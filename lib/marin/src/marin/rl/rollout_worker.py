@@ -74,6 +74,37 @@ SAMPLE_TABLE_EVAL_TYPE_ALIASES = {
     "eval_pass16_sample": "p16s",
 }
 SAMPLE_TABLE_KEY_COMPONENT_MAX_LENGTH = 12
+ROLLOUT_WANDB_STEP_METRICS = (
+    "inference.weight_step",
+    "inference.train_step",
+    "inference.rollout_step",
+)
+ROLLOUT_WANDB_WEIGHT_STEP_PATTERNS = (
+    "inference.rollout/*",
+    "inference.eval/*",
+    "inference.micro_eval/*",
+    "inference.eval_pass1_greedy/*",
+    "inference.eval_pass16_sample/*",
+    "inference.throughput/*",
+    "inference.length/*",
+    "inference.schedule/*",
+    "inference.env.*",
+    "inference.weight_lag",
+    "inference.attempt_*",
+    "inference.total_*",
+    "inference.successful_receives",
+    "inference.failed_receives",
+    "inference.receive_bytes",
+    "inference.param_count",
+    "inference.largest_param_bytes",
+    "inference.fetch_time",
+    "inference.decode_time",
+    "inference.poll_time",
+    "inference.fetch_mib_per_second",
+    "inference.decode_mib_per_second",
+    "inference.cache_*",
+    "inference.queued_*",
+)
 
 
 @dataclass(frozen=True)
@@ -231,6 +262,21 @@ def _sample_table_metric_key(eval_type: str, lesson_id: str) -> str:
     return f"samples/{eval_component}/{lesson_component}"
 
 
+def _rollout_semantic_step_metrics(
+    *,
+    weight_step: int,
+    train_step: int | None,
+    rollout_step: int | None,
+) -> dict[str, int]:
+    metrics = {"inference.weight_step": weight_step}
+    if train_step is not None and train_step >= 0:
+        metrics["inference.train_step"] = train_step
+        metrics["inference.weight_lag"] = train_step - weight_step
+    if rollout_step is not None:
+        metrics["inference.rollout_step"] = rollout_step
+    return metrics
+
+
 class _NoOpTracker:
     """Minimal tracker that discards all metrics. Used when no tracker config is available."""
 
@@ -283,6 +329,13 @@ class RolloutTracker:
             resume="allow",
             mode=config.mode,
         )
+        self._define_semantic_step_metrics()
+
+    def _define_semantic_step_metrics(self) -> None:
+        for metric in ROLLOUT_WANDB_STEP_METRICS:
+            self._run.define_metric(metric)
+        for pattern in ROLLOUT_WANDB_WEIGHT_STEP_PATTERNS:
+            self._run.define_metric(pattern, step_metric="inference.weight_step")
 
     def log(self, metrics: Mapping[str, Any], *, step: int | None = None):
         if step is None:
@@ -947,6 +1000,7 @@ class RolloutWorker:
         batch: RolloutBatch,
         step: int,
         weight_step: int,
+        rollout_step: int | None,
         metrics: Mapping[str, Any],
     ) -> None:
         """Log one completed evaluation batch."""
@@ -957,9 +1011,14 @@ class RolloutWorker:
             eval_type=eval_type,
         )
         log_metrics.update(metrics)
-        log_metrics["inference.weight_step"] = weight_step
-        if eval_type == "eval":
-            log_metrics["inference.train_step"] = step
+        train_step = step if eval_type == "eval" else self._current_train_step
+        log_metrics.update(
+            _rollout_semantic_step_metrics(
+                weight_step=weight_step,
+                train_step=train_step,
+                rollout_step=rollout_step,
+            )
+        )
         self.tracker.log(log_metrics)
         logger.info(
             "Eval metrics for lesson %s at weight_step=%d: %s",
@@ -976,6 +1035,7 @@ class RolloutWorker:
         rng,
         step: int,
         eval_params: EvalSamplingParams | None = None,
+        rollout_step: int | None = None,
     ) -> RolloutBatchStats:
         """Evaluate a single lesson and log metrics."""
         lesson_config = self.config.curriculum_config.lessons[lesson_id]
@@ -1038,6 +1098,7 @@ class RolloutWorker:
             batch=batch,
             step=step,
             weight_step=self._current_weight_step,
+            rollout_step=rollout_step,
             metrics=metrics,
         )
         if update_curriculum_stats:
@@ -1048,7 +1109,7 @@ class RolloutWorker:
             ).result()
         return stats
 
-    def _evaluate_curriculum(self, rng, step: int) -> None:
+    def _evaluate_curriculum(self, rng, step: int, rollout_step: int | None = None) -> None:
         """Evaluate all lessons and update the curriculum actor."""
         lesson_names = list(self.config.curriculum_config.lessons.keys())
         if not lesson_names:
@@ -1066,6 +1127,7 @@ class RolloutWorker:
                     rng=rng,
                     step=step,
                     eval_params=eval_params,
+                    rollout_step=rollout_step,
                 )
 
     def _resume_safe_transfer_metrics(self) -> dict[str, float | int]:
@@ -1108,9 +1170,13 @@ class RolloutWorker:
             log_metrics.update(self._rollout_writer.get_metrics())
         log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
         log_metrics.update(throughput_metrics)
-        log_metrics["inference.weight_step"] = self._current_weight_step
-        if self._current_train_step >= 0:
-            log_metrics["inference.train_step"] = self._current_train_step
+        log_metrics.update(
+            _rollout_semantic_step_metrics(
+                weight_step=self._current_weight_step,
+                train_step=self._current_train_step,
+                rollout_step=rollout_step,
+            )
+        )
         logger.info(
             "Logging metrics at rollout_step=%d weight_step=%d",
             rollout_step,
@@ -1226,6 +1292,7 @@ class RolloutWorker:
                         eval_type="micro_eval",
                         rng=micro_eval_rng,
                         step=self._current_weight_step,
+                        rollout_step=step,
                     )
 
                 # Full eval: comprehensive check on all lessons once per completed trainer step.
@@ -1239,7 +1306,7 @@ class RolloutWorker:
                         rng, eval_rng = jrandom.split(rng)
                     else:
                         eval_rng = py_rng.randint(0, 2**31 - 1)
-                    self._evaluate_curriculum(eval_rng, self._current_train_step)
+                    self._evaluate_curriculum(eval_rng, self._current_train_step, rollout_step=step)
                     self._last_eval_train_step = self._current_train_step
 
                 logger.info(f"Sampled lesson '{lesson_id}' from curriculum")

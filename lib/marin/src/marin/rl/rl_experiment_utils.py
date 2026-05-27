@@ -3,12 +3,15 @@
 
 import dataclasses
 import datetime
+import hashlib
 import importlib
+import json
 import logging
 import uuid
 from urllib.parse import urlparse
 
 import jmp
+import levanter.utils.fsspec_utils as fsspec_utils
 from fray.types import ResourceConfig
 from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
@@ -30,10 +33,13 @@ from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutTrackerConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
+from marin.utilities.json_encoder import CustomJsonEncoder
+from rigging.filesystem import open_url, url_to_fs
 
 logger = logging.getLogger(__name__)
 
 RL_EXECUTOR_STEP_RESOURCES = ResourceConfig.with_cpu(cpu=0.5, ram="4g", disk="30g")
+RL_RUN_CONFIG_FILENAME = "rl_run_config.json"
 
 
 ModelArtifact = ExecutorStep | InputName | str
@@ -131,12 +137,13 @@ class RLExperimentConfig:
     num_rollout_workers: int = 1
     train_ram: str | None = None
     inference_ram: str | None = None
+    launcher_region: str | None = None
     zone: str | None = None
 
 
 def launcher_region_for_rl_experiment(config: RLExperimentConfig) -> str:
     """Return the concrete region that should host the RL launcher and workers."""
-    return resolve_launcher_region(config.train_tpu_type, config.inference_tpu_type)
+    return resolve_launcher_region(config.train_tpu_type, config.inference_tpu_type, config.launcher_region)
 
 
 def executor_step_resources_for_rl_experiment(config: RLExperimentConfig) -> ResourceConfig:
@@ -344,7 +351,110 @@ def _build_rl_job_config(
     return job_config
 
 
+def _run_config_guard_path(output_path: str) -> str:
+    return join_path(output_path, RL_RUN_CONFIG_FILENAME)
+
+
+def _run_config_payload(config: RLStepConfig) -> dict:
+    serialized = json.dumps(config, sort_keys=True, cls=CustomJsonEncoder)
+    return json.loads(serialized)
+
+
+def _run_config_fingerprint(payload: dict) -> str:
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _config_mismatch_paths(existing: object, current: object, prefix: str = "config") -> list[str]:
+    if type(existing) is not type(current):
+        return [prefix]
+
+    if isinstance(existing, dict) and isinstance(current, dict):
+        mismatches: list[str] = []
+        for key in sorted(set(existing) | set(current)):
+            child_prefix = f"{prefix}.{key}"
+            if key not in existing or key not in current:
+                mismatches.append(child_prefix)
+                continue
+            mismatches.extend(_config_mismatch_paths(existing[key], current[key], child_prefix))
+        return mismatches
+
+    if isinstance(existing, list) and isinstance(current, list):
+        if len(existing) != len(current):
+            return [prefix]
+        mismatches = []
+        for index, (existing_item, current_item) in enumerate(zip(existing, current, strict=True)):
+            mismatches.extend(_config_mismatch_paths(existing_item, current_item, f"{prefix}[{index}]"))
+        return mismatches
+
+    if existing != current:
+        return [prefix]
+
+    return []
+
+
+def _path_exists_or_has_children(path: str) -> bool:
+    if fsspec_utils.exists(path):
+        return True
+
+    fs, fs_path = url_to_fs(path)
+    try:
+        return bool(fs.ls(fs_path, detail=False))
+    except FileNotFoundError:
+        return False
+
+
+def _has_existing_rl_run_state(output_path: str) -> bool:
+    return _path_exists_or_has_children(join_path(output_path, "checkpoints")) or _path_exists_or_has_children(
+        join_path(output_path, "rollouts")
+    )
+
+
+def _ensure_run_config_matches_or_write(config: RLStepConfig) -> None:
+    """Fail fast when relaunching an RL output path with a different config."""
+    guard_path = _run_config_guard_path(config.output_path)
+    current_config = _run_config_payload(config)
+    current_fingerprint = _run_config_fingerprint(current_config)
+
+    if fsspec_utils.exists(guard_path):
+        with open_url(guard_path) as f:
+            existing_guard = json.load(f)
+        existing_config = existing_guard.get("config")
+        existing_fingerprint = str(existing_guard.get("fingerprint"))
+        if existing_fingerprint == current_fingerprint and existing_config == current_config:
+            return
+
+        mismatch_paths = _config_mismatch_paths(existing_config, current_config)
+        shown_mismatches = ", ".join(mismatch_paths[:10])
+        if len(mismatch_paths) > 10:
+            shown_mismatches = f"{shown_mismatches}, ... ({len(mismatch_paths)} total)"
+        raise ValueError(
+            "Refusing to launch RL run at an existing output path with a changed config: "
+            f"output_path={config.output_path}, guard_path={guard_path}, "
+            f"existing_fingerprint={existing_fingerprint}, current_fingerprint={current_fingerprint}, "
+            f"mismatches={shown_mismatches}"
+        )
+
+    if _has_existing_rl_run_state(config.output_path):
+        raise ValueError(
+            "Refusing to launch RL run at an existing output path without a config guard. "
+            f"output_path={config.output_path}, expected_guard={guard_path}. "
+            "Use a fresh output path, or manually inspect the old run before creating a guard."
+        )
+
+    fsspec_utils.mkdirs(config.output_path)
+    guard = {
+        "schema_version": 1,
+        "fingerprint": current_fingerprint,
+        "config": current_config,
+    }
+    with open_url(guard_path, "w") as f:
+        json.dump(guard, f, indent=2, sort_keys=True)
+        f.write("\n")
+
+
 def _run_rl_experiment_step(config: RLStepConfig) -> PathMetadata:
+    _ensure_run_config_matches_or_write(config)
     instance_id = f"{config.name}-{datetime.datetime.now(datetime.UTC).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
     job_config = _build_rl_job_config(
         name=config.name,

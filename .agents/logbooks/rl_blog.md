@@ -4,6 +4,38 @@ Findings from auditing the Marin RL loss / replay-buffer code against the W&B
 trace of the canonical Llama-3.1-8B-Instruct + MATH-500 500-step run. Goal:
 identify what to fix before re-running for the blog.
 
+## CODEX 2026-05-24T20:41:38Z — Postmortem: invalid 100-step validation hyperparameter change
+
+The 2026-05-24 100-step scheduler validation run is **not comparable** to the
+canonical 2026-03-30 500-step Math500 baseline because Codex launched it with
+`--max-output-tokens 512`.
+
+That override was a mistake. The Math500 launcher default is
+`DEFAULT_MAX_OUTPUT_TOKENS = 1024`, and the canonical reference rollout logs
+confirm `max_tokens=1024` with vLLM `max_model_len=2048`. The 100-step
+validation therefore tested the new scheduler and robustness instrumentation,
+but it does **not** validate the intended RL hyperparameter stack for the blog
+comparison. Treat its pass@k, truncation, response-length, and throughput
+numbers as invalid for model-quality comparison.
+
+Root cause: Codex inferred from lower-level/shared defaults and earlier
+length-cap discussion that `512` was an acceptable validation cap, instead of
+anchoring to the experiment launcher defaults and the reference W&B run config.
+This was not checked with the user before launch.
+
+Rule for future agents:
+
+- Do **not** change RL experiment hyperparameters from the experiment's default
+  config or the selected reference run unless the user explicitly approves it.
+- Before launching any blog-comparison or validation run, write the intended
+  hyperparameter deltas into this logbook and verify them against the reference
+  run's W&B logs/config. If a value is unchanged, omit the CLI flag rather than
+  restating it with a guessed value.
+- For this project, `max_output_tokens` defaults to `1024` in
+  `experiments/llama_3_8b_rl_math500.py`; passing `--max-output-tokens 512`
+  changes the experiment and invalidates comparison to
+  `iris-rl-e4ms2-500-clean-nodelprevtmp`.
+
 ## Changes applied this turn (2026-05-22)
 
 Implemented "RLOO + importance-sampling hybrid" — RLOO baseline (Ahmadian et
@@ -2065,3 +2097,1466 @@ The babysat 100-step run completed successfully:
   appeared after the patches.
 - Rollout-0 shows `JOB_STATE_KILLED` with `exit_code=0` during coordinated
   shutdown after completion; the nested RL job and root wrapper both succeeded.
+
+## CODEX 2026-05-24T20:58:18Z - Resume guard and old `iris_rl` resume findings
+
+Reviewed the old `iris_rl` resume trail via the packed RL logbooks:
+
+- The original resume bug was in `/ahmed/iris-rl-e4ms2-500-0327`: Iris retried
+  the outer job after preemption, the experiment script generated a new
+  timestamped name, and the new attempt restarted from the base model because
+  checkpoints, W&B IDs, rollout storage, and curriculum state all moved to new
+  names/paths.
+- The durable fix from that branch was to split identity:
+  stable `run_id` owns checkpoints, W&B run IDs, rollout storage, and other
+  resume state; volatile `instance_id` owns per-attempt child job and actor
+  names so retries do not collide with dead attempt resources.
+- Current `rl_blog` already carries that model forward:
+  `_run_rl_experiment_step` creates a fresh timestamp+uuid `instance_id`, while
+  the stable experiment `name` and resolved executor output path anchor
+  checkpoints and rollouts.
+
+Implemented the requested defensive resume behavior:
+
+- `experiments/llama_3_8b_rl_math500.py` now accepts
+  `--override-output-path`, then applies `ExecutorStep.with_output_path(...)`.
+  This is the intended way to relaunch an interrupted RL run against the exact
+  old executor output path instead of relying on the human-readable run name.
+- `_run_rl_experiment_step` now writes `rl_run_config.json` under the resolved
+  output path before launching `RLJob`. The guard stores a stable JSON
+  serialization of `RLStepConfig` plus a SHA256 fingerprint.
+- Relaunching the same output path with the same serialized config is allowed.
+  Relaunching the same output path with a changed config raises before the RL
+  coordinator starts and reports the first mismatching config paths.
+- If an output path already contains `checkpoints/` or `rollouts/` but no
+  `rl_run_config.json`, the launcher now fails closed. Adopting an old
+  pre-guard run needs deliberate manual inspection/backfill instead of silent
+  guard creation.
+- The old-state check handles normal directory existence and object-store style
+  prefixes with children, so GCS paths without explicit directory marker
+  objects are still treated as containing prior state.
+
+Validation:
+
+- `./infra/pre-commit.py --fix experiments/llama_3_8b_rl_math500.py lib/marin/src/marin/rl/rl_experiment_utils.py tests/rl/test_rl_experiment_utils.py`
+  passed.
+- `uv run --project lib/marin --group test pytest tests/rl/test_rl_experiment_utils.py -q`
+  passed with `15 passed`.
+
+Operational caution: the guard proves the serialized RL config matches, not
+that the code package is identical. For high-stakes recovery, still verify
+startup logs show the exact old output path/run id and a real checkpoint resume
+step before treating recovery as successful.
+
+## CODEX 2026-05-24T21:19:55Z - 500-step blog run decision: one v5p-8 sampler
+
+Decision for the next blog-comparison run:
+
+- Use the validated `v5p-8` trainer + `v5p-8` rollout-worker envelope.
+- Use **one** rollout worker, not two.
+- Keep the rest of the Math500 launcher defaults unless explicitly changed:
+  500 training steps, seed `42`, 64 prompts, 16 generations per prompt,
+  max output tokens `1024`, eval every step, v5p-8 trainer/rollout, and the
+  current RLOO + importance-sampling loss stack.
+
+Reasoning:
+
+- Two samplers improve throughput, but they make the policy's data order harder
+  to reason about. If one sampler is preempted or stalls for a long time, the
+  trainer sees a different interleaving of problems and rollout batches from
+  the surviving sampler.
+- That interleaving is not just an implementation detail for RL: it changes the
+  sequence of policy updates and therefore the distribution under which later
+  rollouts are generated.
+- With one trainer and one sampler, inference is the bottleneck, but the data
+  stream is easier to audit. If the sampler is preempted, it should recover
+  from its stable run state instead of being replaced by an independent second
+  sampler whose shuffled order dominates while the first one is gone.
+- This does not make the run perfectly deterministic across infrastructure
+  failures, but it removes the largest avoidable source of scheduler-dependent
+  data interleaving for the blog run.
+
+Operational implication: future blog runs should keep `num_rollout_workers=1`
+unless the experiment is explicitly about throughput or sampler parallelism.
+
+## CODEX 2026-05-24T21:52:32Z - Launched 500-step one-sampler v5p-8 run
+
+Launch sequence:
+
+- First attempt:
+  `/ahmedah/iris-rl-blog-rlooIS-500-1s-uc1-20260524-212018`.
+  It was submitted with the root wrapper pinned to `us-central1-a`; it stayed
+  pending on the central1 CPU pool before any experiment code ran, so it was
+  stopped.
+- Second attempt:
+  `/ahmedah/iris-rl-blog-rlooIS-500-1s-uc1-20260524-213318`.
+  It used an unpinned root wrapper, which landed in `us-central2`. Because the
+  launcher used the root VM's metadata to choose the executor prefix/regions,
+  it produced `gs://marin-us-central2` output paths and contradictory child
+  constraints (`region=us-central2`, `zone=us-central1-a`). It failed before
+  trainer/sampler work and was stopped.
+- Fix applied before the real launch:
+  `RLExperimentConfig.launcher_region` is now explicit. The Math500 launcher
+  accepts `--launcher-region` and also infers it from `--zone` when not passed.
+  This lets the CPU root wrapper land anywhere while keeping executor output
+  paths and child TPU resource constraints in `us-central1`.
+
+Validation after the launcher-region fix:
+
+- `./infra/pre-commit.py --fix experiments/llama_3_8b_rl_math500.py lib/marin/src/marin/rl/placement.py lib/marin/src/marin/rl/rl_experiment_utils.py tests/rl/test_rl_experiment_utils.py`
+  passed.
+- `uv run --project lib/marin --group test pytest tests/rl/test_rl_experiment_utils.py -q`
+  passed with `16 passed`.
+
+Final launched command:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run \
+  --no-wait \
+  --user ahmedah \
+  --job-name iris-rl-blog-rlooIS-500-1s-uc1-20260524-214354 \
+  --cpu 1 \
+  --memory 4G \
+  --disk 30G \
+  --enable-extra-resources \
+  --extra cpu \
+  -- python experiments/llama_3_8b_rl_math500.py \
+    --run-name llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260524-214354 \
+    --experiment-name-suffix rlooIS-500-1s \
+    --num-rollout-workers 1 \
+    --launcher-region us-central1 \
+    --zone us-central1-a
+```
+
+Run details:
+
+- Root job:
+  `/ahmedah/iris-rl-blog-rlooIS-500-1s-uc1-20260524-214354`.
+- Stable run name:
+  `llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260524-214354`.
+- Executor metadata:
+  `gs://marin-us-central1/experiments/llama_3_8b_rl_math500-732296.json`.
+- RL output path:
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260524-214354-894d36`.
+- Instance id:
+  `llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260524-214354-20260524-214651-d84b67c7`.
+
+Smoke status:
+
+- Root wrapper, executor step, RL coordinator, trainer, and rollout-0 are all
+  `JOB_STATE_RUNNING`.
+- Failure and preemption counts were zero for all listed jobs at the smoke
+  check.
+- Coordinator logged `Submitted 2 child jobs (1 trainer + 1 rollout workers)`.
+- Launch log confirms
+  `launcher_region=us-central1`, `zone=us-central1-a`,
+  `executor_prefix=gs://marin-us-central1`, `rollout_workers=1`,
+  and default `max_model_len=2048` / `max_output_tokens=1024`.
+- Rollout-0 initialized vLLM on `v5p-8` with `tensor_parallel_size=4`,
+  `seed=1042`, and four 95.74 GiB HBM chips.
+
+Watch items:
+
+- This run intentionally trades throughput for cleaner data-order reasoning.
+  Expect slower wall-clock than the old two-sampler reference.
+- If recovery is needed, relaunch with the same run name and
+  `--override-output-path gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260524-214354-894d36`.
+  The config guard should fail fast if the relaunch config drifts.
+
+## CODEX 2026-05-24T22:02:03Z - Babysitting checkpoint for 500-step run
+
+Monitoring state file:
+`scratch/20260524-2202_monitoring_state.json`.
+
+Current baseline:
+
+- Root wrapper, executor step, RL coordinator, train child, and rollout-0 child
+  are all `JOB_STATE_RUNNING`.
+- All listed jobs have `failure_count=0`, `preemption_count=0`, and no pending
+  reason.
+- Trainer reached real training: `Training step 0 completed` with
+  `train_step=106.98s`, `rollout_wait=6.11s`, and `loss=-0.0046`.
+- Rollout-0 generated and wrote the next batch against live weights:
+  `Generated rollout with 64 groups from lesson math_full at step 0`,
+  followed by `PHASE: WRITE_ROLLOUT step=3` and metrics at
+  `rollout_step=4 weight_step=0`.
+- The earlier `No new weights available` messages occurred before trainer step
+  0 published weights; they are no longer evidence of startup failure.
+
+Recovery rule for this run:
+
+- Stop the current Iris job before resubmitting.
+- Resubmit with the exact command in
+  `scratch/20260524-2202_monitoring_state.json`.
+- Confirm startup logs show the same output path
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260524-214354-894d36`
+  and a real resume step before counting the recovery as successful.
+
+## CODEX 2026-05-24T22:30:12Z - Babysitting update: pass@16 eval is the bottleneck
+
+The run is still healthy at the Iris layer:
+
+- Root wrapper, executor step, RL coordinator, train child, and rollout-0 child
+  are all `JOB_STATE_RUNNING`.
+- Failure and preemption counts remain zero for all listed jobs.
+- Trainer reached step 2: `Training step 2 completed` with
+  `train_step=81.76s`, `rollout_wait=6.01s`, `iteration=91.29s`, and
+  `loss=-0.0030`.
+
+Important observation:
+
+- The saved run guard config contains both eval configs:
+  `pass1_greedy` with 500 examples × 1 generation and `pass16_sample` with
+  500 examples × 16 generations.
+- Live logs confirmed the pass@16 eval path ran at weight step 2:
+  `eval_pass16_sample/math_full/pass_at_16=0.72` over 8000 responses.
+- That eval took long enough that the trainer logged cumulative rollout waits
+  above 500s while the single rollout worker was evaluating/grading. It still
+  cleared before the trainer's one-hour data-loader timeout.
+- This is not an Iris crash or preemption. It is the expected cost of running
+  full pass@16 eval every eval step on a single rollout worker, plus many
+  bounded `sympy parse_expr timed out after 10s` grading warnings.
+
+Operational watch item: if we want this 500-step run to finish in reasonable
+wall-clock, we need to decide whether pass@16 should really run every eval step
+for the blog training run. The current live run is valid for the saved config,
+but eval now dominates throughput.
+
+## CODEX 2026-05-24T23:18:48Z - Babysitting update: step 6 reached cleanly
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Failure and preemption counts remain zero for all listed jobs.
+- The trainer reached `Training step 6 completed` with
+  `train_step=81.84s`, `rollout_wait=16.82s`, `iteration=102.37s`, and
+  `loss=-0.0088`.
+- The long trainer wait before this was explained by rollout-side generation
+  and grading. Rollout logged `eval_pass16_sample` at weight step 5 with
+  `pass_at_16=0.74` over 8000 responses, then wrote 64-group training batches
+  at weight step 5. The trainer consumed those and advanced to step 6.
+
+Conclusion: no recovery action has been needed. The run is slow but behaving
+consistently with the one-sampler + full pass@16-every-step configuration.
+
+## CODEX 2026-05-24T23:37:28Z - Babysitting update: step 7 and eval backlog
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Failure and preemption counts remain zero for all listed jobs.
+- The trainer reached `Training step 7 completed` with
+  `train_step=81.78s`, `rollout_wait=0.01s`, `iteration=85.58s`, and
+  `loss=-0.0120`.
+- Rollout-0 completed full pass@16 eval at weight step 7:
+  `eval_pass16_sample/math_full/pass_at_16=0.722` over 8000 responses with
+  cap saturation rate `0.121875`.
+- Rollout-0 then generated at least one 64-group training rollout at weight
+  step 7, followed by pass@1 eval at the same weight step:
+  `eval_pass1_greedy/math_full/pass_at_1=0.486`.
+
+Operational interpretation:
+
+- The trainer wait after step 7 is not yet a recovery signal. With one sampler,
+  train rollout production, pass@1 eval, pass@16 eval, and grading all serialize
+  on rollout-0.
+- A single 64-group train rollout may still leave the replay buffer below
+  `train_batch_size` after the no-variance group filter drops dead groups, so
+  the trainer can continue waiting until more accepted rollouts accumulate.
+- Continue to recover only on actual Iris failure/preemption, a hard traceback,
+  or the trainer hitting its one-hour no-rollout guard.
+
+## CODEX 2026-05-24T23:50:40Z - Babysitting update: long wait cleared and checkpointed
+
+The step-7 backlog cleared without intervention:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Failure and preemption counts remain zero for all listed jobs.
+- Pass@16 generation during the backlog completed in `579.9s`.
+- The replay buffer accepted rollout batches and logged:
+  `Collected 1 rollout batches, updated replay buffer in 0.006s`.
+- The trainer then prepared a full batch:
+  `Batch prep: fetch=30.054s, create=3.773s, shard=0.008s, total=33.835s, rollouts=1024`.
+- `Training step 8 completed` with `train_step=60.76s`,
+  `rollout_wait=30.05s`, `iteration=94.59s`, and `loss=-0.0204`.
+- Checkpoint step 8 was saved under the intended output path:
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260524-214354-894d36/checkpoints/.../step-8`.
+- `Training step 9 completed` immediately afterward with `rollout_wait=0.00s`
+  and `loss=-0.0233`.
+
+Conclusion: the apparent stall was not a failure. It was a combination of
+serialized eval on the single sampler plus replay-buffer accumulation under the
+no-variance filter. No recovery or relaunch has been needed.
+
+## CODEX 2026-05-25T00:08:38Z - Babysitting update: step 10 clean
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Failure and preemption counts remain zero for all listed jobs.
+- Another eval/backlog window cleared into a full trainer batch:
+  `Batch prep: fetch=41.235s, create=3.750s, shard=0.011s, total=44.996s, rollouts=1024`.
+- `Training step 10 completed` with `train_step=96.44s`,
+  `rollout_wait=41.24s`, `iteration=141.44s`, and `loss=-0.0197`.
+
+Conclusion: the run continues to make real training progress. The dominant
+latency is still serialized single-sampler eval/rollout work rather than
+preemption or resume failure.
+
+## CODEX 2026-05-25T00:38:22Z - Babysitting update: step 12 clean
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Failure and preemption counts remain zero for all listed jobs.
+- `Training step 11 completed` with `train_step=60.82s`,
+  `rollout_wait=58.65s`, `iteration=123.22s`, and `loss=-0.0400`.
+- Checkpoint step 11 was saved under the intended output path:
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260524-214354-894d36/checkpoints/.../step-11`.
+- `Training step 12 completed` with `train_step=60.82s`,
+  `rollout_wait=0.00s`, `iteration=65.90s`, and `loss=-0.0204`.
+
+Conclusion: the run continues to advance and checkpoint normally. No recovery
+or relaunch has been needed.
+
+## CODEX 2026-05-25T21:24:47Z - New W&B project run launched on us-central1 v5p-8
+
+Request: start the next RL blog run in a new W&B project,
+`marin_rl_blog`, using Iris interactive priority, after first checking where
+the v5p-8 batch load was concentrated.
+
+Cluster placement:
+
+- Iris showed the v5p-8 batch load in `us-central1-a`, specifically
+  `tpu_v5p-preemptible_8-us-central1-a`: 43 batch tasks plus one interactive
+  task at the time of the placement check.
+- `us-east5-a` had interactive v5p-8 work but no batch v5p-8 tasks in that
+  query.
+- The run was therefore launched in `us-central1-a` with
+  `--priority interactive`.
+
+Launch trail:
+
+- First root:
+  `/ahmedah/iris-rl-blog-rlooIS-500-1s-uc1-20260525-205708`.
+- That first attempt exposed a local W&B metric definition bug in
+  `rollout_worker.py`: the new axis helper tried to define
+  `inference.eval_*/*`, but W&B only permits glob suffixes in metric names.
+- Fixed the metric pattern by removing the invalid mid-name glob and added a
+  test that fails if rollout W&B metric patterns stop being suffix-only globs.
+- Validation after the fix:
+  `uv run pytest tests/rl/test_rollout_worker.py` passed with 31 tests, and
+  `./infra/pre-commit.py --files lib/marin/src/marin/rl/rollout_worker.py tests/rl/test_rollout_worker.py .agents/logbooks/rl_blog.md --fix`
+  passed.
+- The bad first root was stopped after the fix so it would not keep retrying
+  rollout startup.
+- The previous live root
+  `/ahmedah/iris-rl-blog-rlooIS-500-1s-uc1-20260524-214354` is confirmed
+  `JOB_STATE_KILLED` with `Terminated by user`, so it is not competing with
+  this new run for v5p-8 capacity.
+
+Live run:
+
+- Root:
+  `/ahmedah/iris-rl-blog-rlooIS-500-1s-uc1-20260525-210900`.
+- Run name:
+  `llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260525-210900`.
+- Output path:
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260525-210900-5fbb52`.
+- W&B project:
+  `https://wandb.ai/marin-community/marin_rl_blog`.
+- Train W&B:
+  `https://wandb.ai/marin-community/marin_rl_blog/runs/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260525-210900-train`.
+- Rollout W&B:
+  `https://wandb.ai/marin-community/marin_rl_blog/runs/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260525-210900-rollout-0`.
+- Monitoring state:
+  `scratch/20260525-2116_monitoring_state.json`.
+
+Current health at this entry:
+
+- Iris reports the root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Train and rollout are both placed on
+  `tpu_v5p-preemptible_8-us-central1-a` with interactive priority.
+- Rollout-0 had one early preemption during startup, then recovered and
+  continued; failure count is zero.
+- Trainer failure and preemption counts are zero.
+- The rollout worker initialized vLLM, received startup weights, and wrote
+  multiple rollout files. Recent logs show several
+  `Generated rollout with 64 groups from lesson math_full at step -1` lines.
+- The trainer consumed rollouts, logged reward statistics, reached
+  `Progress on:train 1.00it/500it`, and transferred weights at step 0 with
+  `loss=-0.0025417718570679426`.
+- Follow-up log check at 2026-05-25T21:26Z showed continued progress:
+  rollout generated a 64-group batch at step 0, train reached
+  `Progress on:train 2.00it/500it`, and transferred weights at step 1 with
+  `loss=-0.009412509389221668`.
+
+Notes:
+
+- The W&B artifact warning about a temporary `config.yaml` was nonfatal; the
+  train job continued.
+- The XLA scoped-VMEM warnings during rollout startup were nonfatal compiler
+  lowering messages; vLLM compiled and generated rollouts afterward.
+
+## CODEX 2026-05-25T22:39:00Z - Babysitting update: run healthy, single-sampler wait windows visible
+
+Current state:
+
+- Live root remains
+  `/ahmedah/iris-rl-blog-rlooIS-500-1s-uc1-20260525-210900`.
+- Iris reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Failure counts remain zero. Trainer preemption count remains zero. Rollout-0
+  still only has the one early startup preemption already noted.
+- The run has reached at least `Progress on:train 6.00it/500it`.
+- Checkpoints have been saved through at least step 3 under the intended output
+  path:
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260525-210900-5fbb52/checkpoints/...`.
+- Rollout files have been written through at least `_000011.pkl`.
+
+Observed behavior:
+
+- The run is not crashing; the dominant issue is throughput/backpressure from
+  the one-sampler design plus eval. Trainer wait windows can reach 10-20 minutes
+  while rollout is doing eval/generation, then resolve when new rollout files
+  appear in GCS.
+- Example: trainer wait grew past `cumulative_wait=1143s`, but rollout later
+  wrote new files, trainer read them from GCS, logged reward stats, and advanced
+  to later train steps.
+- Stale filtering is active and sometimes large:
+  `Filtered 1920 stale rollouts 992 remaining` was observed before training
+  step 5 completed. This is not fatal because enough examples remained, but it
+  is an important metric for interpreting throughput and data usage.
+- Eval metrics are logging under the new project. Recent examples include
+  weight-step-5 greedy pass@1 around `0.45-0.46`, with truncation/cap saturation
+  around `0.11-0.12`.
+
+Conclusion:
+
+- No recovery or relaunch is needed. Continue babysitting at the requested
+  cadence. The job is making progress, but the single-sampler/eval cadence is
+  visibly the bottleneck and creates long trainer idle periods.
+
+## CODEX 2026-05-25T23:13:00Z - Babysitting update: preemption and automatic resume
+
+Current state:
+
+- The original RL child instance
+  `rl-llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260525-210900-20260525-211036-44d860a0`
+  was killed with `Parent task preempted` at roughly 2026-05-25T23:09Z.
+- Iris automatically launched a new RL child instance under the same root and
+  executor output path:
+  `rl-llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260525-210900-20260525-231008-eecd0136`.
+- New train is running. New rollout-0 is currently pending in
+  `tpu_v5p-preemptible_8-us-central1-a` with scheduler reason
+  `Insufficient memory (need 400.0GB, available 0.8GB)` and autoscaler waiting
+  for workers.
+
+Resume verification:
+
+- W&B resumed the existing train run:
+  `https://wandb.ai/marin-community/marin_rl_blog/runs/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260525-210900-train`.
+- Levanter discovered and loaded the latest train checkpoint at
+  `.../checkpoints/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260525-210900-train/step-7`.
+- The train checkpoint listing shows steps 2, 3, 4, 6, and 7 present.
+- The W&B artifact `FileNotFoundError` for temporary `config.yaml` appeared
+  again on startup; as before, it was logged by the background tracker as
+  dropped/continuing and was not the train process failure.
+
+Conclusion:
+
+- This is a successful automatic resume through the intended output path so far.
+  No manual stop/resubmit is needed. Continue watching for rollout-0 to acquire
+  v5p-8 capacity and for train to resume progress after step 7.
+
+## CODEX 2026-05-25T20:47:31Z - Decision: resume-safe rollout W&B axes
+
+The rollout W&B `_step` mismatch is a logging-axis issue, not evidence that the
+sampler is hundreds of trainer steps ahead. The old canonical rollout run used
+explicit W&B `step=current_weight_step`, so sampler `_step` looked aligned with
+trainer `_step`. The current code stopped passing an explicit step and instead
+logs `inference.weight_step` / `inference.train_step`; W&B `_step` is now just
+an append-only event counter.
+
+We should keep that append-only W&B event counter because it is robust to
+preemption and resume. A resumed rollout worker can legitimately emit duplicate
+or lower semantic weight steps, and using those as explicit W&B steps risks
+dropped/non-monotonic history. The fix is to preserve W&B's internal monotonic
+clock while defining semantic rollout axes:
+
+- `inference.weight_step`: policy weights used for this rollout/eval log.
+- `inference.train_step`: latest trainer step known from run state.
+- `inference.rollout_step`: worker-local generation-loop counter.
+- `inference.weight_lag`: latest known trainer step minus weight step.
+
+Implementation plan: configure the rollout W&B run with `define_metric` so
+`inference.rollout/*`, eval metrics, throughput, length, schedule, transfer,
+policy-context, writer, and env metrics are plotted against
+`inference.weight_step` by default. Keep calling `wandb.log(...)` without
+explicit `step=` for rollout worker logs so retries remain append-only.
+
+## CODEX 2026-05-25T20:52:15Z - Implemented resume-safe rollout W&B axes
+
+Implemented the W&B-axis fix in `lib/marin/src/marin/rl/rollout_worker.py`:
+
+- `RolloutTracker` now calls `define_metric` for
+  `inference.weight_step`, `inference.train_step`, and
+  `inference.rollout_step`.
+- Rollout metric families are configured to use
+  `inference.weight_step` as their W&B chart step metric while preserving
+  W&B's append-only internal `_step`.
+- Rollout/eval logs now include `inference.rollout_step` when known and
+  `inference.weight_lag = train_step - weight_step` when trainer state is
+  known.
+- The rollout worker still calls `wandb.log(...)` without explicit `step=` for
+  these logs, so preempted/resumed workers can append duplicate or older
+  semantic weight steps without making W&B reject non-monotonic explicit steps.
+
+Validation:
+
+- `uv run pytest tests/rl/test_rollout_worker.py` passed (`31 passed`).
+- `./infra/pre-commit.py --files lib/marin/src/marin/rl/rollout_worker.py tests/rl/test_rollout_worker.py .agents/logbooks/rl_blog.md --fix`
+  passed.
+
+## CODEX 2026-05-25T20:54:07Z - Stopped current 500-step blog run
+
+Per user request, stopped the active Iris root job:
+`/ahmedah/iris-rl-blog-rlooIS-500-1s-uc1-20260524-214354`.
+
+Iris reported these jobs terminated by the stop command:
+
+- Root wrapper:
+  `/ahmedah/iris-rl-blog-rlooIS-500-1s-uc1-20260524-214354`.
+- Executor step:
+  `/ahmedah/iris-rl-blog-rlooIS-500-1s-uc1-20260524-214354/rl_testing-llama-3.1-8bi-math500-rloois-500-1s-uc1-20260524-214354_b4be0381-7c02432d`.
+- Current RL coordinator attempt:
+  `.../rl-llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260524-214354-20260525-190040-a030fb14`.
+- Current train child and rollout-0 child under that coordinator.
+
+Follow-up `iris job list --prefix` confirmed the root, executor step,
+coordinator, trainer, and rollout-0 are all `JOB_STATE_KILLED` with
+`Terminated by user`. This should be treated as an intentional manual stop, not
+a failed experiment.
+
+## CODEX 2026-05-25T16:43:49Z - Old canonical prompt-distribution data found
+
+Question: can we reconstruct the prompt/question distribution for the old
+canonical run `iris-rl-e4ms2-500-clean-nodelprevtmp` without running a new job?
+
+Found data sources:
+
+- W&B train run:
+  `marin-community/marin_iris_rl_debug/iris-rl-e4ms2-500-clean-nodelprevtmp-train`.
+- W&B rollout run:
+  `marin-community/marin_iris_rl_debug/iris-rl-e4ms2-500-clean-nodelprevtmp-rollout-0`.
+- The rollout run's `output.log` records the actual file-backed rollout store:
+  `gs://marin-us-central1/rollouts/iris-rl-e4ms2-500-clean-nodelprevtmp`.
+- That GCS rollout store still contains 68 retained `.pkl` rollout batches.
+  Local analysis artifact:
+  `scratch/canonical_wandb_probe/old_canonical_rollout_prompt_distribution.json`.
+- W&B train sample tables exist for all 500 train steps. These are only the
+  first five prompt groups sampled by the trainer each step, because
+  `TrainWorker._log_samples` logs `list(prompts.keys())[:5]`, not the full
+  1024-rollout batch. Local analysis artifact:
+  `scratch/canonical_wandb_probe/old_canonical_train_sample_prompt_trace.json`.
+
+Retained rollout-store facts:
+
+- 68 files, 4352 prompt groups, 69,632 responses, 3623 unique prompt IDs.
+- Retained files are mostly late-run data: 62/68 files have rollout weight
+  steps 466-499; only six retained files are from weight steps -1 to 1.
+- Retained hosts: four files from `t1v-n-cb4c3e7f-w-0`, 32 files from
+  `t1v-n-422402d4-w-0`, and 32 files from `t1v-n-40352549-w-0`.
+- Group repeat histogram over retained files:
+  `{1: 2975, 2: 571, 3: 73, 4: 4}`.
+- Zero-variance groups in retained files: 1457; nonzero-variance groups: 2895.
+- Response reward histogram over retained files:
+  `{-0.1: 8957, 0.0: 20030, 0.9: 810, 1.0: 39835}`.
+- Truncation in retained files: 9151 truncated responses out of 69,632.
+
+W&B first-five sample-table facts (not a trainer distribution):
+
+- 502 W&B sample-table files, covering all train steps 0-499; steps 256 and 470
+  each have two table files.
+- 38,406 logged sample rows, representing 2510 observed prompt-group entries
+  and 2251 unique prompt IDs.
+- Among those logged first-five prompt groups, 903 were zero-variance and 1607
+  were nonzero-variance. 373 logged groups were incomplete because the W&B
+  table rows do not always include all 16 responses for a prompt group.
+- This is not a trainer distribution. Treating it as a trainer-side prompt
+  distribution was a mistake. It only describes the subset intentionally logged
+  by `TrainWorker._log_samples`.
+- Overlap between retained rollout prompts and W&B trainer-sample prompts is
+  784 IDs overall. For steps 470-499, overlap is tight: 150/152 unique observed
+  trainer-sample prompt IDs are present in the retained rollout store.
+
+Interpretation:
+
+- We can exactly analyze the generated/retained rollout distribution for the
+  final part of the old canonical run because the retained `.pkl` files include
+  `env_example_id`, rewards, truncation flags, response lengths, and rollout
+  metadata.
+- We cannot exactly reconstruct the full 500-step trainer-consumed prompt
+  distribution from retained GCS files alone because older rollout files were
+  deleted by file-retention behavior.
+- W&B first-five sample tables can be used only as UI/debug examples. Do not use
+  them for prompt-distribution conclusions.
+
+## CODEX 2026-05-25T17:07:31Z - Old vs recent rollout-window comparison; proxy deprecated
+
+Question: compare the old canonical prompt distribution to the newer
+single-sampler run and make a plot where x is train example id and y is group
+count.
+
+Artifacts:
+
+- Deprecated trainer-sample proxy plot:
+  `scratch/prompt_distribution_compare/old_vs_recent_trainer_sample_prompt_id_counts.png`.
+- Deprecated trainer-sample proxy CSV:
+  `scratch/prompt_distribution_compare/old_vs_recent_trainer_sample_prompt_id_counts.csv`.
+- Deprecated trainer-sample count-frequency plot:
+  `scratch/prompt_distribution_compare/old_vs_recent_trainer_sample_count_frequency.png`.
+- Retained rollout-store plot:
+  `scratch/prompt_distribution_compare/old_vs_recent_retained_rollout_prompt_id_counts.png`.
+- Retained rollout-store CSV:
+  `scratch/prompt_distribution_compare/old_vs_recent_retained_rollout_prompt_id_counts.csv`.
+- Interactive plot artifacts exist under
+  `scratch/prompt_distribution_compare/old_vs_recent_prompt_distribution*.html`,
+  but the trainer-proxy panels should not be used for distribution analysis.
+
+Trainer-sample proxy correction:
+
+- W&B `train/samples` logs only the first five prompt groups sampled by the
+  trainer per table, not the full trainer batch. Using it as a trainer
+  distribution proxy was a mistake.
+- Old canonical proxy: 502 W&B sample tables over 500 train steps, 2510
+  observed prompt-group entries, 2251 unique prompts, max observed repeat 4.
+- Recent single-sampler proxy snapshot: 80 W&B sample tables over 79 train
+  steps, 400 observed prompt-group entries, 400 unique prompts, max observed
+  repeat 1.
+- Proxy overlap: 67 prompt IDs appear in both proxy traces; that is 16.75% of
+  the recent proxy's 400 unique prompts.
+- These numbers are retained only to document the false start. They should not
+  be cited as evidence about the real full-batch trainer prompt distribution.
+
+Retained rollout-store comparison:
+
+- This is not exact trainer consumption, and it is not the full generated
+  history. It is only the currently retained `.pkl` rollout window written to
+  rollout storage.
+- Old canonical retained store: 4352 groups, 3623 unique prompts, max repeat 4,
+  1457 zero-variance groups, 2895 nonzero-variance groups.
+- Recent single-sampler retained store snapshot:
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260524-214354-894d36/rollouts`.
+  It has 64 retained files, 4096 groups, 4096 unique prompts, max repeat 1,
+  1074 zero-variance groups, and 3022 nonzero-variance groups.
+- Retained-store overlap: 1214 prompt IDs appear in both retained stores; that
+  is 29.64% of the recent retained store's 4096 unique prompts.
+
+Interpretation:
+
+- The recent run's retained rollout store shows exactly the intended finite
+  schedule behavior at this snapshot: one retained group per prompt, no
+  duplicate prompt groups.
+- The old canonical retained store had repeat prompt groups in the retained
+  window. This is consistent with the old stochastic/curriculum sampling path
+  and with retention preserving a late-run slice rather than the full run.
+- The new run also has a durable finite-schedule ledger, unlike the old run:
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260524-214354-894d36/rollouts/_rollout_schedule_ledger`.
+  At the 2026-05-25T20:26Z check it had 195 committed assignment records.
+- The ledger records assignment ranges over the finite dataset schedule, not
+  responses/rewards and not confirmed trainer consumption. It lets us recover
+  which prompt indices were assigned for generation after `.pkl` files age out.
+- For exact trainer-consumed full-batch prompt distributions, we still need a
+  trainer-side ledger that records every sampled/admitted `env_example_id` and
+  whether it was stale, duplicate, zero-variance, or used for loss.
+
+## CODEX 2026-05-25T20:26:31Z - Ledger entry semantics
+
+Example ledger record:
+
+```json
+{
+  "assignment_id": "worker-0:lesson-math_full:start-5952:count-64",
+  "dataset_len": 12000,
+  "epoch": 0,
+  "start_position": 5952,
+  "end_position": 6016,
+  "n_examples": 64,
+  "worker_index": 0,
+  "worker_seed": 1042
+}
+```
+
+Meaning:
+
+- `dataset_len=12000` means the finite train dataset has 12,000 examples.
+- `worker_seed=1042` defines the logical rollout worker's deterministic
+  Feistel permutation for this epoch.
+- `start_position=5952` and `end_position=6016` are worker-local positions in
+  that deterministic schedule, not raw dataset IDs. This assignment covers
+  positions `[5952, 6016)`, i.e. 64 examples.
+- `epoch=0` because `start_position // dataset_len == 0`. If the worker
+  advances past position 11,999, the next assignments enter epoch 1 with a new
+  Feistel permutation key derived by folding the epoch into the same worker
+  seed.
+- The actual dataset indices are `FeistelPermutation(dataset_len, key)(offset)`
+  for offsets `5952..6015`, where `offset = position % dataset_len`.
+
+Operational interpretation: for each logical rollout worker and lesson, we walk
+through contiguous chunks of 64 positions in a deterministic shuffled order.
+Within an epoch each dataset index appears once; across epochs the worker sees
+the dataset again under an epoch-specific deterministic permutation.
+
+## CODEX 2026-05-25T12:07:09Z - Babysitting update: step 58 completed after long pass@16 eval
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Trainer and rollout child jobs still show the single earlier Iris-managed
+  preemption (`preemption_count=1` each); all failure counts remain zero. No
+  manual recovery or relaunch was needed.
+- Step 57 eval had a long but successful pass@16 interval. The pass@16 request
+  started at `2026-05-25T11:49:07Z` and produced metrics at
+  `2026-05-25T12:01:19Z`.
+- Step 57 eval metrics:
+  `eval_pass1_greedy/math_full/pass_at_1=0.476`,
+  `eval_pass1_greedy/math_full/truncated_rate=0.124`,
+  `eval_pass1_greedy/math_full/cap_saturated_rate=0.134`,
+  `eval_pass16_sample/math_full/pass_at_16=0.742`,
+  `eval_pass16_sample/math_full/pass_at_one=0.45975`,
+  `eval_pass16_sample/math_full/truncated_rate=0.159875`, and
+  `eval_pass16_sample/math_full/cap_saturated_rate=0.167875`.
+- The trainer waited through eval (`cumulative_wait` reached about 901s) and
+  then resumed normally once rollout-0 wrote the next train rollout.
+- `Training step 58 completed` with `train_step=61.13s`,
+  `rollout_wait=39.44s`, `batch_create=3.80s`, `batch_shard=0.01s`,
+  `iteration=104.38s`, and `loss=-0.0491`.
+- Weights were successfully transferred as `weight_id=58`.
+
+Conclusion: this was another expected one-sampler eval bottleneck, not a job
+failure. The run is healthy after the long eval and continues to train.
+
+## CODEX 2026-05-25T12:28:21Z - Babysitting update: step 60 completed, stale backlog persists
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Trainer and rollout child jobs still show the single earlier Iris-managed
+  preemption (`preemption_count=1` each); all failure counts remain zero.
+- Step 58 checkpoint save was confirmed under the intended output path.
+- `Training step 59 completed` with `train_step=61.11s`,
+  `rollout_wait=0.01s`, `iteration=65.35s`, and `loss=-0.0482`.
+  It filtered `976` stale rollouts and left `784` in the replay buffer.
+- Eval at weight step 59 logged greedy pass@1:
+  `eval_pass1_greedy/math_full/pass_at_1=0.476`,
+  `truncated_rate=0.12`, and `cap_saturated_rate=0.122`.
+- `Training step 60 completed` with `train_step=93.54s`,
+  `rollout_wait=56.67s`, `iteration=153.99s`, and `loss=-0.0395`.
+  It filtered `507` stale rollouts and left only `5` in the replay buffer.
+- Weights were successfully transferred as `weight_id=60`, and rollout-0
+  received weights from step 60.
+
+Conclusion: the job is still progressing, but the one-sampler/eval bottleneck
+continues to create stale-rollout waste. This is an experiment-quality
+observation, not an operations failure.
+
+## CODEX 2026-05-25T13:27:48Z - Babysitting update: checkpoint step 63 confirmed
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Trainer and rollout child jobs still show the single earlier Iris-managed
+  preemption (`preemption_count=1` each); all failure counts remain zero.
+- The Iris log stream became sparse and did not retain every trainer completion
+  line in the latest slices, but a narrow checkpoint-prefix listing under the
+  intended output path confirmed checkpoints through step 63:
+  `.../checkpoints/...-train/step-63/`.
+- The recent rollout logs show the sampler generating from weight step 62 and
+  eval pass@1 at weight step 62:
+  `eval_pass1_greedy/math_full/pass_at_1=0.476`,
+  `truncated_rate=0.124`, and `cap_saturated_rate=0.126`.
+- The trainer wait warnings continue to align with sampler-side eval windows.
+  No traceback, hard no-rollout timeout, or Iris task failure was observed.
+
+Conclusion: durable checkpoint progress is now confirmed through step 63. If
+manual recovery becomes necessary, the existing forced output path should resume
+from this same checkpoint tree rather than creating a new run id.
+
+## CODEX 2026-05-25T13:37:18Z - Babysitting update: step 65 checkpointed
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Trainer and rollout child jobs still show the single earlier Iris-managed
+  preemption (`preemption_count=1` each); all failure counts remain zero.
+- A narrow checkpoint-prefix listing confirmed checkpoints through step 65.
+- Eval at weight step 64 logged:
+  `eval_pass16_sample/math_full/pass_at_16=0.728`,
+  `eval_pass16_sample/math_full/pass_at_one=0.449625`,
+  `eval_pass16_sample/math_full/truncated_rate=0.190625`,
+  `eval_pass16_sample/math_full/cap_saturated_rate=0.195625`,
+  `eval_pass1_greedy/math_full/pass_at_1=0.472`,
+  `eval_pass1_greedy/math_full/truncated_rate=0.132`, and
+  `eval_pass1_greedy/math_full/cap_saturated_rate=0.138`.
+- `Training step 65 completed` with `train_step=82.20s`,
+  `rollout_wait=10.31s`, `batch_create=3.88s`, `batch_shard=0.01s`,
+  `iteration=96.40s`, and `loss=-0.0430`.
+- Step 65 filtered `530` stale rollouts and left only `14` in the replay
+  buffer. Weights were transferred as `weight_id=65`.
+
+Conclusion: the run remains healthy and durable through checkpoint step 65.
+Stale-rollout loss remains high during the one-sampler eval cadence.
+
+## CODEX 2026-05-25T14:05:26Z - Babysitting update: step 66 checkpointed
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Trainer and rollout child jobs still show the single earlier Iris-managed
+  preemption (`preemption_count=1` each); all failure counts remain zero.
+- A narrow checkpoint-prefix listing confirmed checkpoints through step 66.
+- The sampler completed another long eval/train cycle after step 65 and
+  continued writing train rollouts.
+- The trainer logged checkpoint save for step 66 under the intended output
+  path, and GCS lists `.../checkpoints/...-train/step-66/`.
+
+Conclusion: durable checkpoint progress is now confirmed through step 66. No
+manual recovery action has been needed.
+
+## CODEX 2026-05-25T14:27:56Z - Babysitting update: step 68 checkpointed
+
+Current state:
+
+- Iris still reports the root wrapper, executor step, RL coordinator, trainer,
+  and rollout-0 as `JOB_STATE_RUNNING`.
+- Trainer and rollout child jobs still show the single earlier Iris-managed
+  preemption (`preemption_count=1` each); all failure counts remain zero.
+- GCS checkpoint listing confirms checkpoints through step 68 under the
+  intended output path.
+- Step 67 eval logged greedy pass@1
+  `eval_pass1_greedy/math_full/pass_at_1=0.452`, `truncated_rate=0.14`, and
+  `cap_saturated_rate=0.146`.
+- The trainer served and transferred `weight_id=68`, filtered `384` stale
+  rollouts with `0` remaining, and logged `Training step 68 completed` with
+  `train_step=82.19s`, `rollout_wait=45.56s`, `iteration=131.42s`, and
+  `loss=-0.0458`.
+- Rollout-0 received weights from step 68 and the trainer entered the next
+  expected rollout wait window.
+
+Conclusion: durable checkpoint progress is confirmed through step 68. The run
+is alive and healthy, but stale rollout discard remains substantial around the
+pass@16 eval cadence.
+
+## CODEX 2026-05-25T14:38:32Z - Babysitting update: waiting after step 68
+
+Current state:
+
+- Iris still reports all RL jobs as `JOB_STATE_RUNNING`.
+- Trainer and rollout child jobs remain at `preemption_count=1`; all failure
+  counts remain zero.
+- No checkpoint beyond step 68 is listed yet.
+- Rollout-0 generated a 64-group train rollout at weight step 68, then entered
+  eval. The trainer logged `Reward mean across all groups: 0.5283203125`,
+  `Reward std across all groups: 0.17345955967903137`, and `Collected 1
+  rollout batches`.
+- The same log window shows many no-variance groups, so that one rollout batch
+  may not be enough usable data for the next trainer step. The trainer was
+  still waiting with `cumulative_wait=721s`.
+- Greedy eval at weight step 68 logged
+  `eval_pass1_greedy/math_full/pass_at_1=0.476`, `truncated_rate=0.116`, and
+  `cap_saturated_rate=0.12`; pass@16 eval began immediately after.
+
+Conclusion: this is still an active eval/wait window, not a failure. Continue
+watching for either a completed pass@16 eval, new train rollout, or checkpoint
+step 69.
+
+## CODEX 2026-05-25T14:49:06Z - Babysitting update: pass@16 generation finished at weight 68
+
+Current state:
+
+- Iris still reports all RL jobs as `JOB_STATE_RUNNING`.
+- Trainer and rollout child jobs remain at `preemption_count=1`; all failure
+  counts remain zero.
+- No checkpoint beyond step 68 is listed yet.
+- The sampler finished the weight-68 pass@16 generation after `629.2s`.
+  Pass@16 eval metrics were not emitted in the checked log window, likely
+  because grading/logging was still in progress.
+- The trainer remained in its rollout wait loop, with
+  `cumulative_wait=1321s`.
+
+Conclusion: this is a long single-sampler eval/grading window, not an Iris
+failure. Continue watching for pass@16 metrics and the next training step.
+
+## CODEX 2026-05-25T14:59:22Z - Babysitting update: checkpoint 69 listed, trainer reached step 70
+
+Current state:
+
+- Iris still reports all RL jobs as `JOB_STATE_RUNNING`.
+- Trainer and rollout child jobs remain at `preemption_count=1`; all failure
+  counts remain zero.
+- GCS checkpoint listing now includes checkpoint step 69.
+- The trainer completed `Training step 70` with `train_step=61.19s`,
+  `rollout_wait=0.00s`, `iteration=65.11s`, and `loss=-0.0363`.
+- Step 70 filtered `1120` stale rollouts and left `736` remaining before
+  serving/transferring `weight_id=70`.
+- Rollout-0 received weights from step 70, generated the next 500-example eval
+  batch, and logged greedy pass@1 at weight step 70:
+  `eval_pass1_greedy/math_full/pass_at_1=0.486`, `truncated_rate=0.106`, and
+  `cap_saturated_rate=0.108`.
+- A targeted log search did not surface pass@16 metrics for weight step 68 in
+  the currently retained Iris log window, even though the later trainer step
+  proves the run moved forward.
+
+Conclusion: progress recovered after the long eval/wait window. The durable
+checkpoint marker is now step 69, and the live trainer has reached step 70.
+
+## CODEX 2026-05-25T15:10:12Z - Babysitting update: weight-70 pass@16 completed
+
+Current state:
+
+- Iris still reports all RL jobs as `JOB_STATE_RUNNING`.
+- Trainer and rollout child jobs remain at `preemption_count=1`; all failure
+  counts remain zero.
+- GCS checkpoint listing still tops out at checkpoint step 69.
+- Rollout-0 completed pass@16 eval at weight step 70:
+  `eval_pass16_sample/math_full/pass_at_16=0.736`,
+  `truncated_rate=0.182375`, and `cap_saturated_rate=0.187375`.
+- Rollout-0 immediately entered the next train rollout generation:
+  `PHASE: GENERATE step=42 lesson=math_full`, `64 prompts`.
+
+Conclusion: the sampler is active and the run remains healthy, but the durable
+checkpoint marker is still step 69 until a later checkpoint directory appears.
+
+## CODEX 2026-05-25T15:20:36Z - Babysitting update: checkpoint step 71 saved
+
+Current state:
+
+- Iris still reports all RL jobs as `JOB_STATE_RUNNING`.
+- Trainer and rollout child jobs remain at `preemption_count=1`; all failure
+  counts remain zero.
+- GCS checkpoint listing now includes checkpoint step 71.
+- The trainer completed `Training step 71` with `train_step=82.18s`,
+  `rollout_wait=41.15s`, `iteration=127.07s`, and `loss=-0.0643`.
+- Step 71 filtered `494` stale rollouts and left `2` remaining, then served
+  and transferred `weight_id=71`.
+- Rollout-0 received weights from step 71. The trainer then entered the next
+  expected rollout wait loop, reaching `cumulative_wait=300s` in the latest
+  checked log window.
+- Greedy eval at weight step 70 logged
+  `eval_pass1_greedy/math_full/pass_at_1=0.47`, `truncated_rate=0.122`, and
+  `cap_saturated_rate=0.126`.
+
+Conclusion: durable checkpoint progress is confirmed through step 71. The run
+continues normally with the same high stale-rollout pressure around eval.
+
+## CODEX 2026-05-25T15:31:15Z - Babysitting update: active eval after checkpoint 71
+
+Current state:
+
+- Iris still reports all RL jobs as `JOB_STATE_RUNNING`.
+- Trainer and rollout child jobs remain at `preemption_count=1`; all failure
+  counts remain zero.
+- GCS checkpoint listing still tops out at checkpoint step 71.
+- Rollout-0 generated a train rollout at weight step 71, then began eval.
+  Greedy eval logged `eval_pass1_greedy/math_full/pass_at_1=0.458`,
+  `truncated_rate=0.13`, and `cap_saturated_rate=0.136`.
+- The trainer was waiting for the next usable rollout batch with
+  `cumulative_wait=901s`; the sampler had already started the following
+  500-prompt sampled eval generation.
+
+Conclusion: this is another expected single-sampler eval window. No recovery
+or relaunch action is needed.
+
+## CODEX 2026-05-25T15:41:34Z - Babysitting update: weight-71 pass@16 completed, batch prepared
+
+Current state:
+
+- Iris still reports all RL jobs as `JOB_STATE_RUNNING`.
+- Trainer and rollout child jobs remain at `preemption_count=1`; all failure
+  counts remain zero.
+- GCS checkpoint listing still tops out at checkpoint step 71.
+- Rollout-0 completed pass@16 eval at weight step 71:
+  `eval_pass16_sample/math_full/pass_at_16=0.754`,
+  `truncated_rate=0.17425`, and `cap_saturated_rate=0.18075`.
+- Rollout-0 then generated the next 64-group train rollout at weight step 71.
+  The trainer logged `Reward mean across all groups: 0.605273425579071`,
+  `Reward std across all groups: 0.2539517283439636`, and prepared a
+  `rollouts=1024` batch with `fetch=52.360s`.
+
+Conclusion: the run remains active and has reached trainer batch preparation
+after the weight-71 eval block. Continue watching for the next training step
+and durable checkpoint.
+
+## CODEX 2026-05-25T15:47:40Z - Babysitting update: live trainer reached step 73, checkpoint 72 listed
+
+Current state:
+
+- Iris still reports all RL jobs as `JOB_STATE_RUNNING`.
+- Trainer and rollout child jobs remain at `preemption_count=1`; all failure
+  counts remain zero.
+- GCS checkpoint listing now includes checkpoint step 72.
+- The trainer completed `Training step 73` with `train_step=82.27s`,
+  `rollout_wait=0.00s`, `iteration=86.10s`, and `loss=-0.0482`.
+- Step 73 filtered `1024` stale rollouts and left `768` remaining, then served
+  and transferred `weight_id=73`.
+- Rollout-0 received weights from step 73, logged greedy eval
+  `eval_pass1_greedy/math_full/pass_at_1=0.48`, `truncated_rate=0.12`, and
+  `cap_saturated_rate=0.134`, then started the sampled 500-prompt eval.
+
+Conclusion: the run is healthy and making progress. Durable checkpoint progress
+is confirmed through step 72, with live training already at step 73.
+
+## CODEX 2026-05-25T10:18:10Z - Babysitting update: Iris auto-recovered preemption
+
+Current state:
+
+- Iris reports the root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- The trainer and rollout-0 child jobs now each show `preemption_count=1`;
+  the root wrapper and coordinator still show `preemption_count=0`.
+- No manual stop/resubmit was performed. Iris restarted the child tasks in
+  place under the same root job.
+- The trainer resumed the same W&B run, discovered the intended checkpoint
+  path, loaded the prior temporary checkpoint at `step-48`, and logged
+  `Trainer recovered state.step=49`.
+- After restart, the trainer re-completed `Training step 49` and then completed
+  `Training step 50` with `train_step=106.18s`, `rollout_wait=0.00s`,
+  `iteration=110.31s`, and `loss=-0.0485`.
+- Rollout-0 initially saw Arrow Flight connection errors against the old
+  trainer address, then received `weight_step=50` from the restarted trainer.
+- The first-weight handoff recovered: rollout-0 generated the 500-example eval
+  at `weight_step=50` and logged greedy pass@1
+  `eval_pass1_greedy/math_full/pass_at_1=0.48`,
+  `truncated_rate=0.1`, and `cap_saturated_rate=0.106`.
+
+Conclusion: this was a real preemption, but Iris recovered it without a manual
+relaunch. The checkpoint/resume path behaved correctly for this run: same output
+path, same W&B run name, loaded `step-48`, and continued through weight step 50.
+Continue watching for post-eval rollout batches and the next checkpoint.
+
+## CODEX 2026-05-25T10:36:56Z - Babysitting update: post-preemption training path healthy
+
+Current state:
+
+- Iris still reports the root wrapper, executor step, RL coordinator, trainer,
+  and rollout-0 as `JOB_STATE_RUNNING`.
+- Trainer and rollout-0 remain at `preemption_count=1`; no new failure counts
+  appeared.
+- The long post-restart generation was pass@16 eval at `weight_step=50`, not a
+  stuck rollout write. It logged
+  `eval_pass16_sample/math_full/pass_at_16=0.754`,
+  `truncated_rate=0.130875`, and `cap_saturated_rate=0.14025`.
+- After that eval, rollout-0 resumed train generation and wrote multiple
+  64-group training rollouts at weight step 50.
+- The trainer consumed the post-preemption rollouts and completed
+  `Training step 51` with `train_step=92.10s`, `rollout_wait=6.21s`,
+  `iteration=102.80s`, and `loss=-0.0304`.
+- Checkpoint `step-51` was saved under the intended output path.
+- The trainer then completed `Training step 52` with `train_step=61.13s`,
+  `rollout_wait=0.00s`, `iteration=65.11s`, and `loss=-0.0410`.
+- Stale filtering remains meaningful after recovery: `Filtered 192 stale
+  rollouts 1984 remaining` before step 51, then `Filtered 960 stale rollouts 0
+  remaining` after step 52.
+
+Conclusion: the run is no longer merely "resumed"; it has proven the full
+post-preemption path: resume checkpoint -> serve weights -> eval -> train
+rollout generation -> trainer consumption -> checkpoint. Continue babysitting,
+with special attention to stale-rollout rates because one-sampler throughput is
+still dominated by eval bursts and old step-50 rollouts.
+
+## CODEX 2026-05-25T10:58:18Z - Babysitting update: step 54 reached after eval wait
+
+Current state:
+
+- Iris still reports the root wrapper, executor step, RL coordinator, trainer,
+  and rollout-0 as `JOB_STATE_RUNNING`.
+- Trainer and rollout-0 remain at `preemption_count=1`; no new failures or
+  preemptions appeared.
+- Rollout completed pass@16 eval at `weight_step=52`:
+  `eval_pass16_sample/math_full/pass_at_16=0.756`,
+  `truncated_rate=0.143875`, and `cap_saturated_rate=0.152125`.
+- After that eval, rollout generated fresh 64-group train batches and the
+  trainer resumed consumption.
+- Checkpoint `step-53` saved under the intended output path.
+- `Training step 53 completed` with `train_step=61.13s`,
+  `rollout_wait=8.11s`, `iteration=72.96s`, and `loss=-0.0315`.
+- `Training step 54 completed` with `train_step=82.21s`,
+  `rollout_wait=0.01s`, `iteration=86.12s`, and `loss=-0.0382`.
+- Stale filtering is still substantial: after weight 54 transfer the trainer
+  logged `Filtered 1216 stale rollouts 704 remaining`.
+
+Conclusion: progress after the preemption is continuing through later train
+steps, not just a one-off recovery. The main risk signal remains stale rollout
+volume after eval bursts, but the trainer still had non-stale data available at
+step 54.
+
+## CODEX 2026-05-25T11:20:29Z - Babysitting update: step 55 checkpointed
+
+Current state:
+
+- Iris still reports the root wrapper, executor step, RL coordinator, trainer,
+  and rollout-0 as `JOB_STATE_RUNNING`.
+- Trainer and rollout-0 remain at `preemption_count=1`; no new failures or
+  preemptions appeared.
+- Weight-step 54 eval completed:
+  `eval_pass16_sample/math_full/pass_at_16=0.744`,
+  `eval_pass16_sample/math_full/truncated_rate=0.151375`,
+  `eval_pass16_sample/math_full/cap_saturated_rate=0.158625`,
+  and greedy `eval_pass1_greedy/math_full/pass_at_1=0.488`.
+- The trainer then completed `Training step 55` with `train_step=82.21s`,
+  `rollout_wait=12.31s`, `iteration=98.18s`, and `loss=-0.0479`.
+- Checkpoint `step-55` saved under the intended output path.
+- The trainer served `weight_id=55`, rollout-0 received step 55, and the latest
+  logs are back in the normal post-weight eval/wait window.
+- Stale filtering was high but not fatal at this step:
+  `Filtered 412 stale rollouts 4 remaining`.
+
+Conclusion: the job remains healthy through step 55. Progress continues, but
+the one-sampler setup is still dominated by eval windows and stale rollout
+drainage after weight updates.
+
+## CODEX 2026-05-25T08:32:03Z - Babysitting update: step 44 completed after long step-43 eval gap
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Failure and preemption counts remain zero for all listed jobs.
+- The trainer waited through a long post-step-43 window, reaching
+  `cumulative_wait=661s` before fresh data arrived. Raw logs showed the noisy
+  `receive_weights: polling for step > 43` lines were from the async/inflight
+  weight-transfer thread, not proof that the rollout main loop was idle.
+- Rollout-0 produced a fresh training rollout at weight step 43:
+  `Generated rollout with 64 groups from lesson math_full at step 43`.
+- Trainer collected that batch with `rollout_wait=17.155s` and completed
+  `Training step 44` with `train_step=60.85s`, `iteration=81.68s`, and
+  `loss=-0.0283`.
+- Checkpoint step 44 was saved under the intended output path:
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260524-214354-894d36/checkpoints/.../step-44`.
+- After the step, the replay buffer logged
+  `Filtered 368 stale rollouts 0 remaining`, so the next step depends on fresh
+  sampler output rather than buffered backlog.
+- A greedy full eval at weight step 43 logged
+  `eval_pass1_greedy/math_full/pass_at_1=0.472`,
+  `truncated_rate=0.102`, and `cap_saturated_rate=0.112`.
+
+Conclusion: the long wait was not a deadlock and no recovery was needed. It is
+another concrete example of the one-sampler determinism tradeoff: eval can
+block training for many minutes, and stale filtering can drain the replay buffer
+after the trainer advances.
+
+## CODEX 2026-05-25T09:24:41Z - Babysitting update: step 47 checkpointed
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Failure and preemption counts remain zero for all listed jobs.
+- The run advanced through the earlier post-step-44 wait and reached
+  `Training step 47 completed` at 2026-05-25T09:19:13Z.
+- Step 47 timing was `train_step=81.84s`, `rollout_wait=17.42s`,
+  `iteration=102.90s`, and `loss=-0.0371`.
+- Checkpoint step 47 was saved under the intended output path:
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260524-214354-894d36/checkpoints/.../step-47`.
+- The replay buffer filtered `445` stale rollouts and had `3` remaining at the
+  step-47 boundary.
+- The trainer is now in another expected one-sampler wait window after step 47;
+  latest observed `cumulative_wait=240s`, with vLLM activity from rollout-0.
+
+Conclusion: no recovery or relaunch has been needed. The run is still
+progressing, but stale filtering continues to leave little buffer backlog after
+trainer steps.
+
+## CODEX 2026-05-25T09:51:01Z - Babysitting update: step 49 reached, checkpoint step 48 not yet confirmed in logs
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Failure and preemption counts remain zero for all listed jobs.
+- Rollout eval reached weight step 47 with
+  `eval_pass16_sample/math_full/pass_at_16=0.76`,
+  `truncated_rate=0.115`, and `cap_saturated_rate=0.1235`.
+- The trainer recovered from the long post-step-47 wait after rollout-0 wrote
+  multiple train batches. One step-47 batch had many `Group ... has no variance`
+  logs, which explains why a single rollout batch did not immediately unblock
+  training.
+- `Training step 48 completed` at 2026-05-25T09:47:41Z with
+  `train_step=60.83s`, `rollout_wait=54.65s`, `iteration=123.02s`, and
+  `loss=-0.0392`. The replay buffer logged
+  `Filtered 3 stale rollouts 1952 remaining`.
+- `Training step 49 completed` at 2026-05-25T09:49:01Z with
+  `train_step=60.84s`, `rollout_wait=0.00s`, `iteration=64.82s`, and
+  `loss=-0.0240`.
+- Checkpoint step 48 was observed starting. The `Saved checkpoint ... step-48`
+  log line did not appear in the checked log windows, but a narrow GCS listing
+  confirmed `.../checkpoints/.../step-48/` exists under the intended output
+  path.
+
+Conclusion: the run is still progressing and has not needed recovery. Step 48
+is durable even though the save-confirmation log line was not captured in the
+monitor windows.
+
+## CODEX 2026-05-25T05:06:28Z - Babysitting update: step 29 checkpointed after pass@16 eval
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Failure and preemption counts remain zero for all listed jobs.
+- The expected single-sampler eval backlog cleared at weight step 28:
+  `eval_pass16_sample/math_full/pass_at_16=0.774` over 8000 responses,
+  `pass_at_one=0.43975`, `truncated_rate=0.122375`, and
+  `cap_saturated_rate=0.132`.
+- During that backlog the trainer wait reached `cumulative_wait=1501s`, below
+  the one-hour no-rollout guard. The next train rollout then arrived and the
+  trainer collected new batches normally.
+- Checkpoint step 29 was saved under the intended output path:
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260524-214354-894d36/checkpoints/.../step-29`.
+- The rollout worker has continued generating subsequent 64-group train
+  batches after step 29.
+
+Conclusion: the long idle window was the expected cost of serialized pass@16
+eval with one sampler, not a failure or resume issue. No recovery or relaunch
+has been needed.
+
+## CODEX 2026-05-25T05:33:21Z - Babysitting update: step 32 clean
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Failure and preemption counts remain zero for all listed jobs.
+- The step-30 pass@16 eval window completed cleanly with
+  `eval_pass16_sample/math_full/pass_at_16=0.798`,
+  `truncated_rate=0.124375`, and `cap_saturated_rate=0.13425`.
+- Training moved past the eval backlog: `Training step 32 completed` with
+  `train_step=81.87s`, `rollout_wait=0.01s`, `iteration=85.75s`, and
+  `loss=-0.0345`.
+- The next eval started at weight step 32 and greedy pass@1 logged
+  `eval_pass1_greedy/math_full/pass_at_1=0.496`,
+  `truncated_rate=0.108`, and `cap_saturated_rate=0.118`.
+
+Conclusion: another serialized eval window resolved into normal training
+progress. No recovery or relaunch has been needed.
+
+## CODEX 2026-05-25T05:47:04Z - Babysitting update: step 33 checkpointed
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Failure and preemption counts remain zero for all listed jobs.
+- The step-32 pass@16 eval window completed with
+  `eval_pass16_sample/math_full/pass_at_16=0.77`,
+  `truncated_rate=0.112`, and `cap_saturated_rate=0.121125`.
+- A subsequent train batch was prepared normally:
+  `Batch prep: fetch=27.929s, create=3.694s, shard=0.009s, total=31.631s,
+  rollouts=1024`.
+- Checkpoint step 33 was saved under the intended output path:
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260524-214354-894d36/checkpoints/.../step-33`.
+- `Training step 33 completed` with `train_step=81.81s`,
+  `rollout_wait=27.93s`, `iteration=113.44s`, and `loss=-0.0351`; the
+  checkpoint save finished successfully at `05:49:07Z`.
+
+Conclusion: the run remains healthy. The rollout worker can still be evaluating
+the previous weight step while the trainer has moved ahead, which is the
+expected one-step staleness pattern for this configuration, not a resume issue.
+
+## CODEX 2026-05-25T06:18:31Z - Babysitting update: step 34 checkpointed
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Failure and preemption counts remain zero for all listed jobs.
+- A long step-33 eval/backlog window resolved: the later pass@16 eval logged
+  `eval_pass16_sample/math_full/pass_at_16=0.772`,
+  `truncated_rate=0.114375`, and `cap_saturated_rate=0.1235`.
+- The trainer then collected enough rollout data and `Training step 34
+  completed` with `train_step=81.82s`, `rollout_wait=14.22s`,
+  `iteration=99.70s`, and `loss=-0.0349`.
+- Checkpoint step 34 saved successfully under the intended output path:
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260524-214354-894d36/checkpoints/.../step-34`.
+
+Conclusion: even the longer trainer wait resolved without recovery. The run is
+still slow because one sampler serializes train rollout and eval, but it remains
+healthy and resumability has not been exercised.
+
+## CODEX 2026-05-25T06:39:28Z - Babysitting update: step 36 checkpointed
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Failure and preemption counts remain zero for all listed jobs.
+- The trainer continued advancing after the prior backlog. It prepared a batch
+  with `fetch=59.956s`, `create=3.640s`, `shard=0.014s`, `rollouts=1024`.
+- Eval at weight step 35 logged greedy pass@1
+  `eval_pass1_greedy/math_full/pass_at_1=0.488`,
+  `truncated_rate=0.124`, and `cap_saturated_rate=0.134`.
+- `Training step 36 completed` with `train_step=60.83s`,
+  `rollout_wait=59.96s`, `iteration=124.44s`, and `loss=-0.0357`.
+- Checkpoint step 36 saved successfully under the intended output path:
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260524-214354-894d36/checkpoints/.../step-36`.
+
+Conclusion: the single-sampler run is still making real training progress and
+checkpointing on the forced output path. No recovery or relaunch has been
+needed.
+
+## CODEX 2026-05-25T07:40:55Z - Babysitting update: eval reached step 40
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Failure and preemption counts remain zero for all listed jobs.
+- Rollout eval reached weight step 38 with
+  `eval_pass16_sample/math_full/pass_at_16=0.784`,
+  `truncated_rate=0.092375`, and `cap_saturated_rate=0.101625`.
+- Rollout eval then reached weight step 40 with
+  `eval_pass16_sample/math_full/pass_at_16=0.764`,
+  `truncated_rate=0.091875`, and `cap_saturated_rate=0.102125`.
+- The recent log slices were sparse and did not retain the full intermediate
+  trainer/checkpoint lines, so this entry only records the directly observed
+  eval milestones and Iris health state.
+
+Conclusion: the job is still alive and progressing through eval at later weight
+steps with no preemption or failure counters. Continue watching for the next
+explicit trainer checkpoint/completion line before drawing more throughput
+conclusions.
+
+## CODEX 2026-05-25T08:12:12Z - Babysitting update: step 42 completed, stale rollouts observed
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Failure and preemption counts remain zero for all listed jobs.
+- Eval reached weight step 41 with greedy pass@1
+  `eval_pass1_greedy/math_full/pass_at_1=0.502`,
+  `truncated_rate=0.108`, and `cap_saturated_rate=0.118`.
+- The trainer transferred weights as `weight_id=42` and logged
+  `Filtered 3 stale rollouts 1776 remaining`.
+- `Training step 42 completed` with `train_step=81.78s`,
+  `rollout_wait=57.36s`, `iteration=142.79s`, and `loss=-0.0524`.
+- The next batch prep immediately followed:
+  `fetch=0.002s`, `create=3.745s`, `shard=0.009s`, `rollouts=1024`.
+
+Conclusion: the run remains healthy and the stale-rollout metric is active in
+the logs. At least one backlog window filtered stale rollouts but still left
+enough data for continued training.
+
+## CODEX 2026-05-25T01:27:00Z - Babysitting update: monitoring tunnel blip, run healthy
+
+Observation:
+
+- A local Iris log pull hit a transient SSH/gcloud tunnel failure:
+  `gcloud crashed (ConnectionError)` / `kex_exchange_identification: read:
+  Connection reset by peer`.
+- A subsequent status check retried successfully. Iris still reports root
+  wrapper, executor step, RL coordinator, trainer, and rollout-0 as
+  `JOB_STATE_RUNNING`.
+- Failure and preemption counts remain zero for all listed jobs.
+- The live run advanced while the monitor tunnel was flaky. Rollout eval reached
+  weight step 15, with `eval_pass16_sample/math_full/pass_at_16=0.746` over
+  8000 responses and cap saturation rate `0.12775`.
+- Trainer wait at the latest check was another normal post-eval wait window
+  (`cumulative_wait=600s`), below the one-hour guard.
+
+Conclusion: the tunnel failure was a monitoring transport issue, not an Iris job
+failure. No recovery or relaunch was needed.
+
+## CODEX 2026-05-25T04:44:35Z - Babysitting update: step 28 checkpointed
+
+Current state:
+
+- Iris still reports root wrapper, executor step, RL coordinator, trainer, and
+  rollout-0 as `JOB_STATE_RUNNING`.
+- Failure and preemption counts remain zero for all listed jobs.
+- Rollout eval reached weight step 27 with
+  `eval_pass1_greedy/math_full/pass_at_1=0.49`.
+- `Training step 28 completed` with `train_step=81.82s`,
+  `rollout_wait=47.75s`, `iteration=133.34s`, and `loss=-0.0253`.
+- Checkpoint step 28 was saved under the intended output path:
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260524-214354-894d36/checkpoints/.../step-28`.
+- The trainer is currently in another expected rollout/eval wait window
+  (`cumulative_wait=360s` at the latest log pull).
+
+Conclusion: the run continues to advance and checkpoint normally. No recovery
+or relaunch has been needed.
+
+## CODEX 2026-05-25T23:37:05Z - Babysitting update: post-preemption resume cleared step 8
+
+Current state:
+
+- The active restarted RL instance is
+  `rl-llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260525-210900-20260525-231008-eecd0136`.
+- Iris reports the restarted RL coordinator, train job, and rollout-0 job as
+  `JOB_STATE_RUNNING` with zero failures and zero preemptions on the restarted
+  children.
+- The earlier instance remains killed with `Parent task preempted`; no manual
+  relaunch was needed because Iris restarted the child instance and Levanter
+  loaded train checkpoint step 7 from the intended output path.
+- The apparent long stall after resume was explained by eval ordering and batch
+  size. Trainer had 1008 fresh usable rollouts, below the 1024 local batch
+  threshold, while rollout spent 626.8s on a step-8 eval generation before
+  returning to train rollout generation.
+- After eval, rollout wrote 64-group train batches at weight step 8. Trainer
+  collected them, prepared a 1024-rollout batch, advanced progress to `9/500`,
+  and began saving checkpoint step 8 under
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260525-210900-5fbb52/checkpoints/.../step-8`.
+
+Conclusion: resume is functioning for this run. The first resumed step had a
+long wait because eval ran before the next train rollout write and the initial
+post-resume buffer was just under one train batch, not because the trainer or
+rollout worker crashed.
+
+## CODEX 2026-05-27T04:03:40Z - Babysitting update: step 109 saved after long eval window
+
+Current state:
+
+- The active run is still the `marin_rl_blog` one-sampler v5p-8 run:
+  `llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260525-210900`.
+- The active Iris RL instance remains
+  `rl-llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260525-210900-20260526-041102-42dd473c`.
+- Iris reports the root wrapper, launcher, RL coordinator, train child, and
+  rollout-0 child as `JOB_STATE_RUNNING`.
+- The current child jobs still carry `preemption_count=1` from earlier
+  infrastructure preemption history, but the latest checks show no terminal
+  failure or manual recovery requirement.
+- The long single-sampler pass@16 window at weight step 108 completed:
+  generation finished at `2026-05-27T03:55:23Z`, then metrics logged at
+  `2026-05-27T03:57:07Z` with `pass_at_16=0.73`, `total_count=8000`,
+  `truncated_rate=0.1405`, and `cap_saturated_rate=0.1465`.
+- The next 64-prompt train rollout finished at `2026-05-27T03:58:34Z`.
+  Trainer collected one rollout batch at `2026-05-27T03:58:47Z` with reward
+  mean `0.5369` and reward std `0.2158`.
+- Trainer advanced to `Progress on:train 110it/500it` and began saving
+  checkpoint `step-109` at `2026-05-27T03:59:51Z`.
+- GCS now lists `step-109` under the intended forced output path:
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-500-1s-uc1-20260525-210900-5fbb52/checkpoints/.../step-109`.
+- At `2026-05-27T04:02:36Z`, the trainer served weights for weight id 109,
+  transferred them successfully, filtered only 2 stale rollouts with 1936
+  remaining, and logged `Training step 109 completed` with
+  `train_step=60.52s`, `rollout_wait=49.10s`, `iteration=113.21s`, and
+  `loss=-0.0516`.
+- Rollout-0 received weights from step 109 at `2026-05-27T04:02:49Z`.
+
+Conclusion: the latest apparent stall was another expected serialized
+single-sampler eval/backlog window. It resolved into normal training progress,
+checkpointing, weight serving, and rollout weight update without manual
+recovery. I stopped the local scratch monitor loop before commit prep so it
+would not keep mutating local scratch logs.

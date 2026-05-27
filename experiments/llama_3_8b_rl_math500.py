@@ -102,6 +102,15 @@ def _default_rl_loss() -> RLOOLoss:
     )
 
 
+def _region_from_zone(zone: str | None) -> str | None:
+    if zone is None:
+        return None
+    region, separator, _zone_suffix = zone.rpartition("-")
+    if not separator or not region:
+        raise ValueError(f"Invalid GCP zone: {zone}")
+    return region
+
+
 def build_math500_curriculum(run_id: str, config: RLExperimentConfig, eval_frequency: int) -> CurriculumConfig:
     sampling_params = SamplingParams(
         temperature=1.0,
@@ -267,6 +276,12 @@ def parse_args() -> argparse.Namespace:
         help="Optional concrete zone for trainer and rollout TPU jobs.",
     )
     parser.add_argument(
+        "--launcher-region",
+        default=None,
+        help="Concrete region for executor output paths and RL child resource constraints. "
+        "Defaults to the region implied by --zone when a zone is provided.",
+    )
+    parser.add_argument(
         "--inflight-weight-updates",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -276,6 +291,12 @@ def parse_args() -> argparse.Namespace:
         "--project-name",
         default=PROJECT_NAME,
         help="W&B project name for trainer and rollout runs.",
+    )
+    parser.add_argument(
+        "--override-output-path",
+        default=None,
+        help="Concrete executor output path to reuse when recovering an interrupted RL run. "
+        "The run will fail fast if the saved RL config guard does not match the current config.",
     )
     return parser.parse_args()
 
@@ -324,6 +345,7 @@ def build_experiment_config(args: argparse.Namespace) -> RLExperimentConfig:
         num_train_slices=args.num_train_slices,
         train_ram=args.train_ram,
         inference_ram=args.inference_ram,
+        launcher_region=args.launcher_region or _region_from_zone(args.zone),
         zone=args.zone,
         inflight_weight_updates=args.inflight_weight_updates,
         max_rollout_step_delay=1,
@@ -357,20 +379,25 @@ def main() -> None:
         config=experiment_config,
         curriculum=curriculum,
     )
+    if args.override_output_path is not None:
+        step = step.with_output_path(args.override_output_path)
     executor_config = executor_main_config_for_rl_experiment(experiment_config)
 
     logger.info(
         "Launching executor RL Math500 run %s (train_tpu=%s, inference_tpu=%s, rollout_workers=%d, "
-        "train_ram=%s, inference_ram=%s, zone=%s, inflight=%s, executor_prefix=%s)",
+        "train_ram=%s, inference_ram=%s, launcher_region=%s, zone=%s, inflight=%s, executor_prefix=%s, "
+        "override_output_path=%s)",
         run_name,
         experiment_config.train_tpu_type,
         experiment_config.inference_tpu_type,
         experiment_config.num_rollout_workers,
         experiment_config.train_ram,
         experiment_config.inference_ram,
+        experiment_config.launcher_region,
         experiment_config.zone,
         experiment_config.inflight_weight_updates,
         executor_config.prefix,
+        args.override_output_path,
     )
 
     executor_main(

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,7 @@ from marin.rl.curriculum import CurriculumConfig
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.model_utils import is_hf_checkpoint
 from marin.rl.rl_experiment_utils import (
+    RL_RUN_CONFIG_FILENAME,
     ModelConfig,
     RLExperimentConfig,
     RLStepConfig,
@@ -60,6 +62,7 @@ def _test_config(
     inference_tpu_type: str,
     train_ram: str | None = None,
     inference_ram: str | None = None,
+    launcher_region: str | None = None,
     zone: str | None = None,
     seed: int = 42,
     delete_previous_temporary_checkpoint_after_save: bool = True,
@@ -87,6 +90,7 @@ def _test_config(
         inference_tpu_type=inference_tpu_type,
         train_ram=train_ram,
         inference_ram=inference_ram,
+        launcher_region=launcher_region,
         zone=zone,
         seed=seed,
         delete_previous_temporary_checkpoint_after_save=delete_previous_temporary_checkpoint_after_save,
@@ -133,6 +137,22 @@ def test_executor_main_config_uses_current_launcher_region_prefix(monkeypatch):
     )
 
     assert executor_config.prefix == "gs://marin-us-east5"
+
+
+def test_executor_main_config_can_use_explicit_launcher_region(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central2")
+
+    config = _test_config(
+        train_tpu_type="v5p-8",
+        inference_tpu_type="v5p-8",
+        launcher_region="us-central1",
+        zone="us-central1-a",
+    )
+    resources = executor_step_resources_for_rl_experiment(config)
+    executor_config = executor_main_config_for_rl_experiment(config)
+
+    assert resources.regions == ["us-central1"]
+    assert executor_config.prefix == "gs://marin-us-central1"
 
 
 def test_launcher_region_raises_when_root_region_conflicts_with_requested_compute(monkeypatch):
@@ -330,6 +350,7 @@ def test_run_rl_experiment_step_returns_serializable_path_metadata(monkeypatch):
         return "job-config"
 
     monkeypatch.setattr("marin.rl.rl_experiment_utils._build_rl_job_config", _fake_build_rl_job_config)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._ensure_run_config_matches_or_write", lambda _config: None)
     monkeypatch.setattr("marin.rl.rl_experiment_utils.RLJob", _FakeRLJob)
 
     result = _run_rl_experiment_step(step_config)
@@ -339,3 +360,102 @@ def test_run_rl_experiment_step_returns_serializable_path_metadata(monkeypatch):
     assert calls["job_config"] == "job-config"
     assert calls["name"] == "exec-gcs-small-test"
     assert result == PathMetadata(path="gs://marin-us-central1/rl_testing/exec-gcs-small-test")
+
+
+def test_run_rl_experiment_step_writes_and_reuses_config_guard(monkeypatch, tmp_path):
+    calls = {"runs": 0}
+
+    class _FakeRLJob:
+        def __init__(self, config):
+            assert config == "job-config"
+
+        def run(self, name):
+            calls["runs"] += 1
+            calls["name"] = name
+
+    output_path = str(tmp_path / "rl-run")
+    step_config = RLStepConfig(
+        name="exec-local-test",
+        experiment_config=_test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
+        curriculum=_test_curriculum(),
+        model_path="gs://marin-us-central1/models/test-model",
+        output_path=output_path,
+    )
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._build_rl_job_config", lambda **_kwargs: "job-config")
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.RLJob", _FakeRLJob)
+
+    assert _run_rl_experiment_step(step_config) == PathMetadata(path=output_path)
+    assert _run_rl_experiment_step(step_config) == PathMetadata(path=output_path)
+
+    guard_path = tmp_path / "rl-run" / RL_RUN_CONFIG_FILENAME
+    guard = json.loads(guard_path.read_text())
+    assert guard["schema_version"] == 1
+    assert guard["config"]["name"] == "exec-local-test"
+    assert guard["config"]["experiment_config"]["seed"] == 42
+    assert calls == {"runs": 2, "name": "exec-local-test"}
+
+
+def test_run_rl_experiment_step_rejects_config_mismatch_for_existing_guard(monkeypatch, tmp_path):
+    calls = {"runs": 0}
+
+    class _FakeRLJob:
+        def __init__(self, config):
+            assert config == "job-config"
+
+        def run(self, name):
+            calls["runs"] += 1
+            calls["name"] = name
+
+    output_path = str(tmp_path / "rl-run")
+    base_config = RLStepConfig(
+        name="exec-local-test",
+        experiment_config=_test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
+        curriculum=_test_curriculum(),
+        model_path="gs://marin-us-central1/models/test-model",
+        output_path=output_path,
+    )
+    changed_config = dataclasses.replace(
+        base_config,
+        experiment_config=_test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8", seed=43),
+    )
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._build_rl_job_config", lambda **_kwargs: "job-config")
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.RLJob", _FakeRLJob)
+
+    _run_rl_experiment_step(base_config)
+
+    with pytest.raises(ValueError, match="changed config"):
+        _run_rl_experiment_step(changed_config)
+
+    assert calls == {"runs": 1, "name": "exec-local-test"}
+
+
+def test_run_rl_experiment_step_rejects_existing_state_without_config_guard(monkeypatch, tmp_path):
+    calls = {"runs": 0}
+
+    class _FakeRLJob:
+        def __init__(self, config):
+            calls["job_config"] = config
+
+        def run(self, name):
+            calls["runs"] += 1
+            calls["name"] = name
+
+    output_path = tmp_path / "rl-run"
+    (output_path / "rollouts").mkdir(parents=True)
+    step_config = RLStepConfig(
+        name="exec-local-test",
+        experiment_config=_test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
+        curriculum=_test_curriculum(),
+        model_path="gs://marin-us-central1/models/test-model",
+        output_path=str(output_path),
+    )
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._build_rl_job_config", lambda **_kwargs: "job-config")
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.RLJob", _FakeRLJob)
+
+    with pytest.raises(ValueError, match="without a config guard"):
+        _run_rl_experiment_step(step_config)
+
+    assert calls == {"runs": 0}

@@ -13,6 +13,7 @@ from marin.rl.environments.inference_ctx.staging import stage_vllm_metadata_loca
 from marin.rl.environments.inference_ctx.vllm import VLLMSamplingConfig, vLLMInferenceContextConfig
 from marin.rl.rollout_schedule import rollout_assignment
 from marin.rl.rollout_worker import (
+    ROLLOUT_WANDB_WEIGHT_STEP_PATTERNS,
     RolloutTracker,
     RolloutTrackerConfig,
     RolloutTransferCounterSnapshot,
@@ -156,6 +157,9 @@ def test_rollout_tracker_uses_explicit_name_when_provided(monkeypatch):
     captured = {}
 
     class _FakeRun:
+        def define_metric(self, _metric, **_kwargs):
+            pass
+
         def log(self, _metrics, step=None):
             pass
 
@@ -175,6 +179,37 @@ def test_rollout_tracker_uses_explicit_name_when_provided(monkeypatch):
     assert captured["name"] == "iris-rl-e4ms2-500-rollout-0"
     assert captured["id"] == "iris-rl-e4ms2-500-rollout-0"
     assert captured["resume"] == "allow"
+
+
+def test_rollout_tracker_defines_resume_safe_semantic_step_axes(monkeypatch):
+    defined_metrics: list[tuple[str, dict[str, object]]] = []
+
+    class _FakeRun:
+        def define_metric(self, metric: str, **kwargs):
+            if "*" in metric and not metric.endswith("*"):
+                raise ValueError(f"W&B only accepts suffix globs in metric patterns: {metric}")
+            defined_metrics.append((metric, kwargs))
+
+        def log(self, _metrics, step=None):
+            pass
+
+        def finish(self):
+            pass
+
+    monkeypatch.setattr("marin.rl.rollout_worker.wandb.init", lambda **_kwargs: _FakeRun())
+
+    RolloutTracker(
+        RolloutTrackerConfig(project="marin_iris_rl_debug", name="iris-rl-e4ms2-500-rollout-0"),
+        run_id="iris-rl-e4ms2-500-rollout-0",
+    )
+
+    assert ("inference.weight_step", {}) in defined_metrics
+    assert ("inference.train_step", {}) in defined_metrics
+    assert ("inference.rollout_step", {}) in defined_metrics
+    assert ("inference.rollout/*", {"step_metric": "inference.weight_step"}) in defined_metrics
+    assert ("inference.eval_pass16_sample/*", {"step_metric": "inference.weight_step"}) in defined_metrics
+    assert ("inference.throughput/*", {"step_metric": "inference.weight_step"}) in defined_metrics
+    assert all("*" not in pattern or pattern.endswith("*") for pattern in ROLLOUT_WANDB_WEIGHT_STEP_PATTERNS)
 
 
 def test_resume_safe_transfer_metrics_logs_attempt_and_cumulative_values_after_counter_reset():
@@ -298,6 +333,8 @@ def test_log_rollout_metrics_uses_wandb_default_step_and_logs_weight_train_steps
                 "inference.throughput/batch_time_seconds": 2.0,
                 "inference.weight_step": -1,
                 "inference.train_step": 248,
+                "inference.weight_lag": 249,
+                "inference.rollout_step": 30,
             },
             None,
         )
@@ -371,6 +408,7 @@ def test_log_lesson_eval_uses_wandb_default_step_and_context_metrics():
         weight_step=-1,
         batch=SimpleNamespace(groups=[]),
         metrics={"inference.eval/lesson-a/avg_reward": 1.0},
+        rollout_step=4,
     )
 
     assert recorded_logs == [
@@ -380,6 +418,8 @@ def test_log_lesson_eval_uses_wandb_default_step_and_context_metrics():
                 "inference.eval/lesson-a/avg_reward": 1.0,
                 "inference.weight_step": -1,
                 "inference.train_step": 12,
+                "inference.weight_lag": 13,
+                "inference.rollout_step": 4,
             },
             None,
         )

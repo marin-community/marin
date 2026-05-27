@@ -19,7 +19,9 @@ def requested_tpu_variants(train_tpu_type: str, inference_tpu_type: str | None) 
     return variants
 
 
-def resolve_launcher_region(train_tpu_type: str, inference_tpu_type: str | None) -> str:
+def resolve_launcher_region(
+    train_tpu_type: str, inference_tpu_type: str | None, explicit_region: str | None = None
+) -> str:
     """Choose the concrete region for an RL run.
 
     The root Iris job must already be launched in the desired region. This
@@ -29,6 +31,15 @@ def resolve_launcher_region(train_tpu_type: str, inference_tpu_type: str | None)
     variants = requested_tpu_variants(train_tpu_type, inference_tpu_type)
     current_region = marin_region()
     allowed_regions = infer_tpu_variant_regions_from_iris(variants)
+
+    if explicit_region is not None:
+        explicit_region = explicit_region.lower()
+        if allowed_regions is not None and explicit_region not in allowed_regions:
+            raise ValueError(
+                f"RL run requests TPU variants {variants}, which are available in {allowed_regions}, "
+                f"but explicit launcher_region is {explicit_region!r}."
+            )
+        return explicit_region
 
     if current_region is not None:
         current_region = current_region.lower()
