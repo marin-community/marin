@@ -40,6 +40,14 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class RowFilter:
+    """Exact-match filter for selecting rows before conversation transformation."""
+
+    column: str
+    allowed_values: list[str]
+
+
+@dataclass(frozen=True)
 class TransformSFTDatasetConfig:
     """Base configuration to transform a conversation dataset from huggingface json to OpenAI format.
 
@@ -51,6 +59,7 @@ class TransformSFTDatasetConfig:
         adapter (TransformAdapter): Adapter responsible for mapping raw rows into OpenAI chat format.
         subsets (list[str]): Data subsets (from HuggingFace config) to use. Empty list indicates all/default subset(s).
         splits (list[str]): Data splits (e.g., `train`, `validation`) to use. Empty list indicates all splits.
+        row_filters (list[RowFilter]): Exact-match filters applied before transforming rows.
         max_parallelism (int | None): Maximum number of concurrent shard processing tasks.
             Set to lower values to avoid HF rate limits. Set to None for default behavior (full concurrency).
     """
@@ -62,6 +71,7 @@ class TransformSFTDatasetConfig:
     adapter: TransformAdapter
     subsets: list[str] = field(default_factory=lambda: [])  # Default behavior is to use all subsets
     splits: list[str] = field(default_factory=lambda: ["train"])  # Set to train; empty set means everything
+    row_filters: list[RowFilter] = field(default_factory=list)
     max_parallelism: int | None = None  # None means use default behavior (full concurrency)
 
 
@@ -118,8 +128,21 @@ def _normalize_tool_structures(message: dict) -> dict:
     return message
 
 
+def _row_matches_filters(row: dict[str, Any], row_filters: Sequence[RowFilter]) -> bool:
+    for row_filter in row_filters:
+        if row_filter.column not in row:
+            raise ValueError(f"Row filter column '{row_filter.column}' is missing from source row.")
+        if row[row_filter.column] not in row_filter.allowed_values:
+            return False
+    return True
+
+
 def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformAdapter):
     source = unwrap_versioned_value(cfg.source)
+    row_filters = unwrap_versioned_value(cfg.row_filters)
+    if row_filters and not _row_matches_filters(row, row_filters):
+        return None
+
     transformed_row_messages: list[OpenAIChatMessage] | None = adapter.transform_conversation_to_openai_format(row)
 
     if transformed_row_messages is None:

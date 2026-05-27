@@ -6,6 +6,7 @@ from marin.transform.conversation.adapters import InputDatasetFormat
 from marin.transform.conversation.transform_conversation import transform_row
 
 from experiments.posttrain.instruction_datasets import (
+    ACE_REASON_1_1_SFT_HF_ID,
     FINEPROOFS_SFT_METADATA_COLUMNS,
     FINEPROOFS_SFT_REVISION,
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
@@ -24,6 +25,46 @@ SYNTHETIC2_SFT_VERIFIED_SAMPLE = {
         {"role": "assistant", "content": "<think>Use set intersection.</think>\n```python\nprint(len(a & b))\n```"},
     ],
 }
+
+ACE_REASON_MATH_SAMPLE = {
+    "category": "math",
+    "source": "OpenMathReasoning",
+    "input": "Find all prime numbers p such that p^3 + 1 = k^2.",
+    "output": "<think>Factor p^3 + 1 and compare factors.</think>\nThe only prime is p = 2.",
+}
+
+ACE_REASON_CODE_SAMPLE = {
+    "category": "code",
+    "source": "OpenCodeReasoning",
+    "input": "Write a function to detect a directed cycle.",
+    "output": "<think>Use DFS colors.</think>\n```python\ndef has_cycle(graph): ...\n```",
+}
+
+ACE_REASON_MATH_ASSISTANT = "\n".join(
+    [
+        "<|start_think|>Factor p^3 + 1 and compare factors.<|end_think|>",
+        "The only prime is p = 2.",
+    ]
+)
+
+ACE_REASON_CODE_ASSISTANT = "\n".join(
+    [
+        "<|start_think|>Use DFS colors.<|end_think|>",
+        "```python\ndef has_cycle(graph): ...\n```",
+    ]
+)
+
+
+def _assert_acereason_transform_result(result, source_row, expected_assistant):
+    assert result is not None
+    assert result.source == ACE_REASON_1_1_SFT_HF_ID
+    assert [message.role for message in result.messages] == ["user", "assistant"]
+    assert result.messages[0].content == source_row["input"]
+    assert result.messages[1].content == expected_assistant
+    assert result.metadata == {
+        "category": source_row["category"],
+        "source": source_row["source"],
+    }
 
 
 def test_fineproofs_sft_datasets_are_registered():
@@ -105,3 +146,41 @@ def test_synthetic2_sft_verified_step_transforms_chat_rows():
         "task_type": "prime_rl_code",
         "reward": 1.0,
     }
+
+
+def test_acereason_sft_full_view_transforms_math_and_code_rows():
+    step = get_instruction_dataset(ACE_REASON_1_1_SFT_HF_ID)
+    cfg = step.config
+    adapter = unwrap_versioned_value(cfg.adapter)
+
+    math_result = transform_row(ACE_REASON_MATH_SAMPLE, cfg, adapter)
+    code_result = transform_row(ACE_REASON_CODE_SAMPLE, cfg, adapter)
+
+    _assert_acereason_transform_result(math_result, ACE_REASON_MATH_SAMPLE, ACE_REASON_MATH_ASSISTANT)
+    _assert_acereason_transform_result(code_result, ACE_REASON_CODE_SAMPLE, ACE_REASON_CODE_ASSISTANT)
+
+
+def test_acereason_sft_math_view_transforms_only_math_rows():
+    step = get_instruction_dataset(f"{ACE_REASON_1_1_SFT_HF_ID}/math")
+    cfg = step.config
+    adapter = unwrap_versioned_value(cfg.adapter)
+
+    code_row_with_math_source = {**ACE_REASON_CODE_SAMPLE, "source": ACE_REASON_MATH_SAMPLE["source"]}
+    result = transform_row(ACE_REASON_MATH_SAMPLE, cfg, adapter)
+    skipped = transform_row(code_row_with_math_source, cfg, adapter)
+
+    _assert_acereason_transform_result(result, ACE_REASON_MATH_SAMPLE, ACE_REASON_MATH_ASSISTANT)
+    assert skipped is None
+
+
+def test_acereason_sft_code_view_transforms_only_code_rows():
+    step = get_instruction_dataset(f"{ACE_REASON_1_1_SFT_HF_ID}/code")
+    cfg = step.config
+    adapter = unwrap_versioned_value(cfg.adapter)
+
+    math_row_with_code_source = {**ACE_REASON_MATH_SAMPLE, "source": ACE_REASON_CODE_SAMPLE["source"]}
+    result = transform_row(ACE_REASON_CODE_SAMPLE, cfg, adapter)
+    skipped = transform_row(math_row_with_code_source, cfg, adapter)
+
+    _assert_acereason_transform_result(result, ACE_REASON_CODE_SAMPLE, ACE_REASON_CODE_ASSISTANT)
+    assert skipped is None

@@ -5,10 +5,12 @@
 
 from pathlib import Path
 
+import pytest
 from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.conversation_to_dolma import transform_conversation_to_dolma
 from marin.transform.conversation.preference_data_adapters import PreferenceTransformAdapter
 from marin.transform.conversation.transform_conversation import (
+    RowFilter,
     TransformSFTDatasetConfig,
     transform_row,
 )
@@ -243,6 +245,55 @@ class TestTransformRow:
         }
 
         assert transform_row(row, cfg, adapter) is None
+
+    def test_transform_row_applies_exact_match_row_filters(self):
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
+            instruction_column="instruction",
+            response_column="response",
+        )
+        cfg = TransformSFTDatasetConfig(
+            source="test/dataset",
+            revision="main",
+            output_path="/tmp/output",
+            metadata_columns=["category"],
+            adapter=adapter,
+            row_filters=[RowFilter(column="category", allowed_values=["math"])],
+        )
+
+        accepted = transform_row(
+            {"category": "math", "instruction": "Solve 2 + 2.", "response": "4"},
+            cfg,
+            adapter,
+        )
+        skipped = transform_row(
+            {"category": "code", "instruction": "Write a function.", "response": "def f(): pass"},
+            cfg,
+            adapter,
+        )
+
+        assert accepted is not None
+        assert accepted.messages[0].content == "Solve 2 + 2."
+        assert accepted.metadata == {"category": "math"}
+        assert skipped is None
+
+    def test_transform_row_requires_row_filter_columns_to_exist(self):
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
+            instruction_column="instruction",
+            response_column="response",
+        )
+        cfg = TransformSFTDatasetConfig(
+            source="test/dataset",
+            revision="main",
+            output_path="/tmp/output",
+            metadata_columns=[],
+            adapter=adapter,
+            row_filters=[RowFilter(column="category", allowed_values=["math"])],
+        )
+
+        with pytest.raises(ValueError, match="Row filter column 'category' is missing"):
+            transform_row({"instruction": "Solve 2 + 2.", "response": "4"}, cfg, adapter)
 
 
 class TestPreferenceDataTransform:

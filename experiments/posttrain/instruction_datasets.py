@@ -38,6 +38,9 @@ Current datasets:
 23. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
 24. lm-provers/FineProofs-SFT
 25. lm-provers/FineProofs-SFT/proof-only
+26. nvidia/AceReason-1.1-SFT
+27. nvidia/AceReason-1.1-SFT/math
+28. nvidia/AceReason-1.1-SFT/code
 """
 
 import dataclasses
@@ -55,6 +58,7 @@ from marin.transform.conversation.conversation_to_dolma import (
     convert_conversation_to_dolma,
 )
 from marin.transform.conversation.transform_conversation import (
+    RowFilter,
     TransformSFTDatasetConfig,
     transform_hf_dataset,
 )
@@ -117,6 +121,7 @@ class InstructionDatasetConfig:
         subsets: Data subsets (from HuggingFace config) to use. Empty list indicates to use all/default subset(s).
         splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits.
                 Defaults to `train` only
+        row_filters: Exact-match filters to select source rows before transforming them.
         name: Optional friendly name for the dataset; defaults to `hf_dataset_id`.
         max_parallelism: Max number of parallel data processing tasks. Reduce if needed to avoid HF rate limits.
     """
@@ -128,6 +133,7 @@ class InstructionDatasetConfig:
     name: str | None = None
     subsets: list[str] = field(default_factory=lambda: [])
     splits: list[str] = field(default_factory=lambda: ["train"])
+    row_filters: list[RowFilter] = field(default_factory=list)
     max_parallelism: int | None = 32  # 32 works for free users; set to None to use default behavior (full parallelism)
 
 
@@ -256,6 +262,10 @@ FINEPROOFS_SFT_METADATA_COLUMNS = [
     "qwen3-4b-thinking-reward@128",
     "source",
 ]
+
+ACE_REASON_1_1_SFT_HF_ID = "nvidia/AceReason-1.1-SFT"
+ACE_REASON_1_1_SFT_REVISION = "5ac692742de9f2481f8274d022dc78d5fc96c249"
+ACE_REASON_1_1_SFT_METADATA_COLUMNS = ["category", "source"]
 
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
@@ -408,6 +418,44 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         name=SYNTHETIC2_SFT_VERIFIED_HF_ID,
         subsets=["default"],
         splits=["train"],
+    ),
+    ACE_REASON_1_1_SFT_HF_ID: InstructionDatasetConfig(
+        hf_dataset_id=ACE_REASON_1_1_SFT_HF_ID,
+        revision=ACE_REASON_1_1_SFT_REVISION,
+        adapter=instruction_response_adapter(
+            instruction_column="input",
+            response_column="output",
+        ),
+        metadata_columns=ACE_REASON_1_1_SFT_METADATA_COLUMNS,
+        name=ACE_REASON_1_1_SFT_HF_ID,
+        subsets=["default"],
+        splits=["train"],
+    ),
+    f"{ACE_REASON_1_1_SFT_HF_ID}/math": InstructionDatasetConfig(
+        hf_dataset_id=ACE_REASON_1_1_SFT_HF_ID,
+        revision=ACE_REASON_1_1_SFT_REVISION,
+        adapter=instruction_response_adapter(
+            instruction_column="input",
+            response_column="output",
+        ),
+        metadata_columns=ACE_REASON_1_1_SFT_METADATA_COLUMNS,
+        name=f"{ACE_REASON_1_1_SFT_HF_ID}/math",
+        subsets=["default"],
+        splits=["train"],
+        row_filters=[RowFilter(column="category", allowed_values=["math"])],
+    ),
+    f"{ACE_REASON_1_1_SFT_HF_ID}/code": InstructionDatasetConfig(
+        hf_dataset_id=ACE_REASON_1_1_SFT_HF_ID,
+        revision=ACE_REASON_1_1_SFT_REVISION,
+        adapter=instruction_response_adapter(
+            instruction_column="input",
+            response_column="output",
+        ),
+        metadata_columns=ACE_REASON_1_1_SFT_METADATA_COLUMNS,
+        name=f"{ACE_REASON_1_1_SFT_HF_ID}/code",
+        subsets=["default"],
+        splits=["train"],
+        row_filters=[RowFilter(column="category", allowed_values=["code"])],
     ),
     "lm-provers/FineProofs-SFT": InstructionDatasetConfig(
         hf_dataset_id="lm-provers/FineProofs-SFT",
@@ -623,11 +671,14 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
 
     adapter_signature = canonicalize(adapter_dict)
     adapter_signature_str = json.dumps(adapter_signature, sort_keys=True)
+    row_filters_signature = canonicalize([dataclasses.asdict(row_filter) for row_filter in dataset_cfg.row_filters])
+    row_filters_signature_str = json.dumps(row_filters_signature, sort_keys=True)
 
     config_str = f"{dataset_name}-\
         {dataset_cfg.revision}\
         -{sorted(dataset_cfg.subsets)}\
         -{sorted(dataset_cfg.splits)}\
+        -{row_filters_signature_str}\
         -{adapter_signature_str}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
@@ -642,6 +693,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
             adapter=versioned(adapter),
             subsets=versioned(dataset_cfg.subsets),
             splits=versioned(dataset_cfg.splits),
+            row_filters=versioned(dataset_cfg.row_filters),
             max_parallelism=dataset_cfg.max_parallelism,
         ),
         override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
