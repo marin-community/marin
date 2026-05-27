@@ -38,6 +38,7 @@ Current datasets:
 23. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
 24. lm-provers/FineProofs-SFT
 25. lm-provers/FineProofs-SFT/proof-only
+26. nvidia/Nemotron-Science-v1
 """
 
 import dataclasses
@@ -141,6 +142,7 @@ def multi_turn_adapter(
     metadata_remap: dict[str, str] | None = None,
     replacements: dict[str, str] | None = None,
     extra_metadata_fn=None,
+    message_passthrough_keys: Sequence[str] = (),
 ) -> TransformAdapter:
     return TransformAdapter(
         dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
@@ -153,6 +155,7 @@ def multi_turn_adapter(
         metadata_remap=metadata_remap or {},
         replacements=replacements,
         extra_metadata_fn=extra_metadata_fn,
+        message_passthrough_keys=tuple(message_passthrough_keys),
     )
 
 
@@ -256,6 +259,11 @@ FINEPROOFS_SFT_METADATA_COLUMNS = [
     "qwen3-4b-thinking-reward@128",
     "source",
 ]
+
+NEMOTRON_SCIENCE_V1_HF_ID = "nvidia/Nemotron-Science-v1"
+NEMOTRON_SCIENCE_V1_REVISION = "82e1af468197076b4f0f392c239274eac032adc7"
+NEMOTRON_SCIENCE_V1_SPLITS = ["MCQ", "RQA"]
+NEMOTRON_SCIENCE_V1_METADATA_COLUMNS = ["uuid", "license", "used_in"]
 
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
@@ -595,6 +603,18 @@ for split_name in NEMOTRON_V1_SPLITS:
         splits=[split_name],
     )
 
+for split_name in NEMOTRON_SCIENCE_V1_SPLITS:
+    dataset_key = f"{NEMOTRON_SCIENCE_V1_HF_ID}/{split_name}"
+    INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_key] = InstructionDatasetConfig(
+        name=dataset_key,
+        hf_dataset_id=NEMOTRON_SCIENCE_V1_HF_ID,
+        revision=NEMOTRON_SCIENCE_V1_REVISION,
+        adapter=multi_turn_adapter(message_passthrough_keys=("reasoning_content",)),
+        metadata_columns=NEMOTRON_SCIENCE_V1_METADATA_COLUMNS,
+        subsets=["default"],
+        splits=[split_name],
+    )
+
 
 def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
     dataset_name = hf_dataset_id.replace("/", "--")
@@ -611,6 +631,8 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
 
     adapter_dict = dataclasses.asdict(adapter)
     adapter_dict["dataset_format"] = adapter_dict["dataset_format"].value
+    if not adapter_dict.get("message_passthrough_keys"):
+        adapter_dict.pop("message_passthrough_keys", None)
 
     def canonicalize(value):
         if isinstance(value, dict):

@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 from marin.execution.executor import unwrap_versioned_value
 from marin.transform.conversation.adapters import InputDatasetFormat
 from marin.transform.conversation.transform_conversation import transform_row
@@ -9,6 +10,10 @@ from experiments.posttrain.instruction_datasets import (
     FINEPROOFS_SFT_METADATA_COLUMNS,
     FINEPROOFS_SFT_REVISION,
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
+    NEMOTRON_SCIENCE_V1_HF_ID,
+    NEMOTRON_SCIENCE_V1_METADATA_COLUMNS,
+    NEMOTRON_SCIENCE_V1_REVISION,
+    NEMOTRON_SCIENCE_V1_SPLITS,
     SYNTHETIC2_SFT_VERIFIED_HF_ID,
     SYNTHETIC2_SFT_VERIFIED_METADATA_COLUMNS,
     SYNTHETIC2_SFT_VERIFIED_REVISION,
@@ -22,6 +27,27 @@ SYNTHETIC2_SFT_VERIFIED_SAMPLE = {
     "messages": [
         {"role": "user", "content": "Write Python code to count the intersection of two sets."},
         {"role": "assistant", "content": "<think>Use set intersection.</think>\n```python\nprint(len(a & b))\n```"},
+    ],
+}
+SYNTHETIC2_SFT_VERIFIED_OUTPUT_PATH = (
+    f"documents/PrimeIntellect--SYNTHETIC-2-SFT-verified-{SYNTHETIC2_SFT_VERIFIED_REVISION}-409fa9"
+)
+
+NEMOTRON_SCIENCE_V1_SAMPLE = {
+    "uuid": "science-row-1",
+    "license": "cc-by-4.0",
+    "used_in": ["nano_v3"],
+    "messages": [
+        {
+            "role": "user",
+            "content": "Which choice best explains predictive genetic testing?",
+            "reasoning_content": None,
+        },
+        {
+            "role": "assistant",
+            "content": "The Best Answer is C.",
+            "reasoning_content": "Predictive testing checks future disease risk in an asymptomatic person.",
+        },
     ],
 }
 
@@ -77,10 +103,6 @@ def test_synthetic2_sft_verified_step_transforms_chat_rows():
     adapter = unwrap_versioned_value(cfg.adapter)
 
     assert step.name == "documents/PrimeIntellect/SYNTHETIC-2-SFT-verified"
-    assert step.override_output_path is not None
-    assert step.override_output_path.startswith(
-        f"documents/PrimeIntellect--SYNTHETIC-2-SFT-verified-{SYNTHETIC2_SFT_VERIFIED_REVISION}-"
-    )
     assert unwrap_versioned_value(cfg.source) == SYNTHETIC2_SFT_VERIFIED_HF_ID
     assert unwrap_versioned_value(cfg.revision) == SYNTHETIC2_SFT_VERIFIED_REVISION
     assert unwrap_versioned_value(cfg.subsets) == ["default"]
@@ -105,3 +127,57 @@ def test_synthetic2_sft_verified_step_transforms_chat_rows():
         "task_type": "prime_rl_code",
         "reward": 1.0,
     }
+
+
+def test_empty_message_passthrough_keys_preserve_existing_sft_output_path():
+    step = get_instruction_dataset(SYNTHETIC2_SFT_VERIFIED_HF_ID)
+
+    assert step.override_output_path == SYNTHETIC2_SFT_VERIFIED_OUTPUT_PATH
+
+
+@pytest.mark.parametrize("split", NEMOTRON_SCIENCE_V1_SPLITS)
+def test_nemotron_science_v1_step_transforms_chat_rows(split):
+    dataset_key = f"{NEMOTRON_SCIENCE_V1_HF_ID}/{split}"
+    step = get_instruction_dataset(dataset_key)
+    cfg = step.config
+    adapter = unwrap_versioned_value(cfg.adapter)
+
+    assert step.name == f"documents/{dataset_key}"
+    assert step.override_output_path is not None
+    assert step.override_output_path.startswith(
+        f"documents/nvidia--Nemotron-Science-v1--{split}-{NEMOTRON_SCIENCE_V1_REVISION}-"
+    )
+    assert unwrap_versioned_value(cfg.source) == NEMOTRON_SCIENCE_V1_HF_ID
+    assert unwrap_versioned_value(cfg.revision) == NEMOTRON_SCIENCE_V1_REVISION
+    assert unwrap_versioned_value(cfg.subsets) == ["default"]
+    assert unwrap_versioned_value(cfg.splits) == [split]
+    assert unwrap_versioned_value(cfg.metadata_columns) == NEMOTRON_SCIENCE_V1_METADATA_COLUMNS
+
+    result = transform_row(NEMOTRON_SCIENCE_V1_SAMPLE, cfg, adapter)
+
+    assert result is not None
+    assert result.source == NEMOTRON_SCIENCE_V1_HF_ID
+    assert result.messages[0].model_dump(exclude_none=True) == {
+        "role": "user",
+        "content": "Which choice best explains predictive genetic testing?",
+    }
+    assert result.messages[1].model_dump(exclude_none=True) == {
+        "role": "assistant",
+        "content": "The Best Answer is C.",
+        "reasoning_content": "Predictive testing checks future disease risk in an asymptomatic person.",
+    }
+    assert result.metadata == {
+        "uuid": "science-row-1",
+        "license": "cc-by-4.0",
+        "used_in": ["nano_v3"],
+    }
+
+
+def test_nemotron_science_v1_split_steps_have_distinct_outputs():
+    output_paths = {
+        get_instruction_dataset(f"{NEMOTRON_SCIENCE_V1_HF_ID}/{split}").override_output_path
+        for split in NEMOTRON_SCIENCE_V1_SPLITS
+    }
+
+    assert None not in output_paths
+    assert len(output_paths) == len(NEMOTRON_SCIENCE_V1_SPLITS)

@@ -122,6 +122,39 @@ class TestTransformAdapters:
         assert messages[1].role == "assistant"
         assert messages[2].role == "system"
 
+    def test_multi_turn_adapter_preserves_requested_message_fields(self):
+        """Test explicit per-message passthrough fields."""
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+            conversation_column="messages",
+            role_key="role",
+            content_key="content",
+            user_value="user",
+            assistant_value="assistant",
+            system_value="system",
+            message_passthrough_keys=("reasoning_content",),
+        )
+        row = {
+            "messages": [
+                {"role": "user", "content": "Question", "reasoning_content": None},
+                {
+                    "role": "assistant",
+                    "content": "Final answer",
+                    "reasoning_content": "Hidden chain for training template.",
+                },
+            ]
+        }
+
+        messages = adapter.transform_conversation_to_openai_format(row)
+
+        assert len(messages) == 2
+        assert messages[0].model_dump(exclude_none=True) == {"role": "user", "content": "Question"}
+        assert messages[1].model_dump(exclude_none=True) == {
+            "role": "assistant",
+            "content": "Final answer",
+            "reasoning_content": "Hidden chain for training template.",
+        }
+
 
 class TestTransformRow:
     """Test the transform_row function."""
