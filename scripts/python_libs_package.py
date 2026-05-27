@@ -453,14 +453,25 @@ def _gh_release_replace(tag: str, files: list[Path], title: str, notes: str, pre
     _verify_release(tag, asset_names, prerelease)
 
 
-def _package_exists_on_pypi(name: str) -> bool:
+def _pypi_versions(name: str) -> set[str] | None:
+    """Return the set of versions published on PyPI for name, or None if the project is unregistered.
+
+    Returning None (vs an empty set) lets the caller distinguish "project does not exist yet" from
+    "project exists but somehow has no releases" — only the first case has to register the name.
+    """
     try:
-        urllib.request.urlopen(f"https://pypi.org/pypi/{name}/json", timeout=10)
-        return True
+        with urllib.request.urlopen(f"https://pypi.org/pypi/{name}/json", timeout=10) as resp:
+            data = json.load(resp)
+        return set(data.get("releases", {}).keys())
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            return False
+            return None
         raise
+
+
+def _pypi_has_version(name: str, version: str) -> bool:
+    versions = _pypi_versions(name)
+    return versions is not None and version in versions
 
 
 def _artifacts_for(pkg: str) -> list[Path]:
@@ -469,18 +480,20 @@ def _artifacts_for(pkg: str) -> list[Path]:
     return sorted(DIST_DIR.glob(f"{stem}-*.whl")) + sorted(DIST_DIR.glob(f"{stem}-*.tar.gz"))
 
 
-def publish_pypi() -> None:
+def publish_pypi(version: str) -> None:
     """Upload every wheel + sdist in DIST_DIR to PyPI via `uv publish`.
 
     Reads the token from UV_PUBLISH_TOKEN (uv's standard env var). Run from
     the same invocation that produced dist/ so the version stamped into
     BUILD_INFO.json matches the artifacts being uploaded. PyPI rejects
-    re-uploads of an existing (name, version) tuple, so first claim runs use
-    a stable version and future cuts must bump it.
+    re-uploads of an existing (name, version) tuple, so we gate on the
+    (name, version) tuple: skip when this exact version is already on PyPI,
+    upload otherwise. New projects get registered on first upload; existing
+    projects get the new version when it isn't already there.
 
-    Idempotent on package name: a project that already exists on PyPI is
-    skipped (this script's purpose is first-time name registration, not
-    publishing new versions of existing projects).
+    Skipping on package-name presence (the prior behavior) silently dropped
+    new versions of any package that had ever been published before — that's
+    how marin-finelog==0.99 was left off PyPI while every sibling pinned it.
     """
     if not os.environ.get("UV_PUBLISH_TOKEN"):
         raise SystemExit(
@@ -488,14 +501,14 @@ def publish_pypi() -> None:
             "Create a PyPI API token at https://pypi.org/manage/account/token/"
         )
 
-    registered: list[str] = []
+    published: list[str] = []
     skipped: list[str] = []
     failed: list[str] = []
 
     for pkg in PACKAGES:
-        print(f"\n--- PyPI: {pkg} ---")
-        if _package_exists_on_pypi(pkg):
-            print("  Already on PyPI — skipping")
+        print(f"\n--- PyPI: {pkg}=={version} ---")
+        if _pypi_has_version(pkg, version):
+            print(f"  {pkg}=={version} already on PyPI — skipping")
             skipped.append(pkg)
             continue
         artifacts = _artifacts_for(pkg)
@@ -506,15 +519,15 @@ def publish_pypi() -> None:
         print(f"  Uploading {len(artifacts)} artifact(s)...")
         try:
             subprocess.run(["uv", "publish", *[str(a) for a in artifacts]], check=True)
-            registered.append(pkg)
+            published.append(pkg)
         except subprocess.CalledProcessError:
             failed.append(pkg)
 
     print("\nPyPI summary:")
     if skipped:
-        print(f"  Already on PyPI: {', '.join(skipped)}")
-    if registered:
-        print(f"  Registered: {', '.join(registered)}")
+        print(f"  Already on PyPI ({version}): {', '.join(skipped)}")
+    if published:
+        print(f"  Published: {', '.join(published)}")
     if failed:
         print(f"  Failed: {', '.join(failed)}")
         raise SystemExit(1)
@@ -623,7 +636,7 @@ def main() -> None:
             print(f"Mode:        {args.mode}\nVersion:     {version} (re-resolved; no BUILD_INFO.json)")
 
     if args.publish_pypi:
-        publish_pypi()
+        publish_pypi(version)
 
     if args.skip_gh_release or args.mode == "manual":
         print(f"\nBuild complete. Wheels in {DIST_DIR}/")
