@@ -27,29 +27,6 @@ def uses_os_login(ssh_config: config_pb2.SshConfig | None) -> bool:
     return ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
 
 
-# GCE label values must match [a-z][a-z0-9_-]*.
-SSH_AUTH_MODE_LABEL_METADATA = "metadata"
-SSH_AUTH_MODE_LABEL_OS_LOGIN = "os_login"
-
-
-def auth_mode_to_label(auth_mode: config_pb2.SshConfig.AuthMode) -> str | None:
-    """Render an SshConfig.AuthMode value as a GCE label token, or None if unknown."""
-    if auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN:
-        return SSH_AUTH_MODE_LABEL_OS_LOGIN
-    if auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_METADATA:
-        return SSH_AUTH_MODE_LABEL_METADATA
-    return None
-
-
-def auth_mode_from_label(label_value: str) -> config_pb2.SshConfig.AuthMode | None:
-    """Parse a GCE label token back to an SshConfig.AuthMode value, or None if unknown."""
-    if label_value == SSH_AUTH_MODE_LABEL_OS_LOGIN:
-        return config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
-    if label_value == SSH_AUTH_MODE_LABEL_METADATA:
-        return config_pb2.SshConfig.SSH_AUTH_MODE_METADATA
-    return None
-
-
 class OsLoginKeyProvisioner:
     """Lazily provisions an SSH keypair and registers it with OS Login.
 
@@ -161,10 +138,24 @@ _os_login_key_provisioner = OsLoginKeyProvisioner()
 def ssh_key_file(
     ssh_config: config_pb2.SshConfig | None,
     impersonate_service_account: str | None = None,
+    *,
+    auth_mode: int | None = None,
 ) -> str | None:
+    """Resolve the SSH key file for an SSH attempt.
+
+    ``auth_mode`` overrides ``ssh_config.auth_mode``. Callers that consolidate
+    dispatch (always-OS-Login-first with metadata fallback) pass the mode of
+    the current attempt explicitly so the right key is returned regardless of
+    local YAML.
+    """
     if ssh_config and ssh_config.key_file:
         return ssh_config.key_file
-    if uses_os_login(ssh_config):
+    effective_mode = (
+        auth_mode
+        if auth_mode is not None
+        else (ssh_config.auth_mode if ssh_config else config_pb2.SshConfig.SSH_AUTH_MODE_METADATA)
+    )
+    if effective_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN:
         path = os.path.expanduser("~/.ssh/google_compute_engine")
         effective_sa = impersonate_service_account or ssh_impersonate_service_account(ssh_config)
         _os_login_key_provisioner.ensure_key(path, effective_sa)

@@ -56,8 +56,6 @@ class Labels:
         # The autoscaler ignores these: they don't count toward demand, don't
         # participate in scale-down, and survive `iris cluster stop`.
         self.iris_manual = f"iris-{prefix}-manual"
-        # Lets clients with stale YAML adopt the cluster's SSH auth mode pre-tunnel.
-        self.iris_ssh_auth_mode = f"iris-{prefix}-ssh-auth-mode"
 
 
 def find_free_port(start: int = -1) -> int:

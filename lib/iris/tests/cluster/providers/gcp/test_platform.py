@@ -10,12 +10,13 @@ tests that cannot be expressed through the protocol are in dedicated sections.
 
 from __future__ import annotations
 
+import io
 import unittest.mock
 from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pytest
-from iris.cluster.providers.gcp.controller import GcpControllerProvider, resolve_controller_ssh_config
+from iris.cluster.providers.gcp.controller import GcpControllerProvider
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.handles import GcpVmSliceHandle, _build_gce_resource_name
 from iris.cluster.providers.gcp.workers import (
@@ -244,30 +245,58 @@ def test_gcp_tunnel_prefers_ssh_impersonation_config():
     assert f"--impersonate-service-account={ssh_config.impersonate_service_account}" in ssh_cmd
 
 
-def test_resolve_controller_ssh_overrides_local_config_from_label():
-    from iris.cluster.providers.gcp.service import VmCreateRequest
-
-    labels = Labels("iris")
+def test_gcp_tunnel_falls_back_to_metadata_on_os_login_error():
+    """OS Login attempt fails with an auth-marker stderr; metadata retry fires."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
-    gcp_service.vm_create(
-        VmCreateRequest(
-            name="iris-controller-iris",
-            zone="us-central2-b",
-            machine_type="n2-standard-4",
-            labels={labels.iris_controller: "true", labels.iris_ssh_auth_mode: "os_login"},
-        )
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
+    ssh_config = config_pb2.SshConfig(
+        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_METADATA,
+        key_file="/tmp/iris-key",
     )
-    platform = config_pb2.PlatformConfig(label_prefix="iris")
-    platform.gcp.project_id = "test-project"
-    cluster = config_pb2.IrisClusterConfig()
-    cluster.controller.gcp.zone = "us-central2-b"
-    local_ssh = config_pb2.SshConfig(auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_METADATA)
-
-    resolved = resolve_controller_ssh_config(
-        gcp_service=gcp_service, platform_config=platform, cluster_config=cluster, local_ssh_config=local_ssh
+    worker_provider = GcpWorkerProvider(
+        gcp_config, label_prefix="iris", worker_port=10001, ssh_config=ssh_config, gcp_service=gcp_service
     )
+    controller = GcpControllerProvider(worker_provider=worker_provider)
 
-    assert resolved.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
+    list_result = unittest.mock.Mock(returncode=0, stdout="iris-controller-iris us-central2-b\n", stderr="")
+
+    failing_proc = unittest.mock.Mock()
+    failing_proc.stderr = io.BytesIO(b"Permission denied (publickey).")
+    failing_proc.terminate.return_value = None
+    failing_proc.wait.return_value = 0
+
+    succeeding_proc = unittest.mock.Mock()
+    succeeding_proc.stderr = io.BytesIO(b"")
+    succeeding_proc.terminate.return_value = None
+    succeeding_proc.wait.return_value = 0
+
+    with (
+        unittest.mock.patch("iris.cluster.providers.gcp.controller._check_gcloud_ssh_key"),
+        unittest.mock.patch("iris.cluster.providers.gcp.controller.find_free_port", return_value=10042),
+        unittest.mock.patch(
+            "iris.cluster.providers.gcp.controller.resolve_current_os_login_user",
+            return_value="svc-user",
+        ),
+        unittest.mock.patch(
+            "iris.cluster.providers.gcp.controller.wait_for_port",
+            side_effect=[False, True],
+        ),
+        unittest.mock.patch("iris.cluster.providers.gcp.controller.subprocess.run", return_value=list_result),
+        unittest.mock.patch(
+            "iris.cluster.providers.gcp.controller.subprocess.Popen",
+            side_effect=[failing_proc, succeeding_proc],
+        ) as popen_mock,
+    ):
+        with controller.tunnel("unused") as tunneled:
+            assert tunneled == "http://127.0.0.1:10042"
+
+    assert popen_mock.call_count == 2
+    first_cmd = popen_mock.call_args_list[0].args[0]
+    second_cmd = popen_mock.call_args_list[1].args[0]
+    # OS Login attempt uses user@vm; metadata fallback uses bare vm name.
+    assert "svc-user@iris-controller-iris" in first_cmd
+    assert "iris-controller-iris" in second_cmd
+    assert "svc-user@iris-controller-iris" not in second_cmd
 
 
 def test_gce_remote_exec_builds_optional_flags_inline():

@@ -21,17 +21,10 @@ from rigging.timing import ExponentialBackoff, retry_with_backoff
 from iris.cluster.controller.vm_lifecycle import restart_controller as vm_restart_controller
 from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
-from iris.cluster.providers.gcp.service import GcpService
-from iris.cluster.providers.gcp.ssh import (
-    auth_mode_from_label,
-    auth_mode_to_label,
-    ssh_impersonate_service_account,
-    ssh_key_file,
-)
+from iris.cluster.providers.gcp.ssh import ssh_impersonate_service_account, ssh_key_file
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.remote_exec import resolve_current_os_login_user
 from iris.cluster.providers.types import (
-    InfraError,
     Labels,
     default_stop_all,
     find_free_port,
@@ -165,68 +158,6 @@ def _check_gcloud_ssh_key(key_file: str | None = None) -> None:
         )
 
 
-def _ssh_auth_mode(ssh_config: config_pb2.SshConfig | None) -> int:
-    if ssh_config is None:
-        return config_pb2.SshConfig.SSH_AUTH_MODE_METADATA
-    return ssh_config.auth_mode or config_pb2.SshConfig.SSH_AUTH_MODE_METADATA
-
-
-def resolve_controller_ssh_config(
-    *,
-    gcp_service: GcpService,
-    platform_config: config_pb2.PlatformConfig,
-    cluster_config: config_pb2.IrisClusterConfig | None,
-    local_ssh_config: config_pb2.SshConfig | None,
-) -> config_pb2.SshConfig | None:
-    """Adopt the SSH auth mode advertised on the controller VM, if any.
-
-    Falls back to ``local_ssh_config`` when there's no controller to read
-    from yet (``cluster start``, LOCAL mode, no zone) or the GCP call fails.
-    """
-    if gcp_service.mode == ServiceMode.LOCAL:
-        return local_ssh_config
-    if cluster_config is None or cluster_config.controller.WhichOneof("controller") != "gcp":
-        return local_ssh_config
-    zone = cluster_config.controller.gcp.zone
-    if not zone:
-        return local_ssh_config
-
-    label_prefix = platform_config.label_prefix or "iris"
-    labels = Labels(label_prefix)
-
-    try:
-        vms = gcp_service.vm_list(zones=[zone], labels={labels.iris_controller: "true"})
-    except InfraError as e:
-        logger.debug("ssh auth_mode probe: vm_list failed (%s); using local config", e)
-        return local_ssh_config
-
-    if not vms:
-        return local_ssh_config
-
-    advertised = vms[0].labels.get(labels.iris_ssh_auth_mode)
-    if not advertised:
-        return local_ssh_config
-    advertised_mode = auth_mode_from_label(advertised)
-    if advertised_mode is None:
-        logger.warning("Controller VM advertises unknown ssh auth_mode=%r; using local config", advertised)
-        return local_ssh_config
-
-    local_mode = _ssh_auth_mode(local_ssh_config)
-    if advertised_mode == local_mode:
-        return local_ssh_config
-
-    resolved = config_pb2.SshConfig()
-    if local_ssh_config is not None:
-        resolved.CopyFrom(local_ssh_config)
-    resolved.auth_mode = advertised_mode
-    logger.info(
-        "using ssh auth_mode=%s (from controller label; local config: %s)",
-        auth_mode_to_label(advertised_mode),
-        auth_mode_to_label(local_mode),
-    )
-    return resolved
-
-
 def _should_retry_metadata(stderr: str) -> bool:
     normalized = stderr.lower()
     return any(marker in normalized for marker in _FALLBACK_SSH_ERROR_MARKERS)
@@ -240,15 +171,16 @@ def _build_tunnel_ssh_cmd(
     local_port: int,
     ssh_config: config_pb2.SshConfig | None,
     effective_service_account: str | None,
-    force_metadata: bool = False,
+    use_os_login: bool,
 ) -> list[str]:
-    auth_mode = _ssh_auth_mode(ssh_config)
-    use_os_login = auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN and not force_metadata
-    key_file = ssh_key_file(ssh_config, effective_service_account)
+    auth_mode = (
+        config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN if use_os_login else config_pb2.SshConfig.SSH_AUTH_MODE_METADATA
+    )
+    key_file = ssh_key_file(ssh_config, effective_service_account, auth_mode=auth_mode)
 
     target = vm_name
     if use_os_login:
-        os_login_user = ssh_config.os_login_user or resolve_current_os_login_user(
+        os_login_user = (ssh_config and ssh_config.os_login_user) or resolve_current_os_login_user(
             impersonate_service_account=effective_service_account
         )
         target = f"{os_login_user}@{vm_name}"
@@ -312,58 +244,53 @@ def _establish_tunnel(
     effective_service_account: str | None,
     timeout: float,
 ) -> subprocess.Popen:
-    """Start an SSH tunnel subprocess and wait for the port to be ready.
+    """Open an SSH tunnel to the controller VM, trying OS Login then metadata.
+
+    Always attempts OS Login first — the target mode post-rollout. Falls back
+    to metadata SSH when the controller VM doesn't yet have ``enable-oslogin``
+    enabled (legacy VMs created before the flip), detected via the auth-marker
+    stderr substrings.
 
     Returns the running Popen; raises RuntimeError on failure.
     """
-    auth_mode = _ssh_auth_mode(ssh_config)
-    cmd = _build_tunnel_ssh_cmd(
-        project=project,
-        zone=zone,
-        vm_name=vm_name,
-        local_port=local_port,
-        ssh_config=ssh_config,
-        effective_service_account=effective_service_account,
-    )
 
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
+    def _start(use_os_login: bool) -> subprocess.Popen:
+        cmd = _build_tunnel_ssh_cmd(
+            project=project,
+            zone=zone,
+            vm_name=vm_name,
+            local_port=local_port,
+            ssh_config=ssh_config,
+            effective_service_account=effective_service_account,
+            use_os_login=use_os_login,
+        )
+        return subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
 
-    if auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN and not wait_for_port(
-        local_port, host="127.0.0.1", timeout=timeout
-    ):
-        stderr = proc.stderr.read().decode() if proc.stderr else ""
-        proc.terminate()
-        proc.wait()
-        if _should_retry_metadata(stderr):
-            logger.warning("OS Login tunnel failed; retrying controller tunnel with metadata SSH fallback")
-            cmd = _build_tunnel_ssh_cmd(
-                project=project,
-                zone=zone,
-                vm_name=vm_name,
-                local_port=local_port,
-                ssh_config=ssh_config,
-                effective_service_account=effective_service_account,
-                force_metadata=True,
-            )
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                start_new_session=True,
-            )
-        else:
-            raise RuntimeError(f"SSH tunnel failed to establish: {stderr}")
+    proc = _start(use_os_login=True)
+
+    if wait_for_port(local_port, host="127.0.0.1", timeout=timeout):
+        return proc
+
+    stderr = proc.stderr.read().decode() if proc.stderr else ""
+    proc.terminate()
+    proc.wait()
+
+    if not _should_retry_metadata(stderr):
+        raise RuntimeError(f"SSH tunnel failed to establish: {stderr}")
+
+    logger.warning("OS Login tunnel failed; retrying with metadata SSH fallback")
+    proc = _start(use_os_login=False)
 
     if not wait_for_port(local_port, host="127.0.0.1", timeout=timeout):
         stderr = proc.stderr.read().decode() if proc.stderr else ""
         proc.terminate()
         proc.wait()
-        raise RuntimeError(f"SSH tunnel failed to establish: {stderr}")
+        raise RuntimeError(f"SSH tunnel failed to establish (after metadata fallback): {stderr}")
 
     return proc
 
@@ -383,7 +310,14 @@ def _gcp_tunnel(
     Picks a free port automatically if none is specified.
     """
     effective_service_account = ssh_impersonate_service_account(ssh_config)
-    key_file = ssh_key_file(ssh_config, effective_service_account)
+    # Pre-provision the OS Login keypair for the OS-Login-first attempt; the
+    # provisioner writes ~/.ssh/google_compute_engine which is also gcloud's
+    # default key for the metadata fallback path.
+    key_file = ssh_key_file(
+        ssh_config,
+        effective_service_account,
+        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
+    )
     _check_gcloud_ssh_key(key_file)
 
     if local_port is None:
