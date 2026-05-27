@@ -38,7 +38,7 @@ _HIDDEN_DIM: int = 512
 _BUDGET: float = 2.19e17
 _TARGET_STEPS: int = 2**14
 _TPU: str = "v5p-8"
-_RUN_SUFFIX: str = "amuse-v8-lr1.5x-b1-0.6-rho-0.8"
+_RUN_SUFFIX: str = "amuse-v9-T0-2000"
 # AMUSE sweep knobs (override per run):
 #   _LR_MULTIPLIER scales the matrix LR (and adam_lr proportionally) over the
 #     heuristic MuonH baseline. AMUSE has no decay phase so the *average*
@@ -50,7 +50,7 @@ _RUN_SUFFIX: str = "amuse-v8-lr1.5x-b1-0.6-rho-0.8"
 _LR_MULTIPLIER: float = 1.5
 _AMUSE_BETA1: float = 0.6
 _AMUSE_RHO: float = 0.8
-_AMUSE_T0: int = 500
+_AMUSE_T0: int = 2000
 
 
 def _build_launch() -> tuple[str, GrugMoeDirectLaunchConfig]:
