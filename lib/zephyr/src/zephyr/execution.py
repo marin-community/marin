@@ -193,13 +193,11 @@ class StageThroughput:
     """Items and bytes processed by a stage with their per-second rates.
 
     Item counts/rates use SI suffixes (K/M/B/T); byte totals/rates use binary
-    (IEC) prefixes. The default ``%s`` / ``repr`` rendering matches the
-    status-line format used in coordinator and per-shard log messages:
+    (IEC) prefixes. The default ``%s`` / ``repr`` rendering is the single
+    canonical text form, used by all coordinator, worker, and per-shard log
+    messages:
 
         ``items=7 (3.5/s), bytes_processed=1 KiB (512 bytes/s)``
-
-    Callers that need to embed individual fields in markdown or split
-    rendering can use the ``*_str`` properties directly.
     """
 
     items: int
@@ -207,26 +205,10 @@ class StageThroughput:
     item_rate: float
     byte_rate: float
 
-    @property
-    def items_str(self) -> str:
-        return _format_count(self.items)
-
-    @property
-    def bytes_str(self) -> str:
-        return _format_bytes(self.bytes_processed)
-
-    @property
-    def item_rate_str(self) -> str:
-        return _format_count(self.item_rate)
-
-    @property
-    def byte_rate_str(self) -> str:
-        return _format_bytes(self.byte_rate)
-
     def __repr__(self) -> str:
         return (
-            f"items={self.items_str} ({self.item_rate_str}/s), "
-            f"bytes_processed={self.bytes_str} ({self.byte_rate_str}/s)"
+            f"items={_format_count(self.items)} ({_format_count(self.item_rate)}/s), "
+            f"bytes_processed={_format_bytes(self.bytes_processed)} ({_format_bytes(self.byte_rate)}/s)"
         )
 
 
@@ -714,17 +696,11 @@ class ZephyrCoordinator:
         def build_md() -> tuple[str, str]:
             with self._lock:
                 current_stage_index = self._current_stage_index
-                stage_name = self._stage_name
                 plan_stages = self._plan_stages
                 completed = self._completed_shards
                 total_shards = self._total_shards
                 in_flight = len(self._in_flight)
                 queued = len(self._task_queue)
-                stage_start = self._stage_monotonic_start
-
-            totals = self.get_counters()
-            elapsed = time.monotonic() - (stage_start or time.monotonic())
-            throughput = _stage_throughput(totals, stage_name, elapsed)
 
             lines = ["**Stages**\n"]
             for idx, stage in enumerate(plan_stages):
@@ -736,20 +712,14 @@ class ZephyrCoordinator:
             lines.append(
                 f"\n**Shards** — {completed}/{total_shards} complete ({pct}%), {in_flight} in-flight, {queued} queued"
             )
-            if throughput is not None:
-                lines.append(
-                    f"\n**Throughput** — {throughput.items_str} items ({throughput.item_rate_str}/s), "
-                    f"{throughput.bytes_str} ({throughput.byte_rate_str}/s)"
-                )
 
             detail_md = "\n".join(lines)[:MAX_STATUS_TEXT_LENGTH]
 
             current_stage_desc = _get_stage_description(plan_stages[current_stage_index]) if plan_stages else ""
-            summary_lines = [f"**{current_stage_desc}** ({current_stage_index + 1}/{len(plan_stages)})"]
-            summary_lines.append(f"{completed}/{total_shards} shards ({pct}%)")
-            if throughput is not None:
-                summary_lines.append(f"{throughput.item_rate_str} items/s")
-                summary_lines.append(f"{throughput.byte_rate_str}/s")
+            summary_lines = [
+                f"**{current_stage_desc}** ({current_stage_index + 1}/{len(plan_stages)})",
+                f"{completed}/{total_shards} shards ({pct}%)",
+            ]
             summary_md = "  \n".join(summary_lines)
             return detail_md, summary_md
 
@@ -1519,10 +1489,7 @@ class ZephyrWorker:
                 detail_lines = [f"**Stage**: {stage}", f"**Active tasks**: {active}"]
                 throughput = _stage_throughput(self._last_reported_counters, stage, 1.0)
                 if throughput is not None:
-                    detail_lines += [
-                        f"**Items**: {throughput.items_str} ({throughput.item_rate_str}/s)",
-                        f"**Throughput**: {throughput.bytes_str} ({throughput.byte_rate_str}/s)",
-                    ]
+                    logger.info("[%s] [%s] throughput: %s", self._worker_id, stage, throughput)
             return "  \n".join(detail_lines), summary_md
 
         _push_iris_task_status(self._iris_status_limiter, build_md)
