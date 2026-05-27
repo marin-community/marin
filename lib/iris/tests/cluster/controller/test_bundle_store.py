@@ -38,7 +38,7 @@ def test_get_zip_reads_stored_bytes(store):
 
 
 def test_get_zip_missing_raises_not_found(store):
-    with pytest.raises(FileNotFoundError, match="Bundle not found"):
+    with pytest.raises(FileNotFoundError, match="not found and no controller configured"):
         store.get_zip("a" * 64)
 
 
@@ -54,12 +54,6 @@ def test_store_survives_restart(tmp_path):
     assert store2.get_zip(bundle_id) == blob
 
 
-def test_get_or_fetch_missing_no_controller_raises_not_found(store):
-    """get_or_fetch raises FileNotFoundError when content is absent and no controller is configured."""
-    with pytest.raises(FileNotFoundError):
-        store.get_or_fetch("b" * 64, "blobs/" + "b" * 64)
-
-
 def test_write_zip_skips_upload_when_already_in_storage(tmp_path):
     """write_zip should not re-upload if bundle exists in storage but was evicted from cache."""
     storage_dir = str(tmp_path / "bundles")
@@ -70,18 +64,19 @@ def test_write_zip_skips_upload_when_already_in_storage(tmp_path):
     id_a = store.write_zip(blob_a)
     store.write_zip(blob_b)  # evicts blob_a from in-memory cache
 
-    # blob_a should still be in storage; re-submitting should not call _write_to_storage
-    original_write = store._write_to_storage
-    write_calls = []
+    # blob_a should still be in storage; re-submitting should not re-open the file for write.
+    original_open = store._fs.open
+    write_paths: list[str] = []
 
-    def tracking_write(bundle_id, blob):
-        write_calls.append(bundle_id)
-        return original_write(bundle_id, blob)
+    def tracking_open(path, mode="rb", *args, **kwargs):
+        if "w" in mode:
+            write_paths.append(path)
+        return original_open(path, mode, *args, **kwargs)
 
-    store._write_to_storage = tracking_write
+    store._fs.open = tracking_open
     id_a2 = store.write_zip(blob_a)
     assert id_a2 == id_a
-    assert write_calls == [], "write_zip should not re-upload when bundle exists in storage"
+    assert write_paths == [], "write_zip should not re-upload when bundle exists in storage"
 
 
 def test_write_blob_returns_content_hash(store):
@@ -101,7 +96,7 @@ def test_write_blob_is_idempotent(store):
 
 
 def test_get_blob_missing_raises(store):
-    with pytest.raises(RuntimeError, match="not cached and controller address is not configured"):
+    with pytest.raises(FileNotFoundError, match="not found and no controller configured"):
         store.get_blob("b" * 64)
 
 

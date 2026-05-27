@@ -110,7 +110,7 @@ class UserStats:
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
-WORKDIR_FILE_OFFLOAD_THRESHOLD = 100 * 1024  # 100KB — externalize large workdir files to blob store
+WORKDIR_FILE_OFFLOAD_THRESHOLD = 10 * 1024  # 10KB — externalize large workdir files to blob store
 
 # Soft cap on how long launch_job waits for a replaced job's worker-bound
 # attempts to finalize before force-reaping them. Sized to exceed the worst-

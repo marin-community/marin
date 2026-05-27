@@ -847,11 +847,11 @@ def test_stress_50_tasks(smoke_cluster):
 # Workdir file offload (large files externalized to blob store)
 # ============================================================================
 
-OFFLOAD_FILE_SIZE = 200 * 1024  # 200KB — exceeds the 100KB offload threshold
+OFFLOAD_FILE_SIZE = 32 * 1024  # 32KB — exceeds the 10KB offload threshold
 
 
 def test_workdir_file_offload(smoke_cluster):
-    """A job with a >100KB workdir file succeeds after blob-store offloading."""
+    """A job with a workdir file above the offload threshold succeeds after blob-store offloading."""
     entrypoint = Entrypoint.from_callable(TestJobs.verify_workdir_file, "large_payload.bin", OFFLOAD_FILE_SIZE)
     entrypoint.workdir_files["large_payload.bin"] = b"\xab" * OFFLOAD_FILE_SIZE
     job = smoke_cluster.client.submit(
