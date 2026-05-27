@@ -138,7 +138,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--keep-last-temporary-checkpoints",
         type=int,
-        default=1,
+        default=5,
         help="Number of complete temporary checkpoints to retain after a successful temporary checkpoint save. "
         "Use 0 to delete temporary checkpoints after they commit.",
     )

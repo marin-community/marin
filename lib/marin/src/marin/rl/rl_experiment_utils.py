@@ -82,7 +82,7 @@ class RLExperimentConfig:
     num_train_steps: int = 500
     steps_per_eval: int = 100
     checkpointer_save_interval: int = 600
-    keep_last_temporary_checkpoints: int = 1
+    keep_last_temporary_checkpoints: int = 5
     checkpoint_debug: CheckpointDebugConfig = dataclasses.field(default_factory=CheckpointDebugConfig)
 
     # wandb
