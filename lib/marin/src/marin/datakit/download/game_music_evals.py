@@ -13,13 +13,11 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-import requests
 import zstandard
-from requests.adapters import HTTPAdapter
 from rigging.filesystem import open_url
-from urllib3.util import Retry
 from zephyr.writers import atomic_rename
 
+from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
     MaterializedOutputMetadata,
@@ -65,21 +63,6 @@ class HfJsonTextStagingConfig:
     source_manifest: IngestionSourceManifest | None = None
     manifest_fingerprint: str = ""
     source_file_url_override: str | None = None
-
-
-def _build_session() -> requests.Session:
-    retry = Retry(
-        total=5,
-        connect=5,
-        read=5,
-        backoff_factor=1.0,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset({"GET"}),
-    )
-    session = requests.Session()
-    session.mount("http://", HTTPAdapter(max_retries=retry))
-    session.mount("https://", HTTPAdapter(max_retries=retry))
-    return session
 
 
 def _validate_manifest(source_manifest: IngestionSourceManifest | None, manifest_fingerprint: str) -> None:
@@ -162,7 +145,7 @@ def stage_lichess_pgn_sample(config: LichessPgnStagingConfig) -> dict[str, int |
     _validate_manifest(config.source_manifest, config.manifest_fingerprint)
     fsspec_mkdirs(config.output_path, exist_ok=True)
 
-    session = _build_session()
+    session = build_retrying_session()
     output_file = posixpath.join(config.output_path, config.output_filename)
     record_count = 0
     bytes_written = 0
@@ -237,7 +220,7 @@ def stage_hf_json_text_source(config: HfJsonTextStagingConfig) -> dict[str, int 
     fsspec_mkdirs(config.output_path, exist_ok=True)
     output_file = posixpath.join(config.output_path, config.output_filename)
 
-    session = _build_session()
+    session = build_retrying_session()
     record_count = 0
     bytes_written = 0
     try:

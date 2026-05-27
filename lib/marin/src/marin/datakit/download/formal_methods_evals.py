@@ -36,14 +36,12 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
-import requests
 import zstandard
-from requests.adapters import HTTPAdapter
 from rigging.filesystem import open_url
-from urllib3.util import Retry
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
 
+from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
     JsonValue,
@@ -314,21 +312,12 @@ def _emit_records(source: ArchiveSourceConfig, filtered: Iterable[_SourceFile]) 
                 yield f"{sf.filename}#{idx}:{value_idx}", text
 
 
-def _http_session(timeout_seconds: int) -> requests.Session:
-    session = requests.Session()
-    retries = Retry(total=5, backoff_factor=1.5, status_forcelist=[500, 502, 503, 504], allowed_methods=["GET"])
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    return session
-
-
 def _fetch_archive_bytes(url: str, timeout_seconds: int) -> bytes:
     """Fetch the archive into memory. For `file://` URLs and any fsspec path we fall back
     to ``open_url`` so tests and local fixtures work without a network round-trip."""
     if url.startswith("http://") or url.startswith("https://"):
         logger.info("fetching archive from %s", url)
-        with _http_session(timeout_seconds) as session:
+        with build_retrying_session(backoff_factor=1.5, status_forcelist=(500, 502, 503, 504)) as session:
             response = session.get(url, timeout=timeout_seconds, stream=True)
             response.raise_for_status()
             return response.content
