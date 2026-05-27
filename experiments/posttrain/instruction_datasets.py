@@ -38,6 +38,7 @@ Current datasets:
 23. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
 24. lm-provers/FineProofs-SFT
 25. lm-provers/FineProofs-SFT/proof-only
+26. nvidia/Nemotron-SFT-Safety-v1
 """
 
 import dataclasses
@@ -248,6 +249,10 @@ SYNTHETIC2_SFT_VERIFIED_HF_ID = "PrimeIntellect/SYNTHETIC-2-SFT-verified"
 SYNTHETIC2_SFT_VERIFIED_REVISION = "fce247fe48af8ff9624fb51d1de63aa1b2332cef"
 SYNTHETIC2_SFT_VERIFIED_METADATA_COLUMNS = ["problem_id", "task_type", "reward"]
 
+NEMOTRON_SFT_SAFETY_V1_HF_ID = "nvidia/Nemotron-SFT-Safety-v1"
+NEMOTRON_SFT_SAFETY_V1_REVISION = "913fd7c803a9378dab0ce4fef80297ce115781f6"
+NEMOTRON_SFT_SAFETY_V1_METADATA_COLUMNS = ["uuid", "license", "used_in"]
+
 FINEPROOFS_SFT_REVISION = "73661e6"
 FINEPROOFS_SFT_METADATA_COLUMNS = [
     "category",
@@ -406,6 +411,15 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         adapter=multi_turn_adapter(),
         metadata_columns=SYNTHETIC2_SFT_VERIFIED_METADATA_COLUMNS,
         name=SYNTHETIC2_SFT_VERIFIED_HF_ID,
+        subsets=["default"],
+        splits=["train"],
+    ),
+    NEMOTRON_SFT_SAFETY_V1_HF_ID: InstructionDatasetConfig(
+        hf_dataset_id=NEMOTRON_SFT_SAFETY_V1_HF_ID,
+        revision=NEMOTRON_SFT_SAFETY_V1_REVISION,
+        adapter=multi_turn_adapter(),
+        metadata_columns=NEMOTRON_SFT_SAFETY_V1_METADATA_COLUMNS,
+        name=NEMOTRON_SFT_SAFETY_V1_HF_ID,
         subsets=["default"],
         splits=["train"],
     ),

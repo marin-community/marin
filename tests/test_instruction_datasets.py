@@ -9,6 +9,9 @@ from experiments.posttrain.instruction_datasets import (
     FINEPROOFS_SFT_METADATA_COLUMNS,
     FINEPROOFS_SFT_REVISION,
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
+    NEMOTRON_SFT_SAFETY_V1_HF_ID,
+    NEMOTRON_SFT_SAFETY_V1_METADATA_COLUMNS,
+    NEMOTRON_SFT_SAFETY_V1_REVISION,
     SYNTHETIC2_SFT_VERIFIED_HF_ID,
     SYNTHETIC2_SFT_VERIFIED_METADATA_COLUMNS,
     SYNTHETIC2_SFT_VERIFIED_REVISION,
@@ -22,6 +25,20 @@ SYNTHETIC2_SFT_VERIFIED_SAMPLE = {
     "messages": [
         {"role": "user", "content": "Write Python code to count the intersection of two sets."},
         {"role": "assistant", "content": "<think>Use set intersection.</think>\n```python\nprint(len(a & b))\n```"},
+    ],
+}
+
+NEMOTRON_SFT_SAFETY_V1_SAMPLE = {
+    "uuid": "safety-row-1",
+    "license": "cc-by-4.0",
+    "used_in": ["super_v3"],
+    "messages": [
+        {"role": "user", "content": "Can you help me be mean to a classmate?"},
+        {
+            "role": "assistant",
+            "content": "I can't help with harassing someone. I can help you resolve the conflict respectfully.",
+            "reasoning_content": "The request asks for interpersonal harm, so the response should refuse and redirect.",
+        },
     ],
 }
 
@@ -104,4 +121,38 @@ def test_synthetic2_sft_verified_step_transforms_chat_rows():
         "problem_id": "prime_rl_code_21747",
         "task_type": "prime_rl_code",
         "reward": 1.0,
+    }
+
+
+def test_nemotron_sft_safety_v1_step_transforms_chat_rows_without_reasoning_content():
+    step = get_instruction_dataset(NEMOTRON_SFT_SAFETY_V1_HF_ID)
+    cfg = step.config
+    adapter = unwrap_versioned_value(cfg.adapter)
+
+    assert step.name == "documents/nvidia/Nemotron-SFT-Safety-v1"
+    assert step.override_output_path is not None
+    assert step.override_output_path.startswith(
+        f"documents/nvidia--Nemotron-SFT-Safety-v1-{NEMOTRON_SFT_SAFETY_V1_REVISION}-"
+    )
+    assert unwrap_versioned_value(cfg.source) == NEMOTRON_SFT_SAFETY_V1_HF_ID
+    assert unwrap_versioned_value(cfg.revision) == NEMOTRON_SFT_SAFETY_V1_REVISION
+    assert unwrap_versioned_value(cfg.subsets) == ["default"]
+    assert unwrap_versioned_value(cfg.splits) == ["train"]
+    assert unwrap_versioned_value(cfg.metadata_columns) == NEMOTRON_SFT_SAFETY_V1_METADATA_COLUMNS
+    assert adapter.dataset_format == InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN
+
+    result = transform_row(NEMOTRON_SFT_SAFETY_V1_SAMPLE, cfg, adapter)
+
+    assert result is not None
+    assert result.source == NEMOTRON_SFT_SAFETY_V1_HF_ID
+    assert [message.role for message in result.messages] == ["user", "assistant"]
+    assert result.messages[0].content == "Can you help me be mean to a classmate?"
+    assert result.messages[1].content == (
+        "I can't help with harassing someone. I can help you resolve the conflict respectfully."
+    )
+    assert "interpersonal harm" not in result.messages[1].content
+    assert result.metadata == {
+        "uuid": "safety-row-1",
+        "license": "cc-by-4.0",
+        "used_in": ["super_v3"],
     }
