@@ -43,6 +43,32 @@ Maintain research-style run records (cf the run-research skill):
 - Record every launched instance: timestamp, DRI, exact command line with secrets scrubbed, git SHA, dirty-tree status, source bundle identity, hardware/topology, W&B run id/display name, output root, `initialize_from`, final step, checkpoint policy, and babysitter state.
 - Post issue updates for significant milestones, failures, relaunches, rollbacks, retention changes, and escalations. Keep dense logs in the logbook and concise status in the issue.
 
+Bootstrap the issue and logbook before launch:
+
+1. Pick a stable run slug, e.g. `grug-moe-1e23-ep8`.
+2. Create `.agents/logbooks/<run>.md` from the template below.
+3. If no dedicated issue exists, create one:
+
+```bash
+gh issue create \
+  --repo marin-community/marin \
+  --title "Hero run: <run name>" \
+  --label experiment \
+  --label agent-generated \
+  --body-file /tmp/<run>-hero-issue.md
+```
+
+4. Put the issue URL in the logbook, and put the logbook path in the issue body.
+5. Commit and push the initial logbook before launch:
+
+```bash
+git add .agents/logbooks/<run>.md
+git commit -m "<run>: start hero-run logbook"
+git push
+```
+
+After launch, commit and push the logbook every time it is materially updated. Use concise commit messages such as `<run>: log launch`, `<run>: log relaunch`, or `<run>: log final seal`. Issue comments should start with `🤖` unless the exact text was explicitly approved by the user.
+
 Use this compact logbook shape:
 
 ```md
