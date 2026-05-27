@@ -3,7 +3,7 @@
 **Date:** 2026-05-26
 **Owner:** Russell Power
 **Branch:** `iris-reconcile-perf`
-**Bench:** `lib/iris/scripts/benchmark_reconcile.py`
+**Bench:** `lib/iris/scripts/benchmark_controller.py reconcile`
 
 ## Goal
 
@@ -16,7 +16,7 @@ per-job `RunTaskRequest` payload grows.
 
 ## Benchmark setup
 
-`lib/iris/scripts/benchmark_reconcile.py` synthesizes a fresh controller DB
+The `reconcile` subcommand of `lib/iris/scripts/benchmark_controller.py` synthesizes a fresh controller DB
 representing one zephyr-shaped job with N tasks distributed across M workers,
 then spins up a single in-process fake worker (Connect ASGI on localhost) whose
 `Reconcile` handler echoes every `DesiredAttempt.run` back as a
@@ -39,7 +39,7 @@ Hardware: single workstation (this Linux box), bench process and fake worker
 share an asyncio loop and CPU pool, so `RPC fanout` is a **lower bound** on
 production latency.
 
-Sweep run: `uv run python lib/iris/scripts/benchmark_reconcile.py --scale-sweep`.
+Sweep run: `uv run python lib/iris/scripts/benchmark_controller.py reconcile --scale-sweep`.
 
 ## Headline numbers
 
@@ -278,8 +278,8 @@ production CoreWeave ↔ GCP this is meaningful.
 
 ## Files
 
-- `lib/iris/scripts/benchmark_reconcile.py` — the new harness (run with
-  `--scale-sweep` to reproduce).
+- `lib/iris/scripts/benchmark_controller.py reconcile` — the new harness (run
+  with `--scale-sweep` to reproduce).
 - `lib/iris/docs/reconcile_rpc.md` — design doc this evaluates.
 - `lib/iris/src/iris/cluster/controller/reconcile.py:66` — pure compute.
 - `lib/iris/src/iris/cluster/controller/worker_provider.py:271` — RPC fanout.
