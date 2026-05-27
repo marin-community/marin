@@ -17,16 +17,27 @@ Then:
     fuzzy_dups([<minhash per source>])
     build_clustered_store(tokenize, decontam, cluster_assign, quality, dedup)
 
-Assumes two pre-trained artifacts already exist on GCS — this pipeline does
-not train either:
+Each model artifact accepts either a path (skip training) or a StepSpec that
+produces it (train inline). The CLI exposes only the path forms; programmatic
+callers can pass StepSpecs via :func:`build_steps`.
 
-  ``--domain-centroids``    A directory containing the K-means output from
-                            :mod:`experiments.datakit.cluster.domain.v0.exp_full_clusters`:
+  ``--domain-centroids``    Optional. Directory containing K-means output:
                             ``centroids_<K_TRAIN>.npy`` plus
-                            ``lookup_<K_TRAIN>_to_<k>.npy`` for every K view.
+                            ``lookup_<K_TRAIN>_to_<k>.npy`` for every K view
+                            (the layout produced by
+                            :mod:`experiments.datakit.cluster.domain.v0.exp_full_clusters`).
+                            If omitted, the CLI builds the per-source embeds
+                            and a train-centroids StepSpec via
+                            :func:`build_train_centroids_step`, then passes
+                            that step to :func:`build_steps`.
 
-  ``--quality-model-bin``   A trained fasttext quality ``.bin`` from
+  ``--quality-model-bin``   Optional. Trained fasttext quality ``.bin`` from
                             :mod:`experiments.datakit.cluster.quality.v0.train`.
+                            The CLI requires a path because the v0 quality
+                            training flow (sample → LLM-score → fasttext-train)
+                            is not yet wrapped as StepSpecs. Programmatic
+                            callers can still pass a pre-built StepSpec
+                            producing a ``FastTextModel`` artifact.
 
 Region-agnostic: every worker resource is unpinned, so iris's ``--region``
 flag drives scheduling. ``MARIN_PREFIX`` is resolved by
@@ -62,7 +73,7 @@ from marin.datakit.decon import (
     decon_step,
 )
 from marin.datakit.normalize import NormalizedData
-from marin.datakit.sources import all_sources
+from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.artifact import Artifact
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
@@ -85,6 +96,8 @@ from experiments.datakit.cluster.domain.v0.assign import (
     AssignmentAttrData,
     assign_source,
 )
+from experiments.datakit.cluster.domain.v0.sample import sample_centroid_inputs
+from experiments.datakit.cluster.domain.v0.train import train_centroids
 from experiments.datakit.cluster.quality.v0.all_sources_quality_llm import (
     LlmQualityOutput,
     _register_model_step,
@@ -137,6 +150,14 @@ COORDINATOR_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="4g")
 EMBED_MAX_WORKERS_PER_SOURCE = 512
 ASSIGN_MAX_WORKERS_PER_SOURCE = 512
 
+# Inline domain training (used when the caller does not pre-stage centroids).
+# ~100 sources x 100k = ~10M-row centroid sample, matching exp_full_clusters.
+N_PER_SOURCE_FOR_SAMPLE = 100_000
+SAMPLE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="4g")
+SAMPLE_MAX_WORKERS = 256
+# FAISS K=5000 on 10M x 192 wants every core it can get.
+TRAIN_CENTROIDS_RESOURCES = ResourceConfig.with_cpu(cpu=32, ram="64g")
+
 # Minhash / dedup mirror all_sources_fuzzy defaults.
 MINHASH_WORKER_RESOURCES = ResourceConfig(cpu=5, ram="32g", disk="5g")
 DEDUP_MAX_PARALLELISM = 4096
@@ -152,10 +173,127 @@ STORE_MAX_WORKERS = 2048 + 1024
 SPLIT = "train"
 
 
+def _select_sources() -> dict[str, DatakitSource]:
+    """Apply the static ``_EXCLUDE_SOURCES`` carve-out and log the chosen set."""
+    sources = {name: src for name, src in all_sources().items() if name not in _EXCLUDE_SOURCES}
+    logger.info(
+        "Reference pipeline: %d sources (excluded: %s)",
+        len(sources),
+        sorted(_EXCLUDE_SOURCES),
+    )
+    return sources
+
+
+def _build_embed_step(name: str, normalize_step: StepSpec) -> StepSpec:
+    return StepSpec(
+        name=f"datakit/embed/{name}",
+        deps=[normalize_step],
+        hash_attrs={
+            "luxical_repo": LUXICAL_REPO,
+            "luxical_weights": LUXICAL_WEIGHTS_FILE,
+            "batch_size": EMBED_BATCH_SIZE,
+            "v": 1,
+        },
+        fn=remote(
+            lambda output_path, np=normalize_step.output_path: embed_source(
+                output_path=output_path,
+                normalized=Artifact.from_path(np, NormalizedData),
+                batch_size=EMBED_BATCH_SIZE,
+                worker_resources=EMBED_WORKER_RESOURCES,
+                max_workers=EMBED_MAX_WORKERS_PER_SOURCE,
+            ),
+            resources=COORDINATOR_RESOURCES,
+            pip_dependency_groups=["embed"],
+        ),
+    )
+
+
+def build_per_source_embed_steps(sources: dict[str, DatakitSource]) -> dict[str, StepSpec]:
+    """Build the Luxical embed StepSpec for each source.
+
+    Exposed so callers that also build the domain training subgraph (via
+    :func:`build_train_centroids_step`) can share the same embed steps with
+    :func:`build_steps` instead of duplicating them.
+    """
+    return {name: _build_embed_step(name, src.normalized) for name, src in sources.items()}
+
+
+def build_train_centroids_step(embed_steps: dict[str, StepSpec]) -> StepSpec:
+    """Build the K-means training StepSpec for the domain centroids.
+
+    The returned step's ``output_path`` contains ``centroids_<K_TRAIN>.npy``
+    plus ``lookup_<K_TRAIN>_to_<k>.npy`` for each ``k`` in ``K_VIEWS`` -- the
+    same layout :func:`build_steps` consumes when given a centroids path.
+    """
+    sample_step = StepSpec(
+        name="datakit/cluster/sample_centroids",
+        deps=list(embed_steps.values()),
+        hash_attrs={"n_per_source": N_PER_SOURCE_FOR_SAMPLE, "format": "parquet", "v": 1},
+        fn=remote(
+            lambda output_path, es={n: s.output_path for n, s in embed_steps.items()}: sample_centroid_inputs(
+                output_path=output_path,
+                embeddings={n: Artifact.from_path(p, EmbeddingAttrData) for n, p in es.items()},
+                n_per_source=N_PER_SOURCE_FOR_SAMPLE,
+                worker_resources=SAMPLE_WORKER_RESOURCES,
+                max_workers=SAMPLE_MAX_WORKERS,
+            ),
+            resources=COORDINATOR_RESOURCES,
+            pip_dependency_groups=["cluster"],
+        ),
+    )
+    return StepSpec(
+        name="datakit/cluster/train_centroids",
+        deps=[sample_step],
+        hash_attrs={"k_train": K_TRAIN, "k_views": list(K_VIEWS), "v": 1},
+        fn=remote(
+            lambda output_path, sp=sample_step.output_path: train_centroids(
+                output_path=output_path,
+                sample_path=sp,
+                k_train=K_TRAIN,
+                k_views=K_VIEWS,
+            ),
+            resources=TRAIN_CENTROIDS_RESOURCES,
+            pip_dependency_groups=["cluster"],
+        ),
+    )
+
+
+def _resolve_centroids(
+    domain_centroids: str | StepSpec,
+) -> tuple[str, dict[int, str], list[StepSpec], object]:
+    """Return ``(centroids_uri, lookup_uris, extra_deps, hash_value)`` for assign."""
+    if isinstance(domain_centroids, StepSpec):
+        base = domain_centroids.output_path
+        return (
+            f"{base}/centroids_{K_TRAIN}.npy",
+            {k: f"{base}/lookup_{K_TRAIN}_to_{k}.npy" for k in K_VIEWS},
+            [domain_centroids],
+            base,  # already includes a content hash; safe in hash_attrs
+        )
+    base = domain_centroids.rstrip("/")
+    return (
+        f"{base}/centroids_{K_TRAIN}.npy",
+        {k: f"{base}/lookup_{K_TRAIN}_to_{k}.npy" for k in K_VIEWS},
+        [],
+        domain_centroids,
+    )
+
+
+def _resolve_quality_model(quality_model: str | StepSpec) -> StepSpec:
+    if isinstance(quality_model, StepSpec):
+        return quality_model
+    return _register_model_step(
+        name="datakit/quality_model/reference",
+        model_bin_path=quality_model,
+    )
+
+
 def build_steps(
     *,
-    domain_centroids_dir: str,
-    quality_model_bin: str,
+    domain_centroids: str | StepSpec,
+    quality_model: str | StepSpec,
+    sources: dict[str, DatakitSource] | None = None,
+    embed_steps: dict[str, StepSpec] | None = None,
     store_shards_per_task: int = 1,
 ) -> list[StepSpec]:
     """Build the full DAG of StepSpecs.
@@ -166,27 +304,30 @@ def build_steps(
     of changing ``MARIN_PREFIX``.
 
     Args:
-        domain_centroids_dir: GCS directory holding ``centroids_<K_TRAIN>.npy``
-            and ``lookup_<K_TRAIN>_to_<k>.npy`` for each K in ``K_VIEWS``.
-        quality_model_bin: GCS path to the trained fasttext quality ``.bin``.
+        domain_centroids: Either a GCS directory holding
+            ``centroids_<K_TRAIN>.npy`` and ``lookup_<K_TRAIN>_to_<k>.npy``
+            for each ``k`` in ``K_VIEWS``, or a StepSpec whose
+            ``output_path`` will contain that layout once it runs (see
+            :func:`build_train_centroids_step`).
+        quality_model: Either a GCS path to a trained fasttext quality
+            ``.bin``, or a StepSpec that produces a ``FastTextModel``
+            artifact directly (e.g. an inline-training step).
+        sources: Optional pre-selected source set. Defaults to
+            :func:`_select_sources` (every Datakit source minus
+            ``_EXCLUDE_SOURCES``).
+        embed_steps: Optional pre-built per-source embed steps. Pass these
+            when the caller has already built them (e.g. to share with
+            :func:`build_train_centroids_step`); otherwise this function
+            builds them via :func:`build_per_source_embed_steps`.
+        store_shards_per_task: Tuning knob for the final store step.
     """
-    sources = {name: src for name, src in all_sources().items() if name not in _EXCLUDE_SOURCES}
-    logger.info(
-        "Reference pipeline: %d sources (excluded: %s)",
-        len(sources),
-        sorted(_EXCLUDE_SOURCES),
-    )
+    if sources is None:
+        sources = _select_sources()
+    if embed_steps is None:
+        embed_steps = build_per_source_embed_steps(sources)
 
-    centroids_uri = f"{domain_centroids_dir.rstrip('/')}/centroids_{K_TRAIN}.npy"
-    lookup_uris = {k: f"{domain_centroids_dir.rstrip('/')}/lookup_{K_TRAIN}_to_{k}.npy" for k in K_VIEWS}
-
-    # ---- Shared upstream steps -------------------------------------------------
-    # Quality model wrapper: emits a FastTextModel artifact pointing at the
-    # already-staged .bin (no download/training).
-    quality_model_step = _register_model_step(
-        name="datakit/quality_model/reference",
-        model_bin_path=quality_model_bin,
-    )
+    centroids_uri, lookup_uris, centroids_deps, centroids_hash = _resolve_centroids(domain_centroids)
+    quality_model_step = _resolve_quality_model(quality_model)
 
     # One combined decontam bloom (no merge step); every per-source decon
     # consumes it directly.
@@ -205,6 +346,7 @@ def build_steps(
 
     for name, source in sources.items():
         normalize_step = source.normalized
+        embed = embed_steps[name]
 
         tokenize = tokenize_attributes_step(
             name=f"datakit/tokenize/{name}",
@@ -215,36 +357,14 @@ def build_steps(
             worker_resources=TOKENIZE_WORKER_RESOURCES,
         )
 
-        embed = StepSpec(
-            name=f"datakit/embed/{name}",
-            deps=[normalize_step],
-            hash_attrs={
-                "luxical_repo": LUXICAL_REPO,
-                "luxical_weights": LUXICAL_WEIGHTS_FILE,
-                "batch_size": EMBED_BATCH_SIZE,
-                "v": 1,
-            },
-            fn=remote(
-                lambda output_path, np=normalize_step.output_path: embed_source(
-                    output_path=output_path,
-                    normalized=Artifact.from_path(np, NormalizedData),
-                    batch_size=EMBED_BATCH_SIZE,
-                    worker_resources=EMBED_WORKER_RESOURCES,
-                    max_workers=EMBED_MAX_WORKERS_PER_SOURCE,
-                ),
-                resources=COORDINATOR_RESOURCES,
-                pip_dependency_groups=["embed"],
-            ),
-        )
-
-        # Domain assign: consumes the embed + the (given) centroids.
-        # The centroids URIs feed hash_attrs so re-pointing at a new model
+        # Domain assign: consumes the embed + the (given or trained) centroids.
+        # ``centroids_hash`` feeds hash_attrs so re-pointing at a new model
         # invalidates already-assigned outputs.
         assign = StepSpec(
             name=f"datakit/cluster_assign/{name}",
-            deps=[embed],
+            deps=[embed, *centroids_deps],
             hash_attrs={
-                "centroids_dir": domain_centroids_dir,
+                "centroids_dir": centroids_hash,
                 "k_train": K_TRAIN,
                 "k_views": list(K_VIEWS),
                 "batch_size": ASSIGN_BATCH_SIZE,
@@ -346,6 +466,8 @@ def build_steps(
     )
 
     all_steps: list[StepSpec] = [quality_model_step, decon_bloom_step]
+    if isinstance(domain_centroids, StepSpec):
+        all_steps.append(domain_centroids)
     for s in per_source.values():
         all_steps += list(s.values())
     all_steps += [dedup, store]
@@ -356,8 +478,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--domain-centroids",
-        required=True,
-        help="GCS dir containing centroids_<K>.npy + lookup_<K>_to_<k>.npy from cluster/domain/v0",
+        default=None,
+        help=(
+            "GCS dir containing centroids_<K>.npy + lookup_<K>_to_<k>.npy from "
+            "cluster/domain/v0. If omitted, the pipeline trains centroids inline "
+            "from the per-source embeds."
+        ),
     )
     parser.add_argument(
         "--quality-model-bin",
@@ -386,9 +512,16 @@ def main() -> None:
     args = parser.parse_args()
 
     configure_logging(logging.INFO)
+
+    sources = _select_sources()
+    embed_steps = build_per_source_embed_steps(sources)
+    domain_centroids: str | StepSpec = args.domain_centroids or build_train_centroids_step(embed_steps)
+
     steps = build_steps(
-        domain_centroids_dir=args.domain_centroids,
-        quality_model_bin=args.quality_model_bin,
+        domain_centroids=domain_centroids,
+        quality_model=args.quality_model_bin,
+        sources=sources,
+        embed_steps=embed_steps,
         store_shards_per_task=args.store_shards_per_task,
     )
     StepRunner().run(steps, max_concurrent=args.max_concurrent)
