@@ -178,17 +178,10 @@ def resolve_controller_ssh_config(
     cluster_config: config_pb2.IrisClusterConfig | None,
     local_ssh_config: config_pb2.SshConfig | None,
 ) -> config_pb2.SshConfig | None:
-    """Resolve the SSH auth mode the cluster's controller advertises.
+    """Adopt the SSH auth mode advertised on the controller VM, if any.
 
-    Reads ``Labels.iris_ssh_auth_mode`` off the controller VM via a cheap
-    label-filtered ``vm_list`` call. If the controller advertises a different
-    mode than the local YAML, returns a new SshConfig with the advertised
-    auth_mode swapped in. Otherwise returns ``local_ssh_config`` unchanged.
-
-    Returns silently in cases where there's no controller to read from:
-    LOCAL service mode, missing controller.gcp.zone, no controller VM yet
-    (e.g. ``cluster start``), or any GCP API error. The local config is the
-    authority in those cases.
+    Falls back to ``local_ssh_config`` when there's no controller to read
+    from yet (``cluster start``, LOCAL mode, no zone) or the GCP call fails.
     """
     if gcp_service.mode == ServiceMode.LOCAL:
         return local_ssh_config

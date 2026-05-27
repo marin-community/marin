@@ -173,8 +173,6 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
     _service_account: str | None = None
     # Always populated at construction; Optional only for dataclass inheritance ordering.
     _gcp_service: GcpService | None = None
-    # Labels observed on the GCE instance at handle-construction time.
-    # Used by clients to read controller-advertised hints (e.g. SSH auth mode).
     _labels: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
