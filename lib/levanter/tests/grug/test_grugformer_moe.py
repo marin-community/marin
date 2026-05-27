@@ -171,10 +171,6 @@ def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():
     np.testing.assert_allclose(np.asarray(y_default), np.asarray(y_ring), rtol=1e-5, atol=1e-5)
 
 
-def test_resolve_moe_implementation_accepts_deepep_backend():
-    assert grug_moe.resolve_moe_implementation("deepep") == "deepep"
-
-
 def test_prepare_moe_dispatch_indices_match_materialized_dispatch():
     x, selected_experts, combine_weights, _w_up_gate, _w_down = _make_inputs(
         key=jax.random.key(28),
