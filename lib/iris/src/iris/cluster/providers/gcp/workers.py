@@ -383,6 +383,7 @@ class GcpWorkerProvider:
             _gcp_service=self._gcp,
             _remote_exec=remote_exec,
             _service_account=request.service_account,
+            _labels=dict(vm_info.labels),
         )
 
     def create_slice(
@@ -814,6 +815,7 @@ class GcpWorkerProvider:
                     _gcp_service=self._gcp,
                     _remote_exec=remote_exec,
                     _service_account=vm.service_account,
+                    _labels=dict(vm.labels),
                 )
             )
         return handles

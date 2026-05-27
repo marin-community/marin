@@ -5,8 +5,9 @@
 
 from dataclasses import dataclass
 
-from iris.cluster.providers.gcp.controller import GcpControllerProvider
+from iris.cluster.providers.gcp.controller import GcpControllerProvider, resolve_controller_ssh_config
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
+from iris.cluster.providers.gcp.service import CloudGcpService
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.k8s.controller import K8sControllerProvider
 from iris.cluster.providers.manual.provider import ManualControllerProvider, ManualWorkerProvider
@@ -54,11 +55,19 @@ def create_provider_bundle(
     if which == "gcp":
         if not platform_config.gcp.project_id:
             raise ValueError("platform.gcp.project_id is required")
+        gcp_service = CloudGcpService(project_id=platform_config.gcp.project_id)
+        effective_ssh = resolve_controller_ssh_config(
+            gcp_service=gcp_service,
+            platform_config=platform_config,
+            cluster_config=cluster_config,
+            local_ssh_config=ssh_config,
+        )
         worker_provider = GcpWorkerProvider(
             gcp_config=platform_config.gcp,
             label_prefix=label_prefix,
             worker_port=worker_port,
-            ssh_config=ssh_config,
+            ssh_config=effective_ssh,
+            gcp_service=gcp_service,
         )
         return ProviderBundle(
             controller=GcpControllerProvider(

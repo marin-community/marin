@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from rigging.timing import Duration, Timestamp
 
@@ -173,10 +173,17 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
     _service_account: str | None = None
     # Always populated at construction; Optional only for dataclass inheritance ordering.
     _gcp_service: GcpService | None = None
+    # Labels observed on the GCE instance at handle-construction time.
+    # Used by clients to read controller-advertised hints (e.g. SSH auth mode).
+    _labels: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self._gcp_service is None:
             raise ValueError("_gcp_service is required")
+
+    @property
+    def labels(self) -> dict[str, str]:
+        return dict(self._labels)
 
     def status(self) -> WorkerStatus:
         assert self._gcp_service is not None

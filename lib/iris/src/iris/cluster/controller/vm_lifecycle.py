@@ -33,7 +33,7 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
 from iris.cluster.providers.gcp.bootstrap import (
     build_controller_bootstrap_script_from_config,
 )
-from iris.cluster.providers.gcp.ssh import OS_LOGIN_METADATA
+from iris.cluster.providers.gcp.ssh import OS_LOGIN_METADATA, auth_mode_to_label
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import (
     Labels,
@@ -297,6 +297,9 @@ def _build_controller_vm_config(
     vm_config = config_pb2.VmConfig()
     vm_config.name = f"iris-controller-{label_prefix}"
     vm_config.labels[labels.iris_controller] = "true"
+    auth_mode_label = auth_mode_to_label(config.defaults.ssh.auth_mode)
+    if auth_mode_label is not None:
+        vm_config.labels[labels.iris_ssh_auth_mode] = auth_mode_label
 
     which = config.controller.WhichOneof("controller")
     if which == "gcp":

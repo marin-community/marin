@@ -21,10 +21,17 @@ from rigging.timing import ExponentialBackoff, retry_with_backoff
 from iris.cluster.controller.vm_lifecycle import restart_controller as vm_restart_controller
 from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
-from iris.cluster.providers.gcp.ssh import ssh_impersonate_service_account, ssh_key_file
+from iris.cluster.providers.gcp.service import GcpService
+from iris.cluster.providers.gcp.ssh import (
+    auth_mode_from_label,
+    auth_mode_to_label,
+    ssh_impersonate_service_account,
+    ssh_key_file,
+)
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.remote_exec import resolve_current_os_login_user
 from iris.cluster.providers.types import (
+    InfraError,
     Labels,
     default_stop_all,
     find_free_port,
@@ -162,6 +169,69 @@ def _ssh_auth_mode(ssh_config: config_pb2.SshConfig | None) -> int:
     if ssh_config is None:
         return config_pb2.SshConfig.SSH_AUTH_MODE_METADATA
     return ssh_config.auth_mode or config_pb2.SshConfig.SSH_AUTH_MODE_METADATA
+
+
+def resolve_controller_ssh_config(
+    *,
+    gcp_service: GcpService,
+    platform_config: config_pb2.PlatformConfig,
+    cluster_config: config_pb2.IrisClusterConfig | None,
+    local_ssh_config: config_pb2.SshConfig | None,
+) -> config_pb2.SshConfig | None:
+    """Resolve the SSH auth mode the cluster's controller advertises.
+
+    Reads ``Labels.iris_ssh_auth_mode`` off the controller VM via a cheap
+    label-filtered ``vm_list`` call. If the controller advertises a different
+    mode than the local YAML, returns a new SshConfig with the advertised
+    auth_mode swapped in. Otherwise returns ``local_ssh_config`` unchanged.
+
+    Returns silently in cases where there's no controller to read from:
+    LOCAL service mode, missing controller.gcp.zone, no controller VM yet
+    (e.g. ``cluster start``), or any GCP API error. The local config is the
+    authority in those cases.
+    """
+    if gcp_service.mode == ServiceMode.LOCAL:
+        return local_ssh_config
+    if cluster_config is None or cluster_config.controller.WhichOneof("controller") != "gcp":
+        return local_ssh_config
+    zone = cluster_config.controller.gcp.zone
+    if not zone:
+        return local_ssh_config
+
+    label_prefix = platform_config.label_prefix or "iris"
+    labels = Labels(label_prefix)
+
+    try:
+        vms = gcp_service.vm_list(zones=[zone], labels={labels.iris_controller: "true"})
+    except InfraError as e:
+        logger.debug("ssh auth_mode probe: vm_list failed (%s); using local config", e)
+        return local_ssh_config
+
+    if not vms:
+        return local_ssh_config
+
+    advertised = vms[0].labels.get(labels.iris_ssh_auth_mode) if vms[0].labels else None
+    if not advertised:
+        return local_ssh_config
+    advertised_mode = auth_mode_from_label(advertised)
+    if advertised_mode is None:
+        logger.warning("Controller VM advertises unknown ssh auth_mode=%r; using local config", advertised)
+        return local_ssh_config
+
+    local_mode = _ssh_auth_mode(local_ssh_config)
+    if advertised_mode == local_mode:
+        return local_ssh_config
+
+    resolved = config_pb2.SshConfig()
+    if local_ssh_config is not None:
+        resolved.CopyFrom(local_ssh_config)
+    resolved.auth_mode = advertised_mode
+    logger.info(
+        "using ssh auth_mode=%s (from controller label; local config: %s)",
+        auth_mode_to_label(advertised_mode),
+        auth_mode_to_label(local_mode),
+    )
+    return resolved
 
 
 def _should_retry_metadata(stderr: str) -> bool:

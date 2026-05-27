@@ -27,6 +27,31 @@ def uses_os_login(ssh_config: config_pb2.SshConfig | None) -> bool:
     return ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
 
 
+# GCE label values must match [a-z][a-z0-9_-]*. These tokens are advertised on
+# the controller VM (see Labels.iris_ssh_auth_mode) so clients with stale local
+# YAML can resolve the cluster's actual auth mode before opening the tunnel.
+SSH_AUTH_MODE_LABEL_METADATA = "metadata"
+SSH_AUTH_MODE_LABEL_OS_LOGIN = "os_login"
+
+
+def auth_mode_to_label(auth_mode: config_pb2.SshConfig.AuthMode) -> str | None:
+    """Render an SshConfig.AuthMode value as a GCE label token, or None if unknown."""
+    if auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN:
+        return SSH_AUTH_MODE_LABEL_OS_LOGIN
+    if auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_METADATA:
+        return SSH_AUTH_MODE_LABEL_METADATA
+    return None
+
+
+def auth_mode_from_label(label_value: str) -> config_pb2.SshConfig.AuthMode | None:
+    """Parse a GCE label token back to an SshConfig.AuthMode value, or None if unknown."""
+    if label_value == SSH_AUTH_MODE_LABEL_OS_LOGIN:
+        return config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
+    if label_value == SSH_AUTH_MODE_LABEL_METADATA:
+        return config_pb2.SshConfig.SSH_AUTH_MODE_METADATA
+    return None
+
+
 class OsLoginKeyProvisioner:
     """Lazily provisions an SSH keypair and registers it with OS Login.
 

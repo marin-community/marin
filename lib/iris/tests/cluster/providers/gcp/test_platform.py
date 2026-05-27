@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pytest
-from iris.cluster.providers.gcp.controller import GcpControllerProvider
+from iris.cluster.providers.gcp.controller import GcpControllerProvider, resolve_controller_ssh_config
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.handles import GcpVmSliceHandle, _build_gce_resource_name
 from iris.cluster.providers.gcp.workers import (
@@ -242,6 +242,108 @@ def test_gcp_tunnel_prefers_ssh_impersonation_config():
     ssh_cmd = popen_mock.call_args.args[0]
     assert f"--impersonate-service-account={ssh_config.impersonate_service_account}" in list_cmd
     assert f"--impersonate-service-account={ssh_config.impersonate_service_account}" in ssh_cmd
+
+
+def _ssh_resolver_setup(
+    *,
+    controller_labels: dict[str, str] | None = None,
+    local_auth_mode: int = config_pb2.SshConfig.SSH_AUTH_MODE_METADATA,
+    label_prefix: str = "iris",
+    zone: str = "us-central2-b",
+) -> tuple[InMemoryGcpService, config_pb2.PlatformConfig, config_pb2.IrisClusterConfig, config_pb2.SshConfig]:
+    from iris.cluster.providers.gcp.service import VmCreateRequest
+
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    if controller_labels is not None:
+        gcp_service.vm_create(
+            VmCreateRequest(
+                name=f"iris-controller-{label_prefix}",
+                zone=zone,
+                machine_type="n2-standard-4",
+                labels=controller_labels,
+            )
+        )
+
+    platform_config = config_pb2.PlatformConfig(label_prefix=label_prefix)
+    platform_config.gcp.project_id = "test-project"
+
+    cluster_config = config_pb2.IrisClusterConfig()
+    cluster_config.controller.gcp.zone = zone
+
+    local_ssh = config_pb2.SshConfig(auth_mode=local_auth_mode)
+    return gcp_service, platform_config, cluster_config, local_ssh
+
+
+def test_resolve_controller_ssh_overrides_when_label_disagrees(caplog):
+    labels = Labels("iris")
+    gcp_service, platform, cluster, local_ssh = _ssh_resolver_setup(
+        controller_labels={labels.iris_controller: "true", labels.iris_ssh_auth_mode: "os_login"},
+        local_auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_METADATA,
+    )
+
+    with caplog.at_level("INFO", logger="iris.cluster.providers.gcp.controller"):
+        resolved = resolve_controller_ssh_config(
+            gcp_service=gcp_service, platform_config=platform, cluster_config=cluster, local_ssh_config=local_ssh
+        )
+
+    assert resolved is not None
+    assert resolved.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
+    assert any("from controller label" in r.message for r in caplog.records)
+
+
+def test_resolve_controller_ssh_preserves_when_label_absent():
+    labels = Labels("iris")
+    gcp_service, platform, cluster, local_ssh = _ssh_resolver_setup(
+        controller_labels={labels.iris_controller: "true"},
+        local_auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_METADATA,
+    )
+
+    resolved = resolve_controller_ssh_config(
+        gcp_service=gcp_service, platform_config=platform, cluster_config=cluster, local_ssh_config=local_ssh
+    )
+
+    assert resolved is local_ssh
+
+
+def test_resolve_controller_ssh_warns_on_unknown_label(caplog):
+    labels = Labels("iris")
+    gcp_service, platform, cluster, local_ssh = _ssh_resolver_setup(
+        controller_labels={labels.iris_controller: "true", labels.iris_ssh_auth_mode: "kerberos"},
+    )
+
+    with caplog.at_level("WARNING", logger="iris.cluster.providers.gcp.controller"):
+        resolved = resolve_controller_ssh_config(
+            gcp_service=gcp_service, platform_config=platform, cluster_config=cluster, local_ssh_config=local_ssh
+        )
+
+    assert resolved is local_ssh
+    assert any("unknown ssh auth_mode" in r.message for r in caplog.records)
+
+
+def test_resolve_controller_ssh_when_no_controller_vm():
+    gcp_service, platform, cluster, local_ssh = _ssh_resolver_setup(controller_labels=None)
+
+    resolved = resolve_controller_ssh_config(
+        gcp_service=gcp_service, platform_config=platform, cluster_config=cluster, local_ssh_config=local_ssh
+    )
+
+    assert resolved is local_ssh
+
+
+def test_resolve_controller_ssh_no_log_when_modes_match(caplog):
+    labels = Labels("iris")
+    gcp_service, platform, cluster, local_ssh = _ssh_resolver_setup(
+        controller_labels={labels.iris_controller: "true", labels.iris_ssh_auth_mode: "metadata"},
+        local_auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_METADATA,
+    )
+
+    with caplog.at_level("INFO", logger="iris.cluster.providers.gcp.controller"):
+        resolved = resolve_controller_ssh_config(
+            gcp_service=gcp_service, platform_config=platform, cluster_config=cluster, local_ssh_config=local_ssh
+        )
+
+    assert resolved is local_ssh
+    assert not any("from controller label" in r.message for r in caplog.records)
 
 
 def test_gce_remote_exec_builds_optional_flags_inline():
