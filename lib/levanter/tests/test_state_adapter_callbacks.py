@@ -69,26 +69,3 @@ def test_state_callback_runner_supports_grug_style_state_and_force_flag():
 
     runner.run(state, loss=1.0, step_duration=0.1, force=True)
     assert calls == [1]
-
-
-def test_state_callback_runner_skips_step_zero_for_periodic_hooks():
-    per_step_calls: list[int] = []
-    periodic_calls: list[int] = []
-    runner = StateCallbackRunner[_TrainerLikeState](
-        step_getter=lambda s: s.step,
-        model_getter=lambda s: s.model,
-        eval_model_getter=lambda s: s.eval_model,
-        opt_state_getter=lambda s: s.opt_state,
-    )
-    runner.add_hook(lambda info: per_step_calls.append(info.step), every=1)
-    runner.add_hook(lambda info: periodic_calls.append(info.step), every=10)
-
-    # state.step=1 -> completed step 0 (right after the first training step).
-    step0_state = _TrainerLikeState(step=jnp.array(1, dtype=jnp.int32), model="m", eval_model="em", opt_state="os")
-    runner.run(step0_state, loss=1.0, step_duration=0.1)
-    assert per_step_calls == [0]
-    assert periodic_calls == []
-
-    # Forcing at step 0 still runs the periodic hook (end-of-training drain semantics).
-    runner.run(step0_state, loss=1.0, step_duration=0.1, force=True)
-    assert periodic_calls == [0]

@@ -103,21 +103,6 @@ class _JitHook:
     every: int
 
 
-def _hook_should_fire(step: int, every: int, force: bool) -> bool:
-    """Whether a hook configured for ``every`` steps should fire at this step.
-
-    Interprets ``every=N`` as "steps N, 2N, 3N, ..." rather than "0, N, 2N, ...".
-    Hooks configured for every step (``every=1``) still fire at step 0. ``force``
-    overrides both checks so end-of-training and resume-already-done paths can
-    still drain callbacks.
-    """
-    if force:
-        return True
-    if every > 1 and step == 0:
-        return False
-    return step % every == 0
-
-
 @dataclass
 class TrainStepResult(typing.Generic[S]):
     """Result of a training step, returned from the JIT-compiled _train_step function."""
@@ -141,12 +126,13 @@ class TrainerHooks:
 
     def run_hooks(self, info: StepInfo, force: bool = False):
         for hook in self.hooks:
-            if _hook_should_fire(info.step, hook.every, force):
+            # `every=N` means N, 2N, 3N, ...; skip the spurious match at step 0 for periodic hooks.
+            if force or (info.step % hook.every == 0 and (info.step != 0 or hook.every == 1)):
                 hook.fn.on_step(info, force=force)
 
     def run_jit_hooks_outside_step(self, info: StepInfo, cb_infos: Sequence[PyTree], force: bool = False):
         for s_hook, cb_info in zip(self.jit_hooks, cb_infos):
-            if _hook_should_fire(info.step, s_hook.every, force):
+            if force or (info.step % s_hook.every == 0 and (info.step != 0 or s_hook.every == 1)):
                 s_hook.fn.on_step(info, cb_info)
 
     def run_jit_hooks(self, state: TrainerState, jit_info: InsideJitInfo, force: bool = False) -> tuple[PyTree, ...]:
@@ -154,10 +140,8 @@ class TrainerHooks:
         hook_infos = []
         for hook in self.jit_hooks:
             hook_shape = eqx.filter_eval_shape(hook.fn.inside_step, state, jit_info)
-            fires = state.step % hook.every == 0
-            if hook.every > 1:
-                # "every N" means N, 2N, 3N, ...; skip the spurious match at step 0.
-                fires = fires & (state.step != 0)
+            # `every=N` means N, 2N, 3N, ...; skip the spurious match at step 0 for periodic hooks.
+            fires = (state.step % hook.every == 0) & ((state.step != 0) | (hook.every == 1))
             new_s = jax.lax.cond(
                 force or fires,
                 lambda: hook.fn.inside_step(state, jit_info),
