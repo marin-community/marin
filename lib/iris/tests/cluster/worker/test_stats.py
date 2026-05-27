@@ -1,13 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the iris.worker / iris.task stats schemas."""
+"""Tests for the iris.worker / iris.task / iris.task_status stats schemas."""
 
 from datetime import datetime
 
+from finelog.client.log_client import schema_from_dataclass
 from iris.cluster.worker.stats import (
     IrisTaskStat,
     IrisWorkerStat,
+    TaskStatusRow,
     WorkerStatus,
     build_task_stat,
     build_worker_stat,
@@ -133,3 +135,8 @@ def test_build_task_stat_with_accelerator():
     )
     assert stat.accelerator_util_pct == 88.5
     assert stat.accelerator_mem_bytes == 2_000_000
+
+
+def test_task_status_row_schema_is_registrable():
+    """Smoke test: LogClient.get_table reflects the dataclass on first push."""
+    schema_from_dataclass(TaskStatusRow)

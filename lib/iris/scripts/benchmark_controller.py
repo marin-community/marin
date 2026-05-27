@@ -186,10 +186,6 @@ class RpcHarness:
     snapshot stays stable across benchmark iterations, but RPCs still
     contend with the scheduler's reads and the loop's CPU cost, matching
     production shape.
-
-    ``on_loop`` toggles the SetTaskStatusText ``@on_loop`` attribute inside
-    the child before the controller is built so the dispatch mode is locked
-    in for the lifetime of the harness.
     """
 
     def __init__(
@@ -198,7 +194,6 @@ class RpcHarness:
         tmp: Path,
         *,
         startup_timeout_s: float = 30.0,
-        on_loop: bool = False,
     ) -> None:
         tmp.mkdir(parents=True, exist_ok=True)
         cmd = [
@@ -211,8 +206,6 @@ class RpcHarness:
             "--state-dir",
             str(tmp / "server-state"),
         ]
-        if on_loop:
-            cmd.append("--on-loop")
         self._proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -292,9 +285,9 @@ class RpcLoad:
 
     The runner picks ``max(n_clients_min, ceil(target_rps / MAX_PER_THREAD_RPS))``.
     Set this above 1 to model loads where the *connection count* matters
-    independently of throughput — e.g. SetTaskStatusText in production is
-    pushed by ~200 task processes, each holding its own connection. A single
-    thread doing 316 rps doesn't expose the same concurrency on the server.
+    independently of throughput — e.g. a hot RPC pushed by many task
+    processes, each holding its own connection. A single thread doing N rps
+    doesn't expose the same concurrency on the server.
     """
 
 
@@ -628,28 +621,6 @@ def _has_committed_columns(db: ControllerDB) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def load_set_task_status_text(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
-    task_ids = [f"/bench/sts/{i:04d}" for i in range(50)]
-    counter = {"n": 0}
-    payload = "x" * 256
-    short = payload[:32]
-
-    def invoke(client: ControllerServiceClientSync) -> None:
-        tid = task_ids[counter["n"] % len(task_ids)]
-        counter["n"] += 1
-        client.set_task_status_text(
-            job_pb2.SetTaskStatusTextRequest(
-                task_id=tid,
-                status_text_detail_md=payload,
-                status_text_summary_md=short,
-            )
-        )
-
-    # Production reality: ~200 task processes each push their own status,
-    # so the connection count on the server matters as much as the throughput.
-    return RpcLoad(name="SetTaskStatusText", target_rps=rps, invoke=invoke, n_clients_min=200)
-
-
 def load_get_job_state(harness: RpcHarness, db: ControllerDB, rps: float, batch: int = 1) -> RpcLoad | None:
     with db.read_snapshot() as tx:
         rows = tx.fetchall(select(jobs_table.c.job_id).limit(50))
@@ -868,7 +839,6 @@ def load_get_process_status(harness: RpcHarness, db: ControllerDB, rps: float) -
 
 
 PRODUCTION_MIX_RPS: dict[str, float] = {
-    "SetTaskStatusText": 316.0,
     "GetJobState": 7.85,
     "ListEndpoints": 0.90,
     "GetJobStatus": 0.73,
@@ -887,7 +857,6 @@ PRODUCTION_MIX_RPS: dict[str, float] = {
 }
 
 _FACTORY_BY_NAME: dict[str, Callable[..., RpcLoad | None]] = {
-    "SetTaskStatusText": load_set_task_status_text,
     "GetJobState": load_get_job_state,
     "ListEndpoints": load_list_endpoints,
     "GetJobStatus": load_get_job_status,
@@ -1816,7 +1785,7 @@ def benchmark_apply_contention(db: ControllerDB) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Group: set_task_status_text (on_loop vs threadpool dispatch comparison)
+# Shared latency / scenario helpers (used by the rpcs and scenario groups)
 # ---------------------------------------------------------------------------
 
 
@@ -1830,85 +1799,6 @@ def _percentiles_ms(latencies: list[float]) -> tuple[float, float, float, float,
         latencies[min(int(n * 0.999), n - 1)],
         latencies[-1],
     )
-
-
-def _set_status_text_probe(
-    harness: "RpcHarness",
-    *,
-    n_threads: int,
-    duration_s: float,
-    payload_size: int = 256,
-) -> dict:
-    """Saturate SetTaskStatusText from ``n_threads`` client threads.
-
-    Each thread runs a tight loop with its own pooled client — no rate
-    limiting — so the result is the ceiling, not a hand-throttled target.
-    """
-    stop = threading.Event()
-    payload = "x" * payload_size
-    per_thread: list[list[float]] = [[] for _ in range(n_threads)]
-    errors: list[BaseException] = []
-
-    def worker(idx: int) -> None:
-        client = harness.make_client()
-        latencies = per_thread[idx]
-        task_id = f"/u/probe/{uuid.uuid4().hex[:8]}-{idx}"
-        try:
-            while not stop.is_set():
-                t0 = time.perf_counter()
-                client.set_task_status_text(
-                    job_pb2.SetTaskStatusTextRequest(
-                        task_id=task_id,
-                        status_text_detail_md=payload,
-                        status_text_summary_md=payload[:32],
-                    )
-                )
-                latencies.append((time.perf_counter() - t0) * 1000.0)
-        except BaseException as exc:
-            errors.append(exc)
-        finally:
-            try:
-                client.close()
-            except Exception:
-                pass
-
-    threads = [threading.Thread(target=worker, args=(i,), name=f"sts-probe-{i}") for i in range(n_threads)]
-    t_start = time.perf_counter()
-    for t in threads:
-        t.start()
-    time.sleep(duration_s)
-    stop.set()
-    for t in threads:
-        t.join(timeout=30.0)
-    elapsed = time.perf_counter() - t_start
-
-    if errors:
-        print(f"  probe worker errors: {errors[0]!r}")
-    all_latencies = [v for sub in per_thread for v in sub]
-    if not all_latencies:
-        return {"n": 0, "rps": 0.0}
-    p50, p95, p99, p999, mx = _percentiles_ms(all_latencies)
-    return {
-        "n": len(all_latencies),
-        "rps": len(all_latencies) / elapsed,
-        "p50": p50,
-        "p95": p95,
-        "p99": p99,
-        "p999": p999,
-        "max": mx,
-    }
-
-
-def _print_probe(label: str, r: dict) -> None:
-    if r["n"] == 0:
-        print(f"  {label:36s}  (no samples)")
-        return
-    print(
-        f"  {label:36s}  n={r['n']:6d}  rps={r['rps']:8.1f}  "
-        f"p50={r['p50']:6.2f}ms  p95={r['p95']:7.2f}ms  "
-        f"p99={r['p99']:7.2f}ms  p99.9={r['p999']:7.2f}ms  max={r['max']:7.2f}ms"
-    )
-    _results.append((label, r["p50"], r["p95"], r["n"]))
 
 
 def _print_scenario_table(scenario: Scenario, results: dict[str, dict]) -> None:
@@ -1932,66 +1822,6 @@ def _print_scenario_table(scenario: Scenario, results: dict[str, dict]) -> None:
             f"{r['p50']:>6.1f}ms  {r['p95']:>6.1f}ms  {r['p99']:>6.1f}ms  {r['max']:>6.1f}ms"
         )
         _results.append((f"Scenario: {load.name}", r["p50"], r["p95"], r["n"]))
-
-
-def _run_set_status_text_variant(
-    db: ControllerDB,
-    *,
-    on_loop: bool,
-    n_threads: int,
-    duration_s: float,
-) -> dict:
-    """Boot a fresh harness with the requested dispatch mode and run the probe."""
-    label = "on_loop=True" if on_loop else "on_loop=False (threadpool)"
-    write_db = clone_db(db)
-    db_dir = write_db._db_dir
-    db_path = db_dir / ControllerDB.DB_FILENAME
-    write_db.close()
-    harness_dir = Path(tempfile.mkdtemp(prefix="iris_sts_probe_"))
-    harness = RpcHarness(db_path, harness_dir, on_loop=on_loop)
-    try:
-        # Warmup: prime the connection / event loop with a single call.
-        warmup = harness.make_client()
-        try:
-            warmup.set_task_status_text(
-                job_pb2.SetTaskStatusTextRequest(
-                    task_id="/u/warmup/0",
-                    status_text_detail_md="",
-                    status_text_summary_md="",
-                )
-            )
-        finally:
-            warmup.close()
-        # Single-call baseline (sequential, low load) so the on_loop dispatch
-        # cost is visible without saturation effects.
-        baseline_client = harness.make_client()
-        baseline_latencies: list[float] = []
-        try:
-            for _ in range(200):
-                t0 = time.perf_counter()
-                baseline_client.set_task_status_text(
-                    job_pb2.SetTaskStatusTextRequest(
-                        task_id="/u/baseline/0",
-                        status_text_detail_md="x" * 256,
-                        status_text_summary_md="x" * 32,
-                    )
-                )
-                baseline_latencies.append((time.perf_counter() - t0) * 1000.0)
-        finally:
-            baseline_client.close()
-        baseline_p50, baseline_p95, baseline_p99, _, _ = _percentiles_ms(baseline_latencies)
-        print(
-            f"  SetTaskStatusText [{label}] single-client baseline: "
-            f"p50={baseline_p50:.2f}ms  p95={baseline_p95:.2f}ms  p99={baseline_p99:.2f}ms  (n=200)"
-        )
-        _results.append((f"RPC: SetTaskStatusText baseline [{label}]", baseline_p50, baseline_p95, 200))
-
-        # Saturation probe.
-        return _set_status_text_probe(harness, n_threads=n_threads, duration_s=duration_s)
-    finally:
-        harness.close()
-        shutil.rmtree(db_dir, ignore_errors=True)
-        shutil.rmtree(harness_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -2027,37 +1857,6 @@ def benchmark_scenario(db: ControllerDB) -> None:
         sample_db.close()
         shutil.rmtree(db_dir, ignore_errors=True)
         shutil.rmtree(harness_dir, ignore_errors=True)
-
-
-def benchmark_set_task_status_text(db: ControllerDB) -> None:
-    """Compare SetTaskStatusText latency & throughput with @on_loop vs threadpool.
-
-    Production sees ~1000 SetTaskStatusText/sec. The handler body is two
-    in-memory dict writes (microseconds); what changes between the two
-    dispatch modes is whether each call runs inline on the asyncio event loop
-    (one-at-a-time, blocks every other on_loop handler) or hops into a thread
-    via ``asyncio.to_thread`` (parallel-capable, pays a thread-hop per call).
-
-    Saturation probe: N client threads in a tight loop hitting
-    SetTaskStatusText with no rate limiting — surfaces the ceiling and
-    lets us compare modes head-to-head. Runs the controller's scheduler /
-    polling / ping loops at their natural production cadence (10s / 1s / etc).
-    """
-    n_threads = 8
-    duration_s = 5.0
-
-    # ---- Saturation probe ----
-    print(f"  (saturation probe: {n_threads} client threads, {duration_s:.0f}s per variant, no rate-limit)")
-    threadpool_result = _run_set_status_text_variant(db, on_loop=False, n_threads=n_threads, duration_s=duration_s)
-    _print_probe("RPC: SetTaskStatusText [threadpool]", threadpool_result)
-
-    on_loop_result = _run_set_status_text_variant(db, on_loop=True, n_threads=n_threads, duration_s=duration_s)
-    _print_probe("RPC: SetTaskStatusText [on_loop]", on_loop_result)
-
-    if threadpool_result["n"] and on_loop_result["n"]:
-        rps_ratio = on_loop_result["rps"] / threadpool_result["rps"]
-        p99_ratio = on_loop_result["p99"] / threadpool_result["p99"]
-        print(f"  saturation: on_loop / threadpool ratio  rps x{rps_ratio:.2f}, p99 x{p99_ratio:.2f}")
 
 
 # ---------------------------------------------------------------------------
@@ -2159,7 +1958,6 @@ _GROUPS = (
     "dashboard",
     "endpoints",
     "apply_contention",
-    "set_task_status_text",
     "scenario",
 )
 
@@ -2224,7 +2022,6 @@ def run_cmd(db_path: Path | None, only_group: str | None, scenario_scale: float,
         ("dashboard", benchmark_dashboard),
         ("endpoints", benchmark_endpoints),
         ("apply_contention", benchmark_apply_contention),
-        ("set_task_status_text", benchmark_set_task_status_text),
         ("scenario", benchmark_scenario),
     ]
     for name, fn in groups:
@@ -2253,31 +2050,13 @@ def run_cmd(db_path: Path | None, only_group: str | None, scenario_scale: float,
     required=True,
     help="Scratch directory for the controller's local state / remote-state-dir.",
 )
-@click.option(
-    "--on-loop/--no-on-loop",
-    "on_loop",
-    default=False,
-    help="Run SetTaskStatusText inline on the event loop (vs the default threadpool dispatch).",
-)
-def serve_cmd(db_path: Path, state_dir: Path, on_loop: bool) -> None:
+def serve_cmd(db_path: Path, state_dir: Path) -> None:
     """Boot a Controller(dry_run=True) bound to ``db_path`` and serve over RPC.
 
     Prints ``READY port=N`` to stdout once the HTTP server is accepting
     connections, then blocks until SIGTERM. Used by ``RpcHarness`` so the
     benchmark process and the controller have independent GILs.
-
-    ``--on-loop`` flips the ``@on_loop`` attribute on
-    ``ControllerServiceImpl.set_task_status_text`` before the controller is
-    built. ``AsyncServiceAdapter`` reads the attribute when it walks the
-    service's methods, so the toggle is locked in for this process's
-    lifetime.
     """
-    if on_loop:
-        from iris.cluster.controller.service import ControllerServiceImpl
-        from iris.rpc.async_adapter import _ON_LOOP_ATTR
-
-        setattr(ControllerServiceImpl.set_task_status_text, _ON_LOOP_ATTR, True)
-
     state_dir.mkdir(parents=True, exist_ok=True)
     db = ControllerDB(db_dir=db_path.parent)
     db.apply_migrations()
