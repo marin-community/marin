@@ -188,12 +188,54 @@ def _format_bytes(n: float) -> str:
     return humanfriendly.format_size(int(n), binary=True)
 
 
+@dataclass(frozen=True, repr=False)
+class StageThroughput:
+    """Items and bytes processed by a stage with their per-second rates.
+
+    Item counts/rates use SI suffixes (K/M/B/T); byte totals/rates use binary
+    (IEC) prefixes. The default ``%s`` / ``repr`` rendering matches the
+    status-line format used in coordinator and per-shard log messages:
+
+        ``items=7 (3.5/s), bytes_processed=1 KiB (512 bytes/s)``
+
+    Callers that need to embed individual fields in markdown or split
+    rendering can use the ``*_str`` properties directly.
+    """
+
+    items: int
+    bytes_processed: int
+    item_rate: float
+    byte_rate: float
+
+    @property
+    def items_str(self) -> str:
+        return _format_count(self.items)
+
+    @property
+    def bytes_str(self) -> str:
+        return _format_bytes(self.bytes_processed)
+
+    @property
+    def item_rate_str(self) -> str:
+        return _format_count(self.item_rate)
+
+    @property
+    def byte_rate_str(self) -> str:
+        return _format_bytes(self.byte_rate)
+
+    def __repr__(self) -> str:
+        return (
+            f"items={self.items_str} ({self.item_rate_str}/s), "
+            f"bytes_processed={self.bytes_str} ({self.byte_rate_str}/s)"
+        )
+
+
 def _stage_throughput(
     counters: Mapping[str, int],
     stage_name: str,
     elapsed: float,
-) -> tuple[int, int, float, float] | None:
-    """Return ``(items, bytes_processed, item_rate, byte_rate)`` for *stage_name*.
+) -> StageThroughput | None:
+    """Return throughput stats for *stage_name*, or ``None`` if uninstrumented.
 
     Returns ``None`` when neither the item nor the byte counter has been
     recorded for this stage. Map-only stages and stages still in run_stage
@@ -209,22 +251,11 @@ def _stage_throughput(
     bytes_processed = counters.get(byte_key, 0)
     item_rate = items / elapsed if elapsed > 0 else 0.0
     byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
-    return items, bytes_processed, item_rate, byte_rate
-
-
-def _format_throughput(throughput: tuple[int, int, float, float]) -> tuple[str, str, str, str]:
-    """Render a ``_stage_throughput`` tuple into display strings, preserving field order.
-
-    Centralizes the convention that item counts/rates use SI suffixes while byte
-    totals/rates use binary prefixes. Returns ``(items, bytes_processed,
-    item_rate, byte_rate)`` so callers can unpack in the same order as the input.
-    """
-    items, bytes_processed, item_rate, byte_rate = throughput
-    return (
-        _format_count(items),
-        _format_bytes(bytes_processed),
-        _format_count(item_rate),
-        _format_bytes(byte_rate),
+    return StageThroughput(
+        items=items,
+        bytes_processed=bytes_processed,
+        item_rate=item_rate,
+        byte_rate=byte_rate,
     )
 
 
@@ -694,7 +725,6 @@ class ZephyrCoordinator:
             totals = self.get_counters()
             elapsed = time.monotonic() - (stage_start or time.monotonic())
             throughput = _stage_throughput(totals, stage_name, elapsed)
-            throughput_strs = _format_throughput(throughput) if throughput is not None else None
 
             lines = ["**Stages**\n"]
             for idx, stage in enumerate(plan_stages):
@@ -706,19 +736,20 @@ class ZephyrCoordinator:
             lines.append(
                 f"\n**Shards** — {completed}/{total_shards} complete ({pct}%), {in_flight} in-flight, {queued} queued"
             )
-            if throughput_strs is not None:
-                items_s, bytes_s, item_rate_s, byte_rate_s = throughput_strs
-                lines.append(f"\n**Throughput** — {items_s} items ({item_rate_s}/s), {bytes_s} ({byte_rate_s}/s)")
+            if throughput is not None:
+                lines.append(
+                    f"\n**Throughput** — {throughput.items_str} items ({throughput.item_rate_str}/s), "
+                    f"{throughput.bytes_str} ({throughput.byte_rate_str}/s)"
+                )
 
             detail_md = "\n".join(lines)[:MAX_STATUS_TEXT_LENGTH]
 
             current_stage_desc = _get_stage_description(plan_stages[current_stage_index]) if plan_stages else ""
             summary_lines = [f"**{current_stage_desc}** ({current_stage_index + 1}/{len(plan_stages)})"]
             summary_lines.append(f"{completed}/{total_shards} shards ({pct}%)")
-            if throughput_strs is not None:
-                _, _, item_rate_s, byte_rate_s = throughput_strs
-                summary_lines.append(f"{item_rate_s} items/s")
-                summary_lines.append(f"{byte_rate_s}/s")
+            if throughput is not None:
+                summary_lines.append(f"{throughput.item_rate_str} items/s")
+                summary_lines.append(f"{throughput.byte_rate_str}/s")
             summary_md = "  \n".join(summary_lines)
             return detail_md, summary_md
 
@@ -751,15 +782,7 @@ class ZephyrCoordinator:
         elapsed = time.monotonic() - (self._stage_monotonic_start or time.monotonic())
         throughput = _stage_throughput(totals, self._stage_name, elapsed)
         if throughput is not None:
-            items_s, bytes_s, item_rate_s, byte_rate_s = _format_throughput(throughput)
-            logger.info(
-                base_msg + "; items=%s (%s/s), bytes_processed=%s (%s/s)",
-                *base_args,
-                items_s,
-                item_rate_s,
-                bytes_s,
-                byte_rate_s,
-            )
+            logger.info(base_msg + "; %s", *base_args, throughput)
         else:
             logger.info(base_msg, *base_args)
         if retried:
@@ -1496,10 +1519,9 @@ class ZephyrWorker:
                 detail_lines = [f"**Stage**: {stage}", f"**Active tasks**: {active}"]
                 throughput = _stage_throughput(self._last_reported_counters, stage, 1.0)
                 if throughput is not None:
-                    items_s, bytes_s, item_rate_s, byte_rate_s = _format_throughput(throughput)
                     detail_lines += [
-                        f"**Items**: {items_s} ({item_rate_s}/s)",
-                        f"**Throughput**: {bytes_s} ({byte_rate_s}/s)",
+                        f"**Items**: {throughput.items_str} ({throughput.item_rate_str}/s)",
+                        f"**Throughput**: {throughput.bytes_str} ({throughput.byte_rate_str}/s)",
                     ]
             return "  \n".join(detail_lines), summary_md
 
