@@ -270,7 +270,7 @@ def serve_vllm_http_proxy(
     thread = threading.Thread(target=server.run, name="vllm-http-proxy")
     logger.info("Starting VllmHttpProxy server url=http://%s:%d/v1 model=%s", host, actual_port, model)
     thread.start()
-    started = ExponentialBackoff(initial=0.01, maximum=0.1, jitter=0).wait_until(
+    started = ExponentialBackoff(initial=0.01, maximum=1, jitter=0).wait_until(
         lambda: server.started or not thread.is_alive(),
         timeout=Duration.from_seconds(server_start_timeout_seconds),
     )

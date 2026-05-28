@@ -45,7 +45,7 @@ class VllmServerConfig:
     port: int = 8000
     # vLLM TPU startup can include model download and compile work.
     timeout_seconds: int = 1800
-    # Compact default context length; VLLM_ALLOW_LONG_MAX_MODEL_LEN is still set by the caller's env.
+    # Default vLLM maximum sequence length, including prompt and generated tokens.
     max_model_len: int = 4096
     # Keep prefill modest on v5p-8 while still exercising vLLM's internal batching.
     max_num_batched_tokens: int = 1024
@@ -55,7 +55,7 @@ class VllmServerConfig:
 class VllmProxyConfig:
     # The eval client talks to this local OpenAI-compatible URL.
     host: str = "127.0.0.1"
-    # 0 picks a free loopback port; Iris CPU workers can be reused and may already have 8001 bound.
+    # Local OpenAI-compatible proxy port; 0 chooses an available port.
     port: int = 0
     # End-to-end timeout from eval request to brokered response.
     request_timeout_seconds: float = DEFAULT_BROKERED_PROXY_TIMEOUT_SECONDS
@@ -145,7 +145,7 @@ def start_local_brokered_vllm(config: BrokeredVllmSystemConfig) -> Iterator[Runn
             _start_proxy(config, broker) as proxy_model,
             run_vllm_worker(worker, max_in_flight=config.workers.max_in_flight_per_worker),
         ):
-            _wait_for_brokered_vllm_ready(proxy_model, timeout_seconds=_readiness_timeout_seconds(config))
+            _wait_for_brokered_vllm_ready(proxy_model, timeout_seconds=config.proxy.readiness_timeout_seconds)
             logger.info("Started local VllmWorker")
             yield proxy_model
 
@@ -202,7 +202,7 @@ def start_iris_brokered_vllm(
             logger.info("Submitted vLLM worker job_id=%s index=%d", job.job_id, worker_index)
 
         with _start_proxy(config, broker_handle) as running_model:
-            _wait_for_brokered_vllm_ready(running_model, timeout_seconds=_readiness_timeout_seconds(config))
+            _wait_for_brokered_vllm_ready(running_model, timeout_seconds=config.proxy.readiness_timeout_seconds)
             yield running_model
     finally:
         _terminate_jobs(worker_jobs)
@@ -260,7 +260,7 @@ def _start_proxy(config: BrokeredVllmSystemConfig, broker: WorkloadBroker) -> It
         host=proxy_config.host,
         port=proxy_config.port,
         request_timeout_seconds=proxy_config.request_timeout_seconds,
-        readiness_timeout_seconds=_readiness_timeout_seconds(config),
+        readiness_timeout_seconds=config.proxy.readiness_timeout_seconds,
         max_pending_requests=proxy_config.max_pending_requests,
         response_fetch_batch_size=proxy_config.response_fetch_batch_size,
         server_start_timeout_seconds=proxy_config.server_start_timeout_seconds,
@@ -298,10 +298,6 @@ def _validate_resource_zone(resources: ResourceConfig, *, name: str, region: str
 
 def _region_from_zone(zone: str) -> str:
     return zone.rsplit("-", maxsplit=1)[0]
-
-
-def _readiness_timeout_seconds(config: BrokeredVllmSystemConfig) -> float:
-    return config.proxy.readiness_timeout_seconds
 
 
 def _wait_for_brokered_vllm_ready(running_model: RunningModel, *, timeout_seconds: float) -> None:

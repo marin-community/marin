@@ -80,8 +80,6 @@ class LocalWorkloadBroker:
         request_lease_timeout_seconds: float,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        # The proxy and worker can run in separate event-loop threads, so this
-        # broker needs a thread lock rather than an asyncio-loop-bound lock.
         self._lock = threading.Lock()
         # Request leases make fetched-but-unanswered work visible again if the
         # local worker dies while holding it.
