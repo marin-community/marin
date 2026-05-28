@@ -10,7 +10,6 @@ import json
 import os
 import pathlib
 import random
-import sys
 import uuid
 
 import numpy as np
@@ -56,28 +55,6 @@ def dataclass_with_default_init(_cls=None, *args, **kwargs):
         return wrap
     else:
         return wrap(_cls)
-
-
-def actual_sizeof(obj):
-    """similar to sys.getsizeof, but recurses into dicts and lists and other objects"""
-    seen = set()
-    size = 0
-    objects = [obj]
-    while objects:
-        need_to_see = []
-        for obj in objects:
-            if id(obj) in seen:
-                continue
-            seen.add(id(obj))
-            size += sys.getsizeof(obj)
-            if isinstance(obj, dict):
-                need_to_see.extend(obj.values())
-            elif hasattr(obj, "__dict__"):
-                need_to_see.extend(obj.__dict__.values())
-            elif isinstance(obj, (list, tuple, set, frozenset)):
-                need_to_see.extend(obj)
-        objects = need_to_see
-    return size
 
 
 @contextlib.contextmanager
