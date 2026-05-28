@@ -457,3 +457,33 @@ class Catalog:
         if row is None:
             return None
         return self._row_from_tuple(row)
+
+    def select_aged_eviction_candidate(self, namespace: str, cutoff_ms: int) -> SegmentRow | None:
+        """Pick the oldest-by-``created_at_ms`` evictable segment past ``cutoff_ms``.
+
+        Same eligibility as :meth:`select_eviction_candidate` (``level >= 1``
+        and ``location = 'BOTH'``). Ordering by ``created_at_ms`` (not
+        ``min_seq``) matters because compaction outputs inherit their
+        inputs' ``min_seq`` but get a fresh ``created_at_ms`` — so a
+        low-``min_seq`` segment can be the *youngest* one in the
+        namespace, and a ``min_seq``-ordered scan would short-circuit
+        on it and miss strictly-older siblings at higher ``min_seq``.
+        Returns ``None`` if no eligible segment is older than the cutoff.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                f"""
+                SELECT {self._SEGMENT_COLUMNS}
+                FROM segments
+                WHERE namespace = ?
+                  AND level >= 1
+                  AND location = ?
+                  AND created_at_ms < ?
+                ORDER BY created_at_ms ASC
+                LIMIT 1
+                """,
+                [namespace, SegmentLocation.BOTH.value, cutoff_ms],
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_from_tuple(row)

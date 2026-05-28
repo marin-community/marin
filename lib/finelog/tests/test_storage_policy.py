@@ -153,6 +153,57 @@ def test_age_eviction_drops_old_segments(tmp_path: Path):
         store.close()
 
 
+def test_age_eviction_scans_by_created_at_not_min_seq(tmp_path: Path):
+    """Age trim picks the oldest-by-time segment even when it sits at higher min_seq.
+
+    A compaction output inherits the smallest input's ``min_seq`` but
+    gets a fresh ``created_at_ms``. A naive min_seq-ordered eviction
+    would see that fresh segment first, decide it's young enough, and
+    short-circuit — missing an older sibling at a higher min_seq.
+    """
+    config = CompactionConfig(max_segments_per_namespace=100, level_targets=(1,))
+    store = DuckDBLogStore(
+        log_dir=tmp_path / "data",
+        remote_log_dir=str(tmp_path / "remote"),
+        compaction_config=config,
+    )
+    try:
+        store.register_table("ns", _worker_schema(), StoragePolicy(max_age_seconds=1))
+
+        # Two distinct segments. We'll forge the (min_seq, created_at_ms)
+        # combination directly in the catalog rows: the low-min_seq one
+        # is fresh, the higher-min_seq one is old.
+        store.write_rows("ns", _ipc_bytes(_worker_batch(["a"], [1], [1])))
+        _seal(store, "ns")
+        store.write_rows("ns", _ipc_bytes(_worker_batch(["b"], [2], [2])))
+        _seal(store, "ns")
+        segs = sorted((tmp_path / "data" / "ns").glob("seg_L1_*.parquet"))
+        assert len(segs) == 2
+
+        now_ms = int(time.time() * 1000)
+        rows = store.catalog.list_segments("ns")
+        # Low min_seq → freshly compacted (cr=now); high min_seq → old (cr=now-1h).
+        low = min(rows, key=lambda r: r.min_seq)
+        high = max(rows, key=lambda r: r.min_seq)
+        store.catalog._conn.execute(
+            "UPDATE segments SET created_at_ms = ? WHERE namespace = 'ns' AND path = ?",
+            [now_ms, low.path],
+        )
+        store.catalog._conn.execute(
+            "UPDATE segments SET created_at_ms = ? WHERE namespace = 'ns' AND path = ?",
+            [now_ms - 3600 * 1000, high.path],
+        )
+
+        store.catalog["ns"].compact()
+
+        remaining = {r.path for r in store.catalog.list_segments("ns") if r.location.value != "REMOTE"}
+        # The old (high min_seq) segment is gone; the fresh (low min_seq) one stays.
+        assert high.path not in remaining
+        assert low.path in remaining
+    finally:
+        store.close()
+
+
 def test_age_eviction_keeps_recent_segments(tmp_path: Path):
     """Recent segments are not aged out even when the policy is tight."""
     config = CompactionConfig(max_segments_per_namespace=100, level_targets=(1,))

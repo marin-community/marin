@@ -1634,16 +1634,18 @@ class DiskLogNamespace:
             )
 
         # Age trim: independent of size; only L>=1 BOTH segments are
-        # eligible (same predicate as select_eviction_candidate). Iterate
-        # oldest-first; stop as soon as a still-young segment is hit so
-        # we don't scan the whole deque per tick.
+        # eligible. Order by created_at_ms (not min_seq) because
+        # compaction outputs inherit their inputs' min_seq but get a
+        # fresh created_at_ms — so the lowest-min_seq segment can be
+        # the youngest, and a min_seq scan would short-circuit on it
+        # and miss strictly-older siblings at higher min_seq.
         if max_age_ms is None:
             return
         cutoff_ms = int(time.time() * 1000) - max_age_ms
         while True:
             with self._insertion_lock:
-                row = self._catalog.select_eviction_candidate(self.name)
-            if row is None or row.created_at_ms >= cutoff_ms:
+                row = self._catalog.select_aged_eviction_candidate(self.name, cutoff_ms)
+            if row is None:
                 return
             self.evict_segment(row.path)
             logger.info(
