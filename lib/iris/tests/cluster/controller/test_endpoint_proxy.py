@@ -200,7 +200,6 @@ def _build_proxy_app(proxy: EndpointProxy) -> Starlette:
     #   the browser's current origin instead.
     # - ``/proxy/<name>/<sub_path>`` -> the proxy itself.
     async def _redirect_to_slash(request: Request) -> Response:
-
         name = request.path_params["endpoint_name"]
         query = f"?{request.url.query}" if request.url.query else ""
         return RedirectResponse(f"/proxy/{name}/{query}", status_code=307)

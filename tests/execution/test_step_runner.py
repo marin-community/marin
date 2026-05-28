@@ -15,10 +15,11 @@ from fray.types import ResourceConfig
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact, PathMetadata
-from marin.execution.executor import Executor, ExecutorStep, _dag_tpu_regions, resolve_executor_step
+from marin.execution.executor import Executor, _dag_tpu_regions, resolve_executor_step
 from marin.execution.remote import RemoteCallable, remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from marin.execution.types import ExecutorStep
 from pydantic import BaseModel
 from rigging.filesystem import MARIN_CROSS_REGION_OVERRIDE_ENV
 

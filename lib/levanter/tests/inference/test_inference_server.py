@@ -13,9 +13,9 @@ import numpy as np
 import pytest
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
+from levanter.layers.attention import AttentionMask
 from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
-from levanter.layers.attention import AttentionMask
 
 try:
     from fastapi.testclient import TestClient

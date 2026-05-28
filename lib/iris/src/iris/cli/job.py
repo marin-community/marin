@@ -37,6 +37,7 @@ from iris.cluster.constraints import (
     zone_constraint,
 )
 from iris.cluster.redaction import redact_submit_argv
+from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
     TERMINAL_TASK_STATES,
     CoschedulingConfig,
@@ -45,7 +46,6 @@ from iris.cluster.types import (
     JobName,
     ReservationEntry,
     ResourceSpec,
-    get_tpu_topology,
     gpu_device,
     tpu_device,
 )

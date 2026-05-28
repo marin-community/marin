@@ -231,7 +231,6 @@ class _DashboardAuthInterceptor:
         return identity
 
     def intercept_unary_sync(self, call_next, request, ctx):
-
         if ctx.method().name in _UNAUTHENTICATED_RPCS:
             return call_next(request, ctx)
 
@@ -246,7 +245,6 @@ class _DashboardAuthInterceptor:
             _verified_identity.reset(reset_token)
 
     async def intercept_unary(self, call_next, request, ctx):
-
         if ctx.method().name in _UNAUTHENTICATED_RPCS:
             return await call_next(request, ctx)
 

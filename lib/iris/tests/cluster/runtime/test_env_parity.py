@@ -240,7 +240,6 @@ def test_task_resources_uses_proto_json():
 
 
 def test_task_resources_includes_gpu_device():
-
     env = _common_env(_make_req(gpu_count=8))
     proto = job_pb2.ResourceSpecProto()
     jf.Parse(env["IRIS_TASK_RESOURCES"], proto)
@@ -249,7 +248,6 @@ def test_task_resources_includes_gpu_device():
 
 
 def test_task_resources_includes_tpu_device():
-
     env = _common_env(_make_req(tpu=True))
     proto = job_pb2.ResourceSpecProto()
     jf.Parse(env["IRIS_TASK_RESOURCES"], proto)

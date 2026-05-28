@@ -1,16 +1,15 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import haliax as hax
 import numpy as np
 import pytest
 from jax import random
-
-import haliax as hax
-
-from levanter.layers.rotary import _rotate_half as levanter_rotate_half
 from test_llama import _get_llama_config
 from test_utils import skip_if_no_torch
+
 from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
+from levanter.layers.rotary import _rotate_half as levanter_rotate_half
 
 
 @skip_if_no_torch

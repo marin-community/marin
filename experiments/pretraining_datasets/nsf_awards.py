@@ -4,7 +4,7 @@
 """NSF awards dataset download, normalization, and tokenization."""
 
 from marin.datakit.download.nsf_awards import download_nsf_awards_step, normalize_nsf_awards_step
-from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
+from marin.execution.types import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
 from experiments.marin_models import marin_tokenizer

@@ -14,19 +14,16 @@ import dataclasses
 import tempfile
 
 import chex
+import haliax as hax
 import numpy as np
 import pytest
 from jax import random
-
-import haliax as hax
+from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
 
 from levanter.layers.attention import AttentionMask
-from levanter.utils.jax_utils import parameter_count
-from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
-from levanter.models.olmo3 import Olmo3Config
-from levanter.models.olmo3 import Olmo3LMHeadModel
 from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
-from levanter.models.olmo3 import Olmo3DecoderLayer
+from levanter.models.olmo3 import Olmo3Config, Olmo3DecoderLayer, Olmo3LMHeadModel
+from levanter.utils.jax_utils import parameter_count
 
 pytestmark = skip_if_module_missing("transformers")
 

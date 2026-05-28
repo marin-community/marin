@@ -8,9 +8,9 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from tokenizers import Tokenizer as HfBaseTokenizer
 
 from levanter.tokenizers import HfMarinTokenizer, load_tokenizer
-from tokenizers import Tokenizer as HfBaseTokenizer
 
 pytest_plugins = ["tests.test_utils"]
 

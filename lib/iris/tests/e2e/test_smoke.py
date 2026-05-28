@@ -23,13 +23,7 @@ from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
 from iris.cluster.providers.local.cluster import LocalCluster
-from iris.cluster.types import (
-    Entrypoint,
-    EnvironmentSpec,
-    ReservationEntry,
-    ResourceSpec,
-    gpu_device,
-)
+from iris.cluster.types import Entrypoint, EnvironmentSpec, ReservationEntry, ResourceSpec, gpu_device
 from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.controller_connect import ControllerServiceClientSync

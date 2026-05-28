@@ -417,7 +417,6 @@ def test_cancel_job_preserves_kill_worker_mapping_after_clearing_tasks(harness):
 
 
 def test_cancel_job_removes_endpoints_for_job_tree(state):
-
     parent_worker = register_worker(state, "w1", "host1:8080", make_worker_metadata())
     child_worker = register_worker(state, "w2", "host2:8080", make_worker_metadata())
 

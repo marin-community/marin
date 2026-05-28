@@ -12,9 +12,9 @@ import pathlib
 import random
 import sys
 import uuid
+from dataclasses import asdict, dataclass, is_dataclass
 
 import numpy as np
-from dataclasses import asdict, dataclass, is_dataclass
 
 
 def logical_cpu_core_count() -> int:

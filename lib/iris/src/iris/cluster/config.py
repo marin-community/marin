@@ -28,7 +28,8 @@ from rigging.timing import Duration
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
-from iris.cluster.types import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, parse_memory_string, tpu_variant_name
+from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
+from iris.cluster.types import parse_memory_string
 from iris.rpc import config_pb2
 from iris.time_proto import duration_to_proto
 

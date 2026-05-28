@@ -256,7 +256,6 @@ def print_results(results: list[dict[str, Any]]) -> None:
 
 
 def _run_in_subprocess(mode: str, path: str, script_path: str) -> dict[str, Any]:
-
     cmd = [sys.executable, script_path, "--file", path, "--modes", mode, "--json"]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     if proc.returncode != 0:

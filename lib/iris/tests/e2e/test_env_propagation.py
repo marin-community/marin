@@ -18,12 +18,7 @@ from iris.client import IrisContext, iris_ctx_scope
 from iris.client.client import LocalClientConfig, iris_ctx
 from iris.client.local_client import local_client
 from iris.cluster.client.job_info import JobInfo, get_job_info
-from iris.cluster.types import (
-    Entrypoint,
-    EnvironmentSpec,
-    JobName,
-    ResourceSpec,
-)
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 
 pytestmark = pytest.mark.requires_cluster
 
@@ -41,7 +36,6 @@ def dummy_entrypoint():
 
 
 def _sleep_entrypoint():
-
     time.sleep(300)
 
 

@@ -112,7 +112,6 @@ class FakeProvider:
         return []
 
     def reconcile_workers(self, plans, addresses):
-
         return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]
 
     def close(self) -> None:

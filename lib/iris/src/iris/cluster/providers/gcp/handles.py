@@ -30,7 +30,7 @@ from iris.cluster.providers.types import (
     SliceStatus,
     WorkerStatus,
 )
-from iris.cluster.types import get_tpu_topology
+from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)

@@ -269,7 +269,6 @@ class GcpFakeBackend:
         return "unknown"
 
     def _matches_label_filter(self, labels: dict[str, str], filter_str: str) -> bool:
-
         decoded = urllib.parse.unquote(filter_str)
         for part in decoded.split(" AND "):
             part = part.strip()

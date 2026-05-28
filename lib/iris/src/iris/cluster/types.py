@@ -26,26 +26,7 @@ import humanfriendly
 from rigging.timing import Timestamp
 
 from iris.cluster.constraints import Constraint
-
-# Re-exported from the leaf module so callers using
-# ``from iris.cluster.types import ...`` keep working while
-# :mod:`iris.cluster.constraints` can also import these directly without an
-# import cycle.
-from iris.cluster.tpu_topology import (
-    TPU_FAMILY_VARIANT_PREFIX as TPU_FAMILY_VARIANT_PREFIX,
-)
-from iris.cluster.tpu_topology import (
-    TPU_TOPOLOGIES as TPU_TOPOLOGIES,
-)
-from iris.cluster.tpu_topology import (
-    TpuTopologyInfo as TpuTopologyInfo,
-)
-from iris.cluster.tpu_topology import (
-    get_tpu_topology as get_tpu_topology,
-)
-from iris.cluster.tpu_topology import (
-    tpu_variant_name as tpu_variant_name,
-)
+from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
 

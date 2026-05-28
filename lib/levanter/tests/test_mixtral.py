@@ -3,6 +3,7 @@
 
 import tempfile
 
+import haliax as hax
 import jax
 import numpy as np
 
@@ -12,21 +13,18 @@ import numpy as np
 import pytest
 import transformers
 from jax import random
-
-import haliax as hax
-
-from levanter.layers.attention import AttentionMask
-
-# from levanter.models.loss import next_token_loss
-from levanter.models.mixtral import MixtralConfig, MixtralLMHeadModel  # , MixtralDecoderLayer, MixtralSparseMoeBlock
 from test_utils import (  # , check_model_works_with_seqlen
     check_load_config,
     parameterize_with_configs,
     skip_if_no_torch,
     use_test_mesh,
 )
+
+from levanter.layers.attention import AttentionMask
 from levanter.main.train_lm import TrainLmConfig
 
+# from levanter.models.loss import next_token_loss
+from levanter.models.mixtral import MixtralConfig, MixtralLMHeadModel  # , MixtralDecoderLayer, MixtralSparseMoeBlock
 
 # from jax.sharding import Mesh
 
@@ -337,7 +335,6 @@ def _get_random_inputs(config: MixtralConfig, override_Pos=None):
 
 @parameterize_with_configs("mixtral*.yaml")
 def test_mixtral_configs(config_file):
-
     config_class = TrainLmConfig
 
     check_load_config(config_class, config_file)

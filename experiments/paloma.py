@@ -15,7 +15,8 @@ from marin.evaluation.perplexity_gap import raw_text_dataset
 
 # cyclic dependency
 # from experiments.llama import llama3_tokenizer
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import executor_main
+from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
 
@@ -83,7 +84,6 @@ def paloma_tokenized(
 
 
 def paloma_raw_validation_sets(*, paloma_raw: ExecutorStep = paloma):
-
     return {
         os.path.join("paloma", dataset): raw_text_dataset(paloma_raw.cd(f"{path_part}/val/val*.jsonl.gz"))
         for dataset, path_part in PALOMA_DATASETS_TO_DIR.items()

@@ -119,7 +119,6 @@ def test_jax_coordinator_address_format(tpu_sim_cluster):
     """
 
     def validate_jax_env_format():
-
         addr = os.environ.get("JAX_COORDINATOR_ADDRESS", "")
         proc_id = os.environ.get("JAX_PROCESS_ID", "")
         num_procs = os.environ.get("JAX_NUM_PROCESSES", "")

@@ -3,9 +3,7 @@
 
 import numpy as np
 
-from levanter.optim.config import AdamConfig
-from levanter.optim.config import PolynomialLrSchedule
-from levanter.optim.config import InvSqrtDecayLrSchedule
+from levanter.optim.config import AdamConfig, InvSqrtDecayLrSchedule, PolynomialLrSchedule
 
 
 def test_no_stable_weirdness():

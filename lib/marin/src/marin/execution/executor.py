@@ -119,48 +119,14 @@ from marin.execution.executor_step_status import (
 from marin.execution.remote import RemoteCallable
 from marin.execution.step_runner import StepRunner, worker_id
 from marin.execution.step_spec import StepSpec, _is_relative_path
-
-# Re-exported for back-compat with callers that import these from
-# ``marin.execution.executor``. The ``X as X`` form marks each name as an
-# intentional public re-export so the linter doesn't flag it as unused.
 from marin.execution.types import (
-    THIS_OUTPUT_PATH as THIS_OUTPUT_PATH,
-)
-from marin.execution.types import (
-    ConfigT_co as ConfigT_co,
-)
-from marin.execution.types import (
-    ExecutorFunction as ExecutorFunction,
-)
-from marin.execution.types import (
-    ExecutorStep as ExecutorStep,
-)
-from marin.execution.types import (
-    InputName as InputName,
-)
-from marin.execution.types import (
-    OutputName as OutputName,
-)
-from marin.execution.types import (
-    T_co as T_co,
-)
-from marin.execution.types import (
-    VersionedValue as VersionedValue,
-)
-from marin.execution.types import (
-    ensure_versioned as ensure_versioned,
-)
-from marin.execution.types import (
-    get_executor_step as get_executor_step,
-)
-from marin.execution.types import (
-    output_path_of as output_path_of,
-)
-from marin.execution.types import (
-    this_output_path as this_output_path,
-)
-from marin.execution.types import (
-    versioned as versioned,
+    ExecutorFunction,
+    ExecutorStep,
+    InputName,
+    OutputName,
+    T_co,
+    VersionedValue,
+    output_path_of,
 )
 from marin.utilities.json_encoder import CustomJsonEncoder
 

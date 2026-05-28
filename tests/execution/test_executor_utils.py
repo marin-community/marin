@@ -4,7 +4,7 @@
 from types import SimpleNamespace
 
 import pytest
-from marin.execution.executor import InputName
+from marin.execution.types import InputName
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 
 

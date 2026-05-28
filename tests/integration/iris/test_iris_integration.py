@@ -15,11 +15,7 @@ import uuid
 import pytest
 from finelog.rpc import logging_pb2
 from iris.cluster.constraints import WellKnownAttribute, region_constraint
-from iris.cluster.types import (
-    ReservationEntry,
-    ResourceSpec,
-    gpu_device,
-)
+from iris.cluster.types import ReservationEntry, ResourceSpec, gpu_device
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, ExponentialBackoff
 

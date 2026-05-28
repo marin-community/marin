@@ -412,7 +412,6 @@ class ServiceTestHarness:
 
 
 def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
-
     db = ControllerDB(db_dir=tmp_path / "k8s_db")
     health = WorkerHealthTracker()
     endpoints = EndpointsProjection(db)
@@ -459,7 +458,6 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
 
 
 def _make_gcp_harness(tmp_path) -> ServiceTestHarness:
-
     db = ControllerDB(db_dir=tmp_path / "gcp_db")
     health = WorkerHealthTracker()
     endpoints = EndpointsProjection(db)

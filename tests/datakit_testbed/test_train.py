@@ -10,7 +10,7 @@ end-to-end shape is validated by a live smoke run rather than unit tests.
 """
 
 from marin.datakit.sources import all_sources
-from marin.execution.executor import ExecutorStep
+from marin.execution.types import ExecutorStep
 from marin.processing.tokenize import TokenizeConfig, lm_mixture_data_config
 
 from experiments.datakit_testbed.sampler import build_testbed_steps

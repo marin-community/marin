@@ -8,7 +8,7 @@ import pytest
 from levanter.checkpoint import CheckpointDebugConfig
 from levanter.models.llama import LlamaConfig
 from marin.execution.artifact import PathMetadata
-from marin.execution.executor import ExecutorStep, output_path_of
+from marin.execution.types import ExecutorStep, output_path_of
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.model_utils import is_hf_checkpoint

@@ -7,17 +7,16 @@ import re
 import warnings
 from typing import Tuple
 
+import draccus
 import pytest
 import yaml
 
 import levanter.tracker
-from levanter.tracker import CompositeTracker, TrackerConfig
-import draccus
-from levanter.tracker.tracker import NoopConfig
-from levanter.tracker import NoopTracker
 import levanter.tracker.tracker_fns as tracker_fns
-from levanter.tracker.wandb import WandbTracker, _truncate_wandb_artifact_name
 import levanter.tracker.wandb as wandb_tracker_mod
+from levanter.tracker import CompositeTracker, NoopTracker, TrackerConfig
+from levanter.tracker.tracker import NoopConfig
+from levanter.tracker.wandb import WandbTracker, _truncate_wandb_artifact_name
 
 
 def test_tracker_plugin_stuff_works():
@@ -85,7 +84,6 @@ def test_get_tracker_by_name(monkeypatch):
 
 
 def test_tracker_logging_without_global_tracker_emits_no_warning(monkeypatch):
-
     monkeypatch.setattr(tracker_fns, "_global_tracker", None)
     monkeypatch.setattr(tracker_fns, "_has_logged_missing_tracker", False)
 

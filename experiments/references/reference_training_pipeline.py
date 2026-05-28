@@ -17,7 +17,7 @@ from fray.cluster import ResourceConfig
 from levanter.data.text import ChatLmDatasetFormat
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.executor import this_output_path
+from marin.execution.types import this_output_path
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 

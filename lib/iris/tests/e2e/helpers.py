@@ -30,7 +30,6 @@ class TestJobs:
 
     @staticmethod
     def sleep(duration: float):
-
         time.sleep(duration)
         return 1
 

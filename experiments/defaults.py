@@ -41,19 +41,9 @@ from levanter.utils import fsspec_utils
 from levanter.utils.mesh import MeshConfig
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
-from marin.execution.executor import (
-    ExecutorStep,
-    InputName,
-    VersionedValue,
-    compute_output_path,
-    ensure_versioned,
-    materialize,
-    resolve_local_placeholders,
-    this_output_path,
-    unwrap_versioned_value,
-    versioned,
-)
+from marin.execution.executor import compute_output_path, materialize, resolve_local_placeholders, unwrap_versioned_value
 from marin.execution.remote import _sanitize_job_name, remote
+from marin.execution.types import ExecutorStep, InputName, VersionedValue, ensure_versioned, this_output_path, versioned
 from marin.processing.tokenize import (
     HfDatasetSpec,
     TokenizeConfig,

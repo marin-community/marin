@@ -19,7 +19,6 @@ def quick():
 
 
 def sleep(duration: float):
-
     time.sleep(duration)
     return 1
 

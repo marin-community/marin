@@ -1042,7 +1042,6 @@ class TestPrepareSliceConfigGpuCount:
     """prepare_slice_config propagates gpu_count from parent resources."""
 
     def test_gpu_count_propagated_from_resources(self):
-
         parent = config_pb2.ScaleGroupConfig(name="gpu-group")
         parent.resources.CopyFrom(
             config_pb2.ScaleGroupResources(device_count=8, device_type=config_pb2.ACCELERATOR_TYPE_GPU)
@@ -1058,7 +1057,6 @@ class TestPrepareSliceConfigGpuCount:
         assert result.gpu_count == 8
 
     def test_gpu_count_zero_when_no_resources(self):
-
         parent = config_pb2.ScaleGroupConfig(name="cpu-group")
         parent.slice_template.coreweave.instance_type = "cd-gp-i64-erapids"
 
@@ -1340,7 +1338,6 @@ class TestSliceStateToProtoIdleFields:
     """Tests for the idle/last_active fields on SliceInfo proto."""
 
     def test_idle_true_when_past_threshold(self):
-
         handle = make_fake_slice_handle("s1", scale_group="g1", created_at_ms=1000)
         state = SliceState(
             handle=handle,
@@ -1356,7 +1353,6 @@ class TestSliceStateToProtoIdleFields:
         assert proto.last_active.epoch_ms == 1000
 
     def test_idle_false_when_no_threshold(self):
-
         handle = make_fake_slice_handle("s1", scale_group="g1", created_at_ms=1000)
         state = SliceState(
             handle=handle,
@@ -1381,7 +1377,6 @@ class TestSliceStateToProtoIdleFields:
         assert proto.idle is False
 
     def test_idle_false_for_non_ready_slices(self):
-
         handle = make_fake_slice_handle("s1", scale_group="g1", created_at_ms=1000)
         state = SliceState(
             handle=handle,

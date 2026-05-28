@@ -335,21 +335,18 @@ def test_scatter_file_iterator_multiple_chunks(tmp_path):
 
 
 def test_external_sort_merge_streaming(tmp_path):
-
     iters = [iter([1, 4, 7]), iter([2, 5, 8]), iter([3, 6, 9])]
     result = list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
     assert result == list(range(1, 10))
 
 
 def test_external_sort_merge_single_batch(tmp_path):
-
     iters = [iter([i]) for i in range(10)]
     result = list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
     assert result == list(range(10))
 
 
 def test_external_sort_merge_cleans_up(tmp_path):
-
     iters = [iter([i]) for i in range(EXTERNAL_SORT_FAN_IN + 1)]
     list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
     assert list(tmp_path.iterdir()) == [], "run files should be deleted after merge"

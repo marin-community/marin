@@ -71,7 +71,6 @@ def test_sync_propagates_non_kubectl_failure(provider, k8s):
 
 
 def test_sync_catches_kubectl_error_and_returns_task_failure(provider, k8s):
-
     k8s.inject_failure(
         "apply_json",
         KubectlError("kubectl apply failed: Error from server (RequestEntityTooLarge): limit is 3145728"),
@@ -1008,7 +1007,6 @@ def _seed_configmap(k8s, name: str, task_hash: str, created: str) -> None:
 
 
 def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
-
     now = datetime.now(timezone.utc)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
     recent_ts = (now - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")

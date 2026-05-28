@@ -165,7 +165,6 @@ class _FakeProvider:
     def reconcile_workers(self, plans, addresses):
         # Same shape the test-suite FakeProvider returns. Only exercised if
         # someone disables dry_run on the harness.
-
         return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]
 
     def close(self):
@@ -1112,7 +1111,6 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # ---- resource_usage_by_worker (NEW): full join over unfinished
     #      worker-bound attempts. Runs every scheduling tick. ----
     def _usage_new():
-
         with db_mod.read_snapshot(db.sa_read_engine) as snap:
             reads.resource_usage_by_worker(snap)
 
@@ -1137,7 +1135,6 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
     # ---- Full tick: _read_scheduling_state-style aggregate ----
     def _state_read():
-
         _schedulable_tasks(db)
         with db.read_snapshot() as _rtx:
             ws = reads.healthy_active_workers_with_attributes(_rtx, health, _NoAttrs())
@@ -1267,7 +1264,6 @@ def benchmark_polling(db: ControllerDB) -> None:
         ids = worker_ids[:batch_size]
 
         def _reconcile(_ids=ids):
-
             target_ids = set(_ids)
             with db_mod.read_snapshot(db.sa_read_engine) as snap:
                 # Worker filter applied in Python to keep the partial index

@@ -142,7 +142,6 @@ def test_subprocess_runner_isolates_native_crash(local_client, tmp_path):
     """
 
     def crash(_: int) -> int:
-
         os._exit(139)
 
     ctx = _ctx(local_client, tmp_path, stage_runner_factory=lambda n: SubprocessRunner(num_workers=n))

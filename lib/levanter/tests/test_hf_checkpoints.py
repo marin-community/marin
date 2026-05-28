@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import glob
 import os
 import tempfile
 import uuid
@@ -13,10 +14,10 @@ import jmp
 import pytest
 import safetensors
 from chex import assert_trees_all_close, assert_trees_all_equal
-from jax.random import PRNGKey
-
 from haliax import Axis
 from haliax.state_dict import ModuleWithStateDictSerialization, to_torch_compatible_state_dict
+from jax.random import PRNGKey
+from test_utils import skip_if_no_torch
 
 from levanter.compat.hf_checkpoints import (
     SAFE_TENSORS_INDEX_NAME,
@@ -25,9 +26,7 @@ from levanter.compat.hf_checkpoints import (
     _convert_to_jnp,
 )
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
-from test_utils import skip_if_no_torch
 from tests.test_utils import use_test_mesh
-import glob
 
 
 @skip_if_no_torch

@@ -338,7 +338,6 @@ class LocalFileLease(DistributedLease):
     """Local-filesystem lease using ``fcntl`` file locking."""
 
     def _read_with_generation(self) -> tuple[int, Lease | None]:
-
         try:
             with open(self.lock_path, "r") as f:
                 fcntl.flock(f.fileno(), fcntl.LOCK_SH)
@@ -351,7 +350,6 @@ class LocalFileLease(DistributedLease):
             return (0, None)
 
     def _write(self, lease: Lease, if_generation_match: int) -> None:
-
         parent = os.path.dirname(self.lock_path)
         os.makedirs(parent, exist_ok=True)
 

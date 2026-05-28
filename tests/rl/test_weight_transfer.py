@@ -207,7 +207,6 @@ def test_arrow_flight_server_debug_snapshot_reports_stored_bytes(sample_params):
 
 
 def test_arrow_flight_coordinator_accepts_rollback_weight_ids():
-
     client = current_client()
     coordinator = client.create_actor(
         ArrowFlightCoordinator,

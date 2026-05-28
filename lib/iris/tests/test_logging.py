@@ -93,7 +93,6 @@ def test_slow_log_silent_when_fast(caplog):
 
 
 def test_configure_logging_captures_records():
-
     log_setup._configured = False
     old_handlers = logging.getLogger().handlers[:]
     try:

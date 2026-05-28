@@ -1,22 +1,22 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import jax
+import equinox as eqx
 import haliax as hax
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-
 from haliax.partitioning import ResourceAxis
+
 from levanter.utils.jax_utils import (
     axis_resource_is_explicit,
     best_effort_sharding,
     move_tree_to_memory_kind,
     sharded_tree_size,
+    tree_broadcast_to,
 )
 from levanter.utils.mesh import create_mesh_from_axis_specs
-from levanter.utils.jax_utils import tree_broadcast_to
-import equinox as eqx
 
 
 def _assert_can_put_with_sharding(array, sharding):
@@ -181,7 +181,6 @@ def test_tree_broadcast_to_mixed_types():
 
 
 def test_tree_broadcast_to_with_equinox():
-
     class SimpleModule(eqx.Module):
         weight: jnp.ndarray
         bias: jnp.ndarray

@@ -5,19 +5,19 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import equinox as eqx
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 import pytest
 from chex import assert_trees_all_close
-from jax.sharding import NamedSharding, PartitionSpec as P
-
-import haliax as hax
-
-from levanter.tensorstore_serialization import tree_deserialize_leaves_tensorstore, tree_serialize_leaves_tensorstore
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
+
 from levanter.models.gpt2 import Gpt2Mlp
+from levanter.tensorstore_serialization import tree_deserialize_leaves_tensorstore, tree_serialize_leaves_tensorstore
 
 
 def test_tensorstore_checkpoint_simple():

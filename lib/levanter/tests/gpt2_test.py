@@ -3,17 +3,16 @@
 
 import dataclasses
 
+import haliax as hax
 import jax.numpy as jnp
 import pytest
-from jax.random import PRNGKey
-
-import haliax as hax
 from haliax import Axis
+from jax.random import PRNGKey
+from test_utils import check_load_config, check_model_works_with_seqlen, parameterize_with_configs
 
 from levanter.layers.attention import AttentionBackend, AttentionMask
-from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
-from test_utils import check_load_config, check_model_works_with_seqlen, parameterize_with_configs
 from levanter.main.train_lm import TrainLmConfig
+from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 
 
 @pytest.mark.parametrize("num_blocks", [1, 4, 12])
@@ -50,7 +49,6 @@ def test_gradient_checkpointing(num_blocks, attn_backend):
 
 @parameterize_with_configs("gpt2*.yaml")
 def test_gpt2_configs(config_file):
-
     check_load_config(TrainLmConfig, config_file)
 
 

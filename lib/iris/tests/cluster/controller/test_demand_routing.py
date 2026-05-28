@@ -1253,7 +1253,6 @@ class TestCheckCoschedulingFeasibility:
         return make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")[0].constraints
 
     def _make_autoscaler(self, groups):
-
         return Autoscaler(
             scale_groups=groups,
             evaluation_interval=Duration.from_seconds(0.1),
@@ -1305,7 +1304,6 @@ class TestCheckRoutingFeasibility:
     """Tests for Autoscaler.job_feasibility() (non-coscheduled jobs)."""
 
     def _make_autoscaler(self, groups):
-
         return Autoscaler(
             scale_groups=groups,
             evaluation_interval=Duration.from_seconds(0.1),

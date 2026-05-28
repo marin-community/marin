@@ -8,6 +8,7 @@ installed are skipped gracefully. The test model is meta-llama/Llama-3.1-8B,
 which requires HF authentication (tests skip if auth is missing).
 """
 
+import dataclasses
 import json
 import os
 import pathlib
@@ -18,7 +19,11 @@ from unittest.mock import patch
 import pytest
 from huggingface_hub import __version__ as _hf_hub_version
 
+import levanter.tokenizers as tk
+from levanter.data.text._batch_tokenizer import BatchTokenizer
+from levanter.data.text.formats import ChatProcessor
 from levanter.tokenizers import (
+    KitokenMarinTokenizer,
     MarinTokenizer,
     TokenizerBackend,
     _load_tokenizer_config,
@@ -28,11 +33,6 @@ from levanter.tokenizers import (
     _try_load_tokenizer_from_dir,
     load_tokenizer,
 )
-import levanter.tokenizers as tk
-from levanter.data.text._batch_tokenizer import BatchTokenizer
-from levanter.data.text.formats import ChatProcessor
-import dataclasses
-from levanter.tokenizers import KitokenMarinTokenizer
 
 try:
     import kitoken as _kitoken  # noqa: F401

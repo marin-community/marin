@@ -33,7 +33,6 @@ def test_bio_chem_raw_validation_sets_are_opt_in_and_deterministic():
 
 
 def test_default_marin_vs_llama_gap_script_does_not_include_bio_chem_slices():
-
     dataset_names = DATASETS.keys()
     assert all(not name.startswith("bio_chem/") for name in dataset_names)
 

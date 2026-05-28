@@ -5,18 +5,13 @@ import tempfile
 
 import chex
 import equinox as eqx
+import haliax as hax
+import haliax.nn as hnn
 import numpy
 import numpy as np
 import pytest
 import transformers
 from jax import random
-
-import haliax as hax
-import haliax.nn as hnn
-
-from levanter.layers.attention import AttentionBackend, AttentionMask
-from levanter.models.llama import Attention, LlamaConfig, LlamaDecoderLayer, LlamaLMHeadModel
-from levanter.utils.jax_utils import parameter_count
 from test_utils import (
     check_load_config,
     check_model_works_with_seqlen,
@@ -25,7 +20,11 @@ from test_utils import (
     skip_if_no_torch,
     use_test_mesh,
 )
+
+from levanter.layers.attention import AttentionBackend, AttentionMask
 from levanter.main.train_lm import TrainLmConfig
+from levanter.models.llama import Attention, LlamaConfig, LlamaDecoderLayer, LlamaLMHeadModel
+from levanter.utils.jax_utils import parameter_count
 
 
 @skip_if_no_torch
@@ -309,7 +308,6 @@ def _get_random_inputs(config: LlamaConfig, override_Pos=None):
 
 @parameterize_with_configs("llama*.yaml")
 def test_llama_configs(config_file):
-
     config_class = TrainLmConfig
 
     check_load_config(config_class, config_file)

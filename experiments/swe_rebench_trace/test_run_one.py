@@ -155,7 +155,6 @@ def test_sanitize_container_id_uniqueness_across_calls():
 
 
 def _frame(record: dict) -> bytes:
-
     payload = json.dumps(record).encode("utf-8")
     return struct.pack(">I", len(payload)) + payload
 

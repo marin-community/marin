@@ -43,8 +43,9 @@ from marin.datakit.ingestion_manifest import (
     UsagePolicy,
 )
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.executor import executor_main
 from marin.execution.step_spec import StepSpec
+from marin.execution.types import ExecutorStep
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
 from marin.transform.structured_text.table_records import (

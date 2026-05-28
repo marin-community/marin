@@ -19,8 +19,9 @@ import fsspec
 from fray.cluster import ResourceConfig
 from levanter.optim import AdamHConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import executor_main
 from marin.execution.remote import remote
+from marin.execution.types import ExecutorStep, this_output_path
 from marin.processing.tokenize import add_validation_sets_to_mixture
 
 from experiments.defaults import default_validation_sets

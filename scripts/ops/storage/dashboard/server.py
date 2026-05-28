@@ -778,7 +778,6 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
     @app.delete("/api/rules/{rule_id}")
     @serialized
     def remove_protect_rule(rule_id: int) -> dict[str, Any]:
-
         conn = db()
         path = catalog.protect_rules_json
         rules = json.loads(path.read_text()) if path.exists() else []
@@ -999,7 +998,6 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
     @app.post("/api/delete-rules")
     @serialized
     def create_delete_rule(req: DeleteRuleCreate) -> dict[str, Any]:
-
         conn = db()
         new_id = _next_rule_id(conn, "delete_rules")
         now = datetime.now(UTC).isoformat()
@@ -1020,7 +1018,6 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
     @app.delete("/api/delete-rules/{rule_id}")
     @serialized
     def remove_delete_rule(rule_id: int) -> dict[str, Any]:
-
         conn = db()
         path = catalog.delete_rules_json
         rules = json.loads(path.read_text()) if path.exists() else []

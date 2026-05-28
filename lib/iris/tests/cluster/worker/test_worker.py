@@ -73,7 +73,6 @@ def test_no_port_reuse_before_release(allocator):
 
 
 def test_concurrent_allocations(allocator):
-
     results = []
 
     def allocate_ports():
