@@ -136,11 +136,11 @@ def parse_args() -> argparse.Namespace:
         help="Seconds between trainer checkpoint saves.",
     )
     parser.add_argument(
-        "--delete-previous-temporary-checkpoint-after-save",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Delete the previous temporary checkpoint after a successful new save. "
-        "Defaults to false to match the current clean 500-step baseline.",
+        "--keep-last-temporary-checkpoints",
+        type=int,
+        default=5,
+        help="Number of complete temporary checkpoints to retain after a successful temporary checkpoint save. "
+        "Use 0 to delete temporary checkpoints after they commit.",
     )
     parser.add_argument(
         "--debug-checkpointer",
@@ -230,7 +230,7 @@ def build_experiment_config(args: argparse.Namespace) -> RLExperimentConfig:
         tags=tags,
         num_train_steps=args.num_train_steps,
         checkpointer_save_interval=args.checkpointer_save_interval,
-        delete_previous_temporary_checkpoint_after_save=args.delete_previous_temporary_checkpoint_after_save,
+        keep_last_temporary_checkpoints=args.keep_last_temporary_checkpoints,
         checkpoint_debug=CheckpointDebugConfig(
             enabled=args.debug_checkpointer,
             log_interval=args.debug_checkpointer_log_interval,
