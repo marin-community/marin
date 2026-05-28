@@ -11770,3 +11770,46 @@ bottleneck: 2e20 (~22 h on `v5p-8`) if all 7 launch in parallel.
 Test suite: 151 passing across `tests/midtraining/` +
 `tests/test_materialize_delphi_prefix_checkpoint.py`. Pre-commit clean.
 
+## 2026-05-28T00:10Z — Handoff: 7 prefix-materialization scripts ready to fire
+
+State as of this entry:
+
+- Working tree at `7e511d8f3` (NTS fix + yaml regeneration), clean.
+- 7 source ckpts pre-copied to `gs://marin-us-east5/checkpoints/isoflop/...`
+  (one per base, 97.18 GiB total). Verified clean: each has
+  `manifest.ocdbt` + `metadata.json` + `d/` at the top level, no nested
+  duplicates.
+- 7 submit scripts at `scratch/submit_delphi_prefix_{base}_qwen3.py` on
+  the skampere3 worktree (gitignored). Each launches a single combined
+  materialization run that writes both the 70% and 80% prefix in one
+  pass via the `--also-save-step` keep policy.
+- iris and W&B both confirm: no `delphi-3e18-...-qwen3` runs exist yet.
+  The sanity-check launch the user requested earlier ("launch 3e18 on
+  v6 in us-east5-b") still needs to fire from the laptop (skampere3
+  ADC is expired and the helper does a GCS read at planning time;
+  `gsutil` works here but `fsspec` does not).
+
+Launch order plan:
+
+1. **3e18 sanity check first** (v6e-4 in us-east5-b, ~3-4h wall). When
+   it succeeds, validates the entire Flavor A pipeline end-to-end
+   (mirror-resolution of pre-copied source, `--also-save-step` keep
+   policy fires at intermediate step, final force-save at target,
+   post-train D5 multi-step check passes).
+2. After 3e18 confirms, fire the other 6 in parallel. Wall bottleneck:
+   2e20 on v5p-8 (~22h).
+
+The candidate yaml's `materialized_checkpoint: false` rows for
+3e18/3e19/3e20 cooldown30 (the 3 previously-bad-materialized cells, now
+listing the bad path under `invalidated_materialized_checkpoint_path`)
+will need a follow-up edit AFTER the new materializations succeed:
+flip to `materialized_checkpoint: true`, point `suggested_checkpoint_path`
+at the new step dir, set `suggested_step_delta: 0` and
+`suggested_relation_to_target: exact_target`. The same flip applies to
+the cooldown20 / cooldown10 rows for all 7 bases once their respective
+prefixes land. That edit is intentionally NOT part of this commit
+because the materialized paths don't exist yet.
+
+No code/config drift since `7e511d8f3` — this is a "ready to launch"
+checkpoint entry only. Pre-commit clean. Tests still pass (151).
+
