@@ -1334,7 +1334,12 @@ def _classify_post_wait_failures(client, unhealthy: set[str]) -> tuple[set[str],
     try:
         resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
         present = {w.worker_id for w in resp.workers}
-    except Exception:
+    except Exception as e:
+        click.echo(
+            f"  WARNING: could not list workers for preemption classification ({e}); "
+            f"treating all {len(unhealthy)} unhealthy as failed",
+            err=True,
+        )
         return set(), set(unhealthy)
     preempted = {wid for wid in unhealthy if wid not in present}
     return preempted, unhealthy - preempted
