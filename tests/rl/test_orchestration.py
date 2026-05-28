@@ -15,6 +15,7 @@ from marin.rl.orchestration import (
     _train_worker_entry,
 )
 from marin.rl.rl_job import RLJobConfig, RunConfig
+from marin.rl.rollout_schedule import derive_worker_seed
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutTrackerConfig
 
@@ -405,14 +406,20 @@ def test_run_rl_coordinator_assigns_stable_rollout_wandb_names(monkeypatch):
     rollout0_config = client.submissions[1].entrypoint.callable_entrypoint.args[0]
     rollout1_config = client.submissions[2].entrypoint.callable_entrypoint.args[0]
 
+    # Per-worker seeds are derived via `derive_worker_seed(base, worker_index)`
+    # (jax.random.fold_in). Adjacent workers get fully decorrelated seeds — they
+    # are NOT base+0 and base+1 as the old implementation produced.
+    expected_seed_0 = derive_worker_seed(11, 0)
+    expected_seed_1 = derive_worker_seed(11, 1)
+    assert expected_seed_0 != expected_seed_1  # sanity: derivation is decorrelating
     assert rollout0_config.run_id == "rl-test-rollout-0"
-    assert rollout0_config.seed == 11
-    assert rollout0_config.inference_config.seed == 11
+    assert rollout0_config.seed == expected_seed_0
+    assert rollout0_config.inference_config.seed == expected_seed_0
     assert rollout0_config.worker_index == 0
     assert rollout0_config.tracker_config.name == "rl-test-rollout-0"
     assert rollout1_config.run_id == "rl-test-rollout-1"
-    assert rollout1_config.seed == 12
-    assert rollout1_config.inference_config.seed == 12
+    assert rollout1_config.seed == expected_seed_1
+    assert rollout1_config.inference_config.seed == expected_seed_1
     assert rollout1_config.worker_index == 1
     assert rollout1_config.tracker_config.name == "rl-test-rollout-1"
 

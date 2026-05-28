@@ -27,6 +27,7 @@ from marin.rl.curriculum import Curriculum
 from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
 from marin.rl.placement import resolve_launcher_region, singleton_region_list
 from marin.rl.rl_job import RLJob, RLJobConfig
+from marin.rl.rollout_schedule import derive_worker_seed
 from marin.rl.rollout_storage import StorageType
 from marin.rl.rollout_worker import RolloutWorker
 from marin.rl.run_state import RLRunState
@@ -206,7 +207,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
         # Rollout workers
         for i in range(run_config.num_rollout_workers):
             worker_run_id = f"{rollout_config.run_id}-rollout-{i}"
-            worker_seed = rollout_config.seed + i
+            worker_seed = derive_worker_seed(rollout_config.seed, i)
             tracker_config = rollout_config.tracker_config
             if tracker_config is not None:
                 tracker_config = dataclasses.replace(tracker_config, name=worker_run_id)

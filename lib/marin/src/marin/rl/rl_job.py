@@ -110,7 +110,13 @@ class RLJobConfig:
     inference_type: Literal["levanter", "vllm"]
 
     seed: int = 42
-    """Base seed for trainer RNG and replay sampling; rollout workers derive seeds as base + 1000 + worker_index."""
+    """Base seed for trainer RNG, replay sampling, and rollout-worker seed derivation.
+
+    Per-worker seeds are derived in orchestration via
+    ``marin.rl.rollout_schedule.derive_worker_seed(base, worker_index)``
+    (``jax.random.fold_in`` under the hood). Outputs are decorrelated, free of
+    collisions across any realistic ``(base, worker_index)`` grid, and invariant
+    to total worker count."""
 
     vocab_size: int | None = None
     """Vocab size for model construction. Should match the checkpoint's vocab dimension.
@@ -232,9 +238,11 @@ class RLJob:
         # Create tokenizer
         tokenizer = make_tokenizer(self.config.tokenizer)
         trainer_config = dataclasses.replace(self.config.trainer, seed=self.config.seed)
-        # Keep rollout-side data sampling and vLLM token sampling on one derived stream.
-        # Orchestration adds worker_index for multi-rollout runs.
-        rollout_seed = self.config.seed + 1000
+        # Pass the base RL seed through to rollout workers. Orchestration derives
+        # per-worker seeds via `derive_worker_seed(base, worker_index)`
+        # (`jax.random.fold_in`), which is collision-free, num-workers invariant,
+        # and avalanche-strong.
+        rollout_seed = self.config.seed
 
         # Scan over sampling params for max seqs, must be able to fit a single lesson prompt
         max_seqs = 0

@@ -10,6 +10,35 @@ import numpy as np
 from levanter.data._prp import FeistelPermutation
 
 
+def derive_worker_seed(base_seed: int, worker_index: int) -> int:
+    """Derive a 32-bit int seed for rollout worker ``worker_index`` from ``base_seed``.
+
+    Uses JAX's ``fold_in`` key-derivation primitive (Threefry under the hood),
+    matching the Levanter convention for ``(parent_key, index) -> child_key``
+    used by ``PermutationDataset``, ``MixtureDataset``, ``flash_attention``
+    dropout keys, and the per-epoch keys inside
+    :meth:`FeistelEpochSchedule._permutation_for_epoch`.
+
+    Properties:
+
+    - **Avalanche-strong**: a 1-bit change in ``base_seed`` or ``worker_index``
+      produces a ~16-bit Hamming-distance change in the output. Adjacent
+      ``(base, worker)`` pairs are uncorrelated.
+    - **No collisions**: every distinct ``(base_seed, worker_index)`` pair maps
+      to a distinct output across any realistic ablation grid.
+    - **Invariant to total worker count**: the output depends only on
+      ``(base_seed, worker_index)``. Adding rollout workers later does not
+      shift any existing worker's seed.
+
+    Suitable for ``random.Random(...)``, ``np.random.default_rng(...)``, and
+    ``vllm.AsyncEngineArgs(seed=...)``: all want a plain int in ``[0, 2**31)``.
+    """
+    if worker_index < 0:
+        raise ValueError(f"worker_index must be non-negative, got {worker_index}")
+    key = jrandom.fold_in(jrandom.PRNGKey(base_seed & 0xFFFFFFFF), worker_index)
+    return int(jrandom.randint(key, (), 0, 2**31 - 1))
+
+
 @dataclass(frozen=True)
 class RolloutAssignment:
     """Concrete finite-dataset indices assigned to one logical rollout worker."""

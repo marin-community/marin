@@ -41,8 +41,13 @@ def test_rl_job_seed_overrides_trainer_and_vllm_config(monkeypatch):
 
     train_config, rollout_config = RLJob(job_config).to_worker_configs()
 
+    # The trainer/replay seed equals the base seed.
     assert train_config.seed == 77
     assert train_config.trainer.seed == 77
-    assert rollout_config.seed == 1077
+    # RLJob.to_worker_configs returns the BASE rollout seed; orchestration derives
+    # per-worker seeds via `derive_worker_seed(base, worker_index)` (see
+    # `marin.rl.rollout_schedule.derive_worker_seed`). At this layer the value is
+    # the unaltered base.
+    assert rollout_config.seed == 77
     assert rollout_config.trainer.seed == 77
-    assert rollout_config.inference_config.seed == 1077
+    assert rollout_config.inference_config.seed == 77
