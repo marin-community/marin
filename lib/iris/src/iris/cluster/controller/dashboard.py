@@ -25,7 +25,6 @@ Auth model:
 
 import logging
 import os
-from http.cookies import SimpleCookie
 from urllib.parse import urlparse
 
 import httpx
@@ -69,17 +68,8 @@ logger = logging.getLogger(__name__)
 
 def _extract_token_from_scope(scope: Scope) -> str | None:
     """Extract auth token from ASGI scope (cookie or Authorization header)."""
-    headers: dict[str, str] = {k.decode(): v.decode() for k, v in scope.get("headers", [])}
-    auth_header = headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        return auth_header[7:]
-    cookie_header = headers.get("cookie", "")
-    if not cookie_header:
-        return None
-    cookie = SimpleCookie(cookie_header)
-    if SESSION_COOKIE in cookie:
-        return cookie[SESSION_COOKIE].value
-    return None
+    headers = {k.decode(): v.decode() for k, v in scope.get("headers", [])}
+    return extract_bearer_token(headers)
 
 
 async def _enforce_http_auth(
