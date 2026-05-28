@@ -1048,8 +1048,8 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
     default=False,
     help=(
         "Skip workers whose reported git_hash matches the CLI's current working-tree hash "
-        "(``iris build`` would bake this into a fresh image). Useful for resuming a partial "
-        "rollout without redoing already-restarted workers."
+        "(worker-restart bakes this into the freshly-built worker image). Useful for "
+        "resuming a partial rollout without redoing already-restarted workers."
     ),
 )
 @click.pass_context
@@ -1092,6 +1092,20 @@ def worker_restart(
     bundle = ctx.obj.get("provider_bundle") or iris_config.provider_bundle()
     if not isinstance(bundle.workers, GcpWorkerProvider):
         raise click.ClickException("worker-restart is only supported on GCP clusters")
+
+    # Build and push fresh worker/task images so the bootstrap pulls the operator's
+    # current tree, not whatever ``:latest`` happens to resolve to. Without this,
+    # repeated worker-restarts pick up whichever SHA was last published by
+    # ``controller restart`` (or by autoscaler-fresh VMs racing the registry),
+    # producing a fleet split across multiple git_hashes and making
+    # ``--skip-current-hash`` a no-op.
+    git_sha = get_git_sha()
+    _pin_latest_images(config, git_sha)
+    verbose = ctx.obj.get("verbose", False)
+    if config.defaults.worker.docker_image:
+        _build_and_push_image(config.defaults.worker.docker_image, "worker", git_sha, verbose=verbose)
+    if config.defaults.worker.default_task_image:
+        _build_and_push_image(config.defaults.worker.default_task_image, "task", git_sha, verbose=verbose)
 
     # Resolve the controller address workers will reconnect to (matches cluster_create_slice).
     worker_controller_address = iris_config.controller_address()
