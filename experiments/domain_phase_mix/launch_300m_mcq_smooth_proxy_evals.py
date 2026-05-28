@@ -3,13 +3,14 @@
 
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["fsspec", "pandas"]
+# dependencies = ["fsspec", "pandas", "pyarrow"]
 # ///
 """Launch MCQ smooth-proxy scoring for hard-only 300M English-lite tasks."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -58,6 +59,7 @@ RESULTS_CSV_LOCAL = OUTPUT_DIR / "300m_mcq_smooth_proxy_eval_results.csv"
 DEFAULT_NAME_PREFIX = "pinlin_calvin_xu/data_mixture/ngd3dm2_300m_mcq_smooth_proxy_evals_20260430"
 DEFAULT_REQUEST_CACHE_URI = "gs://marin-us-east5/raw/eval-datasets/300m-mcq-smooth-proxy-v1/requests.jsonl"
 RESULTS_JSON = "results.json"
+REQUEST_FEATURES_PARQUET = "request_loglikelihoods.parquet"
 RESULTS_CSV = "300m_mcq_smooth_proxy_eval_results.csv"
 STATE_OUTPUT_CSV = "300m_mcq_smooth_proxy_eval_state.csv"
 REQUEST_CACHE_MANIFEST = ".mcq_smooth_proxy_requests_manifest.json"
@@ -531,6 +533,66 @@ def _summarize_mcq_groups(rows: list[dict[str, Any]], loglikelihoods: list[tuple
     return metrics
 
 
+def _request_id(parts: dict[str, Any]) -> str:
+    payload = json.dumps(parts, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:24]
+
+
+def _write_request_features(
+    *,
+    output_path: str,
+    eval_key: str,
+    checkpoint_root: str,
+    request_rows: list[dict[str, Any]],
+    loglikelihoods: list[tuple[float, bool]],
+) -> None:
+    """Write aligned per-choice smooth-proxy features for checkpoint ensembling."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    rows: list[dict[str, Any]] = []
+    for request_index, (row, (loglikelihood, greedy)) in enumerate(zip(request_rows, loglikelihoods, strict=True)):
+        task_alias = str(row["task_alias"])
+        doc_id = int(row["doc_id"])
+        choice_idx = int(row["choice_idx"])
+        target = str(row["target"])
+        context = str(row["context"])
+        rows.append(
+            {
+                "request_id": _request_id(
+                    {
+                        "task_alias": task_alias,
+                        "doc_id": doc_id,
+                        "choice_idx": choice_idx,
+                        "context": context,
+                        "target": target,
+                    }
+                ),
+                "eval_key": eval_key,
+                "checkpoint_root": checkpoint_root,
+                "request_index": request_index,
+                "task_alias": task_alias,
+                "task_name": str(row["task_name"]),
+                "doc_id": doc_id,
+                "choice_idx": choice_idx,
+                "choice": str(row["choice"]),
+                "context": context,
+                "target": target,
+                "choice_bytes": int(row["choice_bytes"]),
+                "target_bytes": int(row["target_bytes"]),
+                "is_gold": _bool_value(row["is_gold"]),
+                "gold_indices": str(row["gold_indices"]),
+                "multi_gold": _bool_value(row["multi_gold"]),
+                "loglikelihood": float(loglikelihood),
+                "nll": -float(loglikelihood),
+                "greedy": bool(greedy),
+            }
+        )
+    table = pa.Table.from_pylist(rows)
+    with fsspec.open(os.path.join(output_path.rstrip("/"), REQUEST_FEATURES_PARQUET), "wb") as handle:
+        pq.write_table(table, handle)
+
+
 def score_mcq_smooth_proxies(config: McqSmoothProxyScoreConfig) -> None:
     """Score one checkpoint on MCQ smooth-proxy requests."""
     import typing
@@ -595,6 +657,13 @@ def score_mcq_smooth_proxies(config: McqSmoothProxyScoreConfig) -> None:
             output_path = config.output_path.rstrip("/")
             fs, _, _ = fsspec.get_fs_token_paths(output_path)
             fs.makedirs(output_path, exist_ok=True)
+            _write_request_features(
+                output_path=output_path,
+                eval_key=config.eval_key,
+                checkpoint_root=config.checkpoint_root,
+                request_rows=request_rows,
+                loglikelihoods=loglikelihoods,
+            )
             with fsspec.open(os.path.join(output_path, RESULTS_JSON), "wt") as handle:
                 json.dump(metrics, handle, indent=2, sort_keys=True)
             levanter.tracker.current_tracker().finish()

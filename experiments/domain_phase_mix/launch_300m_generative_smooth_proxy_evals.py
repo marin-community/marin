@@ -3,7 +3,7 @@
 
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["fsspec", "pandas"]
+# dependencies = ["fsspec", "pandas", "pyarrow"]
 # ///
 """Launch teacher-forced smooth proxies for 300M GSM8K/HumanEval rows.
 
@@ -15,6 +15,7 @@ we can estimate smooth loss-style proxies for the same signal/noise population.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -63,6 +64,7 @@ RESULTS_CSV_LOCAL = OUTPUT_DIR / "300m_generative_smooth_proxy_eval_results.csv"
 DEFAULT_NAME_PREFIX = "pinlin_calvin_xu/data_mixture/ngd3dm2_300m_generative_smooth_proxy_evals_20260429"
 DEFAULT_REQUEST_CACHE_URI = "gs://marin-us-east5/raw/eval-datasets/300m-generative-smooth-proxy-v1/requests.jsonl"
 RESULTS_JSON = "results.json"
+REQUEST_FEATURES_PARQUET = "request_loglikelihoods.parquet"
 RESULTS_CSV = "300m_generative_smooth_proxy_eval_results.csv"
 STATE_OUTPUT_CSV = "300m_generative_smooth_proxy_eval_state.csv"
 
@@ -400,6 +402,54 @@ def _summarize_loglikelihoods(
     return metrics
 
 
+def _request_id(parts: dict[str, Any]) -> str:
+    payload = json.dumps(parts, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:24]
+
+
+def _write_request_features(
+    *,
+    output_path: str,
+    eval_key: str,
+    checkpoint_root: str,
+    request_rows: list[dict[str, Any]],
+    loglikelihoods: list[tuple[float, bool]],
+) -> None:
+    """Write aligned per-request smooth-proxy features for checkpoint ensembling."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    rows: list[dict[str, Any]] = []
+    for request_index, (row, (loglikelihood, greedy)) in enumerate(zip(request_rows, loglikelihoods, strict=True)):
+        metric_prefix = str(row["metric_prefix"])
+        target = str(row["target"])
+        context = str(row["instance"].arguments[0])
+        rows.append(
+            {
+                "request_id": _request_id(
+                    {
+                        "metric_prefix": metric_prefix,
+                        "context": context,
+                        "target": target,
+                    }
+                ),
+                "eval_key": eval_key,
+                "checkpoint_root": checkpoint_root,
+                "request_index": request_index,
+                "metric_prefix": metric_prefix,
+                "context": context,
+                "target": target,
+                "target_bytes": max(1, len(target.encode("utf-8"))),
+                "loglikelihood": float(loglikelihood),
+                "nll": -float(loglikelihood),
+                "greedy": bool(greedy),
+            }
+        )
+    table = pa.Table.from_pylist(rows)
+    with fsspec.open(os.path.join(output_path.rstrip("/"), REQUEST_FEATURES_PARQUET), "wb") as handle:
+        pq.write_table(table, handle)
+
+
 def score_teacher_forced_smooth_proxies(config: SmoothProxyScoreConfig) -> None:
     """Score one checkpoint on teacher-forced GSM8K/HumanEval smooth proxies."""
     import typing
@@ -464,6 +514,13 @@ def score_teacher_forced_smooth_proxies(config: SmoothProxyScoreConfig) -> None:
             output_path = config.output_path.rstrip("/")
             fs, _, _ = fsspec.get_fs_token_paths(output_path)
             fs.makedirs(output_path, exist_ok=True)
+            _write_request_features(
+                output_path=output_path,
+                eval_key=config.eval_key,
+                checkpoint_root=config.checkpoint_root,
+                request_rows=request_rows,
+                loglikelihoods=loglikelihoods,
+            )
             with fsspec.open(os.path.join(output_path, RESULTS_JSON), "wt") as handle:
                 json.dump(metrics, handle, indent=2, sort_keys=True)
             levanter.tracker.current_tracker().finish()
