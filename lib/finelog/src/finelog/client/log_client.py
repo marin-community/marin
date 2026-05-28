@@ -41,6 +41,7 @@ from finelog.rpc import logging_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 from finelog.rpc.logging_connect import LogServiceClientSync
 from finelog.store.log_namespace import LOG_REGISTERED_SCHEMA
+from finelog.store.policy import StoragePolicy, policy_to_proto
 from finelog.store.schema import (
     IMPLICIT_SEQ_COLUMN,
     Column,
@@ -539,8 +540,20 @@ class LogClient:
             return FlushResult.SUCCEEDED
         return table.flush(timeout=timeout)
 
-    def get_table(self, namespace: str, schema: type | Schema) -> Table:
-        """Idempotently register ``namespace`` and return a Table handle."""
+    def get_table(
+        self,
+        namespace: str,
+        schema: type | Schema,
+        *,
+        storage_policy: StoragePolicy = StoragePolicy(),
+    ) -> Table:
+        """Idempotently register ``namespace`` and return a Table handle.
+
+        ``storage_policy`` is a per-namespace retention override; an
+        empty policy inherits the server defaults. A non-empty policy
+        on a re-register replaces the namespace's current policy
+        (last-write-wins).
+        """
         if namespace == LOG_NAMESPACE:
             raise InvalidNamespaceError("use write_batch/query for the privileged 'log' namespace")
         if isinstance(schema, Schema):
@@ -560,6 +573,7 @@ class LogClient:
                 stats_pb2.RegisterTableRequest(
                     namespace=namespace,
                     schema=schema_to_proto(requested),
+                    storage_policy=policy_to_proto(storage_policy),
                 )
             )
         except ConnectError as exc:

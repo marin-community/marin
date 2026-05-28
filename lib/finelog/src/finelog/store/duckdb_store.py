@@ -52,6 +52,7 @@ from finelog.store.log_namespace import (
     DiskLogNamespace,
     MemoryLogNamespace,
 )
+from finelog.store.policy import StoragePolicy
 from finelog.store.rwlock import RWLock
 from finelog.store.schema import (
     MAX_WRITE_ROWS_BYTES,
@@ -356,7 +357,13 @@ class DuckDBLogStore:
         self._rehydrate_from_registry()
         self._ensure_log_namespace_registered()
 
-    def _make_namespace(self, name: str, schema: Schema, namespace_dir: Path | None) -> LogNamespaceProtocol:
+    def _make_namespace(
+        self,
+        name: str,
+        schema: Schema,
+        namespace_dir: Path | None,
+        policy: StoragePolicy = StoragePolicy(),
+    ) -> LogNamespaceProtocol:
         if self._data_dir is None:
             return MemoryLogNamespace(
                 name=name,
@@ -373,13 +380,15 @@ class DuckDBLogStore:
             query_visibility_lock=self._query_visibility_lock,
             read_pool=self._pool,
             catalog=self.catalog,
+            storage_policy=policy,
             **self._disk_namespace_kwargs,
         )
 
     def _rehydrate_from_registry(self) -> None:
         for name, schema in self.catalog.list_all().items():
             namespace_dir = self._namespace_dir(name)
-            ns = self._make_namespace(name, schema, namespace_dir)
+            policy = self.catalog.get_policy(name)
+            ns = self._make_namespace(name, schema, namespace_dir, policy)
             self.catalog.insert_live(name, ns)
 
     def _ensure_log_namespace_registered(self) -> None:
@@ -392,7 +401,7 @@ class DuckDBLogStore:
         self.catalog.register_or_evolve(
             LOG_NAMESPACE_NAME,
             stored_schema,
-            lambda schema: self._make_namespace(LOG_NAMESPACE_NAME, schema, log_dir),
+            lambda schema, policy: self._make_namespace(LOG_NAMESPACE_NAME, schema, log_dir, policy),
             on_existing=lambda existing: existing.schema,
         )
 
@@ -406,11 +415,19 @@ class DuckDBLogStore:
             return self._data_dir / LOG_NAMESPACE_DIR
         return _validate_namespace_name(name, self._data_dir)
 
-    def register_table(self, name: str, schema: Schema) -> Schema:
+    def register_table(
+        self,
+        name: str,
+        schema: Schema,
+        policy: StoragePolicy = StoragePolicy(),
+    ) -> Schema:
         """Register or evolve ``name`` to ``schema``; return the effective schema.
 
         Implicit ``seq`` is stamped at this boundary so the on-disk layout
-        is uniform across namespaces.
+        is uniform across namespaces. ``policy`` is a per-namespace
+        retention override; an empty policy inherits the cluster-wide
+        defaults. Re-register with a different policy updates the
+        existing namespace's policy (last-write-wins).
         """
         namespace_dir = self._namespace_dir(name)
         resolve_key_column(schema)
@@ -422,17 +439,23 @@ class DuckDBLogStore:
             if effective != existing_ns.schema:
                 self.catalog.upsert(name, effective)
                 existing_ns.update_schema(effective)
+            # Policy is overridden whole-record on re-register; the
+            # catalog persists the new policy and the live namespace
+            # picks it up on the next eviction tick.
+            self.catalog.upsert_policy(name, policy)
+            existing_ns.update_policy(policy)
             return effective
 
         return self.catalog.register_or_evolve(
             name,
             stored_schema,
-            lambda effective_schema: self._make_namespace(name, effective_schema, namespace_dir),
+            lambda eff_schema, eff_policy: self._make_namespace(name, eff_schema, namespace_dir, eff_policy),
             on_existing=on_existing,
+            policy=policy,
         )
 
-    def list_namespaces_with_stats(self) -> list[tuple[str, Schema, NamespaceStats]]:
-        """Return ``(name, schema, stats)`` for every live namespace.
+    def list_namespaces_with_stats(self) -> list[tuple[str, Schema, NamespaceStats, StoragePolicy]]:
+        """Return ``(name, schema, stats, policy)`` for every live namespace.
 
         Backs ``StatsService.ListNamespaces`` — the dashboard relies on
         it to render the summary table without issuing per-namespace
@@ -444,7 +467,7 @@ class DuckDBLogStore:
         # registry snapshot to release the catalog lock before any stats()
         # call so a slow namespace can't stall this call for every other.
         namespaces = self.catalog.snapshot_live()
-        return [(name, ns.schema, ns.stats()) for name, ns in namespaces]
+        return [(name, ns.schema, ns.stats(), self.catalog.get_policy(name)) for name, ns in namespaces]
 
     def get_table_schema(self, name: str) -> Schema:
         return self.catalog.require_live(name).schema

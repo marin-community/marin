@@ -24,6 +24,7 @@ from connectrpc.errors import ConnectError
 
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.store import LogStore
+from finelog.store.policy import policy_from_proto, policy_to_proto
 from finelog.store.schema import (
     InvalidNamespaceError,
     NamespaceNotFoundError,
@@ -68,14 +69,21 @@ class StatsServiceImpl:
     ) -> stats_pb2.RegisterTableResponse:
         try:
             schema = schema_from_proto(request.schema)
-            effective = await asyncio.to_thread(self._log_store.register_table, request.namespace, schema)
+            policy = policy_from_proto(request.storage_policy)
+            effective_schema = await asyncio.to_thread(self._log_store.register_table, request.namespace, schema, policy)
         except InvalidNamespaceError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
         except SchemaConflictError as exc:
             raise ConnectError(Code.FAILED_PRECONDITION, str(exc)) from exc
         except SchemaValidationError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
-        return stats_pb2.RegisterTableResponse(effective_schema=schema_to_proto(effective))
+        # Policy is last-write-wins, so the request's policy is now in
+        # force; surface it back so clients can confirm.
+        effective_policy = self._log_store.catalog.get_policy(request.namespace)
+        return stats_pb2.RegisterTableResponse(
+            effective_schema=schema_to_proto(effective_schema),
+            effective_policy=policy_to_proto(effective_policy),
+        )
 
     async def write_rows(
         self,
@@ -144,8 +152,9 @@ class StatsServiceImpl:
                 min_seq=stats.min_seq,
                 max_seq=stats.max_seq,
                 segment_count=stats.segment_count,
+                storage_policy=policy_to_proto(policy),
             )
-            for name, schema, stats in entries
+            for name, schema, stats, policy in entries
         ]
         return stats_pb2.ListNamespacesResponse(namespaces=infos)
 

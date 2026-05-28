@@ -88,6 +88,7 @@ class _FakeStatsServiceClient:
     def __init__(self, address, **_kwargs):
         self.address = address
         self.registered: dict[str, stats_pb2.Schema] = {}
+        self.registered_policies: dict[str, stats_pb2.StoragePolicy] = {}
         self.writes: list[stats_pb2.WriteRowsRequest] = []
         self.drops: list[str] = []
         self.queries: list[str] = []
@@ -96,7 +97,11 @@ class _FakeStatsServiceClient:
 
     def register_table(self, request):
         self.registered[request.namespace] = request.schema
-        return stats_pb2.RegisterTableResponse(effective_schema=request.schema)
+        self.registered_policies[request.namespace] = request.storage_policy
+        return stats_pb2.RegisterTableResponse(
+            effective_schema=request.schema,
+            effective_policy=request.storage_policy,
+        )
 
     def write_rows(self, request):
         if self.errors:
@@ -313,6 +318,38 @@ def test_get_table_with_explicit_schema(tracked_clients):
         assert table.schema.key_column == "ts"
         table.write([SimpleNamespace(ts=1, value=1.5)])
         assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+    finally:
+        client.close()
+
+
+def test_get_table_forwards_storage_policy(tracked_clients):
+    """An explicit StoragePolicy on get_table is sent on the register_table request."""
+    from finelog.client import StoragePolicy
+
+    client = LogClient.connect("http://h:1")
+    try:
+        client.get_table(
+            "iris.worker",
+            WorkerStat,
+            storage_policy=StoragePolicy(max_bytes=100, max_age_seconds=60),
+        )
+        policy = tracked_clients[0].registered_policies["iris.worker"]
+        assert policy.max_bytes == 100
+        assert policy.max_age_seconds == 60
+        assert policy.max_segments == 0  # unset → proto3 zero
+    finally:
+        client.close()
+
+
+def test_get_table_default_policy_is_empty(tracked_clients):
+    """No policy argument sends an empty proto (all zeros = inherit defaults)."""
+    client = LogClient.connect("http://h:1")
+    try:
+        client.get_table("iris.worker", WorkerStat)
+        policy = tracked_clients[0].registered_policies["iris.worker"]
+        assert policy.max_bytes == 0
+        assert policy.max_age_seconds == 0
+        assert policy.max_segments == 0
     finally:
         client.close()
 
