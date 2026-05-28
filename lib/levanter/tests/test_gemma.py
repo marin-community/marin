@@ -34,6 +34,8 @@ from test_utils import (
     skip_if_no_torch,
     use_test_mesh,
 )
+from levanter.models.gemma import Gemma2DecoderLayer as LevDecoderLayer  # local to avoid circular import at top
+from levanter.main.train_lm import TrainLmConfig
 
 
 # N.B. Gemma uses LLamaAttention directly so we skip tests for attention and rotary embeddings.
@@ -171,8 +173,6 @@ def test_gemma2_decoder_layer(num_kv_heads):
     import torch
     from transformers.models.gemma2.modeling_gemma2 import Gemma2DecoderLayer as HFGemmaDecoderLayer
     from transformers.models.gemma2.modeling_gemma2 import Gemma2RotaryEmbedding as HFGemmaRotaryEmbedding
-
-    from levanter.models.gemma import Gemma2DecoderLayer as LevDecoderLayer  # local to avoid circular import at top
 
     gemma_config = _get_gemma2_config(num_kv_heads=num_kv_heads)
 
@@ -393,7 +393,6 @@ def _get_gemma_config(use_flash=False, num_kv_heads=4, seq_len=128) -> GemmaConf
 
 
 def _get_gemma2_config(use_flash=False, num_kv_heads=4, seq_len=128) -> Gemma2Config:
-    from levanter.models.gemma import Gemma2Config
 
     return Gemma2Config(
         max_seq_len=seq_len,
@@ -414,7 +413,6 @@ def _get_gemma2_config(use_flash=False, num_kv_heads=4, seq_len=128) -> Gemma2Co
 
 
 def _get_gemma3_config(use_flash=False, num_kv_heads=4, seq_len=128) -> Gemma3Config:
-    from levanter.models.gemma import Gemma3Config
 
     return Gemma3Config(
         max_seq_len=seq_len,
@@ -443,7 +441,6 @@ def _get_random_inputs(config: GemmaConfig):
 
 @parameterize_with_configs("gemma*.yaml")
 def test_gemma_configs(config_file):
-    from levanter.main.train_lm import TrainLmConfig
 
     config_class = TrainLmConfig
 
@@ -462,8 +459,6 @@ def test_gemma3_decoder_layer(num_kv_heads):
     import torch
     from transformers.models.gemma3.modeling_gemma3 import Gemma3DecoderLayer as HFGemmaDecoderLayer
     from transformers.models.gemma3.modeling_gemma3 import Gemma3RotaryEmbedding as HFGemmaRotaryEmbedding
-
-    from levanter.models.gemma import Gemma2DecoderLayer as LevDecoderLayer  # Gemma3 reuses implementation
 
     gemma_config = _get_gemma3_config(num_kv_heads=num_kv_heads)
 

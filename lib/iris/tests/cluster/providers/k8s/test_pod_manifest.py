@@ -811,8 +811,6 @@ def test_init_container_for_workdir_file_refs():
     assert env_by_name["IRIS_CONTROLLER_URL"] == "http://ctrl:8080"
     assert "IRIS_WORKDIR_BLOB_REFS" in env_by_name
 
-    import json
-
     refs = json.loads(env_by_name["IRIS_WORKDIR_BLOB_REFS"])
     assert refs == {"_callable.pkl": "abcd1234" * 8}
     assert configmap_name is None

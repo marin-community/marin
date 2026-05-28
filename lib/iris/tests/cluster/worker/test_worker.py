@@ -5,20 +5,26 @@
 
 import hashlib
 import socket
+import subprocess as sp
+import threading
 import time
 import zipfile
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from connectrpc.request import RequestContext
+from iris.cluster.log_store_helpers import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import (
+    ContainerConfig,
     ContainerErrorKind,
     ContainerInfraError,
     ContainerPhase,
     ContainerStatus,
     DiscoveredContainer,
     ExecutionStage,
+    MountKind,
+    MountSpec,
 )
 from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.worker.port_allocator import PortAllocator
@@ -27,6 +33,7 @@ from iris.cluster.worker.stats import IrisTaskStat, IrisWorkerStat
 from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
+from iris.managed_thread import ThreadContainer
 from iris.rpc import job_pb2, worker_pb2
 from iris.test_util import wait_for_condition
 from rigging.timing import Duration
@@ -66,7 +73,6 @@ def test_no_port_reuse_before_release(allocator):
 
 
 def test_concurrent_allocations(allocator):
-    import threading
 
     results = []
 
@@ -766,7 +772,6 @@ def _worker_with_mock_client(config, mock_bundle_store, mock_runtime):
 def test_attach_log_handler_uses_worker_log_key_before_register(mock_bundle_store, mock_runtime, tmp_path):
     """Worker known locally (e.g. via slice_id) attaches under worker_log_key
     *before* register so pre-register failures ship remote logs."""
-    from iris.cluster.log_store_helpers import worker_log_key
 
     config = WorkerConfig(
         port=0,
@@ -801,7 +806,6 @@ def test_attach_log_handler_noop_without_worker_id(mock_bundle_store, mock_runti
 
 def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runtime, tmp_path):
     """Re-attach under a new worker_id renames the handler's key in place."""
-    from iris.cluster.log_store_helpers import worker_log_key
 
     config = WorkerConfig(
         port=0,
@@ -1244,7 +1248,6 @@ def test_preserve_containers_then_new_worker_adopts_with_live_log_client(mock_bu
     restart must end with adopted attempts pointed at the *new* worker's live
     client and tables.
     """
-    from iris.managed_thread import ThreadContainer
 
     container = _make_discovered_container(worker_id="worker-rt", attempt_uid="uid-roundtrip")
     # Same container survives across the stop/start; mock_runtime keeps reporting
@@ -1411,9 +1414,6 @@ def test_task_attempt_adopt_factory():
 @pytest.mark.docker
 def test_docker_container_has_adoption_labels(docker_runtime, tmp_path):
     """Containers created by DockerRuntime should have adoption labels."""
-    import subprocess as sp
-
-    from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
 
     workdir = tmp_path / "workdir"
     workdir.mkdir()
@@ -1463,7 +1463,6 @@ def test_docker_container_has_adoption_labels(docker_runtime, tmp_path):
 @pytest.mark.docker
 def test_docker_discover_containers(docker_runtime, tmp_path):
     """discover_containers() should find iris-managed containers."""
-    from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
 
     workdir = tmp_path / "workdir"
     workdir.mkdir()
@@ -1505,7 +1504,6 @@ def test_docker_discover_containers(docker_runtime, tmp_path):
 @pytest.mark.docker
 def test_docker_adopt_container(docker_runtime, tmp_path):
     """adopt_container() should wrap an existing container."""
-    from iris.cluster.runtime.types import ContainerConfig, ContainerPhase, MountKind, MountSpec
 
     workdir = tmp_path / "workdir"
     workdir.mkdir()
@@ -1547,8 +1545,6 @@ def test_docker_worker_restart_round_trip_adopts_surviving_container(docker_runt
     identity. This exercises the real discover_containers / adopt_container
     path through Worker.start(), which the mock-runtime test cannot.
     """
-    from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
-    from iris.managed_thread import ThreadContainer
 
     workdir = tmp_path / "workdir"
     workdir.mkdir()

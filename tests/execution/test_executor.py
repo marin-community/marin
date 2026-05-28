@@ -41,6 +41,7 @@ from marin.execution.executor_step_status import (
     StatusFile,
     step_lock,
 )
+from rigging.distributed_lock import HEARTBEAT_TIMEOUT, Lease
 
 
 @dataclass(frozen=True)
@@ -856,7 +857,6 @@ def test_mirrored_changes_version():
 
 def test_status_file_takeover_stale_lock_then_refresh(tmp_path):
     """Test taking over a stale lock from a dead worker and then refreshing it."""
-    from rigging.distributed_lock import HEARTBEAT_TIMEOUT, Lease
 
     # Simulate worker A creating a stale lock (as if it died)
     dead_worker = StatusFile(tmp_path, worker_id="dead-worker")

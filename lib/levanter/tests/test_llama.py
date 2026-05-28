@@ -25,6 +25,7 @@ from test_utils import (
     skip_if_no_torch,
     use_test_mesh,
 )
+from levanter.main.train_lm import TrainLmConfig
 
 
 @skip_if_no_torch
@@ -308,7 +309,6 @@ def _get_random_inputs(config: LlamaConfig, override_Pos=None):
 
 @parameterize_with_configs("llama*.yaml")
 def test_llama_configs(config_file):
-    from levanter.main.train_lm import TrainLmConfig
 
     config_class = TrainLmConfig
 

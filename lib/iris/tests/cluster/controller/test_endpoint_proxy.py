@@ -32,7 +32,7 @@ from iris.managed_thread import ThreadContainer
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
+from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 # Endpoint name registered with the proxy resolver; reachable at /proxy/user.jobX.dash/...
@@ -200,7 +200,6 @@ def _build_proxy_app(proxy: EndpointProxy) -> Starlette:
     #   the browser's current origin instead.
     # - ``/proxy/<name>/<sub_path>`` -> the proxy itself.
     async def _redirect_to_slash(request: Request) -> Response:
-        from starlette.responses import RedirectResponse
 
         name = request.path_params["endpoint_name"]
         query = f"?{request.url.query}" if request.url.query else ""

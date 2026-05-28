@@ -21,6 +21,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 from finelog.rpc import logging_pb2
@@ -95,8 +96,6 @@ def pytest_collection_modifyitems(config, items):
     Cloud mode: 20 min for first smoke test (provisioning), 2 min for the rest.
     """
     is_cloud = config.getoption("--iris-controller-url") is not None
-
-    import pytest
 
     first_smoke_test = True
     for item in items:
@@ -553,7 +552,6 @@ def dashboard_goto(page, url: str) -> None:
     """
     if _is_noop_page(page):
         return
-    from urllib.parse import urlparse
 
     parsed = urlparse(url)
     path = parsed.path

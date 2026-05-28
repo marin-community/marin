@@ -15,6 +15,7 @@ from marin.rl.environments.mock_env import (
 from marin.rl.types import Rollout, RolloutGroup
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
+from openai.types.chat.chat_completion_chunk import ChoiceLogprobsLogprob
 from openai.types.completion_usage import CompletionUsage
 
 
@@ -41,7 +42,6 @@ def create_test_tokenizer():
 
 def create_test_logprobs(text: str):
     """Create logprobs content for a response text."""
-    from openai.types.chat.chat_completion_chunk import ChoiceLogprobsLogprob
 
     logprobs_content = []
     for c in text:

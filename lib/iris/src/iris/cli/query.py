@@ -10,7 +10,7 @@ import json
 import click
 from tabulate import tabulate
 
-from iris.cli.main import require_controller_url, rpc_client
+from iris.cli.rpc_base import require_controller_url, rpc_client
 from iris.rpc import query_pb2
 
 

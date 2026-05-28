@@ -11,12 +11,17 @@ import logging
 from pathlib import Path
 
 import pytest
+from iris.cluster.config import _derive_slice_config_from_resources, load_config
+from iris.cluster.constraints import DeviceType
 from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth, SliceFate
 from iris.cluster.controller.autoscaler.scaling_group import (
+    GroupAvailability,
     ScalingGroup,
     SliceLifecycleState,
     SliceState,
     _zones_from_config,
+    prepare_slice_config,
+    slice_state_to_proto,
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.providers.types import (
@@ -714,7 +719,6 @@ class TestScalingGroupAvailability:
 
     def test_available_when_no_constraints(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Group is AVAILABLE when not in backoff, quota ok, and under capacity."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
@@ -724,7 +728,6 @@ class TestScalingGroupAvailability:
 
     def test_at_max_slices_when_at_max_slices(self):
         """Group is AT_MAX_SLICES when at max_slices with all slices READY."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config = _with_resources(
             config_pb2.ScaleGroupConfig(
@@ -746,7 +749,6 @@ class TestScalingGroupAvailability:
 
     def test_backoff_when_detector_hostile(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Group is in BACKOFF when the churn detector is HOSTILE."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
@@ -785,7 +787,6 @@ class TestScalingGroupAvailability:
 
     def test_quota_exceeded_blocks_demand_until_timeout(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Quota exceeded state auto-expires after timeout."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         platform = make_mock_platform()
         platform.create_slice.side_effect = QuotaExhaustedError("TPU quota exhausted")
@@ -835,7 +836,6 @@ class TestScalingGroupAvailability:
 
     def test_quota_exceeded_takes_precedence_over_churn_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Quota exceeded reports as QUOTA_EXCEEDED even if churn is HOSTILE."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform, quota_timeout=Duration.from_ms(60_000))
@@ -850,7 +850,6 @@ class TestScalingGroupAvailability:
 
     def test_available_immediately_after_scale_up(self):
         """After complete_scale_up, the group is AVAILABLE (no cooldown gate)."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config = _with_resources(
             config_pb2.ScaleGroupConfig(
@@ -873,7 +872,6 @@ class TestScalingGroupAvailability:
 
     def test_at_max_slices_with_inflight_capacity_accepts_demand(self):
         """At max_slices but with in-flight booting capacity → COOLDOWN (accepts demand)."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config = _with_resources(
             config_pb2.ScaleGroupConfig(
@@ -905,7 +903,6 @@ class TestScalingGroupAvailability:
         self, scale_group_config: config_pb2.ScaleGroupConfig
     ):
         """matches_device_requirement filters groups by device type and variant."""
-        from iris.cluster.constraints import DeviceType
 
         platform = make_mock_platform()
         group = ScalingGroup(scale_group_config, platform)  # TPU with accelerator_variant="v5p-8"
@@ -1017,7 +1014,6 @@ class TestPrepareSliceConfigPreemptible:
 
     def test_preemptible_set_on_slice_template_is_preserved(self):
         """preemptible=True on slice_template is preserved through prepare_slice_config."""
-        from iris.cluster.controller.autoscaler.scaling_group import prepare_slice_config
 
         parent = config_pb2.ScaleGroupConfig(
             name="test-group",
@@ -1031,7 +1027,6 @@ class TestPrepareSliceConfigPreemptible:
 
     def test_preemptible_false_by_default(self):
         """capacity_type defaults to CAPACITY_TYPE_UNSPECIFIED when not set on template."""
-        from iris.cluster.controller.autoscaler.scaling_group import prepare_slice_config
 
         parent = config_pb2.ScaleGroupConfig(
             name="test-group",
@@ -1047,8 +1042,6 @@ class TestPrepareSliceConfigGpuCount:
     """prepare_slice_config propagates gpu_count from parent resources."""
 
     def test_gpu_count_propagated_from_resources(self):
-        from iris.cluster.config import _derive_slice_config_from_resources
-        from iris.cluster.controller.autoscaler.scaling_group import prepare_slice_config
 
         parent = config_pb2.ScaleGroupConfig(name="gpu-group")
         parent.resources.CopyFrom(
@@ -1065,7 +1058,6 @@ class TestPrepareSliceConfigGpuCount:
         assert result.gpu_count == 8
 
     def test_gpu_count_zero_when_no_resources(self):
-        from iris.cluster.controller.autoscaler.scaling_group import prepare_slice_config
 
         parent = config_pb2.ScaleGroupConfig(name="cpu-group")
         parent.slice_template.coreweave.instance_type = "cd-gp-i64-erapids"
@@ -1075,10 +1067,6 @@ class TestPrepareSliceConfigGpuCount:
 
     def test_coreweave_yaml_gpu_count_flows_through(self):
         """Loading coreweave.yaml and running prepare_slice_config produces correct gpu_count."""
-        from pathlib import Path
-
-        from iris.cluster.config import load_config
-        from iris.cluster.controller.autoscaler.scaling_group import prepare_slice_config
 
         yaml_path = Path(__file__).parents[3] / "config" / "coreweave.yaml"
         config = load_config(yaml_path)
@@ -1142,7 +1130,6 @@ class TestMarkSliceLockDiscipline:
 
 def test_slice_state_to_proto_uses_worker_ids_as_vm_ids():
     """slice_state_to_proto uses worker_ids directly as vm_id."""
-    from iris.cluster.controller.autoscaler.scaling_group import slice_state_to_proto
 
     handle = make_fake_slice_handle("my-slice", scale_group="sg", created_at_ms=1000)
     state = SliceState(
@@ -1353,7 +1340,6 @@ class TestSliceStateToProtoIdleFields:
     """Tests for the idle/last_active fields on SliceInfo proto."""
 
     def test_idle_true_when_past_threshold(self):
-        from iris.cluster.controller.autoscaler.scaling_group import slice_state_to_proto
 
         handle = make_fake_slice_handle("s1", scale_group="g1", created_at_ms=1000)
         state = SliceState(
@@ -1370,7 +1356,6 @@ class TestSliceStateToProtoIdleFields:
         assert proto.last_active.epoch_ms == 1000
 
     def test_idle_false_when_no_threshold(self):
-        from iris.cluster.controller.autoscaler.scaling_group import slice_state_to_proto
 
         handle = make_fake_slice_handle("s1", scale_group="g1", created_at_ms=1000)
         state = SliceState(
@@ -1384,7 +1369,6 @@ class TestSliceStateToProtoIdleFields:
 
     def test_idle_false_when_currently_active(self):
         """quiet_since=None means currently active — never idle."""
-        from iris.cluster.controller.autoscaler.scaling_group import slice_state_to_proto
 
         handle = make_fake_slice_handle("s1", scale_group="g1", created_at_ms=1000)
         state = SliceState(
@@ -1397,7 +1381,6 @@ class TestSliceStateToProtoIdleFields:
         assert proto.idle is False
 
     def test_idle_false_for_non_ready_slices(self):
-        from iris.cluster.controller.autoscaler.scaling_group import slice_state_to_proto
 
         handle = make_fake_slice_handle("s1", scale_group="g1", created_at_ms=1000)
         state = SliceState(

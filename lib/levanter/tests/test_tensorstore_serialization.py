@@ -17,6 +17,7 @@ import haliax as hax
 
 from levanter.tensorstore_serialization import tree_deserialize_leaves_tensorstore, tree_serialize_leaves_tensorstore
 from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
+from levanter.models.gpt2 import Gpt2Mlp
 
 
 def test_tensorstore_checkpoint_simple():
@@ -121,7 +122,6 @@ def test_checkpoint_steps():
 
 def test_tensorstore_gpt2_mlp():
     with use_test_mesh():
-        from levanter.models.gpt2 import Gpt2Mlp
 
         key0 = jax.random.PRNGKey(0)
         key1 = jax.random.PRNGKey(1)

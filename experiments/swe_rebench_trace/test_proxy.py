@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import socket
 import threading
+import time as _time
 
 import pytest
 
@@ -196,7 +197,6 @@ def test_proxy_handle_shutdown_is_idempotent(loopback_proxy):
 
 def test_proxy_header_deadline_disconnects_slow_client(loopback_proxy):
     """A client that connects but never sends headers must be disconnected by the deadline."""
-    import time as _time
 
     s = socket.create_connection((loopback_proxy.host, loopback_proxy.port), timeout=10.0)
     s.settimeout(10.0)

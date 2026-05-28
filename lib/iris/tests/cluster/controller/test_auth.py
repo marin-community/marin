@@ -19,7 +19,13 @@ from iris.cluster.controller.auth import (
     revoke_api_key,
     revoke_login_keys_for_user,
 )
-from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.cluster.controller.dashboard import (
+    ControllerDashboard,
+    _LegacyFetchLogsRedirect,
+    _RouteAuthMiddleware,
+    _SubdomainProxyMiddleware,
+    requires_auth,
+)
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
@@ -29,6 +35,8 @@ from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, hash_token, resolve_auth
 from rigging.timing import Timestamp
 from sqlalchemy import text
+from starlette.responses import JSONResponse as _J
+from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from tests.cluster.conftest import fake_log_client_from_service
@@ -470,15 +478,6 @@ def test_route_auth_middleware_uses_resolve_auth(service, log_service, verifier,
     We build a dashboard with a @requires_auth route injected and verify it
     agrees with resolve_auth for every (token, optional) combination.
     """
-    from iris.cluster.controller.dashboard import (
-        ControllerDashboard,
-        _LegacyFetchLogsRedirect,
-        _RouteAuthMiddleware,
-        _SubdomainProxyMiddleware,
-        requires_auth,
-    )
-    from starlette.responses import JSONResponse as _J
-    from starlette.routing import Route
 
     @requires_auth
     def _protected(_request):

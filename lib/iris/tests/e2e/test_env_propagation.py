@@ -10,13 +10,14 @@ extras, and pip_packages propagate correctly through job hierarchies.
 from __future__ import annotations
 
 import json
+import time
 from unittest.mock import patch
 
 import pytest
 from iris.client import IrisContext, iris_ctx_scope
-from iris.client.client import LocalClientConfig
+from iris.client.client import LocalClientConfig, iris_ctx
 from iris.client.local_client import local_client
-from iris.cluster.client.job_info import JobInfo
+from iris.cluster.client.job_info import JobInfo, get_job_info
 from iris.cluster.types import (
     Entrypoint,
     EnvironmentSpec,
@@ -40,7 +41,6 @@ def dummy_entrypoint():
 
 
 def _sleep_entrypoint():
-    import time
 
     time.sleep(300)
 
@@ -85,11 +85,6 @@ def _chain_job(output_file: str, child_spec: dict | None = None):
             - extras: list[str] | None — extras for the child's EnvironmentSpec
             - child_spec: dict | None — recursive spec for the grandchild
     """
-    import json
-
-    from iris.client.client import iris_ctx
-    from iris.cluster.client.job_info import get_job_info
-    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 
     info = get_job_info()
     state = {

@@ -17,7 +17,7 @@ from google.protobuf import json_format
 from google.protobuf.descriptor import FieldDescriptor
 from google.protobuf.message import Message
 
-from iris.cli.main import require_controller_url
+from iris.cli.rpc_base import require_controller_url
 from iris.rpc import actor_connect, controller_connect, worker_connect
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
 

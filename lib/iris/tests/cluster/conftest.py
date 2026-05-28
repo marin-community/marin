@@ -24,6 +24,7 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.k8s.types import K8sResource
@@ -31,6 +32,8 @@ from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select
+
+from tests.cluster.controller.conftest import make_test_entrypoint
 
 
 class _FakeLogClientFromService:
@@ -174,7 +177,6 @@ class ServiceTestHarness:
         resources: job_pb2.ResourceSpecProto | None = None,
     ) -> JobName:
         """Submit a job via the RPC layer. Returns job_id."""
-        from tests.cluster.controller.conftest import make_test_entrypoint
 
         job_id = JobName.root(user, name)
         request = controller_pb2.Controller.LaunchJobRequest(
@@ -410,7 +412,6 @@ class ServiceTestHarness:
 
 
 def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
 
     db = ControllerDB(db_dir=tmp_path / "k8s_db")
     health = WorkerHealthTracker()
@@ -458,7 +459,6 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
 
 
 def _make_gcp_harness(tmp_path) -> ServiceTestHarness:
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
 
     db = ControllerDB(db_dir=tmp_path / "gcp_db")
     health = WorkerHealthTracker()

@@ -25,6 +25,7 @@ from test_utils import (  # , check_model_works_with_seqlen
     skip_if_no_torch,
     use_test_mesh,
 )
+from levanter.main.train_lm import TrainLmConfig
 
 
 # from jax.sharding import Mesh
@@ -336,7 +337,6 @@ def _get_random_inputs(config: MixtralConfig, override_Pos=None):
 
 @parameterize_with_configs("mixtral*.yaml")
 def test_mixtral_configs(config_file):
-    from levanter.main.train_lm import TrainLmConfig
 
     config_class = TrainLmConfig
 

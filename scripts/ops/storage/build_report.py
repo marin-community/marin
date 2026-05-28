@@ -44,11 +44,18 @@ from pathlib import Path
 
 import click
 import fsspec
+import fsspec as _fsspec
+from fray import ResourceConfig
 from iris.cli.main import IRIS_CLUSTER_CONFIG_DIRS, create_client_token_provider, resolve_cluster_name
 from iris.client import IrisClient
 from iris.cluster.config import IrisConfig
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.config_discovery import resolve_cluster_config
+from zephyr import Dataset, ZephyrContext
+
+from scripts.ops.storage.constants import MARIN_BUCKETS
+from scripts.ops.storage.distributed_scan import run_distributed
+from scripts.ops.storage.report import generate_report, load_parquet_db
 
 DEFAULT_STAGING_DIR = "gs://marin-us-central2/tmp/storage-scan"
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -62,8 +69,6 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 def _scan_stage(staging_dir: str, workers: int) -> None:
     """Iris-side entrypoint for stage 1: distributed scan into parquet segments."""
-    from scripts.ops.storage.constants import MARIN_BUCKETS
-    from scripts.ops.storage.distributed_scan import run_distributed
 
     run_distributed(
         buckets=MARIN_BUCKETS,
@@ -91,8 +96,6 @@ def _dedup_stage(input_glob: str, output_dir: str, num_shards: int, worker_cpu: 
     collapses those into one row per (bucket, name) and lives inside the
     coordinator job so the pipeline is constructed where it executes.
     """
-    from fray import ResourceConfig
-    from zephyr import Dataset, ZephyrContext
 
     output_pattern = f"{output_dir.rstrip('/')}/objects-{{shard:05d}}.parquet"
 
@@ -115,9 +118,6 @@ def _dedup_stage(input_glob: str, output_dir: str, num_shards: int, worker_cpu: 
 
 def _report_stage(deduped_dir: str, report_path: str) -> None:
     """Iris-side entrypoint for stage 3: build the markdown report."""
-    import fsspec as _fsspec
-
-    from scripts.ops.storage.report import generate_report, load_parquet_db
 
     conn = load_parquet_db(deduped_dir)
     report = generate_report(conn)

@@ -21,6 +21,7 @@ from test_utils import (
     skip_if_no_torch,
     use_test_mesh,
 )
+from levanter.main.train_lm import TrainLmConfig
 
 
 @skip_if_no_torch
@@ -159,7 +160,6 @@ def _get_mistral_config(use_flash=False, num_kv_heads=4) -> MistralConfig:
 
 @parameterize_with_configs("mistral*.yaml")
 def test_mistral_configs(config_file):
-    from levanter.main.train_lm import TrainLmConfig
 
     config_class = TrainLmConfig
 

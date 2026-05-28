@@ -27,6 +27,7 @@ from levanter.compat.hf_checkpoints import (
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from test_utils import skip_if_no_torch
 from tests.test_utils import use_test_mesh
+import glob
 
 
 @skip_if_no_torch
@@ -57,7 +58,6 @@ def test_save_sharded_checkpoints():
             converter.save_pretrained(nano_model, tmpdir, max_shard_size=1024)
 
         # make sure we saved a few different files
-        import glob
 
         assert len(glob.glob(tmpdir + "/*.safetensors")) > 1
 

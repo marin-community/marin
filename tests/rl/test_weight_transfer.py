@@ -13,6 +13,7 @@ import jax.numpy as jnp
 import jmp
 import numpy as np
 import pytest
+from fray import LocalClient, current_client, set_current_client
 from jax.sharding import Mesh
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.models.llama import LlamaConfig
@@ -23,6 +24,7 @@ from marin.rl.weight_transfer import (
     create_weight_transfer_client,
     create_weight_transfer_server,
 )
+from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
 from marin.rl.weight_utils import levanter_to_nnx_state
 from transformers import AutoConfig, AutoTokenizer
 
@@ -90,8 +92,6 @@ def sample_params():
 
 def create_test_weight_transfer_pair(weight_transfer_config):
     """Helper function to create server/client pairs for testing with simplified Levanter API."""
-    from fray import current_client
-    from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
 
     # Set unique coordinator name for distributed modes
     coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
@@ -146,7 +146,6 @@ def weight_transfer_config(transfer_mode):
 @pytest.fixture(autouse=True)
 def v2_client():
     """Ensure a v2 LocalClient for weight transfer tests."""
-    from fray import LocalClient, set_current_client
 
     with set_current_client(LocalClient()) as client:
         yield client
@@ -208,8 +207,6 @@ def test_arrow_flight_server_debug_snapshot_reports_stored_bytes(sample_params):
 
 
 def test_arrow_flight_coordinator_accepts_rollback_weight_ids():
-    from fray import current_client
-    from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
 
     client = current_client()
     coordinator = client.create_actor(

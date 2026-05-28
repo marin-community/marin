@@ -12,6 +12,12 @@ import yaml
 
 import levanter.tracker
 from levanter.tracker import CompositeTracker, TrackerConfig
+import draccus
+from levanter.tracker.tracker import NoopConfig
+from levanter.tracker import NoopTracker
+import levanter.tracker.tracker_fns as tracker_fns
+from levanter.tracker.wandb import WandbTracker, _truncate_wandb_artifact_name
+import levanter.tracker.wandb as wandb_tracker_mod
 
 
 def test_tracker_plugin_stuff_works():
@@ -31,8 +37,6 @@ def test_tracker_plugin_default_works():
     class ConfigHolder:
         tracker: TrackerConfig
 
-    import draccus
-
     tconfig = draccus.decode(ConfigHolder, parsed).tracker
 
     assert isinstance(tconfig, TrackerConfig.get_choice_class("wandb"))
@@ -50,10 +54,6 @@ def test_tracker_plugin_multi_parsing_work():
     @dataclasses.dataclass
     class ConfigHolder:
         tracker: TrackerConfig | Tuple[TrackerConfig, ...]
-
-    import draccus
-
-    from levanter.tracker.tracker import NoopConfig
 
     assert isinstance(draccus.decode(ConfigHolder, parsed).tracker, NoopConfig)
 
@@ -73,8 +73,6 @@ def test_get_tracker_by_name(monkeypatch):
     if wandb_config is None:
         pytest.skip("wandb not installed")
 
-    from levanter.tracker import NoopTracker
-
     wandb1 = wandb_config(mode="offline").init(None)
     tracker = CompositeTracker([wandb1, NoopTracker()])
 
@@ -87,7 +85,6 @@ def test_get_tracker_by_name(monkeypatch):
 
 
 def test_tracker_logging_without_global_tracker_emits_no_warning(monkeypatch):
-    import levanter.tracker.tracker_fns as tracker_fns
 
     monkeypatch.setattr(tracker_fns, "_global_tracker", None)
     monkeypatch.setattr(tracker_fns, "_has_logged_missing_tracker", False)
@@ -105,8 +102,6 @@ def test_tracker_logging_without_global_tracker_emits_no_warning(monkeypatch):
 
 def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch):
     monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
-
-    from levanter.tracker.wandb import WandbTracker, _truncate_wandb_artifact_name
 
     class FakeRun:
         def __init__(self):
@@ -130,9 +125,6 @@ def test_wandb_artifact_name_defaults_to_basename_and_truncates(monkeypatch):
 
 def test_wandb_tracker_suppressed_logging_materializes_after_resume_step(monkeypatch):
     monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
-
-    import levanter.tracker.wandb as wandb_tracker_mod
-    from levanter.tracker.wandb import WandbTracker
 
     converted = []
 
@@ -179,9 +171,6 @@ def test_wandb_tracker_suppressed_logging_materializes_after_resume_step(monkeyp
 
 def test_wandb_tracker_materializes_before_dynamic_stale_step_check(monkeypatch):
     monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
-
-    import levanter.tracker.wandb as wandb_tracker_mod
-    from levanter.tracker.wandb import WandbTracker
 
     converted = []
 

@@ -33,6 +33,7 @@ from huggingface_hub import __version__ as _hf_hub_version
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
 from tokenizers import Tokenizer as HfBaseTokenizer
+import kitoken
 
 logger = logging.getLogger(__name__)
 
@@ -962,7 +963,6 @@ def _resolve_special_token_id_from_config(
 
 
 def _load_kitoken_tokenizer(name_or_path: str) -> KitokenMarinTokenizer:
-    import kitoken
 
     local_json = os.path.join(name_or_path, "tokenizer.json")
     if not os.path.isfile(local_json):

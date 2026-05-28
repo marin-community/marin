@@ -4,6 +4,7 @@
 import logging
 
 import pytest
+import rigging.log_setup as log_setup
 from rigging.log_setup import (
     BufferedLogRecord,
     LevelPrefixFormatter,
@@ -92,7 +93,6 @@ def test_slow_log_silent_when_fast(caplog):
 
 
 def test_configure_logging_captures_records():
-    import rigging.log_setup as log_setup
 
     log_setup._configured = False
     old_handlers = logging.getLogger().handlers[:]
@@ -156,8 +156,6 @@ def test_level_prefix_formatter_produces_expected_format():
 
 def test_configure_logging_uses_level_prefix_format():
     """configure_logging produces log lines with single-letter level prefix."""
-
-    import rigging.log_setup as log_setup
 
     log_setup._configured = False
     old_handlers = logging.getLogger().handlers[:]

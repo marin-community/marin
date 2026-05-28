@@ -20,6 +20,7 @@ Usage:
     uvx dashboard-eval-loop.py --screenshot-dir logs/dashboard-eval-20260128
 """
 
+import argparse
 import asyncio
 import os
 import subprocess
@@ -253,7 +254,6 @@ async def run_fixer_agent(
 
 async def main_async():
     """Run the evaluation loop."""
-    import argparse
 
     parser = argparse.ArgumentParser(description="Dashboard evaluation and improvement loop")
     parser.add_argument(

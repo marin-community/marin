@@ -3,6 +3,8 @@
 
 """Tests for iris.cluster.types — Entrypoint, EnvironmentSpec, and constraint helpers."""
 
+import hashlib
+
 import pytest
 from iris.cluster.constraints import (
     Constraint,
@@ -113,7 +115,6 @@ def test_job_name_require_task_errors_on_non_task():
 
 
 def test_job_name_to_safe_token_and_deep_nesting():
-    import hashlib
 
     job = JobName.from_string("/test-user/a/b/c/d/e/0")
     expected_hash = hashlib.sha256(str(job).encode()).hexdigest()

@@ -12,15 +12,15 @@ from pathlib import Path
 
 import pytest
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.projections import (
-    PROJECTIONS,
+from iris.cluster.controller.projections import PROJECTIONS
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.schema import endpoints_table, meta_table, worker_attributes_table
+from iris.cluster.controller.writes import REGISTERED_WRITE_FUNCTIONS, writes_to
+from iris.cluster.controller.writes_validation import (
     ConfigurationError,
     assert_owned_tables_not_externally_written,
 )
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.schema import endpoints_table, worker_attributes_table
-from iris.cluster.controller.writes import REGISTERED_WRITE_FUNCTIONS, writes_to
 
 
 @pytest.fixture
@@ -78,7 +78,6 @@ def test_cascade_violation_detected(projections_built, registry_isolated):
     # endpoints_table is harmless filler so this isn't *also* flagged as a
     # direct write to a Projection-owned table; the assertion below targets
     # the cascade leg specifically.
-    from iris.cluster.controller.schema import meta_table
 
     @writes_to(meta_table, cascades_into=(worker_attributes_table,))
     def rogue_cascade(tx) -> None:

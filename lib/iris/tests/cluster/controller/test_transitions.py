@@ -11,7 +11,10 @@ They focus on:
 """
 
 import asyncio
+import logging
+import tempfile
 import threading
+from pathlib import Path
 
 from finelog.rpc import logging_pb2
 from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
@@ -42,8 +45,10 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     PruneResult,
     TaskUpdate,
+    _kill_non_terminal_tasks,
 )
-from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.log_store_helpers import task_log_key
+from iris.cluster.types import JobName, TaskAttempt, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, select, text
@@ -1617,7 +1622,6 @@ def test_stale_attempt_ignored(state):
 
 def test_stale_attempt_error_log_for_non_terminal(state, caplog):
     """Stale attempt report logs ERROR when the old attempt is not terminal."""
-    import logging
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
@@ -1673,8 +1677,6 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
 
 def test_log_service_direct_push(state, log_service):
     """Log entries pushed via LogService are queryable."""
-    from iris.cluster.log_store_helpers import task_log_key
-    from iris.cluster.types import TaskAttempt
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
@@ -1698,9 +1700,6 @@ def test_log_service_direct_push(state, log_service):
 
 def test_log_service_accumulates_pushes(state, log_service):
     """Multiple pushes accumulate logs in the service."""
-
-    from iris.cluster.log_store_helpers import task_log_key
-    from iris.cluster.types import TaskAttempt
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
@@ -3052,8 +3051,6 @@ def test_holder_tasks_excluded_from_poll_expected_tasks(state):
 
 def test_snapshot_round_trip_preserves_reservation_holder(state):
     """DB checkpoint copy round-trip preserves is_reservation_holder flag."""
-    import tempfile
-    from pathlib import Path
 
     req = _make_reservation_make_job_request(
         task_device=_h100_device(),
@@ -3384,7 +3381,6 @@ def test_prune_old_inactive_workers(state):
 
 def test_submit_job_emits_structured_audit_log(state, caplog):
     """submit_job logs a structured event=job_submitted line for the log-store audit trail."""
-    import logging
 
     req = make_job_request("audit-me")
     with caplog.at_level(logging.INFO, logger="iris.cluster.controller.transitions"):
@@ -3814,7 +3810,6 @@ def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harnes
     ``j.is_reservation_holder = 0``), so terminating a holder task on a
     co-tenanted worker cannot move the co-tenant's reservation accounting.
     """
-    from iris.cluster.controller.transitions import _kill_non_terminal_tasks
 
     worker_id = harness.add_worker("w1")
 

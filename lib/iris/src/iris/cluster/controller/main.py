@@ -22,9 +22,10 @@ from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.config import create_autoscaler, load_config, make_provider
+from iris.cluster.config import load_config, make_provider
 from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
 from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler_factory import create_autoscaler
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import Controller, ControllerConfig

@@ -15,6 +15,8 @@ from levanter.utils.jax_utils import (
     sharded_tree_size,
 )
 from levanter.utils.mesh import create_mesh_from_axis_specs
+from levanter.utils.jax_utils import tree_broadcast_to
+import equinox as eqx
 
 
 def _assert_can_put_with_sharding(array, sharding):
@@ -145,7 +147,6 @@ def test_best_effort_sharding_with_mesh(fsdp_size):
 
 
 def test_tree_broadcast_to_simple():
-    from levanter.utils.jax_utils import tree_broadcast_to
 
     # Test with simple nested dicts
     prefix = {"a": 1, "b": 2}
@@ -170,7 +171,6 @@ def test_tree_broadcast_to_simple():
 
 
 def test_tree_broadcast_to_mixed_types():
-    from levanter.utils.jax_utils import tree_broadcast_to
 
     # Test with mixed types
     prefix = {"a": 1, "b": 2}
@@ -181,10 +181,6 @@ def test_tree_broadcast_to_mixed_types():
 
 
 def test_tree_broadcast_to_with_equinox():
-    import equinox as eqx
-    import jax.numpy as jnp
-
-    from levanter.utils.jax_utils import tree_broadcast_to
 
     class SimpleModule(eqx.Module):
         weight: jnp.ndarray
@@ -219,7 +215,6 @@ def test_tree_broadcast_to_with_equinox():
 
 
 def test_tree_broadcast_to_edge_cases():
-    from levanter.utils.jax_utils import tree_broadcast_to
 
     # Test with empty trees
     prefix = None

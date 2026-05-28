@@ -34,7 +34,9 @@ from levanter.optim import AdamConfig
 from levanter.tokenizers import load_tokenizer
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
-from marin.rl.curriculum import Curriculum
+from marin.rl.curriculum import Curriculum, CurriculumConfig, LessonConfig, SamplingParams
+from marin.rl.decoding import DecodingConfig
+from marin.rl.environments import EnvConfig
 from marin.rl.environments.inference_ctx import (
     VLLMEngineConfig,
     VLLMFallbackSamplingConfig,
@@ -43,7 +45,7 @@ from marin.rl.environments.inference_ctx import (
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLOOLoss
-from marin.rl.rollout_storage import RolloutStorageConfig
+from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutWorker, find_open_port
 from marin.rl.run_state import RLRunState
 from marin.rl.runtime import RLRuntimeHandles, WeightTransferRuntime
@@ -272,9 +274,6 @@ def create_vllm_inference_config():
 
 def create_test_curriculum_config(actor_name: str = "test_curriculum"):
     """Create a minimal CurriculumConfig for testing."""
-    from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
-    from marin.rl.decoding import DecodingConfig
-    from marin.rl.environments import EnvConfig
 
     return CurriculumConfig(
         lessons={
@@ -343,7 +342,6 @@ def create_test_inference_server_config(model_config: LlamaConfig, output_dir: s
 
 def create_test_rollout_storage_config() -> RolloutStorageConfig:
     """Create in-memory storage config for testing."""
-    from marin.rl.rollout_storage import StorageType
 
     test_id = uuid.uuid4().hex[:8]
     return RolloutStorageConfig(storage_type=StorageType.IN_MEMORY, queue_name=f"test_{test_id}")

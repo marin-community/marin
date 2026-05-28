@@ -46,6 +46,7 @@ import pyarrow.ipc as paipc
 from finelog.rpc import logging_pb2
 from finelog.store.catalog import Catalog
 from finelog.store.compactor import CompactionConfig
+from finelog.store.cursor import LogCursor
 from finelog.store.layout_migration import LOG_NAMESPACE_DIR
 from finelog.store.log_namespace import (
     LOG_REGISTERED_SCHEMA,
@@ -641,9 +642,7 @@ class DuckDBLogStore:
         result = self.get_logs(key, max_lines=1)
         return len(result.entries) > 0
 
-    def cursor(self, key: str):
-        from finelog.store import LogCursor  # circular import: duckdb_store -> store.__init__ -> duckdb_store
-
+    def cursor(self, key: str) -> LogCursor:
         return LogCursor(self, key)
 
     def close(self) -> None:

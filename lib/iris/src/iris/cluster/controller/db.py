@@ -253,17 +253,6 @@ class ControllerDB:
             raw_conn.close()
         logger.info("ANALYZE completed in %.2fs", time.monotonic() - t0)
 
-        # Enforce the @writes_to invariant. Importing the writes package
-        # re-exports every entity module so REGISTERED_WRITE_FUNCTIONS is
-        # fully populated. Projection classes load via the projections
-        # package re-export; instances appear in PROJECTIONS only after
-        # construction. The check is safe pre-instantiation — owned will be
-        # empty and no violations can fire — and is re-runnable after
-        # projections are built.
-        from iris.cluster.controller import projections, writes  # noqa: F401
-
-        projections.assert_owned_tables_not_externally_written()
-
     def register_reopen_hook(self, hook: Callable[[], None]) -> None:
         """Register a no-arg callable to run at the end of ``replace_from``."""
         self._reopen_hooks.append(hook)

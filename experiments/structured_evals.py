@@ -57,6 +57,8 @@ from marin.transform.structured_text.web_data_commons import (
     stage_web_data_commons_source,
 )
 
+from experiments.defaults import default_tokenize
+
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 LONG_TAIL_PPL_EPIC_ISSUE = 5005
 STRUCTURED_TEXT_ISSUE = 5059
@@ -346,7 +348,6 @@ def structured_evals_tokenized(
     tokenizer: str = llama3_tokenizer,
 ) -> dict[str, TokenizerStep]:
     """Tokenize the structured-text eval slices for a given tokenizer."""
-    from experiments.defaults import default_tokenize
 
     steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for key, staged in STRUCTURED_EVAL_STAGED.items():
