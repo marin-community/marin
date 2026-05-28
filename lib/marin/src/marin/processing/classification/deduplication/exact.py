@@ -199,7 +199,7 @@ def dedup_exact_document(
     if filetypes is None:
         filetypes = DEFAULT_FILETYPES
 
-    input_files = _collect_input_files(input_paths=input_paths, filetypes=DEFAULT_FILETYPES)
+    input_files = _collect_input_files(input_paths=input_paths, filetypes=filetypes)
     idx_to_path = dict(list(enumerate(input_files)))
     path_to_idx = {v: k for k, v in idx_to_path.items()}
 
