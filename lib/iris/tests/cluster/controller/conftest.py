@@ -63,7 +63,6 @@ from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 
-from tests.cluster.conftest import fake_log_client_from_service
 from tests.cluster.controller._test_support import set_task_state_for_test
 from tests.cluster.providers.conftest import make_mock_platform
 
@@ -183,6 +182,9 @@ def log_service(state, tmp_path) -> LogServiceImpl:
 @pytest.fixture
 def controller_service(state, log_service, mock_controller, tmp_path) -> ControllerServiceImpl:
     """ControllerServiceImpl with fresh DB, log service, and mock controller."""
+    # Local import: tests.cluster.conftest imports make_test_entrypoint from this module.
+    from tests.cluster.conftest import fake_log_client_from_service
+
     return ControllerServiceImpl(
         state,
         controller=mock_controller,

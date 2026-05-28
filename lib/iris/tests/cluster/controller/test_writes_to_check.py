@@ -16,10 +16,11 @@ from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import endpoints_table, meta_table, worker_attributes_table
-from iris.cluster.controller.writes import REGISTERED_WRITE_FUNCTIONS, writes_to
-from iris.cluster.controller.writes_validation import (
+from iris.cluster.controller.writes import (
+    REGISTERED_WRITE_FUNCTIONS,
     ConfigurationError,
-    assert_owned_tables_not_externally_written,
+    validate,
+    writes_to,
 )
 
 
@@ -64,7 +65,7 @@ def test_violation_detected(projections_built, registry_isolated):
         pass
 
     with pytest.raises(ConfigurationError) as exc_info:
-        assert_owned_tables_not_externally_written()
+        validate()
 
     msg = str(exc_info.value)
     assert "rogue_write" in msg
@@ -84,7 +85,7 @@ def test_cascade_violation_detected(projections_built, registry_isolated):
         pass
 
     with pytest.raises(ConfigurationError) as exc_info:
-        assert_owned_tables_not_externally_written()
+        validate()
 
     msg = str(exc_info.value)
     assert "rogue_cascade" in msg
@@ -103,7 +104,7 @@ def test_projection_method_allowed(projections_built, registry_isolated):
     fake_method.__qualname__ = "EndpointsProjection.some_write"
 
     # Must not raise.
-    assert_owned_tables_not_externally_written()
+    validate()
 
 
 def test_clean_codebase_passes(fresh_db):
@@ -114,4 +115,4 @@ def test_clean_codebase_passes(fresh_db):
     regressions as a normal assertion rather than as fixture-setup failure.
     """
     del fresh_db  # only needed to materialize writes/projections modules
-    assert_owned_tables_not_externally_written()
+    validate()

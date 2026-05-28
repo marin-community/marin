@@ -6,10 +6,7 @@
 Each projection instance registers itself in :data:`PROJECTIONS` at
 construction. The ``@writes_to`` invariant — that no Projection-owned
 table may be mutated from outside its owning Projection — is enforced at
-controller startup by
-:func:`iris.cluster.controller.writes_validation.assert_owned_tables_not_externally_written`,
-which lives downstream of both this package and ``writes`` to keep this
-module's import graph cycle-free.
+controller startup by :func:`iris.cluster.controller.writes.validate`.
 
 Re-exporting the entity submodules at import time ensures that every
 projection instance is materialized before the check runs. Without this,
