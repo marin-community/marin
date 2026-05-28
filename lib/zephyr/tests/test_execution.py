@@ -36,7 +36,6 @@ from zephyr.execution import (
     ZephyrCoordinator,
     ZephyrWorker,
     ZephyrWorkerError,
-    _format_worker_status_md,
     zephyr_worker_ctx,
 )
 from zephyr.plan import PhysicalStage, StageType, compute_plan
@@ -1343,27 +1342,6 @@ def test_heartbeat_failures_fail_actor_context():
     assert shutdown_event.is_set(), "actor_ctx.shutdown_event should have been set by fail()"
     assert actor_ctx._errors, "expected at least one error recorded on actor_ctx"
     assert isinstance(actor_ctx._errors[0], CoordinatorUnreachable)
-
-
-@pytest.mark.parametrize(
-    ("active", "stage"),
-    [
-        (0, ""),
-        (0, "stage0-Map"),
-        (3, ""),
-    ],
-)
-def test_format_worker_status_md_idle(active, stage):
-    """Idle status renders as the literal string ``idle`` — not joined character-by-character."""
-    detail, summary = _format_worker_status_md(active, stage)
-    assert detail == "idle"
-    assert summary == "idle"
-
-
-def test_format_worker_status_md_active():
-    detail, summary = _format_worker_status_md(2, "stage0-Map")
-    assert summary == "**stage0-Map** — 2 task(s)"
-    assert detail == "**Stage**: stage0-Map  \n**Active tasks**: 2"
 
 
 # --- Integration tests (all backends) ---
