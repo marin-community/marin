@@ -472,3 +472,316 @@ Next action:
 monitor retry15 until it dispatches child TPU jobs in `us-east5-a`, then check
 that train-only children reach final HF export. After checkpoints land, launch a
 follow-up eval-only job to backfill the suppressed lm-eval/code metrics.
+
+### 2026-05-26 - retry15 live status refresh
+
+Live Iris check of
+`/calvinxu/dm-starcoder-hetero-snr-retry15-east5-train-only-20260525-2340`
+showed the parent remains running and has dispatched child TPU jobs in
+`us-east5-a`.
+
+Current visible state:
+
+- `36` child trainings succeeded.
+- `9` child trainings are running.
+- `2` child jobs failed with us-east5 GCS egress-bandwidth 429s.
+- The parent is still running.
+
+Do not submit a retry while the parent is active. After retry15 becomes
+terminal, retry the failed/missing rows with CC review and preserve east5
+locality. The 429s look like transient regional GCS bandwidth pressure rather
+than a code bug.
+
+Fieldbook:
+
+- Refreshed retry15's running job timestamp.
+- Archived the older retry15 child-health validation.
+- Added an updated warning validation with the current counts.
+
+### 2026-05-26 - retry15 terminal with two transient GCS 429 failures
+
+Live Iris check showed
+`/calvinxu/dm-starcoder-hetero-snr-retry15-east5-train-only-20260525-2340`
+is terminal failed because `2` child training steps failed.
+
+Final visible state:
+
+- `48` child trainings succeeded.
+- `2` child trainings failed.
+- Both failures were us-east5 GCS egress-bandwidth 429s, not deterministic code
+  failures.
+
+Failed children:
+
+- `t2s_snr_a04_r01`
+- `t2s_snr_a03_r03`
+
+Interpretation:
+
+The remaining failure is a narrow transient-infrastructure gap, but the current
+StarCoder launcher does not expose an exact `--only-run-name-file` or equivalent
+selector. Do not rerun the full 50-row graph to recover 2 rows. The next fix
+should add an exact run-name subset retry path to
+`experiments/domain_phase_mix/launch_starcoder_heteroskedastic_snr.py`, dry-run
+only these two repeats, get CC review, then submit a 2-row retry.
+
+Fieldbook:
+
+- Marked retry15 as `failed` with the 2-row GCS 429 reason.
+- Archived stale live-health warning.
+- Added a warning validation recording `48` succeeded and `2` failed.
+
+### 2026-05-26 - retry16 old-prefix executor-skip retry submitted
+
+Rationale:
+
+The initial plan was to add an exact run-name selector and submit only
+`t2s_snr_a04_r01` and `t2s_snr_a03_r03`. After revisiting executor semantics,
+we switched to the cleaner operational pattern: resubmit the full retry15 graph
+with the same `--base-name-prefix` and let executor cache skip completed rows.
+
+Evidence:
+
+- Dry-run with
+  `--base-name-prefix pinlin_calvin_xu/data_mixture/t2s_heteroskedastic_snr_20260523_east5_retry15_train_only`
+  prepared the same `10` anchors x `5` repeats = `50` training runs.
+- A known succeeded row,
+  `t2s_snr_a00_r00`, has `.artifact.json` and final `hf/step-3813` files under
+  its deterministic output root.
+- The two failed rows, `t2s_snr_a04_r01` and `t2s_snr_a03_r03`, only have
+  partial executor metadata and `checkpoints/eval_metrics.jsonl`, with no
+  `.artifact.json`.
+- Safety gate passed with `ok=true`, parent region `us-east5`, child TPU
+  region/zone `us-east5/us-east5-a`, and only `gs://marin-us-east5` explicit
+  Marin GCS paths. The parent intentionally remains region-only to avoid
+  `us-east5-a` CPU capacity stalls.
+- Validation passed:
+  `uv run pytest tests/test_domain_phase_mix_starcoder_heteroskedastic_snr.py tests/test_domain_phase_mix_east5_launch_safety.py -q`
+  reported `24 passed`, and `uv run python -m py_compile` passed on the launcher
+  and safety files.
+
+Claude Code review:
+
+Used `env -u ANTHROPIC_API_KEY claude --resume
+d0a45bcd-ae4f-4efd-8bd5-3cbcdf4b3490 --model claude-opus-4-7 --effort max`
+after subscription preflight showed `plambdafour@proton.me`,
+`stripe_subscription`, and no inherited `ANTHROPIC_API_KEY`. CC verdict: no
+blockers; submit retry16. It confirmed executor skip-on-`.artifact.json`
+semantics should skip the 48 completed rows and rerun only the two failed roots
+because `force_run_failed=True` is the default.
+
+Submitted:
+
+`/calvinxu/dm-starcoder-hetero-snr-retry16-east5-old-prefix-skip-20260526-1245`
+
+Command:
+
+`uv run iris --cluster=marin job run --no-wait --no-preemptible --job-name dm-starcoder-hetero-snr-retry16-east5-old-prefix-skip-20260526-1245 --region us-east5 --enable-extra-resources --cpu 0.5 --memory 8GB --disk 20GB --extra marin:tpu --extra marin:eval -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- python -m experiments.domain_phase_mix.launch_starcoder_heteroskedastic_snr --base-name-prefix pinlin_calvin_xu/data_mixture/t2s_heteroskedastic_snr_20260523_east5_retry15_train_only --max-concurrent 8 --local-artifact-dir /tmp/starcoder_hetero_snr_20260523_east5_retry16_old_prefix_skip --tpu-region us-east5 --tpu-zone us-east5-a --eval-datasets-cache-path gs://marin-us-east5/raw/eval-datasets/code-tasks --skip-inline-eval-harness`
+
+Fieldbook:
+
+Added retry16 as a running retry of retry15, resolved the obsolete exact-selector
+next action, resolved the retry15 monitoring next action, added a passing
+submission validation, and opened a retry16 monitoring next action.
+
+Next action:
+
+Monitor retry16. Expected behavior is immediate executor skipping for the 48
+completed rows and fresh/recovered execution only for `t2s_snr_a04_r01` and
+`t2s_snr_a03_r03`. If either row fails while resuming from a partial checkpoint,
+diagnose before deleting any row-specific output root.
+
+Initial status:
+
+The first post-submit Iris check confirmed the expected executor-cache behavior:
+the retry16 prefix has the running parent plus exactly two child jobs, one for
+`t2s_snr_a04_r01` and one for `t2s_snr_a03_r03`. No children were dispatched for
+the 48 rows that already had `.artifact.json`.
+
+### 2026-05-26 - preliminary 48-row variance readout
+
+Read small metadata/eval files from the east5 checkpoint roots for retry15's
+old-prefix graph. Current clean panel:
+
+- `48` final-step rows with `.artifact.json` and `latest_step=3813`.
+- `2` failed retry15 rows have only partial `eval_metrics.jsonl` at steps
+  `2000` and `3000`; they are excluded from the variance readout and are the
+  two rows retry16 is currently rerunning.
+- Inline lm-eval was intentionally skipped, so this readout covers Levanter
+  train/eval metrics only, not downstream lm-eval/code metrics.
+
+Artifacts:
+
+- `experiments/domain_phase_mix/exploratory/reference_outputs/starcoder_heteroskedastic_snr_20260523/collected_train_only_metrics_live.csv`
+- `experiments/domain_phase_mix/exploratory/reference_outputs/starcoder_heteroskedastic_snr_20260523/preliminary_key_metric_by_anchor.csv`
+- `experiments/domain_phase_mix/exploratory/reference_outputs/starcoder_heteroskedastic_snr_20260523/preliminary_heteroskedastic_metric_summary.csv`
+
+Headline within-anchor standard deviations:
+
+| Metric | Quiet anchor std | Loud anchor std | Max/min |
+| --- | ---: | ---: | ---: |
+| `eval/bpb` | `0.000375` (`observed_global_best`) | `0.05335` (`starcoder_only`) | `142x` |
+| `eval/paloma/dolma_100_programing_languages/bpb` | `0.000760` (`late_code_moderate`) | `0.04725` (`starcoder_only`) | `62x` |
+| `eval/uncheatable_eval/bpb` | `0.000640` (`late_code_moderate`) | `0.05150` (`starcoder_only`) | `80x` |
+| `eval/paloma/macro_bpb` | `0.000453` (`proportional`) | `0.06511` (`starcoder_only`) | `144x` |
+
+Even excluding the pathological `starcoder_only` anchor, within-anchor standard
+deviation still varies substantially:
+
+- `eval/bpb`: `6.8x`.
+- `eval/paloma/dolma_100_programing_languages/bpb`: `13.0x`.
+- `eval/uncheatable_eval/bpb`: `11.6x`.
+- `eval/paloma/macro_bpb`: `13.5x`.
+
+Interpretation:
+
+- This is strong preliminary evidence that noise is heteroskedastic across the
+  StarCoder mixture landscape for smooth train/eval BPB metrics.
+- The high-StarCoder pathological region is both worse on mean BPB and much
+  noisier. Near the useful late-code/moderate-code region, noise is much lower.
+- The top three code-BPB anchors are close enough that ranking them precisely
+  still needs the final two repeats and possibly more local repeats:
+  `observed_global_best` mean `0.9128`, `observed_p0_zero_slice_best` mean
+  `0.9130`, and `late_code_moderate` mean `0.9152`.
+- This first panel estimates data-ordering/batching variance under the current
+  fixed trainer/init convention, not total nuisance variance across all seeds.
+
+### 2026-05-26 22:42 PDT - heteroskedastic landscape plot
+
+Confirmed retry16 succeeded, refreshed the two stale local collection rows from
+their final `eval_metrics.jsonl` records, and built an interactive Plotly
+version of the StarCoder two-phase landscape that overlays the completed
+repeat-anchor panel.
+
+Command:
+
+`uv run --with kaleido==0.2.1 python -m experiments.domain_phase_mix.exploratory.paper_plots.starcoder_two_phase_heteroskedastic_landscape`
+
+Artifacts:
+
+- `experiments/domain_phase_mix/exploratory/paper_plots/img/starcoder_two_phase_heteroskedastic_landscape.html`
+- `experiments/domain_phase_mix/exploratory/paper_plots/img/starcoder_two_phase_heteroskedastic_landscape.png`
+- `experiments/domain_phase_mix/exploratory/paper_plots/img/starcoder_two_phase_heteroskedastic_anchor_summary.csv`
+
+Validation:
+
+- `uv run python -m py_compile experiments/domain_phase_mix/exploratory/paper_plots/starcoder_two_phase_heteroskedastic_landscape.py tests/test_starcoder_heteroskedastic_landscape.py`
+- `uv run pytest tests/test_starcoder_heteroskedastic_landscape.py -q` reported `3 passed`.
+- Retry16 Iris status:
+  `uv run iris --cluster=marin job summary /calvinxu/dm-starcoder-hetero-snr-retry16-east5-old-prefix-skip-20260526-1245 --json`
+  reported parent `state=succeeded`, `exit_code=0`.
+- Refreshed `t2s_snr_a03_r03` and `t2s_snr_a04_r01` from their final
+  `checkpoints/eval_metrics.jsonl` records. All 10 anchors now have 5 rows at
+  `latest_step=3813` in
+  `collected_train_only_metrics_live.csv`.
+
+Plot semantics:
+
+- Background surface: the historical 143-row two-phase StarCoder landscape for
+  `eval/paloma/dolma_100_programing_languages/bpb`.
+- Left overlay: anchor points colored by `log10` within-anchor repeat variance
+  for the selected metric.
+- Right overlay: anchor points colored by absolute contrast SNR versus the
+  proportional anchor, defined as
+  `|mean(anchor)-mean(proportional)| / pooled_standard_error`.
+- Marker z-position is always the repeat mean for the Code BPB target metric,
+  so both overlay panels remain on the same landscape geometry.
+
+Data caveat:
+
+- The current figure uses all `50` final-step rows at `latest_step=3813`.
+- Earlier preliminary summaries used `48` final-step rows and excluded two
+  partial-step retry15 rows. Those rows have now been refreshed from retry16's
+  successful final outputs.
+
+### 2026-05-27 18:25 PDT - 3D confidence bars
+
+Updated the StarCoder heteroskedastic landscape plot to draw vertical 3D
+confidence bars at the evaluated repeat anchors.
+
+Command:
+
+`uv run --with kaleido==0.2.1 python -m experiments.domain_phase_mix.exploratory.paper_plots.starcoder_two_phase_heteroskedastic_landscape`
+
+Artifacts:
+
+- `experiments/domain_phase_mix/exploratory/paper_plots/img/starcoder_two_phase_heteroskedastic_landscape.html`
+- `experiments/domain_phase_mix/exploratory/paper_plots/img/starcoder_two_phase_heteroskedastic_landscape.png`
+- `experiments/domain_phase_mix/exploratory/paper_plots/img/starcoder_two_phase_heteroskedastic_anchor_summary.csv`
+
+Plot semantics:
+
+- Marker z-position remains the repeat mean for the Code BPB target
+  `eval/paloma/dolma_100_programing_languages/bpb`, so both 3D panels stay on
+  the original StarCoder landscape geometry.
+- The vertical bars show approximate normal 95% CIs for that Code-BPB
+  z-position, using `1.96 * std / sqrt(n)` from the repeat panel.
+- Marker color and size still use the selected dropdown metric: left panel for
+  within-anchor repeat variance, right panel for contrast SNR versus the
+  proportional anchor.
+- This means the CI bars quantify uncertainty in the plotted z-coordinate, not
+  a per-selected-metric y-axis. A per-metric CI plot would need a different
+  z-axis or a separate 2D view.
+
+Validation:
+
+- `uv run python -m py_compile experiments/domain_phase_mix/exploratory/paper_plots/starcoder_two_phase_heteroskedastic_landscape.py tests/test_starcoder_heteroskedastic_landscape.py`
+- `uv run pytest tests/test_starcoder_heteroskedastic_landscape.py -q` reported `3 passed`.
+- Regeneration reported all `50` final-step rows and `0` excluded partial rows.
+
+### 2026-05-27 18:45 PDT - local gradient-SNR landscape
+
+Built a dedicated local-SNR plot for the StarCoder two-phase panel.
+
+Definition:
+
+For metric \(b\), estimate a local weighted-linear response surface
+\(\hat\mu_b(w)\) from the historical 143 completed StarCoder mixtures. At each
+repeat anchor \(w\), compute
+\[
+\mathrm{SNR}^{\nabla}_b(w)
+= \frac{r^2\lVert \nabla\hat\mu_b(w)\rVert_2^2}{\hat\sigma_b^2(w)}
+\]
+with \(r=0.05\) in StarCoder mixture units, bandwidth `0.18`, and
+\(\hat\sigma_b^2(w)\) from the five repeat runs at that anchor. This is a local
+detectability diagnostic: expected squared first-order movement under a small
+mixture step divided by one-run repeat variance.
+
+Command:
+
+`uv run --with kaleido==0.2.1 python -m experiments.domain_phase_mix.exploratory.paper_plots.starcoder_two_phase_local_snr_landscape`
+
+Artifacts:
+
+- `experiments/domain_phase_mix/exploratory/paper_plots/img/starcoder_two_phase_local_snr_landscape.html`
+- `experiments/domain_phase_mix/exploratory/paper_plots/img/starcoder_two_phase_local_snr_landscape.png`
+- `experiments/domain_phase_mix/exploratory/paper_plots/img/starcoder_two_phase_local_snr_anchor_summary.csv`
+
+Plot semantics:
+
+- Left panel: selected metric mean surface from the historical 143 runs, with
+  repeat anchors colored/sized by `log10_snr_power`.
+- Right panel: anchor-only local SNR plot with
+  `z = log10(r^2 ||grad mu(w)||^2 / sigma^2(w))`; stems run from zero to the
+  local SNR value, and point color shows `log10` repeat variance.
+- The plot intentionally stays anchor-only for SNR because noise was measured
+  at only 10 locations. Interpolating a full SNR surface would overstate
+  certainty.
+
+Validation:
+
+- `uv run python -m py_compile experiments/domain_phase_mix/exploratory/paper_plots/starcoder_two_phase_local_snr_landscape.py tests/test_starcoder_heteroskedastic_landscape.py`
+- `uv run pytest tests/test_starcoder_heteroskedastic_landscape.py -q` reported `6 passed`.
+- Regeneration reported `12` plotted metrics, `50` final-step repeat rows, and
+  `0` excluded partial rows.
+
+Initial readout:
+
+Highest maximum local gradient-SNR among the plotted metrics was on broad
+Uncheatable/Paloma text metrics, especially
+`eval/uncheatable_eval/wikipedia_english/bpb`,
+`eval/uncheatable_eval/bbc_news/bpb`, and
+`eval/uncheatable_eval/arxiv_computer_science/bpb`. Code-specific metrics
+(`dolma_100_programing_languages`, GitHub Python/CPP) still have high median
+local SNR, but lower maximum local gradient magnitude than the broad metrics in
+this two-dimensional StarCoder/Nemotron family.

@@ -54,6 +54,13 @@ RUN_ID_RE = re.compile(
     """,
     re.VERBOSE,
 )
+BASE_RUN_ID_RE = re.compile(
+    r"""
+    ^(grug_moe_mix(?:_v\d+)?_d(?P<hidden_dim>\d+)-(?P<budget>[0-9.]+e[+-]\d+))
+    -[0-9a-f]+$
+    """,
+    re.VERBOSE,
+)
 
 
 class ExistingResultStatus(StrEnum):
@@ -69,6 +76,7 @@ class TrainingCheckpoint:
     hidden_dim: int
     budget: float
     target_steps: int | None
+    checkpoint_layout: CheckpointLayout = LEGACY_MOE_FLAT_CHECKPOINT_LAYOUT
 
 
 @dataclass(frozen=True)
@@ -119,6 +127,8 @@ def _checkpoint_subpath(root: str) -> str:
 def _training_checkpoint_from_root(root: str) -> TrainingCheckpoint | None:
     name = _root_name(root)
     match = RUN_ID_RE.match(name)
+    if not match:
+        match = BASE_RUN_ID_RE.match(name)
     if not match:
         return None
     status = _read_text(f"{root}/.executor_status", allow_missing=True).strip()
@@ -279,8 +289,15 @@ def build_eval_candidates(
 ) -> list[EvalCandidate]:
     candidates: list[EvalCandidate] = []
     _validate_output_attempt(retry_attempt)
-    existing_results = {} if assume_missing else discover_existing_result_statuses(only_run_ids, only_task_aliases)
-    for checkpoint in discover_successful_path_checkpoints(only_run_ids, checkpoint_roots):
+    checkpoints = discover_successful_path_checkpoints(only_run_ids, checkpoint_roots)
+    discovered_run_ids = frozenset(checkpoint.run_id for checkpoint in checkpoints)
+    status_run_ids = only_run_ids or discovered_run_ids
+    existing_results = (
+        {}
+        if assume_missing
+        else discover_existing_result_statuses(status_run_ids, only_task_aliases)
+    )
+    for checkpoint in checkpoints:
         if only_run_ids and checkpoint.run_id not in only_run_ids:
             continue
         for task in GRUG_LOGPROB_TASKS:
@@ -308,7 +325,7 @@ def build_eval_candidates(
                     budget=checkpoint.budget,
                     checkpoint_subpath=checkpoint.checkpoint_subpath,
                     task_alias=alias,
-                    checkpoint_layout=LEGACY_MOE_FLAT_CHECKPOINT_LAYOUT,
+                    checkpoint_layout=checkpoint.checkpoint_layout,
                     output_prefix=output_prefix,
                     output_attempt=output_attempt,
                     action=action,
@@ -391,7 +408,7 @@ def write_artifacts(
         "num_skipped_cells": sum(candidate.action == "skip" for candidate in candidates),
         "num_invalid_existing_cells": invalid_existing_count,
         "num_valid_existing_cells": valid_existing_count,
-        "checkpoint_layout": LEGACY_MOE_FLAT_CHECKPOINT_LAYOUT,
+        "checkpoint_layouts": sorted({str(candidate.checkpoint_layout) for candidate in candidates}),
         "max_concurrent": max_concurrent,
         "only_run_ids": only_run_ids,
         "only_task_aliases": only_task_aliases,
@@ -487,7 +504,7 @@ def main() -> None:
                 "skipped_cells": skipped,
                 "invalid_existing_cells": invalid_existing_count,
                 "valid_existing_cells": valid_existing_count,
-                "checkpoint_layout": LEGACY_MOE_FLAT_CHECKPOINT_LAYOUT,
+                "checkpoint_layouts": sorted({str(candidate.checkpoint_layout) for candidate in candidates}),
                 "max_concurrent": args.max_concurrent,
                 "only_run_ids": args.only_run_id,
                 "only_task_aliases": args.only_task_alias,

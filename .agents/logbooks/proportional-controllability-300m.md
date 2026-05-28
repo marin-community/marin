@@ -459,3 +459,101 @@ Policy from this point:
 - Parent capacity/preemption recovery must not use placement-unconstrained
   parents for east5 workloads.
 - Run CC review before every live retry submission.
+
+### 2026-05-26 - live status refresh, no retry while parent is active
+
+Live Iris check of
+`/calvinxu/dm-proportional-controllability-300m-train-retry-nonpreempt-parent-region-20260522-1556`
+showed the parent is still running. Visible state under the current prefix:
+
+- `67` child trainings succeeded.
+- `9` child trainings are running.
+- `15` child jobs failed.
+- `13` child jobs were killed.
+- `104` rows are visible including the parent; the experiment has `117`
+  datapoints total.
+
+Most failures are transient infrastructure/startup failures such as JAX
+distributed `add_port` SIGSEGVs, worker ping failures, task-not-found, and one
+us-east5 GCS egress-bandwidth 429. Because the parent is still active and may
+continue dispatching, do not submit a retry now. Wait for the parent to become
+terminal, then collect successes and prepare a failure/missing-row retry after
+CC review.
+
+Fieldbook:
+
+- Refreshed the running parent job timestamp.
+- Archived the older child-health validation.
+- Added an updated warning validation recording the current child-state counts
+  and the next action.
+
+### 2026-05-26 - second live status refresh
+
+Live Iris check of
+`/calvinxu/dm-proportional-controllability-300m-train-retry-nonpreempt-parent-region-20260522-1556`
+showed the parent is still running and has made further progress:
+
+- `74` child trainings succeeded.
+- `7` child trainings are running.
+- `16` child jobs failed.
+- `13` child jobs were killed.
+- `110` rows are visible including the parent.
+
+No retry was submitted because the parent remains active. The correct next step
+is still to wait for terminal state, collect the successful checkpoints, and
+then prepare a missing/failed-row retry with CC review.
+
+Fieldbook:
+
+- Refreshed the running parent timestamp.
+- Archived the previous live child-health warning.
+- Added a new warning validation with the current counts.
+
+### 2026-05-26 - missing-HF retry after parent terminal failure
+
+Live Iris check showed no active `/calvinxu` jobs. The main pctrl parent
+`/calvinxu/dm-proportional-controllability-300m-train-retry-nonpreempt-parent-region-20260522-1556`
+was terminal failed with `RuntimeError: 29 step(s) failed`.
+
+Metadata-only GCS checks against final HF exports found:
+
+- `94/117` datapoints have `hf/step-22887/config.json`.
+- `23/117` datapoints are missing final HF exports.
+
+The missing rows are recorded locally in
+`experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/proportional_controllability_300m_20260520/retry_missing_hf_run_names_20260526_2257.txt`.
+
+First attempted submission:
+
+`/calvinxu/dm-proportional-controllability-300m-train-retry-missing-hf23-20260526-2302`
+
+This failed before dispatch because the remote Iris bundle did not include the
+new untracked run-name file. No child training jobs launched.
+
+Corrected submission after fresh CC review:
+
+`/calvinxu/dm-proportional-controllability-300m-train-retry-missing-hf23-inline-20260526-2307`
+
+The corrected command embeds all `23` run names as repeated `--only-run-name`
+flags. Dry-run prepared exactly `23` interventions and `23` training steps:
+`12` central log-tilts and `11` domain deletions. The exact live command passed
+`east5_launch_safety` with explicit parent `--region us-east5 --zone
+us-east5-a`, child `--tpu-region us-east5 --tpu-zone us-east5-a`, and no
+cross-region paths.
+
+CC review:
+
+- Invoked with `env -u ANTHROPIC_API_KEY`, Opus 4.7 max effort, resumed Marin
+  session `d0a45bcd-ae4f-4efd-8bd5-3cbcdf4b3490`.
+- Preflight showed `plambdafour@proton.me`, `stripe_subscription`, and no
+  inherited `ANTHROPIC_API_KEY`.
+- Verdict: no blockers; submit the inline-flag retry.
+
+Operational lesson:
+
+- Do not rely on newly-created untracked local files being available inside an
+  Iris parent bundle.
+- For small retry scopes, prefer repeated inline flags such as
+  `--only-run-name`.
+- For larger file-shaped retry inputs, stage the file to `gs://marin-us-east5`
+  and pass a GCS URI rather than a local path.

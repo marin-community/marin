@@ -25,6 +25,21 @@ matching skill exists** by scanning the skill descriptions in your system
 prompt. If a skill matches, invoke it via the Skill tool — do not skip it in
 favor of ad-hoc commands.
 
+For long-running research experiments, Fieldbook is the local experiment
+ledger. If `.experiments/ledger.sqlite` exists, or the task asks about active
+experiments, job recovery, retries, experiment progress, context switching, or
+source-of-truth bookkeeping, start with:
+
+```bash
+fieldbook db where --json
+fieldbook experiment list --json
+```
+
+Then inspect the relevant experiment with `fieldbook experiment status
+<experiment> --json` before relying on Iris, W&B, logbooks, or chat history.
+Record submissions, retries, artifacts, validations, and checkpoints back into
+Fieldbook when the task changes experiment state.
+
 ## Development
 
 ```bash

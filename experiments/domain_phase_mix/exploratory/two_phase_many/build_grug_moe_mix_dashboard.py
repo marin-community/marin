@@ -332,6 +332,9 @@ def eval_results_paths() -> list[str]:
     paths = []
     for obj in gcloud_ls(f"{GCS_EVAL_PREFIX}/**/results.json"):
         rel = obj.path.split(f"{GCS_EVAL_PREFIX}/", maxsplit=1)[1]
+        parent = rel.split("/", maxsplit=1)[0]
+        if parent.startswith("grug_moe_mix_v4_path_r1"):
+            continue
         if len(rel.split("/")) >= 3:
             paths.append(obj.path)
     return paths
@@ -346,21 +349,33 @@ def result_path_attempt_rank(path: str) -> int:
     return int(match.group("attempt"))
 
 
-def path_eval_results_paths() -> list[str]:
+def path_eval_results_paths(parent_run_ids: list[str] | None = None) -> list[str]:
     """List Grug logprob result files for path-test checkpoints, if present."""
     # `gcloud storage ls prefix/**/results.json` has missed nested retry outputs
     # in practice, so explicitly include the direct task-child and one retry
     # level layouts used by the executor.
-    patterns = [
-        f"{GCS_EVAL_PREFIX}/grug_moe_mix_v4_path_r1_*/*/results.json",
-        f"{GCS_EVAL_PREFIX}/grug_moe_mix_v4_path_r1_*/*/*/results.json",
-    ]
+    if parent_run_ids is None:
+        patterns = [
+            f"{GCS_EVAL_PREFIX}/grug_moe_mix_v4_path_r1_*/*/results.json",
+            f"{GCS_EVAL_PREFIX}/grug_moe_mix_v4_path_r1_*/*/*/results.json",
+        ]
+    else:
+        patterns = []
+        for parent_run_id in sorted(set(parent_run_ids)):
+            patterns.extend(
+                [
+                    f"{GCS_EVAL_PREFIX}/{parent_run_id}/*/results.json",
+                    f"{GCS_EVAL_PREFIX}/{parent_run_id}/*/*/results.json",
+                ]
+            )
     paths: dict[str, None] = {}
-    for pattern in patterns:
-        for obj in gcloud_ls(pattern, allow_failure=True):
-            rel = obj.path.split(f"{GCS_EVAL_PREFIX}/", maxsplit=1)[1]
-            if len(rel.split("/")) >= 3:
-                paths[obj.path] = None
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        futures = [executor.submit(gcloud_ls, pattern, allow_failure=True) for pattern in patterns]
+        for future in as_completed(futures):
+            for obj in future.result():
+                rel = obj.path.split(f"{GCS_EVAL_PREFIX}/", maxsplit=1)[1]
+                if len(rel.split("/")) >= 3:
+                    paths[obj.path] = None
     return sorted(paths)
 
 
@@ -512,8 +527,8 @@ def collect_eval_metrics() -> pd.DataFrame:
     return deduplicate_eval_metric_rows(df, ["track", "hidden_dim", "budget", "task_alias", "metric"])
 
 
-def collect_path_eval_metrics() -> pd.DataFrame:
-    paths = path_eval_results_paths()
+def collect_path_eval_metrics(parent_run_ids: list[str] | None = None) -> pd.DataFrame:
+    paths = path_eval_results_paths(parent_run_ids)
     rows: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=16) as executor:
         futures = [executor.submit(collect_one_path_eval, path) for path in paths]
@@ -1362,7 +1377,10 @@ def main(*, use_cached_inputs: bool = False) -> None:
         metrics_df = collect_eval_metrics()
 
     path_runs_df = collect_path_training_metadata()
-    path_eval_metrics_df = collect_path_eval_metrics()
+    path_parent_run_ids = []
+    if not path_runs_df.empty:
+        path_parent_run_ids = [str(run_id) for run_id in path_runs_df["run_id"].dropna().unique()]
+    path_eval_metrics_df = collect_path_eval_metrics(path_parent_run_ids or None)
     runs_df = normalize_scale_columns(runs_df)
     metrics_df = normalize_scale_columns(metrics_df)
     path_runs_df = normalize_scale_columns(path_runs_df)

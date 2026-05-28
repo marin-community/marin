@@ -443,3 +443,254 @@ live submission.
 - Fieldbook:
   Added report/table/plot artifacts and a research note to experiment
   `exp_01ks41d0zkx21kb4w8kyqfz2mb`.
+
+### 2026-05-26 - Live status refresh
+- Training:
+  Live Iris check of
+  `/calvinxu/dm-grug-moe-v4-path-train-r1-20260520-1803` showed `14/15`
+  training children succeeded. The only remaining training datapoint is
+  `t=0.75,d1536`, which is still running. No failed-like child jobs are visible
+  under the active training parent.
+- Eval:
+  The t=0.25,d1280 eval retry
+  `/calvinxu/dm-grug-moe-v4-path-logprob-eval10-t025-d1280-full-suite-20260525-2028`
+  is complete: parent succeeded, with `21` succeeded task rows and `20` earlier
+  killed duplicates superseded by replacement children.
+- Fieldbook:
+  Refreshed the active training parent timestamp and archived the stale eval10
+  live-warning validation. No new submission is needed until the final d1536
+  training checkpoint lands.
+
+### 2026-05-26 - Eval11 d1536 full-suite submission
+- Training status:
+  Live Iris check showed
+  `/calvinxu/dm-grug-moe-v4-path-train-r1-20260520-1803` completed
+  successfully with `15/15` child trainings succeeded.
+- Dry-run:
+  `uv run python experiments/grug/moe/launch_v4_path_logprob_evals.py --dry-run --max-concurrent 64`
+
+  Result: `15` successful training checkpoints, `22` tasks, `66` launch cells,
+  `264` skipped cells, `264` valid existing cells, and `0` invalid existing
+  cells. This is the missing d1536 path coverage.
+- Safety:
+  The proposed Iris parent command passed
+  `uv run python -m experiments.domain_phase_mix.east5_launch_safety --json`
+  with parent region `us-east5`, parent zone `us-east5-a`, and no warnings.
+- Claude Code review:
+  Reviewed with `env -u ANTHROPIC_API_KEY`, Opus 4.7 max effort, resumed Marin
+  session `d0a45bcd-ae4f-4efd-8bd5-3cbcdf4b3490`; preflight showed
+  `plambdafour@proton.me`, `stripe_subscription`, and no inherited
+  `ANTHROPIC_API_KEY`. Verdict: no blockers; submit as written.
+- Submitted:
+  `/calvinxu/dm-grug-moe-v4-path-logprob-eval11-d1536-full-suite-20260526-1225`
+
+  Command:
+  `uv run iris --cluster=marin job run --no-wait --no-preemptible --job-name dm-grug-moe-v4-path-logprob-eval11-d1536-full-suite-20260526-1225 --region us-east5 --zone us-east5-a --enable-extra-resources --cpu 1 --memory 16GB --disk 20GB -e WANDB_API_KEY "$WANDB_API_KEY" -- python experiments/grug/moe/launch_v4_path_logprob_evals.py --max-concurrent 64`
+- Fieldbook:
+  Marked the path training parent as `succeeded`, added eval11 as a running
+  job, resolved the previous d1536/eval10 next actions, and added an eval11
+  monitoring next action.
+
+### 2026-05-26 - Eval11b d1536 parent resource retry
+- Status:
+  The eval11 parent remained `JOB_STATE_PENDING` with zero children dispatched.
+  The pending reason was parent-side CPU/memory capacity on `us-east5-a`
+  highmem workers, not an eval launcher failure.
+- Action:
+  Stopped eval11 before any child dispatch, then submitted a smaller parent:
+  `/calvinxu/dm-grug-moe-v4-path-logprob-eval11b-d1536-full-suite-lite-20260526-1231`.
+- Claude Code review:
+  Ran a focused review in the Marin CC session after the capacity stall. Verdict:
+  no blockers; stop eval11 and submit eval11b with `0.5` CPU, `8GB` memory, and
+  `15GB` disk. Safety gate again passed for `us-east5/us-east5-a`.
+- Command:
+  `uv run iris --cluster=marin job run --no-wait --no-preemptible --job-name dm-grug-moe-v4-path-logprob-eval11b-d1536-full-suite-lite-20260526-1231 --region us-east5 --zone us-east5-a --enable-extra-resources --cpu 0.5 --memory 8GB --disk 15GB -e WANDB_API_KEY "$WANDB_API_KEY" -- python experiments/grug/moe/launch_v4_path_logprob_evals.py --max-concurrent 64`
+- Current state:
+  Post-submit check shows eval11b is also pending with zero children dispatched
+  due `us-east5-a` highmem CPU/memory capacity. This is a scheduler capacity
+  wait; no failed eval cells exist yet.
+- Fieldbook:
+  Marked eval11 as `killed`, archived the stale eval11 submission validation,
+  resolved the eval11 monitoring note, added eval11b as a queued retry, and
+  opened an eval11b monitoring next action.
+
+### 2026-05-26 - Endpoint eval12 coverage backfill
+- Coverage diagnosis:
+  After refreshing the dashboard, the path/intermediate rows were complete, but
+  endpoint coverage still had two classes of gaps. `grug_moe_mix_v4_d1536`
+  had alias-only invalid `logprob_gsm8k_5shot` and
+  `logprob_humaneval_10shot` outputs, and `mmlu_sl_0shot` /
+  `mmlu_sl_5shot` were missing for proportional d1536 plus all v4 endpoint
+  scales. The `mmlu_sl_verb_*` rows were already present.
+- Code changes:
+  Extended `experiments/grug/moe/launch_v4_path_logprob_evals.py` so explicit
+  base endpoint checkpoint roots use the current checkpoint layout while path
+  roots keep the legacy flat layout. Also fixed explicit-root existing-result
+  discovery so valid endpoint cells are skipped.
+- Dry-run:
+  The endpoint dry-run over six endpoint checkpoint roots and four task aliases
+  produced `24` candidate cells, `14` launch cells, `10` skipped cells, `2`
+  invalid-existing retries, `10` valid existing cells, and checkpoint layout
+  `current`.
+- Safety and review:
+  `east5_launch_safety` passed with parent region `us-east5`, parent zone
+  `us-east5-a`, and all GCS roots under `gs://marin-us-east5`. Claude Code was
+  invoked with `env -u ANTHROPIC_API_KEY`, Opus 4.7 max effort, resumed Marin
+  session `d0a45bcd-ae4f-4efd-8bd5-3cbcdf4b3490`; preflight showed
+  `plambdafour@proton.me`, `stripe_subscription`, and no inherited
+  `ANTHROPIC_API_KEY`. Verdict: no blockers.
+- Submitted:
+  `/calvinxu/dm-grug-moe-v4-endpoint-logprob-eval12-20260526-2312`
+
+  Command:
+  `uv run iris --cluster=marin job run --no-wait --no-preemptible --job-name dm-grug-moe-v4-endpoint-logprob-eval12-20260526-2312 --region us-east5 --zone us-east5-a --enable-extra-resources --cpu 0.5 --memory 8GB --disk 20GB --extra marin:tpu --extra marin:eval -e WANDB_API_KEY "$WANDB_API_KEY" -- python experiments/grug/moe/launch_v4_path_logprob_evals.py --max-concurrent 16 --checkpoint-root gs://marin-us-east5/grug/grug_moe_mix_d1536-9.00e+19-54df08 --checkpoint-root gs://marin-us-east5/grug/grug_moe_mix_v4_d512-2.19e+17-6aa7c8 --checkpoint-root gs://marin-us-east5/grug/grug_moe_mix_v4_d768-1.70e+18-556077 --checkpoint-root gs://marin-us-east5/grug/grug_moe_mix_v4_d1024-9.00e+18-7938f2 --checkpoint-root gs://marin-us-east5/grug/grug_moe_mix_v4_d1280-2.83e+19-fd54fd --checkpoint-root gs://marin-us-east5/grug/grug_moe_mix_v4_d1536-9.00e+19-5ae83d --only-task-alias mmlu_sl_0shot --only-task-alias mmlu_sl_5shot --only-task-alias logprob_gsm8k_5shot --only-task-alias logprob_humaneval_10shot --retry-attempt endpoint_retry1`
+- Current state:
+  Post-submit Iris summary shows the parent accepted and currently pending with
+  `0/1` completed parent tasks.
+- Fieldbook:
+  Started a session for `exp_01ks41d0zkx21kb4w8kyqfz2mb`, added the eval12
+  job as running, recorded the dry-run manifest/summary artifacts, added pass
+  validation for dry-run plus CC/safety review, and opened a next-action note to
+  monitor eval12 and refresh the dashboard/analysis once it completes.
+
+### 2026-05-26 - Endpoint eval13 capacity recovery
+- Status:
+  Eval12 remained pending with zero children dispatched. Iris reported parent
+  capacity pressure on the `us-east5-a` highmem CPU slice:
+  `cpu_vm_e2_highmem_2_ondemand-us-east5-a=at_max_slices`.
+- Claude Code review:
+  Reviewed a capacity-only recovery with `env -u ANTHROPIC_API_KEY`, Opus 4.7
+  max effort, resumed Marin session `d0a45bcd-ae4f-4efd-8bd5-3cbcdf4b3490`.
+  Verdict: no blockers; stop eval12 before it dispatches, then resubmit the
+  same 14 logical cells with a standard-tier parent. CC suggested using `15GB`
+  disk instead of `10GB` for uv install headroom.
+- Action:
+  Stopped `/calvinxu/dm-grug-moe-v4-endpoint-logprob-eval12-20260526-2312`
+  before any child dispatch. Submitted
+  `/calvinxu/dm-grug-moe-v4-endpoint-logprob-eval13-20260526-2335` with
+  `1` CPU, `2GB` memory, `15GB` disk, no parent `--extra` constraints, and the
+  same launcher arguments.
+- Command:
+  `uv run iris --cluster=marin job run --no-wait --no-preemptible --job-name dm-grug-moe-v4-endpoint-logprob-eval13-20260526-2335 --region us-east5 --zone us-east5-a --enable-extra-resources --cpu 1 --memory 2GB --disk 15GB -e WANDB_API_KEY "$WANDB_API_KEY" -- python experiments/grug/moe/launch_v4_path_logprob_evals.py --max-concurrent 16 --checkpoint-root gs://marin-us-east5/grug/grug_moe_mix_d1536-9.00e+19-54df08 --checkpoint-root gs://marin-us-east5/grug/grug_moe_mix_v4_d512-2.19e+17-6aa7c8 --checkpoint-root gs://marin-us-east5/grug/grug_moe_mix_v4_d768-1.70e+18-556077 --checkpoint-root gs://marin-us-east5/grug/grug_moe_mix_v4_d1024-9.00e+18-7938f2 --checkpoint-root gs://marin-us-east5/grug/grug_moe_mix_v4_d1280-2.83e+19-fd54fd --checkpoint-root gs://marin-us-east5/grug/grug_moe_mix_v4_d1536-9.00e+19-5ae83d --only-task-alias mmlu_sl_0shot --only-task-alias mmlu_sl_5shot --only-task-alias logprob_gsm8k_5shot --only-task-alias logprob_humaneval_10shot --retry-attempt endpoint_retry1`
+- Current state:
+  Eval13 parent started immediately and dispatched the 14 cells. Initial child
+  poll showed two transient `add_port.cc:83` SIGSEGV failures
+  (`grug_moe_mix_d1536` / `mmlu_sl_5shot` and `grug_moe_mix_v4_d1024` /
+  `mmlu_sl_5shot`); wait for the parent to settle before any focused retry.
+- Fieldbook:
+  Marked eval12 as `killed`, added eval13 as a running retry, and recorded a
+  warning validation with the initial child failure signal.
+
+### 2026-05-26 - Endpoint eval14 layout repair
+- Eval13 result:
+  Eval13 dispatched all 14 cells but failed them. Most children failed with
+  `FileNotFoundError` for missing `params/blocks/*/mlp/expert_mlp/*` arrays.
+  This proved the explicit endpoint roots are still legacy-flat MoE checkpoints,
+  not current nested-`expert_mlp` checkpoints.
+- Code fix:
+  Kept `BASE_RUN_ID_RE` endpoint parsing in
+  `experiments/grug/moe/launch_v4_path_logprob_evals.py`, but removed the
+  incorrect switch to `CURRENT_CHECKPOINT_LAYOUT`. Endpoint and path roots now
+  use `legacy_moe_flat` for this launcher.
+- Validation:
+  `uv run python -m py_compile experiments/grug/moe/launch_v4_path_logprob_evals.py`
+  passed, and
+  `uv run pytest tests/test_grug_v4_path_logprob_launcher.py tests/test_grug_logprob_eval.py -q`
+  passed with `15` tests. The repaired dry-run still has `14` launch cells,
+  `10` skipped cells, `2` invalid direct-logprob retries, and now reports
+  checkpoint layout `legacy_moe_flat`.
+- Claude Code review:
+  Reviewed with `env -u ANTHROPIC_API_KEY`, Opus 4.7 max effort, resumed Marin
+  session `d0a45bcd-ae4f-4efd-8bd5-3cbcdf4b3490`. Verdict: no blockers; use
+  `endpoint_retry2` for the two invalid direct-logprob cells and submit eval14.
+- Submitted:
+  `/calvinxu/dm-grug-moe-v4-endpoint-logprob-eval14-20260526-2345`.
+
+  Command:
+  `uv run iris --cluster=marin job run --no-wait --no-preemptible --job-name dm-grug-moe-v4-endpoint-logprob-eval14-20260526-2345 --region us-east5 --zone us-east5-a --enable-extra-resources --cpu 1 --memory 2GB --disk 15GB -e WANDB_API_KEY "$WANDB_API_KEY" -- python experiments/grug/moe/launch_v4_path_logprob_evals.py --max-concurrent 16 --checkpoint-root gs://marin-us-east5/grug/grug_moe_mix_d1536-9.00e+19-54df08 --checkpoint-root gs://marin-us-east5/grug/grug_moe_mix_v4_d512-2.19e+17-6aa7c8 --checkpoint-root gs://marin-us-east5/grug/grug_moe_mix_v4_d768-1.70e+18-556077 --checkpoint-root gs://marin-us-east5/grug/grug_moe_mix_v4_d1024-9.00e+18-7938f2 --checkpoint-root gs://marin-us-east5/grug/grug_moe_mix_v4_d1280-2.83e+19-fd54fd --checkpoint-root gs://marin-us-east5/grug/grug_moe_mix_v4_d1536-9.00e+19-5ae83d --only-task-alias mmlu_sl_0shot --only-task-alias mmlu_sl_5shot --only-task-alias logprob_gsm8k_5shot --only-task-alias logprob_humaneval_10shot --retry-attempt endpoint_retry2`
+- Fieldbook:
+  Marked eval13 as failed with the layout root cause, added eval14 as the active
+  retry, and recorded the CC-reviewed eval14 submission validation.
+- Initial health:
+  First child-status poll showed all 14 eval14 children in running/building/pending
+  states with zero failures, and filtered recent logs did not repeat the
+  eval13 `expert_mlp` checkpoint-layout error.
+
+### 2026-05-27 - Endpoint eval15 completion and path analysis refresh
+- Eval14 result:
+  Eval14 fixed the checkpoint-layout issue and completed `10/14` endpoint cells,
+  but failed the remaining cells on Hugging Face Hub rate limiting. The eval14
+  submission did not pass `HF_TOKEN`, so the children were likely using the
+  unauthenticated hub quota despite the local shell having a token available.
+- Retry:
+  Submitted `/calvinxu/dm-grug-moe-v4-endpoint-logprob-eval15-20260527-0010`
+  after CC no-blockers review. The retry passed both `WANDB_API_KEY` and
+  `HF_TOKEN`, reduced `--max-concurrent` to `2`, used `endpoint_retry3`, and
+  kept all checkpoint roots in `gs://marin-us-east5`.
+- Result:
+  Eval15 succeeded. All `4/4` child cells completed. A post-success dry-run with
+  a fresh retry tag reports `launch_cells=0`, `skipped_cells=24`,
+  `invalid_existing_cells=0`, and `valid_existing_cells=24`, confirming that the
+  endpoint backfill is complete.
+- Dashboard:
+  Regenerated the Grug-MoE dashboard cache and plots. The path dashboard now has
+  complete endpoint cells for `mmlu_sl_0shot`, `mmlu_sl_5shot`,
+  `logprob_gsm8k_5shot`, and `logprob_humaneval_10shot`, including the d1536
+  t=0/t=1 endpoint rows.
+- Path-response analysis:
+  Regenerated
+  `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/grug_moe_path_response_analysis_20260525/`.
+  `coverage_summary.csv` now reports `20/20` complete task paths for each hidden
+  dimension `512`, `768`, `1024`, `1280`, and `1536`, with zero missing rows.
+  Strict-common analysis uses all five hidden dimensions and `20` headline
+  tasks. Current classification counts are `endpoint_improves=4`,
+  `interior_peak=6`, `mixed_or_flat=6`, and `worsens_with_t=4`.
+- Fieldbook:
+  Recorded the eval15 success validation, archived superseded endpoint-retry
+  warnings/failures as validations, refreshed drifted local dry-run artifacts,
+  recorded the refreshed dashboard/path-analysis artifacts, resolved the active
+  endpoint-monitoring notes, and wrote a fresh experiment checkpoint. Fieldbook
+  status now has no blocking failed jobs, no failed validations, no validation
+  warnings, and current freshness for this experiment.
+
+### 2026-05-27 - Standardized path effect-size analysis
+- Motivation:
+  Native path deltas are oriented but not comparable across tasks because BPB,
+  accuracy, and normalized choice-probability metrics use different units.
+- Implementation:
+  Extended
+  `experiments/domain_phase_mix/exploratory/two_phase_many/analyze_grug_moe_path_response.py`
+  to compute per-task empirical metric scales from the Grug-MoE dashboard/path
+  oriented values, attach standardized deltas, and export standardized CSVs and
+  HTML plots.
+- Outputs:
+  New artifacts under
+  `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/grug_moe_path_response_analysis_20260525/`:
+  `task_metric_scales.csv`, `standardized_path_task_deltas.csv`,
+  `task_t_standardized_mean_deltas.csv`,
+  `task_endpoint_standardized_delta_summary.csv`,
+  `task_t_standardized_delta_heatmap.html`,
+  `task_endpoint_standardized_delta_ranking.html`, and
+  `task_t_standardized_mean_delta_facets.html`.
+- Result:
+  At `t=1`, standardized endpoint deltas have `11` positive tasks and `9`
+  negative tasks. Mean positive endpoint z-delta is `0.409`; mean absolute
+  negative endpoint z-delta is `0.293`; max gain is about `+0.846`
+  (`medmcqa_5shot`) and max deterioration is about `-1.161`
+  (`boolq_sl_verb_10shot`). The endpoint therefore looks positive on average
+  in empirical standardized units, but not Pareto-safe: the largest single
+  standardized regression is larger than the largest single standardized gain.
+- Caveat:
+  This is an empirical native-unit scale normalization, not a repeated-seed
+  noise standardization. It should be interpreted as an effect-size diagnostic,
+  not as a statistical-significance estimate.
+- Validation:
+  `uv run pytest tests/test_grug_moe_mix_dashboard.py tests/test_grug_moe_path_response_analysis.py -q`
+  passed with `8` tests, and
+  `uv run python -m py_compile experiments/domain_phase_mix/exploratory/two_phase_many/analyze_grug_moe_path_response.py`
+  passed.
+- Fieldbook:
+  Recorded the standardized-analysis artifacts, added a pass validation, wrote a
+  checkpoint, and refreshed drifted artifact metadata. Fieldbook status for the
+  Grug-MoE v4 path experiment now has no blocking failed jobs, no failed
+  validations, no validation warnings, and current freshness.

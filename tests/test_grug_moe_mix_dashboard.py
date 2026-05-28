@@ -51,6 +51,38 @@ def test_path_eval_results_paths_includes_nested_retry_outputs(monkeypatch):
     assert dash.path_eval_results_paths() == [direct, nested_retry]
 
 
+def test_path_eval_results_paths_can_use_exact_parent_prefixes(monkeypatch):
+    direct = (
+        "gs://marin-us-east5/evaluation/grug_logprob/"
+        "grug_moe_mix_v4_path_r1_t025_d512-2.19e+17/"
+        "arc_easy_5shot-111111/results.json"
+    )
+    nested_retry = (
+        "gs://marin-us-east5/evaluation/grug_logprob/"
+        "grug_moe_mix_v4_path_r1_t025_d512-2.19e+17/"
+        "logprob_gsm8k_5shot/numeric_retry2-222222/results.json"
+    )
+    seen_patterns = []
+
+    def fake_gcloud_ls(pattern: str, *, allow_failure: bool = False):
+        assert allow_failure
+        seen_patterns.append(pattern)
+        if pattern.endswith("/*/*/results.json"):
+            return [dash.GcsObject(nested_retry)]
+        if pattern.endswith("/*/results.json"):
+            return [dash.GcsObject(direct)]
+        raise AssertionError(f"unexpected pattern: {pattern}")
+
+    monkeypatch.setattr(dash, "gcloud_ls", fake_gcloud_ls)
+
+    parent = "grug_moe_mix_v4_path_r1_t025_d512-2.19e+17"
+    assert dash.path_eval_results_paths([parent]) == [direct, nested_retry]
+    assert seen_patterns == [
+        f"{dash.GCS_EVAL_PREFIX}/{parent}/*/results.json",
+        f"{dash.GCS_EVAL_PREFIX}/{parent}/*/*/results.json",
+    ]
+
+
 def test_collect_path_eval_metrics_prefers_latest_retry(monkeypatch):
     direct = (
         "gs://marin-us-east5/evaluation/grug_logprob/"
@@ -91,7 +123,7 @@ def test_collect_path_eval_metrics_prefers_latest_retry(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(dash, "path_eval_results_paths", lambda: [direct, retry1, retry2])
+    monkeypatch.setattr(dash, "path_eval_results_paths", lambda parent_run_ids=None: [direct, retry1, retry2])
     monkeypatch.setattr(dash, "collect_one_path_eval", fake_collect_one_path_eval)
 
     rows = dash.collect_path_eval_metrics()

@@ -6,39 +6,63 @@ The representability hypothesis predicts three broad empirical regimes: aligned 
 
 ## Coverage
 
-- Headline strict-common analysis uses hidden dimensions: `512, 768, 1024`.
+- Headline strict-common analysis uses hidden dimensions: `512, 768, 1024, 1280, 1536`.
 - Headline task count: `20` after excluding incomplete non-verb MMLU-SL aliases.
-- Complete task/scale paths in the filtered input: `62` out of `98` task-scale cells.
-- The current strict-common cut intentionally excludes d1280 for most tasks and d1536 for all intermediate path points; rerun this script after pending eval/training completion.
+- Complete task/scale paths in the filtered input: `100` out of `100` task-scale cells.
+- No missing task/scale paths remain in the filtered input.
 
 ## Headline Classification
 
 - Endpoint improves: `4` tasks.
-- Interior peak: `9` tasks.
-- Worsens with t: `6` tasks.
-- Mixed or flat: `1` tasks.
+- Interior peak: `6` tasks.
+- Worsens with t: `4` tasks.
+- Mixed or flat: `6` tasks.
 
 ## Strongest Positive t-Response
 
-- `logprob_humaneval_10shot`: Pearson `0.917`, endpoint delta `0.1091`, best t `1.00`.
-- `logprob_gsm8k_5shot`: Pearson `0.828`, endpoint delta `0.1195`, best t `1.00`.
-- `piqa_5shot`: Pearson `0.647`, endpoint delta `0.0007869`, best t `0.75`.
-- `arc_easy_5shot`: Pearson `0.619`, endpoint delta `0.001676`, best t `0.75`.
-- `medmcqa_5shot`: Pearson `0.273`, endpoint delta `0.01163`, best t `0.75`.
-- `boolq_10shot`: Pearson `0.253`, endpoint delta `0.00978`, best t `1.00`.
-- `truthfulqa_mc1_0shot`: Pearson `0.160`, endpoint delta `0.005712`, best t `1.00`.
-- `medmcqa_sl_verb_5shot`: Pearson `0.070`, endpoint delta `0.0009566`, best t `0.75`.
+- `logprob_gsm8k_5shot`: Pearson `0.754`, endpoint delta `0.1106`, best t `1.00`.
+- `logprob_humaneval_10shot`: Pearson `0.708`, endpoint delta `0.08194`, best t `1.00`.
+- `piqa_5shot`: Pearson `0.687`, endpoint delta `0.0008126`, best t `0.75`.
+- `arc_easy_5shot`: Pearson `0.521`, endpoint delta `0.002039`, best t `0.75`.
+- `arc_challenge_5shot`: Pearson `0.336`, endpoint delta `0.001008`, best t `0.75`.
+- `medmcqa_5shot`: Pearson `0.262`, endpoint delta `0.01807`, best t `1.00`.
+- `boolq_10shot`: Pearson `0.244`, endpoint delta `0.008685`, best t `1.00`.
+- `truthfulqa_mc1_0shot`: Pearson `0.136`, endpoint delta `0.004896`, best t `1.00`.
 
 ## Strongest Negative t-Response
 
-- `hellaswag_0shot`: Pearson `-0.813`, endpoint delta `-0.0005048`, best t `0.00`.
-- `hellaswag_5shot`: Pearson `-0.708`, endpoint delta `-0.0005049`, best t `0.00`.
-- `openbookqa_0shot`: Pearson `-0.638`, endpoint delta `-0.00214`, best t `0.25`.
-- `wsc273_0shot`: Pearson `-0.487`, endpoint delta `-0.0003601`, best t `0.00`.
-- `boolq_sl_verb_10shot`: Pearson `-0.442`, endpoint delta `-0.04161`, best t `0.00`.
-- `mmlu_sl_verb_0shot`: Pearson `-0.411`, endpoint delta `-0.0006343`, best t `0.25`.
-- `csqa_sl_verb_5shot`: Pearson `-0.310`, endpoint delta `-0.001991`, best t `0.25`.
-- `mmlu_sl_verb_5shot`: Pearson `-0.302`, endpoint delta `-0.0003886`, best t `0.00`.
+- `hellaswag_0shot`: Pearson `-0.824`, endpoint delta `-0.0005721`, best t `0.00`.
+- `hellaswag_5shot`: Pearson `-0.798`, endpoint delta `-0.0005605`, best t `0.00`.
+- `openbookqa_0shot`: Pearson `-0.573`, endpoint delta `-0.001942`, best t `0.25`.
+- `copa_0shot`: Pearson `-0.332`, endpoint delta `-0.002728`, best t `0.00`.
+- `mmlu_sl_verb_0shot`: Pearson `-0.282`, endpoint delta `-0.0002842`, best t `0.25`.
+- `boolq_sl_verb_10shot`: Pearson `-0.280`, endpoint delta `-0.02633`, best t `0.00`.
+- `mmlu_sl_verb_5shot`: Pearson `-0.271`, endpoint delta `-0.000291`, best t `0.00`.
+- `wsc273_0shot`: Pearson `-0.271`, endpoint delta `-0.0002816`, best t `0.00`.
+
+## Standardized Effect-Size View
+
+- Standardization divides each task's oriented delta by the empirical standard deviation of that task's oriented metric values across the Grug-MoE dashboard/path cells. This is a native-unit effect-size diagnostic, not a repeated-seed noise standard deviation.
+- At t=1, `11` tasks are positive and `9` tasks are negative in standardized units.
+- Mean positive endpoint standardized delta: `0.409`; mean absolute negative endpoint standardized delta: `0.293`.
+
+### Largest Standardized Endpoint Gains
+
+- `medmcqa_5shot`: endpoint z-delta `0.846`, best t `1.00`.
+- `medmcqa_sl_verb_5shot`: endpoint z-delta `0.811`, best t `0.75`.
+- `boolq_10shot`: endpoint z-delta `0.677`, best t `1.00`.
+- `truthfulqa_mc1_0shot`: endpoint z-delta `0.510`, best t `1.00`.
+- `logprob_humaneval_10shot`: endpoint z-delta `0.501`, best t `1.00`.
+- `logprob_gsm8k_5shot`: endpoint z-delta `0.407`, best t `1.00`.
+
+### Largest Standardized Endpoint Deteriorations
+
+- `boolq_sl_verb_10shot`: endpoint z-delta `-1.161`, best t `0.00`.
+- `mmlu_sl_verb_0shot`: endpoint z-delta `-0.385`, best t `0.25`.
+- `mmlu_sl_verb_5shot`: endpoint z-delta `-0.334`, best t `0.00`.
+- `copa_0shot`: endpoint z-delta `-0.276`, best t `0.00`.
+- `openbookqa_0shot`: endpoint z-delta `-0.183`, best t `0.25`.
+- `wsc273_0shot`: endpoint z-delta `-0.166`, best t `0.00`.
 
 ## Interpretation Notes
 

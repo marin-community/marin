@@ -26,6 +26,24 @@ For each research thread, maintain all of:
    term **research logbook** consistently in prose and file naming.
 4. Optional W&B runs/report for dense numeric output and charts.
 5. One or more tags to seal meaningful snapshots.
+6. A Fieldbook experiment row when the repo has an active Fieldbook ledger.
+
+## Fieldbook First
+
+If `.experiments/ledger.sqlite` exists, use Fieldbook as the local source of
+truth for experiment state. Before checking or fixing active experiments, run:
+
+```bash
+fieldbook db where --json
+fieldbook experiment list --json
+fieldbook experiment status "$EXP_ID" --json
+```
+
+Use Iris, W&B, GCS, and logbooks as evidence sources, but reconcile important
+changes back into Fieldbook. Record planned datapoints as `run` rows, execution
+attempts as `job` rows, job fan-out with `run link-job`, and readiness checks as
+`validation` rows. Before switching away from an experiment, write a checkpoint
+note with `fieldbook experiment checkpoint "$EXP_ID" --json`.
 
 ## W&B Project Policy
 - Choose project scope by the type signature of the work.

@@ -1067,3 +1067,139 @@ Result:
 Remaining gap:
 
 - Raw-PPL remains `97/112`; retry6 is pending on east5 CPU capacity.
+
+### 2026-05-26 - raw-PPL retry7 submitted after retry6 parent capacity stall
+
+Raw-PPL retry6
+`/calvinxu/dm-ppert-raw-ppl-full-retry6-region-20260525-1913`
+remained pending for the east5 highmem CPU parent shape with no children
+dispatched. I asked CC to review a replacement using the same 15-row GCS state
+CSV but with a lighter coordination parent. CC was invoked with
+`env -u ANTHROPIC_API_KEY`, Opus 4.7 max effort, and resumed Marin session
+`d0a45bcd-ae4f-4efd-8bd5-3cbcdf4b3490`; subscription preflight showed
+`plambdafour@proton.me`, `stripe_subscription`, and no inherited API key. CC
+recommended stopping retry6 and using an 8GB parent rather than the 16GB
+highmem shape.
+
+Actions:
+
+- Stopped retry6 before dispatch.
+- Submitted `/calvinxu/dm-ppert-raw-ppl-full-retry7-region-lite-20260526-0555`.
+- Parent placement: `--region us-east5`, `--cpu 0.5`, `--memory 8GB`,
+  `--disk 20GB`.
+- Child eval placement remains `us-east5-a`; explicit GCS inputs use
+  `gs://marin-us-east5`.
+- Safety gate passed with `--allow-region-only-parent`.
+
+The first live submit attempt failed before job creation because Iris tried to
+bundle large untracked local analysis artifacts. I fixed this with local-only
+`.git/info/exclude` entries for reference-output and ChatGPT packet artifacts;
+the bundle dropped to `15.1MB`. CC reviewed this focused bundle fix and found no
+blockers before retry7 submission.
+
+Post-submit status:
+
+- Retry7 parent is running.
+- All `15` raw-PPL children are dispatched.
+- Latest check: all `15` children are running in east5-a.
+
+Fieldbook:
+
+- Marked retry6 as `killed`.
+- Added retry7 as a running retry of retry6.
+- Archived stale retry6 live validations.
+- Added a passing retry7 dispatch validation and a new next-action to monitor
+  retry7 to terminal, then collect raw-PPL outputs.
+
+### 2026-05-26 - raw-PPL retry7 collected; perturbation coverage complete
+
+Live check showed
+`/calvinxu/dm-ppert-raw-ppl-full-retry7-region-lite-20260526-0555`
+finished successfully: parent and all `15` raw-PPL eval children succeeded.
+
+Collection command:
+
+`uv run python -m experiments.domain_phase_mix.launch_300m_raw_ppl_evals --state-csv gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ppert_recovery_state_20260525/ppert_raw_ppl_retry6_state.csv --bundle priority --bundle fineweb2-representative --allow-partial --collect-from-prefix gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_raw_ppl_full_retry7_region_lite_20260526 --collect-output-csv /tmp/ppert_raw_ppl_collected_retry7.csv`
+
+Result:
+
+- Collected `15/15` retry7 raw-PPL rows.
+- Merged them into
+  `experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/proportional_perturbation_scale_transfer/ppert_raw_ppl_eval_results.csv`.
+- Rebuilt the local metric registry with
+  `uv run python -m experiments.domain_phase_mix.exploratory.two_phase_many.metric_registry.build_metric_registry --no-gcs`.
+- Registry rebuild summary: `983` runs, `1,354` canonical metrics,
+  `606,254` canonical metric facts, `0` conflicts.
+
+Coverage:
+
+- Raw-PPL perturbation coverage is now `112/112`.
+- Parity perturbation coverage was already `112/112`.
+
+Fieldbook:
+
+- Marked retry7 as `succeeded`.
+- Archived stale retry7 dispatch and raw-PPL collection warnings.
+- Added a passing `perturbation.raw_ppl_collection` validation and a research
+  note recording the final coverage.
+
+### 2026-05-26 - preliminary SNR heteroskedasticity analysis
+
+Compared the canonical global 300M SNR table against a proportional-noise
+variant to test whether the noise denominator changes with the mixture anchor.
+Both tables use the same 242-row global 300M signal numerator; the only intended
+difference is the 10-row noise denominator:
+
+- `run00097` variable-subset noise.
+- `baseline_proportional` variable-subset noise.
+
+Artifacts:
+
+- `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/ppert_raw_ppl_snr_heteroskedasticity_20260526/snr_global_run00097_variable_noise.csv`
+- `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/ppert_raw_ppl_snr_heteroskedasticity_20260526/snr_global_proportional_variable_noise.csv`
+- `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/ppert_raw_ppl_snr_heteroskedasticity_20260526/snr_noise_anchor_comparison.csv`
+- `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/ppert_raw_ppl_snr_heteroskedasticity_20260526/raw_ppl_bpb_noise_anchor_comparison.csv`
+- `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/ppert_raw_ppl_snr_heteroskedasticity_20260526/ppert_raw_ppl_local_response_not_global_snr.csv`
+- `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/ppert_raw_ppl_snr_heteroskedasticity_20260526/run00097_vs_proportional_snr_notebook.py`
+
+Headline results:
+
+- Shared global SNR metrics: `1,142`.
+- Raw-PPL BPB metrics with both noise anchors: `40`.
+- Median proportional/run00097 noise-scale ratio across all shared metrics:
+  `0.966`.
+- Across all shared metrics, `28.6%` have proportional noise more than `1.25x`
+  run00097 noise, and `32.6%` have proportional noise less than `0.8x`
+  run00097 noise.
+- Raw-PPL BPB has stronger anchor dependence: median ratio `0.786`, with
+  `27.5%` above `1.25x` and `50.0%` below `0.8x`.
+- Median global SNR is nearly unchanged overall (`1.390` run00097 vs `1.390`
+  proportional), but individual metrics move substantially.
+
+Interpretation:
+
+- This is preliminary evidence that SNR is heteroskedastic: the noise scale is
+  not just a metric property, but depends on the mixture/noise anchor.
+- The result is not uniformly in one direction. Proportional is quieter for many
+  metrics, but noisier for others.
+- Ppert local signal-to-noise should not be compared directly to the global SNR
+  tables because its numerator is a finite perturbation-response spread rather
+  than the global swarm signal spread, and its denominator is the proportional
+  noise proxy rather than a matched denominator per perturbation. The artifact is
+  retained as a local effect-to-noise diagnostic, not an apples-to-apples SNR.
+
+Coverage caveat:
+
+- Ppert raw-PPL contains `55` BPB metrics. The two-noise-anchor SNR comparison
+  covers `40` of them; the missing `15` are FineWeb2 representative language
+  slices that do not currently have matching proportional-noise denominator
+  coverage in the global SNR table.
+
+Visualization notebook:
+
+- Added a Marimo notebook that plots run00097's mixture weights against the
+  proportional mixture, plus per-metric SNR under the run00097 and proportional
+  noise denominators. The notebook also includes SNR distribution histograms
+  and proportional/run00097 SNR-ratio and noise-scale-ratio distributions.
+- Launch with:
+  `uv run --with marimo --with pandas --with plotly --with numpy marimo edit experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/ppert_raw_ppl_snr_heteroskedasticity_20260526/run00097_vs_proportional_snr_notebook.py`

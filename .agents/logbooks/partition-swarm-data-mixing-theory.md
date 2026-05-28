@@ -313,3 +313,68 @@
   - `uv run python -m py_compile experiments/domain_phase_mix/exploratory/two_phase_many/factor_dsp_constraint_dashboard.py experiments/domain_phase_mix/exploratory/two_phase_many/factor_dsp_constraint_dashboard_helpers.py experiments/domain_phase_mix/exploratory/two_phase_many/build_factor_dsp_candidate_library.py experiments/domain_phase_mix/exploratory/two_phase_many/build_factor_dsp_task_prediction_cache.py`
   - `uv run --with marimo marimo check experiments/domain_phase_mix/exploratory/two_phase_many/factor_dsp_constraint_dashboard.py`
   - `uv run --with marimo --with numpy --with pandas --with plotly --with scipy --with scikit-learn --with pyarrow marimo export html experiments/domain_phase_mix/exploratory/two_phase_many/factor_dsp_constraint_dashboard.py -o experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/factor_dsp_constraint_dashboard_20260526/factor_dsp_constraint_dashboard.html --no-include-code -f`
+
+### 2026-05-27 - Factor loading readiness sanity check with DSP
+- Goal: test the collaborator suggestion to remove unpredictable metrics from factor construction and treat them as held-out evals before refitting the aggregate.
+- Command:
+  `uv run --script experiments/domain_phase_mix/exploratory/two_phase_many/plot_factor_loading_readiness.py`
+- Inputs:
+  - Factor loadings from the reproduced collaborator/v4 41-metric varimax aggregate: `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/collaborator_grug_v4_aggregate_repro_20260525/sent_raw_metric_matrix_300m_zip/factor_loadings.csv`
+  - Readiness from current canonical effective-exposure DSP per-metric diagnostics: `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/aggregate_metric_clean_slate_20260518/metric_controllability_effective_exposure_dsp.csv`
+- Outputs:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/predictable_metric_factor_pruning_20260527/factor_loadings_dsp_readiness.html`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/predictable_metric_factor_pruning_20260527/metric_predictable_vs_heldout.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/predictable_metric_factor_pruning_20260527/summary.md`
+- Result:
+  - Using DSP OOF Pearson `r` >= 0.50 as `predictable` and >= 0.35 as `borderline`, the 41 metrics split into 36 predictable, 1 borderline, and 4 held out.
+  - Proportional-anchor SNR is currently available for 18/41 factor metrics, mostly the lm-eval, MCQ-smooth, and teacher-forced metrics. It is missing for the Paloma/uncheatable training-eval metrics in the proportional noise matrix, so it should refine but not replace DSP readiness for this diagnostic.
+  - Held-out metrics are concentrated in dominant factor F3: `mcq_smooth/truthfulqa_mc1_0shot/choice_logprob`, `lm_eval/mmlu_sl_verb_5shot/choice_logprob`, `lm_eval/boolq_10shot/choice_logprob`, and `mcq_smooth/medmcqa_5shot/choice_logprob`.
+  - `lm_eval/csqa_5shot/choice_logprob` is borderline at DSP OOF Pearson `r` 0.395.
+- Interpretation:
+  - The collaborator's proposal is plausible: the current factor basis mostly uses predictable metrics, but the weakly controlled metrics cluster in the task/MCQ factor and are good first held-out candidates.
+  - The next local test should refit the factor aggregate after excluding held-out and optionally borderline metrics, then fit canonical DSP and inspect whether the predicted optimum stays sane and avoids held-out regressions.
+
+### 2026-05-27 - Heldout-5 predictable-metric factor DSP optimum
+- Goal: rebuild the collaborator 5-factor aggregate after excluding all non-`predictable` metrics from factor construction, then fit canonical effective-exposure DSP and inspect the predicted raw optimum.
+- Command:
+  `uv run python -m experiments.domain_phase_mix.exploratory.two_phase_many.fit_predictable_metric_factor_dsp`
+- Held-out metrics:
+  - `lm_eval/csqa_5shot/choice_logprob` (borderline)
+  - `mcq_smooth/truthfulqa_mc1_0shot/choice_logprob`
+  - `lm_eval/mmlu_sl_verb_5shot/choice_logprob`
+  - `lm_eval/boolq_10shot/choice_logprob`
+  - `mcq_smooth/medmcqa_5shot/choice_logprob`
+- Outputs:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/fit_predictable_metric_factor_dsp.py`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/predictable_metric_factor_pruning_20260527/heldout5_canonical_dsp/summary.json`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/predictable_metric_factor_pruning_20260527/heldout5_canonical_dsp/report.md`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/predictable_metric_factor_pruning_20260527/heldout5_canonical_dsp/mixture_plot.html`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/predictable_metric_factor_pruning_20260527/heldout5_canonical_dsp/raw_optimum_weights.csv`
+- Result:
+  - Metrics used: 36 predictable metrics; rows: 242; domains: 39; DSP parameters: 158.
+  - Fit: train RMSE 0.1425, train R2 0.8957, train Spearman 0.9512; OOF RMSE 0.1934, OOF R2 0.8080, OOF Spearman 0.9008.
+  - Raw optimum predicted pruned `y_factor` 3.2731, gain vs proportional 2.8028.
+  - Nearest observed row is `run_00183`, average phase TV 0.6971.
+  - Raw optimum support > 1e-3 is 8 domains in phase 0 and 9 in phase 1; effective support is 2.67 in phase 0 and 4.98 in phase 1.
+  - Max weights are large: phase 0 puts 0.7620 on `dolma3_cc/science_math_and_technology_low`; phase 1 puts 0.4663 on `dolma3_cc/entertainment_high` and 0.2295 on `dolma3_cc/entertainment_low`.
+  - Prediction-space comparisons under the heldout-5 DSP: dashboard v4 predicted `y_factor` 1.0025, collaborator LCB 2.3579, proportional 0.4703, raw DSP optimum 3.2731.
+  - The heldout-5 raw optimum is far from proportional (mean phase TV 0.8249), far from dashboard v4 (TV 0.8131), and still materially different from the full-metric raw DSP optimum (mean phase TV 0.4887).
+- Interpretation:
+  - Holding out weakly predictable metrics slightly improves OOF Spearman versus the full 41-metric canonical DSP fit (0.9008 vs 0.8961), but it does not make the raw unconstrained optimum sane.
+  - The pruned target is easier to fit and more aggressively exploitable, which strengthens the case for constrained/trust-region search and held-out guardrail evaluation rather than direct deployment of the raw optimum.
+
+### 2026-05-27 - W&B report for historical swarm rank crossovers
+- Goal: create a W&B report checking whether the historical 60M and 300M qsplit240 swarms had stable early ordering on `eval/uncheatable_eval/github_python/loss`.
+- Command:
+  `uv run experiments/domain_phase_mix/exploratory/two_phase_many/build_historical_swarm_crossover_wandb_report.py`
+- Report:
+  - `https://wandb.ai/marin-community/marin/reports/Historical-qsplit240-swarm-eval-loss-crossovers--VmlldzoxNzAzMjcxNg==`
+  - Analysis run: `https://wandb.ai/marin-community/marin/runs/vmaswgpe`
+- Local outputs:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/build_historical_swarm_crossover_wandb_report.py`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/historical_swarm_crossover_wandb_report_20260527/`
+- Result:
+  - 60M: 238 completed qsplit240 core histories fetched. First common eval at progress 0.218 has rank Spearman 0.298 vs final and pair-flip fraction 0.398. First eval after 80% progress has rank Spearman 0.856 and pair-flip fraction 0.141.
+  - 300M: 241 completed qsplit240 core histories fetched. First common eval at progress 0.044 has rank Spearman 0.204 vs final and pair-flip fraction 0.429. First eval after 80% progress has rank Spearman 0.937 and pair-flip fraction 0.105.
+- Interpretation:
+  - The historical qsplit240 swarms did not show stable early rank ordering on this metric; the new production swarm's apparent stability around 10% progress is qualitatively different and should be verified with the same crossover diagnostics.
