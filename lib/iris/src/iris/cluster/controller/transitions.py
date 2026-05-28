@@ -953,9 +953,6 @@ class ControllerTransitions:
         self._health = health or WorkerHealthTracker()
         self._endpoints = endpoints or EndpointsProjection(db)
         self._worker_attrs = worker_attrs or WorkerAttrsProjection(db)
-        # In-memory task status text (markdown for UI display).
-        self._status_text_detail: dict[str, str] = {}
-        self._status_text_summary: dict[str, str] = {}
         self._run_template_cache: LRUCache[str, job_pb2.RunTaskRequest] = LRUCache(RUN_REQUEST_TEMPLATE_CACHE_SIZE)
 
     def run_request_template(
@@ -2747,14 +2744,6 @@ class ControllerTransitions:
                 # Invalidate endpoint cache BEFORE the CASCADE so the cache
                 # drops rows SQLite is about to delete for us.
                 self._endpoints.remove_by_job_ids(cur, [job_name])
-                # Evict status text for all tasks owned by this job.
-                # Status text is keyed by task_id (e.g. /user/job/0), not job_id,
-                # so we must match by prefix rather than an exact key lookup.
-                prefix = job_name.to_wire() + "/"
-                for key in [k for k in self._status_text_detail if k.startswith(prefix)]:
-                    del self._status_text_detail[key]
-                for key in [k for k in self._status_text_summary if k.startswith(prefix)]:
-                    del self._status_text_summary[key]
                 writes.delete_job(cur, job_name)
             log_event("job_pruned", job_name.to_wire())
             jobs_deleted += 1
@@ -2888,19 +2877,6 @@ class ControllerTransitions:
             removed_workers=[(wid, addr) for wid, addr in results.removed_workers if addr is not None],
             results=results.results,
         )
-
-    # --- Task Status Text ---
-
-    def record_task_status_text(self, task_id: JobName, detail_md: str, summary_md: str) -> None:
-        """Update the task's markdown status text for UI display (held in memory only)."""
-        self._status_text_detail[task_id.to_wire()] = detail_md
-        self._status_text_summary[task_id.to_wire()] = summary_md
-
-    def get_status_text_detail(self, task_id_wire: str) -> str:
-        return self._status_text_detail.get(task_id_wire, "")
-
-    def get_status_text_summary(self, task_id_wire: str) -> str:
-        return self._status_text_summary.get(task_id_wire, "")
 
     # --- Endpoint Management ---
 

@@ -18,13 +18,14 @@ import pytest
 from iris.cluster.providers.gcp.controller import GcpControllerProvider
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.handles import GcpVmSliceHandle, _build_gce_resource_name
+from iris.cluster.providers.gcp.service import VmCreateRequest
 from iris.cluster.providers.gcp.workers import (
     GcpWorkerProvider,
     _run_vm_slice_bootstrap,
     _validate_slice_config,
 )
 from iris.cluster.providers.manual.provider import ManualControllerProvider, ManualWorkerProvider
-from iris.cluster.providers.remote_exec import DirectSshRemoteExec, GceRemoteExec, GcloudRemoteExec
+from iris.cluster.providers.remote_exec import GceRemoteExec, GcloudRemoteExec
 from iris.cluster.providers.types import (
     CloudSliceState,
     InfraError,
@@ -197,12 +198,29 @@ def test_tunnel_returns_address_directly():
         assert tunneled == addr
 
 
+def _register_controller_vm(gcp_service: InMemoryGcpService, *, os_login: bool, zone: str = "us-central2-b") -> None:
+    """Register a controller VM in the in-memory service for tunnel tests."""
+    metadata = {"enable-oslogin": "TRUE", "block-project-ssh-keys": "TRUE"} if os_login else {}
+    gcp_service.vm_create(
+        VmCreateRequest(
+            name="iris-controller-iris",
+            zone=zone,
+            machine_type="n2-standard-4",
+            labels={Labels("iris").iris_controller: "true"},
+            metadata=metadata,
+        )
+    )
+    # InMemoryGcpService creates VMs in PROVISIONING; the tunnel filters for RUNNING.
+    gcp_service._vms[("iris-controller-iris", zone)].status = "RUNNING"
+
+
 def test_gcp_tunnel_prefers_ssh_impersonation_config():
+    """Tunnel passes --impersonate-service-account through; gcloud picks user/key itself."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    _register_controller_vm(gcp_service, os_login=True)
+
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
     ssh_config = config_pb2.SshConfig(
-        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
-        key_file="/tmp/iris-oslogin",
         impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
     )
     worker_provider = GcpWorkerProvider(
@@ -213,7 +231,6 @@ def test_gcp_tunnel_prefers_ssh_impersonation_config():
         controller_service_account="iris-worker@test-project.iam.gserviceaccount.com",
     )
 
-    list_result = unittest.mock.Mock(returncode=0, stdout="iris-controller-iris us-central2-b\n", stderr="")
     ssh_proc = unittest.mock.Mock()
     ssh_proc.poll.return_value = None
     ssh_proc.terminate.return_value = None
@@ -222,14 +239,7 @@ def test_gcp_tunnel_prefers_ssh_impersonation_config():
     with (
         unittest.mock.patch("iris.cluster.providers.gcp.controller._check_gcloud_ssh_key"),
         unittest.mock.patch("iris.cluster.providers.gcp.controller.find_free_port", return_value=10042),
-        unittest.mock.patch(
-            "iris.cluster.providers.gcp.controller.resolve_current_os_login_user",
-            return_value="svc-user",
-        ) as resolve_user,
         unittest.mock.patch("iris.cluster.providers.gcp.controller.wait_for_port"),
-        unittest.mock.patch(
-            "iris.cluster.providers.gcp.controller.subprocess.run", return_value=list_result
-        ) as run_mock,
         unittest.mock.patch(
             "iris.cluster.providers.gcp.controller.subprocess.Popen", return_value=ssh_proc
         ) as popen_mock,
@@ -237,11 +247,12 @@ def test_gcp_tunnel_prefers_ssh_impersonation_config():
         with controller.tunnel("unused") as tunneled:
             assert tunneled == "http://127.0.0.1:10042"
 
-    resolve_user.assert_called_with(impersonate_service_account=ssh_config.impersonate_service_account)
-    list_cmd = run_mock.call_args.args[0]
     ssh_cmd = popen_mock.call_args.args[0]
-    assert f"--impersonate-service-account={ssh_config.impersonate_service_account}" in list_cmd
     assert f"--impersonate-service-account={ssh_config.impersonate_service_account}" in ssh_cmd
+    # No explicit user@vm prefix or --ssh-key-file: gcloud auto-detects.
+    assert "iris-controller-iris" in ssh_cmd
+    assert "@iris-controller-iris" not in " ".join(ssh_cmd)
+    assert not any("--ssh-key-file" in arg for arg in ssh_cmd)
 
 
 def test_gce_remote_exec_builds_optional_flags_inline():
@@ -424,21 +435,16 @@ def test_gcp_create_vm_slice_mode_with_long_prefix_uses_valid_slice_id():
     assert "_" not in handle.slice_id
     status = handle.describe()
     assert len(status.workers) == 1
-    assert status.workers[0]._remote_exec.ssh_user == "iris"
+    assert isinstance(status.workers[0]._remote_exec, GceRemoteExec)
     listed = platform.list_all_slices()
     assert handle.slice_id in {s.handle.slice_id for s in listed}
 
 
-def test_gcp_vm_slice_os_login_sets_metadata_and_uses_gcloud_default_user():
+def test_gcp_vm_slice_sets_os_login_metadata_unconditionally():
+    """Every VM slice gets enable-oslogin metadata; the GceRemoteExec carries no user/key."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
-    ssh_config = config_pb2.SshConfig(
-        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
-        key_file="/tmp/iris-oslogin",
-    )
-    platform = GcpWorkerProvider(
-        gcp_config, label_prefix="iris", worker_port=10001, ssh_config=ssh_config, gcp_service=gcp_service
-    )
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-cpu-vm",
@@ -457,20 +463,16 @@ def test_gcp_vm_slice_os_login_sets_metadata_and_uses_gcloud_default_user():
     vm = next(iter(gcp_service._vms.values()))
     assert vm.metadata["enable-oslogin"] == "TRUE"
     assert vm.metadata["block-project-ssh-keys"] == "TRUE"
-    assert status.workers[0]._remote_exec.ssh_user is None
-    assert status.workers[0]._remote_exec.ssh_key_file == "/tmp/iris-oslogin"
+    remote_exec = status.workers[0]._remote_exec
+    assert isinstance(remote_exec, GceRemoteExec)
+    assert remote_exec.ssh_user is None
+    assert remote_exec.ssh_key_file is None
 
 
-def test_gcp_vm_slice_os_login_uses_service_account_impersonation():
+def test_gcp_vm_slice_omits_impersonation_when_unset():
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
-    ssh_config = config_pb2.SshConfig(
-        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
-        key_file="/tmp/iris-oslogin",
-    )
-    platform = GcpWorkerProvider(
-        gcp_config, label_prefix="iris", worker_port=10001, ssh_config=ssh_config, gcp_service=gcp_service
-    )
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-cpu-vm",
@@ -488,12 +490,10 @@ def test_gcp_vm_slice_os_login_uses_service_account_impersonation():
     assert status.workers[0]._remote_exec.impersonate_service_account is None
 
 
-def test_gcp_vm_slice_os_login_prefers_explicit_ssh_impersonation_account():
+def test_gcp_vm_slice_propagates_explicit_ssh_impersonation_account():
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
     ssh_config = config_pb2.SshConfig(
-        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
-        key_file="/tmp/iris-oslogin",
         impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
     )
     platform = GcpWorkerProvider(
@@ -844,17 +844,11 @@ def test_gcp_tpu_slice_passes_startup_script_metadata():
     assert "test-image:latest" in metadata["startup-script"]
 
 
-def test_gcp_tpu_slice_os_login_sets_metadata_and_uses_direct_ssh():
+def test_gcp_tpu_slice_sets_os_login_metadata_and_uses_gcloud_remote_exec():
+    """TPU slices always set enable-oslogin metadata and build a GcloudRemoteExec."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
-    ssh_config = config_pb2.SshConfig(
-        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
-        os_login_user="ci-user",
-        key_file="/tmp/iris-oslogin",
-    )
-    platform = GcpWorkerProvider(
-        gcp_config, label_prefix="iris", worker_port=10001, ssh_config=ssh_config, gcp_service=gcp_service
-    )
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-tpu",
@@ -869,50 +863,17 @@ def test_gcp_tpu_slice_os_login_sets_metadata_and_uses_direct_ssh():
     tpu = next(iter(gcp_service._tpus.values()))
     assert tpu.metadata["enable-oslogin"] == "TRUE"
     assert tpu.metadata["block-project-ssh-keys"] == "TRUE"
-    assert isinstance(status.workers[0]._remote_exec, DirectSshRemoteExec)
-    assert status.workers[0]._remote_exec.user == "ci-user"
-    assert status.workers[0]._remote_exec.key_file == "/tmp/iris-oslogin"
-    assert status.workers[0].external_address is None
-    assert status.workers[0]._remote_exec.host == status.workers[0].internal_address
+    remote_exec = status.workers[0]._remote_exec
+    assert isinstance(remote_exec, GcloudRemoteExec)
+    assert remote_exec.ssh_user is None
+    assert remote_exec.ssh_key_file is None
 
 
-def test_gcp_tpu_slice_os_login_resolves_user_from_service_account():
+def test_gcp_tpu_slice_propagates_explicit_ssh_impersonation_account():
+    """SshConfig.impersonate_service_account is forwarded onto the GcloudRemoteExec."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
     ssh_config = config_pb2.SshConfig(
-        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
-        key_file="/tmp/iris-oslogin",
-    )
-    platform = GcpWorkerProvider(
-        gcp_config, label_prefix="iris", worker_port=10001, ssh_config=ssh_config, gcp_service=gcp_service
-    )
-
-    cfg = config_pb2.SliceConfig(
-        name_prefix="iris-tpu",
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-        accelerator_variant="v5litepod-8",
-    )
-    cfg.gcp.zone = "us-central2-b"
-    cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
-    cfg.gcp.service_account = "iris-worker@test-project.iam.gserviceaccount.com"
-
-    with unittest.mock.patch(
-        "iris.cluster.providers.gcp.handles.resolve_current_os_login_user",
-        return_value="svc-user",
-    ) as resolve_user:
-        handle = platform.create_slice(cfg)
-        status = handle.describe()
-
-    resolve_user.assert_called_with(impersonate_service_account=None)
-    assert status.workers[0]._remote_exec.user == "svc-user"
-
-
-def test_gcp_tpu_slice_os_login_prefers_explicit_ssh_impersonation_account():
-    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
-    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
-    ssh_config = config_pb2.SshConfig(
-        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
-        key_file="/tmp/iris-oslogin",
         impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
     )
     platform = GcpWorkerProvider(
@@ -928,48 +889,12 @@ def test_gcp_tpu_slice_os_login_prefers_explicit_ssh_impersonation_account():
     cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
     cfg.gcp.service_account = "iris-worker@test-project.iam.gserviceaccount.com"
 
-    with unittest.mock.patch(
-        "iris.cluster.providers.gcp.handles.resolve_current_os_login_user",
-        return_value="svc-user",
-    ) as resolve_user:
-        handle = platform.create_slice(cfg)
-        status = handle.describe()
-
-    resolve_user.assert_called_with(impersonate_service_account=ssh_config.impersonate_service_account)
-    assert status.workers[0]._remote_exec.user == "svc-user"
-
-
-def test_gcp_tpu_slice_os_login_prefers_external_ip_for_direct_ssh():
-    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
-    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
-    ssh_config = config_pb2.SshConfig(
-        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
-        os_login_user="svc-user",
-        key_file="/tmp/iris-oslogin",
-    )
-    platform = GcpWorkerProvider(
-        gcp_config, label_prefix="iris", worker_port=10001, ssh_config=ssh_config, gcp_service=gcp_service
-    )
-
-    cfg = config_pb2.SliceConfig(
-        name_prefix="iris-tpu",
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-        accelerator_variant="v5litepod-8",
-    )
-    cfg.gcp.zone = "us-central2-b"
-    cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
-
     handle = platform.create_slice(cfg)
-    tpu = next(iter(gcp_service._tpus.values()))
-    tpu.state = "READY"
-    tpu.external_network_endpoints = ["34.1.2.3"]
-
     status = handle.describe()
 
-    assert status.workers[0].internal_address == "10.0.0.0"
-    assert status.workers[0].external_address == "34.1.2.3"
-    assert isinstance(status.workers[0]._remote_exec, DirectSshRemoteExec)
-    assert status.workers[0]._remote_exec.host == "34.1.2.3"
+    remote_exec = status.workers[0]._remote_exec
+    assert isinstance(remote_exec, GcloudRemoteExec)
+    assert remote_exec.impersonate_service_account == ssh_config.impersonate_service_account
 
 
 # =============================================================================
@@ -982,8 +907,6 @@ def _make_vm_slice_for_bootstrap(
     zone: str = "us-central2-b",
 ) -> tuple[GcpVmSliceHandle, str]:
     """Create a VM in InMemoryGcpService and return a handle + vm_name for bootstrap testing."""
-    from iris.cluster.providers.gcp.service import VmCreateRequest
-
     vm_name = "test-bootstrap-vm"
     gcp_service.vm_create(
         VmCreateRequest(
@@ -1105,8 +1028,6 @@ def test_vm_bootstrap_cloud_not_ready_raises_phase1_timeout():
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
 
     # Create a VM but set it to non-READY state
-    from iris.cluster.providers.gcp.service import VmCreateRequest
-
     vm_name = "test-stuck-vm"
     gcp_service.vm_create(
         VmCreateRequest(

@@ -1034,12 +1034,23 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
     help="Seconds to observe restarted workers for failures before advancing",
 )
 @click.option(
+    "--max-failures",
+    type=int,
+    default=4,
+    help=(
+        "Abort rollout if cumulative per-worker failures exceed this budget. "
+        "Covers preemptions (which surface as restart errors or workers "
+        "disappearing from the controller table), bootstrap errors, and workers "
+        "that don't come back healthy in time."
+    ),
+)
+@click.option(
     "--skip-current-hash/--no-skip-current-hash",
     default=False,
     help=(
         "Skip workers whose reported git_hash matches the CLI's current working-tree hash "
-        "(``iris build`` would bake this into a fresh image). Useful for resuming a partial "
-        "rollout without redoing already-restarted workers."
+        "(worker-restart bakes this into the freshly-built worker image). Useful for "
+        "resuming a partial rollout without redoing already-restarted workers."
     ),
 )
 @click.pass_context
@@ -1050,6 +1061,7 @@ def worker_restart(
     min_batch: int,
     max_batch: int,
     observation_window: int,
+    max_failures: int,
     skip_current_hash: bool,
 ):
     """Rolling restart of workers with adaptive batch sizing.
@@ -1057,8 +1069,10 @@ def worker_restart(
     Restarts workers in progressively larger batches (1, 2, 4, ... up to
     --max-batch). After each batch, waits for workers to become healthy, then
     observes them for --observation-window seconds to catch post-restart
-    failures. Aborts immediately if any worker fails to come back healthy or
-    develops failures during observation.
+    failures. Every per-worker failure (bootstrap error, fail-to-become-healthy,
+    unhealthy after observation, vanished from the controller) counts toward
+    --max-failures; the rollout aborts only once cumulative failures exceed
+    the budget. This absorbs ordinary preemption noise without special-casing.
 
     The CLI drives the SSH bootstrap directly per worker — no controller-side
     proxy — so bootstrap stdout/stderr streams to the operator's terminal.
@@ -1075,6 +1089,20 @@ def worker_restart(
     bundle = ctx.obj.get("provider_bundle") or iris_config.provider_bundle()
     if not isinstance(bundle.workers, GcpWorkerProvider):
         raise click.ClickException("worker-restart is only supported on GCP clusters")
+
+    # Build and push fresh worker/task images so the bootstrap pulls the operator's
+    # current tree, not whatever ``:latest`` happens to resolve to. Without this,
+    # repeated worker-restarts pick up whichever SHA was last published by
+    # ``controller restart`` (or by autoscaler-fresh VMs racing the registry),
+    # producing a fleet split across multiple git_hashes and making
+    # ``--skip-current-hash`` a no-op.
+    git_sha = get_git_sha()
+    _pin_latest_images(config, git_sha)
+    verbose = ctx.obj.get("verbose", False)
+    if config.defaults.worker.docker_image:
+        _build_and_push_image(config.defaults.worker.docker_image, "worker", git_sha, verbose=verbose)
+    if config.defaults.worker.default_task_image:
+        _build_and_push_image(config.defaults.worker.default_task_image, "task", git_sha, verbose=verbose)
 
     # Resolve the controller address workers will reconnect to (matches cluster_create_slice).
     worker_controller_address = iris_config.controller_address()
@@ -1123,24 +1151,38 @@ def worker_restart(
         total = len(worker_ids)
         click.echo(
             f"Restarting {total} worker(s) "
-            f"(timeout={timeout}s, observation={observation_window}s, max_batch={max_batch})"
+            f"(timeout={timeout}s, observation={observation_window}s, "
+            f"max_batch={max_batch}, max_failures={max_failures})"
         )
 
         rows_by_id = _fetch_worker_bootstrap_rows(client, worker_ids)
-        missing_rows = [wid for wid in worker_ids if wid not in rows_by_id]
-        if missing_rows:
-            click.echo(
-                f"  ABORT: workers missing from controller workers table: {', '.join(sorted(missing_rows))}",
-                err=True,
-            )
-            raise SystemExit(1)
 
         succeeded = 0
+        failures = 0
         batch_size = min_batch
         offset = 0
 
+        def _record_failure(wid: str, reason: str) -> None:
+            nonlocal failures
+            failures += 1
+            click.echo(f"  FAILED ({failures}/{max_failures}): {wid}: {reason}", err=True)
+            if failures > max_failures:
+                click.echo(
+                    f"  ABORT: failure budget exceeded ({failures} > {max_failures})",
+                    err=True,
+                )
+                _print_summary(succeeded, failures, total - succeeded - failures, offset)
+                raise SystemExit(1)
+
+        missing_rows = [wid for wid in worker_ids if wid not in rows_by_id]
+        for wid in sorted(missing_rows):
+            _record_failure(wid, "missing from controller workers table (likely preempted)")
+        worker_ids = [wid for wid in worker_ids if wid in rows_by_id]
+
         while offset < total:
             batch = worker_ids[offset : offset + batch_size]
+            if not batch:
+                break
             click.echo(f"\n--- Batch of {len(batch)} (workers {offset + 1}-{offset + len(batch)} of {total}) ---")
 
             # Drive each worker's bootstrap in parallel: build the bootstrap script
@@ -1175,45 +1217,35 @@ def worker_restart(
             with ThreadPoolExecutor(max_workers=len(batch)) as pool:
                 results = list(pool.map(_restart, batch))
 
+            healthy_targets: set[str] = set()
             for wid, status, error in results:
-                if status is None:
-                    click.echo(f"  ABORT: restart failed for {wid}: {error}", err=True)
-                    _print_summary(succeeded, total - succeeded, offset)
-                    raise SystemExit(1)
+                if status == "ok":
+                    healthy_targets.add(wid)
+                else:
+                    _record_failure(wid, f"restart failed: {error}")
 
-            # Wait for all workers in the batch to become healthy
-            click.echo(f"  Waiting for {len(batch)} worker(s) to become healthy...")
-            unhealthy = _wait_for_workers_healthy(client, set(batch), timeout)
-            if unhealthy:
-                click.echo(
-                    f"  ABORT: workers did not become healthy within {timeout}s: " f"{', '.join(sorted(unhealthy))}",
-                    err=True,
-                )
-                _print_summary(succeeded, total - succeeded, offset)
-                raise SystemExit(1)
+            if healthy_targets:
+                click.echo(f"  Waiting for {len(healthy_targets)} worker(s) to become healthy...")
+                unhealthy = _wait_for_workers_healthy(client, set(healthy_targets), timeout)
+                for wid in sorted(unhealthy):
+                    _record_failure(wid, f"did not become healthy within {timeout}s")
+                healthy_targets -= unhealthy
 
-            click.echo(f"  All {len(batch)} worker(s) healthy. Observing for {observation_window}s...")
-            time.sleep(observation_window)
+            if healthy_targets:
+                click.echo(f"  Observing {len(healthy_targets)} worker(s) for {observation_window}s...")
+                time.sleep(observation_window)
+                for wid, msg in _check_worker_health(client, set(healthy_targets)):
+                    healthy_targets.discard(wid)
+                    _record_failure(wid, f"unhealthy after observation: {msg}")
 
-            # Re-check health after observation window
-            failed_workers = _check_worker_health(client, set(batch))
-            if failed_workers:
-                click.echo(
-                    f"  ABORT: workers developed failures during observation: "
-                    f"{', '.join(f'{wid} ({msg})' for wid, msg in sorted(failed_workers))}",
-                    err=True,
-                )
-                _print_summary(succeeded, total - succeeded, offset)
-                raise SystemExit(1)
-
-            succeeded += len(batch)
+            succeeded += len(healthy_targets)
             offset += len(batch)
-            click.echo(f"  Batch OK ({succeeded}/{total} complete)")
+            click.echo(f"  Batch done: {succeeded}/{total} healthy, {failures}/{max_failures} failures")
 
             # Double batch size for next round, capped at max_batch
             batch_size = min(batch_size * 2, max_batch)
 
-    click.echo(f"\nDone: {succeeded}/{total} workers restarted successfully")
+    click.echo(f"\nDone: {succeeded}/{total} workers restarted ({failures} failures within budget)")
 
 
 def _wait_for_workers_healthy(client, worker_ids: set[str], timeout: int) -> set[str]:
@@ -1252,5 +1284,8 @@ def _check_worker_health(client, worker_ids: set[str]) -> list[tuple[str, str]]:
     return failures
 
 
-def _print_summary(succeeded: int, remaining: int, offset: int):
-    click.echo(f"\nSummary: {succeeded} succeeded, {remaining} remaining (aborted at worker {offset + 1})")
+def _print_summary(succeeded: int, failures: int, remaining: int, offset: int):
+    click.echo(
+        f"\nSummary: {succeeded} succeeded, {failures} failed, {remaining} remaining "
+        f"(aborted at worker {offset + 1})"
+    )

@@ -9,8 +9,6 @@ platform:
     project_id: hai-gcp-models
 
 defaults:
-  ssh:
-    auth_mode: SSH_AUTH_MODE_METADATA
   autoscaler:
     evaluation_interval:
       milliseconds: 10000

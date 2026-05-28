@@ -25,6 +25,8 @@ import json
 import os
 import pathlib
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -40,6 +42,7 @@ HALIAX_LICENSE = ROOT_DIR / "lib/haliax/etc/license_header.txt"
 MARIN_LICENSE = ROOT_DIR / "etc/license_header.txt"
 LEVANTER_BLACK_CONFIG = ROOT_DIR / "lib/levanter/pyproject.toml"
 HALIAX_BLACK_CONFIG = ROOT_DIR / "lib/haliax/pyproject.toml"
+LINT_CATALOG = ROOT_DIR / "infra/lint.md"
 
 EXCLUDE_PATTERNS = [
     ".git/**",
@@ -748,8 +751,6 @@ def _ensure_iris_protos() -> None:
     resolve imports from other modules, even when the generated files themselves
     are excluded from type-checking via project-excludes.
     """
-    import shutil
-
     rpc_dir = ROOT_DIR / "lib" / "iris" / "src" / "iris" / "rpc"
     # Check if any pb2 file exists already
     if list(rpc_dir.glob("*_pb2.py")):
@@ -866,6 +867,111 @@ PRECOMMIT_CONFIGS = [
 ]
 
 
+LINT_REVIEW_AGENT_DEFAULT = "claude -p"
+
+LINT_REVIEW_TIMEOUT = 600
+
+LINT_REVIEW_INSTRUCTIONS = (
+    "Apply the lint catalog above to the branch diff below. Follow the "
+    '"Detector usage" section exactly: emit one finding per line in the format '
+    "it specifies, and emit nothing at all when there are no findings. Work "
+    "from the diff as given; do not re-derive it."
+)
+
+# Env vars that mark a Claude Code session and would re-bind the spawned headless
+# agent to its parent's transcript / session. Stripped before exec so the
+# sub-agent runs as a fresh, isolated session.
+LINT_REVIEW_STRIPPED_ENV = (
+    "ANTHROPIC_API_KEY",  # force subscription auth, not metered API billing
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_SSE_PORT",
+)
+
+
+def run_lint_review(agent_command: str) -> int:
+    """Run the advisory `infra/lint.md` catalog over the branch diff via an agent.
+
+    `agent_command` is the headless CLI invocation of the agent that will read
+    the prompt from stdin and print findings to stdout (e.g. `claude -p`,
+    `codex exec`). Callers should pass the command for the agent they are
+    themselves running so the sub-agent matches the calling environment.
+
+    Findings are advisory and never block — they are printed for the author to
+    act on before pushing. Returns 0 in all cases that fit the advisory contract
+    (no findings, findings emitted, agent unavailable, merge-base unresolved,
+    timeout). Returns 1 only when the agent itself ran and exited non-zero,
+    which indicates a tooling bug worth surfacing.
+    """
+    agent_cmd = shlex.split(agent_command)
+    if not agent_cmd or shutil.which(agent_cmd[0]) is None:
+        agent_name = agent_cmd[0] if agent_cmd else "(empty)"
+        click.echo(f"  ⚠ Lint review skipped: agent '{agent_name}' not found on PATH")
+        return 0
+
+    base_result = subprocess.run(
+        ["git", "merge-base", "origin/main", "HEAD"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+    )
+    if base_result.returncode != 0:
+        click.echo("  ⚠ Lint review skipped: could not resolve merge-base with origin/main")
+        click.echo(f"    (run `git fetch origin main` first; git said: {base_result.stderr.strip()})")
+        return 0
+    merge_base = base_result.stdout.strip()
+    # Diff the working tree against the merge-base: covers all branch work,
+    # committed and uncommitted, so the review runs whether or not the author
+    # has committed before reaching the pre-push checklist.
+    diff = subprocess.run(
+        ["git", "diff", merge_base, "-U15", "--", "*.py", "*.proto"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    if not diff.strip():
+        click.echo("Lint review: no Python/proto changes on this branch.")
+        return 0
+
+    prompt = f"{LINT_CATALOG.read_text()}\n\n{LINT_REVIEW_INSTRUCTIONS}\n\n```diff\n{diff}\n```\n"
+
+    # Strip session/auth markers so the headless agent runs as a fresh session
+    # rather than nesting under the calling agent's transcript or being billed
+    # via metered API auth.
+    env = {k: v for k, v in os.environ.items() if k not in LINT_REVIEW_STRIPPED_ENV}
+
+    try:
+        result = subprocess.run(
+            agent_cmd,
+            input=prompt,
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=LINT_REVIEW_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        click.echo(f"  ⚠ Lint review timed out after {LINT_REVIEW_TIMEOUT}s")
+        return 0
+
+    if result.returncode != 0:
+        click.echo(f"  ⚠ Lint review agent exited {result.returncode}:")
+        click.echo(result.stderr.strip())
+        return 1
+
+    findings = result.stdout.strip()
+    if not findings:
+        click.echo("Lint review: no findings.")
+        return 0
+
+    click.echo("Lint review findings (advisory — search infra/lint.md for each ml-... code):\n")
+    click.echo(findings)
+    return 0
+
+
 @click.command()
 @click.option("--fix", is_flag=True, help="Automatically fix issues where possible")
 @click.option("--all-files", is_flag=True, help="Run checks on all files, not just changed")
@@ -880,6 +986,22 @@ PRECOMMIT_CONFIGS = [
     is_flag=True,
     help="Run checks on staged changes only (for git pre-commit hook)",
 )
+@click.option(
+    "--review",
+    is_flag=True,
+    help="Run the advisory infra/lint.md rule catalog over the branch diff via an agent",
+)
+@click.option(
+    "--agent-command",
+    "agent_command",
+    default=LINT_REVIEW_AGENT_DEFAULT,
+    show_default=True,
+    help=(
+        "Headless agent invocation for --review. Agents calling this from a skill "
+        "should pass their own command (e.g. 'claude -p', 'codex exec') so the "
+        "sub-agent matches the calling environment."
+    ),
+)
 @click.option("--files", "files_opt", multiple=True, help="Files to check (alias for positional args)")
 @click.argument("files", nargs=-1)
 def main(
@@ -887,9 +1009,14 @@ def main(
     all_files: bool,
     changed_files: bool,
     pre_commit: bool,
+    review: bool,
+    agent_command: str,
     files_opt: tuple[str, ...],
     files: tuple[str, ...],
 ):
+    if review:
+        sys.exit(run_lint_review(agent_command))
+
     all_files_set: set[pathlib.Path] = set()
     input_files = files_opt + files
 

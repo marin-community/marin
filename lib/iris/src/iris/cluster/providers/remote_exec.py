@@ -14,7 +14,6 @@ This module provides:
 from __future__ import annotations
 
 import dataclasses
-import functools
 import logging
 import subprocess
 import threading
@@ -265,28 +264,6 @@ class DirectSshRemoteExec:
             stderr=subprocess.STDOUT,
             text=True,
         )
-
-
-@functools.lru_cache(maxsize=8)
-def resolve_current_os_login_user(impersonate_service_account: str | None = None) -> str:
-    """Resolve the current caller's OS Login POSIX username via gcloud."""
-    cmd = [
-        "gcloud",
-        "compute",
-        "os-login",
-        "describe-profile",
-        "--format=value(posixAccounts[0].username)",
-    ]
-    if impersonate_service_account:
-        cmd.append(f"--impersonate-service-account={impersonate_service_account}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"Failed to resolve OS Login username: {result.stderr.strip()}")
-
-    username = result.stdout.strip()
-    if not username:
-        raise RuntimeError("OS Login profile has no POSIX username")
-    return username
 
 
 # ============================================================================

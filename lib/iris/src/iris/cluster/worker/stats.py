@@ -1,22 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stats schemas emitted by iris workers.
+"""Finelog stats schemas used by iris.
 
-Two namespaces:
-
-- ``iris.worker`` — one row per ping with host-level utilization. Replaces
-  the controller's ``worker_resource_history`` table.
-- ``iris.task`` — one row per attempt resource update. Replaces the
-  controller's ``task_resource_history`` table.
+- ``iris.worker`` / ``iris.task`` — worker-emitted host and per-attempt
+  resource rows. Replace the controller's old in-memory history tables.
+- ``iris.task_status`` — markdown status text pushed from inside a running
+  task via ``RemoteClusterClient.report_task_status_text``. Replaces the
+  in-memory dict that previously backed ``ControllerService.SetTaskStatusText``.
 
 The ``iris.profile`` schema lives in ``iris.cluster.runtime.profile`` next to
 the capture machinery — see ``IrisProfile`` and ``PROFILE_NAMESPACE`` there.
 
-All schemas use a datetime column as the segment key. They are
-registered eagerly in ``Worker.start()`` via
-``LogClient.get_table(<namespace>, <dataclass>)`` so schema mismatches surface
-on first ping rather than silently dropping rows.
+Worker schemas are registered eagerly in ``Worker.start()``; the task-status
+schema is registered lazily on first ``report_task_status_text`` call so a
+CLI that never touches status text doesn't open a finelog connection.
 """
 
 from __future__ import annotations
@@ -32,6 +30,7 @@ from iris.rpc import job_pb2
 
 WORKER_STATS_NAMESPACE = "iris.worker"
 TASK_STATS_NAMESPACE = "iris.task"
+TASK_STATUS_NAMESPACE = "iris.task_status"
 
 
 def stats_timestamp() -> datetime:
@@ -115,6 +114,23 @@ class IrisTaskStat:
     memory_peak_mb: int
     accelerator_util_pct: float | None = None
     accelerator_mem_bytes: int | None = None
+
+
+@dataclass
+class TaskStatusRow:
+    """One row per ``report_task_status_text`` push from a running task.
+
+    ``attempt_id`` tiebreaks two attempts colliding within a single millisecond
+    during preemption so the newer attempt wins deterministically.
+    """
+
+    key_column: ClassVar[str] = "task_id"
+
+    task_id: str
+    attempt_id: int
+    ts: datetime
+    status_text_detail_md: str
+    status_text_summary_md: str
 
 
 def build_worker_stat(
