@@ -17,21 +17,25 @@ Then:
     fuzzy_dups([<minhash per source>])
     build_clustered_store(tokenize, decontam, cluster_assign, quality, dedup)
 
-Each model artifact accepts either a path (skip training) or a StepSpec that
-produces it (train inline). The CLI exposes only the path forms; programmatic
-callers can pass StepSpecs via :func:`build_steps`.
+Public API: :func:`reference_datakit_steps`. Pass ``sources`` (a ``{name:
+normalize_step}`` mapping) and either a path or a pre-built StepSpec for each
+model. Each model accepts ``None`` to train inline -- supported today only
+for the domain centroids; ``quality_model=None`` raises until v0 quality
+training is wrapped as StepSpecs.
+
+CLI flags map to those parameters:
 
   ``--domain-centroids``    Optional. Directory containing K-means output:
                             ``centroids_<K_TRAIN>.npy`` plus
                             ``lookup_<K_TRAIN>_to_<k>.npy`` for every K view
                             (the layout produced by
                             :mod:`experiments.datakit.cluster.domain.v0.exp_full_clusters`).
-                            If omitted, the CLI builds the per-source embeds
-                            and a train-centroids StepSpec via
-                            :func:`build_train_centroids_step`, then passes
-                            that step to :func:`build_steps`.
+                            If omitted, the CLI lets
+                            :func:`reference_datakit_steps` build the
+                            inline-training subgraph via
+                            :func:`build_train_centroids_step`.
 
-  ``--quality-model-bin``   Optional. Trained fasttext quality ``.bin`` from
+  ``--quality-model``       Required. Trained fasttext quality ``.bin`` from
                             :mod:`experiments.datakit.cluster.quality.v0.train`.
                             The CLI requires a path because the v0 quality
                             training flow (sample → LLM-score → fasttext-train)
@@ -59,11 +63,12 @@ Submit on iris::
         --priority production --cpu 2 --memory 8GB \\
         -- python -m experiments.datakit.reference_pipeline \\
             --domain-centroids gs://.../cluster/train_centroids_<hash> \\
-            --quality-model-bin gs://.../quality/model.bin
+            --quality-model gs://.../quality/model.bin
 """
 
 import argparse
 import logging
+from dataclasses import dataclass
 
 from fray import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
@@ -73,7 +78,7 @@ from marin.datakit.decon import (
     decon_step,
 )
 from marin.datakit.normalize import NormalizedData
-from marin.datakit.sources import DatakitSource, all_sources
+from marin.datakit.sources import all_sources
 from marin.execution.artifact import Artifact
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
@@ -124,11 +129,6 @@ from experiments.datakit.store.datakit_store import (
 logger = logging.getLogger(__name__)
 
 
-# Sources to skip. ``numinamath-1.5`` is a fresh add (#5841) and not yet
-# included in the trained domain centroids -- assigning it would just produce
-# garbage cluster ids until we retrain.
-_EXCLUDE_SOURCES: frozenset[str] = frozenset({"numinamath-1.5"})
-
 # Clustering knobs. Must match the centroids file passed in.
 K_TRAIN = 5000
 K_VIEWS: tuple[int, ...] = (40, 1000)
@@ -173,14 +173,10 @@ STORE_MAX_WORKERS = 2048 + 1024
 SPLIT = "train"
 
 
-def _select_sources() -> dict[str, DatakitSource]:
-    """Apply the static ``_EXCLUDE_SOURCES`` carve-out and log the chosen set."""
-    sources = {name: src for name, src in all_sources().items() if name not in _EXCLUDE_SOURCES}
-    logger.info(
-        "Reference pipeline: %d sources (excluded: %s)",
-        len(sources),
-        sorted(_EXCLUDE_SOURCES),
-    )
+def default_sources() -> dict[str, StepSpec]:
+    """Default Datakit source set: every ``all_sources()`` entry, mapped to its normalize StepSpec."""
+    sources = {name: src.normalized for name, src in all_sources().items()}
+    logger.info("default_sources: %d sources", len(sources))
     return sources
 
 
@@ -203,19 +199,20 @@ def _build_embed_step(name: str, normalize_step: StepSpec) -> StepSpec:
                 max_workers=EMBED_MAX_WORKERS_PER_SOURCE,
             ),
             resources=COORDINATOR_RESOURCES,
-            pip_dependency_groups=["embed"],
+            pip_dependency_groups=["datakit"],
         ),
     )
 
 
-def build_per_source_embed_steps(sources: dict[str, DatakitSource]) -> dict[str, StepSpec]:
+def build_per_source_embed_steps(sources: dict[str, StepSpec]) -> dict[str, StepSpec]:
     """Build the Luxical embed StepSpec for each source.
 
-    Exposed so callers that also build the domain training subgraph (via
-    :func:`build_train_centroids_step`) can share the same embed steps with
-    :func:`build_steps` instead of duplicating them.
+    ``sources`` maps source name → normalize StepSpec; the embed step is built
+    against that step as its dep. Exposed so callers that also want to build
+    the domain training subgraph (via :func:`build_train_centroids_step`) can
+    share the same embeds across both wirings.
     """
-    return {name: _build_embed_step(name, src.normalized) for name, src in sources.items()}
+    return {name: _build_embed_step(name, step) for name, step in sources.items()}
 
 
 def build_train_centroids_step(embed_steps: dict[str, StepSpec]) -> StepSpec:
@@ -223,7 +220,8 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec]) -> StepSpec:
 
     The returned step's ``output_path`` contains ``centroids_<K_TRAIN>.npy``
     plus ``lookup_<K_TRAIN>_to_<k>.npy`` for each ``k`` in ``K_VIEWS`` -- the
-    same layout :func:`build_steps` consumes when given a centroids path.
+    same layout :func:`reference_datakit_steps` consumes via its
+    ``domain_centroids`` parameter when given a centroids path.
     """
     sample_step = StepSpec(
         name="datakit/cluster/sample_centroids",
@@ -238,7 +236,7 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec]) -> StepSpec:
                 max_workers=SAMPLE_MAX_WORKERS,
             ),
             resources=COORDINATOR_RESOURCES,
-            pip_dependency_groups=["cluster"],
+            pip_dependency_groups=["datakit"],
         ),
     )
     return StepSpec(
@@ -253,7 +251,7 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec]) -> StepSpec:
                 k_views=K_VIEWS,
             ),
             resources=TRAIN_CENTROIDS_RESOURCES,
-            pip_dependency_groups=["cluster"],
+            pip_dependency_groups=["datakit"],
         ),
     )
 
@@ -279,7 +277,14 @@ def _resolve_centroids(
     )
 
 
-def _resolve_quality_model(quality_model: str | StepSpec) -> StepSpec:
+def _resolve_quality_model(quality_model: str | StepSpec | None) -> StepSpec:
+    if quality_model is None:
+        raise NotImplementedError(
+            "quality_model=None means train inline, but v0 quality training "
+            "(sample → LLM-score → fasttext-train) is not yet wrapped as "
+            "StepSpecs. Pass a GCS path to a trained model.bin or a pre-built "
+            "StepSpec producing a FastTextModel artifact."
+        )
     if isinstance(quality_model, StepSpec):
         return quality_model
     return _register_model_step(
@@ -288,15 +293,29 @@ def _resolve_quality_model(quality_model: str | StepSpec) -> StepSpec:
     )
 
 
-def build_steps(
+@dataclass(frozen=True)
+class DatakitSteps:
+    """Result of :func:`reference_datakit_steps`."""
+
+    sources: dict[str, StepSpec]
+    """Echo of the input sources mapping (``{name: normalize_step}``)."""
+
+    output_buckets: StepSpec
+    """Final store StepSpec. Its ``output_path`` is the per-(cluster, quality)
+    bucket directory the downstream training mixture reads from."""
+
+    all_steps: list[StepSpec]
+    """Every StepSpec the runner needs (shared upstream, per-source, dedup, store)."""
+
+
+def reference_datakit_steps(
+    sources: dict[str, StepSpec],
     *,
-    domain_centroids: str | StepSpec,
-    quality_model: str | StepSpec,
-    sources: dict[str, DatakitSource] | None = None,
-    embed_steps: dict[str, StepSpec] | None = None,
+    domain_centroids: str | StepSpec | None = None,
+    quality_model: str | StepSpec | None = None,
     store_shards_per_task: int = 1,
-) -> list[StepSpec]:
-    """Build the full DAG of StepSpecs.
+) -> DatakitSteps:
+    """Build the reference Datakit DAG over the given normalize steps.
 
     Every step's output lands at ``<MARIN_PREFIX>/<step_name>_<hash>/`` via
     the default StepSpec routing -- this pipeline never sets
@@ -304,27 +323,24 @@ def build_steps(
     of changing ``MARIN_PREFIX``.
 
     Args:
-        domain_centroids: Either a GCS directory holding
-            ``centroids_<K_TRAIN>.npy`` and ``lookup_<K_TRAIN>_to_<k>.npy``
-            for each ``k`` in ``K_VIEWS``, or a StepSpec whose
-            ``output_path`` will contain that layout once it runs (see
-            :func:`build_train_centroids_step`).
-        quality_model: Either a GCS path to a trained fasttext quality
-            ``.bin``, or a StepSpec that produces a ``FastTextModel``
-            artifact directly (e.g. an inline-training step).
-        sources: Optional pre-selected source set. Defaults to
-            :func:`_select_sources` (every Datakit source minus
-            ``_EXCLUDE_SOURCES``).
-        embed_steps: Optional pre-built per-source embed steps. Pass these
-            when the caller has already built them (e.g. to share with
-            :func:`build_train_centroids_step`); otherwise this function
-            builds them via :func:`build_per_source_embed_steps`.
+        sources: ``{name: normalize_step}``. Each step must produce a
+            :class:`marin.datakit.normalize.NormalizedData` artifact;
+            misuse fails loudly the first time a downstream step tries
+            ``Artifact.from_path(step, NormalizedData)``.
+        domain_centroids: A GCS directory holding ``centroids_<K_TRAIN>.npy``
+            and ``lookup_<K_TRAIN>_to_<k>.npy`` for each ``k`` in
+            ``K_VIEWS``; a StepSpec whose ``output_path`` will contain that
+            layout once it runs (see :func:`build_train_centroids_step`);
+            or ``None`` to train inline from the per-source embeds.
+        quality_model: A GCS path to a trained fasttext quality ``.bin``,
+            or a StepSpec producing a ``FastTextModel`` artifact. ``None``
+            is reserved for a future inline-training mode and currently
+            raises :class:`NotImplementedError`.
         store_shards_per_task: Tuning knob for the final store step.
     """
-    if sources is None:
-        sources = _select_sources()
-    if embed_steps is None:
-        embed_steps = build_per_source_embed_steps(sources)
+    embed_steps = build_per_source_embed_steps(sources)
+    if domain_centroids is None:
+        domain_centroids = build_train_centroids_step(embed_steps)
 
     centroids_uri, lookup_uris, centroids_deps, centroids_hash = _resolve_centroids(domain_centroids)
     quality_model_step = _resolve_quality_model(quality_model)
@@ -344,8 +360,7 @@ def build_steps(
     per_source: dict[str, dict[str, StepSpec]] = {}
     minhash_steps: list[StepSpec] = []
 
-    for name, source in sources.items():
-        normalize_step = source.normalized
+    for name, normalize_step in sources.items():
         embed = embed_steps[name]
 
         tokenize = tokenize_attributes_step(
@@ -381,7 +396,7 @@ def build_steps(
                     max_workers=ASSIGN_MAX_WORKERS_PER_SOURCE,
                 ),
                 resources=COORDINATOR_RESOURCES,
-                pip_dependency_groups=["cluster"],
+                pip_dependency_groups=["datakit"],
             ),
         )
 
@@ -471,7 +486,7 @@ def build_steps(
     for s in per_source.values():
         all_steps += list(s.values())
     all_steps += [dedup, store]
-    return all_steps
+    return DatakitSteps(sources=sources, output_buckets=store, all_steps=all_steps)
 
 
 def main() -> None:
@@ -486,7 +501,7 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--quality-model-bin",
+        "--quality-model",
         required=True,
         help="GCS path to the trained fasttext quality model.bin from cluster/quality/v0",
     )
@@ -513,18 +528,13 @@ def main() -> None:
 
     configure_logging(logging.INFO)
 
-    sources = _select_sources()
-    embed_steps = build_per_source_embed_steps(sources)
-    domain_centroids: str | StepSpec = args.domain_centroids or build_train_centroids_step(embed_steps)
-
-    steps = build_steps(
-        domain_centroids=domain_centroids,
-        quality_model=args.quality_model_bin,
-        sources=sources,
-        embed_steps=embed_steps,
+    result = reference_datakit_steps(
+        default_sources(),
+        domain_centroids=args.domain_centroids,
+        quality_model=args.quality_model,
         store_shards_per_task=args.store_shards_per_task,
     )
-    StepRunner().run(steps, max_concurrent=args.max_concurrent)
+    StepRunner().run(result.all_steps, max_concurrent=args.max_concurrent)
 
 
 if __name__ == "__main__":

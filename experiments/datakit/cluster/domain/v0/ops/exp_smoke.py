@@ -123,7 +123,7 @@ def _build_steps() -> list[StepSpec]:
             ),
             resources=COORDINATOR_RESOURCES,
             env_vars=_THREAD_ENV,
-            pip_dependency_groups=["embed"],
+            pip_dependency_groups=["datakit"],
         ),
     )
 
@@ -143,7 +143,7 @@ def _build_steps() -> list[StepSpec]:
                 max_workers=SAMPLE_MAX_WORKERS,
             ),
             resources=COORDINATOR_RESOURCES,
-            pip_dependency_groups=["cluster"],
+            pip_dependency_groups=["datakit"],
         ),
     )
 
@@ -160,7 +160,7 @@ def _build_steps() -> list[StepSpec]:
                 k_views=K_VIEWS,
             ),
             resources=ResourceConfig.with_cpu(regions=[DATA_REGION], cpu=4, ram="8g"),
-            pip_dependency_groups=["cluster"],
+            pip_dependency_groups=["datakit"],
         ),
     )
 
@@ -183,7 +183,7 @@ def _build_steps() -> list[StepSpec]:
                 max_workers=ASSIGN_MAX_WORKERS,
             ),
             resources=COORDINATOR_RESOURCES,
-            pip_dependency_groups=["cluster"],
+            pip_dependency_groups=["datakit"],
         ),
     )
 
@@ -207,7 +207,7 @@ def _build_steps() -> list[StepSpec]:
                         n_sample_per_cluster=n,
                     ),
                     resources=ResourceConfig.with_cpu(regions=[DATA_REGION], cpu=4, ram="8g"),
-                    pip_dependency_groups=["probe"],
+                    pip_dependency_groups=["datakit"],
                 ),
             )
         )

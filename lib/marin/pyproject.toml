@@ -210,18 +210,11 @@ dedup = [
     "marin-dupekit",
 ]
 
-embed = [
+datakit = [
     "luxical",
     "huggingface-hub",
-]
-
-probe = [
-    "scikit-learn",
-    "scipy",
-]
-
-cluster = [
     "faiss-cpu",
+    "scikit-learn",
     "scipy",
 ]
 

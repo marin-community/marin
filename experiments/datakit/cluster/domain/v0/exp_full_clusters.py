@@ -179,7 +179,7 @@ def _build_steps() -> list[StepSpec]:
                 # waits, writes the artifact. Workers come from ZephyrContext.
                 resources=COORDINATOR_RESOURCES,
                 env_vars=_THREAD_ENV,
-                pip_dependency_groups=["embed"],
+                pip_dependency_groups=["datakit"],
             ),
         )
 
@@ -204,7 +204,7 @@ def _build_steps() -> list[StepSpec]:
             ),
             # Coordinator only -- workers run via Zephyr.
             resources=COORDINATOR_RESOURCES,
-            pip_dependency_groups=["cluster"],
+            pip_dependency_groups=["datakit"],
         ),
     )
 
@@ -223,7 +223,7 @@ def _build_steps() -> list[StepSpec]:
             ),
             # FAISS K=5000 on 10M x 192 wants every core it can get.
             resources=ResourceConfig.with_cpu(regions=[DATA_REGION], cpu=32, ram="64g"),
-            pip_dependency_groups=["cluster"],
+            pip_dependency_groups=["datakit"],
         ),
     )
 
@@ -249,7 +249,7 @@ def _build_steps() -> list[StepSpec]:
                     max_workers=ASSIGN_MAX_WORKERS_PER_SOURCE,
                 ),
                 resources=COORDINATOR_RESOURCES,
-                pip_dependency_groups=["cluster"],
+                pip_dependency_groups=["datakit"],
             ),
         )
 
@@ -274,7 +274,7 @@ def _build_steps() -> list[StepSpec]:
                         n_sample_per_cluster=n,
                     ),
                     resources=ResourceConfig.with_cpu(regions=[DATA_REGION], cpu=8, ram="32g"),
-                    pip_dependency_groups=["probe"],
+                    pip_dependency_groups=["datakit"],
                 ),
             )
         )
