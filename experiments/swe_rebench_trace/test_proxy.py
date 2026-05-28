@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import socket
 import threading
-import time as _time
+import time
 
 import pytest
 
@@ -200,7 +200,7 @@ def test_proxy_header_deadline_disconnects_slow_client(loopback_proxy):
 
     s = socket.create_connection((loopback_proxy.host, loopback_proxy.port), timeout=10.0)
     s.settimeout(10.0)
-    started = _time.monotonic()
+    started = time.monotonic()
     try:
         # Don't send anything; wait for the proxy to give up.
         # The proxy's header read deadline is 5s; recv() will return when the
@@ -211,7 +211,7 @@ def test_proxy_header_deadline_disconnects_slow_client(loopback_proxy):
             data = b""
     finally:
         s.close()
-    elapsed = _time.monotonic() - started
+    elapsed = time.monotonic() - started
     # Must be bounded by the header deadline (5s) plus a small slack.
     assert elapsed < 8.0, f"slow client held the connection for {elapsed:.1f}s"
     # The proxy may have sent a 400, or may have closed without writing.

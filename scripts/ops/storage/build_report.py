@@ -44,7 +44,6 @@ from pathlib import Path
 
 import click
 import fsspec
-import fsspec as _fsspec
 from fray import ResourceConfig
 from iris.cli.main import IRIS_CLUSTER_CONFIG_DIRS, create_client_token_provider, resolve_cluster_name
 from iris.client import IrisClient
@@ -121,7 +120,7 @@ def _report_stage(deduped_dir: str, report_path: str) -> None:
 
     conn = load_parquet_db(deduped_dir)
     report = generate_report(conn)
-    with _fsspec.open(report_path, "w") as f:
+    with fsspec.open(report_path, "w") as f:
         f.write(report)
     print(f"Report written to {report_path}", file=sys.stderr)
 

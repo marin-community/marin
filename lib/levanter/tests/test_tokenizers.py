@@ -31,7 +31,7 @@ from levanter.tokenizers import (
 import levanter.tokenizers as tk
 from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.data.text.formats import ChatProcessor
-import dataclasses as _dc
+import dataclasses
 from levanter.tokenizers import KitokenMarinTokenizer
 
 try:
@@ -1274,7 +1274,7 @@ def test_encode_batch_respects_prepend_bos(backend_tokenizer, text):
         pytest.skip("Bug only affects KitokenMarinTokenizer")
 
     # Simulate a model whose post-processor does NOT prepend BOS.
-    patched = _dc.replace(backend_tokenizer, _prepend_bos=False)
+    patched = dataclasses.replace(backend_tokenizer, _prepend_bos=False)
 
     single = patched.encode(text, add_special_tokens=True)
     batch = patched.encode_batch([text], add_special_tokens=True)

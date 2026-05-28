@@ -7,8 +7,7 @@ import asyncio
 import shutil
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass
-from dataclasses import replace as _replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
@@ -666,7 +665,7 @@ def hydrate_worker_attributes(state: ControllerTransitions, workers: list) -> li
     attrs_by_worker: dict = {}
     for row in attr_rows:
         attrs_by_worker.setdefault(row.worker_id, {})[row.key] = _decode_attr_value(row)
-    return [_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
+    return [replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
 
 
 def healthy_active_workers(state: ControllerTransitions) -> list[SchedulableWorker]:

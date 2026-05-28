@@ -24,7 +24,6 @@ import random
 import subprocess
 import sys
 import tempfile
-import tempfile as _tf
 import time
 from typing import Any
 
@@ -88,7 +87,7 @@ def write_test_file(path: str, target_bytes: int, row_group_mb: int = 100) -> di
     sample = _generate_batch(1000, 0, 0)
     sample_table = pa.Table.from_batches([sample])
 
-    with _tf.NamedTemporaryFile(suffix=".parquet") as tmp:
+    with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
         pq.write_table(sample_table, tmp.name)
         disk_bytes_per_row = os.path.getsize(tmp.name) / len(sample_table)
 

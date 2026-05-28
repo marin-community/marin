@@ -9,7 +9,7 @@ legacy ``tokenize()`` path on a tiny local parquet fixture.
 """
 from __future__ import annotations
 
-import json as _json
+import json
 import os
 
 import numpy as np
@@ -187,7 +187,7 @@ def test_split_pipeline_matches_legacy_tokenize(tmp_path):
     with open(raw_path, "w") as f:
 
         for t in texts:
-            f.write(_json.dumps({"text": t}) + "\n")
+            f.write(json.dumps({"text": t}) + "\n")
 
     legacy_config = TokenizeConfig(
         train_paths=[str(raw_path)],

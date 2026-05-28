@@ -35,7 +35,7 @@ from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, hash_token, resolve_auth
 from rigging.timing import Timestamp
 from sqlalchemy import text
-from starlette.responses import JSONResponse as _J
+from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
@@ -481,7 +481,7 @@ def test_route_auth_middleware_uses_resolve_auth(service, log_service, verifier,
 
     @requires_auth
     def _protected(_request):
-        return _J({"ok": True})
+        return JSONResponse({"ok": True})
 
     dashboard = ControllerDashboard(
         service,

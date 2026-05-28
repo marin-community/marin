@@ -6,7 +6,7 @@
 Defines the ``iris`` Click group and registers all subcommands.
 """
 
-import logging as _logging_module
+import logging
 import sys
 
 import click
@@ -15,12 +15,11 @@ from rigging.log_setup import configure_logging
 
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
 from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token, store_token
-from iris.rpc import config_pb2, job_pb2
-from iris.rpc import controller_pb2 as _controller_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
 from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 
-logger = _logging_module.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def resolve_cluster_name(
@@ -106,9 +105,9 @@ def iris(
     ctx.obj["cluster_name"] = cluster_name
 
     if verbose:
-        configure_logging(level=_logging_module.DEBUG)
+        configure_logging(level=logging.DEBUG)
     else:
-        configure_logging(level=_logging_module.INFO)
+        configure_logging(level=logging.INFO)
 
     # Resolve cluster name to config file if no explicit config or URL given
     if cluster_name and not config_file and not controller_url:
@@ -310,7 +309,7 @@ def budget_set(ctx, user_id: str, budget_limit: int, max_band: str):
 
     with rpc_client(controller_url, token_provider) as client:
         client.set_user_budget(
-            _controller_pb2.Controller.SetUserBudgetRequest(
+            controller_pb2.Controller.SetUserBudgetRequest(
                 user_id=user_id,
                 budget_limit=budget_limit,
                 max_band=priority_band_value(max_band),
@@ -329,7 +328,7 @@ def budget_get(ctx, user_id: str):
     token_provider = ctx.obj.get("token_provider")
 
     with rpc_client(controller_url, token_provider) as client:
-        resp = client.get_user_budget(_controller_pb2.Controller.GetUserBudgetRequest(user_id=user_id))
+        resp = client.get_user_budget(controller_pb2.Controller.GetUserBudgetRequest(user_id=user_id))
 
     click.echo(f"User:      {resp.user_id}")
     click.echo(f"Limit:     {resp.budget_limit}")
@@ -345,7 +344,7 @@ def budget_list(ctx):
     token_provider = ctx.obj.get("token_provider")
 
     with rpc_client(controller_url, token_provider) as client:
-        resp = client.list_user_budgets(_controller_pb2.Controller.ListUserBudgetsRequest())
+        resp = client.list_user_budgets(controller_pb2.Controller.ListUserBudgetsRequest())
 
     if not resp.users:
         click.echo("No user budgets found.")

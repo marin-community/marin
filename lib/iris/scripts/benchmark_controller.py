@@ -60,16 +60,15 @@ from iris.cluster.controller.controller import (
 from iris.cluster.controller.controller import (
     _pending_tasks_with_jobs as _schedulable_tasks,
 )
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.db import Tx as _Tx
+from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.reconcile import ReconcileResult
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.managed_thread import ThreadContainer
 
 # Branch removed Tx.fetchall/fetchone; restore for this benchmark script.
-if not hasattr(_Tx, "fetchall"):
-    _Tx.fetchall = lambda self, stmt, params=None: self.execute(stmt, params).all()
-    _Tx.fetchone = lambda self, stmt, params=None: self.execute(stmt, params).first()
+if not hasattr(Tx, "fetchall"):
+    Tx.fetchall = lambda self, stmt, params=None: self.execute(stmt, params).all()
+    Tx.fetchone = lambda self, stmt, params=None: self.execute(stmt, params).first()
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
 from iris.cluster.controller.reads import SchedulableWorker, healthy_active_workers_with_attributes  # noqa: F401
 from iris.cluster.controller.reconcile import ReconcileInputs, ReconcileRow, reconcile_workers
