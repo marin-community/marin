@@ -94,6 +94,15 @@ SIGNAL_MATRIX_CSV = METRIC_REGISTRY_DIR / "raw_metric_matrix_300m" / "raw_metric
 DEFAULT_NAME_PREFIX = "pinlin_calvin_xu/data_mixture/ngd3dm2_300m_checkpoint_features_canary_20260528"
 DEFAULT_RUN_NAME = "baseline_proportional"
 DEFAULT_EXPECTED_STEP = 22_887
+# The canary scope is intentionally fixed to this exact proportional checkpoint.
+# For other checkpoints, pass --matrix-csv or explicit checkpoint metadata and bump the canary version.
+DEFAULT_REGISTRY_KEY = "300m_6b:signal:pinlin_calvin_xu/data_mixture/ngd3dm2_qsplit240_300m_6b:baseline_proportional"
+DEFAULT_SOURCE_EXPERIMENT = "pinlin_calvin_xu/data_mixture/ngd3dm2_qsplit240_300m_6b"
+DEFAULT_COHORT = "signal"
+DEFAULT_CHECKPOINT_ROOT = (
+    "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture/"
+    "ngd3dm2_qsplit240_300m_6b/baseline_proportional-982696"
+)
 SUMMARY_JSON = "checkpoint_feature_canary_summary.json"
 STATE_OUTPUT_CSV = "300m_checkpoint_features_canary_state.csv"
 TEXT_FEATURE_SURFACE = "raw_text_loss_features"
@@ -218,10 +227,14 @@ def build_text_feature_datasets(bundle_keys: tuple[str, ...]) -> dict[str, RawTe
     return dict(sorted(datasets.items()))
 
 
-def build_state_row(
+def _build_state_row_from_values(
     *,
-    matrix_csv: str | Path,
     run_name: str,
+    registry_key: str,
+    source_experiment: str,
+    cohort: str,
+    checkpoint_root: str,
+    expected_checkpoint_step: int,
     text_bundle_keys: tuple[str, ...],
     text_dataset_names: tuple[str, ...],
     max_docs_per_dataset: int,
@@ -230,10 +243,8 @@ def build_state_row(
     default_tpu_region: str,
     default_tpu_zone: str,
 ) -> CheckpointFeatureCanarySpec:
-    """Build the single proportional-checkpoint feature canary row."""
-    row = _baseline_proportional_row(matrix_csv, run_name)
-    checkpoint_root = _string_value(row.get("checkpoint_root")).rstrip("/")
-    expected_checkpoint_step = _expected_checkpoint_step(row)
+    """Build a self-contained checkpoint-feature canary row."""
+    checkpoint_root = checkpoint_root.rstrip("/")
     hf_checkpoint = _exact_hf_checkpoint(checkpoint_root, expected_checkpoint_step)
     has_exact_hf_checkpoint = bool(hf_checkpoint)
     uses_east5_checkpoint = _uses_east5_checkpoint(checkpoint_root)
@@ -243,10 +254,10 @@ def build_state_row(
         uses_east5_checkpoint=uses_east5_checkpoint,
     )
     return CheckpointFeatureCanarySpec(
-        run_name=_string_value(row.get("run_name")),
-        registry_key=_string_value(row.get("registry_run_key", row.get("registry_key"))),
-        source_experiment=_string_value(row.get("source_experiment")),
-        cohort=_string_value(row.get("cohort")),
+        run_name=run_name,
+        registry_key=registry_key,
+        source_experiment=source_experiment,
+        cohort=cohort,
         checkpoint_root=checkpoint_root,
         expected_checkpoint_step=expected_checkpoint_step,
         hf_checkpoint_latest=hf_checkpoint,
@@ -264,6 +275,37 @@ def build_state_row(
         eligible=launch_decision == "launch",
         launch_decision=launch_decision,
         step_name=f"checkpoint_feature_canary/{_slug(run_name)}",
+    )
+
+
+def build_state_row(
+    *,
+    matrix_csv: str | Path,
+    run_name: str,
+    text_bundle_keys: tuple[str, ...],
+    text_dataset_names: tuple[str, ...],
+    max_docs_per_dataset: int,
+    max_eval_instances: int,
+    default_tpu_type: str,
+    default_tpu_region: str,
+    default_tpu_zone: str,
+) -> CheckpointFeatureCanarySpec:
+    """Build the canary row from a local or GCS matrix."""
+    row = _baseline_proportional_row(matrix_csv, run_name)
+    return _build_state_row_from_values(
+        run_name=_string_value(row.get("run_name")),
+        registry_key=_string_value(row.get("registry_run_key", row.get("registry_key"))),
+        source_experiment=_string_value(row.get("source_experiment")),
+        cohort=_string_value(row.get("cohort")),
+        checkpoint_root=_string_value(row.get("checkpoint_root")),
+        expected_checkpoint_step=_expected_checkpoint_step(row),
+        text_bundle_keys=text_bundle_keys,
+        text_dataset_names=text_dataset_names,
+        max_docs_per_dataset=max_docs_per_dataset,
+        max_eval_instances=max_eval_instances,
+        default_tpu_type=default_tpu_type,
+        default_tpu_region=default_tpu_region,
+        default_tpu_zone=default_tpu_zone,
     )
 
 
@@ -428,7 +470,15 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--name-prefix", default=DEFAULT_NAME_PREFIX)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--run-name", default=DEFAULT_RUN_NAME)
-    parser.add_argument("--matrix-csv", default=str(SIGNAL_MATRIX_CSV))
+    parser.add_argument(
+        "--matrix-csv",
+        help="Optional matrix CSV to resolve the run row. Defaults to self-contained proportional metadata.",
+    )
+    parser.add_argument("--registry-key", default=DEFAULT_REGISTRY_KEY)
+    parser.add_argument("--source-experiment", default=DEFAULT_SOURCE_EXPERIMENT)
+    parser.add_argument("--cohort", default=DEFAULT_COHORT)
+    parser.add_argument("--checkpoint-root", default=DEFAULT_CHECKPOINT_ROOT)
+    parser.add_argument("--expected-checkpoint-step", type=int, default=DEFAULT_EXPECTED_STEP)
     parser.add_argument("--text-bundle", action="append", choices=TEXT_BUNDLE_CHOICES, default=[])
     parser.add_argument("--tpu-type", default=DEFAULT_TPU_TYPE)
     parser.add_argument("--tpu-region", default=DEFAULT_TPU_REGION)
@@ -460,17 +510,34 @@ def main() -> None:
     datasets = build_text_feature_datasets(text_bundle_keys)
     dataset_names = tuple(datasets)
     if args.state_csv is None:
-        state_row = build_state_row(
-            matrix_csv=args.matrix_csv,
-            run_name=args.run_name,
-            text_bundle_keys=text_bundle_keys,
-            text_dataset_names=dataset_names,
-            max_docs_per_dataset=args.max_docs_per_dataset,
-            max_eval_instances=args.max_eval_instances,
-            default_tpu_type=args.tpu_type,
-            default_tpu_region=args.tpu_region,
-            default_tpu_zone=args.tpu_zone,
-        )
+        if args.matrix_csv:
+            state_row = build_state_row(
+                matrix_csv=args.matrix_csv,
+                run_name=args.run_name,
+                text_bundle_keys=text_bundle_keys,
+                text_dataset_names=dataset_names,
+                max_docs_per_dataset=args.max_docs_per_dataset,
+                max_eval_instances=args.max_eval_instances,
+                default_tpu_type=args.tpu_type,
+                default_tpu_region=args.tpu_region,
+                default_tpu_zone=args.tpu_zone,
+            )
+        else:
+            state_row = _build_state_row_from_values(
+                run_name=args.run_name,
+                registry_key=args.registry_key,
+                source_experiment=args.source_experiment,
+                cohort=args.cohort,
+                checkpoint_root=args.checkpoint_root,
+                expected_checkpoint_step=args.expected_checkpoint_step,
+                text_bundle_keys=text_bundle_keys,
+                text_dataset_names=dataset_names,
+                max_docs_per_dataset=args.max_docs_per_dataset,
+                max_eval_instances=args.max_eval_instances,
+                default_tpu_type=args.tpu_type,
+                default_tpu_region=args.tpu_region,
+                default_tpu_zone=args.tpu_zone,
+            )
         state_rows = [state_row]
     else:
         state_rows = _load_state_rows(args.state_csv)

@@ -72,6 +72,33 @@ def test_build_state_row_for_proportional_checkpoint(monkeypatch, tmp_path: Path
     assert row.text_dataset_count == 2
 
 
+def test_build_state_row_from_values_does_not_need_local_matrix(monkeypatch) -> None:
+    def fake_exact_hf_checkpoint(checkpoint_root: str, expected_step: int) -> str:
+        return f"{checkpoint_root}/hf/step-{expected_step}"
+
+    monkeypatch.setattr(canary, "_exact_hf_checkpoint", fake_exact_hf_checkpoint)
+
+    row = canary._build_state_row_from_values(
+        run_name="baseline_proportional",
+        registry_key="registry",
+        source_experiment="source",
+        cohort="signal",
+        checkpoint_root="gs://marin-us-east5/checkpoints/source/baseline_proportional-123456",
+        expected_checkpoint_step=22887,
+        text_bundle_keys=("paloma",),
+        text_dataset_names=("paloma/c4_en",),
+        max_docs_per_dataset=8,
+        max_eval_instances=4,
+        default_tpu_type="v5p-8",
+        default_tpu_region="us-east5",
+        default_tpu_zone="us-east5-a",
+    )
+
+    assert row.launch_decision == "launch"
+    assert row.registry_key == "registry"
+    assert row.hf_checkpoint_latest.endswith("/hf/step-22887")
+
+
 def test_build_state_row_rejects_non_east5_checkpoint(monkeypatch, tmp_path: Path) -> None:
     matrix_path = _matrix_csv(tmp_path)
     frame = pd.read_csv(matrix_path)
