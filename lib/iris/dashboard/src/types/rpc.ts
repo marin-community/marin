@@ -98,8 +98,6 @@ export interface TaskStatus {
   pendingReason?: string
   canBeScheduled?: boolean
   containerId?: string
-  statusTextDetailMd?: string
-  statusTextSummaryMd?: string
 }
 
 // -- Jobs --

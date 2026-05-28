@@ -19,14 +19,21 @@ Usage:
     # Run a specific group: rpcs, scheduling, polling, dashboard, endpoints,
     # apply_contention.
     uv run python lib/iris/scripts/benchmark_controller.py --only polling
+
+    # Benchmark the Reconcile RPC dispatch + apply tick on a synthesized DB
+    # (independent of the checkpoint-driven groups above).
+    uv run python lib/iris/scripts/benchmark_controller.py reconcile \\
+        --num-tasks 5000 --tasks-per-worker 64 --payload-bytes 100000
 """
 
+import asyncio
 import dataclasses
 import math
 import os
 import shutil
 import signal
 import sqlite3
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -34,11 +41,14 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 import click
+import uvicorn
 import yaml
+from connectrpc.request import RequestContext
 from iris.cluster.controller import reads
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
@@ -60,6 +70,7 @@ if not hasattr(_Tx, "fetchall"):
     _Tx.fetchone = lambda self, stmt, params=None: self.execute(stmt, params).first()
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
 from iris.cluster.controller.reads import SchedulableWorker, healthy_active_workers_with_attributes  # noqa: F401
+from iris.cluster.controller.reconcile import ReconcileInputs, ReconcileRow, reconcile_workers
 from iris.cluster.controller.scheduler import Scheduler
 from iris.cluster.controller.schema import (
     endpoints_table,
@@ -82,9 +93,12 @@ from iris.cluster.controller.transitions import (
     TaskUpdate,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
+from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.worker_connect import WorkerServiceASGIApplication
 from iris.version import client_revision_date
 from rigging.timing import Timestamp
 from sqlalchemy import func, select, text, update
@@ -147,21 +161,12 @@ class _FakeProvider:
     def ping_workers(self, workers):
         return []
 
-    def reconcile_workers(self, plans):
+    def reconcile_workers(self, plans, addresses):
         # Same shape the test-suite FakeProvider returns. Only exercised if
         # someone disables dry_run on the harness.
-        from iris.cluster.controller.worker_provider import WorkerReconcileResult
+        from iris.cluster.controller.reconcile import ReconcileResult
 
-        return [
-            WorkerReconcileResult(
-                worker_id=plan.worker_id,
-                start_response=worker_pb2.Worker.StartTasksResponse() if plan.start_tasks else None,
-                start_error=None,
-                poll_updates=[],
-                poll_error=None,
-            )
-            for plan in plans
-        ]
+        return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]
 
     def close(self):
         pass
@@ -181,10 +186,6 @@ class RpcHarness:
     snapshot stays stable across benchmark iterations, but RPCs still
     contend with the scheduler's reads and the loop's CPU cost, matching
     production shape.
-
-    ``on_loop`` toggles the SetTaskStatusText ``@on_loop`` attribute inside
-    the child before the controller is built so the dispatch mode is locked
-    in for the lifetime of the harness.
     """
 
     def __init__(
@@ -193,7 +194,6 @@ class RpcHarness:
         tmp: Path,
         *,
         startup_timeout_s: float = 30.0,
-        on_loop: bool = False,
     ) -> None:
         tmp.mkdir(parents=True, exist_ok=True)
         cmd = [
@@ -206,8 +206,6 @@ class RpcHarness:
             "--state-dir",
             str(tmp / "server-state"),
         ]
-        if on_loop:
-            cmd.append("--on-loop")
         self._proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -287,9 +285,9 @@ class RpcLoad:
 
     The runner picks ``max(n_clients_min, ceil(target_rps / MAX_PER_THREAD_RPS))``.
     Set this above 1 to model loads where the *connection count* matters
-    independently of throughput — e.g. SetTaskStatusText in production is
-    pushed by ~200 task processes, each holding its own connection. A single
-    thread doing 316 rps doesn't expose the same concurrency on the server.
+    independently of throughput — e.g. a hot RPC pushed by many task
+    processes, each holding its own connection. A single thread doing N rps
+    doesn't expose the same concurrency on the server.
     """
 
 
@@ -623,28 +621,6 @@ def _has_committed_columns(db: ControllerDB) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def load_set_task_status_text(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
-    task_ids = [f"/bench/sts/{i:04d}" for i in range(50)]
-    counter = {"n": 0}
-    payload = "x" * 256
-    short = payload[:32]
-
-    def invoke(client: ControllerServiceClientSync) -> None:
-        tid = task_ids[counter["n"] % len(task_ids)]
-        counter["n"] += 1
-        client.set_task_status_text(
-            job_pb2.SetTaskStatusTextRequest(
-                task_id=tid,
-                status_text_detail_md=payload,
-                status_text_summary_md=short,
-            )
-        )
-
-    # Production reality: ~200 task processes each push their own status,
-    # so the connection count on the server matters as much as the throughput.
-    return RpcLoad(name="SetTaskStatusText", target_rps=rps, invoke=invoke, n_clients_min=200)
-
-
 def load_get_job_state(harness: RpcHarness, db: ControllerDB, rps: float, batch: int = 1) -> RpcLoad | None:
     with db.read_snapshot() as tx:
         rows = tx.fetchall(select(jobs_table.c.job_id).limit(50))
@@ -657,29 +633,6 @@ def load_get_job_state(harness: RpcHarness, db: ControllerDB, rps: float, batch:
         client.get_job_state(req)
 
     return RpcLoad(name="GetJobState", target_rps=rps, invoke=invoke)
-
-
-def load_update_task_status(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
-    hb_requests = _build_heartbeat_requests(db)
-    if not hb_requests:
-        return None
-    mid = hb_requests[len(hb_requests) // 2]
-    rpc_req = controller_pb2.Controller.UpdateTaskStatusRequest(
-        worker_id=str(mid.worker_id),
-        updates=[
-            job_pb2.WorkerTaskStatus(
-                task_id=u.task_id.to_wire(),
-                attempt_id=u.attempt_id,
-                state=u.new_state,
-            )
-            for u in mid.updates
-        ],
-    )
-
-    def invoke(client: ControllerServiceClientSync) -> None:
-        client.update_task_status(rpc_req)
-
-    return RpcLoad(name="UpdateTaskStatus", target_rps=rps, invoke=invoke)
 
 
 def load_register_endpoint(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
@@ -886,9 +839,7 @@ def load_get_process_status(harness: RpcHarness, db: ControllerDB, rps: float) -
 
 
 PRODUCTION_MIX_RPS: dict[str, float] = {
-    "SetTaskStatusText": 316.0,
     "GetJobState": 7.85,
-    "UpdateTaskStatus": 1.71,
     "ListEndpoints": 0.90,
     "GetJobStatus": 0.73,
     "RegisterEndpoint": 0.45,
@@ -906,9 +857,7 @@ PRODUCTION_MIX_RPS: dict[str, float] = {
 }
 
 _FACTORY_BY_NAME: dict[str, Callable[..., RpcLoad | None]] = {
-    "SetTaskStatusText": load_set_task_status_text,
     "GetJobState": load_get_job_state,
-    "UpdateTaskStatus": load_update_task_status,
     "ListEndpoints": load_list_endpoints,
     "GetJobStatus": load_get_job_status,
     "RegisterEndpoint": load_register_endpoint,
@@ -960,7 +909,7 @@ def _bench_load(name: str, harness: RpcHarness, load: RpcLoad | None, **bench_kw
 
 def benchmark_rpcs(db: ControllerDB) -> None:
     """Cover the highest-volume RPCs: GetJobState, ListJobs, GetJobStatus,
-    Register, RegisterEndpoint, LaunchJob, TerminateJob, UpdateTaskStatus.
+    Register, RegisterEndpoint, LaunchJob, TerminateJob.
 
     All RPCs go through ``RpcHarness`` (real Controller in dry_run + Connect
     HTTP). Numbers include serialization, ASGI dispatch, AsyncServiceAdapter,
@@ -1105,46 +1054,6 @@ def benchmark_rpcs(db: ControllerDB) -> None:
         else:
             print("  RPC: TerminateJob                                                 (skipped, no running jobs)")
 
-        # ---- UpdateTaskStatus (4.8k/day, p95=256ms) — one RPC per worker.
-        hb_requests = _build_heartbeat_requests(write_db)
-        if hb_requests:
-            total_t = sum(len(r.updates) for r in hb_requests)
-            print(f"  (UpdateTaskStatus batch: {len(hb_requests)} workers, {total_t} task updates total)")
-
-            rpc_hb_requests = [
-                controller_pb2.Controller.UpdateTaskStatusRequest(
-                    worker_id=str(req.worker_id),
-                    updates=[
-                        job_pb2.WorkerTaskStatus(
-                            task_id=u.task_id.to_wire(),
-                            attempt_id=u.attempt_id,
-                            state=u.new_state,
-                        )
-                        for u in req.updates
-                    ],
-                )
-                for req in hb_requests
-            ]
-            mid = rpc_hb_requests[len(rpc_hb_requests) // 2]
-            update_client = harness.make_client()
-
-            bench(
-                f"RPC: UpdateTaskStatus (1 worker, t={len(mid.updates)})",
-                lambda: update_client.update_task_status(mid),
-            )
-
-            # _update_all_serial is bespoke: it issues one call per worker in sequence
-            # so total latency is the sum — a different measurement than per-RPC.
-            def _update_all_serial():
-                for req in rpc_hb_requests:
-                    update_client.update_task_status(req)
-
-            bench(
-                f"RPC: UpdateTaskStatus (w={len(rpc_hb_requests)} serial, t={total_t})",
-                _update_all_serial,
-                min_runs=3,
-                min_time_s=2.0,
-            )
     finally:
         harness.close()
         write_db.close()
@@ -1876,7 +1785,7 @@ def benchmark_apply_contention(db: ControllerDB) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Group: set_task_status_text (on_loop vs threadpool dispatch comparison)
+# Shared latency / scenario helpers (used by the rpcs and scenario groups)
 # ---------------------------------------------------------------------------
 
 
@@ -1890,85 +1799,6 @@ def _percentiles_ms(latencies: list[float]) -> tuple[float, float, float, float,
         latencies[min(int(n * 0.999), n - 1)],
         latencies[-1],
     )
-
-
-def _set_status_text_probe(
-    harness: "RpcHarness",
-    *,
-    n_threads: int,
-    duration_s: float,
-    payload_size: int = 256,
-) -> dict:
-    """Saturate SetTaskStatusText from ``n_threads`` client threads.
-
-    Each thread runs a tight loop with its own pooled client — no rate
-    limiting — so the result is the ceiling, not a hand-throttled target.
-    """
-    stop = threading.Event()
-    payload = "x" * payload_size
-    per_thread: list[list[float]] = [[] for _ in range(n_threads)]
-    errors: list[BaseException] = []
-
-    def worker(idx: int) -> None:
-        client = harness.make_client()
-        latencies = per_thread[idx]
-        task_id = f"/u/probe/{uuid.uuid4().hex[:8]}-{idx}"
-        try:
-            while not stop.is_set():
-                t0 = time.perf_counter()
-                client.set_task_status_text(
-                    job_pb2.SetTaskStatusTextRequest(
-                        task_id=task_id,
-                        status_text_detail_md=payload,
-                        status_text_summary_md=payload[:32],
-                    )
-                )
-                latencies.append((time.perf_counter() - t0) * 1000.0)
-        except BaseException as exc:
-            errors.append(exc)
-        finally:
-            try:
-                client.close()
-            except Exception:
-                pass
-
-    threads = [threading.Thread(target=worker, args=(i,), name=f"sts-probe-{i}") for i in range(n_threads)]
-    t_start = time.perf_counter()
-    for t in threads:
-        t.start()
-    time.sleep(duration_s)
-    stop.set()
-    for t in threads:
-        t.join(timeout=30.0)
-    elapsed = time.perf_counter() - t_start
-
-    if errors:
-        print(f"  probe worker errors: {errors[0]!r}")
-    all_latencies = [v for sub in per_thread for v in sub]
-    if not all_latencies:
-        return {"n": 0, "rps": 0.0}
-    p50, p95, p99, p999, mx = _percentiles_ms(all_latencies)
-    return {
-        "n": len(all_latencies),
-        "rps": len(all_latencies) / elapsed,
-        "p50": p50,
-        "p95": p95,
-        "p99": p99,
-        "p999": p999,
-        "max": mx,
-    }
-
-
-def _print_probe(label: str, r: dict) -> None:
-    if r["n"] == 0:
-        print(f"  {label:36s}  (no samples)")
-        return
-    print(
-        f"  {label:36s}  n={r['n']:6d}  rps={r['rps']:8.1f}  "
-        f"p50={r['p50']:6.2f}ms  p95={r['p95']:7.2f}ms  "
-        f"p99={r['p99']:7.2f}ms  p99.9={r['p999']:7.2f}ms  max={r['max']:7.2f}ms"
-    )
-    _results.append((label, r["p50"], r["p95"], r["n"]))
 
 
 def _print_scenario_table(scenario: Scenario, results: dict[str, dict]) -> None:
@@ -1992,219 +1822,6 @@ def _print_scenario_table(scenario: Scenario, results: dict[str, dict]) -> None:
             f"{r['p50']:>6.1f}ms  {r['p95']:>6.1f}ms  {r['p99']:>6.1f}ms  {r['max']:>6.1f}ms"
         )
         _results.append((f"Scenario: {load.name}", r["p50"], r["p95"], r["n"]))
-
-
-def _run_set_status_text_variant(
-    db: ControllerDB,
-    *,
-    on_loop: bool,
-    n_threads: int,
-    duration_s: float,
-) -> dict:
-    """Boot a fresh harness with the requested dispatch mode and run the probe."""
-    label = "on_loop=True" if on_loop else "on_loop=False (threadpool)"
-    write_db = clone_db(db)
-    db_dir = write_db._db_dir
-    db_path = db_dir / ControllerDB.DB_FILENAME
-    write_db.close()
-    harness_dir = Path(tempfile.mkdtemp(prefix="iris_sts_probe_"))
-    harness = RpcHarness(db_path, harness_dir, on_loop=on_loop)
-    try:
-        # Warmup: prime the connection / event loop with a single call.
-        warmup = harness.make_client()
-        try:
-            warmup.set_task_status_text(
-                job_pb2.SetTaskStatusTextRequest(
-                    task_id="/u/warmup/0",
-                    status_text_detail_md="",
-                    status_text_summary_md="",
-                )
-            )
-        finally:
-            warmup.close()
-        # Single-call baseline (sequential, low load) so the on_loop dispatch
-        # cost is visible without saturation effects.
-        baseline_client = harness.make_client()
-        baseline_latencies: list[float] = []
-        try:
-            for _ in range(200):
-                t0 = time.perf_counter()
-                baseline_client.set_task_status_text(
-                    job_pb2.SetTaskStatusTextRequest(
-                        task_id="/u/baseline/0",
-                        status_text_detail_md="x" * 256,
-                        status_text_summary_md="x" * 32,
-                    )
-                )
-                baseline_latencies.append((time.perf_counter() - t0) * 1000.0)
-        finally:
-            baseline_client.close()
-        baseline_p50, baseline_p95, baseline_p99, _, _ = _percentiles_ms(baseline_latencies)
-        print(
-            f"  SetTaskStatusText [{label}] single-client baseline: "
-            f"p50={baseline_p50:.2f}ms  p95={baseline_p95:.2f}ms  p99={baseline_p99:.2f}ms  (n=200)"
-        )
-        _results.append((f"RPC: SetTaskStatusText baseline [{label}]", baseline_p50, baseline_p95, 200))
-
-        # Saturation probe.
-        return _set_status_text_probe(harness, n_threads=n_threads, duration_s=duration_s)
-    finally:
-        harness.close()
-        shutil.rmtree(db_dir, ignore_errors=True)
-        shutil.rmtree(harness_dir, ignore_errors=True)
-
-
-def _measure_update_task_status_under_storm(
-    db: ControllerDB,
-    *,
-    on_loop: bool,
-    storm_rps_target: int,
-    storm_threads: int,
-    victim_duration_s: float,
-) -> tuple[dict, dict]:
-    """Run a victim UpdateTaskStatus RPC alongside a SetTaskStatusText storm.
-
-    Returns ``(baseline, under_storm)`` results so the caller can quantify the
-    blast radius. Both phases share the same harness (and therefore the same
-    background scheduler/polling/ping cadence) so the only changing variable
-    is whether the storm is running.
-
-    The victim is a real ``UpdateTaskStatus`` RPC built from the snapshot's
-    live worker→task attribution. Sample a worker that actually has updates
-    to push so we measure a write-touching call, not a no-op early-return.
-    """
-    label = "on_loop=True" if on_loop else "on_loop=False (threadpool)"
-    write_db = clone_db(db)
-    db_dir = write_db._db_dir
-    db_path = db_dir / ControllerDB.DB_FILENAME
-    write_db.close()
-    harness_dir = Path(tempfile.mkdtemp(prefix="iris_sts_contend_"))
-    harness = RpcHarness(db_path, harness_dir, on_loop=on_loop)
-    try:
-        # Build the victim request. Bias toward a worker with non-empty updates.
-        hb_requests = _build_heartbeat_requests(db)
-        candidates = [req for req in hb_requests if req.updates]
-        if not candidates:
-            print(f"  [{label}] (skipped: no worker with active tasks for victim)")
-            return ({"n": 0, "rps": 0.0}, {"n": 0, "rps": 0.0})
-        sample = candidates[len(candidates) // 2]
-        victim_req = controller_pb2.Controller.UpdateTaskStatusRequest(
-            worker_id=str(sample.worker_id),
-            updates=[
-                job_pb2.WorkerTaskStatus(
-                    task_id=u.task_id.to_wire(),
-                    attempt_id=u.attempt_id,
-                    state=u.new_state,
-                )
-                for u in sample.updates
-            ],
-        )
-
-        def _victim_run(seconds: float) -> dict:
-            client = harness.make_client()
-            latencies: list[float] = []
-            try:
-                deadline = time.perf_counter() + seconds
-                while time.perf_counter() < deadline:
-                    t0 = time.perf_counter()
-                    client.update_task_status(victim_req)
-                    latencies.append((time.perf_counter() - t0) * 1000.0)
-            finally:
-                client.close()
-            if not latencies:
-                return {"n": 0, "rps": 0.0}
-            p50, p95, p99, p999, mx = _percentiles_ms(latencies)
-            return {
-                "n": len(latencies),
-                "rps": len(latencies) / seconds,
-                "p50": p50,
-                "p95": p95,
-                "p99": p99,
-                "p999": p999,
-                "max": mx,
-            }
-
-        # Warmup: prime connections + JIT paths.
-        warmup_client = harness.make_client()
-        try:
-            warmup_client.update_task_status(victim_req)
-            warmup_client.set_task_status_text(
-                job_pb2.SetTaskStatusTextRequest(
-                    task_id="/u/warmup/0", status_text_detail_md="", status_text_summary_md=""
-                )
-            )
-        finally:
-            warmup_client.close()
-
-        # Phase 1: victim baseline (no storm).
-        baseline = _victim_run(victim_duration_s)
-
-        # Phase 2: storm + victim concurrently. The storm threads rate-limit
-        # themselves to ``storm_rps_target`` total so we're testing the
-        # production scenario (1000 RPS), not the saturation ceiling.
-        stop = threading.Event()
-        per_thread_target = storm_rps_target / storm_threads
-        storm_payload = "x" * 256
-        storm_short = storm_payload[:32]
-        storm_latencies: list[list[float]] = [[] for _ in range(storm_threads)]
-
-        def _storm_worker(idx: int) -> None:
-            client = harness.make_client()
-            latencies = storm_latencies[idx]
-            task_id = f"/u/storm/{uuid.uuid4().hex[:8]}-{idx}"
-            interval = 1.0 / per_thread_target if per_thread_target > 0 else 0.0
-            next_send = time.perf_counter()
-            try:
-                while not stop.is_set():
-                    now = time.perf_counter()
-                    wait = next_send - now
-                    if wait > 0:
-                        # Sleep in small slices so stop signal is responsive.
-                        time.sleep(min(wait, 0.05))
-                        continue
-                    t0 = time.perf_counter()
-                    client.set_task_status_text(
-                        job_pb2.SetTaskStatusTextRequest(
-                            task_id=task_id,
-                            status_text_detail_md=storm_payload,
-                            status_text_summary_md=storm_short,
-                        )
-                    )
-                    latencies.append((time.perf_counter() - t0) * 1000.0)
-                    next_send += interval
-                    # If we fell badly behind, don't try to catch up — reset the
-                    # baseline so a slow tail doesn't compound.
-                    if next_send < time.perf_counter() - interval:
-                        next_send = time.perf_counter()
-            finally:
-                try:
-                    client.close()
-                except Exception:
-                    pass
-
-        threads = [
-            threading.Thread(target=_storm_worker, args=(i,), name=f"sts-storm-{i}") for i in range(storm_threads)
-        ]
-        for t in threads:
-            t.start()
-        # Let the storm reach steady state before measuring the victim.
-        time.sleep(0.5)
-        under_storm = _victim_run(victim_duration_s)
-        stop.set()
-        for t in threads:
-            t.join(timeout=10.0)
-
-        storm_total = sum(len(s) for s in storm_latencies)
-        storm_rps_actual = storm_total / (victim_duration_s + 0.5)
-        print(
-            f"  [{label}] storm actual: {storm_rps_actual:.0f} rps "
-            f"(target {storm_rps_target} rps from {storm_threads} threads, sent {storm_total})"
-        )
-        return baseline, under_storm
-    finally:
-        harness.close()
-        shutil.rmtree(db_dir, ignore_errors=True)
-        shutil.rmtree(harness_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -2240,88 +1857,6 @@ def benchmark_scenario(db: ControllerDB) -> None:
         sample_db.close()
         shutil.rmtree(db_dir, ignore_errors=True)
         shutil.rmtree(harness_dir, ignore_errors=True)
-
-
-def benchmark_set_task_status_text(db: ControllerDB) -> None:
-    """Compare SetTaskStatusText latency & throughput with @on_loop vs threadpool.
-
-    Production sees ~1000 SetTaskStatusText/sec. The handler body is two
-    in-memory dict writes (microseconds); what changes between the two
-    dispatch modes is whether each call runs inline on the asyncio event loop
-    (one-at-a-time, blocks every other on_loop handler) or hops into a thread
-    via ``asyncio.to_thread`` (parallel-capable, pays a thread-hop per call).
-
-    Two scenarios:
-
-    1. **Saturation probe**: N client threads in a tight loop hitting
-       SetTaskStatusText with no rate limiting — surfaces the ceiling and
-       lets us compare modes head-to-head.
-
-    2. **Production-shape contention**: a victim ``UpdateTaskStatus`` RPC
-       runs alongside a 1000 RPS SetTaskStatusText storm. The delta between
-       victim-baseline and victim-under-storm is the blast radius the prod
-       traffic imposes on every other handler.
-
-    Both scenarios run the controller's scheduler / polling / ping loops at
-    their natural production cadence (10s / 1s / etc).
-    """
-    n_threads = 8
-    duration_s = 5.0
-
-    # ---- Saturation probe ----
-    print(f"  (saturation probe: {n_threads} client threads, {duration_s:.0f}s per variant, no rate-limit)")
-    threadpool_result = _run_set_status_text_variant(db, on_loop=False, n_threads=n_threads, duration_s=duration_s)
-    _print_probe("RPC: SetTaskStatusText [threadpool]", threadpool_result)
-
-    on_loop_result = _run_set_status_text_variant(db, on_loop=True, n_threads=n_threads, duration_s=duration_s)
-    _print_probe("RPC: SetTaskStatusText [on_loop]", on_loop_result)
-
-    if threadpool_result["n"] and on_loop_result["n"]:
-        rps_ratio = on_loop_result["rps"] / threadpool_result["rps"]
-        p99_ratio = on_loop_result["p99"] / threadpool_result["p99"]
-        print(f"  saturation: on_loop / threadpool ratio  rps x{rps_ratio:.2f}, p99 x{p99_ratio:.2f}")
-
-    # ---- Production-shape contention: victim UpdateTaskStatus + 1000 RPS storm. ----
-    print()
-    storm_rps = 1000
-    storm_threads = 8
-    victim_seconds = 5.0
-    print(
-        f"  (contention probe: victim=UpdateTaskStatus, storm={storm_rps} rps SetTaskStatusText "
-        f"from {storm_threads} threads, {victim_seconds:.0f}s)"
-    )
-    tp_baseline, tp_under = _measure_update_task_status_under_storm(
-        db, on_loop=False, storm_rps_target=storm_rps, storm_threads=storm_threads, victim_duration_s=victim_seconds
-    )
-    _print_probe("Victim: UpdateTaskStatus [storm=threadpool] baseline", tp_baseline)
-    _print_probe("Victim: UpdateTaskStatus [storm=threadpool] +storm", tp_under)
-
-    ol_baseline, ol_under = _measure_update_task_status_under_storm(
-        db, on_loop=True, storm_rps_target=storm_rps, storm_threads=storm_threads, victim_duration_s=victim_seconds
-    )
-    _print_probe("Victim: UpdateTaskStatus [storm=on_loop] baseline", ol_baseline)
-    _print_probe("Victim: UpdateTaskStatus [storm=on_loop] +storm", ol_under)
-
-    # Blast-radius summary: how much does the storm cost the victim?
-    def _ratio(under: dict, base: dict, key: str) -> str:
-        if not under.get("n") or not base.get("n") or base[key] == 0:
-            return "—"
-        return f"x{under[key] / base[key]:.2f}"
-
-    print()
-    print("  blast radius (victim under storm / victim baseline):")
-    print(
-        f"    threadpool storm:  p50 {_ratio(tp_under, tp_baseline, 'p50')}  "
-        f"p95 {_ratio(tp_under, tp_baseline, 'p95')}  "
-        f"p99 {_ratio(tp_under, tp_baseline, 'p99')}  "
-        f"max {_ratio(tp_under, tp_baseline, 'max')}"
-    )
-    print(
-        f"    on_loop storm:     p50 {_ratio(ol_under, ol_baseline, 'p50')}  "
-        f"p95 {_ratio(ol_under, ol_baseline, 'p95')}  "
-        f"p99 {_ratio(ol_under, ol_baseline, 'p99')}  "
-        f"max {_ratio(ol_under, ol_baseline, 'max')}"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -2423,7 +1958,6 @@ _GROUPS = (
     "dashboard",
     "endpoints",
     "apply_contention",
-    "set_task_status_text",
     "scenario",
 )
 
@@ -2488,7 +2022,6 @@ def run_cmd(db_path: Path | None, only_group: str | None, scenario_scale: float,
         ("dashboard", benchmark_dashboard),
         ("endpoints", benchmark_endpoints),
         ("apply_contention", benchmark_apply_contention),
-        ("set_task_status_text", benchmark_set_task_status_text),
         ("scenario", benchmark_scenario),
     ]
     for name, fn in groups:
@@ -2517,31 +2050,13 @@ def run_cmd(db_path: Path | None, only_group: str | None, scenario_scale: float,
     required=True,
     help="Scratch directory for the controller's local state / remote-state-dir.",
 )
-@click.option(
-    "--on-loop/--no-on-loop",
-    "on_loop",
-    default=False,
-    help="Run SetTaskStatusText inline on the event loop (vs the default threadpool dispatch).",
-)
-def serve_cmd(db_path: Path, state_dir: Path, on_loop: bool) -> None:
+def serve_cmd(db_path: Path, state_dir: Path) -> None:
     """Boot a Controller(dry_run=True) bound to ``db_path`` and serve over RPC.
 
     Prints ``READY port=N`` to stdout once the HTTP server is accepting
     connections, then blocks until SIGTERM. Used by ``RpcHarness`` so the
     benchmark process and the controller have independent GILs.
-
-    ``--on-loop`` flips the ``@on_loop`` attribute on
-    ``ControllerServiceImpl.set_task_status_text`` before the controller is
-    built. ``AsyncServiceAdapter`` reads the attribute when it walks the
-    service's methods, so the toggle is locked in for this process's
-    lifetime.
     """
-    if on_loop:
-        from iris.cluster.controller.service import ControllerServiceImpl
-        from iris.rpc.async_adapter import _ON_LOOP_ATTR
-
-        setattr(ControllerServiceImpl.set_task_status_text, _ON_LOOP_ATTR, True)
-
     state_dir.mkdir(parents=True, exist_ok=True)
     db = ControllerDB(db_dir=db_path.parent)
     db.apply_migrations()
@@ -2578,6 +2093,557 @@ def serve_cmd(db_path: Path, state_dir: Path, on_loop: bool) -> None:
     stop.wait()
     controller.stop()
     db.close()
+
+
+# ---------------------------------------------------------------------------
+# Reconcile dispatch + apply tick benchmark (synthetic DB + fake worker)
+#
+# Unlike the checkpoint-driven groups above, this exercise builds its own DB
+# representing a single zephyr-shaped job (one root job, ``num_tasks`` task
+# replicas, all dispatched to ``num_workers`` healthy workers), then times the
+# four stages of one polling tick:
+#
+#     1. ``_snapshot_reconcile_inputs`` (DB read + per-job RunTaskRequest
+#        template build).
+#     2. ``reconcile_workers(inputs)`` (pure-compute: copies the spec proto
+#        into a ``DesiredAttempt`` for every ASSIGNED row).
+#     3. ``WorkerProvider.reconcile_workers(plans, addresses)`` (async fanout
+#        over Connect RPC to a single in-process fake worker that echoes
+#        observations back).
+#     4. ``ControllerTransitions.apply_reconcile_result`` (one DB transaction
+#        fanning all per-worker results in).
+#
+# A single uvicorn-backed fake worker is mounted on localhost; every
+# ``worker_id`` in the DB resolves to that address, isolating the cost of the
+# controller-side loop + Connect protocol + asyncio.gather without paying
+# NxN port setup.
+# ---------------------------------------------------------------------------
+
+
+def _reconcile_worker_metadata() -> job_pb2.WorkerMetadata:
+    device = job_pb2.DeviceConfig()
+    device.cpu.CopyFrom(job_pb2.CpuDevice(variant="cpu"))
+    meta = job_pb2.WorkerMetadata(
+        hostname="bench-worker",
+        ip_address="127.0.0.1",
+        cpu_count=64,
+        memory_bytes=256 * 1024**3,
+        disk_bytes=2 * 1024**4,
+        device=device,
+    )
+    meta.attributes["device_type"].string_value = "cpu"
+    meta.attributes["device_variant"].string_value = "cpu"
+    return meta
+
+
+def _reconcile_launch_request(
+    job_id: JobName,
+    *,
+    replicas: int,
+    payload_bytes: int,
+) -> controller_pb2.Controller.LaunchJobRequest:
+    """Build a zephyr-shaped LaunchJobRequest with an inflated workdir file.
+
+    The workdir file lives on the job (not the task), and the controller
+    pulls it once per job and embeds it in the cached RunTaskRequest
+    template. Each ASSIGNED row's DesiredAttempt then carries a full copy
+    of that template — so ``payload_bytes`` directly multiplies into the
+    wire bytes for every ASSIGNED dispatch.
+    """
+    entrypoint = job_pb2.RuntimeEntrypoint()
+    entrypoint.run_command.argv[:] = ["python", "-m", "zephyr.worker", "--task-id", "$IRIS_TASK_ID"]
+    if payload_bytes > 0:
+        entrypoint.workdir_files["state.pkl"] = (b"x" * 64 + b"\x00" * 8) * (payload_bytes // 72 + 1)
+
+    return controller_pb2.Controller.LaunchJobRequest(
+        name=job_id.to_wire(),
+        entrypoint=entrypoint,
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+        replicas=replicas,
+        task_image="bench:latest",
+    )
+
+
+@dataclasses.dataclass
+class SyntheticReconcileState:
+    db: ControllerDB
+    txns: ControllerTransitions
+    health: WorkerHealthTracker
+    job_id: JobName
+    worker_ids: list[WorkerId]
+    task_ids: list[JobName]
+    address: str  # all workers share this loopback address
+
+
+def _build_synthetic_reconcile_state(
+    *,
+    db_dir: Path,
+    num_tasks: int,
+    num_workers: int,
+    payload_bytes: int,
+    worker_address: str,
+) -> SyntheticReconcileState:
+    """Build a fresh DB with one job, ``num_tasks`` tasks, ``num_workers`` workers.
+
+    Every task is ``ASSIGNED`` to a worker — exactly the state the dispatch
+    tick has to handle when the controller has just finished scheduling but
+    no worker has acknowledged yet. This is the worst case for the
+    Reconcile dispatch because every plan carries the full inline spec.
+    """
+    db = ControllerDB(db_dir=db_dir)
+    db.apply_migrations()
+    health = WorkerHealthTracker()
+    txns = ControllerTransitions(db, health=health)
+
+    job_id = JobName.root("bench", "zephyr")
+    request = _reconcile_launch_request(job_id, replicas=num_tasks, payload_bytes=payload_bytes)
+
+    meta = _reconcile_worker_metadata()
+    worker_ids: list[WorkerId] = []
+    chunk = 500
+    now = Timestamp.now()
+    for chunk_start in range(0, num_workers, chunk):
+        with db.transaction() as cur:
+            for i in range(chunk_start, min(chunk_start + chunk, num_workers)):
+                wid = WorkerId(f"w-{i:05d}")
+                worker_ids.append(wid)
+                txns.register_or_refresh_worker(
+                    cur,
+                    worker_id=wid,
+                    address=worker_address,
+                    metadata=meta,
+                    ts=now,
+                    slice_id="",
+                    scale_group="bench",
+                )
+    health.heartbeat(worker_ids, now.epoch_ms())
+
+    with db.transaction() as cur:
+        txns.submit_job(cur, job_id, request, now)
+
+    with db.read_snapshot() as tx:
+        task_rows = tx.execute(
+            select(tasks_table.c.task_id).where(tasks_table.c.job_id == job_id).order_by(tasks_table.c.task_index)
+        ).all()
+    task_ids = [r.task_id for r in task_rows]
+    assert len(task_ids) == num_tasks, f"expected {num_tasks} tasks, got {len(task_ids)}"
+
+    for chunk_start in range(0, num_tasks, chunk):
+        slice_tasks = task_ids[chunk_start : chunk_start + chunk]
+        assignments = [
+            Assignment(task_id=tid, worker_id=worker_ids[(chunk_start + i) % num_workers])
+            for i, tid in enumerate(slice_tasks)
+        ]
+        with db.transaction() as cur:
+            txns.queue_assignments(cur, assignments)
+
+    return SyntheticReconcileState(
+        db=db, txns=txns, health=health, job_id=job_id, worker_ids=worker_ids, task_ids=task_ids, address=worker_address
+    )
+
+
+class _EchoWorker:
+    """WorkerService that echoes each desired run as RUNNING.
+
+    Mirrors a worker that has accepted the spec and is about to launch the
+    process. Stop intents emit a KILLED observation. The shape matches
+    ``WorkerLifecycle.handle_reconcile`` closely enough that the controller's
+    apply path exercises its real branches.
+    """
+
+    async def reconcile(
+        self,
+        request: worker_pb2.Worker.ReconcileRequest,
+        _ctx: RequestContext,
+    ) -> worker_pb2.Worker.ReconcileResponse:
+        observed: list[worker_pb2.Worker.AttemptObservation] = []
+        for desired in request.desired:
+            if desired.HasField("run"):
+                observed.append(
+                    worker_pb2.Worker.AttemptObservation(
+                        attempt_uid=desired.attempt_uid,
+                        state=job_pb2.TASK_STATE_RUNNING,
+                    )
+                )
+            elif desired.HasField("stop"):
+                observed.append(
+                    worker_pb2.Worker.AttemptObservation(
+                        attempt_uid=desired.attempt_uid,
+                        state=job_pb2.TASK_STATE_KILLED,
+                    )
+                )
+        return worker_pb2.Worker.ReconcileResponse(
+            worker_id=request.worker_id,
+            observed=observed,
+            health=worker_pb2.Worker.WorkerHealth(healthy=True),
+        )
+
+    async def get_task_status(self, request, ctx):
+        raise NotImplementedError
+
+    async def list_tasks(self, request, ctx):
+        raise NotImplementedError
+
+    async def health_check(self, request, ctx):
+        return worker_pb2.Worker.HealthResponse(healthy=True)
+
+    async def profile_task(self, request, ctx):
+        raise NotImplementedError
+
+    async def get_process_status(self, request, ctx):
+        raise NotImplementedError
+
+    async def exec_in_container(self, request, ctx):
+        raise NotImplementedError
+
+    async def ping(self, request, ctx):
+        return worker_pb2.Worker.PingResponse(healthy=True)
+
+    async def start_tasks(self, request, ctx):
+        raise NotImplementedError
+
+    async def stop_tasks(self, request, ctx):
+        raise NotImplementedError
+
+    async def poll_tasks(self, request, ctx):
+        raise NotImplementedError
+
+
+@contextmanager
+def _serve_fake_worker():
+    app = WorkerServiceASGIApplication(
+        _EchoWorker(),
+        compressions=IRIS_RPC_COMPRESSIONS,
+    )
+    config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error", log_config=None, timeout_keep_alive=120)
+    server = uvicorn.Server(config)
+
+    def _run():
+        # uvicorn's run() installs signal handlers from the main thread only;
+        # drive the asyncio loop manually instead.
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(server.serve())
+        finally:
+            loop.close()
+
+    thread = threading.Thread(target=_run, name="fake-worker", daemon=True)
+    thread.start()
+
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if server.started:
+            break
+        time.sleep(0.02)
+    else:
+        raise RuntimeError("fake worker did not start in 10s")
+
+    port = None
+    for sock in server.servers or []:
+        for s in sock.sockets:
+            port = s.getsockname()[1]
+            break
+        if port is not None:
+            break
+    if port is None:
+        raise RuntimeError("fake worker did not bind a port")
+    address = f"127.0.0.1:{port}"
+    try:
+        yield address
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+
+
+@dataclasses.dataclass
+class _StageTimings:
+    snapshot_ms: list[float] = dataclasses.field(default_factory=list)
+    reconcile_compute_ms: list[float] = dataclasses.field(default_factory=list)
+    rpc_fanout_ms: list[float] = dataclasses.field(default_factory=list)
+    apply_ms: list[float] = dataclasses.field(default_factory=list)
+    total_ms: list[float] = dataclasses.field(default_factory=list)
+
+
+def _reconcile_percentiles(xs: list[float]) -> tuple[float, float, float, float]:
+    if not xs:
+        return (0.0, 0.0, 0.0, 0.0)
+    xs = sorted(xs)
+    n = len(xs)
+    return (xs[n // 2], xs[int(n * 0.95)], xs[int(n * 0.99)], xs[-1])
+
+
+def _serialized_bytes(plans) -> int:
+    return sum(p.request.ByteSize() for p in plans)
+
+
+def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[ReconcileInputs, dict[WorkerId, str]]:
+    """Replicate ``controller._snapshot_reconcile_inputs`` against the synthetic DB."""
+    db = state.db
+    health = state.health
+    txns = state.txns
+    with db.read_snapshot() as snap:
+        addresses = reads.list_active_healthy_workers(snap, health)
+        if not addresses:
+            return ReconcileInputs(job_specs={}, worker_ids=[], rows_by_worker={}), {}
+        worker_ids = list(addresses)
+        target_ids = set(worker_ids)
+        raw_rows = snap.execute(
+            select(
+                task_attempts_table.c.worker_id,
+                tasks_table.c.task_id,
+                task_attempts_table.c.attempt_id,
+                tasks_table.c.state.label("task_state"),
+                task_attempts_table.c.state.label("attempt_state"),
+                tasks_table.c.job_id,
+                task_attempts_table.c.attempt_uid,
+            )
+            .select_from(
+                task_attempts_table.join(
+                    tasks_table,
+                    (tasks_table.c.task_id == task_attempts_table.c.task_id)
+                    & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
+                )
+            )
+            .where(
+                task_attempts_table.c.worker_id.is_not(None),
+                task_attempts_table.c.finished_at_ms.is_(None),
+            ),
+        ).all()
+        rows = [row for row in raw_rows if row.worker_id in target_ids]
+        templates_by_job: dict[JobName, job_pb2.RunTaskRequest | None] = {}
+        for row in rows:
+            if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
+                continue
+            if row.job_id not in templates_by_job:
+                templates_by_job[row.job_id] = txns.run_request_template(snap, row.job_id)
+
+    rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in worker_ids}
+    for row in rows:
+        rows_by_worker[WorkerId(str(row.worker_id))].append(
+            ReconcileRow(
+                worker_id=WorkerId(str(row.worker_id)),
+                task_id=row.task_id,
+                attempt_id=int(row.attempt_id),
+                task_state=int(row.task_state),
+                attempt_state=int(row.attempt_state),
+                job_id=row.job_id,
+                attempt_uid=AttemptUid(str(row.attempt_uid)),
+            )
+        )
+    job_specs = {jid: spec for jid, spec in templates_by_job.items() if spec is not None}
+    inputs = ReconcileInputs(job_specs=job_specs, worker_ids=worker_ids, rows_by_worker=rows_by_worker)
+    return inputs, addresses
+
+
+def _one_reconcile_tick(state: SyntheticReconcileState, provider: WorkerProvider) -> tuple[float, float, float, float]:
+    """Run one full reconcile tick. Returns (snapshot, compute, rpc, apply) ms."""
+    t0 = time.perf_counter()
+    inputs, addresses = _snapshot_reconcile_inputs(state)
+    t1 = time.perf_counter()
+    plans = reconcile_workers(inputs)
+    t2 = time.perf_counter()
+    results = provider.reconcile_workers(plans, addresses, use_reconcile_rpc=True)
+    t3 = time.perf_counter()
+    plan_by_worker = {p.worker_id: p for p in plans}
+    now = Timestamp.now()
+    with state.db.transaction() as cur:
+        for result in results:
+            plan = plan_by_worker[result.worker_id]
+            state.txns.apply_reconcile_result(cur, plan, result, now)
+    t4 = time.perf_counter()
+    return (t1 - t0) * 1000, (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000
+
+
+def _measure_full_tick(
+    state: SyntheticReconcileState,
+    provider: WorkerProvider,
+    *,
+    n_iters: int,
+) -> tuple[_StageTimings, _StageTimings]:
+    """Return ``(dispatch, steady_state)`` timings.
+
+    The first reconcile tick runs against a fully-ASSIGNED DB and triggers
+    the spec-carrying RPC dispatch — that's the **dispatch tick**, measured
+    once. The fake worker then echoes RUNNING observations and the apply
+    layer transitions every task. Subsequent ticks have nothing inline to
+    send (the worker is already running) and exercise the **steady-state
+    polling tick** that runs every 250 ms in production.
+    """
+    _snapshot_reconcile_inputs(state)
+
+    dispatch = _StageTimings()
+    s, c, r, a = _one_reconcile_tick(state, provider)
+    dispatch.snapshot_ms.append(s)
+    dispatch.reconcile_compute_ms.append(c)
+    dispatch.rpc_fanout_ms.append(r)
+    dispatch.apply_ms.append(a)
+    dispatch.total_ms.append(s + c + r + a)
+
+    steady = _StageTimings()
+    for _ in range(n_iters):
+        s, c, r, a = _one_reconcile_tick(state, provider)
+        steady.snapshot_ms.append(s)
+        steady.reconcile_compute_ms.append(c)
+        steady.rpc_fanout_ms.append(r)
+        steady.apply_ms.append(a)
+        steady.total_ms.append(s + c + r + a)
+    return dispatch, steady
+
+
+def _measure_compute_only(state: SyntheticReconcileState, *, n_iters: int) -> tuple[list[float], int]:
+    """Time just ``reconcile_workers`` (pure compute) — no RPC, no DB transaction."""
+    inputs, _addresses = _snapshot_reconcile_inputs(state)
+    plans = reconcile_workers(inputs)  # warmup
+    total_bytes = _serialized_bytes(plans)
+
+    times: list[float] = []
+    for _ in range(n_iters):
+        t0 = time.perf_counter()
+        _plans = reconcile_workers(inputs)
+        times.append((time.perf_counter() - t0) * 1000)
+    return times, total_bytes
+
+
+def _summarize_reconcile(label: str, xs: list[float], unit: str = "ms") -> str:
+    if not xs:
+        return f"{label}: (no samples)"
+    p50, p95, p99, mx = _reconcile_percentiles(xs)
+    return (
+        f"{label:<28s} mean={statistics.mean(xs):8.1f}{unit}  "
+        f"p50={p50:7.1f}{unit}  p95={p95:7.1f}{unit}  p99={p99:7.1f}{unit}  max={mx:7.1f}{unit}  (n={len(xs)})"
+    )
+
+
+def _human_bytes(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024**2:
+        return f"{n / 1024:.1f} KB"
+    if n < 1024**3:
+        return f"{n / 1024**2:.1f} MB"
+    return f"{n / 1024**3:.2f} GB"
+
+
+def _run_reconcile_scenario(
+    num_tasks: int,
+    tasks_per_worker: int,
+    payload_bytes: int,
+    n_iters: int,
+    parallelism: int,
+) -> dict:
+    """Run one reconcile scenario and return a dict of measurements."""
+    num_workers = max(1, (num_tasks + tasks_per_worker - 1) // tasks_per_worker)
+    tmp = Path(tempfile.mkdtemp(prefix="bench_reconcile_"))
+    print(
+        f"\n=== num_tasks={num_tasks}  num_workers={num_workers}  "
+        f"tasks_per_worker={tasks_per_worker}  payload={_human_bytes(payload_bytes)} ==="
+    )
+    sys.stdout.flush()
+    state = None
+    try:
+        with _serve_fake_worker() as address:
+            t0 = time.perf_counter()
+            state = _build_synthetic_reconcile_state(
+                db_dir=tmp,
+                num_tasks=num_tasks,
+                num_workers=num_workers,
+                payload_bytes=payload_bytes,
+                worker_address=address,
+            )
+            build_s = time.perf_counter() - t0
+            print(f"  build:                       {build_s * 1000:.0f} ms")
+
+            stub_factory = RpcWorkerStubFactory()
+            provider = WorkerProvider(stub_factory=stub_factory, parallelism=parallelism)
+            try:
+                compute_ms, total_bytes = _measure_compute_only(state, n_iters=n_iters)
+                per_worker_avg = total_bytes / max(1, len(state.worker_ids))
+                print(
+                    f"  ReconcileRequest payload:    total={_human_bytes(total_bytes)}  "
+                    f"avg/worker={_human_bytes(int(per_worker_avg))}"
+                )
+                print("  " + _summarize_reconcile("compute (reconcile_workers)", compute_ms))
+
+                dispatch, steady = _measure_full_tick(state, provider, n_iters=n_iters)
+                print("  -- dispatch tick (all ASSIGNED, full spec on the wire) --")
+                for label, xs in [
+                    ("snapshot", dispatch.snapshot_ms),
+                    ("compute", dispatch.reconcile_compute_ms),
+                    ("RPC fanout", dispatch.rpc_fanout_ms),
+                    ("apply", dispatch.apply_ms),
+                    ("total tick", dispatch.total_ms),
+                ]:
+                    print("  " + _summarize_reconcile(label, xs))
+                print("  -- steady-state tick (all RUNNING, no inline spec) --")
+                for label, xs in [
+                    ("snapshot", steady.snapshot_ms),
+                    ("compute", steady.reconcile_compute_ms),
+                    ("RPC fanout", steady.rpc_fanout_ms),
+                    ("apply", steady.apply_ms),
+                    ("total tick", steady.total_ms),
+                ]:
+                    print("  " + _summarize_reconcile(label, xs))
+
+                return {
+                    "num_tasks": num_tasks,
+                    "num_workers": num_workers,
+                    "tasks_per_worker": tasks_per_worker,
+                    "payload_bytes": payload_bytes,
+                    "total_request_bytes": total_bytes,
+                    "compute_ms": compute_ms,
+                    "dispatch": dataclasses.asdict(dispatch),
+                    "steady": dataclasses.asdict(steady),
+                }
+            finally:
+                provider.close()
+    finally:
+        if state is not None:
+            state.db.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@main.command("reconcile")
+@click.option("--num-tasks", "num_tasks", type=int, default=5000, help="Number of zephyr tasks.")
+@click.option("--tasks-per-worker", type=int, default=64, help="Round-robin density (smaller = more workers).")
+@click.option("--payload-bytes", type=int, default=100_000, help="Per-job workdir-file size.")
+@click.option("--n-iters", type=int, default=5, help="Number of full reconcile ticks to time.")
+@click.option("--parallelism", type=int, default=128, help="Async RPC concurrency cap.")
+@click.option("--scale-sweep", is_flag=True, help="Sweep across multiple scales for the final report.")
+def reconcile_cmd(
+    num_tasks: int,
+    tasks_per_worker: int,
+    payload_bytes: int,
+    n_iters: int,
+    parallelism: int,
+    scale_sweep: bool,
+) -> None:
+    """Benchmark the Reconcile dispatch + apply tick at zephyr scale.
+
+    Builds a synthetic controller DB with one zephyr-shaped job
+    (``num_tasks`` task replicas dispatched across enough workers to hit
+    ``tasks_per_worker`` round-robin density), spins up a single in-process
+    fake worker on localhost, and times each stage of the polling tick.
+    """
+    if scale_sweep:
+        scenarios: list[tuple[int, int, int]] = [
+            # (num_tasks, tasks_per_worker, payload_bytes)
+            (500, 64, 1_000),
+            (500, 64, 100_000),
+            (2000, 64, 1_000),
+            (2000, 64, 100_000),
+            (5000, 64, 1_000),
+            (5000, 64, 10_000),
+            (5000, 64, 100_000),
+            (5000, 1, 100_000),  # zero-fanout density: 1 task per worker
+            (5000, 8, 100_000),  # intermediate density
+        ]
+    else:
+        scenarios = [(num_tasks, tasks_per_worker, payload_bytes)]
+
+    for nt, tpw, pb in scenarios:
+        _run_reconcile_scenario(nt, tpw, pb, n_iters=n_iters, parallelism=parallelism)
 
 
 if __name__ == "__main__":

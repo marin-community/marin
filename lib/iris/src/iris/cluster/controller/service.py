@@ -66,11 +66,7 @@ from iris.cluster.controller.schema import (
     workers_table,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, attempt_is_worker_failure, task_row_can_be_scheduled
-from iris.cluster.controller.transitions import (
-    ControllerTransitions,
-    HeartbeatApplyRequest,
-    task_updates_from_proto,
-)
+from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
@@ -90,7 +86,6 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
-from iris.rpc.async_adapter import on_loop
 from iris.rpc.auth import (
     AuthzAction,
     authorize,
@@ -114,6 +109,7 @@ class UserStats:
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
+WORKDIR_FILE_OFFLOAD_THRESHOLD = 10 * 1024  # 10KB — externalize large workdir files to blob store
 
 # Soft cap on how long launch_job waits for a replaced job's worker-bound
 # attempts to finalize before force-reaping them. Sized to exceed the worst-
@@ -973,10 +969,10 @@ class ControllerServiceImpl:
         self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
 
     def bundle_zip(self, bundle_id: str) -> bytes:
-        return self._bundle_store.get_zip(bundle_id)
+        return self._bundle_store.get(bundle_id)
 
     def blob_data(self, blob_id: str) -> bytes:
-        return self._bundle_store.get_zip(blob_id)
+        return self._bundle_store.get(blob_id)
 
     def _get_autoscaler_pending_hints(self) -> dict[str, PendingHint]:
         """Build autoscaler-based pending hints keyed by job id."""
@@ -1191,12 +1187,29 @@ class ControllerServiceImpl:
                     f"Bundle size {bundle_size_mb:.1f}MB exceeds maximum {max_size_mb:.0f}MB",
                 )
 
-            bundle_id = self._bundle_store.write_zip(request.bundle_blob)
+            bundle_id = self._bundle_store.write(request.bundle_blob)
 
             new_request = controller_pb2.Controller.LaunchJobRequest()
             new_request.CopyFrom(request)
             new_request.ClearField("bundle_blob")
             new_request.bundle_id = bundle_id
+            request = new_request
+
+        # Externalize large workdir files to the blob store so request_proto
+        # (and every RunTaskRequest dispatch) stays small.
+        large_files = {
+            name: data
+            for name, data in request.entrypoint.workdir_files.items()
+            if len(data) > WORKDIR_FILE_OFFLOAD_THRESHOLD
+        }
+        if large_files:
+            new_request = controller_pb2.Controller.LaunchJobRequest()
+            new_request.CopyFrom(request)
+            for name, data in large_files.items():
+                blob_id = self._bundle_store.write(data)
+                del new_request.entrypoint.workdir_files[name]
+                new_request.entrypoint.workdir_file_refs[name] = blob_id
+                logger.info("Externalized workdir file %s (%d bytes) as blob %s", name, len(data), blob_id[:12])
             request = new_request
 
         # Auto-inject device constraints from the resource spec.
@@ -1365,9 +1378,9 @@ class ControllerServiceImpl:
         # transaction, so there is no need to recurse manually.
         with self._db.transaction() as cur:
             self._transitions.cancel_job(cur, job_id, reason="Terminated by user")
-        # The next polling tick reconciles each affected worker and sends
-        # StopTasks via the expected_tasks diff; wake the loops so it lands
-        # within one tick rather than waiting on the next backoff.
+        # The next polling tick reconciles each affected worker; the
+        # cancellation appears in the desired-set diff so the worker stops
+        # the attempt within one tick rather than waiting on the next backoff.
         self._controller.wake()
         return job_pb2.Empty()
 
@@ -1508,9 +1521,6 @@ class ControllerServiceImpl:
                     jc_row.res_cpu_millicores, jc_row.res_memory_bytes, jc_row.res_disk_bytes, jc_row.res_device_json
                 )
 
-        proto.status_text_detail_md = self._transitions.get_status_text_detail(task_id.to_wire())
-        proto.status_text_summary_md = self._transitions.get_status_text_summary(task_id.to_wire())
-
         return controller_pb2.Controller.GetTaskStatusResponse(task=proto, job_resources=job_resources)
 
     def list_tasks(
@@ -1536,8 +1546,6 @@ class ControllerServiceImpl:
             # Users should check job detail page for scheduling diagnostics
             if task.state == job_pb2.TASK_STATE_PENDING:
                 proto_task_status.can_be_scheduled = task_row_can_be_scheduled(task)
-
-            proto_task_status.status_text_summary_md = self._transitions.get_status_text_summary(task.task_id.to_wire())
 
             task_statuses.append(proto_task_status)
 
@@ -2325,34 +2333,6 @@ class ControllerServiceImpl:
             rows=rows,
         )
 
-    def restart_worker(
-        self,
-        request: controller_pb2.Controller.RestartWorkerRequest,
-        ctx: Any,
-    ) -> controller_pb2.Controller.RestartWorkerResponse:
-        """Restart a worker while preserving its running containers.
-
-        Delegates to the worker's platform handle which knows how to restart
-        the worker process (e.g., `docker restart` on GCE). The new worker
-        discovers and adopts existing task containers via Docker labels.
-        """
-        require_identity()
-        worker_id = request.worker_id
-        if not worker_id:
-            return controller_pb2.Controller.RestartWorkerResponse(accepted=False, error="worker_id is required")
-
-        autoscaler = self._controller.autoscaler
-        if autoscaler is None:
-            return controller_pb2.Controller.RestartWorkerResponse(accepted=False, error="autoscaler not configured")
-
-        try:
-            autoscaler.restart_worker(worker_id)
-            logger.info("Initiated restart for worker %s", worker_id)
-            return controller_pb2.Controller.RestartWorkerResponse(accepted=True)
-        except Exception as e:
-            logger.warning("Failed to restart worker %s: %s", worker_id, e)
-            return controller_pb2.Controller.RestartWorkerResponse(accepted=False, error=str(e))
-
     def set_user_budget(
         self,
         request: controller_pb2.Controller.SetUserBudgetRequest,
@@ -2569,50 +2549,15 @@ class ControllerServiceImpl:
             running_buckets=running_buckets,
         )
 
-    # --- Worker Push ---
-
-    def update_task_status(
-        self,
-        request: controller_pb2.Controller.UpdateTaskStatusRequest,
-        _ctx: Any,
-    ) -> controller_pb2.Controller.UpdateTaskStatusResponse:
-        """Worker pushes task state transitions to controller.
-
-        Converts the proto updates into TaskUpdate dataclasses and applies
-        them via ``ControllerTransitions.apply_task_updates``. Stop decisions
-        are delivered via the StopTasks RPC, not piggy-backed on the response.
-
-        The kill decisions produced here are ignored: the poll loop reruns the
-        same transition logic and routes kills through ``_stop_tasks_direct``,
-        so push-path kills are recovered with ≤60s latency.
-        """
-        updates = task_updates_from_proto(request.updates)
-        if updates:
-            with self._db.transaction() as cur:
-                self._transitions.apply_task_updates(
-                    cur,
-                    HeartbeatApplyRequest(
-                        worker_id=WorkerId(request.worker_id),
-                        updates=updates,
-                    ),
-                )
-            self._controller.wake()
-        return controller_pb2.Controller.UpdateTaskStatusResponse()
-
-    # --- Task Status Text Push ---
-
-    @on_loop
     def set_task_status_text(
         self,
-        request: job_pb2.SetTaskStatusTextRequest,
+        _request: job_pb2.SetTaskStatusTextRequest,
         _ctx: Any,
     ) -> job_pb2.SetTaskStatusTextResponse:
-        """Task pushes a markdown status string to the coordinator.
+        """Deprecated no-op kept so pre-cutover clients don't crash.
 
-        Status text lives entirely in the in-memory in-memory dict on ControllerTransitions; the
-        write is idempotent and stale task IDs are evicted by
-        ``remove_status_text_by_job_ids`` during pruning.
+        Status text now flows through the iris.task_status finelog namespace
+        via RemoteClusterClient.report_task_status_text. Remove this handler
+        and its RPC/messages on the date in the iris-status-cleanup cron.
         """
-        task_id = JobName.from_wire(request.task_id)
-        self._transitions.record_task_status_text(task_id, request.status_text_detail_md, request.status_text_summary_md)
         return job_pb2.SetTaskStatusTextResponse()

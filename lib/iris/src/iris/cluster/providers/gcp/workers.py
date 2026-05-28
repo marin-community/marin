@@ -44,12 +44,13 @@ from iris.cluster.providers.gcp.service import (
     TpuCreateRequest,
     VmCreateRequest,
 )
-from iris.cluster.providers.gcp.ssh import OS_LOGIN_METADATA, ssh_impersonate_service_account, ssh_key_file
+from iris.cluster.providers.gcp.ssh import OS_LOGIN_METADATA, ssh_impersonate_service_account
 from iris.cluster.providers.remote_exec import GceRemoteExec
 from iris.cluster.providers.types import (
     InfraError,
     Labels,
     ListedSlice,
+    RemoteWorkerHandle,
     SliceHandle,
     generate_slice_suffix,
 )
@@ -180,13 +181,10 @@ def _wait_for_queued_resource_activation(
         time.sleep(poll_interval)
 
 
-def _gcp_instance_metadata(
-    ssh_config: config_pb2.SshConfig | None,
-    metadata: dict[str, str] | None = None,
-) -> dict[str, str]:
+def _gcp_instance_metadata(metadata: dict[str, str] | None = None) -> dict[str, str]:
+    """Merge the cluster's required OS-Login metadata into a per-VM metadata dict."""
     result = dict(metadata or {})
-    if ssh_config and ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN:
-        result.update(OS_LOGIN_METADATA)
+    result.update(OS_LOGIN_METADATA)
     return result
 
 
@@ -316,6 +314,25 @@ class GcpWorkerProvider:
         except InfraError as e:
             logger.warning("Cleanup of VM %s failed: %s", vm_name, e)
 
+    def worker_handle(self, worker_id: str, slice_id: str, zone: str) -> RemoteWorkerHandle:
+        """Look up a worker handle for an existing slice.
+
+        Discovers the slice via ``list_slices`` (same path the controller's
+        autoscaler uses) and returns the per-worker handle from
+        ``slice.describe().workers``. The handle type — TPU vs standalone GCE —
+        is dispatched by the slice handle itself, so SSH plumbing matches
+        whatever the autoscaler would have used.
+        """
+        candidates = self.list_slices(zones=[zone])
+        for slice_handle in candidates:
+            if slice_handle.slice_id != slice_id:
+                continue
+            for worker in slice_handle.describe().workers:
+                if worker.worker_id == worker_id:
+                    return worker
+            raise ValueError(f"Worker {worker_id!r} not found in slice {slice_id!r}")
+        raise ValueError(f"Slice {slice_id!r} not found in zone {zone!r}")
+
     def create_vm(self, config: config_pb2.VmConfig) -> GcpStandaloneWorkerHandle:
         """Create a GCE instance. Returns a handle with SSH and label/metadata support."""
         _validate_vm_config(config)
@@ -329,7 +346,7 @@ class GcpWorkerProvider:
             zone=zone,
             machine_type=machine_type,
             labels=dict(config.labels),
-            metadata=_gcp_instance_metadata(self._ssh_config, dict(config.metadata)),
+            metadata=_gcp_instance_metadata(dict(config.metadata)),
             service_account=config.gcp.service_account or None,
             disk_size_gb=boot_disk_size,
             boot_disk_type=DEFAULT_BOOT_DISK_TYPE,
@@ -348,7 +365,6 @@ class GcpWorkerProvider:
             project_id=self._project_id,
             zone=zone,
             vm_name=config.name,
-            ssh_key_file=ssh_key_file(self._ssh_config),
             impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
         )
 
@@ -414,7 +430,7 @@ class GcpWorkerProvider:
         gcp = config.gcp
         slice_id = _build_gce_resource_name(config.name_prefix, generate_slice_suffix())
 
-        metadata = _gcp_instance_metadata(self._ssh_config)
+        metadata = _gcp_instance_metadata()
         if worker_config:
             worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
             worker_config.slice_id = slice_id
@@ -477,7 +493,7 @@ class GcpWorkerProvider:
         labels = dict(config.labels)
         labels[CAPACITY_TYPE_LABEL] = CAPACITY_TYPE_RESERVED_VALUE
 
-        metadata = _gcp_instance_metadata(self._ssh_config)
+        metadata = _gcp_instance_metadata()
         if worker_config:
             worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
             worker_config.slice_id = slice_id
@@ -572,7 +588,7 @@ class GcpWorkerProvider:
             zone=gcp.zone,
             machine_type=machine_type,
             labels=labels,
-            metadata=_gcp_instance_metadata(self._ssh_config),
+            metadata=_gcp_instance_metadata(),
             service_account=gcp.service_account or None,
             disk_size_gb=boot_disk_size,
             image_family="debian-12",
@@ -779,7 +795,6 @@ class GcpWorkerProvider:
                 project_id=self._project_id,
                 zone=vm.zone,
                 vm_name=vm.name,
-                ssh_key_file=ssh_key_file(self._ssh_config),
                 impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
             )
             handles.append(

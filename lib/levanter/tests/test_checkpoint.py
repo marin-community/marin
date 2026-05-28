@@ -348,6 +348,12 @@ def test_checkpointer_config_no_temporary_base_path():
     assert config.expanded_temporary_path("run1") is None
 
 
+def test_checkpointer_config_keep_none_means_no_step_policies(tmp_path):
+    config = CheckpointerConfig(base_path=str(tmp_path / "checkpoints"), keep=None)
+    checkpointer = config.create("run1")
+    assert checkpointer.step_policies == []
+
+
 def test_trainer_config_checkpoint_search_paths():
     config = dataclasses.replace(
         TrainerConfig(),

@@ -1,35 +1,46 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stats schemas emitted by iris workers.
+"""Finelog stats schemas used by iris.
 
-Two namespaces:
-
-- ``iris.worker`` — one row per ping with host-level utilization. Replaces
-  the controller's ``worker_resource_history`` table.
-- ``iris.task`` — one row per attempt resource update. Replaces the
-  controller's ``task_resource_history`` table.
+- ``iris.worker`` / ``iris.task`` — worker-emitted host and per-attempt
+  resource rows. Replace the controller's old in-memory history tables.
+- ``iris.task_status`` — markdown status text pushed from inside a running
+  task via ``RemoteClusterClient.report_task_status_text``. Replaces the
+  in-memory dict that previously backed ``ControllerService.SetTaskStatusText``.
 
 The ``iris.profile`` schema lives in ``iris.cluster.runtime.profile`` next to
 the capture machinery — see ``IrisProfile`` and ``PROFILE_NAMESPACE`` there.
 
-All schemas use a datetime column as the segment key. They are
-registered eagerly in ``Worker.start()`` via
-``LogClient.get_table(<namespace>, <dataclass>)`` so schema mismatches surface
-on first ping rather than silently dropping rows.
+Worker schemas are registered eagerly in ``Worker.start()``; the task-status
+schema is registered lazily on first ``report_task_status_text`` call so a
+CLI that never touches status text doesn't open a finelog connection.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import ClassVar
+
+from rigging.timing import Timestamp
 
 from iris.rpc import job_pb2
 
 WORKER_STATS_NAMESPACE = "iris.worker"
 TASK_STATS_NAMESPACE = "iris.task"
+TASK_STATUS_NAMESPACE = "iris.task_status"
+
+
+def stats_timestamp() -> datetime:
+    """Current tz-naive UTC datetime for the stats namespaces' ``ts`` segment key.
+
+    Worker and task stats schemas key their parquet segments on a ``ts``
+    datetime column (stored as TIMESTAMP_MS by finelog). Built from rigging's
+    ``Timestamp.now()`` so the time source stays consistent with the rest of iris.
+    """
+    return datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
 
 
 class WorkerStatus(StrEnum):
@@ -105,19 +116,39 @@ class IrisTaskStat:
     accelerator_mem_bytes: int | None = None
 
 
+@dataclass
+class TaskStatusRow:
+    """One row per ``report_task_status_text`` push from a running task.
+
+    ``attempt_id`` tiebreaks two attempts colliding within a single millisecond
+    during preemption so the newer attempt wins deterministically.
+    """
+
+    key_column: ClassVar[str] = "task_id"
+
+    task_id: str
+    attempt_id: int
+    ts: datetime
+    status_text_detail_md: str
+    status_text_summary_md: str
+
+
 def build_worker_stat(
     *,
     worker_id: str,
-    ts: datetime,
     status: str,
     address: str,
     snapshot: job_pb2.WorkerResourceSnapshot,
     metadata: job_pb2.WorkerMetadata,
+    ts: datetime | None = None,
 ) -> IrisWorkerStat:
-    """Build a heartbeat row from the per-tick snapshot and worker metadata."""
+    """Build a heartbeat row from the per-tick snapshot and worker metadata.
+
+    ``ts`` defaults to :func:`stats_timestamp` (current UTC, tz-naive).
+    """
     return IrisWorkerStat(
         worker_id=worker_id,
-        ts=ts,
+        ts=ts if ts is not None else stats_timestamp(),
         status=status,
         address=address,
         cpu_pct=float(snapshot.host_cpu_percent),
@@ -144,17 +175,20 @@ def build_task_stat(
     task_id: str,
     attempt_id: int,
     worker_id: str,
-    ts: datetime,
     usage: job_pb2.ResourceUsage,
+    ts: datetime | None = None,
     accelerator_util_pct: float | None = None,
     accelerator_mem_bytes: int | None = None,
 ) -> IrisTaskStat:
-    """Build a per-attempt resource row from a ResourceUsage proto."""
+    """Build a per-attempt resource row from a ResourceUsage proto.
+
+    ``ts`` defaults to :func:`stats_timestamp` (current UTC, tz-naive).
+    """
     return IrisTaskStat(
         task_id=task_id,
         attempt_id=attempt_id,
         worker_id=worker_id,
-        ts=ts,
+        ts=ts if ts is not None else stats_timestamp(),
         cpu_millicores=int(usage.cpu_millicores),
         memory_mb=int(usage.memory_mb),
         disk_mb=int(usage.disk_mb),

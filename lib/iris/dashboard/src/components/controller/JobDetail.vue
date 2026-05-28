@@ -11,6 +11,7 @@ import type {
 import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
 import { getLeafJobName } from '@/utils/jobTree'
+import { batchSummarySql } from '@/utils/taskStatus'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
@@ -161,6 +162,32 @@ function taskCpuMillicores(taskId: string): number {
   return Number(taskUsageMap.value.get(taskId)?.cpu_millicores ?? 0)
 }
 
+// Batched status text query (see batchSummarySql in utils/taskStatus).
+interface StatusTextRow {
+  task_id?: string
+  status_text_summary_md?: string
+}
+
+const { data: statusTextData, refresh: fetchStatusText } = useLogServerStatsRpc<{ arrowIpc?: string }>(
+  'Query',
+  () => ({ sql: batchSummarySql(tasks.value.map(t => t.taskId)) }),
+)
+
+const statusTextMap = computed<Map<string, string>>(() => {
+  const ipc = statusTextData.value?.arrowIpc
+  const m = new Map<string, string>()
+  if (!ipc) return m
+  const rows = decodeArrowIpc(ipc).rows as StatusTextRow[]
+  for (const r of rows) {
+    if (r.task_id) m.set(r.task_id, r.status_text_summary_md ?? '')
+  }
+  return m
+})
+
+function taskStatusTextSummary(taskId: string): string {
+  return statusTextMap.value.get(taskId) ?? ''
+}
+
 // True when the task has finished with a non-zero exit code. Drives the
 // merged status column: non-zero exits get prominent display; zero exits
 // fall back to status text or the state badge.
@@ -221,6 +248,7 @@ async function fetchData() {
     // the rest of the page.
     if (tasks.value.length > 0) {
       void fetchTaskStats()
+      void fetchStatusText()
     }
 
     const parentIds = [props.jobId, ...expandedChildJobs.value]
@@ -1126,7 +1154,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             </span>
           </div>
           <div class="mt-1 text-xs break-anywhere">
-            <MarkdownRenderer v-if="task.statusTextSummaryMd && !TERMINAL_STATES.has(stateToName(task.state))" :content="task.statusTextSummaryMd" class="text-text-secondary" />
+            <MarkdownRenderer v-if="taskStatusTextSummary(task.taskId) && !TERMINAL_STATES.has(stateToName(task.state))" :content="taskStatusTextSummary(task.taskId)" class="text-text-secondary" />
             <span v-else-if="task.error && FAILED_TERMINAL_STATES.has(stateToName(task.state))" class="text-status-danger" :title="task.error">{{ task.error.length > 160 ? task.error.slice(0, 160) + '…' : task.error }}</span>
           </div>
           <div v-if="stateToName(task.state) === 'running'" class="mt-2 flex gap-1">
@@ -1242,7 +1270,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                 <span v-if="taskExitNonZero(task)" class="text-status-danger font-mono">
                   exit {{ task.exitCode }}
                 </span>
-                <MarkdownRenderer v-else-if="task.statusTextSummaryMd && !TERMINAL_STATES.has(stateToName(task.state))" :content="task.statusTextSummaryMd" />
+                <MarkdownRenderer v-else-if="taskStatusTextSummary(task.taskId) && !TERMINAL_STATES.has(stateToName(task.state))" :content="taskStatusTextSummary(task.taskId)" />
                 <span v-else-if="task.error && FAILED_TERMINAL_STATES.has(stateToName(task.state))" class="text-status-danger break-anywhere" :title="task.error">{{ task.error.length > 160 ? task.error.slice(0, 160) + '…' : task.error }}</span>
                 <span v-else class="text-text-muted">—</span>
               </td>

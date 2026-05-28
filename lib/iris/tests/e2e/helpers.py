@@ -135,6 +135,20 @@ class TestJobs:
         assert info.ports["grpc"] > 0
 
     @staticmethod
+    def verify_workdir_file(filename: str, expected_size: int):
+        """Verify a workdir file exists with the expected size."""
+        import os
+
+        workdir = os.environ.get("IRIS_WORKDIR", "/app")
+        path = os.path.join(workdir, filename)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Workdir file {filename} not found at {path}")
+        actual_size = os.path.getsize(path)
+        if actual_size != expected_size:
+            raise ValueError(f"Expected {expected_size} bytes, got {actual_size}")
+        return actual_size
+
+    @staticmethod
     def validate_job_context():
         """Validate job context via get_job_info() in a coscheduled job."""
         import logging

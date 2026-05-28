@@ -353,16 +353,16 @@ class TestScalingGroupChurnDetector:
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
         create_ts = Timestamp.from_ms(1_000_000)
-        # Three slices created and "preempted" 6 minutes later (past 5-min threshold).
+        # Three slices created and "preempted" 16 minutes later (past the 15-min default).
         for i in range(3):
             slice_id = f"s{i}"
             group.detector.record_created(slice_id, create_ts)
             group.detector.record_terminated(
                 slice_id,
                 SliceFate.PREEMPTED,
-                Timestamp.from_ms(1_000_000 + 6 * 60 * 1000),
+                Timestamp.from_ms(1_000_000 + 16 * 60 * 1000),
             )
-        now = Timestamp.from_ms(1_000_000 + 7 * 60 * 1000)
+        now = Timestamp.from_ms(1_000_000 + 17 * 60 * 1000)
         assert group.can_scale_up(timestamp=now)
 
 

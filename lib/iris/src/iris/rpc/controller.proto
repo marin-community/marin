@@ -294,8 +294,9 @@ message Controller {
     // The controller uses this as the canonical worker identity.
     string worker_id = 3;
     // Infrastructure identity from WorkerConfig, set by the autoscaler at
-    // bootstrap. Stored in the workers table so restart_worker() can look
-    // up the worker's slice without waiting for the autoscaler refresh cycle.
+    // bootstrap. Stored in the workers table so the CLI-side worker-restart
+    // driver can look up the worker's slice without waiting for the autoscaler
+    // refresh cycle.
     string slice_id = 4;
     string scale_group = 5;
   }
@@ -472,17 +473,6 @@ message Controller {
     repeated NodePoolStatus node_pools = 8;
   }
 
-  // --- Worker Restart ---
-
-  message RestartWorkerRequest {
-    string worker_id = 1;
-  }
-
-  message RestartWorkerResponse {
-    bool accepted = 1;
-    string error = 2;
-  }
-
   // --- Budget Management ---
   message SetUserBudgetRequest {
     string user_id = 1;
@@ -504,14 +494,6 @@ message Controller {
   message ListUserBudgetsRequest {}
   message ListUserBudgetsResponse {
     repeated GetUserBudgetResponse users = 1;
-  }
-
-  // --- Heartbeat Refactor: Worker pushes task state transitions ---
-  message UpdateTaskStatusRequest {
-    string worker_id = 1;
-    repeated iris.job.WorkerTaskStatus updates = 2;
-  }
-  message UpdateTaskStatusResponse {
   }
 
   // --- Scheduler State ---
@@ -621,9 +603,6 @@ service ControllerService {
   // Generic query API
   rpc ExecuteRawQuery(iris.query.RawQueryRequest) returns (iris.query.RawQueryResponse);
 
-  // Worker lifecycle
-  rpc RestartWorker(Controller.RestartWorkerRequest) returns (Controller.RestartWorkerResponse);
-
   // Budget management
   rpc SetUserBudget(Controller.SetUserBudgetRequest) returns (Controller.SetUserBudgetResponse);
   rpc GetUserBudget(Controller.GetUserBudgetRequest) returns (Controller.GetUserBudgetResponse);
@@ -632,9 +611,8 @@ service ControllerService {
   // Scheduler state (dashboard)
   rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
 
-  // Worker-to-controller task status push
-  rpc UpdateTaskStatus(Controller.UpdateTaskStatusRequest) returns (Controller.UpdateTaskStatusResponse);
-
-  // Task-to-controller status text push
+  // Deprecated. Discards the payload; status text now writes to the
+  // iris.task_status finelog namespace. Kept one release so pre-cutover
+  // clients don't crash; removal tracked by the iris-status-cleanup cron.
   rpc SetTaskStatusText(iris.job.SetTaskStatusTextRequest) returns (iris.job.SetTaskStatusTextResponse);
 }

@@ -15,7 +15,6 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 from finelog.client import LogClient, Table
@@ -272,9 +271,9 @@ class TaskAttempt:
         self.task_id: JobName = config.task_id
         self.num_tasks: int = config.num_tasks
         self.attempt_id: int = config.attempt_id
-        # Controller-minted routing key. Mutable: an attempt adopted from a
-        # pre-upgrade container starts with "" and is stamped on the first
-        # Reconcile tick that composite-matches it.
+        # Controller-minted routing key. Set at submit time and stamped onto
+        # the container as the ``iris.attempt_uid`` label so adoption recovers
+        # it across worker restarts.
         self.attempt_uid: AttemptUid = config.attempt_uid
         self.request: job_pb2.RunTaskRequest = config.request
         self.ports: dict[str, int] = {}
@@ -307,7 +306,6 @@ class TaskAttempt:
         self.thread: threading.Thread | None = None
         self.cleanup_done: bool = False
         self.should_stop: bool = False
-        self.on_state_change: Callable[[TaskState], None] | None = None
 
     @classmethod
     def adopt(
@@ -529,11 +527,6 @@ class TaskAttempt:
                 self.error = error
             if exit_code is not None:
                 self.exit_code = exit_code
-        if self.on_state_change is not None:
-            try:
-                self.on_state_change(state)
-            except Exception:
-                logger.debug("on_state_change callback failed", exc_info=True)
 
     def duration(self) -> Duration | None:
         """Calculate how long the attempt ran.
@@ -688,7 +681,7 @@ class TaskAttempt:
         assert self.workdir is not None
         workdir_files = dict(self.request.entrypoint.workdir_files)
         for name, blob_id in self.request.entrypoint.workdir_file_refs.items():
-            workdir_files[name] = self._bundle_store.get_or_fetch(blob_id, f"blobs/{blob_id}")
+            workdir_files[name] = self._bundle_store.get(blob_id)
         self._runtime.stage_bundle(
             bundle_id=self.request.bundle_id,
             workdir=self.workdir,
@@ -988,12 +981,10 @@ class TaskAttempt:
             cpu_millicores=self.current_cpu_millicores,
             process_count=self.process_count,
         )
-        ts = datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
         stat = build_task_stat(
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,
             worker_id=self._worker_id,
-            ts=ts,
             usage=usage,
         )
         table.write([stat])

@@ -51,6 +51,10 @@ Fieldbook when the task changes experiment state.
 # Type checking (also done by pre-commit.py)
 uv run pyrefly
 - Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
+
+# Advisory lint review — agentic pass over the branch diff before pushing a PR
+./infra/pre-commit.py --review
+- Surfaces `infra/lint.md` rule-catalog findings; advisory, never blocks.
 ```
 
 - Python >=3.11. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.

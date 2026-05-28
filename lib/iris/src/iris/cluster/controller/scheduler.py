@@ -385,10 +385,6 @@ class SchedulingContext:
         self.assignment_counts = {}
         self._soft_score_cache = {}
 
-    @property
-    def all_worker_ids(self) -> set[WorkerId]:
-        return {self._str_to_wid[s] for s in self.index._all_ids}
-
     def evolve_with_workers(
         self,
         workers: list[WorkerSnapshot],

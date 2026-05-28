@@ -3020,10 +3020,10 @@ def test_holder_tasks_excluded_from_building_counts(state):
 
 
 def test_holder_tasks_excluded_from_poll_expected_tasks(state):
-    """Holder tasks must not appear in PollTasks expected_tasks.
+    """Holder tasks must not appear in the Reconcile request's desired set.
 
     Holder tasks are virtual — never dispatched to the worker. If included
-    in expected_tasks the worker reports "Task not found on worker", causing
+    in the desired set the worker reports "Task not found on worker", causing
     a worker_failed → retry loop (GH-3178).
     """
 
@@ -3353,36 +3353,6 @@ def test_prune_old_terminal_jobs(state):
 
     # Tasks for old job should also be gone (CASCADE)
     assert _query_task(state, old_tasks[0].task_id) is None
-
-
-def test_prune_evicts_status_text_cache(state):
-    """prune_old_data evicts _status_text entries for pruned jobs; other tasks are unaffected."""
-    wid = register_worker(state, "w1", "host:8080", make_worker_metadata())
-
-    old_tasks = submit_job(state, "old-job", make_job_request("old-job"))
-    dispatch_task(state, old_tasks[0], wid)
-    transition_task(state, old_tasks[0].task_id, job_pb2.TASK_STATE_SUCCEEDED)
-
-    kept_tasks = submit_job(state, "kept-job", make_job_request("kept-job"))
-    dispatch_task(state, kept_tasks[0], wid)
-    transition_task(state, kept_tasks[0].task_id, job_pb2.TASK_STATE_SUCCEEDED)
-
-    old_job_id = JobName.root("test-user", "old-job")
-    with state._db.transaction() as _tx:
-        _tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == old_job_id).values(finished_at_ms=1000))
-
-    state.record_task_status_text(old_tasks[0].task_id, "old detail", "old summary")
-    state.record_task_status_text(kept_tasks[0].task_id, "kept detail", "kept summary")
-
-    state.prune_old_data(
-        job_retention=Duration.from_seconds(86400),
-        worker_retention=Duration.from_seconds(86400),
-    )
-
-    assert state.get_status_text_detail(old_tasks[0].task_id.to_wire()) == ""
-    assert state.get_status_text_summary(old_tasks[0].task_id.to_wire()) == ""
-    assert state.get_status_text_detail(kept_tasks[0].task_id.to_wire()) == "kept detail"
-    assert state.get_status_text_summary(kept_tasks[0].task_id.to_wire()) == "kept summary"
 
 
 def test_prune_old_inactive_workers(state):

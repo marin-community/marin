@@ -607,9 +607,12 @@ def _preempt_solo(
             continue
         if victim.device_variant != wanted_variant:
             continue
-        # Can only preempt strictly lower priority (higher band_sort_key)
+        # Can only preempt strictly lower priority (higher band_sort_key).
+        # `solo_victims` is sorted by descending band_sort_key, so once this
+        # gate trips every later victim also fails — break, don't continue,
+        # to avoid scanning the unpreemptible tail (issue #5888).
         if victim.band_sort_key <= candidate.band:
-            continue
+            break
 
         cap = context.capacities.get(victim.worker_id)
         if cap is None:
@@ -1238,9 +1241,8 @@ class ControllerConfig:
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(1.0))
     """Polling reconcile cadence. The polling thread wakes every ``poll_interval``
     (or sooner if ``_polling_wake`` is set) and runs ``_reconcile_worker_batch``
-    against every healthy worker. Workers push state changes themselves via
-    ``UpdateTaskStatus``; this loop is the recovery channel for ASSIGNED→BUILDING
-    when the push is dropped, plus the dispatch path for fresh ASSIGNED rows."""
+    against every healthy worker. The Reconcile RPC is the sole channel that
+    dispatches new ASSIGNED rows and observes worker-side state changes."""
 
     max_dispatch_parallelism: int = 32
     """Maximum number of concurrent RPC dispatch operations."""
@@ -1296,11 +1298,6 @@ class ControllerConfig:
     """Resolved cluster endpoints: logical name -> concrete URL. Built from
     cluster_config.endpoints by the daemon entrypoint. Registered into the
     controller service's _system_endpoints during start()."""
-
-    reconcile_rpc_enabled: bool = False
-    """When True, the controller dispatches the Reconcile RPC instead of the
-    legacy StartTasks+PollTasks wire. Resolved once at startup from
-    ``IRIS_RECONCILE_RPC_ENABLED``."""
 
 
 def _log_client_interceptors(config: "ControllerConfig") -> tuple:
@@ -1736,8 +1733,9 @@ class Controller:
         assignments possible). Resets to min interval when woken by a producer
         that may free capacity or by a new job submission.
 
-        Reconciliation (StartTasks + PollTasks) runs on the separate polling
-        thread (``_run_polling_loop``) on its own 250 ms cadence. Sharing the
+        Reconciliation runs on the separate polling thread
+        (``_run_polling_loop``) on its own cadence via the Reconcile RPC.
+        Sharing the
         same write transaction is no longer required: producers write
         ``tasks.state = ASSIGNED`` and the polling thread reads that state via
         a snapshot query, so dispatch never crosses a transaction boundary.
@@ -1770,13 +1768,14 @@ class Controller:
 
         Each tick:
           1. Snapshot every healthy active worker.
-          2. Fan out ``StartTasks`` for ASSIGNED rows and ``PollTasks`` for
-             BUILDING/RUNNING rows.
-          3. Apply heartbeat-style results in one write txn.
+          2. Fan out the Reconcile RPC carrying the desired-attempt set per
+             worker (ASSIGNED rows to start, BUILDING/RUNNING rows to keep
+             alive, and stops for everything else).
+          3. Apply observation-driven results in one write txn.
 
         The polling thread is the sole path that pushes work to a worker.
-        Worker auto-kill is implicit: any task absent from the worker's
-        ``expected_tasks`` set on the next poll is killed locally.
+        Worker auto-kill is implicit: any attempt absent from the desired
+        set on the next reconcile is killed locally by the worker.
         """
         tick_seconds = self._config.poll_interval.to_seconds()
         while not stop_event.is_set():
@@ -2141,7 +2140,7 @@ class Controller:
         recomputing from current spend on every tick.
 
         The polling reconcile thread reads ASSIGNED rows on its next tick
-        (woken via ``_polling_wake``) and fans out the StartTasks RPCs.
+        (woken via ``_polling_wake``) and fans out the Reconcile RPCs.
         """
         if self._config.dry_run:
             for task_id, worker_id in assignments:
@@ -2158,7 +2157,7 @@ class Controller:
         with self._db.transaction() as cur:
             self._transitions.queue_assignments(cur, command)
         # Wake the polling thread; every tick reconciles every healthy worker,
-        # so the new ASSIGNED rows turn into StartTasks RPCs on the next tick.
+        # so the new ASSIGNED rows turn into Reconcile RPCs on the next tick.
         self._polling_wake.set()
 
     def _apply_preemptions(
@@ -2339,12 +2338,13 @@ class Controller:
             # RUNNING) drive normal reconciliation; rows whose task has
             # already moved to a terminal state but whose attempt is still
             # worker-bound (worker_id set, finished_at_ms NULL) are stranded
-            # attempts whose terminal UpdateTaskStatus push was dropped.
-            # Including them in expected_tasks gives the worker a second
+            # attempts whose terminal Reconcile observation was lost.
+            # Including them in the desired set gives the worker a second
             # chance to report -- either with the real terminal status or
-            # via _missing_task_status -- so the heartbeat path can stamp
-            # finished_at_ms. Without this, a single lost RPC strands the
-            # attempt forever, since no other code path polls about it.
+            # via the MISSING synthesis in ``handle_reconcile`` -- so the
+            # heartbeat path can stamp finished_at_ms. Without this, a single
+            # lost RPC strands the attempt forever, since no other code path
+            # polls about it.
             target_ids: set[WorkerId] = set(worker_ids)
             raw_rows = snap.execute(
                 select(
@@ -2398,11 +2398,7 @@ class Controller:
 
         plans = reconcile_workers(inputs)
         now = Timestamp.now()
-        results = self._provider.reconcile_workers(
-            plans,
-            addresses,
-            use_reconcile_rpc=self._config.reconcile_rpc_enabled,
-        )
+        results = self._provider.reconcile_workers(plans, addresses)
 
         plan_by_worker: dict[WorkerId, WorkerReconcilePlan] = {p.worker_id: p for p in plans}
         with self._db.transaction() as cur:
@@ -2469,11 +2465,9 @@ class Controller:
         polling tick (or, for K8s, the sync loop) picks up the kills.
 
         Deliberately does **not** wake the scheduling loop. The scheduler
-        re-evaluates capacity on its own backoff cadence; the worker push
-        path (``update_task_status``) is the only writer that wakes
-        scheduling, since it can free capacity by stamping ``finished_at_ms``
-        on the heartbeat. Polling-thread heartbeats firing every tick used
-        to short-circuit the backoff entirely.
+        re-evaluates capacity on its own backoff cadence; polling-thread
+        heartbeats firing every tick used to short-circuit the backoff
+        entirely.
         """
         with self._db.transaction() as cur:
             self._transitions.apply_heartbeats_batch(cur, requests)

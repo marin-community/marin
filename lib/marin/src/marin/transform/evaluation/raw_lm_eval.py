@@ -22,7 +22,7 @@ from marin.datakit.ingestion_manifest import (
     MaterializedOutputMetadata,
     write_ingestion_metadata_json,
 )
-from marin.utils import fsspec_mkdirs
+from marin.utils import fsspec_mkdirs, fsspec_url
 from rigging.filesystem import open_url, url_to_fs
 from zephyr.writers import atomic_rename
 
@@ -108,17 +108,6 @@ class LmEvalRawStagingConfig:
     content_fingerprint: str = ""
 
 
-def _fsspec_url(fs: Any, path: str) -> str:
-    protocol = fs.protocol
-    if isinstance(protocol, (list, tuple)):
-        protocol = protocol[0]
-    if protocol in (None, "file"):
-        return path
-    if path.startswith(f"{protocol}://"):
-        return path
-    return f"{protocol}://{path}"
-
-
 def _parquet_file_matches_split(path: str, split: str) -> bool:
     filename = os.path.basename(path)
     if not filename.endswith(".parquet"):
@@ -149,7 +138,7 @@ def _find_split_parquet_files(input_path: str, split: str, subset: str | None) -
     if not matches:
         raise FileNotFoundError(f"No parquet files found for split {split!r} under {input_path}")
 
-    return [_fsspec_url(fs, path) for path in sorted(set(matches))]
+    return [fsspec_url(fs, path) for path in sorted(set(matches))]
 
 
 def _load_hf_iterable(input_path: str, split: str, subset: str | None) -> Iterable[dict[str, Any]]:

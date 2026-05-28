@@ -1037,9 +1037,8 @@ class CheckpointerConfig:
     save_interval: timedelta = timedelta(minutes=15)
     # TODO: I'd like to write this, but it's not supported by draccus
     # keep: List[CheckpointInterval] = field(default_factory=lambda: [CheckpointInterval(every=1000)])
-    keep: List[dict] = field(
-        default_factory=lambda: [dict(every=10000)]
-    )  # list of dicts with two keys: every and until
+    keep: Optional[List[dict]] = field(default_factory=lambda: [dict(every=10000)])
+    """Permanent checkpoint intervals. None means only forced checkpoints, such as the final checkpoint."""
 
     append_run_id_to_base_path: bool = True
     delete_old_temp_checkpoints: bool = True
@@ -1066,7 +1065,7 @@ class CheckpointerConfig:
         return os.path.expanduser(self.temporary_base_path)
 
     def create(self, run_id) -> Checkpointer:
-        keeps = [CheckpointInterval(**k) for k in self.keep]
+        keeps = [CheckpointInterval(**k) for k in self.keep or []]
         return Checkpointer(
             base_path=self.expanded_path(run_id),
             save_interval=self.save_interval,
@@ -1089,7 +1088,7 @@ class CheckpointerConfig:
         # validate the checkpoint intervals.
         # we want to make sure that the intervals are monotonic. only the last one can be None
         prev_interval = None
-        for interval in self.keep:
+        for interval in self.keep or []:
             if prev_interval is not None:
                 assert prev_interval["until"] is not None, "Only the last checkpoint interval can be None"
                 assert (

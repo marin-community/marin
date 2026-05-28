@@ -900,7 +900,7 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
 
 def test_get_worker_status_recent_attempts_carry_attempt_uid(client, state, job_request):
     """GetWorkerStatus per-attempt rows surface the controller-minted
-    attempt_uid (the operator-visible UID-routing rollout signal).
+    attempt_uid for operator traceability.
 
     Covers ``_attempts_for_worker``: the projection reads ``attempt_uid``
     from ``ATTEMPT_COLS`` and stamps it onto each ``TaskAttempt`` proto. The

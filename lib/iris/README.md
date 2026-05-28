@@ -123,30 +123,39 @@ Workers communicate with the controller using internal VPC IPs. External clients
 
 ## Worker Lifecycle
 
-### Registration and Heartbeat
+### Registration and Reconcile
 
 Workers register with the controller once at startup via the `Register` RPC.
-After registration, the worker enters a serve loop and waits for controller-
-initiated heartbeats.
+After registration, the worker serves the `WorkerService` gRPC and waits for
+controller-initiated `Reconcile` calls.
 
-The controller sends `Heartbeat` RPCs to all registered workers on each
-scheduler tick (~5s). The heartbeat request carries:
-- `tasks_to_run`: new task assignments for this worker
-- `tasks_to_kill`: task IDs to terminate
+The controller issues one `Reconcile` RPC per worker on each scheduler tick
+(~5s). The request carries the controller's complete **desired attempt set**
+for that worker: each `DesiredAttempt` is keyed by `attempt_uid` and contains
+either an `AttemptSpec.run` intent (with the `RunTaskRequest` payload on the
+dispatch tick) or a `StopReason` intent.
 
-The worker responds with:
-- `running_tasks`: tasks currently executing (task_id + attempt_id)
-- `completed_tasks`: tasks that finished since the last heartbeat
+The worker responds with the complete **observed set** plus a `WorkerHealth`
+block:
+- `AttemptObservation` per attempt the controller asked about (`attempt_uid`,
+  current `TaskState`, `exit_code`, `error`, `finished_at`, `container_id`,
+  `resource_usage`).
+- `WorkerHealth` carries `healthy`/`health_error` and a
+  `WorkerResourceSnapshot`.
 
 The controller reconciles the response:
 
 1. **Worker missing expected tasks** (e.g., worker restarted mid-task):
-   - Controller marks missing tasks as `WORKER_FAILED`
-   - Tasks are retried on another worker
+   - The worker emits `TASK_STATE_MISSING` observations for run intents that
+     resolved to nothing locally.
+   - Controller marks those tasks as `WORKER_FAILED` and retries them on
+     another worker.
 
-2. **Worker reports unknown tasks** (e.g., controller restarted):
-   - Controller sends kill requests for unknown tasks on next heartbeat
-   - Worker terminates orphaned containers
+2. **Worker has unknown tasks** (e.g., controller restarted):
+   - The worker kills any local attempt not in the desired set ("zombie") and
+     returns an observation for the kill on this tick.
+
+See [`docs/reconcile_rpc.md`](docs/reconcile_rpc.md) for the protocol details.
 
 ## Job State Transitions
 

@@ -31,11 +31,6 @@ class TaskProvider(Protocol):
     def list_tasks(self) -> list[TaskInfo]: ...
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool: ...
     def handle_ping(self, request: worker_pb2.Worker.PingRequest) -> worker_pb2.Worker.PingResponse: ...
-    def handle_start_tasks(
-        self, request: worker_pb2.Worker.StartTasksRequest
-    ) -> worker_pb2.Worker.StartTasksResponse: ...
-    def handle_stop_tasks(self, request: worker_pb2.Worker.StopTasksRequest) -> worker_pb2.Worker.StopTasksResponse: ...
-    def handle_poll_tasks(self, request: worker_pb2.Worker.PollTasksRequest) -> worker_pb2.Worker.PollTasksResponse: ...
     def handle_reconcile(self, request: worker_pb2.Worker.ReconcileRequest) -> worker_pb2.Worker.ReconcileResponse: ...
     def capture_and_log_profile(
         self,
@@ -149,24 +144,6 @@ class WorkerServiceImpl:
     def ping(self, request: worker_pb2.Worker.PingRequest, _ctx: RequestContext) -> worker_pb2.Worker.PingResponse:
         with rpc_error_handler("ping"):
             return self._provider.handle_ping(request)
-
-    def start_tasks(
-        self, request: worker_pb2.Worker.StartTasksRequest, _ctx: RequestContext
-    ) -> worker_pb2.Worker.StartTasksResponse:
-        with rpc_error_handler("start_tasks"):
-            return self._provider.handle_start_tasks(request)
-
-    def stop_tasks(
-        self, request: worker_pb2.Worker.StopTasksRequest, _ctx: RequestContext
-    ) -> worker_pb2.Worker.StopTasksResponse:
-        with rpc_error_handler("stop_tasks"):
-            return self._provider.handle_stop_tasks(request)
-
-    def poll_tasks(
-        self, request: worker_pb2.Worker.PollTasksRequest, _ctx: RequestContext
-    ) -> worker_pb2.Worker.PollTasksResponse:
-        with rpc_error_handler("poll_tasks"):
-            return self._provider.handle_poll_tasks(request)
 
     def reconcile(
         self, request: worker_pb2.Worker.ReconcileRequest, _ctx: RequestContext

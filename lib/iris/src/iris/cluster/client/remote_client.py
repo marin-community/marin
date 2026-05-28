@@ -7,6 +7,7 @@ import logging
 import time
 import uuid
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
 
 from connectrpc.code import Code
@@ -20,6 +21,7 @@ from iris.cluster.client.bundle import BundleCreator
 from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
+from iris.cluster.worker.stats import TASK_STATUS_NAMESPACE, TaskStatusRow
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
@@ -96,6 +98,9 @@ class RemoteClusterClient:
             timeout_ms=timeout_ms,
             interceptors=interceptors,
         )
+        # Deferred so CLI calls that never push status (submit_job, list_jobs,
+        # get_status) don't spawn a finelog flush thread.
+        self._task_status_table = None
 
     def submit_job(
         self,
@@ -506,17 +511,28 @@ class RemoteClusterClient:
 
         return call_with_retry("get_autoscaler_status", _call)
 
-    def report_task_status_text(self, task_id: JobName, detail_md: str, summary_md: str) -> None:
-        """Push markdown status text to the controller for UI display.
+    def report_task_status_text(
+        self,
+        task_id: JobName,
+        attempt_id: int,
+        detail_md: str,
+        summary_md: str,
+    ) -> None:
+        """Push one row of markdown status text to the ``iris.task_status`` namespace.
 
-        Args:
-            task_id: Full task ID of the currently-running task.
-            detail_md: Full markdown for the task detail page.
-            summary_md: Short summary (up to ~3 lines) for the task list table.
+        Buffered and fire-and-forget; ``LogClient`` swallows flush failures
+        so a finelog outage cannot abort task execution.
         """
-        request = job_pb2.SetTaskStatusTextRequest(
-            task_id=task_id.to_wire(),
-            status_text_detail_md=detail_md,
-            status_text_summary_md=summary_md,
+        if self._task_status_table is None:
+            self._task_status_table = self._log_client.get_table(TASK_STATUS_NAMESPACE, TaskStatusRow)
+        self._task_status_table.write(
+            [
+                TaskStatusRow(
+                    ts=datetime.now(UTC).replace(tzinfo=None),
+                    task_id=task_id.to_wire(),
+                    attempt_id=attempt_id,
+                    status_text_detail_md=detail_md,
+                    status_text_summary_md=summary_md,
+                )
+            ]
         )
-        self._client.set_task_status_text(request)
