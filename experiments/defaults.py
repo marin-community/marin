@@ -75,9 +75,7 @@ from marin.training.training import (
     run_levanter_train_lm,
 )
 
-from experiments.evals.exp1600_uncheatable_evals import uncheatable_eval_raw_validation_sets, uncheatable_eval_tokenized
 from experiments.evals.task_configs import CORE_TASKS
-from experiments.paloma import paloma_raw_validation_sets, paloma_tokenized
 from experiments.simple_dpo_config import SimpleDPOConfig
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
@@ -303,8 +301,11 @@ def default_tokenize(
 
 @lru_cache  # LRU to make the executor happier
 def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> dict[str, TokenizerStep]:
-    # Avoid circular dependencies
-    # TODO: Will - break apart defaults a bit
+    # Local imports: experiments.paloma and exp1600_uncheatable_evals both
+    # depend on default_tokenize from this module, so they must be imported
+    # lazily to avoid a circular import at module load.
+    from experiments.evals.exp1600_uncheatable_evals import uncheatable_eval_tokenized
+    from experiments.paloma import paloma_tokenized
 
     validation_sets = dict(paloma_tokenized(base_path=base_path, tokenizer=tokenizer))
     validation_sets.update(uncheatable_eval_tokenized(base_path=base_path, tokenizer=tokenizer))
@@ -313,6 +314,8 @@ def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> di
 
 @lru_cache
 def default_raw_validation_sets() -> dict[str, Any]:
+    from experiments.evals.exp1600_uncheatable_evals import uncheatable_eval_raw_validation_sets
+    from experiments.paloma import paloma_raw_validation_sets
 
     validation_sets = dict(paloma_raw_validation_sets())
     validation_sets.update(uncheatable_eval_raw_validation_sets())
