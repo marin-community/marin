@@ -57,14 +57,23 @@ def test_register_table_persists_policy_across_reopens(tmp_path: Path):
 
 
 def test_register_table_updates_policy_on_re_register(tmp_path: Path):
-    """Last-write-wins: the most recent register_table policy overrides."""
+    """A non-empty re-register policy overrides; an empty one keeps the existing.
+
+    The empty-policy carve-out is what protects newer-client policies from
+    being wiped by older clients that don't know to send one.
+    """
     store = DuckDBLogStore(log_dir=tmp_path / "data")
     try:
         store.register_table("ns", _worker_schema(), StoragePolicy(max_bytes=1024))
         assert store.catalog.get_policy("ns") == StoragePolicy(max_bytes=1024)
 
-        # Re-register with a different policy.
+        # Re-register with a non-empty policy overrides whole-record.
         store.register_table("ns", _worker_schema(), StoragePolicy(max_age_seconds=10))
+        assert store.catalog.get_policy("ns") == StoragePolicy(max_age_seconds=10)
+
+        # Re-register with an empty policy preserves the existing one
+        # (old-client-safe).
+        store.register_table("ns", _worker_schema(), StoragePolicy())
         assert store.catalog.get_policy("ns") == StoragePolicy(max_age_seconds=10)
     finally:
         store.close()

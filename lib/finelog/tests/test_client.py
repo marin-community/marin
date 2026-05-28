@@ -15,7 +15,7 @@ import pyarrow.ipc as paipc
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from finelog.client import FlushResult, LogClient, RemoteLogHandler, schema_from_dataclass
+from finelog.client import FlushResult, LogClient, RemoteLogHandler, StoragePolicy, schema_from_dataclass
 from finelog.client import log_client as log_client_mod
 from finelog.errors import (
     InvalidNamespaceError,
@@ -324,8 +324,6 @@ def test_get_table_with_explicit_schema(tracked_clients):
 
 def test_get_table_forwards_storage_policy(tracked_clients):
     """An explicit StoragePolicy on get_table is sent on the register_table request."""
-    from finelog.client import StoragePolicy
-
     client = LogClient.connect("http://h:1")
     try:
         client.get_table(

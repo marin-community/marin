@@ -71,8 +71,11 @@ message StoragePolicy {
 message RegisterTableRequest {
   string namespace = 1;
   Schema schema = 2;
-  // Optional retention overrides. Omit (or send an empty StoragePolicy)
-  // to use the server-wide defaults.
+  // Optional retention overrides. On fresh registration, an empty
+  // policy inherits the server-wide defaults. On re-register, an empty
+  // policy means "no opinion" and the namespace's existing policy is
+  // preserved — so an older client that doesn't know about policies
+  // can't wipe a tighter policy set by a newer client.
   StoragePolicy storage_policy = 3;
 }
 

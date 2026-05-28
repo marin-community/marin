@@ -426,8 +426,11 @@ class DuckDBLogStore:
         Implicit ``seq`` is stamped at this boundary so the on-disk layout
         is uniform across namespaces. ``policy`` is a per-namespace
         retention override; an empty policy inherits the cluster-wide
-        defaults. Re-register with a different policy updates the
-        existing namespace's policy (last-write-wins).
+        defaults. On re-register an empty policy is treated as
+        "no opinion" and the existing policy is kept — otherwise an old
+        client that doesn't know about policies would wipe a tighter
+        policy a newer client had installed. A non-empty policy
+        overwrites whole-record.
         """
         namespace_dir = self._namespace_dir(name)
         resolve_key_column(schema)
@@ -439,11 +442,9 @@ class DuckDBLogStore:
             if effective != existing_ns.schema:
                 self.catalog.upsert(name, effective)
                 existing_ns.update_schema(effective)
-            # Policy is overridden whole-record on re-register; the
-            # catalog persists the new policy and the live namespace
-            # picks it up on the next eviction tick.
-            self.catalog.upsert_policy(name, policy)
-            existing_ns.update_policy(policy)
+            if not policy.is_empty():
+                self.catalog.upsert_policy(name, policy)
+                existing_ns.update_policy(policy)
             return effective
 
         return self.catalog.register_or_evolve(
