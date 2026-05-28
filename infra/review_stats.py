@@ -33,7 +33,7 @@ Expected stdin payload:
       "invocation":    { variant, trigger, agent_cli, git_branch, merge_base_sha,
                          head_sha, pr_number, marin_user, lint_catalog_sha,
                          diff_files, diff_added_lines, diff_removed_lines,
-                         finding_count, elapsed_s, agent_exit_code, timed_out },
+                         finding_count, elapsed, agent_exit_code, timed_out },
       "findings":      [[file, line, code, confidence, message], ...]
     }
 """
@@ -70,7 +70,7 @@ INVOCATION_COLUMNS = [
     "diff_added_lines",
     "diff_removed_lines",
     "finding_count",
-    "elapsed_s",
+    "elapsed",
     "agent_exit_code",
     "timed_out",
 ]

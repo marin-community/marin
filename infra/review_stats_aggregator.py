@@ -53,6 +53,7 @@ import sys
 from dataclasses import dataclass
 from typing import Literal
 
+import wandb
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
@@ -233,6 +234,21 @@ def _gh_json(args: list[str]) -> object:
     return json.loads(r.stdout)
 
 
+def _gh_paginated(args: list[str]) -> list:
+    """Fetch a paginated gh API endpoint as a single flat list of items.
+
+    `gh api --paginate` alone emits one JSON document per page concatenated,
+    which `json.loads` cannot parse. Pairing it with `--slurp` wraps the
+    pages in an outer array `[[page1_items], [page2_items], ...]`; we flatten
+    so callers don't have to care how many pages came back.
+    """
+    pages = _gh_json([*args, "--paginate", "--slurp"])
+    out: list = []
+    for page in pages:
+        out.extend(page)
+    return out
+
+
 def list_merged_prs(repo: str, days: int, limit: int) -> list[dict]:
     since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).strftime("%Y-%m-%d")
     search = f"is:pr is:merged merged:>={since} repo:{repo}"
@@ -280,8 +296,8 @@ def fetch_pr_comments(repo: str, pr: dict, bot_logins: set[str]) -> list[Comment
     out: list[Comment] = []
 
     # Inline review comments (anchored to file:line)
-    inline = _gh_json(["api", f"repos/{repo}/pulls/{n}/comments", "--paginate"])
-    for c in inline:  # type: ignore[union-attr]
+    inline = _gh_paginated(["api", f"repos/{repo}/pulls/{n}/comments"])
+    for c in inline:
         u = c.get("user") or {}
         out.append(
             Comment(
@@ -302,8 +318,8 @@ def fetch_pr_comments(repo: str, pr: dict, bot_logins: set[str]) -> list[Comment
         )
 
     # Review summary bodies (state + free text)
-    reviews = _gh_json(["api", f"repos/{repo}/pulls/{n}/reviews", "--paginate"])
-    for r in reviews:  # type: ignore[union-attr]
+    reviews = _gh_paginated(["api", f"repos/{repo}/pulls/{n}/reviews"])
+    for r in reviews:
         body = r.get("body") or ""
         if not body.strip():
             continue
@@ -327,8 +343,8 @@ def fetch_pr_comments(repo: str, pr: dict, bot_logins: set[str]) -> list[Comment
         )
 
     # Top-level PR comments (issue thread)
-    issue_comments = _gh_json(["api", f"repos/{repo}/issues/{n}/comments", "--paginate"])
-    for c in issue_comments:  # type: ignore[union-attr]
+    issue_comments = _gh_paginated(["api", f"repos/{repo}/issues/{n}/comments"])
+    for c in issue_comments:
         u = c.get("user") or {}
         out.append(
             Comment(
@@ -448,10 +464,10 @@ def main() -> int:
         per_pr_comments[pr["number"]] = comments
         all_shas.add(pr["headRefOid"])
 
-    # Pull bot findings for these shas from the shared run.
-    if not args.dry_run:
-        import wandb
-
+    # Pull bot findings for these shas from the shared run (skip in dry-run).
+    if args.dry_run:
+        findings_by_sha = {sha: [] for sha in all_shas}
+    else:
         wandb.init(
             project=WANDB_PROJECT,
             id=WANDB_RUN_ID,
@@ -459,9 +475,6 @@ def main() -> int:
             settings=wandb.Settings(silent=True, _disable_stats=True, _disable_meta=True),
         )
         findings_by_sha = load_findings_for_shas(wandb, all_shas)
-    else:
-        wandb = None  # type: ignore[assignment]
-        findings_by_sha = {sha: [] for sha in all_shas}
 
     # Classify + build rows.
     for pr in prs:
@@ -540,19 +553,15 @@ def main() -> int:
 
     existing_humans = [r for r in _load_existing_rows(wandb, "human_comments") if r[pr_col_idx] not in refreshed_prs]
     existing_humans.extend(human_rows)
-    wandb.log(  # type: ignore[union-attr]
-        {"human_comments": wandb.Table(columns=HUMAN_COMMENT_COLUMNS, data=existing_humans)}
-    )
+    wandb.log({"human_comments": wandb.Table(columns=HUMAN_COMMENT_COLUMNS, data=existing_humans)})
 
     existing_outcomes = [
         r for r in _load_existing_rows(wandb, "pr_review_outcomes") if r[out_pr_col_idx] not in refreshed_prs
     ]
     existing_outcomes.extend(pr_rows)
-    wandb.log(  # type: ignore[union-attr]
-        {"pr_review_outcomes": wandb.Table(columns=PR_OUTCOME_COLUMNS, data=existing_outcomes)}
-    )
+    wandb.log({"pr_review_outcomes": wandb.Table(columns=PR_OUTCOME_COLUMNS, data=existing_outcomes)})
 
-    wandb.finish(quiet=True)  # type: ignore[union-attr]
+    wandb.finish(quiet=True)
     logger.info(
         "Logged %d PR rollups and %d classified human comments to %s/%s",
         len(pr_rows),

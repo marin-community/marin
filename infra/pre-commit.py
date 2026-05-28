@@ -1050,7 +1050,7 @@ def run_lint_review(agent_command: str) -> int:
     started = time.time()
     started_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started))
     # Fields shared by every outcome (timeout / agent-error / success). The
-    # outcome-specific fields (elapsed_s, finding_count, exit code, timed_out)
+    # outcome-specific fields (elapsed, finding_count, exit code, timed_out)
     # are spread in at each return site.
     invocation_base = {
         "variant": None,
@@ -1087,7 +1087,7 @@ def run_lint_review(agent_command: str) -> int:
                 "invocation": {
                     **invocation_base,
                     "finding_count": 0,
-                    "elapsed_s": time.time() - started,
+                    "elapsed": time.time() - started,
                     "agent_exit_code": -1,
                     "timed_out": True,
                 },
@@ -1106,7 +1106,7 @@ def run_lint_review(agent_command: str) -> int:
             "invocation": {
                 **invocation_base,
                 "finding_count": len(parsed),
-                "elapsed_s": time.time() - started,
+                "elapsed": time.time() - started,
                 "agent_exit_code": result.returncode,
                 "timed_out": False,
             },
