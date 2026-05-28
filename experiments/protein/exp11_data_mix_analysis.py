@@ -131,6 +131,24 @@ DEFAULT_SWEEP = "run_mix_sweep_v2"
 # ``render_train_vs_full_eval_scatter``). Missing = no scatter for that sweep.
 EVAL_OF: dict[str, str] = {"run_mix_sweep_v2": "run_mix_sweep_v2_eval"}
 
+# Pair each scale sweep with the mix sweep whose recipes it re-runs at larger
+# scale (drives ``render_mix_vs_scale_scatter`` in ``main()``). Missing = no
+# cross-scale scatter for that sweep.
+MIX_OF: dict[str, str] = {"run_scale_sweep_v6": "run_mix_sweep_v2"}
+
+# Recipes that appear in both the mix sweep (100M, ~4.3B tok) and the scale
+# sweep (1.5B, ~21.5B tok). Each entry is ``(mix_id, scale_id, label, group)``
+# where ``group`` keys into ``GROUP_COLORS``. Mixtures absent here (m4/m5/m8/m9
+# in mix; m13 in scale) have no cross-sweep counterpart and are dropped from
+# the cross-scale scatter.
+SHARED_MIXTURE_PAIRS: tuple[tuple[str, str, str, str], ...] = (
+    ("m1", "m10", "H", "Single quality"),
+    ("m2", "m14", "M", "Single quality"),
+    ("m3", "m15", "L", "Single quality"),
+    ("m6", "m11", "H31/M26/L43", "Blends"),
+    ("m7", "m12", "L→H", "Blends"),
+)
+
 # Prefix every plot title with this so the experiment context is unambiguous.
 TITLE_PREFIX = "MarinFold Experiment #11"
 
@@ -1003,6 +1021,121 @@ def render_train_vs_full_eval_scatter(
     logger.info("Saved %s and %s  (r=%.6f, 1-r=%.2e, n=%d)", pdf_path, png_path, r, 1 - r, len(df))
 
 
+def render_mix_vs_scale_scatter(
+    scale_snapshot: pd.DataFrame,
+    scale_meta: EvalMeta,
+    mix_snapshot: pd.DataFrame,
+    mix_meta: EvalMeta,
+    scale_sweep: SweepConfig,
+    mix_sweep: SweepConfig,
+    out_dir: Path,
+) -> None:
+    """Scatter: cd-val loss for the same recipe at mix scale vs scale-up scale.
+
+    Only the recipes in ``SHARED_MIXTURE_PAIRS`` appear — m4/m5/m8/m9 (mix)
+    and m13 (scale) have no cross-sweep counterpart. Pearson r and a
+    least-squares fit show how the cheap mix-stage ranking (100M, ~4.3B tok)
+    transfers to the more expensive scale-stage ranking (1.5B, ~21.5B tok).
+    """
+    mix_cdval = mix_snapshot[mix_snapshot["metric"] == "cd-val"].set_index("mixture_id")
+    scale_cdval = scale_snapshot[scale_snapshot["metric"] == "cd-val"].set_index("mixture_id")
+    rows: list[dict] = []
+    for mix_id, scale_id, label, group in SHARED_MIXTURE_PAIRS:
+        if mix_id not in mix_cdval.index or scale_id not in scale_cdval.index:
+            logger.warning("Skipping pair %s/%s: missing cd-val in one of the sweeps", mix_id, scale_id)
+            continue
+        rows.append(
+            {
+                "mix_id": mix_id,
+                "scale_id": scale_id,
+                "label": label,
+                "group": group,
+                "mix_value": float(mix_cdval.loc[mix_id, "value"]),
+                "scale_value": float(scale_cdval.loc[scale_id, "value"]),
+            }
+        )
+    if not rows:
+        logger.warning("No shared mixtures between %s and %s", mix_sweep.id, scale_sweep.id)
+        return
+    df = pd.DataFrame(rows)
+    x = df["mix_value"].to_numpy(dtype=float)
+    y = df["scale_value"].to_numpy(dtype=float)
+    r = float(np.corrcoef(x, y)[0, 1])
+    slope, intercept = np.polyfit(x, y, 1)
+    rho = float(pd.Series(x).rank().corr(pd.Series(y).rank()))
+
+    fig, ax = plt.subplots(figsize=(8, 4.2))
+    seen_groups: list[str] = []
+    for group_label in df["group"].unique():
+        sub = df[df["group"] == group_label]
+        ax.scatter(
+            sub["mix_value"],
+            sub["scale_value"],
+            c=GROUP_COLORS.get(group_label, "#888888"),
+            label=group_label,
+            edgecolor="black",
+            linewidth=0.5,
+            alpha=0.9,
+            s=90,
+            zorder=3,
+        )
+        seen_groups.append(group_label)
+        for _, row in sub.iterrows():
+            ax.annotate(
+                row["label"],
+                (row["mix_value"], row["scale_value"]),
+                xytext=(0, -8),
+                textcoords="offset points",
+                fontsize=9,
+                ha="center",
+                va="top",
+            )
+
+    pad_x = 0.08 * float(np.ptp(x)) or 0.01
+    pad_y = 0.08 * float(np.ptp(y)) or 0.01
+    x_lo, x_hi = float(x.min()) - pad_x, float(x.max()) + pad_x
+    y_lo, y_hi = float(y.min()) - pad_y, float(y.max()) + pad_y
+    ax.set_xlim(x_lo, x_hi)
+    ax.set_ylim(y_lo, y_hi)
+
+    sign = "+" if intercept >= 0 else "-"
+    fit_label = f"y = {slope:.3f}*x {sign} {abs(intercept):.3f}"
+    ax.plot(
+        [x_lo, x_hi],
+        [slope * x_lo + intercept, slope * x_hi + intercept],
+        "--",
+        color="grey",
+        linewidth=1.2,
+        zorder=1,
+        label=fit_label,
+    )
+
+    ax.set_xlabel(
+        f"Stage 1 cd-val loss  "
+        f"(N={mix_meta.params_exact / 1e9:.2f}B, D={mix_meta.tokens_exact / 1e9:.1f}B)"
+    )
+    ax.set_ylabel(
+        f"Stage 2 cd-val loss  "
+        f"(N={scale_meta.params_exact / 1e9:.2f}B, D={scale_meta.tokens_exact / 1e9:.1f}B)"
+    )
+    ax.set_title(
+        f"{TITLE_PREFIX} — cd-val loss: scale sweep vs mix sweep on shared mixtures\n"
+        f"Pearson r = {r:.4f}   Spearman rho = {rho:.4f}   (n = {len(df)} shared mixtures)",
+        fontsize=10,
+    )
+    ax.grid(True, linestyle="--", alpha=0.4)
+    ax.legend(loc="upper left", fontsize=9, framealpha=0.9)
+
+    fig.tight_layout()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = out_dir / "mix_vs_scale_cdval_scatter.pdf"
+    png_path = out_dir / "mix_vs_scale_cdval_scatter.png"
+    fig.savefig(pdf_path, dpi=300, bbox_inches="tight")
+    fig.savefig(png_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved %s and %s  (r=%.4f, rho=%.4f, n=%d)", pdf_path, png_path, r, rho, len(df))
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1031,6 +1164,12 @@ def main(argv: list[str] | None = None) -> int:
         eval_sweep = SWEEPS[eval_sweep_id]
         eval_snapshot, eval_meta = load_or_build_snapshot(eval_sweep, refresh=args.refresh)
         render_train_vs_full_eval_scatter(snapshot, meta, eval_snapshot, eval_meta, sweep, eval_sweep, plots_dir)
+
+    mix_sweep_id = MIX_OF.get(args.sweep)
+    if mix_sweep_id is not None:
+        mix_sweep = SWEEPS[mix_sweep_id]
+        mix_snapshot, mix_meta = load_or_build_snapshot(mix_sweep, refresh=args.refresh)
+        render_mix_vs_scale_scatter(snapshot, meta, mix_snapshot, mix_meta, sweep, mix_sweep, plots_dir)
     return 0
 
 
