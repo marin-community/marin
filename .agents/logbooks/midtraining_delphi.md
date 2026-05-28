@@ -11650,3 +11650,123 @@ If a future cooldown launch fails with `missing Qwen3 QK-norm arrays`:
    the new path, mark `materialized_checkpoint: true`, leave the old
    path as `invalidated_materialized_checkpoint_path`.
 4. Re-run the launcher. The preflight schema check (D4) should now pass.
+
+## 2026-05-27T23:35Z — Multi-target helper extension + registry NTS fix + 7 sources pre-copied
+
+Closing the loop on the 70%+80% prefix materialization plan. Three
+pieces landed in this session:
+
+### Source checkpoints pre-copied to us-east5 (7 ckpts, 97.18 GiB)
+
+Minimum-source plan: one source per base, used as the at-or-before
+resume point for BOTH 70% and 80% materializations in a single
+combined run. All 7 copies completed `2026-05-27T23:31Z`, ~$2
+cross-region egress. Path symmetry preserved so the materialize
+helper's `mirror://` resolution finds the local us-east5 copy.
+
+| Base | Source step | Size | New 70% target | New 80% target |
+| --- | ---: | ---: | ---: | ---: |
+| 3e18 | 20000 |  5.00 GiB | 26134 | 29868 |
+| 9e18 | 30000 |  6.15 GiB | 31021 | 35453 |
+| 2e19 | 30000 |  9.35 GiB | 38587 | 44100 |
+| 3e19 | 20000 | 11.15 GiB | 26609 | 30411 |
+| 9e19 | 20000 | 15.47 GiB | 28198 | 32226 |
+| 2e20 | 30000 | 21.62 GiB | 39533 | 45181 |
+| 3e20 | 20000 | 28.44 GiB | 24857 | 28408 |
+
+Note: 3 of the 7 cps (`3e18`, `3e19`, `3e20`) initially landed with a
+nested `step-N/step-N/` duplicate from a `gsutil cp -r` directory
+ambiguity. The top-level data was correct in all 7; nested duplicates
+were deleted before verification. Final check: every destination has
+`manifest.ocdbt` + `metadata.json` + `d/` at the right level with no
+nested duplicates.
+
+### Helper extension `--also-save-step` (commit `5cb06d791`)
+
+The materialize helper now supports multiple permanent saves in one
+training run, addressing audit items A1-A10 from
+`.agents/projects/silent_type_degradation_risk_register.md`:
+
+- `MaterializeRequest.extra_target_steps` (tuple of ints, must be
+  strictly inside `(source_step, target_step)` and distinct)
+- One Levanter `CheckpointInterval` policy per extra:
+  `{"every": X, "until": X}` sorted ascending; X % X == 0 fires a
+  permanent save at exactly X; past X the policy goes inactive
+- The final `target_step` is NOT in `keep` -- it's still covered by
+  Levanter's forced save at training end
+  (`lib/levanter/src/levanter/trainer.py:568,581`)
+- `MaterializationPlan.destination_checkpoint_paths` (tuple), with
+  `destination_checkpoint_path` kept as a backward-compat shortcut
+- `validate_checkpoint_io` checks every destination for pre-existence
+- `checkpoint_metadata` writes `all_target_steps: list[int]`; legacy
+  `target_step` (singular) still equals the FINAL target
+- Launcher D5 post-train check now validates EVERY step dir under
+  `permanent_checkpoints_uri`, not just the latest
+
+The 5afac0bdf Qwen3 fail-closed in
+`decode_train_config_from_executor_info` is untouched. The keep
+policy only controls WHEN to save, not WHAT -- all saves share the
+in-memory param tree, so if the load is Qwen3-correct, every saved
+checkpoint has `q_norm` / `k_norm`. The silent-type-degradation bug
+class remains structurally impossible to reintroduce.
+
+### Registry NTS fix: `9e18`, `2e19`, `9e19`, `2e20`
+
+Audit of the Flavor A scripts caught a stale registry: the
+`2026-05-25T20:22Z` fix that updated `delphi_models.py.num_train_steps`
+to match `.executor_info` was applied to `3e18`/`3e19`/`3e20` only.
+The other 4 small-ladder bases were missed, so their candidate yaml
+target steps landed at 79.6%-79.8% of the true pretrain schedule
+instead of exactly 80%.
+
+| Base | Old registry NTS | True NTS (`.executor_info`) | Drift |
+| --- | ---: | ---: | ---: |
+| 9e18 | 44096 | 44317 | +221 |
+| 2e19 | 54915 | 55125 | +210 |
+| 9e19 | 40163 | 40283 | +120 |
+| 2e20 | 56392 | 56477 | +85 |
+
+Fix applied: `experiments/delphi_models.py` `num_train_steps` bumped
+to the true values; `checkpoint_candidates.yaml` recomputed for those
+4 bases x 3 cooldown ratios = 12 entries. Per-entry updates:
+`target_step` (= `floor(prefix_ratio * new_NTS)`),
+`target_progress_percent`, `target_cooldown_steps`,
+`suggested_step_delta`, `suggested_progress_percent`, and the
+`checkpoint_at_or_before` / `at_or_after` `delta` + `progress_percent`
+fields. The `suggested_step` itself is operator-pinned (chosen during
+review), so it's preserved unchanged; the cooldown launcher uses the
+suggested path only when consuming the candidate, not for the
+materialization plan (which uses at_or_before for the source-resume
+step).
+
+After the fix every target lands at 70.00% / 80.00% of the true
+schedule to 4 decimal places. Validated by re-rendering each plan
+with the helper.
+
+### 7 submit scripts ready in `scratch/` (gitignored)
+
+One per base: `scratch/submit_delphi_prefix_{base}_qwen3.py`. Each
+launches a single combined materialization run with
+`--also-save-step` for the 70% prefix and `--target-step` for the
+80%. TPU choices match the verified cooldown / CPT TPU per base
+(`v6e-4` for 3e18 / 9e18, `v6e-8` for 2e19 / 3e19 / 9e19, `v5p-8`
+for 2e20, `v5p-16` for 3e20).
+
+3e18 sanity-check launch handed to laptop earlier today; other 6
+ready to fire once 3e18 confirms the pipeline end-to-end.
+
+Aggregate forward-step budget across all 7 runs: ~76 k steps. Wall
+bottleneck: 2e20 (~22 h on `v5p-8`) if all 7 launch in parallel.
+
+### Files touched (this session)
+
+- `scripts/materialize_delphi_prefix_checkpoint.py` (helper extension)
+- `experiments/midtrain_specs/true_midtrain/nemotron_math_only/launcher.py` (D5 multi-step)
+- `tests/test_materialize_delphi_prefix_checkpoint.py` (+8 tests)
+- `experiments/delphi_models.py` (4 NTS bumps)
+- `experiments/midtrain_specs/true_midtrain/nemotron_math_only/configs/checkpoint_candidates.yaml` (12 entries recomputed)
+- `scratch/submit_delphi_prefix_{3e18,9e18,2e19,3e19,9e19,2e20,3e20}_qwen3.py` (gitignored, on skampere3 worktree)
+
+Test suite: 151 passing across `tests/midtraining/` +
+`tests/test_materialize_delphi_prefix_checkpoint.py`. Pre-commit clean.
+
