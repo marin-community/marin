@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-r"""Run HumanEval against Qwen3 through brokered vLLM serving.
+"""Run HumanEval against Qwen3 through brokered vLLM serving.
 
 Default mode submits one Iris CPU parent job that runs lm-eval plus a local
 OpenAI-compatible proxy. The parent starts a broker actor and TPU vLLM worker
@@ -11,20 +11,21 @@ process for single-node checks.
 lm-eval runs in an isolated uv environment so the eval client does not share the
 TPU serving environment's `vllm-tpu` dependency set.
 
-    uv run python experiments/evals/served_qwen3_humaneval.py
-    uv run python experiments/evals/served_qwen3_humaneval.py --priority production
-    uv run python experiments/evals/served_qwen3_humaneval.py --local
+\b
+Examples:
+  uv run python experiments/evals/served_qwen3_humaneval.py
+  uv run python experiments/evals/served_qwen3_humaneval.py --priority production
+  uv run python experiments/evals/served_qwen3_humaneval.py --local
 """
 
 from __future__ import annotations
 
-import argparse
 import shlex
 import subprocess
-import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+import click
 from fray.types import ResourceConfig
 from iris.client import IrisClient
 from iris.cluster.config import IrisConfig
@@ -218,125 +219,106 @@ def _build_inference_config(
     )
 
 
-def _parse_args(argv: list[str] | None) -> tuple[argparse.Namespace, BrokeredVllmSystemConfig]:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=8,
-        help="Limit HumanEval docs for a fast run (default: 8). Use 0 to run the full task.",
-    )
-    parser.add_argument(
-        "--output-path",
-        default="/tmp/served-qwen3-humaneval",
-        help="Directory where lm-eval writes samples and metrics (default: /tmp/served-qwen3-humaneval).",
-    )
-    parser.add_argument(
-        "--timeout-seconds",
-        type=int,
-        help="Override vLLM startup and proxy/lm-eval request timeouts for slow manual runs.",
-    )
-    parser.add_argument(
-        "--num-concurrent",
-        type=int,
-        default=DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER,
-        help=(
-            "lm-eval local-completions concurrency and per-worker vLLM request limit "
-            f"(default: brokered worker default, currently {DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER})."
-        ),
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        default=1,
-        help="Number of child vLLM worker jobs in Iris mode (default: 1). Local mode requires 1.",
-    )
-    parser.add_argument(
-        "--tpu-type",
-        default="v5litepod-4",
-        help="TPU type for child vLLM workers (default: v5litepod-4).",
-    )
-    parser.add_argument(
-        "--worker-ram",
-        default="96g",
-        help="Host RAM request for each child vLLM worker (default: 96g).",
-    )
-    parser.add_argument(
-        "--parent-ram",
-        default="6g",
-        help="Host RAM request for the CPU parent job that runs lm-eval and the proxy (default: 6g).",
-    )
-    parser.add_argument(
-        "--tpu-region",
-        "--tpu-regions",
-        dest="tpu_region",
-        default="us-west4",
-        help="Region for the CPU parent, broker actor, and TPU worker jobs (default: us-west4).",
-    )
-    parser.add_argument(
-        "--job-name",
-        default="served-qwen3-humaneval",
-        help="Iris parent job name (default: served-qwen3-humaneval).",
-    )
-    parser.add_argument(
-        "--priority",
-        choices=PRIORITY_BAND_NAMES,
-        help="Iris priority band for the parent, broker, and worker jobs (default: Iris cluster default).",
-    )
-    parser.add_argument(
-        "--local",
-        action="store_true",
-        help="Run the single-node dev TPU path in the current process instead of submitting an Iris parent job.",
-    )
-    args = parser.parse_args(argv)
-
-    if args.limit < 0:
-        parser.error("--limit must be non-negative")
-    if args.num_concurrent < 1:
-        parser.error("--num-concurrent must be at least 1")
-    if args.workers < 1:
-        parser.error("--workers must be at least 1")
-    if args.local and args.workers > 1:
-        parser.error("--local only supports --workers 1; use --num-concurrent for local request fanout")
-    if args.timeout_seconds is not None and args.timeout_seconds < 1:
-        parser.error("--timeout-seconds must be at least 1")
-    tpu_region = args.tpu_region.strip()
+@click.command(help=__doc__, context_settings={"help_option_names": ["-h", "--help"], "show_default": True})
+@click.option(
+    "--limit",
+    type=click.IntRange(min=0),
+    default=8,
+    help="Limit HumanEval docs for a fast run. Use 0 to run the full task.",
+)
+@click.option(
+    "--output-path",
+    default="/tmp/served-qwen3-humaneval",
+    help="Directory where lm-eval writes samples and metrics.",
+)
+@click.option(
+    "--timeout-seconds",
+    type=click.IntRange(min=1),
+    help="Override vLLM startup and proxy/lm-eval request timeouts for slow manual runs.",
+)
+@click.option(
+    "--num-concurrent",
+    type=click.IntRange(min=1),
+    default=DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER,
+    help="lm-eval local-completions concurrency and per-worker vLLM request limit.",
+)
+@click.option(
+    "--workers",
+    type=click.IntRange(min=1),
+    default=1,
+    help="Number of child vLLM worker jobs in Iris mode. Local mode requires 1.",
+)
+@click.option("--tpu-type", default="v5litepod-4", help="TPU type for child vLLM workers.")
+@click.option("--worker-ram", default="96g", help="Host RAM request for each child vLLM worker.")
+@click.option(
+    "--parent-ram",
+    default="6g",
+    help="Host RAM request for the CPU parent job that runs lm-eval and the proxy.",
+)
+@click.option(
+    "--tpu-region",
+    "--tpu-regions",
+    default="us-west4",
+    help="Region for the CPU parent, broker actor, and TPU worker jobs.",
+)
+@click.option("--job-name", default="served-qwen3-humaneval", help="Iris parent job name.")
+@click.option(
+    "--priority",
+    type=click.Choice(PRIORITY_BAND_NAMES),
+    help="Iris priority band for the parent, broker, and worker jobs.",
+)
+@click.option(
+    "--local",
+    is_flag=True,
+    help="Run the single-node dev TPU path in the current process instead of submitting an Iris parent job.",
+)
+def main(
+    limit: int,
+    output_path: str,
+    timeout_seconds: int | None,
+    num_concurrent: int,
+    workers: int,
+    tpu_type: str,
+    worker_ram: str,
+    parent_ram: str,
+    tpu_region: str,
+    job_name: str,
+    priority: str | None,
+    local: bool,
+) -> None:
+    configure_logging()
+    if local and workers > 1:
+        raise click.UsageError("--local only supports --workers 1; use --num-concurrent for local request fanout")
+    tpu_region = tpu_region.strip()
     if not tpu_region:
-        parser.error("--tpu-region must be non-empty")
+        raise click.UsageError("--tpu-region must be non-empty")
     if "," in tpu_region:
-        parser.error("--tpu-region accepts one region; rerun separately for another region")
-    args.limit = args.limit if args.limit > 0 else None
-    args.tpu_region = tpu_region
+        raise click.UsageError("--tpu-region accepts one region; rerun separately for another region")
 
     try:
-        return args, _build_inference_config(
-            workers=args.workers,
-            num_concurrent=args.num_concurrent,
-            timeout_seconds=args.timeout_seconds,
+        inference_config = _build_inference_config(
+            workers=workers,
+            num_concurrent=num_concurrent,
+            timeout_seconds=timeout_seconds,
         )
     except ValueError as exc:
-        parser.error(str(exc))
-
-
-def main(argv: list[str] | None = None) -> int:
-    configure_logging()
-    args, inference_config = _parse_args(argv)
+        raise click.UsageError(str(exc)) from exc
 
     eval_config = HumanEvalRunConfig(
-        output_path=args.output_path,
-        limit=args.limit,
+        output_path=output_path,
+        limit=limit if limit > 0 else None,
         num_concurrent=inference_config.workers.max_in_flight_per_worker,
         request_timeout_seconds=int(inference_config.proxy.request_timeout_seconds),
     )
 
-    if args.local:
+    if local:
         run_local_humaneval(inference_config, eval_config)
-        return 0
+        return
 
-    priority_band = priority_band_value(args.priority) if args.priority else job_pb2.PRIORITY_BAND_UNSPECIFIED
+    priority_band = priority_band_value(priority) if priority else job_pb2.PRIORITY_BAND_UNSPECIFIED
     runtime_config = IrisBrokeredVllmRuntimeConfig(
-        region=args.tpu_region,
-        worker_resources=ResourceConfig.with_tpu(args.tpu_type, ram=args.worker_ram),
+        region=tpu_region,
+        worker_resources=ResourceConfig.with_tpu(tpu_type, ram=worker_ram),
         worker_env_vars=VLLM_WORKER_ENV_VARS,
         priority_band=priority_band,
     )
@@ -344,14 +326,13 @@ def main(argv: list[str] | None = None) -> int:
         inference_config,
         eval_config,
         runtime_config,
-        job_name=args.job_name,
+        job_name=job_name,
         iris_config_path="lib/iris/config/marin.yaml",
-        parent_ram=args.parent_ram,
-        region=args.tpu_region,
+        parent_ram=parent_ram,
+        region=tpu_region,
         priority_band=priority_band,
     )
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    main()
