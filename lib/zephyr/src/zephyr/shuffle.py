@@ -31,8 +31,6 @@ import io
 import itertools
 import logging
 import math
-import shutil
-import tempfile
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
@@ -120,6 +118,8 @@ _PAYLOAD_COL = "__payload__"
 _DATAFRAME_ROW_COUNT = 1000
 # Number of write() calls between buffer compaction passes.
 _BUFFER_COMPACTION_INTERVAL = 100
+# Number of write() calls between memory checks.
+_MEMORY_CHECK_INTERVAL = 10
 # Flush scatter buffers when cgroup memory exceeds this fraction of the container
 # limit, and keep flushing until usage drops to _SCATTER_FLUSH_TARGET.
 _SCATTER_FLUSH_THRESHOLD = 0.75
@@ -389,43 +389,27 @@ class ScatterReader:
 
             if estimated_merge_memory_bytes * overhead > memory_bytes * _SCATTER_READ_MEMORY_FRACTION:
                 fan_in = math.ceil(math.sqrt(self.total_chunks))
-                disk_bytes = task_resources.disk_bytes / num_workers * _LOCAL_DISK_SHUFFLE_UTILIZATION
-                need_bytes = self.total_chunk_bytes
-                use_local = need_bytes <= disk_bytes
 
                 logger.info(
                     "[shard %d] Merging %d chunks via external sort "
-                    "(%s memory needed > %s memory available); fan_in=%d, "
-                    "spill=%s (%s needed %s %s available)",
+                    "(%s memory needed > %s memory available); fan_in=%d",
                     self._target_shard,
                     self.total_chunks,
                     humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
                     humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
                     fan_in,
-                    "local" if use_local else "gcs",
-                    humanfriendly.format_size(need_bytes, binary=True),
-                    "<=" if use_local else ">",
-                    humanfriendly.format_size(disk_bytes, binary=True),
                 )
 
-                if use_local:
-                    spill_dir = tempfile.mkdtemp(prefix=f"zephyr-sort-{self._target_shard:04d}-")
-                else:
-                    spill_dir = external_sort_dir
+                merged = external_sort_merge(
+                    input_frames=self.get_frames(),
+                    sort_key=_SORT_KEY_COL,
+                    external_sort_dir=external_sort_dir,
+                    fan_in=fan_in,
+                    shard=self._target_shard,
+                )
 
-                try:
-                    merged = external_sort_merge(
-                        input_frames=self.get_frames(),
-                        sort_key=_SORT_KEY_COL,
-                        external_sort_dir=spill_dir,
-                        fan_in=fan_in,
-                        shard=self._target_shard,
-                    )
+                yield from itertools.chain.from_iterable(map(_dataframe_to_items, merged))
 
-                    yield from itertools.chain.from_iterable(map(_dataframe_to_items, merged))
-                finally:
-                    if use_local:
-                        shutil.rmtree(spill_dir, ignore_errors=True)
             else:
                 logger.info(
                     "[shard %d] Merging %d chunks in memory (%s memory needed < %s memory available)",
@@ -596,22 +580,23 @@ class ScatterWriter:
         if self._write_calls % _BUFFER_COMPACTION_INTERVAL == 0:
             self._compact_buffers()
 
-        mem = _read_cgroup_memory_bytes()
-        if mem > self._peak_rss_bytes:
-            self._peak_rss_bytes = mem
+        if self._write_calls % _MEMORY_CHECK_INTERVAL == 0:
+            mem = _read_cgroup_memory_bytes()
+            if mem > self._peak_rss_bytes:
+                self._peak_rss_bytes = mem
 
-        if mem > self._flush_threshold_bytes:
-            logger.info(
-                "[shard %d] Memory at %s (%.0f%% of %s); flushing scatter buffers to %.0f%%",
-                self._source_shard,
-                humanfriendly.format_size(mem, binary=True),
-                100.0 * mem / self._memory_available_bytes,
-                humanfriendly.format_size(self._memory_available_bytes, binary=True),
-                100.0 * _SCATTER_FLUSH_TARGET,
-            )
-            while self._buffers and _read_cgroup_memory_bytes() > self._flush_target_bytes:
-                largest = max(self._buffers, key=lambda t: self._buffers[t].estimated_size())
-                self._flush(largest)
+            if mem > self._flush_threshold_bytes:
+                logger.info(
+                    "[shard %d] Memory at %s (%.0f%% of %s); flushing scatter buffers to %.0f%%",
+                    self._source_shard,
+                    humanfriendly.format_size(mem, binary=True),
+                    100.0 * mem / self._memory_available_bytes,
+                    humanfriendly.format_size(self._memory_available_bytes, binary=True),
+                    100.0 * _SCATTER_FLUSH_TARGET,
+                )
+                while self._buffers and _read_cgroup_memory_bytes() > self._flush_target_bytes:
+                    largest = max(self._buffers, key=lambda t: self._buffers[t].estimated_size())
+                    self._flush(largest)
 
     def close(self) -> ListShard:
         """Flush remaining buffers, write sidecar."""
