@@ -1034,6 +1034,16 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
     help="Seconds to observe restarted workers for failures before advancing",
 )
 @click.option(
+    "--max-failures",
+    type=int,
+    default=4,
+    help=(
+        "Abort rollout if cumulative non-preemption failures exceed this budget. "
+        "Workers whose slice has been preempted (slice gone from GCE, or worker "
+        "row deleted by the autoscaler) are skipped without counting toward the budget."
+    ),
+)
+@click.option(
     "--skip-current-hash/--no-skip-current-hash",
     default=False,
     help=(
@@ -1050,6 +1060,7 @@ def worker_restart(
     min_batch: int,
     max_batch: int,
     observation_window: int,
+    max_failures: int,
     skip_current_hash: bool,
 ):
     """Rolling restart of workers with adaptive batch sizing.
@@ -1057,8 +1068,14 @@ def worker_restart(
     Restarts workers in progressively larger batches (1, 2, 4, ... up to
     --max-batch). After each batch, waits for workers to become healthy, then
     observes them for --observation-window seconds to catch post-restart
-    failures. Aborts immediately if any worker fails to come back healthy or
-    develops failures during observation.
+    failures.
+
+    Preempted workers (slice no longer present, or controller has already
+    removed the worker row) are skipped without counting toward --max-failures;
+    the autoscaler will recreate them with a freshly-bootstrapped image.
+    All other failures (SSH/bootstrap errors, fail-to-become-healthy,
+    unhealthy after observation) count toward the budget; the rollout aborts
+    only once the cumulative count exceeds --max-failures.
 
     The CLI drives the SSH bootstrap directly per worker — no controller-side
     proxy — so bootstrap stdout/stderr streams to the operator's terminal.
@@ -1123,21 +1140,39 @@ def worker_restart(
         total = len(worker_ids)
         click.echo(
             f"Restarting {total} worker(s) "
-            f"(timeout={timeout}s, observation={observation_window}s, max_batch={max_batch})"
+            f"(timeout={timeout}s, observation={observation_window}s, "
+            f"max_batch={max_batch}, max_failures={max_failures})"
         )
 
         rows_by_id = _fetch_worker_bootstrap_rows(client, worker_ids)
         missing_rows = [wid for wid in worker_ids if wid not in rows_by_id]
         if missing_rows:
+            # Already-preempted workers may legitimately be missing from the
+            # workers table. Skip them rather than aborting.
             click.echo(
-                f"  ABORT: workers missing from controller workers table: {', '.join(sorted(missing_rows))}",
-                err=True,
+                f"  Skipping {len(missing_rows)} worker(s) already gone from controller "
+                f"(likely preempted): {', '.join(sorted(missing_rows))}"
             )
-            raise SystemExit(1)
+            worker_ids = [wid for wid in worker_ids if wid in rows_by_id]
+            total = len(worker_ids)
+            if not worker_ids:
+                click.echo("No workers to restart")
+                return
 
         succeeded = 0
+        preempted_total = 0
+        failures = 0
         batch_size = min_batch
         offset = 0
+
+        def _abort_if_over_budget(stage: str) -> None:
+            if failures > max_failures:
+                click.echo(
+                    f"  ABORT: failure budget exceeded during {stage} " f"({failures} > {max_failures})",
+                    err=True,
+                )
+                _print_summary(succeeded, total - succeeded - preempted_total, preempted_total, failures, offset)
+                raise SystemExit(1)
 
         while offset < total:
             batch = worker_ids[offset : offset + batch_size]
@@ -1175,45 +1210,71 @@ def worker_restart(
             with ThreadPoolExecutor(max_workers=len(batch)) as pool:
                 results = list(pool.map(_restart, batch))
 
+            healthy_targets: set[str] = set()
             for wid, status, error in results:
-                if status is None:
-                    click.echo(f"  ABORT: restart failed for {wid}: {error}", err=True)
-                    _print_summary(succeeded, total - succeeded, offset)
-                    raise SystemExit(1)
+                if status == "ok":
+                    healthy_targets.add(wid)
+                elif _is_preemption_error(error or ""):
+                    preempted_total += 1
+                    click.echo(f"  PREEMPTED: {wid} ({error}); autoscaler will replace — skipping")
+                else:
+                    failures += 1
+                    click.echo(
+                        f"  FAILED ({failures}/{max_failures}): restart failed for {wid}: {error}",
+                        err=True,
+                    )
+            _abort_if_over_budget("restart")
 
-            # Wait for all workers in the batch to become healthy
-            click.echo(f"  Waiting for {len(batch)} worker(s) to become healthy...")
-            unhealthy = _wait_for_workers_healthy(client, set(batch), timeout)
-            if unhealthy:
-                click.echo(
-                    f"  ABORT: workers did not become healthy within {timeout}s: " f"{', '.join(sorted(unhealthy))}",
-                    err=True,
-                )
-                _print_summary(succeeded, total - succeeded, offset)
-                raise SystemExit(1)
+            if healthy_targets:
+                click.echo(f"  Waiting for {len(healthy_targets)} worker(s) to become healthy...")
+                unhealthy = _wait_for_workers_healthy(client, set(healthy_targets), timeout)
+                if unhealthy:
+                    preempted_now, still_failing = _classify_post_wait_failures(client, unhealthy)
+                    for wid in sorted(preempted_now):
+                        preempted_total += 1
+                        click.echo(f"  PREEMPTED: {wid} disappeared from controller during health-wait — skipping")
+                    for wid in sorted(still_failing):
+                        failures += 1
+                        click.echo(
+                            f"  FAILED ({failures}/{max_failures}): {wid} did not become healthy within {timeout}s",
+                            err=True,
+                        )
+                    healthy_targets -= unhealthy
+                    _abort_if_over_budget("health-wait")
 
-            click.echo(f"  All {len(batch)} worker(s) healthy. Observing for {observation_window}s...")
-            time.sleep(observation_window)
+            if healthy_targets:
+                click.echo(f"  Observing {len(healthy_targets)} worker(s) for {observation_window}s...")
+                time.sleep(observation_window)
 
-            # Re-check health after observation window
-            failed_workers = _check_worker_health(client, set(batch))
-            if failed_workers:
-                click.echo(
-                    f"  ABORT: workers developed failures during observation: "
-                    f"{', '.join(f'{wid} ({msg})' for wid, msg in sorted(failed_workers))}",
-                    err=True,
-                )
-                _print_summary(succeeded, total - succeeded, offset)
-                raise SystemExit(1)
+                observed_failures = _check_worker_health(client, set(healthy_targets))
+                for wid, msg in observed_failures:
+                    if msg == "disappeared":
+                        preempted_total += 1
+                        healthy_targets.discard(wid)
+                        click.echo(f"  PREEMPTED: {wid} disappeared during observation — skipping")
+                    else:
+                        failures += 1
+                        healthy_targets.discard(wid)
+                        click.echo(
+                            f"  FAILED ({failures}/{max_failures}): {wid} unhealthy after observation: {msg}",
+                            err=True,
+                        )
+                _abort_if_over_budget("observation")
 
-            succeeded += len(batch)
+            succeeded += len(healthy_targets)
             offset += len(batch)
-            click.echo(f"  Batch OK ({succeeded}/{total} complete)")
+            click.echo(
+                f"  Batch done: {succeeded}/{total} healthy, "
+                f"{preempted_total} preempted, {failures}/{max_failures} failures"
+            )
 
             # Double batch size for next round, capped at max_batch
             batch_size = min(batch_size * 2, max_batch)
 
-    click.echo(f"\nDone: {succeeded}/{total} workers restarted successfully")
+    click.echo(
+        f"\nDone: {succeeded}/{total} workers restarted successfully "
+        f"({preempted_total} preempted skipped, {failures} non-fatal failures)"
+    )
 
 
 def _wait_for_workers_healthy(client, worker_ids: set[str], timeout: int) -> set[str]:
@@ -1252,5 +1313,35 @@ def _check_worker_health(client, worker_ids: set[str]) -> list[tuple[str, str]]:
     return failures
 
 
-def _print_summary(succeeded: int, remaining: int, offset: int):
-    click.echo(f"\nSummary: {succeeded} succeeded, {remaining} remaining (aborted at worker {offset + 1})")
+def _is_preemption_error(error_msg: str) -> bool:
+    """Best-effort detect that a per-worker restart error is a preemption.
+
+    The canonical signal during a rollout is ``worker_handle`` raising
+    ``ValueError("Slice '...' not found in zone '...')`` because the underlying
+    TPU/VM slice has been reclaimed by GCE. The autoscaler will replace the
+    slice asynchronously, so the rollout should skip rather than abort.
+    """
+    return "not found in zone" in error_msg
+
+
+def _classify_post_wait_failures(client, unhealthy: set[str]) -> tuple[set[str], set[str]]:
+    """After a health-wait timeout, split workers into (preempted, still_failing).
+
+    The controller's recovery loop deletes the worker row once it confirms the
+    slice is gone (autoscaler ``recovery.py``), so workers absent from
+    ``list_workers`` are treated as preempted; the rest are genuine failures.
+    """
+    try:
+        resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
+        present = {w.worker_id for w in resp.workers}
+    except Exception:
+        return set(), set(unhealthy)
+    preempted = {wid for wid in unhealthy if wid not in present}
+    return preempted, unhealthy - preempted
+
+
+def _print_summary(succeeded: int, remaining: int, preempted: int, failures: int, offset: int):
+    click.echo(
+        f"\nSummary: {succeeded} succeeded, {preempted} preempted (skipped), "
+        f"{failures} failed, {remaining} remaining (aborted at worker {offset + 1})"
+    )
