@@ -13,7 +13,7 @@ import click
 from rigging.config_discovery import resolve_cluster_config
 from rigging.log_setup import configure_logging
 
-from iris.cli.rpc_base import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
+from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
 from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token, store_token
 from iris.rpc import config_pb2, job_pb2
 from iris.rpc import controller_pb2 as _controller_pb2

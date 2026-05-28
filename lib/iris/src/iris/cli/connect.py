@@ -33,7 +33,7 @@ def _bundled_iris_config_dir() -> str | None:
        ``Path(__file__).parent.parent / "config"``.
     2. Editable workspace installs: the yamls stay at their source location
        ``lib/iris/config/`` — reachable via ``parents[3] / "config"`` from
-       ``lib/iris/src/iris/cli/rpc_base.py``.
+       ``lib/iris/src/iris/cli/connect.py``.
 
     Returns the first directory that exists, or ``None`` for wheel installs
     that don't ship configs at all.
