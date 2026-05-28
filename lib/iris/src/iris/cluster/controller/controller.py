@@ -98,7 +98,7 @@ from iris.cluster.controller.schema import (
     workers_table,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.task_state import job_scheduling_deadline, task_row_can_be_scheduled
+from iris.cluster.controller.task_state import hint_rare_state, job_scheduling_deadline, task_row_can_be_scheduled
 from iris.cluster.controller.transitions import (
     DIRECT_PROVIDER_PROMOTION_RATE,
     RESERVATION_HOLDER_JOB_NAME,
@@ -2269,7 +2269,7 @@ class Controller:
                     )
                 )
                 .where(
-                    tasks_table.c.state.in_(bindparam("executing_states", expanding=True)),
+                    hint_rare_state(tasks_table.c.state.in_(bindparam("executing_states", expanding=True))),
                     job_config_table.c.timeout_ms.is_not(None),
                     job_config_table.c.timeout_ms > 0,
                     task_attempts_table.c.started_at_ms.is_not(None),
