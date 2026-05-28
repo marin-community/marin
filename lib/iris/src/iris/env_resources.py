@@ -51,7 +51,6 @@ class TaskResources:
     cpu_cores: float
     gpu_count: int
     tpu_count: int
-    disk_bytes: int = 0
 
     @staticmethod
     def from_environment() -> TaskResources:
@@ -65,7 +64,6 @@ class TaskResources:
 
         memory = _resolve_memory(proto)
         cpu = _resolve_cpu(proto)
-        disk = _resolve_disk(proto)
         gpu = (
             proto.device.gpu.count
             if proto is not None and proto.HasField("device") and proto.device.HasField("gpu")
@@ -77,7 +75,7 @@ class TaskResources:
             else 0
         )
 
-        result = TaskResources(memory_bytes=memory, cpu_cores=cpu, gpu_count=gpu, tpu_count=tpu, disk_bytes=disk)
+        result = TaskResources(memory_bytes=memory, cpu_cores=cpu, gpu_count=gpu, tpu_count=tpu)
         logger.info("TaskResources: %s", result)
         return result
 
@@ -148,23 +146,6 @@ def _resolve_memory(proto: job_pb2.ResourceSpecProto | None) -> int:
     # Last resort: 0 signals unknown
     logger.warning("Cannot determine memory limit from env, cgroups, or /proc/meminfo")
     return 0
-
-
-def _resolve_disk(proto: job_pb2.ResourceSpecProto | None) -> int:
-    """Return disk limit in bytes using the escalation chain.
-
-    Prefers the task's requested disk allocation from ``IRIS_TASK_RESOURCES``.
-    Falls back to the filesystem free space under ``/`` so callers always get
-    a usable estimate even outside an Iris task.
-    """
-    if proto is not None and proto.disk_bytes:
-        return proto.disk_bytes
-    try:
-        stat = os.statvfs("/")
-        return stat.f_bavail * stat.f_frsize
-    except OSError:
-        logger.warning("Cannot determine free disk space via os.statvfs('/')", exc_info=True)
-        return 0
 
 
 def _resolve_cpu(proto: job_pb2.ResourceSpecProto | None) -> float:
