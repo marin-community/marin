@@ -175,7 +175,7 @@ def start_iris_brokered_vllm(
         count=1,
         request_lease_timeout_seconds=config.request_lease_timeout_seconds,
         resources=runtime.broker_resources_in_region,
-        actor_config=ActorConfig(max_task_retries=0, priority_band=runtime.priority_band),
+        actor_config=ActorConfig(max_task_retries=0, priority=runtime.priority_band),
     )
     worker_jobs: list[JobHandle] = []
     try:
@@ -195,7 +195,7 @@ def start_iris_brokered_vllm(
                     entrypoint=Entrypoint.from_callable(_run_iris_vllm_worker, args=(config, broker_handle)),
                     resources=runtime.worker_resources_in_region,
                     environment=worker_environment,
-                    priority_band=runtime.priority_band,
+                    priority=runtime.priority_band,
                 )
             )
             worker_jobs.append(job)

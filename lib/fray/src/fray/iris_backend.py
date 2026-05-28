@@ -558,7 +558,7 @@ class FrayIrisClient:
                 max_retries_preemption=request.max_retries_preemption,
                 existing_job_policy=policy,
                 task_image=request.resources.image,
-                priority_band=request.priority_band,
+                priority_band=request.priority,
             )
         except IrisJobAlreadyExists as e:
             raise FrayJobAlreadyExists(request.name) from e
@@ -656,7 +656,7 @@ class FrayIrisClient:
             coscheduling=coscheduling,
             replicas=count,  # Create N replicas in a single job
             task_image=resources.image,
-            priority_band=actor_config.priority_band,
+            priority_band=actor_config.priority,
             **retry_kwargs,
         )
 
