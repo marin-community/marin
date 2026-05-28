@@ -199,6 +199,30 @@ def smoke_screenshot(smoke_page, tmp_path_factory):
     return capture
 
 
+def _wait_for_worker_detail_screenshot_ready(page, worker_id: str) -> None:
+    # WorkerDetail.vue uniquely nulls `data` in its workerId watch, so a late
+    # re-fire can flip the page back to the "Loading worker..." overlay after a
+    # naive wait passes. Anchor on h3 sections that only render in the
+    # v-else-if="data" branch, then settle + re-verify to catch the transient.
+    check = """
+        (workerId) => {
+            const text = document.body.textContent || "";
+            const routeReady = decodeURIComponent(window.location.hash) === `#/worker/${workerId}`;
+            const headings = Array.from(document.querySelectorAll("h3"))
+                .map((heading) => (heading.textContent || "").trim().toLowerCase());
+            return routeReady
+                && !text.includes("Loading worker...")
+                && text.includes(workerId)
+                && text.includes("Healthy")
+                && headings.includes("identity")
+                && headings.includes("task history");
+        }
+    """
+    page.wait_for_function(check, arg=worker_id, timeout=15000)
+    page.wait_for_timeout(250)
+    page.wait_for_function(check, arg=worker_id, timeout=5000)
+
+
 def _wait_for_job_detail_screenshot_ready(page, job_id: str) -> None:
     page.wait_for_function(
         """
@@ -445,12 +469,7 @@ def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, ca
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/worker/{worker_id}")
     wait_for_dashboard_ready(smoke_page)
 
-    smoke_page.wait_for_function(
-        f"() => document.body.textContent.includes('{worker_id}') && "
-        "document.body.textContent.includes('Healthy') && "
-        "!document.body.textContent.includes('Loading worker...')",
-        timeout=15000,
-    )
+    _wait_for_worker_detail_screenshot_ready(smoke_page, worker_id)
     smoke_screenshot(
         "worker-detail", "Worker detail page with identity info, health badge, metric sparklines, and task history"
     )
