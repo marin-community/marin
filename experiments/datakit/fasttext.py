@@ -271,6 +271,7 @@ def _predict_batch(
         counters.increment("classify/docs_truncated", truncated)
 
     if not texts:
+        counters.increment("classify/batches_skipped_empty")
         return
 
     # IMPORTANT: per-text predict, NOT batch predict.
