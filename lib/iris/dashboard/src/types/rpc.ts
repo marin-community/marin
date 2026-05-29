@@ -123,6 +123,7 @@ export interface JobStatus {
   completedCount?: number
   pendingReason?: string
   hasChildren?: boolean
+  parentJobId?: string
 }
 
 export interface JobQuery {
