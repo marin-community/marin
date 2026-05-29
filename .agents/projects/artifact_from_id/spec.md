@@ -46,7 +46,10 @@ class ArtifactEntry(pydantic.BaseModel):
     """Artifact id in the form `<namespace>/<name>`. Validated by `validate_id`."""
 
     version: str
-    """User-supplied version string. Validated by `validate_version`."""
+    """CalVer version string `YYYY.MM.DD` with optional `-<modifier>` suffix
+       (e.g. `"2026.05.29"`, `"2026.10.01-fall-hero"`). Validated by `validate_version`,
+       which both pattern-matches AND constructs a `datetime.date` to reject impossible
+       calendar dates."""
 
     uri: str
     """Location of the artifact bytes — the `base_path` argument to `Artifact.from_path`.
@@ -177,7 +180,7 @@ def from_id(
     """Load an artifact by registry id + version.
 
     `id` and `version` are positional-only — callers always write `Artifact.from_id("ns/n",
-    "v3", ...)`, never `Artifact.from_id(version="v3", id="ns/n")`. This keeps every call
+    "2026.05.29", ...)`, never `Artifact.from_id(version="2026.05.29", id="ns/n")`. This keeps every call
     site readable and aligns with the `from_path` shape.
 
     Resolves `(id, version)` against `registry` (or the module-level default if
@@ -201,18 +204,36 @@ Both `register` and `lookup` validate their `id` and `version` arguments before 
 
 ```python
 ID_PATTERN: typing.Final = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-VERSION_PATTERN: typing.Final = re.compile(r"^[A-Za-z0-9_.-]+$")
+VERSION_PATTERN: typing.Final = re.compile(
+    r"^(?P<year>\d{4})\.(?P<month>\d{2})\.(?P<day>\d{2})(?:-(?P<suffix>[A-Za-z0-9][A-Za-z0-9._-]*))?$"
+)
 
 def validate_id(id: str) -> tuple[str, str]:
     """Returns `(namespace, name)`. Raises `InvalidArtifactIdError` if the id is not
     exactly one `/`-separated pair of non-empty segments matching `ID_PATTERN`."""
 
 def validate_version(version: str) -> str:
-    """Returns the version unchanged. Raises `InvalidArtifactIdError` if it does not
-    match `VERSION_PATTERN`."""
+    """Returns the version unchanged on success. The version MUST be CalVer:
+    `YYYY.MM.DD` with optional `-<modifier>` suffix where the modifier begins with
+    an alphanumeric and contains only `[A-Za-z0-9._-]`.
+
+    Validation is two-step: first `VERSION_PATTERN` rejects shape mismatches; then the
+    `(year, month, day)` groups are passed to `datetime.date(...)` to reject impossible
+    calendar dates (e.g. `2026.02.30`, `2026.13.01`). Either check failing raises
+    `InvalidArtifactIdError`.
+
+    The modifier MUST NOT contain `/` — the whole version becomes a single path segment
+    in `{root}/{namespace}/{name}/{version}.json`, and embedded slashes would silently
+    create directory levels and break `lookup`. `/` is excluded by `VERSION_PATTERN`'s
+    suffix alphabet; this is called out here so it isn't lost in the regex.
+
+    Examples accepted: `"2026.05.29"`, `"2026.10.01-fall-hero"`, `"2026.10.01-rc1"`.
+    Examples rejected: `"v3"`, `"2026.5.29"` (no zero-pad), `"2026.02.30"` (impossible
+    date), `"2026.10.01-"` (empty suffix), `"2026.10.01--foo"` (suffix must start with
+    alphanumeric), `"2026.10.01-foo/bar"` (slash in modifier)."""
 ```
 
-The pattern is intentionally narrow — anything we allow becomes part of a GCS path, so we disallow `/`, whitespace, and shell metacharacters by construction. The validators are exposed (no leading underscore) so callers generating ids can pre-check.
+The id pattern is intentionally narrow — anything we allow becomes part of a GCS path, so the alphabet excludes `/`, whitespace, and shell metacharacters. CalVer for versions gives lexical sort = chronological sort (zero-padded date prefix) and embeds provenance. The validators are exposed (no leading underscore) so callers generating ids or versions can pre-check.
 
 ## Errors
 
@@ -257,10 +278,10 @@ One JSON file per `(id, version)`:
 - Contents: `ArtifactEntry.model_dump_json()` (UTF-8, no enclosing array).
 - Encoding: UTF-8 with no BOM. No trailing newline guarantee.
 
-Example (`gs://marin-us-central2/artifact_registry/datasets/fineweb-resiliparse/v3.json`):
+Example (`gs://marin-us-central2/artifact_registry/datasets/fineweb-resiliparse/2026.05.29.json`):
 
 ```json
-{"id": "datasets/fineweb-resiliparse", "version": "v3", "uri": "gs://marin-us-central2/documents/fineweb-resiliparse-8c2f3a"}
+{"id": "datasets/fineweb-resiliparse", "version": "2026.05.29", "uri": "gs://marin-us-central2/documents/fineweb-resiliparse-8c2f3a"}
 ```
 
 The `uri` is typically itself a content-addressed executor output (the `_8c2f3a` suffix is the executor step hash from `step_spec.py`). The registry layer adds logical naming on top of that existing content-addressed storage.

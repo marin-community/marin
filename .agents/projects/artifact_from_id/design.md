@@ -4,7 +4,7 @@ _Why are we doing this? What's the benefit?_
 
 Today an artifact's identity is its GCS path. `Artifact.from_path(...)` resolves the metadata sidecar under that path, which is fine until the path needs to change — and we can't easily restructure GCS. Downstream code can't refer to a dataset or model checkpoint by a stable name; it has to know the exact computed path that produced it.
 
-We want a path-independent way to refer to artifacts: `Artifact.from_id("datasets/fineweb-resiliparse", "v3", NormalizedData)` should resolve to the same payload regardless of where the bytes live, today or after a re-org. This requires a small registry that maps `(id, version) → path + metadata`, with a default backed by GCS / local filesystem and a user-supplied override hook.
+We want a path-independent way to refer to artifacts: `Artifact.from_id("datasets/fineweb-resiliparse", "2026.05.29", NormalizedData)` should resolve to the same payload regardless of where the bytes live, today or after a re-org. This requires a small registry that maps `(id, version) → path + metadata`, with a default backed by GCS / local filesystem and a user-supplied override hook.
 
 ## Background
 
@@ -21,7 +21,7 @@ _What's hard?_
 The core mechanics are easy; the contentious bits are policy choices.
 
 1. **Concurrent writes on object storage.** GCS has no native locking. We avoid this at v1 with a layout where concurrent registrations of distinct `(id, version)` pairs never touch the same key; same-pair races are last-writer-wins. CAS (`if-generation-match`) is a clean follow-up.
-2. **Version flavor is a one-way door.** Once callers pin `"v3"`, changing the version model (content-hash, monotonic-int) costs a migration. We pick *user-supplied string* and accept that immutability discipline now lives with the caller.
+2. **Version flavor is a one-way door.** Once callers pin a version string, changing the version model costs a migration. We pick **CalVer** — `YYYY.MM.DD` with an optional `-<modifier>` suffix (`2026.10.01-fall-hero`) — validated by regex *and* an actual date parse. The modifier alphabet is restricted to `[A-Za-z0-9._-]`; no `/`, since the whole version is a single path segment. This buys lexical-equals-chronological ordering for free, gives provenance (the date the artifact was minted), and leaves room for hero / RC suffixes; see Decisions for what we considered instead.
 
 ## Costs / Risks
 
@@ -48,7 +48,7 @@ Two new pieces in `lib/marin/src/marin/execution/`:
 <registry-root>/<namespace>/<name>/<version>.json
 ```
 
-Example: `gs://marin-us-central2/artifact_registry/datasets/fineweb-resiliparse/v3.json`. The hot path is id+version → known key (O(1) GET); directory size doesn't matter for reads. Concurrent writers of distinct `(id, version)` pairs never contend; same-pair races are last-writer-wins (no CAS at v1).
+Example: `gs://marin-us-central2/artifact_registry/datasets/fineweb-resiliparse/2026.05.29.json`. The hot path is id+version → known key (O(1) GET); directory size doesn't matter for reads. Concurrent writers of distinct `(id, version)` pairs never contend; same-pair races are last-writer-wins (no CAS at v1).
 
 **Immutability is registry-level only.** A registered `(id, version)` always points at the same `uri`, but the bytes at that `uri` are protected by GCS IAM, not by this design. Anyone with write access can delete or repoint the underlying artifact; the open content-hash field would let `from_id` detect this.
 
@@ -57,7 +57,9 @@ Example: `gs://marin-us-central2/artifact_registry/datasets/fineweb-resiliparse/
 - *Sharded prefix* (`<name[-2:]>/<name>/<version[-2:]>/<version>.json`) — rejected: reads go straight to a known key, and "list all versions" is a debugging operation. Adding sharding later is a one-time migration.
 - *Single global `registry.json`* — rejected (worst concurrency, worst diff-ability).
 - *SQL-backed service* — out of scope; the manifest-file shape parallels DVC and HF-as-git, the right reference class for a library component.
-- *Content-addressable storage (content-hash as identity)* — **considered and rejected.** Marin already content-addresses one layer down ([`step_spec.py:90`](https://github.com/marin-community/marin/blob/f07122bbd20376b97e8951ac75f0eb8a7ebee7e3/lib/marin/src/marin/execution/step_spec.py#L90)), so the registry hash would mostly duplicate that. More importantly, humans say "give me `fineweb-resiliparse` v3", not "`sha256:e3b0c44…`" — content-hash naming reintroduces the path-coupling problem we're trying to leave. Callers pick the version string; `register` fails on collision. A content-hash field for verification (not identity) remains an Open Question.
+- *Content-addressable storage (content-hash as identity)* — **considered and rejected.** Marin already content-addresses one layer down ([`step_spec.py:90`](https://github.com/marin-community/marin/blob/f07122bbd20376b97e8951ac75f0eb8a7ebee7e3/lib/marin/src/marin/execution/step_spec.py#L90)), so the registry hash would mostly duplicate that. More importantly, humans say "give me `fineweb-resiliparse` from 2026-05-29", not "`sha256:e3b0c44…`" — content-hash naming reintroduces the path-coupling problem we're trying to leave. Callers pick the version string; `register` fails on collision. A content-hash field for verification (not identity) remains an Open Question.
+- *Free-form version strings* (the original draft: `[A-Za-z0-9_.-]+`) — **rejected** in favor of CalVer. Free-form gives no ordering, no provenance, no shared vocabulary; pinning structure now is cheaper than retrofitting it later.
+- *Semver via `packaging.version()` (3-tuple, ordered)* — **considered.** Strict semver maps badly to datasets and trained checkpoints — "what's a breaking change for `fineweb-resiliparse`?" doesn't have an obvious answer, and the major/minor/patch discipline is overhead without payoff for this domain. CalVer doubles as a creation date and the zero-padded prefix gives lexical=chronological sort for free.
 - *Mutable aliases (`latest`, `prod`, …)* — **intentionally not supported, non-goal not deferral.** The registry is `(id, version) → uri` and nothing else. Callers needing a "latest" pointer maintain it themselves. Rationale: aliases drift implicitly on every registration, breaking reproducibility of old run logs without anyone touching them — exactly the failure mode the registry exists to prevent.
 
 **`Artifact.from_id`** delegates to existing machinery after resolving:
@@ -67,7 +69,7 @@ Example: `gs://marin-us-central2/artifact_registry/datasets/fineweb-resiliparse/
 def from_id(
     cls,
     id: str,                          # "<namespace>/<name>", e.g. "datasets/fineweb-resiliparse"
-    version: str,                      # user-supplied, immutable, e.g. "v3"
+    version: str,                      # CalVer YYYY.MM.DD[-suffix], e.g. "2026.05.29-fall-hero"
     artifact_type: type[T] | None = None,  # Pydantic schema, same role as in from_path
     *,
     registry: ArtifactRegistry | None = None,
@@ -91,7 +93,7 @@ Integration tests against the local-FS backend cover the load-bearing behaviors:
 
 - Round-trip: `register(id, "v1", uri, MyModel)` then `from_id(id, "v1", MyModel)` returns the same payload via the existing `from_path` deserialization.
 - Immutability: second `register(id, "v1", ...)` raises a typed error; the original entry is untouched.
-- ID validation: malformed ids (`"foo"`, `"foo/"`, `"a/b/c"`, empty version) raise `ValueError` before any FS access.
+- ID and version validation: malformed ids (`"foo"`, `"foo/"`, `"a/b/c"`) and non-CalVer versions (`"v3"`, `"2026.5.29"`, `"2026.02.30"`) raise `InvalidArtifactIdError` before any FS access.
 - Manifest layout invariant: a registered entry lands at the expected path. (Pins the on-disk contract.)
 - Override: `from_id(..., registry=other)` ignores the default singleton.
 
