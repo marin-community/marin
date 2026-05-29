@@ -1,11 +1,34 @@
-# To get started with Dependabot version updates, you'll need to specify which
-# package ecosystems to update and where the package manifests are located.
-# Please see the documentation for all configuration options:
+# Dependabot version updates.
 # https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+#
+# Minor and patch bumps are grouped into a single PR per ecosystem per
+# directory to cut review noise; major bumps stay as individual PRs.
 
 version: 2
 updates:
-  - package-ecosystem: "pip" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  - package-ecosystem: "uv"
+    directories:
+      - "/"
+      - "/rust/dupekit"
     schedule:
       interval: "weekly"
+    groups:
+      uv-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "npm"
+    directories:
+      - "/infra/status-page"
+      - "/lib/iris"
+      - "/lib/iris/dashboard"
+      - "/lib/finelog"
+      - "/lib/finelog/dashboard"
+    schedule:
+      interval: "weekly"
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
