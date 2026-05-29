@@ -639,6 +639,10 @@ def apply_cancel_job_batch(
     now_ms = now.epoch_ms()
     finished_at = Timestamp.from_ms(now_ms)
 
+    # The subtree is the full transitive descendant closure, so killing every
+    # job's tasks here covers all coscheduled siblings too (siblings always live
+    # in the same job). No separate peer cascade is needed — by the time a job's
+    # tasks are killed, ``find_coscheduled_siblings`` would find none active.
     for jid in subtree:
         _kill_non_terminal_tasks(state, jid, reason, now_ms)
 
@@ -652,15 +656,6 @@ def apply_cancel_job_batch(
                 allow_overwrite_worker_failed=True,
             )
         )
-
-        # Coscheduled cascade for tasks just killed in this job.
-        jc = state.job_config(jid)
-        if jc is None or not jc.has_coscheduling:
-            continue
-        for row in snapshot.active_tasks_by_job.get(jid, ()):
-            siblings = peers.find_coscheduled_siblings(state, row.job_id, row.task_id, row.has_coscheduling)
-            if siblings:
-                peers.terminate_coscheduled_siblings(state, siblings, row.task_id, now_ms)
 
     state.record_log_event(
         LogEvent(

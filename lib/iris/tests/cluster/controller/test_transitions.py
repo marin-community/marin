@@ -363,17 +363,18 @@ def test_cancel_job_rolls_attempt_state_without_finalizing(harness):
         att = _query_attempt(harness.state, t.task_id, attempt_ids[t.task_id])
         assert att is not None
         assert attempt_is_terminal(att.state), f"orphan attempt left active for task {t.task_id} (state={att.state})"
-        # Producer-side cancel does not stamp finished_at_ms — the heartbeat
-        # path owns that write so the scheduler keeps capacity held.
+        # Producer-side cancel does not stamp finished_at_ms — the
+        # reconcile-observation path owns that write so the scheduler keeps
+        # capacity held.
         assert att.finished_at_ms is None
 
 
 def test_heartbeat_finalizes_stranded_attempt_after_producer_terminal(harness):
     """A producer transition (cancel) leaves the task terminal but the attempt
-    unfinalized; a subsequent heartbeat carrying a terminal status — the case
-    the poll loop now re-issues via expected_tasks for worker-bound attempts
-    with NULL finished_at_ms — must stamp finished_at_ms without rewriting the
-    task's terminal state.
+    unfinalized; a subsequent terminal observation — the case the reconcile
+    planner now re-issues (via the worker's desired set) for worker-bound
+    attempts with NULL finished_at_ms — must stamp finished_at_ms without
+    rewriting the task's terminal state.
     """
     w1 = harness.add_worker("w1")
     tasks = harness.submit("j1", replicas=1)
@@ -2024,7 +2025,14 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
                 now=Timestamp.now(),
             )
 
+    # The diagnostic fires...
     assert any("Stale attempt precondition violation" in r.message for r in caplog.records)
+    # ...and, more importantly, the stale update is dropped: attempt 0 is not
+    # revived to SUCCEEDED and the current-attempt pointer is untouched.
+    assert _query_task(state, task.task_id).current_attempt_id == 1
+    stale = _query_attempt(state, task.task_id, 0)
+    assert stale.state != job_pb2.TASK_STATE_SUCCEEDED
+    assert stale.finished_at_ms is None
 
 
 # =============================================================================

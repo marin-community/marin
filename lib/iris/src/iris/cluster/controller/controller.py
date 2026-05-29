@@ -1071,8 +1071,8 @@ class Controller:
                         endpoints=self._endpoints,
                         now=now,
                     )
-                # Killed-task RPCs land on the next polling tick via the
-                # worker's expected_tasks diff.
+                # Victims stop on the next reconcile tick: the planner marks
+                # them 'stop' (or drops them) from the worker's desired set.
                 logger.info("Preemption pass: %d tasks preempted", len(preemptions))
         return preemptions
 
@@ -1236,7 +1236,7 @@ class Controller:
             # Including them in the desired set gives the worker a second
             # chance to report -- either with the real terminal status or
             # via the MISSING synthesis in ``handle_reconcile`` -- so the
-            # heartbeat path can stamp finished_at_ms. Without this, a single
+            # reconcile-observation path can stamp finished_at_ms. Without this, a single
             # lost RPC strands the attempt forever, since no other code path
             # polls about it.
             target_ids: set[WorkerId] = set(worker_ids)
@@ -1415,9 +1415,10 @@ class Controller:
             for wid, addr in sibling_failures.removed_workers:
                 self._provider.on_worker_failed(wid, addr)
                 removed.append(wid)
-        # Surviving-slice siblings get killed on the next polling tick via
-        # the worker's expected_tasks diff; the failed workers themselves
-        # are already gone from the worker table.
+        # Surviving-slice siblings stop on the next reconcile tick: the
+        # planner drops them from the worker's desired set (or marks them
+        # 'stop'); the failed workers themselves are already gone from the
+        # worker table.
         return removed
 
     def _run_autoscaler_once(self) -> None:

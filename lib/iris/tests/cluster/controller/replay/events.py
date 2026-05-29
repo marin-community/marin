@@ -65,11 +65,6 @@ class ApplyTaskUpdates:
 
 
 @dataclass(frozen=True, slots=True)
-class ApplyHeartbeatsBatch:
-    requests: list[WorkerTaskUpdates]
-
-
-@dataclass(frozen=True, slots=True)
 class PreemptTask:
     task_id: JobName
     reason: str
@@ -79,27 +74,6 @@ class PreemptTask:
 class CancelTasksForTimeout:
     task_ids: frozenset[JobName]
     reason: str
-
-
-@dataclass(frozen=True, slots=True)
-class MarkTaskUnschedulable:
-    task_id: JobName
-    reason: str
-
-
-@dataclass(frozen=True, slots=True)
-class RemoveFinishedJob:
-    job_id: JobName
-
-
-@dataclass(frozen=True, slots=True)
-class RemoveWorker:
-    worker_id: WorkerId
-
-
-@dataclass(frozen=True, slots=True)
-class UpdateWorkerPings:
-    worker_ids: list[WorkerId]
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,13 +116,8 @@ IrisEvent = (
     | RegisterOrRefreshWorker
     | QueueAssignments
     | ApplyTaskUpdates
-    | ApplyHeartbeatsBatch
     | PreemptTask
     | CancelTasksForTimeout
-    | MarkTaskUnschedulable
-    | RemoveFinishedJob
-    | RemoveWorker
-    | UpdateWorkerPings
     | DrainForDirectProvider
     | ApplyDirectProviderUpdates
     | AddEndpoint
@@ -203,14 +172,6 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     endpoints=transitions._endpoints,
                     now=Timestamp.now(),
                 )
-            case ApplyHeartbeatsBatch(requests):
-                return apply_task_observations(
-                    cur,
-                    requests,
-                    health=transitions._health,
-                    endpoints=transitions._endpoints,
-                    now=Timestamp.now(),
-                )
             case PreemptTask(task_id, reason):
                 return apply_terminal_decisions(
                     cur,
@@ -230,29 +191,6 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     endpoints=transitions._endpoints,
                     now=Timestamp.now(),
                 )
-            case MarkTaskUnschedulable(task_id, reason):
-                return apply_terminal_decisions(
-                    cur,
-                    [TerminalDecision(TerminalKind.UNSCHEDULABLE, task_id, reason)],
-                    health=transitions._health,
-                    endpoints=transitions._endpoints,
-                    now=Timestamp.now(),
-                )
-            case RemoveFinishedJob(job_id):
-                return ops.job.remove_finished(cur, job_id)
-            case RemoveWorker(worker_id):
-                writes.remove_worker(
-                    cur,
-                    worker_id,
-                    health=transitions._health,
-                    worker_attrs=transitions._worker_attrs,
-                )
-                return None
-            case UpdateWorkerPings(worker_ids):
-                ids = list(worker_ids)
-                if ids:
-                    transitions._health.bump_heartbeat(ids, Timestamp.now().epoch_ms())
-                return None
             case DrainForDirectProvider(max_promotions):
                 return direct_provider.drain_for_direct_provider(
                     cur, cache=transitions._run_template_cache, max_promotions=max_promotions

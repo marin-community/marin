@@ -885,13 +885,12 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
         _apply_observations(state, _W1, [_obs(uid_1, job_pb2.TASK_STATE_FAILED, error="oom")])
 
         assert query_task(state, task_id_1).state == job_pb2.TASK_STATE_FAILED
+        # max_retries_failure=0, so the failure is terminal (not a retry): the
+        # coscheduled sibling is terminated, not requeued.
         sibling_state = query_task(state, task_id_2).state
-        assert sibling_state in (
-            job_pb2.TASK_STATE_KILLED,
-            job_pb2.TASK_STATE_PREEMPTED,
-            job_pb2.TASK_STATE_PENDING,
-            job_pb2.TASK_STATE_COSCHED_FAILED,
-        ), f"sibling state should have cascaded, got {sibling_state}"
+        assert (
+            sibling_state == job_pb2.TASK_STATE_COSCHED_FAILED
+        ), f"sibling should cascade terminal, got {sibling_state}"
 
 
 # --- UID routing in _observations_to_updates --------------------------------

@@ -897,9 +897,9 @@ class ControllerServiceImpl:
         """Wait up to ``wait`` for ``job_id`` to have no unfinished worker-bound
         attempts. Returns ``True`` if drained, ``False`` if the wait elapsed.
 
-        Polls the snapshot DB; the heartbeat path landing terminal updates is
-        what flips the predicate. Caller decides whether to reap the
-        predecessor when the wait elapses — a stuck heartbeat must not block
+        Polls the snapshot DB; the reconcile-observation path landing terminal
+        updates is what flips the predicate. Caller decides whether to reap the
+        predecessor when the wait elapses — a stuck worker must not block
         the new submission forever.
         """
 
@@ -913,7 +913,7 @@ class ControllerServiceImpl:
         """Attempt to replace a terminal job; signal whether a drain is needed.
 
         CASCADE-deleting a job's tasks while its attempts are still worker-
-        bound destroys the rows the heartbeat path needs to find when it
+        bound destroys the rows the reconcile-observation path needs to find when it
         stamps ``finished_at_ms``. Returns ``True`` when the caller must wait
         for worker-bound attempts to finalize before retrying (the job rows
         are left in place), ``False`` when removal completed in this
@@ -1048,8 +1048,8 @@ class ControllerServiceImpl:
                         # unfinished until the worker confirms termination.
                         # Defer remove_finished_job to a second tx after the
                         # drain wait so we don't destroy task_attempts rows
-                        # whose finished_at_ms write the heartbeat path is
-                        # still racing to land.
+                        # whose finished_at_ms write the reconcile-observation
+                        # path is still racing to land.
                         needs_drain = True
                     else:
                         needs_drain = needs_drain or self._replace_finished_job(cur, job_id)
@@ -1066,9 +1066,9 @@ class ControllerServiceImpl:
 
         if needs_drain:
             # Nudge the polling loop so workers see the cancelled tasks excluded
-            # from their expected set on the next reconcile and auto-kill the
-            # containers; the heartbeat path then stamps finished_at_ms. If
-            # the heartbeat never lands, force-reap so a stuck worker can't
+            # from their desired set on the next reconcile and auto-kill the
+            # containers; the reconcile-observation path then stamps finished_at_ms. If
+            # the terminal observation never lands, force-reap so a stuck worker can't
             # block the resubmit forever.
             self._controller.wake()
             if not self._wait_until_job_drained(job_id, _JOB_REPLACEMENT_DRAIN_WAIT):
