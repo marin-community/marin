@@ -17,11 +17,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # analysis-kinds selects which CodeQL products run for each language:
+        #   code-scanning  -> security alerts (Security > Code scanning)
+        #   code-quality   -> maintainability/reliability alerts (Security > Code quality)
+        # Security and quality share one path scope per language, configured in
+        # the matching .github/codeql/<language>.yml file.
         include:
         - language: actions
           build-mode: none
+          analysis-kinds: code-scanning
         - language: python
           build-mode: none
+          analysis-kinds: code-scanning,code-quality
+        - language: javascript-typescript
+          build-mode: none
+          analysis-kinds: code-scanning,code-quality
     steps:
     - name: Checkout repository
       uses: actions/checkout@v5
@@ -30,31 +40,18 @@ jobs:
       with:
         languages: ${{ matrix.language }}
         build-mode: ${{ matrix.build-mode }}
-        config: |
-          paths:
-            - lib/marin/src
-          paths-ignore:
-            - tests/**
-          # Suppress the two highest-volume, lowest-signal maintainability checks
-          # for any query run through this advanced workflow:
-          #   - py/ineffectual-statement fires on `...` ellipsis bodies in
-          #     Protocol/stub methods and on docstring-style string expressions.
-          #     ruff's B018 already flags the genuinely-ineffectual cases while
-          #     correctly ignoring `...` and docstrings, so this is pure noise.
-          #   - py/import-and-import-from flags modules reached via both `import x`
-          #     and `from x import y`; too common across the repo to be actionable.
-          # NOTE: the Security > Code quality alerts are produced by GitHub's
-          # *managed* Code Quality preview (Settings > Security > Code quality),
-          # NOT by this workflow — that runner scans the whole repo / all languages
-          # and does not honor query-filters. To actually drop these rules from the
-          # Code quality tab, either dismiss them by-rule there, or move code quality
-          # into this advanced workflow (and disable the managed feature) so these
-          # filters take effect.
-          query-filters:
-            - exclude:
-                id: py/ineffectual-statement
-            - exclude:
-                id: py/import-and-import-from
+        # analysis-kinds turns on GitHub's "Code quality" analysis alongside the
+        # security ("code-scanning") analysis. This advanced-setup workflow is the
+        # source of both the Code scanning and Code quality alerts, replacing the
+        # managed Code Quality default setup (which offers no per-query control).
+        # NOTE: GitHub currently documents `analysis-kinds` as an internal input
+        # that is subject to change. It is the only way to feed the Code quality
+        # tab from an advanced workflow today. If GitHub drops it, the input is
+        # ignored and analysis falls back to security-only — a soft failure, not
+        # a broken run. Per-language scope and query suppressions live in the
+        # referenced config file.
+        analysis-kinds: ${{ matrix.analysis-kinds }}
+        config-file: ./.github/codeql/${{ matrix.language }}.yml
 
     - name: Run manual build steps
       if: matrix.build-mode == 'manual'

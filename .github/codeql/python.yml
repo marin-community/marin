@@ -1,0 +1,24 @@
+name: "CodeQL — Python (security + code quality)"
+
+# Scope: first-party Marin library source. This matches the long-standing
+# security scope; broaden `paths` (e.g. add lib/iris/src, lib/zephyr/src,
+# experiments) if you want code-quality coverage beyond marin core — note that
+# also widens the security scan, since both share this path scope.
+paths:
+  - lib/marin/src
+paths-ignore:
+  - tests/**
+  - "**/*_pb2.py"
+  - "**/*_connect.py"
+
+# Code-quality suppressions: the two highest-volume, lowest-signal checks.
+#   - py/ineffectual-statement fires on `...` ellipsis bodies in Protocol/stub
+#     methods and on docstring-style string expressions. ruff's B018 already
+#     flags the genuinely-ineffectual cases while ignoring `...`/docstrings.
+#   - py/import-and-import-from flags modules reached via both `import x` and
+#     `from x import y`; too common across the repo to be actionable.
+query-filters:
+  - exclude:
+      id: py/ineffectual-statement
+  - exclude:
+      id: py/import-and-import-from
