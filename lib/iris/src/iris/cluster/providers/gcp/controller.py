@@ -18,9 +18,6 @@ from dataclasses import dataclass
 
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
-from iris.cluster.controller.vm_lifecycle import restart_controller as vm_restart_controller
-from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
-from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
 from iris.cluster.providers.gcp.service import GcpService
 from iris.cluster.providers.gcp.ssh import ssh_impersonate_service_account
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
@@ -30,6 +27,9 @@ from iris.cluster.providers.types import (
     find_free_port,
     wait_for_port,
 )
+from iris.cluster.providers.vm_lifecycle import restart_controller as vm_restart_controller
+from iris.cluster.providers.vm_lifecycle import start_controller as vm_start_controller
+from iris.cluster.providers.vm_lifecycle import stop_controller as vm_stop_controller
 from iris.cluster.service_mode import ServiceMode
 from iris.rpc import config_pb2
 

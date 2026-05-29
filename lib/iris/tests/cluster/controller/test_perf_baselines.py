@@ -16,15 +16,16 @@ from pathlib import Path
 from time import perf_counter
 
 import pytest
-from iris.cluster.controller import db, reads
-from iris.cluster.controller.controller import _jobs_with_reservations
+from iris.cluster.controller import db, ops, reads
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.scheduling_policy import _jobs_with_reservations
 from iris.cluster.controller.schema import task_attempts_table, tasks_table
-from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select, text
+
+from tests.cluster.controller._test_support import ControllerTestState
 
 _RESERVATION_JOB_COUNT = 200
 _NON_RESERVATION_JOB_COUNT = 200
@@ -298,30 +299,30 @@ _REGISTER_32_ATTRS_MAX_MS = 50
 
 
 @pytest.fixture
-def submit_perf_db() -> Iterator[ControllerTransitions]:
-    """Fresh ControllerTransitions for bulk-insert submit perf gate."""
+def submit_perf_db() -> Iterator[ControllerTestState]:
+    """Fresh ControllerTestState for bulk-insert submit perf gate."""
     tmp = Path(tempfile.mkdtemp(prefix="iris_perf_submit_"))
     controller_db = ControllerDB(db_dir=tmp)
     try:
-        yield ControllerTransitions(controller_db)
+        yield ControllerTestState(controller_db)
     finally:
         controller_db.close()
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 @pytest.fixture
-def register_perf_db() -> Iterator[ControllerTransitions]:
-    """Fresh ControllerTransitions for bulk worker-attribute insert perf gate."""
+def register_perf_db() -> Iterator[ControllerTestState]:
+    """Fresh ControllerTestState for bulk worker-attribute insert perf gate."""
     tmp = Path(tempfile.mkdtemp(prefix="iris_perf_register_"))
     controller_db = ControllerDB(db_dir=tmp)
     try:
-        yield ControllerTransitions(controller_db)
+        yield ControllerTestState(controller_db)
     finally:
         controller_db.close()
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def test_submit_job_with_n_replicas_perf(submit_perf_db: ControllerTransitions) -> None:
+def test_submit_job_with_n_replicas_perf(submit_perf_db: ControllerTestState) -> None:
     """Gate bulk_insert_tasks submit path for 32 replicas below a ms ceiling."""
     state = submit_perf_db
     job_id_counter = [0]
@@ -340,7 +341,9 @@ def test_submit_job_with_n_replicas_perf(submit_perf_db: ControllerTransitions) 
         )
         jid = JobName.from_wire(name)
         with state._db.transaction() as cur:
-            state.submit_job(cur, jid, req, Timestamp.now())
+            ops.job.submit(
+                cur, job_id=jid, request=req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
+            )
 
     per_call_s = _measure(_submit, _TICKS)
     max_ms = _SUBMIT_32_REPLICAS_MAX_MS
@@ -350,7 +353,7 @@ def test_submit_job_with_n_replicas_perf(submit_perf_db: ControllerTransitions) 
     )
 
 
-def test_register_worker_with_n_attributes_perf(register_perf_db: ControllerTransitions) -> None:
+def test_register_worker_with_n_attributes_perf(register_perf_db: ControllerTestState) -> None:
     """Gate batch worker-attribute INSERT for 32 attributes below a ms ceiling."""
     state = register_perf_db
     worker_counter = [0]
@@ -369,12 +372,14 @@ def test_register_worker_with_n_attributes_perf(register_perf_db: ControllerTran
             attributes=attrs,
         )
         with state._db.transaction() as cur:
-            state.register_or_refresh_worker(
+            ops.worker.register_or_refresh(
                 cur,
                 worker_id=wid,
                 address=f"{wid}:8080",
                 metadata=metadata,
                 ts=Timestamp.now(),
+                health=state._health,
+                worker_attrs=state._worker_attrs,
             )
 
     per_call_s = _measure(_register, _TICKS)

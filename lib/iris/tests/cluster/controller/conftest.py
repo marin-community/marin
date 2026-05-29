@@ -7,7 +7,8 @@ import asyncio
 import shutil
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
+from dataclasses import replace as _replace
 from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
@@ -29,15 +30,17 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.controller import reads
+from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.direct_provider import RunTemplateCache
+from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.provider import ProviderUnsupportedError
 from iris.cluster.controller.reads import SchedulableWorker
-from iris.cluster.controller.reconcile import ReconcileResult
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import (
     jobs_table,
     task_attempts_table,
@@ -46,12 +49,6 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
-from iris.cluster.controller.transitions import (
-    Assignment,
-    ControllerTransitions,
-    HeartbeatApplyRequest,
-    TaskUpdate,
-)
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.types import CloudSliceState
@@ -63,7 +60,9 @@ from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 
-from tests.cluster.controller._test_support import set_task_state_for_test
+from tests.cluster.conftest import fake_log_client_from_service
+from tests.cluster.controller._test_support import ControllerTestState, set_task_state_for_test
+from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 from tests.cluster.providers.conftest import make_mock_platform
 
 check_task_can_be_scheduled = task_row_can_be_scheduled
@@ -112,6 +111,8 @@ class FakeProvider:
         return []
 
     def reconcile_workers(self, plans, addresses):
+        from iris.cluster.controller.reconcile.worker import ReconcileResult
+
         return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]
 
     def close(self) -> None:
@@ -120,7 +121,7 @@ class FakeProvider:
 
 @pytest.fixture
 def state():
-    """Create a fresh ControllerTransitions with temp DB and log store."""
+    """Create a fresh ControllerTestState with temp DB and log store."""
     with make_controller_state() as s:
         yield s
 
@@ -135,6 +136,7 @@ class MockController:
         self.autoscaler = None
         self.provider = Mock()
         self.has_direct_provider = False
+        self._run_template_cache: RunTemplateCache = RunTemplateCache(256)
 
 
 @pytest.fixture
@@ -181,11 +183,7 @@ def log_service(state, tmp_path) -> LogServiceImpl:
 @pytest.fixture
 def controller_service(state, log_service, mock_controller, tmp_path) -> ControllerServiceImpl:
     """ControllerServiceImpl with fresh DB, log service, and mock controller."""
-    # Local import: tests.cluster.conftest imports make_test_entrypoint from this module.
-    from tests.cluster.conftest import fake_log_client_from_service
-
     return ControllerServiceImpl(
-        state,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(log_service),
@@ -203,11 +201,11 @@ def controller_service(state, log_service, mock_controller, tmp_path) -> Control
 
 @contextmanager
 def make_controller_state(**kwargs):
-    """Yield a ControllerTransitions with a fresh temp DB, cleaning up on exit."""
+    """Yield a ControllerTestState with a fresh temp DB, cleaning up on exit."""
     tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
     try:
         db = ControllerDB(db_dir=tmp)
-        yield ControllerTransitions(db, **kwargs)
+        yield ControllerTestState(db, **kwargs)
         db.close()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -297,7 +295,7 @@ def make_direct_job_request(
 
 
 def submit_direct_job(
-    state: ControllerTransitions,
+    state: ControllerTestState,
     name: str,
     replicas: int = 1,
     task_image: str = "",
@@ -305,7 +303,7 @@ def submit_direct_job(
     jid = JobName.root("test-user", name)
     req = make_direct_job_request(name, replicas, task_image=task_image)
     with state._db.transaction() as cur:
-        state.submit_job(cur, jid, req, Timestamp.now())
+        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now(), run_template_cache=state._run_template_cache)
     with state._db.read_snapshot() as tx:
         rows = tx.execute(select(tasks_table.c.task_id).where(tasks_table.c.job_id == jid)).all()
     return [row.task_id for row in rows]
@@ -316,7 +314,7 @@ def submit_direct_job(
 # =============================================================================
 
 
-def query_task(state: ControllerTransitions, task_id: JobName):
+def query_task(state: ControllerTestState, task_id: JobName):
     """Return the SA Row for ``task_id`` or None.
 
     Callers access ``row.state``, ``row.current_attempt_id``, etc. via attribute access.
@@ -325,7 +323,7 @@ def query_task(state: ControllerTransitions, task_id: JobName):
         return reads.get_task_detail(tx, task_id)
 
 
-def query_attempt(state: ControllerTransitions, task_id: JobName, attempt_id: int):
+def query_attempt(state: ControllerTestState, task_id: JobName, attempt_id: int):
     """Return the SA Row for the given attempt or None."""
     with state._db.read_snapshot() as tx:
         return tx.execute(
@@ -336,13 +334,13 @@ def query_attempt(state: ControllerTransitions, task_id: JobName, attempt_id: in
         ).first()
 
 
-def query_job(state: ControllerTransitions, job_id: JobName):
+def query_job(state: ControllerTestState, job_id: JobName):
     """Return the SA Row for ``job_id`` joining jobs+job_config, or None."""
     with state._db.read_snapshot() as tx:
         return reads.get_job_detail(tx, job_id)
 
 
-def query_job_row(state: ControllerTransitions, job_id: JobName):
+def query_job_row(state: ControllerTestState, job_id: JobName):
     """Return the SA Row for ``job_id`` (same as query_job; alias for scheduling projection tests)."""
     with state._db.read_snapshot() as tx:
         return reads.get_job_detail(tx, job_id)
@@ -385,7 +383,7 @@ def _worker_view(row, liveness) -> WorkerView:
     )
 
 
-def query_worker(state: ControllerTransitions, worker_id: WorkerId) -> WorkerView | None:
+def query_worker(state: ControllerTestState, worker_id: WorkerId) -> WorkerView | None:
     with state._db.read_snapshot() as tx:
         row = reads.get_worker_detail(tx, worker_id)
     if row is None:
@@ -393,7 +391,7 @@ def query_worker(state: ControllerTransitions, worker_id: WorkerId) -> WorkerVie
     return _worker_view(row, state._health.liveness(row.worker_id))
 
 
-def query_tasks_for_job(state: ControllerTransitions, job_id: JobName) -> list:
+def query_tasks_for_job(state: ControllerTestState, job_id: JobName) -> list:
     """Return SA Rows for all tasks in ``job_id``."""
     with state._db.read_snapshot() as tx:
         return tx.execute(
@@ -401,7 +399,7 @@ def query_tasks_for_job(state: ControllerTransitions, job_id: JobName) -> list:
         ).all()
 
 
-def schedulable_tasks(state: ControllerTransitions) -> list:
+def schedulable_tasks(state: ControllerTestState) -> list:
     """Return non-terminal task SA Rows eligible for scheduling, in priority order."""
     with state._db.read_snapshot() as tx:
         tasks = tx.execute(
@@ -417,7 +415,7 @@ def schedulable_tasks(state: ControllerTransitions) -> list:
     return [t for t in tasks if check_task_can_be_scheduled(t)]
 
 
-def building_counts(state: ControllerTransitions) -> dict[WorkerId, int]:
+def building_counts(state: ControllerTestState) -> dict[WorkerId, int]:
     """Count tasks in BUILDING/ASSIGNED state per worker, excluding reservation holders."""
     with state._db.read_snapshot() as tx:
         rows = tx.execute(
@@ -439,7 +437,7 @@ def building_counts(state: ControllerTransitions) -> dict[WorkerId, int]:
 
 
 def register_worker(
-    state: ControllerTransitions,
+    state: ControllerTestState,
     worker_id: str,
     address: str,
     metadata: job_pb2.WorkerMetadata,
@@ -449,12 +447,14 @@ def register_worker(
 ) -> WorkerId:
     wid = WorkerId(worker_id)
     with state._db.transaction() as cur:
-        state.register_or_refresh_worker(
+        ops.worker.register_or_refresh(
             cur,
             worker_id=wid,
             address=address,
             metadata=metadata,
             ts=Timestamp.now(),
+            health=state._health,
+            worker_attrs=state._worker_attrs,
             slice_id=slice_id,
             scale_group=scale_group,
         )
@@ -481,7 +481,7 @@ def inject_device_constraints(request: controller_pb2.Controller.LaunchJobReques
 
 
 def submit_job(
-    state: ControllerTransitions,
+    state: ControllerTestState,
     job_id: str,
     request: controller_pb2.Controller.LaunchJobRequest,
     timestamp_ms: int | None = None,
@@ -495,11 +495,12 @@ def submit_job(
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
     with state._db.transaction() as cur:
-        state.submit_job(
+        ops.job.submit(
             cur,
-            jid,
-            request,
-            Timestamp.from_ms(timestamp_ms) if timestamp_ms is not None else Timestamp.now(),
+            job_id=jid,
+            request=request,
+            ts=Timestamp.from_ms(timestamp_ms) if timestamp_ms is not None else Timestamp.now(),
+            run_template_cache=state._run_template_cache,
         )
     return query_tasks_for_job(state, jid)
 
@@ -521,7 +522,7 @@ class TaskWithAttempts:
         return getattr(self._row, name)
 
 
-def query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName) -> list[TaskWithAttempts]:
+def query_tasks_with_attempts(state: ControllerTestState, job_id: JobName) -> list[TaskWithAttempts]:
     """Return task rows with their attempt rows attached under ``.attempts``."""
     with state._db.read_snapshot() as tx:
         task_rows = tx.execute(
@@ -541,7 +542,7 @@ def query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName) -> 
     return [TaskWithAttempts(_row=t, attempts=attempts_by_task.get(t.task_id, [])) for t in task_rows]
 
 
-def query_task_with_attempts(state: ControllerTransitions, task_id: JobName) -> TaskWithAttempts | None:
+def query_task_with_attempts(state: ControllerTestState, task_id: JobName) -> TaskWithAttempts | None:
     """Return the task row with attempts attached, or None."""
     with state._db.read_snapshot() as tx:
         task_row = tx.execute(select(tasks_table).where(tasks_table.c.task_id == task_id)).first()
@@ -629,7 +630,7 @@ def make_worker_metadata(
     return meta
 
 
-def worker_running_tasks(state: ControllerTransitions, worker_id: WorkerId) -> frozenset[JobName]:
+def worker_running_tasks(state: ControllerTestState, worker_id: WorkerId) -> frozenset[JobName]:
     with state._db.read_snapshot() as tx:
         rows = tx.execute(
             select(tasks_table.c.task_id)
@@ -655,7 +656,7 @@ def _decode_attr_value(row) -> AttributeValue:
     return AttributeValue(str(row.str_value or ""))
 
 
-def hydrate_worker_attributes(state: ControllerTransitions, workers: list) -> list:
+def hydrate_worker_attributes(state: ControllerTestState, workers: list) -> list:
     if not workers:
         return workers
     worker_ids = [w.worker_id for w in workers]
@@ -666,35 +667,40 @@ def hydrate_worker_attributes(state: ControllerTransitions, workers: list) -> li
     attrs_by_worker: dict = {}
     for row in attr_rows:
         attrs_by_worker.setdefault(row.worker_id, {})[row.key] = _decode_attr_value(row)
-    return [replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
+    return [_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
 
 
-def healthy_active_workers(state: ControllerTransitions) -> list[SchedulableWorker]:
+def healthy_active_workers(state: ControllerTestState) -> list[SchedulableWorker]:
     with state._db.read_snapshot() as tx:
         return reads.healthy_active_workers_with_attributes(tx, state._health, state._worker_attrs)
 
 
-def dispatch_task(state: ControllerTransitions, task, worker_id: WorkerId) -> None:
+def dispatch_task(state: ControllerTestState, task, worker_id: WorkerId) -> None:
     with state._db.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)])
+        ops.task.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
     with state._db.transaction() as cur:
-        state.apply_task_updates(
+        apply_task_observations(
             cur,
-            HeartbeatApplyRequest(
-                worker_id=worker_id,
-                updates=[
-                    TaskUpdate(
-                        task_id=task.task_id,
-                        attempt_id=query_task(state, task.task_id).current_attempt_id,
-                        new_state=job_pb2.TASK_STATE_RUNNING,
-                    )
-                ],
-            ),
+            [
+                WorkerTaskUpdates(
+                    worker_id=worker_id,
+                    updates=[
+                        TaskUpdate(
+                            task_id=task.task_id,
+                            attempt_id=query_task(state, task.task_id).current_attempt_id,
+                            new_state=job_pb2.TASK_STATE_RUNNING,
+                        )
+                    ],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
         )
 
 
 def transition_task(
-    state: ControllerTransitions,
+    state: ControllerTestState,
     task_id: JobName,
     new_state: int,
     *,
@@ -705,7 +711,10 @@ def transition_task(
     assert task is not None
     if new_state == job_pb2.TASK_STATE_KILLED:
         with state._db.transaction() as cur:
-            return state.cancel_job(cur, task.job_id, reason=error or "killed")
+            ops.job.cancel(
+                cur, job_id=task.job_id, reason=error or "killed", endpoints=state._endpoints, health=state._health
+            )
+        return state
     # Compute worker_id: prefer current attempt's worker, fall back to current_worker_id.
     current_attempt = task.attempts[-1] if task.attempts else None
     worker_id = current_attempt.worker_id if current_attempt is not None else task.current_worker_id
@@ -719,26 +728,38 @@ def transition_task(
         )
         return state
     with state._db.transaction() as cur:
-        return state.apply_task_updates(
+        return apply_task_observations(
             cur,
-            HeartbeatApplyRequest(
-                worker_id=worker_id,
-                updates=[
-                    TaskUpdate(
-                        task_id=task_id,
-                        attempt_id=task.current_attempt_id,
-                        new_state=new_state,
-                        error=error,
-                        exit_code=exit_code,
-                    )
-                ],
-            ),
+            [
+                WorkerTaskUpdates(
+                    worker_id=worker_id,
+                    updates=[
+                        TaskUpdate(
+                            task_id=task_id,
+                            attempt_id=task.current_attempt_id,
+                            new_state=new_state,
+                            error=error,
+                            exit_code=exit_code,
+                        )
+                    ],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
         )
 
 
-def fail_worker(state: ControllerTransitions, worker_id: WorkerId, error: str) -> None:
+def fail_worker(state: ControllerTestState, worker_id: WorkerId, error: str) -> None:
     """Force-remove a worker via the explicit kill path used by the reaper thread."""
-    state.fail_workers([(worker_id, None, error)])
+    ops.worker.fail(
+        state._db,
+        worker_ids=[str(worker_id)],
+        reason=error,
+        health=state._health,
+        endpoints=state._endpoints,
+        worker_attrs=state._worker_attrs,
+    )
 
 
 # =============================================================================
@@ -747,10 +768,10 @@ def fail_worker(state: ControllerTransitions, worker_id: WorkerId, error: str) -
 
 
 class ControllerTestHarness:
-    """Wraps ControllerTransitions with ergonomic helpers for the common
+    """Wraps ControllerTestState with ergonomic helpers for the common
     register-workers -> submit-jobs -> dispatch -> transition test pattern."""
 
-    def __init__(self, state: ControllerTransitions):
+    def __init__(self, state: ControllerTestState):
         self.state = state
 
     def add_worker(

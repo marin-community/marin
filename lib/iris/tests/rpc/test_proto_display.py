@@ -4,7 +4,7 @@
 """Tests for protobuf utilities."""
 
 from iris.rpc import config_pb2
-from iris.rpc.proto_utils import (
+from iris.rpc.proto_display import (
     accelerator_type_friendly,
     accelerator_type_name,
     format_accelerator_display,

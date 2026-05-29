@@ -9,6 +9,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
+from iris.cluster.controller import ops
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.budget import (
     UserTask,
@@ -17,15 +18,13 @@ from iris.cluster.controller.budget import (
     interleave_by_user,
     resource_value,
 )
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.ops.task import Assignment
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.transitions import Assignment, HeartbeatApplyRequest, TaskUpdate
-from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import VerifiedIdentity, _verified_identity
-from iris.rpc.proto_utils import PRIORITY_BAND_VALUES, priority_band_name, priority_band_value
+from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_name, priority_band_value
 from rigging.timing import Timestamp
 
 from tests.cluster.conftest import fake_log_client_from_service
@@ -34,6 +33,7 @@ from tests.cluster.controller.conftest import (
     make_controller_state,
     make_test_entrypoint,
 )
+from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 PRODUCTION = job_pb2.PRIORITY_BAND_PRODUCTION
 INTERACTIVE = job_pb2.PRIORITY_BAND_INTERACTIVE
@@ -44,7 +44,7 @@ GiB = 1024**3
 
 @pytest.fixture
 def state():
-    """Fresh ControllerTransitions with a temp DB, cleaned up on exit."""
+    """Fresh ControllerTestState with a temp DB, cleaned up on exit."""
     with make_controller_state() as s:
         yield s
 
@@ -205,11 +205,13 @@ def _start_running_job(
         replicas=replicas,
     )
     with state._db.transaction() as cur:
-        state.submit_job(cur, job_id, request, Timestamp.now())
+        ops.job.submit(
+            cur, job_id=job_id, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
+        )
 
     worker_id = WorkerId(f"w-{user}")
     with state._db.transaction() as cur:
-        state.register_or_refresh_worker(
+        ops.worker.register_or_refresh(
             cur,
             worker_id=worker_id,
             address=f"{worker_id}:8080",
@@ -221,18 +223,25 @@ def _start_running_job(
                 disk_bytes=100 * GiB,
             ),
             ts=Timestamp.now(),
+            health=state._health,
+            worker_attrs=state._worker_attrs,
         )
     for idx in range(replicas):
         task_id = job_id.task(idx)
         with state._db.transaction() as cur:
-            state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=worker_id)])
+            ops.task.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=worker_id)], health=state._health)
         with state._db.transaction() as cur:
-            state.apply_task_updates(
+            apply_task_observations(
                 cur,
-                HeartbeatApplyRequest(
-                    worker_id=worker_id,
-                    updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
-                ),
+                [
+                    WorkerTaskUpdates(
+                        worker_id=worker_id,
+                        updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+                    )
+                ],
+                health=state._health,
+                endpoints=state._endpoints,
+                now=Timestamp.now(),
             )
 
 
@@ -253,7 +262,9 @@ def test_compute_user_spend_excludes_pending(state):
     job_id = JobName.root("bob", "pending")
     request = _launch_request(job_id.to_wire(), cpu_millicores=2000, memory_bytes=8 * GiB)
     with state._db.transaction() as cur:
-        state.submit_job(cur, job_id, request, Timestamp.now())
+        ops.job.submit(
+            cur, job_id=job_id, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
+        )
     with state._db.read_snapshot() as snap:
         assert compute_user_spend(snap).get("bob", 0) == 0
 
@@ -274,9 +285,11 @@ def test_compute_user_spend_null_resources_proto(state):
 def service(state, tmp_path) -> ControllerServiceImpl:
     """ControllerServiceImpl wired with static-provider auth so that
     priority-band authorization triggers (see launch_job band check)."""
+    from iris.cluster.controller.projections.endpoints import EndpointsProjection
+    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+    from iris.cluster.controller.worker_health import WorkerHealthTracker
 
     return ControllerServiceImpl(
-        state,
         controller=MockController(),
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(LogServiceImpl()),

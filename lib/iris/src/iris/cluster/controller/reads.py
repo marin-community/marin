@@ -25,7 +25,7 @@ from rigging.timing import Timestamp
 from sqlalchemy import Integer, bindparam, case, cast, func, literal_column, select, tuple_
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller.codec import device_counts_from_json
+from iris.cluster.controller.codec import device_counts_from_json, resource_spec_from_scalars
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.schema import (
     USER_ROLE_DEFAULT,
@@ -39,37 +39,13 @@ from iris.cluster.controller.schema import (
     users_table,
     workers_table,
 )
+from iris.cluster.controller.task_state import ActiveTaskRow, TaskDetailRow
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 
 # ---------------------------------------------------------------------------
 # Query-result dataclasses (previously rows.py)
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class ActiveTaskRow:
-    """Task projection joined with ``jobs`` + ``job_config``.
-
-    Shared by every cascade/scheduling query (``_kill_non_terminal_tasks``,
-    ``_find_coscheduled_siblings``, ``cancel_job``, ``preempt_task``,
-    ``cancel_tasks_for_timeout``, ``_remove_failed_worker``, poll paths).
-    Callers that need resource info for RPC payloads use ``PendingDispatchRow``
-    instead; ``ActiveTaskRow`` carries only the fields needed for state-machine
-    and cascade logic.
-    """
-
-    task_id: JobName
-    job_id: JobName
-    state: int
-    current_attempt_id: int
-    current_worker_id: WorkerId | None
-    failure_count: int
-    preemption_count: int
-    max_retries_failure: int
-    max_retries_preemption: int
-    is_reservation_holder: bool
-    has_coscheduling: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -512,6 +488,25 @@ def get_job_config(tx: Tx, job_id: JobName) -> dict | None:
     return dict(row) if row is not None else None
 
 
+def bulk_get_job_configs(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, dict]:
+    """Return ``{job_id: config_dict}`` for all ``job_ids`` that have a config row.
+
+    Missing keys are silently absent. Uses a single IN-list query.
+    """
+    ids = list(job_ids)
+    if not ids:
+        return {}
+    rows = (
+        tx.execute(
+            select(job_config_table).where(job_config_table.c.job_id.in_(bindparam("job_ids", expanding=True))),
+            {"job_ids": ids},
+        )
+        .mappings()
+        .all()
+    )
+    return {row["job_id"]: dict(row) for row in rows}
+
+
 def _build_priority_bands_stmt():
     """Build the recursive-CTE statement once with an expanding bindparam.
 
@@ -842,32 +837,6 @@ class TaskScope:
     null_worker: bool = False
 
 
-class TaskDetailRow(Protocol):
-    """Shape of the SA Row returned by ``get_task_detail`` and values in ``bulk_get_task_detail``.
-
-    Columns match ``TASK_DETAIL_COLS``.  Consumers in ``transitions.py`` use
-    this Protocol as the value type of the task map.
-    """
-
-    task_id: JobName
-    job_id: JobName
-    state: int
-    current_attempt_id: int
-    failure_count: int
-    preemption_count: int
-    max_retries_failure: int
-    max_retries_preemption: int
-    submitted_at_ms: object  # Timestamp from TimestampMsType; typed as object to avoid a circular dep
-    priority_band: int
-    error: str | None
-    exit_code: int | None
-    started_at_ms: object | None
-    finished_at_ms: object | None
-    current_worker_id: str | None
-    current_worker_address: str | None
-    container_id: str | None
-
-
 TASK_DETAIL_COLS = (
     tasks_table.c.task_id,
     tasks_table.c.job_id,
@@ -1012,6 +981,41 @@ def list_active_tasks(
     return [_row_to_active_task(row) for row in rows]
 
 
+def list_active_tasks_for_jobs(
+    tx: Tx,
+    job_ids: Iterable[JobName],
+    *,
+    states: Iterable[int],
+) -> dict[JobName, tuple[ActiveTaskRow, ...]]:
+    """Return ``{job_id: (ActiveTaskRow, ...)}`` for all ``job_ids`` in one query.
+
+    Jobs with no matching tasks map to ``()``. Uses a single IN-list query
+    instead of one query per job. State filter is applied as an IN predicate,
+    identical to ``list_active_tasks``.
+    """
+    ids = list(job_ids)
+    states_tuple = tuple(states)
+    result: dict[JobName, tuple[ActiveTaskRow, ...]] = {jid: () for jid in ids}
+    if not ids or not states_tuple:
+        return result
+
+    stmt = (
+        select(*_ACTIVE_TASK_COLS)
+        .select_from(_ACTIVE_TASK_FROM)
+        .where(
+            tasks_table.c.job_id.in_(bindparam("bulk_job_ids", expanding=True)),
+            tasks_table.c.state.in_(bindparam("active_states", expanding=True)),
+        )
+    )
+    rows = tx.execute(stmt, {"bulk_job_ids": ids, "active_states": list(states_tuple)}).all()
+    lists: dict[JobName, list[ActiveTaskRow]] = {}
+    for row in rows:
+        lists.setdefault(row.job_id, []).append(_row_to_active_task(row))
+    for jid, task_rows in lists.items():
+        result[jid] = tuple(task_rows)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Worker reads (previously reads/workers.py)
 # ---------------------------------------------------------------------------
@@ -1100,6 +1104,23 @@ def filter_existing_workers(tx: Tx, worker_ids: Iterable[WorkerId]) -> set[str]:
     return {str(row.worker_id) for row in rows}
 
 
+def bulk_get_worker_addresses(tx: Tx, worker_ids: Iterable[WorkerId]) -> dict[WorkerId, str]:
+    """Return ``{worker_id: address}`` for all ``worker_ids`` that have a ``workers`` row.
+
+    Missing keys are silently absent. Uses a single IN-list query.
+    """
+    ids = list(worker_ids)
+    if not ids:
+        return {}
+    rows = tx.execute(
+        select(workers_table.c.worker_id, workers_table.c.address).where(
+            workers_table.c.worker_id.in_(bindparam("worker_ids", expanding=True))
+        ),
+        {"worker_ids": ids},
+    ).all()
+    return {row.worker_id: str(row.address) for row in rows}
+
+
 @dataclass(frozen=True, slots=True)
 class SchedulableWorker:
     """Worker shape consumed by the scheduler.
@@ -1163,3 +1184,52 @@ def healthy_active_workers_with_attributes(
         for row in rows
         if row.worker_id in healthy_active
     ]
+
+
+# ---------------------------------------------------------------------------
+# Direct-provider dispatch helpers (used by direct_provider.py)
+# ---------------------------------------------------------------------------
+
+# Columns selected for every pending-dispatch / redrive query.  Covers all
+# fields required to build a RunTaskRequest without a second DB round-trip.
+PENDING_DISPATCH_COLS = (
+    tasks_table.c.task_id,
+    tasks_table.c.job_id,
+    tasks_table.c.current_attempt_id,
+    jobs_table.c.num_tasks,
+    job_config_table.c.res_cpu_millicores,
+    job_config_table.c.res_memory_bytes,
+    job_config_table.c.res_disk_bytes,
+    job_config_table.c.res_device_json,
+    job_config_table.c.entrypoint_json,
+    job_config_table.c.environment_json,
+    job_config_table.c.bundle_id,
+    job_config_table.c.ports_json,
+    job_config_table.c.constraints_json,
+    job_config_table.c.task_image,
+    job_config_table.c.timeout_ms,
+)
+
+
+def pending_dispatch_row(r) -> PendingDispatchRow:
+    """Decode a raw SA result row into a :class:`PendingDispatchRow`."""
+    _tms = r.timeout_ms
+    return PendingDispatchRow(
+        task_id=r.task_id,
+        job_id=r.job_id,
+        current_attempt_id=int(r.current_attempt_id),
+        num_tasks=int(r.num_tasks),
+        resources=resource_spec_from_scalars(
+            int(r.res_cpu_millicores),
+            int(r.res_memory_bytes),
+            int(r.res_disk_bytes),
+            r.res_device_json,
+        ),
+        entrypoint_json=str(r.entrypoint_json),
+        environment_json=str(r.environment_json),
+        bundle_id=str(r.bundle_id),
+        ports_json=r.ports_json,
+        constraints_json=r.constraints_json,
+        task_image=str(r.task_image),
+        timeout_ms=int(_tms) if _tms is not None else None,
+    )

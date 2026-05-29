@@ -12,13 +12,13 @@ from pathlib import Path
 import pytest
 import yaml
 from iris.cluster.config import (
-    config_to_dict,
     connect_cluster,
     get_ssh_config,
     load_config,
     make_local_config,
     validate_config,
 )
+from iris.cluster.config_serde import config_to_dict
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.autoscaler_factory import create_autoscaler
 from iris.cluster.providers.factory import create_provider_bundle

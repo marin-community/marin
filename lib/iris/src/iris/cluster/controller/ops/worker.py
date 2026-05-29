@@ -1,0 +1,310 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Aggregate-scoped commands for workers: register/refresh and chunked failure."""
+
+from dataclasses import dataclass
+
+from rigging.timing import Timestamp
+from sqlalchemy import bindparam, delete, insert, select
+
+from iris.cluster.constraints import AttributeValue
+from iris.cluster.controller import reads, writes
+from iris.cluster.controller.audit import log_event
+from iris.cluster.controller.codec import proto_to_json
+from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.reconcile.batches import apply_reconcile_batch, apply_worker_failures_batch
+from iris.cluster.controller.reconcile.effects import ControllerEffects, apply_effects
+from iris.cluster.controller.reconcile.loader import load_reconcile_snapshot, load_workers_slice
+from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
+from iris.cluster.controller.schema import worker_attributes_table, workers_table
+from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.types import AttemptUid, JobName, WorkerId, get_gpu_count, get_tpu_count
+from iris.rpc import job_pb2
+
+FAIL_WORKERS_CHUNK_SIZE = 10
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerAttributeParams:
+    key: str
+    value_type: str
+    str_value: str | None
+    int_value: int | None
+    float_value: float | None
+
+
+@dataclass(frozen=True)
+class WorkerFailureBatchResult:
+    """Narrow result for :func:`fail`: just the worker rows removed.
+
+    ``_terminate_workers`` calls ``provider.on_worker_failed`` for each entry
+    and forwards the IDs to the autoscaler for slice-sibling teardown. Per-
+    task kill targets and log events are already applied by ``apply_effects``
+    inside the batch, so they don't need to surface in the return value.
+    """
+
+    removed_workers: list[tuple[WorkerId, str | None]]
+
+
+def register_or_refresh(
+    cur: Tx,
+    *,
+    worker_id: WorkerId,
+    address: str,
+    metadata: job_pb2.WorkerMetadata,
+    ts: Timestamp,
+    health: WorkerHealthTracker,
+    worker_attrs: WorkerAttrsProjection,
+    slice_id: str = "",
+    scale_group: str = "",
+) -> None:
+    """Register a new worker or refresh an existing one. Caller owns the transaction."""
+    attrs: list[WorkerAttributeParams] = []
+    for key, proto in metadata.attributes.items():
+        value = AttributeValue.from_proto(proto).value
+        if isinstance(value, int):
+            attrs.append(WorkerAttributeParams(key, "int", None, int(value), None))
+        elif isinstance(value, float):
+            attrs.append(WorkerAttributeParams(key, "float", None, None, float(value)))
+        else:
+            attrs.append(WorkerAttributeParams(key, "str", str(value), None, None))
+    now_ms = ts.epoch_ms()
+    gpu_count = get_gpu_count(metadata.device)
+    tpu_count = get_tpu_count(metadata.device)
+    if metadata.device.HasField("gpu"):
+        device_type = "gpu"
+        device_variant = metadata.device.gpu.variant
+    elif metadata.device.HasField("tpu"):
+        device_type = "tpu"
+        device_variant = metadata.device.tpu.variant
+    else:
+        device_type = ""
+        device_variant = ""
+    writes.upsert_worker_row(
+        cur,
+        {
+            "worker_id": worker_id,
+            "address": address,
+            "total_cpu_millicores": metadata.cpu_count * 1000,
+            "total_memory_bytes": metadata.memory_bytes,
+            "total_gpu_count": gpu_count,
+            "total_tpu_count": tpu_count,
+            "device_type": device_type,
+            "device_variant": device_variant,
+            "slice_id": slice_id,
+            "scale_group": scale_group,
+            "md_hostname": metadata.hostname,
+            "md_ip_address": metadata.ip_address,
+            "md_cpu_count": metadata.cpu_count,
+            "md_memory_bytes": metadata.memory_bytes,
+            "md_disk_bytes": metadata.disk_bytes,
+            "md_tpu_name": metadata.tpu_name,
+            "md_tpu_worker_hostnames": metadata.tpu_worker_hostnames,
+            "md_tpu_worker_id": metadata.tpu_worker_id,
+            "md_tpu_chips_per_host_bounds": metadata.tpu_chips_per_host_bounds,
+            "md_gpu_count": metadata.gpu_count,
+            "md_gpu_name": metadata.gpu_name,
+            "md_gpu_memory_mb": metadata.gpu_memory_mb,
+            "md_gce_instance_name": metadata.gce_instance_name,
+            "md_gce_zone": metadata.gce_zone,
+            "md_git_hash": metadata.git_hash,
+            "md_device_json": proto_to_json(metadata.device),
+        },
+    )
+    cur.register(lambda: health.register(worker_id, now_ms=now_ms))
+    cur.execute(delete(worker_attributes_table).where(worker_attributes_table.c.worker_id == worker_id))
+    if attrs:
+        cur.execute(
+            insert(worker_attributes_table),
+            [
+                {
+                    "worker_id": worker_id,
+                    "key": attr.key,
+                    "value_type": attr.value_type,
+                    "str_value": attr.str_value,
+                    "int_value": attr.int_value,
+                    "float_value": attr.float_value,
+                }
+                for attr in attrs
+            ],
+        )
+    attr_dict: dict[str, AttributeValue] = {}
+    for attr in attrs:
+        if attr.value_type == "int":
+            attr_dict[attr.key] = AttributeValue(int(attr.int_value))
+        elif attr.value_type == "float":
+            attr_dict[attr.key] = AttributeValue(float(attr.float_value))
+        else:
+            attr_dict[attr.key] = AttributeValue(str(attr.str_value or ""))
+    worker_attrs.set(cur, worker_id, attr_dict)
+    cur.register(
+        lambda: log_event(
+            "worker_registered",
+            str(worker_id),
+            address=address,
+        )
+    )
+
+
+def fail(
+    db: ControllerDB,
+    *,
+    worker_ids: list[str],
+    reason: str,
+    health: WorkerHealthTracker,
+    endpoints: EndpointsProjection,
+    worker_attrs: WorkerAttrsProjection,
+) -> WorkerFailureBatchResult:
+    """Fail active workers in chunked write transactions.
+
+    Used for slice reaping: when one worker on a multi-VM slice fails, all
+    sibling workers on that slice must be failed immediately rather than
+    waiting for individual ping timeouts.
+
+    Worker removals are written in chunks of FAIL_WORKERS_CHUNK_SIZE; each
+    chunk commits its own transaction so the SQLite writer is released and
+    other RPCs can interleave during a zone-wide failure.
+    """
+    if not worker_ids:
+        return WorkerFailureBatchResult(removed_workers=[])
+    with db.read_snapshot() as snap:
+        _liveness = health.all()
+        _active_ids = sorted(
+            {
+                WorkerId(str(wid))
+                for wid in worker_ids
+                if (e := _liveness.get(WorkerId(str(wid)))) is not None and e.active
+            }
+        )
+        rows = (
+            snap.execute(
+                select(*reads.WORKER_DETAIL_COLS).where(
+                    workers_table.c.worker_id.in_(bindparam("worker_ids", expanding=True))
+                ),
+                {"worker_ids": _active_ids},
+            ).all()
+            if _active_ids
+            else []
+        )
+    failures: list[tuple[WorkerId, str | None, str]] = [(row.worker_id, row.address, reason) for row in rows]
+    if not failures:
+        return WorkerFailureBatchResult(removed_workers=[])
+
+    removed_workers: list[tuple[WorkerId, str | None]] = []
+
+    for chunk_start in range(0, len(failures), FAIL_WORKERS_CHUNK_SIZE):
+        chunk = failures[chunk_start : chunk_start + FAIL_WORKERS_CHUNK_SIZE]
+        with db.transaction() as cur:
+            now = Timestamp.now()
+            # Re-check liveness inside the write tx: a concurrent reaper
+            # may have already failed some workers since we snapshotted.
+            live_chunk = [
+                (worker_id, worker_address, error)
+                for worker_id, worker_address, error in chunk
+                if health.liveness(worker_id).active
+            ]
+            if not live_chunk:
+                continue
+            _apply_worker_failures_chunk(
+                cur,
+                live_chunk,
+                health=health,
+                endpoints=endpoints,
+                worker_attrs=worker_attrs,
+                now=now,
+            )
+            for worker_id, worker_address, _ in live_chunk:
+                if worker_address is not None:
+                    removed_workers.append((worker_id, worker_address))
+
+    return WorkerFailureBatchResult(removed_workers=removed_workers)
+
+
+def _apply_worker_failures_chunk(
+    cur: Tx,
+    failures: list[tuple[WorkerId, str | None, str]],
+    *,
+    health: WorkerHealthTracker,
+    endpoints: EndpointsProjection,
+    worker_attrs: WorkerAttrsProjection,
+    now: Timestamp,
+) -> None:
+    """Glue: load the worker slice for ``failures``, run the worker-failure
+    kernel, apply effects.
+
+    Per-chunk shape: one closed snapshot, one :class:`WorkingState`, then
+    ``writes.remove_worker`` after ``apply_effects``.
+    """
+    if not failures:
+        return
+
+    worker_ids = [wid for wid, _, _ in failures]
+    # ``load_workers_slice`` closes every active task on the failed workers
+    # (plus their jobs' peer/descendant graph), so the batch derives its
+    # per-worker task rows from the snapshot.
+    snapshot = load_workers_slice(cur, worker_ids, now=now)
+    effects = apply_worker_failures_batch(snapshot, failures)
+
+    # apply_effects before remove_worker: task mutations reference attempt rows
+    # that would be CASCADE-deleted by remove_worker; order must be preserved.
+    apply_effects(cur, effects, health=health, endpoints=endpoints, now=now)
+    for worker_id, _, _ in failures:
+        writes.remove_worker(cur, worker_id, health=health, worker_attrs=worker_attrs)
+
+
+def apply_reconcile_observations(
+    cur: Tx,
+    plans_by_worker: dict[WorkerId, WorkerReconcilePlan],
+    results: list[ReconcileResult],
+    *,
+    health: WorkerHealthTracker,
+    endpoints: EndpointsProjection,
+    now: Timestamp,
+) -> ControllerEffects:
+    """Load ONE snapshot covering every (plan, result) pair, then apply once.
+
+    The pure :func:`apply_reconcile_batch` shares a ``WorkingState`` across
+    all pairs so cascade kills triggered by earlier workers are visible to
+    later ones.
+    """
+    plan_results: list[tuple[WorkerReconcilePlan, ReconcileResult]] = []
+    all_task_ids: list[JobName] = []
+    all_attempt_keys: list[tuple[JobName, int]] = []
+    all_attempt_uids: list[AttemptUid] = []
+    all_worker_ids: list[WorkerId] = []
+
+    for result in results:
+        plan = plans_by_worker[result.worker_id]
+        plan_results.append((plan, result))
+        all_worker_ids.append(plan.worker_id)
+
+        if result.error is not None:
+            for desired in plan.request.desired:
+                if not desired.HasField("run") or not desired.run.HasField("request"):
+                    continue
+                req_proto = desired.run.request
+                tid = JobName.from_wire(req_proto.task_id)
+                all_task_ids.append(tid)
+                all_attempt_keys.append((tid, req_proto.attempt_id))
+        else:
+            # Extract only plan-scoped UIDs for snapshot preloading (no logging here;
+            # worker.filter_observations_to_plan logs dropped observations inline).
+            plan_uids = {d.attempt_uid for d in plan.request.desired if d.attempt_uid}
+            for obs in result.observations:
+                if obs.attempt_uid and obs.attempt_uid in plan_uids:
+                    all_attempt_uids.append(AttemptUid(obs.attempt_uid))
+
+    snapshot = load_reconcile_snapshot(
+        cur,
+        all_worker_ids,
+        now=now,
+        observation_uids=all_attempt_uids,
+        extra_task_ids=all_task_ids,
+        extra_attempt_keys=all_attempt_keys,
+    )
+    effects = apply_reconcile_batch(snapshot, plan_results, now)
+    apply_effects(cur, effects, health=health, endpoints=endpoints, now=now)
+    return effects

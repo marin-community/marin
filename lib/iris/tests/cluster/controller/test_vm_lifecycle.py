@@ -32,16 +32,16 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 
 import pytest
-from iris.cluster.controller.vm_lifecycle import (
-    _build_controller_vm_config,
-    start_controller,
-    stop_controller,
-)
 from iris.cluster.providers.types import (
     CloudWorkerState,
     CommandResult,
     SliceHandle,
     WorkerStatus,
+)
+from iris.cluster.providers.vm_lifecycle import (
+    _build_controller_vm_config,
+    start_controller,
+    stop_controller,
 )
 from iris.rpc import config_pb2
 from rigging.timing import Duration

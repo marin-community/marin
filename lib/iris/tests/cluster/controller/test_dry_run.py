@@ -9,6 +9,7 @@ import pytest
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
+from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.conftest import (
     make_job_request,
     make_worker_metadata,
@@ -34,7 +35,13 @@ def test_dry_run_controller_starts_and_stops(dry_run_controller):
 
 def test_dry_run_scheduling_does_not_dispatch(dry_run_controller):
     controller = dry_run_controller
-    state = controller.state
+    state = ControllerTestState(
+        controller._db,
+        health=controller._health,
+        endpoints=controller._endpoints,
+        worker_attrs=controller._worker_attrs,
+        run_template_cache=controller._run_template_cache,
+    )
 
     register_worker(state, "w1", "w1:8080", make_worker_metadata())
     req = make_job_request(name="dry-job", cpu=1, replicas=1)

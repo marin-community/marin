@@ -9,10 +9,12 @@ modify state, or run threads.
 """
 
 import pytest
-from iris.cluster.constraints import AttributeValue, WellKnownAttribute
-from iris.cluster.controller import reads
+from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
+from iris.cluster.controller.ops.task import Assignment
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
@@ -23,17 +25,16 @@ from iris.cluster.controller.scheduler import (
     WorkerSnapshot,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.schema import jobs_table, worker_attributes_table
-from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
+from iris.cluster.controller.schema import worker_attributes_table
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
-from iris.cluster.worker.env_probe import _build_worker_attributes
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import select
 
 from tests.cluster.conftest import eq_constraint, in_constraint
-from tests.cluster.controller._test_support import set_worker_health_for_test
+from tests.cluster.controller._test_support import ControllerTestState, set_worker_health_for_test
+from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
     building_counts as _building_counts,
@@ -83,6 +84,7 @@ def _job_requirements_from_job(job) -> JobRequirements:
 
 def _decode_worker_attr_value(row):
     """Decode a worker_attributes row value by value_type."""
+    from iris.cluster.constraints import AttributeValue
 
     if row.value_type == "int":
         return AttributeValue(int(row.int_value))
@@ -91,7 +93,7 @@ def _decode_worker_attr_value(row):
     return AttributeValue(str(row.str_value or ""))
 
 
-def _worker_attr(state: ControllerTransitions, worker_id: WorkerId, key: str):
+def _worker_attr(state: ControllerTestState, worker_id: WorkerId, key: str):
     with state._db.read_snapshot() as tx:
         rows = tx.execute(
             select(worker_attributes_table).where(
@@ -104,42 +106,37 @@ def _worker_attr(state: ControllerTransitions, worker_id: WorkerId, key: str):
     return _decode_worker_attr_value(rows[0])
 
 
-def assign_task_to_worker(state: ControllerTransitions, task, worker_id: WorkerId) -> None:
+def assign_task_to_worker(state: ControllerTestState, task, worker_id: WorkerId) -> None:
     with state._db.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)])
+        ops.task.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
 
 
-def transition_task_to_running(state: ControllerTransitions, task) -> None:
+def transition_task_to_running(state: ControllerTestState, task) -> None:
+    transition_task_to_state(state, task, job_pb2.TASK_STATE_RUNNING)
+
+
+def transition_task_to_state(state: ControllerTestState, task, new_state: int) -> None:
+    # Re-read the live task: callers pass the object captured at submit time,
+    # before assignment minted the current attempt/worker.
+    live = _query_task(state, task.task_id)
     with state._db.transaction() as cur:
-        state.apply_task_updates(
+        apply_task_observations(
             cur,
-            HeartbeatApplyRequest(
-                worker_id=task.current_worker_id,
-                updates=[
-                    TaskUpdate(
-                        task_id=task.task_id,
-                        attempt_id=task.current_attempt_id,
-                        new_state=job_pb2.TASK_STATE_RUNNING,
-                    )
-                ],
-            ),
-        )
-
-
-def transition_task_to_state(state: ControllerTransitions, task, new_state: int) -> None:
-    with state._db.transaction() as cur:
-        state.apply_task_updates(
-            cur,
-            HeartbeatApplyRequest(
-                worker_id=task.current_worker_id,
-                updates=[
-                    TaskUpdate(
-                        task_id=task.task_id,
-                        attempt_id=task.current_attempt_id,
-                        new_state=new_state,
-                    )
-                ],
-            ),
+            [
+                WorkerTaskUpdates(
+                    worker_id=live.current_worker_id,
+                    updates=[
+                        TaskUpdate(
+                            task_id=live.task_id,
+                            attempt_id=live.current_attempt_id,
+                            new_state=new_state,
+                        )
+                    ],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
         )
 
 
@@ -210,7 +207,7 @@ def _build_context(scheduler, state):
 
 def schedule_until_done(
     scheduler: Scheduler,
-    state: ControllerTransitions,
+    state: ControllerTestState,
     max_cycles: int = 100,
 ) -> SchedulingResult:
     """Drive the scheduler until no more tasks can be assigned.
@@ -353,6 +350,7 @@ def test_scheduler_detects_timed_out_tasks(state):
     tasks = submit_job(state, "j1", request)
 
     # Manually set deadline epoch to past timestamp in DB.
+    from iris.cluster.controller.schema import jobs_table
     from sqlalchemy import update as sa_update
 
     with state._db.transaction() as _tx:
@@ -2230,6 +2228,7 @@ def test_gpu_job_matches_worker_with_config_variant(scheduler, state):
 
 def _register_worker_with_probed_attributes(state, worker_id, address, metadata):
     """Register a worker, populating attributes via _build_worker_attributes (as real workers do)."""
+    from iris.cluster.worker.env_probe import _build_worker_attributes
 
     # Determine accelerator_type and variant from the device config on metadata,
     # mirroring what the autoscaler would set on WorkerConfig.

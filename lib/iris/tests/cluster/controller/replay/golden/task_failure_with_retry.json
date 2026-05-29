@@ -36,7 +36,7 @@
       "depth": 1,
       "error": null,
       "exit_code": null,
-      "finished_at_ms": 1704067200005,
+      "finished_at_ms": 1704067200003,
       "has_reservation": 0,
       "is_reservation_holder": 0,
       "job_id": "/test-user/retry-job",
@@ -53,10 +53,6 @@
     }
   ],
   "meta": [
-    {
-      "key": "last_submission_ms",
-      "value": 1704067200000
-    },
     {
       "key": "task_priority_insertion",
       "value": 1
@@ -81,10 +77,10 @@
     {
       "attempt_id": 1,
       "attempt_uid": "<masked-1>",
-      "created_at_ms": 1704067200003,
+      "created_at_ms": 1704067200002,
       "error": null,
       "exit_code": 0,
-      "finished_at_ms": 1704067200004,
+      "finished_at_ms": 1704067200003,
       "started_at_ms": null,
       "state": 4,
       "task_id": "/test-user/retry-job/0",
@@ -100,7 +96,7 @@
       "error": "boom",
       "exit_code": 0,
       "failure_count": 1,
-      "finished_at_ms": 1704067200004,
+      "finished_at_ms": 1704067200003,
       "job_id": "/test-user/retry-job",
       "max_retries_failure": 2,
       "max_retries_preemption": 0,

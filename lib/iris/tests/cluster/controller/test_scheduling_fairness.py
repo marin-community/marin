@@ -5,10 +5,12 @@
 
 from collections import defaultdict
 
-from iris.cluster.controller import reads
+from iris.cluster.controller import ops, reads
 from iris.cluster.controller.budget import UserTask, compute_effective_band, interleave_by_user
 from iris.cluster.controller.controller import (
     SchedulingOutcome,
+)
+from iris.cluster.controller.scheduling_policy import (
     _pending_tasks_with_jobs,
     _sort_pending_tasks_by_resolved_band,
 )
@@ -151,7 +153,9 @@ def test_depth_boost_within_band():
             replicas=1,
         )
         with state._db.transaction() as cur:
-            state.submit_job(cur, child_id, child_req, Timestamp.now())
+            ops.job.submit(
+                cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
+            )
         child_tasks = query_tasks_for_job(state, child_id)
 
         schedulable = _pending(state)
@@ -192,7 +196,9 @@ def test_child_resolves_parent_band_from_job_config():
             replicas=1,
         )
         with state._db.transaction() as cur:
-            state.submit_job(cur, child_id, child_req, Timestamp.now())
+            ops.job.submit(
+                cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
+            )
         child_tasks = query_tasks_for_job(state, child_id)
 
         # Pending rows no longer inherit by reading parent task rows; the
@@ -328,7 +334,9 @@ def test_get_priority_bands_resolves_via_parent_chain():
             replicas=1,
         )
         with state._db.transaction() as cur:
-            state.submit_job(cur, sub_id, sub_req, Timestamp.now())
+            ops.job.submit(
+                cur, job_id=sub_id, request=sub_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
+            )
 
         # Sub-job with its own explicit BATCH → BATCH (own band wins, no walk).
         batch_sub_id = prod_job_id.child("batch-sub")
@@ -341,7 +349,13 @@ def test_get_priority_bands_resolves_via_parent_chain():
             priority_band=job_pb2.PRIORITY_BAND_BATCH,
         )
         with state._db.transaction() as cur:
-            state.submit_job(cur, batch_sub_id, batch_sub_req, Timestamp.now())
+            ops.job.submit(
+                cur,
+                job_id=batch_sub_id,
+                request=batch_sub_req,
+                ts=Timestamp.now(),
+                run_template_cache=state._run_template_cache,
+            )
 
         with state._db.read_snapshot() as snap:
             bands = reads.get_priority_bands(snap, [plain_job_id, prod_job_id, sub_id, batch_sub_id])
@@ -408,31 +422,45 @@ def test_unplaceable_tasks_do_not_starve_placeable_tasks(make_controller, tmp_pa
         tpu_req.resources.device.tpu.variant = "v5p-8"
         inject_device_constraints(tpu_req)
         jid = JobName.from_string(f"/alice/tpu-job-{i}")
-        with ctrl._transitions._db.transaction() as cur:
-            ctrl._transitions.submit_job(cur, jid, tpu_req, Timestamp.now())
+        with ctrl._db.transaction() as cur:
+            ops.job.submit(
+                cur,
+                job_id=jid,
+                request=tpu_req,
+                ts=Timestamp.now(),
+                run_template_cache=ctrl._run_template_cache,
+            )
 
     # Submit 1 CPU task for alice — this should be placeable on the CPU worker
     cpu_jid = JobName.from_string("/alice/cpu-job")
     cpu_req = make_job_request(name="/alice/cpu-job", cpu=1, replicas=1)
     inject_device_constraints(cpu_req)
-    with ctrl._transitions._db.transaction() as cur:
-        ctrl._transitions.submit_job(cur, cpu_jid, cpu_req, Timestamp.now())
+    with ctrl._db.transaction() as cur:
+        ops.job.submit(
+            cur,
+            job_id=cpu_jid,
+            request=cpu_req,
+            ts=Timestamp.now(),
+            run_template_cache=ctrl._run_template_cache,
+        )
 
     # Register exactly 1 CPU worker — no TPU workers
-    with ctrl._transitions._db.transaction() as cur:
-        ctrl._transitions.register_or_refresh_worker(
+    with ctrl._db.transaction() as cur:
+        ops.worker.register_or_refresh(
             cur,
             worker_id=WorkerId("cpu-worker"),
             address="cpu-worker:8080",
             metadata=make_worker_metadata(cpu=4, memory_bytes=8 * 1024**3),
             ts=Timestamp.now(),
+            health=ctrl._health,
+            worker_attrs=ctrl._worker_attrs,
         )
 
     outcome = ctrl._run_scheduling()
 
     assert outcome == SchedulingOutcome.ASSIGNMENTS_MADE, f"Expected ASSIGNMENTS_MADE, got {outcome}"
 
-    cpu_tasks = query_tasks_for_job(ctrl._transitions, cpu_jid)
+    cpu_tasks = query_tasks_for_job(ctrl, cpu_jid)
     assert len(cpu_tasks) == 1
     assert (
         cpu_tasks[0].state == job_pb2.TASK_STATE_ASSIGNED

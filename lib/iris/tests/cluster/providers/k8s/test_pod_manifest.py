@@ -6,7 +6,7 @@
 import json
 
 import pytest
-from iris.cluster.controller.transitions import RunningTaskEntry
+from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.providers.k8s.tasks import (
     _INFRASTRUCTURE_FAILURE_REASONS,
     _LABEL_JOB_ID,

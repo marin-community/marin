@@ -30,15 +30,15 @@ from finelog.types import LogWriterProtocol, str_to_log_level
 from rigging.log_setup import parse_log_level
 from rigging.timing import Timestamp
 
-from iris.cluster.controller.transitions import (
+from iris.cluster.controller.direct_provider import (
     ClusterCapacity,
     DirectProviderBatch,
     DirectProviderSyncResult,
-    RunningTaskEntry,
     SchedulingEvent,
-    TaskUpdate,
 )
-from iris.cluster.log_store_helpers import task_log_key
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.log_keys import task_log_key
 from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity

@@ -38,7 +38,7 @@ from iris.cluster.client import (
     resolve_job_user,
 )
 from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
-from iris.cluster.log_store_helpers import build_log_source
+from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -53,7 +53,7 @@ from iris.cluster.types import (
 )
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
-from iris.rpc.proto_utils import job_state_friendly
+from iris.rpc.proto_display import job_state_friendly
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)

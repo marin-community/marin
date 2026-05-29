@@ -3,13 +3,14 @@
 
 """Controller task and attempt state predicates."""
 
-from typing import Any, NamedTuple
+from dataclasses import dataclass
+from typing import Any, NamedTuple, Protocol
 
 from rigging.timing import Deadline, Duration, Timestamp
 from sqlalchemy import func, literal_column
 from sqlalchemy.sql.elements import ColumnElement
 
-from iris.cluster.types import TERMINAL_TASK_STATES, JobName
+from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId
 from iris.rpc import job_pb2
 
 ACTIVE_TASK_STATES: frozenset[int] = frozenset(
@@ -104,3 +105,54 @@ def attempt_is_terminal(state: int) -> bool:
 def attempt_is_worker_failure(state: int) -> bool:
     """Check if an attempt is a worker failure or preemption."""
     return state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED)
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveTaskRow:
+    """Task projection joined with ``jobs`` + ``job_config``.
+
+    Shared by every cascade/scheduling query (``_kill_non_terminal_tasks``,
+    ``peers.find_coscheduled_siblings``, ``cancel_job``, ``apply_terminal_decisions_batch``,
+    ``apply_worker_failures_batch``, poll paths).
+    Callers that need resource info for RPC payloads use ``PendingDispatchRow``
+    instead; ``ActiveTaskRow`` carries only the fields needed for state-machine
+    and cascade logic.
+    """
+
+    task_id: JobName
+    job_id: JobName
+    state: int
+    current_attempt_id: int
+    current_worker_id: WorkerId | None
+    failure_count: int
+    preemption_count: int
+    max_retries_failure: int
+    max_retries_preemption: int
+    is_reservation_holder: bool
+    has_coscheduling: bool
+
+
+class TaskDetailRow(Protocol):
+    """Shape of the SA Row returned by ``get_task_detail`` and values in ``bulk_get_task_detail``.
+
+    Columns match ``TASK_DETAIL_COLS``.  Consumers in ``reconcile.py`` use
+    this Protocol as the value type of the task map.
+    """
+
+    task_id: JobName
+    job_id: JobName
+    state: int
+    current_attempt_id: int
+    failure_count: int
+    preemption_count: int
+    max_retries_failure: int
+    max_retries_preemption: int
+    submitted_at_ms: object  # Timestamp from TimestampMsType; typed as object to avoid a circular dep
+    priority_band: int
+    error: str | None
+    exit_code: int | None
+    started_at_ms: object | None
+    finished_at_ms: object | None
+    current_worker_id: str | None
+    current_worker_address: str | None
+    container_id: str | None

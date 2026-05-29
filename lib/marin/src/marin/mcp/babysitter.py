@@ -16,15 +16,15 @@ from finelog.rpc.logging_connect import LogServiceClientSync
 from google.protobuf import json_format
 from iris.cli.bug_report import gather_bug_report
 from iris.cli.job import build_job_summary
-from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token
-from iris.cluster.log_store_helpers import build_log_source
+from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
+from iris.cluster.token_store import cluster_name_from_url, load_any_token, load_token
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider, TokenProvider
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
+from iris.rpc.proto_display import job_state_friendly, task_state_friendly
 from mcp.server.fastmcp import FastMCP
 from rigging.timing import Timestamp
 

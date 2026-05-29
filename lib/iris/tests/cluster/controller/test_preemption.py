@@ -3,10 +3,15 @@
 
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
-from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller import reads
+from iris.cluster.controller import ops, reads
 from iris.cluster.controller.budget import compute_effective_band
-from iris.cluster.controller.controller import (
+from iris.cluster.controller.ops.task import Assignment, apply_terminal_decisions
+from iris.cluster.controller.reconcile.policy import RESERVATION_HOLDER_JOB_NAME
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
+from iris.cluster.controller.reconcile.task import resolve_task_failure_state as _resolve_task_failure_state
+from iris.cluster.controller.scheduler import JobRequirements, WorkerCapacity
+from iris.cluster.controller.scheduling_policy import (
     PreemptionCandidate,
     RunningTaskInfo,
     _get_running_tasks_with_band_and_value,
@@ -14,17 +19,11 @@ from iris.cluster.controller.controller import (
     _run_preemption_pass,
     _sort_pending_tasks_by_resolved_band,
 )
-from iris.cluster.controller.scheduler import JobRequirements, WorkerCapacity
-from iris.cluster.controller.transitions import (
-    RESERVATION_HOLDER_JOB_NAME,
-    Assignment,
-    HeartbeatApplyRequest,
-    TaskUpdate,
-    _resolve_task_failure_state,
-)
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
+
+from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
     ControllerTestHarness,
@@ -494,7 +493,7 @@ def test_solo_preemptor_does_not_tear_down_slice():
 
 
 # ---------------------------------------------------------------------------
-# Integration tests using ControllerTransitions
+# Integration tests using ControllerTestState
 # ---------------------------------------------------------------------------
 
 
@@ -519,7 +518,13 @@ def test_preempted_task_retries():
 
         # Preempt
         with state._db.transaction() as cur:
-            state.preempt_task(cur, task.task_id, reason="Preempted by /bob/prod-job:0")
+            apply_terminal_decisions(
+                cur,
+                [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Preempted by /bob/prod-job:0")],
+                health=state._health,
+                endpoints=state._endpoints,
+                now=Timestamp.now(),
+            )
 
         # Task should be PENDING (retry)
         updated = query_task(state, task.task_id)
@@ -546,7 +551,13 @@ def test_preempted_task_exhausted_retries():
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
 
         with state._db.transaction() as cur:
-            state.preempt_task(cur, task.task_id, reason="preempted")
+            apply_terminal_decisions(
+                cur,
+                [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted")],
+                health=state._health,
+                endpoints=state._endpoints,
+                now=Timestamp.now(),
+            )
 
         updated = query_task(state, task.task_id)
         assert updated.state == job_pb2.TASK_STATE_PREEMPTED
@@ -816,7 +827,9 @@ def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
             replicas=1,
         )
         with state._db.transaction() as cur:
-            state.submit_job(cur, child_id, child_req, Timestamp.now())
+            ops.job.submit(
+                cur, job_id=child_id, request=child_req, ts=Timestamp.now(), run_template_cache=state._run_template_cache
+            )
         interactive_tasks = harness.submit(
             "/bob/interactive",
             cpu=1,
@@ -838,23 +851,29 @@ def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
 def _dispatch_with_band(state, task, worker_id, priority_band: int) -> None:
     """Dispatch task with an explicit stamped band, advancing it to RUNNING."""
     with state._db.transaction() as cur:
-        state.queue_assignments(
+        ops.task.queue_assignments(
             cur,
             [Assignment(task_id=task.task_id, worker_id=worker_id, priority_band=priority_band)],
+            health=state._health,
         )
     with state._db.transaction() as cur:
-        state.apply_task_updates(
+        apply_task_observations(
             cur,
-            HeartbeatApplyRequest(
-                worker_id=worker_id,
-                updates=[
-                    TaskUpdate(
-                        task_id=task.task_id,
-                        attempt_id=query_task(state, task.task_id).current_attempt_id,
-                        new_state=job_pb2.TASK_STATE_RUNNING,
-                    )
-                ],
-            ),
+            [
+                WorkerTaskUpdates(
+                    worker_id=worker_id,
+                    updates=[
+                        TaskUpdate(
+                            task_id=task.task_id,
+                            attempt_id=query_task(state, task.task_id).current_attempt_id,
+                            new_state=job_pb2.TASK_STATE_RUNNING,
+                        )
+                    ],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
         )
 
 
@@ -875,11 +894,17 @@ def test_preempted_assigned_task_always_retries():
 
         # Only assign, don't advance to RUNNING
         with state._db.transaction() as cur:
-            state.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=w1)])
+            ops.task.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=w1)], health=state._health)
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
 
         with state._db.transaction() as cur:
-            state.preempt_task(cur, task.task_id, reason="preempted while assigned")
+            apply_terminal_decisions(
+                cur,
+                [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted while assigned")],
+                health=state._health,
+                endpoints=state._endpoints,
+                now=Timestamp.now(),
+            )
 
         updated = query_task(state, task.task_id)
         assert updated.state == job_pb2.TASK_STATE_PENDING, "ASSIGNED tasks should always retry on preemption"
@@ -997,14 +1022,22 @@ def test_preemption_nonexistent_task_is_noop():
     """Preempting a non-existent task is a no-op."""
     with make_controller_state() as state:
         with state._db.transaction() as cur:
-            result = state.preempt_task(cur, JobName.from_wire("/ghost/job:0"), reason="does not exist")
-        assert result.tasks_to_kill == set()
+            result = apply_terminal_decisions(
+                cur,
+                [TerminalDecision(TerminalKind.PREEMPT, JobName.from_wire("/ghost/job:0"), "does not exist")],
+                health=state._health,
+                endpoints=state._endpoints,
+                now=Timestamp.now(),
+            )
+        assert not result.tasks
+        assert not result.attempts
+        assert not result.jobs
 
 
 def test_preempt_then_worker_terminal_heartbeat_stamps_finished_at_ms():
     """Regression for #5918: worker's post-preempt terminal heartbeat must finalize the attempt.
 
-    ``preempt_task`` marks the attempt PREEMPTED via ``_mark_task_producing_transition``,
+    ``preempt_task`` marks the attempt PREEMPTED via ``task.mark_task_terminating``,
     which deliberately leaves ``finished_at_ms`` NULL and relies on the worker's
     subsequent terminal-state heartbeat to stamp it. Without the stamp the row
     stays counted by ``resource_usage_by_worker`` and ghost-pins the worker's
@@ -1021,25 +1054,36 @@ def test_preempt_then_worker_terminal_heartbeat_stamps_finished_at_ms():
 
         # Producer transition: attempt PREEMPTED, finished_at_ms left NULL on purpose.
         with state._db.transaction() as cur:
-            state.preempt_task(cur, task.task_id, reason="preempted by /bob/prod-job:0")
+            apply_terminal_decisions(
+                cur,
+                [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted by /bob/prod-job:0")],
+                health=state._health,
+                endpoints=state._endpoints,
+                now=Timestamp.now(),
+            )
         attempt = query_attempt(state, task.task_id, attempt_id)
         assert attempt.state == job_pb2.TASK_STATE_PREEMPTED
         assert attempt.finished_at_ms is None, "producer transition should leave finalization for heartbeat"
 
         # Worker's heartbeat for the now-terminal attempt — the deferred finalization.
         with state._db.transaction() as cur:
-            state.apply_task_updates(
+            apply_task_observations(
                 cur,
-                HeartbeatApplyRequest(
-                    worker_id=w1,
-                    updates=[
-                        TaskUpdate(
-                            task_id=task.task_id,
-                            attempt_id=attempt_id,
-                            new_state=job_pb2.TASK_STATE_KILLED,
-                        )
-                    ],
-                ),
+                [
+                    WorkerTaskUpdates(
+                        worker_id=w1,
+                        updates=[
+                            TaskUpdate(
+                                task_id=task.task_id,
+                                attempt_id=attempt_id,
+                                new_state=job_pb2.TASK_STATE_KILLED,
+                            )
+                        ],
+                    )
+                ],
+                health=state._health,
+                endpoints=state._endpoints,
+                now=Timestamp.now(),
             )
 
         attempt = query_attempt(state, task.task_id, attempt_id)
@@ -1065,7 +1109,13 @@ def test_preemption_terminal_task_is_noop():
 
         # Preempt should be no-op
         with state._db.transaction() as cur:
-            state.preempt_task(cur, task.task_id, reason="too late")
+            apply_terminal_decisions(
+                cur,
+                [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "too late")],
+                health=state._health,
+                endpoints=state._endpoints,
+                now=Timestamp.now(),
+            )
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_SUCCEEDED
 
 
@@ -1157,7 +1207,13 @@ def test_preempt_task_retries_when_budget_remains():
 
         attempt_id_before = query_task(state, task.task_id).current_attempt_id
         with state._db.transaction() as cur:
-            result = state.preempt_task(cur, task.task_id, reason="Evicted by /bob/prod:0")
+            result = apply_terminal_decisions(
+                cur,
+                [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Evicted by /bob/prod:0")],
+                health=state._health,
+                endpoints=state._endpoints,
+                now=Timestamp.now(),
+            )
 
         # Task retries to PENDING
         updated = query_task(state, task.task_id)
@@ -1169,11 +1225,9 @@ def test_preempt_task_retries_when_budget_remains():
         assert attempt is not None
         assert attempt.state == job_pb2.TASK_STATE_PREEMPTED
 
-        # Even though the task retries, the worker process from the prior attempt
-        # must be stopped — otherwise the next assignment lands on the same TPU
-        # alongside a still-running ghost process.
-        assert task.task_id in result.tasks_to_kill
-        assert result.task_kill_workers[task.task_id] == w1
+        # The task_preempted log event confirms the preemption was recorded.
+        preempted_ids = {ev.entity_id for ev in result.log_events if ev.action == "task_preempted"}
+        assert task.task_id.to_wire() in preempted_ids
 
 
 def test_preempt_task_terminal_when_budget_exhausted():
@@ -1192,16 +1246,22 @@ def test_preempt_task_terminal_when_budget_exhausted():
         harness.dispatch(task, w1)
 
         with state._db.transaction() as cur:
-            result = state.preempt_task(cur, task.task_id, reason="budget gone")
+            result = apply_terminal_decisions(
+                cur,
+                [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "budget gone")],
+                health=state._health,
+                endpoints=state._endpoints,
+                now=Timestamp.now(),
+            )
 
         updated = query_task(state, task.task_id)
         assert updated.state == job_pb2.TASK_STATE_PREEMPTED
         assert updated.preemption_count == 1
         assert updated.finished_at_ms is not None
 
-        # The preempted task is included in tasks_to_kill so the controller
-        # can send a kill RPC to the worker.
-        assert task.task_id in result.tasks_to_kill
+        # The task_preempted log event confirms the preemption was recorded.
+        preempted_ids = {ev.entity_id for ev in result.log_events if ev.action == "task_preempted"}
+        assert task.task_id.to_wire() in preempted_ids
 
         # Attempt is also PREEMPTED
         attempt = query_attempt(state, task.task_id, updated.current_attempt_id)
@@ -1214,6 +1274,7 @@ def test_preempt_task_requeues_coscheduled_siblings_on_retry():
     bounced to PENDING so the job re-coschedules atomically. Without this, the
     retry could land on a different slice from the still-RUNNING siblings,
     splitting the SPMD mesh."""
+    from iris.cluster.constraints import WellKnownAttribute
 
     with make_controller_state() as state:
         for i in range(2):
@@ -1238,7 +1299,13 @@ def test_preempt_task_requeues_coscheduled_siblings_on_retry():
             dispatch_task(state, task, WorkerId(f"w{i}"))
 
         with state._db.transaction() as cur:
-            result = state.preempt_task(cur, tasks[0].task_id, reason="evicted")
+            result = apply_terminal_decisions(
+                cur,
+                [TerminalDecision(TerminalKind.PREEMPT, tasks[0].task_id, "evicted")],
+                health=state._health,
+                endpoints=state._endpoints,
+                now=Timestamp.now(),
+            )
 
         # Preempted task retries to PENDING with attempt PREEMPTED.
         preempted = query_task(state, tasks[0].task_id)
@@ -1251,12 +1318,12 @@ def test_preempt_task_requeues_coscheduled_siblings_on_retry():
         assert sibling.state == job_pb2.TASK_STATE_PENDING
         assert sibling.preemption_count == 0
 
-        # Both workers must receive a StopTask RPC so neither leaks a process
-        # onto the TPU when the scheduler reuses the slot.
-        assert tasks[0].task_id in result.tasks_to_kill
-        assert tasks[1].task_id in result.tasks_to_kill
-        assert result.task_kill_workers[tasks[0].task_id] == WorkerId("w0")
-        assert result.task_kill_workers[tasks[1].task_id] == WorkerId("w1")
+        # The preempted trigger task is recorded via a task_preempted log event.
+        preempted_ids = {ev.entity_id for ev in result.log_events if ev.action == "task_preempted"}
+        assert tasks[0].task_id.to_wire() in preempted_ids
+        # The sibling was bounced to PENDING (requeue, not terminal preempt).
+        assert tasks[1].task_id in result.tasks
+        assert result.tasks[tasks[1].task_id].state == job_pb2.TASK_STATE_PENDING
 
 
 def test_preempt_task_cascades_coscheduled_siblings():
@@ -1264,8 +1331,9 @@ def test_preempt_task_cascades_coscheduled_siblings():
 
     preempt_task does not directly cascade coscheduled siblings (unlike
     WORKER_FAILED via heartbeat). Instead, siblings are killed when the job
-    reaches a terminal state through _finalize_terminal_job.
+    reaches a terminal state through the batches._finalize_terminal_job orchestrator.
     """
+    from iris.cluster.constraints import WellKnownAttribute
 
     with make_controller_state() as state:
         # Register 2 workers with TPU attributes for coscheduling
@@ -1294,7 +1362,13 @@ def test_preempt_task_cascades_coscheduled_siblings():
 
         # Preempt the first task — it goes terminal PREEMPTED
         with state._db.transaction() as cur:
-            result0 = state.preempt_task(cur, tasks[0].task_id, reason="preempted by prod")
+            result0 = apply_terminal_decisions(
+                cur,
+                [TerminalDecision(TerminalKind.PREEMPT, tasks[0].task_id, "preempted by prod")],
+                health=state._health,
+                endpoints=state._endpoints,
+                now=Timestamp.now(),
+            )
         assert query_task(state, tasks[0].task_id).state == job_pb2.TASK_STATE_PREEMPTED
 
         # Second task is still running (preempt_task doesn't directly cascade siblings)
@@ -1302,13 +1376,19 @@ def test_preempt_task_cascades_coscheduled_siblings():
 
         # Preempt the second task — now ALL tasks are terminal, job finalizes
         with state._db.transaction() as cur:
-            result1 = state.preempt_task(cur, tasks[1].task_id, reason="preempted by prod")
+            result1 = apply_terminal_decisions(
+                cur,
+                [TerminalDecision(TerminalKind.PREEMPT, tasks[1].task_id, "preempted by prod")],
+                health=state._health,
+                endpoints=state._endpoints,
+                now=Timestamp.now(),
+            )
         assert query_task(state, tasks[1].task_id).state == job_pb2.TASK_STATE_PREEMPTED
 
-        # Both tasks should be in the combined kill set
-        all_kills = result0.tasks_to_kill | result1.tasks_to_kill
-        assert tasks[0].task_id in all_kills
-        assert tasks[1].task_id in all_kills
+        # Both tasks should have task_preempted log events across both results.
+        all_preempted = {ev.entity_id for ev in result0.log_events + result1.log_events if ev.action == "task_preempted"}
+        assert tasks[0].task_id.to_wire() in all_preempted
+        assert tasks[1].task_id.to_wire() in all_preempted
 
 
 # ---------------------------------------------------------------------------
@@ -1381,7 +1461,13 @@ def test_preemption_retry_preserves_reservation_holder():
 
         # Preempt the parent task — it should retry (go PENDING)
         with state._db.transaction() as cur:
-            state.preempt_task(cur, parent_task.task_id, reason="Preempted by higher priority")
+            apply_terminal_decisions(
+                cur,
+                [TerminalDecision(TerminalKind.PREEMPT, parent_task.task_id, "Preempted by higher priority")],
+                health=state._health,
+                endpoints=state._endpoints,
+                now=Timestamp.now(),
+            )
 
         # Parent task should be PENDING (retry)
         updated_parent = query_task(state, parent_task.task_id)
@@ -1422,7 +1508,7 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
     attempt ended up in the impossible mixed state
         state=RUNNING, error="Preempted by ...", finished_at_ms=<set>
     because preempt_task leaves `tasks.current_attempt_id` pointing at the dead
-    attempt, so _apply_task_transitions' stale-attempt guard fails to fire and
+    attempt, so task.apply_one_transition's stale-attempt guard fails to fire and
     overwrites `state` on the attempt row (COALESCE only protects
     finished_at_ms / error / exit_code).
     """
@@ -1444,7 +1530,13 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
         assert dead_attempt_id == 0
 
         with state._db.transaction() as cur:
-            state.preempt_task(cur, task.task_id, reason="Preempted by /bob/prod-job:0")
+            apply_terminal_decisions(
+                cur,
+                [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Preempted by /bob/prod-job:0")],
+                health=state._health,
+                endpoints=state._endpoints,
+                now=Timestamp.now(),
+            )
 
         # Sanity: task went to PENDING (budget remains), attempt row is in
         # PREEMPTED reporting state. ``preempt_task`` is a producer transition
@@ -1463,18 +1555,23 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
         # Late heartbeat for the (now-dead) attempt 0 arrives: worker still thinks
         # it is RUNNING. This simulates the RPC-in-flight race.
         with state._db.transaction() as cur:
-            state.apply_task_updates(
+            apply_task_observations(
                 cur,
-                HeartbeatApplyRequest(
-                    worker_id=worker_id,
-                    updates=[
-                        TaskUpdate(
-                            task_id=task.task_id,
-                            attempt_id=dead_attempt_id,
-                            new_state=job_pb2.TASK_STATE_RUNNING,
-                        )
-                    ],
-                ),
+                [
+                    WorkerTaskUpdates(
+                        worker_id=worker_id,
+                        updates=[
+                            TaskUpdate(
+                                task_id=task.task_id,
+                                attempt_id=dead_attempt_id,
+                                new_state=job_pb2.TASK_STATE_RUNNING,
+                            )
+                        ],
+                    )
+                ],
+                health=state._health,
+                endpoints=state._endpoints,
+                now=Timestamp.now(),
             )
 
         # The attempt row must remain in a consistent state — NOT flipped

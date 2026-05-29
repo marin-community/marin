@@ -9,9 +9,9 @@ Three layers, exercised in order:
    proto per worker from a ``ReconcileInputs`` snapshot. No DB.
 2. **Wire & dispatch** — ``WorkerProvider.reconcile_workers`` fans out via a
    fake stub factory and synthesizes ``ReconcileResult.observations``.
-3. **Apply + e2e** — ``ControllerTransitions.apply_reconcile_result`` against
-   real SQLite DB state, plus a handful of end-to-end convergence ticks driven
-   through ``Controller._reconcile_worker_batch``.
+3. **Apply + e2e** — ``apply_reconcile`` against real SQLite DB state, plus a
+   handful of end-to-end convergence ticks driven through
+   ``Controller._reconcile_worker_batch``.
 """
 
 from __future__ import annotations
@@ -20,8 +20,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
-from iris.cluster.controller import writes
-from iris.cluster.controller.reconcile import (
+from iris.cluster.controller import ops, writes
+from iris.cluster.controller.ops.task import Assignment
+from iris.cluster.controller.ops.worker import apply_reconcile_observations as apply_reconcile
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
     ReconcileResult,
     ReconcileRow,
@@ -29,17 +32,14 @@ from iris.cluster.controller.reconcile import (
     reconcile_workers,
 )
 from iris.cluster.controller.schema import task_attempts_table
-from iris.cluster.controller.transitions import (
-    Assignment,
-    ControllerTransitions,
-    HeartbeatApplyRequest,
-    TaskUpdate,
-)
 from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2, worker_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select
+
+from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
     dispatch_task,
@@ -123,13 +123,13 @@ def _desired_stop(attempt_uid: str, *, reason=worker_pb2.Worker.STOP_REASON_CANC
 # error propagates.
 
 
-def _submit_pending_task(state: ControllerTransitions, job: str = "mint-job") -> JobName:
+def _submit_pending_task(state: ControllerTestState, job: str = "mint-job") -> JobName:
     """Submit a one-task job and return its task_id (task stays PENDING, no attempt)."""
     tasks = submit_job(state, job, make_job_request(name=job))
     return tasks[0].task_id
 
 
-def _insert_attempt(state: ControllerTransitions, task_id: JobName, attempt_id: int) -> str:
+def _insert_attempt(state: ControllerTestState, task_id: JobName, attempt_id: int) -> str:
     with state._db.transaction() as cur:
         return writes.insert_attempt(
             cur,
@@ -517,7 +517,7 @@ def test_reconcile_rpc_failure_returns_error_and_empty_observations():
 # ===========================================================================
 
 
-def _attempt_uid(state: ControllerTransitions, task_id: JobName, attempt_id: int) -> str:
+def _attempt_uid(state: ControllerTestState, task_id: JobName, attempt_id: int) -> str:
     """Read the controller-minted attempt_uid for one attempt row."""
     with state._db.read_snapshot() as tx:
         row = tx.execute(
@@ -530,7 +530,7 @@ def _attempt_uid(state: ControllerTransitions, task_id: JobName, attempt_id: int
     return row.attempt_uid
 
 
-def _setup_running_task(state: ControllerTransitions, worker_id: str = _W1) -> tuple[JobName, int, str]:
+def _setup_running_task(state: ControllerTestState, worker_id: str = _W1) -> tuple[JobName, int, str]:
     """Register worker, submit job, dispatch, drive to RUNNING.
 
     Returns ``(task_id, attempt_id, attempt_uid)``.
@@ -546,7 +546,7 @@ def _setup_running_task(state: ControllerTransitions, worker_id: str = _W1) -> t
     return task_row.task_id, refreshed.current_attempt_id, uid
 
 
-def _setup_assigned_task(state: ControllerTransitions, worker_id: str = _W1) -> tuple[JobName, int, str]:
+def _setup_assigned_task(state: ControllerTestState, worker_id: str = _W1) -> tuple[JobName, int, str]:
     """Register worker, submit job, queue assignment (no heartbeat → stays ASSIGNED).
 
     Returns ``(task_id, attempt_id, attempt_uid)``.
@@ -556,7 +556,7 @@ def _setup_assigned_task(state: ControllerTransitions, worker_id: str = _W1) -> 
     tasks = submit_job(state, "test-job", make_job_request(name="test-job"))
     task_row = tasks[0]
     with state._db.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=task_row.task_id, worker_id=wid)])
+        ops.task.queue_assignments(cur, [Assignment(task_id=task_row.task_id, worker_id=wid)], health=state._health)
     refreshed = query_task(state, task_row.task_id)
     assert refreshed is not None
     assert refreshed.state == job_pb2.TASK_STATE_ASSIGNED
@@ -565,7 +565,7 @@ def _setup_assigned_task(state: ControllerTransitions, worker_id: str = _W1) -> 
 
 
 def _apply_observations(
-    state: ControllerTransitions,
+    state: ControllerTestState,
     worker_id: str,
     observations: list[worker_pb2.Worker.AttemptObservation],
     *,
@@ -590,18 +590,32 @@ def _apply_observations(
         plan = _make_plan(worker_id, desired=desired)
     result = ReconcileResult(worker_id=WorkerId(worker_id), observations=observations, error=None)
     with state._db.transaction() as cur:
-        return state.apply_reconcile_result(cur, plan, result, _NOW)
+        return apply_reconcile(
+            cur,
+            {plan.worker_id: plan},
+            [result],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=_NOW,
+        )
 
 
 def _apply_failure(
-    state: ControllerTransitions,
+    state: ControllerTestState,
     worker_id: str,
     plan: WorkerReconcilePlan,
     error: str,
 ):
     result = ReconcileResult(worker_id=WorkerId(worker_id), observations=[], error=error)
     with state._db.transaction() as cur:
-        return state.apply_reconcile_result(cur, plan, result, _NOW)
+        return apply_reconcile(
+            cur,
+            {plan.worker_id: plan},
+            [result],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=_NOW,
+        )
 
 
 # --- Terminal observations transition tasks + propagate to jobs --------------
@@ -679,7 +693,9 @@ def test_stale_running_observation_does_not_revive_cancelled_task():
         with state._db.transaction() as cur:
             task_row = query_task(state, task_id)
             assert task_row is not None
-            state.cancel_job(cur, task_row.job_id, "user_cancel")
+            ops.job.cancel(
+                cur, job_id=task_row.job_id, reason="user_cancel", endpoints=state._endpoints, health=state._health
+            )
         assert query_task(state, task_id).state == job_pb2.TASK_STATE_KILLED
 
         _apply_observations(state, _W1, [_obs(uid, job_pb2.TASK_STATE_RUNNING)])
@@ -719,17 +735,17 @@ def test_rpc_failure_with_no_assigned_attempts_is_a_noop():
         tasks = submit_job(state, "idle-job", make_job_request(name="idle-job"))
         task_id = tasks[0].task_id
 
-        result = _apply_failure(state, _W1, _make_plan(_W1), "connection refused")
+        _apply_failure(state, _W1, _make_plan(_W1), "connection refused")
 
-        assert result.tasks_to_kill == set()
         assert query_task(state, task_id).state == job_pb2.TASK_STATE_PENDING
 
 
 def test_apply_result_on_unknown_worker_is_a_noop():
     with make_controller_state() as state:
         result = _apply_observations(state, "ghost-worker", [])
-        assert result.tasks_to_kill == set()
-        assert result.task_kill_workers == {}
+        assert not result.tasks
+        assert not result.attempts
+        assert not result.jobs
 
 
 def test_observation_outside_plan_is_dropped():
@@ -775,12 +791,13 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
         task_id_1, task_id_2 = tasks[0].task_id, tasks[1].task_id
 
         with state._db.transaction() as cur:
-            state.queue_assignments(
+            ops.task.queue_assignments(
                 cur,
                 [
                     Assignment(task_id=task_id_1, worker_id=wid1),
                     Assignment(task_id=task_id_2, worker_id=wid2),
                 ],
+                health=state._health,
             )
 
         attempt_id_1 = query_task(state, task_id_1).current_attempt_id
@@ -792,14 +809,19 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
             (wid2, task_id_2, attempt_id_2),
         ]:
             with state._db.transaction() as cur:
-                state.apply_task_updates(
+                apply_task_observations(
                     cur,
-                    HeartbeatApplyRequest(
-                        worker_id=wid,
-                        updates=[
-                            TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING)
-                        ],
-                    ),
+                    [
+                        WorkerTaskUpdates(
+                            worker_id=wid,
+                            updates=[
+                                TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING)
+                            ],
+                        )
+                    ],
+                    health=state._health,
+                    endpoints=state._endpoints,
+                    now=Timestamp.now(),
                 )
 
         uid_1 = _attempt_uid(state, task_id_1, attempt_id_1)
@@ -819,11 +841,18 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
 
 
 def _observations_to_updates(
-    state: ControllerTransitions,
+    state: ControllerTestState,
     observations: list[worker_pb2.Worker.AttemptObservation],
 ) -> list[TaskUpdate]:
+    from iris.cluster.controller.reconcile.loader import load_reconcile_snapshot
+    from iris.cluster.controller.reconcile.worker import observations_to_updates as _observations_to_updates
+    from iris.cluster.types import AttemptUid
+    from rigging.timing import Timestamp
+
+    uids = [AttemptUid(obs.attempt_uid) for obs in observations if obs.attempt_uid]
     with state._db.transaction() as cur:
-        return state._observations_to_updates(cur, observations)
+        snapshot = load_reconcile_snapshot(cur, [], now=Timestamp.now(), observation_uids=uids)
+        return _observations_to_updates(snapshot, observations)
 
 
 def test_observation_routed_by_attempt_uid():
@@ -840,7 +869,25 @@ def test_observation_routed_by_attempt_uid():
         assert updates[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
 
 
-def _setup_running_task_named(state: ControllerTransitions, job: str, worker_id: str) -> tuple[JobName, int, str]:
+def test_unresolvable_observation_uid_is_dropped_and_logged(caplog):
+    """An observation whose uid resolves to no attempt is dropped and logged inline.
+
+    The diagnostic is emitted inline by ``observations_to_updates`` (logger
+    ``iris.cluster.controller.reconcile.worker``), not via a deferred effect.
+    """
+    import logging
+
+    with make_controller_state() as state:
+        _setup_running_task(state)
+        obs = _obs("does-not-exist-uid", job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
+        with caplog.at_level(logging.WARNING, logger="iris.cluster.controller.reconcile.worker"):
+            updates = _observations_to_updates(state, [obs])
+
+    assert updates == []
+    assert any("did not resolve to an attempt row" in r.getMessage() for r in caplog.records), caplog.text
+
+
+def _setup_running_task_named(state: ControllerTestState, job: str, worker_id: str) -> tuple[JobName, int, str]:
     """Register a worker, submit a uniquely-named job, dispatch, drive to RUNNING."""
     wid = WorkerId(worker_id)
     register_worker(state, worker_id, f"{worker_id}:8080", make_worker_metadata())
@@ -929,14 +976,20 @@ def test_e2e_converges_to_succeeded(make_controller):
     ]
     provider = _ScriptedProvider(script=script)
     ctrl = make_controller(provider=provider)
-    state = ctrl._transitions
+    state = ControllerTestState(
+        ctrl._db,
+        health=ctrl._health,
+        endpoints=ctrl._endpoints,
+        worker_attrs=ctrl._worker_attrs,
+        run_template_cache=ctrl._run_template_cache,
+    )
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
     tasks = submit_job(state, "e2e-job", make_job_request(name="e2e-job"))
     task_id = tasks[0].task_id
 
     with state._db.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+        ops.task.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
 
     # Tick 1: ASSIGNED — controller dispatches the inline spec.
     ctrl._reconcile_worker_batch()
@@ -970,14 +1023,20 @@ def test_e2e_missing_observation_fails_attempt_with_worker_lost_spec(make_contro
     ]
     provider = _ScriptedProvider(script=script)
     ctrl = make_controller(provider=provider)
-    state = ctrl._transitions
+    state = ControllerTestState(
+        ctrl._db,
+        health=ctrl._health,
+        endpoints=ctrl._endpoints,
+        worker_attrs=ctrl._worker_attrs,
+        run_template_cache=ctrl._run_template_cache,
+    )
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
     tasks = submit_job(state, "missing-job", make_job_request(name="missing-job"))
     task_id = tasks[0].task_id
 
     with state._db.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+        ops.task.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
 
     ctrl._reconcile_worker_batch()
     ctrl._reconcile_worker_batch()

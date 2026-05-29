@@ -31,7 +31,7 @@ import click
 import duckdb
 from finelog.rpc import logging_pb2
 from finelog.store.duckdb_store import DuckDBLogStore as LogStore
-from iris.cluster.log_store_helpers import task_log_key
+from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import JobName, TaskAttempt
 
 

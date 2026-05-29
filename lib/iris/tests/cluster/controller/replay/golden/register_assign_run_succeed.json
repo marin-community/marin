@@ -36,7 +36,7 @@
       "depth": 1,
       "error": null,
       "exit_code": null,
-      "finished_at_ms": 1704067200004,
+      "finished_at_ms": 1704067200002,
       "has_reservation": 0,
       "is_reservation_holder": 0,
       "job_id": "/test-user/happy-job",
@@ -54,10 +54,6 @@
   ],
   "meta": [
     {
-      "key": "last_submission_ms",
-      "value": 1704067200000
-    },
-    {
       "key": "task_priority_insertion",
       "value": 1
     }
@@ -72,7 +68,7 @@
       "created_at_ms": 1704067200000,
       "error": null,
       "exit_code": 0,
-      "finished_at_ms": 1704067200003,
+      "finished_at_ms": 1704067200002,
       "started_at_ms": 1704067200001,
       "state": 4,
       "task_id": "/test-user/happy-job/0",
@@ -88,7 +84,7 @@
       "error": null,
       "exit_code": 0,
       "failure_count": 0,
-      "finished_at_ms": 1704067200003,
+      "finished_at_ms": 1704067200002,
       "job_id": "/test-user/happy-job",
       "max_retries_failure": 0,
       "max_retries_preemption": 0,

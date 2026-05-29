@@ -46,17 +46,13 @@
       "root_job_id": "/test-user/direct-job",
       "root_submitted_at_ms": 1704067200000,
       "scheduling_deadline_epoch_ms": null,
-      "started_at_ms": 1704067200002,
+      "started_at_ms": 1704067200001,
       "state": 3,
       "submitted_at_ms": 1704067200000,
       "user_id": "test-user"
     }
   ],
   "meta": [
-    {
-      "key": "last_submission_ms",
-      "value": 1704067200000
-    },
     {
       "key": "task_priority_insertion",
       "value": 1

@@ -54,10 +54,6 @@
   ],
   "meta": [
     {
-      "key": "last_submission_ms",
-      "value": 1704067200000
-    },
-    {
       "key": "task_priority_insertion",
       "value": 1
     }
@@ -72,7 +68,7 @@
       "created_at_ms": 1704067200000,
       "error": "transient-tpu-init",
       "exit_code": null,
-      "finished_at_ms": 1704067200005,
+      "finished_at_ms": 1704067200003,
       "started_at_ms": 1704067200001,
       "state": 5,
       "task_id": "/test-user/cosched-fail/0",
@@ -85,7 +81,7 @@
       "error": "Coscheduled sibling /test-user/cosched-fail/0 bounced for atomic re-scheduling",
       "exit_code": null,
       "finished_at_ms": null,
-      "started_at_ms": 1704067200003,
+      "started_at_ms": 1704067200002,
       "state": 10,
       "task_id": "/test-user/cosched-fail/1",
       "worker_id": "w-cosched-fail-b"

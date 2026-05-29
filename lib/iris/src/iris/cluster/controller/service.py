@@ -25,7 +25,7 @@ from sqlalchemy import bindparam, func, select, text, tuple_
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints, validate_tpu_request
-from iris.cluster.controller import reads, writes
+from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.auth import (
     DEFAULT_JWT_TTL_SECONDS,
     ControllerAuth,
@@ -41,10 +41,11 @@ from iris.cluster.controller.budget import (
     compute_user_spend,
 )
 from iris.cluster.controller.codec import (
-    constraints_from_json,
-    proto_from_json,
-    reservation_entries_from_json,
+    decode_attribute_value,
+    reconstruct_launch_job_request,
+    resource_spec_from_job_row,
     resource_spec_from_scalars,
+    worker_metadata_to_proto,
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import (
@@ -66,7 +67,6 @@ from iris.cluster.controller.schema import (
     workers_table,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, attempt_is_worker_failure, task_row_can_be_scheduled
-from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
@@ -94,7 +94,7 @@ from iris.rpc.auth import (
     get_verified_user,
     require_identity,
 )
-from iris.rpc.proto_utils import job_state_friendly, priority_band_name, task_state_friendly
+from iris.rpc.proto_display import job_state_friendly, priority_band_name, task_state_friendly
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -402,103 +402,6 @@ def _read_worker(db: ControllerDB, worker_id: WorkerId):
         ).first()
 
 
-def _resource_spec_from_job_row(job: Any) -> job_pb2.ResourceSpecProto:
-    """Reconstruct a ResourceSpecProto from native job columns."""
-    return resource_spec_from_scalars(
-        job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
-    )
-
-
-def _reconstruct_launch_job_request(job) -> controller_pb2.Controller.LaunchJobRequest:
-    """Reconstruct a LaunchJobRequest proto from native job columns."""
-    req = controller_pb2.Controller.LaunchJobRequest(
-        name=job.name,
-        bundle_id=job.bundle_id,
-        max_task_failures=job.max_task_failures,
-        max_retries_failure=job.max_retries_failure,
-        max_retries_preemption=job.max_retries_preemption,
-        replicas=job.num_tasks,
-        preemption_policy=job.preemption_policy,
-        existing_job_policy=job.existing_job_policy,
-        priority_band=job.priority_band,
-        task_image=job.task_image,
-        fail_if_exists=job.fail_if_exists,
-    )
-    req.entrypoint.CopyFrom(proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint))
-    req.environment.CopyFrom(proto_from_json(job.environment_json, job_pb2.EnvironmentConfig))
-    req.resources.CopyFrom(
-        resource_spec_from_scalars(job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json)
-    )
-
-    for c in constraints_from_json(job.constraints_json):
-        req.constraints.append(c.to_proto())
-    for port in job.ports_json:
-        req.ports.append(port)
-    for arg in job.submit_argv_json:
-        req.submit_argv.append(arg)
-
-    if job.has_coscheduling:
-        req.coscheduling.CopyFrom(job_pb2.CoschedulingConfig(group_by=job.coscheduling_group_by))
-
-    if job.scheduling_timeout_ms is not None and job.scheduling_timeout_ms > 0:
-        req.scheduling_timeout.milliseconds = job.scheduling_timeout_ms
-
-    if job.timeout_ms is not None and job.timeout_ms > 0:
-        req.timeout.milliseconds = job.timeout_ms
-
-    if job.reservation_json:
-        for entry in reservation_entries_from_json(job.reservation_json):
-            req.reservation.entries.append(entry)
-
-    return req
-
-
-def _worker_metadata_to_proto(worker, attributes: dict) -> job_pb2.WorkerMetadata:
-    """Reconstruct a WorkerMetadata proto from scalar columns and decoded attributes dict."""
-    md = job_pb2.WorkerMetadata(
-        hostname=worker.md_hostname,
-        ip_address=worker.md_ip_address,
-        cpu_count=worker.md_cpu_count,
-        memory_bytes=worker.md_memory_bytes,
-        disk_bytes=worker.md_disk_bytes,
-        tpu_name=worker.md_tpu_name,
-        tpu_worker_hostnames=worker.md_tpu_worker_hostnames,
-        tpu_worker_id=worker.md_tpu_worker_id,
-        tpu_chips_per_host_bounds=worker.md_tpu_chips_per_host_bounds,
-        gpu_count=worker.md_gpu_count,
-        gpu_name=worker.md_gpu_name,
-        gpu_memory_mb=worker.md_gpu_memory_mb,
-        gce_instance_name=worker.md_gce_instance_name,
-        gce_zone=worker.md_gce_zone,
-        git_hash=worker.md_git_hash,
-    )
-    if worker.md_device_json and worker.md_device_json != "{}":
-        md.device.CopyFrom(proto_from_json(worker.md_device_json, job_pb2.DeviceConfig))
-    for key, value in attributes.items():
-        av = job_pb2.AttributeValue()
-        if isinstance(value, str):
-            av.string_value = value
-        elif isinstance(value, int):
-            av.int_value = value
-        elif isinstance(value, float):
-            av.float_value = value
-        md.attributes[key].CopyFrom(av)
-    return md
-
-
-def _decode_attribute_value(row: Any) -> tuple[str, str | int | float]:
-    """Decode a worker_attributes row into a (key, value) pair."""
-    vtype = str(row.value_type)
-    key = str(row.key)
-    if vtype == "str":
-        return key, str(row.str_value)
-    elif vtype == "int":
-        return key, int(row.int_value)
-    elif vtype == "float":
-        return key, float(row.float_value)
-    raise ValueError(f"Unknown attribute value_type: {vtype!r}")
-
-
 @dataclass(frozen=True)
 class _WorkerDetail:
     worker: Any  # SA Row from reads.get_worker_detail
@@ -520,7 +423,7 @@ def _read_worker_detail(db: ControllerDB, worker_id: WorkerId) -> _WorkerDetail 
                 worker_attributes_table.c.float_value,
             ).where(worker_attributes_table.c.worker_id == worker_id)
         ).all()
-        attrs = dict(_decode_attribute_value(row) for row in attr_rows)
+        attrs = dict(decode_attribute_value(row) for row in attr_rows)
         running_rows = tx.execute(
             select(tasks_table.c.task_id)
             .select_from(
@@ -752,7 +655,7 @@ def _worker_roster(db: ControllerDB) -> list[tuple[Any, dict]]:
         attrs_by_worker: dict[str, dict[str, str | int | float]] = {}
         for row in attr_rows:
             wid = str(row.worker_id)
-            key, value = _decode_attribute_value(row)
+            key, value = decode_attribute_value(row)
             attrs_by_worker.setdefault(wid, {})[key] = value
     return [(w, attrs_by_worker.get(str(w.worker_id), {})) for w in decoded]
 
@@ -929,7 +832,6 @@ class ControllerServiceImpl:
     """ControllerService RPC implementation.
 
     Args:
-        transitions: State machine for DB mutations (submit, cancel, register, etc.)
         controller: Controller runtime for scheduling and worker management
         bundle_store: Bundle store for zip storage.
         log_client: LogClient for reading task logs through LogService.FetchLogs.
@@ -941,7 +843,6 @@ class ControllerServiceImpl:
 
     def __init__(
         self,
-        transitions: ControllerTransitions,
         controller: ControllerProtocol,
         bundle_store: BundleStore,
         log_client: LogClient,
@@ -954,7 +855,6 @@ class ControllerServiceImpl:
         system_endpoints: dict[str, str] | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
     ):
-        self._transitions = transitions
         self._db = db
         self._health = health
         self._endpoints = endpoints
@@ -1022,7 +922,7 @@ class ControllerServiceImpl:
         """
         if reads.has_unfinished_worker_attempts(cur, job_id):
             return True
-        self._transitions.remove_finished_job(cur, job_id)
+        ops.job.remove_finished(cur, job_id)
         return False
 
     def launch_job(
@@ -1137,7 +1037,13 @@ class ControllerServiceImpl:
                     needs_drain = needs_drain or self._replace_finished_job(cur, job_id)
                 elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
                     if not is_job_finished(existing_state):
-                        self._transitions.cancel_job(cur, job_id, "Replaced by new submission")
+                        ops.job.cancel(
+                            cur,
+                            job_id=job_id,
+                            reason="Replaced by new submission",
+                            endpoints=self._endpoints,
+                            health=self._health,
+                        )
                         # Cancel is a producer transition: attempts stay
                         # unfinished until the worker confirms termination.
                         # Defer remove_finished_job to a second tx after the
@@ -1172,7 +1078,7 @@ class ControllerServiceImpl:
                     _JOB_REPLACEMENT_DRAIN_WAIT.to_seconds(),
                 )
             with self._db.transaction() as cur:
-                self._transitions.remove_finished_job(cur, job_id)
+                ops.job.remove_finished(cur, job_id)
 
         # Handle bundle_blob: upload to bundle store, then replace blob
         # with the resulting GCS path (preserving all other fields).
@@ -1264,7 +1170,13 @@ class ControllerServiceImpl:
                     Code.ALREADY_EXISTS,
                     f"Job {job_id} already exists (concurrent submission)",
                 )
-            self._transitions.submit_job(cur, job_id, request, Timestamp.now())
+            ops.job.submit(
+                cur,
+                job_id=job_id,
+                request=request,
+                ts=Timestamp.now(),
+                run_template_cache=self._controller._run_template_cache,
+            )
         self._controller.wake()
 
         with self._db.read_snapshot() as tx:
@@ -1307,7 +1219,7 @@ class ControllerServiceImpl:
                 scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
                 pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
-        resources = _resource_spec_from_job_row(job)
+        resources = resource_spec_from_job_row(job)
 
         proto_job_status = job_pb2.JobStatus(
             job_id=job.job_id.to_wire(),
@@ -1328,7 +1240,7 @@ class ControllerServiceImpl:
         if job.submitted_at_ms:
             proto_job_status.submitted_at.CopyFrom(timestamp_to_proto(job.submitted_at_ms))
 
-        reconstructed_request = _reconstruct_launch_job_request(job)
+        reconstructed_request = reconstruct_launch_job_request(job)
         return controller_pb2.Controller.GetJobStatusResponse(
             job=proto_job_status,
             request=redact_request_env_vars(reconstructed_request),
@@ -1378,7 +1290,13 @@ class ControllerServiceImpl:
         # cancel_job uses a recursive CTE to walk the full subtree in a single
         # transaction, so there is no need to recurse manually.
         with self._db.transaction() as cur:
-            self._transitions.cancel_job(cur, job_id, reason="Terminated by user")
+            ops.job.cancel(
+                cur,
+                job_id=job_id,
+                reason="Terminated by user",
+                endpoints=self._endpoints,
+                health=self._health,
+            )
         # The next polling tick reconciles each affected worker; the
         # cancellation appears in the desired-set diff so the worker stops
         # the attempt within one tick rather than waiting on the next backoff.
@@ -1575,12 +1493,14 @@ class ControllerServiceImpl:
         worker_id = WorkerId(request.worker_id)
 
         with self._db.transaction() as cur:
-            self._transitions.register_or_refresh_worker(
+            ops.worker.register_or_refresh(
                 cur,
                 worker_id=worker_id,
                 address=request.address,
                 metadata=request.metadata,
                 ts=Timestamp.now(),
+                health=self._health,
+                worker_attrs=self._worker_attrs,
                 slice_id=request.slice_id,
                 scale_group=request.scale_group,
             )
@@ -1643,7 +1563,7 @@ class ControllerServiceImpl:
                     last_heartbeat=timestamp_to_proto(Timestamp.from_ms(liveness.last_heartbeat_ms)),
                     running_job_ids=[task_id.to_wire() for task_id in running.get(worker.worker_id, set())],
                     address=worker.address,
-                    metadata=_worker_metadata_to_proto(worker, attrs),
+                    metadata=worker_metadata_to_proto(worker, attrs),
                     status_message=worker_status_message(liveness),
                 )
             )
@@ -1689,7 +1609,7 @@ class ControllerServiceImpl:
         # :meth:`EndpointsProjection.add`: NOT_FOUND if the task row is missing,
         # FAILED_PRECONDITION if the task is terminal or the attempt is stale.
         with self._db.transaction() as cur:
-            outcome = self._transitions.add_endpoint(cur, endpoint, expected_attempt_id=request.attempt_id)
+            outcome = self._endpoints.add(cur, endpoint, expected_attempt_id=request.attempt_id)
         if outcome is AddEndpointOutcome.NOT_FOUND:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
         if outcome is AddEndpointOutcome.STALE_ATTEMPT:
@@ -1712,7 +1632,7 @@ class ControllerServiceImpl:
     ) -> job_pb2.Empty:
         """Unregister a service endpoint. Idempotent."""
         with self._db.transaction() as cur:
-            self._transitions.remove_endpoint(cur, request.endpoint_id)
+            self._endpoints.remove(cur, request.endpoint_id)
         return job_pb2.Empty()
 
     def list_endpoints(
@@ -2035,7 +1955,7 @@ class ControllerServiceImpl:
             last_heartbeat=timestamp_to_proto(Timestamp.from_ms(liveness.last_heartbeat_ms)),
             running_job_ids=[tid.to_wire() for tid in detail.running_tasks],
             address=worker.address,
-            metadata=_worker_metadata_to_proto(worker, detail.attributes),
+            metadata=worker_metadata_to_proto(worker, detail.attributes),
             status_message=worker_status_message(liveness),
         )
 

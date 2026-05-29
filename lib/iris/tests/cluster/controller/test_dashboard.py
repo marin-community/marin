@@ -10,16 +10,17 @@ The dashboard serves a web UI that fetches data via RPC calls.
 from unittest.mock import Mock
 
 import pytest
-from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller import reads
+from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.reads import healthy_active_workers_with_attributes
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
@@ -30,19 +31,9 @@ from iris.cluster.controller.scheduler import (
 )
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.transitions import (
-    Assignment,
-    ControllerTransitions,
-    DirectProviderBatch,
-    HeartbeatApplyRequest,
-    TaskUpdate,
-)
-from iris.cluster.providers.k8s.fake import InMemoryK8sService
-from iris.cluster.providers.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE, K8sTaskProvider
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
-from iris.rpc.auth import StaticTokenVerifier
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
 from sqlalchemy import func, select
@@ -50,6 +41,8 @@ from sqlalchemy import update as sa_update
 from starlette.testclient import TestClient
 
 from tests.cluster.conftest import fake_log_client_from_service
+from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
     check_task_can_be_scheduled,
@@ -67,7 +60,7 @@ from .conftest import (
 
 
 def submit_job(
-    state: ControllerTransitions,
+    state: ControllerTestState,
     job_id: str,
     request: controller_pb2.Controller.LaunchJobRequest,
 ) -> JobName:
@@ -75,12 +68,14 @@ def submit_job(
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
     with state._db.transaction() as cur:
-        state.submit_job(cur, jid, request, Timestamp.now())
+        ops.job.submit(
+            cur, job_id=jid, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
+        )
     return jid
 
 
 def set_job_state(
-    state: ControllerTransitions, job_id: JobName, new_state: int, *, started_at_ms: int | None = None
+    state: ControllerTestState, job_id: JobName, new_state: int, *, started_at_ms: int | None = None
 ) -> None:
     """Directly set job state in DB for dashboard-only read-model tests."""
     values: dict = {"state": new_state}
@@ -93,7 +88,7 @@ def set_job_state(
 
 
 def set_task_retry_counts(
-    state: ControllerTransitions,
+    state: ControllerTestState,
     task_id: JobName,
     *,
     failure_count: int | None = None,
@@ -111,7 +106,7 @@ def set_task_retry_counts(
         tx.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(**values))
 
 
-def set_task_state(state: ControllerTransitions, task_id: JobName, new_state: int) -> None:
+def set_task_state(state: ControllerTestState, task_id: JobName, new_state: int) -> None:
     """Directly set task state in DB for aggregate count tests."""
     with state._db.transaction() as tx:
         tx.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(state=new_state))
@@ -213,7 +208,6 @@ def log_service() -> LogServiceImpl:
 def service(state, scheduler, tmp_path, log_service):
     controller_mock = _make_controller_mock(state, scheduler)
     return ControllerServiceImpl(
-        state,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(log_service),
@@ -234,7 +228,6 @@ def client(service, log_service):
 def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path, log_service):
     controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
     return ControllerServiceImpl(
-        state,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(log_service),
@@ -350,7 +343,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
 
     # Add endpoints only for non-terminal jobs
     with state._db.transaction() as cur:
-        state.add_endpoint(
+        state._endpoints.add(
             cur,
             EndpointRow(
                 endpoint_id="ep1",
@@ -362,7 +355,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
             ),
         )
     with state._db.transaction() as cur:
-        state.add_endpoint(
+        state._endpoints.add(
             cur,
             EndpointRow(
                 endpoint_id="ep2",
@@ -389,7 +382,7 @@ def test_list_endpoints_returns_task_id(client, state, job_request):
 
     task_id = job_id.task(0)
     with state._db.transaction() as cur:
-        state.add_endpoint(
+        state._endpoints.add(
             cur,
             EndpointRow(
                 endpoint_id="ep-task",
@@ -810,22 +803,32 @@ def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_re
     task_id = job_id.task(0)
 
     with state._db.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+        ops.task.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
     with state._db.transaction() as cur:
-        state.apply_task_updates(
+        apply_task_observations(
             cur,
-            HeartbeatApplyRequest(
-                worker_id=wid,
-                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
-            ),
+            [
+                WorkerTaskUpdates(
+                    worker_id=wid,
+                    updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        state.apply_task_updates(
+        apply_task_observations(
             cur,
-            HeartbeatApplyRequest(
-                worker_id=wid,
-                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
-            ),
+            [
+                WorkerTaskUpdates(
+                    worker_id=wid,
+                    updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
         )
 
     resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
@@ -861,42 +864,57 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
 
     # First attempt: BUILDING -> WORKER_FAILED (retriable, retries to PENDING).
     with state._db.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+        ops.task.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
     with state._db.transaction() as cur:
-        state.apply_task_updates(
+        apply_task_observations(
             cur,
-            HeartbeatApplyRequest(
-                worker_id=wid,
-                updates=[
-                    TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_BUILDING),
-                ],
-            ),
+            [
+                WorkerTaskUpdates(
+                    worker_id=wid,
+                    updates=[
+                        TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_BUILDING),
+                    ],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        state.apply_task_updates(
+        apply_task_observations(
             cur,
-            HeartbeatApplyRequest(
-                worker_id=wid,
-                updates=[
-                    TaskUpdate(
-                        task_id=task_id,
-                        attempt_id=0,
-                        new_state=job_pb2.TASK_STATE_WORKER_FAILED,
-                        error="TPU init failure",
-                    ),
-                ],
-            ),
+            [
+                WorkerTaskUpdates(
+                    worker_id=wid,
+                    updates=[
+                        TaskUpdate(
+                            task_id=task_id,
+                            attempt_id=0,
+                            new_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                            error="TPU init failure",
+                        ),
+                    ],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
         )
     # Second attempt: re-dispatch to the same worker, RUNNING.
     with state._db.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+        ops.task.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
     with state._db.transaction() as cur:
-        state.apply_task_updates(
+        apply_task_observations(
             cur,
-            HeartbeatApplyRequest(
-                worker_id=wid,
-                updates=[TaskUpdate(task_id=task_id, attempt_id=1, new_state=job_pb2.TASK_STATE_RUNNING)],
-            ),
+            [
+                WorkerTaskUpdates(
+                    worker_id=wid,
+                    updates=[TaskUpdate(task_id=task_id, attempt_id=1, new_state=job_pb2.TASK_STATE_RUNNING)],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
         )
 
     resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
@@ -921,14 +939,19 @@ def test_get_worker_status_recent_attempts_carry_attempt_uid(client, state, job_
     job_id = submit_job(state, "uid-worker-job", job_request)
     task_id = job_id.task(0)
     with state._db.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+        ops.task.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
     with state._db.transaction() as cur:
-        state.apply_task_updates(
+        apply_task_observations(
             cur,
-            HeartbeatApplyRequest(
-                worker_id=wid,
-                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
-            ),
+            [
+                WorkerTaskUpdates(
+                    worker_id=wid,
+                    updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
         )
 
     # The minted UID lives on the attempt row; read it directly to compare.
@@ -968,25 +991,35 @@ def test_get_task_status_attempts_carry_attempt_uid(client, state, job_request):
 
     # Attempt 0: placed then WORKER_FAILED so it retries to a fresh attempt.
     with state._db.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+        ops.task.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
     with state._db.transaction() as cur:
-        state.apply_task_updates(
+        apply_task_observations(
             cur,
-            HeartbeatApplyRequest(
-                worker_id=wid,
-                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED)],
-            ),
+            [
+                WorkerTaskUpdates(
+                    worker_id=wid,
+                    updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED)],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
         )
     # Attempt 1: re-placed and RUNNING.
     with state._db.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+        ops.task.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
     with state._db.transaction() as cur:
-        state.apply_task_updates(
+        apply_task_observations(
             cur,
-            HeartbeatApplyRequest(
-                worker_id=wid,
-                updates=[TaskUpdate(task_id=task_id, attempt_id=1, new_state=job_pb2.TASK_STATE_RUNNING)],
-            ),
+            [
+                WorkerTaskUpdates(
+                    worker_id=wid,
+                    updates=[TaskUpdate(task_id=task_id, attempt_id=1, new_state=job_pb2.TASK_STATE_RUNNING)],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
         )
 
     with state._db.read_snapshot() as tx:
@@ -1028,10 +1061,16 @@ def test_get_worker_status_includes_running_tasks(client, state, job_request):
     job_id = submit_job(state, "worker-detail-res", job_request)
     task_id = job_id.task(0)
     with state._db.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+        ops.task.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
 
     with state._db.transaction() as cur:
-        state.apply_task_updates(cur, HeartbeatApplyRequest(worker_id=wid, updates=[]))
+        apply_task_observations(
+            cur,
+            [WorkerTaskUpdates(worker_id=wid, updates=[])],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
+        )
 
     resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
     running_job_ids = resp.get("worker", {}).get("runningJobIds", [])
@@ -1091,6 +1130,7 @@ def test_fetch_logs_backward_compat_proxy(client):
 
 def test_fetch_logs_backward_compat_proxy_proto_binary(client):
     """Old clients using default Connect proto encoding hit the compat endpoint."""
+    from finelog.rpc import logging_pb2
 
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     req = logging_pb2.FetchLogsRequest(
@@ -1259,6 +1299,7 @@ def test_auth_config_returns_disabled_by_default(client):
 
 def test_auth_config_returns_enabled_when_verifier_set(service, log_service):
     """Auth config endpoint reports auth enabled with provider name."""
+    from iris.rpc.auth import StaticTokenVerifier
 
     verifier = StaticTokenVerifier({"test-token": "test-user"})
     dashboard = ControllerDashboard(service, log_service=log_service, auth_verifier=verifier, auth_provider="gcp")
@@ -1285,7 +1326,6 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
     controller_mock.has_direct_provider = True
     log_service = LogServiceImpl()
     svc = ControllerServiceImpl(
-        state,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(log_service),
@@ -1310,6 +1350,8 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
 
 def _make_k8s_dashboard_client(state, scheduler, tmp_path):
     """Build a TestClient wired to a real K8sTaskProvider backed by InMemoryK8sService."""
+    from iris.cluster.providers.k8s.fake import InMemoryK8sService
+    from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 
     k8s = InMemoryK8sService(namespace="iris")
     provider = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest")
@@ -1318,7 +1360,6 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path):
     controller_mock.provider = provider
     log_service = LogServiceImpl()
     svc = ControllerServiceImpl(
-        state,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(log_service),
@@ -1333,6 +1374,8 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path):
 
 def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path):
     """GetKubernetesClusterStatus returns node capacity and pod statuses after sync."""
+    from iris.cluster.controller.direct_provider import DirectProviderBatch
+    from iris.cluster.providers.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
 
     client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path)
 

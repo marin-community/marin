@@ -12,6 +12,7 @@ Authentication is optional: when no verifier is configured, all requests
 pass through as the anonymous admin user.
 """
 
+import contextlib
 import hashlib
 import logging
 import time
@@ -79,6 +80,21 @@ def get_verified_user() -> str | None:
     """Return just the user_id for the current RPC, or None."""
     identity = _verified_identity.get()
     return identity.user_id if identity is not None else None
+
+
+@contextlib.contextmanager
+def identity_scope(identity: VerifiedIdentity | None):
+    """Bind ``identity`` as the verified identity for the duration of the block.
+
+    Mirrors the ContextVar bookkeeping AuthInterceptor performs per RPC so code
+    outside the interceptor (e.g. the dashboard's RPC dispatch) can establish
+    the same identity for service handlers reached via get_verified_identity().
+    """
+    reset_token = _verified_identity.set(identity)
+    try:
+        yield
+    finally:
+        _verified_identity.reset(reset_token)
 
 
 # ---------------------------------------------------------------------------

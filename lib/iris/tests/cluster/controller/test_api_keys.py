@@ -24,7 +24,6 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.rpc import config_pb2, job_pb2
 from iris.rpc.auth import VerifiedIdentity, _verified_identity, hash_token
@@ -45,7 +44,6 @@ def _make_service(db, auth=None):
     health = WorkerHealthTracker()
     endpoints = EndpointsProjection(db)
     worker_attrs = WorkerAttrsProjection(db)
-    state = ControllerTransitions(db, health=health, endpoints=endpoints, worker_attrs=worker_attrs)
 
     controller_mock = Mock()
     controller_mock.wake = Mock()
@@ -56,7 +54,6 @@ def _make_service(db, auth=None):
     controller_mock.has_direct_provider = False
 
     return ControllerServiceImpl(
-        state,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
         log_client=fake_log_client_from_service(LogServiceImpl()),

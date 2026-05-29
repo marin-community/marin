@@ -19,10 +19,12 @@ Production incident timeline (Incident B, v5p-256):
 
 import pytest
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller import reads
+from iris.cluster.controller import ops, reads
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.controller import SchedulingOutcome
+from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import WorkerResourceUsage
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     JobRequirements,
@@ -31,14 +33,13 @@ from iris.cluster.controller.scheduler import (
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.schema import task_attempts_table
-from iris.cluster.controller.transitions import (
-    Assignment,
-    HeartbeatApplyRequest,
-    TaskUpdate,
-)
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
+from rigging.timing import Timestamp
 from sqlalchemy import func, select, update
+
+from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
     building_counts as _building_counts,
@@ -165,40 +166,52 @@ def _schedule_and_commit(scheduler, state):
         task = _query_task(state, tid)
         if task:
             with state._db.transaction() as cur:
-                state.queue_assignments(cur, [Assignment(task_id=tid, worker_id=wid)])
+                ops.task.queue_assignments(cur, [Assignment(task_id=tid, worker_id=wid)], health=state._health)
     return result
 
 
 def _transition_to_running(state, task):
     with state._db.transaction() as cur:
-        state.apply_task_updates(
+        apply_task_observations(
             cur,
-            HeartbeatApplyRequest(
-                worker_id=task.current_worker_id,
-                updates=[
-                    TaskUpdate(
-                        task_id=task.task_id, attempt_id=task.current_attempt_id, new_state=job_pb2.TASK_STATE_RUNNING
-                    )
-                ],
-            ),
+            [
+                WorkerTaskUpdates(
+                    worker_id=task.current_worker_id,
+                    updates=[
+                        TaskUpdate(
+                            task_id=task.task_id,
+                            attempt_id=task.current_attempt_id,
+                            new_state=job_pb2.TASK_STATE_RUNNING,
+                        )
+                    ],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
         )
 
 
 def _heartbeat_killed(state, task):
     """Synthesize a terminal heartbeat for ``task``: that is what releases capacity now."""
     with state._db.transaction() as cur:
-        state.apply_task_updates(
+        apply_task_observations(
             cur,
-            HeartbeatApplyRequest(
-                worker_id=task.current_worker_id,
-                updates=[
-                    TaskUpdate(
-                        task_id=task.task_id,
-                        attempt_id=task.current_attempt_id,
-                        new_state=job_pb2.TASK_STATE_KILLED,
-                    )
-                ],
-            ),
+            [
+                WorkerTaskUpdates(
+                    worker_id=task.current_worker_id,
+                    updates=[
+                        TaskUpdate(
+                            task_id=task.task_id,
+                            attempt_id=task.current_attempt_id,
+                            new_state=job_pb2.TASK_STATE_KILLED,
+                        )
+                    ],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
         )
 
 
@@ -206,19 +219,24 @@ def _worker_fail_one_task(state, task):
     """Send WORKER_FAILED for one task. For coscheduled jobs this triggers
     _requeue_coscheduled_siblings which bounces all siblings to PENDING."""
     with state._db.transaction() as cur:
-        result = state.apply_task_updates(
+        result = apply_task_observations(
             cur,
-            HeartbeatApplyRequest(
-                worker_id=task.current_worker_id,
-                updates=[
-                    TaskUpdate(
-                        task_id=task.task_id,
-                        attempt_id=task.current_attempt_id,
-                        new_state=job_pb2.TASK_STATE_WORKER_FAILED,
-                        error="502 Bad Gateway downloading Python (simulated GCP preemption)",
-                    )
-                ],
-            ),
+            [
+                WorkerTaskUpdates(
+                    worker_id=task.current_worker_id,
+                    updates=[
+                        TaskUpdate(
+                            task_id=task.task_id,
+                            attempt_id=task.current_attempt_id,
+                            new_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                            error="502 Bad Gateway downloading Python (simulated GCP preemption)",
+                        )
+                    ],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
         )
     return result
 
@@ -337,7 +355,7 @@ class TestPreemptionReassignment:
         # attempts (siblings) — so slice-3's chips remain reserved.
         first_job_tasks = query_tasks_for_job(state, first_job)
         fail_result = _worker_fail_one_task(state, first_job_tasks[0])
-        assert fail_result.tasks_to_kill, "Coscheduled requeue should produce kill targets"
+        assert fail_result.tasks, "Coscheduled requeue should produce task deltas"
 
         usage_after_fail = _read_usage_by_worker(state)
         # The trigger task's worker was finalized by its terminal heartbeat.
@@ -410,7 +428,13 @@ class TestPreemptionReassignment:
         slice — the conservative-state property described in design §6.1.
         """
         ctrl = make_controller(remote_state_dir="file:///tmp/iris-5470-test")
-        state = ctrl._transitions
+        state = ControllerTestState(
+            ctrl._db,
+            health=ctrl._health,
+            endpoints=ctrl._endpoints,
+            worker_attrs=ctrl._worker_attrs,
+            run_template_cache=ctrl._run_template_cache,
+        )
 
         job_a_id, job_b_id = self._setup_two_gangs_running(ctrl, state)
         self._preempt_and_new_slice(state, job_a_id, job_b_id)
@@ -436,7 +460,7 @@ class TestPreemptionReassignment:
             _transition_to_running(state, t)
         tasks_a = query_tasks_for_job(state, job_a_id)
         trigger_task = tasks_a[0]
-        fail_request = HeartbeatApplyRequest(
+        fail_request = WorkerTaskUpdates(
             worker_id=trigger_task.current_worker_id,
             updates=[
                 TaskUpdate(
@@ -451,7 +475,14 @@ class TestPreemptionReassignment:
         # Drive the production code path: heartbeat-induced cascade requeues
         # gang A's siblings without finalizing their attempts. Then run a
         # scheduling tick before any worker confirms termination.
-        ctrl._process_heartbeat_updates([fail_request])
+        with ctrl._db.transaction() as cur:
+            apply_task_observations(
+                cur,
+                [fail_request],
+                health=ctrl._health,
+                endpoints=ctrl._endpoints,
+                now=Timestamp.now(),
+            )
         ctrl._run_scheduling()
 
         # Gang B must not land on slice-3 — the still-unfinished sibling

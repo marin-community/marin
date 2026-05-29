@@ -1,22 +1,33 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test-support helpers for ControllerTransitions.
+"""Test-support helpers and a controller projection carrier for tests.
 
-Module-level functions that previously lived on ControllerTransitions as
-``*_for_test`` methods. Each function takes ``ctrl: ControllerTransitions``
-as its first argument and mutates state directly via the controller's DB.
+After Stage 7 (transitions-pure.md), production no longer has a
+``ControllerTransitions`` class to hang test helpers off of. Tests still
+want a single handle to pass through helpers that drive ``commands.*`` /
+``reconcile_io.*`` flows, so this module defines :class:`ControllerTestState`: a thin
+read-only bundle of the projections + DB + cache that those helpers need.
+
+``ControllerTestState`` is intentionally test-only — production wires the same
+projections through ``Controller`` constructor arguments.
 """
+
+from dataclasses import dataclass
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import writes
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.direct_provider import RunTemplateCache
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import (
     tasks_table,
     worker_attributes_table,
     workers_table,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
-from iris.cluster.controller.transitions import ControllerTransitions
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, WorkerId
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, select
@@ -24,13 +35,45 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 
-def set_worker_health_for_test(ctrl: ControllerTransitions, worker_id: WorkerId, healthy: bool) -> None:
+@dataclass
+class ControllerTestState:
+    """Projection bundle for tests that drive ``commands.*`` / ``reconcile_io.*``
+    without booting a full ``Controller``.
+
+    Field names match the underscored ones on :class:`Controller`
+    (``_db``, ``_health``, ``_endpoints``, ``_worker_attrs``,
+    ``_run_template_cache``) so the same helpers work against either.
+    """
+
+    _db: ControllerDB
+    _health: WorkerHealthTracker
+    _endpoints: EndpointsProjection
+    _worker_attrs: WorkerAttrsProjection
+    _run_template_cache: RunTemplateCache
+
+    def __init__(
+        self,
+        db: ControllerDB,
+        *,
+        health: WorkerHealthTracker | None = None,
+        endpoints: EndpointsProjection | None = None,
+        worker_attrs: WorkerAttrsProjection | None = None,
+        run_template_cache: RunTemplateCache | None = None,
+    ) -> None:
+        self._db = db
+        self._health = health or WorkerHealthTracker()
+        self._endpoints = endpoints or EndpointsProjection(db)
+        self._worker_attrs = worker_attrs or WorkerAttrsProjection(db)
+        self._run_template_cache = run_template_cache or RunTemplateCache()
+
+
+def set_worker_health_for_test(ctrl: ControllerTestState, worker_id: WorkerId, healthy: bool) -> None:
     """Set worker health in the in-memory tracker."""
     ctrl._health.set_health_for_test(worker_id, healthy)
 
 
 def set_worker_attribute_for_test(
-    ctrl: ControllerTransitions, worker_id: WorkerId, key: str, value: AttributeValue
+    ctrl: ControllerTestState, worker_id: WorkerId, key: str, value: AttributeValue
 ) -> None:
     """Upsert one worker attribute in DB and mirror it into the in-memory projection."""
     str_value = int_value = float_value = None
@@ -71,14 +114,14 @@ def set_worker_attribute_for_test(
 
 
 def set_worker_consecutive_failures_for_test(
-    ctrl: ControllerTransitions, worker_id: WorkerId, consecutive_failures: int
+    ctrl: ControllerTestState, worker_id: WorkerId, consecutive_failures: int
 ) -> None:
     """Set worker consecutive failure count in the in-memory tracker."""
     ctrl._health.set_consecutive_failures_for_test(worker_id, consecutive_failures)
 
 
 def set_task_state_for_test(
-    ctrl: ControllerTransitions,
+    ctrl: ControllerTestState,
     task_id: JobName,
     state: int,
     *,
@@ -94,7 +137,7 @@ def set_task_state_for_test(
         cur.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(**values))
 
 
-def create_attempt_for_test(ctrl: ControllerTransitions, task_id: JobName, worker_id: WorkerId) -> int:
+def create_attempt_for_test(ctrl: ControllerTestState, task_id: JobName, worker_id: WorkerId) -> int:
     """Append a new task_attempt without finalizing the prior attempt."""
     with ctrl._db.read_snapshot() as snap:
         _attempt_row = snap.execute(

@@ -16,9 +16,6 @@ from dataclasses import dataclass, field
 
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.controller.vm_lifecycle import restart_controller as vm_restart_controller
-from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
-from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
 from iris.cluster.providers._worker_base import RemoteExecWorkerBase
 from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
 from iris.cluster.providers.remote_exec import DirectSshRemoteExec
@@ -33,6 +30,9 @@ from iris.cluster.providers.types import (
     default_stop_all,
     generate_slice_suffix,
 )
+from iris.cluster.providers.vm_lifecycle import restart_controller as vm_restart_controller
+from iris.cluster.providers.vm_lifecycle import start_controller as vm_start_controller
+from iris.cluster.providers.vm_lifecycle import stop_controller as vm_stop_controller
 from iris.cluster.worker.env_probe import construct_worker_id
 from iris.rpc import config_pb2
 from iris.time_proto import duration_from_proto
