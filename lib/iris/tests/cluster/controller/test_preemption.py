@@ -3,6 +3,7 @@
 
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
+from iris.cluster.constraints import AttributeValue, Constraint, ConstraintOp
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.budget import compute_effective_band
 from iris.cluster.controller.ops.task import Assignment, apply_terminal_decisions
@@ -67,20 +68,26 @@ def _cpu_requirements(cpu_cores: int = 1) -> JobRequirements:
     )
 
 
-def _tpu_requirements(variant: str, *, count: int = 4, is_coscheduled: bool = False) -> JobRequirements:
+def _tpu_requirements(
+    variant: str,
+    *,
+    count: int = 4,
+    is_coscheduled: bool = False,
+    constraints: list[Constraint] | None = None,
+) -> JobRequirements:
     return JobRequirements(
         req_cpu_millicores=1000,
         req_memory_bytes=1024**3,
         req_gpu_count=0,
         req_tpu_count=count,
         device_variant=variant,
-        constraints=[],
+        constraints=constraints or [],
         is_coscheduled=is_coscheduled,
         coscheduling_group_by="tpu-name" if is_coscheduled else None,
     )
 
 
-def _tpu_capacity(worker_id: WorkerId) -> WorkerCapacity:
+def _tpu_capacity(worker_id: WorkerId, *, attributes: dict[str, AttributeValue] | None = None) -> WorkerCapacity:
     """Worker fully committed to a TPU task (0 available)."""
     return WorkerCapacity(
         worker_id=worker_id,
@@ -88,6 +95,7 @@ def _tpu_capacity(worker_id: WorkerId) -> WorkerCapacity:
         available_memory=0,
         available_gpus=0,
         available_tpus=0,
+        attributes=attributes or {},
     )
 
 
@@ -426,6 +434,94 @@ def test_coscheduled_preemptor_does_not_evict_different_variant_slice():
 
     preemptions = run_preemption_pass(unscheduled, victims, ctx)
     assert preemptions == []
+
+
+def test_coscheduled_preemptor_skips_slice_failing_hard_constraint():
+    """A coscheduled preemptor must not evict a same-variant slice whose workers
+    fail the preemptor's hard constraints (e.g. wrong region).
+
+    Same device variant is necessary but not sufficient: if the freed slice does
+    not satisfy the preemptor's placement constraints, the preemptor can never be
+    scheduled onto it, so the eviction is pure waste. Mirrors the solo path's
+    matches_constraints gate.
+    """
+    workers = [WorkerId(f"w{i}") for i in range(4)]
+    # Victim slice workers are in us-east1; the preemptor demands us-west1.
+    ctx = _make_simple_context([_tpu_capacity(w, attributes={"region": AttributeValue("us-east1")}) for w in workers])
+
+    victim_job = JobName.from_wire("/alice/cosched-batch")
+    victims = [
+        RunningTaskInfo(
+            task_id=victim_job.child(str(i)),
+            worker_id=workers[i],
+            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            resource_value=1000,
+            is_coscheduled=True,
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            gpu_count=0,
+            tpu_count=4,
+            device_variant="v5p-8",
+        )
+        for i in range(4)
+    ]
+
+    preemptor_job = JobName.from_wire("/bob/cosched-prod")
+    req = _tpu_requirements(
+        "v5p-8",
+        is_coscheduled=True,
+        constraints=[Constraint.create(key="region", op=ConstraintOp.EQ, value="us-west1")],
+    )
+    unscheduled = [
+        PreemptionCandidate(preemptor_job.child(str(i)), req, job_pb2.PRIORITY_BAND_PRODUCTION) for i in range(4)
+    ]
+
+    preemptions = run_preemption_pass(unscheduled, victims, ctx)
+    assert preemptions == []
+
+
+def test_coscheduled_preemptor_evicts_slice_satisfying_hard_constraint():
+    """Positive control for the constraint gate: when the slice's workers DO
+    satisfy the preemptor's hard constraint, the eviction proceeds. A soft
+    constraint the workers fail must not block it."""
+    workers = [WorkerId(f"w{i}") for i in range(4)]
+    ctx = _make_simple_context([_tpu_capacity(w, attributes={"region": AttributeValue("us-west1")}) for w in workers])
+
+    victim_job = JobName.from_wire("/alice/cosched-batch")
+    victims = [
+        RunningTaskInfo(
+            task_id=victim_job.child(str(i)),
+            worker_id=workers[i],
+            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            resource_value=1000,
+            is_coscheduled=True,
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            gpu_count=0,
+            tpu_count=4,
+            device_variant="v5p-8",
+        )
+        for i in range(4)
+    ]
+
+    preemptor_job = JobName.from_wire("/bob/cosched-prod")
+    req = _tpu_requirements(
+        "v5p-8",
+        is_coscheduled=True,
+        constraints=[
+            Constraint.create(key="region", op=ConstraintOp.EQ, value="us-west1"),
+            # An unmet *soft* preference must not veto the eviction.
+            Constraint.create(
+                key="zone", op=ConstraintOp.EQ, value="us-west1-b", mode=job_pb2.CONSTRAINT_MODE_PREFERRED
+            ),
+        ],
+    )
+    unscheduled = [
+        PreemptionCandidate(preemptor_job.child(str(i)), req, job_pb2.PRIORITY_BAND_PRODUCTION) for i in range(4)
+    ]
+
+    preemptions = run_preemption_pass(unscheduled, victims, ctx)
+    assert {p[1] for p in preemptions} == {v.task_id for v in victims}
 
 
 def test_coscheduled_preemptor_skips_undersized_slice():

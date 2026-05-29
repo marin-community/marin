@@ -501,6 +501,9 @@ def _preempt_solo(
     victim using only some of a worker's CPUs or TPUs).
     """
     req = candidate.requirements
+    # Gate on hard constraints only: soft constraints are placement preferences,
+    # not requirements, so an unmet one must not veto an otherwise-valid eviction.
+    hard_constraints, _ = split_hard_soft(req.constraints)
     for victim in solo_victims:
         if victim.already_preempted:
             continue
@@ -516,7 +519,7 @@ def _preempt_solo(
         cap = context.capacities.get(victim.worker_id)
         if cap is None:
             continue
-        if not cap.matches_constraints(req.constraints):
+        if not cap.matches_constraints(hard_constraints):
             continue
         # If current capacity already fits, no preemption needed
         if cap.can_fit(req) is None:
@@ -544,6 +547,7 @@ def _preempt_coscheduled(
     wanted_variant: str | None,
     n_required: int,
     sorted_groups: list[tuple[JobName, list[RunningTaskInfo]]],
+    context: SchedulingContext,
 ) -> list[tuple[JobName, JobName]]:
     """Find a victim slice (all running tasks of one coscheduled job) whose
     eviction satisfies a coscheduled preemptor. Returns one (preemptor, victim)
@@ -556,6 +560,12 @@ def _preempt_coscheduled(
     """
     if wanted_variant is None:
         return []
+    # Gate on hard constraints (mirrors _preempt_solo): the device variant alone
+    # does not prove the preemptor can land on the freed slice — region/zone/
+    # attribute constraints must hold on every member's worker too. Without this
+    # we evict a slice the preemptor can never be placed on, wasting the eviction
+    # and risking a preempt/reject thrash loop.
+    hard_constraints, _ = split_hard_soft(candidate.requirements.constraints)
     for _victim_job, members in sorted_groups:
         if any(m.already_preempted for m in members):
             continue
@@ -565,6 +575,11 @@ def _preempt_coscheduled(
         if any(m.band_sort_key <= candidate.band for m in members):
             continue
         if len(members) < n_required:
+            continue
+        if any(
+            (cap := context.capacities.get(m.worker_id)) is None or not cap.matches_constraints(hard_constraints)
+            for m in members
+        ):
             continue
         pairs = [(candidate.job_name, m.task_id) for m in members]
         for m in members:
@@ -647,7 +662,7 @@ def run_preemption_pass(
             continue
 
         n_required = sibling_count.get(parent, 1) if parent is not None else 1
-        pairs = _preempt_coscheduled(candidate, wanted_variant, n_required, sorted_groups)
+        pairs = _preempt_coscheduled(candidate, wanted_variant, n_required, sorted_groups, context)
         if pairs:
             preemptions.extend(pairs)
             if parent is not None:
