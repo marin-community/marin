@@ -21,15 +21,15 @@ from iris.rpc import job_pb2
 from rigging.log_setup import configure_logging
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.inference.local_workload_broker import LocalWorkloadBroker
-from marin.inference.types import OpenAIEndpoint, RunningModel
-from marin.inference.vllm_http_proxy import serve_vllm_http_proxy
-from marin.inference.vllm_server import VllmEnvironment
-from marin.inference.vllm_worker import (
-    VllmWorker,
-    run_vllm_worker,
+from marin.inference.in_memory_inference_broker import InMemoryInferenceBroker
+from marin.inference.inference_broker import InferenceBroker
+from marin.inference.inference_proxy import serve_inference_proxy
+from marin.inference.inference_worker import (
+    InferenceWorker,
+    run_inference_worker,
 )
-from marin.inference.workload_broker import WorkloadBroker
+from marin.inference.types import OpenAIEndpoint, RunningModel
+from marin.inference.vllm_server import VllmEnvironment
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
@@ -77,8 +77,8 @@ class VllmProxyConfig:
 
 
 @dataclass(frozen=True)
-class VllmWorkerConfig:
-    # Number of vLLM worker jobs in Iris mode. Local mode requires one worker.
+class InferenceWorkerConfig:
+    # Number of inference worker jobs in Iris mode. Local mode requires one worker.
     count: int = 1
     # Individual HTTP requests each worker may keep active against its vLLM server.
     max_in_flight_per_worker: int = DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER
@@ -94,7 +94,7 @@ class BrokeredVllmSystemConfig:
     request_lease_timeout_seconds: float = DEFAULT_BROKERED_REQUEST_LEASE_TIMEOUT.total_seconds()
     server: VllmServerConfig = field(default_factory=VllmServerConfig)
     proxy: VllmProxyConfig = field(default_factory=VllmProxyConfig)
-    workers: VllmWorkerConfig = field(default_factory=VllmWorkerConfig)
+    workers: InferenceWorkerConfig = field(default_factory=InferenceWorkerConfig)
 
     def __post_init__(self) -> None:
         _validate_timeout_ordering(self)
@@ -125,19 +125,19 @@ def start_local_brokered_vllm(config: BrokeredVllmSystemConfig) -> Iterator[Runn
     if config.workers.count != 1:
         raise ValueError("Local brokered vLLM mode supports exactly one worker; use Iris mode for multiple workers.")
 
-    broker = LocalWorkloadBroker(request_lease_timeout_seconds=config.request_lease_timeout_seconds)
+    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=config.request_lease_timeout_seconds)
     with start_local_vllm_server(config) as upstream:
-        worker = VllmWorker(
+        worker = InferenceWorker(
             broker=broker,
             upstream=upstream,
             request_timeout_seconds=config.workers.request_timeout_seconds,
         )
         with (
             _start_proxy(config, broker) as proxy_model,
-            run_vllm_worker(worker, max_in_flight=config.workers.max_in_flight_per_worker),
+            run_inference_worker(worker, max_in_flight=config.workers.max_in_flight_per_worker),
         ):
             _wait_for_brokered_vllm_ready(proxy_model, timeout_seconds=config.proxy.readiness_timeout_seconds)
-            logger.info("Started local VllmWorker")
+            logger.info("Started local InferenceWorker")
             yield proxy_model
 
 
@@ -156,7 +156,7 @@ def start_iris_brokered_vllm(
     broker_name = f"vllm-broker-{run_id}"
     worker_prefix = f"vllm-worker-{run_id}"
     broker_group = client.create_actor_group(
-        LocalWorkloadBroker,
+        InMemoryInferenceBroker,
         name=broker_name,
         count=1,
         request_lease_timeout_seconds=config.request_lease_timeout_seconds,
@@ -165,9 +165,9 @@ def start_iris_brokered_vllm(
     )
     worker_jobs: list[JobHandle] = []
     try:
-        logger.info("Waiting for LocalWorkloadBroker actor name=%s", broker_name)
+        logger.info("Waiting for broker actor name=%s", broker_name)
         broker_handle = cast(
-            WorkloadBroker,
+            InferenceBroker,
             broker_group.wait_ready(count=1, timeout=runtime.broker_ready_timeout_seconds)[0],
         )
         worker_environment = create_environment(
@@ -178,7 +178,7 @@ def start_iris_brokered_vllm(
             job = client.submit(
                 JobRequest(
                     name=f"{worker_prefix}-{worker_index}",
-                    entrypoint=Entrypoint.from_callable(_run_iris_vllm_worker, args=(config, broker_handle)),
+                    entrypoint=Entrypoint.from_callable(_run_iris_inference_worker, args=(config, broker_handle)),
                     resources=runtime.worker_resources,
                     environment=worker_environment,
                     priority=runtime.priority_band,
@@ -225,10 +225,10 @@ def start_local_vllm_server(config: BrokeredVllmSystemConfig) -> Iterator[Runnin
         )
 
 
-def _run_iris_vllm_worker(config: BrokeredVllmSystemConfig, broker_handle: WorkloadBroker) -> None:
+def _run_iris_inference_worker(config: BrokeredVllmSystemConfig, broker_handle: InferenceBroker) -> None:
     configure_logging()
     with remove_tpu_lockfile_on_exit(), start_local_vllm_server(config) as upstream:
-        worker = VllmWorker(
+        worker = InferenceWorker(
             broker=broker_handle,
             upstream=upstream,
             request_timeout_seconds=config.workers.request_timeout_seconds,
@@ -238,9 +238,9 @@ def _run_iris_vllm_worker(config: BrokeredVllmSystemConfig, broker_handle: Workl
 
 
 @contextlib.contextmanager
-def _start_proxy(config: BrokeredVllmSystemConfig, broker: WorkloadBroker) -> Iterator[RunningModel]:
+def _start_proxy(config: BrokeredVllmSystemConfig, broker: InferenceBroker) -> Iterator[RunningModel]:
     proxy_config = config.proxy
-    with serve_vllm_http_proxy(
+    with serve_inference_proxy(
         broker=broker,
         model=config.model,
         host=proxy_config.host,
@@ -274,6 +274,7 @@ def _validate_timeout_ordering(config: BrokeredVllmSystemConfig) -> None:
         )
     if config.proxy.readiness_timeout_seconds <= 0:
         raise ValueError("proxy.readiness_timeout_seconds must be positive.")
+
 
 def _wait_for_brokered_vllm_ready(running_model: RunningModel, *, timeout_seconds: float) -> None:
     models_url = running_model.endpoint.url("models")

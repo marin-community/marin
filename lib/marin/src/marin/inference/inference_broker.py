@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Shared broker types for request/response workload routing.
+Shared broker types for inference request/response routing.
 
 Lifecycle contract:
 The client task owns broker and worker lifetimes. In Iris, broker/workers should
@@ -41,7 +41,7 @@ def format_request_ids(ids: list[str]) -> str:
 
 
 @dataclass(frozen=True)
-class WorkloadRequest:
+class InferenceRequest:
     request_id: str
     method: str
     path: str
@@ -49,29 +49,29 @@ class WorkloadRequest:
 
 
 @dataclass(frozen=True)
-class WorkloadResponse:
+class InferenceResponse:
     request_id: str
     status_code: int
     payload: bytes
 
 
 @dataclass(frozen=True)
-class LeasedWorkloadRequest:
+class LeasedInferenceRequest:
     lease_id: str
-    request: WorkloadRequest
+    request: InferenceRequest
 
 
 @dataclass(frozen=True)
-class LeasedWorkloadResponse:
+class LeasedInferenceResponse:
     lease_id: str
-    response: WorkloadResponse
+    response: InferenceResponse
 
 
-class WorkloadBroker(Protocol):
-    def submit_request(self, request: WorkloadRequest) -> None: ...
+class InferenceBroker(Protocol):
+    def submit_request(self, request: InferenceRequest) -> None: ...
 
-    def fetch_requests(self, *, max_items: int) -> list[LeasedWorkloadRequest]: ...
+    def fetch_requests(self, *, max_items: int) -> list[LeasedInferenceRequest]: ...
 
-    def submit_responses(self, responses: Iterable[LeasedWorkloadResponse]) -> None: ...
+    def submit_responses(self, responses: Iterable[LeasedInferenceResponse]) -> None: ...
 
-    def fetch_responses(self, *, max_items: int) -> list[WorkloadResponse]: ...
+    def fetch_responses(self, *, max_items: int) -> list[InferenceResponse]: ...

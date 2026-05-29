@@ -36,8 +36,8 @@ from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, priority_band_value
 from marin.inference.brokered_vllm import (
     DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER,
     BrokeredVllmSystemConfig,
+    InferenceWorkerConfig,
     IrisBrokeredVllmRuntimeConfig,
-    VllmWorkerConfig,
     start_iris_brokered_vllm,
     start_local_brokered_vllm,
 )
@@ -207,7 +207,7 @@ def _build_inference_config(
     config = BrokeredVllmSystemConfig(
         model="Qwen/Qwen3-0.6B-Base",
         tokenizer="Qwen/Qwen3-0.6B",
-        workers=VllmWorkerConfig(count=workers, max_in_flight_per_worker=num_concurrent),
+        workers=InferenceWorkerConfig(count=workers, max_in_flight_per_worker=num_concurrent),
     )
     if timeout_seconds is None:
         return config

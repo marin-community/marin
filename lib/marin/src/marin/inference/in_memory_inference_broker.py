@@ -12,11 +12,11 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
-from marin.inference.workload_broker import (
-    LeasedWorkloadRequest,
-    LeasedWorkloadResponse,
-    WorkloadRequest,
-    WorkloadResponse,
+from marin.inference.inference_broker import (
+    InferenceRequest,
+    InferenceResponse,
+    LeasedInferenceRequest,
+    LeasedInferenceResponse,
     format_request_ids,
 )
 
@@ -71,8 +71,8 @@ class MemoryQueue(Generic[T]):
             self._queue.insert(0, item)
 
 
-class LocalWorkloadBroker:
-    """Thread-safe in-process WorkloadBroker implementation."""
+class InMemoryInferenceBroker:
+    """Thread-safe in-memory InferenceBroker implementation."""
 
     def __init__(
         self,
@@ -84,29 +84,29 @@ class LocalWorkloadBroker:
         # Request leases make fetched-but-unanswered work visible again if the
         # local worker dies while holding it.
         self._request_lease_timeout_seconds = request_lease_timeout_seconds
-        self._requests: MemoryQueue[WorkloadRequest] = MemoryQueue(clock=clock)
-        self._responses: deque[WorkloadResponse] = deque()
-        self._request_leases: dict[str, Lease[WorkloadRequest]] = {}
+        self._requests: MemoryQueue[InferenceRequest] = MemoryQueue(clock=clock)
+        self._responses: deque[InferenceResponse] = deque()
+        self._request_leases: dict[str, Lease[InferenceRequest]] = {}
         # Insertion-ordered set of request ids for diagnostics.
         self._pending: dict[str, None] = {}
 
-    def submit_request(self, request: WorkloadRequest) -> None:
+    def submit_request(self, request: InferenceRequest) -> None:
         with self._lock:
             self._requests.push(request)
             self._pending[request.request_id] = None
 
-    def fetch_requests(self, *, max_items: int) -> list[LeasedWorkloadRequest]:
-        fetched: list[LeasedWorkloadRequest] = []
+    def fetch_requests(self, *, max_items: int) -> list[LeasedInferenceRequest]:
+        fetched: list[LeasedInferenceRequest] = []
         with self._lock:
             while len(fetched) < max_items:
                 lease = self._requests.pop(self._request_lease_timeout_seconds)
                 if lease is None:
                     break
-                fetched.append(LeasedWorkloadRequest(lease_id=lease.lease_id, request=lease.item))
+                fetched.append(LeasedInferenceRequest(lease_id=lease.lease_id, request=lease.item))
                 self._request_leases[lease.item.request_id] = lease
         return fetched
 
-    def submit_responses(self, responses: Iterable[LeasedWorkloadResponse]) -> None:
+    def submit_responses(self, responses: Iterable[LeasedInferenceResponse]) -> None:
         dropped_ids: list[str] = []
         with self._lock:
             for leased_response in responses:
@@ -122,13 +122,13 @@ class LocalWorkloadBroker:
                 self._pending.pop(response.request_id, None)
         if dropped_ids:
             logger.warning(
-                "LocalWorkloadBroker dropped responses for inactive request leases count=%d request_ids=%s",
+                "InMemoryInferenceBroker dropped responses for inactive request leases count=%d request_ids=%s",
                 len(dropped_ids),
                 format_request_ids(dropped_ids),
             )
 
-    def fetch_responses(self, *, max_items: int) -> list[WorkloadResponse]:
-        fetched: list[WorkloadResponse] = []
+    def fetch_responses(self, *, max_items: int) -> list[InferenceResponse]:
+        fetched: list[InferenceResponse] = []
         with self._lock:
             while len(fetched) < max_items and self._responses:
                 fetched.append(self._responses.popleft())

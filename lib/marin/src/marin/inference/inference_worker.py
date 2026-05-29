@@ -14,30 +14,30 @@ from typing import Any
 import httpx
 from rigging.timing import ExponentialBackoff
 
-from marin.inference.types import RunningModel
-from marin.inference.workload_broker import (
-    LeasedWorkloadRequest,
-    LeasedWorkloadResponse,
-    WorkloadBroker,
-    WorkloadRequest,
-    WorkloadResponse,
+from marin.inference.inference_broker import (
+    InferenceBroker,
+    InferenceRequest,
+    InferenceResponse,
+    LeasedInferenceRequest,
+    LeasedInferenceResponse,
     format_request_ids,
     pack_json_payload,
     unpack_json_payload,
 )
+from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
 _UPSTREAM_TEXT_PREVIEW_CHARS = 1000
 
 
-class VllmWorker:
-    """Poll brokered requests and forward them to a local OpenAI-compatible vLLM endpoint."""
+class InferenceWorker:
+    """Poll brokered requests and forward them to an OpenAI-compatible endpoint."""
 
     def __init__(
         self,
         *,
-        broker: WorkloadBroker,
+        broker: InferenceBroker,
         upstream: RunningModel,
         request_timeout_seconds: float,
     ) -> None:
@@ -57,9 +57,9 @@ class VllmWorker:
         if stop_event is None:
             stop_event = threading.Event()
         backoff = ExponentialBackoff() if backoff is None else backoff.copy()
-        in_flight: set[asyncio.Task[LeasedWorkloadResponse]] = set()
+        in_flight: set[asyncio.Task[LeasedInferenceResponse]] = set()
         logger.info(
-            "VllmWorker starting upstream=%s model=%s max_in_flight=%d timeout_seconds=%.1f",
+            "InferenceWorker starting upstream=%s model=%s max_in_flight=%d timeout_seconds=%.1f",
             self._upstream.endpoint.base_url,
             self._upstream.endpoint.model,
             max_in_flight,
@@ -76,7 +76,7 @@ class VllmWorker:
                             in_flight.add(asyncio.create_task(self._forward_one(client, leased_request)))
                         if leased_requests:
                             logger.info(
-                                "VllmWorker fetched requests count=%d in_flight=%d/%d request_ids=%s",
+                                "InferenceWorker fetched requests count=%d in_flight=%d/%d request_ids=%s",
                                 len(leased_requests),
                                 len(in_flight),
                                 max_in_flight,
@@ -100,7 +100,7 @@ class VllmWorker:
                         responses = [task.result() for task in done]
                         await asyncio.to_thread(self._broker.submit_responses, responses)
                         logger.info(
-                            "VllmWorker submitted responses count=%d in_flight=%d/%d statuses=%s request_ids=%s",
+                            "InferenceWorker submitted responses count=%d in_flight=%d/%d statuses=%s request_ids=%s",
                             len(responses),
                             len(in_flight),
                             max_in_flight,
@@ -109,27 +109,27 @@ class VllmWorker:
                         )
                         backoff.reset()
         finally:
-            logger.info("VllmWorker stopping in_flight=%d", len(in_flight))
+            logger.info("InferenceWorker stopping in_flight=%d", len(in_flight))
             if in_flight:
                 for task in in_flight:
                     task.cancel()
                 await asyncio.gather(*in_flight, return_exceptions=True)
 
     async def _forward_one(
-        self, client: httpx.AsyncClient, leased_request: LeasedWorkloadRequest
-    ) -> LeasedWorkloadResponse:
+        self, client: httpx.AsyncClient, leased_request: LeasedInferenceRequest
+    ) -> LeasedInferenceResponse:
         request = leased_request.request
         # The proxy receives /v1/... paths, while RunningModel.endpoint.url() already points at /v1.
         upstream_path = request.path.removeprefix("/v1/")
         url = self._upstream.endpoint.url(upstream_path)
         try:
             response = await self._send(client, request, url)
-            workload_response = _response_from_upstream(request, response)
+            inference_response = _response_from_upstream(request, response)
         except Exception as exc:
-            workload_response = _response_from_exception(request, exc, timeout_seconds=self._request_timeout_seconds)
-        return LeasedWorkloadResponse(lease_id=leased_request.lease_id, response=workload_response)
+            inference_response = _response_from_exception(request, exc, timeout_seconds=self._request_timeout_seconds)
+        return LeasedInferenceResponse(lease_id=leased_request.lease_id, response=inference_response)
 
-    async def _send(self, client: httpx.AsyncClient, request: WorkloadRequest, url: str) -> httpx.Response:
+    async def _send(self, client: httpx.AsyncClient, request: InferenceRequest, url: str) -> httpx.Response:
         method = request.method.upper()
         if method == "GET":
             return await client.get(url)
@@ -143,8 +143,8 @@ class VllmWorker:
 
 
 @contextmanager
-def run_vllm_worker(
-    worker: VllmWorker,
+def run_inference_worker(
+    worker: InferenceWorker,
     *,
     max_in_flight: int,
     backoff: ExponentialBackoff | None = None,
@@ -154,31 +154,33 @@ def run_vllm_worker(
         target=lambda: asyncio.run(
             worker.run_forever(stop_event=stop_event, max_in_flight=max_in_flight, backoff=backoff)
         ),
-        name="vllm-worker",
+        name="inference-worker",
     )
-    logger.info("Starting VllmWorker thread max_in_flight=%d", max_in_flight)
+    logger.info("Starting InferenceWorker thread max_in_flight=%d", max_in_flight)
     thread.start()
     try:
         yield
     finally:
-        logger.info("Stopping VllmWorker thread")
+        logger.info("Stopping InferenceWorker thread")
         stop_event.set()
         thread.join()
 
 
-def _response_from_upstream(request: WorkloadRequest, response: httpx.Response) -> WorkloadResponse:
+def _response_from_upstream(request: InferenceRequest, response: httpx.Response) -> InferenceResponse:
     try:
         payload = response.json()
     except ValueError:
-        return _workload_error_response(
+        return _inference_error_response(
             request,
             response.status_code,
-            "vLLM returned a non-JSON response",
+            "upstream endpoint returned a non-JSON response",
             body=response.text[:_UPSTREAM_TEXT_PREVIEW_CHARS],
         )
     if not isinstance(payload, dict):
-        return _workload_error_response(request, response.status_code, "vLLM returned a non-object JSON response")
-    return WorkloadResponse(
+        return _inference_error_response(
+            request, response.status_code, "upstream endpoint returned a non-object JSON response"
+        )
+    return InferenceResponse(
         request_id=request.request_id,
         status_code=response.status_code,
         payload=pack_json_payload(payload),
@@ -186,40 +188,42 @@ def _response_from_upstream(request: WorkloadRequest, response: httpx.Response) 
 
 
 def _response_from_exception(
-    request: WorkloadRequest,
+    request: InferenceRequest,
     exc: Exception,
     *,
     timeout_seconds: float,
-) -> WorkloadResponse:
+) -> InferenceResponse:
     if isinstance(exc, httpx.TimeoutException):
-        return _workload_error_response(
+        return _inference_error_response(
             request,
             504,
-            "timed out forwarding request to vLLM",
+            "timed out forwarding request to upstream endpoint",
             detail=f"timeout_seconds={timeout_seconds:.1f}",
         )
     if isinstance(exc, httpx.HTTPError):
-        return _workload_error_response(request, 502, "failed forwarding request to vLLM", detail=repr(exc))
-    return _workload_error_response(
+        return _inference_error_response(
+            request, 502, "failed forwarding request to upstream endpoint", detail=repr(exc)
+        )
+    return _inference_error_response(
         request,
         502,
-        "unexpected worker failure while forwarding request to vLLM",
+        "unexpected worker failure while forwarding request to upstream endpoint",
         detail=repr(exc),
         exc_info=True,
     )
 
 
-def _workload_error_response(
-    request: WorkloadRequest,
+def _inference_error_response(
+    request: InferenceRequest,
     status_code: int,
     message: str,
     *,
     body: str | None = None,
     detail: str | None = None,
     exc_info: bool = False,
-) -> WorkloadResponse:
+) -> InferenceResponse:
     logger.warning(
-        "VllmWorker returning error response request_id=%s method=%s path=%s status_code=%d error=%s detail=%s",
+        "InferenceWorker returning error response request_id=%s method=%s path=%s status_code=%d error=%s detail=%s",
         request.request_id,
         request.method,
         request.path,
@@ -232,4 +236,4 @@ def _workload_error_response(
     if body is not None:
         error["body"] = body
     payload: dict[str, Any] = {"error": error}
-    return WorkloadResponse(request_id=request.request_id, status_code=status_code, payload=pack_json_payload(payload))
+    return InferenceResponse(request_id=request.request_id, status_code=status_code, payload=pack_json_payload(payload))

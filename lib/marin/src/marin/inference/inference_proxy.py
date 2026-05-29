@@ -20,15 +20,15 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from marin.inference.types import OpenAIEndpoint, RunningModel
-from marin.inference.workload_broker import (
-    WorkloadBroker,
-    WorkloadRequest,
-    WorkloadResponse,
+from marin.inference.inference_broker import (
+    InferenceBroker,
+    InferenceRequest,
+    InferenceResponse,
     format_request_ids,
     pack_json_payload,
     unpack_json_payload,
 )
+from marin.inference.types import OpenAIEndpoint, RunningModel
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +41,13 @@ class ProxyStats:
     rejected_requests: int = 0
 
 
-class VllmHttpProxy:
-    """OpenAI-compatible local HTTP proxy backed by a WorkloadBroker."""
+class InferenceProxy:
+    """OpenAI-compatible local HTTP proxy backed by an InferenceBroker."""
 
     def __init__(
         self,
         *,
-        broker: WorkloadBroker,
+        broker: InferenceBroker,
         model: str,
         request_timeout_seconds: float,
         readiness_timeout_seconds: float,
@@ -68,7 +68,7 @@ class VllmHttpProxy:
         if backoff is None:
             backoff = ExponentialBackoff(initial=0.01, maximum=0.25, factor=2.0)
         self._backoff = backoff
-        self._pending: dict[str, asyncio.Future[WorkloadResponse]] = {}
+        self._pending: dict[str, asyncio.Future[InferenceResponse]] = {}
         self._lock = asyncio.Lock()
         self.stats = ProxyStats()
         self.app = Starlette(
@@ -83,7 +83,7 @@ class VllmHttpProxy:
     @asynccontextmanager
     async def _lifespan(self, _app: Starlette) -> AsyncIterator[None]:
         logger.info(
-            "VllmHttpProxy starting model=%s timeout_seconds=%.1f max_pending_requests=%d",
+            "InferenceProxy starting model=%s timeout_seconds=%.1f max_pending_requests=%d",
             self._model,
             self._request_timeout_seconds,
             self._max_pending_requests,
@@ -92,11 +92,11 @@ class VllmHttpProxy:
         try:
             yield
         finally:
-            logger.info("VllmHttpProxy stopping response poller")
+            logger.info("InferenceProxy stopping response poller")
             poll_task.cancel()
             with suppress(asyncio.CancelledError):
                 await poll_task
-            logger.info("VllmHttpProxy stopped stats=%s", self.stats)
+            logger.info("InferenceProxy stopped stats=%s", self.stats)
 
     async def _models(self, request: Request) -> Response:
         return await self.forward_request(
@@ -122,14 +122,14 @@ class VllmHttpProxy:
     ) -> Response:
         request_id = str(uuid.uuid4())
         loop = asyncio.get_running_loop()
-        future: asyncio.Future[WorkloadResponse] = loop.create_future()
+        future: asyncio.Future[InferenceResponse] = loop.create_future()
         pending_count = 0
         timeout_seconds = self._request_timeout_seconds if timeout_seconds is None else timeout_seconds
         async with self._lock:
             if len(self._pending) >= self._max_pending_requests:
                 self.stats.rejected_requests += 1
                 logger.warning(
-                    "VllmHttpProxy rejecting request method=%s path=%s pending=%d/%d",
+                    "InferenceProxy rejecting request method=%s path=%s pending=%d/%d",
                     method,
                     path,
                     len(self._pending),
@@ -146,7 +146,7 @@ class VllmHttpProxy:
         try:
             await asyncio.to_thread(
                 self._broker.submit_request,
-                WorkloadRequest(
+                InferenceRequest(
                     request_id=request_id,
                     method=method,
                     path=path,
@@ -154,7 +154,7 @@ class VllmHttpProxy:
                 ),
             )
             logger.info(
-                "VllmHttpProxy submitted request request_id=%s method=%s path=%s pending=%d/%d",
+                "InferenceProxy submitted request request_id=%s method=%s path=%s pending=%d/%d",
                 request_id,
                 method,
                 path,
@@ -166,13 +166,13 @@ class VllmHttpProxy:
         except TimeoutError:
             self.stats.timed_out_requests += 1
             logger.warning(
-                "VllmHttpProxy timed out waiting for response request_id=%s method=%s path=%s timeout_seconds=%.1f",
+                "InferenceProxy timed out waiting for response request_id=%s method=%s path=%s timeout_seconds=%.1f",
                 request_id,
                 method,
                 path,
                 timeout_seconds,
             )
-            return JSONResponse({"error": f"timed out waiting for workload response {request_id}"}, status_code=504)
+            return JSONResponse({"error": f"timed out waiting for inference response {request_id}"}, status_code=504)
         finally:
             async with self._lock:
                 self._pending.pop(request_id, None)
@@ -180,7 +180,7 @@ class VllmHttpProxy:
                     future.cancel()
 
         logger.info(
-            "VllmHttpProxy returning response request_id=%s method=%s path=%s status_code=%d",
+            "InferenceProxy returning response request_id=%s method=%s path=%s status_code=%d",
             request_id,
             method,
             path,
@@ -215,7 +215,7 @@ class VllmHttpProxy:
         self.stats.dropped_responses += len(dropped_ids)
         if responses:
             logger.info(
-                "VllmHttpProxy fetched responses count=%d matched=%d dropped=%d "
+                "InferenceProxy fetched responses count=%d matched=%d dropped=%d "
                 "pending=%d matched_ids=%s dropped_ids=%s",
                 len(responses),
                 len(matched_ids),
@@ -226,7 +226,7 @@ class VllmHttpProxy:
             )
         if dropped_ids:
             logger.warning(
-                "VllmHttpProxy dropped stale or duplicate workload responses count=%d request_ids=%s; "
+                "InferenceProxy dropped stale or duplicate inference responses count=%d request_ids=%s; "
                 "likely causes are proxy timeout or request lease expiry before worker response. "
                 "Increase request_timeout_seconds or investigate slow/unhealthy workers if this repeats.",
                 len(dropped_ids),
@@ -236,9 +236,9 @@ class VllmHttpProxy:
 
 
 @contextmanager
-def serve_vllm_http_proxy(
+def serve_inference_proxy(
     *,
-    broker: WorkloadBroker,
+    broker: InferenceBroker,
     model: str,
     host: str = "127.0.0.1",
     port: int = 0,
@@ -250,7 +250,7 @@ def serve_vllm_http_proxy(
     backoff: ExponentialBackoff | None = None,
 ) -> Iterator[RunningModel]:
     actual_port = _reserve_port(host, port)
-    proxy = VllmHttpProxy(
+    proxy = InferenceProxy(
         broker=broker,
         model=model,
         request_timeout_seconds=request_timeout_seconds,
@@ -261,8 +261,8 @@ def serve_vllm_http_proxy(
     )
     config = uvicorn.Config(proxy.app, host=host, port=actual_port, log_level="error", log_config=None)
     server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, name="vllm-http-proxy")
-    logger.info("Starting VllmHttpProxy server url=http://%s:%d/v1 model=%s", host, actual_port, model)
+    thread = threading.Thread(target=server.run, name="inference-proxy")
+    logger.info("Starting InferenceProxy server url=http://%s:%d/v1 model=%s", host, actual_port, model)
     thread.start()
     started = ExponentialBackoff(initial=0.01, maximum=1, jitter=0).wait_until(
         lambda: server.started or not thread.is_alive(),
@@ -271,11 +271,11 @@ def serve_vllm_http_proxy(
     if not started or not server.started:
         server.should_exit = True
         thread.join()
-        raise RuntimeError("vLLM HTTP proxy failed to start")
+        raise RuntimeError("Inference proxy failed to start")
     try:
         yield RunningModel(endpoint=OpenAIEndpoint(base_url=f"http://{host}:{actual_port}/v1", model=model))
     finally:
-        logger.info("Stopping VllmHttpProxy server url=http://%s:%d/v1", host, actual_port)
+        logger.info("Stopping InferenceProxy server url=http://%s:%d/v1", host, actual_port)
         server.should_exit = True
         thread.join()
 

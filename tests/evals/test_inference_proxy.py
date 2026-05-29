@@ -16,23 +16,23 @@ from fray.types import ResourceConfig
 from marin.inference.brokered_vllm import (
     DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER,
     BrokeredVllmSystemConfig,
+    InferenceWorkerConfig,
     IrisBrokeredVllmRuntimeConfig,
     VllmProxyConfig,
-    VllmWorkerConfig,
     start_local_brokered_vllm,
 )
-from marin.inference.local_workload_broker import LocalWorkloadBroker
-from marin.inference.types import OpenAIEndpoint, RunningModel
-from marin.inference.vllm_http_proxy import VllmHttpProxy, serve_vllm_http_proxy
-from marin.inference.vllm_worker import VllmWorker, run_vllm_worker
-from marin.inference.workload_broker import (
-    LeasedWorkloadRequest,
-    LeasedWorkloadResponse,
-    WorkloadRequest,
-    WorkloadResponse,
+from marin.inference.in_memory_inference_broker import InMemoryInferenceBroker
+from marin.inference.inference_broker import (
+    InferenceRequest,
+    InferenceResponse,
+    LeasedInferenceRequest,
+    LeasedInferenceResponse,
     pack_json_payload,
     unpack_json_payload,
 )
+from marin.inference.inference_proxy import InferenceProxy, serve_inference_proxy
+from marin.inference.inference_worker import InferenceWorker, run_inference_worker
+from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.timing import ExponentialBackoff
 
 from tests.evals.openai_stub import assert_completions_scoring_contract, serve_deterministic_openai_stub
@@ -40,9 +40,9 @@ from tests.evals.openai_stub import assert_completions_scoring_contract, serve_d
 BROKER_LEASE_TIMEOUT_SECONDS = 300.0
 
 
-def test_local_workload_broker_round_trip() -> None:
-    broker = LocalWorkloadBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
-    request = WorkloadRequest(request_id="req-1", method="POST", path="/v1/completions", payload=b"request")
+def test_in_memory_inference_broker_round_trip() -> None:
+    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    request = InferenceRequest(request_id="req-1", method="POST", path="/v1/completions", payload=b"request")
 
     broker.submit_request(request)
 
@@ -52,8 +52,8 @@ def test_local_workload_broker_round_trip() -> None:
     assert [leased.request for leased in leased_requests] == [request]
     assert broker.fetch_requests(max_items=8) == []
 
-    response_a = WorkloadResponse(request_id="req-1", status_code=200, payload=b"a")
-    broker.submit_responses([LeasedWorkloadResponse(lease_id=leased_requests[0].lease_id, response=response_a)])
+    response_a = InferenceResponse(request_id="req-1", status_code=200, payload=b"a")
+    broker.submit_responses([LeasedInferenceResponse(lease_id=leased_requests[0].lease_id, response=response_a)])
 
     assert broker.pending() == []
     assert broker.size() == 1
@@ -62,10 +62,10 @@ def test_local_workload_broker_round_trip() -> None:
     assert broker.size() == 0
 
 
-def test_local_workload_broker_requeues_unanswered_request_after_lease_timeout() -> None:
+def test_in_memory_inference_broker_requeues_unanswered_request_after_lease_timeout() -> None:
     now = [0.0]
-    broker = LocalWorkloadBroker(request_lease_timeout_seconds=10, clock=lambda: now[0])
-    request = WorkloadRequest(request_id="req-1", method="POST", path="/v1/completions", payload=b"request")
+    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=10, clock=lambda: now[0])
+    request = InferenceRequest(request_id="req-1", method="POST", path="/v1/completions", payload=b"request")
 
     broker.submit_request(request)
 
@@ -80,12 +80,12 @@ def test_local_workload_broker_requeues_unanswered_request_after_lease_timeout()
     assert leased_b[0].lease_id != leased_a[0].lease_id
 
 
-def test_local_workload_broker_drops_response_for_expired_lease_after_requeue(
+def test_in_memory_inference_broker_drops_response_for_expired_lease_after_requeue(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     now = [0.0]
-    broker = LocalWorkloadBroker(request_lease_timeout_seconds=10, clock=lambda: now[0])
-    request = WorkloadRequest(request_id="req-1", method="POST", path="/v1/completions", payload=b"request")
+    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=10, clock=lambda: now[0])
+    request = InferenceRequest(request_id="req-1", method="POST", path="/v1/completions", payload=b"request")
 
     broker.submit_request(request)
     [lease_a] = broker.fetch_requests(max_items=1)
@@ -95,25 +95,25 @@ def test_local_workload_broker_drops_response_for_expired_lease_after_requeue(
     assert lease_b.request == request
     assert lease_b.lease_id != lease_a.lease_id
 
-    stale_response = WorkloadResponse(request_id="req-1", status_code=504, payload=b"stale")
-    fresh_response = WorkloadResponse(request_id="req-1", status_code=200, payload=b"fresh")
+    stale_response = InferenceResponse(request_id="req-1", status_code=504, payload=b"stale")
+    fresh_response = InferenceResponse(request_id="req-1", status_code=200, payload=b"fresh")
 
     with caplog.at_level(logging.WARNING):
-        broker.submit_responses([LeasedWorkloadResponse(lease_id=lease_a.lease_id, response=stale_response)])
+        broker.submit_responses([LeasedInferenceResponse(lease_id=lease_a.lease_id, response=stale_response)])
 
     assert broker.fetch_responses(max_items=1) == []
     assert broker.pending() == ["req-1"]
     assert "dropped responses for inactive request leases" in caplog.text
     assert "request_ids=req-1" in caplog.text
 
-    broker.submit_responses([LeasedWorkloadResponse(lease_id=lease_b.lease_id, response=fresh_response)])
+    broker.submit_responses([LeasedInferenceResponse(lease_id=lease_b.lease_id, response=fresh_response)])
 
     assert broker.pending() == []
     assert broker.fetch_responses(max_items=1) == [fresh_response]
 
 
 def test_local_brokered_vllm_rejects_multiple_workers() -> None:
-    config = BrokeredVllmSystemConfig(model="gpt2", workers=VllmWorkerConfig(count=2))
+    config = BrokeredVllmSystemConfig(model="gpt2", workers=InferenceWorkerConfig(count=2))
 
     with pytest.raises(ValueError, match="Local brokered vLLM mode supports exactly one worker"):
         with start_local_brokered_vllm(config):
@@ -123,7 +123,7 @@ def test_local_brokered_vllm_rejects_multiple_workers() -> None:
 def test_brokered_vllm_rejects_timeout_ordering_without_recovery_window() -> None:
     expected = "workers.request_timeout_seconds < request_lease_timeout_seconds < proxy.request_timeout_seconds"
     with pytest.raises(ValueError, match=expected):
-        BrokeredVllmSystemConfig(model="gpt2", workers=VllmWorkerConfig(request_timeout_seconds=250))
+        BrokeredVllmSystemConfig(model="gpt2", workers=InferenceWorkerConfig(request_timeout_seconds=250))
 
     with pytest.raises(ValueError, match=expected):
         BrokeredVllmSystemConfig(model="gpt2", proxy=VllmProxyConfig(request_timeout_seconds=130))
@@ -140,17 +140,17 @@ def test_iris_runtime_leaves_child_placement_to_parent_region_inheritance() -> N
     assert runtime.worker_resources.zone is None
 
 
-def test_vllm_http_proxy_forwards_completions_to_running_model() -> None:
-    broker = LocalWorkloadBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+def test_inference_proxy_forwards_completions_to_running_model() -> None:
+    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     with serve_deterministic_openai_stub() as upstream_stub:
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
-        worker = VllmWorker(broker=broker, upstream=upstream, request_timeout_seconds=5)
-        with _serve_vllm_http_proxy(
+        worker = InferenceWorker(broker=broker, upstream=upstream, request_timeout_seconds=5)
+        with _serve_inference_proxy(
             broker=broker,
             model=upstream_stub.model,
             request_timeout_seconds=5,
         ) as proxy_model:
-            with run_vllm_worker(worker, max_in_flight=DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER):
+            with run_inference_worker(worker, max_in_flight=DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER):
                 assert_completions_scoring_contract(proxy_model.endpoint.base_url, proxy_model.endpoint.model)
 
     upstream_requests = upstream_stub.requests_for("/v1/completions")
@@ -159,18 +159,18 @@ def test_vllm_http_proxy_forwards_completions_to_running_model() -> None:
     assert broker.size() == 0
 
 
-def test_vllm_http_proxy_routes_models_readiness_to_running_model() -> None:
-    broker = LocalWorkloadBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+def test_inference_proxy_routes_models_readiness_to_running_model() -> None:
+    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     with serve_deterministic_openai_stub() as upstream_stub:
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
-        worker = VllmWorker(broker=broker, upstream=upstream, request_timeout_seconds=5)
-        with _serve_vllm_http_proxy(
+        worker = InferenceWorker(broker=broker, upstream=upstream, request_timeout_seconds=5)
+        with _serve_inference_proxy(
             broker=broker,
             model=upstream_stub.model,
             request_timeout_seconds=5,
             readiness_timeout_seconds=5,
         ) as proxy_model:
-            with run_vllm_worker(worker, max_in_flight=DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER):
+            with run_inference_worker(worker, max_in_flight=DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER):
                 response = httpx.get(f"{proxy_model.endpoint.base_url}/models", timeout=5)
 
     assert response.status_code == 200
@@ -181,10 +181,10 @@ def test_vllm_http_proxy_routes_models_readiness_to_running_model() -> None:
 
 
 @pytest.mark.asyncio
-async def test_vllm_worker_refills_slots_while_slow_request_is_in_flight() -> None:
-    broker = LocalWorkloadBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+async def test_inference_worker_refills_slots_while_slow_request_is_in_flight() -> None:
+    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     for request_id, prompt in [("slow", "slow"), ("fast-a", "fast a"), ("fast-b", "fast b")]:
-        broker.submit_request(_completion_workload_request(request_id=request_id, prompt=prompt))
+        broker.submit_request(_completion_inference_request(request_id=request_id, prompt=prompt))
 
     release_slow_request = threading.Event()
     stop_event = threading.Event()
@@ -192,7 +192,7 @@ async def test_vllm_worker_refills_slots_while_slow_request_is_in_flight() -> No
         blocked_prompts={"slow": release_slow_request},
     ) as upstream_stub:
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
-        worker = VllmWorker(
+        worker = InferenceWorker(
             broker=broker,
             upstream=upstream,
             request_timeout_seconds=5,
@@ -215,15 +215,15 @@ async def test_vllm_worker_refills_slots_while_slow_request_is_in_flight() -> No
 
 
 @pytest.mark.asyncio
-async def test_vllm_worker_returns_504_for_upstream_timeout() -> None:
-    broker = LocalWorkloadBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
-    broker.submit_request(_completion_workload_request(request_id="slow", prompt="slow"))
+async def test_inference_worker_returns_504_for_upstream_timeout() -> None:
+    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    broker.submit_request(_completion_inference_request(request_id="slow", prompt="slow"))
 
     release_slow_request = threading.Event()
     stop_event = threading.Event()
     with serve_deterministic_openai_stub(blocked_prompts={"slow": release_slow_request}) as upstream_stub:
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
-        worker = VllmWorker(
+        worker = InferenceWorker(
             broker=broker,
             upstream=upstream,
             request_timeout_seconds=0.05,
@@ -245,16 +245,18 @@ async def test_vllm_worker_returns_504_for_upstream_timeout() -> None:
 
     assert responses[0].request_id == "slow"
     assert responses[0].status_code == 504
-    assert unpack_json_payload(responses[0].payload)["error"]["message"] == "timed out forwarding request to vLLM"
+    assert unpack_json_payload(responses[0].payload)["error"]["message"] == (
+        "timed out forwarding request to upstream endpoint"
+    )
 
 
 @pytest.mark.asyncio
-async def test_vllm_worker_returns_502_for_upstream_connection_failure() -> None:
-    broker = LocalWorkloadBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
-    broker.submit_request(_completion_workload_request(request_id="connect-failure", prompt="connect failure"))
+async def test_inference_worker_returns_502_for_upstream_connection_failure() -> None:
+    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    broker.submit_request(_completion_inference_request(request_id="connect-failure", prompt="connect failure"))
     stop_event = threading.Event()
     upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=f"http://127.0.0.1:{_closed_port()}/v1", model="gpt2"))
-    worker = VllmWorker(
+    worker = InferenceWorker(
         broker=broker,
         upstream=upstream,
         request_timeout_seconds=1,
@@ -275,16 +277,18 @@ async def test_vllm_worker_returns_502_for_upstream_connection_failure() -> None
 
     assert responses[0].request_id == "connect-failure"
     assert responses[0].status_code == 502
-    assert unpack_json_payload(responses[0].payload)["error"]["message"] == "failed forwarding request to vLLM"
+    assert unpack_json_payload(responses[0].payload)["error"]["message"] == (
+        "failed forwarding request to upstream endpoint"
+    )
 
 
 @pytest.mark.asyncio
-async def test_vllm_worker_preserves_status_for_non_json_upstream_response() -> None:
-    broker = LocalWorkloadBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
-    broker.submit_request(_completion_workload_request(request_id="non-json", prompt="non json"))
+async def test_inference_worker_preserves_status_for_non_json_upstream_response() -> None:
+    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    broker.submit_request(_completion_inference_request(request_id="non-json", prompt="non json"))
     stop_event = threading.Event()
     with _serve_text_upstream(status_code=503, body="temporarily unavailable") as upstream:
-        worker = VllmWorker(
+        worker = InferenceWorker(
             broker=broker,
             upstream=upstream,
             request_timeout_seconds=1,
@@ -306,14 +310,14 @@ async def test_vllm_worker_preserves_status_for_non_json_upstream_response() -> 
     payload = unpack_json_payload(responses[0].payload)
     assert responses[0].request_id == "non-json"
     assert responses[0].status_code == 503
-    assert payload["error"]["message"] == "vLLM returned a non-JSON response"
+    assert payload["error"]["message"] == "upstream endpoint returned a non-JSON response"
     assert payload["error"]["body"] == "temporarily unavailable"
 
 
 @pytest.mark.asyncio
-async def test_vllm_http_proxy_matches_out_of_order_responses_to_inflight_requests() -> None:
-    broker = LocalWorkloadBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
-    with _serve_vllm_http_proxy(
+async def test_inference_proxy_matches_out_of_order_responses_to_inflight_requests() -> None:
+    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    with _serve_inference_proxy(
         broker=broker,
         model="gpt2",
         request_timeout_seconds=5,
@@ -331,7 +335,7 @@ async def test_vllm_http_proxy_matches_out_of_order_responses_to_inflight_reques
                 [
                     _leased_response(
                         requests[1],
-                        WorkloadResponse(
+                        InferenceResponse(
                             request_id=requests[1].request.request_id,
                             status_code=200,
                             payload=pack_json_payload({"prompt": "second"}),
@@ -339,7 +343,7 @@ async def test_vllm_http_proxy_matches_out_of_order_responses_to_inflight_reques
                     ),
                     _leased_response(
                         requests[0],
-                        WorkloadResponse(
+                        InferenceResponse(
                             request_id=requests[0].request.request_id,
                             status_code=200,
                             payload=pack_json_payload({"prompt": "first"}),
@@ -355,9 +359,9 @@ async def test_vllm_http_proxy_matches_out_of_order_responses_to_inflight_reques
 
 
 @pytest.mark.asyncio
-async def test_vllm_http_proxy_rejects_when_pending_queue_is_full() -> None:
-    broker = LocalWorkloadBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
-    with _serve_vllm_http_proxy(
+async def test_inference_proxy_rejects_when_pending_queue_is_full() -> None:
+    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    with _serve_inference_proxy(
         broker=broker,
         model="gpt2",
         request_timeout_seconds=5,
@@ -378,7 +382,7 @@ async def test_vllm_http_proxy_rejects_when_pending_queue_is_full() -> None:
                 [
                     _leased_response(
                         requests[0],
-                        WorkloadResponse(
+                        InferenceResponse(
                             request_id=requests[0].request.request_id,
                             status_code=200,
                             payload=pack_json_payload({"prompt": "first"}),
@@ -395,9 +399,9 @@ async def test_vllm_http_proxy_rejects_when_pending_queue_is_full() -> None:
 
 
 @pytest.mark.asyncio
-async def test_vllm_http_proxy_times_out_inflight_request() -> None:
-    broker = LocalWorkloadBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
-    with _serve_vllm_http_proxy(
+async def test_inference_proxy_times_out_inflight_request() -> None:
+    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    with _serve_inference_proxy(
         broker=broker,
         model="gpt2",
         request_timeout_seconds=0.05,
@@ -411,16 +415,16 @@ async def test_vllm_http_proxy_times_out_inflight_request() -> None:
 
 
 @pytest.mark.asyncio
-async def test_vllm_http_proxy_drops_stale_responses_with_warning(caplog: pytest.LogCaptureFixture) -> None:
-    broker = LocalWorkloadBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
-    request = WorkloadRequest(request_id="stale", method="POST", path="/v1/completions", payload=b"request")
+async def test_inference_proxy_drops_stale_responses_with_warning(caplog: pytest.LogCaptureFixture) -> None:
+    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    request = InferenceRequest(request_id="stale", method="POST", path="/v1/completions", payload=b"request")
     broker.submit_request(request)
     [leased_request] = broker.fetch_requests(max_items=1)
     broker.submit_responses(
         [
             _leased_response(
                 leased_request,
-                WorkloadResponse(
+                InferenceResponse(
                     request_id="stale",
                     status_code=200,
                     payload=pack_json_payload({"prompt": "stale"}),
@@ -428,7 +432,7 @@ async def test_vllm_http_proxy_drops_stale_responses_with_warning(caplog: pytest
             )
         ]
     )
-    proxy = VllmHttpProxy(
+    proxy = InferenceProxy(
         broker=broker,
         model="gpt2",
         request_timeout_seconds=5,
@@ -441,16 +445,16 @@ async def test_vllm_http_proxy_drops_stale_responses_with_warning(caplog: pytest
         assert await proxy.tick() == 1
 
     assert broker.fetch_responses(max_items=1) == []
-    assert "dropped stale or duplicate workload responses" in caplog.text
+    assert "dropped stale or duplicate inference responses" in caplog.text
     assert "request_ids=stale" in caplog.text
 
 
-async def _fetch_until_two_requests(broker: LocalWorkloadBroker) -> list[LeasedWorkloadRequest]:
+async def _fetch_until_two_requests(broker: InMemoryInferenceBroker) -> list[LeasedInferenceRequest]:
     return await _fetch_until_requests(broker, count=2)
 
 
-async def _fetch_until_requests(broker: LocalWorkloadBroker, *, count: int) -> list[LeasedWorkloadRequest]:
-    requests: list[LeasedWorkloadRequest] = []
+async def _fetch_until_requests(broker: InMemoryInferenceBroker, *, count: int) -> list[LeasedInferenceRequest]:
+    requests: list[LeasedInferenceRequest] = []
     deadline = asyncio.get_running_loop().time() + 5
     while len(requests) < count and asyncio.get_running_loop().time() < deadline:
         requests.extend(broker.fetch_requests(max_items=count - len(requests)))
@@ -460,8 +464,8 @@ async def _fetch_until_requests(broker: LocalWorkloadBroker, *, count: int) -> l
     return requests
 
 
-async def _fetch_until_responses(broker: LocalWorkloadBroker, *, count: int) -> list[WorkloadResponse]:
-    responses: list[WorkloadResponse] = []
+async def _fetch_until_responses(broker: InMemoryInferenceBroker, *, count: int) -> list[InferenceResponse]:
+    responses: list[InferenceResponse] = []
     deadline = asyncio.get_running_loop().time() + 5
     while len(responses) < count and asyncio.get_running_loop().time() < deadline:
         responses.extend(broker.fetch_responses(max_items=count - len(responses)))
@@ -471,12 +475,12 @@ async def _fetch_until_responses(broker: LocalWorkloadBroker, *, count: int) -> 
     return responses
 
 
-def _leased_response(leased_request: LeasedWorkloadRequest, response: WorkloadResponse) -> LeasedWorkloadResponse:
-    return LeasedWorkloadResponse(lease_id=leased_request.lease_id, response=response)
+def _leased_response(leased_request: LeasedInferenceRequest, response: InferenceResponse) -> LeasedInferenceResponse:
+    return LeasedInferenceResponse(lease_id=leased_request.lease_id, response=response)
 
 
-def _completion_workload_request(*, request_id: str, prompt: str) -> WorkloadRequest:
-    return WorkloadRequest(
+def _completion_inference_request(*, request_id: str, prompt: str) -> InferenceRequest:
+    return InferenceRequest(
         request_id=request_id,
         method="POST",
         path="/v1/completions",
@@ -494,9 +498,9 @@ def _completion_workload_request(*, request_id: str, prompt: str) -> WorkloadReq
 
 
 @contextmanager
-def _serve_vllm_http_proxy(
+def _serve_inference_proxy(
     *,
-    broker: LocalWorkloadBroker,
+    broker: InMemoryInferenceBroker,
     model: str,
     request_timeout_seconds: float,
     max_pending_requests: int | None = None,
@@ -508,7 +512,7 @@ def _serve_vllm_http_proxy(
             request_timeout_seconds if readiness_timeout_seconds is None else readiness_timeout_seconds
         ),
     )
-    with serve_vllm_http_proxy(
+    with serve_inference_proxy(
         broker=broker,
         model=model,
         request_timeout_seconds=config.request_timeout_seconds,
