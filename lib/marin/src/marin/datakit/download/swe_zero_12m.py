@@ -15,18 +15,12 @@ from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import load_parquet_batched
+from marin.datakit.download.rollout_transforms import load_parquet_batched, render_role_message
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "AlienKevin/SWE-ZERO-12M-trajectories"
 HF_REVISION = "44e0280"
-
-
-def render_message(msg: dict) -> str:
-    role = msg.get("role", "unknown")
-    content = msg.get("content") or ""
-    return f"<{role}>\n{content}\n</{role}>"
 
 
 def row_to_doc(row: dict) -> list[dict]:
@@ -35,7 +29,7 @@ def row_to_doc(row: dict) -> list[dict]:
         counters.increment("swe_zero_12m/dropped")
         return []
 
-    text = "\n\n".join(render_message(m) for m in messages)
+    text = "\n\n".join(render_role_message(m) for m in messages)
 
     counters.increment("swe_zero_12m/kept")
     return [
