@@ -21,7 +21,7 @@ from iris.cluster.controller.direct_provider import RunTemplateCache
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.reconcile.batches import apply_cancel_job_batch
 from iris.cluster.controller.reconcile.effects import apply_effects
-from iris.cluster.controller.reconcile.loader import load_jobs_slice
+from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.policy import (
     DEFAULT_MAX_RETRIES_PREEMPTION,
     MAX_REPLICAS_PER_JOB,
@@ -337,7 +337,7 @@ def cancel(
     # The slice closes the full descendant subtree (and every job's tasks /
     # active rows) so the kernel can cascade-kill children and fire
     # coscheduled-peer cascades on killed tasks.
-    snapshot = load_jobs_slice(cur, [job_id], now=now)
+    snapshot = load_closed_snapshot(cur, now=now, seed_job_ids=[job_id])
     if job_id not in snapshot.job_configs:
         return
     # No per-job state preload: the cascade-kill merge guard skips already-

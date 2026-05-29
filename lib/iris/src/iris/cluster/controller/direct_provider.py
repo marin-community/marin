@@ -8,9 +8,6 @@ Functions:
   drain_for_direct_provider — promote PENDING tasks and snapshot running set
   build_run_request     — assemble a RunTaskRequest from a PendingDispatchRow
 
-Class:
-  RunTemplateCache      — thin LRU wrapper typed for RunTaskRequest values
-
 Dataclasses:
   SchedulingEvent, ClusterCapacity, DirectProviderBatch, DirectProviderSyncResult
 """
@@ -52,28 +49,15 @@ This rate limit exists only to bound API server pressure."""
 # prevent serving the prior submission's payload.
 RUN_REQUEST_TEMPLATE_CACHE_SIZE = 4096
 
+# LRU cache for per-job ``RunTaskRequest`` templates, keyed by wire job id.
+# Templates carry the immutable per-job fields (entrypoint, environment,
+# resources, constraints); per-attempt fields (``task_id``, ``attempt_id``)
+# are stamped onto a copy at fan-out time.
+RunTemplateCache = LRUCache[str, job_pb2.RunTaskRequest]
 
-class RunTemplateCache:
-    """LRU cache for per-job ``RunTaskRequest`` templates.
 
-    Templates carry the immutable per-job fields (entrypoint, environment,
-    resources, constraints). Per-attempt fields (``task_id``, ``attempt_id``)
-    are stamped onto a copy at fan-out time.
-
-    Constructor: ``RunTemplateCache(size=RUN_REQUEST_TEMPLATE_CACHE_SIZE)``
-    """
-
-    def __init__(self, size: int = RUN_REQUEST_TEMPLATE_CACHE_SIZE) -> None:
-        self._cache: LRUCache[str, job_pb2.RunTaskRequest] = LRUCache(size)
-
-    def get(self, wire: str) -> job_pb2.RunTaskRequest | None:
-        return self._cache.get(wire)
-
-    def put(self, wire: str, template: job_pb2.RunTaskRequest) -> job_pb2.RunTaskRequest:
-        return self._cache.put(wire, template)
-
-    def pop(self, wire: str) -> None:
-        self._cache.pop(wire)
+def new_run_template_cache() -> RunTemplateCache:
+    return LRUCache(RUN_REQUEST_TEMPLATE_CACHE_SIZE)
 
 
 @dataclass(frozen=True)

@@ -328,8 +328,8 @@ def apply_worker_failures_batch(
     """Cascade a batch of worker failures against a single shared overlay.
 
     Active tasks on the failed workers are derived from the snapshot — the
-    loader (``load_workers_slice``) closes them, so the batch reads only the
-    snapshot.
+    loader (``load_closed_snapshot`` seeded by worker) closes them, so the
+    batch reads only the snapshot.
     """
     state = WorkingState(snapshot=snapshot)
     now_ms = snapshot.now.epoch_ms()

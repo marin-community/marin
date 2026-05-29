@@ -4113,7 +4113,7 @@ def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harnes
     """
     from iris.cluster.controller.reconcile.batches import _kill_non_terminal_tasks
     from iris.cluster.controller.reconcile.effects import apply_effects
-    from iris.cluster.controller.reconcile.loader import load_tasks_slice
+    from iris.cluster.controller.reconcile.loader import load_closed_snapshot
     from iris.cluster.controller.reconcile.working_state import WorkingState
 
     worker_id = harness.add_worker("w1")
@@ -4140,10 +4140,10 @@ def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harnes
     # the holder sub-job via _kill_non_terminal_tasks. cancel_job has its own
     # inline gated path and doesn't cover this.
     with harness.state._db.transaction() as cur:
-        snapshot = load_tasks_slice(
+        snapshot = load_closed_snapshot(
             cur,
-            [holder_tasks[0].task_id],
             now=Timestamp.from_ms(0),
+            seed_task_ids=[holder_tasks[0].task_id],
         )
 
         kill_state = WorkingState(snapshot=snapshot)

@@ -844,14 +844,14 @@ def _observations_to_updates(
     state: ControllerTestState,
     observations: list[worker_pb2.Worker.AttemptObservation],
 ) -> list[TaskUpdate]:
-    from iris.cluster.controller.reconcile.loader import load_reconcile_snapshot
+    from iris.cluster.controller.reconcile.loader import load_closed_snapshot
     from iris.cluster.controller.reconcile.worker import observations_to_updates as _observations_to_updates
     from iris.cluster.types import AttemptUid
     from rigging.timing import Timestamp
 
     uids = [AttemptUid(obs.attempt_uid) for obs in observations if obs.attempt_uid]
     with state._db.transaction() as cur:
-        snapshot = load_reconcile_snapshot(cur, [], now=Timestamp.now(), observation_uids=uids)
+        snapshot = load_closed_snapshot(cur, now=Timestamp.now(), observation_uids=uids)
         return _observations_to_updates(snapshot, observations)
 
 

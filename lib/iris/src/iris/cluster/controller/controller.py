@@ -47,6 +47,7 @@ from iris.cluster.controller.direct_provider import (
     ClusterCapacity,
     RunTemplateCache,
     SchedulingEvent,
+    new_run_template_cache,
 )
 from iris.cluster.controller.ops.task import (
     Assignment,
@@ -373,7 +374,7 @@ class Controller:
         self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger("iris").addHandler(self._log_handler)
 
-        self._run_template_cache: RunTemplateCache = RunTemplateCache()
+        self._run_template_cache: RunTemplateCache = new_run_template_cache()
         self._scheduler = Scheduler()
 
         self._bundle_store = BundleStore(storage_dir=f"{config.remote_state_dir.rstrip('/')}/bundles")

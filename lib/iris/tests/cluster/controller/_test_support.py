@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import writes
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.direct_provider import RunTemplateCache
+from iris.cluster.controller.direct_provider import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import (
@@ -64,7 +64,7 @@ class ControllerTestState:
         self._health = health or WorkerHealthTracker()
         self._endpoints = endpoints or EndpointsProjection(db)
         self._worker_attrs = worker_attrs or WorkerAttrsProjection(db)
-        self._run_template_cache = run_template_cache or RunTemplateCache()
+        self._run_template_cache = run_template_cache or new_run_template_cache()
 
 
 def set_worker_health_for_test(ctrl: ControllerTestState, worker_id: WorkerId, healthy: bool) -> None:

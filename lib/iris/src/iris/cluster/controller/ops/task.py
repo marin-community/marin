@@ -29,7 +29,7 @@ from iris.cluster.controller.reconcile.batches import (
     apply_terminal_decisions_batch,
 )
 from iris.cluster.controller.reconcile.effects import ControllerEffects, apply_effects
-from iris.cluster.controller.reconcile.loader import load_tasks_slice
+from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision
 from iris.cluster.controller.schema import jobs_table
@@ -150,10 +150,10 @@ def apply_provider_updates(
         if update.new_state not in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING)
     ]
     attempt_keys = [(update.task_id, update.attempt_id) for update in updates]
-    snapshot = load_tasks_slice(
+    snapshot = load_closed_snapshot(
         cur,
-        relevant_task_ids,
         now=now,
+        seed_task_ids=relevant_task_ids,
         extra_attempt_keys=attempt_keys,
     )
     effects = apply_direct_provider_updates_batch(snapshot, updates)
@@ -180,7 +180,7 @@ def apply_terminal_decisions(
         return ControllerEffects()
 
     all_task_ids: list[JobName] = sorted({d.task_id for d in decisions}, key=lambda tid: tid.to_wire())
-    snapshot = load_tasks_slice(cur, all_task_ids, now=now)
+    snapshot = load_closed_snapshot(cur, now=now, seed_task_ids=all_task_ids)
     effects = apply_terminal_decisions_batch(snapshot, decisions)
     apply_effects(cur, effects, health=health, endpoints=endpoints, now=now)
     return effects

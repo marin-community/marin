@@ -17,7 +17,7 @@ from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile.batches import apply_reconcile_batch, apply_worker_failures_batch
 from iris.cluster.controller.reconcile.effects import ControllerEffects, apply_effects
-from iris.cluster.controller.reconcile.loader import load_reconcile_snapshot, load_workers_slice
+from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
 from iris.cluster.controller.schema import worker_attributes_table, workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
@@ -242,10 +242,10 @@ def _apply_worker_failures_chunk(
         return
 
     worker_ids = [wid for wid, _, _ in failures]
-    # ``load_workers_slice`` closes every active task on the failed workers
-    # (plus their jobs' peer/descendant graph), so the batch derives its
-    # per-worker task rows from the snapshot.
-    snapshot = load_workers_slice(cur, worker_ids, now=now)
+    # Seeding by worker closes every active task on the failed workers (plus
+    # their jobs' peer/descendant graph), so the batch derives its per-worker
+    # task rows from the snapshot.
+    snapshot = load_closed_snapshot(cur, now=now, seed_worker_ids=worker_ids)
     effects = apply_worker_failures_batch(snapshot, failures)
 
     # apply_effects before remove_worker: task mutations reference attempt rows
@@ -297,12 +297,12 @@ def apply_reconcile_observations(
                 if obs.attempt_uid and obs.attempt_uid in plan_uids:
                     all_attempt_uids.append(AttemptUid(obs.attempt_uid))
 
-    snapshot = load_reconcile_snapshot(
+    snapshot = load_closed_snapshot(
         cur,
-        all_worker_ids,
         now=now,
+        seed_worker_ids=all_worker_ids,
         observation_uids=all_attempt_uids,
-        extra_task_ids=all_task_ids,
+        seed_task_ids=all_task_ids,
         extra_attempt_keys=all_attempt_keys,
     )
     effects = apply_reconcile_batch(snapshot, plan_results, now)

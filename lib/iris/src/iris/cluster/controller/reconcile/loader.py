@@ -207,7 +207,7 @@ def _build_job_configs(cur: Tx, job_ids: Iterable[JobName]) -> dict[JobName, Job
     }
 
 
-def _load_closed_snapshot(
+def load_closed_snapshot(
     cur: Tx,
     *,
     now: Timestamp,
@@ -218,6 +218,19 @@ def _load_closed_snapshot(
     observation_uids: Iterable[AttemptUid] = (),
 ) -> TransitionSnapshot:
     """Build a closed :class:`TransitionSnapshot` from arbitrary seeds.
+
+    Callers seed by whichever entity their path starts from — tasks, jobs,
+    and/or workers — and the snapshot closes over everything the kernel may
+    touch. Seed semantics:
+
+    * ``seed_job_ids`` expand to their full descendant subtree; every task of
+      every job in the subtree joins the slice.
+    * ``seed_worker_ids`` pull in the active tasks currently on those workers
+      (the worker-failure path finalizes whatever they were running) and are
+      recorded as ``active_workers`` if they still exist.
+    * ``seed_task_ids`` join verbatim, as do ``extra_attempt_keys`` (non-current
+      attempts, e.g. direct-provider stale-attempt validation) and the tasks /
+      attempts resolved from ``observation_uids``.
 
     Closure invariants (every kernel-touched relation is present for *every*
     job in the slice, not just the roots):
@@ -300,78 +313,4 @@ def _load_closed_snapshot(
         all_tasks_by_job=all_tasks_by_job,
         active_tasks_by_job=active_tasks_by_job,
         active_workers=active_workers,
-    )
-
-
-def load_tasks_slice(
-    cur: Tx,
-    task_ids: Iterable[JobName],
-    *,
-    now: Timestamp,
-    extra_attempt_keys: Iterable[tuple[JobName, int]] = (),
-    worker_ids: Iterable[WorkerId] = (),
-) -> TransitionSnapshot:
-    """Closed snapshot seeded by ``task_ids``.
-
-    ``extra_attempt_keys`` are pulled verbatim (non-current attempts for the
-    direct-provider stale-attempt validation). ``worker_ids`` are recorded as
-    ``active_workers`` if they still exist — heartbeat/provider callers pass
-    the workers whose updates they intend to apply so the batch can drop
-    requests for vanished workers. This cannot be derived from the loaded task
-    rows: a worker's deferred terminal heartbeat for an already-preempted
-    attempt (whose task is now PENDING with no ``current_worker_id``) must
-    still be applied to stamp the attempt's ``finished_at_ms``.
-    """
-    return _load_closed_snapshot(
-        cur,
-        now=now,
-        seed_task_ids=task_ids,
-        seed_worker_ids=worker_ids,
-        extra_attempt_keys=extra_attempt_keys,
-    )
-
-
-def load_jobs_slice(cur: Tx, job_ids: Iterable[JobName], *, now: Timestamp) -> TransitionSnapshot:
-    """Closed snapshot seeded by ``job_ids``.
-
-    The core expands each seed to its full descendant subtree and pulls in
-    every task of every job in the subtree.
-    """
-    return _load_closed_snapshot(cur, now=now, seed_job_ids=job_ids)
-
-
-def load_workers_slice(cur: Tx, worker_ids: Iterable[WorkerId], *, now: Timestamp) -> TransitionSnapshot:
-    """Closed snapshot seeded by ``worker_ids``.
-
-    Active tasks currently on the seeded workers join the slice. Used by the
-    worker-failure path, which finalizes whatever the workers were running.
-    """
-    return _load_closed_snapshot(cur, now=now, seed_worker_ids=worker_ids)
-
-
-def load_reconcile_snapshot(
-    cur: Tx,
-    worker_ids: Iterable[WorkerId],
-    *,
-    now: Timestamp,
-    observation_uids: Iterable[AttemptUid] = (),
-    extra_task_ids: Iterable[JobName] = (),
-    extra_attempt_keys: Iterable[tuple[JobName, int]] = (),
-) -> TransitionSnapshot:
-    """Closed snapshot for the reconcile-observation apply path.
-
-    Active tasks currently on the seeded workers join the slice.
-    ``observation_uids`` resolve to (task_id, attempt_id) and fold their
-    (possibly non-current) attempts in. ``extra_task_ids`` /
-    ``extra_attempt_keys`` cover desired tasks not currently on the worker
-    (the reconcile-RPC error path validates plan-desired attempts that may
-    have moved off the worker).
-    """
-    return _load_closed_snapshot(
-        cur,
-        now=now,
-        seed_task_ids=extra_task_ids,
-        seed_worker_ids=worker_ids,
-        observation_uids=observation_uids,
-        extra_attempt_keys=extra_attempt_keys,
     )

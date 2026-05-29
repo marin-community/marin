@@ -15,7 +15,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller import direct_provider, ops
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.direct_provider import RunTemplateCache
+from iris.cluster.controller.direct_provider import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.task import apply_provider_updates as apply_direct_provider_updates
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
@@ -144,7 +144,7 @@ class _HarnessController:
         self.autoscaler = None
         self.provider: object = Mock()
         self.has_direct_provider = False
-        self._run_template_cache: RunTemplateCache = RunTemplateCache()
+        self._run_template_cache: RunTemplateCache = new_run_template_cache()
 
 
 @dataclass
