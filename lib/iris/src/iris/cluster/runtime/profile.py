@@ -16,14 +16,16 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import signal
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Protocol
 
 from iris.rpc import job_pb2
 
@@ -209,6 +211,216 @@ def build_pyspy_dump_cmd(
     return cmd
 
 
+# Workaround for https://github.com/benfred/py-spy/issues/846: py-spy dump --subprocesses
+# exits non-zero when it walks into a non-Python child (e.g. wandb-core, a Go binary), even
+# though the parent dump already went to stdout. Drop this once py-spy fixes the upstream bug.
+_PYSPY_NON_PYTHON_CHILD_ERROR = "Failed to find python version from target process"
+
+# Headroom a healthy profiler needs beyond the sample window to attach and write
+# its output. These set the in-environment watchdog deadline; the dispatcher's
+# own client-side timeout is a few seconds longer (see PROFILER_WATCHDOG_GRACE_SECONDS).
+CPU_WRITE_HEADROOM_SECONDS = 30
+MEMRAY_ATTACH_HEADROOM_SECONDS = 30
+THREAD_DUMP_TIMEOUT_SECONDS = 30
+
+
+# ---------------------------------------------------------------------------
+# ptrace profiler safety: watchdog + group-stop recovery
+# ---------------------------------------------------------------------------
+# py-spy and ``memray attach`` attach to the target via ptrace, which pauses it
+# while sampling. Two failure modes can freeze the target indefinitely when the
+# profiler is launched into an isolated PID namespace over a client connection
+# (``docker exec`` / ``kubectl exec``):
+#
+#   1. Orphaned profiler. A client-side ``subprocess.run(timeout=...)`` only
+#      kills the local exec *client*; the in-namespace profiler keeps running
+#      and keeps the target ptrace-stopped (observed: zephyr shards stalled for
+#      hours). Wrapping the profiler in GNU ``timeout --signal=KILL`` makes the
+#      container/pod reap it regardless of the client.
+#
+#   2. Lingering group-stop. py-spy attaches via ``PTRACE_ATTACH``, which
+#      delivers SIGSTOP. Per ptrace(2), a SIGKILL'd tracer only auto-resumes a
+#      *ptrace*-stopped tracee, not a *group*-stopped one, so a profiler that
+#      dies or exits before detaching cleanly can leave the target in
+#      job-control stop (``T``), needing SIGCONT (benfred/py-spy#390, still seen
+#      on recent releases).
+#
+# Both are specific to the exec-into-namespace model and are handled inside the
+# namespaced dispatchers' ``exec_profiler``. A direct ``subprocess.run`` profiler
+# (process runtime, controller self-profile) is reaped by Python's own timeout
+# and shares the host PID namespace, so it needs no ``timeout`` wrapper and
+# recovers (if at all) by SIGCONT-ing the profiled child's process group.
+PROFILER_WATCHDOG_GRACE_SECONDS = 5
+
+
+def wrap_with_kill_watchdog(cmd: list[str], sample_timeout: int) -> list[str]:
+    """Prefix a profiler command with ``timeout --signal=KILL`` so a hung profiler self-reaps."""
+    return ["timeout", "--signal=KILL", str(sample_timeout), *cmd]
+
+
+def sigcont_sweep_argv() -> list[str]:
+    """Command that SIGCONTs every process in the (container/pod) PID namespace.
+
+    Clears a group-stop a ptrace profiler may have left. Sweeps ``/proc`` so it
+    needs no procps, reaches ``--subprocesses`` children, and signals PID 1
+    (which the ``kill -1`` broadcast deliberately skips). SIGCONT is a no-op on
+    running processes. Only safe where the PID namespace is isolated.
+    """
+    return ["sh", "-c", 'for p in /proc/[0-9]*; do kill -CONT "${p##*/}" 2>/dev/null; done; true']
+
+
+@dataclass(frozen=True)
+class ExecResult:
+    """Normalized result of running a command in a target environment."""
+
+    returncode: int
+    stdout: bytes
+    stderr: str
+
+
+class ProfileDispatch(Protocol):
+    """Where/how a profiling backend runs commands and moves files.
+
+    The ``capture_*`` functions own *what* to run (which py-spy/memray command,
+    when to read output, how to interpret exit codes); a dispatch implementation
+    owns *where* it runs — ``docker exec``, ``kubectl exec``, or a host
+    subprocess. ``exec_profiler`` runs a ptrace-attaching profiler and is
+    responsible for reaping a hung profiler and clearing any group-stop it leaves
+    (see the module notes above); ``exec`` runs non-attaching helpers (e.g.
+    ``memray`` transform) that never touch the live target.
+    """
+
+    pyspy_bin: str
+    memray_bin: str
+
+    def tmp_path(self, suffix: str) -> str:
+        """Return a fresh temp path (with ``.suffix``) writable by the profiler."""
+        ...
+
+    def exec_profiler(self, cmd: list[str], *, sample_timeout: int) -> ExecResult:
+        """Run a ptrace-attaching profiler, reaping it and clearing any group-stop."""
+        ...
+
+    def exec(self, cmd: list[str], *, timeout: int) -> ExecResult:
+        """Run a non-attaching helper command."""
+        ...
+
+    def read_file(self, path: str) -> bytes:
+        """Read a file produced by a profiler in the target environment."""
+        ...
+
+    def rm_files(self, paths: list[str]) -> None:
+        """Best-effort removal of temp files in the target environment."""
+        ...
+
+
+def capture_cpu(
+    dispatch: ProfileDispatch,
+    cpu_config: job_pb2.CpuProfile,
+    duration_seconds: int,
+    *,
+    pid: str,
+    subprocesses: bool = True,
+) -> bytes:
+    """Record a CPU profile with py-spy and return the encoded output bytes."""
+    spec = resolve_cpu_spec(cpu_config, duration_seconds, pid=pid)
+    output_path = dispatch.tmp_path(spec.ext)
+    cmd = build_pyspy_cmd(spec, dispatch.pyspy_bin, output_path, subprocesses=subprocesses)
+    try:
+        result = dispatch.exec_profiler(cmd, sample_timeout=duration_seconds + CPU_WRITE_HEADROOM_SECONDS)
+        if result.returncode != 0:
+            raise RuntimeError(f"py-spy record failed (exit {result.returncode}): {result.stderr}")
+        return dispatch.read_file(output_path)
+    finally:
+        dispatch.rm_files([output_path])
+
+
+def capture_threads(
+    dispatch: ProfileDispatch, *, pid: str, include_locals: bool = False, subprocesses: bool = True
+) -> bytes:
+    """Collect thread stacks with py-spy dump and return the raw stdout bytes."""
+    cmd = build_pyspy_dump_cmd(pid, dispatch.pyspy_bin, include_locals=include_locals, subprocesses=subprocesses)
+    result = dispatch.exec_profiler(cmd, sample_timeout=THREAD_DUMP_TIMEOUT_SECONDS)
+    if result.returncode != 0:
+        partial_ok = subprocesses and bool(result.stdout.strip()) and _PYSPY_NON_PYTHON_CHILD_ERROR in result.stderr
+        if not partial_ok:
+            raise RuntimeError(f"py-spy dump failed (exit {result.returncode}): {result.stderr}")
+    return result.stdout
+
+
+def capture_memory_attach(
+    dispatch: ProfileDispatch, memory_config: job_pb2.MemoryProfile, duration_seconds: int, *, pid: str
+) -> bytes:
+    """Profile memory by attaching memray to a running process, then transforming the trace."""
+    spec = resolve_memory_spec(memory_config, duration_seconds, pid=pid)
+    trace_path = dispatch.tmp_path("bin")
+    output_path = None
+    try:
+        attach_cmd = build_memray_attach_cmd(spec, dispatch.memray_bin, trace_path)
+        result = dispatch.exec_profiler(attach_cmd, sample_timeout=duration_seconds + MEMRAY_ATTACH_HEADROOM_SECONDS)
+        if result.returncode != 0:
+            raise RuntimeError(f"memray attach failed (exit {result.returncode}): {result.stderr}")
+
+        if spec.is_raw:
+            return dispatch.read_file(trace_path)
+
+        if spec.output_is_file:
+            output_path = dispatch.tmp_path(spec.ext)
+
+        transform_cmd = build_memray_transform_cmd(spec, dispatch.memray_bin, trace_path, output_path or "")
+        result = dispatch.exec(transform_cmd, timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError(f"memray {spec.reporter} failed (exit {result.returncode}): {result.stderr}")
+
+        return dispatch.read_file(output_path) if spec.output_is_file else result.stdout
+    finally:
+        dispatch.rm_files([trace_path, *([output_path] if output_path else [])])
+
+
+@dataclass
+class LocalProfileDispatch:
+    """Run profilers as host subprocesses, sharing the host PID namespace.
+
+    Python's own subprocess timeout reaps a hung profiler (no orphan), so no
+    ``timeout`` wrapper is used. ``resume_pid`` (when set) is SIGCONT'd by
+    process group after each attach to clear a py-spy group-stop; self-profiling
+    leaves it ``None`` because a group-stopped process cannot signal itself.
+    """
+
+    pyspy_bin: str = "py-spy"
+    memray_bin: str = "memray"
+    resume_pid: int | None = None
+
+    def tmp_path(self, suffix: str) -> str:
+        with tempfile.NamedTemporaryFile(suffix=f".{suffix}", delete=False) as f:
+            return f.name
+
+    def exec_profiler(self, cmd: list[str], *, sample_timeout: int) -> ExecResult:
+        try:
+            return self.exec(cmd, timeout=sample_timeout)
+        finally:
+            self._resume()
+
+    def exec(self, cmd: list[str], *, timeout: int) -> ExecResult:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return ExecResult(result.returncode, (result.stdout or "").encode("utf-8"), result.stderr or "")
+
+    def read_file(self, path: str) -> bytes:
+        return Path(path).read_bytes()
+
+    def rm_files(self, paths: list[str]) -> None:
+        for path in paths:
+            Path(path).unlink(missing_ok=True)
+
+    def _resume(self) -> None:
+        if self.resume_pid is None or sys.platform != "linux":
+            return
+        try:
+            os.killpg(os.getpgid(self.resume_pid), signal.SIGCONT)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
 def profile_local_process(duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
     """Profile the current interpreter process using py-spy or memray.
 
@@ -216,55 +428,21 @@ def profile_local_process(duration_seconds: int, profile_type: job_pb2.ProfileTy
     Raises RuntimeError immediately if the required tool is not installed.
     """
     pid = str(os.getpid())
+    # Self-profiling shares this process's PID namespace and cannot SIGCONT
+    # itself, so resume_pid stays None and --subprocesses is off.
+    dispatch = LocalProfileDispatch()
 
     if profile_type.HasField("threads"):
         _check_tool("py-spy")
-        return run_pyspy_dump(pid, include_locals=profile_type.threads.locals, subprocesses=False)
+        return capture_threads(dispatch, pid=pid, include_locals=profile_type.threads.locals, subprocesses=False)
     elif profile_type.HasField("cpu"):
         _check_tool("py-spy")
-        return _run_pyspy_record(pid, duration_seconds, profile_type.cpu)
+        return capture_cpu(dispatch, profile_type.cpu, duration_seconds, pid=pid, subprocesses=False)
     elif profile_type.HasField("memory"):
         _check_tool("memray")
         return _run_memray_profile(pid, duration_seconds, profile_type.memory)
     else:
         raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
-
-
-# Workaround for https://github.com/benfred/py-spy/issues/846: py-spy dump --subprocesses
-# exits non-zero when it walks into a non-Python child (e.g. wandb-core, a Go binary), even
-# though the parent dump already went to stdout. Drop this once py-spy fixes the upstream bug.
-_PYSPY_NON_PYTHON_CHILD_ERROR = "Failed to find python version from target process"
-
-
-def run_pyspy_dump(
-    pid: str, py_spy_bin: str = "py-spy", *, include_locals: bool = False, subprocesses: bool = True
-) -> bytes:
-    """Run py-spy dump to collect thread stacks from a process."""
-    cmd = build_pyspy_dump_cmd(pid, py_spy_bin, include_locals=include_locals, subprocesses=subprocesses)
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    if result.returncode != 0:
-        partial_ok = subprocesses and bool(result.stdout.strip()) and _PYSPY_NON_PYTHON_CHILD_ERROR in result.stderr
-        if not partial_ok:
-            raise RuntimeError(f"py-spy dump failed: {result.stderr}")
-    return result.stdout.encode("utf-8")
-
-
-def _run_pyspy_record(pid: str, duration_seconds: int, cpu_config: job_pb2.CpuProfile) -> bytes:
-    """Run py-spy record against a local process and return the output."""
-    spec = resolve_cpu_spec(cpu_config, duration_seconds, pid=pid)
-    output_path = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
-            output_path = f.name
-
-        cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path=output_path, subprocesses=False)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
-        if result.returncode != 0:
-            raise RuntimeError(f"py-spy record failed: {result.stderr}")
-        return Path(output_path).read_bytes()
-    finally:
-        if output_path is not None:
-            Path(output_path).unlink(missing_ok=True)
 
 
 def _run_memray_profile(pid: str, duration_seconds: int, memory_config: job_pb2.MemoryProfile) -> bytes:
