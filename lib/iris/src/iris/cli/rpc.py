@@ -17,7 +17,7 @@ from google.protobuf import json_format
 from google.protobuf.descriptor import FieldDescriptor
 from google.protobuf.message import Message
 
-from iris.cli.main import require_controller_url
+from iris.cli.connect import require_controller_url
 from iris.rpc import actor_connect, controller_connect, worker_connect
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
 
@@ -147,12 +147,6 @@ def get_service(name: str) -> ServiceInfo | None:
     """Get a service by name."""
     register_services()
     return SERVICES.get(name)
-
-
-def list_services() -> list[ServiceInfo]:
-    """List all registered services."""
-    register_services()
-    return list(SERVICES.values())
 
 
 def build_request(method_info: MethodInfo, json_str: str | None, kwargs: dict[str, Any]) -> Message:

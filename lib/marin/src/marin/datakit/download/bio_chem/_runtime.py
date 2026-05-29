@@ -21,8 +21,8 @@ from typing import Any
 from rigging.filesystem import open_url
 from zephyr import Dataset, ZephyrContext
 
-from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.execution.step_spec import StepSpec
+from marin.execution.types import THIS_OUTPUT_PATH
 from marin.transform.bio_chem.splitters import (
     SamplingCap,
     iter_fasta_records,

@@ -122,11 +122,6 @@ class WorkerRegistry:
 
         self.workers.update(workers)
 
-    def tracked_worker(self, worker_id: str) -> TrackedWorker | None:
-        """Look up a tracked worker by ID."""
-
-        return self.workers.get(worker_id)
-
     def vm_info(self, vm_id: str) -> vm_pb2.VmInfo | None:
         """Build VM status for a tracked worker."""
 

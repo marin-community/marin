@@ -1,15 +1,15 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import haliax as hax
 import numpy as np
 import pytest
 from jax import random
-
-import haliax as hax
-
-from levanter.layers.rotary import _rotate_half as levanter_rotate_half
 from test_llama import _get_llama_config
 from test_utils import skip_if_no_torch
+
+from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
+from levanter.layers.rotary import _rotate_half as levanter_rotate_half
 
 
 @skip_if_no_torch
@@ -71,11 +71,6 @@ def test_apply_rotary_pos_emb(test_seq_len):
 
 def test_yarn_rotary_embedding():
     """Test that YarnRotaryEmbeddings can be created and used."""
-    from jax import random
-
-    import haliax as hax
-
-    from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
 
     # Test configuration
     HeadSize = hax.Axis("HeadSize", 64)
@@ -133,8 +128,6 @@ def test_yarn_rotary_embedding_vs_hf(factor):
     from transformers import LlamaConfig
     from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding as HFLlamaRotaryEmbedding
     from transformers.models.llama.modeling_llama import apply_rotary_pos_emb
-
-    from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
 
     head_dim = 64
     seq_len = 32

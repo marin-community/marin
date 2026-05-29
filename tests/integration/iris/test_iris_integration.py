@@ -14,12 +14,8 @@ import uuid
 
 import pytest
 from finelog.rpc import logging_pb2
-from iris.cluster.constraints import region_constraint
-from iris.cluster.types import (
-    ReservationEntry,
-    ResourceSpec,
-    gpu_device,
-)
+from iris.cluster.constraints import WellKnownAttribute, region_constraint
+from iris.cluster.types import ReservationEntry, ResourceSpec, gpu_device
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, ExponentialBackoff
 
@@ -168,8 +164,6 @@ def test_region_constrained_routing(integration_cluster):
     """Job with region constraint lands on correct worker."""
     # Query workers to check for multi-region support
     workers = integration_cluster.list_workers()
-
-    from iris.cluster.constraints import WellKnownAttribute
 
     regions = set()
     for w in workers:

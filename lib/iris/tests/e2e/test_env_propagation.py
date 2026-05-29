@@ -10,19 +10,15 @@ extras, and pip_packages propagate correctly through job hierarchies.
 from __future__ import annotations
 
 import json
+import time
 from unittest.mock import patch
 
 import pytest
 from iris.client import IrisContext, iris_ctx_scope
-from iris.client.client import LocalClientConfig
+from iris.client.client import LocalClientConfig, iris_ctx
 from iris.client.local_client import local_client
-from iris.cluster.client.job_info import JobInfo
-from iris.cluster.types import (
-    Entrypoint,
-    EnvironmentSpec,
-    JobName,
-    ResourceSpec,
-)
+from iris.cluster.client.job_info import JobInfo, get_job_info
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 
 pytestmark = pytest.mark.requires_cluster
 
@@ -40,8 +36,6 @@ def dummy_entrypoint():
 
 
 def _sleep_entrypoint():
-    import time
-
     time.sleep(300)
 
 
@@ -85,11 +79,6 @@ def _chain_job(output_file: str, child_spec: dict | None = None):
             - extras: list[str] | None — extras for the child's EnvironmentSpec
             - child_spec: dict | None — recursive spec for the grandchild
     """
-    import json
-
-    from iris.client.client import iris_ctx
-    from iris.cluster.client.job_info import get_job_info
-    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 
     info = get_job_info()
     state = {
@@ -145,9 +134,12 @@ def test_env_propagates_through_job_chain(tmp_path):
         job = client.submit(entrypoint, "job-a", resources, environment=environment)
         job.wait(timeout=120, raise_on_failure=True, stream_logs=True)
 
-    state_a = json.loads(open(out_a).read())
-    state_b = json.loads(open(out_b).read())
-    state_c = json.loads(open(out_c).read())
+    with open(out_a) as f:
+        state_a = json.load(f)
+    with open(out_b) as f:
+        state_b = json.load(f)
+    with open(out_c) as f:
+        state_c = json.load(f)
 
     # env_vars propagate through the full chain
     assert state_a["env"]["TEST_PROPAGATION_KEY"] == "hello_chain"

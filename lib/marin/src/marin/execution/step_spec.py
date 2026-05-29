@@ -15,6 +15,8 @@ from urllib.parse import urlparse
 from fray.types import ResourceConfig
 from rigging.filesystem import marin_prefix
 
+from marin.execution.types import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue
+
 
 def _is_relative_path(url_or_path: str) -> bool:
     """Return True if the path is relative (not a URL and doesn't start with /)."""
@@ -115,15 +117,13 @@ class StepSpec:
             return self.override_output_path
         return f"{prefix}/{self.name_with_hash}"
 
-    def as_executor_step(self) -> ExecutorStep:  # noqa: F821
+    def as_executor_step(self) -> ExecutorStep:
         """Convert to an ``ExecutorStep`` for use in ``Executor.run()`` pipelines.
 
         The resulting ``ExecutorStep`` preserves this step's output path and
         caching identity via ``override_output_path``. Round-tripping through
         ``resolve_executor_step`` returns the original ``StepSpec``.
         """
-        from marin.execution.executor import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue  # circular import
-
         dep_steps = [dep.as_executor_step() for dep in self.deps]
 
         config = _StepSpecMigrationConfig(

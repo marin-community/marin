@@ -5,6 +5,7 @@ from fray.types import ResourceConfig
 
 from experiments.bio_chem_notation import BIO_CHEM_SLICES, bio_chem_raw_validation_sets
 from experiments.evals.perplexity_gap_registry import build_registered_perplexity_gap_coverage_plan
+from experiments.exp_model_perplexity_gap_marin_vs_llama import DATASETS
 
 EXPECTED_KEYS = {
     "bio_chem/refseq/refseq_viral_fasta",
@@ -32,8 +33,6 @@ def test_bio_chem_raw_validation_sets_are_opt_in_and_deterministic():
 
 
 def test_default_marin_vs_llama_gap_script_does_not_include_bio_chem_slices():
-    from experiments.exp_model_perplexity_gap_marin_vs_llama import DATASETS
-
     dataset_names = DATASETS.keys()
     assert all(not name.startswith("bio_chem/") for name in dataset_names)
 

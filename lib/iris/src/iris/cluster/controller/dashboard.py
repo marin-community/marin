@@ -25,10 +25,11 @@ Auth model:
 
 import logging
 import os
-from http.cookies import SimpleCookie
 from urllib.parse import urlparse
 
 import httpx
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from finelog.client.proxy import LogServiceProxy, StatsServiceProxy
 from finelog.rpc.finelog_stats_connect import (
     StatsServiceASGIApplication as FinelogStatsServiceASGIApplication,
@@ -40,7 +41,7 @@ from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from starlette.routing import Mount, Route
+from starlette.routing import Match, Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from iris.cluster.controller import endpoint_proxy
@@ -56,7 +57,14 @@ from iris.cluster.dashboard_common import (
     static_files_mount,
 )
 from iris.rpc.async_adapter import AsyncServiceAdapter
-from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
+from iris.rpc.auth import (
+    SESSION_COOKIE,
+    NullAuthInterceptor,
+    TokenVerifier,
+    _verified_identity,
+    extract_bearer_token,
+    resolve_auth,
+)
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceASGIApplication
 from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, RequestTimingInterceptor
@@ -69,17 +77,8 @@ logger = logging.getLogger(__name__)
 
 def _extract_token_from_scope(scope: Scope) -> str | None:
     """Extract auth token from ASGI scope (cookie or Authorization header)."""
-    headers: dict[str, str] = {k.decode(): v.decode() for k, v in scope.get("headers", [])}
-    auth_header = headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        return auth_header[7:]
-    cookie_header = headers.get("cookie", "")
-    if not cookie_header:
-        return None
-    cookie = SimpleCookie(cookie_header)
-    if SESSION_COOKIE in cookie:
-        return cookie[SESSION_COOKIE].value
-    return None
+    headers = {k.decode(): v.decode() for k, v in scope.get("headers", [])}
+    return extract_bearer_token(headers)
 
 
 async def _enforce_http_auth(
@@ -149,7 +148,6 @@ class _RouteAuthMiddleware:
 
     def _resolve_policy(self, scope: Scope) -> str:
         """Resolve the auth policy for the matched route."""
-        from starlette.routing import Match
 
         for route in self._router.routes:
             if isinstance(route, Mount):
@@ -211,8 +209,6 @@ class _DashboardAuthInterceptor:
 
     def _resolve_or_raise(self, ctx):
         """Returns (identity, fallback_to_null). Raises ConnectError on rejection."""
-        from connectrpc.code import Code
-        from connectrpc.errors import ConnectError
 
         token = extract_bearer_token(ctx.request_headers())
         try:
@@ -225,8 +221,6 @@ class _DashboardAuthInterceptor:
         return identity
 
     def intercept_unary_sync(self, call_next, request, ctx):
-        from iris.rpc.auth import _verified_identity
-
         if ctx.method().name in _UNAUTHENTICATED_RPCS:
             return call_next(request, ctx)
 
@@ -241,8 +235,6 @@ class _DashboardAuthInterceptor:
             _verified_identity.reset(reset_token)
 
     async def intercept_unary(self, call_next, request, ctx):
-        from iris.rpc.auth import _verified_identity
-
         if ctx.method().name in _UNAUTHENTICATED_RPCS:
             return await call_next(request, ctx)
 
@@ -319,11 +311,13 @@ class _SubdomainProxyMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
-            return await self._app(scope, receive, send)
+            await self._app(scope, receive, send)
+            return
 
         encoded_name = _extract_proxy_subdomain(self._extract_host(scope))
         if encoded_name is None:
-            return await self._app(scope, receive, send)
+            await self._app(scope, receive, send)
+            return
 
         if self._auth_verifier is not None:
             if not await _enforce_http_auth(scope, receive, send, self._auth_verifier, self._auth_optional):

@@ -11,7 +11,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from rigging.timing import Timer
 
-from iris.cluster.process_status import get_process_status as _get_process_status
+from iris.cluster.process_status import get_process_status
 from iris.cluster.runtime.profile import ProfileTrigger
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.rpc import job_pb2, worker_pb2
@@ -99,7 +99,7 @@ class WorkerServiceImpl:
         _ctx: RequestContext,
     ) -> job_pb2.GetProcessStatusResponse:
         """Return local process info (logs are in the central LogService)."""
-        return _get_process_status(self._timer)
+        return get_process_status(self._timer)
 
     def profile_task(
         self,

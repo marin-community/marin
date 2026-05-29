@@ -32,12 +32,7 @@ from iris.cluster.constraints import (
     soft_constraint_score,
     split_hard_soft,
 )
-from iris.cluster.types import (
-    JobName,
-    PendingTask,
-    UserBudgetDefaults,
-    WorkerId,
-)
+from iris.cluster.types import JobName, PendingTask, UserBudgetDefaults, WorkerId
 
 logger = logging.getLogger(__name__)
 
@@ -200,9 +195,6 @@ class JobRequirements:
     coscheduling_group_by: str | None
 
 
-_evaluate_constraint = evaluate_constraint
-
-
 @dataclass
 class WorkerCapacity:
     """Available capacity on a worker for scheduling.
@@ -314,7 +306,7 @@ class WorkerCapacity:
         """Check if this worker matches all given constraints."""
         for constraint in constraints:
             attr = self.attributes.get(constraint.key)
-            if not _evaluate_constraint(attr, constraint):
+            if not evaluate_constraint(attr, constraint):
                 return False
         return True
 

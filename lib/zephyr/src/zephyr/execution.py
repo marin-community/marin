@@ -246,6 +246,19 @@ def _shared_data_path(prefix: str, execution_id: str, name: str) -> str:
     return f"{prefix}/{execution_id}/shared/{name}.pkl"
 
 
+def _format_worker_status_md(active_tasks: int, stage: str) -> tuple[str, str]:
+    """Return ``(detail_md, summary_md)`` for the worker's Iris task-status push.
+
+    Returns ``("idle", "idle")`` when no task is in flight or no stage has run
+    yet; otherwise produces a one-line summary plus a two-line detail block.
+    """
+    if active_tasks == 0 or not stage:
+        return "idle", "idle"
+    summary = f"**{stage}** — {active_tasks} task(s)"
+    detail = "  \n".join([f"**Stage**: {stage}", f"**Active tasks**: {active_tasks}"])
+    return detail, summary
+
+
 def _push_iris_task_status(
     rate_limiter: RateLimiter,
     build_md: Callable[[], tuple[str, str]],
@@ -436,7 +449,6 @@ class StageRunner(Protocol):
         chunk_prefix: str,
         execution_id: str,
     ) -> tuple[TaskResult, dict[str, int]]: ...
-
     def live_counters(self) -> dict[str, int]: ...
 
 
@@ -1479,18 +1491,11 @@ class ZephyrWorker:
         """Push worker status text to Iris for UI display. Called on each heartbeat."""
 
         def build_md() -> tuple[str, str]:
-            active = self._active_task_count
             stage = self._current_stage_name
-            if active == 0 or not stage:
-                summary_md = "idle"
-                detail_lines = "idle"
-            else:
-                summary_md = f"**{stage}** — {active} task(s)"
-                detail_lines = [f"**Stage**: {stage}", f"**Active tasks**: {active}"]
-                throughput = _stage_throughput(self._last_reported_counters, stage, 1.0)
-                if throughput is not None:
-                    logger.info("[%s] [%s] throughput: %s", self._worker_id, stage, throughput)
-            return "  \n".join(detail_lines), summary_md
+            throughput = _stage_throughput(self._last_reported_counters, stage, 1.0) if stage else None
+            if throughput is not None:
+                logger.info("[%s] [%s] throughput: %s", self._worker_id, stage, throughput)
+            return _format_worker_status_md(self._active_task_count, stage)
 
         _push_iris_task_status(self._iris_status_limiter, build_md)
 
@@ -1574,7 +1579,6 @@ class ZephyrWorker:
         stage-boundary exit (re-pool for next stage) from a pipeline-shutdown
         exit (break the outer loop).
         """
-        task_count = 0
         backoff = ExponentialBackoff(initial=0.1, maximum=5.0)
         future: ActorFuture | None = None
         future_start = 0.0
@@ -1641,7 +1645,6 @@ class ZephyrWorker:
                     result,
                     CounterSnapshot(counters=dict(task_counters), generation=self._counter_generation),
                 ).result()
-                task_count += 1
             except Exception:
                 logger.error("Worker %s error on shard %d", worker_id, task.shard_idx, exc_info=True)
                 coordinator.report_error.remote(

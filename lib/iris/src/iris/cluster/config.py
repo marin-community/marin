@@ -28,11 +28,10 @@ from rigging.timing import Duration
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
-from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.types import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, parse_memory_string, tpu_variant_name
-from iris.managed_thread import ThreadContainer, get_thread_container
+from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
+from iris.cluster.types import parse_memory_string
 from iris.rpc import config_pb2
-from iris.time_proto import duration_from_proto, duration_to_proto
+from iris.time_proto import duration_to_proto
 
 logger = logging.getLogger(__name__)
 
@@ -1189,85 +1188,6 @@ def connect_cluster(config: config_pb2.IrisClusterConfig) -> Iterator[str]:
         finally:
             bundle.controller.stop_controller(config)
             bundle.controller.shutdown()
-
-
-def create_autoscaler(
-    platform: WorkerInfraProvider,
-    autoscaler_config: config_pb2.AutoscalerConfig,
-    scale_groups: dict[str, config_pb2.ScaleGroupConfig],
-    label_prefix: str,
-    base_worker_config: config_pb2.WorkerConfig | None = None,
-    threads: ThreadContainer | None = None,
-    db: "ControllerDB | None" = None,  # noqa: F821, UP037 — circular import
-):
-    """Create autoscaler from WorkerInfraProvider and explicit config.
-
-    Args:
-        platform: WorkerInfraProvider instance for creating/discovering slices
-        autoscaler_config: Autoscaler settings (already resolved with defaults)
-        scale_groups: Map of scale group name to config
-        label_prefix: Prefix for labels on managed resources
-        base_worker_config: Base worker configuration passed through to platform.create_slice().
-            None disables bootstrap (test/local mode).
-        threads: Thread container for background threads. Uses global default if not provided.
-        db: Optional DB handle for write-through persistence.
-
-    Returns:
-        Configured Autoscaler instance
-
-    Raises:
-        ValueError: If autoscaler_config has invalid timing values
-    """
-    # Local import: controller modules import config.py, creating a circular dependency.
-    from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.controller.autoscaler.scaling_group import (
-        DEFAULT_SCALE_DOWN_RATE_LIMIT,
-        DEFAULT_SCALE_UP_RATE_LIMIT,
-        ScalingGroup,
-    )
-
-    threads = threads or get_thread_container()
-
-    _validate_autoscaler_config(autoscaler_config, context="create_autoscaler")
-    _validate_scale_group_resources(_scale_groups_to_config(scale_groups))
-
-    scale_down_delay = duration_from_proto(autoscaler_config.scale_down_delay)
-
-    scaling_groups: dict[str, ScalingGroup] = {}
-    for name, group_config in scale_groups.items():
-        scaling_groups[name] = ScalingGroup(
-            config=group_config,
-            platform=platform,
-            label_prefix=label_prefix,
-            idle_threshold=scale_down_delay,
-            scale_up_rate_limit=group_config.scale_up_rate_limit or DEFAULT_SCALE_UP_RATE_LIMIT,
-            scale_down_rate_limit=group_config.scale_down_rate_limit or DEFAULT_SCALE_DOWN_RATE_LIMIT,
-            db=db,
-        )
-        resources = group_config.resources
-        worker_attrs = dict(group_config.worker.attributes) if group_config.HasField("worker") else {}
-        slice_template = group_config.slice_template
-        cw_instance = slice_template.coreweave.instance_type if slice_template.HasField("coreweave") else ""
-        logger.info(
-            "Scale group %s: device=%s:%s device_count=%d num_vms=%d buffer=%d max=%d instance=%s worker_attrs=%s",
-            name,
-            resources.device_type,
-            resources.device_variant,
-            resources.device_count,
-            group_config.num_vms,
-            group_config.buffer_slices,
-            group_config.max_slices,
-            cw_instance or "n/a",
-            worker_attrs or "none",
-        )
-
-    return Autoscaler.from_config(
-        scale_groups=scaling_groups,
-        config=autoscaler_config,
-        platform=platform,
-        base_worker_config=base_worker_config,
-        db=db,
-    )
 
 
 def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvider | K8sTaskProvider:

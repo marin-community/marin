@@ -6,6 +6,7 @@ Environment Wrapper for the Environments Hub by Prime-Intellect, which contains 
 https://app.primeintellect.ai/dashboard/environments?ex_sort=most_stars
 """
 import logging
+import subprocess
 from typing import Any, ClassVar, cast
 
 import jax.numpy as jnp
@@ -84,7 +85,6 @@ class PrimeIntellectEnv(MarinEnv):
         del prng_key, system_prompt
         decoding = inference_ctx.resolve_decoding(decoding)
         self._ensure_verifiers_installed()
-        import subprocess
 
         from verifiers.types import GenerateOutputs
 

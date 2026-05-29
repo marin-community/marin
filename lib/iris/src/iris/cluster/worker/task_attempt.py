@@ -42,14 +42,8 @@ from iris.cluster.runtime.types import (
     MountSpec,
     RuntimeLogReader,
 )
-from iris.cluster.types import (
-    AttemptUid,
-    JobName,
-    is_task_finished,
-)
-from iris.cluster.types import (
-    TaskAttempt as TaskAttemptIdentity,
-)
+from iris.cluster.types import AttemptUid, JobName, is_task_finished
+from iris.cluster.types import TaskAttempt as TaskAttemptIdentity
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure

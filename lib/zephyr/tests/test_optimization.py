@@ -5,6 +5,8 @@
 
 from zephyr import Dataset, compute_plan
 from zephyr.dataset import FilterOp, MapOp, ReshardOp, TakePerShardOp
+from zephyr.execution import ZephyrContext
+from zephyr.expr import col
 from zephyr.plan import Map, PhysicalStage, Reshard, StageType
 
 
@@ -86,7 +88,6 @@ def test_fused_execution_with_batch():
     Note: Batching happens per-shard. Since each input item becomes its own shard,
     and filtering may reduce items per shard, batches may not span across shards.
     """
-    from zephyr.execution import ZephyrContext
 
     # Use a flat_map to create multiple items in a single shard
     ds = (
@@ -130,8 +131,6 @@ def test_lambda_filter_blocks_select_pushdown(tmp_path):
     would drop columns the lambda reads, KeyError-ing the user code."""
     import pyarrow as pa
     import pyarrow.parquet as pq
-    from zephyr.execution import ZephyrContext
-    from zephyr.expr import col
 
     path = str(tmp_path / "data.parquet")
     pq.write_table(

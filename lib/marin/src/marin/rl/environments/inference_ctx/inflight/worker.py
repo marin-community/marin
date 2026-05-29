@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import logging
 
 import numpy as np
@@ -233,7 +234,6 @@ class SyncVLLMWrapper:
         Generate for multiple prompts concurrently.
         Each prompt gets its own request_id and runs in parallel.
         """
-        import asyncio
 
         # Create a task for each prompt
         tasks = []

@@ -48,8 +48,8 @@ from marin.datakit.ingestion_manifest import (
     MaterializedOutputMetadata,
     write_ingestion_metadata_json,
 )
-from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.execution.step_spec import StepSpec
+from marin.execution.types import THIS_OUTPUT_PATH
 from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)

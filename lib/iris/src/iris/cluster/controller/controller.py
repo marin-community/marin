@@ -43,7 +43,7 @@ from iris.cluster.constraints import (
 from iris.cluster.constraints import (
     region_constraint as make_region_constraint,
 )
-from iris.cluster.controller import db, reads
+from iris.cluster.controller import db, reads, writes
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
@@ -69,7 +69,6 @@ from iris.cluster.controller.codec import (
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.projections import assert_owned_tables_not_externally_written
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.provider import TaskProvider
@@ -98,7 +97,7 @@ from iris.cluster.controller.schema import (
     workers_table,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.task_state import job_scheduling_deadline, task_row_can_be_scheduled
+from iris.cluster.controller.task_state import hint_rare_state, job_scheduling_deadline, task_row_can_be_scheduled
 from iris.cluster.controller.transitions import (
     DIRECT_PROVIDER_PROMOTION_RATE,
     RESERVATION_HOLDER_JOB_NAME,
@@ -142,7 +141,7 @@ _UNLIMITED = sys.maxsize
 # every other RPC, including the worker heartbeats that would unblock the
 # drain. Install a wider, named pool so a burst of slow handlers cannot
 # starve the rest.
-_RPC_HANDLER_THREADS = 64
+_RPC_HANDLER_THREADS = 1024
 
 
 def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
@@ -1379,7 +1378,7 @@ class Controller:
         self._health = WorkerHealthTracker()
         self._endpoints = EndpointsProjection(self._db)
         self._worker_attrs = WorkerAttrsProjection(self._db)
-        assert_owned_tables_not_externally_written()
+        writes.validate()
         self._seed_liveness_from_workers()
         self._db.register_reopen_hook(self._seed_liveness_from_workers)
 
@@ -2269,7 +2268,7 @@ class Controller:
                     )
                 )
                 .where(
-                    tasks_table.c.state.in_(bindparam("executing_states", expanding=True)),
+                    hint_rare_state(tasks_table.c.state.in_(bindparam("executing_states", expanding=True))),
                     job_config_table.c.timeout_ms.is_not(None),
                     job_config_table.c.timeout_ms > 0,
                     task_attempts_table.c.started_at_ms.is_not(None),

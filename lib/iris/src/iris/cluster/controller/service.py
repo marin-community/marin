@@ -1318,6 +1318,7 @@ class ControllerServiceImpl:
             pending_reason=pending_reason,
             resources=resources,
             has_children=has_children,
+            parent_job_id=job.parent_job_id.to_wire() if job.parent_job_id else "",
             **_job_status_counts(summary, job.job_id),
         )
         if job.started_at_ms:

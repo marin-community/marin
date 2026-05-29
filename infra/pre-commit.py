@@ -29,6 +29,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -891,6 +893,105 @@ LINT_REVIEW_STRIPPED_ENV = (
 )
 
 
+# Output format the agent emits, per infra/lint.md "Output format":
+#   <path>:<line>: <code> (<confidence>) <message>
+_FINDING_RE = re.compile(r"^(?P<path>[^:\s]+):(?P<line>\d+): (?P<code>ml-[\w-]+) \((?P<conf>[\d.]+)\) (?P<msg>.*)$")
+
+
+def _parse_findings(stdout: str) -> list[list]:
+    rows: list[list] = []
+    for line in stdout.splitlines():
+        m = _FINDING_RE.match(line.strip())
+        if not m:
+            continue
+        try:
+            line_no = int(m["line"])
+            conf = float(m["conf"])
+        except ValueError:
+            continue
+        rows.append([m["path"], line_no, m["code"], conf, m["msg"][:200]])
+    return rows
+
+
+def _diff_stats(diff: str) -> tuple[int, int, int]:
+    files = added = removed = 0
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            files += 1
+        elif line.startswith("+") and not line.startswith("+++"):
+            added += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            removed += 1
+    return files, added, removed
+
+
+def _git_user_email() -> str | None:
+    try:
+        r = subprocess.run(["git", "config", "user.email"], cwd=ROOT_DIR, capture_output=True, text=True, timeout=2)
+        return r.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def _git_current_branch() -> str | None:
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        return r.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def _git_head_sha() -> str | None:
+    try:
+        r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT_DIR, capture_output=True, text=True, timeout=2)
+        return r.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def _git_blob_sha(path: pathlib.Path) -> str | None:
+    try:
+        r = subprocess.run(
+            ["git", "hash-object", str(path)],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        return r.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def _ship_review_stats(event: dict) -> None:
+    """Fire-and-forget: hand the event off to infra/codehealth/log_stats.py via
+    `uv run`. Detached so the W&B init/network cost never blocks the dev.
+    Silent on every failure mode (no uv, no wandb, no auth, no network).
+    """
+    if not shutil.which("uv"):
+        return
+    try:
+        proc = subprocess.Popen(
+            ["uv", "run", "--quiet", str(ROOT_DIR / "infra" / "codehealth" / "log_stats.py")],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            cwd=ROOT_DIR,
+            start_new_session=True,
+        )
+        assert proc.stdin is not None
+        proc.stdin.write(json.dumps(event).encode())
+        proc.stdin.close()
+    except Exception:
+        pass
+
+
 def run_lint_review(agent_command: str) -> int:
     """Run the advisory `infra/lint.md` catalog over the branch diff via an agent.
 
@@ -943,6 +1044,28 @@ def run_lint_review(agent_command: str) -> int:
     # via metered API auth.
     env = {k: v for k, v in os.environ.items() if k not in LINT_REVIEW_STRIPPED_ENV}
 
+    diff_files, diff_added, diff_removed = _diff_stats(diff)
+    invocation_id = str(uuid.uuid4())
+    started = time.time()
+    started_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started))
+    # Fields shared by every outcome (timeout / agent-error / success). The
+    # outcome-specific fields (elapsed, exit code, timed_out) are spread in at
+    # each return site. `finding_count` is derived by log_stats.py from len(findings).
+    invocation_base = {
+        "variant": None,
+        "trigger": "local",
+        "agent_cli": agent_cmd[0],
+        "git_branch": _git_current_branch(),
+        "merge_base_sha": merge_base,
+        "head_sha": _git_head_sha(),
+        "pr_number": None,
+        "marin_user": _git_user_email(),
+        "lint_catalog_sha": _git_blob_sha(LINT_CATALOG),
+        "diff_files": diff_files,
+        "diff_added_lines": diff_added,
+        "diff_removed_lines": diff_removed,
+    }
+
     try:
         result = subprocess.run(
             agent_cmd,
@@ -955,20 +1078,50 @@ def run_lint_review(agent_command: str) -> int:
         )
     except subprocess.TimeoutExpired:
         click.echo(f"  ⚠ Lint review timed out after {LINT_REVIEW_TIMEOUT}s")
+        _ship_review_stats(
+            {
+                "invocation_id": invocation_id,
+                "ts": started_iso,
+                "tool": "pre-commit-review",
+                "invocation": {
+                    **invocation_base,
+                    "elapsed": time.time() - started,
+                    "agent_exit_code": -1,
+                    "timed_out": True,
+                },
+                "findings": [],
+            }
+        )
         return 0
+
+    findings_text = result.stdout.strip()
+    parsed = _parse_findings(findings_text) if findings_text else []
+    _ship_review_stats(
+        {
+            "invocation_id": invocation_id,
+            "ts": started_iso,
+            "tool": "pre-commit-review",
+            "invocation": {
+                **invocation_base,
+                "elapsed": time.time() - started,
+                "agent_exit_code": result.returncode,
+                "timed_out": False,
+            },
+            "findings": parsed,
+        }
+    )
 
     if result.returncode != 0:
         click.echo(f"  ⚠ Lint review agent exited {result.returncode}:")
         click.echo(result.stderr.strip())
         return 1
 
-    findings = result.stdout.strip()
-    if not findings:
+    if not findings_text:
         click.echo("Lint review: no findings.")
         return 0
 
     click.echo("Lint review findings (advisory — search infra/lint.md for each ml-... code):\n")
-    click.echo(findings)
+    click.echo(findings_text)
     return 0
 
 

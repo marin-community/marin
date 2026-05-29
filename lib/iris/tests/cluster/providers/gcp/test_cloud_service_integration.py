@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import urllib.parse
 from dataclasses import dataclass, field
 
 import httpx
@@ -268,8 +269,6 @@ class GcpFakeBackend:
         return "unknown"
 
     def _matches_label_filter(self, labels: dict[str, str], filter_str: str) -> bool:
-        import urllib.parse
-
         decoded = urllib.parse.unquote(filter_str)
         for part in decoded.split(" AND "):
             part = part.strip()

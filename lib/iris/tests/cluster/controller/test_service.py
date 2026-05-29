@@ -147,6 +147,29 @@ def test_launch_job_returns_job_id(service):
     assert status_response.job.state == job_pb2.JOB_STATE_PENDING
 
 
+def test_get_job_status_reports_parent_job_id(service):
+    """get_job_status surfaces parent_job_id for child jobs (empty for roots).
+
+    The dashboard's child-job view uses this to render a "back to parent job"
+    link, so the parent relationship must travel over the RPC, not just the DB.
+    """
+    parent_name = "/test-user/parent"
+    child_name = "/test-user/parent/child"
+    service.launch_job(make_job_request("parent"), None)
+    service.launch_job(make_job_request(child_name), None)
+
+    child_status = service.get_job_status(
+        controller_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string(child_name).to_wire()), None
+    )
+    assert child_status.job.parent_job_id == JobName.from_string(parent_name).to_wire()
+
+    parent_status = service.get_job_status(
+        controller_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string(parent_name).to_wire()), None
+    )
+    assert parent_status.job.parent_job_id == ""
+    assert parent_status.job.has_children
+
+
 def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state):
     request = make_job_request("bundle-job")
     request.bundle_blob = b"bundle-bytes"

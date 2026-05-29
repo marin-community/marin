@@ -10,7 +10,7 @@ backed by in-memory fakes rather than MagicMock.
 
 import threading
 
-from iris.cluster.constraints import DeviceType
+from iris.cluster.constraints import DeviceType, PlacementRequirements
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry, ScalingAction
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
@@ -18,7 +18,7 @@ from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.types import CloudSliceState
 from iris.cluster.service_mode import ServiceMode
-from iris.rpc import config_pb2
+from iris.rpc import config_pb2, job_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 
@@ -205,9 +205,6 @@ class TestAutoscalerWaterfallEndToEnd:
             scale_groups={"primary": group_primary, "fallback": group_fallback},
             config=config,
         )
-
-        from iris.cluster.constraints import PlacementRequirements
-        from iris.rpc import job_pb2
 
         big_resources = job_pb2.ResourceSpecProto(cpu_millicores=128000, memory_bytes=128 * 1024**3)
         normalized = PlacementRequirements(

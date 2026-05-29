@@ -21,6 +21,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 from finelog.rpc import logging_pb2
@@ -79,7 +80,10 @@ def pytest_addoption(parser):
 
 
 # Cloud mode needs much longer timeouts: GCE provisioning can take 20 minutes,
-# and individual tests need time for remote job execution.
+# and individual tests need time for remote job execution. Local mode's first
+# smoke test pays the module-scoped fixture's wait_for_workers(timeout=60) cost,
+# so it gets its own larger budget; subsequent tests reuse the booted cluster.
+_LOCAL_FIXTURE_TIMEOUT = 120  # first smoke test absorbs cluster boot + worker registration
 _LOCAL_E2E_TIMEOUT = 30  # local e2e tests boot clusters + run jobs
 _CLOUD_FIXTURE_TIMEOUT = 1200  # 20 min for cluster provisioning
 _CLOUD_TEST_TIMEOUT = 120  # 2 min per test
@@ -88,28 +92,28 @@ _CLOUD_TEST_TIMEOUT = 120  # 2 min per test
 def pytest_collection_modifyitems(config, items):
     """Set appropriate timeouts for e2e tests.
 
-    Local mode: 30s default (cluster boot + job execution).
+    Local mode: 30s default; first smoke test gets 120s to cover cluster boot.
     Cloud mode: 20 min for first smoke test (provisioning), 2 min for the rest.
     """
     is_cloud = config.getoption("--iris-controller-url") is not None
-
-    import pytest
 
     first_smoke_test = True
     for item in items:
         if item.get_closest_marker("timeout"):
             continue
+        uses_smoke = "smoke_cluster" in getattr(item, "fixturenames", ())
         if is_cloud:
-            if "smoke_cluster" in getattr(item, "fixturenames", ()):
-                if first_smoke_test:
-                    item.add_marker(pytest.mark.timeout(_CLOUD_FIXTURE_TIMEOUT))
-                    first_smoke_test = False
-                else:
-                    item.add_marker(pytest.mark.timeout(_CLOUD_TEST_TIMEOUT))
+            if uses_smoke and first_smoke_test:
+                item.add_marker(pytest.mark.timeout(_CLOUD_FIXTURE_TIMEOUT))
+                first_smoke_test = False
             else:
                 item.add_marker(pytest.mark.timeout(_CLOUD_TEST_TIMEOUT))
         else:
-            item.add_marker(pytest.mark.timeout(_LOCAL_E2E_TIMEOUT))
+            if uses_smoke and first_smoke_test:
+                item.add_marker(pytest.mark.timeout(_LOCAL_FIXTURE_TIMEOUT))
+                first_smoke_test = False
+            else:
+                item.add_marker(pytest.mark.timeout(_LOCAL_E2E_TIMEOUT))
 
 
 @dataclass
@@ -548,7 +552,6 @@ def dashboard_goto(page, url: str) -> None:
     """
     if _is_noop_page(page):
         return
-    from urllib.parse import urlparse
 
     parsed = urlparse(url)
     path = parsed.path

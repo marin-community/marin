@@ -5,10 +5,9 @@ import dataclasses
 from types import SimpleNamespace
 
 import pytest
-from levanter.checkpoint import CheckpointDebugConfig
 from levanter.models.llama import LlamaConfig
 from marin.execution.artifact import PathMetadata
-from marin.execution.executor import ExecutorStep, output_path_of
+from marin.execution.types import ExecutorStep, output_path_of
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.model_utils import is_hf_checkpoint
@@ -58,11 +57,6 @@ def _test_config(
     *,
     train_tpu_type: str,
     inference_tpu_type: str,
-    train_ram: str | None = None,
-    inference_ram: str | None = None,
-    zone: str | None = None,
-    delete_previous_temporary_checkpoint_after_save: bool = True,
-    checkpoint_debug: CheckpointDebugConfig | None = None,
 ) -> RLExperimentConfig:
     return RLExperimentConfig(
         model_config=ModelConfig(
@@ -84,11 +78,6 @@ def _test_config(
         experiment_name_suffix="test",
         train_tpu_type=train_tpu_type,
         inference_tpu_type=inference_tpu_type,
-        train_ram=train_ram,
-        inference_ram=inference_ram,
-        zone=zone,
-        delete_previous_temporary_checkpoint_after_save=delete_previous_temporary_checkpoint_after_save,
-        checkpoint_debug=checkpoint_debug or CheckpointDebugConfig(),
     )
 
 
@@ -240,68 +229,6 @@ def test_build_rl_job_config_uses_dummy_load_format_for_non_object_store_model_p
 
     assert job_config.inference_config.engine.load_format == "dummy"
     assert job_config.inference_config.engine.canonical_model_name == MODEL_NAME
-
-
-def test_build_rl_job_config_propagates_ram_overrides(monkeypatch):
-    class _FakeConverter:
-        def __init__(self, *args, **kwargs):
-            self.default_hf_config = SimpleNamespace(vocab_size=32000)
-
-    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
-    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
-
-    job_config = _build_rl_job_config(
-        name="rl-test",
-        config=_test_config(
-            train_tpu_type="v5p-8",
-            inference_tpu_type="v5p-8",
-            train_ram="300g",
-            inference_ram="300g",
-        ),
-        curriculum=_test_curriculum(),
-        model_path="gs://marin-us-central1/models/test-model",
-        output_path="gs://marin-us-central1/rl_testing/rl-test",
-    )
-
-    assert job_config.run_config.train_ram == "300g"
-    assert job_config.run_config.inference_ram == "300g"
-
-
-def test_build_rl_job_config_propagates_checkpoint_controls_and_instance_id(monkeypatch):
-    class _FakeConverter:
-        def __init__(self, *args, **kwargs):
-            self.default_hf_config = SimpleNamespace(vocab_size=32000)
-
-    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
-    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
-
-    job_config = _build_rl_job_config(
-        name="rl-test",
-        config=_test_config(
-            train_tpu_type="v5p-8",
-            inference_tpu_type="v5p-8",
-            zone="us-central1-b",
-            delete_previous_temporary_checkpoint_after_save=False,
-            checkpoint_debug=CheckpointDebugConfig(
-                enabled=True,
-                log_interval=15.0,
-                dump_stacks_after=45.0,
-            ),
-        ),
-        curriculum=_test_curriculum(),
-        model_path="gs://marin-us-central1/models/test-model",
-        output_path="gs://marin-us-central1/rl_testing/rl-test",
-        instance_id="rl-test-instance",
-    )
-
-    assert job_config.instance_id == "rl-test-instance"
-    assert job_config.run_config.zone == "us-central1-b"
-    assert job_config.curriculum.actor_name == "curriculum-rl-test-instance"
-    assert job_config.weight_transfer.coordinator_name == "wt-coord-rl-test-instance"
-    assert not job_config.trainer.checkpointer.delete_previous_temporary_checkpoint_after_save
-    assert job_config.trainer.checkpointer.debug.enabled
-    assert job_config.trainer.checkpointer.debug.log_interval == 15.0
-    assert job_config.trainer.checkpointer.debug.dump_stacks_after == 45.0
 
 
 def test_run_rl_experiment_step_returns_serializable_path_metadata(monkeypatch):

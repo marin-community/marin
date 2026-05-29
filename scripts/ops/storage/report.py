@@ -30,6 +30,7 @@ from pathlib import Path
 
 import click
 import duckdb
+import fsspec
 from tqdm import tqdm
 
 from scripts.ops.storage.constants import (
@@ -48,7 +49,6 @@ def _download_gcs_parquet(gcs_dir: str, local_dir: Path) -> Path:
 
     Returns the local directory.
     """
-    import fsspec
 
     local_dir.mkdir(parents=True, exist_ok=True)
     fs, _ = fsspec.core.url_to_fs(gcs_dir)

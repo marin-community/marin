@@ -336,6 +336,7 @@ def standardize_options(options: list | dict) -> list:
         sorted_keys = sorted(list(options.keys()))
         sorted_values = [options[key] for key in sorted_keys]
         return sorted_values
+    raise TypeError(f"Unsupported options format: {type(options).__name__}")
 
 
 def format_prompt_response(
