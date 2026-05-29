@@ -9,8 +9,13 @@ from dataclasses import dataclass
 
 from rigging.timing import Timestamp
 
-from iris.cluster.controller.autoscaler.models import RoutingDecision, ScalingAction, ScalingDecision
-from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, SliceLifecycleState
+from iris.cluster.controller.autoscaler.models import (
+    RoutingDecision,
+    ScalingAction,
+    ScalingDecision,
+    SliceLifecycleState,
+)
+from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 
 
 @dataclass(frozen=True)

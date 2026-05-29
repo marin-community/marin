@@ -19,6 +19,7 @@ from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
 from iris.cluster.controller.autoscaler.routing import route_demand
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
+from iris.cluster.controller.autoscaler.slice_lifecycle import CloudReady
 from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
 from iris.cluster.providers.types import (
     CloudSliceState,
@@ -680,7 +681,7 @@ class TestAutoscalerBootstrapLogs:
         autoscaler = make_autoscaler({"test-group": group})
 
         workers = mock_handle.describe().workers
-        autoscaler._register_slice_workers(workers, mock_handle.slice_id, "test-group")
+        autoscaler._worker_registry.register_slice_workers(list(workers), mock_handle.slice_id, "test-group")
 
         vm_id = mock_handle.describe().workers[0].worker_id
         assert autoscaler.get_init_log(vm_id) == bootstrap_log
@@ -694,7 +695,7 @@ class TestAutoscalerBootstrapLogs:
         autoscaler = make_autoscaler({"test-group": group})
 
         workers = mock_handle.describe().workers
-        autoscaler._register_slice_workers(workers, mock_handle.slice_id, "test-group")
+        autoscaler._worker_registry.register_slice_workers(list(workers), mock_handle.slice_id, "test-group")
 
         worker = workers[0]
         # Lookup by platform worker_id
@@ -1279,9 +1280,11 @@ class TestGpuScaleGroupBugs:
         handle = group.scale_up(timestamp=ts)
         group.complete_scale_up(handle, ts)
 
-        worker_ids = [w.worker_id for w in handle.describe().workers]
-        group.mark_slice_ready(handle.slice_id, worker_ids)
+        # Mark the slice as READY (simulates bootstrap completion)
+        group.dispatch(handle.slice_id, CloudReady(workers=tuple(handle.describe().workers)))
 
+        # quiet_since=None means the slice is currently active (or never
+        # observed idle) — the next tick decides based on live worker state.
         with group._slices_lock:
             state = group._slices[handle.slice_id]
 
