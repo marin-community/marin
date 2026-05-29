@@ -31,7 +31,7 @@ from levanter.main.perplexity_gap import (
 from levanter.models.lm_model import LmConfig
 from levanter.tokenizers import TokenizerBackend
 from levanter.tracker.wandb import WandbConfig
-from levanter.trainer import TrainerConfig
+from levanter.trainer import MeshConfig, TrainerConfig
 
 from marin.execution.types import ExecutorStep, InputName, VersionedValue, this_output_path, versioned
 from marin.processing.tokenize import HfDatasetSpec
@@ -235,6 +235,8 @@ def find_model_perplexity_scores(config: ModelPerplexityScoreConfig) -> None:
         trainer=TrainerConfig(
             tracker=WandbConfig(project=WANDB_PROJECT, tags=tags, name=run_name),
             per_device_eval_parallelism=config.per_device_batch_size,
+            mesh=MeshConfig(axes={"expert": 1, "model": 1}),
+            use_explicit_mesh_axes=True,
         ),
         output_path=config.output_path,
         max_eval_length=config.max_eval_length,
