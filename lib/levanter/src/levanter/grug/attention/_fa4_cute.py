@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from dataclasses import replace
 
 import equinox as eqx
 import jax
@@ -127,6 +128,20 @@ def _gpu_compute_arch() -> int:
     raise RuntimeError("Could not determine CUDA compute capability for FA4/CuTe attention.")
 
 
+def _segmented_kernel_config(head_dim: int):
+    arch = _gpu_compute_arch()
+    kernel_config = flash4_cute_kernel_config(head_dim, arch=arch)
+
+    # Upstream flash-attn-4 4.0.0b15 dense SM100 FA4 uses 128x128 tiles in
+    # flash_attn/cute/interface.py. This Grug port is not that native SM100
+    # kernel: it carries dynamic lower-bound metadata through the SM80/SM120
+    # segmented fork. On B200 d5120 Grug shapes, 64x64 fwd/bwd is consistently
+    # faster than both the prior 128x64/64x64 config and dense-upstream 128x128.
+    if arch // 10 == 10 and head_dim == 128:
+        return replace(kernel_config, forward_tile=(64, 64), backward_tile=(64, 64), num_threads=128)
+    return kernel_config
+
+
 def gpu_fa4_cute_attention(
     q: Float[Array, "B Q Hq D"],
     k: Float[Array, "B K Hkv D"],
@@ -146,7 +161,7 @@ def gpu_fa4_cute_attention(
         seq_len=q.shape[1],
         sliding_window=mask.sliding_window,
     )
-    kernel_config = flash4_cute_kernel_config(q.shape[-1], arch=_gpu_compute_arch())
+    kernel_config = _segmented_kernel_config(q.shape[-1])
 
     return fa4_cute_attention_forward(
         q,
