@@ -930,6 +930,83 @@ def test_preference_pass_no_claims_returns_empty():
     assert task_id in context.pending_tasks
 
 
+def _req_with_constraints(constraints: list[Constraint]) -> JobRequirements:
+    return JobRequirements(
+        req_cpu_millicores=1000,
+        req_memory_bytes=1024**3,
+        req_gpu_count=0,
+        req_tpu_count=0,
+        device_variant=None,
+        constraints=constraints,
+        is_coscheduled=False,
+        coscheduling_group_by=None,
+    )
+
+
+def test_preference_pass_rejects_claimed_worker_violating_hard_constraint():
+    """A claimed worker that violates the task's own hard constraint (e.g. wrong
+    region) must NOT receive the task. ``can_fit`` checks resource counts only,
+    so without the constraint gate the task would be silently placed on the
+    wrong worker and stripped from pending_tasks before find_assignments could
+    correct it."""
+    w1 = _make_worker("w1", attributes={WellKnownAttribute.REGION: AttributeValue("us-east5")})
+    job_id = JobName.root("test-user", "res-job")
+    task_id = job_id.task(0)
+    req = _req_with_constraints(
+        [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-central2")]
+    )
+    has_reservation = {job_id}
+    claims = {WorkerId("w1"): ReservationClaim(job_id=job_id.to_wire(), entry_idx=0)}
+
+    context = _build_context_with_workers([w1], pending_tasks=[task_id], jobs={job_id: req})
+
+    assignments = preference_pass(context, has_reservation, claims)
+
+    assert assignments == []
+    assert task_id in context.pending_tasks
+
+
+def test_preference_pass_respects_matching_hard_constraint():
+    """A claimed worker that satisfies the task's hard constraint is assigned."""
+    w1 = _make_worker("w1", attributes={WellKnownAttribute.REGION: AttributeValue("us-central2")})
+    job_id = JobName.root("test-user", "res-job")
+    task_id = job_id.task(0)
+    req = _req_with_constraints(
+        [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-central2")]
+    )
+    has_reservation = {job_id}
+    claims = {WorkerId("w1"): ReservationClaim(job_id=job_id.to_wire(), entry_idx=0)}
+
+    context = _build_context_with_workers([w1], pending_tasks=[task_id], jobs={job_id: req})
+
+    assignments = preference_pass(context, has_reservation, claims)
+
+    assert assignments == [(task_id, WorkerId("w1"))]
+    assert task_id not in context.pending_tasks
+
+
+def test_preference_pass_accepts_claimed_worker_carrying_its_reservation_taint():
+    """The constraint gate must not reject a claimed worker for its own EQ
+    reservation taint. In production preference_pass runs on the tainted req: a
+    direct-reservation job carries an EQ reservation-job==<job> constraint and
+    the claimed worker carries the matching reservation-job attribute, so the
+    gate must still admit it (otherwise direct reservations would never place)."""
+    job_id = JobName.root("test-user", "res-job")
+    job_wire = job_id.to_wire()
+    task_id = job_id.task(0)
+    w1 = _make_worker("w1", attributes={RESERVATION_TAINT_KEY: AttributeValue(job_wire)})
+    req = _req_with_constraints([Constraint.create(key=RESERVATION_TAINT_KEY, op=ConstraintOp.EQ, value=job_wire)])
+    has_reservation = {job_id}
+    claims = {WorkerId("w1"): ReservationClaim(job_id=job_wire, entry_idx=0)}
+
+    context = _build_context_with_workers([w1], pending_tasks=[task_id], jobs={job_id: req})
+
+    assignments = preference_pass(context, has_reservation, claims)
+
+    assert assignments == [(task_id, WorkerId("w1"))]
+    assert task_id not in context.pending_tasks
+
+
 def test_preference_pass_deducts_capacity():
     """After preference assignment, the claimed worker's capacity is consumed."""
     w1 = _make_worker("w1")

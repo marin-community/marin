@@ -28,6 +28,7 @@ from iris.cluster.constraints import (
     evaluate_constraint,
     extract_placement_requirements,
     merge_constraints,
+    split_hard_soft,
 )
 from iris.cluster.controller import db, reads, writes
 from iris.cluster.controller.autoscaler.models import DemandEntry
@@ -946,6 +947,18 @@ def preference_pass(
         if req is None or req.is_coscheduled:
             continue
 
+        # Enforce the task's hard placement constraints against the claimed
+        # worker, exactly as the normal scheduler does (compute_candidates).
+        # ``can_fit`` checks resource counts only — not device type/variant,
+        # region, or zone — so without this gate a reservation task could be
+        # placed on a claimed worker that violates its own constraints and then
+        # be stripped from ``pending_tasks`` before find_assignments can correct
+        # it. ``split_hard_soft`` keeps soft constraints as preferences, not
+        # filters. For direct-reservation jobs the injected EQ taint is itself a
+        # hard constraint and is satisfied by the claimed worker's taint
+        # attribute, so this does not reject a worker for its own claim.
+        hard_constraints, _ = split_hard_soft(list(req.constraints))
+
         job_wire = job_id.to_wire()
         # Holder jobs are children of the reservation job — look up claims
         # under the parent's wire ID.
@@ -959,6 +972,8 @@ def preference_pass(
                 continue
             capacity = context.capacities.get(wid)
             if capacity is None:
+                continue
+            if not capacity.matches_constraints(hard_constraints):
                 continue
             if capacity.can_fit(req) is not None:
                 continue
