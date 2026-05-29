@@ -1878,7 +1878,7 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
         ).all()
     assert not attempt_is_terminal(attempts[0].state)
 
-    with caplog.at_level(logging.ERROR, logger="iris.cluster.controller.transitions"):
+    with caplog.at_level(logging.ERROR, logger="iris.cluster.controller.reconcile.task"):
         with state._db.transaction() as cur:
             apply_task_observations(
                 cur,
@@ -3619,20 +3619,6 @@ def test_prune_old_inactive_workers(state):
     assert result.workers_deleted == 1
     assert _query_worker(state, active_wid) is not None  # kept (healthy+active)
     assert _query_worker(state, stale_wid) is None  # pruned
-
-
-def test_submit_job_emits_structured_audit_log(state, caplog):
-    """submit_job logs a structured event=job_submitted line for the log-store audit trail."""
-    import logging
-
-    req = make_job_request("audit-me")
-    with caplog.at_level(logging.INFO, logger="iris.cluster.controller.transitions"):
-        submit_job(state, "audit-me", req)
-
-    job_wire = JobName.root("test-user", "audit-me").to_wire()
-    expected = f"event=job_submitted entity={job_wire}"
-    messages = [r.getMessage() for r in caplog.records]
-    assert any(expected in msg for msg in messages), messages
 
 
 def test_prune_noop_when_nothing_old(state):

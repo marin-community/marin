@@ -231,8 +231,8 @@ def compute_demand_entries(
         snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
         task_ids = [t.task_id for t in all_schedulable]
         claims = reservation_claims or {}
-        dry_run_workers = _inject_reservation_taints(snapshots, claims)
-        dry_run_jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
+        dry_run_workers = inject_reservation_taints(snapshots, claims)
+        dry_run_jobs = inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
         # Dry-run scheduling context — only the per-(task, worker) matching loop
         # consumes capacities/jobs/pending_tasks, so the raw-read fields stay
@@ -321,7 +321,7 @@ def compute_demand_entries(
     return demand_entries
 
 
-def _read_reservation_claims(db: ControllerDB) -> dict[WorkerId, ReservationClaim]:
+def read_reservation_claims(db: ControllerDB) -> dict[WorkerId, ReservationClaim]:
     """Read reservation claims from the canonical DB table."""
     with db.read_snapshot() as tx:
         return reads.list_claims(tx)
@@ -426,7 +426,7 @@ def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> l
         ).all()
 
 
-def _get_running_tasks_with_band_and_value(
+def get_running_tasks_with_band_and_value(
     db: ControllerDB,
     claimed_workers: set[WorkerId],
 ) -> list[RunningTaskInfo]:
@@ -576,7 +576,7 @@ def _preempt_coscheduled(
     return []
 
 
-def _run_preemption_pass(
+def run_preemption_pass(
     unscheduled_tasks: list[PreemptionCandidate],
     running_tasks_info: list[RunningTaskInfo],
     context: SchedulingContext,
@@ -802,7 +802,7 @@ def refresh_reservation_claims(
     ``persist=False`` to compute the updated claims without writing them
     (dry-run).
     """
-    claims = _read_reservation_claims(db)
+    claims = read_reservation_claims(db)
     changed = cleanup_stale_claims(claims, db, health)
     changed = claim_workers_for_reservations(claims, db, health, worker_attrs) or changed
     if changed and persist:
@@ -811,7 +811,7 @@ def refresh_reservation_claims(
     return claims
 
 
-def _inject_reservation_taints(
+def inject_reservation_taints(
     workers: list[WorkerSnapshot],
     claims: dict[WorkerId, ReservationClaim],
 ) -> list[WorkerSnapshot]:
@@ -840,7 +840,7 @@ def _inject_reservation_taints(
     return claimed + unclaimed
 
 
-def _inject_taint_constraints(
+def inject_taint_constraints(
     jobs: dict[JobName, JobRequirements],
     has_reservation: set[JobName],
     has_direct_reservation: set[JobName] | None = None,
@@ -949,7 +949,7 @@ def _reservation_region_constraints(
     return [*existing_constraints, make_region_constraint(sorted(regions))]
 
 
-def _preference_pass(
+def preference_pass(
     context: SchedulingContext,
     has_reservation: set[JobName],
     claims: dict[WorkerId, ReservationClaim],

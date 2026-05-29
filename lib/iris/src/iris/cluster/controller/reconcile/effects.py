@@ -27,7 +27,7 @@ from sqlalchemy import bindparam, func
 from sqlalchemy import literal as sa_literal
 from sqlalchemy import update as sa_update
 
-from iris.cluster.controller.audit import log_event
+from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.reconcile.policy import CANCEL_GUARD_STATES

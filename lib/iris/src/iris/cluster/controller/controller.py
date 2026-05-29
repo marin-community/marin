@@ -28,7 +28,7 @@ from sqlalchemy import bindparam, select
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller import direct_provider, ops, reads, writes
-from iris.cluster.controller.audit import log_event
+from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.checkpoint import (
@@ -77,17 +77,17 @@ from iris.cluster.controller.scheduling_policy import (
     GatedCandidates,
     PreemptionCandidate,
     SchedulingOrder,
-    _get_running_tasks_with_band_and_value,
-    _inject_reservation_taints,
-    _inject_taint_constraints,
-    _preference_pass,
-    _read_reservation_claims,
-    _run_preemption_pass,
     apply_scheduling_gates,
     build_scheduling_context,
     compute_demand_entries,
     compute_scheduling_order,
+    get_running_tasks_with_band_and_value,
+    inject_reservation_taints,
+    inject_taint_constraints,
+    preference_pass,
+    read_reservation_claims,
     refresh_reservation_claims,
+    run_preemption_pass,
 )
 from iris.cluster.controller.schema import (
     job_config_table,
@@ -944,10 +944,10 @@ class Controller:
         un-tainted workers. When there are no claims we reuse ``ctx`` directly
         to avoid an index rebuild.
         """
-        modified_jobs = _inject_taint_constraints(gated.jobs, gated.has_reservation, gated.has_direct_reservation)
+        modified_jobs = inject_taint_constraints(gated.jobs, gated.has_reservation, gated.has_direct_reservation)
 
         if claims:
-            modified_workers = _inject_reservation_taints(list(ctx.workers), claims)
+            modified_workers = inject_reservation_taints(list(ctx.workers), claims)
             building_counts = {wid: cap.building_task_count for wid, cap in ctx.capacities.items()}
             ctx.pending_tasks = list(order.ordered_task_ids)
             context = ctx.evolve_with_workers(
@@ -971,7 +971,7 @@ class Controller:
 
         # Soft preference — steer reservation tasks toward claimed workers.
         # Skips coscheduled jobs (they need atomic all-or-nothing via find_assignments).
-        preference_assignments = _preference_pass(context, gated.has_reservation, claims)
+        preference_assignments = preference_pass(context, gated.has_reservation, claims)
 
         result = self._scheduler.find_assignments(context)
 
@@ -1050,8 +1050,8 @@ class Controller:
         preemptions: list[tuple[JobName, JobName]] = []
         if unscheduled:
             claimed_workers = set(claims.keys())
-            running_info = _get_running_tasks_with_band_and_value(self._db, claimed_workers)
-            preemptions = _run_preemption_pass(unscheduled, running_info, context)
+            running_info = get_running_tasks_with_band_and_value(self._db, claimed_workers)
+            preemptions = run_preemption_pass(unscheduled, running_info, context)
             # Apply all preemptions in one transaction so slice evictions
             # (N siblings of a coscheduled preemptor) are all-or-nothing.
             if preemptions:
@@ -1441,7 +1441,7 @@ class Controller:
             self._db,
             self._scheduler,
             workers,
-            reservation_claims=_read_reservation_claims(self._db),
+            reservation_claims=read_reservation_claims(self._db),
         )
         self._autoscaler.update(demand_entries)
 
@@ -1550,7 +1550,7 @@ class Controller:
     @property
     def reservation_claims(self) -> dict[WorkerId, ReservationClaim]:
         """Current reservation claims, keyed by worker ID."""
-        return _read_reservation_claims(self._db)
+        return read_reservation_claims(self._db)
 
     @property
     def autoscaler(self) -> "Autoscaler | None":

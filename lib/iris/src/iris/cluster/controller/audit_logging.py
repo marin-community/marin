@@ -9,10 +9,7 @@ later querying.
 
 import logging
 
-# Preserve the historical log channel name so external audit-line consumers
-# (and tests that pin the channel via ``caplog.at_level(..., logger=...)``)
-# continue to observe events on ``iris.cluster.controller.transitions``.
-logger = logging.getLogger("iris.cluster.controller.transitions")
+logger = logging.getLogger(__name__)
 
 
 def log_event(

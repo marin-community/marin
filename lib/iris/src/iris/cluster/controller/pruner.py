@@ -19,7 +19,7 @@ from rigging.timing import Duration, Timestamp
 from sqlalchemy import bindparam, select
 
 from iris.cluster.controller import writes
-from iris.cluster.controller.audit import log_event
+from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection

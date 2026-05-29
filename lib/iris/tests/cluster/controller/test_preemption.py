@@ -14,10 +14,10 @@ from iris.cluster.controller.scheduler import JobRequirements, WorkerCapacity
 from iris.cluster.controller.scheduling_policy import (
     PreemptionCandidate,
     RunningTaskInfo,
-    _get_running_tasks_with_band_and_value,
     _pending_tasks_with_jobs,
-    _run_preemption_pass,
     _sort_pending_tasks_by_resolved_band,
+    get_running_tasks_with_band_and_value,
+    run_preemption_pass,
 )
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
@@ -48,7 +48,7 @@ def _make_simple_context(workers: list[WorkerCapacity]) -> "FakeSchedulingContex
 
 
 class FakeSchedulingContext:
-    """Minimal stand-in for SchedulingContext used by _run_preemption_pass."""
+    """Minimal stand-in for SchedulingContext used by run_preemption_pass."""
 
     def __init__(self, capacities: dict[WorkerId, WorkerCapacity]):
         self.capacities = capacities
@@ -92,7 +92,7 @@ def _tpu_capacity(worker_id: WorkerId) -> WorkerCapacity:
 
 
 # ---------------------------------------------------------------------------
-# Unit tests for _run_preemption_pass
+# Unit tests for run_preemption_pass
 # ---------------------------------------------------------------------------
 
 
@@ -126,7 +126,7 @@ def test_production_preempts_batch():
         PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
-    preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
     assert len(preemptions) == 1
     assert preemptions[0] == (preemptor_id, victim.task_id)
 
@@ -160,7 +160,7 @@ def test_interactive_preempts_batch():
         PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_INTERACTIVE),
     ]
 
-    preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
     assert len(preemptions) == 1
     assert preemptions[0] == (preemptor_id, victim.task_id)
 
@@ -194,7 +194,7 @@ def test_interactive_does_not_preempt_production():
         PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_INTERACTIVE),
     ]
 
-    preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
     assert len(preemptions) == 0
 
 
@@ -228,7 +228,7 @@ def test_batch_never_preempts():
         PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_BATCH),
     ]
 
-    preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
     assert len(preemptions) == 0
 
 
@@ -261,7 +261,7 @@ def test_same_band_no_preemption():
         PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_INTERACTIVE),
     ]
 
-    preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
     assert len(preemptions) == 0
 
 
@@ -294,7 +294,7 @@ def test_coscheduled_not_preempted():
         PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
-    preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
     assert len(preemptions) == 0
 
 
@@ -326,7 +326,7 @@ def test_solo_preempts_same_variant_tpu():
         PreemptionCandidate(preemptor_id, _tpu_requirements("v5p-8"), job_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
-    preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
     assert preemptions == [(preemptor_id, victim.task_id)]
 
 
@@ -353,7 +353,7 @@ def test_solo_does_not_preempt_different_variant():
         PreemptionCandidate(preemptor_id, _tpu_requirements("v5p-256"), job_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
-    preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
     assert preemptions == []
 
 
@@ -386,7 +386,7 @@ def test_coscheduled_preemptor_evicts_same_variant_slice():
         PreemptionCandidate(preemptor_job.child(str(i)), req, job_pb2.PRIORITY_BAND_PRODUCTION) for i in range(4)
     ]
 
-    preemptions = _run_preemption_pass(unscheduled, victims, ctx)
+    preemptions = run_preemption_pass(unscheduled, victims, ctx)
     # Exactly N pairs emitted, one preemptor task per victim sibling.
     assert len(preemptions) == 4
     assert {p[1] for p in preemptions} == {v.task_id for v in victims}
@@ -424,7 +424,7 @@ def test_coscheduled_preemptor_does_not_evict_different_variant_slice():
         PreemptionCandidate(preemptor_job.child(str(i)), req, job_pb2.PRIORITY_BAND_PRODUCTION) for i in range(4)
     ]
 
-    preemptions = _run_preemption_pass(unscheduled, victims, ctx)
+    preemptions = run_preemption_pass(unscheduled, victims, ctx)
     assert preemptions == []
 
 
@@ -457,7 +457,7 @@ def test_coscheduled_preemptor_skips_undersized_slice():
         for i in range(4)  # needs 4, slice has 2
     ]
 
-    preemptions = _run_preemption_pass(unscheduled, victims, ctx)
+    preemptions = run_preemption_pass(unscheduled, victims, ctx)
     assert preemptions == []
 
 
@@ -488,7 +488,7 @@ def test_solo_preemptor_does_not_tear_down_slice():
         PreemptionCandidate(preemptor_id, _tpu_requirements("v5p-8"), job_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
-    preemptions = _run_preemption_pass(unscheduled, victims, ctx)
+    preemptions = run_preemption_pass(unscheduled, victims, ctx)
     assert preemptions == []
 
 
@@ -595,7 +595,7 @@ def test_preemption_skips_if_capacity_available():
     ]
 
     # Should not preempt since capacity is available
-    preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
     assert len(preemptions) == 0
 
 
@@ -639,13 +639,13 @@ def test_preemption_picks_cheapest_victim():
         PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
-    preemptions = _run_preemption_pass(unscheduled, [expensive_victim, cheap_victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [expensive_victim, cheap_victim], ctx)
     assert len(preemptions) == 1
     assert preemptions[0][1] == cheap_victim.task_id
 
 
 def test_get_running_tasks_skips_claimed_workers():
-    """_get_running_tasks_with_band_and_value skips tasks on reservation-claimed workers."""
+    """get_running_tasks_with_band_and_value skips tasks on reservation-claimed workers."""
     with make_controller_state() as state:
         harness = ControllerTestHarness(state)
         w1 = harness.add_worker("w1", cpu=4)
@@ -659,7 +659,7 @@ def test_get_running_tasks_skips_claimed_workers():
 
         # w1 is claimed by reservation
         claimed = {w1}
-        running = _get_running_tasks_with_band_and_value(state._db, claimed)
+        running = get_running_tasks_with_band_and_value(state._db, claimed)
 
         # Only tasks on w2 should be returned
         task_ids = {r.task_id for r in running}
@@ -706,7 +706,7 @@ def test_over_budget_user_tasks_preemptible():
         PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_INTERACTIVE),
     ]
 
-    preemptions = _run_preemption_pass(unscheduled, [victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
     assert len(preemptions) == 1
     assert preemptions[0] == (preemptor_id, victim.task_id)
 
@@ -723,7 +723,7 @@ def test_over_budget_production_not_preemptible():
 
 
 def test_running_tasks_report_stamped_band():
-    """_get_running_tasks_with_band_and_value returns the band stamped at assign time.
+    """get_running_tasks_with_band_and_value returns the band stamped at assign time.
 
     The over-budget downgrade is applied once in ``_commit_assignments`` and
     persisted in ``tasks.priority_band``; the lookup must not re-derive the
@@ -743,7 +743,7 @@ def test_running_tasks_report_stamped_band():
         _dispatch_with_band(state, tasks_alice[0], w1, job_pb2.PRIORITY_BAND_INTERACTIVE)
         _dispatch_with_band(state, tasks_bob[0], w2, job_pb2.PRIORITY_BAND_BATCH)
 
-        running = {r.task_id: r.band_sort_key for r in _get_running_tasks_with_band_and_value(state._db, set())}
+        running = {r.task_id: r.band_sort_key for r in get_running_tasks_with_band_and_value(state._db, set())}
         assert running == {
             tasks_alice[0].task_id: job_pb2.PRIORITY_BAND_INTERACTIVE,
             tasks_bob[0].task_id: job_pb2.PRIORITY_BAND_BATCH,
@@ -956,7 +956,7 @@ def test_preemption_multiple_victims_one_pass():
         job_pb2.PRIORITY_BAND_PRODUCTION,
     )
 
-    preemptions = _run_preemption_pass([preemptor1, preemptor2], [victim1, victim2], ctx)
+    preemptions = run_preemption_pass([preemptor1, preemptor2], [victim1, victim2], ctx)
     assert len(preemptions) == 2
     victims_preempted = {p[1] for p in preemptions}
     assert victim1.task_id in victims_preempted
@@ -1013,7 +1013,7 @@ def test_preemption_across_multiple_workers():
         job_pb2.PRIORITY_BAND_PRODUCTION,
     )
 
-    preemptions = _run_preemption_pass([preemptor], [victim_w1, victim_w2], ctx)
+    preemptions = run_preemption_pass([preemptor], [victim_w1, victim_w2], ctx)
     assert len(preemptions) == 1
     assert preemptions[0][1] == victim_w2.task_id
 

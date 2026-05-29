@@ -9,7 +9,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints
 from iris.cluster.controller import reads, writes
-from iris.cluster.controller.audit import log_event
+from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.codec import (
     constraints_to_json,
     entrypoint_to_json,

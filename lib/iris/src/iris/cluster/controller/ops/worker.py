@@ -10,7 +10,7 @@ from sqlalchemy import bindparam, delete, insert, select
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import reads, writes
-from iris.cluster.controller.audit import log_event
+from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.codec import proto_to_json
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.endpoints import EndpointsProjection

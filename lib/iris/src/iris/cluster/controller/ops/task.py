@@ -21,7 +21,7 @@ from sqlalchemy import case, func
 from sqlalchemy import update as sa_update
 
 from iris.cluster.controller import reads, writes
-from iris.cluster.controller.audit import log_event
+from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.reconcile.batches import (

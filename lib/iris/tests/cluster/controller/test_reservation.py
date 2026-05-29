@@ -43,10 +43,6 @@ from iris.cluster.controller.scheduler import (
 from iris.cluster.controller.scheduling_policy import (
     RESERVATION_TAINT_KEY,
     _find_reservation_ancestor,
-    _inject_reservation_taints,
-    _inject_taint_constraints,
-    _preference_pass,
-    _read_reservation_claims,
     _reservation_region_constraints,
     _reserved_job_ids,
     _worker_matches_reservation_entry,
@@ -54,7 +50,11 @@ from iris.cluster.controller.scheduling_policy import (
     build_scheduling_context,
     claim_workers_for_reservations,
     cleanup_stale_claims,
+    inject_reservation_taints,
+    inject_taint_constraints,
     job_requirements_from_job,
+    preference_pass,
+    read_reservation_claims,
 )
 from iris.cluster.controller.task_state import task_row_can_be_scheduled
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, is_job_finished
@@ -224,7 +224,7 @@ def ctrl(make_controller) -> Controller:
 
 def _claim_for_reservations(ctrl: Controller) -> None:
     """Read claims, run the claim pass, and persist — mirrors the scheduling cycle."""
-    claims = _read_reservation_claims(ctrl._db)
+    claims = read_reservation_claims(ctrl._db)
     if claim_workers_for_reservations(claims, ctrl._db, ctrl._health, ctrl._worker_attrs):
         with ctrl._db.transaction() as cur:
             writes.replace_reservation_claims(cur, claims)
@@ -232,7 +232,7 @@ def _claim_for_reservations(ctrl: Controller) -> None:
 
 def _cleanup_claims(ctrl: Controller) -> None:
     """Read claims, run the stale-claim sweep, and persist."""
-    claims = _read_reservation_claims(ctrl._db)
+    claims = read_reservation_claims(ctrl._db)
     if cleanup_stale_claims(claims, ctrl._db, ctrl._health):
         with ctrl._db.transaction() as cur:
             writes.replace_reservation_claims(cur, claims)
@@ -592,7 +592,7 @@ def test_gate_satisfied_for_jobs_without_reservation(ctrl):
 
 
 # =============================================================================
-# _inject_reservation_taints
+# inject_reservation_taints
 # =============================================================================
 
 
@@ -607,7 +607,7 @@ def test_taint_injection_adds_attribute_to_claimed_workers():
     s2 = _make_snapshot("w2")
     claims = {WorkerId("w1"): ReservationClaim(job_id="job-a", entry_idx=0)}
 
-    result = _inject_reservation_taints([s1, s2], claims)
+    result = inject_reservation_taints([s1, s2], claims)
 
     # w1 should have the taint
     tainted = [w for w in result if w.worker_id == WorkerId("w1")]
@@ -622,7 +622,7 @@ def test_taint_injection_unclaimed_workers_no_attribute():
     s2 = _make_snapshot("w2")
     claims = {WorkerId("w1"): ReservationClaim(job_id="job-a", entry_idx=0)}
 
-    result = _inject_reservation_taints([s1, s2], claims)
+    result = inject_reservation_taints([s1, s2], claims)
 
     unclaimed = [w for w in result if w.worker_id == WorkerId("w2")]
     assert len(unclaimed) == 1
@@ -637,7 +637,7 @@ def test_taint_injection_claimed_workers_first():
     # Only w2 is claimed
     claims = {WorkerId("w2"): ReservationClaim(job_id="job-a", entry_idx=0)}
 
-    result = _inject_reservation_taints([s1, s2, s3], claims)
+    result = inject_reservation_taints([s1, s2, s3], claims)
 
     assert result[0].worker_id == WorkerId("w2")
     unclaimed_ids = [w.worker_id for w in result[1:]]
@@ -649,7 +649,7 @@ def test_taint_injection_no_claims_returns_original_list():
     s1 = _make_snapshot("w1")
     s2 = _make_snapshot("w2")
 
-    result = _inject_reservation_taints([s1, s2], {})
+    result = inject_reservation_taints([s1, s2], {})
 
     # With no claims, the function returns the input list directly
     assert result[0].worker_id == WorkerId("w1")
@@ -662,13 +662,13 @@ def test_taint_injection_does_not_mutate_original():
     original_attrs = dict(s1.attributes)
     claims = {WorkerId("w1"): ReservationClaim(job_id="job-a", entry_idx=0)}
 
-    _inject_reservation_taints([s1], claims)
+    inject_reservation_taints([s1], claims)
 
     assert s1.attributes == original_attrs
 
 
 # =============================================================================
-# _inject_taint_constraints
+# inject_taint_constraints
 # =============================================================================
 
 
@@ -692,7 +692,7 @@ def test_taint_constraint_added_to_non_reservation_jobs():
     }
     has_reservation: set[JobName] = set()
 
-    result = _inject_taint_constraints(jobs, has_reservation)
+    result = inject_taint_constraints(jobs, has_reservation)
 
     constraints = result[JobName.root("test-user", "regular")].constraints
     not_exists = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
@@ -709,7 +709,7 @@ def test_taint_constraint_not_added_to_reservation_jobs():
     has_reservation = {res_job}
     has_direct_reservation = {res_job}
 
-    result = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
+    result = inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
     constraints = result[res_job].constraints
     eq = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
@@ -731,7 +731,7 @@ def test_taint_constraint_mixed_jobs():
     has_reservation = {res_job, descendant_job}
     has_direct_reservation = {res_job}
 
-    result = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
+    result = inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
     # Direct reservation job: EQ constraint
     res_constraints = [c for c in result[res_job].constraints if c.key == RESERVATION_TAINT_KEY]
@@ -767,7 +767,7 @@ def test_taint_constraint_preserves_existing_constraints():
     has_reservation: set[JobName] = set()
     has_direct_reservation: set[JobName] = set()
 
-    result = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
+    result = inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
     constraints = result[JobName.root("test-user", "regular")].constraints
     assert len(constraints) == 2
@@ -780,7 +780,7 @@ def test_taint_constraint_preserves_existing_constraints():
 
 
 # =============================================================================
-# _preference_pass
+# preference_pass
 # =============================================================================
 
 
@@ -823,7 +823,7 @@ def test_preference_pass_assigns_to_claimed_worker():
         jobs={job_id: req},
     )
 
-    assignments = _preference_pass(context, has_reservation, claims)
+    assignments = preference_pass(context, has_reservation, claims)
 
     assert len(assignments) == 1
     assert assignments[0] == (task_id, WorkerId("w1"))
@@ -855,7 +855,7 @@ def test_preference_pass_falls_through_on_no_capacity():
         jobs={job_id: req},
     )
 
-    assignments = _preference_pass(context, has_reservation, claims)
+    assignments = preference_pass(context, has_reservation, claims)
 
     assert len(assignments) == 0
     assert task_id in context.pending_tasks
@@ -876,7 +876,7 @@ def test_preference_pass_skips_non_reservation_tasks():
         jobs={job_id: req},
     )
 
-    assignments = _preference_pass(context, has_reservation, claims)
+    assignments = preference_pass(context, has_reservation, claims)
 
     assert len(assignments) == 0
     assert task_id in context.pending_tasks
@@ -906,7 +906,7 @@ def test_preference_pass_skips_coscheduled_jobs():
         jobs={job_id: req},
     )
 
-    assignments = _preference_pass(context, has_reservation, claims)
+    assignments = preference_pass(context, has_reservation, claims)
 
     assert len(assignments) == 0
     assert task_id in context.pending_tasks
@@ -926,7 +926,7 @@ def test_preference_pass_no_claims_returns_empty():
         jobs={job_id: req},
     )
 
-    assignments = _preference_pass(context, has_reservation, {})
+    assignments = preference_pass(context, has_reservation, {})
 
     assert len(assignments) == 0
     assert task_id in context.pending_tasks
@@ -958,7 +958,7 @@ def test_preference_pass_deducts_capacity():
         jobs={job_id: req},
     )
 
-    assignments = _preference_pass(context, has_reservation, claims)
+    assignments = preference_pass(context, has_reservation, claims)
 
     # First task assigned to w1; second stays pending (w1 already scheduled this cycle)
     assert len(assignments) == 1
@@ -1278,7 +1278,7 @@ def test_taint_exemption_for_children_of_reservation_job(ctrl):
             has_direct_reservation.add(task.job_id)
 
     # Child does NOT get NOT_EXISTS constraint (descendant, no constraint at all)
-    modified_jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
+    modified_jobs = inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
     child_constraints = modified_jobs[child_jid].constraints
     taint = [c for c in child_constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(taint) == 0
@@ -1409,7 +1409,7 @@ def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
             has_direct_reservation.add(task.job_id)
 
     # Neither grandchild gets any taint constraint (descendants)
-    modified_jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
+    modified_jobs = inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
     for gc_jid in [gc_a_jid, gc_b_jid]:
         gc_constraints = modified_jobs[gc_jid].constraints
         taint = [c for c in gc_constraints if c.key == RESERVATION_TAINT_KEY]
@@ -1435,7 +1435,7 @@ def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
         coscheduling_group_by=None,
     )
     jobs[unrelated_jid] = unrelated_req
-    modified_jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
+    modified_jobs = inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
     unrelated_constraints = modified_jobs[unrelated_jid].constraints
     not_exists = [c for c in unrelated_constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(not_exists) == 1
@@ -1473,7 +1473,7 @@ def test_unrelated_job_blocked_when_all_workers_claimed(ctrl):
     jobs = {unrelated_jid: unrelated_req}
     has_reservation: set[JobName] = set()
 
-    modified_jobs = _inject_taint_constraints(jobs, has_reservation)
+    modified_jobs = inject_taint_constraints(jobs, has_reservation)
     constraints = modified_jobs[unrelated_jid].constraints
     not_exists = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(not_exists) == 1
@@ -1819,7 +1819,7 @@ def test_preference_pass_routes_holder_to_claimed_worker():
         jobs={holder_job_id: req},
     )
 
-    assignments = _preference_pass(context, has_reservation, claims)
+    assignments = preference_pass(context, has_reservation, claims)
 
     assert len(assignments) == 1
     assert assignments[0] == (
