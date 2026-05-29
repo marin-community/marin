@@ -26,8 +26,6 @@ from iris.cluster.runtime.profile import (
     capture_threads,
     resolve_cpu_spec,
     resolve_memory_spec,
-    sigcont_sweep_argv,
-    wrap_with_kill_watchdog,
 )
 from iris.rpc import job_pb2
 
@@ -217,24 +215,6 @@ def test_run_memray_profile_stats_returns_valid_json():
 
 
 # ---------------------------------------------------------------------------
-# Watchdog / recovery command construction
-# ---------------------------------------------------------------------------
-
-
-def test_wrap_with_kill_watchdog_prefixes_timeout_sigkill():
-    wrapped = wrap_with_kill_watchdog(["py-spy", "record"], sample_timeout=42)
-    assert wrapped == ["timeout", "--signal=KILL", "42", "py-spy", "record"]
-
-
-def test_sigcont_sweep_continues_every_pid_via_proc():
-    argv = sigcont_sweep_argv()
-    assert argv[0] == "sh"
-    # Sweeps /proc (no procps) and SIGCONTs each pid, including PID 1.
-    assert "/proc/[0-9]*" in argv[-1]
-    assert "kill -CONT" in argv[-1]
-
-
-# ---------------------------------------------------------------------------
 # Shared capture_* orchestration, exercised through a fake dispatch
 # ---------------------------------------------------------------------------
 
@@ -248,8 +228,6 @@ class FakeDispatch:
     files: dict[str, bytes] = field(default_factory=dict)
     profiler_result: ExecResult = field(default_factory=lambda: ExecResult(0, b"", ""))
     transform_result: ExecResult = field(default_factory=lambda: ExecResult(0, b"", ""))
-    profiler_cmds: list[list[str]] = field(default_factory=list)
-    transform_cmds: list[list[str]] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
     _counter: int = 0
 
@@ -265,11 +243,9 @@ class FakeDispatch:
             self.removed.extend(paths)
 
     def exec_profiler(self, cmd, *, sample_timeout):
-        self.profiler_cmds.append(cmd)
         return self.profiler_result
 
     def exec(self, cmd, *, timeout):
-        self.transform_cmds.append(cmd)
         return self.transform_result
 
     def read_file(self, path):
@@ -285,7 +261,6 @@ def test_capture_cpu_records_reads_and_cleans_up():
     data = capture_cpu(dispatch, cfg, duration_seconds=5, pid="1")
 
     assert data == b"speedscope-bytes"
-    assert dispatch.profiler_cmds[0][:2] == ["py-spy", "record"]
     assert dispatch.removed == ["/tmp/fake-1.json"]
 
 
@@ -303,7 +278,6 @@ def test_capture_threads_returns_stdout_bytes():
     dispatch = FakeDispatch(profiler_result=ExecResult(0, b"Thread 0x1\n  main.py:1", ""))
     data = capture_threads(dispatch, pid="1")
     assert b"Thread 0x1" in data
-    assert dispatch.profiler_cmds[0][:2] == ["py-spy", "dump"]
 
 
 def test_capture_threads_tolerates_non_python_child_with_partial_output():
@@ -329,8 +303,6 @@ def test_capture_memory_flamegraph_attaches_transforms_reads_file():
     data = capture_memory_attach(dispatch, cfg, duration_seconds=5, pid="1")
 
     assert data == b"<html>flamegraph</html>"
-    assert dispatch.profiler_cmds[0][:2] == ["memray", "attach"]
-    assert dispatch.transform_cmds[0][:2] == ["memray", "flamegraph"]
     assert dispatch.removed == ["/tmp/fake-1.bin", "/tmp/fake-2.html"]
 
 

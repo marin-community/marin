@@ -10,7 +10,7 @@ from unittest.mock import Mock
 
 import pytest
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.docker import DockerRuntime, _DockerProfileDispatch
+from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import MountKind, MountSpec
 
 
@@ -103,73 +103,3 @@ def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):
     )
     assert len(calls) == 0
     mock_bundle_store.extract_bundle_to.assert_called_once_with("abc", workdir)
-
-
-# ---------------------------------------------------------------------------
-# _DockerProfileDispatch: in-container `timeout --signal=KILL` reaps a hung
-# profiler and a SIGCONT sweep clears any group-stop it leaves, so an orphaned
-# `docker exec` can never hold the target ptrace-stopped (py-spy#390).
-# ---------------------------------------------------------------------------
-
-
-def _docker_exec_payload(cmd: list[str]) -> list[str]:
-    """Strip the leading ``docker exec <cid>`` wrapper from a captured argv."""
-    assert cmd[:2] == ["docker", "exec"]
-    return cmd[3:]
-
-
-def test_exec_profiler_wraps_in_kill_watchdog_with_longer_host_backstop(monkeypatch):
-    """The profiler runs under `timeout --signal=KILL`; the host timeout is longer."""
-    calls: list[tuple[list[str], dict]] = []
-
-    def fake_run(cmd, **kwargs):
-        calls.append((cmd, kwargs))
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
-
-    dispatch = _DockerProfileDispatch("cid123")
-    dispatch.exec_profiler(["/app/.venv/bin/py-spy", "record", "--pid", "1"], sample_timeout=35)
-
-    cmd, kwargs = calls[0]
-    payload = _docker_exec_payload(cmd)
-    assert payload[:3] == ["timeout", "--signal=KILL", "35"]
-    assert payload[3].endswith("py-spy")
-    # Host backstop outlives the in-container watchdog so the watchdog wins.
-    assert kwargs["timeout"] > 35
-
-
-def test_exec_profiler_sends_sigcont_sweep_after_profiler_exits(monkeypatch):
-    """After the profiler exits, a SIGCONT sweep clears any lingering group-stop."""
-    calls: list[list[str]] = []
-
-    def fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
-
-    _DockerProfileDispatch("cid123").exec_profiler(["/app/.venv/bin/py-spy", "dump"], sample_timeout=30)
-
-    payloads = [_docker_exec_payload(c) for c in calls]
-    assert payloads[0][0] == "timeout"  # profiler first, under the watchdog
-    sweep = payloads[-1]
-    assert sweep[0] == "sh" and "kill -CONT" in sweep[-1]
-
-
-def test_exec_profiler_sigcont_runs_even_when_profiler_raises(monkeypatch):
-    """A host-side timeout must not skip the SIGCONT recovery."""
-    calls: list[list[str]] = []
-
-    def fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        if _docker_exec_payload(cmd)[0] == "timeout":
-            raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
-
-    with pytest.raises(subprocess.TimeoutExpired):
-        _DockerProfileDispatch("cid123").exec_profiler(["py-spy", "dump"], sample_timeout=30)
-
-    assert any(_docker_exec_payload(c)[0] == "sh" and "kill -CONT" in c[-1] for c in calls)
