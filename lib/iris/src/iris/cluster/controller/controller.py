@@ -141,7 +141,7 @@ _UNLIMITED = sys.maxsize
 # every other RPC, including the worker heartbeats that would unblock the
 # drain. Install a wider, named pool so a burst of slow handlers cannot
 # starve the rest.
-_RPC_HANDLER_THREADS = 64
+_RPC_HANDLER_THREADS = 1024
 
 
 def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
