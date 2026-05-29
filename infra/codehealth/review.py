@@ -5,13 +5,14 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
+#     "click>=8.0",
 #     "google-genai>=1.0",
 #     "pydantic>=2.0",
 #     "wandb>=0.18",
 # ]
 # ///
 
-"""Daily aggregator for the review-automation stats dashboard.
+"""Daily aggregator for the code-health stats dashboard.
 
 For each PR merged in the last N days:
   1. Pull review/inline/issue comments via the `gh` CLI.
@@ -24,26 +25,21 @@ For each PR merged in the last N days:
                               plausibly flag it with high confidence.
      Strict ⊆ generous by construction (the prompt enforces it).
   4. Pull the bot's own findings for the PR's head_sha from the existing
-     `findings` artifact written by `infra/review_stats.py`.
+     `findings` artifact written by `infra/codehealth/log_stats.py`.
   5. Append two flat tables to the shared `review-stats` W&B run (same run
-     that `infra/review_stats.py` writes invocations + findings to):
+     that `infra/codehealth/log_stats.py` writes invocations + findings to):
        - human_comments      — one row per classified comment.
        - pr_review_outcomes  — one row per PR (rollup).
 
-Same append-to-artifact pattern as `infra/review_stats.py`. Concurrent
+Same append-to-artifact pattern as `infra/codehealth/log_stats.py`. Concurrent
 writers race; loser's row is dropped (acceptable at our scale).
 
 Requires GEMINI_API_KEY and W&B auth. Invoke via `gh auth login` for the
 GitHub side. Designed to run as a daily GHA cron.
-
-Usage:
-    infra/review_stats_aggregator.py [--days 1] [--limit N] [--repo OWNER/REPO]
-                                     [--model gemini-3.5-flash] [--dry-run]
 """
 
 from __future__ import annotations
 
-import argparse
 import datetime as dt
 import json
 import logging
@@ -53,12 +49,13 @@ import sys
 from dataclasses import dataclass
 from typing import Literal
 
+import click
 import wandb
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
-logger = logging.getLogger("review_stats_aggregator")
+logger = logging.getLogger("codehealth.review")
 
 WANDB_PROJECT = "marin-review-stats"
 WANDB_RUN_ID = "review-stats"
@@ -387,7 +384,7 @@ def load_findings_for_shas(wandb, shas: set[str]) -> dict[str, list[dict]]:
     Returns sha -> list of finding dicts (file, line, code, confidence, message).
     """
     by_sha: dict[str, list[dict]] = {sha: [] for sha in shas}
-    # FINDING_COLUMNS layout from review_stats.py:
+    # FINDING_COLUMNS layout from log_stats.py:
     #   ts, invocation_id, tool, pr_number, git_branch, head_sha, marin_user,
     #   file, line, code, confidence, message
     for r in _load_existing_rows(wandb, "findings"):
@@ -421,31 +418,30 @@ def overlap_count(bot_findings: list[dict], human_comments: list[Comment], windo
 # ---------------------------------------------------------------------------
 
 
-def main() -> int:
+@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+@click.option("--repo", default=DEFAULT_REPO, show_default=True)
+@click.option("--days", type=int, default=1, show_default=True, help="Look back N days of merged PRs")
+@click.option("--limit", type=int, default=100, show_default=True, help="Max PRs to process")
+@click.option("--model", default=DEFAULT_MODEL, show_default=True)
+@click.option(
+    "--bot-logins",
+    default="github-actions,dependabot,claude,claude-review,renovate",
+    show_default=True,
+    help="Comma-separated bot logins to skip (lowercase)",
+)
+@click.option("--dry-run", is_flag=True, help="Skip W&B upload; print rollup")
+def main(repo: str, days: int, limit: int, model: str, bot_logins: str, dry_run: bool) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", default=DEFAULT_REPO)
-    parser.add_argument("--days", type=int, default=1, help="Look back N days of merged PRs")
-    parser.add_argument("--limit", type=int, default=100, help="Max PRs to process")
-    parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument(
-        "--bot-logins",
-        default="github-actions,dependabot,claude,claude-review,renovate",
-        help="Comma-separated bot logins to skip (lowercase)",
-    )
-    parser.add_argument("--dry-run", action="store_true", help="Skip W&B upload; print rollup")
-    args = parser.parse_args()
-
-    bot_logins = {x.strip().lower() for x in args.bot_logins.split(",") if x.strip()}
+    bot_login_set = {x.strip().lower() for x in bot_logins.split(",") if x.strip()}
 
     if not os.environ.get("GEMINI_API_KEY"):
         logger.error("GEMINI_API_KEY not set")
-        return 2
+        sys.exit(2)
 
     client = genai.Client()
 
-    logger.info("Listing PRs merged in last %d day(s) in %s", args.days, args.repo)
-    prs = list_merged_prs(args.repo, args.days, args.limit)
+    logger.info("Listing PRs merged in last %d day(s) in %s", days, repo)
+    prs = list_merged_prs(repo, days, limit)
     logger.info("Found %d merged PRs", len(prs))
 
     aggregator_ts = dt.datetime.now(dt.timezone.utc).isoformat()
@@ -457,7 +453,7 @@ def main() -> int:
 
     for pr in prs:
         try:
-            comments = fetch_pr_comments(args.repo, pr, bot_logins)
+            comments = fetch_pr_comments(repo, pr, bot_login_set)
         except subprocess.CalledProcessError as e:
             logger.warning("Failed to fetch comments for PR #%s: %s", pr["number"], e)
             continue
@@ -465,7 +461,7 @@ def main() -> int:
         all_shas.add(pr["headRefOid"])
 
     # Pull bot findings for these shas from the shared run (skip in dry-run).
-    if args.dry_run:
+    if dry_run:
         findings_by_sha = {sha: [] for sha in all_shas}
     else:
         wandb.init(
@@ -485,7 +481,7 @@ def main() -> int:
         strict_cnt = generous_cnt = 0
 
         for c in human:
-            cls = classify_comment(client, args.model, c.file, c.line, c.body)
+            cls = classify_comment(client, model, c.file, c.line, c.body)
             if cls is None:
                 continue
             by_class[cls.klass] = by_class.get(cls.klass, 0) + 1
@@ -540,9 +536,9 @@ def main() -> int:
             len(bot_findings),
         )
 
-    if args.dry_run:
-        print(json.dumps({"pr_rollups": pr_rows, "human_comments": human_rows[:20]}, default=str, indent=2))
-        return 0
+    if dry_run:
+        click.echo(json.dumps({"pr_rollups": pr_rows, "human_comments": human_rows[:20]}, default=str, indent=2))
+        return
 
     # Replace-by-PR: a daily cron over a rolling window re-classifies PRs we've
     # seen before. Drop existing rows whose pr_number is in this batch, then
@@ -569,8 +565,7 @@ def main() -> int:
         WANDB_PROJECT,
         WANDB_RUN_ID,
     )
-    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

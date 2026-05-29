@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Opportunistic W&B logging for review-automation tools.
+"""Opportunistic W&B logging for code-health automation.
 
 Reads one JSON event from stdin and appends rows to two flat W&B Tables
 attached to a single persistent run (`review-stats`) in the

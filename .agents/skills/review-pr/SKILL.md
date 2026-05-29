@@ -1,7 +1,7 @@
 ---
 name: review-pr
 description: Multi-agent correctness review of a pull request.
-allowed-tools: Bash(gh issue view:*), Bash(gh search:*), Bash(gh issue list:*), Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(.venv/bin/python infra/review_stats.py:*), mcp__github_inline_comment__create_inline_comment
+allowed-tools: Bash(gh issue view:*), Bash(gh search:*), Bash(gh issue list:*), Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(.venv/bin/python infra/codehealth/log_stats.py:*), mcp__github_inline_comment__create_inline_comment
 ---
 
 Provide a code review for the given pull request.
@@ -58,7 +58,7 @@ Follow these steps precisely:
    non-`--comment` runs in the dashboard. Run from the repo root:
 
    ```bash
-   cat <<'EOF' | .venv/bin/python infra/review_stats.py
+   cat <<'EOF' | .venv/bin/python infra/codehealth/log_stats.py
    {
      "tool": "review-pr",
      "invocation": {

@@ -970,8 +970,8 @@ def _git_blob_sha(path: pathlib.Path) -> str | None:
 
 
 def _ship_review_stats(event: dict) -> None:
-    """Fire-and-forget: hand the event off to infra/review_stats.py via the
-    project venv. Detached so the W&B init/network cost never blocks the dev.
+    """Fire-and-forget: hand the event off to infra/codehealth/log_stats.py via
+    the project venv. Detached so the W&B init/network cost never blocks the dev.
     Silent on every failure mode (no venv, no wandb, no auth, no network).
     """
     venv_python = ROOT_DIR / ".venv" / "bin" / "python"
@@ -979,7 +979,7 @@ def _ship_review_stats(event: dict) -> None:
         return
     try:
         proc = subprocess.Popen(
-            [str(venv_python), str(ROOT_DIR / "infra" / "review_stats.py")],
+            [str(venv_python), str(ROOT_DIR / "infra" / "codehealth" / "log_stats.py")],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
