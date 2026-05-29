@@ -41,7 +41,7 @@ from finelog.rpc import logging_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 from finelog.rpc.logging_connect import LogServiceClientSync
 from finelog.store.log_namespace import LOG_REGISTERED_SCHEMA
-from finelog.store.policy import StoragePolicy, policy_to_proto
+from finelog.store.policy import StoragePolicy
 from finelog.store.schema import (
     IMPLICIT_SEQ_COLUMN,
     Column,
@@ -573,7 +573,7 @@ class LogClient:
                 stats_pb2.RegisterTableRequest(
                     namespace=namespace,
                     schema=schema_to_proto(requested),
-                    storage_policy=policy_to_proto(storage_policy),
+                    storage_policy=storage_policy.to_proto(),
                 )
             )
         except ConnectError as exc:

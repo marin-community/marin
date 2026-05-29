@@ -11,7 +11,7 @@ from pathlib import Path
 from finelog.store.catalog import Catalog
 from finelog.store.compactor import CompactionConfig
 from finelog.store.duckdb_store import DuckDBLogStore
-from finelog.store.policy import StoragePolicy, policy_from_proto, policy_to_proto
+from finelog.store.policy import StoragePolicy
 
 from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema
 
@@ -19,11 +19,11 @@ from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema
 def test_policy_proto_round_trip():
     """Zero in proto maps to None in dataclass and vice versa."""
     src = StoragePolicy(max_segments=5, max_bytes=100, max_age_seconds=3600)
-    assert policy_from_proto(policy_to_proto(src)) == src
+    assert StoragePolicy.from_proto(src.to_proto()) == src
 
     empty = StoragePolicy()
     assert empty.is_empty()
-    assert policy_from_proto(policy_to_proto(empty)) == empty
+    assert StoragePolicy.from_proto(empty.to_proto()) == empty
 
 
 def test_catalog_persists_policy(tmp_path: Path):

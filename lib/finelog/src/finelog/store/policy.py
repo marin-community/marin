@@ -54,20 +54,19 @@ class StoragePolicy:
         """True iff every field is ``None`` (i.e. inherit-all)."""
         return self.max_segments is None and self.max_bytes is None and self.max_age_seconds is None
 
+    @classmethod
+    def from_proto(cls, msg: stats_pb2.StoragePolicy) -> StoragePolicy:
+        """Decode a wire policy. Zero in proto3 means "inherit"."""
+        return cls(
+            max_segments=msg.max_segments or None,
+            max_bytes=msg.max_bytes or None,
+            max_age_seconds=msg.max_age_seconds or None,
+        )
 
-def policy_from_proto(msg: stats_pb2.StoragePolicy) -> StoragePolicy:
-    """Decode a wire policy. Zero in proto3 means "inherit"."""
-    return StoragePolicy(
-        max_segments=msg.max_segments or None,
-        max_bytes=msg.max_bytes or None,
-        max_age_seconds=msg.max_age_seconds or None,
-    )
-
-
-def policy_to_proto(policy: StoragePolicy) -> stats_pb2.StoragePolicy:
-    """Encode a policy for the wire. ``None`` round-trips as proto3's zero."""
-    return stats_pb2.StoragePolicy(
-        max_segments=policy.max_segments or 0,
-        max_bytes=policy.max_bytes or 0,
-        max_age_seconds=policy.max_age_seconds or 0,
-    )
+    def to_proto(self) -> stats_pb2.StoragePolicy:
+        """Encode a policy for the wire. ``None`` round-trips as proto3's zero."""
+        return stats_pb2.StoragePolicy(
+            max_segments=self.max_segments or 0,
+            max_bytes=self.max_bytes or 0,
+            max_age_seconds=self.max_age_seconds or 0,
+        )

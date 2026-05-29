@@ -24,7 +24,7 @@ from connectrpc.errors import ConnectError
 
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.store import LogStore
-from finelog.store.policy import policy_from_proto, policy_to_proto
+from finelog.store.policy import StoragePolicy
 from finelog.store.schema import (
     InvalidNamespaceError,
     NamespaceNotFoundError,
@@ -69,7 +69,7 @@ class StatsServiceImpl:
     ) -> stats_pb2.RegisterTableResponse:
         try:
             schema = schema_from_proto(request.schema)
-            policy = policy_from_proto(request.storage_policy)
+            policy = StoragePolicy.from_proto(request.storage_policy)
             effective_schema = await asyncio.to_thread(self._log_store.register_table, request.namespace, schema, policy)
         except InvalidNamespaceError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
@@ -82,7 +82,7 @@ class StatsServiceImpl:
         effective_policy = self._log_store.catalog.get_policy(request.namespace)
         return stats_pb2.RegisterTableResponse(
             effective_schema=schema_to_proto(effective_schema),
-            effective_policy=policy_to_proto(effective_policy),
+            effective_policy=effective_policy.to_proto(),
         )
 
     async def write_rows(
@@ -152,7 +152,7 @@ class StatsServiceImpl:
                 min_seq=stats.min_seq,
                 max_seq=stats.max_seq,
                 segment_count=stats.segment_count,
-                storage_policy=policy_to_proto(policy),
+                storage_policy=policy.to_proto(),
             )
             for name, schema, stats, policy in entries
         ]

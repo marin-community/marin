@@ -1930,7 +1930,7 @@ class MemoryLogNamespace:
     def update_policy(self, new_policy: StoragePolicy) -> None:
         # In-memory namespaces don't evict; policy is accepted for
         # protocol uniformity and ignored.
-        del new_policy
+        pass
 
     def evict_segment(self, path: str) -> int:
         return 0
