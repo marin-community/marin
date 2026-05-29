@@ -101,6 +101,10 @@ def _structural_exemplar(record: dict) -> dict:
     sequence leaves to a single element keeps the per-shard payload returned to
     the coordinator tiny — a full document can be megabytes for long-context
     data, and we return one per shard.
+
+    This is an optimization to avoid materializing too much data on the
+    entrypoint: every shard ships its exemplar back, but only the structure is
+    needed, so we never pull whole documents onto the coordinator.
     """
     return {k: v[:1] if isinstance(v, np.ndarray | list | tuple) else v for k, v in record.items()}
 
