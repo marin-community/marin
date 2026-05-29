@@ -15,13 +15,14 @@ those methods directly when needed.
 from dataclasses import dataclass
 from typing import Any
 
-from iris.cluster.controller import direct_provider, ops, writes
+from iris.cluster.controller import direct_provider, ops, reads, writes
 from iris.cluster.controller.ops.task import Assignment, apply_terminal_decisions
 from iris.cluster.controller.ops.task import apply_provider_updates as apply_direct_provider_updates
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.reads import ReservationClaim
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
+from iris.cluster.controller.scheduling_policy import claim_workers_for_reservations, cleanup_stale_claims
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
@@ -126,6 +127,15 @@ class ReplaceReservationClaims:
     claims: dict[WorkerId, ReservationClaim]
 
 
+@dataclass(frozen=True, slots=True)
+class RunReservationClaimCycle:
+    """Run the controller's reservation claim phase: clean up stale claims, then
+    claim eligible workers for unsatisfied reservation entries, persisting the
+    result. Drives the same ``scheduling_policy.refresh_reservation_claims`` path
+    the controller runs each scheduling cycle.
+    """
+
+
 IrisEvent = (
     SubmitJob
     | CancelJob
@@ -144,6 +154,7 @@ IrisEvent = (
     | AddEndpoint
     | RemoveEndpoint
     | ReplaceReservationClaims
+    | RunReservationClaimCycle
 )
 
 
@@ -260,5 +271,20 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                 return transitions._endpoints.remove(cur, endpoint_id)
             case ReplaceReservationClaims(claims):
                 return writes.replace_reservation_claims(cur, claims)
+            case RunReservationClaimCycle():
+                # Persist through the caller's ``cur`` rather than the standalone
+                # ``refresh_reservation_claims`` write transaction, which would
+                # nest inside this open one. Reads use the separate read engine.
+                claims = reads.list_claims(cur)
+                changed = cleanup_stale_claims(claims, transitions._db, transitions._health)
+                changed = (
+                    claim_workers_for_reservations(
+                        claims, transitions._db, transitions._health, transitions._worker_attrs
+                    )
+                    or changed
+                )
+                if changed:
+                    writes.replace_reservation_claims(cur, claims)
+                return claims
             case _:
                 raise TypeError(f"unhandled IrisEvent variant: {type(event).__name__}")

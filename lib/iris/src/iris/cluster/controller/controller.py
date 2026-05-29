@@ -37,9 +37,6 @@ from iris.cluster.controller.checkpoint import (
     upload_checkpoint,
     write_checkpoint,
 )
-from iris.cluster.controller.codec import (
-    reservation_entries_from_json,
-)
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.direct_provider import (
@@ -83,16 +80,14 @@ from iris.cluster.controller.scheduling_policy import (
     _get_running_tasks_with_band_and_value,
     _inject_reservation_taints,
     _inject_taint_constraints,
-    _job_state_by_id,
-    _jobs_with_reservations,
     _preference_pass,
     _read_reservation_claims,
     _run_preemption_pass,
-    _worker_matches_reservation_entry,
     apply_scheduling_gates,
     build_scheduling_context,
     compute_demand_entries,
     compute_scheduling_order,
+    refresh_reservation_claims,
 )
 from iris.cluster.controller.schema import (
     job_config_table,
@@ -113,7 +108,6 @@ from iris.cluster.types import (
     WorkerId,
     WorkerStatus,
     WorkerStatusMap,
-    is_job_finished,
 )
 from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
@@ -836,80 +830,6 @@ class Controller:
         # Worker-side kills are surfaced through the next K8s pod-diff sync;
         # no immediate RPC fan-out here.
 
-    def _cleanup_stale_claims(self, claims: dict[WorkerId, ReservationClaim] | None = None) -> bool:
-        """Remove claims for workers that disappeared or jobs that finished."""
-        persisted = False
-        if claims is None:
-            claims = _read_reservation_claims(self._db)
-            persisted = True
-        active_worker_ids = {wid for wid, l in self._health.all().items() if l.active}
-        claimed_job_ids = {JobName.from_wire(claim.job_id) for claim in claims.values()}
-        # Only job.state is needed here; use the thin 2-column query.
-        job_states = _job_state_by_id(self._db, claimed_job_ids)
-        stale: list[WorkerId] = []
-        for worker_id, claim in claims.items():
-            if worker_id not in active_worker_ids:
-                stale.append(worker_id)
-                continue
-            job_state = job_states.get(JobName.from_wire(claim.job_id))
-            if job_state is None or is_job_finished(job_state):
-                stale.append(worker_id)
-        for wid in stale:
-            del claims[wid]
-        if stale and persisted:
-            with self._db.transaction() as cur:
-                writes.replace_reservation_claims(cur, claims)
-            log_event("reservation_claims_cleaned", "controller", count=len(stale))
-        return bool(stale)
-
-    def _claim_workers_for_reservations(self, claims: dict[WorkerId, ReservationClaim] | None = None) -> bool:
-        """Assign unclaimed workers to unsatisfied reservation entries.
-
-        Scans all non-finished jobs with reservations. For each unfulfilled
-        entry, finds an eligible unclaimed worker and records the claim.
-        """
-        persisted = False
-        if claims is None:
-            claims = _read_reservation_claims(self._db)
-            persisted = True
-        claimed_entries: set[tuple[str, int]] = {(c.job_id, c.entry_idx) for c in claims.values()}
-        claimed_worker_ids: set[WorkerId] = set(claims.keys())
-        with self._db.read_snapshot() as tx:
-            all_workers = reads.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
-        changed = False
-
-        reservable_states = (
-            job_pb2.JOB_STATE_PENDING,
-            job_pb2.JOB_STATE_BUILDING,
-            job_pb2.JOB_STATE_RUNNING,
-        )
-        reservation_jobs = _jobs_with_reservations(self._db, reservable_states)
-        for job in reservation_jobs:
-            job_wire = job.job_id.to_wire()
-            for idx, res_entry in enumerate(reservation_entries_from_json(job.reservation_json)):
-                if (job_wire, idx) in claimed_entries:
-                    continue
-
-                for worker in all_workers:
-                    if worker.worker_id in claimed_worker_ids:
-                        continue
-                    if not _worker_matches_reservation_entry(worker, res_entry):
-                        continue
-
-                    claims[worker.worker_id] = ReservationClaim(
-                        job_id=job_wire,
-                        entry_idx=idx,
-                    )
-                    claimed_worker_ids.add(worker.worker_id)
-                    claimed_entries.add((job_wire, idx))
-                    changed = True
-                    break
-        if changed and persisted:
-            with self._db.transaction() as cur:
-                writes.replace_reservation_claims(cur, claims)
-            log_event("reservation_claims_updated", "controller", total_claims=len(claims))
-        return changed
-
     def _run_scheduling(self) -> SchedulingOutcome:
         """Run one scheduling cycle.
 
@@ -1002,20 +922,12 @@ class Controller:
 
     def _refresh_reservation_claims(self) -> dict[WorkerId, ReservationClaim]:
         """Read, clean up, and refresh reservation claims. Returns updated claims."""
-        # Claims are read outside the scheduling transaction. This creates a
-        # narrow race window where a worker could be removed between claim reads
-        # and scheduling, but it's benign: queue_assignments() re-validates all
-        # assignments transactionally, and stale claims are cleaned up next cycle.
-        claims = _read_reservation_claims(self._db)
-        claims_changed = self._cleanup_stale_claims(claims)
-        claims_changed = self._claim_workers_for_reservations(claims) or claims_changed
-        if claims_changed:
-            if self._config.dry_run:
-                logger.info("[DRY-RUN] Would update %d reservation claims", len(claims))
-            else:
-                with self._db.transaction() as cur:
-                    writes.replace_reservation_claims(cur, claims)
-        return claims
+        return refresh_reservation_claims(
+            self._db,
+            self._health,
+            self._worker_attrs,
+            persist=not self._config.dry_run,
+        )
 
     def _run_scheduler_pass(
         self,

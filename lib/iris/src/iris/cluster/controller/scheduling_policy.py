@@ -30,7 +30,7 @@ from iris.cluster.constraints import (
 from iris.cluster.constraints import (
     region_constraint as make_region_constraint,
 )
-from iris.cluster.controller import db, reads
+from iris.cluster.controller import db, reads, writes
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.budget import (
     UserTask,
@@ -712,6 +712,100 @@ def _worker_matches_reservation_entry(
             return False
 
     return True
+
+
+def cleanup_stale_claims(
+    claims: dict[WorkerId, ReservationClaim],
+    db: ControllerDB,
+    health: WorkerHealthTracker,
+) -> bool:
+    """Remove claims for workers that disappeared or jobs that finished.
+
+    Mutates ``claims`` in place; returns whether anything was removed.
+    """
+    active_worker_ids = {wid for wid, lease in health.all().items() if lease.active}
+    claimed_job_ids = {JobName.from_wire(claim.job_id) for claim in claims.values()}
+    job_states = _job_state_by_id(db, claimed_job_ids)
+    stale: list[WorkerId] = []
+    for worker_id, claim in claims.items():
+        if worker_id not in active_worker_ids:
+            stale.append(worker_id)
+            continue
+        job_state = job_states.get(JobName.from_wire(claim.job_id))
+        if job_state is None or is_job_finished(job_state):
+            stale.append(worker_id)
+    for wid in stale:
+        del claims[wid]
+    return bool(stale)
+
+
+def claim_workers_for_reservations(
+    claims: dict[WorkerId, ReservationClaim],
+    db: ControllerDB,
+    health: WorkerHealthTracker,
+    worker_attrs: WorkerAttrsProjection,
+) -> bool:
+    """Assign unclaimed workers to unsatisfied reservation entries.
+
+    Scans all non-finished jobs with reservations. For each unfulfilled entry,
+    finds an eligible unclaimed worker and records the claim. Mutates ``claims``
+    in place; returns whether any new claim was added.
+    """
+    claimed_entries: set[tuple[str, int]] = {(c.job_id, c.entry_idx) for c in claims.values()}
+    claimed_worker_ids: set[WorkerId] = set(claims.keys())
+    with db.read_snapshot() as tx:
+        all_workers = reads.healthy_active_workers_with_attributes(tx, health, worker_attrs)
+    changed = False
+
+    reservable_states = (
+        job_pb2.JOB_STATE_PENDING,
+        job_pb2.JOB_STATE_BUILDING,
+        job_pb2.JOB_STATE_RUNNING,
+    )
+    reservation_jobs = _jobs_with_reservations(db, reservable_states)
+    for job in reservation_jobs:
+        job_wire = job.job_id.to_wire()
+        for idx, res_entry in enumerate(reservation_entries_from_json(job.reservation_json)):
+            if (job_wire, idx) in claimed_entries:
+                continue
+
+            for worker in all_workers:
+                if worker.worker_id in claimed_worker_ids:
+                    continue
+                if not _worker_matches_reservation_entry(worker, res_entry):
+                    continue
+
+                claims[worker.worker_id] = ReservationClaim(job_id=job_wire, entry_idx=idx)
+                claimed_worker_ids.add(worker.worker_id)
+                claimed_entries.add((job_wire, idx))
+                changed = True
+                break
+    return changed
+
+
+def refresh_reservation_claims(
+    db: ControllerDB,
+    health: WorkerHealthTracker,
+    worker_attrs: WorkerAttrsProjection,
+    *,
+    persist: bool = True,
+) -> dict[WorkerId, ReservationClaim]:
+    """Read, clean up, and re-claim reservation workers; return updated claims.
+
+    Claims are read outside any scheduling transaction. This creates a narrow
+    race window where a worker could be removed between the claim read and
+    scheduling, but it's benign: ``queue_assignments`` re-validates assignments
+    transactionally and stale claims are cleaned up on the next cycle. Pass
+    ``persist=False`` to compute the updated claims without writing them
+    (dry-run).
+    """
+    claims = _read_reservation_claims(db)
+    changed = cleanup_stale_claims(claims, db, health)
+    changed = claim_workers_for_reservations(claims, db, health, worker_attrs) or changed
+    if changed and persist:
+        with db.transaction() as cur:
+            writes.replace_reservation_claims(cur, claims)
+    return claims
 
 
 def _inject_reservation_taints(

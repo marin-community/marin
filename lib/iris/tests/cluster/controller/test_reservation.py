@@ -46,11 +46,14 @@ from iris.cluster.controller.scheduling_policy import (
     _inject_reservation_taints,
     _inject_taint_constraints,
     _preference_pass,
+    _read_reservation_claims,
     _reservation_region_constraints,
     _reserved_job_ids,
     _worker_matches_reservation_entry,
     apply_scheduling_gates,
     build_scheduling_context,
+    claim_workers_for_reservations,
+    cleanup_stale_claims,
     job_requirements_from_job,
 )
 from iris.cluster.controller.task_state import task_row_can_be_scheduled
@@ -219,6 +222,22 @@ def ctrl(make_controller) -> Controller:
     return make_controller(remote_state_dir="file:///tmp/iris-test-bundles")
 
 
+def _claim_for_reservations(ctrl: Controller) -> None:
+    """Read claims, run the claim pass, and persist — mirrors the scheduling cycle."""
+    claims = _read_reservation_claims(ctrl._db)
+    if claim_workers_for_reservations(claims, ctrl._db, ctrl._health, ctrl._worker_attrs):
+        with ctrl._db.transaction() as cur:
+            writes.replace_reservation_claims(cur, claims)
+
+
+def _cleanup_claims(ctrl: Controller) -> None:
+    """Read claims, run the stale-claim sweep, and persist."""
+    claims = _read_reservation_claims(ctrl._db)
+    if cleanup_stale_claims(claims, ctrl._db, ctrl._health):
+        with ctrl._db.transaction() as cur:
+            writes.replace_reservation_claims(cur, claims)
+
+
 def _register_worker(
     state: ControllerTestState,
     worker_id: str,
@@ -326,7 +345,7 @@ def test_claim_eligible_worker(ctrl):
     )
     _submit_job(ctrl, "j1", req)
 
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     assert WorkerId("w1") in ctrl.reservation_claims
     claim = ctrl.reservation_claims[WorkerId("w1")]
@@ -342,7 +361,7 @@ def test_claim_rejects_wrong_device(ctrl):
     )
     _submit_job(ctrl, "j1", req)
 
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     assert len(ctrl.reservation_claims) == 0
 
@@ -355,7 +374,7 @@ def test_claim_one_per_worker(ctrl):
     )
     _submit_job(ctrl, "j1", req)
 
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     assert len(ctrl.reservation_claims) == 1
     assert WorkerId("w1") in ctrl.reservation_claims
@@ -370,7 +389,7 @@ def test_claim_respects_entry_count(ctrl):
     )
     _submit_job(ctrl, "j1", req)
 
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     assert len(ctrl.reservation_claims) == 2
     job_wire = JobName.root("test-user", "j1").to_wire()
@@ -388,7 +407,7 @@ def test_claim_does_not_exceed_entry_count(ctrl):
     )
     _submit_job(ctrl, "j1", req)
 
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     assert len(ctrl.reservation_claims) == 1
 
@@ -410,7 +429,7 @@ def test_claim_independent_per_job(ctrl):
     )
     _submit_job(ctrl, "job-b", req_b)
 
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     assert len(ctrl.reservation_claims) == 2
     job_ids = {c.job_id for c in ctrl.reservation_claims.values()}
@@ -431,7 +450,7 @@ def test_claim_skips_unhealthy_worker(ctrl):
     )
     _submit_job(ctrl, "j1", req)
 
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     assert len(ctrl.reservation_claims) == 0
 
@@ -444,8 +463,8 @@ def test_claim_idempotent(ctrl):
     )
     _submit_job(ctrl, "j1", req)
 
-    ctrl._claim_workers_for_reservations()
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
+    _claim_for_reservations(ctrl)
 
     assert len(ctrl.reservation_claims) == 1
 
@@ -462,7 +481,7 @@ def test_cleanup_removes_dead_worker_claims(ctrl):
         reservation_entries=[_make_reservation_entry()],
     )
     _submit_job(ctrl, "j1", req)
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
     assert len(ctrl.reservation_claims) == 1
 
     # Simulate worker disappearing by injecting a claim for a non-existent worker
@@ -475,7 +494,7 @@ def test_cleanup_removes_dead_worker_claims(ctrl):
         writes.replace_reservation_claims(cur, claims)
     assert len(ctrl.reservation_claims) == 2
 
-    ctrl._cleanup_stale_claims()
+    _cleanup_claims(ctrl)
 
     # dead-worker removed, w1 preserved
     assert WorkerId("dead-worker") not in ctrl.reservation_claims
@@ -489,7 +508,7 @@ def test_cleanup_removes_finished_job_claims(ctrl):
         reservation_entries=[_make_reservation_entry()],
     )
     jid = _submit_job(ctrl, "j1", req)
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
     assert len(ctrl.reservation_claims) == 1
 
     # Kill the job to mark it as finished.
@@ -499,7 +518,7 @@ def test_cleanup_removes_finished_job_claims(ctrl):
     job = _query_job(ctrl, jid)
     assert is_job_finished(job.state)
 
-    ctrl._cleanup_stale_claims()
+    _cleanup_claims(ctrl)
 
     assert len(ctrl.reservation_claims) == 0
 
@@ -511,9 +530,9 @@ def test_cleanup_preserves_valid_claims(ctrl):
         reservation_entries=[_make_reservation_entry()],
     )
     _submit_job(ctrl, "j1", req)
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
-    ctrl._cleanup_stale_claims()
+    _cleanup_claims(ctrl)
 
     assert len(ctrl.reservation_claims) == 1
 
@@ -530,7 +549,7 @@ def test_gate_satisfied_when_claims_meet_entries(ctrl):
         reservation_entries=[_make_reservation_entry()],
     )
     jid = _submit_job(ctrl, "j1", req)
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     claims = ctrl.reservation_claims
     ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults)
@@ -546,7 +565,7 @@ def test_gate_unsatisfied_when_claims_below_entries(ctrl):
         reservation_entries=[_make_reservation_entry(), _make_reservation_entry()],
     )
     jid = _submit_job(ctrl, "j1", req)
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     # Only 1 worker available for 2 entries — gate must stay closed.
     claims = ctrl.reservation_claims
@@ -961,7 +980,7 @@ def test_region_constraint_injected_from_claimed_workers(ctrl):
 
     req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
     jid = _submit_job(ctrl, "j1", req)
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     result = _reservation_region_constraints(
         jid.to_wire(),
@@ -985,7 +1004,7 @@ def test_region_constraint_not_injected_when_already_present(ctrl):
 
     req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
     jid = _submit_job(ctrl, "j1", req)
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     existing = Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-east1")
     result = _reservation_region_constraints(
@@ -1007,7 +1026,7 @@ def test_region_constraint_not_injected_when_no_region_attr(ctrl):
 
     req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
     jid = _submit_job(ctrl, "j1", req)
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     result = _reservation_region_constraints(
         jid.to_wire(),
@@ -1032,7 +1051,7 @@ def test_region_constraint_multiple_regions(ctrl):
         reservation_entries=[_make_reservation_entry(), _make_reservation_entry()],
     )
     jid = _submit_job(ctrl, "j1", req)
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     result = _reservation_region_constraints(
         jid.to_wire(),
@@ -1057,7 +1076,7 @@ def test_no_injection_for_non_reservation_job(ctrl):
     # Claim w1 for a different job
     req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
     _submit_job(ctrl, "other-job", req)
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     result = _reservation_region_constraints(
         "/test-user/unrelated-job",
@@ -1210,7 +1229,7 @@ def test_taint_exemption_for_children_of_reservation_job(ctrl):
         ],
     )
     _submit_job(ctrl, "res-parent", parent_req)
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
     assert len(ctrl.reservation_claims) == 2
 
     # Child job (NO reservation) requesting GPU
@@ -1325,7 +1344,7 @@ def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
             run_template_cache=ctrl._run_template_cache,
         )
 
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
     assert len(ctrl.reservation_claims) == 4
 
     # Grandchild-A (under child-A) requesting H100
@@ -1435,7 +1454,7 @@ def test_unrelated_job_blocked_when_all_workers_claimed(ctrl):
         ],
     )
     _submit_job(ctrl, "res-parent", parent_req)
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
     assert len(ctrl.reservation_claims) == 2
 
     # Unrelated job requesting GPU
