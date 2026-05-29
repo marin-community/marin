@@ -2,48 +2,42 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build and publish marin-* lib wheels.
+"""Build the marin-* lib wheels for PyPI publication.
 
-Builds the eight pure-Python marin-* lib packages (marin, marin-iris,
+Builds the eight pure-Python marin-* lib packages (marin-core, marin-iris,
 marin-fray, marin-haliax, marin-levanter, marin-rigging, marin-zephyr,
-marin-finelog) into dist/, then optionally publishes them as GitHub Releases.
+marin-finelog) into dist/. Publication to PyPI is done by the release
+workflow (.github/workflows/marin-release-libs-wheels.yaml) via
+`pypa/gh-action-pypi-publish` with OIDC trusted publishing -- this script
+never uploads anything and never needs a token.
 
 Four modes:
-    nightly  -- version becomes <base>.dev<YYYYMMDD>; overwrites the rolling
-                marin-<pkg>-latest tag in place. No dated history is kept;
-                reproducibility comes from stable tags, not historical nightlies.
-    stable   -- version is taken from --version; creates marin-<pkg>-v<version>
-                and overwrites marin-<pkg>-stable.
-    manual   -- version becomes <base>+manual.<sha>; build only (no publish).
-                Useful for inspecting wheels from a workflow_dispatch run.
-    vendor   -- version becomes <base>.dev<YYYYMMDDHHMMSS>; copy wheels to a
-                local directory (no GH publish). For local-iteration loops
+    nightly  -- version becomes <dev_base>.dev<YYYYMMDDhhmm> (UTC). <dev_base>
+                is one patch above max(declared version, latest stable on
+                PyPI), so PEP 440 orders the dev release above the current
+                stable and `pip install --pre` / `uv` prefer it.
+    stable   -- version is taken verbatim from --version (the release
+                workflow extracts it from the marin-libs-v<version> tag).
+    manual   -- version becomes <declared>+manual.<sha>; a build-only smoke.
+                PyPI rejects local-version identifiers, so the workflow's
+                publish job declines to run in this mode.
+    vendor   -- version becomes <dev_base>.dev<YYYYMMDDHHMMSS>; copy wheels to
+                a local directory (no publish). For local-iteration loops
                 where a marin worktree feeds wheels into an experiment repo's
-                find-links. The timestamp guarantees rebuilt wheels beat any
-                nightly already published earlier the same day.
-
-Two publish targets, independent of each other:
-    GitHub Releases  -- on by default; suppress with --skip-gh-release.
-    PyPI             -- off by default; opt in with --publish-pypi
-                        (requires UV_PUBLISH_TOKEN).
+                find-links. The second-precision timestamp guarantees rebuilt
+                wheels beat any nightly already published earlier the same day.
 
 Usage:
     python scripts/python_libs_package.py --mode nightly
-    python scripts/python_libs_package.py --mode stable --version 1.0.0
-    python scripts/python_libs_package.py --mode nightly --skip-gh-release
-    python scripts/python_libs_package.py --skip-build --publish-only
+    python scripts/python_libs_package.py --mode stable --version 0.2.0
+    python scripts/python_libs_package.py --mode nightly --resolve-only
     python scripts/python_libs_package.py --mode vendor --vendor ../tiny-tpu/vendor
 
-    # First-time PyPI registration (PyPI only, no GH Release):
-    UV_PUBLISH_TOKEN=pypi-xxx python scripts/python_libs_package.py \
-        --mode stable --version 0.99 --publish-pypi --skip-gh-release
-
 The build is done from a temporary in-place patch of each package's version
-file plus a cross-pin rewrite of every sibling dependency. Mutations are
-reverted on exit (success OR failure) so the working tree stays clean.
-After building, dist/BUILD_INFO.json records the resolved version so that a
-subsequent --publish-only call (typically the publish job in CI) uses the
-exact version the build job produced, even if the run straddles midnight UTC.
+file plus a cross-pin rewrite of every sibling dependency, so the eight wheels
+published together always require each other at the exact same version.
+Mutations are reverted on exit (success OR failure) so the working tree stays
+clean.
 """
 
 import argparse
@@ -61,14 +55,13 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DIST_DIR = REPO_ROOT / "dist"
-REPO = "marin-community/marin"
 
 
 # Each entry: (dist name, lib subdir, version-file path relative to lib subdir, version-file kind)
 # kind = "pyproject" -> patch  version = "..."  in pyproject.toml
 # kind = "about_py"  -> patch  __version__ = "..."  in src/<pkg>/__about__.py
 PACKAGES: dict[str, dict[str, str]] = {
-    "marin": {"path": "lib/marin", "version_file": "pyproject.toml", "kind": "pyproject"},
+    "marin-core": {"path": "lib/marin", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-iris": {"path": "lib/iris", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-fray": {"path": "lib/fray", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-rigging": {"path": "lib/rigging", "version_file": "pyproject.toml", "kind": "pyproject"},
@@ -77,8 +70,6 @@ PACKAGES: dict[str, dict[str, str]] = {
     "marin-haliax": {"path": "lib/haliax", "version_file": "src/haliax/__about__.py", "kind": "about_py"},
     "marin-finelog": {"path": "lib/finelog", "version_file": "pyproject.toml", "kind": "pyproject"},
 }
-
-SIBLING_NAMES = sorted(PACKAGES.keys(), key=len, reverse=True)
 
 
 # ---------- helpers ----------------------------------------------------------
@@ -92,6 +83,15 @@ def _check_tool(name: str, install_hint: str) -> None:
 
 def _git_short_sha() -> str:
     return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True, cwd=REPO_ROOT).strip()
+
+
+def _emit_github_output(key: str, value: str) -> None:
+    """Append `key=value` to $GITHUB_OUTPUT when running under GitHub Actions."""
+    path = os.environ.get("GITHUB_OUTPUT")
+    if not path:
+        return
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(f"{key}={value}\n")
 
 
 def _read_base_version(pkg: str) -> str:
@@ -131,7 +131,7 @@ def _set_version(text: str, kind: str, new_version: str) -> str:
 
 # Match dependency list items: lines that are indented and start with a quoted
 # sibling name. Anchored on `^\s+"` so we never touch metadata lines like
-# `name = "marin"` (no leading whitespace) or single-line `gpu = ["..."]`
+# `name = "marin-core"` (no leading whitespace) or single-line `gpu = ["..."]`
 # entries (no marin siblings appear in those today; verified by grep).
 _SIBLING_ALT = "|".join(re.escape(s) for s in sorted(PACKAGES, key=len, reverse=True))
 _SIBLING_ITEM_RE = re.compile(
@@ -219,72 +219,96 @@ def patched_tree(version: str):
             path.write_text(text)
 
 
-# ---------- build ------------------------------------------------------------
+# ---------- version resolution -----------------------------------------------
 
 
-def _highest_base_version() -> str:
-    """Return the highest version currently declared across the seven libs.
+def _version_key(version: str) -> tuple[int, ...]:
+    """Sort key for a dotted version; non-numeric segments count as 0."""
+    return tuple(int(p) if p.isdigit() else 0 for p in re.split(r"[.\-+]", version))
 
-    All seven packages share one synthetic version per build so cross-pins
-    resolve cleanly. Picking the max keeps the synthetic version above the
-    most recent stable so uv prefers it.
+
+def _bump_patch(version: str) -> str:
+    """Return one patch above `version` (e.g. 0.1.0 -> 0.1.1)."""
+    parts = [int(p) for p in re.split(r"[.\-+]", version) if p.isdigit()][:3]
+    parts += [0] * (3 - len(parts))
+    major, minor, patch = parts
+    return f"{major}.{minor}.{patch + 1}"
+
+
+def _highest_declared_version() -> str:
+    """Highest version currently declared across the eight libs.
+
+    All eight share one synthetic version per build so cross-pins resolve
+    cleanly; the declared versions are the floor that synthetic value sits on.
     """
-    bases = [_read_base_version(p) for p in PACKAGES]
-    return max(bases, key=lambda v: tuple(int(p) if p.isdigit() else 0 for p in re.split(r"[.\-+]", v)))
+    return max((_read_base_version(p) for p in PACKAGES), key=_version_key)
+
+
+def _latest_pypi_stable(pkg: str) -> str | None:
+    """Latest non-prerelease version of `pkg` on PyPI, or None if unregistered.
+
+    PyPI's `info.version` reports the latest stable (it skips pre-releases per
+    its own conventions), which is exactly what we want as the bump base.
+    """
+    try:
+        with urllib.request.urlopen(f"https://pypi.org/pypi/{pkg}/json", timeout=15) as resp:
+            data = json.load(resp)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+    return data.get("info", {}).get("version") or None
+
+
+def _dev_base() -> str:
+    """Patch-bumped base shared by nightly and vendor builds.
+
+    One patch above max(highest declared version, highest stable on PyPI
+    across the libs). PEP 440 orders `<base>.devN` above the current stable,
+    so `pip install --pre` / `uv` resolve a dev build in preference to the
+    last release. Querying PyPI means the declared versions never need
+    re-bumping after a stable cut -- the script always anticipates the next
+    patch correctly.
+    """
+    base = _highest_declared_version()
+    for pkg in PACKAGES:
+        stable = _latest_pypi_stable(pkg)
+        if stable and _version_key(stable) > _version_key(base):
+            base = stable
+    return _bump_patch(base)
 
 
 def resolve_version(mode: str, explicit: str | None) -> str:
     """Return the build version for the requested mode.
 
-    nightly -> <base>.dev<YYYYMMDD>
+    nightly -> <dev_base>.dev<YYYYMMDDhhmm>
     stable  -> <explicit>
-    manual  -> <base>+manual.<sha>
-    vendor  -> <base>.dev<YYYYMMDDHHMMSS>
+    manual  -> <declared>+manual.<sha>
+    vendor  -> <dev_base>.dev<YYYYMMDDHHMMSS>
     """
     if mode == "stable":
         if not explicit:
             raise SystemExit("--version is required for --mode stable")
         return explicit
     if mode == "nightly":
-        date = datetime.now(timezone.utc).strftime("%Y%m%d")
-        return f"{_highest_base_version()}.dev{date}"
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
+        return f"{_dev_base()}.dev{stamp}"
     if mode == "manual":
-        sha = _git_short_sha()
-        return f"{_highest_base_version()}+manual.{sha}"
+        return f"{_highest_declared_version()}+manual.{_git_short_sha()}"
     if mode == "vendor":
         # Second-precision timestamp guarantees the freshly-built wheel beats
         # any nightly built earlier today, so `uv sync` in the consumer always
         # picks up the local copy without cache games.
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-        return f"{_highest_base_version()}.dev{ts}"
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        return f"{_dev_base()}.dev{stamp}"
     raise SystemExit(f"Unknown mode: {mode}")
 
 
-# Path inside dist/ where build_wheels persists the resolved version + mode.
-# Publish reads this instead of re-resolving so a workflow that straddles
-# midnight UTC can't compute a different date in build vs publish.
-BUILD_INFO_PATH = DIST_DIR / "BUILD_INFO.json"
+# ---------- build ------------------------------------------------------------
 
 
-def write_build_info(version: str, mode: str) -> None:
-    BUILD_INFO_PATH.write_text(json.dumps({"version": version, "mode": mode}, indent=2))
-
-
-def read_build_info() -> dict[str, str] | None:
-    if not BUILD_INFO_PATH.is_file():
-        return None
-    return json.loads(BUILD_INFO_PATH.read_text())
-
-
-def build_wheels(version: str, mode: str) -> None:
-    """Build all seven marin-* wheels into DIST_DIR with version patched in.
-
-    Persists BUILD_INFO.json next to the wheels so the publish step (which
-    runs in a separate job and downloads dist/ as an artifact) can read the
-    exact version this build used instead of re-resolving it. That guarantees
-    a workflow run straddling midnight UTC produces a consistent version
-    across build and publish.
-    """
+def build_wheels(version: str) -> None:
+    """Build all marin-* wheels + sdists into DIST_DIR with `version` patched in."""
     _check_tool("uv", "https://docs.astral.sh/uv/")
 
     if DIST_DIR.exists():
@@ -304,16 +328,12 @@ def build_wheels(version: str, mode: str) -> None:
     wheels = sorted(DIST_DIR.glob("*.whl"))
     sdists = sorted(DIST_DIR.glob("*.tar.gz"))
     print(f"\nBuilt {len(wheels)} wheel(s) and {len(sdists)} sdist(s):")
-    for w in wheels:
-        print(f"  {w.name}")
-    for s in sdists:
-        print(f"  {s.name}")
+    for f in (*wheels, *sdists):
+        print(f"  {f.name}")
     if len(wheels) != len(PACKAGES):
         raise RuntimeError(f"Expected {len(PACKAGES)} wheels, got {len(wheels)}")
     if len(sdists) != len(PACKAGES):
         raise RuntimeError(f"Expected {len(PACKAGES)} sdists, got {len(sdists)}")
-
-    write_build_info(version, mode)
 
 
 # ---------- vendor -----------------------------------------------------------
@@ -354,297 +374,53 @@ def lock_consumer(project_dir: Path) -> None:
     subprocess.run(["uv", "lock", *upgrade_flags], check=True, cwd=project_dir)
 
 
-# ---------- publish ----------------------------------------------------------
-
-
-def _wheel_for(pkg: str) -> Path:
-    """Return the dist/ wheel matching pkg (uv normalises hyphens to underscores)."""
-    stem = pkg.replace("-", "_")
-    candidates = list(DIST_DIR.glob(f"{stem}-*.whl"))
-    if not candidates:
-        raise FileNotFoundError(f"No wheel for {pkg} in {DIST_DIR}")
-    if len(candidates) > 1:
-        raise RuntimeError(f"Multiple wheels for {pkg}: {[c.name for c in candidates]}")
-    return candidates[0]
-
-
-def _delete_orphan_drafts(asset_names: set[str]) -> None:
-    """Purge tagless draft releases whose assets collide with the ones we're about to upload.
-
-    GitHub leaves an "untagged-<hash>" draft behind when a previous `gh release create`
-    uploads assets but never attaches the tag (observed for marin-levanter-latest on
-    2026-04-14). Those drafts are invisible to `gh release view <tag>` but still hold
-    the asset filename, which causes subsequent uploads to fail or the tag to stay
-    unattached. Walk all releases and delete any draft that holds a matching asset.
-    """
-    result = subprocess.run(
-        [
-            "gh",
-            "api",
-            "--paginate",
-            f"repos/{REPO}/releases",
-            "--jq",
-            ".[] | select(.draft==true) | {id, assets: [.assets[].name]}",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    for line in result.stdout.splitlines():
-        if not line.strip():
-            continue
-        rel = json.loads(line)
-        if any(name in asset_names for name in rel["assets"]):
-            print(f"Deleting orphan draft release id={rel['id']} (assets={rel['assets']})")
-            subprocess.run(
-                ["gh", "api", "-X", "DELETE", f"repos/{REPO}/releases/{rel['id']}"],
-                check=True,
-            )
-
-
-def _verify_release(tag: str, expected_assets: set[str], prerelease: bool) -> None:
-    """Fail loudly if the release didn't land in the expected state."""
-    result = subprocess.run(
-        ["gh", "api", f"repos/{REPO}/releases/tags/{tag}"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    rel = json.loads(result.stdout)
-    assets = {a["name"] for a in rel["assets"]}
-    problems = []
-    if rel["draft"]:
-        problems.append("release is draft")
-    if rel["prerelease"] != prerelease:
-        problems.append(f"prerelease={rel['prerelease']} (expected {prerelease})")
-    if rel["tag_name"] != tag:
-        problems.append(f"tag_name={rel['tag_name']!r} (expected {tag!r})")
-    if not expected_assets.issubset(assets):
-        problems.append(f"missing assets: {expected_assets - assets}")
-    if problems:
-        raise RuntimeError(f"Release {tag} landed in a bad state: {'; '.join(problems)}")
-
-
-def _gh_release_replace(tag: str, files: list[Path], title: str, notes: str, prerelease: bool) -> None:
-    """Idempotently (re)create a GitHub release with the given assets."""
-    asset_names = {f.name for f in files}
-    _delete_orphan_drafts(asset_names)
-    subprocess.run(
-        ["gh", "release", "delete", tag, "--yes", "--cleanup-tag", "--repo", REPO],
-        check=False,
-        capture_output=True,
-    )
-    cmd = [
-        "gh",
-        "release",
-        "create",
-        tag,
-        *[str(f) for f in files],
-        "--repo",
-        REPO,
-        "--title",
-        title,
-        "--notes",
-        notes,
-    ]
-    if prerelease:
-        cmd.append("--prerelease")
-    subprocess.run(cmd, check=True)
-    _verify_release(tag, asset_names, prerelease)
-
-
-def _pypi_versions(name: str) -> set[str] | None:
-    """Return the set of versions published on PyPI for name, or None if the project is unregistered.
-
-    Returning None (vs an empty set) lets the caller distinguish "project does not exist yet" from
-    "project exists but somehow has no releases" — only the first case has to register the name.
-    """
-    try:
-        with urllib.request.urlopen(f"https://pypi.org/pypi/{name}/json", timeout=10) as resp:
-            data = json.load(resp)
-        return set(data.get("releases", {}).keys())
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return None
-        raise
-
-
-def _pypi_has_version(name: str, version: str) -> bool:
-    versions = _pypi_versions(name)
-    return versions is not None and version in versions
-
-
-def _artifacts_for(pkg: str) -> list[Path]:
-    """Return all wheel+sdist artifacts in DIST_DIR matching pkg."""
-    stem = pkg.replace("-", "_")
-    return sorted(DIST_DIR.glob(f"{stem}-*.whl")) + sorted(DIST_DIR.glob(f"{stem}-*.tar.gz"))
-
-
-def publish_pypi(version: str) -> None:
-    """Upload every wheel + sdist in DIST_DIR to PyPI via `uv publish`.
-
-    Reads the token from UV_PUBLISH_TOKEN (uv's standard env var). Run from
-    the same invocation that produced dist/ so the version stamped into
-    BUILD_INFO.json matches the artifacts being uploaded. PyPI rejects
-    re-uploads of an existing (name, version) tuple, so we gate on the
-    (name, version) tuple: skip when this exact version is already on PyPI,
-    upload otherwise. New projects get registered on first upload; existing
-    projects get the new version when it isn't already there.
-
-    Skipping on package-name presence (the prior behavior) silently dropped
-    new versions of any package that had ever been published before — that's
-    how marin-finelog==0.99 was left off PyPI while every sibling pinned it.
-    """
-    if not os.environ.get("UV_PUBLISH_TOKEN"):
-        raise SystemExit(
-            "UV_PUBLISH_TOKEN is required for --publish-pypi. "
-            "Create a PyPI API token at https://pypi.org/manage/account/token/"
-        )
-
-    published: list[str] = []
-    skipped: list[str] = []
-    failed: list[str] = []
-
-    for pkg in PACKAGES:
-        print(f"\n--- PyPI: {pkg}=={version} ---")
-        if _pypi_has_version(pkg, version):
-            print(f"  {pkg}=={version} already on PyPI — skipping")
-            skipped.append(pkg)
-            continue
-        artifacts = _artifacts_for(pkg)
-        if not artifacts:
-            print(f"  No artifacts found for {pkg} in {DIST_DIR}")
-            failed.append(pkg)
-            continue
-        print(f"  Uploading {len(artifacts)} artifact(s)...")
-        try:
-            subprocess.run(["uv", "publish", *[str(a) for a in artifacts]], check=True)
-            published.append(pkg)
-        except subprocess.CalledProcessError:
-            failed.append(pkg)
-
-    print("\nPyPI summary:")
-    if skipped:
-        print(f"  Already on PyPI ({version}): {', '.join(skipped)}")
-    if published:
-        print(f"  Published: {', '.join(published)}")
-    if failed:
-        print(f"  Failed: {', '.join(failed)}")
-        raise SystemExit(1)
-
-
-def publish_releases(version: str, mode: str) -> None:
-    """Per-package GH release.
-
-    nightly -> overwrite the rolling marin-<pkg>-latest tag in place. No dated
-               tags are kept; consumers point find-links at the rolling URL
-               and always get the most recent build. Reproducibility comes
-               from stable tags, not from historical nightlies.
-    stable  -> create marin-<pkg>-v<version> and overwrite marin-<pkg>-stable.
-    """
-    _check_tool("gh", "https://cli.github.com/")
-
-    if mode == "nightly":
-        for pkg in PACKAGES:
-            wheel = _wheel_for(pkg)
-            tag = f"{pkg}-latest"
-            print(f"\n--- Publishing {tag} ({version}) ---")
-            _gh_release_replace(
-                tag=tag,
-                files=[wheel],
-                title=f"{pkg} (latest)",
-                notes=f"Rolling nightly. Currently pointing at {version}.",
-                prerelease=True,
-            )
-        return
-
-    if mode == "stable":
-        for pkg in PACKAGES:
-            wheel = _wheel_for(pkg)
-            for tag, label in ((f"{pkg}-v{version}", "stable"), (f"{pkg}-stable", "rolling stable")):
-                print(f"\n--- Publishing {tag} ---")
-                _gh_release_replace(
-                    tag=tag,
-                    files=[wheel],
-                    title=f"{pkg} {version}",
-                    notes=f"{pkg} {version} ({label})",
-                    prerelease=False,
-                )
-        return
-
-    raise SystemExit(f"publish_releases called with unsupported mode: {mode}")
-
-
 # ---------- main -------------------------------------------------------------
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mode", choices=["nightly", "stable", "manual", "vendor"], default="nightly")
-    parser.add_argument("--version", default=None, help="Required for --mode stable")
+    parser.add_argument(
+        "--version",
+        default=None,
+        help=(
+            "Explicit version. Required for --mode stable; for the other modes it "
+            "overrides the computed value. CI's resolve job computes the version once "
+            "and passes it here so the build job stamps the identical value."
+        ),
+    )
     parser.add_argument(
         "--vendor",
         type=Path,
         default=None,
         help="Target directory to drop wheels into (required for --mode vendor)",
     )
-    parser.add_argument("--skip-build", action="store_true", help="Reuse existing dist/")
     parser.add_argument(
-        "--skip-gh-release",
+        "--resolve-only",
         action="store_true",
-        help="Skip the GitHub Releases publish (default is to publish there)",
-    )
-    parser.add_argument("--publish-only", action="store_true", help="Same as --skip-build")
-    parser.add_argument(
-        "--publish-pypi",
-        action="store_true",
-        help="Also upload built wheels + sdists to PyPI (requires UV_PUBLISH_TOKEN)",
+        help="Print the resolved version and emit it to $GITHUB_OUTPUT; do not build.",
     )
     args = parser.parse_args()
 
-    if args.publish_only:
-        args.skip_build = True
+    version = args.version if args.version else resolve_version(args.mode, args.version)
+    print(f"Mode:    {args.mode}\nVersion: {version}")
+    _emit_github_output("version", version)
+
+    if args.resolve_only:
+        return
 
     if args.mode == "vendor":
         if args.vendor is None:
             raise SystemExit("--vendor PATH is required for --mode vendor")
-        version = resolve_version(args.mode, args.version)
-        print(f"Mode:        {args.mode}\nVersion:     {version}")
-        build_wheels(version, args.mode)
+        build_wheels(version)
         vendor_target = args.vendor.expanduser().resolve()
         vendor_copy(vendor_target)
         lock_consumer(vendor_target.parent)
         print("\nDone.")
         return
 
-    if not args.skip_build:
-        version = resolve_version(args.mode, args.version)
-        print(f"Mode:        {args.mode}\nVersion:     {version}")
-        build_wheels(version, args.mode)
-    else:
-        if not DIST_DIR.exists() or not list(DIST_DIR.glob("*.whl")):
-            raise SystemExit(f"No wheels in {DIST_DIR}; remove --skip-build/--publish-only or build first.")
-        info = read_build_info()
-        if info is not None:
-            version = info["version"]
-            print(f"Mode:        {args.mode}\nVersion:     {version} (from BUILD_INFO.json)")
-        else:
-            # Legacy path: dist/ has wheels but no BUILD_INFO.json. Fall back
-            # to re-resolving; this is the only branch where the midnight-drift
-            # bug could resurface.
-            version = resolve_version(args.mode, args.version)
-            print(f"Mode:        {args.mode}\nVersion:     {version} (re-resolved; no BUILD_INFO.json)")
-
-    if args.publish_pypi:
-        publish_pypi(version)
-
-    if args.skip_gh_release or args.mode == "manual":
-        print(f"\nBuild complete. Wheels in {DIST_DIR}/")
-        return
-
-    publish_releases(version, args.mode)
-
-    print("\nDone.")
+    build_wheels(version)
+    print(f"\nBuild complete. Wheels + sdists in {DIST_DIR}/")
 
 
 if __name__ == "__main__":

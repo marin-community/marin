@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "marin-zephyr"
-version = "0.99"
+version = "0.2.0"
 description = "Lightweight dataset library for distributed data processing"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
