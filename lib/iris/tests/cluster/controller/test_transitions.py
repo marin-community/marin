@@ -1722,6 +1722,10 @@ def test_coscheduled_retriable_failure_bounces_siblings_to_pending(state):
     for i, task in enumerate(tasks):
         dispatch_task(state, task, WorkerId(f"w{i}"))
 
+    # Capture the siblings' worker-bound attempts before the failure so we can
+    # assert the requeue leaves them unfinished (holding their slice).
+    sibling_attempt_ids = {t.task_id: _query_task(state, t.task_id).current_attempt_id for t in tasks[1:]}
+
     # Fail task-0 (first failure, has retry remaining)
     transition_task(state, tasks[0].task_id, job_pb2.TASK_STATE_FAILED, error="OOM")
 
@@ -1739,6 +1743,12 @@ def test_coscheduled_retriable_failure_bounces_siblings_to_pending(state):
         assert sib.state == job_pb2.TASK_STATE_PENDING
         assert sib.failure_count == 0
         assert sib.preemption_count == 0
+        # Producer-side requeue: the sibling's old attempt stays unfinished and
+        # worker-bound, holding the slice. The reconcile planner sends a 'stop'
+        # for it (PENDING + terminal-attempt branch) so the worker's terminal
+        # observation later stamps finished_at_ms and releases capacity.
+        old = _query_attempt(state, task.task_id, sibling_attempt_ids[task.task_id])
+        assert old.finished_at_ms is None
 
     # Under the new derived-usage contract, sibling resources stay held by
     # their unfinished attempts until heartbeats arrive. The producer-side
@@ -1774,6 +1784,10 @@ def test_coscheduled_worker_failure_bounces_siblings(state):
     for i, task in enumerate(tasks):
         dispatch_task(state, task, WorkerId(f"w{i}"))
 
+    # Capture the siblings' worker-bound attempts before the failure so we can
+    # assert the requeue leaves them unfinished (holding their slice).
+    sibling_attempt_ids = {t.task_id: _query_task(state, t.task_id).current_attempt_id for t in tasks[1:]}
+
     fail_worker(state, WorkerId("w0"), "host disappeared")
 
     # Task-0 retried to PENDING with one preemption charge; siblings bounced
@@ -1785,6 +1799,13 @@ def test_coscheduled_worker_failure_bounces_siblings(state):
         sib = _query_task(state, task.task_id)
         assert sib.state == job_pb2.TASK_STATE_PENDING
         assert sib.preemption_count == 0
+        # The requeue is producer-side: it flips the sibling task to PENDING but
+        # leaves its old attempt unfinished and worker-bound, so the slice stays
+        # reserved. The reconcile planner then sends a 'stop' for that terminal
+        # attempt (PENDING + terminal-attempt branch), and the worker's resulting
+        # terminal observation stamps finished_at_ms and releases the slot.
+        old = _query_attempt(state, task.task_id, sibling_attempt_ids[task.task_id])
+        assert old.finished_at_ms is None
 
     # Surviving workers' chips remain held by unfinished sibling attempts
     # under the new derived-usage contract. They are released when each

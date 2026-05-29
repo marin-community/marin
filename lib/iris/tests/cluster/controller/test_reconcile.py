@@ -389,8 +389,32 @@ def test_reconcile_worker_stop_states_emit_stop_with_reason(task_state, expected
     ],
 )
 def test_reconcile_worker_unrecognised_states_are_omitted(task_state):
+    # PENDING here carries the default non-terminal attempt_state, so there is
+    # no worker-bound terminal attempt to stop (see the PENDING+terminal-attempt
+    # case below). UNSPECIFIED is never planned for.
     plan = _plan_for([_row(task_state)])
     assert list(plan.request.desired) == []
+
+
+def test_reconcile_worker_pending_with_terminal_attempt_emits_stop():
+    """A task rolled back to PENDING for retry, whose old worker-bound attempt is
+    already terminal (PREEMPTED), must be planned as a 'stop' — not omitted.
+
+    Omitting it drops the attempt from the desired set, so the worker's terminal
+    observation for it is filtered out by ``filter_observations_to_plan`` and the
+    attempt is never finalized: its chips leak. Emitting 'stop' keeps it in the
+    plan so the worker tears it down and the terminal observation releases the
+    slot. Covers preemption-with-budget and coscheduled-sibling requeue, which
+    both leave the sibling's attempt unfinished and worker-bound.
+    """
+    row = _row(job_pb2.TASK_STATE_PENDING, attempt_id=5, attempt_state=job_pb2.TASK_STATE_PREEMPTED)
+    plan = _plan_for([row])
+
+    assert len(plan.request.desired) == 1
+    desired = plan.request.desired[0]
+    assert desired.HasField("stop")
+    assert desired.stop == worker_pb2.Worker.STOP_REASON_PREEMPTED
+    assert desired.attempt_uid == row.attempt_uid
 
 
 def test_reconcile_worker_mixed_rows_per_axis():

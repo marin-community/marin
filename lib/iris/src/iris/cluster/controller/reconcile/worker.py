@@ -189,6 +189,27 @@ def _reconcile_worker(
                         run=worker_pb2.Worker.AttemptSpec(),
                     )
                 )
+        elif row.task_state == job_pb2.TASK_STATE_PENDING and row.attempt_state in TERMINAL_TASK_STATES:
+            # The task rolled back to PENDING for retry — preemption with budget,
+            # or a coscheduled-sibling requeue (the sibling's own attempt is left
+            # unfinished) — but current_attempt_id still points at the old
+            # worker-bound attempt, which is already terminal (PREEMPTED). Its
+            # chips stay reserved until that attempt is finalized. Omitting it (as
+            # an unrecognised state) is the leak: the worker zombie-kills the
+            # attempt and reports it terminal, but ``filter_observations_to_plan``
+            # drops the observation because the attempt isn't in the plan, so the
+            # controller never stamps finished_at_ms and the slot leaks forever.
+            # Emit 'stop' so the attempt stays in the plan; the worker tears the
+            # process down and its terminal observation finalizes the attempt and
+            # releases capacity (the reserved-until-heartbeats contract).
+            desired.append(
+                worker_pb2.Worker.DesiredAttempt(
+                    attempt_uid=row.attempt_uid,
+                    task_id=wire_task_id,
+                    attempt_id=row.attempt_id,
+                    stop=worker_pb2.Worker.STOP_REASON_PREEMPTED,
+                )
+            )
         # Unrecognised states are omitted from desired.
 
     return WorkerReconcilePlan(
