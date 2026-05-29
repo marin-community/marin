@@ -152,11 +152,28 @@ extend-exclude = ["scripts/"]
 extend-include = ["scripts/workflows/**/*.py"]
 
 [tool.ruff.lint]
-select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]
+# A,B,E,F,I,NPY,RUF,UP,W are the established families. The individually-listed
+# codes below mechanically enforce CodeQL "Code quality" maintainability/reliability
+# checks locally so they are caught at pre-commit time rather than only post-merge:
+#   N805    -> "First parameter of a method is not named 'self'"
+#   PLR0124 -> "Comparison of identical values" / "Redundant comparison"
+#   PLR1722 -> "Use of exit() or quit()" (use sys.exit)
+#   RET502  -> "Explicit returns mixed with implicit returns" (bare `return` value path)
+#   RET503  -> "Explicit returns mixed with implicit returns" (missing explicit return)
+#   SIM115  -> "File is not always closed" (open() without a context manager)
+# B018 (already via "B") and F401/F841/F811 (via "F") cover the rest of the
+# actionable CodeQL maintainability set; B018 correctly ignores `...`/docstrings.
+select = [
+    "A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W",
+    "N805", "PLR0124", "PLR1722", "RET502", "RET503", "SIM115",
+]
 ignore = ["F722", "B008", "UP015", "A005", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
+# Bloom filter tests deliberately compare an object with itself to exercise its
+# reflexive comparison operators (==, <=, >=, ...), so PLR0124 is expected here.
+"rust/dupekit/tests/test_bloom.py" = ["PLR0124"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["experiments"]

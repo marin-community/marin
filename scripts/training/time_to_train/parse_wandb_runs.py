@@ -77,7 +77,7 @@ def parse_run(run: wandb.apis.public.Run, start_date: str | None = None, end_dat
     runtime = run.summary["_runtime"] / 3600.0  # hours
     create_time = convert_to_local_time(run.createdAt)
     if not check_create_time(create_time, start_date=start_date, end_date=end_date):
-        return
+        return None
     heartbeat_time = convert_to_local_time(run.heartbeatAt)
     # get difference between create time and heartbeat time
     total_time = get_ts_diff(run.createdAt, run.heartbeatAt)

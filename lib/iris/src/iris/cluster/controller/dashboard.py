@@ -311,11 +311,13 @@ class _SubdomainProxyMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
-            return await self._app(scope, receive, send)
+            await self._app(scope, receive, send)
+            return
 
         encoded_name = _extract_proxy_subdomain(self._extract_host(scope))
         if encoded_name is None:
-            return await self._app(scope, receive, send)
+            await self._app(scope, receive, send)
+            return
 
         if self._auth_verifier is not None:
             if not await _enforce_http_auth(scope, receive, send, self._auth_verifier, self._auth_optional):
