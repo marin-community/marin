@@ -199,7 +199,7 @@ scale_groups:
 user_budgets:
   # Admins: standard budget, may submit PRIORITY_BAND_PRODUCTION for work that
   # must not be downgraded. INTERACTIVE work still counts against the budget.
-  - user_ids: [runner, power, dlwh, rav, romain, held, larry]
+  - user_ids: [runner, power, dlwh, rav, romain, held, larry, wmoss]
     budget_limit: 75000
     max_band: PRIORITY_BAND_PRODUCTION
   # Researchers: standard budget, capped at PRIORITY_BAND_INTERACTIVE.
