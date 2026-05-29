@@ -152,14 +152,43 @@ def _reconcile_worker(
                 )
             )
         elif row.task_state in _TERMINAL_EXPECTED_STATES:
-            desired.append(
-                worker_pb2.Worker.DesiredAttempt(
-                    attempt_uid=row.attempt_uid,
-                    task_id=wire_task_id,
-                    attempt_id=row.attempt_id,
-                    run=worker_pb2.Worker.AttemptSpec(),
+            if row.attempt_state in TERMINAL_TASK_STATES:
+                # Controller-induced terminal whose attempt is itself terminal:
+                # execution timeout (-> FAILED) or coscheduled-sibling cascade
+                # (-> COSCHED_FAILED) moved the task terminal while the worker
+                # may still be running the process. A 'run' is a no-op for an
+                # attempt the worker already holds, so it would never stop the
+                # process nor finalize the attempt (the worker keeps reporting
+                # RUNNING, which does not stamp finished_at_ms). Send 'stop' so
+                # the worker tears the process down; its resulting terminal
+                # observation finalizes the attempt and releases capacity.
+                stop_reason = (
+                    worker_pb2.Worker.STOP_REASON_TASK_TIMEOUT
+                    if row.task_state == job_pb2.TASK_STATE_FAILED
+                    else worker_pb2.Worker.STOP_REASON_JOB_TERMINATED
                 )
-            )
+                desired.append(
+                    worker_pb2.Worker.DesiredAttempt(
+                        attempt_uid=row.attempt_uid,
+                        task_id=wire_task_id,
+                        attempt_id=row.attempt_id,
+                        stop=stop_reason,
+                    )
+                )
+            else:
+                # Stranded attempt: the task is terminal but the attempt itself
+                # is not finalized and the worker may have lost the spec. Re-poll
+                # so the worker re-reports its real terminal status, or — if the
+                # worker has forgotten the attempt — the daemon synthesizes
+                # MISSING, which the controller treats as terminal and stamps.
+                desired.append(
+                    worker_pb2.Worker.DesiredAttempt(
+                        attempt_uid=row.attempt_uid,
+                        task_id=wire_task_id,
+                        attempt_id=row.attempt_id,
+                        run=worker_pb2.Worker.AttemptSpec(),
+                    )
+                )
         # Unrecognised states are omitted from desired.
 
     return WorkerReconcilePlan(

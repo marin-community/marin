@@ -906,13 +906,16 @@ class Worker:
                     continue
                 observations.append(self._build_observation(task))
 
-            # Synthesize MISSING for run intents that resolved to no local
-            # attempt by either route. Carry the composite so the controller
-            # can route the observation even if the desired UID never made it
-            # to the worker (pure rollover case).
+            # Synthesize MISSING for any desired attempt that resolved to no
+            # local attempt by either route — both 'run' and 'stop' intents. A
+            # 'run' miss means the worker never received the spec; a 'stop' miss
+            # means the worker has forgotten a (e.g. controller-terminated)
+            # attempt it was asked to kill. In both cases the attempt is gone,
+            # so reporting MISSING lets the controller finalize it (stamp
+            # finished_at_ms) instead of re-polling forever. Carry the composite
+            # so the controller can route the observation even if the desired
+            # UID never made it to the worker (pure rollover case).
             for desired in request.desired:
-                if not desired.HasField("run"):
-                    continue
                 if self.resolve_attempt(AttemptUid(desired.attempt_uid), desired.task_id, desired.attempt_id) is None:
                     observations.append(
                         worker_pb2.Worker.AttemptObservation(

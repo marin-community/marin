@@ -369,9 +369,10 @@ def apply_one_transition(
         # Stranded-attempt finalization: producer transitions move the task
         # to a terminal state but leave the attempt's ``finished_at_ms`` NULL,
         # expecting the worker's next terminal status update to stamp it. If
-        # that push was dropped, the poll loop re-asks via ``expected_tasks``
-        # and we land here with the task already finished. Stamp
-        # ``finished_at_ms`` on the attempt so the scheduler releases capacity.
+        # that push was dropped, the reconcile planner re-polls the still
+        # worker-bound attempt and we land here with the task already finished.
+        # Stamp ``finished_at_ms`` on the attempt so the scheduler releases
+        # capacity.
         if (
             task_is_finished_row(task)
             and update.new_state in TERMINAL_TASK_STATES

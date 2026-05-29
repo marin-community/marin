@@ -237,13 +237,14 @@ def _row(
     attempt_id: int = 0,
     job: str = "job-a",
     attempt_uid: str = "deadbeefdeadbeef",
+    attempt_state: int = job_pb2.TASK_STATE_PENDING,
 ) -> ReconcileRow:
     return ReconcileRow(
         worker_id=WorkerId(_W1),
         task_id=_task_id(task_id),
         attempt_id=attempt_id,
         task_state=task_state,
-        attempt_state=job_pb2.TASK_STATE_PENDING,  # unused by reconcile_worker today
+        attempt_state=attempt_state,
         job_id=_job_id(job),
         attempt_uid=AttemptUid(attempt_uid),
     )
@@ -314,6 +315,32 @@ def test_reconcile_worker_executing_states_emit_run_without_inline_spec(task_sta
 
 
 @pytest.mark.parametrize(
+    "task_state,expected_reason",
+    [
+        # Execution timeout marks the task FAILED; the cosched cascade and the
+        # other controller-induced terminals map to JOB_TERMINATED.
+        (job_pb2.TASK_STATE_FAILED, worker_pb2.Worker.STOP_REASON_TASK_TIMEOUT),
+        (job_pb2.TASK_STATE_COSCHED_FAILED, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED),
+        (job_pb2.TASK_STATE_WORKER_FAILED, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED),
+        (job_pb2.TASK_STATE_UNSCHEDULABLE, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED),
+        (job_pb2.TASK_STATE_SUCCEEDED, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED),
+    ],
+)
+def test_reconcile_worker_controller_terminal_with_terminal_attempt_emits_stop(task_state, expected_reason):
+    """A terminal task whose attempt is itself terminal is a controller-induced
+    terminal where the worker may still be running the process. The planner must
+    emit a 'stop' (not a no-op 'run') so the worker tears the process down."""
+    row = _row(task_state, attempt_id=4, attempt_state=task_state)
+    plan = _plan_for([row])
+
+    assert len(plan.request.desired) == 1
+    desired = plan.request.desired[0]
+    assert desired.HasField("stop")
+    assert desired.stop == expected_reason
+    assert desired.attempt_uid == row.attempt_uid
+
+
+@pytest.mark.parametrize(
     "task_state",
     [
         job_pb2.TASK_STATE_SUCCEEDED,
@@ -323,9 +350,11 @@ def test_reconcile_worker_executing_states_emit_run_without_inline_spec(task_sta
         job_pb2.TASK_STATE_COSCHED_FAILED,
     ],
 )
-def test_reconcile_worker_terminal_rows_emit_run_without_inline_spec(task_state):
-    """Worker-bound terminal rows stay expected until their attempt is finalized."""
-    row = _row(task_state, attempt_id=4)
+def test_reconcile_worker_stranded_terminal_with_live_attempt_emits_run(task_state):
+    """A terminal task whose attempt is NOT yet terminal is a stranded attempt:
+    re-poll (run, no spec) so the worker re-reports its real status or the
+    daemon synthesizes MISSING. Switching it to 'stop' would drop that recovery."""
+    row = _row(task_state, attempt_id=4, attempt_state=job_pb2.TASK_STATE_RUNNING)
     plan = _plan_for([row])
 
     assert len(plan.request.desired) == 1

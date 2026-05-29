@@ -40,9 +40,12 @@ def terminate_coscheduled_siblings(
     """Terminate coscheduled siblings.
 
     Each sibling is moved to ``TASK_STATE_COSCHED_FAILED``, which is
-    unconditionally terminal. Capacity stays held by the unfinished attempt
-    rows until the worker's next poll diffs the task out of its
-    ``expected_tasks`` and the heartbeat path finalizes the attempt.
+    unconditionally terminal. The attempt is left unfinished
+    (``finished_at_ms`` NULL) so the sibling's chips stay accounted for until
+    its process is actually stopped: because the attempt is terminal but still
+    worker-bound, the reconcile planner sends the worker a ``stop`` for it
+    (``reconcile/worker.py``), and the worker's resulting terminal observation
+    finalizes the attempt and releases capacity.
     """
     error = f"Coscheduled sibling {failed_task_id.to_wire()} failed"
 
