@@ -30,7 +30,7 @@ from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.endpoints import resolve_endpoint_uri
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
 from iris.cluster.providers.factory import create_provider_bundle
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.rpc import config_pb2
@@ -41,8 +41,6 @@ logger = logging.getLogger(__name__)
 LOCAL_STATE_DIR_DEFAULT = Path("/var/cache/iris/controller")
 DRY_RUN_STATE_DIR_ROOT = Path("/tmp/dry-run")
 HOURLY_CHECKPOINT_SECONDS = 3600.0
-
-LOG_SERVER_ENDPOINT_NAME = "/system/log-server"
 
 
 def _resolve_cluster_endpoints(cluster_config: config_pb2.IrisClusterConfig) -> dict[str, str]:

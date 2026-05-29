@@ -16,6 +16,7 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff, RateLimiter
 
 from iris.chaos import chaos
 from iris.cluster.bundle import BundleStore
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_store_helpers import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.profile import (
@@ -261,7 +262,7 @@ class Worker:
 
         if self._config.controller_address:
             self._log_client = LogClient.connect(
-                "/system/log-server",
+                LOG_SERVER_ENDPOINT_NAME,
                 interceptors=interceptors,
                 resolver=self._resolve_log_service,
             )

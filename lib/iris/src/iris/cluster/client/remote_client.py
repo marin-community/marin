@@ -18,6 +18,7 @@ from finelog.rpc import logging_pb2
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.cluster.client.bundle import BundleCreator
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
@@ -71,6 +72,7 @@ class RemoteClusterClient:
         workspace: Path | None = None,
         timeout_ms: int = 30000,
         interceptors: Iterable[InterceptorSync] = (),
+        direct_log_server: bool = False,
     ):
         """Initialize RPC cluster operations.
 
@@ -80,6 +82,13 @@ class RemoteClusterClient:
             workspace: Path to workspace directory. Bundle is created lazily on first job submission.
             timeout_ms: RPC timeout in milliseconds
             interceptors: Client-side interceptors (e.g. AuthTokenInjector for token auth)
+            direct_log_server: Resolve ``/system/log-server`` via the controller's
+                endpoint registry and connect the finelog ``LogClient`` straight to
+                that address, instead of routing log/stats RPCs through the
+                controller's StatsServiceProxy. Only safe for clients running
+                *inside* the cluster (e.g. in-task code), which can reach the
+                finelog server's internal address; external clients (CLI over a
+                tunnel) cannot and must keep the default (controller-proxied) path.
         """
         self._address = controller_address
         self._bundle_id = bundle_id
@@ -93,11 +102,24 @@ class RemoteClusterClient:
             accept_compression=IRIS_RPC_COMPRESSIONS,
             send_compression=None,
         )
-        self._log_client = LogClient.connect(
-            controller_address,
-            timeout_ms=timeout_ms,
-            interceptors=interceptors,
-        )
+        # In-cluster clients resolve the finelog endpoint and write direct so
+        # task-status pushes don't pile up on the controller's RPC thread pool;
+        # external clients route through the controller, the only ingress they
+        # can reach. The resolver fires lazily on first table/log use, so this
+        # adds no RPC for CLI calls that never touch logs.
+        if direct_log_server:
+            self._log_client = LogClient.connect(
+                LOG_SERVER_ENDPOINT_NAME,
+                resolver=self._resolve_log_server,
+                timeout_ms=timeout_ms,
+                interceptors=interceptors,
+            )
+        else:
+            self._log_client = LogClient.connect(
+                controller_address,
+                timeout_ms=timeout_ms,
+                interceptors=interceptors,
+            )
         # Deferred so CLI calls that never push status (submit_job, list_jobs,
         # get_status) don't spawn a finelog flush thread.
         self._task_status_table = None
@@ -387,6 +409,18 @@ class RemoteClusterClient:
             return list(response.endpoints)
 
         return call_with_retry("list_endpoints", _call)
+
+    def _resolve_log_server(self, endpoint_name: str) -> str:
+        """Resolve ``endpoint_name`` to the finelog server's address via the registry.
+
+        Invoked by the finelog ``LogClient`` (when ``direct_log_server`` is set)
+        to turn the logical ``/system/log-server`` name into the concrete address
+        the controller advertises.
+        """
+        endpoints = self.list_endpoints(endpoint_name, exact=True)
+        if not endpoints:
+            raise ConnectionError(f"No {endpoint_name!r} endpoint registered on controller")
+        return endpoints[0].address
 
     def list_workers(self) -> list[controller_pb2.Controller.WorkerHealthStatus]:
         """List all workers registered with the controller."""
