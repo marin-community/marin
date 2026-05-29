@@ -26,7 +26,7 @@ from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema
 
 
 def _stats(store: DuckDBLogStore, namespace: str) -> NamespaceStats:
-    for name, _schema, stats in store.list_namespaces_with_stats():
+    for name, _schema, stats, _policy in store.list_namespaces_with_stats():
         if name == namespace:
             return stats
     raise KeyError(namespace)

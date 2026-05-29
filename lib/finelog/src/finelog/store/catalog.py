@@ -48,6 +48,7 @@ from threading import RLock
 import duckdb
 
 from finelog.store.migrations import apply_migrations, transactional
+from finelog.store.policy import StoragePolicy
 from finelog.store.schema import (
     InvalidNamespaceError,
     NamespaceNotFoundError,
@@ -152,9 +153,10 @@ class Catalog:
         self,
         name: str,
         stored_schema: Schema,
-        factory: Callable[[Schema], LogNamespaceProtocol],
+        factory: Callable[[Schema, StoragePolicy], LogNamespaceProtocol],
         *,
         on_existing: Callable[[LogNamespaceProtocol], Schema],
+        policy: StoragePolicy = StoragePolicy(),
     ) -> Schema:
         """Atomically register ``name`` or evolve the existing namespace.
 
@@ -165,6 +167,12 @@ class Catalog:
         ``_namespaces`` publish are inside one ``self._lock`` acquire;
         ``RLock`` lets the factory's namespace constructor call back
         into other catalog methods on the same thread.
+
+        ``policy`` is the per-namespace retention override. On fresh
+        registration it is persisted in ``storage_policies`` and passed
+        to the factory. Existing-namespace evolution is delegated to
+        ``on_existing``; policy updates on re-register are handled by
+        the caller via ``upsert_policy``.
 
         Returns the effective schema in both branches: ``stored_schema``
         for a fresh registration, or whatever ``on_existing`` resolves
@@ -180,8 +188,9 @@ class Catalog:
             if existing is not None:
                 return on_existing(existing)
 
-            ns = factory(stored_schema)
+            ns = factory(stored_schema, policy)
             self.upsert(name, stored_schema)
+            self.upsert_policy(name, policy)
             self._namespaces[name] = ns
             self._registered_at[name] = len(self._registered_at)
             return stored_schema
@@ -221,10 +230,42 @@ class Catalog:
         return {name: schema_from_json(payload) for name, payload in rows}
 
     def delete(self, namespace: str) -> None:
-        """Remove the namespace row and any segment rows. Idempotent."""
+        """Remove the namespace row, segment rows, and policy row. Idempotent."""
         with self._lock:
             self._conn.execute("DELETE FROM segments WHERE namespace = ?", [namespace])
+            self._conn.execute("DELETE FROM storage_policies WHERE namespace = ?", [namespace])
             self._conn.execute("DELETE FROM namespaces WHERE namespace = ?", [namespace])
+
+    # ----- storage_policies table ---------------------------------------
+
+    def get_policy(self, namespace: str) -> StoragePolicy:
+        """Return the persisted policy or an empty (inherit-all) policy."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT max_segments, max_bytes, max_age_seconds FROM storage_policies WHERE namespace = ?",
+                [namespace],
+            ).fetchone()
+        if row is None:
+            return StoragePolicy()
+        return StoragePolicy(max_segments=row[0], max_bytes=row[1], max_age_seconds=row[2])
+
+    def upsert_policy(self, namespace: str, policy: StoragePolicy) -> None:
+        """Persist ``policy``, or delete the row if every field is ``None``."""
+        with self._lock:
+            if policy.is_empty():
+                self._conn.execute("DELETE FROM storage_policies WHERE namespace = ?", [namespace])
+                return
+            self._conn.execute(
+                """
+                INSERT INTO storage_policies (namespace, max_segments, max_bytes, max_age_seconds)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (namespace) DO UPDATE
+                  SET max_segments    = excluded.max_segments,
+                      max_bytes       = excluded.max_bytes,
+                      max_age_seconds = excluded.max_age_seconds
+                """,
+                [namespace, policy.max_segments, policy.max_bytes, policy.max_age_seconds],
+            )
 
     def upsert(self, namespace: str, schema: Schema) -> None:
         """Insert or evolve the row for ``namespace``.
@@ -412,6 +453,36 @@ class Catalog:
                 LIMIT 1
                 """,
                 [namespace, SegmentLocation.BOTH.value],
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_from_tuple(row)
+
+    def select_aged_eviction_candidate(self, namespace: str, cutoff_ms: int) -> SegmentRow | None:
+        """Pick the oldest-by-``created_at_ms`` evictable segment past ``cutoff_ms``.
+
+        Same eligibility as :meth:`select_eviction_candidate` (``level >= 1``
+        and ``location = 'BOTH'``). Ordering by ``created_at_ms`` (not
+        ``min_seq``) matters because compaction outputs inherit their
+        inputs' ``min_seq`` but get a fresh ``created_at_ms`` — so a
+        low-``min_seq`` segment can be the *youngest* one in the
+        namespace, and a ``min_seq``-ordered scan would short-circuit
+        on it and miss strictly-older siblings at higher ``min_seq``.
+        Returns ``None`` if no eligible segment is older than the cutoff.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                f"""
+                SELECT {self._SEGMENT_COLUMNS}
+                FROM segments
+                WHERE namespace = ?
+                  AND level >= 1
+                  AND location = ?
+                  AND created_at_ms < ?
+                ORDER BY created_at_ms ASC
+                LIMIT 1
+                """,
+                [namespace, SegmentLocation.BOTH.value, cutoff_ms],
             ).fetchone()
         if row is None:
             return None

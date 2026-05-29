@@ -16,6 +16,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from finelog.rpc import logging_pb2
+from finelog.store.policy import StoragePolicy
 from finelog.store.schema import AlignedBatch, Schema
 from finelog.types import LogReadResult
 
@@ -137,6 +138,8 @@ class LogNamespaceProtocol(Protocol):
     def all_segments_unlocked(self) -> list[LocalSegment]: ...
 
     def update_schema(self, new_schema: Schema) -> None: ...
+
+    def update_policy(self, new_policy: StoragePolicy) -> None: ...
 
     def evict_segment(self, path: str) -> int: ...
 

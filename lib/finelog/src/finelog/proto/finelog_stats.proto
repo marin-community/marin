@@ -50,6 +50,20 @@ message Schema {
 // Row or Value type; the column types in the table above (ColumnType)
 // describe the Arrow types the server accepts.
 
+// Per-namespace retention overrides. All fields are optional; a field
+// left at zero is "inherit the server default" (a missing/unset field
+// in proto3 semantics). Non-zero values override the corresponding
+// CompactionConfig knob for this namespace only.
+message StoragePolicy {
+  // Per-namespace count cap on locally-tracked segments. 0 = inherit.
+  int32 max_segments = 1;
+  // Per-namespace byte cap on locally-tracked segments. 0 = inherit.
+  int64 max_bytes = 2;
+  // Drop any L>=1 BOTH segment older than ``now - max_age_seconds``.
+  // 0 = disabled (no age-based eviction).
+  int64 max_age_seconds = 3;
+}
+
 // ============================================================================
 // STATS SERVICE
 // ============================================================================
@@ -57,6 +71,12 @@ message Schema {
 message RegisterTableRequest {
   string namespace = 1;
   Schema schema = 2;
+  // Optional retention overrides. On fresh registration, an empty
+  // policy inherits the server-wide defaults. On re-register, an empty
+  // policy means "no opinion" and the namespace's existing policy is
+  // preserved — so an older client that doesn't know about policies
+  // can't wipe a tighter policy set by a newer client.
+  StoragePolicy storage_policy = 3;
 }
 
 message RegisterTableResponse {
@@ -65,6 +85,8 @@ message RegisterTableResponse {
   // registered schema, or when the request was a subset of the existing
   // registered schema.
   Schema effective_schema = 1;
+  // Policy now in force for the namespace.
+  StoragePolicy effective_policy = 2;
 }
 
 message WriteRowsRequest {
@@ -120,6 +142,7 @@ message NamespaceInfo {
   int64 min_seq = 5;          // 0 if empty
   int64 max_seq = 6;          // 0 if empty
   int32 segment_count = 7;    // sealed (logs_*) + in-flight (tmp_*) parquet files
+  StoragePolicy storage_policy = 8;  // retention overrides; empty if all defaults
 }
 
 message ListNamespacesRequest {}

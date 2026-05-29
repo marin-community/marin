@@ -21,7 +21,7 @@ from iris.cluster.client.bundle import BundleCreator
 from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
-from iris.cluster.worker.stats import TASK_STATUS_NAMESPACE, TaskStatusRow
+from iris.cluster.worker.stats import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
@@ -524,7 +524,11 @@ class RemoteClusterClient:
         so a finelog outage cannot abort task execution.
         """
         if self._task_status_table is None:
-            self._task_status_table = self._log_client.get_table(TASK_STATUS_NAMESPACE, TaskStatusRow)
+            self._task_status_table = self._log_client.get_table(
+                TASK_STATUS_NAMESPACE,
+                TaskStatusRow,
+                storage_policy=TASK_STATUS_STORAGE_POLICY,
+            )
         self._task_status_table.write(
             [
                 TaskStatusRow(
