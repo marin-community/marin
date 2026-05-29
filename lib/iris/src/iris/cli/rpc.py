@@ -149,12 +149,6 @@ def get_service(name: str) -> ServiceInfo | None:
     return SERVICES.get(name)
 
 
-def list_services() -> list[ServiceInfo]:
-    """List all registered services."""
-    register_services()
-    return list(SERVICES.values())
-
-
 def build_request(method_info: MethodInfo, json_str: str | None, kwargs: dict[str, Any]) -> Message:
     """Build a protobuf request message from JSON or keyword arguments."""
     if json_str:

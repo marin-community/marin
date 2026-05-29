@@ -1579,7 +1579,6 @@ class ZephyrWorker:
         stage-boundary exit (re-pool for next stage) from a pipeline-shutdown
         exit (break the outer loop).
         """
-        task_count = 0
         backoff = ExponentialBackoff(initial=0.1, maximum=5.0)
         future: ActorFuture | None = None
         future_start = 0.0
@@ -1646,7 +1645,6 @@ class ZephyrWorker:
                     result,
                     CounterSnapshot(counters=dict(task_counters), generation=self._counter_generation),
                 ).result()
-                task_count += 1
             except Exception:
                 logger.error("Worker %s error on shard %d", worker_id, task.shard_idx, exc_info=True)
                 coordinator.report_error.remote(
