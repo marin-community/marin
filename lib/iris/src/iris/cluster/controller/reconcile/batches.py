@@ -374,6 +374,19 @@ def apply_worker_failures_batch(
                 preemption_count=holder_preemption_count,
             )
             parent_job_id, _ = task_id.require_task()
+            # Cascade to coscheduled siblings on surviving slice workers BEFORE
+            # recomputing the job. The cascade moves siblings to a terminal
+            # (COSCHED_FAILED) or PENDING state, and ``recompute_state`` must
+            # observe those writes: otherwise a job whose direct victim
+            # exhausted its retry budget is left RUNNING while every task is
+            # terminal, because the recompute still sees the not-yet-cascaded
+            # siblings as active and no second recompute runs after the cascade.
+            if not is_reservation_holder and task_row.has_coscheduling:
+                siblings = peers.find_coscheduled_siblings(state, parent_job_id, task_id, True)
+                if new_task_state in FAILURE_TASK_STATES:
+                    peers.terminate_coscheduled_siblings(state, siblings, task_id, now_ms)
+                else:
+                    peers.requeue_coscheduled_siblings(state, siblings, task_id, now_ms)
             new_job_state = job.recompute_state(state, parent_job_id)
             if new_job_state is not None and new_job_state in TERMINAL_JOB_STATES:
                 reason = f"Worker {worker_id} failed"
@@ -389,13 +402,6 @@ def apply_worker_failures_batch(
                         "Parent task preempted",
                         exclude_reservation_holders=True,
                     )
-            # Coscheduled siblings on surviving slice workers.
-            if not is_reservation_holder and task_row.has_coscheduling:
-                siblings = peers.find_coscheduled_siblings(state, parent_job_id, task_id, True)
-                if new_task_state in FAILURE_TASK_STATES:
-                    peers.terminate_coscheduled_siblings(state, siblings, task_id, now_ms)
-                else:
-                    peers.requeue_coscheduled_siblings(state, siblings, task_id, now_ms)
 
         state.record_worker_make_unhealthy(worker_id)
         state.record_log_event(

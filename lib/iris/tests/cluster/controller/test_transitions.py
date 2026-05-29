@@ -1466,6 +1466,62 @@ def test_worker_failures_batch_does_not_double_process_cascaded_sibling(state):
     }, f"expected one WORKER_FAILED + one COSCHED_FAILED, got {states}"
 
 
+@pytest.mark.parametrize("fail_both", [False, True])
+def test_worker_failure_drives_coscheduled_job_terminal(state, fail_both):
+    """A coscheduled worker failure must drive the JOB terminal once every task
+    is terminal — not leave it stranded RUNNING.
+
+    Regression for the recompute-before-cascade ordering in
+    ``apply_worker_failures_batch``: the per-task job recompute must observe the
+    cascaded COSCHED_FAILED siblings. Before the fix it recomputed while the
+    siblings were still active (job stayed RUNNING) and never recomputed after
+    the cascade, so a job whose direct victim exhausted its retry budget was
+    left RUNNING with all tasks terminal. Covers both the common single-worker
+    slice reap and the both-workers-in-one-batch case.
+    """
+    for i in range(2):
+        meta = make_worker_metadata()
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name="cosched-worker-fail",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=2,
+        environment=job_pb2.EnvironmentConfig(),
+        max_retries_preemption=0,  # the direct victim is immediately terminal
+    )
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
+    tasks = submit_job(state, "j-cosched-fail", req)
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+
+    failed = ["w0", "w1"] if fail_both else ["w0"]
+    ops.worker.fail(
+        state._db,
+        worker_ids=failed,
+        reason="slice reaped",
+        health=state._health,
+        endpoints=state._endpoints,
+        worker_attrs=state._worker_attrs,
+    )
+
+    task0 = _query_task(state, tasks[0].task_id)
+    task1 = _query_task(state, tasks[1].task_id)
+    assert {task0.state, task1.state} == {
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_COSCHED_FAILED,
+    }, f"expected WORKER_FAILED + COSCHED_FAILED, got {task0.state}, {task1.state}"
+
+    job_id, _ = tasks[0].task_id.require_task()
+    job = _query_job(state, job_id)
+    assert (
+        job.state == job_pb2.JOB_STATE_WORKER_FAILED
+    ), f"job stranded in state {job.state}; expected terminal WORKER_FAILED"
+
+
 def test_coscheduled_cascade_holds_sibling_resources_until_heartbeat(state):
     """Coscheduled sibling cascade keeps siblings' chips reserved until their
     heartbeats finalize them.
