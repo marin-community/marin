@@ -11,7 +11,10 @@ They focus on:
 """
 
 import asyncio
+import logging
+import tempfile
 import threading
+from pathlib import Path
 
 import pytest
 from finelog.rpc import logging_pb2
@@ -29,7 +32,9 @@ from iris.cluster.controller.ops.task import apply_provider_updates as apply_dir
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow
 from iris.cluster.controller.pruner import PruneResult, prune_old_data
 from iris.cluster.controller.reads import WorkerResourceUsage
-from iris.cluster.controller.reconcile.effects import AttemptRowDelta, JobRowDelta, TaskRowDelta
+from iris.cluster.controller.reconcile.batches import _kill_non_terminal_tasks
+from iris.cluster.controller.reconcile.effects import JobRowDelta, apply_effects
+from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.policy import MAX_REPLICAS_PER_JOB
 from iris.cluster.controller.reconcile.snapshot import (
     JobStateBasis,
@@ -48,7 +53,8 @@ from iris.cluster.controller.scheduler import (
 from iris.cluster.controller.scheduling_policy import compute_demand_entries
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table, workers_table
 from iris.cluster.controller.task_state import attempt_is_terminal
-from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.log_keys import task_log_key
+from iris.cluster.types import JobName, TaskAttempt, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, select, text
@@ -1842,8 +1848,6 @@ def test_stale_attempt_ignored(state):
 
 def test_stale_attempt_error_log_for_non_terminal(state, caplog):
     """Stale attempt report logs ERROR when the old attempt is not terminal."""
-    import logging
-
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
     req = make_job_request("job1")
@@ -1903,9 +1907,6 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
 
 def test_log_service_direct_push(state, log_service):
     """Log entries pushed via LogService are queryable."""
-    from iris.cluster.log_keys import task_log_key
-    from iris.cluster.types import TaskAttempt
-
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
     tasks = submit_job(state, "j1", make_job_request("job1"))
@@ -1928,10 +1929,6 @@ def test_log_service_direct_push(state, log_service):
 
 def test_log_service_accumulates_pushes(state, log_service):
     """Multiple pushes accumulate logs in the service."""
-
-    from iris.cluster.log_keys import task_log_key
-    from iris.cluster.types import TaskAttempt
-
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
     tasks = submit_job(state, "j1", make_job_request("job1"))
@@ -3283,9 +3280,6 @@ def test_holder_tasks_excluded_from_building_counts(state):
 
 def test_snapshot_round_trip_preserves_reservation_holder(state):
     """DB checkpoint copy round-trip preserves is_reservation_holder flag."""
-    import tempfile
-    from pathlib import Path
-
     req = _make_reservation_make_job_request(
         task_device=_h100_device(),
         reservation_devices=[_h100_device()],
@@ -4097,11 +4091,6 @@ def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harnes
     ``j.is_reservation_holder = 0``), so terminating a holder task on a
     co-tenanted worker cannot move the co-tenant's reservation accounting.
     """
-    from iris.cluster.controller.reconcile.batches import _kill_non_terminal_tasks
-    from iris.cluster.controller.reconcile.effects import apply_effects
-    from iris.cluster.controller.reconcile.loader import load_closed_snapshot
-    from iris.cluster.controller.reconcile.working_state import WorkingState
-
     worker_id = harness.add_worker("w1")
 
     real_tasks = harness.submit("real-job", replicas=1)
@@ -4235,11 +4224,6 @@ def test_job_cancel_marks_job_killed(harness) -> None:
     assert harness.query_job(jid).state == job_pb2.JOB_STATE_KILLED
 
 
-# =============================================================================
-# Accumulator merge-fold unit tests (pure WorkingState, no DB)
-# =============================================================================
-
-
 def _empty_snapshot(*, job_state_basis=None):
     return TransitionSnapshot(
         now=Timestamp.from_ms(1000),
@@ -4253,88 +4237,6 @@ def _empty_snapshot(*, job_state_basis=None):
         active_tasks_by_job={},
         active_workers=frozenset(),
     )
-
-
-def test_task_merge_running_then_failed_collapses_to_one_delta():
-    """Two writes to the same task (RUNNING then FAILED) collapse to one delta.
-
-    state is last-wins (FAILED); started_at is first-wins (kept from RUNNING);
-    finished_at is last-wins (set by FAILED); error/exit_code last-non-null.
-    """
-    ws = WorkingState(_empty_snapshot())
-    tid = JobName.from_wire("/u/j:0")
-    ws.record_task(TaskRowDelta(task_id=tid, state=job_pb2.TASK_STATE_RUNNING, started_at=Timestamp.from_ms(100)))
-    ws.record_task(
-        TaskRowDelta(
-            task_id=tid,
-            state=job_pb2.TASK_STATE_FAILED,
-            error="boom",
-            exit_code=1,
-            finished_at=Timestamp.from_ms(200),
-            failure_count=1,
-        )
-    )
-
-    assert list(ws.effects.tasks.keys()) == [tid]
-    merged = ws.effects.tasks[tid]
-    assert merged.state == job_pb2.TASK_STATE_FAILED
-    assert merged.started_at == Timestamp.from_ms(100)  # first-wins
-    assert merged.finished_at == Timestamp.from_ms(200)  # last-wins
-    assert merged.error == "boom"
-    assert merged.exit_code == 1
-    assert merged.failure_count == 1
-
-
-def test_task_merge_finished_at_last_wins_can_clear():
-    """Task finished_at is last-wins INCLUDING None — a later write can clear it."""
-    ws = WorkingState(_empty_snapshot())
-    tid = JobName.from_wire("/u/j:0")
-    ws.record_task(TaskRowDelta(task_id=tid, state=job_pb2.TASK_STATE_FAILED, finished_at=Timestamp.from_ms(200)))
-    # Rollback-to-PENDING for retry clears finished_at.
-    ws.record_task(TaskRowDelta(task_id=tid, state=job_pb2.TASK_STATE_PENDING, finished_at=None))
-
-    merged = ws.effects.tasks[tid]
-    assert merged.state == job_pb2.TASK_STATE_PENDING
-    assert merged.finished_at is None
-
-
-def test_task_merge_error_is_last_non_null():
-    """error/exit_code fold last-non-null: a later None does NOT clobber an earlier value."""
-    ws = WorkingState(_empty_snapshot())
-    tid = JobName.from_wire("/u/j:0")
-    ws.record_task(TaskRowDelta(task_id=tid, state=job_pb2.TASK_STATE_FAILED, error="first", exit_code=7))
-    ws.record_task(TaskRowDelta(task_id=tid, state=job_pb2.TASK_STATE_KILLED, error=None, exit_code=None))
-
-    merged = ws.effects.tasks[tid]
-    assert merged.state == job_pb2.TASK_STATE_KILLED  # last-wins
-    assert merged.error == "first"  # last-non-null keeps earlier
-    assert merged.exit_code == 7
-
-
-def test_attempt_merge_finished_at_is_first_wins():
-    """Attempt finished_at is FIRST-wins (unlike tasks, which are last-wins)."""
-    ws = WorkingState(_empty_snapshot())
-    tid = JobName.from_wire("/u/j:0")
-    ws.record_attempt(AttemptRowDelta(task_id=tid, attempt_id=0, finished_at=Timestamp.from_ms(100)))
-    ws.record_attempt(AttemptRowDelta(task_id=tid, attempt_id=0, finished_at=Timestamp.from_ms(200)))
-
-    merged = ws.effects.attempts[(tid, 0)]
-    assert merged.finished_at == Timestamp.from_ms(100)  # first-wins
-
-
-def test_attempt_merge_started_at_first_state_last():
-    ws = WorkingState(_empty_snapshot())
-    tid = JobName.from_wire("/u/j:0")
-    ws.record_attempt(
-        AttemptRowDelta(task_id=tid, attempt_id=0, state=job_pb2.TASK_STATE_RUNNING, started_at=Timestamp.from_ms(50))
-    )
-    ws.record_attempt(
-        AttemptRowDelta(task_id=tid, attempt_id=0, state=job_pb2.TASK_STATE_SUCCEEDED, started_at=Timestamp.from_ms(60))
-    )
-
-    merged = ws.effects.attempts[(tid, 0)]
-    assert merged.state == job_pb2.TASK_STATE_SUCCEEDED  # last-non-null
-    assert merged.started_at == Timestamp.from_ms(50)  # first-wins
 
 
 def _basis(job_id: JobName, state: int):

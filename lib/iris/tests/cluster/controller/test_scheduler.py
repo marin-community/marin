@@ -9,7 +9,7 @@ modify state, or run threads.
 """
 
 import pytest
-from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.constraints import AttributeValue, WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
@@ -25,12 +25,14 @@ from iris.cluster.controller.scheduler import (
     WorkerSnapshot,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.schema import worker_attributes_table
+from iris.cluster.controller.schema import jobs_table, worker_attributes_table
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.worker.env_probe import _build_worker_attributes
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import select
+from sqlalchemy import update as sa_update
 
 from tests.cluster.conftest import eq_constraint, in_constraint
 from tests.cluster.controller._test_support import ControllerTestState, set_worker_health_for_test
@@ -84,8 +86,6 @@ def _job_requirements_from_job(job) -> JobRequirements:
 
 def _decode_worker_attr_value(row):
     """Decode a worker_attributes row value by value_type."""
-    from iris.cluster.constraints import AttributeValue
-
     if row.value_type == "int":
         return AttributeValue(int(row.int_value))
     if row.value_type == "float":
@@ -350,9 +350,6 @@ def test_scheduler_detects_timed_out_tasks(state):
     tasks = submit_job(state, "j1", request)
 
     # Manually set deadline epoch to past timestamp in DB.
-    from iris.cluster.controller.schema import jobs_table
-    from sqlalchemy import update as sa_update
-
     with state._db.transaction() as _tx:
         _tx.execute(
             sa_update(jobs_table)
@@ -2228,8 +2225,6 @@ def test_gpu_job_matches_worker_with_config_variant(scheduler, state):
 
 def _register_worker_with_probed_attributes(state, worker_id, address, metadata):
     """Register a worker, populating attributes via _build_worker_attributes (as real workers do)."""
-    from iris.cluster.worker.env_probe import _build_worker_attributes
-
     # Determine accelerator_type and variant from the device config on metadata,
     # mirroring what the autoscaler would set on WorkerConfig.
     if metadata.device.HasField("tpu"):

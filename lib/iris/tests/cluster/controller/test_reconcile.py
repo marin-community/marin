@@ -16,6 +16,7 @@ Three layers, exercised in order:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -23,6 +24,7 @@ import pytest
 from iris.cluster.controller import ops, writes
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile_observations as apply_reconcile
+from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
@@ -31,12 +33,16 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcilePlan,
     reconcile_workers,
 )
+from iris.cluster.controller.reconcile.worker import (
+    observations_to_updates as worker_observations_to_updates,
+)
 from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2, worker_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
@@ -214,8 +220,6 @@ def test_insert_attempt_propagates_non_uid_integrity_error():
     with make_controller_state() as state:
         task_id = _submit_pending_task(state, job="pk-collide")
         _insert_attempt(state, task_id, attempt_id=0)
-
-        from sqlalchemy.exc import IntegrityError
 
         with pytest.raises(IntegrityError):
             _insert_attempt(state, task_id, attempt_id=0)
@@ -844,15 +848,10 @@ def _observations_to_updates(
     state: ControllerTestState,
     observations: list[worker_pb2.Worker.AttemptObservation],
 ) -> list[TaskUpdate]:
-    from iris.cluster.controller.reconcile.loader import load_closed_snapshot
-    from iris.cluster.controller.reconcile.worker import observations_to_updates as _observations_to_updates
-    from iris.cluster.types import AttemptUid
-    from rigging.timing import Timestamp
-
     uids = [AttemptUid(obs.attempt_uid) for obs in observations if obs.attempt_uid]
     with state._db.transaction() as cur:
         snapshot = load_closed_snapshot(cur, now=Timestamp.now(), observation_uids=uids)
-        return _observations_to_updates(snapshot, observations)
+        return worker_observations_to_updates(snapshot, observations)
 
 
 def test_observation_routed_by_attempt_uid():
@@ -875,8 +874,6 @@ def test_unresolvable_observation_uid_is_dropped_and_logged(caplog):
     The diagnostic is emitted inline by ``observations_to_updates`` (logger
     ``iris.cluster.controller.reconcile.worker``), not via a deferred effect.
     """
-    import logging
-
     with make_controller_state() as state:
         _setup_running_task(state)
         obs = _obs("does-not-exist-uid", job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)

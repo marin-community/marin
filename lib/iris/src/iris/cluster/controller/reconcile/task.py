@@ -58,6 +58,13 @@ class TerminalKind(StrEnum):
     UNSCHEDULABLE = "unschedulable"
 
 
+class TransitionSource(StrEnum):
+    """Caller policy for side effects attached to task-state updates."""
+
+    WORKER_RECONCILE = "worker_reconcile"
+    DIRECT_PROVIDER = "direct_provider"
+
+
 @dataclass(frozen=True, slots=True)
 class TerminalDecision:
     """One task → terminal assertion to be applied as part of a batch."""
@@ -322,16 +329,14 @@ def apply_one_transition(
     update: TaskUpdate,
     now_ms: int,
     *,
-    track_worker_build_failures: bool = True,
+    source: TransitionSource = TransitionSource.WORKER_RECONCILE,
 ) -> TransitionOutcome | None:
     """Apply one ``TaskUpdate`` against ``state``: write attempt + task mutations.
 
-    This is the single per-update transition core. Heartbeats and reconcile-plan
-    observations drive it with ``track_worker_build_failures=True`` so a host
-    that keeps failing builds gets reaped; direct providers (e.g. Kubernetes)
-    manage their own hosts and drive it with the flag off. ``update.container_id``
-    is folded into the task row when present (direct-provider reports carry it;
-    heartbeats leave it ``None``, a no-op).
+    This is the single per-update transition core. Worker reconcile updates
+    charge build failures to worker health so hosts that keep failing builds
+    get reaped; direct providers manage their own hosts. ``update.container_id``
+    is folded into the task row when present.
 
     Returns a :class:`TransitionOutcome` describing the change so the
     orchestrator can drive the peer-cascade and job-recompute. Returns
@@ -438,6 +443,7 @@ def apply_one_transition(
     task_exit = update.exit_code
     failure_count = task.failure_count
     preemption_count = task.preemption_count
+    charge_worker_build_failures = source is TransitionSource.WORKER_RECONCILE
 
     if update.new_state == job_pb2.TASK_STATE_RUNNING:
         started_ms = now_ms
@@ -464,7 +470,7 @@ def apply_one_transition(
             # runtime. Mark the worker as build-failed so the scheduler
             # avoids it.
             if (
-                track_worker_build_failures
+                charge_worker_build_failures
                 and prior_state == job_pb2.TASK_STATE_BUILDING
                 and attempt_worker_id is not None
             ):
@@ -480,7 +486,7 @@ def apply_one_transition(
             # ASSIGNED -> WORKER_FAILED means the worker accepted the task but
             # couldn't bring it up. Attribute the failure to the worker so a
             # host that keeps failing launches gets reaped.
-            if track_worker_build_failures and attempt_worker_id is not None:
+            if charge_worker_build_failures and attempt_worker_id is not None:
                 state.record_worker_build_failed(WorkerId(str(attempt_worker_id)))
         if update.new_state == job_pb2.TASK_STATE_FAILED and failure_count <= task.max_retries_failure:
             task_state = job_pb2.TASK_STATE_PENDING

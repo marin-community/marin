@@ -153,7 +153,7 @@ def _apply_transitions(
     now_ms: int,
     acc: _TouchedJobs,
     *,
-    track_worker_build_failures: bool = True,
+    source: task.TransitionSource = task.TransitionSource.WORKER_RECONCILE,
 ) -> None:
     """Apply pass: apply task transitions + per-update peer cascade.
 
@@ -166,14 +166,11 @@ def _apply_transitions(
     sibling fails the job stays SUCCEEDED, since finalize only kills NON-terminal
     tasks.
 
-    ``track_worker_build_failures`` is threaded to the per-update core:
-    reconcile callers reap build-failing hosts; direct providers manage their
-    own hosts and pass ``False``.
+    ``source`` selects caller-specific health side effects: worker reconcile
+    reaps build-failing hosts; direct providers manage their own hosts.
     """
     for update in updates:
-        outcome = task.apply_one_transition(
-            state, snapshot, update, now_ms, track_worker_build_failures=track_worker_build_failures
-        )
+        outcome = task.apply_one_transition(state, snapshot, update, now_ms, source=source)
         if outcome is None:
             continue
         _cascade_to_peers(state, outcome, now_ms)
@@ -207,7 +204,7 @@ def _apply_and_recompute(
     updates: list[TaskUpdate],
     now_ms: int,
     *,
-    track_worker_build_failures: bool = True,
+    source: task.TransitionSource = task.TransitionSource.WORKER_RECONCILE,
 ) -> set[JobName]:
     """Single-call convenience: apply pass over ``updates`` then recompute pass.
 
@@ -216,7 +213,7 @@ def _apply_and_recompute(
     all workers first, then a single recompute pass.
     """
     acc = _TouchedJobs()
-    _apply_transitions(state, snapshot, updates, now_ms, acc, track_worker_build_failures=track_worker_build_failures)
+    _apply_transitions(state, snapshot, updates, now_ms, acc, source=source)
     return _recompute_touched_jobs(state, acc, now_ms)
 
 
@@ -301,7 +298,7 @@ def apply_direct_provider_updates_batch(
     now_ms = snapshot.now.epoch_ms()
     state = WorkingState(snapshot=snapshot)
     # Direct providers manage their own hosts -> no build-failed reaping.
-    cascaded_jobs = _apply_and_recompute(state, snapshot, updates, now_ms, track_worker_build_failures=False)
+    cascaded_jobs = _apply_and_recompute(state, snapshot, updates, now_ms, source=task.TransitionSource.DIRECT_PROVIDER)
 
     if cascaded_jobs:
         state.record_log_event(LogEvent(action="direct_provider_updates_applied", entity_id="direct"))

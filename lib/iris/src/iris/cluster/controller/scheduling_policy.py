@@ -24,14 +24,10 @@ from iris.cluster.constraints import (
     Constraint,
     ConstraintOp,
     PlacementRequirements,
-    WellKnownAttribute,
     constraints_from_resources,
     evaluate_constraint,
     extract_placement_requirements,
     merge_constraints,
-)
-from iris.cluster.constraints import (
-    region_constraint as make_region_constraint,
 )
 from iris.cluster.controller import db, reads, writes
 from iris.cluster.controller.autoscaler.models import DemandEntry
@@ -910,43 +906,6 @@ def _find_reservation_ancestor(reserved_jobs: set[JobName], job_id: JobName) -> 
             return current
         current = current.parent
     return None
-
-
-def _reservation_region_constraints(
-    job_id_wire: str,
-    claims: dict[WorkerId, ReservationClaim],
-    queries: ControllerDB,
-    health: WorkerHealthTracker,
-    worker_attrs: WorkerAttrsProjection,
-    existing_constraints: list[Constraint],
-) -> list[Constraint]:
-    """Derive region constraints from claimed reservation workers.
-
-    When a reservation job has no explicit region constraint, this function
-    extracts the region attributes of claimed workers and returns the existing
-    constraints plus an injected region constraint.  If the job already has a
-    region constraint, or if claimed workers lack region attributes, the
-    existing constraints are returned unchanged.
-    """
-    if any(c.key == WellKnownAttribute.REGION for c in existing_constraints):
-        return existing_constraints
-
-    claimed_worker_ids = {worker_id for worker_id, claim in claims.items() if claim.job_id == job_id_wire}
-    with queries.read_snapshot() as tx:
-        _all_workers = reads.healthy_active_workers_with_attributes(tx, health, worker_attrs)
-    workers_by_id = {worker.worker_id: worker for worker in _all_workers if worker.worker_id in claimed_worker_ids}
-    regions: set[str] = set()
-    for worker in workers_by_id.values():
-        if worker is None:
-            continue
-        region_attr = worker.attributes.get(WellKnownAttribute.REGION)
-        if region_attr is not None:
-            regions.add(str(region_attr.value))
-
-    if not regions:
-        return existing_constraints
-
-    return [*existing_constraints, make_region_constraint(sorted(regions))]
 
 
 def preference_pass(
