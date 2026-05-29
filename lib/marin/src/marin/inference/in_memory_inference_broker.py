@@ -72,7 +72,7 @@ class MemoryQueue(Generic[T]):
 
 
 class InMemoryInferenceBroker:
-    """Thread-safe in-memory InferenceBroker implementation."""
+    """Thread-safe in-memory broker implementation."""
 
     def __init__(
         self,

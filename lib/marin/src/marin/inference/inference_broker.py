@@ -67,11 +67,13 @@ class LeasedInferenceResponse:
     response: InferenceResponse
 
 
-class InferenceBroker(Protocol):
-    def submit_request(self, request: InferenceRequest) -> None: ...
-
+class InferenceRequestProvider(Protocol):
     def fetch_requests(self, *, max_items: int) -> list[LeasedInferenceRequest]: ...
 
     def submit_responses(self, responses: Iterable[LeasedInferenceResponse]) -> None: ...
+
+
+class InferenceResponseProvider(Protocol):
+    def submit_request(self, request: InferenceRequest) -> None: ...
 
     def fetch_responses(self, *, max_items: int) -> list[InferenceResponse]: ...

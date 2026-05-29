@@ -21,9 +21,9 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from marin.inference.inference_broker import (
-    InferenceBroker,
     InferenceRequest,
     InferenceResponse,
+    InferenceResponseProvider,
     format_request_ids,
     pack_json_payload,
     unpack_json_payload,
@@ -42,12 +42,12 @@ class ProxyStats:
 
 
 class InferenceProxy:
-    """OpenAI-compatible local HTTP proxy backed by an InferenceBroker."""
+    """OpenAI-compatible local HTTP proxy backed by an inference response provider."""
 
     def __init__(
         self,
         *,
-        broker: InferenceBroker,
+        broker: InferenceResponseProvider,
         model: str,
         request_timeout_seconds: float,
         readiness_timeout_seconds: float,
@@ -238,7 +238,7 @@ class InferenceProxy:
 @contextmanager
 def serve_inference_proxy(
     *,
-    broker: InferenceBroker,
+    broker: InferenceResponseProvider,
     model: str,
     host: str = "127.0.0.1",
     port: int = 0,

@@ -22,7 +22,7 @@ from rigging.log_setup import configure_logging
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.in_memory_inference_broker import InMemoryInferenceBroker
-from marin.inference.inference_broker import InferenceBroker
+from marin.inference.inference_broker import InferenceRequestProvider, InferenceResponseProvider
 from marin.inference.inference_proxy import serve_inference_proxy
 from marin.inference.inference_worker import (
     InferenceWorker,
@@ -166,10 +166,9 @@ def start_iris_brokered_vllm(
     worker_jobs: list[JobHandle] = []
     try:
         logger.info("Waiting for broker actor name=%s", broker_name)
-        broker_handle = cast(
-            InferenceBroker,
-            broker_group.wait_ready(count=1, timeout=runtime.broker_ready_timeout_seconds)[0],
-        )
+        broker_handle = broker_group.wait_ready(count=1, timeout=runtime.broker_ready_timeout_seconds)[0]
+        request_provider = cast(InferenceRequestProvider, broker_handle)
+        response_provider = cast(InferenceResponseProvider, broker_handle)
         worker_environment = create_environment(
             extras=runtime.worker_environment_extras,
             env_vars=dict(runtime.worker_env_vars),
@@ -178,7 +177,7 @@ def start_iris_brokered_vllm(
             job = client.submit(
                 JobRequest(
                     name=f"{worker_prefix}-{worker_index}",
-                    entrypoint=Entrypoint.from_callable(_run_iris_inference_worker, args=(config, broker_handle)),
+                    entrypoint=Entrypoint.from_callable(_run_iris_inference_worker, args=(config, request_provider)),
                     resources=runtime.worker_resources,
                     environment=worker_environment,
                     priority=runtime.priority_band,
@@ -187,7 +186,7 @@ def start_iris_brokered_vllm(
             worker_jobs.append(job)
             logger.info("Submitted vLLM worker job_id=%s index=%d", job.job_id, worker_index)
 
-        with _start_proxy(config, broker_handle) as running_model:
+        with _start_proxy(config, response_provider) as running_model:
             _wait_for_brokered_vllm_ready(running_model, timeout_seconds=config.proxy.readiness_timeout_seconds)
             yield running_model
     finally:
@@ -225,7 +224,7 @@ def start_local_vllm_server(config: BrokeredVllmSystemConfig) -> Iterator[Runnin
         )
 
 
-def _run_iris_inference_worker(config: BrokeredVllmSystemConfig, broker_handle: InferenceBroker) -> None:
+def _run_iris_inference_worker(config: BrokeredVllmSystemConfig, broker_handle: InferenceRequestProvider) -> None:
     configure_logging()
     with remove_tpu_lockfile_on_exit(), start_local_vllm_server(config) as upstream:
         worker = InferenceWorker(
@@ -238,7 +237,7 @@ def _run_iris_inference_worker(config: BrokeredVllmSystemConfig, broker_handle: 
 
 
 @contextlib.contextmanager
-def _start_proxy(config: BrokeredVllmSystemConfig, broker: InferenceBroker) -> Iterator[RunningModel]:
+def _start_proxy(config: BrokeredVllmSystemConfig, broker: InferenceResponseProvider) -> Iterator[RunningModel]:
     proxy_config = config.proxy
     with serve_inference_proxy(
         broker=broker,

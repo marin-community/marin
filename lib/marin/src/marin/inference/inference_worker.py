@@ -15,8 +15,8 @@ import httpx
 from rigging.timing import ExponentialBackoff
 
 from marin.inference.inference_broker import (
-    InferenceBroker,
     InferenceRequest,
+    InferenceRequestProvider,
     InferenceResponse,
     LeasedInferenceRequest,
     LeasedInferenceResponse,
@@ -37,7 +37,7 @@ class InferenceWorker:
     def __init__(
         self,
         *,
-        broker: InferenceBroker,
+        broker: InferenceRequestProvider,
         upstream: RunningModel,
         request_timeout_seconds: float,
     ) -> None:
