@@ -129,23 +129,15 @@ def test_brokered_vllm_rejects_timeout_ordering_without_recovery_window() -> Non
         BrokeredVllmSystemConfig(model="gpt2", proxy=VllmProxyConfig(request_timeout_seconds=130))
 
 
-def test_iris_runtime_pins_broker_and_workers_to_one_region() -> None:
+def test_iris_runtime_leaves_child_placement_to_parent_region_inheritance() -> None:
     runtime = IrisBrokeredVllmRuntimeConfig(
-        region="us-east5",
         worker_resources=ResourceConfig.with_tpu("v5p-8"),
     )
 
-    assert runtime.broker_resources_in_region.regions == ["us-east5"]
-    assert runtime.worker_resources_in_region.regions == ["us-east5"]
-
-
-def test_iris_runtime_overrides_resource_regions() -> None:
-    runtime = IrisBrokeredVllmRuntimeConfig(
-        region="us-east5",
-        worker_resources=ResourceConfig.with_tpu("v5p-8", regions=["us-central1"]),
-    )
-
-    assert runtime.worker_resources_in_region.regions == ["us-east5"]
+    assert runtime.broker_resources.regions is None
+    assert runtime.broker_resources.zone is None
+    assert runtime.worker_resources.regions is None
+    assert runtime.worker_resources.zone is None
 
 
 def test_vllm_http_proxy_forwards_completions_to_running_model() -> None:

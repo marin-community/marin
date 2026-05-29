@@ -8,7 +8,7 @@ import contextlib
 import logging
 import uuid
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import cast
 
@@ -102,11 +102,9 @@ class BrokeredVllmSystemConfig:
 
 @dataclass(frozen=True)
 class IrisBrokeredVllmRuntimeConfig:
-    # All Iris jobs in this serving topology must stay in one region to avoid cross-region serving traffic.
-    region: str
     # Model- and eval-specific TPU resources for each vLLM worker.
     worker_resources: ResourceConfig
-    # Broker is CPU-only: it holds queues and compressed request/response payloads.
+    # Broker is CPU-only; TPU work happens in worker jobs.
     broker_resources: ResourceConfig = field(
         default_factory=lambda: ResourceConfig.with_cpu(cpu=2, ram="8g", disk="20g")
     )
@@ -118,18 +116,6 @@ class IrisBrokeredVllmRuntimeConfig:
     broker_ready_timeout_seconds: float = 900.0
     # Applied to broker actor and TPU worker child jobs.
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED
-
-    def __post_init__(self) -> None:
-        _validate_resource_zone(self.broker_resources, name="broker_resources", region=self.region)
-        _validate_resource_zone(self.worker_resources, name="worker_resources", region=self.region)
-
-    @property
-    def broker_resources_in_region(self) -> ResourceConfig:
-        return replace(self.broker_resources, regions=[self.region])
-
-    @property
-    def worker_resources_in_region(self) -> ResourceConfig:
-        return replace(self.worker_resources, regions=[self.region])
 
 
 @contextlib.contextmanager
@@ -166,11 +152,6 @@ def start_iris_brokered_vllm(
     job_info = get_job_info()
     if job_info is None:
         raise RuntimeError("start_iris_brokered_vllm must run inside an Iris job.")
-    if job_info.worker_region != runtime.region:
-        raise RuntimeError(
-            "Brokered vLLM parent, broker, and workers must run in one Iris region. "
-            f"Parent region={job_info.worker_region!r}, runtime region={runtime.region!r}."
-        )
     run_id = uuid.uuid4().hex[:8]
     broker_name = f"vllm-broker-{run_id}"
     worker_prefix = f"vllm-worker-{run_id}"
@@ -179,7 +160,7 @@ def start_iris_brokered_vllm(
         name=broker_name,
         count=1,
         request_lease_timeout_seconds=config.request_lease_timeout_seconds,
-        resources=runtime.broker_resources_in_region,
+        resources=runtime.broker_resources,
         actor_config=ActorConfig(max_task_retries=0, priority=runtime.priority_band),
     )
     worker_jobs: list[JobHandle] = []
@@ -198,7 +179,7 @@ def start_iris_brokered_vllm(
                 JobRequest(
                     name=f"{worker_prefix}-{worker_index}",
                     entrypoint=Entrypoint.from_callable(_run_iris_vllm_worker, args=(config, broker_handle)),
-                    resources=runtime.worker_resources_in_region,
+                    resources=runtime.worker_resources,
                     environment=worker_environment,
                     priority=runtime.priority_band,
                 )
@@ -293,16 +274,6 @@ def _validate_timeout_ordering(config: BrokeredVllmSystemConfig) -> None:
         )
     if config.proxy.readiness_timeout_seconds <= 0:
         raise ValueError("proxy.readiness_timeout_seconds must be positive.")
-
-
-def _validate_resource_zone(resources: ResourceConfig, *, name: str, region: str) -> None:
-    if resources.zone is not None and _region_from_zone(resources.zone) != region:
-        raise ValueError(f"{name}.zone={resources.zone!r} is outside required region {region!r}.")
-
-
-def _region_from_zone(zone: str) -> str:
-    return zone.rsplit("-", maxsplit=1)[0]
-
 
 def _wait_for_brokered_vllm_ready(running_model: RunningModel, *, timeout_seconds: float) -> None:
     models_url = running_model.endpoint.url("models")

@@ -171,7 +171,7 @@ def submit_iris_humaneval(
     job_name: str,
     iris_config_path: str,
     parent_ram: str,
-    region: str,
+    region: str | None,
     priority_band: job_pb2.PriorityBand,
 ) -> None:
     def _run_parent() -> None:
@@ -181,6 +181,9 @@ def submit_iris_humaneval(
     iris_config = IrisConfig.load(iris_config_path)
     controller = iris_config.provider_bundle().controller
     controller_address = iris_config.controller_address() or controller.discover_controller(iris_config.proto.controller)
+    constraints = [preemptible_constraint(False)]
+    if region is not None:
+        constraints.append(region_constraint([region]))
     with controller.tunnel(address=controller_address) as controller_url:
         with IrisClient.remote(controller_url, workspace=Path.cwd()) as client:
             job = client.submit(
@@ -188,7 +191,7 @@ def submit_iris_humaneval(
                 name=job_name,
                 resources=ResourceSpec(cpu=0.5, memory=parent_ram, disk="16g"),
                 environment=EnvironmentSpec(env_vars={"HF_ALLOW_CODE_EVAL": "1"}),
-                constraints=[preemptible_constraint(False), region_constraint([region])],
+                constraints=constraints,
                 priority_band=priority_band,
             )
             print(f"Submitted Iris parent job {job.job_id}", flush=True)
@@ -256,10 +259,9 @@ def _build_inference_config(
     help="Host RAM request for the CPU parent job that runs lm-eval and the proxy.",
 )
 @click.option(
-    "--tpu-region",
-    "--tpu-regions",
-    default="us-west4",
-    help="Region for the CPU parent, broker actor, and TPU worker jobs.",
+    "--region",
+    default=None,
+    help="Optional region for the Iris parent job; broker and worker jobs inherit it.",
 )
 @click.option("--job-name", default="served-qwen3-humaneval", help="Iris parent job name.")
 @click.option(
@@ -281,7 +283,7 @@ def main(
     tpu_type: str,
     worker_ram: str,
     parent_ram: str,
-    tpu_region: str,
+    region: str | None,
     job_name: str,
     priority: str | None,
     local: bool,
@@ -289,11 +291,6 @@ def main(
     configure_logging()
     if local and workers > 1:
         raise click.UsageError("--local only supports --workers 1; use --num-concurrent for local request fanout")
-    tpu_region = tpu_region.strip()
-    if not tpu_region:
-        raise click.UsageError("--tpu-region must be non-empty")
-    if "," in tpu_region:
-        raise click.UsageError("--tpu-region accepts one region; rerun separately for another region")
 
     try:
         inference_config = _build_inference_config(
@@ -317,7 +314,6 @@ def main(
 
     priority_band = priority_band_value(priority) if priority else job_pb2.PRIORITY_BAND_UNSPECIFIED
     runtime_config = IrisBrokeredVllmRuntimeConfig(
-        region=tpu_region,
         worker_resources=ResourceConfig.with_tpu(tpu_type, ram=worker_ram),
         worker_env_vars=VLLM_WORKER_ENV_VARS,
         priority_band=priority_band,
@@ -329,7 +325,7 @@ def main(
         job_name=job_name,
         iris_config_path="lib/iris/config/marin.yaml",
         parent_ram=parent_ram,
-        region=tpu_region,
+        region=region,
         priority_band=priority_band,
     )
 
