@@ -1,11 +1,17 @@
 name: "CodeQL — Python (security + code quality)"
 
-# Scope: first-party Marin library source. This matches the long-standing
-# security scope; broaden `paths` (e.g. add lib/iris/src, lib/zephyr/src,
-# experiments) if you want code-quality coverage beyond marin core — note that
-# also widens the security scan, since both share this path scope.
+# Scope: source of every first-party Marin sub-package. Upstream-vendored
+# sibling libraries lib/levanter and lib/haliax are intentionally excluded —
+# they carry their own lint/scan configs. This scope is shared by both the
+# security and code-quality analyses. Add experiments/ here if you also want
+# the experiment scripts scanned.
 paths:
   - lib/marin/src
+  - lib/iris/src
+  - lib/finelog/src
+  - lib/zephyr/src
+  - lib/fray/src
+  - lib/rigging/src
 paths-ignore:
   - tests/**
   - "**/*_pb2.py"
