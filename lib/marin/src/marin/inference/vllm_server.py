@@ -327,8 +327,10 @@ def _start_vllm_native_server(
     log_dir = tempfile.mkdtemp(prefix="vllm_server_")
     stdout_path = os.path.join(log_dir, "stdout.log")
     stderr_path = os.path.join(log_dir, "stderr.log")
-    stdout_f = open(stdout_path, "w")
-    stderr_f = open(stderr_path, "w")
+    # These handles are owned by the long-lived vLLM subprocess below and must
+    # stay open for its lifetime, so a context manager is not applicable here.
+    stdout_f = open(stdout_path, "w")  # noqa: SIM115
+    stderr_f = open(stderr_path, "w")  # noqa: SIM115
     native_env = _vllm_env()
     logger.info(
         "Starting vLLM native server with "
