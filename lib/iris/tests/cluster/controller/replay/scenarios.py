@@ -469,6 +469,42 @@ def scenario_coscheduled_preempt_retry_bounces_siblings(transitions: ControllerT
     apply_event(transitions, PreemptTask(task_id=tasks[0], reason="evicted-by-prod"))
 
 
+def scenario_coscheduled_preempt_terminal_cascades_siblings(
+    transitions: ControllerTestState, clock: FrozenClock
+) -> None:
+    """Coscheduled 2-replica job RUNNING with no preemption budget; the controller
+    preempts one task terminally. The sibling must cascade to COSCHED_FAILED — not
+    bounce to PENDING — so no task is left active on a slice whose partner is gone.
+
+    The terminal-preempt complement of ``coscheduled_preempt_retry_bounces_siblings``:
+    the retry case requeues siblings, the no-budget case terminates them.
+    """
+    worker_a = _register_worker(transitions, clock, "w-cosched-pt-a", address="w-cosched-pt-a:8080")
+    worker_b = _register_worker(transitions, clock, "w-cosched-pt-b", address="w-cosched-pt-b:8080")
+    job_id = _submit(
+        transitions,
+        clock,
+        "cosched-preempt-term",
+        replicas=2,
+        coscheduled=True,
+        max_retries_preemption=0,
+    )
+    tasks = _task_ids(transitions, job_id)
+    apply_event(
+        transitions,
+        QueueAssignments(
+            [
+                Assignment(task_id=tasks[0], worker_id=worker_a),
+                Assignment(task_id=tasks[1], worker_id=worker_b),
+            ],
+        ),
+    )
+    attempts = [_current_attempt(transitions, t) for t in tasks]
+    _observe(transitions, worker_a, tasks[0], attempts[0], job_pb2.TASK_STATE_RUNNING)
+    _observe(transitions, worker_b, tasks[1], attempts[1], job_pb2.TASK_STATE_RUNNING)
+    apply_event(transitions, PreemptTask(task_id=tasks[0], reason="evicted-by-prod"))
+
+
 def scenario_direct_provider_cycle(transitions: ControllerTestState, clock: FrozenClock) -> None:
     """Submit a job with no worker, drain to direct-provider, then mark RUNNING."""
     job_id = _submit(transitions, clock, "direct-job")
@@ -686,6 +722,7 @@ SCENARIOS: dict[str, Callable[[ControllerTestState, FrozenClock], None]] = {
     "cancel_running_job": scenario_cancel_running_job,
     "coscheduled_failure_retry_bounces_siblings": scenario_coscheduled_failure_retry_bounces_siblings,
     "coscheduled_preempt_retry_bounces_siblings": scenario_coscheduled_preempt_retry_bounces_siblings,
+    "coscheduled_preempt_terminal_cascades_siblings": scenario_coscheduled_preempt_terminal_cascades_siblings,
     "coscheduled_timeout": scenario_coscheduled_timeout,
     "direct_provider_cycle": scenario_direct_provider_cycle,
     "coscheduled_five_tasks_one_fails_all_terminal": scenario_coscheduled_five_tasks_one_fails_all_terminal,

@@ -1796,6 +1796,56 @@ def test_coscheduled_worker_failure_bounces_siblings(state):
         assert usage.cpu_millicores == 1000
 
 
+def test_coscheduled_terminal_preempt_cascades_siblings(state):
+    """A *terminal* preemption (no retry budget) of one coscheduled task must
+    drive every sibling terminal, just like the retry case bounces them.
+
+    The preempt path routes through the shared peer cascade, which terminates
+    siblings when the trigger lands on a FAILURE-class state and only requeues
+    them on a PENDING rollback. The terminal branch previously skipped the
+    cascade outright, leaving siblings RUNNING on their slice — the split-slice
+    precondition the ``test_no_split_coscheduled_active_tasks`` invariant flags.
+    """
+
+    for i in range(4):
+        meta = make_worker_metadata()
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name="coschedule-preempt-terminal",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=4,
+        environment=job_pb2.EnvironmentConfig(),
+        max_retries_preemption=0,  # no budget -> preempt is terminal
+    )
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
+    tasks = submit_job(state, "j-preempt", req)
+
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+
+    with state._db.transaction() as cur:
+        apply_terminal_decisions(
+            cur,
+            [TerminalDecision(TerminalKind.PREEMPT, tasks[0].task_id, "reclaim")],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
+        )
+
+    # Direct victim is terminally preempted...
+    assert _query_task(state, tasks[0].task_id).state == job_pb2.TASK_STATE_PREEMPTED
+    # ...and every coscheduled sibling cascades terminal, so no task is left
+    # active to be re-placed onto a fresh slice.
+    for task in tasks[1:]:
+        sib = _query_task(state, task.task_id)
+        assert sib.state == job_pb2.TASK_STATE_COSCHED_FAILED
+        assert sib.preemption_count == 0, "sibling counter must stay honest"
+
+
 def test_coscheduled_bounced_job_recoschedules_to_single_slice(state):
     """End-to-end: after a transient failure bounces a coscheduled slice,
     the next scheduling pass must place all tasks on a single tpu-name
@@ -3467,6 +3517,53 @@ def test_worker_death_preemption_policy_preserve(state):
     child_task = _query_task(state, child_tasks[0].task_id)
     assert child_task.state == job_pb2.TASK_STATE_RUNNING
 
+    child_job = _query_job(state, JobName.from_string("/test-user/parent/child"))
+    assert child_job.state == job_pb2.JOB_STATE_RUNNING
+
+
+def test_worker_death_terminal_job_respects_preserve_children_policy(state):
+    """A multi-task parent that goes *terminal* on worker death must honour its
+    PRESERVE_CHILDREN policy for descendant jobs.
+
+    The terminal-finalize child cascade is policy-gated (same gate as the
+    reconcile path's ``_finalize_terminal_job``). The worker-failure batch
+    previously cascaded children unconditionally once the parent went terminal,
+    killing descendants the policy says to keep — the inconsistency that the
+    PENDING-rollback policy gate (``test_worker_death_preemption_policy_preserve``)
+    already covered but the terminal branch did not.
+    """
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+
+    # Multi-task parent with no preemption budget: worker death makes both tasks
+    # terminal, taking the whole job terminal. Multi-task default policy is
+    # PRESERVE_CHILDREN.
+    parent_req = controller_pb2.Controller.LaunchJobRequest(
+        name="parent",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+        replicas=2,
+        max_retries_preemption=0,
+        max_task_failures=0,
+    )
+    parent_tasks = submit_job(state, "parent", parent_req)
+    for task in parent_tasks:
+        dispatch_task(state, task, worker_id)
+
+    # Child job under the parent, running on its own worker.
+    child_req = make_job_request("child")
+    child_tasks = submit_job(state, "/test-user/parent/child", child_req)
+    w2 = register_worker(state, "w2", "host2:8080", make_worker_metadata())
+    dispatch_task(state, child_tasks[0], w2)
+    assert _query_task(state, child_tasks[0].task_id).state == job_pb2.TASK_STATE_RUNNING
+
+    # w1 dies: both parent tasks exhaust budget -> WORKER_FAILED -> parent terminal.
+    fail_worker(state, worker_id, "Connection lost")
+    for task in parent_tasks:
+        assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_WORKER_FAILED
+
+    # PRESERVE_CHILDREN: the child survives the parent's terminal finalize.
+    assert _query_task(state, child_tasks[0].task_id).state == job_pb2.TASK_STATE_RUNNING
     child_job = _query_job(state, JobName.from_string("/test-user/parent/child"))
     assert child_job.state == job_pb2.JOB_STATE_RUNNING
 

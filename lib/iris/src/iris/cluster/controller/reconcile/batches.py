@@ -32,6 +32,7 @@ from iris.cluster.controller.reconcile.working_state import WorkingState
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, ActiveTaskRow
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
+    TERMINAL_TASK_STATES,
     JobName,
     WorkerId,
 )
@@ -218,6 +219,63 @@ def _apply_and_recompute(
 
 
 # ---------------------------------------------------------------------------
+# Controller-asserted terminal transitions (worker failure / preempt / timeout)
+# ---------------------------------------------------------------------------
+#
+# These batches drive terminal transitions the controller decides on its own
+# (not reported by a worker). They reuse the reconcile kernel's cross-aggregate
+# machinery — per-update peer cascade + deferred ``_recompute_touched_jobs`` —
+# rather than inlining recompute+cascade per task, so terminal-vs-requeue sibling
+# cascades and terminal-job finalize stay consistent with the reconcile path.
+
+
+def _fan_out_outcome(
+    state: WorkingState,
+    outcome: task.TransitionOutcome,
+    acc: _TouchedJobs,
+    pending_child_cascades: dict[JobName, str],
+    child_cascade_reason: str,
+    now_ms: int,
+) -> None:
+    """Drive the cross-aggregate effects of one controller-asserted transition.
+
+    Mirrors the reconcile kernel's per-update step: cascade to coscheduled
+    siblings immediately (so later items in the batch observe the
+    terminate/requeue) and record the job for the deferred recompute pass. When
+    the task rolled back to PENDING under a ``TERMINATE_CHILDREN`` policy, the
+    descendant-job cascade is deferred (deduped per job) to the recompute pass so
+    it runs once per job after every sibling has settled.
+    """
+    _cascade_to_peers(state, outcome, now_ms)
+    acc.note(outcome.job_id)
+    if outcome.new_task_state == job_pb2.TASK_STATE_PENDING:
+        policy = state.job_preemption_policy(outcome.job_id)
+        if policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
+            pending_child_cascades.setdefault(outcome.job_id, child_cascade_reason)
+
+
+def _finalize_assertive_batch(
+    state: WorkingState,
+    acc: _TouchedJobs,
+    pending_child_cascades: dict[JobName, str],
+    now_ms: int,
+) -> set[JobName]:
+    """Recompute pass for the controller-asserted batches.
+
+    ``_recompute_touched_jobs`` finalizes jobs that went terminal (with the
+    policy-gated child cascade). PENDING rollbacks that did not take the job
+    terminal still get their ``TERMINATE_CHILDREN`` descendant cascade here,
+    skipping any job already finalized above so children never cascade twice.
+    """
+    cascaded = _recompute_touched_jobs(state, acc, now_ms)
+    for job_id, reason in pending_child_cascades.items():
+        if job_id in cascaded:
+            continue
+        _cascade_to_children(state, job_id, now_ms, reason, exclude_reservation_holders=True)
+    return cascaded
+
+
+# ---------------------------------------------------------------------------
 # Batch entry points
 # ---------------------------------------------------------------------------
 
@@ -337,9 +395,11 @@ def apply_worker_failures_batch(
             if row.current_worker_id in failed_worker_ids:
                 task_rows_by_worker[row.current_worker_id].append(row)
 
+    acc = _TouchedJobs()
+    pending_child_cascades: dict[JobName, str] = {}
+
     for worker_id, worker_address, error in failures:
-        task_rows = task_rows_by_worker.get(worker_id, [])
-        for task_row in task_rows:
+        for task_row in task_rows_by_worker.get(worker_id, []):
             task_id = task_row.task_id
             # Overlay-aware prior state: an earlier worker failure (or its peer
             # cascade) in this same batch may have already finalized this task —
@@ -363,6 +423,9 @@ def apply_worker_failures_batch(
                     job_pb2.TASK_STATE_WORKER_FAILED,
                 )
             holder_preemption_count = 0 if is_reservation_holder else preemption_count
+            # The worker is gone, so the attempt is truly done: finalize it
+            # (stamp finished_at) rather than leaving it for a status update
+            # that will never arrive.
             task.finalize_attempt(
                 state,
                 task_id.to_wire(),
@@ -374,34 +437,14 @@ def apply_worker_failures_batch(
                 preemption_count=holder_preemption_count,
             )
             parent_job_id, _ = task_id.require_task()
-            # Cascade to coscheduled siblings on surviving slice workers BEFORE
-            # recomputing the job. The cascade moves siblings to a terminal
-            # (COSCHED_FAILED) or PENDING state, and ``recompute_state`` must
-            # observe those writes: otherwise a job whose direct victim
-            # exhausted its retry budget is left RUNNING while every task is
-            # terminal, because the recompute still sees the not-yet-cascaded
-            # siblings as active and no second recompute runs after the cascade.
-            if not is_reservation_holder and task_row.has_coscheduling:
-                siblings = peers.find_coscheduled_siblings(state, parent_job_id, task_id, True)
-                if new_task_state in FAILURE_TASK_STATES:
-                    peers.terminate_coscheduled_siblings(state, siblings, task_id, now_ms)
-                else:
-                    peers.requeue_coscheduled_siblings(state, siblings, task_id, now_ms)
-            new_job_state = job.recompute_state(state, parent_job_id)
-            if new_job_state is not None and new_job_state in TERMINAL_JOB_STATES:
-                reason = f"Worker {worker_id} failed"
-                _kill_non_terminal_tasks(state, parent_job_id, reason, now_ms)
-                _cascade_to_children(state, parent_job_id, now_ms, reason)
-            elif new_task_state == job_pb2.TASK_STATE_PENDING:
-                policy = state.job_preemption_policy(parent_job_id)
-                if policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
-                    _cascade_to_children(
-                        state,
-                        parent_job_id,
-                        now_ms,
-                        "Parent task preempted",
-                        exclude_reservation_holders=True,
-                    )
+            outcome = task.TransitionOutcome(
+                task_id=task_id,
+                job_id=parent_job_id,
+                prior_state=prior_state,
+                new_task_state=new_task_state,
+                has_coscheduling=not is_reservation_holder and task_row.has_coscheduling,
+            )
+            _fan_out_outcome(state, outcome, acc, pending_child_cascades, "Parent task preempted", now_ms)
 
         state.record_worker_make_unhealthy(worker_id)
         state.record_log_event(
@@ -414,6 +457,8 @@ def apply_worker_failures_batch(
                 ),
             )
         )
+
+    _finalize_assertive_batch(state, acc, pending_child_cascades, now_ms)
     return state.effects
 
 
@@ -435,6 +480,9 @@ def apply_terminal_decisions_batch(
         seen_tasks.add(decision.task_id)
         ordered.append(decision)
 
+    acc = _TouchedJobs()
+    pending_child_cascades: dict[JobName, str] = {}
+
     # Batch timeout decisions together so the two-phase sibling dedup
     # operates on the full set at once.
     timeout_rows: list[ActiveTaskRow] = []
@@ -449,32 +497,33 @@ def apply_terminal_decisions_batch(
         if timeout_reason is None:
             timeout_reason = decision.reason
     if timeout_rows and timeout_reason is not None:
-        _cascade_timeouts(state, timeout_rows, timeout_reason, now_ms)
+        _cascade_timeouts(state, timeout_rows, timeout_reason, acc, now_ms)
 
     for decision in ordered:
         if decision.kind is task.TerminalKind.PREEMPT:
+            # Overlay-aware: skip a task an earlier same-batch decision (e.g. a
+            # timeout sibling cascade) already moved out of an active state.
+            effective_state = state.task_state(decision.task_id)
+            if effective_state is None or effective_state not in ACTIVE_TASK_STATES:
+                continue
             row = task.active_row_from_snapshot(snapshot, decision.task_id)
             outcome = task.preempt_one(state, snapshot, decision.task_id, decision.reason, row=row)
             if outcome is None:
                 continue
-            # Coscheduled retry: bounce siblings back to PENDING so the
-            # job re-coschedules atomically.
-            if outcome.new_state == job_pb2.TASK_STATE_PENDING and outcome.has_coscheduling:
-                siblings = peers.find_coscheduled_siblings(state, outcome.job_id, decision.task_id, True)
-                peers.requeue_coscheduled_siblings(state, siblings, decision.task_id, now_ms)
-            new_job_state = job.recompute_state(state, outcome.job_id)
-            if new_job_state is not None and new_job_state in TERMINAL_JOB_STATES:
-                _finalize_terminal_job(state, outcome.job_id, new_job_state, now_ms)
-            elif outcome.new_state == job_pb2.TASK_STATE_PENDING:
-                policy = state.job_preemption_policy(outcome.job_id)
-                if policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
-                    _cascade_to_children(
-                        state,
-                        outcome.job_id,
-                        now_ms,
-                        decision.reason,
-                        exclude_reservation_holders=True,
-                    )
+            _fan_out_outcome(
+                state,
+                task.TransitionOutcome(
+                    task_id=decision.task_id,
+                    job_id=outcome.job_id,
+                    prior_state=effective_state,
+                    new_task_state=outcome.new_state,
+                    has_coscheduling=outcome.has_coscheduling,
+                ),
+                acc,
+                pending_child_cascades,
+                decision.reason,
+                now_ms,
+            )
             state.record_log_event(
                 LogEvent(
                     action="task_preempted",
@@ -483,12 +532,16 @@ def apply_terminal_decisions_batch(
                 )
             )
         elif decision.kind is task.TerminalKind.UNSCHEDULABLE:
+            # A still-PENDING task is the normal unschedulable target, so (unlike
+            # preempt) don't require an active state — only skip a task an earlier
+            # same-batch decision already drove terminal.
+            effective_state = state.task_state(decision.task_id)
+            if effective_state is not None and effective_state in TERMINAL_TASK_STATES:
+                continue
             job_id = task.unschedulable_one(state, snapshot, decision.task_id, decision.reason)
             if job_id is None:
                 continue
-            new_job_state = job.recompute_state(state, job_id)
-            if new_job_state is not None and new_job_state in TERMINAL_JOB_STATES:
-                _finalize_terminal_job(state, job_id, new_job_state, now_ms)
+            acc.note(job_id)
             state.record_log_event(
                 LogEvent(
                     action="task_unschedulable",
@@ -497,6 +550,8 @@ def apply_terminal_decisions_batch(
                 )
             )
         # TIMEOUT handled above.
+
+    _finalize_assertive_batch(state, acc, pending_child_cascades, now_ms)
     return state.effects
 
 
@@ -504,9 +559,14 @@ def _cascade_timeouts(
     state: WorkingState,
     rows: list[ActiveTaskRow],
     reason: str,
+    acc: _TouchedJobs,
     now_ms: int,
 ) -> None:
-    """Two-phase timeout cascade with sibling dedup."""
+    """Two-phase timeout cascade with sibling dedup.
+
+    Notes touched jobs into ``acc``; the caller's deferred recompute pass
+    finalizes any that go terminal.
+    """
     if not rows:
         return
     direct_task_wires: set[str] = set()
@@ -534,14 +594,12 @@ def _cascade_timeouts(
                 deduped.append(sib)
         siblings_by_job[job_id_wire] = deduped
 
-    jobs_to_update: set[str] = set()
     task_ids_to_log: set[JobName] = set()
 
     for row in rows:
-        tid = row.task_id
-        task_ids_to_log.add(tid)
+        task_ids_to_log.add(row.task_id)
         task.timeout_one(state, row, reason, now_ms)
-        jobs_to_update.add(row.job_id.to_wire())
+        acc.note(row.job_id)
 
     for job_id_wire, siblings in siblings_by_job.items():
         if not siblings:
@@ -550,12 +608,7 @@ def _cascade_timeouts(
         peers.terminate_coscheduled_siblings(state, siblings, cause_tid, now_ms)
         for sib in siblings:
             task_ids_to_log.add(sib.task_id)
-        jobs_to_update.add(job_id_wire)
-
-    for job_wire in jobs_to_update:
-        new_job_state = job.recompute_state(state, JobName.from_wire(job_wire))
-        if new_job_state in TERMINAL_JOB_STATES:
-            _finalize_terminal_job(state, JobName.from_wire(job_wire), new_job_state, now_ms)
+        acc.note(JobName.from_wire(job_id_wire))
 
     for tid in task_ids_to_log:
         state.record_log_event(

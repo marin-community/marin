@@ -19,7 +19,7 @@ from iris.cluster.controller.scheduling_policy import (
     get_running_tasks_with_band_and_value,
     run_preemption_pass,
 )
-from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.types import TERMINAL_JOB_STATES, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 
@@ -1327,11 +1327,13 @@ def test_preempt_task_requeues_coscheduled_siblings_on_retry():
 
 
 def test_preempt_task_cascades_coscheduled_siblings():
-    """When all coscheduled tasks are preempted to terminal, the job finalizes and kills survivors.
+    """Terminally preempting one coscheduled task cascades its siblings to
+    COSCHED_FAILED in the same batch, tearing the gang down atomically.
 
-    preempt_task does not directly cascade coscheduled siblings (unlike
-    WORKER_FAILED via heartbeat). Instead, siblings are killed when the job
-    reaches a terminal state through the batches._finalize_terminal_job orchestrator.
+    A terminal preemption is a FAILURE-class transition, so the shared peer
+    cascade terminates siblings (it only requeues them when the trigger task
+    rolls back to PENDING with retry budget). The job then finalizes terminal
+    with no task left active on a half-gone slice.
     """
     from iris.cluster.constraints import WellKnownAttribute
 
@@ -1360,7 +1362,7 @@ def test_preempt_task_cascades_coscheduled_siblings():
         for i, task in enumerate(tasks):
             dispatch_task(state, task, WorkerId(f"w{i}"))
 
-        # Preempt the first task — it goes terminal PREEMPTED
+        # Preempt the first task terminally (no retry budget).
         with state._db.transaction() as cur:
             result0 = apply_terminal_decisions(
                 cur,
@@ -1369,26 +1371,20 @@ def test_preempt_task_cascades_coscheduled_siblings():
                 endpoints=state._endpoints,
                 now=Timestamp.now(),
             )
+
+        # Direct victim is PREEMPTED; the coscheduled sibling cascades to
+        # COSCHED_FAILED in the same batch — no second preempt needed.
         assert query_task(state, tasks[0].task_id).state == job_pb2.TASK_STATE_PREEMPTED
+        assert query_task(state, tasks[1].task_id).state == job_pb2.TASK_STATE_COSCHED_FAILED
 
-        # Second task is still running (preempt_task doesn't directly cascade siblings)
-        assert query_task(state, tasks[1].task_id).state == job_pb2.TASK_STATE_RUNNING
+        # The job finalizes terminal once no task is active.
+        parent_job_id, _ = tasks[0].task_id.require_task()
+        assert query_job(state, parent_job_id).state in TERMINAL_JOB_STATES
 
-        # Preempt the second task — now ALL tasks are terminal, job finalizes
-        with state._db.transaction() as cur:
-            result1 = apply_terminal_decisions(
-                cur,
-                [TerminalDecision(TerminalKind.PREEMPT, tasks[1].task_id, "preempted by prod")],
-                health=state._health,
-                endpoints=state._endpoints,
-                now=Timestamp.now(),
-            )
-        assert query_task(state, tasks[1].task_id).state == job_pb2.TASK_STATE_PREEMPTED
-
-        # Both tasks should have task_preempted log events across both results.
-        all_preempted = {ev.entity_id for ev in result0.log_events + result1.log_events if ev.action == "task_preempted"}
-        assert tasks[0].task_id.to_wire() in all_preempted
-        assert tasks[1].task_id.to_wire() in all_preempted
+        # The direct victim emitted a task_preempted event; the cascaded sibling
+        # is terminated by the peer cascade, not a separate preempt decision.
+        preempted = {ev.entity_id for ev in result0.log_events if ev.action == "task_preempted"}
+        assert preempted == {tasks[0].task_id.to_wire()}
 
 
 # ---------------------------------------------------------------------------
