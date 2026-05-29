@@ -8,10 +8,6 @@ prunable job (or worker) per transaction, sleeping between iterations so
 scheduling and heartbeat traffic can interleave. The actual row-level
 deletes live in :mod:`iris.cluster.controller.writes`; this module owns
 only the loop structure that drives them.
-
-This file deliberately sits outside ``reconcile.py`` / ``reconcile_io.py``
-because the loop is I/O-driving controller plumbing rather than the
-per-tick reconcile entry points.
 """
 
 import logging

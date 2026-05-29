@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cross-aggregate rules for coscheduled task peers.
-
-peers.py imports ``task`` (for ``mark_task_terminating``) as
-the single allowed cross-aggregate edge. It does NOT import ``job``,
-``worker``, ``batches``.
-"""
+"""Cross-aggregate rules for coscheduled task peers."""
 
 from collections.abc import Iterable
 

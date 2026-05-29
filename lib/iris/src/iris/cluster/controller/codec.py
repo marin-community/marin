@@ -4,9 +4,7 @@
 """Canonical JSON/proto codec for controller DB columns.
 
 All serialization between protobuf messages and the JSON columns stored in the
-controller SQLite database goes through this module.  controller.py,
-commands.py and service.py import from here — this module has no dependency
-on any of them, sitting at the bottom of the import graph.
+controller SQLite database goes through this module.
 """
 
 import functools

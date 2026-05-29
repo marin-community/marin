@@ -6,7 +6,7 @@
 All public functions return SA ``Row`` objects (or ``Sequence[Row]`` / dicts of
 them).  Return shapes are documented per-function.
 
-Areas covered (previously split across reads/<area>.py):
+Areas covered:
   budgets        — user budgets and roles
   dashboard      — job listing, task summaries, parent-child helpers
   jobs           — job/job_config lookups and CTEs

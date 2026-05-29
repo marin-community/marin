@@ -3,13 +3,8 @@
 
 """Direct-provider dispatch: RunTaskRequest construction and drain logic.
 
-Functions:
-  run_request_template  — per-job RunTaskRequest template (LRU-cached)
-  drain_for_direct_provider — promote PENDING tasks and snapshot running set
-  build_run_request     — assemble a RunTaskRequest from a PendingDispatchRow
-
-Dataclasses:
-  SchedulingEvent, ClusterCapacity, DirectProviderBatch, DirectProviderSyncResult
+Builds per-job RunTaskRequest templates (LRU-cached), promotes PENDING tasks
+and snapshots the running set, and assembles per-attempt requests.
 """
 
 from dataclasses import dataclass, field

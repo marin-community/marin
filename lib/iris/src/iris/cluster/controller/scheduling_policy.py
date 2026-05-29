@@ -3,8 +3,11 @@
 
 """Scheduling, preemption, and reservation policy.
 
-Pure helpers parameterized by ``SchedulingContext`` / ``Scheduler`` /
-``ControllerDB``; they never reference the ``Controller`` instance.
+Free functions parameterized by their dependencies (``ControllerDB``,
+``WorkerHealthTracker``, ``SchedulingContext``) rather than the ``Controller``
+instance. DB I/O is concentrated in the context builders and the reservation-
+claim lifecycle; the gate, ordering, and preemption passes are pure transforms
+over an in-memory ``SchedulingContext``.
 """
 
 import logging

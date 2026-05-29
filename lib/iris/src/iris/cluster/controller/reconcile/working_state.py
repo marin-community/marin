@@ -3,9 +3,7 @@
 
 """Mutable scratch space for one pure-function call into the state machine.
 
-Narrow record-bag class. Imports ONLY ``snapshot`` and ``effects`` — no
-imports of ``task``, ``job``, ``worker``, ``peers``, ``batches`` (those
-files import ``working_state`` instead).
+A narrow record-bag threaded through the per-update kernel.
 """
 
 from collections.abc import Iterable

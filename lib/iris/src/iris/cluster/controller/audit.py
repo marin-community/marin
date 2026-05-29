@@ -3,8 +3,7 @@
 
 """Structured audit-line emitter for controller state transitions.
 
-This module is intentionally free of DB and state-machine dependencies; it just
-formats and emits ``logger.info`` lines that the Iris log server captures for
+Formats and emits ``logger.info`` lines that the Iris log server captures for
 later querying.
 """
 

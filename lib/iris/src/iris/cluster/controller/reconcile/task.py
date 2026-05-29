@@ -3,10 +3,6 @@
 
 """Pure rules for tasks and attempts: per-transition primitives.
 
-This module owns task-aggregate primitives only. Cross-aggregate
-orchestration (peer cascade, job recompute) lives in ``batches.py``. This file
-imports nothing from ``job``, ``worker``, ``peers``, ``batches``.
-
 The transition primitives are otherwise pure, but emit free-form diagnostic
 logs inline for dropped stale/late attempt updates. Those logs are
 observability, not state, so they do not flow through ``ControllerEffects``.

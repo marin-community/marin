@@ -3,14 +3,9 @@
 
 """Batch orchestrators: snapshot in → ControllerEffects out.
 
-This is the only module that composes primitives from
-``task``, ``job``, ``worker``, and ``peers``. All imports here are PUBLIC
-functions (no leading underscore). Aggregate files contain primitives only;
-cross-aggregate orchestration lives here.
-
-Each ``apply_*_batch`` builds one :class:`WorkingState` and threads it
-through the per-update kernel so cascades triggered by earlier items in the
-batch are visible to later items.
+Cross-aggregate orchestration lives here — each ``apply_*_batch`` builds one
+:class:`WorkingState` and threads it through the per-update kernel so cascades
+triggered by earlier items in a batch are visible to later items.
 """
 
 import logging

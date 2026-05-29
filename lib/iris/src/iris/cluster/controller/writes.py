@@ -10,12 +10,12 @@ registry against the ``PROJECTIONS`` list to verify no Projection-owned
 table is written outside its owning Projection. Controller startup calls
 :func:`validate`; tests call it after registering their fixtures.
 
-Areas covered (previously split across writes/<entity>.py):
+Areas covered:
   jobs           — jobs, job_config, meta sequence
   task_attempts  — task_attempts
   tasks          — tasks (insert, assign, state update)
   workers        — workers, worker_attributes
-  budgets        — users, user_budgets (previously db.py methods)
+  budgets        — users, user_budgets
 """
 
 import secrets

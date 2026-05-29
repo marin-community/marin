@@ -1,11 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Constants and predicate sets shared across the reconcile kernel.
-
-Leaf module: depends only on stdlib, rigging.timing, and protobuf state enums.
-No imports from other reconcile.* modules.
-"""
+"""Constants and predicate sets shared across the reconcile kernel."""
 
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.types import TERMINAL_JOB_STATES

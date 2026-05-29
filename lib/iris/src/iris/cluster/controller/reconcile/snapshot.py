@@ -3,9 +3,8 @@
 
 """Pure data shapes for one pure-function call into the state machine.
 
-Leaf module: depends only on stdlib, rigging.timing, and iris-types modules.
-No imports from other reconcile.* modules. `TransitionSnapshot` is the
-closed input bundle; the leaf dataclasses are its row shapes.
+`TransitionSnapshot` is the closed input bundle; the leaf dataclasses are its
+row shapes.
 """
 
 from dataclasses import dataclass

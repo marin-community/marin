@@ -1,13 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pure rules for the job aggregate: state recomputation.
-
-job.py owns the job-aggregate primitives. Cross-aggregate
-orchestration that needs to kill tasks (_cascade_to_children, _finalize_terminal_job)
-lives in ``batches.py`` because it needs task-aggregate calls. job.py imports
-nothing from ``task``, ``worker``, ``peers``, ``batches``.
-"""
+"""Pure rules for the job aggregate: state recomputation."""
 
 from iris.cluster.controller.reconcile.effects import JobRowDelta
 from iris.cluster.controller.reconcile.policy import ERROR_STATES

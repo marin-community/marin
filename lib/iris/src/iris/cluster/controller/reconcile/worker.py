@@ -3,11 +3,6 @@
 
 """Pure rules for the worker aggregate: planning + per-worker observation processing.
 
-worker.py owns worker-aggregate primitives. The cross-aggregate
-cascade for worker failures (task + peer + job) is orchestrated from
-``batches.py``. worker.py imports nothing from ``task``, ``job``, ``peers``,
-``batches``.
-
 The primitives are otherwise pure, but emit free-form diagnostic logs inline
 for dropped/unresolvable observations. Those logs are observability, not state,
 so they do not flow through ``ControllerEffects``.
