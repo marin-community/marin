@@ -11,6 +11,7 @@ import json
 import os
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 import pytest
@@ -252,9 +253,16 @@ class FakeDispatch:
     removed: list[str] = field(default_factory=list)
     _counter: int = 0
 
-    def tmp_path(self, suffix: str) -> str:
-        self._counter += 1
-        return f"/tmp/fake-{self._counter}.{suffix}"
+    @contextmanager
+    def scratch(self, *suffixes):
+        paths = []
+        for suffix in suffixes:
+            self._counter += 1
+            paths.append(f"/tmp/fake-{self._counter}.{suffix}")
+        try:
+            yield tuple(paths)
+        finally:
+            self.removed.extend(paths)
 
     def exec_profiler(self, cmd, *, sample_timeout):
         self.profiler_cmds.append(cmd)
@@ -266,9 +274,6 @@ class FakeDispatch:
 
     def read_file(self, path):
         return self.files[path]
-
-    def rm_files(self, paths):
-        self.removed.extend(paths)
 
 
 def test_capture_cpu_records_reads_and_cleans_up():
@@ -336,4 +341,6 @@ def test_capture_memory_table_returns_transform_stdout():
     data = capture_memory_attach(dispatch, cfg, duration_seconds=5, pid="1")
 
     assert data == b"ALLOC SIZE FILE"
-    assert dispatch.removed == ["/tmp/fake-1.bin"]  # table writes no output file
+    # Both scratch paths are reserved up front and cleaned up, even though the
+    # table reporter writes to stdout and never uses the .txt output file.
+    assert dispatch.removed == ["/tmp/fake-1.bin", "/tmp/fake-2.txt"]

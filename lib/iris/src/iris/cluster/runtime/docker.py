@@ -21,7 +21,8 @@ import subprocess
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -93,8 +94,13 @@ class _DockerProfileDispatch:
     pyspy_bin: str = "/app/.venv/bin/py-spy"
     memray_bin: str = "/app/.venv/bin/memray"
 
-    def tmp_path(self, suffix: str) -> str:
-        return f"/tmp/iris-profile-{uuid.uuid4().hex[:8]}.{suffix}"
+    @contextmanager
+    def scratch(self, *suffixes: str) -> Iterator[tuple[str, ...]]:
+        paths = tuple(f"/tmp/iris-profile-{uuid.uuid4().hex[:8]}.{suffix}" for suffix in suffixes)
+        try:
+            yield paths
+        finally:
+            subprocess.run(["docker", "exec", self.container_id, "rm", "-f", *paths], capture_output=True, timeout=10)
 
     def exec_profiler(self, cmd: list[str], *, sample_timeout: int) -> ExecResult:
         watchdog_cmd = wrap_with_kill_watchdog(cmd, sample_timeout)
@@ -114,9 +120,6 @@ class _DockerProfileDispatch:
         if result.returncode != 0:
             raise RuntimeError(f"Failed to read {path}: {result.stderr.decode('utf-8', 'replace')}")
         return result.stdout
-
-    def rm_files(self, paths: list[str]) -> None:
-        subprocess.run(["docker", "exec", self.container_id, "rm", "-f", *paths], capture_output=True, timeout=10)
 
     def _sigcont_sweep(self) -> None:
         try:

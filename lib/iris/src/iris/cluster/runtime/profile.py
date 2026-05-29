@@ -21,6 +21,8 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -293,8 +295,8 @@ class ProfileDispatch(Protocol):
     pyspy_bin: str
     memray_bin: str
 
-    def tmp_path(self, suffix: str) -> str:
-        """Return a fresh temp path (with ``.suffix``) writable by the profiler."""
+    def scratch(self, *suffixes: str) -> AbstractContextManager[tuple[str, ...]]:
+        """Yield one temp path per suffix, removing them all on context exit."""
         ...
 
     def exec_profiler(self, cmd: list[str], *, sample_timeout: int) -> ExecResult:
@@ -309,10 +311,6 @@ class ProfileDispatch(Protocol):
         """Read a file produced by a profiler in the target environment."""
         ...
 
-    def rm_files(self, paths: list[str]) -> None:
-        """Best-effort removal of temp files in the target environment."""
-        ...
-
 
 def capture_cpu(
     dispatch: ProfileDispatch,
@@ -324,15 +322,12 @@ def capture_cpu(
 ) -> bytes:
     """Record a CPU profile with py-spy and return the encoded output bytes."""
     spec = resolve_cpu_spec(cpu_config, duration_seconds, pid=pid)
-    output_path = dispatch.tmp_path(spec.ext)
-    cmd = build_pyspy_cmd(spec, dispatch.pyspy_bin, output_path, subprocesses=subprocesses)
-    try:
+    with dispatch.scratch(spec.ext) as (output_path,):
+        cmd = build_pyspy_cmd(spec, dispatch.pyspy_bin, output_path, subprocesses=subprocesses)
         result = dispatch.exec_profiler(cmd, sample_timeout=duration_seconds + CPU_WRITE_HEADROOM_SECONDS)
         if result.returncode != 0:
             raise RuntimeError(f"py-spy record failed (exit {result.returncode}): {result.stderr}")
         return dispatch.read_file(output_path)
-    finally:
-        dispatch.rm_files([output_path])
 
 
 def capture_threads(
@@ -353,9 +348,7 @@ def capture_memory_attach(
 ) -> bytes:
     """Profile memory by attaching memray to a running process, then transforming the trace."""
     spec = resolve_memory_spec(memory_config, duration_seconds, pid=pid)
-    trace_path = dispatch.tmp_path("bin")
-    output_path = None
-    try:
+    with dispatch.scratch("bin", spec.ext) as (trace_path, output_path):
         attach_cmd = build_memray_attach_cmd(spec, dispatch.memray_bin, trace_path)
         result = dispatch.exec_profiler(attach_cmd, sample_timeout=duration_seconds + MEMRAY_ATTACH_HEADROOM_SECONDS)
         if result.returncode != 0:
@@ -364,17 +357,14 @@ def capture_memory_attach(
         if spec.is_raw:
             return dispatch.read_file(trace_path)
 
-        if spec.output_is_file:
-            output_path = dispatch.tmp_path(spec.ext)
-
-        transform_cmd = build_memray_transform_cmd(spec, dispatch.memray_bin, trace_path, output_path or "")
+        transform_cmd = build_memray_transform_cmd(
+            spec, dispatch.memray_bin, trace_path, output_path if spec.output_is_file else ""
+        )
         result = dispatch.exec(transform_cmd, timeout=30)
         if result.returncode != 0:
             raise RuntimeError(f"memray {spec.reporter} failed (exit {result.returncode}): {result.stderr}")
 
         return dispatch.read_file(output_path) if spec.output_is_file else result.stdout
-    finally:
-        dispatch.rm_files([trace_path, *([output_path] if output_path else [])])
 
 
 @dataclass
@@ -391,9 +381,17 @@ class LocalProfileDispatch:
     memray_bin: str = "memray"
     resume_pid: int | None = None
 
-    def tmp_path(self, suffix: str) -> str:
-        with tempfile.NamedTemporaryFile(suffix=f".{suffix}", delete=False) as f:
-            return f.name
+    @contextmanager
+    def scratch(self, *suffixes: str) -> Iterator[tuple[str, ...]]:
+        paths = []
+        for suffix in suffixes:
+            with tempfile.NamedTemporaryFile(suffix=f".{suffix}", delete=False) as f:
+                paths.append(f.name)
+        try:
+            yield tuple(paths)
+        finally:
+            for path in paths:
+                Path(path).unlink(missing_ok=True)
 
     def exec_profiler(self, cmd: list[str], *, sample_timeout: int) -> ExecResult:
         try:
@@ -407,10 +405,6 @@ class LocalProfileDispatch:
 
     def read_file(self, path: str) -> bytes:
         return Path(path).read_bytes()
-
-    def rm_files(self, paths: list[str]) -> None:
-        for path in paths:
-            Path(path).unlink(missing_ok=True)
 
     def _resume(self) -> None:
         if self.resume_pid is None or sys.platform != "linux":

@@ -18,8 +18,9 @@ import re
 import shlex
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1091,8 +1092,13 @@ class _K8sProfileDispatch:
     pyspy_bin: str = "py-spy"
     memray_bin: str = "memray"
 
-    def tmp_path(self, suffix: str) -> str:
-        return f"/tmp/iris-profile.{suffix}"
+    @contextmanager
+    def scratch(self, *suffixes: str) -> Iterator[tuple[str, ...]]:
+        paths = tuple(f"/tmp/iris-profile.{suffix}" for suffix in suffixes)
+        try:
+            yield paths
+        finally:
+            self.kubectl.rm_files(self.pod_name, list(paths), container="task")
 
     def exec_profiler(self, cmd: list[str], *, sample_timeout: int) -> ExecResult:
         watchdog_cmd = wrap_with_kill_watchdog(cmd, sample_timeout)
@@ -1106,9 +1112,6 @@ class _K8sProfileDispatch:
 
     def read_file(self, path: str) -> bytes:
         return self.kubectl.read_file(self.pod_name, path, container="task")
-
-    def rm_files(self, paths: list[str]) -> None:
-        self.kubectl.rm_files(self.pod_name, paths, container="task")
 
     def _venv_exec(self, cmd: list[str], *, timeout: int) -> ExecResult:
         shell_cmd = ["bash", "-lc", f"source /app/.venv/bin/activate 2>/dev/null; {shlex.join(cmd)}"]
