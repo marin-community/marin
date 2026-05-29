@@ -21,7 +21,7 @@
     "@rsbuild/core": "^1.2.0",
     "@rsbuild/plugin-vue": "^1.0.0",
     "autoprefixer": "^10.4.0",
-    "postcss": "^8.5.0",
+    "postcss": "^8.5.15",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.0",
     "vue-tsc": "^2.2.0"
