@@ -119,6 +119,6 @@ jobs:
           path: dist
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@v1.12.4
+        uses: pypa/gh-action-pypi-publish@v1.14.0
         with:
           packages-dir: dist/
