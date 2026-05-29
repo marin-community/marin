@@ -518,6 +518,14 @@ class K8sControllerProvider:
                     "resources": ["poddisruptionbudgets"],
                     "verbs": ["get", "list", "create", "update", "patch", "delete"],
                 },
+                {
+                    # Kueue gang admission: Iris deletes the per-pod-group
+                    # Workload to release a torn-down gang's reserved quota
+                    # (Kueue parks it in WaitingForReplacementPods otherwise).
+                    "apiGroups": ["kueue.x-k8s.io"],
+                    "resources": ["workloads"],
+                    "verbs": ["get", "list", "watch", "delete"],
+                },
             ],
         }
 

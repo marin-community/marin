@@ -1177,6 +1177,7 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
             controller_address=kp.controller_address or None,
             managed_label=managed_label,
             task_env=dict(cluster_config.defaults.task_env),
+            local_queue=kp.local_queue or "",
         )
     if which == "worker_provider":
         from iris.cluster.controller.worker_provider import RpcWorkerStubFactory

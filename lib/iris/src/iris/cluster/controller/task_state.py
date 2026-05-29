@@ -53,10 +53,17 @@ def hint_rare_state(predicate: ColumnElement[bool]) -> ColumnElement[bool]:
 
 
 class RunningTaskEntry(NamedTuple):
-    """Task ID and attempt ID pair captured at snapshot time."""
+    """Task ID and attempt ID pair captured at snapshot time.
+
+    ``coscheduled`` lets the direct (K8s) provider classify a vanished pod as
+    a gang preemption (WORKER_FAILED) rather than an application failure: when
+    Kueue preempts a pod group it deletes every pod, leaving no terminal pod
+    status to read — only the absence. See K8sTaskProvider._poll_pods.
+    """
 
     task_id: JobName
     attempt_id: int
+    coscheduled: bool = False
 
 
 def task_is_finished(

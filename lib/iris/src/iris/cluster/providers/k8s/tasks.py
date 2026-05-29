@@ -100,6 +100,73 @@ _POD_NOT_FOUND_GRACE_CYCLES = 3
 # (requesting too little memory), not transient infrastructure failure.
 _INFRASTRUCTURE_FAILURE_REASONS = frozenset({"Evicted", "DeadlineExceeded", "Preempting"})
 
+# ---------------------------------------------------------------------------
+# Kueue gang admission (coscheduled jobs only)
+# ---------------------------------------------------------------------------
+# Iris expresses gang scheduling to Kueue's plain-pod-group integration. The
+# mutating webhook injects a scheduling gate on any pod carrying the
+# queue-name label and removes it only once the whole group's Workload is
+# admitted, giving all-or-nothing startup. Kueue never recreates pods — Iris
+# remains the only pod controller (the _terminate/_requeue sibling cascade in
+# transitions.py owns retries). See .agents/projects/20260529_iris_k8s_gang_admission.md.
+_KUEUE_POD_GROUP_NAME = "kueue.x-k8s.io/pod-group-name"
+_KUEUE_POD_GROUP_TOTAL = "kueue.x-k8s.io/pod-group-total-count"
+_KUEUE_QUEUE_NAME = "kueue.x-k8s.io/queue-name"
+_KUEUE_PRIORITY_CLASS = "kueue.x-k8s.io/priority-class"
+_KUEUE_REQUIRED_TOPOLOGY = "kueue.x-k8s.io/podset-required-topology"
+_KUEUE_PREFERRED_TOPOLOGY = "kueue.x-k8s.io/podset-preferred-topology"
+
+# WorkloadPriorityClass names (admin-provisioned, see cluster bootstrap).
+_BAND_TO_WPC: dict[int, str] = {
+    job_pb2.PRIORITY_BAND_PRODUCTION: "iris-production",
+    job_pb2.PRIORITY_BAND_INTERACTIVE: "iris-interactive",
+    job_pb2.PRIORITY_BAND_BATCH: "iris-batch",
+}
+
+# group_by attribute -> (topology annotation key, node topology label, hard?).
+# A hard unit (single TPU slice / NVLink domain) MUST land on one topology
+# domain -> required topology. A soft unit (a multi-node GPU job that cannot
+# fit one leafgroup) -> preferred topology; Kueue falls back to a coarser tier.
+# Unknown group_by -> no topology annotation (the gang still admits atomically
+# via pod-group-total-count, it just isn't placement-constrained).
+_GROUP_BY_TO_TOPOLOGY: dict[str, tuple[str, str, bool]] = {
+    "tpu-name": (_KUEUE_REQUIRED_TOPOLOGY, "ds.coreweave.com/nvlink.domain", True),
+    "nvlink": (_KUEUE_REQUIRED_TOPOLOGY, "ds.coreweave.com/nvlink.domain", True),
+    "pool": (_KUEUE_PREFERRED_TOPOLOGY, "backend.coreweave.cloud/leafgroup", False),
+}
+
+
+def _band_to_wpc(priority: int) -> str:
+    """Map a PriorityBand to its Kueue WorkloadPriorityClass name.
+
+    UNSPECIFIED defaults to interactive, matching the proto comment.
+    """
+    return _BAND_TO_WPC.get(priority, "iris-interactive")
+
+
+def _job_path(task_id: JobName) -> str:
+    """Return the raw (unsanitized) parent job path of a task wire ID.
+
+    Siblings of a coscheduled job share this path, so hashing it yields one
+    pod-group identity for the whole gang. Distinct from _job_id_from_task,
+    which sanitizes the result for use as a label *value*; here we want a
+    collision-resistant input to _task_hash.
+    """
+    wire = task_id.to_wire()
+    return wire.rsplit("/", 1)[0] if "/" in wire else wire
+
+
+def _pod_group_name(task_id: JobName, attempt_id: int) -> str:
+    """Kueue pod-group-name shared by every sibling of a coscheduled gang.
+
+    Keyed by the job (parent path) so all siblings join one group, and by
+    attempt_id as the generation key. A full-gang requeue bumps every
+    sibling's attempt in lockstep (drain_for_direct_provider promotes the gang
+    all-or-none), so the retry gets a fresh pod-group-name and a fresh atomic
+    admission; Kueue never resurrects the prior generation's Workload.
+    """
+    return f"iris-pg-{_task_hash(_job_path(task_id))}-{attempt_id}"
+
 
 def _constraints_to_node_selector(
     constraints: Sequence[job_pb2.Constraint],
@@ -249,6 +316,10 @@ class PodConfig:
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
+    # Kueue LocalQueue for coscheduled gang admission. Empty disables Kueue:
+    # coscheduled pods then fall back to the soft podAffinity colocation and
+    # get no atomic startup (status quo on clusters without Kueue).
+    local_queue: str = ""
 
 
 def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
@@ -493,11 +564,26 @@ def _build_pod_manifest(
     }
     if managed_label:
         labels[managed_label] = "true"
-    metadata = {
+    metadata: dict = {
         "name": pod_name,
         "namespace": namespace,
         "labels": labels,
     }
+
+    # Kueue gang admission for coscheduled jobs. Requires a configured
+    # LocalQueue: without one, Kueue's webhook ignores the pod (no queue-name
+    # label) and we fall back to the soft podAffinity colocation below.
+    kueue_enabled = bool(run_req.coscheduling.group_by) and bool(config.local_queue)
+    if kueue_enabled:
+        labels[_KUEUE_POD_GROUP_NAME] = _pod_group_name(task_id, attempt_id)
+        labels[_KUEUE_QUEUE_NAME] = config.local_queue
+        labels[_KUEUE_PRIORITY_CLASS] = _band_to_wpc(run_req.priority)
+        annotations: dict[str, str] = {_KUEUE_POD_GROUP_TOTAL: str(run_req.num_tasks)}
+        topo = _GROUP_BY_TO_TOPOLOGY.get(run_req.coscheduling.group_by)
+        if topo is not None:
+            anno_key, node_label, _hard = topo
+            annotations[anno_key] = node_label
+        metadata["annotations"] = annotations
 
     spec: dict = {
         "restartPolicy": "Never",
@@ -520,11 +606,17 @@ def _build_pod_manifest(
         spec["hostNetwork"] = True
         spec["dnsPolicy"] = "ClusterFirstWithHostNet"
 
-    if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0:
+    # Skip activeDeadlineSeconds for Kueue-gated pods: k8s counts it from pod
+    # creation, including time spent SchedulingGated waiting for admission, so
+    # a gang that waits on the autoscaler could hit DeadlineExceeded before it
+    # ever runs. The controller's own timeout accounting governs these.
+    if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0 and not kueue_enabled:
         spec["activeDeadlineSeconds"] = max(1, run_req.timeout.milliseconds // 1000)
 
-    # Prefer co-locating sibling task pods on the same network spine for IB connectivity.
-    if run_req.num_tasks > 1 and colocation_topology_key:
+    # Prefer co-locating sibling task pods on the same network spine for IB
+    # connectivity. Kueue-gated gangs use podset topology (above) instead, so
+    # this soft podAffinity applies only to non-Kueue multi-task jobs.
+    if run_req.num_tasks > 1 and colocation_topology_key and not kueue_enabled:
         spec["affinity"] = {
             "podAffinity": {
                 "preferredDuringSchedulingIgnoredDuringExecution": [
@@ -1152,6 +1244,7 @@ class K8sTaskProvider:
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
+    local_queue: str = ""
     log_client: LogWriterProtocol | None = None
     # Pre-resolved iris.task Table handle. The controller injects this after
     # constructing the LogClient (see controller.py); when None — e.g. tests
@@ -1336,6 +1429,7 @@ class K8sTaskProvider:
             controller_address=self.controller_address,
             managed_label=self.managed_label,
             task_env=self.task_env,
+            local_queue=self.local_queue,
         )
 
     def _apply_pod(self, run_req: job_pb2.RunTaskRequest) -> None:
@@ -1412,6 +1506,7 @@ class K8sTaskProvider:
         """
         stray_pod_names: list[str] = []
         stray_hashes: set[str] = set()
+        stray_pod_groups: set[str] = set()
         for pod in cached_pods:
             labels = pod.get("metadata", {}).get("labels", {})
             task_hash = labels.get(_LABEL_TASK_HASH)
@@ -1428,19 +1523,41 @@ class K8sTaskProvider:
             if pod_name:
                 stray_pod_names.append(pod_name)
                 stray_hashes.add(task_hash)
+                pod_group = labels.get(_KUEUE_POD_GROUP_NAME)
+                if pod_group:
+                    stray_pod_groups.add(pod_group)
 
         if not stray_pod_names:
             return
 
         self.kubectl.delete_many(K8sResource.PODS, stray_pod_names, wait=False)
+        # Release the Kueue gang reservation for every torn-down generation.
+        # Kueue parks a coscheduled Workload in WaitingForReplacementPods when
+        # its pods are deleted, holding the quota until the Workload itself is
+        # removed; without this, a gang requeue (which bumps to a new
+        # pod-group generation) would deadlock behind the old generation's
+        # still-reserved quota.
+        self._delete_kueue_workloads(stray_pod_groups)
         # Enqueue task hashes for deferred configmap/PDB cleanup by the GC pass.
         self._pending_gc_hashes.update(stray_hashes)
 
         logger.info(
-            "Deleted %d stray pods for %d task hashes (CM/PDB cleanup deferred to GC)",
+            "Deleted %d stray pods for %d task hashes (%d Kueue workloads released, CM/PDB cleanup deferred to GC)",
             len(stray_pod_names),
             len(stray_hashes),
+            len(stray_pod_groups),
         )
+
+    def _delete_kueue_workloads(self, pod_group_names: set[str]) -> None:
+        """Delete the Kueue Workload backing each coscheduled pod-group generation.
+
+        Kueue names the Workload after the pod-group-name, so the name Iris
+        stamped on the pods is the Workload name. Deletion is idempotent
+        (NotFound is ignored), so it is safe for non-Kueue clusters and for
+        groups whose Workload Kueue already finished on its own.
+        """
+        for name in pod_group_names:
+            self.kubectl.delete(K8sResource.WORKLOADS, name, wait=False)
 
     def _maybe_gc_terminal_resources(self, active_pods: list[dict]) -> None:
         """Periodically delete terminal (Succeeded/Failed) pods and their associated
@@ -1614,13 +1731,18 @@ class K8sTaskProvider:
                         )
                     )
                     continue
-                # Grace exhausted — pod is truly gone.
+                # Grace exhausted — pod is truly gone. For a coscheduled task
+                # this is almost always a Kueue gang preemption (Kueue deletes
+                # every pod in a preempted group, leaving no terminal status to
+                # read), so bill it to the preemption budget (WORKER_FAILED)
+                # rather than the application budget (FAILED).
                 self._pod_not_found_counts.pop(cursor_key, None)
+                gone_state = job_pb2.TASK_STATE_WORKER_FAILED if entry.coscheduled else job_pb2.TASK_STATE_FAILED
                 updates.append(
                     TaskUpdate(
                         task_id=entry.task_id,
                         attempt_id=entry.attempt_id,
-                        new_state=job_pb2.TASK_STATE_FAILED,
+                        new_state=gone_state,
                         error="Pod not found",
                     )
                 )

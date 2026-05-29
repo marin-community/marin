@@ -484,7 +484,7 @@ class WorkerProviderConfig(_message.Message):
     def __init__(self) -> None: ...
 
 class KubernetesProviderConfig(_message.Message):
-    __slots__ = ("namespace", "kubeconfig", "default_image", "colocation_topology_key", "service_account", "host_network", "cache_dir", "controller_address")
+    __slots__ = ("namespace", "kubeconfig", "default_image", "colocation_topology_key", "service_account", "host_network", "cache_dir", "controller_address", "local_queue")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     KUBECONFIG_FIELD_NUMBER: _ClassVar[int]
     DEFAULT_IMAGE_FIELD_NUMBER: _ClassVar[int]
@@ -493,6 +493,7 @@ class KubernetesProviderConfig(_message.Message):
     HOST_NETWORK_FIELD_NUMBER: _ClassVar[int]
     CACHE_DIR_FIELD_NUMBER: _ClassVar[int]
     CONTROLLER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
+    LOCAL_QUEUE_FIELD_NUMBER: _ClassVar[int]
     namespace: str
     kubeconfig: str
     default_image: str
@@ -501,7 +502,8 @@ class KubernetesProviderConfig(_message.Message):
     host_network: bool
     cache_dir: str
     controller_address: str
-    def __init__(self, namespace: _Optional[str] = ..., kubeconfig: _Optional[str] = ..., default_image: _Optional[str] = ..., colocation_topology_key: _Optional[str] = ..., service_account: _Optional[str] = ..., host_network: _Optional[bool] = ..., cache_dir: _Optional[str] = ..., controller_address: _Optional[str] = ...) -> None: ...
+    local_queue: str
+    def __init__(self, namespace: _Optional[str] = ..., kubeconfig: _Optional[str] = ..., default_image: _Optional[str] = ..., colocation_topology_key: _Optional[str] = ..., service_account: _Optional[str] = ..., host_network: _Optional[bool] = ..., cache_dir: _Optional[str] = ..., controller_address: _Optional[str] = ..., local_queue: _Optional[str] = ...) -> None: ...
 
 class UserBudgetTier(_message.Message):
     __slots__ = ("user_ids", "budget_limit", "max_band")

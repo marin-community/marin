@@ -450,6 +450,11 @@ message KubernetesProviderConfig {
   bool host_network = 6;         // Run task pods with hostNetwork (for NCCL/IB)
   string cache_dir = 7;          // hostPath base for cache mounts (default: "/cache")
   string controller_address = 8; // Controller URL injected into task pods
+  // Kueue LocalQueue name stamped on coscheduled task pods
+  // (kueue.x-k8s.io/queue-name). Required for gang admission of coscheduled
+  // jobs; empty disables Kueue integration (coscheduled pods then schedule
+  // without gang admission). Admin provisions the LocalQueue out of band.
+  string local_queue = 9;
 }
 
 // ============================================================================

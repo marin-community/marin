@@ -11,9 +11,11 @@ from iris.cluster.controller.direct_provider import (
 )
 from iris.cluster.controller.ops.task import apply_direct_provider_updates
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.schema import tasks_table
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
+from sqlalchemy import update as sa_update
 
 from .conftest import (
     make_direct_job_request,
@@ -460,6 +462,204 @@ def test_apply_ignores_stale_attempt(state):
     task = query_task(state, task_id)
     # Should still be ASSIGNED (the update was skipped).
     assert task.state == job_pb2.TASK_STATE_ASSIGNED
+
+
+# =============================================================================
+# Gang-atomic promotion (Kueue coscheduled jobs)
+# =============================================================================
+
+_GROUP = "tpu-name"
+
+
+def _submit_cosched(state, name, replicas, *, max_retries_preemption=0, band=0):
+    """Submit a coscheduled direct job and return its task ids."""
+    jid = JobName.root("test-user", name)
+    req = make_direct_job_request(name, replicas=replicas, coscheduling_group_by=_GROUP, priority_band=band)
+    req.max_retries_preemption = max_retries_preemption
+    with state._db.transaction() as cur:
+        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now(), run_template_cache=state._run_template_cache)
+    return jid, [t.task_id for t in query_tasks_for_job(state, jid)]
+
+
+def _states(state, task_ids):
+    return [query_task(state, t).state for t in task_ids]
+
+
+def test_drain_promotes_coscheduled_gang_atomically(state):
+    """A coscheduled gang is promoted whole in one drain; every RunTaskRequest carries
+    the same attempt_id (the pod-group generation) and the coscheduling + priority fields."""
+    _jid, task_ids = _submit_cosched(state, "gang", replicas=4, band=job_pb2.PRIORITY_BAND_BATCH)
+
+    with state._db.transaction() as cur:
+        batch = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+
+    assert len(batch.tasks_to_run) == 4
+    assert {r.task_id for r in batch.tasks_to_run} == {t.to_wire() for t in task_ids}
+    assert {r.attempt_id for r in batch.tasks_to_run} == {0}, "siblings must share the generation"
+    for r in batch.tasks_to_run:
+        assert r.HasField("coscheduling")
+        assert r.coscheduling.group_by == _GROUP
+        assert r.priority == job_pb2.PRIORITY_BAND_BATCH
+    assert all(s == job_pb2.TASK_STATE_ASSIGNED for s in _states(state, task_ids))
+
+
+def test_drain_oversized_gang_promoted_whole_despite_cap(state):
+    """A gang larger than the per-cycle cap is still promoted whole (the cap only bounds
+    API-server pressure; a partial gang would deadlock Kueue)."""
+    _jid, task_ids = _submit_cosched(state, "big-gang", replicas=5)
+
+    with state._db.transaction() as cur:
+        batch = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache, max_promotions=2)
+
+    assert len(batch.tasks_to_run) == 5
+    assert all(s == job_pb2.TASK_STATE_ASSIGNED for s in _states(state, task_ids))
+
+
+def test_drain_defers_gang_over_remaining_budget(state):
+    """When a gang fits the per-cycle cap but not the remaining budget, it is deferred whole
+    rather than split. The next cycle promotes it."""
+    _a, a_tasks = _submit_cosched(state, "gang-a", replicas=3)
+    _b, b_tasks = _submit_cosched(state, "gang-b", replicas=3)
+
+    # Cap = 4: one gang of 3 fits, the second (3 > remaining 1, 3 <= 4 cap) is deferred.
+    with state._db.transaction() as cur:
+        batch1 = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache, max_promotions=4)
+    assert len(batch1.tasks_to_run) == 3
+
+    all_states = _states(state, a_tasks) + _states(state, b_tasks)
+    assert all_states.count(job_pb2.TASK_STATE_ASSIGNED) == 3
+    assert all_states.count(job_pb2.TASK_STATE_PENDING) == 3
+
+    # Next cycle: deferred gang promoted (the already-ASSIGNED gang is redriven, not re-promoted).
+    with state._db.transaction() as cur:
+        direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache, max_promotions=4)
+    after = _states(state, a_tasks) + _states(state, b_tasks)
+    assert all(s == job_pb2.TASK_STATE_ASSIGNED for s in after)
+
+
+def test_drain_does_not_promote_partial_gang(state):
+    """A gang is promoted only when every sibling is PENDING together; a lone PENDING
+    sibling (siblings still in flight) is held until the gang reconverges."""
+    _jid, task_ids = _submit_cosched(state, "partial", replicas=3)
+    with state._db.transaction() as cur:
+        direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)  # all -> ASSIGNED @0
+
+    # Force a partial state: one sibling back to PENDING, two still ASSIGNED.
+    with state._db.transaction() as cur:
+        cur.execute(
+            sa_update(tasks_table).where(tasks_table.c.task_id == task_ids[0]).values(state=job_pb2.TASK_STATE_PENDING)
+        )
+
+    with state._db.transaction() as cur:
+        batch = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+
+    # The lone PENDING sibling must NOT be promoted (still attempt 0, still PENDING).
+    promoted_to_attempt1 = [r for r in batch.tasks_to_run if r.attempt_id == 1]
+    assert promoted_to_attempt1 == []
+    assert query_task(state, task_ids[0]).state == job_pb2.TASK_STATE_PENDING
+    assert query_task(state, task_ids[0]).current_attempt_id == 0
+
+
+def test_coscheduled_gang_requeue_keeps_siblings_in_lockstep(state):
+    """End-to-end lockstep invariant: a transient failure bounces the whole gang to PENDING,
+    and the next drain re-promotes every sibling to the SAME next attempt_id — which is what
+    keeps the per-generation pod-group-name uniform across the gang."""
+    _jid, task_ids = _submit_cosched(state, "lockstep", replicas=3, max_retries_preemption=5)
+
+    with state._db.transaction() as cur:
+        batch0 = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+    assert {r.attempt_id for r in batch0.tasks_to_run} == {0}
+
+    # All siblings reach RUNNING.
+    with state._db.transaction() as cur:
+        apply_direct_provider_updates(
+            cur,
+            [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
+        )
+
+    # One sibling hits a transient (preemption) failure -> whole gang bounced to PENDING.
+    with state._db.transaction() as cur:
+        apply_direct_provider_updates(
+            cur,
+            [TaskUpdate(task_id=task_ids[0], attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED)],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
+        )
+    assert all(s == job_pb2.TASK_STATE_PENDING for s in _states(state, task_ids))
+
+    # Re-drain: the entire gang re-promotes to attempt 1 in lockstep.
+    with state._db.transaction() as cur:
+        batch1 = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+    assert len(batch1.tasks_to_run) == 3
+    assert {r.attempt_id for r in batch1.tasks_to_run} == {1}, "all siblings share the new generation"
+    assert all(r.coscheduling.group_by == _GROUP for r in batch1.tasks_to_run)
+
+
+def test_gang_requeue_bounces_assigned_sibling_off_old_generation(state):
+    """A still-ASSIGNED (pod not yet landed / redrive-pending) sibling is bounced to
+    PENDING when another sibling fails, so the next drain re-promotes the WHOLE gang on
+    one new attempt_id.
+
+    Guards against a mixed-generation gang: if the ASSIGNED sibling stayed on attempt 0
+    (redriven on the old pod-group-name) while its siblings advanced to attempt 1, Kueue
+    would see two partial Workloads and never admit either. The fix hinges on ASSIGNED
+    being an active state, so the requeue cascade catches the not-yet-running sibling.
+    """
+    _jid, task_ids = _submit_cosched(state, "assigned-bounce", replicas=3, max_retries_preemption=5)
+
+    with state._db.transaction() as cur:
+        direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)  # all -> ASSIGNED @0
+    assert all(s == job_pb2.TASK_STATE_ASSIGNED for s in _states(state, task_ids))
+
+    # Two siblings reach RUNNING; task_ids[0] stays ASSIGNED+null-worker (its pod has
+    # not landed yet — it is a redrive candidate this whole time).
+    with state._db.transaction() as cur:
+        apply_direct_provider_updates(
+            cur,
+            [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids[1:]],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
+        )
+    assert query_task(state, task_ids[0]).state == job_pb2.TASK_STATE_ASSIGNED
+
+    # A running sibling hits a transient failure -> the whole gang, including the
+    # still-ASSIGNED sibling, must bounce to PENDING.
+    with state._db.transaction() as cur:
+        apply_direct_provider_updates(
+            cur,
+            [TaskUpdate(task_id=task_ids[1], attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED)],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
+        )
+    assert all(
+        s == job_pb2.TASK_STATE_PENDING for s in _states(state, task_ids)
+    ), "the ASSIGNED sibling must not be stranded on the old generation"
+
+    # Re-drain: every sibling re-promotes to attempt 1 together; nothing is redriven on
+    # attempt 0 (which would mean a split pod-group generation).
+    with state._db.transaction() as cur:
+        batch = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+    assert {r.task_id for r in batch.tasks_to_run} == {t.to_wire() for t in task_ids}
+    assert {r.attempt_id for r in batch.tasks_to_run} == {1}, "no sibling left on the old pod-group generation"
+
+
+def test_drain_gang_and_noncoscheduled_coexist(state):
+    """A coscheduled gang promotes whole; non-coscheduled tasks fill the remaining budget."""
+    _jid, gang_tasks = _submit_cosched(state, "mixed-gang", replicas=2)
+    single = submit_direct_job(state, "mixed-single")
+
+    with state._db.transaction() as cur:
+        batch = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+
+    promoted = {r.task_id for r in batch.tasks_to_run}
+    assert {t.to_wire() for t in gang_tasks} <= promoted
+    assert single[0].to_wire() in promoted
 
 
 def test_apply_ignores_finished_task(state):

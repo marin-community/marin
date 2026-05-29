@@ -48,6 +48,11 @@ class K8sResource(Enum):
     # CoreWeave custom resources
     NODE_POOLS = ("compute.coreweave.com", "v1alpha1", False, "nodepools", "NodePool")
 
+    # Kueue: the per-pod-group Workload (gang admission). Kueue names the
+    # Workload after the pod-group-name, so Iris can address it directly to
+    # release quota when it tears down a coscheduled gang generation.
+    WORKLOADS = ("kueue.x-k8s.io", "v1beta1", True, "workloads", "Workload")
+
     def __init__(self, api_group: str, api_version: str, is_namespaced: bool, plural: str, kind: str) -> None:
         self.api_group = api_group
         self.api_version = api_version
