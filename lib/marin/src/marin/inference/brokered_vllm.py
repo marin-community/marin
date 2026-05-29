@@ -67,8 +67,6 @@ class VllmProxyConfig:
     response_fetch_batch_size: int = 64
     # Local uvicorn startup should be quick; vLLM startup has a separate timeout.
     server_start_timeout_seconds: float = 10.0
-    # Hint for clients rejected by the proxy pending-request guard.
-    retry_after_seconds: int = 1
 
 
 @dataclass(frozen=True)
@@ -264,7 +262,6 @@ def _start_proxy(config: BrokeredVllmSystemConfig, broker: WorkloadBroker) -> It
         max_pending_requests=proxy_config.max_pending_requests,
         response_fetch_batch_size=proxy_config.response_fetch_batch_size,
         server_start_timeout_seconds=proxy_config.server_start_timeout_seconds,
-        retry_after_seconds=proxy_config.retry_after_seconds,
     ) as running_model:
         yield RunningModel(endpoint=running_model.endpoint, tokenizer=config.tokenizer)
 

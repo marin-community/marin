@@ -53,22 +53,18 @@ class VllmHttpProxy:
         readiness_timeout_seconds: float,
         max_pending_requests: int,
         response_fetch_batch_size: int,
-        retry_after_seconds: int,
         backoff: ExponentialBackoff | None = None,
     ) -> None:
         if max_pending_requests < 1:
             raise ValueError("max_pending_requests must be at least 1")
         if response_fetch_batch_size < 1:
             raise ValueError("response_fetch_batch_size must be at least 1")
-        if retry_after_seconds < 0:
-            raise ValueError("retry_after_seconds must be non-negative")
         self._broker = broker
         self._model = model
         self._request_timeout_seconds = request_timeout_seconds
         self._readiness_timeout_seconds = readiness_timeout_seconds
         self._max_pending_requests = max_pending_requests
         self._response_fetch_batch_size = response_fetch_batch_size
-        self._retry_after_seconds = retry_after_seconds
         if backoff is None:
             backoff = ExponentialBackoff(initial=0.01, maximum=0.25, factor=2.0)
         self._backoff = backoff
@@ -142,7 +138,7 @@ class VllmHttpProxy:
                 return JSONResponse(
                     {"error": "too many pending proxy requests; back off and retry"},
                     status_code=429,
-                    headers={"Retry-After": str(self._retry_after_seconds)},
+                    headers={"Retry-After": "1"},
                 )
             self._pending[request_id] = future
             pending_count = len(self._pending)
@@ -251,7 +247,6 @@ def serve_vllm_http_proxy(
     max_pending_requests: int,
     response_fetch_batch_size: int,
     server_start_timeout_seconds: float,
-    retry_after_seconds: int,
     backoff: ExponentialBackoff | None = None,
 ) -> Iterator[RunningModel]:
     actual_port = _reserve_port(host, port)
@@ -262,7 +257,6 @@ def serve_vllm_http_proxy(
         readiness_timeout_seconds=readiness_timeout_seconds,
         max_pending_requests=max_pending_requests,
         response_fetch_batch_size=response_fetch_batch_size,
-        retry_after_seconds=retry_after_seconds,
         backoff=backoff,
     )
     config = uvicorn.Config(proxy.app, host=host, port=actual_port, log_level="error", log_config=None)

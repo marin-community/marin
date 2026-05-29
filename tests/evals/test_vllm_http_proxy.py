@@ -443,7 +443,6 @@ async def test_vllm_http_proxy_drops_stale_responses_with_warning(caplog: pytest
         readiness_timeout_seconds=5,
         max_pending_requests=8,
         response_fetch_batch_size=8,
-        retry_after_seconds=1,
     )
 
     with caplog.at_level(logging.WARNING):
@@ -525,7 +524,6 @@ def _serve_vllm_http_proxy(
         max_pending_requests=config.max_pending_requests if max_pending_requests is None else max_pending_requests,
         response_fetch_batch_size=config.response_fetch_batch_size,
         server_start_timeout_seconds=config.server_start_timeout_seconds,
-        retry_after_seconds=config.retry_after_seconds,
     ) as running_model:
         yield running_model
 
