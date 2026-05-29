@@ -57,6 +57,26 @@ class _FixedByteTokenizer:
         return "".join(self.convert_ids_to_tokens(i) for i in ids)
 
 
+class _ZeroByteTokenizer:
+    all_special_ids = []
+
+    def get_vocab(self):
+        return {".": 0, "<zero-byte>": 1, "abc": 2}
+
+    def convert_ids_to_tokens(self, idx):
+        return {0: ".", 1: "<zero-byte>", 2: "abc"}[idx]
+
+    def encode(self, text, *, add_special_tokens=False):
+        assert text == "."
+        del add_special_tokens
+        return [0]
+
+    def decode(self, ids, *, skip_special_tokens=False):
+        del skip_special_tokens
+        token_text = {0: ".", 1: "", 2: "abc"}
+        return "".join(token_text[token_id] for token_id in ids)
+
+
 def test_tagged_evaluator_logs_historical_bpb_and_source_document_bpb():
     EvalBatch = Axis("batch", 1)
     examples = [
@@ -89,11 +109,39 @@ def test_tagged_evaluator_logs_historical_bpb_and_source_document_bpb():
             np.log2(np.e) / len("longtoken".encode("utf-8")),
         ]
     )
-    expected_source_document_bpb = 2.0 * np.log2(np.e) / (
-        len("a".encode("utf-8")) + len("longtoken".encode("utf-8"))
-    )
+    expected_source_document_bpb = 2.0 * np.log2(np.e) / (len("a".encode("utf-8")) + len("longtoken".encode("utf-8")))
     assert result.micro_bpb == pytest.approx(expected_bpb)
     assert result.source_document_bpb == pytest.approx(expected_source_document_bpb)
+
+
+def test_tagged_evaluator_source_document_bpb_includes_zero_byte_token_loss():
+    EvalBatch = Axis("batch", 2)
+    examples = [
+        GrugLmExample(tokens=jnp.array([1, 1], dtype=jnp.int32), loss_weight=jnp.ones((2,), dtype=jnp.float32)),
+        GrugLmExample(tokens=jnp.array([1, 1], dtype=jnp.int32), loss_weight=jnp.ones((2,), dtype=jnp.float32)),
+        GrugLmExample(tokens=jnp.array([2, 2], dtype=jnp.int32), loss_weight=jnp.ones((2,), dtype=jnp.float32)),
+        GrugLmExample(tokens=jnp.array([2, 2], dtype=jnp.int32), loss_weight=jnp.ones((2,), dtype=jnp.float32)),
+    ]
+
+    def loss_fn(_model, batch: GrugLmExample) -> LossFnOutput:
+        losses = jnp.ones_like(batch.tokens, dtype=jnp.float32)
+        return losses, batch.loss_weight, batch.tokens
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        evaluator = TaggedEvaluator(
+            EvalBatch=EvalBatch,
+            tagged_eval_sets=[(ListAsyncDataset(examples), ["root/mix"])],
+            loss_fn=loss_fn,
+            tokenizer=_ZeroByteTokenizer(),
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+        )
+        result = evaluator.evaluate(None)
+
+    expected_source_document_bpb = 8.0 * np.log2(np.e) / 12.0
+    assert result.source_document_bpb == pytest.approx(expected_source_document_bpb)
+    assert result.tag_source_document_bpb["root/mix"] == pytest.approx(expected_source_document_bpb)
+    assert result.tag_source_document_bpb["root"] == pytest.approx(expected_source_document_bpb)
 
 
 def test_tagged_evaluator_accepts_grug_lm_examples():

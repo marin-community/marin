@@ -5,6 +5,7 @@ import heapq
 import itertools
 import json
 import os
+import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterator, Sequence
@@ -567,6 +568,13 @@ def tokenize_text_with_byte_spans(tokenizer: MarinTokenizer, hf_tokenizer: Any, 
     custom_offsets = getattr(tokenizer, "tokenize_with_byte_offsets", None)
     if custom_offsets is not None:
         ids, byte_starts, byte_ends, num_bytes = custom_offsets(text)
+        _validate_source_token_spans(
+            hf_tokenizer=hf_tokenizer,
+            text=text,
+            token_ids=ids,
+            byte_starts=byte_starts,
+            byte_ends=byte_ends,
+        )
         return TokenizedDocument(
             token_ids=np.asarray(ids, dtype=np.int32),
             byte_starts=np.asarray(byte_starts, dtype=np.int32),
@@ -620,6 +628,138 @@ def tokenize_text_with_byte_spans(tokenizer: MarinTokenizer, hf_tokenizer: Any, 
         byte_ends=np.asarray(byte_ends, dtype=np.int32),
         num_bytes=int(byte_offsets[-1]),
     )
+
+
+def _validate_source_token_spans(
+    *,
+    hf_tokenizer: Any,
+    text: str,
+    token_ids: Sequence[int],
+    byte_starts: Sequence[int],
+    byte_ends: Sequence[int],
+) -> None:
+    """Validate that tokenizer offsets are usable for source-byte BPB attribution.
+
+    BPB scoring spreads each next-token loss over the token's source byte span.
+    That is only meaningful when non-special source tokens form an ordered
+    partition of the decoded source bytes. Byte-level tokenizers may emit
+    multiple tokens for one Unicode character; those tokens have the same byte
+    span and are accepted as one source-byte group.
+    """
+    if len(token_ids) != len(byte_starts) or len(token_ids) != len(byte_ends):
+        raise ValueError("Token ids and byte spans must have the same length.")
+
+    source_bytes = text.encode("utf-8")
+    num_bytes = len(source_bytes)
+    if not token_ids:
+        if num_bytes == 0:
+            return
+        raise ValueError("Tokenizer produced no source tokens for non-empty text.")
+
+    current_group_end: int | None = None
+    current_group_start: int | None = None
+    current_group_ids: list[int] = []
+    for index, (token_id, start, end) in enumerate(zip(token_ids, byte_starts, byte_ends, strict=True)):
+        token_id = int(token_id)
+        start = int(start)
+        end = int(end)
+        if start < 0 or end <= start:
+            raise ValueError(
+                "Tokenizer produced a source token without a positive source byte span "
+                f"at token index {index} (token_id={token_id}, span=({start}, {end})). "
+                "Per-byte BPB would drop this token's loss."
+            )
+        if end > num_bytes:
+            raise ValueError(
+                f"Tokenizer byte span ({start}, {end}) exceeds document length {num_bytes} at token index {index}."
+            )
+
+        if current_group_end is None:
+            if start != 0:
+                raise ValueError(
+                    f"Tokenizer byte spans start at byte {start}, leaving source bytes [0, {start}) unscored."
+                )
+            current_group_start = start
+            current_group_end = end
+            current_group_ids = [token_id]
+        elif end == current_group_end:
+            if start != current_group_start:
+                raise ValueError(
+                    "Tokenizer emitted multiple tokens for one byte boundary with inconsistent starts: "
+                    f"expected {current_group_start}, got {start} at token index {index}."
+                )
+            current_group_ids.append(token_id)
+        elif end > current_group_end:
+            assert current_group_start is not None
+            _validate_decoded_span(
+                hf_tokenizer=hf_tokenizer,
+                token_ids=current_group_ids,
+                source_bytes=source_bytes,
+                byte_start=current_group_start,
+                byte_end=current_group_end,
+            )
+            if start != current_group_end:
+                raise ValueError(
+                    "Tokenizer byte spans must advance without gaps or partial overlaps: "
+                    f"previous group ended at {current_group_end}, next span starts at {start}."
+                )
+            current_group_start = start
+            current_group_end = end
+            current_group_ids = [token_id]
+        else:
+            raise ValueError(
+                "Tokenizer byte spans must be ordered by decoded source prefix: "
+                f"token index {index} ended at {end} after prior group ended at {current_group_end}."
+            )
+
+    assert current_group_end is not None
+    assert current_group_start is not None
+    _validate_decoded_span(
+        hf_tokenizer=hf_tokenizer,
+        token_ids=current_group_ids,
+        source_bytes=source_bytes,
+        byte_start=current_group_start,
+        byte_end=current_group_end,
+    )
+    if current_group_end != num_bytes:
+        raise ValueError(
+            f"Tokenizer byte spans end at byte {current_group_end}, leaving source bytes "
+            f"[{current_group_end}, {num_bytes}) unscored."
+        )
+
+
+def _validate_decoded_span(
+    *,
+    hf_tokenizer: Any,
+    token_ids: Sequence[int],
+    source_bytes: bytes,
+    byte_start: int,
+    byte_end: int,
+) -> None:
+    decoded = _decode_token_ids(hf_tokenizer, token_ids)
+    try:
+        expected = source_bytes[byte_start:byte_end].decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise ValueError(
+            "Tokenizer offset mapping split a UTF-8 codepoint: "
+            f"bytes [{byte_start}, {byte_end}) are not a valid source-text span."
+        ) from e
+    if decoded != expected and not _normalization_equivalent(decoded, expected):
+        raise ValueError(
+            "Tokenizer offset mapping is not source-aligned: "
+            f"decoded token group for bytes [{byte_start}, {byte_end}) is {decoded!r}, expected {expected!r}."
+        )
+
+
+def _normalization_equivalent(left: str, right: str) -> bool:
+    return any(unicodedata.normalize(form, left) == unicodedata.normalize(form, right) for form in ("NFC", "NFD"))
+
+
+def _decode_token_ids(hf_tokenizer: Any, token_ids: Sequence[int]) -> str:
+    try:
+        return hf_tokenizer.decode(list(token_ids), clean_up_tokenization_spaces=False)
+    except TypeError:
+        return hf_tokenizer.decode(list(token_ids))
 
 
 def chunk_tokenized_document(

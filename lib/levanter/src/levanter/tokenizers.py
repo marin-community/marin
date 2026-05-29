@@ -16,7 +16,6 @@ Usage:
 
 import contextlib
 import dataclasses
-import bisect
 import functools
 import json
 import logging
@@ -38,6 +37,8 @@ from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
 from tokenizers import Tokenizer as HfBaseTokenizer
 
 logger = logging.getLogger(__name__)
+
+_TOKENMONSTER_MAX_SOURCE_GROUP_TOKENS = 32
 
 
 # Borrowed from meta-llama/llama3 tokenizer.py: bound the size of any single
@@ -637,12 +638,12 @@ class TokenMonsterMarinTokenizer:
     def convert_ids_to_tokens(self, ids: int | list[int]) -> str | list[str]:
         if isinstance(ids, int):
             return self._id_to_token.get(ids, self._tokenizer.id_to_token(ids))
-        return [self.convert_ids_to_tokens(i) for i in ids]
+        return [self._id_to_token.get(token_id, self._tokenizer.id_to_token(token_id)) for token_id in ids]
 
     def convert_tokens_to_ids(self, tokens: str | list[str]) -> int | list[int]:
         if isinstance(tokens, str):
             return self._vocab.get(tokens, -1)
-        return [self.convert_tokens_to_ids(token) for token in tokens]
+        return [self._vocab.get(token, -1) for token in tokens]
 
     def id_to_token(self, idx: int) -> str:
         return self._tokenizer.id_to_token(int(idx))
@@ -687,196 +688,116 @@ class TokenMonsterMarinTokenizer:
         and remaps normalization cases so downstream BPB/perplexity-gap code
         can attribute losses to bytes in the original document.
         """
-        from levanter.utils.hf_utils import byte_length_of_token
-
         ids = self.encode(text, add_special_tokens=False)
-        starts: list[int] = []
-        ends: list[int] = []
-        offset = 0
-        carried_adjustment = 0
-        for token_id in ids:
-            token_bytes = byte_length_of_token(self, token_id)
-            if token_bytes < 0:
-                starts.append(-1)
-                ends.append(-1)
-                carried_adjustment += token_bytes
-                continue
-
-            effective_bytes = token_bytes + carried_adjustment
-            carried_adjustment = 0
-            if effective_bytes <= 0:
-                starts.append(-1)
-                ends.append(-1)
-                continue
-            starts.append(offset)
-            offset += effective_bytes
-            ends.append(offset)
-
+        starts, ends = _tokenmonster_source_byte_spans(
+            text=text,
+            token_ids=ids,
+            decode=self.decode,
+            tokenizer_name=self._name_or_path,
+        )
         num_bytes = len(text.encode("utf-8"))
-        if offset != num_bytes:
-            decoded = self.decode(ids)
-            if decoded == text:
-                starts, ends = _scale_tokenmonster_byte_spans(starts, ends, source_byte_length=offset, num_bytes=num_bytes)
-                offset = num_bytes
-            else:
-                remapped = _remap_normalized_tokenmonster_offsets(
-                    text,
-                    decoded,
-                    starts,
-                    ends,
-                    normalized_byte_length=offset,
-                )
-                if remapped is None:
-                    raise ValueError(f"TokenMonster tokenizer did not round-trip input text for {self._name_or_path}.")
-                starts, ends = remapped
-                offset = num_bytes
-
         return ids, starts, ends, num_bytes
 
 
-def _remap_normalized_tokenmonster_offsets(
-    text: str,
-    decoded: str,
-    starts: list[int],
-    ends: list[int],
+def _tokenmonster_source_byte_spans(
     *,
-    normalized_byte_length: int,
-) -> tuple[list[int], list[int]] | None:
-    """Map TokenMonster byte spans through a Unicode normalization round-trip.
+    text: str,
+    token_ids: list[int],
+    decode,
+    tokenizer_name: str,
+) -> tuple[list[int], list[int]]:
+    decoded = decode(token_ids)
+    match_text, source_byte_by_match_char = _tokenmonster_match_text(text, decoded, tokenizer_name)
 
-    Some TokenMonster vocabularies decode canonically equivalent text, such as
-    decomposed accents. When that happens, spans first live in the decoded
-    normalized string; this helper detects the normalization form and converts
-    those spans back to the original source string.
-    """
+    @functools.lru_cache(maxsize=None)
+    def decode_group(start: int, end: int) -> str:
+        return decode(token_ids[start:end])
+
+    @functools.lru_cache(maxsize=None)
+    def segment_from(token_index: int, char_offset: int) -> tuple[tuple[int, int, int, int], ...] | None:
+        if token_index == len(token_ids):
+            return () if char_offset == len(match_text) else None
+
+        max_end = min(len(token_ids), token_index + _TOKENMONSTER_MAX_SOURCE_GROUP_TOKENS)
+        for end in range(token_index + 1, max_end + 1):
+            group_text = decode_group(token_index, end)
+            if not group_text:
+                continue
+            if not match_text.startswith(group_text, char_offset):
+                continue
+
+            next_char_offset = char_offset + len(group_text)
+            if char_offset not in source_byte_by_match_char or next_char_offset not in source_byte_by_match_char:
+                continue
+            rest = segment_from(end, next_char_offset)
+            if rest is not None:
+                group = (
+                    token_index,
+                    end,
+                    source_byte_by_match_char[char_offset],
+                    source_byte_by_match_char[next_char_offset],
+                )
+                return (group, *rest)
+
+        return None
+
+    groups = segment_from(0, 0)
+    if groups is None:
+        raise ValueError(f"TokenMonster tokenizer {tokenizer_name!r} could not align decoded tokens to source text.")
+
+    starts = [-1] * len(token_ids)
+    ends = [-1] * len(token_ids)
+    for token_start, token_end, byte_start, byte_end in groups:
+        for token_index in range(token_start, token_end):
+            starts[token_index] = byte_start
+            ends[token_index] = byte_end
+
+    return starts, ends
+
+
+def _tokenmonster_match_text(text: str, decoded: str, tokenizer_name: str) -> tuple[str, dict[int, int]]:
+    if decoded == text:
+        return text, dict(enumerate(_utf8_byte_offsets(text)))
+
     for normalization in ("NFD", "NFKD", "NFC", "NFKC"):
         normalized = unicodedata.normalize(normalization, text)
-        if decoded != normalized:
-            continue
-        normalized_bytes = len(normalized.encode("utf-8"))
-        normalized_starts, normalized_ends = starts, ends
-        if normalized_bytes != normalized_byte_length:
-            normalized_starts, normalized_ends = _scale_tokenmonster_byte_spans(
-                starts,
-                ends,
-                source_byte_length=normalized_byte_length,
-                num_bytes=normalized_bytes,
-            )
-        return _remap_normalized_byte_spans_to_original(
-            text, normalized, normalized_starts, normalized_ends, normalization
-        )
-    return None
+        if decoded == normalized:
+            boundary_map = _normalized_char_boundaries_to_source_bytes(text, normalized, normalization)
+            if boundary_map is None:
+                break
+            return normalized, boundary_map
+
+    raise ValueError(f"TokenMonster tokenizer did not round-trip input text for {tokenizer_name}.")
 
 
-def _remap_normalized_byte_spans_to_original(
+def _normalized_char_boundaries_to_source_bytes(
     text: str,
     normalized: str,
-    starts: list[int],
-    ends: list[int],
     normalization: str,
-) -> tuple[list[int], list[int]]:
-    """Convert byte spans from a normalized string back to original text bytes."""
+) -> dict[int, int] | None:
     normalized_pieces: list[str] = []
-    normalized_byte_to_original_byte: dict[int, int] = {}
-    normalized_offset = 0
-    original_offset = 0
+    source_byte_by_match_char = {0: 0}
+    normalized_char_offset = 0
+    original_byte_offset = 0
     for ch in text:
-        original_end = original_offset + len(ch.encode("utf-8"))
         normalized_piece = unicodedata.normalize(normalization, ch)
         normalized_pieces.append(normalized_piece)
-        normalized_piece_bytes = len(normalized_piece.encode("utf-8"))
-        if normalized_piece_bytes == 0:
-            original_offset = original_end
-            continue
-
-        piece_offset = 0
-        normalized_byte_to_original_byte[normalized_offset] = original_offset
-        for piece_ch in normalized_piece:
-            piece_offset += len(piece_ch.encode("utf-8"))
-            normalized_byte_to_original_byte[normalized_offset + piece_offset] = original_offset + round(
-                piece_offset * (original_end - original_offset) / normalized_piece_bytes
-            )
-        normalized_offset += normalized_piece_bytes
-        original_offset = original_end
+        normalized_char_offset += len(normalized_piece)
+        original_byte_offset += len(ch.encode("utf-8"))
+        source_byte_by_match_char[normalized_char_offset] = original_byte_offset
 
     if "".join(normalized_pieces) != normalized:
-        return _scale_tokenmonster_byte_spans(
-            starts,
-            ends,
-            source_byte_length=len(normalized.encode("utf-8")),
-            num_bytes=len(text.encode("utf-8")),
-        )
-
-    normalized_boundaries = sorted(normalized_byte_to_original_byte)
-
-    def remap_byte(byte_offset: int, *, is_end: bool) -> int:
-        if byte_offset in normalized_byte_to_original_byte:
-            return normalized_byte_to_original_byte[byte_offset]
-
-        if is_end:
-            index = bisect.bisect_left(normalized_boundaries, byte_offset)
-            if index >= len(normalized_boundaries):
-                return original_offset
-        else:
-            index = bisect.bisect_right(normalized_boundaries, byte_offset) - 1
-            if index < 0:
-                return 0
-        return normalized_byte_to_original_byte[normalized_boundaries[index]]
-
-    remapped_starts: list[int] = []
-    remapped_ends: list[int] = []
-    for start, end in zip(starts, ends, strict=True):
-        if start < 0 or end < 0:
-            remapped_starts.append(-1)
-            remapped_ends.append(-1)
-            continue
-
-        original_start = remap_byte(start, is_end=False)
-        original_end = remap_byte(end, is_end=True)
-        if original_end <= original_start:
-            remapped_starts.append(-1)
-            remapped_ends.append(-1)
-            continue
-
-        remapped_starts.append(original_start)
-        remapped_ends.append(original_end)
-
-    return remapped_starts, remapped_ends
+        return None
+    return source_byte_by_match_char
 
 
-def _scale_tokenmonster_byte_spans(
-    starts: list[int],
-    ends: list[int],
-    *,
-    source_byte_length: int,
-    num_bytes: int,
-) -> tuple[list[int], list[int]]:
-    """Scale valid byte spans when decoded and source bytes differ uniformly."""
-    if source_byte_length <= 0:
-        return starts, ends
-
-    def scale(byte_offset: int) -> int:
-        return min(num_bytes, max(0, round(byte_offset * num_bytes / source_byte_length)))
-
-    scaled_starts: list[int] = []
-    scaled_ends: list[int] = []
-    for start, end in zip(starts, ends, strict=True):
-        if start < 0 or end < 0:
-            scaled_starts.append(-1)
-            scaled_ends.append(-1)
-            continue
-
-        scaled_start = scale(start)
-        scaled_end = scale(end)
-        if scaled_end <= scaled_start:
-            scaled_starts.append(-1)
-            scaled_ends.append(-1)
-            continue
-
-        scaled_starts.append(scaled_start)
-        scaled_ends.append(scaled_end)
-
-    return scaled_starts, scaled_ends
+def _utf8_byte_offsets(text: str) -> list[int]:
+    offsets = [0] * (len(text) + 1)
+    running = 0
+    for index, ch in enumerate(text, start=1):
+        running += len(ch.encode("utf-8"))
+        offsets[index] = running
+    return offsets
 
 
 class TokenizerBackend(StrEnum):
@@ -1324,9 +1245,7 @@ def _load_tokenmonster_tokenizer(name_or_path: str) -> TokenMonsterMarinTokenize
     dictionary = tok.get_dictionary()
     vocab = {info["token"]: token_id for token_id, info in dictionary.items()}
     id_to_token = {token_id: info["token"] for token_id, info in dictionary.items()}
-    all_special_ids = [
-        token_id for token_id, info in dictionary.items() if info.get("type") in {2, "special"}
-    ]
+    all_special_ids = [token_id for token_id, info in dictionary.items() if info.get("type") in {2, "special"}]
 
     return TokenMonsterMarinTokenizer(
         _tokenizer=tok,
