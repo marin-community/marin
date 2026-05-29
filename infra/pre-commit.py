@@ -33,6 +33,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 
 import click
 import tomllib
@@ -190,11 +191,13 @@ def _record(name: str, exit_code: int, output: str = "") -> int:
     return exit_code
 
 
-def check_ruff(files: list[pathlib.Path], fix: bool) -> int:
+def check_ruff(files: list[pathlib.Path], fix: bool, agent_output: bool = False) -> int:
     if not files:
         return 0
 
     args = ["uvx", "ruff@0.14.3", "check"]
+    if agent_output:
+        args.extend(["--output-format", "json"])
     if fix:
         args.extend(["--fix", "--exit-non-zero-on-fix"])
 
@@ -206,7 +209,12 @@ def check_ruff(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Ruff linter", result.returncode, output)
 
 
-def check_black(files: list[pathlib.Path], fix: bool, config: pathlib.Path | None = None) -> int:
+def check_black(
+    config: pathlib.Path | None,
+    files: list[pathlib.Path],
+    fix: bool,
+    agent_output: bool = False,
+) -> int:
     if not files:
         return 0
 
@@ -236,7 +244,12 @@ def check_black(files: list[pathlib.Path], fix: bool, config: pathlib.Path | Non
     return _record(label, result.returncode, output)
 
 
-def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pathlib.Path) -> int:
+def check_license_headers(
+    license_file: pathlib.Path,
+    files: list[pathlib.Path],
+    fix: bool,
+    agent_output: bool = False,
+) -> int:
     if not files:
         return 0
 
@@ -310,7 +323,7 @@ def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pa
     return _record(label, 0)
 
 
-def check_mypy(files: list[pathlib.Path], fix: bool) -> int:
+def check_mypy(files: list[pathlib.Path], fix: bool, agent_output: bool = False) -> int:
     if not files:
         return 0
 
@@ -328,7 +341,7 @@ def check_mypy(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Mypy type checker", result.returncode, output)
 
 
-def check_large_files(files: list[pathlib.Path], fix: bool) -> int:
+def check_large_files(files: list[pathlib.Path], fix: bool, agent_output: bool = False) -> int:
     if not files:
         return 0
 
@@ -348,7 +361,7 @@ def check_large_files(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Large files", 0)
 
 
-def check_python_ast(files: list[pathlib.Path], fix: bool) -> int:
+def check_python_ast(files: list[pathlib.Path], fix: bool, agent_output: bool = False) -> int:
     py_files = [f for f in files if f.suffix == ".py"]
     if not py_files:
         return 0
@@ -371,7 +384,7 @@ def check_python_ast(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Python AST", 0)
 
 
-def check_merge_conflicts(files: list[pathlib.Path], fix: bool) -> int:
+def check_merge_conflicts(files: list[pathlib.Path], fix: bool, agent_output: bool = False) -> int:
     if not files:
         return 0
 
@@ -398,7 +411,7 @@ def check_merge_conflicts(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Merge conflicts", 0)
 
 
-def check_toml_yaml(files: list[pathlib.Path], fix: bool) -> int:
+def check_toml_yaml(files: list[pathlib.Path], fix: bool, agent_output: bool = False) -> int:
     config_files = [f for f in files if f.suffix in [".toml", ".yaml", ".yml"]]
     if not config_files:
         return 0
@@ -440,7 +453,7 @@ def check_toml_yaml(files: list[pathlib.Path], fix: bool) -> int:
     return _record("TOML and YAML", 0)
 
 
-def check_trailing_whitespace(files: list[pathlib.Path], fix: bool) -> int:
+def check_trailing_whitespace(files: list[pathlib.Path], fix: bool, agent_output: bool = False) -> int:
     if not files:
         return 0
 
@@ -481,7 +494,7 @@ def check_trailing_whitespace(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Trailing whitespace", 0)
 
 
-def check_eof_newline(files: list[pathlib.Path], fix: bool) -> int:
+def check_eof_newline(files: list[pathlib.Path], fix: bool, agent_output: bool = False) -> int:
     if not files:
         return 0
 
@@ -513,7 +526,7 @@ def check_eof_newline(files: list[pathlib.Path], fix: bool) -> int:
     return _record("End-of-file newline", 0)
 
 
-def check_notebooks(files: list[pathlib.Path], fix: bool) -> int:
+def check_notebooks(files: list[pathlib.Path], fix: bool, agent_output: bool = False) -> int:
     """Check that Jupyter notebooks have cleared outputs and normalized formatting.
 
     TODO: Consider generating static HTML versions of notebooks (via nbconvert) and uploading
@@ -566,7 +579,7 @@ def check_notebooks(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Jupyter notebooks", 0)
 
 
-def check_markdown_precommit_invocation(files: list[pathlib.Path], fix: bool) -> int:
+def check_markdown_precommit_invocation(files: list[pathlib.Path], fix: bool, agent_output: bool = False) -> int:
     md_files = [f for f in files if f.suffix == ".md"]
     if not md_files:
         return 0
@@ -644,7 +657,7 @@ def _should_skip_skill_reference(reference: str) -> bool:
     )
 
 
-def check_skill_metadata(files: list[pathlib.Path], fix: bool) -> int:
+def check_skill_metadata(files: list[pathlib.Path], fix: bool, agent_output: bool = False) -> int:
     skill_files = [f for f in files if _is_skill_file(f)]
     if not skill_files:
         return 0
@@ -777,13 +790,15 @@ def _ensure_iris_protos() -> None:
         print(f"  ⚠ Proto generation failed: {result.stderr.strip()}")
 
 
-def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
+def check_pyrefly(files: list[pathlib.Path], fix: bool, agent_output: bool = False) -> int:
     if not files:
         return 0
 
     _ensure_iris_protos()
 
     args = ["uvx", "pyrefly@0.61.0", "check", "--baseline", ".pyrefly-baseline.json"]
+    if agent_output:
+        args.extend(["--output-format", "json"])
     result = run_cmd(args)
     output = (result.stdout + result.stderr).strip()
     return _record("Pyrefly type checker", result.returncode, output)
@@ -792,7 +807,7 @@ def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
 @dataclass
 class PrecommitConfig:
     patterns: list[str]
-    checks: list[Callable[[list[pathlib.Path], bool], int]]
+    checks: list[Callable[[list[pathlib.Path], bool, bool], int]]
     exclude_patterns: list[str] = field(default_factory=list)
 
 
@@ -801,8 +816,8 @@ PRECOMMIT_CONFIGS = [
         patterns=["lib/levanter/**/*.py"],
         checks=[
             check_ruff,
-            lambda files, fix: check_black(files, fix, config=LEVANTER_BLACK_CONFIG),
-            lambda files, fix: check_license_headers(files, fix, LEVANTER_LICENSE),
+            partial(check_black, LEVANTER_BLACK_CONFIG),
+            partial(check_license_headers, LEVANTER_LICENSE),
             # check_mypy,
         ],
     ),
@@ -810,8 +825,8 @@ PRECOMMIT_CONFIGS = [
         patterns=["lib/haliax/**/*.py"],
         checks=[
             check_ruff,
-            lambda files, fix: check_black(files, fix, config=HALIAX_BLACK_CONFIG),
-            lambda files, fix: check_license_headers(files, fix, HALIAX_LICENSE),
+            partial(check_black, HALIAX_BLACK_CONFIG),
+            partial(check_license_headers, HALIAX_LICENSE),
         ],
     ),
     PrecommitConfig(
@@ -819,8 +834,8 @@ PRECOMMIT_CONFIGS = [
         exclude_patterns=["lib/levanter/**", "lib/haliax/**", "lib/**/vendor/**"],
         checks=[
             check_ruff,
-            check_black,
-            lambda files, fix: check_license_headers(files, fix, MARIN_LICENSE),
+            partial(check_black, None),
+            partial(check_license_headers, MARIN_LICENSE),
         ],
     ),
     PrecommitConfig(
@@ -1125,6 +1140,12 @@ def run_lint_review(agent_command: str) -> int:
     return 0
 
 
+def _get_check_name(check) -> str:
+    if isinstance(check, partial):
+        return check.func.__name__
+    return check.__name__
+
+
 @click.command()
 @click.option("--fix", is_flag=True, help="Automatically fix issues where possible")
 @click.option("--all-files", is_flag=True, help="Run checks on all files, not just changed")
@@ -1156,6 +1177,9 @@ def run_lint_review(agent_command: str) -> int:
     ),
 )
 @click.option("--files", "files_opt", multiple=True, help="Files to check (alias for positional args)")
+@click.option("--skip", multiple=True, help="Skip specific checks by name (e.g. ruff, black)")
+@click.option("--only", multiple=True, help="Run only specific checks by name (e.g. ruff, black)")
+@click.option("--agent-output", is_flag=True, help="Produce structured output for agent consumption where supported")
 @click.argument("files", nargs=-1)
 def main(
     fix: bool,
@@ -1165,6 +1189,9 @@ def main(
     review: bool,
     agent_command: str,
     files_opt: tuple[str, ...],
+    skip: tuple[str, ...],
+    only: tuple[str, ...],
+    agent_output: bool,
     files: tuple[str, ...],
 ):
     if review:
@@ -1192,6 +1219,9 @@ def main(
     all_files_list = sorted(list(all_files_set))
     exit_codes = []
 
+    skip_set = set(f"check_{s}" for s in skip)
+    only_set = set(f"check_{o}" for o in only)
+
     for config in PRECOMMIT_CONFIGS:
         matched_files = get_matching_files(config.patterns, all_files_list, config.exclude_patterns)
         matched_files = [f for f in matched_files if f.exists()]
@@ -1199,11 +1229,16 @@ def main(
             continue
 
         for check in config.checks:
+            check_name = _get_check_name(check)
+            if only_set and check_name not in only_set:
+                continue
+            if check_name in skip_set:
+                continue
             try:
-                exit_code = check(matched_files, fix)
+                exit_code = check(matched_files, fix, agent_output=agent_output)
                 exit_codes.append(exit_code)
             except Exception as e:
-                click.echo(f"  Error running check {check.__name__}: {e}")
+                click.echo(f"  Error running check {check_name}: {e}")
                 exit_codes.append(1)
 
     # Print failure details at the end
