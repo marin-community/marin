@@ -1,7 +1,7 @@
 ---
 name: review-pr
 description: Multi-agent correctness review of a pull request.
-allowed-tools: Bash(gh issue view:*), Bash(gh search:*), Bash(gh issue list:*), Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(.venv/bin/python infra/codehealth/log_stats.py:*), mcp__github_inline_comment__create_inline_comment
+allowed-tools: Bash(gh issue view:*), Bash(gh search:*), Bash(gh issue list:*), Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(uv run infra/codehealth/log_stats.py:*), mcp__github_inline_comment__create_inline_comment
 ---
 
 Provide a code review for the given pull request.
@@ -58,14 +58,13 @@ Follow these steps precisely:
    non-`--comment` runs in the dashboard. Run from the repo root:
 
    ```bash
-   cat <<'EOF' | .venv/bin/python infra/codehealth/log_stats.py
+   cat <<'EOF' | uv run infra/codehealth/log_stats.py
    {
      "tool": "review-pr",
      "invocation": {
        "trigger": "local",
        "agent_cli": "claude",
        "pr_number": <PR>,
-       "finding_count": <N>,
        "agent_exit_code": 0,
        "timed_out": false
      },
@@ -76,11 +75,11 @@ Follow these steps precisely:
    EOF
    ```
 
-   - `<N>` is the count of validated issues from step 6 (0 if none).
    - `<category>` is one of: `bug`, `claude-md-adherence`.
    - One `findings` row per validated issue. Pass `"findings": []` if there
      were none — the empty row in the `invocations` table is the
-     "tool ran with no signal" datapoint we want.
+     "tool ran with no signal" datapoint we want. `finding_count` is derived
+     from the `findings` array length by `log_stats.py`.
 
 8. Output a summary of the review findings to the terminal:
    - If issues were found, list each issue with a brief description.

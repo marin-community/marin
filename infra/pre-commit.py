@@ -971,15 +971,14 @@ def _git_blob_sha(path: pathlib.Path) -> str | None:
 
 def _ship_review_stats(event: dict) -> None:
     """Fire-and-forget: hand the event off to infra/codehealth/log_stats.py via
-    the project venv. Detached so the W&B init/network cost never blocks the dev.
-    Silent on every failure mode (no venv, no wandb, no auth, no network).
+    `uv run`. Detached so the W&B init/network cost never blocks the dev.
+    Silent on every failure mode (no uv, no wandb, no auth, no network).
     """
-    venv_python = ROOT_DIR / ".venv" / "bin" / "python"
-    if not venv_python.exists():
+    if not shutil.which("uv"):
         return
     try:
         proc = subprocess.Popen(
-            [str(venv_python), str(ROOT_DIR / "infra" / "codehealth" / "log_stats.py")],
+            ["uv", "run", "--quiet", str(ROOT_DIR / "infra" / "codehealth" / "log_stats.py")],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -1050,8 +1049,8 @@ def run_lint_review(agent_command: str) -> int:
     started = time.time()
     started_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started))
     # Fields shared by every outcome (timeout / agent-error / success). The
-    # outcome-specific fields (elapsed, finding_count, exit code, timed_out)
-    # are spread in at each return site.
+    # outcome-specific fields (elapsed, exit code, timed_out) are spread in at
+    # each return site. `finding_count` is derived by log_stats.py from len(findings).
     invocation_base = {
         "variant": None,
         "trigger": "local",
@@ -1086,7 +1085,6 @@ def run_lint_review(agent_command: str) -> int:
                 "tool": "pre-commit-review",
                 "invocation": {
                     **invocation_base,
-                    "finding_count": 0,
                     "elapsed": time.time() - started,
                     "agent_exit_code": -1,
                     "timed_out": True,
@@ -1105,7 +1103,6 @@ def run_lint_review(agent_command: str) -> int:
             "tool": "pre-commit-review",
             "invocation": {
                 **invocation_base,
-                "finding_count": len(parsed),
                 "elapsed": time.time() - started,
                 "agent_exit_code": result.returncode,
                 "timed_out": False,

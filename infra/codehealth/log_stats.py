@@ -159,6 +159,7 @@ def _fill_defaults(event: dict) -> dict:
     inv.setdefault("marin_user", _git(["config", "user.email"]))
     if LINT_CATALOG.exists():
         inv.setdefault("lint_catalog_sha", _git(["hash-object", str(LINT_CATALOG)]))
+    inv["finding_count"] = len(event.get("findings") or [])
     return event
 
 
