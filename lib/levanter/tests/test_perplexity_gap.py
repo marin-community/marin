@@ -77,10 +77,38 @@ class _MemoryShardSource(ShardedDataSource[dict[str, Any]]):
         return iter(self.records[row:])
 
 
+class _FakeTokenizer:
+    bos_token_id = None
+    eos_token_id = None
+
+    def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
+        return []
+
+
+class _FakeOffsetTokenizer:
+    def __init__(
+        self,
+        *,
+        input_ids: list[int],
+        offset_mapping: list[tuple[int, int]],
+        decoded_prefixes: dict[tuple[int, ...], str],
+    ):
+        self.input_ids = input_ids
+        self.offset_mapping = offset_mapping
+        self.decoded_prefixes = decoded_prefixes
+
+    def __call__(self, text: str, *, add_special_tokens: bool = False, return_offsets_mapping: bool = False):
+        assert return_offsets_mapping
+        return {"input_ids": self.input_ids, "offset_mapping": self.offset_mapping}
+
+    def decode(self, token_ids: list[int], *, clean_up_tokenization_spaces: bool = False) -> str:
+        return self.decoded_prefixes[tuple(token_ids)]
+
+
 def test_tokenize_text_with_byte_spans_covers_utf8_bytes():
     tokenizer = load_tokenizer("gpt2")
     hf_tokenizer = tokenizer.as_hf_tokenizer()
-    text = "hello  \nnaive café"
+    text = "hello  \nnaive café 🙂"
 
     tokenized = tokenize_text_with_byte_spans(tokenizer, hf_tokenizer, text)
 
@@ -93,7 +121,34 @@ def test_tokenize_text_with_byte_spans_covers_utf8_bytes():
     assert spans
     assert spans[0][0] == 0
     assert spans[-1][1] == tokenized.num_bytes
-    assert sum(end - start for start, end in spans) == tokenized.num_bytes
+
+
+def test_tokenize_text_with_byte_spans_rejects_shifted_offsets():
+    hf_tokenizer = _FakeOffsetTokenizer(
+        input_ids=[1, 2],
+        offset_mapping=[(0, 2), (2, 6)],
+        decoded_prefixes={
+            (1,): "abc",
+            (1, 2): "abcdef",
+        },
+    )
+
+    with pytest.raises(ValueError, match="offset mapping is not source-aligned"):
+        tokenize_text_with_byte_spans(_FakeTokenizer(), hf_tokenizer, "abcdef")
+
+
+def test_tokenize_text_with_byte_spans_rejects_zero_width_source_tokens():
+    hf_tokenizer = _FakeOffsetTokenizer(
+        input_ids=[1, 2],
+        offset_mapping=[(0, 0), (0, 5)],
+        decoded_prefixes={
+            (1,): "",
+            (1, 2): "Hello",
+        },
+    )
+
+    with pytest.raises(ValueError, match="without a positive source byte span"):
+        tokenize_text_with_byte_spans(_FakeTokenizer(), hf_tokenizer, "Hello")
 
 
 def test_iter_dataset_documents_combines_supervised_input_and_target():

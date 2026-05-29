@@ -38,6 +38,30 @@ from .test_lm_model_loss import ToyLmConfig, ToyLmHeadModel
 from .test_utils import use_test_mesh
 
 
+class _ByteLengthTokenizer:
+    bos_token_id = None
+    eos_token_id = None
+    pad_token_id = None
+    all_special_ids = []
+
+    def get_vocab(self) -> dict[str, int]:
+        return {".": 0, "<zero-byte>": 1, "abc": 2}
+
+    def convert_ids_to_tokens(self, ids: int | list[int]) -> str | list[str]:
+        token_strings = {0: ".", 1: "<zero-byte>", 2: "abc"}
+        if isinstance(ids, int):
+            return token_strings[ids]
+        return [token_strings[token_id] for token_id in ids]
+
+    def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
+        assert text == "."
+        return [0]
+
+    def decode(self, ids: list[int], *, skip_special_tokens: bool = False) -> str:
+        token_text = {0: ".", 1: "", 2: "abc"}
+        return "".join(token_text[token_id] for token_id in ids)
+
+
 def test_tagged_evaluator_accepts_grug_lm_examples():
     cfg = ToyLmConfig(max_seq_len=8, embed_dim=16)
     Vocab = Axis("vocab", 32)
@@ -77,6 +101,36 @@ def test_tagged_evaluator_accepts_grug_lm_examples():
 
     assert np.isfinite(result.micro_avg_loss)
     assert "grug" in result.tag_micro_losses
+
+
+def test_tagged_evaluator_bpb_includes_zero_byte_token_loss():
+    EvalBatch = Axis("batch", 2)
+    examples = [
+        GrugLmExample(tokens=jnp.array([1, 1], dtype=jnp.int32), loss_weight=jnp.ones((2,), dtype=jnp.float32)),
+        GrugLmExample(tokens=jnp.array([1, 1], dtype=jnp.int32), loss_weight=jnp.ones((2,), dtype=jnp.float32)),
+        GrugLmExample(tokens=jnp.array([2, 2], dtype=jnp.int32), loss_weight=jnp.ones((2,), dtype=jnp.float32)),
+        GrugLmExample(tokens=jnp.array([2, 2], dtype=jnp.int32), loss_weight=jnp.ones((2,), dtype=jnp.float32)),
+    ]
+
+    def loss_fn(_model, batch: GrugLmExample) -> LossFnOutput:
+        losses = jnp.ones_like(batch.tokens, dtype=jnp.float32)
+        return losses, batch.loss_weight, batch.tokens
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        evaluator = TaggedEvaluator(
+            EvalBatch=EvalBatch,
+            tagged_eval_sets=[(ListAsyncDataset(examples), ["root/mix"])],
+            loss_fn=loss_fn,
+            tokenizer=_ByteLengthTokenizer(),
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+        )
+        result = evaluator.evaluate(None)
+
+    expected_bpb = 8.0 * np.log2(np.e) / 12.0
+    np.testing.assert_allclose(result.micro_bpb, expected_bpb)
+    np.testing.assert_allclose(result.tag_micro_bpb["root/mix"], expected_bpb)
+    np.testing.assert_allclose(result.tag_micro_bpb["root"], expected_bpb)
 
 
 def test_tagged_evaluator_accepts_mixed_lm_example_types():
@@ -238,6 +292,36 @@ def test_labeled_evaluator_aggregates_exclusive_loss_labels():
     np.testing.assert_allclose(result.label_losses["tool_observation"], 4.0)
     np.testing.assert_allclose(result.label_token_counts["assistant"], EvalBatch.size * 2)
     assert "dont_score" not in result.label_losses
+
+
+def test_labeled_evaluator_bpb_includes_zero_byte_token_loss():
+    EvalBatch = Axis("batch", 2)
+    examples = [
+        LabeledLmExample(tokens=jnp.array([1, 1], dtype=jnp.int32), loss_labels=jnp.ones((2,), dtype=jnp.int32)),
+        LabeledLmExample(tokens=jnp.array([1, 1], dtype=jnp.int32), loss_labels=jnp.ones((2,), dtype=jnp.int32)),
+        LabeledLmExample(tokens=jnp.array([2, 2], dtype=jnp.int32), loss_labels=jnp.ones((2,), dtype=jnp.int32)),
+        LabeledLmExample(tokens=jnp.array([2, 2], dtype=jnp.int32), loss_labels=jnp.ones((2,), dtype=jnp.int32)),
+    ]
+    label_spec = LossLabelSpec(id_to_name={1: "target"})
+
+    def loss_fn(_model, batch: LabeledLmExample) -> LabeledLossFnOutput:
+        losses = jnp.ones_like(batch.tokens, dtype=jnp.float32)
+        return losses, batch.loss_labels, batch.tokens
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        evaluator = LabeledEvaluator(
+            EvalBatch=EvalBatch,
+            eval_set=ListAsyncDataset(examples),
+            label_spec=label_spec,
+            loss_fn=loss_fn,
+            tokenizer=_ByteLengthTokenizer(),
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+        )
+        result = evaluator.evaluate(None)
+
+    expected_bpb = 8.0 * np.log2(np.e) / 12.0
+    np.testing.assert_allclose(result.label_bpb["target"], expected_bpb)
 
 
 def test_labeled_lm_evaluator_accepts_labeled_lm_examples():

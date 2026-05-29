@@ -244,6 +244,16 @@ def _calculate_bytes_per_token_type(tokenizer: MarinTokenizer) -> Optional[Int[A
     return jnp.array(byte_lengths)
 
 
+def _bpb_from_totals(loss: jax.Array, bytes_: jax.Array) -> jax.Array:
+    return jnp.where(bytes_ > 0, loss * jnp.log2(jnp.e) / bytes_, jnp.nan)
+
+
+def _bpb_from_numpy_totals(loss: float, bytes_: float) -> float:
+    if bytes_ <= 0:
+        return float("nan")
+    return float(loss * np.log2(np.e) / bytes_)
+
+
 def _ensure_named_lm_example(batch: LmEvalExample, *, EvalBatch: hax.Axis, model_pos: hax.Axis) -> LmExample:
     if isinstance(batch, LmExample):
         return batch
@@ -607,7 +617,6 @@ class TaggedEvaluator(Generic[Ex, M]):
 
     def _make_accum_for_batch(self) -> Callable[[M, "_EvalRunningMeans", Ex, BatchedTagArray], "_EvalRunningMeans"]:
         bytes_per_token = self.bytes_per_token
-        log2e = jnp.log2(jnp.e)
         per_tag_out_sharding = None if self.device_mesh is None else NamedSharding(self.device_mesh, P(None))
         per_pos_out_sharding = self.per_pos_out_sharding
 
@@ -642,14 +651,13 @@ class TaggedEvaluator(Generic[Ex, M]):
                     "bt,bt,bk->k", bytes_per_pos, weights, tags, out_sharding=per_tag_out_sharding
                 )
 
-                bpb = this_loss / jnp.maximum(this_bytes, 1.0) * log2e
-                bpb_per_tag = this_loss_per_tag / jnp.maximum(bytes_per_tag, 1.0) * log2e
-
-                bpb_mean = state.bpb.add(bpb, this_weights)
-                state = dataclasses.replace(state, bpb=bpb_mean)
-                if len(self.dataset.tag_to_index) > 0:
-                    bpb_per_tag_mean = state.bpb_per_tag.add(bpb_per_tag, this_weights_per_tag)
-                    state = dataclasses.replace(state, bpb_per_tag=bpb_per_tag_mean)
+                state = dataclasses.replace(
+                    state,
+                    bpb_loss=state.bpb_loss + this_loss,
+                    bpb_bytes=state.bpb_bytes + this_bytes,
+                    bpb_loss_per_tag=state.bpb_loss_per_tag + this_loss_per_tag,
+                    bpb_bytes_per_tag=state.bpb_bytes_per_tag + bytes_per_tag,
+                )
 
             return state
 
@@ -673,9 +681,12 @@ class TaggedEvaluator(Generic[Ex, M]):
         macro_avg_loss = jnp.mean(tag_avg_loss).item()
 
         if self.bytes_per_token is not None:
-            micro_bpb = state.bpb.mean.item()
-            tag_avg_bpb = state.bpb_per_tag.mean
-            macro_avg_bpb = jnp.mean(tag_avg_bpb).item()
+            micro_bpb = _bpb_from_totals(state.bpb_loss, state.bpb_bytes).item()
+            tag_avg_bpb = _bpb_from_totals(state.bpb_loss_per_tag, state.bpb_bytes_per_tag)
+            tag_avg_bpb_cpu = np.array(tag_avg_bpb)
+            total_bpb_bytes_per_tag_cpu = np.array(state.bpb_bytes_per_tag)
+            bpb_tag_mask = total_bpb_bytes_per_tag_cpu > 0
+            macro_avg_bpb = float(np.mean(tag_avg_bpb_cpu[bpb_tag_mask])) if np.any(bpb_tag_mask) else float("nan")
         else:
             micro_bpb = None
             macro_avg_bpb = None
@@ -687,8 +698,9 @@ class TaggedEvaluator(Generic[Ex, M]):
 
         mean_loss_per_tag_cpu = np.array(state.loss_per_tag.mean)
         total_tokens_per_tag_cpu = np.array(state.loss_per_tag.total)
-        mean_bits_per_tag_cpu = np.array(state.bpb_per_tag.mean)
-        total_bytes_per_tag_cpu = np.array(state.bpb_per_tag.total)
+        bpb_loss_per_tag_cpu = np.array(state.bpb_loss_per_tag)
+        bpb_bytes_per_tag_cpu = np.array(state.bpb_bytes_per_tag)
+        mean_bits_per_tag_cpu = np.array(_bpb_from_totals(state.bpb_loss_per_tag, state.bpb_bytes_per_tag))
 
         for parent, children in self.hierarchy.items():
             mask = np.zeros(self.dataset.num_tags, dtype=bool)
@@ -699,8 +711,13 @@ class TaggedEvaluator(Generic[Ex, M]):
             tag_micro_loss[parent] = np.average(mean_loss_per_tag_cpu, weights=total_tokens_per_tag_cpu * mask)
 
             if self.bytes_per_token is not None:
-                tag_macro_bpb[parent] = np.mean(mean_bits_per_tag_cpu, where=mask)
-                tag_micro_bpb[parent] = np.average(mean_bits_per_tag_cpu, weights=total_bytes_per_tag_cpu * mask)
+                bpb_mask = mask & (bpb_bytes_per_tag_cpu > 0)
+                tag_macro_bpb[parent] = (
+                    float(np.mean(mean_bits_per_tag_cpu[bpb_mask])) if np.any(bpb_mask) else float("nan")
+                )
+                parent_loss = float(np.sum(bpb_loss_per_tag_cpu[mask]))
+                parent_bytes = float(np.sum(bpb_bytes_per_tag_cpu[mask]))
+                tag_micro_bpb[parent] = _bpb_from_numpy_totals(parent_loss, parent_bytes)
 
         for tag, index in self.dataset.tag_to_index.items():
             tag_micro_loss[tag] = float(mean_loss_per_tag_cpu[index])
@@ -815,7 +832,6 @@ class LabeledEvaluator(Generic[Ex, M]):
         bytes_per_token = self.bytes_per_token
         aggregate_label_ids = self.aggregate_label_ids
         valid_label_ids = aggregate_label_ids >= 0
-        log2e = jnp.log2(jnp.e)
         per_pos_out_sharding = self.per_pos_out_sharding
 
         @hax.named_jit(axis_resources=self.axis_mapping)
@@ -847,9 +863,11 @@ class LabeledEvaluator(Generic[Ex, M]):
                     bytes_per_pos[:, None, :] * weights_per_aggregate,
                     axis=(0, 2),
                 )
-                bpb_per_label = this_loss_per_label / jnp.maximum(bytes_per_label, 1.0) * log2e
-                bpb_per_label_mean = state.bpb_per_label.add(bpb_per_label, bytes_per_label)
-                state = dataclasses.replace(state, bpb_per_label=bpb_per_label_mean)
+                state = dataclasses.replace(
+                    state,
+                    bpb_loss_per_label=state.bpb_loss_per_label + this_loss_per_label,
+                    bpb_bytes_per_label=state.bpb_bytes_per_label + bytes_per_label,
+                )
 
             return state
 
@@ -876,7 +894,7 @@ class LabeledEvaluator(Generic[Ex, M]):
 
         label_bpb = None
         if self.bytes_per_token is not None:
-            label_bpb_cpu = np.array(state.bpb_per_label.mean)
+            label_bpb_cpu = np.array(_bpb_from_totals(state.bpb_loss_per_label, state.bpb_bytes_per_label))
             label_bpb = {
                 name: float(label_bpb_cpu[index])
                 for index, name in enumerate(self.aggregate_names)
@@ -897,21 +915,24 @@ class LabeledEvaluator(Generic[Ex, M]):
 class _EvalRunningMeans(eqx.Module):
     token_avg_loss: RunningMean  # average loss averaged over all tokens
     loss_per_tag: RunningMean  # average loss per tag
-    bpb: RunningMean  # bits per byte averaged over all tokens
-    bpb_per_tag: RunningMean  # bits per byte per tag
+    bpb_loss: Float[Array, "..."]  # summed BPB numerator, in nats
+    bpb_bytes: Float[Array, "..."]  # summed BPB denominator, in bytes
+    bpb_loss_per_tag: Float[Array, "tag"]
+    bpb_bytes_per_tag: Float[Array, "tag"]
 
     @staticmethod
     def zeros_like(total: Float[Array, "..."], per_tag: Float[Array, "tag"]) -> "_EvalRunningMeans":
         z = RunningMean.zeros_like(total)
-        per_tag = RunningMean.zeros_like(per_tag)
-        return _EvalRunningMeans(z, per_tag, z, per_tag)
+        per_tag_mean = RunningMean.zeros_like(per_tag)
+        return _EvalRunningMeans(z, per_tag_mean, total * 0.0, total * 0.0, per_tag * 0.0, per_tag * 0.0)
 
 
 class _LabeledEvalRunningMeans(eqx.Module):
     loss_per_label: RunningMean
-    bpb_per_label: RunningMean
+    bpb_loss_per_label: Float[Array, "label"]
+    bpb_bytes_per_label: Float[Array, "label"]
 
     @staticmethod
     def zeros_like(per_label: Float[Array, "label"]) -> "_LabeledEvalRunningMeans":
         per_label_mean = RunningMean.zeros_like(per_label)
-        return _LabeledEvalRunningMeans(per_label_mean, per_label_mean)
+        return _LabeledEvalRunningMeans(per_label_mean, per_label * 0.0, per_label * 0.0)
