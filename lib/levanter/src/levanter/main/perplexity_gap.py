@@ -177,7 +177,7 @@ def score_main(config: ModelPerplexityConfig) -> None:
             if docs_processed % 32 == 0:
                 logger.info("Processed %s documents for model perplexity scores", docs_processed)
 
-        token_id_to_text = _token_id_to_text(scored_documents, runner.hf_tokenizer)
+        token_id_to_text = _token_id_to_text(scored_documents, runner.tokenizer)
         summary = report.build_summary()
         write_model_score_files(
             config.output_path,
@@ -299,12 +299,12 @@ def _load_model_runner(
 
     tokenizer = load_tokenizer(spec.tokenizer, backend=spec.tokenizer_backend)
     hf_tokenizer = tokenizer.as_hf_tokenizer()
-    if not getattr(hf_tokenizer, "is_fast", False):
+    if not getattr(tokenizer, "tokenize_with_byte_offsets", None) and not getattr(hf_tokenizer, "is_fast", False):
         raise ValueError(f"Tokenizer {spec.tokenizer!r} does not expose a fast tokenizer with offset mappings.")
 
     key = jax.random.PRNGKey(0)
     vocab_size = len(tokenizer)
-    eval_length = min(max_eval_length, spec.model.max_Pos.size)
+    eval_length = min(max_eval_length, _model_max_seq_len(spec.model))
     EvalBatch = trainer.EvalBatch
     Pos = Axis("position", eval_length)
     Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), compute_axis_mapping)
@@ -317,8 +317,20 @@ def _load_model_runner(
     def compute_losses(model: LmHeadModel, batch: GrugLmExample):
         model = inference_mode(model, True)
         model = mp.cast_to_compute(model)
-        named_batch = named_lm_example_from_grug(batch, Pos=Pos, batch_axis=EvalBatch)
-        return model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
+        if hasattr(model, "compute_next_token_loss"):
+            named_batch = named_lm_example_from_grug(batch, Pos=Pos, batch_axis=EvalBatch)
+            return model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
+
+        if hasattr(model, "next_token_loss"):
+            return model.next_token_loss(
+                batch.tokens,
+                batch.loss_weight,
+                mask=batch.attn_mask,
+                reduction="none",
+                logsumexp_weight=None,
+            )
+
+        raise TypeError(f"Model {type(model).__name__} does not expose a next-token loss method.")
 
     if spec.checkpoint_is_hf:
         model_config = spec.model
@@ -334,9 +346,9 @@ def _load_model_runner(
         )
     else:
         with use_cpu_device():
-            model = eqx.filter_eval_shape(spec.model.build, Vocab, key=key)
+            model = _init_native_model_shape(spec.model, Vocab, key=key)
             checkpoint_path = latest_checkpoint_path(spec.checkpoint_path)
-            model = load_checkpoint(model, checkpoint_path, subpath="model")
+            model = _load_native_checkpoint(model, checkpoint_path, spec.model)
         model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
 
     label = _model_label(spec)
@@ -348,6 +360,145 @@ def _load_model_runner(
         eval_batch_size=trainer.eval_batch_size,
         eval_length=eval_length,
         compute_losses=compute_losses,
+    )
+
+
+def _model_max_seq_len(model_config: Any) -> int:
+    max_pos = getattr(model_config, "max_Pos", None)
+    if max_pos is not None:
+        return max_pos.size
+
+    max_seq_len = getattr(model_config, "max_seq_len", None)
+    if max_seq_len is not None:
+        return max_seq_len
+
+    raise ValueError(f"Model config {type(model_config).__name__} does not expose max_Pos or max_seq_len.")
+
+
+def _init_native_model_shape(model_config: Any, Vocab: Axis, *, key: jax.Array) -> Any:
+    build = getattr(model_config, "build", None)
+    if build is not None:
+        return eqx.filter_eval_shape(build, Vocab, key=key)
+
+    if type(model_config).__name__ == "GrugModelConfig":
+        from experiments.grug.moe.model import Transformer
+
+        return eqx.filter_eval_shape(Transformer.init, model_config, key=key)
+
+    raise ValueError(f"Model config {type(model_config).__name__} cannot initialize native checkpoints.")
+
+
+def _load_native_checkpoint(model: Any, checkpoint_path: str, model_config: Any) -> Any:
+    if type(model_config).__name__ == "GrugModelConfig":
+        compat_model = _grug_model_to_checkpoint_compat(model)
+        compat_model = load_checkpoint(compat_model, checkpoint_path, subpath="params")
+        return _checkpoint_compat_to_grug_model(compat_model, model)
+
+    return load_checkpoint(model, checkpoint_path, subpath="model")
+
+
+class _GrugCheckpointExpertMLP(eqx.Module):
+    w_gate_up: Any
+    w_down: Any
+
+
+class _GrugCheckpointMoEMLP(eqx.Module):
+    router: Any
+    router_bias: Any
+    expert_mlp: _GrugCheckpointExpertMLP
+    cfg: Any = eqx.field(static=True)
+
+
+class _GrugCheckpointBlock(eqx.Module):
+    rms_attn: Any
+    attn_gated_norm: Any
+    attn: Any
+    rms_mlp: Any
+    mlp_gated_norm: Any
+    mlp: _GrugCheckpointMoEMLP
+    shared: Any
+
+
+class _GrugCheckpointTransformer(eqx.Module):
+    token_embed: Any
+    embed_norm: Any
+    embed_gated_norm: Any
+    output_proj: Any
+    blocks: tuple[_GrugCheckpointBlock, ...]
+    final_norm: Any
+    final_gated_norm: Any
+    config: Any = eqx.field(static=True)
+
+
+def _grug_model_to_checkpoint_compat(model: Any) -> _GrugCheckpointTransformer:
+    blocks = []
+    for block in model.blocks:
+        compat_mlp = _GrugCheckpointMoEMLP(
+            router=block.mlp.router,
+            router_bias=block.mlp.router_bias,
+            expert_mlp=_GrugCheckpointExpertMLP(
+                w_gate_up=block.mlp.w_gate_up,
+                w_down=block.mlp.w_down,
+            ),
+            cfg=block.mlp.cfg,
+        )
+        blocks.append(
+            _GrugCheckpointBlock(
+                rms_attn=block.rms_attn,
+                attn_gated_norm=block.attn_gated_norm,
+                attn=block.attn,
+                rms_mlp=block.rms_mlp,
+                mlp_gated_norm=block.mlp_gated_norm,
+                mlp=compat_mlp,
+                shared=block.shared,
+            )
+        )
+
+    return _GrugCheckpointTransformer(
+        token_embed=model.token_embed,
+        embed_norm=model.embed_norm,
+        embed_gated_norm=model.embed_gated_norm,
+        output_proj=model.output_proj,
+        blocks=tuple(blocks),
+        final_norm=model.final_norm,
+        final_gated_norm=model.final_gated_norm,
+        config=model.config,
+    )
+
+
+def _checkpoint_compat_to_grug_model(compat_model: _GrugCheckpointTransformer, model_shape: Any) -> Any:
+    from experiments.grug.moe.model import Block, MoEMLP, Transformer
+
+    blocks = []
+    for compat_block in compat_model.blocks:
+        mlp = MoEMLP(
+            router=compat_block.mlp.router,
+            router_bias=compat_block.mlp.router_bias,
+            w_gate_up=compat_block.mlp.expert_mlp.w_gate_up,
+            w_down=compat_block.mlp.expert_mlp.w_down,
+            cfg=compat_block.mlp.cfg,
+        )
+        blocks.append(
+            Block(
+                rms_attn=compat_block.rms_attn,
+                attn_gated_norm=compat_block.attn_gated_norm,
+                attn=compat_block.attn,
+                rms_mlp=compat_block.rms_mlp,
+                mlp_gated_norm=compat_block.mlp_gated_norm,
+                mlp=mlp,
+                shared=compat_block.shared,
+            )
+        )
+
+    return Transformer(
+        token_embed=compat_model.token_embed,
+        embed_norm=compat_model.embed_norm,
+        embed_gated_norm=compat_model.embed_gated_norm,
+        output_proj=compat_model.output_proj,
+        blocks=tuple(blocks),
+        final_norm=compat_model.final_norm,
+        final_gated_norm=compat_model.final_gated_norm,
+        config=model_shape.config,
     )
 
 
@@ -456,13 +607,38 @@ def _log_report_artifact(summary: dict[str, Any]) -> None:
     if jax.process_index() != 0:
         return
 
-    with tempfile.TemporaryDirectory(prefix="perplexity-gap-report-") as tmpdir:
-        write_report_files(tmpdir, summary)
-        levanter.tracker.current_tracker().log_artifact(
-            tmpdir,
-            name="perplexity_gap_report",
-            type="perplexity_gap_report",
-        )
+    tmpdir = tempfile.mkdtemp(prefix="perplexity-gap-report-")
+    write_report_files(tmpdir, summary)
+    levanter.tracker.current_tracker().log_artifact(
+        tmpdir,
+        name="perplexity_gap_report",
+        type="perplexity_gap_report",
+    )
+
+
+def _log_model_score_artifact(
+    summary: dict[str, Any],
+    scored_documents: Sequence[ScoredDocument],
+    *,
+    vocab_size: int | None = None,
+    token_id_to_text: dict[int, str] | None = None,
+) -> None:
+    if jax.process_index() != 0:
+        return
+
+    tmpdir = tempfile.mkdtemp(prefix="model-perplexity-scores-")
+    write_model_score_files(
+        tmpdir,
+        summary,
+        scored_documents,
+        vocab_size=vocab_size,
+        token_id_to_text=token_id_to_text,
+    )
+    levanter.tracker.current_tracker().log_artifact(
+        tmpdir,
+        name="model_perplexity_scores",
+        type="model_perplexity_scores",
+    )
 
 
 if __name__ == "__main__":

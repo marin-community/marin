@@ -9,6 +9,7 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from haliax import Axis
 from haliax.partitioning import ResourceAxis
 
@@ -36,6 +37,63 @@ from levanter.utils.tree_utils import inference_mode
 
 from .test_lm_model_loss import ToyLmConfig, ToyLmHeadModel
 from .test_utils import use_test_mesh
+
+
+class _FixedByteTokenizer:
+    all_special_ids = []
+
+    def get_vocab(self):
+        return {"a": 0, "longtoken": 1}
+
+    def convert_ids_to_tokens(self, idx):
+        return ["a", "longtoken"][idx]
+
+    def encode(self, text, *, add_special_tokens=False):
+        del text, add_special_tokens
+        return [0]
+
+    def decode(self, ids, *, skip_special_tokens=False):
+        del skip_special_tokens
+        return "".join(self.convert_ids_to_tokens(i) for i in ids)
+
+
+def test_tagged_evaluator_logs_historical_bpb_and_byte_weighted_bpb_fixed():
+    EvalBatch = Axis("batch", 1)
+    examples = [
+        GrugLmExample.causal(jnp.asarray([0], dtype=jnp.int32)),
+        GrugLmExample.causal(jnp.asarray([1], dtype=jnp.int32)),
+    ]
+    dataset = ListAsyncDataset(examples)
+
+    def loss_fn(_model, batch: GrugLmExample) -> LossFnOutput:
+        return (
+            jnp.ones_like(batch.tokens, dtype=jnp.float32),
+            jnp.ones_like(batch.tokens, dtype=jnp.float32),
+            batch.tokens,
+        )
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        evaluator = TaggedEvaluator(
+            EvalBatch=EvalBatch,
+            tagged_eval_sets=[(dataset, ["tiny"])],
+            loss_fn=loss_fn,
+            tokenizer=_FixedByteTokenizer(),
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+        )
+        result = evaluator.evaluate(jnp.zeros((), dtype=jnp.float32))
+
+    expected_bpb = np.mean(
+        [
+            np.log2(np.e) / len("a".encode("utf-8")),
+            np.log2(np.e) / len("longtoken".encode("utf-8")),
+        ]
+    )
+    expected_bpb_fixed = 2.0 * np.log2(np.e) / (
+        len("a".encode("utf-8")) + len("longtoken".encode("utf-8"))
+    )
+    assert result.micro_bpb == pytest.approx(expected_bpb)
+    assert result.micro_bpb_fixed == pytest.approx(expected_bpb_fixed)
 
 
 def test_tagged_evaluator_accepts_grug_lm_examples():

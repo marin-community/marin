@@ -563,6 +563,16 @@ def _truncate_text_to_byte_limit(text: str, max_doc_bytes: int) -> str:
 
 
 def tokenize_text_with_byte_spans(tokenizer: MarinTokenizer, hf_tokenizer: Any, text: str) -> TokenizedDocument:
+    custom_offsets = getattr(tokenizer, "tokenize_with_byte_offsets", None)
+    if custom_offsets is not None:
+        ids, byte_starts, byte_ends, num_bytes = custom_offsets(text)
+        return TokenizedDocument(
+            token_ids=np.asarray(ids, dtype=np.int32),
+            byte_starts=np.asarray(byte_starts, dtype=np.int32),
+            byte_ends=np.asarray(byte_ends, dtype=np.int32),
+            num_bytes=int(num_bytes),
+        )
+
     parts = _safe_split_for_tokenizer(text)
     ids: list[int] = []
     char_spans: list[tuple[int, int]] = []
