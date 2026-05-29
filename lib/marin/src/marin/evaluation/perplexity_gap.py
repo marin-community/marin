@@ -245,11 +245,12 @@ def find_model_perplexity_scores(config: ModelPerplexityScoreConfig) -> None:
     assert isinstance(config.resource_config.device, TpuConfig), "find_model_perplexity_scores requires TPU resources"
 
     client = current_client()
+    pip_packages = ["tokenmonster==1.1.12"] if _uses_tokenmonster(config.model) else []
     job_request = JobRequest(
         name=f"model-perplexity-scores-{run_name}",
         resources=config.resource_config,
         entrypoint=Entrypoint.from_callable(score_main, args=[levanter_config]),
-        environment=create_environment(extras=["tpu"]),
+        environment=create_environment(extras=["tpu"], pip_packages=pip_packages),
     )
     job = client.submit(job_request)
     job.wait(raise_on_failure=True)
@@ -365,6 +366,13 @@ def _cache_key_for_model(config: GapFinderModelConfig) -> dict[str, Any]:
         "tokenizer_backend": config.tokenizer_backend.value,
         "trust_remote_code": config.trust_remote_code,
     }
+
+
+def _uses_tokenmonster(config: GapFinderModelConfig) -> bool:
+    """Return whether the score job needs the optional TokenMonster package."""
+    return config.tokenizer_backend == TokenizerBackend.TOKENMONSTER or (
+        isinstance(config.tokenizer, str) and config.tokenizer.startswith("tokenmonster:")
+    )
 
 
 def _cache_key_for_dataset(dataset: RawTextEvaluationDataset) -> dict[str, Any]:

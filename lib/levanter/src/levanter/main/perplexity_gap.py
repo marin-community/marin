@@ -177,7 +177,10 @@ def score_main(config: ModelPerplexityConfig) -> None:
             if docs_processed % 32 == 0:
                 logger.info("Processed %s documents for model perplexity scores", docs_processed)
 
-        token_id_to_text = _token_id_to_text(scored_documents, runner.hf_tokenizer)
+        token_text_tokenizer = runner.tokenizer
+        if not hasattr(token_text_tokenizer, "convert_ids_to_tokens"):
+            token_text_tokenizer = runner.hf_tokenizer
+        token_id_to_text = _token_id_to_text(scored_documents, token_text_tokenizer)
         summary = report.build_summary()
         write_model_score_files(
             config.output_path,
@@ -299,7 +302,7 @@ def _load_model_runner(
 
     tokenizer = load_tokenizer(spec.tokenizer, backend=spec.tokenizer_backend)
     hf_tokenizer = tokenizer.as_hf_tokenizer()
-    if not getattr(hf_tokenizer, "is_fast", False):
+    if not getattr(tokenizer, "tokenize_with_byte_offsets", None) and not getattr(hf_tokenizer, "is_fast", False):
         raise ValueError(f"Tokenizer {spec.tokenizer!r} does not expose a fast tokenizer with offset mappings.")
 
     key = jax.random.PRNGKey(0)

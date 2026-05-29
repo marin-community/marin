@@ -16,6 +16,7 @@ Usage:
 
 import contextlib
 import dataclasses
+import bisect
 import functools
 import json
 import logging
@@ -23,6 +24,7 @@ import os
 import re
 import shutil
 import tempfile
+import unicodedata
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
@@ -567,9 +569,320 @@ class KitokenMarinTokenizer:
         return AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
 
 
+@dataclasses.dataclass(frozen=True)
+class TokenMonsterMarinTokenizer:
+    """MarinTokenizer backed by TokenMonster.
+
+    TokenMonster uses capcode/control tokens and byte fallback tokens whose
+    source-byte contribution is not the same as the raw token string length.
+    The custom byte-offset path below keeps raw perplexity-gap accounting on
+    original text bytes.
+    """
+
+    _tokenizer: Any
+    _name_or_path: str
+    _vocab: dict[str, int] = dataclasses.field(default_factory=dict, repr=False)
+    _id_to_token: dict[int, str] = dataclasses.field(default_factory=dict, repr=False)
+    _all_special_ids: list[int] = dataclasses.field(default_factory=list)
+
+    @property
+    def name_or_path(self) -> str:
+        return self._name_or_path
+
+    @property
+    def vocab_size(self) -> int:
+        return int(self._tokenizer.vocab_size)
+
+    @property
+    def bos_token_id(self) -> int | None:
+        return None
+
+    @property
+    def eos_token_id(self) -> int | None:
+        return None
+
+    @property
+    def pad_token_id(self) -> int | None:
+        return None
+
+    @property
+    def bos_token(self) -> str | None:
+        return None
+
+    @property
+    def eos_token(self) -> str | None:
+        return None
+
+    @property
+    def chat_template(self) -> str | None:
+        return None
+
+    def __len__(self) -> int:
+        return self.vocab_size
+
+    def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
+        del add_special_tokens
+        return [int(token_id) for token_id in self._tokenizer.tokenize(text)]
+
+    def decode(self, ids: list[int], *, skip_special_tokens: bool = False) -> str:
+        del skip_special_tokens
+        return self._tokenizer.decode([int(token_id) for token_id in ids])
+
+    def encode_batch(self, texts: list[str], *, add_special_tokens: bool = False) -> list[list[int]]:
+        return [self.encode(text, add_special_tokens=add_special_tokens) for text in texts]
+
+    def get_vocab(self) -> dict[str, int]:
+        return self._vocab
+
+    def convert_ids_to_tokens(self, ids: int | list[int]) -> str | list[str]:
+        if isinstance(ids, int):
+            return self._id_to_token.get(ids, self._tokenizer.id_to_token(ids))
+        return [self.convert_ids_to_tokens(i) for i in ids]
+
+    def convert_tokens_to_ids(self, tokens: str | list[str]) -> int | list[int]:
+        if isinstance(tokens, str):
+            return self._vocab.get(tokens, -1)
+        return [self.convert_tokens_to_ids(token) for token in tokens]
+
+    def id_to_token(self, idx: int) -> str:
+        return self._tokenizer.id_to_token(int(idx))
+
+    def id_to_token_decoded(self, idx: int) -> str:
+        return self._tokenizer.id_to_token_decoded(int(idx))
+
+    def get_dictionary(self) -> dict[int, dict[str, Any]]:
+        return self._tokenizer.get_dictionary()
+
+    @property
+    def all_special_ids(self) -> list[int]:
+        return self._all_special_ids
+
+    def apply_chat_template(
+        self,
+        conversation: list[dict[str, str]],
+        *,
+        tokenize: bool = True,
+        add_generation_prompt: bool = False,
+        **kwargs,
+    ) -> str | list[int]:
+        raise ValueError(f"Tokenizer {self._name_or_path} has no chat template")
+
+    def apply_chat_template_with_masks(
+        self,
+        conversations: list[list[dict[str, str]]],
+        *,
+        chat_template: str | None = None,
+        **kwargs,
+    ) -> dict[str, list[list[int]]]:
+        raise ValueError(f"Tokenizer {self._name_or_path} has no chat template")
+
+    def as_hf_tokenizer(self) -> Any:
+        return self
+
+    def tokenize_with_byte_offsets(self, text: str) -> tuple[list[int], list[int], list[int], int]:
+        """Tokenize text and return token spans in the original UTF-8 byte space.
+
+        TokenMonster's raw token strings can include control markers that do
+        not correspond to source bytes. This method uses decoded-token metadata
+        and remaps normalization cases so downstream BPB/perplexity-gap code
+        can attribute losses to bytes in the original document.
+        """
+        from levanter.utils.hf_utils import byte_length_of_token
+
+        ids = self.encode(text, add_special_tokens=False)
+        starts: list[int] = []
+        ends: list[int] = []
+        offset = 0
+        carried_adjustment = 0
+        for token_id in ids:
+            token_bytes = byte_length_of_token(self, token_id)
+            if token_bytes < 0:
+                starts.append(-1)
+                ends.append(-1)
+                carried_adjustment += token_bytes
+                continue
+
+            effective_bytes = token_bytes + carried_adjustment
+            carried_adjustment = 0
+            if effective_bytes <= 0:
+                starts.append(-1)
+                ends.append(-1)
+                continue
+            starts.append(offset)
+            offset += effective_bytes
+            ends.append(offset)
+
+        num_bytes = len(text.encode("utf-8"))
+        if offset != num_bytes:
+            decoded = self.decode(ids)
+            if decoded == text:
+                starts, ends = _scale_tokenmonster_byte_spans(starts, ends, source_byte_length=offset, num_bytes=num_bytes)
+                offset = num_bytes
+            else:
+                remapped = _remap_normalized_tokenmonster_offsets(
+                    text,
+                    decoded,
+                    starts,
+                    ends,
+                    normalized_byte_length=offset,
+                )
+                if remapped is None:
+                    raise ValueError(f"TokenMonster tokenizer did not round-trip input text for {self._name_or_path}.")
+                starts, ends = remapped
+                offset = num_bytes
+
+        return ids, starts, ends, num_bytes
+
+
+def _remap_normalized_tokenmonster_offsets(
+    text: str,
+    decoded: str,
+    starts: list[int],
+    ends: list[int],
+    *,
+    normalized_byte_length: int,
+) -> tuple[list[int], list[int]] | None:
+    """Map TokenMonster byte spans through a Unicode normalization round-trip.
+
+    Some TokenMonster vocabularies decode canonically equivalent text, such as
+    decomposed accents. When that happens, spans first live in the decoded
+    normalized string; this helper detects the normalization form and converts
+    those spans back to the original source string.
+    """
+    for normalization in ("NFD", "NFKD", "NFC", "NFKC"):
+        normalized = unicodedata.normalize(normalization, text)
+        if decoded != normalized:
+            continue
+        normalized_bytes = len(normalized.encode("utf-8"))
+        normalized_starts, normalized_ends = starts, ends
+        if normalized_bytes != normalized_byte_length:
+            normalized_starts, normalized_ends = _scale_tokenmonster_byte_spans(
+                starts,
+                ends,
+                source_byte_length=normalized_byte_length,
+                num_bytes=normalized_bytes,
+            )
+        return _remap_normalized_byte_spans_to_original(
+            text, normalized, normalized_starts, normalized_ends, normalization
+        )
+    return None
+
+
+def _remap_normalized_byte_spans_to_original(
+    text: str,
+    normalized: str,
+    starts: list[int],
+    ends: list[int],
+    normalization: str,
+) -> tuple[list[int], list[int]]:
+    """Convert byte spans from a normalized string back to original text bytes."""
+    normalized_pieces: list[str] = []
+    normalized_byte_to_original_byte: dict[int, int] = {}
+    normalized_offset = 0
+    original_offset = 0
+    for ch in text:
+        original_end = original_offset + len(ch.encode("utf-8"))
+        normalized_piece = unicodedata.normalize(normalization, ch)
+        normalized_pieces.append(normalized_piece)
+        normalized_piece_bytes = len(normalized_piece.encode("utf-8"))
+        if normalized_piece_bytes == 0:
+            original_offset = original_end
+            continue
+
+        piece_offset = 0
+        normalized_byte_to_original_byte[normalized_offset] = original_offset
+        for piece_ch in normalized_piece:
+            piece_offset += len(piece_ch.encode("utf-8"))
+            normalized_byte_to_original_byte[normalized_offset + piece_offset] = original_offset + round(
+                piece_offset * (original_end - original_offset) / normalized_piece_bytes
+            )
+        normalized_offset += normalized_piece_bytes
+        original_offset = original_end
+
+    if "".join(normalized_pieces) != normalized:
+        return _scale_tokenmonster_byte_spans(
+            starts,
+            ends,
+            source_byte_length=len(normalized.encode("utf-8")),
+            num_bytes=len(text.encode("utf-8")),
+        )
+
+    normalized_boundaries = sorted(normalized_byte_to_original_byte)
+
+    def remap_byte(byte_offset: int, *, is_end: bool) -> int:
+        if byte_offset in normalized_byte_to_original_byte:
+            return normalized_byte_to_original_byte[byte_offset]
+
+        if is_end:
+            index = bisect.bisect_left(normalized_boundaries, byte_offset)
+            if index >= len(normalized_boundaries):
+                return original_offset
+        else:
+            index = bisect.bisect_right(normalized_boundaries, byte_offset) - 1
+            if index < 0:
+                return 0
+        return normalized_byte_to_original_byte[normalized_boundaries[index]]
+
+    remapped_starts: list[int] = []
+    remapped_ends: list[int] = []
+    for start, end in zip(starts, ends, strict=True):
+        if start < 0 or end < 0:
+            remapped_starts.append(-1)
+            remapped_ends.append(-1)
+            continue
+
+        original_start = remap_byte(start, is_end=False)
+        original_end = remap_byte(end, is_end=True)
+        if original_end <= original_start:
+            remapped_starts.append(-1)
+            remapped_ends.append(-1)
+            continue
+
+        remapped_starts.append(original_start)
+        remapped_ends.append(original_end)
+
+    return remapped_starts, remapped_ends
+
+
+def _scale_tokenmonster_byte_spans(
+    starts: list[int],
+    ends: list[int],
+    *,
+    source_byte_length: int,
+    num_bytes: int,
+) -> tuple[list[int], list[int]]:
+    """Scale valid byte spans when decoded and source bytes differ uniformly."""
+    if source_byte_length <= 0:
+        return starts, ends
+
+    def scale(byte_offset: int) -> int:
+        return min(num_bytes, max(0, round(byte_offset * num_bytes / source_byte_length)))
+
+    scaled_starts: list[int] = []
+    scaled_ends: list[int] = []
+    for start, end in zip(starts, ends, strict=True):
+        if start < 0 or end < 0:
+            scaled_starts.append(-1)
+            scaled_ends.append(-1)
+            continue
+
+        scaled_start = scale(start)
+        scaled_end = scale(end)
+        if scaled_end <= scaled_start:
+            scaled_starts.append(-1)
+            scaled_ends.append(-1)
+            continue
+
+        scaled_starts.append(scaled_start)
+        scaled_ends.append(scaled_end)
+
+    return scaled_starts, scaled_ends
+
+
 class TokenizerBackend(StrEnum):
     HF = "hf"
     KITOKEN = "kitoken"
+    TOKENMONSTER = "tokenmonster"
 
 
 @functools.lru_cache(maxsize=32)
@@ -583,6 +896,9 @@ def load_tokenizer(
     Files are staged once via mirror://tokenizers/ (GCS/S3) before falling back
     to HF Hub. Cached per (name_or_path, backend).
     """
+    if backend == TokenizerBackend.TOKENMONSTER or name_or_path.startswith("tokenmonster:"):
+        return _load_tokenmonster_tokenizer(name_or_path)
+
     local_dir = _stage_tokenizer(name_or_path) if not os.path.isdir(name_or_path) else name_or_path
     if backend == TokenizerBackend.HF:
         tok = _load_hf_tokenizer(local_dir)
@@ -996,4 +1312,26 @@ def _load_kitoken_tokenizer(name_or_path: str) -> KitokenMarinTokenizer:
         _prepend_bos=prepend_bos,
         _vocab=vocab,
         _id_to_token={v: k for k, v in vocab.items()},
+    )
+
+
+def _load_tokenmonster_tokenizer(name_or_path: str) -> TokenMonsterMarinTokenizer:
+    """Load a TokenMonster vocabulary into the Marin tokenizer protocol."""
+    import tokenmonster
+
+    vocab_name = name_or_path.removeprefix("tokenmonster:")
+    tok = tokenmonster.load(vocab_name)
+    dictionary = tok.get_dictionary()
+    vocab = {info["token"]: token_id for token_id, info in dictionary.items()}
+    id_to_token = {token_id: info["token"] for token_id, info in dictionary.items()}
+    all_special_ids = [
+        token_id for token_id, info in dictionary.items() if info.get("type") in {2, "special"}
+    ]
+
+    return TokenMonsterMarinTokenizer(
+        _tokenizer=tok,
+        _name_or_path=name_or_path,
+        _vocab=vocab,
+        _id_to_token=id_to_token,
+        _all_special_ids=all_special_ids,
     )
