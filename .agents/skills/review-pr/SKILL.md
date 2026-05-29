@@ -1,7 +1,7 @@
 ---
 name: review-pr
 description: Multi-agent correctness review of a pull request.
-allowed-tools: Bash(gh issue view:*), Bash(gh search:*), Bash(gh issue list:*), Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), mcp__github_inline_comment__create_inline_comment
+allowed-tools: Bash(gh issue view:*), Bash(gh search:*), Bash(gh issue list:*), Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(uv run infra/codehealth/log_stats.py:*), mcp__github_inline_comment__create_inline_comment
 ---
 
 Provide a code review for the given pull request.
@@ -52,7 +52,36 @@ Follow these steps precisely:
 
 6. Filter out any issues not validated in step 5. The remainder is the high-signal review list.
 
-7. Output a summary of the review findings to the terminal:
+7. Emit a stats event for this review (best-effort — never retry, never
+   surface failures to the user). This step runs unconditionally, *before*
+   any of the early-stop branches below, so we capture no-finding runs and
+   non-`--comment` runs in the dashboard. Run from the repo root:
+
+   ```bash
+   cat <<'EOF' | uv run infra/codehealth/log_stats.py
+   {
+     "tool": "review-pr",
+     "invocation": {
+       "trigger": "local",
+       "agent_cli": "claude",
+       "pr_number": <PR>,
+       "agent_exit_code": 0,
+       "timed_out": false
+     },
+     "findings": [
+       ["<file>", <line>, "<category>", 1.0, "<first 200 chars of issue description>"]
+     ]
+   }
+   EOF
+   ```
+
+   - `<category>` is one of: `bug`, `claude-md-adherence`.
+   - One `findings` row per validated issue. Pass `"findings": []` if there
+     were none — the empty row in the `invocations` table is the
+     "tool ran with no signal" datapoint we want. `finding_count` is derived
+     from the `findings` array length by `log_stats.py`.
+
+8. Output a summary of the review findings to the terminal:
    - If issues were found, list each issue with a brief description.
    - If no issues were found, state: "No issues found. Checked for bugs and CLAUDE.md compliance."
 
@@ -60,17 +89,17 @@ Follow these steps precisely:
 
    If `--comment` argument IS provided and NO issues were found, post a summary comment using `gh pr comment` and stop.
 
-   If `--comment` argument IS provided and issues were found, continue to step 8.
+   If `--comment` argument IS provided and issues were found, continue to step 9.
 
-8. Draft the list of comments you plan to leave. For your own review only — do not post it anywhere.
+9. Draft the list of comments you plan to leave. For your own review only — do not post it anywhere.
 
-9. Post inline comments for each issue using `mcp__github_inline_comment__create_inline_comment` with `confirmed: true`. For each comment:
-   - Provide a brief description of the issue
-   - For small, self-contained fixes, include a committable suggestion block
-   - For larger fixes (6+ lines, structural changes, or changes spanning multiple locations), describe the issue and suggested fix without a suggestion block
-   - Never post a committable suggestion UNLESS committing the suggestion fixes the issue entirely. If follow up steps are required, do not leave a committable suggestion.
+10. Post inline comments for each issue using `mcp__github_inline_comment__create_inline_comment` with `confirmed: true`. For each comment:
+    - Provide a brief description of the issue
+    - For small, self-contained fixes, include a committable suggestion block
+    - For larger fixes (6+ lines, structural changes, or changes spanning multiple locations), describe the issue and suggested fix without a suggestion block
+    - Never post a committable suggestion UNLESS committing the suggestion fixes the issue entirely. If follow up steps are required, do not leave a committable suggestion.
 
-   **IMPORTANT: Only post ONE comment per unique issue. Do not post duplicate comments.**
+    **IMPORTANT: Only post ONE comment per unique issue. Do not post duplicate comments.**
 
 Use this list when evaluating issues in Steps 4 and 5 (these are false positives, do NOT flag):
 
