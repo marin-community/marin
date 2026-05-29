@@ -18,8 +18,9 @@ import re
 import shlex
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,14 +45,15 @@ from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
 from iris.cluster.runtime.profile import (
+    PROFILER_WATCHDOG_GRACE_SECONDS,
+    ExecResult,
     IrisProfile,
-    build_memray_attach_cmd,
-    build_memray_transform_cmd,
     build_profile_row,
-    build_pyspy_cmd,
-    build_pyspy_dump_cmd,
-    resolve_cpu_spec,
-    resolve_memory_spec,
+    capture_cpu,
+    capture_memory_attach,
+    capture_threads,
+    sigcont_sweep_argv,
+    wrap_with_kill_watchdog,
 )
 from iris.cluster.types import JobName, TaskAttempt, get_gpu_count
 from iris.cluster.worker.stats import build_task_stat
@@ -1076,6 +1078,53 @@ def _get_pod_node_name(kubectl: K8sService, pod_name: str) -> str:
     return pod.get("spec", {}).get("nodeName", "") or ""
 
 
+@dataclass(frozen=True)
+class _K8sProfileDispatch:
+    """``ProfileDispatch`` backed by ``kubectl exec`` into a task pod.
+
+    Profiler and transform commands run with the task venv activated. Profilers
+    run in the pod's isolated PID namespace, so ``exec_profiler`` applies the
+    kill-watchdog and SIGCONT recovery (see ``runtime.profile``).
+    """
+
+    kubectl: K8sService
+    pod_name: str
+    pyspy_bin: str = "py-spy"
+    memray_bin: str = "memray"
+
+    @contextmanager
+    def scratch(self, *suffixes: str) -> Iterator[tuple[str, ...]]:
+        paths = tuple(f"/tmp/iris-profile.{suffix}" for suffix in suffixes)
+        try:
+            yield paths
+        finally:
+            self.kubectl.rm_files(self.pod_name, list(paths), container="task")
+
+    def exec_profiler(self, cmd: list[str], *, sample_timeout: int) -> ExecResult:
+        watchdog_cmd = wrap_with_kill_watchdog(cmd, sample_timeout)
+        try:
+            return self._venv_exec(watchdog_cmd, timeout=sample_timeout + PROFILER_WATCHDOG_GRACE_SECONDS)
+        finally:
+            self._sigcont_sweep()
+
+    def exec(self, cmd: list[str], *, timeout: int) -> ExecResult:
+        return self._venv_exec(cmd, timeout=timeout)
+
+    def read_file(self, path: str) -> bytes:
+        return self.kubectl.read_file(self.pod_name, path, container="task")
+
+    def _venv_exec(self, cmd: list[str], *, timeout: int) -> ExecResult:
+        shell_cmd = ["bash", "-lc", f"source /app/.venv/bin/activate 2>/dev/null; {shlex.join(cmd)}"]
+        result = self.kubectl.exec(self.pod_name, shell_cmd, container="task", timeout=timeout)
+        return ExecResult(result.returncode, (result.stdout or "").encode("utf-8"), result.stderr or "")
+
+    def _sigcont_sweep(self) -> None:
+        try:
+            self.kubectl.exec(self.pod_name, sigcont_sweep_argv(), container="task", timeout=10)
+        except Exception as e:
+            logger.warning("SIGCONT sweep failed for pod %s: %s", self.pod_name, e)
+
+
 @dataclass
 class K8sTaskProvider:
     """Executes tasks as Kubernetes Pods without worker daemons.
@@ -1205,18 +1254,21 @@ class K8sTaskProvider:
         pod_name = _pod_name(JobName.from_wire(task_id), attempt_id)
         duration = request.duration_seconds or 10
         profile_type = request.profile_type
+        dispatch = _K8sProfileDispatch(self.kubectl, pod_name)
 
         try:
             if profile_type.HasField("threads"):
-                resp = self._profile_threads(pod_name, profile_type.threads)
+                data = capture_threads(dispatch, pid="1", include_locals=profile_type.threads.locals)
             elif profile_type.HasField("cpu"):
-                resp = self._profile_cpu(pod_name, profile_type.cpu, duration)
+                data = capture_cpu(dispatch, profile_type.cpu, duration, pid="1")
             elif profile_type.HasField("memory"):
-                resp = self._profile_memory(pod_name, profile_type.memory, duration)
+                data = capture_memory_attach(dispatch, profile_type.memory, duration, pid="1")
             else:
                 return job_pb2.ProfileTaskResponse(error="Unknown profile type")
         except Exception as e:
             return job_pb2.ProfileTaskResponse(error=str(e))
+
+        resp = job_pb2.ProfileTaskResponse(profile_data=data)
 
         if self.profile_table is not None and resp.profile_data:
             pod_node_name = _get_pod_node_name(self.kubectl, pod_name)
@@ -1261,66 +1313,6 @@ class K8sTaskProvider:
     def get_cluster_status(self) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Return cluster status from the latest sync() snapshot. No kubectl calls."""
         return self._cluster_state.to_status_response(self.namespace)
-
-    # -------------------------------------------------------------------------
-    # Profiling helpers
-    # -------------------------------------------------------------------------
-
-    def _kubectl_exec_shell(self, pod_name: str, cmd: str, timeout: float | None = None) -> str:
-        """Execute a shell command in a task pod with venv activation.
-
-        Returns stdout. Raises RuntimeError on non-zero exit.
-        """
-        shell_cmd = ["bash", "-lc", f"source /app/.venv/bin/activate 2>/dev/null; {cmd}"]
-        result = self.kubectl.exec(pod_name, shell_cmd, container="task", timeout=timeout)
-        if result.returncode != 0:
-            raise RuntimeError(f"kubectl exec failed (exit {result.returncode}): {result.stderr}")
-        return result.stdout
-
-    def _profile_threads(self, pod_name: str, threads_config: job_pb2.ThreadsProfile) -> job_pb2.ProfileTaskResponse:
-        """Get thread stacks via py-spy dump."""
-        cmd = shlex.join(build_pyspy_dump_cmd("1", include_locals=threads_config.locals))
-        stdout = self._kubectl_exec_shell(pod_name, cmd, timeout=30)
-        return job_pb2.ProfileTaskResponse(profile_data=stdout.encode("utf-8"))
-
-    def _profile_cpu(self, pod_name: str, cpu_config: job_pb2.CpuProfile, duration: int) -> job_pb2.ProfileTaskResponse:
-        """Record CPU profile via py-spy."""
-        spec = resolve_cpu_spec(cpu_config, duration, pid="1")
-        output_path = f"/tmp/iris-profile.{spec.ext}"
-        cmd = shlex.join(build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path=output_path))
-        self._kubectl_exec_shell(pod_name, cmd, timeout=duration + 30)
-        data = self.kubectl.read_file(pod_name, output_path, container="task")
-        self.kubectl.rm_files(pod_name, [output_path], container="task")
-        return job_pb2.ProfileTaskResponse(profile_data=data)
-
-    def _profile_memory(
-        self, pod_name: str, memory_config: job_pb2.MemoryProfile, duration: int
-    ) -> job_pb2.ProfileTaskResponse:
-        """Record memory profile via memray."""
-        spec = resolve_memory_spec(memory_config, duration, pid="1")
-        trace_path = "/tmp/iris-memray.bin"
-        output_path = f"/tmp/iris-memray.{spec.ext}"
-
-        attach_cmd = shlex.join(build_memray_attach_cmd(spec, memray_bin="memray", trace_path=trace_path))
-        self._kubectl_exec_shell(pod_name, attach_cmd, timeout=duration + 30)
-
-        if spec.is_raw:
-            data = self.kubectl.read_file(pod_name, trace_path, container="task")
-            self.kubectl.rm_files(pod_name, [trace_path], container="task")
-            return job_pb2.ProfileTaskResponse(profile_data=data)
-
-        transform_cmd = shlex.join(
-            build_memray_transform_cmd(spec, memray_bin="memray", trace_path=trace_path, output_path=output_path)
-        )
-        transform_stdout = self._kubectl_exec_shell(pod_name, transform_cmd, timeout=30)
-
-        if spec.output_is_file:
-            data = self.kubectl.read_file(pod_name, output_path, container="task")
-        else:
-            data = transform_stdout.encode("utf-8")
-
-        self.kubectl.rm_files(pod_name, [trace_path, output_path], container="task")
-        return job_pb2.ProfileTaskResponse(profile_data=data)
 
     # -------------------------------------------------------------------------
     # Internal helpers

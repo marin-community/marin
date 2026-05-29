@@ -35,12 +35,10 @@ from pathlib import Path
 from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.env import write_workdir_files
 from iris.cluster.runtime.profile import (
-    build_memray_attach_cmd,
-    build_memray_transform_cmd,
-    build_pyspy_cmd,
-    resolve_cpu_spec,
-    resolve_memory_spec,
-    run_pyspy_dump,
+    LocalProfileDispatch,
+    capture_cpu,
+    capture_memory_attach,
+    capture_threads,
 )
 from iris.cluster.runtime.types import (
     ContainerConfig,
@@ -508,97 +506,48 @@ class ProcessContainerHandle:
         return 0
 
     def profile(self, duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
-        """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
+        """Profile the running process using py-spy (CPU), memray (memory), or thread dump.
 
+        Runs profilers as host subprocesses sharing this worker's PID namespace.
+        Python's own subprocess timeout reaps a hung profiler, and the profiled
+        child's process group is SIGCONT'd afterward to clear a py-spy group-stop
+        (see ``LocalProfileDispatch``). CPU/memory fall back to a stub when the
+        profiler tool is missing; thread dumps propagate errors.
+        """
         if not self._container or not self._container._process:
             raise RuntimeError("Cannot profile: no running process")
 
+        pid = self._container._process.pid
+        dispatch = LocalProfileDispatch(resume_pid=pid)
+
         if profile_type.HasField("threads"):
-            pid = str(self._container._process.pid)
-            return run_pyspy_dump(pid, include_locals=profile_type.threads.locals)
+            return capture_threads(dispatch, pid=str(pid), include_locals=profile_type.threads.locals)
         elif profile_type.HasField("cpu"):
-            return self._profile_cpu(duration_seconds, profile_type.cpu)
+            return self._profile_cpu(dispatch, pid, duration_seconds, profile_type.cpu)
         elif profile_type.HasField("memory"):
-            return self._profile_memory(duration_seconds, profile_type.memory)
+            return self._profile_memory(dispatch, pid, duration_seconds, profile_type.memory)
         else:
             raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
-    def _profile_cpu(self, duration_seconds: int, cpu_config: job_pb2.CpuProfile) -> bytes:
-        """Profile CPU using py-spy, with fallback stub."""
-        pid = self._container._process.pid
-        spec = resolve_cpu_spec(cpu_config, duration_seconds, pid=str(pid))
-
-        output_path = None
+    def _profile_cpu(
+        self, dispatch: LocalProfileDispatch, pid: int, duration_seconds: int, cpu_config: job_pb2.CpuProfile
+    ) -> bytes:
+        """Profile CPU using py-spy, falling back to a stub when py-spy is unavailable."""
         try:
-            with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
-                output_path = f.name
+            return capture_cpu(dispatch, cpu_config, duration_seconds, pid=str(pid))
+        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, RuntimeError) as e:
+            logger.warning("py-spy CPU profile failed for PID %s (%s); falling back to stub", pid, e)
+            return _cpu_profile_stub(cpu_config.format)
 
-            cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path=output_path)
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
-            if result.returncode == 0:
-                return Path(output_path).read_bytes()
-        except FileNotFoundError:
-            logger.warning("py-spy not found; falling back to stub profile for PID %s", pid)
-        except subprocess.TimeoutExpired:
-            logger.warning("py-spy timed out; falling back to stub profile for PID %s", pid)
-        except PermissionError:
-            logger.warning("py-spy lacks permission to attach; falling back to stub profile for PID %s", pid)
-        finally:
-            if output_path is not None:
-                Path(output_path).unlink(missing_ok=True)
-
-        return _cpu_profile_stub(cpu_config.format)
-
-    def _profile_memory(self, duration_seconds: int, memory_config: job_pb2.MemoryProfile) -> bytes:
-        """Profile memory using memray, with fallback stub."""
-        pid = self._container._process.pid
-        spec = resolve_memory_spec(memory_config, duration_seconds, pid=str(pid))
-
-        trace_path = None
-        output_path = None
+    def _profile_memory(
+        self, dispatch: LocalProfileDispatch, pid: int, duration_seconds: int, memory_config: job_pb2.MemoryProfile
+    ) -> bytes:
+        """Profile memory using memray, falling back to a stub when memray is unavailable."""
         try:
-            with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
-                trace_path = f.name
-
-            attach_cmd = build_memray_attach_cmd(spec, memray_bin="memray", trace_path=trace_path)
-            result = subprocess.run(attach_cmd, capture_output=True, text=True, timeout=duration_seconds + 10)
-            if result.returncode != 0:
-                raise RuntimeError(f"memray attach failed: {result.stderr}")
-
-            if spec.is_raw:
-                return Path(trace_path).read_bytes()
-
-            if spec.output_is_file:
-                with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
-                    output_path = f.name
-
-            transform_cmd = build_memray_transform_cmd(
-                spec, memray_bin="memray", trace_path=trace_path, output_path=output_path or ""
-            )
-            result = subprocess.run(transform_cmd, capture_output=True, text=True, timeout=30)
-            if result.returncode != 0:
-                raise RuntimeError(f"memray {spec.reporter} failed: {result.stderr}")
-
-            if spec.output_is_file:
-                return Path(output_path).read_bytes()
-            else:
-                return result.stdout.encode("utf-8")
-
-        except FileNotFoundError:
-            logger.warning("memray not found; falling back to stub profile for PID %s", pid)
-        except subprocess.TimeoutExpired:
-            logger.warning("memray timed out; falling back to stub profile for PID %s", pid)
-        except PermissionError:
-            logger.warning("memray lacks permission to attach; falling back to stub profile for PID %s", pid)
-        except RuntimeError:
-            logger.warning("memray failed for PID %s; falling back to stub", pid, exc_info=True)
-        finally:
-            if trace_path is not None:
-                Path(trace_path).unlink(missing_ok=True)
-            if output_path is not None:
-                Path(output_path).unlink(missing_ok=True)
-
-        return _memory_profile_stub(memory_config.format)
+            return capture_memory_attach(dispatch, memory_config, duration_seconds, pid=str(pid))
+        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, RuntimeError) as e:
+            logger.warning("memray memory profile failed for PID %s (%s); falling back to stub", pid, e)
+            return _memory_profile_stub(memory_config.format)
 
     def cleanup(self) -> None:
         """Kill the subprocess and clean up resources."""

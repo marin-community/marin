@@ -757,6 +757,10 @@ class InMemoryK8sService:
         timeout: float | None = None,
     ) -> ExecResult:
         self._check_failure("exec")
+        # The profiler SIGCONT-recovery sweep is side-channel plumbing, not a
+        # profiler invocation, so it must not consume a queued profiler response.
+        if any("kill -CONT" in arg for arg in cmd):
+            return ExecResult(returncode=0, stdout="", stderr="")
         # Return queued response if available
         if self._exec_responses.get(pod_name):
             return self._exec_responses[pod_name].pop(0)

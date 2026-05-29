@@ -780,7 +780,7 @@ def test_profile_memory_flamegraph_via_kubectl_exec(provider, k8s):
     # Two exec calls: attach + transform
     k8s.set_exec_response(pod_name, _success_cp())
     k8s.set_exec_response(pod_name, _success_cp())
-    k8s.set_file_content(pod_name, "/tmp/iris-memray.html", b"<html>flamegraph</html>")
+    k8s.set_file_content(pod_name, "/tmp/iris-profile.html", b"<html>flamegraph</html>")
 
     request = job_pb2.ProfileTaskRequest(
         target="/job/0",
