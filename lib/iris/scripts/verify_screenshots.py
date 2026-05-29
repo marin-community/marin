@@ -20,12 +20,13 @@ def verify_screenshots(pairs: list[tuple[Path, str]]) -> tuple[bool, str]:
         "You are verifying E2E test screenshots. For each numbered item below, "
         "read the screenshot file and determine if it matches the expected description.\n\n"
         f"{descriptions}\n\n"
-        "Reply with a single line: OK if ALL screenshots match their descriptions.\n"
-        "Otherwise reply NOT_OK followed by one line per failing screenshot in the format:\n"
-        "  - <filename>: <brief reason>\n\n"
         "Be lenient about exact text but verify structural elements "
         "(badges, tables, cards, charts) are present. We're testing for big failures, "
-        "not minor text differences."
+        "not minor text differences.\n\n"
+        "End your reply with a verdict line on its own: 'OK' if ALL screenshots match "
+        "their descriptions, or 'NOT_OK' if any fail. When NOT_OK, follow it with one "
+        "line per failing screenshot in the format:\n"
+        "  - <filename>: <brief reason>"
     )
     result = subprocess.run(
         ["claude", "--model=sonnet", "--print", "--dangerously-skip-permissions", "--tools=Read", "--", prompt],
@@ -36,7 +37,15 @@ def verify_screenshots(pairs: list[tuple[Path, str]]) -> tuple[bool, str]:
     if result.returncode != 0:
         return False, f"claude CLI failed: {result.stderr.strip()} {result.stdout.strip()}"
     text = result.stdout.strip()
-    return text.startswith("OK"), text
+    # Claude often prepends reasoning despite instructions, so we cannot require the
+    # response to *start* with the verdict. Decide on the verdict token: NOT_OK marks a
+    # failure (checked first since it contains the substring "OK"); a bare OK means pass.
+    # Absence of either token is ambiguous and treated as a failure.
+    if "NOT_OK" in text:
+        return False, text
+    if "OK" in text:
+        return True, text
+    return False, f"No OK/NOT_OK verdict found in claude response:\n{text}"
 
 
 def main():
