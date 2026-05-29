@@ -125,10 +125,6 @@ def build_from_datasets(
     step only writes a top-level ``shard_ledger.json`` that references them by
     relative path (sharded layout, see Levanter ``#5430``).
 
-    The structural exemplar that :func:`consolidate_shard_cache_ledgers` needs as
-    a fallback is taken from the shard writes themselves (first non-empty shard),
-    so no separate pass over the inputs is required.
-
     Args:
         ctx: Zephyr context. The caller is responsible for setting any tokenizer
             shared values (``ctx.put('tokenizer_name', ...)`` etc.) before calling
