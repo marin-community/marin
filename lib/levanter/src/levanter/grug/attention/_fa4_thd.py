@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Experimental upstream FlashAttention-4 THD/varlen wrapper for Grug probes."""
+"""Experimental upstream FlashAttention-4 THD/varlen wrapper for Grug attention."""
 
 import importlib
 import math
@@ -106,7 +106,7 @@ def _torch_batched_segment_ids(segment_ids: Any, *, batch_size: int, seq_len: in
 
 
 def _torch_thd_reshape_metadata(q_segment_ids: Any, kv_segment_ids: Any, *, batch_size: int, seq_len: int) -> Any:
-    import torch
+    import torch  # noqa: PLC0415
 
     q_segment_ids = _torch_batched_segment_ids(q_segment_ids, batch_size=batch_size, seq_len=seq_len)
     kv_segment_ids = _torch_batched_segment_ids(kv_segment_ids, batch_size=batch_size, seq_len=seq_len)
@@ -159,7 +159,7 @@ def _torch_thd_views(q: Any, k: Any, v: Any, segment_ids: tuple[Any, Any]) -> tu
 
 
 def _torch_cu_seqlens_from_segment_lengths(segment_lengths: Any, num_segments: Any, *, total_tokens: int) -> Any:
-    import torch
+    import torch  # noqa: PLC0415
 
     if not _is_torch_tensor(segment_lengths):
         raise TypeError("segment_lengths must be a torch tensor.")
@@ -544,7 +544,7 @@ def torch_fa4_thd_attention(q: Any, k: Any, v: Any, segment_ids: tuple[Any, Any]
 
 
 def _torch_from_jax(x: jax.Array) -> Any:
-    import torch
+    import torch  # noqa: PLC0415
 
     try:
         return torch.utils.dlpack.from_dlpack(x)
@@ -708,9 +708,8 @@ def gpu_fa4_thd_attention(
 ) -> Float[Array, "B Q Hq D"]:
     """Experimental FA4 THD/varlen backend for simple causal self-attention.
 
-    This path is for issue5815 probing. The upstream FA4 CuTe varlen API is
-    torch/autograd-facing, so the JAX wrapper is eager-only and not suitable for
-    production JIT training.
+    The upstream FA4 CuTe varlen API is torch/autograd-facing, so the JAX wrapper
+    is eager-only and not suitable for production JIT training.
     """
     if _is_torch_tensor(q):
         _validate_simple_causal_self_attention(q, k, v, mask, backend_name="gpu_fa4_thd_attention")

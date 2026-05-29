@@ -73,6 +73,9 @@ def test_grug_lm_example_with_max_segments_stacks():
 
 
 def test_thd_segment_metadata_rejects_mismatched_q_kv_segments():
+    if jax.default_backend() == "tpu":
+        pytest.skip("TPU runtime does not support raising eqx.error_if as a Python exception.")
+
     q_segment_ids = jnp.array([0, 0, 1, 1], dtype=jnp.int32)
     kv_segment_ids = jnp.array([0, 0, 2, 2], dtype=jnp.int32)
 
