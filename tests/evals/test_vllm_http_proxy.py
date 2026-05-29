@@ -123,7 +123,7 @@ def test_local_brokered_vllm_rejects_multiple_workers() -> None:
 def test_brokered_vllm_rejects_timeout_ordering_without_recovery_window() -> None:
     expected = "workers.request_timeout_seconds < request_lease_timeout_seconds < proxy.request_timeout_seconds"
     with pytest.raises(ValueError, match=expected):
-        BrokeredVllmSystemConfig(model="gpt2", workers=VllmWorkerConfig(request_timeout_seconds=160))
+        BrokeredVllmSystemConfig(model="gpt2", workers=VllmWorkerConfig(request_timeout_seconds=250))
 
     with pytest.raises(ValueError, match=expected):
         BrokeredVllmSystemConfig(model="gpt2", proxy=VllmProxyConfig(request_timeout_seconds=130))

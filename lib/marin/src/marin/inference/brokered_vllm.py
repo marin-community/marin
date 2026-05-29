@@ -9,6 +9,7 @@ import logging
 import uuid
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field, replace
+from datetime import timedelta
 from typing import cast
 
 import requests
@@ -33,7 +34,13 @@ from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BROKERED_PROXY_TIMEOUT_SECONDS = 300.0
+DEFAULT_BROKERED_REQUEST_TIMEOUT_MARGIN = timedelta(seconds=60)
+DEFAULT_BROKERED_PROXY_REQUEST_TIMEOUT = timedelta(seconds=300)
+DEFAULT_BROKERED_REQUEST_LEASE_TIMEOUT = DEFAULT_BROKERED_PROXY_REQUEST_TIMEOUT - DEFAULT_BROKERED_REQUEST_TIMEOUT_MARGIN
+DEFAULT_BROKERED_WORKER_REQUEST_TIMEOUT = (
+    DEFAULT_BROKERED_REQUEST_LEASE_TIMEOUT - DEFAULT_BROKERED_REQUEST_TIMEOUT_MARGIN
+)
+DEFAULT_BROKERED_PROXY_START_TIMEOUT = timedelta(seconds=10)
 
 # Default eval-client concurrency and per-worker HTTP fanout.
 DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER = 16
@@ -58,15 +65,15 @@ class VllmProxyConfig:
     # Local OpenAI-compatible proxy port; 0 chooses an available port.
     port: int = 0
     # End-to-end timeout from eval request to brokered response.
-    request_timeout_seconds: float = DEFAULT_BROKERED_PROXY_TIMEOUT_SECONDS
+    request_timeout_seconds: float = DEFAULT_BROKERED_PROXY_REQUEST_TIMEOUT.total_seconds()
     # Startup probe timeout through the brokered proxy.
-    readiness_timeout_seconds: float = DEFAULT_BROKERED_PROXY_TIMEOUT_SECONDS
+    readiness_timeout_seconds: float = DEFAULT_BROKERED_PROXY_REQUEST_TIMEOUT.total_seconds()
     # Backpressure guard for client requests waiting on broker responses.
     max_pending_requests: int = 256
     # Response poll batch size; larger than default concurrency so one poll can drain normal completions.
     response_fetch_batch_size: int = 64
     # Local uvicorn startup should be quick; vLLM startup has a separate timeout.
-    server_start_timeout_seconds: float = 10.0
+    server_start_timeout_seconds: float = DEFAULT_BROKERED_PROXY_START_TIMEOUT.total_seconds()
 
 
 @dataclass(frozen=True)
@@ -76,7 +83,7 @@ class VllmWorkerConfig:
     # Individual HTTP requests each worker may keep active against its vLLM server.
     max_in_flight_per_worker: int = DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER
     # Slow vLLM calls fail once from the worker before their broker lease can expire.
-    request_timeout_seconds: float = 120.0
+    request_timeout_seconds: float = DEFAULT_BROKERED_WORKER_REQUEST_TIMEOUT.total_seconds()
 
 
 @dataclass(frozen=True)
@@ -84,7 +91,7 @@ class BrokeredVllmSystemConfig:
     model: str
     tokenizer: str | None = None
     # Recovery timeout for work fetched by a worker but not answered.
-    request_lease_timeout_seconds: float = 150.0
+    request_lease_timeout_seconds: float = DEFAULT_BROKERED_REQUEST_LEASE_TIMEOUT.total_seconds()
     server: VllmServerConfig = field(default_factory=VllmServerConfig)
     proxy: VllmProxyConfig = field(default_factory=VllmProxyConfig)
     workers: VllmWorkerConfig = field(default_factory=VllmWorkerConfig)
