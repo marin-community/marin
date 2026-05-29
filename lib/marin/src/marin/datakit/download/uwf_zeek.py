@@ -36,8 +36,8 @@ from rigging.filesystem import open_url
 from zephyr.writers import atomic_rename
 
 from marin.datakit.download.http_session import build_retrying_session
-from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.execution.step_spec import StepSpec
+from marin.execution.types import THIS_OUTPUT_PATH
 from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)

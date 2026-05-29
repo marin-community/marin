@@ -19,7 +19,8 @@ from functools import lru_cache
 from fray.cluster import ResourceConfig
 from marin.datakit.download.uncheatable_eval import make_uncheatable_eval_step
 from marin.evaluation.perplexity_gap import raw_text_dataset
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of
+from marin.execution.executor import executor_main
+from marin.execution.types import ExecutorStep, output_path_of
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep, mixture_for_evaluation
 

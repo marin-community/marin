@@ -21,8 +21,8 @@ from datasets import load_dataset
 from fray import ResourceConfig
 from levanter.utils import fsspec_utils
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
-from marin.execution.executor import this_output_path
 from marin.execution.step_spec import StepSpec
+from marin.execution.types import this_output_path
 from marin.processing.tokenize import HfDatasetSpec
 from zephyr import Dataset, ZephyrContext
 

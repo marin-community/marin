@@ -10,6 +10,8 @@ end-to-end shape is validated by a live smoke run rather than unit tests.
 """
 
 from marin.datakit.sources import all_sources
+from marin.execution.types import ExecutorStep
+from marin.processing.tokenize import TokenizeConfig, lm_mixture_data_config
 
 from experiments.datakit_testbed.sampler import build_testbed_steps
 from experiments.datakit_testbed.train import testbed_tokenize as _testbed_tokenize
@@ -25,8 +27,6 @@ def test_tokenize_step_bridge_produces_training_ready_steps():
     ``ExecutorStep[TokenizeConfig]`` (= ``TokenizerStep``), not a generic
     ExecutorStep wrapping ``_StepSpecMigrationConfig``.
     """
-    from marin.execution.executor import ExecutorStep
-    from marin.processing.tokenize import TokenizeConfig
 
     steps = build_testbed_steps(sources=[_SMOKE_SOURCE])
     sampled = next(s for s in steps if s.name.startswith("data/datakit/normalized/"))
@@ -42,7 +42,6 @@ def test_bridge_steps_compose_into_lm_mixture():
     Exercises ``step_to_lm_mixture_component`` + ``_verify_tokenizers_same``,
     which silently failed on ``_StepSpecMigrationConfig`` before the bridge fix.
     """
-    from marin.processing.tokenize import lm_mixture_data_config
 
     steps = build_testbed_steps(sources=[_SMOKE_SOURCE])
     sampled = next(s for s in steps if s.name.startswith("data/datakit/normalized/"))

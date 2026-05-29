@@ -49,6 +49,7 @@ import click
 import uvicorn
 import yaml
 from connectrpc.request import RequestContext
+from iris.cluster.controller import db as db_mod
 from iris.cluster.controller import reads
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
@@ -59,15 +60,15 @@ from iris.cluster.controller.controller import (
 from iris.cluster.controller.controller import (
     _pending_tasks_with_jobs as _schedulable_tasks,
 )
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.db import Tx as _Tx
+from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.reconcile import ReconcileResult
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.managed_thread import ThreadContainer
 
 # Branch removed Tx.fetchall/fetchone; restore for this benchmark script.
-if not hasattr(_Tx, "fetchall"):
-    _Tx.fetchall = lambda self, stmt, params=None: self.execute(stmt, params).all()
-    _Tx.fetchone = lambda self, stmt, params=None: self.execute(stmt, params).first()
+if not hasattr(Tx, "fetchall"):
+    Tx.fetchall = lambda self, stmt, params=None: self.execute(stmt, params).all()
+    Tx.fetchone = lambda self, stmt, params=None: self.execute(stmt, params).first()
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
 from iris.cluster.controller.reads import SchedulableWorker, healthy_active_workers_with_attributes  # noqa: F401
 from iris.cluster.controller.reconcile import ReconcileInputs, ReconcileRow, reconcile_workers
@@ -164,8 +165,6 @@ class _FakeProvider:
     def reconcile_workers(self, plans, addresses):
         # Same shape the test-suite FakeProvider returns. Only exercised if
         # someone disables dry_run on the harness.
-        from iris.cluster.controller.reconcile import ReconcileResult
-
         return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]
 
     def close(self):
@@ -1112,8 +1111,6 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # ---- resource_usage_by_worker (NEW): full join over unfinished
     #      worker-bound attempts. Runs every scheduling tick. ----
     def _usage_new():
-        from iris.cluster.controller import db as db_mod
-
         with db_mod.read_snapshot(db.sa_read_engine) as snap:
             reads.resource_usage_by_worker(snap)
 
@@ -1138,8 +1135,6 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
     # ---- Full tick: _read_scheduling_state-style aggregate ----
     def _state_read():
-        from iris.cluster.controller import db as db_mod
-
         _schedulable_tasks(db)
         with db.read_snapshot() as _rtx:
             ws = reads.healthy_active_workers_with_attributes(_rtx, health, _NoAttrs())
@@ -1269,8 +1264,6 @@ def benchmark_polling(db: ControllerDB) -> None:
         ids = worker_ids[:batch_size]
 
         def _reconcile(_ids=ids):
-            from iris.cluster.controller import db as db_mod
-
             target_ids = set(_ids)
             with db_mod.read_snapshot(db.sa_read_engine) as snap:
                 # Worker filter applied in Python to keep the partial index

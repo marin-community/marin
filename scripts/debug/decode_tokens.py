@@ -5,6 +5,7 @@
 """Repl for examining Hugging Face tokenizers."""
 
 import ast
+import os
 import shlex
 
 import click
@@ -211,7 +212,6 @@ def info_cmd():
 @cli.command("clear")
 def clear_cmd():
     """Clear the screen."""
-    import os
 
     os.system("clear" if os.name == "posix" else "cls")
 

@@ -5,6 +5,7 @@
 
 from unittest.mock import patch
 
+from iris.cli.cluster import _build_cluster_images
 from iris.rpc import config_pb2
 
 
@@ -19,7 +20,6 @@ def test_build_cluster_images_pushes_worker_controller_and_task_to_ghcr() -> Non
     config.scale_groups["eu"].slice_template.gcp.zone = "europe-west4-b"
 
     with patch("iris.cli.cluster._build_and_push_image") as build_and_push_image:
-        from iris.cli.cluster import _build_cluster_images
 
         built = _build_cluster_images(config, git_sha="abc")
 

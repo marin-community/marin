@@ -13,13 +13,14 @@ evict → drop → restart).
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 from finelog.rpc import logging_pb2
 from finelog.store.catalog import Catalog
 from finelog.store.duckdb_store import DuckDBLogStore
-from finelog.store.types import NamespaceStats, SegmentLocation
+from finelog.store.types import NamespaceStats, SegmentLocation, SegmentRow
 
 from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema
 
@@ -240,7 +241,6 @@ def test_reconcile_drops_rows_for_missing_files(tmp_path):
     s1.close()
 
     # Delete the parquet behind the catalog's back.
-    import os
 
     os.unlink(seg_path)
 
@@ -373,7 +373,6 @@ def test_registry_replace_segments_is_atomic(tmp_path):
     """A failing upsert mid-replace must roll the whole swap back."""
     db = Catalog(tmp_path)
     db.upsert("ns", _worker_schema())
-    from finelog.store.types import SegmentRow
 
     initial = SegmentRow(
         namespace="ns",

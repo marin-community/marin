@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import datetime as _dt
+import datetime
 import json
 import logging
 import os
@@ -127,7 +127,7 @@ TIERS: dict[str, TierConfig] = {
 
 
 def _build_run_id(pr: int, gate: str) -> str:
-    ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"zephyr-perf-pr{pr}-g{gate}-treatment-{ts}"
 
 

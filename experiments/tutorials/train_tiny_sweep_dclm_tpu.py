@@ -8,7 +8,8 @@ on a 30M parameter DCLM model using TPU hardware.
 import dataclasses
 
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main, versioned
+from marin.execution.executor import executor_main
+from marin.execution.types import versioned
 
 from experiments.defaults import default_train
 from experiments.evals.task_configs import CORE_TASKS

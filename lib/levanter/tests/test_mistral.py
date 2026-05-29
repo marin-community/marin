@@ -4,16 +4,12 @@
 import tempfile
 
 import equinox as eqx
+import haliax as hax
 import jax
 import numpy as np
 import pytest
 import transformers
 from jax import random
-
-import haliax as hax
-
-from levanter.layers.attention import AttentionMask
-from levanter.models.mistral import MistralConfig, MistralLMHeadModel
 from test_utils import (
     check_load_config,
     check_model_works_with_seqlen,
@@ -21,6 +17,10 @@ from test_utils import (
     skip_if_no_torch,
     use_test_mesh,
 )
+
+from levanter.layers.attention import AttentionMask
+from levanter.main.train_lm import TrainLmConfig
+from levanter.models.mistral import MistralConfig, MistralLMHeadModel
 
 
 @skip_if_no_torch
@@ -159,8 +159,6 @@ def _get_mistral_config(use_flash=False, num_kv_heads=4) -> MistralConfig:
 
 @parameterize_with_configs("mistral*.yaml")
 def test_mistral_configs(config_file):
-    from levanter.main.train_lm import TrainLmConfig
-
     config_class = TrainLmConfig
 
     check_load_config(config_class, config_file)

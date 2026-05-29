@@ -14,14 +14,15 @@ import yaml
 from iris.cluster.config import (
     config_to_dict,
     connect_cluster,
-    create_autoscaler,
     get_ssh_config,
     load_config,
     make_local_config,
     validate_config,
 )
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller.autoscaler_factory import create_autoscaler
 from iris.cluster.providers.factory import create_provider_bundle
+from iris.cluster.providers.gcp.service import KNOWN_GCP_ZONES
 from iris.rpc import config_pb2, controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import duration_to_proto
@@ -561,7 +562,6 @@ class TestLocalConfigTransformation:
 
     def test_make_local_config_transforms_gcp_to_local(self, tmp_path: Path):
         """make_local_config transforms GCP config to local mode."""
-        from iris.cluster.config import make_local_config
 
         config_content = """\
 platform:
@@ -627,7 +627,6 @@ scale_groups:
 
     def test_make_local_config_preserves_scale_group_details(self, tmp_path: Path):
         """make_local_config preserves accelerator type and other scale group settings."""
-        from iris.cluster.config import make_local_config
 
         config_content = """\
 platform:
@@ -702,7 +701,6 @@ scale_groups:
 
     def test_example_configs_load_and_transform(self):
         """Example configs in config/ directory load and transform to local correctly."""
-        from iris.cluster.config import make_local_config
 
         iris_root = Path(__file__).parent.parent.parent.parent
         example_configs = [
@@ -733,7 +731,6 @@ scale_groups:
 
     def test_example_config_zones_in_known_gcp_zones(self):
         """All GCP zones used in example configs must be in KNOWN_GCP_ZONES."""
-        from iris.cluster.providers.gcp.service import KNOWN_GCP_ZONES
 
         iris_root = Path(__file__).parent.parent.parent.parent
         for config_path in [iris_root / "config" / "marin.yaml", iris_root / "config" / "marin-dev.yaml"]:

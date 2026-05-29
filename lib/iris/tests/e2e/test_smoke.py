@@ -10,6 +10,7 @@ has workers across CPU, TPU coscheduling, and multi-region scale groups.
 
 import logging
 import os
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -18,16 +19,13 @@ import pytest
 from connectrpc.errors import ConnectError
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
-from iris.client.client import IrisClient
+from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
-from iris.cluster.types import (
-    Entrypoint,
-    ReservationEntry,
-    ResourceSpec,
-    gpu_device,
-)
+from iris.cluster.providers.local.cluster import LocalCluster
+from iris.cluster.types import Entrypoint, EnvironmentSpec, ReservationEntry, ResourceSpec, gpu_device
 from iris.rpc import config_pb2, controller_pb2, job_pb2
+from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.version import client_revision_date
 from rigging.timing import Duration, ExponentialBackoff
@@ -292,8 +290,6 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
 
 def _parent_with_two_children():
     """Parent callable that submits two child jobs and waits for both."""
-    from iris.client.client import iris_ctx
-    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 
     ctx = iris_ctx()
     res = ResourceSpec(cpu=1, memory="1g")
@@ -795,7 +791,6 @@ def test_checkpoint_restore():
     Phase 2 — restart the controller and verify the job is still SUCCEEDED
               and the cluster can accept new work.
     """
-    from iris.cluster.providers.local.cluster import LocalCluster
 
     config = load_config(DEFAULT_CONFIG)
     config = make_local_config(config)
@@ -923,7 +918,6 @@ def test_dashboard_login_flow():
     full browser auth flow: redirect to login, paste token, verify RPC data loads,
     then logout back to the login page.
     """
-    from iris.cluster.providers.local.cluster import LocalCluster
 
     try:
         import playwright.sync_api as pw
@@ -992,8 +986,6 @@ def test_dashboard_login_flow():
         except Exception as exc:
             errors.append(exc)
 
-    import threading
-
     t = threading.Thread(target=_run_browser_flow)
     t.start()
     t.join(timeout=60)
@@ -1019,8 +1011,6 @@ def _login_for_jwt(url: str, identity_token: str) -> str:
 
 def test_static_auth_rpc_access():
     """Static auth rejects unauthenticated and wrong-token RPCs, accepts valid JWT."""
-    from iris.cluster.providers.local.cluster import LocalCluster
-    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 
     config = _make_controller_only_config()
     config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
@@ -1061,8 +1051,6 @@ def test_static_auth_job_ownership():
     PENDING). Verifies user-b gets PERMISSION_DENIED when trying to terminate
     it, while user-a can terminate their own job.
     """
-    from iris.cluster.providers.local.cluster import LocalCluster
-    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 
     _TOKEN_A = "token-user-a"
     _TOKEN_B = "token-user-b"

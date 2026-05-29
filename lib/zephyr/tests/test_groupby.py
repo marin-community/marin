@@ -7,6 +7,8 @@ import hashlib
 import pyarrow as pa
 import pytest
 from zephyr import Dataset
+from zephyr.shuffle import ScatterFileIterator, _write_chunk_frame
+from zephyr.writers import infer_arrow_schema
 
 
 @pytest.fixture
@@ -368,8 +370,6 @@ def test_group_by_non_vortex_serializable(zephyr_ctx):
     column inside Parquet, avoiding the N*M pickle file blowup.
     """
 
-    from zephyr.writers import infer_arrow_schema
-
     # NOTE: confirm frozenset is not arrow-serializable type to trigger the pickle envelope path
     with pytest.raises(pa.lib.ArrowInvalid, match="Could not convert frozenset"):
         infer_arrow_schema([{"foo": frozenset([1, 2, 3])}])
@@ -394,7 +394,6 @@ def test_group_by_non_vortex_serializable(zephyr_ctx):
 
 def test_scatter_file_iterator_pickle_roundtrip(tmp_path):
     """ScatterFileIterator round-trips non-Arrow-serializable items (e.g. frozenset)."""
-    from zephyr.shuffle import ScatterFileIterator, _write_chunk_frame
 
     items = [frozenset([1, 2]), frozenset([3, 4, 5])]
     frame = _write_chunk_frame(items)

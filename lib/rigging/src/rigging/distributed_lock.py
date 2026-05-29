@@ -19,6 +19,7 @@ by other holders.
 """
 
 import abc
+import fcntl
 import functools
 import json
 import logging
@@ -28,6 +29,7 @@ import time
 from dataclasses import asdict, dataclass
 
 import fsspec
+from google.api_core.exceptions import NotFound
 
 logger = logging.getLogger(__name__)
 
@@ -190,7 +192,6 @@ class GcsLease(DistributedLease):
         return (bucket, blob_path)
 
     def _read_with_generation(self) -> tuple[int, Lease | None]:
-        from google.api_core.exceptions import NotFound
         from google.cloud import storage
 
         client = storage.Client()
@@ -217,7 +218,6 @@ class GcsLease(DistributedLease):
         blob.upload_from_string(json.dumps(asdict(lease)), if_generation_match=if_generation_match)
 
     def _delete(self) -> None:
-        from google.api_core.exceptions import NotFound
         from google.cloud import storage
 
         client = storage.Client()
@@ -338,8 +338,6 @@ class LocalFileLease(DistributedLease):
     """Local-filesystem lease using ``fcntl`` file locking."""
 
     def _read_with_generation(self) -> tuple[int, Lease | None]:
-        import fcntl
-
         try:
             with open(self.lock_path, "r") as f:
                 fcntl.flock(f.fileno(), fcntl.LOCK_SH)
@@ -352,8 +350,6 @@ class LocalFileLease(DistributedLease):
             return (0, None)
 
     def _write(self, lease: Lease, if_generation_match: int) -> None:
-        import fcntl
-
         parent = os.path.dirname(self.lock_path)
         os.makedirs(parent, exist_ok=True)
 

@@ -43,7 +43,7 @@ from iris.cluster.providers.types import (
 )
 from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.service_mode import ServiceMode
-from iris.cluster.types import get_tpu_topology
+from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.worker.env_probe import FixedEnvironmentProvider, HardwareProbe, build_worker_metadata
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.worker import Worker, WorkerConfig

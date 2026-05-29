@@ -9,6 +9,8 @@ not on pass-through of constructor arguments.
 
 import json
 import os
+import threading
+import time
 
 import pytest
 from iris.cluster.runtime.profile import (
@@ -152,14 +154,12 @@ def test_memray_transform_stats_includes_json_flag_and_output():
 
 def _allocate_during(duration_seconds: int) -> list:
     """Force allocations so memray captures something during short profiles."""
-    import threading
 
     results: list = []
 
     def _alloc():
         for _ in range(duration_seconds * 100):
             results.append(bytearray(1024))
-            import time
 
             time.sleep(duration_seconds / 100)
 

@@ -6,6 +6,12 @@
 All functions use logging as the primary communication channel. They are
 serialized via cloudpickle (Entrypoint.from_callable).
 """
+import logging
+import time
+
+from iris.cluster.client import get_job_info
+from iris.rpc import controller_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
 
 
 def quick():
@@ -13,8 +19,6 @@ def quick():
 
 
 def sleep(duration: float):
-    import time
-
     time.sleep(duration)
     return 1
 
@@ -29,7 +33,6 @@ def noop():
 
 def busy_loop(duration: float = 3.0):
     """CPU-bound busy loop for profiling tests."""
-    import time
 
     end = time.monotonic() + duration
     while time.monotonic() < end:
@@ -38,7 +41,6 @@ def busy_loop(duration: float = 3.0):
 
 def log_verbose(num_lines: int = 200):
     """Emit log lines at INFO/WARNING/ERROR levels with markers."""
-    import logging
 
     logger = logging.getLogger("iris.test.verbose")
     for i in range(num_lines):
@@ -57,9 +59,6 @@ def log_verbose(num_lines: int = 200):
 
 def register_endpoint(prefix):
     """Register an endpoint via RPC and verify it's listed."""
-    from iris.cluster.client import get_job_info
-    from iris.rpc import controller_pb2
-    from iris.rpc.controller_connect import ControllerServiceClientSync
 
     info = get_job_info()
     if info is None:
@@ -88,7 +87,6 @@ def register_endpoint(prefix):
 
 def validate_ports():
     """Validate that requested ports are allocated via JobInfo."""
-    from iris.cluster.client import get_job_info
 
     info = get_job_info()
     if info is None:

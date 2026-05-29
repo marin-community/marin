@@ -3,7 +3,7 @@
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution import versioned
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.execution.types import ExecutorStep, this_output_path
 from marin.processing.tokenize import lm_mixture_data_config
 from marin.transform.common_pile.filter_by_extension import (
     FilterByMetadataExtensionConfig,

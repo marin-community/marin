@@ -449,7 +449,6 @@ class StageRunner(Protocol):
         chunk_prefix: str,
         execution_id: str,
     ) -> tuple[TaskResult, dict[str, int]]: ...
-
     def live_counters(self) -> dict[str, int]: ...
 
 

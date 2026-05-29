@@ -15,7 +15,9 @@ import json
 import os
 import re
 import sys
+import time
 from collections.abc import Callable, Iterable, Iterator
+from datetime import UTC, datetime
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
@@ -94,7 +96,6 @@ def _http_get_with_retry(url: str, *, timeout: int = 60, attempts: int = 5) -> b
     preserves the original capture's Content-Encoding, so snapshots crawled
     from gzip-serving CDNs come back gzipped regardless of request headers).
     """
-    import time
 
     delay = 2.0
     last_err: Exception | None = None
@@ -153,7 +154,6 @@ def fetch_live_html(url: str) -> tuple[str, dict]:
     ``fetch_cc_html`` returns so downstream schemas stay uniform; WARC fields
     are empty / 0 to signal the source was the live web.
     """
-    from datetime import UTC, datetime
 
     req = Request(url, headers={"User-Agent": "marin-test-fixtures/0.1 (+https://github.com/marin-community/marin)"})
     with urlopen(req, timeout=60) as resp:

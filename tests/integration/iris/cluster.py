@@ -10,13 +10,7 @@ from dataclasses import dataclass
 from finelog.rpc import logging_pb2
 from iris.client.client import IrisClient, Job
 from iris.cluster.constraints import Constraint
-from iris.cluster.types import (
-    CoschedulingConfig,
-    Entrypoint,
-    EnvironmentSpec,
-    ReservationEntry,
-    ResourceSpec,
-)
+from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ReservationEntry, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration
 

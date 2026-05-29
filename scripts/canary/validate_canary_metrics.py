@@ -22,6 +22,8 @@ from collections.abc import Callable
 from marin.execution.executor import Executor
 from rigging.filesystem import open_url
 
+from experiments.ferries.canary_ferry import canary_moe_step
+
 
 def _env_float(key: str, default: float) -> float:
     raw = os.environ.get(key, "")
@@ -41,7 +43,6 @@ def resolve_canary_output_path() -> str:
     Uses mirror:// so the read works regardless of which region the canary
     wrote to.
     """
-    from experiments.ferries.canary_ferry import canary_moe_step
 
     executor = Executor(
         prefix="mirror://",

@@ -41,6 +41,7 @@ from levanter.checkpoint import (
 )
 from levanter.trainer import TrainerConfig
 from levanter.trainer_state import TrainerState
+from levanter.utils import jax_utils
 
 
 def _dummy_step_info(step):
@@ -843,7 +844,6 @@ def test_backward_compatibility_with_ocdbt():
     with tempfile.TemporaryDirectory() as tmpdir:
         # Save with old format by directly using serialize_with_paths (non-OCDBT)
         manager = array_ser.GlobalAsyncCheckpointManager()
-        from levanter.utils import jax_utils
 
         checkpoint_path = tmpdir
 

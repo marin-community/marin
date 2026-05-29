@@ -7,8 +7,7 @@ import asyncio
 import shutil
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass
-from dataclasses import replace as _replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
@@ -38,6 +37,7 @@ from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.provider import ProviderUnsupportedError
 from iris.cluster.controller.reads import SchedulableWorker
+from iris.cluster.controller.reconcile import ReconcileResult
 from iris.cluster.controller.schema import (
     jobs_table,
     task_attempts_table,
@@ -63,7 +63,6 @@ from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 
-from tests.cluster.conftest import fake_log_client_from_service
 from tests.cluster.controller._test_support import set_task_state_for_test
 from tests.cluster.providers.conftest import make_mock_platform
 
@@ -113,8 +112,6 @@ class FakeProvider:
         return []
 
     def reconcile_workers(self, plans, addresses):
-        from iris.cluster.controller.reconcile import ReconcileResult
-
         return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]
 
     def close(self) -> None:
@@ -184,6 +181,9 @@ def log_service(state, tmp_path) -> LogServiceImpl:
 @pytest.fixture
 def controller_service(state, log_service, mock_controller, tmp_path) -> ControllerServiceImpl:
     """ControllerServiceImpl with fresh DB, log service, and mock controller."""
+    # Local import: tests.cluster.conftest imports make_test_entrypoint from this module.
+    from tests.cluster.conftest import fake_log_client_from_service
+
     return ControllerServiceImpl(
         state,
         controller=mock_controller,
@@ -666,7 +666,7 @@ def hydrate_worker_attributes(state: ControllerTransitions, workers: list) -> li
     attrs_by_worker: dict = {}
     for row in attr_rows:
         attrs_by_worker.setdefault(row.worker_id, {})[row.key] = _decode_attr_value(row)
-    return [_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
+    return [replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
 
 
 def healthy_active_workers(state: ControllerTransitions) -> list[SchedulableWorker]:

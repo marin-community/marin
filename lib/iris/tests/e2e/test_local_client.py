@@ -8,9 +8,9 @@ import time
 
 import pytest
 from finelog.rpc import logging_pb2
-from iris.client.client import Job
+from iris.client.client import Job, iris_ctx
 from iris.client.local_client import make_local_client
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.rpc import job_pb2
 
 pytestmark = pytest.mark.requires_cluster
@@ -173,8 +173,6 @@ def test_job_wait_with_stream_logs(client, iris_client, caplog):
 
 def _parent_with_two_children():
     """Parent callable that submits two child jobs and waits for both."""
-    from iris.client.client import iris_ctx
-    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 
     ctx = iris_ctx()
     res = ResourceSpec(cpu=1, memory="1g")
@@ -198,8 +196,6 @@ def _parent_with_two_children():
 
 def _parent_with_delayed_child():
     """Parent callable that starts a child after streaming has already begun."""
-    from iris.client.client import iris_ctx
-    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 
     ctx = iris_ctx()
     res = ResourceSpec(cpu=1, memory="1g")
@@ -262,8 +258,6 @@ def test_wait_stream_logs_discovers_child_tasks(client, iris_client, caplog):
 
 def _parent_with_failing_child():
     """Parent callable that submits a child that exits with an error."""
-    from iris.client.client import iris_ctx
-    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 
     ctx = iris_ctx()
     res = ResourceSpec(cpu=1, memory="1g")

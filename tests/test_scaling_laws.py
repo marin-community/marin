@@ -8,6 +8,7 @@ the snapshot test which ensures reproducibility of config generation.
 """
 
 import jax.numpy as jnp
+from marin.scaling_laws import round_flops_to_bucket
 from marin.scaling_laws.isoflop_analysis import (
     DEFAULT_SEQ_LEN,
     CandidateConfig,
@@ -15,12 +16,14 @@ from marin.scaling_laws.isoflop_analysis import (
     robust_quad_logx,
 )
 
+from experiments.isoflop_sweep import parse_isoflop_run_name, transform_levanter_metrics
+from experiments.scaling_law_sweeps.c_adamc import CAdamCHeuristic
+
 # --- Run name parsing tests ---
 
 
 def test_parse_isoflop_run_name():
     """Test parsing isoflop run names extracts experiment names."""
-    from experiments.isoflop_sweep import parse_isoflop_run_name
 
     # New format: isoflop-{budget}-N{params}-B{batch}-{experiment_name}
     assert parse_isoflop_run_name("isoflop-1e+18-N1e+08-B128-nemo-wider-depth-adapt") == "nemo-wider-depth-adapt"
@@ -40,7 +43,6 @@ def test_parse_isoflop_run_name():
 
 def test_candidate_configs_within_tolerance():
     """Test that generated configs achieve the target FLOP budget within tolerance."""
-    from experiments.scaling_law_sweeps.c_adamc import CAdamCHeuristic
 
     heuristic = CAdamCHeuristic()
     budget = 1e19
@@ -91,7 +93,6 @@ def test_candidates_for_budget_snapshot():
 
     This ensures reproducibility of the config generation algorithm.
     """
-    from experiments.scaling_law_sweeps.c_adamc import CAdamCHeuristic
 
     recipe = CAdamCHeuristic()
     result = list(recipe.candidates_for_budget(budget=3e18))
@@ -180,9 +181,6 @@ def test_end_to_end_analysis_pipeline():
     Uses SAMPLE_METRICS_DATA (simulating real wandb metrics) to verify the full
     pipeline: metrics transformation -> curve fitting -> scaling law extraction.
     """
-    from marin.scaling_laws import round_flops_to_bucket
-
-    from experiments.isoflop_sweep import transform_levanter_metrics
 
     # Transform metrics using the Levanter transform function
     records = transform_levanter_metrics(SAMPLE_METRICS_DATA, "eval/paloma/c4_en/bpb")
