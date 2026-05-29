@@ -30,7 +30,7 @@ import logging
 import os
 import time
 
-import pyarrow.parquet as pq
+import numpy as np
 from fray import ResourceConfig
 from levanter.store.cache import CacheLedger, consolidate_shard_cache_ledgers, write_levanter_cache
 from pydantic import BaseModel
@@ -93,12 +93,23 @@ def _strip_id(record: dict) -> dict:
     return {k: v for k, v in record.items() if k != "id"}
 
 
+def _structural_exemplar(record: dict) -> dict:
+    """Shrink a record to a structural template for cache consolidation.
+
+    :func:`consolidate_shard_cache_ledgers` only needs the exemplar's pytree
+    structure and leaf dtypes to open a ``TreeStore``, never its values. Slicing
+    sequence leaves to a single element keeps the per-shard payload returned to
+    the coordinator tiny — a full document can be megabytes for long-context
+    data, and we return one per shard.
+    """
+    return {k: v[:1] if isinstance(v, np.ndarray | list | tuple) else v for k, v in record.items()}
+
+
 def build_from_datasets(
     *,
     ctx: ZephyrContext,
     dataset: Dataset,
     output_path: str,
-    exemplar: dict,
     batch_size: int | None = None,
     skip_existing: bool = True,
 ) -> CacheLedger:
@@ -106,9 +117,7 @@ def build_from_datasets(
 
     The dataset is expected to yield per-doc records shaped like
     ``{id, input_ids, ...}``. ``id`` is stripped before writing because
-    ``TreeStore`` stores positional concatenated arrays, not keyed rows. The
-    exemplar must already be in the post-strip shape (no ``id``); pass an
-    exemplar derived from the post-tokenize record after dropping ``id``.
+    ``TreeStore`` stores positional concatenated arrays, not keyed rows.
 
     The dataset's shard structure determines the number of per-shard Levanter
     caches written under ``{output_path}/part-NNNNN-of-MMMMM``. Those shard
@@ -116,15 +125,16 @@ def build_from_datasets(
     step only writes a top-level ``shard_ledger.json`` that references them by
     relative path (sharded layout, see Levanter ``#5430``).
 
+    The structural exemplar that :func:`consolidate_shard_cache_ledgers` needs as
+    a fallback is taken from the shard writes themselves (first non-empty shard),
+    so no separate pass over the inputs is required.
+
     Args:
         ctx: Zephyr context. The caller is responsible for setting any tokenizer
             shared values (``ctx.put('tokenizer_name', ...)`` etc.) before calling
             if the upstream dataset relies on them.
         dataset: Zephyr ``Dataset`` of tokenized records.
         output_path: Destination cache directory.
-        exemplar: Output exemplar (without ``id``). Used as a fallback by
-            :func:`consolidate_shard_cache_ledgers` to derive ``field_counts``
-            for any shard whose own ledger lacks them.
         batch_size: Per-shard Levanter cache flush size. ``None`` keeps Levanter's
             default (16384). Lower values reduce peak memory for datasets with
             very large documents.
@@ -133,9 +143,6 @@ def build_from_datasets(
     Returns:
         The merged sharded ``CacheLedger``.
     """
-    if "id" in exemplar:
-        raise ValueError("build_from_datasets: exemplar must not contain 'id'; pass a stripped exemplar")
-
     pipeline_start = time.monotonic()
 
     output_pattern = f"{output_path}/part-{{shard:05d}}-of-{{total:05d}}"
@@ -144,21 +151,30 @@ def build_from_datasets(
         write_kwargs["batch_size"] = batch_size
 
     def _write_shard(records, shard_info):
+        """Write one shard and emit ``(path, exemplar)``.
+
+        ``exemplar`` is ``None`` for empty shards and for skipped (already-written)
+        shards; the coordinator picks the first non-``None`` one for consolidation.
+        """
         shard_path = format_shard_path(output_pattern, shard_info.shard_idx, shard_info.total_shards)
         if skip_existing:
             fs = url_to_fs(shard_path)[0]
             if fs.exists(f"{shard_path}/.success"):
                 logger.info("Skipping write, output exists: %s", shard_path)
-                yield shard_path
+                yield (shard_path, None)
                 return
         result = write_levanter_cache(records, shard_path, **write_kwargs)
-        yield result["path"]
+        exemplar = result["exemplar"]
+        yield (shard_path, _structural_exemplar(exemplar) if exemplar is not None else None)
 
     temp_shards = dataset.map(_strip_id).map_shard(_write_shard)
 
     tokenize_start = time.monotonic()
-    shard_paths = ctx.execute(temp_shards).results
+    shard_results = ctx.execute(temp_shards).results
     tokenize_elapsed = time.monotonic() - tokenize_start
+
+    shard_paths = [path for path, _ in shard_results]
+    exemplar = next((ex for _, ex in shard_results if ex is not None), None)
 
     consolidate_start = time.monotonic()
     logger.info("Consolidating %d shards into %s", len(shard_paths), output_path)
@@ -226,34 +242,15 @@ def _split_shard_paths(sources: list[TokenizedAttrData], split: str) -> list[str
     return paths
 
 
-def _first_nonempty_exemplar(shard_paths: list[str]) -> dict:
-    """Return the first record (id stripped) from the first non-empty shard.
-
-    Co-partitioned attribute datasets may legitimately have empty partitions
-    (filtering, sparse splits); skipping them lets the store build proceed as
-    long as at least one shard has rows.
-    """
-    for path in shard_paths:
-        fs, resolved = url_to_fs(path)
-        with fs.open(resolved, "rb") as f:
-            pf = pq.ParquetFile(f)
-            if pf.metadata.num_rows == 0:
-                continue
-            first_batch = next(pf.iter_batches(batch_size=1))
-        return _strip_id(first_batch.to_pylist()[0])
-    raise ValueError(f"All {len(shard_paths)} attribute shards are empty; cannot derive exemplar")
-
-
 def build_levanter_store(config: BuildLevanterStoreConfig) -> LevanterStoreData:
     """Build one Levanter cache per split from :class:`TokenizedAttrData` sources.
 
     For each split that exists in any source, this:
 
     1. Collects parquet shard paths across all sources.
-    2. Derives an exemplar from the first non-empty shard's first record.
-    3. Runs :func:`build_from_datasets` to write per-shard caches and a
+    2. Runs :func:`build_from_datasets` to write per-shard caches and a
        top-level sharded ledger.
-    4. Writes ``.stats.json`` next to the ledger.
+    3. Writes ``.stats.json`` next to the ledger.
 
     Splits with no shards are skipped. If a split's ledger already exists,
     this loads the existing stats rather than rebuilding.
@@ -274,7 +271,6 @@ def build_levanter_store(config: BuildLevanterStoreConfig) -> LevanterStoreData:
             continue
 
         split_output = os.path.join(config.cache_path, split)
-        exemplar = _first_nonempty_exemplar(shard_paths)
 
         if _ledger_exists(split_output):
             logger.info("Shard ledger already exists for %s at %s; loading", split, split_output)
@@ -291,7 +287,6 @@ def build_levanter_store(config: BuildLevanterStoreConfig) -> LevanterStoreData:
                 ctx=ctx,
                 dataset=dataset,
                 output_path=split_output,
-                exemplar=exemplar,
                 batch_size=config.levanter_batch_size,
             )
 

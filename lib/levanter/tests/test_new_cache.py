@@ -452,6 +452,7 @@ def test_write_levanter_cache_end_to_end():
 
         assert result["path"] == output_path
         assert result["count"] == len(records)
+        assert result["exemplar"] == records[0]
         assert Path(output_path, ".success").exists()
 
         store = TreeStore.open(records[0], output_path, mode="r", cache_metadata=False)
