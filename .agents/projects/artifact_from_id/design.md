@@ -68,14 +68,14 @@ Example: `gs://marin-artifact-registry/datasets/fineweb-resiliparse/2026.05.29.j
 @classmethod
 def from_id(
     cls,
-    id: str,                          # "<namespace>/<name>", e.g. "datasets/fineweb-resiliparse"
+    artifact_id: str,                  # "<namespace>/<name>", e.g. "datasets/fineweb-resiliparse"
     version: str,                      # CalVer YYYY.MM.DD[-suffix], e.g. "2026.05.29-fall-hero"
     artifact_type: type[T] | None = None,  # Pydantic schema, same role as in from_path
     *,
     registry: ArtifactRegistry | None = None,
 ) -> T | PathMetadata | dict[str, Any]:
     reg = registry or get_default_registry()
-    entry = reg.lookup(id, version)
+    entry = reg.lookup(artifact_id, version)
     return cls.from_path(entry.uri, artifact_type)
 ```
 

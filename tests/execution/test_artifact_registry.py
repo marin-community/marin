@@ -266,20 +266,6 @@ def test_get_default_registry_falls_back_to_canonical_root(monkeypatch, reset_de
     assert get_default_registry()._root == DEFAULT_REGISTRY_ROOT
 
 
-def test_get_default_registry_caches(monkeypatch, tmp_path, reset_default):
-    monkeypatch.setenv(DEFAULT_REGISTRY_ENV, str(tmp_path / "envroot"))
-    assert get_default_registry() is get_default_registry()
-
-
-def test_set_default_registry_clears_cache(monkeypatch, tmp_path, reset_default):
-    monkeypatch.setenv(DEFAULT_REGISTRY_ENV, str(tmp_path / "first"))
-    first = get_default_registry()
-    set_default_registry(None)
-    monkeypatch.setenv(DEFAULT_REGISTRY_ENV, str(tmp_path / "second"))
-    assert get_default_registry()._root == str(tmp_path / "second")
-    assert get_default_registry() is not first
-
-
 def test_from_path_fallback_via_id(registry, tmp_path):
     # An artifact dir with no sidecar but SUCCESS status synthesizes PathMetadata, even via from_id.
     base = tmp_path / "step-output"

@@ -72,19 +72,19 @@ class Artifact:
     @overload
     @classmethod
     def from_id(
-        cls, id: str, version: str, /, artifact_type: type[T], *, registry: ArtifactRegistry | None = None
+        cls, artifact_id: str, version: str, /, artifact_type: type[T], *, registry: ArtifactRegistry | None = None
     ) -> T: ...
 
     @overload
     @classmethod
     def from_id(
-        cls, id: str, version: str, /, *, registry: ArtifactRegistry | None = None
+        cls, artifact_id: str, version: str, /, *, registry: ArtifactRegistry | None = None
     ) -> "PathMetadata | dict[str, Any]": ...
 
     @classmethod
     def from_id(
         cls,
-        id: str,
+        artifact_id: str,
         version: str,
         /,
         artifact_type: type[T] | None = None,
@@ -93,7 +93,7 @@ class Artifact:
     ) -> "T | PathMetadata | dict[str, Any]":
         """Load an artifact by registry id + version.
 
-        Resolves ``(id, version)`` against ``registry`` (or the module-level default when
+        Resolves ``(artifact_id, version)`` against ``registry`` (or the module-level default when
         ``registry is None``) to an :class:`ArtifactEntry`, then delegates to :meth:`from_path` —
         so the return value, the ``PathMetadata`` fallback, and the ``artifact_type``
         deserialization semantics are identical to the path-based loader.
@@ -105,8 +105,8 @@ class Artifact:
         ``entry.uri`` — logging a warning when that fallback crosses regions (the absolute uri is
         under a different ``marin_prefix()``).
 
-        ``id`` and ``version`` are positional-only. ``artifact_type``, if provided, MUST be a
-        pydantic ``BaseModel`` subclass (the existing :meth:`from_path` contract). The registry
+        ``artifact_id`` and ``version`` are positional-only. ``artifact_type``, if provided, MUST be
+        a pydantic ``BaseModel`` subclass (the existing :meth:`from_path` contract). The registry
         does not record the type; the caller asserts it on read.
 
         Raises whatever :meth:`ArtifactRegistry.lookup` raises (``ArtifactNotFoundError``,
@@ -114,7 +114,7 @@ class Artifact:
         raises on the resolved uri.
         """
         reg = registry or get_default_registry()
-        entry = reg.lookup(id, version)
+        entry = reg.lookup(artifact_id, version)
 
         if entry.relative_path is not None:
             try:
@@ -125,7 +125,7 @@ class Artifact:
                 if not entry.uri.startswith(marin_prefix().rstrip("/")):
                     logger.warning(
                         "artifact %s@%s has no region-local replica under %s; falling back to cross-region uri %s",
-                        id,
+                        artifact_id,
                         version,
                         marin_prefix(),
                         entry.uri,

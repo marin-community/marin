@@ -63,9 +63,9 @@ class ArtifactNotFoundError(ArtifactRegistryError, KeyError):
     id: str
     version: str
 
-    def __init__(self, id: str, version: str) -> None:
-        super().__init__((id, version))
-        self.id = id
+    def __init__(self, artifact_id: str, version: str) -> None:
+        super().__init__((artifact_id, version))
+        self.id = artifact_id
         self.version = version
 
 
@@ -86,18 +86,18 @@ class InvalidArtifactIdError(ArtifactRegistryError, ValueError):
     """Malformed id or version. Subclasses `ValueError` for ergonomics."""
 
 
-def _validate_id(id: str) -> tuple[str, str]:
+def _validate_id(artifact_id: str) -> tuple[str, str]:
     """Return `(namespace, name)` for a well-formed artifact id.
 
     Raises `InvalidArtifactIdError` if the id is not exactly one `/`-separated pair of
     non-empty segments matching `ID_PATTERN`.
     """
-    if not ID_PATTERN.match(id):
+    if not ID_PATTERN.match(artifact_id):
         raise InvalidArtifactIdError(
-            f"invalid artifact id {id!r}: expected '<namespace>/<name>' with segments matching "
+            f"invalid artifact id {artifact_id!r}: expected '<namespace>/<name>' with segments matching "
             f"{ID_PATTERN.pattern!r}"
         )
-    namespace, name = id.split(ID_SEPARATOR)
+    namespace, name = artifact_id.split(ID_SEPARATOR)
     return namespace, name
 
 
@@ -188,18 +188,18 @@ def _relative_to_marin_prefix(uri: str) -> str | None:
 class ArtifactRegistry(typing.Protocol):
     """A `(id, version) → uri` map. Append-only at v1; existing entries cannot be overwritten."""
 
-    def register(self, id: str, version: str, uri: str) -> ArtifactEntry:
-        """Record `(id, version) → uri`.
+    def register(self, artifact_id: str, version: str, uri: str) -> ArtifactEntry:
+        """Record `(artifact_id, version) → uri`.
 
-        Raises `ArtifactAlreadyExistsError` if an entry for `(id, version)` already exists (the
-        existing entry is not modified), `InvalidArtifactIdError` on a malformed id, version,
+        Raises `ArtifactAlreadyExistsError` if an entry for `(artifact_id, version)` already exists
+        (the existing entry is not modified), `InvalidArtifactIdError` on a malformed id, version,
         non-absolute uri, or a local-filesystem uri registered in a remote (shared) registry.
         Returns the newly-written entry on success.
         """
         ...
 
-    def lookup(self, id: str, version: str) -> ArtifactEntry:
-        """Look up the entry for `(id, version)`.
+    def lookup(self, artifact_id: str, version: str) -> ArtifactEntry:
+        """Look up the entry for `(artifact_id, version)`.
 
         Raises `ArtifactNotFoundError` if no entry exists, `InvalidArtifactIdError` on malformed
         inputs, `ArtifactRegistryError` if the manifest file exists but is unreadable or invalid.
@@ -226,13 +226,13 @@ class FilesystemArtifactRegistry(ArtifactRegistry):
             raise ValueError("root must be a non-empty string")
         self._root = root.rstrip("/")
 
-    def _entry_path(self, id: str, version: str) -> str:
+    def _entry_path(self, artifact_id: str, version: str) -> str:
         """Return the storage path for a given entry — the on-disk layout `{root}/{ns}/{name}/{version}.json`."""
-        namespace, name = _validate_id(id)
+        namespace, name = _validate_id(artifact_id)
         _validate_version(version)
         return f"{self._root}/{namespace}/{name}/{version}.json"
 
-    def register(self, id: str, version: str, uri: str) -> ArtifactEntry:
+    def register(self, artifact_id: str, version: str, uri: str) -> ArtifactEntry:
         if not _is_absolute_uri(uri):
             raise InvalidArtifactIdError(f"uri must be absolute (URI with scheme or '/'-rooted path), got {uri!r}")
         # A local-filesystem uri recorded in a remote (shared) registry is a broken pointer for every
@@ -243,12 +243,12 @@ class FilesystemArtifactRegistry(ArtifactRegistry):
                 f"cannot register local-filesystem uri {uri!r} in the remote registry at {self._root!r}: "
                 f"a local path is not resolvable by other readers of a shared registry"
             )
-        path = self._entry_path(id, version)
-        entry = ArtifactEntry(id=id, version=version, uri=uri, relative_path=_relative_to_marin_prefix(uri))
+        path = self._entry_path(artifact_id, version)
+        entry = ArtifactEntry(id=artifact_id, version=version, uri=uri, relative_path=_relative_to_marin_prefix(uri))
 
         fs, fs_path = url_to_fs(path)
         if fs.exists(fs_path):
-            raise ArtifactAlreadyExistsError(self.lookup(id, version))
+            raise ArtifactAlreadyExistsError(self.lookup(artifact_id, version))
 
         # Publish the manifest with a single write: an object-store upload is one atomic PUT (no
         # partial-read window), and `open_url` auto-creates parent dirs on local FS. No CAS at v1, so
@@ -258,13 +258,13 @@ class FilesystemArtifactRegistry(ArtifactRegistry):
             fd.write(entry.model_dump_json().encode("utf-8"))
         return entry
 
-    def lookup(self, id: str, version: str) -> ArtifactEntry:
-        path = self._entry_path(id, version)
+    def lookup(self, artifact_id: str, version: str) -> ArtifactEntry:
+        path = self._entry_path(artifact_id, version)
         try:
             with open_url(path, "rb") as fd:
                 data = fd.read()
         except FileNotFoundError as e:
-            raise ArtifactNotFoundError(id, version) from e
+            raise ArtifactNotFoundError(artifact_id, version) from e
         try:
             return ArtifactEntry.model_validate_json(data)
         except (UnicodeDecodeError, ValueError) as e:

@@ -85,7 +85,7 @@ class ArtifactRegistry(typing.Protocol):
     overwritten or removed. Concrete impls back the protocol with filesystem,
     in-memory, or test-double storage."""
 
-    def register(self, id: str, version: str, uri: str) -> ArtifactEntry:
+    def register(self, artifact_id: str, version: str, uri: str) -> ArtifactEntry:
         """Record `(id, version) → uri`.
 
         Raises `ArtifactAlreadyExistsError` if an entry for `(id, version)` already
@@ -106,7 +106,7 @@ class ArtifactRegistry(typing.Protocol):
         retention) overwrites are rejected by storage, so the second writer errors instead. v1 does
         not provide CAS; callers needing stronger guarantees should coordinate externally."""
 
-    def lookup(self, id: str, version: str) -> ArtifactEntry:
+    def lookup(self, artifact_id: str, version: str) -> ArtifactEntry:
         """Look up the entry for `(id, version)`.
 
         Raises `ArtifactNotFoundError` if no entry exists. Raises `InvalidArtifactIdError`
@@ -143,9 +143,9 @@ class FilesystemArtifactRegistry(ArtifactRegistry):
            surfaces I/O errors. Empty string and non-string inputs raise `TypeError` /
            `ValueError`."""
 
-    def register(self, id: str, version: str, uri: str) -> ArtifactEntry: ...
+    def register(self, artifact_id: str, version: str, uri: str) -> ArtifactEntry: ...
 
-    def lookup(self, id: str, version: str) -> ArtifactEntry: ...
+    def lookup(self, artifact_id: str, version: str) -> ArtifactEntry: ...
 
     # Internal. The normalized root (`self._root`, trailing slashes stripped) and the on-disk
     # layout (`self._entry_path(id, version)` → `{root}/{ns}/{name}/{version}.json`) are
@@ -198,7 +198,7 @@ Added to the existing `Artifact` class in `lib/marin/src/marin/execution/artifac
 @classmethod
 def from_id(
     cls,
-    id: str,
+    artifact_id: str,
     version: str,
     /,
     artifact_type: type[T] | None = None,
@@ -207,9 +207,9 @@ def from_id(
 ) -> T | PathMetadata | dict[str, Any]:
     """Load an artifact by registry id + version.
 
-    `id` and `version` are positional-only — callers always write `Artifact.from_id("ns/n",
-    "2026.05.29", ...)`, never `Artifact.from_id(version="2026.05.29", id="ns/n")`. This keeps every call
-    site readable and aligns with the `from_path` shape.
+    `artifact_id` and `version` are positional-only — callers always write `Artifact.from_id("ns/n",
+    "2026.05.29", ...)`, never `Artifact.from_id(version="2026.05.29", artifact_id="ns/n")`. This keeps
+    every call site readable and aligns with the `from_path` shape.
 
     Resolves `(id, version)` against `registry` (or the module-level default if
     `registry is None`) to an `ArtifactEntry`, then delegates to `Artifact.from_path(...,
@@ -243,7 +243,7 @@ VERSION_PATTERN: typing.Final = re.compile(
     r"^(?P<year>\d{4})\.(?P<month>\d{2})\.(?P<day>\d{2})(?:-(?P<suffix>[A-Za-z0-9][A-Za-z0-9._-]*))?$"
 )
 
-def _validate_id(id: str) -> tuple[str, str]:
+def _validate_id(artifact_id: str) -> tuple[str, str]:
     """Returns `(namespace, name)`. Raises `InvalidArtifactIdError` if the id is not
     exactly one `/`-separated pair of non-empty segments matching `ID_PATTERN`."""
 
@@ -289,7 +289,7 @@ class ArtifactNotFoundError(ArtifactRegistryError, KeyError):
     id: str
     version: str
 
-    def __init__(self, id: str, version: str) -> None: ...
+    def __init__(self, artifact_id: str, version: str) -> None: ...
 
 
 class ArtifactAlreadyExistsError(ArtifactRegistryError):
