@@ -3668,6 +3668,49 @@ def test_task_update_worker_failed_cascades_children(state):
     assert child_job.state == job_pb2.JOB_STATE_KILLED
 
 
+def test_reconcile_worker_failed_pending_rollback_cascades_children(state):
+    """Worker-reported WORKER_FAILED that retries a parent to PENDING cascades children.
+
+    Reconcile-path analogue of ``test_worker_death_preemption_policy_terminate``:
+    the failure arrives as a worker observation (through ``apply_task_observations``
+    -> ``apply_reconcile_batch``) rather than as a controller-asserted worker death.
+    With retry budget the parent task rolls back to PENDING (its job stays RUNNING,
+    so terminal finalize never fires), and the single-task default
+    ``TERMINATE_CHILDREN`` policy must still kill descendant jobs.
+    """
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+
+    # Parent with retry budget so WORKER_FAILED rolls the task back to PENDING
+    # rather than taking it (and the job) terminal.
+    parent_req = make_job_request("parent")
+    parent_req.max_retries_preemption = 5
+    parent_tasks = submit_job(state, "parent", parent_req)
+    dispatch_task(state, parent_tasks[0], worker_id)
+    assert _query_task(state, parent_tasks[0].task_id).state == job_pb2.TASK_STATE_RUNNING
+
+    # Child job running on its own worker.
+    child_req = make_job_request("child")
+    child_tasks = submit_job(state, "/test-user/parent/child", child_req)
+    w2 = register_worker(state, "w2", "host2:8080", make_worker_metadata())
+    dispatch_task(state, child_tasks[0], w2)
+    assert _query_task(state, child_tasks[0].task_id).state == job_pb2.TASK_STATE_RUNNING
+
+    # Worker reports WORKER_FAILED for the parent task via the reconcile path.
+    transition_task(state, parent_tasks[0].task_id, job_pb2.TASK_STATE_WORKER_FAILED, error="Worker crashed")
+
+    # Parent task rolled back to PENDING; parent job stays RUNNING (not terminal).
+    parent_task = _query_task(state, parent_tasks[0].task_id)
+    assert parent_task.state == job_pb2.TASK_STATE_PENDING
+    parent_job = _query_job(state, JobName.root("test-user", "parent"))
+    assert parent_job.state == job_pb2.JOB_STATE_RUNNING
+
+    # TERMINATE_CHILDREN: the child task/job are cascaded to terminal.
+    child_task = _query_task(state, child_tasks[0].task_id)
+    assert child_task.state == job_pb2.TASK_STATE_KILLED
+    child_job = _query_job(state, JobName.from_string("/test-user/parent/child"))
+    assert child_job.state == job_pb2.JOB_STATE_KILLED
+
+
 def test_endpoint_registered_after_task_terminal_is_orphaned(state):
     """Reproduce endpoint leak: register_endpoint succeeds for already-terminal tasks.
 

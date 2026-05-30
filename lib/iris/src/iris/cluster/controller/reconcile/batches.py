@@ -147,12 +147,33 @@ class _TouchedJobs:
             self.touched_jobs.append(job_id)
 
 
+def _defer_pending_child_cascade(
+    state: WorkingState,
+    outcome: task.TransitionOutcome,
+    pending_child_cascades: dict[JobName, str],
+    reason: str,
+) -> None:
+    """Queue the descendant-job cascade for a PENDING rollback under TERMINATE_CHILDREN.
+
+    Deferred (deduped per job) to the recompute pass so it runs once per job
+    after every sibling in the batch has settled. Shared by the reconcile apply
+    pass and the controller-asserted fan-out so all paths kill descendants when a
+    parent task rolls back to PENDING.
+    """
+    if outcome.new_task_state != job_pb2.TASK_STATE_PENDING:
+        return
+    policy = state.job_preemption_policy(outcome.job_id)
+    if policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
+        pending_child_cascades.setdefault(outcome.job_id, reason)
+
+
 def _apply_transitions(
     state: WorkingState,
     snapshot: TransitionSnapshot,
     updates: list[TaskUpdate],
     now_ms: int,
     acc: _TouchedJobs,
+    pending_child_cascades: dict[JobName, str],
     *,
     source: task.TransitionSource = task.TransitionSource.WORKER_RECONCILE,
 ) -> None:
@@ -167,6 +188,11 @@ def _apply_transitions(
     sibling fails the job stays SUCCEEDED, since finalize only kills NON-terminal
     tasks.
 
+    A worker-reported failure that rolls a parent task back to PENDING under a
+    ``TERMINATE_CHILDREN`` policy queues its descendant-job cascade into
+    ``pending_child_cascades`` (run by ``_finalize_assertive_batch``), matching
+    the controller-asserted paths' ``_fan_out_outcome``.
+
     ``source`` selects caller-specific health side effects: worker reconcile
     reaps build-failing hosts; direct providers manage their own hosts.
     """
@@ -177,6 +203,7 @@ def _apply_transitions(
         _cascade_to_peers(state, outcome, now_ms)
         if outcome.new_task_state != outcome.prior_state:
             acc.note(outcome.job_id)
+            _defer_pending_child_cascade(state, outcome, pending_child_cascades, "Parent task retried")
 
 
 def _recompute_touched_jobs(
@@ -214,8 +241,9 @@ def _apply_and_recompute(
     all workers first, then a single recompute pass.
     """
     acc = _TouchedJobs()
-    _apply_transitions(state, snapshot, updates, now_ms, acc, source=source)
-    return _recompute_touched_jobs(state, acc, now_ms)
+    pending_child_cascades: dict[JobName, str] = {}
+    _apply_transitions(state, snapshot, updates, now_ms, acc, pending_child_cascades, source=source)
+    return _finalize_assertive_batch(state, acc, pending_child_cascades, now_ms)
 
 
 # ---------------------------------------------------------------------------
@@ -248,10 +276,7 @@ def _fan_out_outcome(
     """
     _cascade_to_peers(state, outcome, now_ms)
     acc.note(outcome.job_id)
-    if outcome.new_task_state == job_pb2.TASK_STATE_PENDING:
-        policy = state.job_preemption_policy(outcome.job_id)
-        if policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
-            pending_child_cascades.setdefault(outcome.job_id, child_cascade_reason)
+    _defer_pending_child_cascade(state, outcome, pending_child_cascades, child_cascade_reason)
 
 
 def _finalize_assertive_batch(
@@ -294,6 +319,7 @@ def apply_reconcile_batch(
     now_ms = now.epoch_ms()
     state = WorkingState(snapshot=snapshot)
     acc = _TouchedJobs()
+    pending_child_cascades: dict[JobName, str] = {}
 
     heartbeat_workers = tuple(
         plan.worker_id
@@ -325,7 +351,7 @@ def apply_reconcile_batch(
             assigned_updates = worker.assigned_updates_from_plan(snapshot, candidates, result.error)
             if not assigned_updates:
                 continue
-            _apply_transitions(state, snapshot, assigned_updates, now_ms, acc)
+            _apply_transitions(state, snapshot, assigned_updates, now_ms, acc, pending_child_cascades)
             continue
 
         if worker_id not in snapshot.active_workers:
@@ -342,9 +368,9 @@ def apply_reconcile_batch(
         all_updates = worker.observations_to_updates(snapshot, observations)
         if not all_updates:
             continue
-        _apply_transitions(state, snapshot, all_updates, now_ms, acc)
+        _apply_transitions(state, snapshot, all_updates, now_ms, acc, pending_child_cascades)
 
-    _recompute_touched_jobs(state, acc, now_ms)
+    _finalize_assertive_batch(state, acc, pending_child_cascades, now_ms)
     return state.effects
 
 
