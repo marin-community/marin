@@ -11,11 +11,13 @@ from levanter.optim.adamh import AdamHConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.executor import MirroredValue
+from marin.execution.remote import RemoteCallable
 from rigging.filesystem import collect_gcs_paths
 
 from experiments.delphi_models import get_delphi_model
 from scripts.materialize_delphi_prefix_checkpoint import (
     SOURCE_CHECKPOINT_MIRROR_BUDGET_GB,
+    TPU_PIP_DEPENDENCY_GROUP,
     MaterializeRequest,
     build_executor_step,
     build_materialization_plan,
@@ -189,9 +191,11 @@ def test_stop_target_is_separate_from_lr_schedule_length():
     collected_gcs_paths = [path for _, path in collect_gcs_paths(plan.train_config)]
     assert not any("marin-us-central2" in path for path in collected_gcs_paths)
     step = build_executor_step(plan)
-    assert step.resources == step.config.train_on_pod.resources
-    assert step.resources is not None
-    assert step.resources.device.variant == "v5p-8"
+    assert isinstance(step.fn, RemoteCallable)
+    assert step.resources is None
+    assert step.fn.resources == step.config.train_on_pod.resources
+    assert step.fn.resources.device.variant == "v5p-8"
+    assert step.fn.pip_dependency_groups == [TPU_PIP_DEPENDENCY_GROUP]
     assert step.config.train_on_pod.resources.regions == ("us-east5",)
 
     tracker = trainer.tracker

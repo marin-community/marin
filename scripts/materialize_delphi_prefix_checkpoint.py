@@ -53,6 +53,7 @@ from marin.execution.executor import (
     executor_main,
     mirrored,
 )
+from marin.execution.remote import remote
 from marin.execution.types import ExecutorStep, this_output_path
 from marin.midtraining import assert_checkpoint_complete_for_model_type
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm, temporary_checkpoint_base_path
@@ -65,6 +66,7 @@ EXECUTOR_INFO_FILENAME = ".executor_info"
 RESERVED_CHECKPOINT_METADATA_KEYS = frozenset({"step", "timestamp", "is_temporary"})
 SOURCE_CHECKPOINT_MIRROR_BUDGET_GB = 40.0
 DELPHI_MODEL_TYPE = "qwen3"
+TPU_PIP_DEPENDENCY_GROUP = "tpu"
 
 
 @dataclass(frozen=True)
@@ -456,7 +458,6 @@ def build_executor_step(plan: MaterializationPlan) -> ExecutorStep:
             f"from step-{plan.request.source_step} while preserving the original "
             f"{plan.original_num_train_steps}-step LR schedule."
         ),
-        fn=run_materialization_train,
         config=MaterializationTrainConfig(
             train_on_pod=TrainLmOnPodConfig(
                 train_config=plan.train_config,
@@ -467,7 +468,11 @@ def build_executor_step(plan: MaterializationPlan) -> ExecutorStep:
             model_type=DELPHI_MODEL_TYPE,
             num_layers=plan.model.num_layers,
         ),
-        resources=resource_config,
+        fn=remote(
+            run_materialization_train,
+            resources=resource_config,
+            pip_dependency_groups=[TPU_PIP_DEPENDENCY_GROUP],
+        ),
         override_output_path=plan.request.output_root.rstrip("/"),
     )
 
