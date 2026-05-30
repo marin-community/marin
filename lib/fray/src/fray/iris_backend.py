@@ -11,6 +11,8 @@ via submitted jobs, and deferred actor handle resolution.
 from __future__ import annotations
 
 import logging
+import os
+import sys
 import threading
 import time
 from concurrent.futures import Future
@@ -242,19 +244,34 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     ctx.registry.register(actor_name, address)
     logger.info(f"Actor {actor_name} ready and listening")
 
-    try:
-        # Block until the actor signals shutdown via shutdown_event
-        shutdown_event.wait()
-    finally:
-        logger.info(f"Actor {actor_name} shutting down")
-        server.stop()
-        # Drain and join in-task finelog flush threads before the interpreter finalizes.
-        if ctx.client is not None:
-            ctx.client.shutdown()
+    # Block until the actor signals shutdown via shutdown_event
+    shutdown_event.wait()
+    logger.info(f"Actor {actor_name} shutting down")
+    server.stop()
 
-    if actor_ctx._errors:
-        logger.error("Actor %s recorded %d failure(s); raising the first", actor_name, len(actor_ctx._errors))
-        raise actor_ctx._errors[0]
+    failed = bool(actor_ctx._errors)
+    if failed:
+        logger.error(
+            "Actor %s recorded %d failure(s); first: %r",
+            actor_name,
+            len(actor_ctx._errors),
+            actor_ctx._errors[0],
+            exc_info=actor_ctx._errors[0],
+        )
+
+    # WORKAROUND for the pyqwest interpreter-shutdown crash: CPython
+    # finalization force-unwinds pyqwest's native (tokio) threads and aborts the
+    # process (SIGABRT/SIGSEGV, exit 134/139). Best-effort drain the in-task
+    # finelog client, then hard-exit via os._exit to skip finalization entirely.
+    # Success/failure is encoded in the exit code since this bypasses the raise.
+    if ctx.client is not None:
+        try:
+            ctx.client.shutdown()
+        except Exception:
+            logger.warning("in-task client shutdown failed (ignored before os._exit)", exc_info=True)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(1 if failed else 0)
 
 
 class IrisActorHandle:
