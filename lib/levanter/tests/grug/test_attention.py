@@ -149,6 +149,19 @@ def test_gpu_fa4_thd_registered_backend_jits_with_cutlass_boundary(monkeypatch):
     np.testing.assert_array_equal(grad, jnp.full_like(q, 2))
 
 
+def test_gpu_fa4_thd_rejects_mha_before_kernel_config(monkeypatch):
+    monkeypatch.setattr(fa4_thd.jax, "default_backend", lambda: "gpu")
+
+    q = jnp.ones((1, 4, 2, 8), dtype=jnp.float32)
+    k = jnp.ones((1, 4, 2, 8), dtype=jnp.float32)
+    v = jnp.ones((1, 4, 2, 8), dtype=jnp.float32)
+    segment_ids = jnp.array([[0, 0, 1, 1]], dtype=jnp.int32)
+    mask = AttentionMask.causal().with_segment_ids(segment_ids, max_segments=2)
+
+    with pytest.raises(NotImplementedError, match="supports only GQA"):
+        attention(q, k, v, mask, implementation="gpu_fa4_thd")
+
+
 def test_attention_rejects_unknown_implementation():
     q, k, v = _make_qkv()
 

@@ -102,6 +102,10 @@ def _validate_simple_causal_self_attention(
         raise ValueError(f"{backend_name} requires Dq == Dk == Dv, got q={q.shape}, k={k.shape}, v={v.shape}")
     if q.shape[2] % k.shape[2] != 0:
         raise ValueError(f"{backend_name} requires Hq divisible by Hkv, got q={q.shape}, k={k.shape}")
+    if q.shape[2] == k.shape[2]:
+        raise NotImplementedError(
+            f"{backend_name} currently supports only GQA with Hq > Hkv, got q={q.shape}, k={k.shape}"
+        )
     if k.shape[2] != v.shape[2]:
         raise ValueError(f"{backend_name} requires matching K/V heads, got k={k.shape}, v={v.shape}")
 
