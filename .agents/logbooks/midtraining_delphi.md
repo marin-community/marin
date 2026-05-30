@@ -12431,3 +12431,5 @@ Progress (elapsed ~9h across paced cycles since launch):
   code path are healthy).
 - Ladder: LADDER_COMPLETE=3/7. Remaining: 2e19, 9e19 (finishing), 2e20-r3,
   3e20-r2 (restarted).
+
+Follow-up 2026-05-30T15:34Z — Phase-1 at 5/7. DONE: 3e18, 9e18, 2e19, 3e19, 9e19 (all 70%+80% committed). Remaining: 2e20 (r3, v5p-8) and 3e20 (r2, v5p-16), both running healthy since 14:49Z restart; these are the long poles (~22h / ~17h). No failures this cycle.
