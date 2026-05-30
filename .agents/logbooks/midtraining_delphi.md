@@ -12127,3 +12127,32 @@ Follow-up 2026-05-30T02:03Z:
   target `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-prefixes-qwen3/checkpoints/step-29868`,
   extra save
   `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-prefixes-qwen3/checkpoints/step-26134`.
+
+Follow-up 2026-05-30T02:24Z:
+
+- The `5aea47d` launcher scheduled the materializer child on a v6e worker, but
+  the child environment did not include the TPU dependency group. Logs showed
+  `Failed to open libtpu.so`, CPU fallback, and repeated
+  `RuntimeError: No accelerator found`. Iris classified those as TPU bad-node
+  worker failures, but the repeated same-worker failures pointed at the child
+  environment rather than capacity.
+- Stopped `/ahmed/delphi-3e18-prefixes-qwen3-v6e4-5aea47d` and its child.
+- Patched `build_executor_step()` so the materializer uses `remote(...,
+  resources=resource_config, pip_dependency_groups=["tpu"])`. The training
+  config still carries the same TPU `ResourceConfig`; the remote wrapper is now
+  responsible for submitting the child with the TPU package extra.
+- Validation passed:
+  - `uv run --with pytest --with pytest-timeout python -m pytest tests/test_materialize_delphi_prefix_checkpoint.py -q --timeout=180`
+    (`19 passed`)
+  - `uv run --with pytest --with pytest-timeout python -m pytest tests/midtraining tests/test_materialize_delphi_prefix_checkpoint.py -q --timeout=180`
+    (`155 passed`)
+  - `./infra/pre-commit.py --all-files --fix`
+- Pushed `97b0a892e9`
+  (`[midtrain] Attach TPU extras to Delphi materializer job`).
+- Relaunched with interactive priority and launcher extra
+  `--extra marin-core:tpu`:
+  `/ahmed/delphi-3e18-prefixes-qwen3-v6e4-97b0a89`.
+- Initial 120-second health check passed. The current child is
+  `/ahmed/delphi-3e18-prefixes-qwen3-v6e4-97b0a89/checkpoints-delphi-prefix-3e18-step29868-stop29869_375d5d5e-63139d5c`;
+  it is pending v6e capacity with one pending task. Recent logs had no
+  `No accelerator found` or `libtpu` errors.
