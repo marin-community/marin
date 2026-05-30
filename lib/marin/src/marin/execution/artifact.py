@@ -8,6 +8,7 @@ from typing import Any, TypeVar, overload
 from pydantic import BaseModel
 from rigging.filesystem import marin_prefix, open_url
 
+from marin.execution.artifact_registry import ArtifactRegistry, get_default_registry
 from marin.execution.executor_step_status import STATUS_SUCCESS, get_status_path
 from marin.execution.step_spec import StepSpec, _is_relative_path
 
@@ -64,6 +65,47 @@ class Artifact:
             except FileNotFoundError:
                 continue
         return cls._from_executor_status(base_path, artifact_type)
+
+    @overload
+    @classmethod
+    def from_id(
+        cls, id: str, version: str, /, artifact_type: type[T], *, registry: ArtifactRegistry | None = None
+    ) -> T: ...
+
+    @overload
+    @classmethod
+    def from_id(
+        cls, id: str, version: str, /, *, registry: ArtifactRegistry | None = None
+    ) -> "PathMetadata | dict[str, Any]": ...
+
+    @classmethod
+    def from_id(
+        cls,
+        id: str,
+        version: str,
+        /,
+        artifact_type: type[T] | None = None,
+        *,
+        registry: ArtifactRegistry | None = None,
+    ) -> "T | PathMetadata | dict[str, Any]":
+        """Load an artifact by registry id + version.
+
+        Resolves ``(id, version)`` against ``registry`` (or the module-level default when
+        ``registry is None``) to a uri, then delegates to :meth:`from_path` — so the return value,
+        the ``PathMetadata`` fallback, and the ``artifact_type`` deserialization semantics are
+        identical to the path-based loader.
+
+        ``id`` and ``version`` are positional-only. ``artifact_type``, if provided, MUST be a
+        pydantic ``BaseModel`` subclass (the existing :meth:`from_path` contract). The registry
+        does not record the type; the caller asserts it on read.
+
+        Raises whatever :meth:`ArtifactRegistry.lookup` raises (``ArtifactNotFoundError``,
+        ``InvalidArtifactIdError``, ``ArtifactRegistryError``), plus whatever :meth:`from_path`
+        raises on the resolved uri.
+        """
+        reg = registry or get_default_registry()
+        entry = reg.lookup(id, version)
+        return cls.from_path(entry.uri, artifact_type)
 
     @classmethod
     def _from_executor_status(cls, base_path: str, artifact_type: type[T] | None) -> "T | PathMetadata":
