@@ -18,7 +18,6 @@ import datetime
 import os
 import re
 import typing
-import uuid
 from collections.abc import Iterator
 
 import pydantic
@@ -248,15 +247,11 @@ class FilesystemArtifactRegistry(ArtifactRegistry):
         if fs.exists(fs_path):
             raise ArtifactAlreadyExistsError(self.lookup(id, version))
 
-        # Atomic publish: write to a temp sibling, then move into place. Local moves are an atomic
-        # rename; on GCS the destination object appears via a single server-side copy. A same-pair
-        # race is last-writer-wins (no CAS at v1).
-        tmp_path = f"{fs_path}.{uuid.uuid4().hex}.tmp"
-        parent = fs_path.rsplit("/", 1)[0]
-        fs.makedirs(parent, exist_ok=True)
-        with fs.open(tmp_path, "wb") as fd:
+        # Publish the manifest with a single write: an object-store upload is one atomic PUT (no
+        # partial-read window), and `open_url` auto-creates parent dirs on local FS. The registry is
+        # append-only, so a same-pair race is last-writer-wins (no CAS at v1).
+        with open_url(path, "wb") as fd:
             fd.write(entry.model_dump_json().encode("utf-8"))
-        fs.mv(tmp_path, fs_path)
         return entry
 
     def lookup(self, id: str, version: str) -> ArtifactEntry:

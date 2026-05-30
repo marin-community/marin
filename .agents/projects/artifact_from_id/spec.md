@@ -92,13 +92,16 @@ class ArtifactRegistry(typing.Protocol):
         registered in a remote (shared) registry. Returns the newly-written entry on
         success.
 
-        Implementations MUST write to storage before returning, and MUST do so atomically
-        — the manifest file is either fully present and valid, or absent. On local
-        filesystems this is `tempfile + os.replace`; on GCS, per-object PUT is naturally
-        atomic. Implementations MUST treat the existence check + write as best-effort
-        against concurrent writers — two processes racing to register the *same*
-        `(id, version)` may both believe they succeeded (last-writer-wins on the file).
-        v1 does not provide CAS; callers needing it should coordinate externally."""
+        Implementations MUST write to storage before returning. The default impl writes
+        the manifest with a single `open_url(path, "wb")` call: on object stores this is one
+        atomic PUT (the object is fully present or absent — no partial-read window), which is
+        the property that matters for the production `gs://` root. On local FS a direct write
+        is not crash-atomic, but the registry is append-only and writes one small file once, so
+        a crash leaves at most a single recoverable (deletable) manifest. Implementations MUST
+        treat the existence check + write as best-effort against concurrent writers — two
+        processes racing to register the *same* `(id, version)` may both believe they succeeded
+        (last-writer-wins on the file). v1 does not provide CAS; callers needing it should
+        coordinate externally."""
 
     def lookup(self, id: str, version: str) -> ArtifactEntry:
         """Look up the entry for `(id, version)`.
@@ -124,7 +127,9 @@ class FilesystemArtifactRegistry(ArtifactRegistry):
     `root` may be any URI accepted by `rigging.filesystem` (e.g. `gs://bucket/prefix`,
     `/local/path`). Trailing slashes are normalized away. The registry does not create
     the root directory eagerly; the first `register` call creates intermediate
-    directories as needed.
+    directories as needed. `register` publishes the manifest with a single `open_url(path, "wb")`
+    write — a single object-store upload is one atomic PUT (no partial-read window), and `open_url`
+    auto-creates parent dirs on local FS, so no temp+rename dance is needed for one small file.
 
     The instance is cheap to construct and holds no open file handles. Multiple
     instances pointing at the same root are interchangeable."""
