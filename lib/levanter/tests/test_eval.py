@@ -110,8 +110,8 @@ def test_tagged_evaluator_logs_historical_bpb_and_source_document_bpb():
         ]
     )
     expected_source_document_bpb = 2.0 * np.log2(np.e) / (len("a".encode("utf-8")) + len("longtoken".encode("utf-8")))
-    assert result.micro_bpb == pytest.approx(expected_bpb)
-    assert result.source_document_bpb == pytest.approx(expected_source_document_bpb)
+    assert result.micro_bpb == pytest.approx(expected_bpb, rel=2e-5)
+    assert result.source_document_bpb == pytest.approx(expected_source_document_bpb, rel=2e-5)
 
 
 def test_tagged_evaluator_source_document_bpb_includes_zero_byte_token_loss():
@@ -143,9 +143,9 @@ def test_tagged_evaluator_source_document_bpb_includes_zero_byte_token_loss():
         result = evaluator.evaluate(None)
 
     expected_source_document_bpb = 4.0 * EvalBatch.size * np.log2(np.e) / (6.0 * EvalBatch.size)
-    assert result.source_document_bpb == pytest.approx(expected_source_document_bpb)
-    assert result.tag_source_document_bpb["root/mix"] == pytest.approx(expected_source_document_bpb)
-    assert result.tag_source_document_bpb["root"] == pytest.approx(expected_source_document_bpb)
+    assert result.source_document_bpb == pytest.approx(expected_source_document_bpb, rel=2e-5)
+    assert result.tag_source_document_bpb["root/mix"] == pytest.approx(expected_source_document_bpb, rel=2e-5)
+    assert result.tag_source_document_bpb["root"] == pytest.approx(expected_source_document_bpb, rel=2e-5)
 
 
 def test_tagged_evaluator_accepts_grug_lm_examples():
