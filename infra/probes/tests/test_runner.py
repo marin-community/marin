@@ -76,3 +76,27 @@ def test_multiple_probes_run_independently(caplog):
     msgs = _messages(caplog)
     assert any(m.startswith("probe a: ") for m in msgs), msgs
     assert any(m.startswith("probe b: ") for m in msgs), msgs
+
+
+def test_sink_failure_does_not_disrupt_probing(caplog):
+    """A raising sink must neither crash the runner nor stop the other sinks
+    from receiving the result — sinks are best-effort telemetry."""
+    received = []
+
+    class RaisingSink:
+        def record(self, result):
+            raise RuntimeError("sink boom")
+
+    class RecordingSink:
+        def record(self, result):
+            received.append(result)
+
+    runner = ProbeRunner(sinks=[RaisingSink(), RecordingSink()])
+    runner.add_probe("ok", lambda: True, timeout=1.0, cadence=0.05)
+    with caplog.at_level(logging.INFO, logger="infra_probes"):
+        _run_briefly(runner)
+
+    # probing continued (results still logged) despite the raising sink...
+    assert any(m.startswith("probe ok: ok [") for m in _messages(caplog))
+    # ...and the non-failing sink still got every result.
+    assert received and all(r.name == "ok" and r.is_success for r in received)

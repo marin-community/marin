@@ -128,8 +128,8 @@ class ProbeRunner:
             except Exception:
                 logger.exception("probe %s raised", probe.name)
                 is_success = False
-            result = ProbeResult(is_success=is_success, name=probe.name, started_at=started_at)
-            result.wall_time = time.monotonic() - start
+            wall_time = time.monotonic() - start
+            result = ProbeResult(is_success=is_success, name=probe.name, started_at=started_at, wall_time=wall_time)
             level = logging.INFO if result.is_success else logging.ERROR
             status = "ok" if result.is_success else "fail"
             logger.log(
@@ -137,7 +137,7 @@ class ProbeRunner:
                 "probe %s: %s [%dms] start=%s",
                 result.name,
                 status,
-                result.wall_time * 1000,
+                wall_time * 1000,
                 started_at.isoformat(timespec="milliseconds"),
             )
             for sink in self._sinks:
