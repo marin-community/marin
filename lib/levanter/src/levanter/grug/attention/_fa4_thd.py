@@ -559,7 +559,33 @@ def _jax_from_torch(x: Any) -> jax.Array:
     return jax.dlpack.from_dlpack(x.contiguous())
 
 
+def _detach_if_available(x: Any) -> Any:
+    detach = getattr(x, "detach", None)
+    if detach is None:
+        return x
+    return detach()
+
+
 def _jax_fa4_thd_attention_impl(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    q_segment_ids: jax.Array,
+    kv_segment_ids: jax.Array,
+) -> jax.Array:
+    return jax.pure_callback(
+        _jax_fa4_thd_attention_callback,
+        jax.ShapeDtypeStruct(q.shape, q.dtype),
+        q,
+        k,
+        v,
+        q_segment_ids,
+        kv_segment_ids,
+        vmap_method="sequential",
+    )
+
+
+def _jax_fa4_thd_attention_callback(
     q: jax.Array,
     k: jax.Array,
     v: jax.Array,
@@ -575,6 +601,25 @@ def _jax_fa4_thd_attention_impl(
 
 
 def _jax_fa4_thd_attention_lengths_impl(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    segment_lengths: jax.Array,
+    num_segments: jax.Array,
+) -> jax.Array:
+    return jax.pure_callback(
+        _jax_fa4_thd_attention_lengths_callback,
+        jax.ShapeDtypeStruct(q.shape, q.dtype),
+        q,
+        k,
+        v,
+        segment_lengths,
+        num_segments,
+        vmap_method="sequential",
+    )
+
+
+def _jax_fa4_thd_attention_lengths_callback(
     q: jax.Array,
     k: jax.Array,
     v: jax.Array,
@@ -626,10 +671,36 @@ def _jax_fa4_thd_attention_bwd(
     if isinstance(cotangent, jax.custom_derivatives.SymbolicZero):
         return jnp.zeros_like(q), jnp.zeros_like(k), jnp.zeros_like(v), None, None
 
-    q_t = _torch_from_jax(q).detach()
-    k_t = _torch_from_jax(k).detach()
-    v_t = _torch_from_jax(v).detach()
-    dout_t = _torch_from_jax(cotangent).detach()
+    dq, dk, dv = jax.pure_callback(
+        _jax_fa4_thd_attention_bwd_callback,
+        (
+            jax.ShapeDtypeStruct(q.shape, q.dtype),
+            jax.ShapeDtypeStruct(k.shape, k.dtype),
+            jax.ShapeDtypeStruct(v.shape, v.dtype),
+        ),
+        q,
+        k,
+        v,
+        cotangent,
+        q_segment_ids,
+        kv_segment_ids,
+        vmap_method="sequential",
+    )
+    return dq, dk, dv, None, None
+
+
+def _jax_fa4_thd_attention_bwd_callback(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    cotangent: jax.Array,
+    q_segment_ids: jax.Array,
+    kv_segment_ids: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    q_t = _detach_if_available(_torch_from_jax(q))
+    k_t = _detach_if_available(_torch_from_jax(k))
+    v_t = _detach_if_available(_torch_from_jax(v))
+    dout_t = _detach_if_available(_torch_from_jax(cotangent))
     q_segment_ids_t = _torch_from_jax(q_segment_ids)
     kv_segment_ids_t = _torch_from_jax(kv_segment_ids)
     _, dq_t, dk_t, dv_t = torch_fa4_thd_attention_internal_fwd_bwd(
@@ -639,7 +710,7 @@ def _jax_fa4_thd_attention_bwd(
         dout_t,
         (q_segment_ids_t, kv_segment_ids_t),
     )
-    return _jax_from_torch(dq_t), _jax_from_torch(dk_t), _jax_from_torch(dv_t), None, None
+    return _jax_from_torch(dq_t), _jax_from_torch(dk_t), _jax_from_torch(dv_t)
 
 
 _jax_fa4_thd_attention.defvjp(_jax_fa4_thd_attention_fwd, _jax_fa4_thd_attention_bwd)
@@ -680,10 +751,36 @@ def _jax_fa4_thd_attention_lengths_bwd(
     if isinstance(cotangent, jax.custom_derivatives.SymbolicZero):
         return jnp.zeros_like(q), jnp.zeros_like(k), jnp.zeros_like(v), None, None
 
-    q_t = _torch_from_jax(q).detach()
-    k_t = _torch_from_jax(k).detach()
-    v_t = _torch_from_jax(v).detach()
-    dout_t = _torch_from_jax(cotangent).detach()
+    dq, dk, dv = jax.pure_callback(
+        _jax_fa4_thd_attention_lengths_bwd_callback,
+        (
+            jax.ShapeDtypeStruct(q.shape, q.dtype),
+            jax.ShapeDtypeStruct(k.shape, k.dtype),
+            jax.ShapeDtypeStruct(v.shape, v.dtype),
+        ),
+        q,
+        k,
+        v,
+        cotangent,
+        segment_lengths,
+        num_segments,
+        vmap_method="sequential",
+    )
+    return dq, dk, dv, None, None
+
+
+def _jax_fa4_thd_attention_lengths_bwd_callback(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    cotangent: jax.Array,
+    segment_lengths: jax.Array,
+    num_segments: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    q_t = _detach_if_available(_torch_from_jax(q))
+    k_t = _detach_if_available(_torch_from_jax(k))
+    v_t = _detach_if_available(_torch_from_jax(v))
+    dout_t = _detach_if_available(_torch_from_jax(cotangent))
     segment_lengths_t = _torch_from_jax(segment_lengths)
     num_segments_t = _torch_from_jax(num_segments)
     _, dq_t, dk_t, dv_t = torch_fa4_thd_attention_internal_fwd_bwd_from_lengths(
@@ -694,7 +791,7 @@ def _jax_fa4_thd_attention_lengths_bwd(
         segment_lengths_t,
         num_segments_t,
     )
-    return _jax_from_torch(dq_t), _jax_from_torch(dk_t), _jax_from_torch(dv_t), None, None
+    return _jax_from_torch(dq_t), _jax_from_torch(dk_t), _jax_from_torch(dv_t)
 
 
 _jax_fa4_thd_attention_lengths.defvjp(
@@ -709,10 +806,11 @@ def gpu_fa4_thd_attention(
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
 ) -> Float[Array, "B Q Hq D"]:
-    """Experimental FA4 THD/varlen backend for simple causal self-attention.
+    """FA4 THD/varlen backend for simple causal self-attention.
 
-    The upstream FA4 CuTe varlen API is torch/autograd-facing, so the JAX wrapper
-    is eager-only and not suitable for production JIT training.
+    The upstream FA4 CuTe varlen API is torch-facing. The JAX path wraps it in
+    `pure_callback` under a custom VJP so tracing sees only shape/dtype
+    contracts and DLPack conversion happens on concrete runtime arrays.
     """
     if _is_torch_tensor(q):
         _validate_simple_causal_self_attention(q, k, v, mask, backend_name="gpu_fa4_thd_attention")

@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from levanter.data.text import GrugLmExample
+import levanter.grug.attention._fa4_thd as fa4_thd
 from levanter.grug.attention import (
     AttentionMask,
     attention,
@@ -89,6 +90,39 @@ def test_thd_segment_metadata_rejects_mismatched_q_kv_segments():
         mask = build_mask(q_segment_ids, kv_segment_ids)
         assert mask.thd_segment_metadata is not None
         jax.block_until_ready(mask.thd_segment_metadata.segment_lengths)
+
+
+def test_gpu_fa4_thd_registered_backend_jits_with_callbacks(monkeypatch):
+    def fake_fwd(q, k, v, segment_lengths, num_segments):
+        del k, v, segment_lengths, num_segments
+        return np.asarray(q) * np.asarray(2, dtype=q.dtype)
+
+    def fake_bwd(q, k, v, dout, segment_lengths, num_segments):
+        del segment_lengths, num_segments
+        return (
+            np.asarray(q),
+            np.asarray(dout) * np.asarray(2, dtype=dout.dtype),
+            np.zeros_like(np.asarray(k)),
+            np.zeros_like(np.asarray(v)),
+        )
+
+    monkeypatch.setattr(fa4_thd, "torch_fa4_thd_attention_internal_from_lengths", fake_fwd)
+    monkeypatch.setattr(fa4_thd, "torch_fa4_thd_attention_internal_fwd_bwd_from_lengths", fake_bwd)
+    monkeypatch.setattr(fa4_thd, "_torch_from_jax", lambda x: x)
+    monkeypatch.setattr(fa4_thd, "_jax_from_torch", lambda x: x)
+    monkeypatch.setattr(fa4_thd.jax, "default_backend", lambda: "gpu")
+
+    q = jnp.ones((1, 4, 2, 8), dtype=jnp.float32)
+    k = jnp.ones((1, 4, 1, 8), dtype=jnp.float32)
+    v = jnp.ones((1, 4, 1, 8), dtype=jnp.float32)
+    segment_ids = jnp.array([[0, 0, 1, 1]], dtype=jnp.int32)
+    mask = AttentionMask.causal().with_segment_ids(segment_ids, max_segments=2)
+
+    out = jax.jit(lambda q_arg: attention(q_arg, k, v, mask, implementation="gpu_fa4_thd"))(q)
+    np.testing.assert_array_equal(out, jnp.full_like(q, 2))
+
+    grad = jax.jit(jax.grad(lambda q_arg: jnp.sum(attention(q_arg, k, v, mask, implementation="gpu_fa4_thd"))))(q)
+    np.testing.assert_array_equal(grad, jnp.full_like(q, 2))
 
 
 def test_attention_rejects_unknown_implementation():
