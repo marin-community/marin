@@ -26,12 +26,15 @@ from rigging.filesystem import is_remote_path, marin_prefix, open_url, url_to_fs
 DEFAULT_REGISTRY_ENV = "MARIN_ARTIFACT_REGISTRY"
 """Environment variable read by `get_default_registry` to override the registry root."""
 
-DEFAULT_REGISTRY_ROOT = "gs://marin-us-central1/artifact_registry"
+DEFAULT_REGISTRY_ROOT = "gs://marin-artifact-registry"
 """Canonical registry root used by `get_default_registry` when `DEFAULT_REGISTRY_ENV` is unset.
 
 A single global location so an artifact id resolves identically from every region and cloud
-(the manifests are tiny JSON, so cross-region/cross-cloud reads are cheap). Tests must NOT hit
-this — `tests/conftest.py` installs an autouse fixture that redirects the default to a temp dir.
+(the manifests are tiny JSON, so cross-region/cross-cloud reads are cheap). The dedicated
+`marin-artifact-registry` bucket has a 99-year retention policy, so manifests cannot be deleted
+or overwritten — the append-only contract is enforced by storage, and no separate backup is
+needed. Tests must NOT hit this — `tests/conftest.py` installs an autouse fixture that redirects
+the default to a temp dir.
 """
 
 ID_SEPARATOR = "/"
@@ -248,8 +251,9 @@ class FilesystemArtifactRegistry(ArtifactRegistry):
             raise ArtifactAlreadyExistsError(self.lookup(id, version))
 
         # Publish the manifest with a single write: an object-store upload is one atomic PUT (no
-        # partial-read window), and `open_url` auto-creates parent dirs on local FS. The registry is
-        # append-only, so a same-pair race is last-writer-wins (no CAS at v1).
+        # partial-read window), and `open_url` auto-creates parent dirs on local FS. No CAS at v1, so
+        # a same-pair race is last-writer-wins on backends that allow overwrite; on the canonical
+        # retention-locked bucket overwrites are rejected, so the second writer simply errors.
         with open_url(path, "wb") as fd:
             fd.write(entry.model_dump_json().encode("utf-8"))
         return entry

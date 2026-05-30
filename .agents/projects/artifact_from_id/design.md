@@ -20,7 +20,7 @@ _What's hard?_
 
 The core mechanics are easy; the contentious bits are policy choices.
 
-1. **Concurrent writes on object storage.** GCS has no native locking. We avoid this at v1 with a layout where concurrent registrations of distinct `(id, version)` pairs never touch the same key; same-pair races are last-writer-wins. CAS (`if-generation-match`) is a clean follow-up.
+1. **Concurrent writes on object storage.** GCS has no native locking. We avoid this at v1 with a layout where concurrent registrations of distinct `(id, version)` pairs never touch the same key; same-pair races are last-writer-wins on a backend that allows overwrite (on the canonical 99-year-retention bucket, overwrites are rejected, so the second writer errors instead). CAS (`if-generation-match`) is a clean follow-up.
 2. **Version flavor is a one-way door.** Once callers pin a version string, changing the version model costs a migration. We pick **CalVer** — `YYYY.MM.DD` with an optional `-<modifier>` suffix (`2026.10.01-fall-hero`) — validated by regex *and* an actual date parse. The modifier alphabet is restricted to `[A-Za-z0-9._-]`; no `/`, since the whole version is a single path segment. This buys lexical-equals-chronological ordering for free, gives provenance (the date the artifact was minted), and leaves room for hero / RC suffixes; see Decisions for what we considered instead.
 
 ## Costs / Risks
@@ -48,7 +48,7 @@ Two new pieces in `lib/marin/src/marin/execution/`:
 <registry-root>/<namespace>/<name>/<version>.json
 ```
 
-Example: `gs://marin-us-central2/artifact_registry/datasets/fineweb-resiliparse/2026.05.29.json`. The hot path is id+version → known key (O(1) GET); directory size doesn't matter for reads. Concurrent writers of distinct `(id, version)` pairs never contend; same-pair races are last-writer-wins (no CAS at v1).
+Example: `gs://marin-artifact-registry/datasets/fineweb-resiliparse/2026.05.29.json`. The hot path is id+version → known key (O(1) GET); directory size doesn't matter for reads. Concurrent writers of distinct `(id, version)` pairs never contend; same-pair races are last-writer-wins on an overwrite-allowing backend (rejected by the canonical retention bucket; no CAS at v1).
 
 **Immutability is registry-level only.** A registered `(id, version)` always points at the same `uri`, but the bytes at that `uri` are protected by GCS IAM, not by this design. Anyone with write access can delete or repoint the underlying artifact; the open content-hash field would let `from_id` detect this.
 
@@ -79,7 +79,7 @@ def from_id(
     return cls.from_path(entry.uri, artifact_type)
 ```
 
-`get_default_registry()` returns a module-level singleton built from `MARIN_ARTIFACT_REGISTRY`, falling back to the canonical `gs://marin-us-central1/artifact_registry` (one global location so an id resolves the same from every region/cloud). Tests must never touch that root: an autouse fixture in `tests/conftest.py` redirects the default to a temp dir and resets the cached singleton around each test. Tests and notebook users can also pass `registry=` to override per call.
+`get_default_registry()` returns a module-level singleton built from `MARIN_ARTIFACT_REGISTRY`, falling back to the canonical `gs://marin-artifact-registry` (one global location so an id resolves the same from every region/cloud). The dedicated bucket has a 99-year retention policy, so manifests can't be deleted or overwritten — the append-only contract is enforced by storage and no separate backup is required. Tests must never touch that root: an autouse fixture in `tests/conftest.py` redirects the default to a temp dir and resets the cached singleton around each test. Tests and notebook users can also pass `registry=` to override per call.
 
 **IDs** are strict `<namespace>/<name>` (one slash, both segments non-empty, restricted character set). `register` and `lookup` validate this up-front; ambiguous inputs raise immediately.
 

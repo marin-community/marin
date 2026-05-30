@@ -22,9 +22,11 @@ No proto, no schema-registry tables, no migrations. The registry's persisted for
 DEFAULT_REGISTRY_ENV: str = "MARIN_ARTIFACT_REGISTRY"
 """Environment variable read by `get_default_registry()` to override the registry root."""
 
-DEFAULT_REGISTRY_ROOT: str = "gs://marin-us-central1/artifact_registry"
+DEFAULT_REGISTRY_ROOT: str = "gs://marin-artifact-registry"
 """Canonical default root used when `DEFAULT_REGISTRY_ENV` is unset. One global location so an id
-   resolves identically from every region/cloud. Tests are kept off it by an autouse fixture in
+   resolves identically from every region/cloud. The dedicated `marin-artifact-registry` bucket
+   carries a 99-year retention policy, so manifests cannot be deleted/overwritten (append-only
+   enforced by storage; no separate backup needed). Tests are kept off it by an autouse fixture in
    `tests/conftest.py` that redirects the default to a temp dir."""
 
 ID_SEPARATOR: str = "/"
@@ -99,9 +101,10 @@ class ArtifactRegistry(typing.Protocol):
         is not crash-atomic, but the registry is append-only and writes one small file once, so
         a crash leaves at most a single recoverable (deletable) manifest. Implementations MUST
         treat the existence check + write as best-effort against concurrent writers — two
-        processes racing to register the *same* `(id, version)` may both believe they succeeded
-        (last-writer-wins on the file). v1 does not provide CAS; callers needing it should
-        coordinate externally."""
+        processes racing to register the *same* `(id, version)` are last-writer-wins on a backend
+        that allows overwrite. On the canonical `marin-artifact-registry` bucket (99-year
+        retention) overwrites are rejected by storage, so the second writer errors instead. v1 does
+        not provide CAS; callers needing stronger guarantees should coordinate externally."""
 
     def lookup(self, id: str, version: str) -> ArtifactEntry:
         """Look up the entry for `(id, version)`.
@@ -160,7 +163,7 @@ context and tasks derived from it, isolated from other contexts).
 def get_default_registry() -> ArtifactRegistry:
     """Return the default registry for the current context, constructing it on first use from
     `os.environ[DEFAULT_REGISTRY_ENV]`, falling back to `DEFAULT_REGISTRY_ROOT`
-    (`gs://marin-us-central1/artifact_registry`). Tests must not hit the canonical
+    (`gs://marin-artifact-registry`). Tests must not hit the canonical
     root: an autouse fixture in `tests/conftest.py` installs a temp-dir registry as the
     context-local default for every test (via `use_default_registry`).
 
@@ -310,7 +313,7 @@ One JSON file per `(id, version)`:
 - Contents: `ArtifactEntry.model_dump_json()` (UTF-8, no enclosing array).
 - Encoding: UTF-8 with no BOM. No trailing newline guarantee.
 
-Example (`gs://marin-us-central2/artifact_registry/datasets/fineweb-resiliparse/2026.05.29.json`):
+Example (`gs://marin-artifact-registry/datasets/fineweb-resiliparse/2026.05.29.json`):
 
 ```json
 {"id": "datasets/fineweb-resiliparse", "version": "2026.05.29", "uri": "gs://marin-us-central2/documents/fineweb-resiliparse-8c2f3a", "relative_path": "documents/fineweb-resiliparse-8c2f3a"}

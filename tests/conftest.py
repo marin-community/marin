@@ -39,7 +39,7 @@ def _configure_marin_prefix():
 
 @pytest.fixture(autouse=True)
 def _isolate_artifact_registry(tmp_path_factory):
-    """Keep tests off the real ``gs://marin-us-central1`` artifact registry.
+    """Keep tests off the real ``gs://marin-artifact-registry`` registry.
 
     ``get_default_registry`` defaults to the production root, so without this an unconfigured test
     would read/write live GCS. Install a temp-dir registry as the context-local default for the
