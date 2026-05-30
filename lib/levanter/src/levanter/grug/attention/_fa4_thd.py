@@ -22,6 +22,9 @@ from levanter.grug.attention._fa4_cute import _gpu_compute_arch
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig
 
 
+_BLACKWELL_FA4_ARCH = 100
+
+
 @dataclass(frozen=True)
 class _UpstreamFa4CuteModules:
     cutlass: Any
@@ -141,12 +144,16 @@ def _thd_cu_seqlens_from_segment_lengths(
         raise ValueError(f"num_segments must have shape [B] or scalar, got {num_segments.shape}")
 
     max_segments = segment_lengths.shape[1]
-    segment_index = jnp.arange(max_segments, dtype=jnp.int32)
-    keep = segment_index[None, :] < num_segments[:, None]
-    sharding = _segment_lengths_sharding(segment_lengths, num_segments)
-    if sharding is not None:
-        keep = reshard(keep, sharding)
-    lengths = jnp.where(keep, segment_lengths.astype(jnp.int32), jnp.zeros_like(segment_lengths, dtype=jnp.int32))
+    if max_segments == 1:
+        keep = jnp.ones_like(segment_lengths, dtype=jnp.bool_)
+        lengths = segment_lengths.astype(jnp.int32)
+    else:
+        segment_index = jnp.arange(max_segments, dtype=jnp.int32)
+        keep = segment_index[None, :] < num_segments[:, None]
+        sharding = _segment_lengths_sharding(segment_lengths, num_segments)
+        if sharding is not None:
+            keep = reshard(keep, sharding)
+        lengths = jnp.where(keep, segment_lengths.astype(jnp.int32), jnp.zeros_like(segment_lengths, dtype=jnp.int32))
     lengths = eqx.error_if(
         lengths,
         jnp.any((lengths <= 0) & keep),
@@ -315,7 +322,7 @@ def _upstream_fa4_thd_backward_launcher(
     dq_postprocess = modules.FlashAttentionBackwardPostprocess(
         cute_dtype,
         head_dim,
-        100,
+        _BLACKWELL_FA4_ARCH,
         tile_m,
         num_threads=128,
         AtomLayoutMdQ=1,
@@ -324,7 +331,7 @@ def _upstream_fa4_thd_backward_launcher(
     dk_postprocess = modules.FlashAttentionBackwardPostprocess(
         cute_dtype,
         head_dim,
-        100,
+        _BLACKWELL_FA4_ARCH,
         tile_n,
         num_threads=128,
         AtomLayoutMdQ=1,
@@ -333,7 +340,7 @@ def _upstream_fa4_thd_backward_launcher(
     dv_postprocess = modules.FlashAttentionBackwardPostprocess(
         cute_dtype,
         head_dim_v,
-        100,
+        _BLACKWELL_FA4_ARCH,
         tile_n,
         num_threads=128,
         AtomLayoutMdQ=1,
