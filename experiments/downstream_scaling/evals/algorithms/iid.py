@@ -124,10 +124,14 @@ def _load_vllm(model_path: str, seed: int):
             case = kwargs.get("case")
             if case is not rpa_kernel.RpaCase.DECODE:
                 page_size = args[5]
-                sizes["bq_sz"] = max(1, sizes["bq_sz"] // 2)
-                sizes["bq_csz"] = max(1, sizes["bq_csz"] // 2)
-                sizes["bkv_sz"] = max(page_size, sizes["bkv_sz"] // 2)
-                sizes["bkv_csz"] = max(page_size, sizes["bkv_csz"] // 2)
+                # Quartering (//4) instead of halving (//2). Single halve at
+                # vllm-tpu 0.18/0.20 leaves 67.23 MB VMEM, 3.29 MB over the
+                # 64 MB budget on v5p-8 for 1e21+ models. //4 cuts another
+                # ~50% off these blocks, well under budget.
+                sizes["bq_sz"] = max(1, sizes["bq_sz"] // 4)
+                sizes["bq_csz"] = max(1, sizes["bq_csz"] // 4)
+                sizes["bkv_sz"] = max(page_size, sizes["bkv_sz"] // 4)
+                sizes["bkv_csz"] = max(page_size, sizes["bkv_csz"] // 4)
             return sizes
 
         patched_get_default_block_sizes._marin_iid_patched = True  # type: ignore[attr-defined]

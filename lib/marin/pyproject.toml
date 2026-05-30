@@ -190,8 +190,8 @@ vizier = [
 vllm = [
     "jax==0.9.2",
     "jaxlib==0.9.2",
-    "vllm-tpu==0.19.0",
-    "tpu-inference==0.19.0",
+    "vllm-tpu==0.20.0",
+    "tpu-inference==0.20.0",
     "triton==3.6.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
     # Pin torch + torchvision explicitly so the per-extra source map below
     # routes them to the pytorch-cpu index during fresh Iris resolves.

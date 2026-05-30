@@ -44,7 +44,7 @@ dependencies = [
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
     "kitoken>=0.10.2",
-    "transformers>=4.57.1,<5.0",
+    "transformers>=4.57.1,<6.0",
     "chex>=0.1.86",
     "optax>=0.1.9,<0.2.7",
     "wandb>0.24.0",
