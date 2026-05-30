@@ -210,8 +210,9 @@ def apply_rotary_embedding(
     sin = sin[None, :, None, :]
 
     def _apply(x: Float[Array, "B S H D"]) -> Float[Array, "B S H D"]:
+        dtype = x.dtype
         x1, x2 = jnp.split(x, 2, axis=-1)
-        return jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1)
+        return jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1).astype(dtype)
 
     return _apply(q), _apply(k)
 
