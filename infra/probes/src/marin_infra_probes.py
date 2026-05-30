@@ -14,6 +14,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from finelog.client.log_client import LogClient
 from finelog.rpc import logging_pb2
@@ -39,6 +40,9 @@ DEFAULT_ZONES = ("europe-west4-b", "us-west4-a")
 @dataclass
 class ProbeResult:
     is_success: bool
+    # name and started_at are stamped by the runner, not the probe fn.
+    name: str | None = None
+    started_at: datetime | None = None  # UTC wall-clock time at probe start
     wall_time: float | None = None
 
 
@@ -60,8 +64,8 @@ class ProbeRunner:
     """Register probes, then ``run()`` to execute each one forever on its own
     cadence. Ctrl-C kills the process — there is no graceful shutdown path;
     samples are stateless so there's nothing to clean up. Each result is
-    logged as ``probe <name>: ok|fail [<wall_ms>ms]`` and that's the only
-    output — operator log aggregation does the rest."""
+    logged as ``probe <name>: ok|fail [<wall_ms>ms] start=<utc-iso>`` and
+    that's the only output — operator log aggregation does the rest."""
 
     def __init__(self) -> None:
         self._probes: list[Probe] = []
@@ -79,6 +83,7 @@ class ProbeRunner:
 
     async def _run_probe(self, probe: Probe) -> None:
         while True:
+            started_at = datetime.now(timezone.utc)
             start = time.monotonic()
             try:
                 result = await asyncio.wait_for(asyncio.to_thread(probe.fn), timeout=probe.timeout)
@@ -87,10 +92,19 @@ class ProbeRunner:
             except Exception:
                 logger.exception("probe %s raised", probe.name)
                 result = ProbeResult(is_success=False)
+            result.name = probe.name
+            result.started_at = started_at
             result.wall_time = time.monotonic() - start
             level = logging.INFO if result.is_success else logging.ERROR
             status = "ok" if result.is_success else "fail"
-            logger.log(level, "probe %s: %s [%dms]", probe.name, status, result.wall_time * 1000)
+            logger.log(
+                level,
+                "probe %s: %s [%dms] start=%s",
+                result.name,
+                status,
+                result.wall_time * 1000,
+                started_at.isoformat(timespec="milliseconds"),
+            )
             await asyncio.sleep(probe.cadence)
 
 
