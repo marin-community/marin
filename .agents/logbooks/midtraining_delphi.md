@@ -12276,3 +12276,31 @@ iris auto-tagging CPU-only jobs into a saturated non-preemptible pool). Today's
 command; if any of these four roots stalls pending on CPU capacity, relaunch
 that one with `--preemptible`. Next: verify each child TPU job starts, resumes
 from its source step, and pins output path `delphi-<base>-prefixes-qwen3`.
+
+Follow-up 2026-05-30T05:31Z — startup verified, all 4 healthy:
+
+- All four root coordinators are RUNNING (`iris --cluster marin job summary`):
+  3e19/9e19/2e20/3e20, each `exit=0 failures=0 preemptions=0`. The
+  "auto-tagging job as non-preemptible" heuristic did NOT stall any root.
+- All four executor child jobs were created with the correct plan and the
+  `override_output_path` pin verified in logs ("Output path ...-step<T>-stop<T+1>-<hash>
+  doesn't match given override gs://.../delphi-<base>-prefixes-qwen3, using the
+  latter") — so each W&B run id / output is pinned to `delphi-<base>-prefixes-qwen3`:
+  - 3e19 child `checkpoints-delphi-prefix-3e19-step30411-stop30412_879a2bba-e8126f88`
+    — PENDING v6e-8 capacity ("No worker matches constraints").
+  - 9e19 child `checkpoints-delphi-prefix-9e19-step32226-stop32227_a7d55b2a-58fe078b`
+    — PENDING v6e-8 capacity.
+  - 2e20 child `checkpoints-delphi-prefix-2e20-step45181-stop45182_feedd538-a0b7bebe`
+    — RUNNING on v5p-8; logged `Resuming training from step 30001` at 05:30:07Z,
+    first batch loaded, first train step tracing/lowering. Actively training.
+  - 3e20 child `checkpoints-delphi-prefix-3e20-step28408-stop28409_3ea93698-5b7fca7c`
+    — RUNNING on v5p-16 since 05:26:57Z (resume in progress; 28.4GiB source mirror
+    staging).
+- Per-budget destination prefixes each run will commit (70% then 80%):
+  3e19 → step-26609, step-30411; 9e19 → step-28198, step-32226;
+  2e20 → step-39533, step-45181; 3e20 → step-24857, step-28408.
+- Rough wall-clock estimates from the logbook (if rates hold): 3e19 ~3.5h,
+  9e19 ~10h, 2e20 ~22h, 3e20 ~17h on their respective TPUs. These will not
+  finish in one sitting; monitor for preemptions and for each target checkpoint
+  to land with an atomic OCDBT commit (manifest+metadata written last).
+- W&B: https://wandb.ai/marin-community/marin/runs/delphi-<base>-prefixes-qwen3
