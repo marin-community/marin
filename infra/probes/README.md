@@ -95,7 +95,7 @@ Set flags on the VM via container args; cloud-init isn't needed.
 PROJECT=hai-gcp-models
 ZONE=us-central1-b
 VM=infra-probes
-IMAGE=us-central1-docker.pkg.dev/${PROJECT}/marin/probes:latest
+IMAGE=us-central1-docker.pkg.dev/${PROJECT}/marin/infra-probes:latest
 SA=probes@${PROJECT}.iam.gserviceaccount.com
 
 gcloud iam service-accounts create probes \
