@@ -12219,3 +12219,60 @@ Follow-up 2026-05-30T04:14Z — materialization SUCCEEDED:
   prefix checkpoints. The previous agent's open question ("will the worker stay
   alive long enough to materialize the 70% and 80% checkpoints") is answered:
   yes.
+
+## 2026-05-30T05:25Z — Launch Delphi 3e19→3e20 prefixes-qwen3 materializations (interactive)
+
+Per Ahmed: run the Gen-2 `prefixes-qwen3` prefix materializations for the
+3e19→3e20 ladder segment, each FLOP budget as a SEPARATE interactive-priority
+job. Ahmed confirmed the full set {3e19, 9e19, 2e20, 3e20} (AskUserQuestion:
+"All four"). Each run writes BOTH the 70% (`--also-save-step`) and 80%
+(`--target-step`) native prefix in one training run, same mechanism as the
+3e18 run that succeeded earlier today.
+
+Preflight — `scripts/materialize_delphi_prefix_checkpoint.py --dry-run` for all
+four (all exit=0); destinations confirmed absent; sources confirmed complete
+OCDBT; original Delphi roots will not be modified; source mirror budget is now
+a hardcoded `SOURCE_CHECKPOINT_MIRROR_BUDGET_GB = 40.0` (covers 3e20's 28.4GiB
+source, so the 10GiB `TransferBudgetExceeded` that killed the first Gen-1 3e19
+attempt cannot recur):
+
+| base | schedule | source-step | target (80%) | also-save (70%) | TPU | RAM |
+|------|---------:|------------:|-------------:|----------------:|------|-----|
+| 3e19 | 38,014 | 20,000 | 30,411 | 26,609 | v6e-8  | 128g |
+| 9e19 | 40,283 | 20,000 | 32,226 | 28,198 | v6e-8  | 128g |
+| 2e20 | 56,477 | 30,000 | 45,181 | 39,533 | v5p-8  | 256g |
+| 3e20 | 35,510 | 20,000 | 28,408 | 24,857 | v5p-16 | 256g |
+
+Source checkpoints (us-central2 isoflop v6 bucket winners):
+- 3e19 `isoflop-3e+19-d1536-L16-B32-adamh_scaling_v6/checkpoints/step-20000`
+- 9e19 `isoflop-9e+19-d1792-L18-B64-adamh_scaling_v6/checkpoints/step-20000`
+- 2e20 `isoflop-2e+20-d2048-L21-B64-adamh_scaling_v6/checkpoints/step-30000`
+- 3e20 `isoflop-3e+20-d2304-L23-B128-adamh_scaling_v6/checkpoints/step-20000`
+
+Output roots (us-east5): `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-<base>-prefixes-qwen3`.
+
+Launcher: `scratch/20260530T0432Z_launch_delphi_prefix_3e19_to_3e20.sh`,
+replicating the proven 3e18 command shape (git HEAD `d165cbc`):
+
+```
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait --priority interactive \
+  --region us-east5 --extra marin-core:tpu --job-name delphi-<base>-prefixes-qwen3-<tputag>-d165cbc \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- uv run python scripts/materialize_delphi_prefix_checkpoint.py --base <base> \
+     --source-step <S> --target-step <T> --also-save-step <E> \
+     --output-root gs://.../delphi-<base>-prefixes-qwen3 --tpu <tpu> --ram <ram> --region us-east5
+```
+
+Submitted root jobs (all `submit exit=0`):
+- 3e19 → `/ahmed/delphi-3e19-prefixes-qwen3-v6e8-d165cbc`
+- 9e19 → `/ahmed/delphi-9e19-prefixes-qwen3-v6e8-d165cbc`
+- 2e20 → `/ahmed/delphi-2e20-prefixes-qwen3-v5p8-d165cbc`
+- 3e20 → `/ahmed/delphi-3e20-prefixes-qwen3-v5p16-d165cbc`
+
+Watch item: each `iris job run` logged "Executor heuristic: auto-tagging job as
+non-preemptible" for the CPU root coordinator (matches the known lesson about
+iris auto-tagging CPU-only jobs into a saturated non-preemptible pool). Today's
+3e18 root scheduled fine without `--preemptible`, so I matched that exact
+command; if any of these four roots stalls pending on CPU capacity, relaunch
+that one with `--preemptible`. Next: verify each child TPU job starts, resumes
+from its source step, and pins output path `delphi-<base>-prefixes-qwen3`.
