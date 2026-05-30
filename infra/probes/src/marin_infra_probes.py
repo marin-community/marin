@@ -36,16 +36,15 @@ LOG_SERVER_ENDPOINT_NAME = "/system/log-server"
 # us-west4 zones in the fleet.
 DEFAULT_ZONES = ("europe-west4-b", "us-west4-a")
 
-# finelog-write probe: the key/source the canary writes under, and how long to
-# keep re-reading our own write before declaring failure. The write path flushes
-# asynchronously and the index lags the flush by a beat, so a single immediate
-# read races and spuriously fails.
+# finelog-write probe: the key/source the canary writes under. Reads match on
+# the KEY column (FetchLogsRequest.source + MatchScope are key matchers despite
+# the field name), so the readback queries FINELOG_PROBE_KEY, not the source.
 FINELOG_PROBE_KEY = "infra.canary.finelog_probe"
 FINELOG_PROBE_SOURCE = "/canary/finelog-write-probe"
-# Cap the flush wait: the server-side write RPC can hang indefinitely, and an
+# Cap the flush wait: the StatsService write can be slow or hang, and an
 # unbounded flush would block the probe to its timeout and leak the worker
-# thread. Flush + readback stay well under the probe's 10s timeout.
-FINELOG_FLUSH_TIMEOUT = 3.0
+# thread. Flush + readback stay under the finelog-write probe timeout.
+FINELOG_FLUSH_TIMEOUT = 8.0
 FINELOG_READBACK_TIMEOUT = 5.0
 FINELOG_READBACK_POLL_INTERVAL = 0.25
 
@@ -166,10 +165,16 @@ def probe_finelog_write(finelog: LogClient) -> bool:
         return False
     # Re-read our own write until the nonce shows up or the readback budget is
     # spent: the write is durable now but the index lags it, so a single fetch races.
+    # source here matches the KEY column (EXACT), not the entry's source field.
     deadline = time.monotonic() + FINELOG_READBACK_TIMEOUT
     while True:
         response = finelog.fetch_logs(
-            logging_pb2.FetchLogsRequest(source=FINELOG_PROBE_SOURCE, since_ms=ts_ms - 1000, max_lines=64)
+            logging_pb2.FetchLogsRequest(
+                source=FINELOG_PROBE_KEY,
+                match_scope=logging_pb2.MATCH_SCOPE_EXACT,
+                since_ms=ts_ms - 1000,
+                max_lines=64,
+            )
         )
         if any(e.data == nonce for e in response.entries):
             return True
@@ -209,7 +214,7 @@ def main(argv: list[str] | None = None) -> None:
 
     runner = ProbeRunner()
     runner.add_probe("controller-ping", lambda: probe_controller_ping(iris), timeout=5.0, cadence=60.0)
-    runner.add_probe("finelog-write", lambda: probe_finelog_write(finelog), timeout=10.0, cadence=60.0)
+    runner.add_probe("finelog-write", lambda: probe_finelog_write(finelog), timeout=15.0, cadence=60.0)
     for zone in zones:
         runner.add_probe(
             f"iris-job-submit/{zone}",
