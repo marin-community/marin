@@ -35,6 +35,43 @@ class VllmServerHandle:
     process_group_id: int | None
     log_dir: str
 
+    def stop(self, *, timeout_seconds: float = 10) -> None:
+        self._signal(signal.SIGTERM)
+        try:
+            self.process.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            self._signal(signal.SIGKILL)
+            self.process.wait(timeout=timeout_seconds)
+
+        if self._process_group_exists():
+            # The API parent can exit before EngineCore does, so check the group after wait().
+            self._signal(signal.SIGKILL)
+
+    def _signal(self, sig: signal.Signals) -> None:
+        if self.process_group_id is not None:
+            try:
+                os.killpg(self.process_group_id, sig)
+            except ProcessLookupError:
+                pass
+            return
+
+        if self.process.poll() is None:
+            logger.warning(
+                "vLLM process group unavailable; signaling only parent process pid=%s signal=%s",
+                self.process.pid,
+                sig.name,
+            )
+            self.process.send_signal(sig)
+
+    def _process_group_exists(self) -> bool:
+        if self.process_group_id is None:
+            return False
+        try:
+            os.killpg(self.process_group_id, 0)
+            return True
+        except ProcessLookupError:
+            return False
+
 
 def resolve_model_name_or_path(model: ModelConfig) -> tuple[str, ModelConfig]:
     """Resolve the `model` argument to pass to vLLM."""
@@ -77,41 +114,6 @@ def _native_diagnostics(handle: VllmServerHandle, *, max_lines: int = 200) -> di
         "vLLM native log dir": handle.log_dir,
         "vLLM native logs (tail)": _native_logs_tail(handle.log_dir, max_lines=max_lines),
     }
-
-
-def _signal_process_group(process: subprocess.Popen[str], process_group_id: int | None, sig: signal.Signals) -> None:
-    if process_group_id is not None:
-        try:
-            os.killpg(process_group_id, sig)
-        except ProcessLookupError:
-            pass
-        return
-
-    if process.poll() is None:
-        process.send_signal(sig)
-
-
-def _process_group_exists(process_group_id: int | None) -> bool:
-    if process_group_id is None:
-        return False
-    try:
-        os.killpg(process_group_id, 0)
-        return True
-    except ProcessLookupError:
-        return False
-
-
-def _stop_vllm_process(process: subprocess.Popen[str], process_group_id: int | None) -> None:
-    _signal_process_group(process, process_group_id, signal.SIGTERM)
-    try:
-        process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        _signal_process_group(process, process_group_id, signal.SIGKILL)
-        process.wait(timeout=10)
-
-    if _process_group_exists(process_group_id):
-        # The API parent can exit before EngineCore does, so check the group after wait().
-        _signal_process_group(process, process_group_id, signal.SIGKILL)
 
 
 def _is_object_store_path(path: str) -> bool:
@@ -271,7 +273,7 @@ class VllmEnvironment:
 
     def close(self) -> None:
         if self.vllm_server is not None:
-            _stop_vllm_process(self.vllm_server.process, self.vllm_server.process_group_id)
+            self.vllm_server.stop()
             self.vllm_server = None
 
     @property
@@ -402,6 +404,14 @@ def _start_vllm_native_server(
                 f"{logs}"
             )
 
+    handle = VllmServerHandle(
+        server_url=server_url,
+        port=resolved_port,
+        process=process,
+        process_group_id=process_group_id,
+        log_dir=log_dir,
+    )
+
     try:
         _poll_until_ready(
             server_url,
@@ -409,15 +419,9 @@ def _start_vllm_native_server(
             check_alive=_check_process_alive,
         )
     except Exception:
-        _stop_vllm_process(process, process_group_id)
+        handle.stop()
         raise
     finally:
         stdout_f.close()
         stderr_f.close()
-    return VllmServerHandle(
-        server_url=server_url,
-        port=resolved_port,
-        process=process,
-        process_group_id=process_group_id,
-        log_dir=log_dir,
-    )
+    return handle

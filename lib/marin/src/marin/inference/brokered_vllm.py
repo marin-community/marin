@@ -30,7 +30,6 @@ from marin.inference.inference_worker import (
 )
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from marin.inference.vllm_server import VllmEnvironment
-from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +225,7 @@ def start_local_vllm_server(config: BrokeredVllmSystemConfig) -> Iterator[Runnin
 
 def _run_iris_inference_worker(config: BrokeredVllmSystemConfig, broker_handle: InferenceRequestProvider) -> None:
     configure_logging()
-    with remove_tpu_lockfile_on_exit(), start_local_vllm_server(config) as upstream:
+    with start_local_vllm_server(config) as upstream:
         worker = InferenceWorker(
             broker=broker_handle,
             upstream=upstream,
