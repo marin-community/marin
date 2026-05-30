@@ -12352,3 +12352,10 @@ Follow-up 2026-05-30T06:10Z — 2e20 SIGSEGV recovery + v6e capacity freed:
     New root: `/ahmed/delphi-2e20-prefixes-qwen3-v5p8-r2-1bb059a` (submit exit=0).
 - In-flight after recovery: 9e18 (v6e-4), 2e19/3e19/9e19 (v6e-8), 3e20 (v5p-16),
   2e20-r2 (v5p-8). 3e18 complete.
+
+Correction 2026-05-30T06:15Z to the entry above: the 2e20 recovery root is
+`/ahmed/delphi-2e20-prefixes-qwen3-v5p8-r2-b10c989` (HEAD was b10c989 at
+relaunch, not 1bb059a). Also, the post-failure temp-checkpoint dir was EMPTY
+(no step-31500); r2 restarts from source step 30000, which is correct and
+idempotent via override_output_path. Verified single live r2 root: child
+pending v5p-8 capacity; old ...-d165cbc root remains FAILED/superseded.
