@@ -15,7 +15,7 @@ import jax.numpy as jnp
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
-from jaxtyping import Array, Bool, Float
+from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug.attention._core import AttentionMask
 from levanter.grug.attention._fa4_cute import _gpu_compute_arch
@@ -74,9 +74,9 @@ def _optional_dependency_error() -> RuntimeError:
 
 
 def _validate_simple_causal_self_attention(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     backend_name: str,
@@ -119,12 +119,13 @@ def _thd_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
 
 
 def _thd_cu_seqlens_from_segment_lengths(
-    segment_lengths: jax.Array,
-    num_segments: jax.Array,
+    segment_lengths: Int[Array, "... M"],
+    num_segments: Int[Array, "..."],
     *,
     batch_size: int,
     total_tokens: int,
-) -> jax.Array:
+    token_reference: Float[Array, "B S H D"] | None,
+) -> Int[Array, "N"]:
     if segment_lengths.ndim == 1:
         segment_lengths = jnp.broadcast_to(segment_lengths[None, :], (batch_size, segment_lengths.shape[0]))
     elif segment_lengths.ndim == 2:
@@ -152,7 +153,7 @@ def _thd_cu_seqlens_from_segment_lengths(
     else:
         segment_index = jnp.arange(max_segments, dtype=jnp.int32)
         keep = segment_index[None, :] < num_segments[:, None]
-        sharding = _segment_lengths_sharding(segment_lengths, num_segments)
+        sharding = _segment_lengths_sharding(segment_lengths, num_segments, token_reference)
         if sharding is not None:
             keep = reshard(keep, sharding)
         lengths = jnp.where(keep, segment_lengths.astype(jnp.int32), jnp.zeros_like(segment_lengths, dtype=jnp.int32))
@@ -176,15 +177,14 @@ def _thd_cu_seqlens_from_segment_lengths(
     return cu_seqlens
 
 
-def _segment_lengths_sharding(segment_lengths: jax.Array, num_segments: jax.Array) -> jax.sharding.Sharding | None:
-    mesh = jax.sharding.get_abstract_mesh()
-    if (
-        not getattr(mesh, "empty", False)
-        and segment_lengths.ndim == 2
-        and "data" in mesh.axis_names
-        and "expert" in mesh.axis_names
-    ):
-        return NamedSharding(mesh, P(("data", "expert"), None))
+def _segment_lengths_sharding(
+    segment_lengths: Int[Array, "... M"],
+    num_segments: Int[Array, "..."],
+    token_reference: Float[Array, "B S H D"] | None,
+) -> jax.sharding.Sharding | None:
+    token_sharding = _sharding_of(token_reference)
+    if isinstance(token_sharding, NamedSharding) and len(token_sharding.spec) >= 1:
+        return NamedSharding(token_sharding.mesh, P(token_sharding.spec[0], None))
     sharding = _sharding_of(segment_lengths)
     if sharding is not None:
         return sharding
@@ -194,7 +194,9 @@ def _segment_lengths_sharding(segment_lengths: jax.Array, num_segments: jax.Arra
     return None
 
 
-def _sharding_of(x: jax.Array) -> jax.sharding.Sharding | None:
+def _sharding_of(x: Array | None) -> jax.sharding.Sharding | None:
+    if x is None:
+        return None
     sharding = getattr(x, "sharding", None)
     if isinstance(sharding, NamedSharding) and not getattr(sharding.mesh, "empty", False):
         return sharding
@@ -428,14 +430,14 @@ def _upstream_fa4_thd_backward_launcher(
 
 
 def fa4_thd_attention_forward(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    cu_seqlens: jax.Array,
+    q: Float[Array, "T Hq D"],
+    k: Float[Array, "T Hkv D"],
+    v: Float[Array, "T Hkv D"],
+    cu_seqlens: Int[Array, "N"],
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-) -> tuple[jax.Array, jax.Array]:
+) -> tuple[Float[Array, "T Hq D"], Float[Array, "Hq T"]]:
     _validate_thd_inputs(q, k, v, cu_seqlens, softmax_scale=softmax_scale)
     try:
         modules = _import_upstream_fa4_cute()
@@ -464,17 +466,17 @@ def fa4_thd_attention_forward(
 
 
 def fa4_thd_attention_backward(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    out: jax.Array,
-    dout: jax.Array,
-    lse: jax.Array,
-    cu_seqlens: jax.Array,
+    q: Float[Array, "T Hq D"],
+    k: Float[Array, "T Hkv D"],
+    v: Float[Array, "T Hkv D"],
+    out: Float[Array, "T Hq D"],
+    dout: Float[Array, "T Hq D"],
+    lse: Float[Array, "Hq T"],
+    cu_seqlens: Int[Array, "N"],
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
+) -> tuple[Float[Array, "T Hq D"], Float[Array, "T Hkv D"], Float[Array, "T Hkv D"]]:
     _validate_thd_inputs(q, k, v, cu_seqlens, softmax_scale=softmax_scale)
     if q.shape[1] == k.shape[1]:
         raise NotImplementedError("gpu_fa4_thd_attention backward is currently wired for GQA only.")
@@ -525,10 +527,10 @@ def _cutlass_thd_backward_specs(modules: _UpstreamFa4CuteModules) -> tuple[tuple
 
 
 def _cutlass_thd_backward_output_shapes(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    cu_seqlens: jax.Array,
+    q: Float[Array, "T Hq D"],
+    k: Float[Array, "T Hkv D"],
+    v: Float[Array, "T Hkv D"],
+    cu_seqlens: Int[Array, "N"],
     backward_tile: tuple[int, int],
 ) -> tuple[jax.ShapeDtypeStruct, ...]:
     total_q, q_heads, head_dim = q.shape
@@ -559,13 +561,13 @@ def _num_thd_sequences(*, cu_seqlens_shape: int, cu_seqlens_rank: int) -> int:
 
 @partial(jax.custom_vjp, nondiff_argnums=(4, 5))
 def _jax_fa4_thd_attention(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    cu_seqlens: jax.Array,
+    q: Float[Array, "T Hq D"],
+    k: Float[Array, "T Hkv D"],
+    v: Float[Array, "T Hkv D"],
+    cu_seqlens: Int[Array, "N"],
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-) -> jax.Array:
+) -> Float[Array, "T Hq D"]:
     out, _ = fa4_thd_attention_forward(
         q,
         k,
@@ -578,13 +580,23 @@ def _jax_fa4_thd_attention(
 
 
 def _jax_fa4_thd_attention_fwd(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    cu_seqlens: jax.Array,
+    q: Float[Array, "T Hq D"],
+    k: Float[Array, "T Hkv D"],
+    v: Float[Array, "T Hkv D"],
+    cu_seqlens: Int[Array, "N"],
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]]:
+) -> tuple[
+    Float[Array, "T Hq D"],
+    tuple[
+        Float[Array, "T Hq D"],
+        Float[Array, "T Hkv D"],
+        Float[Array, "T Hkv D"],
+        Float[Array, "T Hq D"],
+        Float[Array, "Hq T"],
+        Int[Array, "N"],
+    ],
+]:
     out, lse = fa4_thd_attention_forward(
         q,
         k,
@@ -599,9 +611,16 @@ def _jax_fa4_thd_attention_fwd(
 def _jax_fa4_thd_attention_bwd(
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-    residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
-    cotangent: jax.Array | jax.custom_derivatives.SymbolicZero,
-) -> tuple[jax.Array | None, jax.Array | None, jax.Array | None, None]:
+    residuals: tuple[
+        Float[Array, "T Hq D"],
+        Float[Array, "T Hkv D"],
+        Float[Array, "T Hkv D"],
+        Float[Array, "T Hq D"],
+        Float[Array, "Hq T"],
+        Int[Array, "N"],
+    ],
+    cotangent: Float[Array, "T Hq D"] | jax.custom_derivatives.SymbolicZero,
+) -> tuple[Float[Array, "T Hq D"] | None, Float[Array, "T Hkv D"] | None, Float[Array, "T Hkv D"] | None, None]:
     q, k, v, out, lse, cu_seqlens = residuals
     if isinstance(cotangent, jax.custom_derivatives.SymbolicZero):
         return jnp.zeros_like(q), jnp.zeros_like(k), jnp.zeros_like(v), None
@@ -623,10 +642,10 @@ _jax_fa4_thd_attention.defvjp(_jax_fa4_thd_attention_fwd, _jax_fa4_thd_attention
 
 
 def _validate_thd_inputs(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    cu_seqlens: jax.Array,
+    q: Float[Array, "T Hq D"],
+    k: Float[Array, "T Hkv D"],
+    v: Float[Array, "T Hkv D"],
+    cu_seqlens: Int[Array, "N"],
     *,
     softmax_scale: float,
 ) -> None:
@@ -675,6 +694,7 @@ def gpu_fa4_thd_attention(
         metadata.num_segments,
         batch_size=batch_size,
         total_tokens=batch_size * seq_len,
+        token_reference=q,
     )
     kernel_config = _thd_kernel_config(head_dim)
     out = _jax_fa4_thd_attention(

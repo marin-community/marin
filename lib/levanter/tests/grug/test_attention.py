@@ -6,6 +6,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 
 from levanter.data.text import GrugLmExample
 import levanter.grug.attention._fa4_thd as fa4_thd
@@ -76,6 +78,19 @@ def test_grug_lm_example_with_max_segments_stacks_padded_packed_rows():
     assert metadata is not None
     np.testing.assert_array_equal(metadata.segment_lengths, jnp.array([[2, 2, 4], [3, 2, 3]], dtype=jnp.int32))
     np.testing.assert_array_equal(metadata.num_segments, jnp.array([3, 3], dtype=jnp.int32))
+
+
+def test_thd_segment_metadata_sharding_follows_token_stream():
+    mesh = jax.sharding.Mesh(np.asarray(jax.devices()[:1]).reshape((1, 1, 1)), ("data", "expert", "model"))
+    token_sharding = NamedSharding(mesh, P(("data", "expert"), None, "model", None))
+    q = jax.device_put(jnp.zeros((2, 4, 2, 8), dtype=jnp.float32), token_sharding)
+    segment_lengths = jnp.array([[2, 2], [3, 1]], dtype=jnp.int32)
+    num_segments = jnp.array([2, 2], dtype=jnp.int32)
+
+    sharding = fa4_thd._segment_lengths_sharding(segment_lengths, num_segments, q)
+
+    assert isinstance(sharding, NamedSharding)
+    assert sharding.spec == P(("data", "expert"), None)
 
 
 def test_thd_segment_metadata_rejects_mismatched_q_kv_segments():
