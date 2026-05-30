@@ -73,8 +73,7 @@ Send SIGTERM/SIGINT to shut down. Tail stdout to see results.
 
 | Flag                  | Env (n/a, all flag-driven) | Notes                                  |
 | --------------------- | -------------------------- | -------------------------------------- |
-| `--iris-endpoint`     | *(required)*               | Used for both Iris RPCs and Finelog if `--finelog-endpoint` is omitted. |
-| `--finelog-endpoint`  | falls back to iris         |                                        |
+| `--iris-endpoint`     | *(required)*               | Iris controller RPC endpoint; the finelog address is resolved from its endpoint registry (`/system/log-server`). |
 | `--zone` (repeatable) | *(required)*               | One canary job per zone every 5 min.   |
 
 ## Deployment

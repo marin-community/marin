@@ -26,6 +26,11 @@ from rigging.timing import Duration
 
 logger = logging.getLogger("probes")
 
+# Iris advertises the finelog log-server under this logical name in its endpoint
+# registry; resolve it to a concrete address via list_endpoints (same name the
+# iris worker uses).
+LOG_SERVER_ENDPOINT_NAME = "/system/log-server"
+
 
 @dataclass
 class ProbeResult:
@@ -133,15 +138,25 @@ def probe_finelog_write(finelog: LogClient) -> ProbeResult:
 # ---- entrypoint -----------------------------------------------------------
 
 
+def resolve_finelog_address(iris: RemoteClusterClient, name: str) -> str:
+    """Resolve the finelog log-server address from iris's endpoint registry."""
+    endpoints = iris.list_endpoints(name, exact=True)
+    if not endpoints:
+        raise ConnectionError(f"no {name!r} endpoint registered on the iris controller")
+    return endpoints[0].address
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="probes")
-    p.add_argument("--iris-endpoint", required=True, help="e.g. https://iris-controller.internal:10001")
-    p.add_argument("--finelog-endpoint", help="defaults to --iris-endpoint")
+    p.add_argument("--iris-endpoint", required=True, help="e.g. http://10.128.0.3:10001")
     p.add_argument("--zone", action="append", required=True, help="GCP zone for iris-job-submit; repeat for multiple")
     args = p.parse_args(argv)
 
     iris = RemoteClusterClient(controller_address=args.iris_endpoint)
-    finelog = LogClient.connect(args.finelog_endpoint or args.iris_endpoint)
+    finelog = LogClient.connect(
+        LOG_SERVER_ENDPOINT_NAME,
+        resolver=lambda name: resolve_finelog_address(iris, name),
+    )
 
     runner = ProbeRunner()
     runner.add_probe("controller-ping", lambda: probe_controller_ping(iris), timeout=5.0, cadence=60.0)
