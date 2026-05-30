@@ -11,7 +11,10 @@ They focus on:
 """
 
 import asyncio
+import logging
+import tempfile
 import threading
+from pathlib import Path
 
 from finelog.rpc import logging_pb2
 from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
@@ -42,8 +45,10 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     PruneResult,
     TaskUpdate,
+    _kill_non_terminal_tasks,
 )
-from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.log_store_helpers import task_log_key
+from iris.cluster.types import JobName, TaskAttempt, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, select, text
@@ -412,7 +417,6 @@ def test_cancel_job_preserves_kill_worker_mapping_after_clearing_tasks(harness):
 
 
 def test_cancel_job_removes_endpoints_for_job_tree(state):
-
     parent_worker = register_worker(state, "w1", "host1:8080", make_worker_metadata())
     child_worker = register_worker(state, "w2", "host2:8080", make_worker_metadata())
 
@@ -1617,7 +1621,6 @@ def test_stale_attempt_ignored(state):
 
 def test_stale_attempt_error_log_for_non_terminal(state, caplog):
     """Stale attempt report logs ERROR when the old attempt is not terminal."""
-    import logging
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
@@ -1673,8 +1676,6 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
 
 def test_log_service_direct_push(state, log_service):
     """Log entries pushed via LogService are queryable."""
-    from iris.cluster.log_store_helpers import task_log_key
-    from iris.cluster.types import TaskAttempt
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
@@ -1698,9 +1699,6 @@ def test_log_service_direct_push(state, log_service):
 
 def test_log_service_accumulates_pushes(state, log_service):
     """Multiple pushes accumulate logs in the service."""
-
-    from iris.cluster.log_store_helpers import task_log_key
-    from iris.cluster.types import TaskAttempt
 
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
@@ -3020,10 +3018,10 @@ def test_holder_tasks_excluded_from_building_counts(state):
 
 
 def test_holder_tasks_excluded_from_poll_expected_tasks(state):
-    """Holder tasks must not appear in PollTasks expected_tasks.
+    """Holder tasks must not appear in the Reconcile request's desired set.
 
     Holder tasks are virtual — never dispatched to the worker. If included
-    in expected_tasks the worker reports "Task not found on worker", causing
+    in the desired set the worker reports "Task not found on worker", causing
     a worker_failed → retry loop (GH-3178).
     """
 
@@ -3052,8 +3050,6 @@ def test_holder_tasks_excluded_from_poll_expected_tasks(state):
 
 def test_snapshot_round_trip_preserves_reservation_holder(state):
     """DB checkpoint copy round-trip preserves is_reservation_holder flag."""
-    import tempfile
-    from pathlib import Path
 
     req = _make_reservation_make_job_request(
         task_device=_h100_device(),
@@ -3355,36 +3351,6 @@ def test_prune_old_terminal_jobs(state):
     assert _query_task(state, old_tasks[0].task_id) is None
 
 
-def test_prune_evicts_status_text_cache(state):
-    """prune_old_data evicts _status_text entries for pruned jobs; other tasks are unaffected."""
-    wid = register_worker(state, "w1", "host:8080", make_worker_metadata())
-
-    old_tasks = submit_job(state, "old-job", make_job_request("old-job"))
-    dispatch_task(state, old_tasks[0], wid)
-    transition_task(state, old_tasks[0].task_id, job_pb2.TASK_STATE_SUCCEEDED)
-
-    kept_tasks = submit_job(state, "kept-job", make_job_request("kept-job"))
-    dispatch_task(state, kept_tasks[0], wid)
-    transition_task(state, kept_tasks[0].task_id, job_pb2.TASK_STATE_SUCCEEDED)
-
-    old_job_id = JobName.root("test-user", "old-job")
-    with state._db.transaction() as _tx:
-        _tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == old_job_id).values(finished_at_ms=1000))
-
-    state.record_task_status_text(old_tasks[0].task_id, "old detail", "old summary")
-    state.record_task_status_text(kept_tasks[0].task_id, "kept detail", "kept summary")
-
-    state.prune_old_data(
-        job_retention=Duration.from_seconds(86400),
-        worker_retention=Duration.from_seconds(86400),
-    )
-
-    assert state.get_status_text_detail(old_tasks[0].task_id.to_wire()) == ""
-    assert state.get_status_text_summary(old_tasks[0].task_id.to_wire()) == ""
-    assert state.get_status_text_detail(kept_tasks[0].task_id.to_wire()) == "kept detail"
-    assert state.get_status_text_summary(kept_tasks[0].task_id.to_wire()) == "kept summary"
-
-
 def test_prune_old_inactive_workers(state):
     """Inactive workers with stale heartbeats are pruned; active workers are kept.
 
@@ -3414,7 +3380,6 @@ def test_prune_old_inactive_workers(state):
 
 def test_submit_job_emits_structured_audit_log(state, caplog):
     """submit_job logs a structured event=job_submitted line for the log-store audit trail."""
-    import logging
 
     req = make_job_request("audit-me")
     with caplog.at_level(logging.INFO, logger="iris.cluster.controller.transitions"):
@@ -3844,7 +3809,6 @@ def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harnes
     ``j.is_reservation_holder = 0``), so terminating a holder task on a
     co-tenanted worker cannot move the co-tenant's reservation accounting.
     """
-    from iris.cluster.controller.transitions import _kill_non_terminal_tasks
 
     worker_id = harness.add_worker("w1")
 

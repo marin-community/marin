@@ -15,8 +15,8 @@
 edition = "2023";
 
 // Worker-specific request/response messages and the WorkerService RPC.
-// Shared types (including RunTaskRequest and WorkerTaskStatus) live in
-// job.proto; controller-specific types live in controller.proto.
+// Shared types (including RunTaskRequest) live in job.proto; controller-
+// specific types live in controller.proto.
 //
 // Package deliberately kept as iris.cluster to preserve the wire-protocol URL
 // /iris.cluster.WorkerService/... for all existing workers and the controller.
@@ -75,30 +75,6 @@ message Worker {
     string health_error = 3;
   }
 
-  message StartTasksRequest {
-    repeated iris.job.RunTaskRequest tasks = 1;
-  }
-  message StartTasksResponse {
-    repeated TaskAck acks = 1;
-  }
-  message TaskAck {
-    string task_id = 1;
-    bool accepted = 2;
-    string error = 3;
-  }
-
-  message StopTasksRequest {
-    repeated string task_ids = 1;
-  }
-  message StopTasksResponse {}
-
-  message PollTasksRequest {
-    repeated iris.job.WorkerTaskStatus expected_tasks = 1;
-  }
-  message PollTasksResponse {
-    repeated iris.job.WorkerTaskStatus tasks = 1;
-  }
-
   // ============================================================
   // RECONCILE RPC (controller -> worker, unary)
   // ============================================================
@@ -115,8 +91,7 @@ message Worker {
   }
 
   message DesiredAttempt {
-    // Routing key. 16 hex chars (128-bit random). Set in Phase C+;
-    // empty in Phase B (recipient routes by task_id+attempt_id then).
+    // Routing key. 16 hex chars (128-bit random).
     string attempt_uid = 1;
 
     oneof intent {
@@ -124,7 +99,11 @@ message Worker {
       StopReason stop = 11;
     }
 
-    // Phase-B compat: legacy composite key.
+    // Legacy composite key. Retained as a rollover fallback so a worker that
+    // adopted a pre-UID-label container (created before 2026-05-19) can
+    // route by (task_id, attempt_id) and stamp the UID onto its local
+    // attempt on the first reconcile tick. Scheduled for removal once
+    // label-less containers have aged out of the cluster.
     string task_id = 100;
     int32 attempt_id = 101;
   }
@@ -146,7 +125,10 @@ message Worker {
     iris.time.Timestamp finished_at = 6;
     iris.job.ResourceUsage resource_usage = 7;
 
-    // Phase-B compat: legacy composite key.
+    // Legacy composite key. Set so the controller can route an observation
+    // emitted by a pre-UID-label adopted attempt (empty attempt_uid) back to
+    // its DB row via (task_id, attempt_id). Scheduled for removal alongside
+    // the matching DesiredAttempt fields.
     string task_id = 100;
     int32 attempt_id = 101;
   }
@@ -186,10 +168,8 @@ service WorkerService {
 
   // --- Worker lifecycle / task RPCs (controller -> worker) ---
   rpc Ping(Worker.PingRequest) returns (Worker.PingResponse);
-  rpc StartTasks(Worker.StartTasksRequest) returns (Worker.StartTasksResponse);
-  rpc StopTasks(Worker.StopTasksRequest) returns (Worker.StopTasksResponse);
-  rpc PollTasks(Worker.PollTasksRequest) returns (Worker.PollTasksResponse);
-  // Reconcile RPC (Phase B+): controller -> worker, unary.
-  // Legacy RPCs (StartTasks / StopTasks / PollTasks / Ping) kept through Phase D.
+  // Reconcile RPC: controller -> worker, unary. One request carries the
+  // controller's complete desired attempt set for this worker; one response
+  // carries the complete observed set plus a WorkerHealth block.
   rpc Reconcile(Worker.ReconcileRequest) returns (Worker.ReconcileResponse);
 }

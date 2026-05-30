@@ -14,22 +14,9 @@ from __future__ import annotations
 import logging
 
 from finelog.rpc import logging_pb2
+from finelog.store.cursor import LogCursor
 from finelog.store.duckdb_store import DuckDBLogStore as LogStore
 from finelog.types import LogReadResult, str_to_log_level
-
-
-class LogCursor:
-    """Stateful incremental reader for a single LogStore key."""
-
-    def __init__(self, store: LogStore, key: str) -> None:
-        self._store = store
-        self._key = key
-        self._cursor: int = 0
-
-    def read(self, max_entries: int = 5000) -> list[logging_pb2.LogEntry]:
-        result = self._store.get_logs(self._key, cursor=self._cursor, max_lines=max_entries)
-        self._cursor = result.cursor
-        return result.entries
 
 
 class LogStoreHandler(logging.Handler):

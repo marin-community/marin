@@ -3,6 +3,7 @@
 
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
+from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import reads
 from iris.cluster.controller.budget import compute_effective_band
 from iris.cluster.controller.controller import (
@@ -1213,7 +1214,6 @@ def test_preempt_task_requeues_coscheduled_siblings_on_retry():
     bounced to PENDING so the job re-coschedules atomically. Without this, the
     retry could land on a different slice from the still-RUNNING siblings,
     splitting the SPMD mesh."""
-    from iris.cluster.constraints import WellKnownAttribute
 
     with make_controller_state() as state:
         for i in range(2):
@@ -1266,7 +1266,6 @@ def test_preempt_task_cascades_coscheduled_siblings():
     WORKER_FAILED via heartbeat). Instead, siblings are killed when the job
     reaches a terminal state through _finalize_terminal_job.
     """
-    from iris.cluster.constraints import WellKnownAttribute
 
     with make_controller_state() as state:
         # Register 2 workers with TPU attributes for coscheduling

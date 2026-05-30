@@ -26,7 +26,7 @@ from iris.cluster.providers.types import (
     ResourceNotFoundError,
 )
 from iris.cluster.service_mode import ServiceMode
-from iris.cluster.types import TPU_TOPOLOGIES
+from iris.cluster.tpu_topology import TPU_TOPOLOGIES
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)

@@ -105,34 +105,6 @@ def configure_client_s3(config: config_pb2.IrisClusterConfig) -> None:
         pass
 
 
-_COREWEAVE_TOPOLOGY_LABEL_PREFIXES = (
-    "backend.coreweave.cloud/",
-    "ib.coreweave.cloud/",
-    "node.coreweave.cloud/",
-)
-_COREWEAVE_TOPOLOGY_DISCOVERY_VALUE = "same-slice"
-
-
-def split_coreweave_topology_selector(worker_attributes: dict[str, str]) -> tuple[dict[str, str], tuple[str, ...]]:
-    """Split worker attributes into static topology selectors and keys needing discovery.
-
-    Keys with known CoreWeave topology prefixes and a concrete value become static
-    nodeSelector entries. Keys with the sentinel value "same-slice" are returned as
-    discovered_keys -- the provider should read the leader pod's node labels to fill
-    these in at runtime.
-    """
-    static_selector: dict[str, str] = {}
-    discovered_keys: list[str] = []
-    for key, value in worker_attributes.items():
-        if not any(key.startswith(prefix) for prefix in _COREWEAVE_TOPOLOGY_LABEL_PREFIXES):
-            continue
-        if value == _COREWEAVE_TOPOLOGY_DISCOVERY_VALUE:
-            discovered_keys.append(key)
-        else:
-            static_selector[key] = value
-    return static_selector, tuple(discovered_keys)
-
-
 # ============================================================================
 # Controller Deployment manifest builder
 # ============================================================================

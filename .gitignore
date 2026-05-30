@@ -214,6 +214,7 @@ archive/
 
 # wandb logs
 wandb
+artifacts
 
 # Ignore generated credentials from google-github-actions/auth
 gha-creds-*.json
@@ -238,6 +239,7 @@ scr/*
 .agents/tmp/
 .codex
 .entire
+.beads
 
 .worktrees
 .obsidian

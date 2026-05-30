@@ -17,7 +17,8 @@ Schedule details
 import dataclasses
 
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main, output_path_of
+from marin.execution.executor import executor_main
+from marin.execution.types import output_path_of
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 from experiments.defaults import default_sft, default_train

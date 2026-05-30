@@ -35,6 +35,7 @@ from iris.cluster.constraints import (
     is_cpu_device_type_constraint,
 )
 from iris.cluster.controller.autoscaler.backoff_detector import (
+    DEFAULT_SHORT_LIVED_THRESHOLD,
     BackoffDetector,
     GroupHealth,
     SliceFate,
@@ -43,11 +44,7 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import scaling_groups_table, slices_table
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import Labels, QuotaExhaustedError, SliceHandle
-from iris.cluster.types import (
-    WorkerStatusMap,
-    get_gpu_count,
-    get_tpu_count,
-)
+from iris.cluster.types import WorkerStatusMap, get_gpu_count, get_tpu_count
 from iris.rpc import config_pb2, job_pb2, time_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 
@@ -313,6 +310,7 @@ class ScalingGroup:
         quota_timeout: Duration = DEFAULT_QUOTA_TIMEOUT,
         scale_up_rate_limit: int = DEFAULT_SCALE_UP_RATE_LIMIT,
         scale_down_rate_limit: int = DEFAULT_SCALE_DOWN_RATE_LIMIT,
+        short_lived_threshold: Duration = DEFAULT_SHORT_LIVED_THRESHOLD,
         detector: BackoffDetector | None = None,
         db: ControllerDB | None = None,
     ):
@@ -345,6 +343,7 @@ class ScalingGroup:
                 group_name=config.name,
                 scale_up_bucket=scale_up_bucket,
                 base_scale_up_per_minute=scale_up_rate_limit,
+                short_lived_threshold=short_lived_threshold,
                 quota_block_duration=quota_timeout,
             )
         )

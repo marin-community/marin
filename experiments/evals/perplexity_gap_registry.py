@@ -23,7 +23,7 @@ from marin.evaluation.perplexity_gap import (
     model_perplexity_gap_from_scores,
     model_perplexity_scores,
 )
-from marin.execution.executor import ExecutorStep
+from marin.execution.types import ExecutorStep
 
 from experiments.bio_chem_notation import bio_chem_raw_validation_sets
 from experiments.defaults import default_raw_validation_sets

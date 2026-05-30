@@ -21,26 +21,22 @@ from marin.evaluation.perplexity_gap import (
     raw_text_dataset,
 )
 from marin.execution.executor import (
-    THIS_OUTPUT_PATH,
     Executor,
-    ExecutorStep,
-    InputName,
     _get_info_path,
     collect_dependencies_and_version,
     compute_output_path,
     instantiate_config,
     materialize,
     mirrored,
-    output_path_of,
-    this_output_path,
     upstream_steps,
-    versioned,
 )
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
     step_lock,
 )
+from marin.execution.types import THIS_OUTPUT_PATH, ExecutorStep, InputName, output_path_of, this_output_path, versioned
+from rigging.distributed_lock import HEARTBEAT_TIMEOUT, Lease
 
 
 @dataclass(frozen=True)
@@ -222,7 +218,8 @@ def test_model_perplexity_score_step_hash_changes_when_tokenizer_changes():
 def test_force_run_failed():
     log = create_log()
 
-    temp_file_to_mark_failure = tempfile.NamedTemporaryFile(prefix="executor-fail-", delete=False)
+    # delete=False: the file must outlive this handle so its path can be reused below.
+    temp_file_to_mark_failure = tempfile.NamedTemporaryFile(prefix="executor-fail-", delete=False)  # noqa: SIM115
     # make sure it exists
     temp_file_to_mark_failure.write(b"hello")
     temp_file_to_mark_failure.close()
@@ -856,7 +853,6 @@ def test_mirrored_changes_version():
 
 def test_status_file_takeover_stale_lock_then_refresh(tmp_path):
     """Test taking over a stale lock from a dead worker and then refreshing it."""
-    from rigging.distributed_lock import HEARTBEAT_TIMEOUT, Lease
 
     # Simulate worker A creating a stale lock (as if it died)
     dead_worker = StatusFile(tmp_path, worker_id="dead-worker")

@@ -40,6 +40,8 @@ from pathlib import PurePath
 from typing import Any
 
 import fsspec
+from fsspec.implementations.local import LocalFileSystem
+from google.api_core.exceptions import Forbidden as GcpForbiddenException
 
 from rigging.distributed_lock import create_lock, default_worker_id
 
@@ -277,7 +279,6 @@ def check_path_in_region(key: str, path: str, region: str, local_ok: bool = Fals
     (instead of raising) when the bucket's region can't be checked due
     to permission errors.
     """
-    from google.api_core.exceptions import Forbidden as GcpForbiddenException
 
     if not path.startswith("gs://"):
         if local_ok:
@@ -752,6 +753,13 @@ def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
     if _fs_is_gcs(fs):
         fs = CrossRegionGuardedFS(fs)
     return fs, path
+
+
+def is_remote_path(path: str) -> bool:
+    """True if ``path`` resolves to a remote filesystem (e.g. ``gs://``, ``s3://``) rather than the
+    local disk. A bare path or ``file://`` URL is local; anything with a remote scheme is not."""
+    fs, _ = url_to_fs(path)
+    return not isinstance(fs, LocalFileSystem)
 
 
 def open_url(url: str, mode: str = "rb", **kwargs: Any) -> fsspec.core.OpenFile:

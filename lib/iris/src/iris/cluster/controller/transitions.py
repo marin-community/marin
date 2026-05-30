@@ -301,21 +301,6 @@ class PruneResult:
         return self.jobs_deleted + self.workers_deleted
 
 
-@dataclass
-class WorkerConfig:
-    """Static worker configuration for v0.
-
-    Args:
-        worker_id: Unique worker identifier
-        address: Worker RPC address (host:port)
-        metadata: Worker environment metadata
-    """
-
-    worker_id: str
-    address: str
-    metadata: job_pb2.WorkerMetadata
-
-
 @dataclass(frozen=True)
 class TaskUpdate:
     """Single task state update applied in a batch."""
@@ -328,27 +313,43 @@ class TaskUpdate:
     container_id: str | None = None
 
 
-def task_updates_from_proto(entries) -> list[TaskUpdate]:
-    """Convert worker-reported WorkerTaskStatus protos into TaskUpdates.
+def _filter_observations_to_plan(
+    plan: WorkerReconcilePlan,
+    observations: list[worker_pb2.Worker.AttemptObservation],
+    worker_id: WorkerId,
+) -> list[worker_pb2.Worker.AttemptObservation]:
+    """Drop observations whose attempt is not in the per-worker plan we sent.
 
-    Skips UNSPECIFIED/PENDING — the controller is only interested in
-    transitions to BUILDING or beyond.
+    Membership: observation matches if its ``attempt_uid`` is in the plan's
+    non-empty UID set OR its ``(task_id, attempt_id)`` composite is in the
+    plan's composite set. The composite fallback covers observations from
+    pre-UID-label adopted attempts that carry an empty UID until the worker
+    stamps it on the first reconcile tick.
     """
-    updates: list[TaskUpdate] = []
-    for entry in entries:
-        if entry.state in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING):
+    plan_uids: set[str] = set()
+    plan_composites: set[tuple[str, int]] = set()
+    for desired in plan.request.desired:
+        if desired.attempt_uid:
+            plan_uids.add(desired.attempt_uid)
+        plan_composites.add((desired.task_id, desired.attempt_id))
+
+    kept: list[worker_pb2.Worker.AttemptObservation] = []
+    dropped = 0
+    for obs in observations:
+        if obs.attempt_uid and obs.attempt_uid in plan_uids:
+            kept.append(obs)
             continue
-        updates.append(
-            TaskUpdate(
-                task_id=JobName.from_wire(entry.task_id),
-                attempt_id=entry.attempt_id,
-                new_state=entry.state,
-                error=entry.error or None,
-                exit_code=entry.exit_code if entry.HasField("exit_code") else None,
-                container_id=entry.container_id or None,
-            )
+        if (obs.task_id, obs.attempt_id) in plan_composites:
+            kept.append(obs)
+            continue
+        dropped += 1
+    if dropped:
+        logger.debug(
+            "apply_reconcile_result: worker %s sent %d observations outside the plan; dropping",
+            worker_id,
+            dropped,
         )
-    return updates
+    return kept
 
 
 @dataclass(frozen=True)
@@ -952,9 +953,6 @@ class ControllerTransitions:
         self._health = health or WorkerHealthTracker()
         self._endpoints = endpoints or EndpointsProjection(db)
         self._worker_attrs = worker_attrs or WorkerAttrsProjection(db)
-        # In-memory task status text (markdown for UI display).
-        self._status_text_detail: dict[str, str] = {}
-        self._status_text_summary: dict[str, str] = {}
         self._run_template_cache: LRUCache[str, job_pb2.RunTaskRequest] = LRUCache(RUN_REQUEST_TEMPLATE_CACHE_SIZE)
 
     def run_request_template(
@@ -1618,7 +1616,7 @@ class ControllerTransitions:
 
         Worker-bound dispatch is driven by the polling reconcile loop, which
         reads ``tasks.state = ASSIGNED`` rows from a snapshot and fans out
-        StartTasks RPCs. This method does not enqueue or fan out anything;
+        Reconcile RPCs. This method does not enqueue or fan out anything;
         callers are responsible for waking ``_polling_wake`` after commit so
         the reconcile loop sees the new ASSIGNED rows on its next tick.
 
@@ -2027,7 +2025,15 @@ class ControllerTransitions:
             return TxResult()
         self._health.heartbeat([worker_id], now_ms)
 
-        all_updates = self._observations_to_updates(cur, result.observations)
+        # Drop observations that fall outside the plan we just sent. Protects
+        # against an old worker volunteering its terminal-state local history
+        # (seen in prod: 287 obs for 1 desired RUNNING attempt) and against any
+        # other extra-observation drift between worker and controller.
+        observations = _filter_observations_to_plan(plan, result.observations, worker_id)
+        if not observations:
+            return TxResult()
+
+        all_updates = self._observations_to_updates(cur, observations)
         if not all_updates:
             return TxResult()
 
@@ -2059,7 +2065,8 @@ class ControllerTransitions:
         for desired in plan.request.desired:
             if not desired.HasField("run") or not desired.run.HasField("request"):
                 continue
-            candidates.append((JobName.from_wire(desired.task_id), desired.attempt_id))
+            req = desired.run.request
+            candidates.append((JobName.from_wire(req.task_id), req.attempt_id))
 
         if not candidates:
             return []
@@ -2093,10 +2100,10 @@ class ControllerTransitions:
         MISSING becomes ``FAILED("worker_lost_spec")``. Routing prefers the
         ``attempt_uid`` when set: the UID is resolved to its ``(task_id,
         attempt_id)`` composite through the ``idx_task_attempts_uid`` index.
-        Observations from pre-UID workers carry an empty ``attempt_uid`` and
-        fall back to the composite key the worker reports directly. A UID that
-        resolves to nothing (e.g. its attempt row was deleted) likewise falls
-        back to the reported composite.
+        Observations from pre-UID-label adopted attempts carry an empty
+        ``attempt_uid`` and fall back to the composite key the worker reports
+        directly. A UID that resolves to nothing (e.g. its attempt row was
+        deleted) likewise falls back to the reported composite.
         """
         uids = [AttemptUid(obs.attempt_uid) for obs in observations if obs.attempt_uid]
         uid_to_composite = reads.resolve_attempt_uids(cur, uids)
@@ -2112,6 +2119,9 @@ class ControllerTransitions:
                         "AttemptObservation uid=%s did not resolve; falling back to composite key",
                         obs.attempt_uid,
                     )
+                if not obs.task_id:
+                    logger.warning("AttemptObservation missing both attempt_uid and task_id; skipping: %s", obs)
+                    continue
                 task_id = JobName.from_wire(obs.task_id)
                 attempt_id = obs.attempt_id
             exit_code: int | None = obs.exit_code if obs.exit_code != 0 else None
@@ -2734,14 +2744,6 @@ class ControllerTransitions:
                 # Invalidate endpoint cache BEFORE the CASCADE so the cache
                 # drops rows SQLite is about to delete for us.
                 self._endpoints.remove_by_job_ids(cur, [job_name])
-                # Evict status text for all tasks owned by this job.
-                # Status text is keyed by task_id (e.g. /user/job/0), not job_id,
-                # so we must match by prefix rather than an exact key lookup.
-                prefix = job_name.to_wire() + "/"
-                for key in [k for k in self._status_text_detail if k.startswith(prefix)]:
-                    del self._status_text_detail[key]
-                for key in [k for k in self._status_text_summary if k.startswith(prefix)]:
-                    del self._status_text_summary[key]
                 writes.delete_job(cur, job_name)
             log_event("job_pruned", job_name.to_wire())
             jobs_deleted += 1
@@ -2795,7 +2797,7 @@ class ControllerTransitions:
         self,
         snap: Tx,
     ) -> tuple[dict[WorkerId, list[RunningTaskEntry]], dict[WorkerId, str]]:
-        """Snapshot running tasks and worker addresses for PollTasks RPCs.
+        """Snapshot running tasks and worker addresses for reconcile dispatch.
 
         Caller passes an open read snapshot or transaction cursor.
         Returns (running_by_worker, worker_addresses) where running_by_worker
@@ -2809,10 +2811,10 @@ class ControllerTransitions:
 
         # Reservation holders are virtual — they live on ``current_worker_id``
         # only as a scheduling anchor and never get a RunTaskRequest. Sending
-        # them in PollTasksRequest.expected_tasks makes the worker reconcile
-        # against its _tasks dict, miss, and return WORKER_FAILED every cycle,
-        # which drains the holder's preemption budget and (post the build-
-        # failure health hook) reaps the claimed worker for a harmless miss.
+        # them in the desired-attempt set makes the worker reconcile against
+        # its _tasks dict, miss, and return WORKER_FAILED every cycle, which
+        # drains the holder's preemption budget and (post the build-failure
+        # health hook) reaps the claimed worker for a harmless miss.
         task_rows = reads.list_active_tasks(
             snap,
             TaskScope(worker_ids=worker_ids),
@@ -2875,32 +2877,6 @@ class ControllerTransitions:
             removed_workers=[(wid, addr) for wid, addr in results.removed_workers if addr is not None],
             results=results.results,
         )
-
-    def load_workers_from_config(self, configs: list[WorkerConfig]) -> None:
-        """Load workers from static configuration in a single transaction."""
-        now = Timestamp.now()
-        with self._db.transaction() as cur:
-            for cfg in configs:
-                self.register_or_refresh_worker(
-                    cur,
-                    worker_id=WorkerId(cfg.worker_id),
-                    address=cfg.address,
-                    metadata=cfg.metadata,
-                    ts=now,
-                )
-
-    # --- Task Status Text ---
-
-    def record_task_status_text(self, task_id: JobName, detail_md: str, summary_md: str) -> None:
-        """Update the task's markdown status text for UI display (held in memory only)."""
-        self._status_text_detail[task_id.to_wire()] = detail_md
-        self._status_text_summary[task_id.to_wire()] = summary_md
-
-    def get_status_text_detail(self, task_id_wire: str) -> str:
-        return self._status_text_detail.get(task_id_wire, "")
-
-    def get_status_text_summary(self, task_id_wire: str) -> str:
-        return self._status_text_summary.get(task_id_wire, "")
 
     # --- Endpoint Management ---
 

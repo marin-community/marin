@@ -126,12 +126,12 @@ class TrainerHooks:
 
     def run_hooks(self, info: StepInfo, force: bool = False):
         for hook in self.hooks:
-            if force or info.step % hook.every == 0:
+            if force or (info.step > 1 and info.step % hook.every == 0):
                 hook.fn.on_step(info, force=force)
 
     def run_jit_hooks_outside_step(self, info: StepInfo, cb_infos: Sequence[PyTree], force: bool = False):
         for s_hook, cb_info in zip(self.jit_hooks, cb_infos):
-            if force or (info.step % s_hook.every == 0):
+            if force or (info.step > 1 and info.step % s_hook.every == 0):
                 s_hook.fn.on_step(info, cb_info)
 
     def run_jit_hooks(self, state: TrainerState, jit_info: InsideJitInfo, force: bool = False) -> tuple[PyTree, ...]:
@@ -139,8 +139,9 @@ class TrainerHooks:
         hook_infos = []
         for hook in self.jit_hooks:
             hook_shape = eqx.filter_eval_shape(hook.fn.inside_step, state, jit_info)
+            fires = (state.step > 1) & (state.step % hook.every == 0)
             new_s = jax.lax.cond(
-                force or (state.step % hook.every == 0),
+                force or fires,
                 lambda: hook.fn.inside_step(state, jit_info),
                 lambda: zeros_like_tree(hook_shape),
             )

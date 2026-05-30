@@ -21,14 +21,8 @@ from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from marin.execution.executor import (
-    compute_output_path,
-    materialize,
-    resolve_local_placeholders,
-    this_output_path,
-    unwrap_versioned_value,
-    versioned,
-)
+from marin.execution.executor import compute_output_path, materialize, resolve_local_placeholders, unwrap_versioned_value
+from marin.execution.types import this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.training.training import temporary_checkpoint_base_path
 
@@ -119,7 +113,7 @@ def _build_grug_run_config(
             temporary_base_path=temporary_checkpoint_base_path(output_path),
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=10),
-            keep=[{"every": 1000}],
+            keep=None,
         ),
     )
 

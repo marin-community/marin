@@ -37,32 +37,12 @@ DEFAULT_FILE_PATH_COLUMN = "__file_path"
 # ---------------------------------------------------------------------------
 
 
-def _check_row_group_statistics(
-    rg_meta: pq.RowGroupMetaData,
-    equality_predicates: dict[str, object],
-) -> bool:
-    """Return False if row group min/max statistics prove no rows can match."""
-    for col_idx in range(rg_meta.num_columns):
-        col_meta = rg_meta.column(col_idx)
-        name = col_meta.path_in_schema
-        if name not in equality_predicates:
-            continue
-        stats = col_meta.statistics
-        if stats is None or not stats.has_min_max:
-            continue  # no stats — assume it could match
-        value = equality_predicates[name]
-        if value < stats.min or value > stats.max:
-            return False
-    return True
-
-
 def iter_parquet_row_groups(
     source: str | pq.ParquetFile,
     *,
     columns: list[str] | None = None,
     row_start: int | None = None,
     row_end: int | None = None,
-    equality_predicates: dict[str, object] | None = None,
 ) -> Iterator[pa.Table]:
     """Yield one ``pa.Table`` per qualifying row group with O(row_group) memory.
 
@@ -74,23 +54,9 @@ def iter_parquet_row_groups(
         columns: Columns to read (``None`` for all).
         row_start: First row to include (inclusive, before filtering).
         row_end: Last row to include (exclusive, before filtering).
-        equality_predicates: Column-value pairs for row group skipping and
-            row-level filtering.  Row groups whose min/max statistics exclude
-            the target value are not read at all, and within matching groups
-            only rows where every predicate column equals its target are kept.
     """
     pf = pq.ParquetFile(source) if isinstance(source, str) else source
     has_row_range = row_start is not None and row_end is not None
-
-    # If caller requests specific columns, ensure predicate columns are
-    # also read so row-level filtering works; drop them before yielding.
-    read_columns = columns
-    drop_columns: list[str] = []
-    if columns is not None and equality_predicates:
-        extra = [c for c in equality_predicates if c not in columns]
-        if extra:
-            read_columns = list(columns) + extra
-            drop_columns = extra
 
     cumulative_rows = 0
 
@@ -101,9 +67,6 @@ def iter_parquet_row_groups(
         rg_end = cumulative_rows + rg_num_rows
         cumulative_rows = rg_end
 
-        if equality_predicates and not _check_row_group_statistics(rg_meta, equality_predicates):
-            continue
-
         if has_row_range:
             assert row_start is not None and row_end is not None
             if rg_end <= row_start:
@@ -111,7 +74,7 @@ def iter_parquet_row_groups(
             if rg_start >= row_end:
                 return
 
-        table = pf.read_row_group(i, columns=read_columns)
+        table = pf.read_row_group(i, columns=columns)
 
         if has_row_range:
             assert row_start is not None and row_end is not None
@@ -120,20 +83,6 @@ def iter_parquet_row_groups(
                 local_start = max(0, row_start - rg_start)
                 local_end = min(rg_num_rows, row_end - rg_start)
                 table = table.slice(local_start, local_end - local_start)
-
-        if equality_predicates:
-            # Build a single combined AND mask so we filter once instead of
-            # copying the table N times for N predicates. Drop predicate-only
-            # columns before filtering — drop is metadata-only, so doing it
-            # first keeps the filter copy from materializing columns we are
-            # about to discard.
-            mask = None
-            for col_name, value in equality_predicates.items():
-                col_mask = pa.compute.equal(table.column(col_name), value)
-                mask = col_mask if mask is None else pa.compute.and_(mask, col_mask)
-            if drop_columns:
-                table = table.drop(drop_columns)
-            table = table.filter(mask)
 
         if len(table) > 0:
             yield table

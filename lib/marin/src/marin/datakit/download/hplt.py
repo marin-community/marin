@@ -14,10 +14,9 @@ from functools import cache
 import requests
 import zstandard
 from fray import ResourceConfig
-from requests.adapters import HTTPAdapter
-from urllib3.util import Retry
 from zephyr import Dataset, ZephyrContext, counters
 
+from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -170,12 +169,7 @@ def _make_session() -> requests.Session:
     Cached so repeated shard tasks on the same worker reuse the connection pool
     instead of opening a new one per shard.
     """
-    session = requests.Session()
-    retries = Retry(total=5, backoff_factor=1.0, status_forcelist=[500, 502, 503, 504], allowed_methods=["GET"])
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    return session
+    return build_retrying_session(status_forcelist=(500, 502, 503, 504))
 
 
 def _download_and_filter_shard(shard: HpltShard) -> Iterator[dict]:
