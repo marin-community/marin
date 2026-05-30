@@ -441,6 +441,11 @@ def dedupe_tags(tags: list[str]) -> list[str]:
 
 def build_executor_step(plan: MaterializationPlan) -> ExecutorStep:
     levanter_stop_step = levanter_stop_step_for_checkpoint_step(plan.request.target_step)
+    resource_config = ResourceConfig.with_tpu(
+        plan.request.tpu,
+        ram=plan.request.ram,
+        regions=plan.request.regions or None,
+    )
     return ExecutorStep(
         name=os.path.join(
             "checkpoints",
@@ -455,17 +460,14 @@ def build_executor_step(plan: MaterializationPlan) -> ExecutorStep:
         config=MaterializationTrainConfig(
             train_on_pod=TrainLmOnPodConfig(
                 train_config=plan.train_config,
-                resources=ResourceConfig.with_tpu(
-                    plan.request.tpu,
-                    ram=plan.request.ram,
-                    regions=plan.request.regions or None,
-                ),
+                resources=resource_config,
                 output_path=this_output_path(),
             ),
             destination_checkpoint_paths=plan.destination_checkpoint_paths,
             model_type=DELPHI_MODEL_TYPE,
             num_layers=plan.model.num_layers,
         ),
+        resources=resource_config,
         override_output_path=plan.request.output_root.rstrip("/"),
     )
 

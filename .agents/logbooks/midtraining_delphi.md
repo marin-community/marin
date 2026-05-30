@@ -12067,3 +12067,46 @@ materialization jobs complete and the new 70%/80% destination step dirs
 exist. With this hardening, a bad materialization should now fail at the
 materialization step itself rather than surfacing later in cooldown.
 
+## 2026-05-30T01:58Z — Main merge and v6e materializer resource pin
+
+Merged `origin/main` (`7115c21d47`) into `midtrain_data` and pushed the
+merge commit `a7119a9bc1`. The serious conflict was semantic:
+`origin/main` refactored executor/training so training runs in the
+scheduled `ExecutorStep` process, while this branch still assumed
+`run_levanter_train_lm()` would submit a nested Fray/Iris child from the
+`TrainLmOnPodConfig.resources` field.
+
+Resolution:
+
+- Kept main's newer TPU JAX init behavior: Iris TPU jobs delegate through
+  `iris.runtime.jax_init.initialize_jax()`, which calls
+  `jax.distributed.initialize()` using TPU runtime autodiscovery.
+- Preserved the midtraining resume invariant by keeping exact
+  run-id/output-path basename checking in `impute_run_id()`.
+- Preserved W&B project plumbing through the new
+  `_build_train_lm_config()` / `prepare_lm_train()` / `train()` flow.
+- Preserved mirror budget propagation into configs with `env_vars`.
+- Updated the materializer import for the new
+  `marin.execution.types.this_output_path` location.
+
+After the merge, the first real 3e18 launcher submission
+(`/ahmed/delphi-3e18-prefixes-qwen3-v6e4-a7119a9`) exposed the executor
+semantic change: the step began on the CPU launcher because
+`build_executor_step()` put the v6e resource only inside
+`TrainLmOnPodConfig.resources`. That job was terminated before useful
+training. The helper now builds one `ResourceConfig.with_tpu(...)` and
+sets it on both `TrainLmOnPodConfig.resources` and
+`ExecutorStep.resources`, so StepRunner schedules the materialization step
+itself on `v6e-4`.
+
+Validation after the merge/resource-pin fix:
+
+- `uv run --with pytest --with pytest-timeout python -m pytest tests/test_training.py tests/execution/test_executor.py -q --timeout=180`
+  passed (`70 passed, 1 skipped`).
+- `uv run --with pytest --with pytest-timeout python -m pytest -o addopts='' lib/iris/tests/test_jax_init.py -q --timeout=180`
+  passed (`11 passed`).
+- `uv run --with pytest --with pytest-timeout python -m pytest -o addopts='' lib/levanter/tests/test_distributed.py lib/levanter/tests/test_checkpoint.py -q --timeout=180`
+  passed (`37 passed`).
+- `uv run --with pytest --with pytest-timeout python -m pytest tests/midtraining tests/test_materialize_delphi_prefix_checkpoint.py -q --timeout=180`
+  passed (`155 passed`).
+- `./infra/pre-commit.py --all-files --fix` passed, including pyrefly.

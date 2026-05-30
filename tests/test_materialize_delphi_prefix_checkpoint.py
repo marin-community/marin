@@ -189,6 +189,9 @@ def test_stop_target_is_separate_from_lr_schedule_length():
     collected_gcs_paths = [path for _, path in collect_gcs_paths(plan.train_config)]
     assert not any("marin-us-central2" in path for path in collected_gcs_paths)
     step = build_executor_step(plan)
+    assert step.resources == step.config.train_on_pod.resources
+    assert step.resources is not None
+    assert step.resources.device.variant == "v5p-8"
     assert step.config.train_on_pod.resources.regions == ("us-east5",)
 
     tracker = trainer.tracker
