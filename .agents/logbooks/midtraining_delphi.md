@@ -12406,3 +12406,28 @@ before launch (not now — paths must exist for preflight).
 Sequencing: per the goal, finish ALL 7 prefixes (70%+80%) first, THEN launch the
 21 cooldowns. Holding the YAML edit until prefixes are near-complete so I can
 validate each repointed path against a committed checkpoint.
+
+Follow-up 2026-05-30T14:50Z — Phase-1 at 3/7; recovered 2e20+3e20:
+
+Progress (elapsed ~9h across paced cycles since launch):
+- COMPLETE (70%+80%, manifest committed): 3e18, 9e18, 3e19.
+  - 9e18 child `...-v6e4-1bb059a/...step35453...` SUCCEEDED.
+  - 3e19 child `...-v6e8-d165cbc/...step30411...` SUCCEEDED.
+- In progress: 2e19 (70% done, 80% training, child running), 9e19 (70% done,
+  80% training, child running).
+- Recovered failures:
+  - 2e20-r2 (`...-v5p8-r2-b10c989`) SIGSEGV AGAIN at 07:25Z (2nd transient
+    libtpu `add_port.cc:83` port-bind crash on v5p-8). No checkpoints committed;
+    temp dir empty.
+  - 3e20 (`...-v5p16-d165cbc`) failed `worker_lost_spec` (preemption-class).
+    No checkpoints committed; temp dir empty.
+  - Both relaunched from the same pinned output-root (idempotent via
+    override_output_path; restart clean from source since no temp checkpoint):
+    - 2e20 → `/ahmed/delphi-2e20-prefixes-qwen3-r3-a65439d` (v5p-8), exit 0.
+    - 3e20 → `/ahmed/delphi-3e20-prefixes-qwen3-r2-a65439d` (v5p-16), exit 0.
+- Watch: 2e20 on v5p-8 has now hit transient SIGSEGV twice. If r3 SIGSEGVs a
+  third time, consider a different v5p zone/topology. Each crash so far is a
+  distinct host fault, not a code/config issue (3e20 + all v6e runs on the same
+  code path are healthy).
+- Ladder: LADDER_COMPLETE=3/7. Remaining: 2e19, 9e19 (finishing), 2e20-r3,
+  3e20-r2 (restarted).
