@@ -33,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     print("DeepEP preflight")
     print(f"  component: {args.component}")
     print(f"  source_root: {status.source_root or '<unset>'}")
+    print(f"  source_revision: {status.source_revision or '<unverified>'}")
     print(f"  cache_root: {status.cache_root}")
     print(f"  cuda_arch: {status.cuda_arch}")
     print(f"  nvcc: {status.nvcc_path or '<missing>'}")

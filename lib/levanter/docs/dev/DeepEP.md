@@ -23,9 +23,13 @@ Then point Levanter at the external DeepEP source tree:
 
 ```bash
 git clone https://github.com/deepseek-ai/DeepEP.git /path/to/DeepEP
+git -C /path/to/DeepEP checkout 7febc6e25660af0f54d95dd781ecdcd62265ecca
 export DEEPEP_SRC_ROOT=/path/to/DeepEP
 export DEEPEP_CUDA_ARCH=sm_100  # B200/GB200. Use sm_90 or sm_90a for H100-class systems.
 ```
+
+That DeepEP revision is the version validated with Levanter's JAX FFI shim. The preflight warns, but does not fail, when
+`DEEPEP_SRC_ROOT` points at a different git revision so newer DeepEP checkouts can still be tested deliberately.
 
 The raw FFI build path needs `nvcc` on `PATH`. The compiled objects are cached under `~/.cache/marin` by default. To
 put the cache somewhere else:
@@ -55,6 +59,7 @@ uv run python -m levanter.kernels.deepep.preflight
 The preflight checks:
 
 - `DEEPEP_SRC_ROOT` is set and contains the DeepEP transport sources.
+- `DEEPEP_SRC_ROOT` is at the validated DeepEP revision, when it is a git checkout.
 - `nvcc` is available.
 - `DEEPEP_CUDA_ARCH` is one of `sm_90`, `sm_90a`, or `sm_100`.
 - incompatible FFI loader/build flags are not set together.

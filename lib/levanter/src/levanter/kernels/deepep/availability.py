@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +17,7 @@ DEEPEP_CUDA_ARCH_ENV = "DEEPEP_CUDA_ARCH"
 DISABLE_SM90_ENV = "DISABLE_SM90_FEATURES"
 BUILD_WITH_TORCH_EXTENSION_ENV = "DEEPEP_BUILD_WITH_TORCH_EXTENSION"
 LOAD_AS_PYTHON_MODULE_ENV = "DEEPEP_LOAD_AS_PYTHON_MODULE"
+DEEPEP_KNOWN_GOOD_COMMIT = "7febc6e25660af0f54d95dd781ecdcd62265ecca"
 
 LAYOUT_SOURCE_CANDIDATES = (
     "csrc/kernels/layout.cu",
@@ -38,6 +40,7 @@ class DeepEPPreflightStatus:
     """Result of a cheap DeepEP environment check."""
 
     source_root: Path | None
+    source_revision: str | None
     cache_root: Path
     cuda_arch: str
     nvcc_path: str | None
@@ -54,6 +57,7 @@ def deepep_install_help() -> str:
     return (
         "DeepEP support expects an external DeepEP source checkout. Set "
         f"{DEEPEP_SRC_ENV}=/path/to/DeepEP and, on B200/GB200, set {DEEPEP_CUDA_ARCH_ENV}=sm_100. "
+        f"The validated DeepEP revision is {DEEPEP_KNOWN_GOOD_COMMIT}. "
         f"Compiled JAX FFI objects are cached under {DEEPEP_CACHE_ENV} when set, otherwise under "
         "~/.cache/marin."
     )
@@ -109,6 +113,23 @@ def deepep_layout_source(root: Path) -> Path:
     raise RuntimeError(f"DeepEP layout source is missing; expected one of: {candidates}")
 
 
+def deepep_source_revision(root: Path) -> str | None:
+    """Return the DeepEP git revision when the source root is a git checkout."""
+    if not (root / ".git").exists():
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    revision = result.stdout.strip()
+    return revision or None
+
+
 def deepep_source_root(
     *,
     required_files: tuple[str, ...],
@@ -142,11 +163,21 @@ def deepep_preflight_status(
     errors: list[str] = []
     warnings: list[str] = []
     root: Path | None = None
+    source_revision: str | None = None
     missing: tuple[Path, ...] = ()
 
     raw_root = os.environ.get(DEEPEP_SRC_ENV)
     if raw_root:
         root = Path(raw_root).expanduser().resolve()
+        source_revision = deepep_source_revision(root)
+        if source_revision is None:
+            warnings.append(
+                f"Could not verify DeepEP source revision; validated revision is {DEEPEP_KNOWN_GOOD_COMMIT}."
+            )
+        elif source_revision != DEEPEP_KNOWN_GOOD_COMMIT:
+            warnings.append(
+                f"{DEEPEP_SRC_ENV} is at {source_revision}; validated revision is {DEEPEP_KNOWN_GOOD_COMMIT}."
+            )
         missing = missing_deepep_source_files(root, required_files)
         if missing:
             relative_missing = []
@@ -184,6 +215,7 @@ def deepep_preflight_status(
 
     return DeepEPPreflightStatus(
         source_root=root,
+        source_revision=source_revision,
         cache_root=deepep_cache_root(component),
         cuda_arch=arch,
         nvcc_path=nvcc_path,

@@ -7,6 +7,7 @@ import pytest
 
 from levanter.kernels.deepep.availability import (
     DEEPEP_CUDA_ARCH_ENV,
+    DEEPEP_KNOWN_GOOD_COMMIT,
     DEEPEP_SRC_ENV,
     TRANSPORT_REQUIRED_FILES,
     deepep_layout_source,
@@ -61,3 +62,18 @@ def test_deepep_preflight_reports_missing_layout_source_candidates(
     status = deepep_preflight_status(required_files=TRANSPORT_REQUIRED_FILES)
 
     assert any("layout source" in error and "csrc/kernels/legacy/layout.cu" in error for error in status.errors)
+
+
+def test_deepep_preflight_warns_for_unverified_source_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "DeepEP"
+    _write_transport_sources(root)
+    _write(root, "csrc/kernels/legacy/layout.cu")
+    monkeypatch.setenv(DEEPEP_SRC_ENV, str(root))
+    monkeypatch.setenv(DEEPEP_CUDA_ARCH_ENV, "sm_100")
+
+    status = deepep_preflight_status(required_files=TRANSPORT_REQUIRED_FILES)
+
+    assert status.source_revision is None
+    assert any(DEEPEP_KNOWN_GOOD_COMMIT in warning for warning in status.warnings)
