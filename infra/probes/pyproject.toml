@@ -31,7 +31,7 @@ find-links = [
 ]
 
 [tool.hatch.build.targets.wheel]
-only-include = ["src/infra_probes.py", "src/sinks.py"]
+only-include = ["src/infra_probes.py", "src/result.py", "src/sinks.py"]
 sources = ["src"]
 
 [tool.pytest.ini_options]

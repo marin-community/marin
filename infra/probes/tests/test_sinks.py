@@ -10,26 +10,19 @@ from __future__ import annotations
 import gzip
 import io
 import json
-from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import pytest
 import sinks
+from result import ProbeResult
 from sinks import JsonlGcsSink
 
 GCS_PREFIX = "gs://bucket/infra/probes"
 
 
-@dataclass
-class FakeResult:
-    name: str
-    is_success: bool
-    started_at: datetime
-    wall_time: float | None = 1.0
-
-
-def _result(day: str, name: str = "controller-ping", ok: bool = True) -> FakeResult:
-    return FakeResult(name=name, is_success=ok, started_at=datetime.fromisoformat(day).replace(tzinfo=timezone.utc))
+def _result(day: str, name: str = "controller-ping", ok: bool = True) -> ProbeResult:
+    started = datetime.fromisoformat(day).replace(tzinfo=timezone.utc)
+    return ProbeResult(is_success=ok, name=name, started_at=started, wall_time=1.0)
 
 
 @pytest.fixture

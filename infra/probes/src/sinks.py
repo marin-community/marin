@@ -21,32 +21,22 @@ import json
 import logging
 import shutil
 import threading
-from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
-from typing import ClassVar, Protocol, TextIO
+from typing import Protocol, TextIO
 
 from finelog.client.log_client import LogClient, Table
+from result import ProbeResult
 from rigging.filesystem import open_url
 
 logger = logging.getLogger(__name__)
 
 
-class ProbeResultLike(Protocol):
-    """The fields a sink reads off a ProbeResult. A Protocol (not the concrete
-    ProbeResult) keeps this module decoupled from the entrypoint module."""
-
-    name: str
-    is_success: bool
-    started_at: datetime
-    wall_time: float | None
-
-
 class ProbeSink(Protocol):
-    def record(self, result: ProbeResultLike) -> None: ...
+    def record(self, result: ProbeResult) -> None: ...
 
 
-def result_to_json(result: ProbeResultLike) -> str:
+def result_to_json(result: ProbeResult) -> str:
     """Serialize a result to a single JSON object (one JSONL line)."""
     return json.dumps(
         {
@@ -73,7 +63,7 @@ class JsonlGcsSink:
         self._fh: TextIO | None = None
         self._dir.mkdir(parents=True, exist_ok=True)
 
-    def record(self, result: ProbeResultLike) -> None:
+    def record(self, result: ProbeResult) -> None:
         day = result.started_at.date()
         line = result_to_json(result) + "\n"
         with self._lock:
@@ -114,31 +104,13 @@ class JsonlGcsSink:
         logger.info("rolled probe results to %s", dest)
 
 
-@dataclass
-class ProbeResultRow:
-    """Row schema for the finelog namespace; grouped (keyed) by probe name."""
-
-    name: str
-    is_success: bool
-    started_at: datetime
-    wall_time: float
-    key_column: ClassVar[str] = "name"
-
-
 class FinelogTableSink:
-    """Write each result as a row into a dedicated finelog namespace."""
+    """Write each result as a row into a dedicated finelog namespace. ProbeResult
+    is the table schema directly: get_table derives the columns from it and
+    Table.write reads its fields."""
 
     def __init__(self, finelog: LogClient, namespace: str) -> None:
-        self._table: Table = finelog.get_table(namespace, ProbeResultRow)
+        self._table: Table = finelog.get_table(namespace, ProbeResult)
 
-    def record(self, result: ProbeResultLike) -> None:
-        self._table.write(
-            [
-                ProbeResultRow(
-                    name=result.name,
-                    is_success=result.is_success,
-                    started_at=result.started_at,
-                    wall_time=result.wall_time if result.wall_time is not None else 0.0,
-                )
-            ]
-        )
+    def record(self, result: ProbeResult) -> None:
+        self._table.write([result])

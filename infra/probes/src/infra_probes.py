@@ -24,6 +24,7 @@ from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.constraints import zone_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.rpc import job_pb2
+from result import ProbeResult
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration
 from sinks import FinelogTableSink, JsonlGcsSink, ProbeSink
@@ -76,17 +77,6 @@ FINELOG_READBACK_POLL_INTERVAL = 0.25
 PROBE_RESULTS_DIR = Path("/var/lib/probes")
 PROBE_RESULTS_GCS_PREFIX = "gs://marin-us-central1/infra/probes"
 PROBE_RESULTS_NAMESPACE = "infra.canary.probes"
-
-
-@dataclass
-class ProbeResult:
-    # name and started_at are supplied by the runner, which owns this metadata;
-    # the probe fn only reports is_success. wall_time is filled in once the run
-    # completes.
-    is_success: bool
-    name: str
-    started_at: datetime  # UTC wall-clock time at probe start
-    wall_time: float | None = None
 
 
 # A probe fn reports only whether the probe succeeded; the runner stamps the
