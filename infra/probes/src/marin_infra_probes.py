@@ -38,15 +38,20 @@ LOG_SERVER_ENDPOINT_NAME = "/system/log-server"
 # us-west4 zones in the fleet.
 DEFAULT_ZONES = ("europe-west4-b", "us-west4-a")
 
-# The iris worker unconditionally runs `uv sync` against the job's bundle, which
-# fails without a pyproject.toml. The canary sleep job needs no deps, so ship a
-# throwaway workspace whose only content is a minimal pyproject (resolves to an
-# empty venv). package=false skips building it as a package.
+# The iris worker unconditionally runs `uv sync --all-packages --no-group dev`
+# against the job's bundle, which fails without a pyproject.toml (and without a
+# `dev` group for --no-group to exclude). The canary sleep job needs no deps, so
+# ship a throwaway workspace whose only content is a minimal pyproject that
+# resolves to an empty venv: an empty dev group satisfies --no-group dev, and
+# package=false skips building it as a package.
 CANARY_PYPROJECT = """\
 [project]
 name = "iris-canary"
 version = "0"
 requires-python = ">=3.11"
+
+[dependency-groups]
+dev = []
 
 [tool.uv]
 package = false
