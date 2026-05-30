@@ -135,17 +135,14 @@ class FilesystemArtifactRegistry(ArtifactRegistry):
            surfaces I/O errors. Empty string and non-string inputs raise `TypeError` /
            `ValueError`."""
 
-    @property
-    def root(self) -> str:
-        """The normalized registry root URI (trailing slashes stripped)."""
-
     def register(self, id: str, version: str, uri: str) -> ArtifactEntry: ...
 
     def lookup(self, id: str, version: str) -> ArtifactEntry: ...
 
-    def entry_path(self, id: str, version: str) -> str:
-        """Return the storage path for a given entry. Public: pins the on-disk layout
-           contract for tooling, tests, and human introspection (`gsutil cat $(...)`)."""
+    # Internal. The normalized root (`self._root`, trailing slashes stripped) and the on-disk
+    # layout (`self._entry_path(id, version)` → `{root}/{ns}/{name}/{version}.json`) are
+    # implementation details, not part of the `ArtifactRegistry` contract. No external consumer
+    # today; promote to a public accessor only when one appears.
 ```
 
 ## Singleton helpers

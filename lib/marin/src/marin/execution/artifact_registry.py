@@ -224,13 +224,8 @@ class FilesystemArtifactRegistry(ArtifactRegistry):
             raise ValueError("root must be a non-empty string")
         self._root = root.rstrip("/")
 
-    @property
-    def root(self) -> str:
-        """The normalized registry root URI (trailing slashes stripped)."""
-        return self._root
-
-    def entry_path(self, id: str, version: str) -> str:
-        """Return the storage path for a given entry. Pins the on-disk layout contract."""
+    def _entry_path(self, id: str, version: str) -> str:
+        """Return the storage path for a given entry — the on-disk layout `{root}/{ns}/{name}/{version}.json`."""
         namespace, name = _validate_id(id)
         _validate_version(version)
         return f"{self._root}/{namespace}/{name}/{version}.json"
@@ -246,7 +241,7 @@ class FilesystemArtifactRegistry(ArtifactRegistry):
                 f"cannot register local-filesystem uri {uri!r} in the remote registry at {self._root!r}: "
                 f"a local path is not resolvable by other readers of a shared registry"
             )
-        path = self.entry_path(id, version)
+        path = self._entry_path(id, version)
         entry = ArtifactEntry(id=id, version=version, uri=uri, relative_path=_relative_to_marin_prefix(uri))
 
         fs, fs_path = url_to_fs(path)
@@ -265,7 +260,7 @@ class FilesystemArtifactRegistry(ArtifactRegistry):
         return entry
 
     def lookup(self, id: str, version: str) -> ArtifactEntry:
-        path = self.entry_path(id, version)
+        path = self._entry_path(id, version)
         try:
             with open_url(path, "rb") as fd:
                 data = fd.read()

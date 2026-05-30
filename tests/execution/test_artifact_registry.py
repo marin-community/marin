@@ -158,8 +158,8 @@ def test_register_validates_id_and_version(registry, artifact_path):
 
 def test_manifest_layout(registry, artifact_path):
     registry.register("datasets/fineweb", "2026.05.29", artifact_path)
-    expected = f"{registry.root}/datasets/fineweb/2026.05.29.json"
-    assert registry.entry_path("datasets/fineweb", "2026.05.29") == expected
+    expected = f"{registry._root}/datasets/fineweb/2026.05.29.json"
+    assert registry._entry_path("datasets/fineweb", "2026.05.29") == expected
     with open(expected) as fd:
         on_disk = json.load(fd)
     # artifact_path is outside marin_prefix() in tests, so relative_path is null.
@@ -167,7 +167,7 @@ def test_manifest_layout(registry, artifact_path):
 
 
 def test_lookup_corrupt_manifest_raises(registry):
-    path = registry.entry_path("datasets/fineweb", "2026.05.29")
+    path = registry._entry_path("datasets/fineweb", "2026.05.29")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as fd:
         fd.write("not json{")
@@ -179,7 +179,7 @@ def test_lookup_corrupt_manifest_raises(registry):
 
 
 def test_root_normalizes_trailing_slash(tmp_path):
-    assert FilesystemArtifactRegistry(f"{tmp_path}/reg///").root == f"{tmp_path}/reg"
+    assert FilesystemArtifactRegistry(f"{tmp_path}/reg///")._root == f"{tmp_path}/reg"
 
 
 def test_empty_root_raises():
@@ -284,12 +284,12 @@ def reset_default():
 
 def test_get_default_registry_reads_env(monkeypatch, tmp_path, reset_default):
     monkeypatch.setenv(DEFAULT_REGISTRY_ENV, str(tmp_path / "envroot"))
-    assert get_default_registry().root == str(tmp_path / "envroot")
+    assert get_default_registry()._root == str(tmp_path / "envroot")
 
 
 def test_get_default_registry_falls_back_to_canonical_root(monkeypatch, reset_default):
     monkeypatch.delenv(DEFAULT_REGISTRY_ENV, raising=False)
-    assert get_default_registry().root == DEFAULT_REGISTRY_ROOT
+    assert get_default_registry()._root == DEFAULT_REGISTRY_ROOT
 
 
 def test_get_default_registry_caches(monkeypatch, tmp_path, reset_default):
@@ -302,7 +302,7 @@ def test_set_default_registry_clears_cache(monkeypatch, tmp_path, reset_default)
     first = get_default_registry()
     set_default_registry(None)
     monkeypatch.setenv(DEFAULT_REGISTRY_ENV, str(tmp_path / "second"))
-    assert get_default_registry().root == str(tmp_path / "second")
+    assert get_default_registry()._root == str(tmp_path / "second")
     assert get_default_registry() is not first
 
 
