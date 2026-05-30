@@ -66,7 +66,6 @@ build() {
     echo "==> Pushing ${image_sha} and :latest"
     docker push "${image_sha}"
     docker push "${image_latest}"
-    echo "${image_sha}" > "${PROBES_DIR}/deploy/.last-image"
 }
 
 apply() {
