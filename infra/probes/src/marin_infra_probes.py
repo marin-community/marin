@@ -129,7 +129,7 @@ def probe_controller_ping(iris: RemoteClusterClient) -> bool:
 
 
 def probe_iris_job_submit(iris: RemoteClusterClient, zone: str) -> bool:
-    job_id = JobName.root("probes", f"canary-{zone}-{int(time.time())}")
+    job_id = JobName.root("infra-probes", f"canary-{zone}-{int(time.time())}")
     submitted = iris.submit_job(
         job_id=job_id,
         entrypoint=Entrypoint.from_command("python", "-c", "import time; time.sleep(1)"),
