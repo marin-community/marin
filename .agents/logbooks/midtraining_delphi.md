@@ -12554,3 +12554,15 @@ REMAINING STEPS (next context MUST finish):
 VERIFIED COMPLETE (OCDBT logical-array == source, QK-norm + full opt_state):
 3e18,9e18,2e19,3e19 x {70%,80%}. Note IMPORTANT: uv is at /Users/ahmed/.local/bin/uv
 (bare `uv` not on PATH in this shell). .env has WANDB_API_KEY (source it first).
+
+Follow-up 2026-05-30T18:40Z — resume-fix committed + 3 runs relaunched:
+- Committed a7f98bf8f5 (load_checkpoint=None + save_interval 5min; 19 tests pass,
+  pre-commit green incl pyrefly).
+- Stopped 9e19 (froze step-31857), 2e20-r3, 3e20-r2 (latter two were on old code).
+- Relaunched on new code (HEAD a7f98bf), interactive:
+  - 9e19 -> /ahmed/delphi-9e19-prefixes-qwen3-v6e8-r2-a7f98bf  (--allow-existing-destination,
+    70% step-28198 already committed; should RESUME from temp step-31857 -> ~9 min to 32226)
+  - 2e20 -> /ahmed/delphi-2e20-prefixes-qwen3-r4-a7f98bf (v5p-8)
+  - 3e20 -> /ahmed/delphi-3e20-prefixes-qwen3-r3-a7f98bf (v5p-16)
+  All submit exit=0. Next: confirm 9e19 logs "Resuming training from step 31857"
+  (NOT 20001) to validate the fix end-to-end; babysit all 3 to 7/7.
