@@ -123,6 +123,7 @@ def compute_minhash_attrs(
     seed: int = 42,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    map_workers_per_actor: int | None = None,
 ) -> MinHashAttrData:
     """Compute MinHash bucket attributes for *source* and persist as Parquet.
 
@@ -174,6 +175,8 @@ def compute_minhash_attrs(
     }
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
+    if map_workers_per_actor is not None:
+        ctx_kwargs["map_workers_per_actor"] = map_workers_per_actor
     ctx = ZephyrContext(**ctx_kwargs)
 
     # Preserve source basenames; zephyr's `{basename}` placeholder is synthetic.

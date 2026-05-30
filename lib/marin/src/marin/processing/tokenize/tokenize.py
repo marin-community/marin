@@ -83,6 +83,7 @@ class TokenizeConfigBase(abc.ABC):
 
     max_workers: int = 4096
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
+    map_workers_per_actor: int | None = None
 
     tokenizer_backend: TokenizerBackend = TokenizerBackend.HF
     """Backend to use for tokenization. HF uses the HuggingFace tokenizers library directly.
@@ -330,6 +331,8 @@ def _run_split(
         max_workers=min(config.max_workers, len(file_groups)),
         name=f"tokenize-{split_name}",
     )
+    if config.map_workers_per_actor is not None:
+        ctx.map_workers_per_actor = config.map_workers_per_actor
     # Broadcast tokenizer config to workers. We send name + backend rather than
     # the tokenizer object because not all backends support pickling.
     ctx.put("tokenizer_name", config.tokenizer)
