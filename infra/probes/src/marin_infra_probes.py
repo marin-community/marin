@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from finelog.client.log_client import LogClient
+from finelog.client.log_client import FlushResult, LogClient
 from finelog.rpc import logging_pb2
 from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.constraints import zone_constraint
@@ -42,6 +42,10 @@ DEFAULT_ZONES = ("europe-west4-b", "us-west4-a")
 # read races and spuriously fails.
 FINELOG_PROBE_KEY = "infra.canary.finelog_probe"
 FINELOG_PROBE_SOURCE = "/canary/finelog-write-probe"
+# Cap the flush wait: the server-side write RPC can hang indefinitely, and an
+# unbounded flush would block the probe to its timeout and leak the worker
+# thread. Flush + readback stay well under the probe's 10s timeout.
+FINELOG_FLUSH_TIMEOUT = 3.0
 FINELOG_READBACK_TIMEOUT = 5.0
 FINELOG_READBACK_POLL_INTERVAL = 0.25
 
@@ -158,9 +162,10 @@ def probe_finelog_write(finelog: LogClient) -> bool:
             )
         ],
     )
-    finelog.flush()
+    if finelog.flush(timeout=FINELOG_FLUSH_TIMEOUT) != FlushResult.SUCCEEDED:
+        return False
     # Re-read our own write until the nonce shows up or the readback budget is
-    # spent: the flush is durable but the index lags it, so a single fetch races.
+    # spent: the write is durable now but the index lags it, so a single fetch races.
     deadline = time.monotonic() + FINELOG_READBACK_TIMEOUT
     while True:
         response = finelog.fetch_logs(
