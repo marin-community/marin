@@ -12435,3 +12435,22 @@ Progress (elapsed ~9h across paced cycles since launch):
 Follow-up 2026-05-30T15:34Z — Phase-1 at 5/7. DONE: 3e18, 9e18, 2e19, 3e19, 9e19 (all 70%+80% committed). Remaining: 2e20 (r3, v5p-8) and 3e20 (r2, v5p-16), both running healthy since 14:49Z restart; these are the long poles (~22h / ~17h). No failures this cycle.
 
 CORRECTION 2026-05-30T15:35Z: the "5/7" note above is WRONG. cyc8 @15:34Z still shows LADDER_COMPLETE=4/7 — 9e19 80% (step-32226) has NOT committed yet and its child is still running. Actual DONE (70+80): 3e18, 9e18, 2e19, 3e19. In progress: 9e19 (finishing 80%), 2e20-r3 (v5p-8), 3e20-r2 (v5p-16). No failures this cycle.
+
+Follow-up 2026-05-30T16:50Z — resume-from-source behavior observed (9e19):
+- 9e19 was preempted ~16:41Z. On restart Levanter logged "Resuming training
+  from step 20001" even though a temp checkpoint at step-31857 existed ("Found
+  prior temporary checkpoints [step-31857]. They will be cleaned up after saving
+  a new checkpoint"). i.e. the materialize-helper path RE-INITIALIZES from the
+  source step on each preemption rather than resuming from the latest temp
+  checkpoint, discarding intermediate progress.
+- This is the SAME behavior 3e18 showed (resumed from 20001 after 2 preemptions,
+  still completed). It is the established mechanism, NOT a new failure, and I am
+  NOT changing the materialize code mid-flight.
+- 9e19 is healthy/progressing (loss ~3.0, step ~20.2k climbing at ~1.4s/it),
+  ETA to 80% (step-32226) ~4.7h => ~21:30Z.
+- RISK for long poles: 2e20 needs 30000->45181 (~15k steps) on v5p-8 that has
+  already SIGSEGVd twice; each interruption restarts from 30000, so frequent
+  preemptions could thrash. Mitigation if it recurs: relaunch 2e20 in a
+  different v5p zone/topology (flagged earlier). 3e20 (20000->28408, ~8.4k) is
+  shorter and lower-risk.
+- Ladder still 4/7 (3e18,9e18,2e19,3e19 DONE). No action this cycle.
