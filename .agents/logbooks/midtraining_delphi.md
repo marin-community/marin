@@ -12454,3 +12454,56 @@ Follow-up 2026-05-30T16:50Z — resume-from-source behavior observed (9e19):
   different v5p zone/topology (flagged earlier). 3e20 (20000->28408, ~8.4k) is
   shorter and lower-risk.
 - Ladder still 4/7 (3e18,9e18,2e19,3e19 DONE). No action this cycle.
+
+## 2026-05-30T18:0?Z — DEEP-VERIFY completed prefix checkpoints (opt_state + QK-norm)
+
+User flagged: before scaling to larger runs, ABSOLUTELY confirm the DONE prefix
+checkpoints have everything incl optimizer state and QK-norm. Found that the
+shipped validator `assert_checkpoint_complete_for_model_type` is SHALLOW (only
+checks model.embeddings/transformer/lm_head top-level prefixes; does NOT check
+opt_state or qk_norm). So I wrote deeper checks:
+
+1. Structural-vs-source (scratch/verify_prefix_checkpoint.py): metadata.json
+   records the TrainerState pytree at GROUP granularity (31 groups incl
+   model.embeddings/activations/transformer/lm_head, opt_state, step,
+   is_trainable...). Compared all 8 done checkpoints (3e18,9e18,2e19,3e19 x
+   70/80
+
+## 2026-05-30T18:20Z — OCDBT-level verification of done prefixes: VERIFIED COMPLETE
+
+User insisted (before scaling further): prove the DONE prefix checkpoints have
+EVERYTHING incl optimizer state and QK-norm. Two earlier attempts were FLAWED
+and discarded: (1) metadata.json is 449B of run metadata only (no pytree);
+(2) strict Levanter load crashed pre-leaf ('No mesh found'). Also caught
+myself drafting a premature PASS that wrongly rubber-stamped 2e19/3e19 on a
+raw-keyset compare; removed it before commit.
+
+Decisive method: marin.midtraining.checkpoint_schema.default_list_checkpoint_keys
+(repo's tested OCDBT lister, built for the 2026-05-27 silent-QK-drop bug) lists
+REAL leaf keys; compared each prefix to its canonical SOURCE isoflop checkpoint.
+Tools: scratch/verify_ocdbt_keys.py + logical-array compare.
+Raw: scratch/20260530_ocdbt_verify_result.json, 20260530_logical_array_cmp.txt.
+
+Raw-key result (q_norm/k_norm counts, opt_state present, missing-vs-source):
+  3e18 70(26134)/80(29868): n=210 q=6 k=6 opt=142 missing=0 extra=0   keyset==source
+  9e18 70(31021)/80(35453): n=210 q=6 k=6 opt=142 missing=0 extra=0   keyset==source
+  2e19 70(38587)/80(44100): n=354 q=6 k=6 opt=238 missing=0 extra=144 (re-chunked)
+  3e19 70(26609)/80(30411): n=354 q=6 k=6 opt=238 missing=0 extra=144 (re-chunked)
+
+The 2e19/3e19 'extra' keys are PURELY TensorStore re-chunking (v6e-8 sharded
+embedding/lm_head into more chunk files than v6e-4); ALL extras are /c/ chunk-
+data keys, zero non-chunk extras. Stripping chunk/zarr suffixes to LOGICAL
+arrays: every base = 59 logical arrays == source, 0 missing, 0 extra. QK-norm
+present (model/transformer/layers/stacked/self_attn/{q,k}_norm/weight) and
+opt_state includes Adam mu AND nu moments for the q_norm/k_norm params
+themselves + adamH hyperparams. ('stacked' axis packs all layers into one
+array, so 1 logical q_norm array = full per-layer QK-norm.)
+Note: use_qk_norm is a LlamaConfig flag; Qwen3Config forces qk_norm on via
+norm_config override (qwen.py:371) — the base-config use_qk_norm=False read was
+a red herring; stored arrays are authoritative and present.
+
+CONCLUSION: all 4 completed bases (3e18,9e18,2e19,3e19) x {70%,80%} are COMPLETE
+full-state checkpoints (model + QK-norm + full AdamH optimizer state), logically
+identical to their known-good sources. SAFE as cooldown resume points. The
+2e20/3e20 prefixes will get the same OCDBT-key + logical-array check before
+Phase 2 consumes them.

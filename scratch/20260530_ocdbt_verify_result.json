@@ -1,0 +1,249 @@
+{
+  "all_ok": false,
+  "bases": {
+    "2e19": {
+      "prefixes": {
+        "70": {
+          "emb": 27,
+          "extra_sample": [
+            "model/embeddings/token_embeddings/weight/c/0/4",
+            "model/embeddings/token_embeddings/weight/c/0/5",
+            "model/embeddings/token_embeddings/weight/c/0/6",
+            "model/embeddings/token_embeddings/weight/c/0/7",
+            "model/lm_head/weight/c/0/4",
+            "model/lm_head/weight/c/0/5",
+            "model/lm_head/weight/c/0/6",
+            "model/lm_head/weight/c/0/7"
+          ],
+          "k_norm": 6,
+          "lm_head": 27,
+          "missing_sample": [],
+          "n": 354,
+          "n_extra_vs_source": 144,
+          "n_missing_vs_source": 0,
+          "ok": false,
+          "opt_ok": true,
+          "opt_state": 238,
+          "path": "gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-2e19-prefixes-qwen3/checkpoints/step-38587",
+          "q_norm": 6,
+          "qk_ok": true,
+          "same_keyset_as_source": false,
+          "step": "38587",
+          "transformer": 282
+        },
+        "80": {
+          "emb": 27,
+          "extra_sample": [
+            "model/embeddings/token_embeddings/weight/c/0/4",
+            "model/embeddings/token_embeddings/weight/c/0/5",
+            "model/embeddings/token_embeddings/weight/c/0/6",
+            "model/embeddings/token_embeddings/weight/c/0/7",
+            "model/lm_head/weight/c/0/4",
+            "model/lm_head/weight/c/0/5",
+            "model/lm_head/weight/c/0/6",
+            "model/lm_head/weight/c/0/7"
+          ],
+          "k_norm": 6,
+          "lm_head": 27,
+          "missing_sample": [],
+          "n": 354,
+          "n_extra_vs_source": 144,
+          "n_missing_vs_source": 0,
+          "ok": false,
+          "opt_ok": true,
+          "opt_state": 238,
+          "path": "gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-2e19-prefixes-qwen3/checkpoints/step-44100",
+          "q_norm": 6,
+          "qk_ok": true,
+          "same_keyset_as_source": false,
+          "step": "44100",
+          "transformer": 282
+        }
+      },
+      "source": {
+        "emb": 15,
+        "k_norm": 6,
+        "lm_head": 15,
+        "n": 210,
+        "opt_state": 142,
+        "path": "gs://marin-us-central2/checkpoints/isoflop/isoflop-2e+19-d1408-L15-B16-adamh_scaling_v6/checkpoints/step-30000",
+        "q_norm": 6,
+        "transformer": 162
+      }
+    },
+    "3e18": {
+      "prefixes": {
+        "70": {
+          "emb": 15,
+          "extra_sample": [],
+          "k_norm": 6,
+          "lm_head": 15,
+          "missing_sample": [],
+          "n": 210,
+          "n_extra_vs_source": 0,
+          "n_missing_vs_source": 0,
+          "ok": true,
+          "opt_ok": true,
+          "opt_state": 142,
+          "path": "gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-prefixes-qwen3/checkpoints/step-26134",
+          "q_norm": 6,
+          "qk_ok": true,
+          "same_keyset_as_source": true,
+          "step": "26134",
+          "transformer": 162
+        },
+        "80": {
+          "emb": 15,
+          "extra_sample": [],
+          "k_norm": 6,
+          "lm_head": 15,
+          "missing_sample": [],
+          "n": 210,
+          "n_extra_vs_source": 0,
+          "n_missing_vs_source": 0,
+          "ok": true,
+          "opt_ok": true,
+          "opt_state": 142,
+          "path": "gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-prefixes-qwen3/checkpoints/step-29868",
+          "q_norm": 6,
+          "qk_ok": true,
+          "same_keyset_as_source": true,
+          "step": "29868",
+          "transformer": 162
+        }
+      },
+      "source": {
+        "emb": 15,
+        "k_norm": 6,
+        "lm_head": 15,
+        "n": 210,
+        "opt_state": 142,
+        "path": "gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+18-d1024-L11-B8-adamh_scaling_v6/checkpoints/step-20000",
+        "q_norm": 6,
+        "transformer": 162
+      }
+    },
+    "3e19": {
+      "prefixes": {
+        "70": {
+          "emb": 27,
+          "extra_sample": [
+            "model/embeddings/token_embeddings/weight/c/0/4",
+            "model/embeddings/token_embeddings/weight/c/0/5",
+            "model/embeddings/token_embeddings/weight/c/0/6",
+            "model/embeddings/token_embeddings/weight/c/0/7",
+            "model/lm_head/weight/c/0/4",
+            "model/lm_head/weight/c/0/5",
+            "model/lm_head/weight/c/0/6",
+            "model/lm_head/weight/c/0/7"
+          ],
+          "k_norm": 6,
+          "lm_head": 27,
+          "missing_sample": [],
+          "n": 354,
+          "n_extra_vs_source": 144,
+          "n_missing_vs_source": 0,
+          "ok": false,
+          "opt_ok": true,
+          "opt_state": 238,
+          "path": "gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e19-prefixes-qwen3/checkpoints/step-26609",
+          "q_norm": 6,
+          "qk_ok": true,
+          "same_keyset_as_source": false,
+          "step": "26609",
+          "transformer": 282
+        },
+        "80": {
+          "emb": 27,
+          "extra_sample": [
+            "model/embeddings/token_embeddings/weight/c/0/4",
+            "model/embeddings/token_embeddings/weight/c/0/5",
+            "model/embeddings/token_embeddings/weight/c/0/6",
+            "model/embeddings/token_embeddings/weight/c/0/7",
+            "model/lm_head/weight/c/0/4",
+            "model/lm_head/weight/c/0/5",
+            "model/lm_head/weight/c/0/6",
+            "model/lm_head/weight/c/0/7"
+          ],
+          "k_norm": 6,
+          "lm_head": 27,
+          "missing_sample": [],
+          "n": 354,
+          "n_extra_vs_source": 144,
+          "n_missing_vs_source": 0,
+          "ok": false,
+          "opt_ok": true,
+          "opt_state": 238,
+          "path": "gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e19-prefixes-qwen3/checkpoints/step-30411",
+          "q_norm": 6,
+          "qk_ok": true,
+          "same_keyset_as_source": false,
+          "step": "30411",
+          "transformer": 282
+        }
+      },
+      "source": {
+        "emb": 15,
+        "k_norm": 6,
+        "lm_head": 15,
+        "n": 210,
+        "opt_state": 142,
+        "path": "gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+19-d1536-L16-B32-adamh_scaling_v6/checkpoints/step-20000",
+        "q_norm": 6,
+        "transformer": 162
+      }
+    },
+    "9e18": {
+      "prefixes": {
+        "70": {
+          "emb": 15,
+          "extra_sample": [],
+          "k_norm": 6,
+          "lm_head": 15,
+          "missing_sample": [],
+          "n": 210,
+          "n_extra_vs_source": 0,
+          "n_missing_vs_source": 0,
+          "ok": true,
+          "opt_ok": true,
+          "opt_state": 142,
+          "path": "gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-9e18-prefixes-qwen3/checkpoints/step-31021",
+          "q_norm": 6,
+          "qk_ok": true,
+          "same_keyset_as_source": true,
+          "step": "31021",
+          "transformer": 162
+        },
+        "80": {
+          "emb": 15,
+          "extra_sample": [],
+          "k_norm": 6,
+          "lm_head": 15,
+          "missing_sample": [],
+          "n": 210,
+          "n_extra_vs_source": 0,
+          "n_missing_vs_source": 0,
+          "ok": true,
+          "opt_ok": true,
+          "opt_state": 142,
+          "path": "gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-9e18-prefixes-qwen3/checkpoints/step-35453",
+          "q_norm": 6,
+          "qk_ok": true,
+          "same_keyset_as_source": true,
+          "step": "35453",
+          "transformer": 162
+        }
+      },
+      "source": {
+        "emb": 15,
+        "k_norm": 6,
+        "lm_head": 15,
+        "n": 210,
+        "opt_state": 142,
+        "path": "gs://marin-us-central2/checkpoints/isoflop/isoflop-9e+18-d1152-L12-B16-adamh_scaling_v6/checkpoints/step-30000",
+        "q_norm": 6,
+        "transformer": 162
+      }
+    }
+  }
+}
