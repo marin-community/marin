@@ -12110,3 +12110,20 @@ Validation after the merge/resource-pin fix:
 - `uv run --with pytest --with pytest-timeout python -m pytest tests/midtraining tests/test_materialize_delphi_prefix_checkpoint.py -q --timeout=180`
   passed (`155 passed`).
 - `./infra/pre-commit.py --all-files --fix` passed, including pyrefly.
+
+Follow-up 2026-05-30T02:03Z:
+
+- Pushed the resource-pin fix as `5aea47ddf7`
+  (`[midtrain] Pin Delphi materializer executor resources`).
+- Relaunched the 3e18 validation launcher with interactive priority:
+  `/ahmed/delphi-3e18-prefixes-qwen3-v6e4-5aea47d`.
+- The actual materializer child job is now
+  `/ahmed/delphi-3e18-prefixes-qwen3-v6e4-5aea47d/checkpoints-delphi-prefix-3e18-step29868-stop29869_375d5d5e-3b97b7b3`.
+  It is pending Iris capacity with one pending task, not running on the
+  CPU launcher. The earlier bad launcher
+  `/ahmed/delphi-3e18-prefixes-qwen3-v6e4-a7119a9` was stopped.
+- Planned source/targets for this run remain:
+  source `gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+18-d1024-L11-B8-adamh_scaling_v6/checkpoints/step-20000`,
+  target `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-prefixes-qwen3/checkpoints/step-29868`,
+  extra save
+  `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-prefixes-qwen3/checkpoints/step-26134`.
