@@ -120,14 +120,14 @@ def test_register_rejects_relative_uri(registry):
 @pytest.mark.parametrize("local_uri", ["/local/path/to/data", "file:///local/path/to/data"])
 def test_register_rejects_local_uri_in_remote_registry(local_uri):
     # A local path stored in a shared cloud registry is unresolvable for other readers.
-    remote = FilesystemArtifactRegistry("gs://marin-artifact-registry")
+    remote = FilesystemArtifactRegistry("gs://foobar2000")
     with pytest.raises(InvalidArtifactIdError):
         remote.register("datasets/fineweb", "2026.05.29", local_uri)
 
 
 def test_register_allows_remote_uri_in_local_registry(registry):
     # The reverse is fine: a gs:// pointer recorded in a local registry resolves anywhere.
-    uri = "gs://marin-us-central1/documents/fineweb-8c2f3a"
+    uri = "gs://foobar2000/documents/fineweb-8c2f3a"
     assert registry.register("datasets/fineweb", "2026.05.29", uri).uri == uri
 
 
