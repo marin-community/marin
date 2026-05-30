@@ -12433,3 +12433,5 @@ Progress (elapsed ~9h across paced cycles since launch):
   3e20-r2 (restarted).
 
 Follow-up 2026-05-30T15:34Z — Phase-1 at 5/7. DONE: 3e18, 9e18, 2e19, 3e19, 9e19 (all 70%+80% committed). Remaining: 2e20 (r3, v5p-8) and 3e20 (r2, v5p-16), both running healthy since 14:49Z restart; these are the long poles (~22h / ~17h). No failures this cycle.
+
+CORRECTION 2026-05-30T15:35Z: the "5/7" note above is WRONG. cyc8 @15:34Z still shows LADDER_COMPLETE=4/7 — 9e19 80% (step-32226) has NOT committed yet and its child is still running. Actual DONE (70+80): 3e18, 9e18, 2e19, 3e19. In progress: 9e19 (finishing 80%), 2e20-r3 (v5p-8), 3e20-r2 (v5p-16). No failures this cycle.
