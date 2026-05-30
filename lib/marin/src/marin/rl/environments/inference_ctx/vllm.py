@@ -2,15 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gc
+import inspect
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from typing import Any
 
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
 from levanter.tokenizers import load_tokenizer
+from marin.rl.decoding import DecodingConfig, DecodingStrategy
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
 from marin.rl.environments.inference_ctx.render import Llama3Renderer, Message, Qwen3Renderer, Renderer
@@ -45,47 +48,14 @@ class InferenceMode(StrEnum):
     ASYNC = "async"
 
 
-@dataclass
-class VLLMSamplingConfig:
-    """Serializable sampling config that doesn't depend on vllm.
-
-    Replaces vllm.SamplingParams in config objects so they can be
-    serialized/deserialized on CPU workers without vllm installed.
-    Converted to vllm.SamplingParams inside the inference context.
-    """
-
-    temperature: float = 1.0
-    n: int = 1
-    max_tokens: int = 512
-    top_k: int = -1
-    stop: list[str] | None = None
-    include_stop_str_in_output: bool = False
-    logprobs: int | None = 1
-
-    def to_vllm(self):
-        """Convert to vllm.SamplingParams. Must be called where vllm is available."""
-        if SamplingParams is None:
-            raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
-        return SamplingParams(
-            temperature=self.temperature,
-            n=self.n,
-            max_tokens=self.max_tokens,
-            top_k=self.top_k,
-            stop=self.stop,
-            include_stop_str_in_output=self.include_stop_str_in_output,
-            logprobs=self.logprobs,
-        )
-
-
-@dataclass
-class vLLMInferenceContextConfig:
-    """Configuration for vLLM engine and sampling parameters."""
+@dataclass(frozen=True)
+class VLLMEngineConfig:
+    """Engine/runtime configuration for the vLLM backend."""
 
     model_name: str
     max_model_len: int
     tensor_parallel_size: int
     gpu_memory_utilization: float
-    sampling_params: VLLMSamplingConfig
     seed: int = 0
     """Engine-level vLLM seed. TPU vLLM does not support per-request sampling seeds."""
     canonical_model_name: str | None = None
@@ -95,6 +65,27 @@ class vLLMInferenceContextConfig:
     kv_cache_metrics: bool = False
 
 
+@dataclass
+class VLLMFallbackSamplingConfig:
+    """Fallback decode/output defaults for non-RL or partially specified calls."""
+
+    top_k: int | None = None
+    stop_strings: list[str] | None = None
+    include_stop_str_in_output: bool = False
+
+    def __post_init__(self):
+        if self.top_k is not None and self.top_k <= 0:
+            raise ValueError("top_k must be positive when set")
+
+
+@dataclass
+class vLLMInferenceContextConfig:
+    """Configuration for vLLM engine/runtime settings and fallback sampling."""
+
+    engine: VLLMEngineConfig
+    fallback_sampling: VLLMFallbackSamplingConfig = field(default_factory=VLLMFallbackSamplingConfig)
+
+
 class vLLMInferenceContext(BaseInferenceContext):
     """Inference context for vLLM."""
 
@@ -102,7 +93,7 @@ class vLLMInferenceContext(BaseInferenceContext):
         self,
         inference_config: vLLMInferenceContextConfig,
     ):
-        self.llm = self._get_llm_engine(inference_config)
+        self.llm = self._get_llm_engine(inference_config.engine)
         # Mesh for the weight transfer client should be on the CPU and then
         # in sync_weights function, we will reshard to the TPU
         # self.mesh = jax.make_mesh(
@@ -112,16 +103,86 @@ class vLLMInferenceContext(BaseInferenceContext):
         # )
         self.mesh = None
         self.axis_mapping = {}
-        self.tokenizer = load_tokenizer(inference_config.model_name)
+        self.tokenizer = load_tokenizer(inference_config.engine.model_name)
         # Reverse vocab map for logprob token string display
         self._id_to_token: dict[int, str] = {v: k for k, v in self.tokenizer.get_vocab().items()}
-        self.model_name = inference_config.model_name
-        self.canonical_model_name = inference_config.canonical_model_name or inference_config.model_name
-        self.sampling_config = inference_config.sampling_params
-        self._use_final_only = inference_config.mode == InferenceMode.ASYNC
+        self.engine_config = inference_config.engine
+        self.model_name = self.engine_config.model_name
+        self.canonical_model_name = self.engine_config.canonical_model_name or self.engine_config.model_name
+        self.fallback_sampling = inference_config.fallback_sampling
+        self._use_final_only = self.engine_config.mode == InferenceMode.ASYNC
 
-        # Initialize the appropriate renderer based on model type
+        # Initialize the appropriate renderer based on model type.
         self.renderer = self._get_renderer(self.canonical_model_name, self.tokenizer)
+
+    def resolve_decoding(self, decoding: DecodingConfig) -> DecodingConfig:
+        """Bake vLLM fallback sampling defaults into the applied decoding trace."""
+        top_k = decoding.top_k
+        if top_k is None and self.fallback_sampling.top_k is not None:
+            top_k = self.fallback_sampling.top_k
+
+        stop_strings = decoding.stop_strings
+        if stop_strings is None and decoding.stop_token_ids is None and self.fallback_sampling.stop_strings is not None:
+            stop_strings = list(self.fallback_sampling.stop_strings)
+
+        if top_k == decoding.top_k and stop_strings == decoding.stop_strings:
+            return decoding
+        return replace(decoding, top_k=top_k, stop_strings=stop_strings)
+
+    @staticmethod
+    def _sampling_params_supports_argument(argument_name: str) -> bool:
+        """Return whether the installed vLLM SamplingParams accepts an argument."""
+        if SamplingParams is None:
+            return False
+        try:
+            return argument_name in inspect.signature(SamplingParams.__init__).parameters
+        except (TypeError, ValueError):
+            logger.warning("Could not inspect vLLM SamplingParams.__init__; treating %s as unsupported", argument_name)
+            return False
+
+    def _sampling_params_from_decoding(self, decoding: DecodingConfig, n: int):
+        """Translate shared decoding config into vLLM SamplingParams."""
+        if SamplingParams is None:
+            raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
+
+        decoding = self.resolve_decoding(decoding)
+        kwargs: dict[str, Any] = {
+            "temperature": 0.0 if decoding.strategy == DecodingStrategy.GREEDY else decoding.temperature,
+            "n": n,
+            "max_tokens": decoding.max_output_tokens,
+            "logprobs": 1,
+            "include_stop_str_in_output": self.fallback_sampling.include_stop_str_in_output,
+        }
+        if decoding.top_k is not None:
+            kwargs["top_k"] = decoding.top_k
+        if decoding.top_p is not None:
+            kwargs["top_p"] = decoding.top_p
+        if decoding.min_p is not None:
+            kwargs["min_p"] = decoding.min_p
+        if decoding.repetition_penalty is not None:
+            kwargs["repetition_penalty"] = decoding.repetition_penalty
+        if decoding.presence_penalty is not None:
+            kwargs["presence_penalty"] = decoding.presence_penalty
+        if decoding.frequency_penalty is not None:
+            kwargs["frequency_penalty"] = decoding.frequency_penalty
+        if decoding.min_output_tokens is not None:
+            kwargs["min_tokens"] = decoding.min_output_tokens
+        if decoding.stop_strings is not None:
+            kwargs["stop"] = decoding.stop_strings
+        elif decoding.stop_token_ids is not None:
+            if not self._sampling_params_supports_argument("stop_token_ids"):
+                raise ValueError(
+                    "This vLLM SamplingParams implementation does not support stop_token_ids; "
+                    "configure stop_strings instead."
+                )
+            kwargs["stop_token_ids"] = decoding.stop_token_ids
+        if decoding.seed is not None:
+            kwargs["seed"] = decoding.seed
+        if decoding.ignore_eos:
+            kwargs["ignore_eos"] = True
+        if self._use_final_only and RequestOutputKind is not None:
+            kwargs["output_kind"] = RequestOutputKind.FINAL_ONLY
+        return SamplingParams(**kwargs)
 
     @staticmethod
     def _get_renderer(model_name: str, tokenizer) -> Renderer:
@@ -174,30 +235,28 @@ class vLLMInferenceContext(BaseInferenceContext):
             raise
 
     @staticmethod
-    def _get_llm_engine(inference_config: vLLMInferenceContextConfig):
+    def _get_llm_engine(engine_config: VLLMEngineConfig):
         vLLMInferenceContext._patch_tpu_inference_registry()
 
-        if inference_config.mode == InferenceMode.SYNC:
+        if engine_config.mode == InferenceMode.SYNC:
             if LLM is None:
                 raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
             llm_engine_cls = LLM
-        elif inference_config.mode == InferenceMode.ASYNC:
+        elif engine_config.mode == InferenceMode.ASYNC:
             llm_engine_cls = SyncVLLMWrapper
         else:
-            raise ValueError(f"Invalid inference mode: {inference_config.mode}")
+            raise ValueError(f"Invalid inference mode: {engine_config.mode}")
 
-        engine_kwargs = {
-            "model": inference_config.model_name,
-            "max_model_len": inference_config.max_model_len,
-            "tensor_parallel_size": inference_config.tensor_parallel_size,
-            "gpu_memory_utilization": inference_config.gpu_memory_utilization,
-            "load_format": inference_config.load_format,
-            "enforce_eager": inference_config.enforce_eager,
-            "kv_cache_metrics": inference_config.kv_cache_metrics,
-            "seed": inference_config.seed,
-        }
-
-        return llm_engine_cls(**engine_kwargs)
+        return llm_engine_cls(
+            model=engine_config.model_name,
+            max_model_len=engine_config.max_model_len,
+            tensor_parallel_size=engine_config.tensor_parallel_size,
+            gpu_memory_utilization=engine_config.gpu_memory_utilization,
+            load_format=engine_config.load_format,
+            enforce_eager=engine_config.enforce_eager,
+            kv_cache_metrics=engine_config.kv_cache_metrics,
+            seed=engine_config.seed,
+        )
 
     def tokenize_prompt(self, prompt: str, choice: Choice | None = None, system_prompt: str | None = None) -> np.ndarray:
         """Tokenize the prompt with the choice's prompt token IDs.
@@ -325,37 +384,19 @@ class vLLMInferenceContext(BaseInferenceContext):
     def batch_completions(
         self,
         prompts: list[str] | list[list[dict]],
-        temperature: float,
         n: int,
-        max_tokens: int | None = None,
-        top_k: int | None = None,
-        stop: list[str] | None = None,
+        decoding: DecodingConfig,
         system_prompt: str | None = None,
     ) -> list[ChatCompletion]:
         """Batch completions from the inference server.
 
         Args:
             prompts: Either a list of strings or a list of message lists (with few-shot examples)
-            temperature: Sampling temperature
             n: Number of completions per prompt
-            max_tokens: Maximum tokens to generate
-            stop: Stop sequences
+            decoding: Sampling configuration
             system_prompt: Optional system prompt (only used if prompts are strings)
         """
-        if SamplingParams is None:
-            raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
-        kwargs = {
-            "temperature": temperature,
-            "n": n,
-            "max_tokens": max_tokens or self.sampling_config.max_tokens,
-            "top_k": top_k or self.sampling_config.top_k,
-            "stop": stop or self.sampling_config.stop,
-            "logprobs": 1,
-            "include_stop_str_in_output": self.sampling_config.include_stop_str_in_output,
-        }
-        if self._use_final_only and RequestOutputKind is not None:
-            kwargs["output_kind"] = RequestOutputKind.FINAL_ONLY
-        sampling_params = SamplingParams(**kwargs)
+        sampling_params = self._sampling_params_from_decoding(decoding, n)
 
         # Convert prompts to message lists if they aren't already
         message_lists: list[list[Message]] = []

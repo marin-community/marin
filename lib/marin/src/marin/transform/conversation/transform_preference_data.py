@@ -17,9 +17,8 @@ from dataclasses import dataclass, field
 
 import datasets
 import draccus
-import fsspec
 from datasets import get_dataset_config_info
-from marin.utils import is_path_like
+from marin.utils import fsspec_url, is_path_like
 from rigging.filesystem import url_to_fs
 from zephyr import Dataset, ZephyrContext, write_jsonl_file
 
@@ -63,22 +62,6 @@ def generate_hash_from_pair(chosen, rejected) -> str:
     return hashlib.sha256((str(chosen) + str(rejected)).encode()).hexdigest()
 
 
-def _get_fsspec_protocol(fs: fsspec.AbstractFileSystem) -> str | None:
-    protocol = fs.protocol
-    if isinstance(protocol, (list, tuple)):
-        protocol = protocol[0]
-    if protocol == "file":
-        return None
-    return protocol
-
-
-def _to_fsspec_url(fs: fsspec.AbstractFileSystem, path: str) -> str:
-    protocol = _get_fsspec_protocol(fs)
-    if protocol:
-        return f"{protocol}://{path}"
-    return path
-
-
 def _find_split_files(input_path: str, subset: str | None, split: str, filetype: str) -> list[str]:
     """Find split shard files under an fsspec path."""
     fs, base_path = url_to_fs(input_path)
@@ -96,7 +79,7 @@ def _find_split_files(input_path: str, subset: str | None, split: str, filetype:
         raise FileNotFoundError(
             f"No {filetype} files found for split '{split}' under {input_path}. " f"Tried patterns: {patterns}"
         )
-    return [_to_fsspec_url(fs, path) for path in sorted(set(matches))]
+    return [fsspec_url(fs, path) for path in sorted(set(matches))]
 
 
 def _infer_splits_from_files(input_path: str, subsets: list[str | None], filetype: str) -> list[str]:

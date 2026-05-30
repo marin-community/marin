@@ -10,13 +10,11 @@ bundle download -> image build -> container run -> monitor -> cleanup.
 import contextlib
 import logging
 import shutil
-import socket
 import subprocess
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 from finelog.client import LogClient, Table
@@ -29,6 +27,7 @@ from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.log_store_helpers import task_log_key
+from iris.cluster.providers.types import probe_outbound_ip
 from iris.cluster.runtime.docker import DockerContainerHandle
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.runtime.types import (
@@ -43,14 +42,8 @@ from iris.cluster.runtime.types import (
     MountSpec,
     RuntimeLogReader,
 )
-from iris.cluster.types import (
-    AttemptUid,
-    JobName,
-    is_task_finished,
-)
-from iris.cluster.types import (
-    TaskAttempt as TaskAttemptIdentity,
-)
+from iris.cluster.types import AttemptUid, JobName, is_task_finished
+from iris.cluster.types import TaskAttempt as TaskAttemptIdentity
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure
@@ -145,21 +138,6 @@ class TaskAttemptConfig:
         return self.task_attempt.require_attempt()
 
 
-def _get_host_ip() -> str:
-    """Get the routable IP of this host via the default route.
-
-    Opens a UDP socket to a public IP (no traffic sent) and reads back the
-    local address the OS selected. With --network=host this returns the real
-    machine IP visible to other machines in the same VPC.
-    """
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
-    finally:
-        s.close()
-
-
 def build_iris_env(
     task: "TaskAttempt",
     worker_id: str | None,
@@ -190,7 +168,7 @@ def build_iris_env(
     # With --network=host, containers share the host's network stack.
     # Compute the host's routable IP so container code can read it via
     # get_job_info().advertise_host without needing its own socket tricks.
-    env["IRIS_ADVERTISE_HOST"] = _get_host_ip()
+    env["IRIS_ADVERTISE_HOST"] = probe_outbound_ip()
 
     # Override port placeholders with real allocated values
     for name, port in task.ports.items():
@@ -287,9 +265,9 @@ class TaskAttempt:
         self.task_id: JobName = config.task_id
         self.num_tasks: int = config.num_tasks
         self.attempt_id: int = config.attempt_id
-        # Controller-minted routing key. Mutable: an attempt adopted from a
-        # pre-upgrade container starts with "" and is stamped on the first
-        # Reconcile tick that composite-matches it.
+        # Controller-minted routing key. Set at submit time and stamped onto
+        # the container as the ``iris.attempt_uid`` label so adoption recovers
+        # it across worker restarts.
         self.attempt_uid: AttemptUid = config.attempt_uid
         self.request: job_pb2.RunTaskRequest = config.request
         self.ports: dict[str, int] = {}
@@ -322,7 +300,6 @@ class TaskAttempt:
         self.thread: threading.Thread | None = None
         self.cleanup_done: bool = False
         self.should_stop: bool = False
-        self.on_state_change: Callable[[TaskState], None] | None = None
 
     @classmethod
     def adopt(
@@ -544,11 +521,6 @@ class TaskAttempt:
                 self.error = error
             if exit_code is not None:
                 self.exit_code = exit_code
-        if self.on_state_change is not None:
-            try:
-                self.on_state_change(state)
-            except Exception:
-                logger.debug("on_state_change callback failed", exc_info=True)
 
     def duration(self) -> Duration | None:
         """Calculate how long the attempt ran.
@@ -703,7 +675,7 @@ class TaskAttempt:
         assert self.workdir is not None
         workdir_files = dict(self.request.entrypoint.workdir_files)
         for name, blob_id in self.request.entrypoint.workdir_file_refs.items():
-            workdir_files[name] = self._bundle_store.get_or_fetch(blob_id, f"blobs/{blob_id}")
+            workdir_files[name] = self._bundle_store.get(blob_id)
         self._runtime.stage_bundle(
             bundle_id=self.request.bundle_id,
             workdir=self.workdir,
@@ -1003,12 +975,10 @@ class TaskAttempt:
             cpu_millicores=self.current_cpu_millicores,
             process_count=self.process_count,
         )
-        ts = datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
         stat = build_task_stat(
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,
             worker_id=self._worker_id,
-            ts=ts,
             usage=usage,
         )
         table.write([stat])

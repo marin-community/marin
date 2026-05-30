@@ -40,6 +40,7 @@ from pathlib import PurePath
 from typing import Any
 
 import fsspec
+from google.api_core.exceptions import Forbidden as GcpForbiddenException
 
 from rigging.distributed_lock import create_lock, default_worker_id
 
@@ -277,7 +278,6 @@ def check_path_in_region(key: str, path: str, region: str, local_ok: bool = Fals
     (instead of raising) when the bucket's region can't be checked due
     to permission errors.
     """
-    from google.api_core.exceptions import Forbidden as GcpForbiddenException
 
     if not path.startswith("gs://"):
         if local_ok:

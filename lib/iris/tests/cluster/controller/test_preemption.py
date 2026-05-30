@@ -3,6 +3,7 @@
 
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
+from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import reads
 from iris.cluster.controller.budget import compute_effective_band
 from iris.cluster.controller.controller import (
@@ -1000,6 +1001,54 @@ def test_preemption_nonexistent_task_is_noop():
         assert result.tasks_to_kill == set()
 
 
+def test_preempt_then_worker_terminal_heartbeat_stamps_finished_at_ms():
+    """Regression for #5918: worker's post-preempt terminal heartbeat must finalize the attempt.
+
+    ``preempt_task`` marks the attempt PREEMPTED via ``_mark_task_producing_transition``,
+    which deliberately leaves ``finished_at_ms`` NULL and relies on the worker's
+    subsequent terminal-state heartbeat to stamp it. Without the stamp the row
+    stays counted by ``resource_usage_by_worker`` and ghost-pins the worker's
+    capacity for as long as the worker lives.
+    """
+    with make_controller_state() as state:
+        harness = ControllerTestHarness(state)
+        w1 = harness.add_worker("w1", cpu=4)
+
+        tasks = harness.submit("/alice/job", cpu=1, replicas=1, max_retries_preemption=5)
+        task = tasks[0]
+        harness.dispatch(task, w1)
+        attempt_id = query_task(state, task.task_id).current_attempt_id
+
+        # Producer transition: attempt PREEMPTED, finished_at_ms left NULL on purpose.
+        with state._db.transaction() as cur:
+            state.preempt_task(cur, task.task_id, reason="preempted by /bob/prod-job:0")
+        attempt = query_attempt(state, task.task_id, attempt_id)
+        assert attempt.state == job_pb2.TASK_STATE_PREEMPTED
+        assert attempt.finished_at_ms is None, "producer transition should leave finalization for heartbeat"
+
+        # Worker's heartbeat for the now-terminal attempt — the deferred finalization.
+        with state._db.transaction() as cur:
+            state.apply_task_updates(
+                cur,
+                HeartbeatApplyRequest(
+                    worker_id=w1,
+                    updates=[
+                        TaskUpdate(
+                            task_id=task.task_id,
+                            attempt_id=attempt_id,
+                            new_state=job_pb2.TASK_STATE_KILLED,
+                        )
+                    ],
+                ),
+            )
+
+        attempt = query_attempt(state, task.task_id, attempt_id)
+        assert attempt.finished_at_ms is not None, (
+            "worker's terminal-state heartbeat must stamp finished_at_ms on the preempted "
+            "attempt; otherwise the row stays in resource_usage_by_worker and ghost-pins capacity"
+        )
+
+
 def test_preemption_terminal_task_is_noop():
     """Preempting an already-finished task is a no-op."""
     with make_controller_state() as state:
@@ -1165,7 +1214,6 @@ def test_preempt_task_requeues_coscheduled_siblings_on_retry():
     bounced to PENDING so the job re-coschedules atomically. Without this, the
     retry could land on a different slice from the still-RUNNING siblings,
     splitting the SPMD mesh."""
-    from iris.cluster.constraints import WellKnownAttribute
 
     with make_controller_state() as state:
         for i in range(2):
@@ -1218,7 +1266,6 @@ def test_preempt_task_cascades_coscheduled_siblings():
     WORKER_FAILED via heartbeat). Instead, siblings are killed when the job
     reaches a terminal state through _finalize_terminal_job.
     """
-    from iris.cluster.constraints import WellKnownAttribute
 
     with make_controller_state() as state:
         # Register 2 workers with TPU attributes for coscheduling

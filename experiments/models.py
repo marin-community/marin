@@ -19,7 +19,7 @@ executor_main([download_step])
 from dataclasses import dataclass
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.utils import get_directory_friendly_name
 
 

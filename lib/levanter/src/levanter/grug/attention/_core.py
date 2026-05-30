@@ -4,6 +4,7 @@ import functools
 import inspect
 import math
 from dataclasses import dataclass
+from typing import Literal
 
 import equinox as eqx
 import jax
@@ -15,9 +16,13 @@ from jaxtyping import Array, Bool, Float, Int
 from haliax.jax_utils import named_call
 from haliax.partitioning import _get_mesh
 
-
 _SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
 _SHARD_MAP_CHECK_KWARGS = {_SHARD_MAP_CHECK_KWARG: False}
+GrugAttentionImplementation = Literal[
+    "reference",
+    "tpu_splash",
+    "gpu_fa4_cute",
+]
 
 
 @dataclass(frozen=True)
@@ -41,11 +46,20 @@ class AttentionMask(eqx.Module):
     sliding_window: int | None = eqx.field(default=None, static=True)
 
     @classmethod
-    def causal(cls, *, sliding_window: int | None = None) -> "AttentionMask":
-        return cls(is_causal=True, sliding_window=sliding_window)
+    def causal(
+        cls,
+        *,
+        sliding_window: int | None = None,
+    ) -> "AttentionMask":
+        return cls(
+            is_causal=True,
+            sliding_window=sliding_window,
+        )
 
     def with_segment_ids(
-        self, q_segment_ids: Int[Array, "..."], kv_segment_ids: Int[Array, "..."] | None = None
+        self,
+        q_segment_ids: Int[Array, "..."],
+        kv_segment_ids: Int[Array, "..."] | None = None,
     ) -> "AttentionMask":
         kv_ids = q_segment_ids if kv_segment_ids is None else kv_segment_ids
         return AttentionMask(
@@ -389,7 +403,22 @@ def attention(
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    implementation: GrugAttentionImplementation | None = None,
 ) -> Float[Array, "B Q Hq D"]:
+    if implementation == "reference":
+        return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+    if implementation == "gpu_fa4_cute":
+        from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention
+
+        return gpu_fa4_cute_attention(q, k, v, mask)
+    if implementation == "tpu_splash":
+        if isinstance(mask, jax.Array):
+            raise NotImplementedError("Dense masks are not supported for splash attention.")
+        return _tpu_splash_attention(q, k, v, mask)
+    if implementation is not None:
+        raise ValueError(f"Unknown Grug attention implementation: {implementation}")
+
     if jax.default_backend() == "tpu":
         if isinstance(mask, jax.Array):
             return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
@@ -399,6 +428,7 @@ def attention(
 
 __all__ = [
     "AttentionMask",
+    "GrugAttentionImplementation",
     "RotaryConfig",
     "align_kv_heads",
     "apply_rotary_embedding",

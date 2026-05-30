@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import threading
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 
@@ -26,8 +26,9 @@ class ActorHandle(Protocol):
 class ActorContext:
     """Context available to actors during execution.
 
-    ``shutdown_event`` is set by the actor when it is ready to exit; the
-    backend creates the event and blocks on it to tear the actor down.
+    To exit, the actor sets ``shutdown_event`` (clean — task SUCCEEDED) or
+    calls ``fail(exc)`` (task FAILED — retry policy applies). Backends create
+    the event and block on it; on wake, they inspect recorded errors.
     """
 
     handle: ActorHandle
@@ -41,6 +42,15 @@ class ActorContext:
 
     shutdown_event: threading.Event | None = None
     """Set by the actor when ready to exit; backends wait on it."""
+
+    _errors: list[BaseException] = field(default_factory=list, repr=False)
+    """Fray-internal: errors recorded via ``fail()``; backends inspect after wait."""
+
+    def fail(self, exc: BaseException) -> None:
+        """Request failure exit. Backends re-raise so retry policy applies."""
+        self._errors.append(exc)
+        if self.shutdown_event is not None:
+            self.shutdown_event.set()
 
 
 class HostedActor:

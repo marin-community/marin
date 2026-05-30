@@ -37,7 +37,7 @@ from zephyr import Dataset, ZephyrContext
 from zephyr.dataset import FileEntry
 from zephyr.readers import load_file
 
-from marin.execution.executor import InputName, VersionedValue
+from marin.execution.types import InputName, VersionedValue
 from marin.processing.tokenize._core import (
     MIN_GROUP_BYTES,
     bundle_files_by_size,

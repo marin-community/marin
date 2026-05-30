@@ -24,7 +24,8 @@ from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import leaf_key_paths
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import executor_main
+from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.training.training import temporary_checkpoint_base_path
 
@@ -209,7 +210,7 @@ def run_grug_modular_opt_trial(config: GrugModularOptLaunchConfig) -> None:
             temporary_base_path=temporary_checkpoint_base_path(config.output_path),
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=10),
-            keep=[{"every": 1000}],
+            keep=None,
         ),
     )
 

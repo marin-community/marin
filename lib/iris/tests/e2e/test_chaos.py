@@ -118,8 +118,8 @@ def test_scheduling_timeout(cluster):
 
 
 def test_dispatch_delayed(cluster):
-    """Dispatch delayed by chaos on StartTasks, but eventually goes through."""
-    enable_chaos("controller.start_tasks", delay_seconds=1.0, failure_rate=1.0, max_failures=2)
+    """Dispatch delayed by chaos on Reconcile, but eventually goes through."""
+    enable_chaos("controller.reconcile", delay_seconds=1.0, failure_rate=1.0, max_failures=2)
     job = cluster.submit(TestJobs.quick, "delayed-dispatch")
     status = cluster.wait(job, timeout=30)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
@@ -182,18 +182,18 @@ def test_all_workers_fail(cluster):
 
 
 def test_dispatch_intermittent_failure(cluster):
-    """Intermittent StartTasks failure during dispatch (30%)."""
+    """Intermittent Reconcile failure during dispatch (30%)."""
     cluster.wait_for_workers(1, timeout=15)
-    enable_chaos("controller.start_tasks", failure_rate=0.3)
+    enable_chaos("controller.reconcile", failure_rate=0.3)
     job = cluster.submit(TestJobs.quick, "intermittent-dispatch")
     status = cluster.wait(job, timeout=30)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_dispatch_permanent_failure(cluster):
-    """Permanent StartTasks failure leaves the job unable to dispatch."""
+    """Permanent Reconcile failure leaves the job unable to dispatch."""
     cluster.wait_for_workers(1, timeout=15)
-    enable_chaos("controller.start_tasks", failure_rate=1.0)
+    enable_chaos("controller.reconcile", failure_rate=1.0)
     job = cluster.submit(TestJobs.quick, "permanent-dispatch", scheduling_timeout=Duration.from_seconds(2))
     status = cluster.wait(job, timeout=10)
     assert status.state in (job_pb2.JOB_STATE_FAILED, job_pb2.JOB_STATE_UNSCHEDULABLE)
@@ -334,8 +334,8 @@ def test_checkpoint_with_worker_death(cluster):
 
 @pytest.mark.slow
 def test_128_tasks_concurrent_scheduling(multi_worker_cluster, sentinel):
-    """128 simultaneous tasks expose PollTasks iteration race conditions."""
-    enable_chaos("controller.poll_iteration", delay_seconds=0.01)
+    """128 simultaneous tasks expose Reconcile iteration race conditions."""
+    enable_chaos("controller.reconcile", delay_seconds=0.01)
 
     try:
         job = multi_worker_cluster.submit(

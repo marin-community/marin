@@ -332,11 +332,6 @@ class PhysicalPlan:
             return 0
         return len({item.shard_idx for item in self.source_items})
 
-    @property
-    def num_chunks(self) -> int:
-        """Total number of chunks across all shards."""
-        return len(self.source_items)
-
 
 @dataclass
 class FusionState:

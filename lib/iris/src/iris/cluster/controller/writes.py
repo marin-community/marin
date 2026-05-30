@@ -5,9 +5,10 @@
 
 The :func:`writes_to` decorator records the table set on the function as
 ``fn.writes_to`` / ``fn.cascades_into`` and appends the function to
-:data:`REGISTERED_WRITE_FUNCTIONS`. The startup check in
-``projections/__init__.py`` walks that registry and the ``PROJECTIONS``
-list to verify no Projection-owned table is written outside its Projection.
+:data:`REGISTERED_WRITE_FUNCTIONS`. :func:`validate` cross-checks that
+registry against the ``PROJECTIONS`` list to verify no Projection-owned
+table is written outside its owning Projection. Controller startup calls
+:func:`validate`; tests call it after registering their fixtures.
 
 Areas covered (previously split across writes/<entity>.py):
   jobs           — jobs, job_config, meta sequence
@@ -26,6 +27,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
 from iris.cluster.controller.db import Tx
+from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import (
     USER_ROLE_DEFAULT,
@@ -44,6 +46,65 @@ from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2
 
 REGISTERED_WRITE_FUNCTIONS: list[Callable] = []
+
+
+class ConfigurationError(RuntimeError):
+    """Raised by :func:`validate` when a ``@writes_to`` declaration violates
+    the Projection-owned-table invariant.
+
+    Signals a programming error: a write function declared
+    ``@writes_to(<projection-owned table>)`` from outside the owning
+    Projection class, or its ``cascades_into`` fans out into a
+    Projection-owned table without an explicit invalidation hook.
+    """
+
+
+def validate() -> None:
+    """Check that no Projection-owned table is mutated outside its owning Projection.
+
+    For projection-owned tables, all SQL mutations must flow through the
+    Projection so the in-memory dict can be updated atomically. A write
+    function that bypasses the Projection (or whose FK cascade silently
+    mutates the table) leaves the dict stale.
+
+    The exemption is by ``fn.__qualname__``: a method whose qualified
+    name starts with ``<OwningProjection>.`` is allowed to mutate the
+    table directly. Free functions that need to cascade into a
+    Projection-owned table must call the Projection's invalidation method
+    inline; they should then drop the Projection-owned table from their
+    ``cascades_into`` declaration so the linkage is documented at the
+    call site rather than buried in the decorator metadata.
+
+    Called from controller startup once both registries are populated.
+
+    Raises:
+        ConfigurationError: when a violation is detected.
+    """
+    owned: dict[Table, type] = {}
+    for projection in PROJECTIONS:
+        for table in projection.sources:
+            owned[table] = type(projection)
+
+    violations: list[str] = []
+    for fn in REGISTERED_WRITE_FUNCTIONS:
+        for table in (*fn.writes_to, *fn.cascades_into):
+            if table not in owned:
+                continue
+            if fn.__qualname__.startswith(owned[table].__name__ + "."):
+                continue
+            violations.append(
+                f"  - {fn.__qualname__} writes (or cascades) into {table.name!r} owned by {owned[table].__name__}"
+            )
+
+    if violations:
+        raise ConfigurationError(
+            "Projection-owned tables externally written:\n"
+            + "\n".join(violations)
+            + "\n\nFix: either move this write onto the Projection, or have "
+            "the write function call the Projection's invalidation method "
+            "(e.g. projection.invalidate_for_worker(tx, ...)) and document "
+            "the linkage at the call site."
+        )
 
 
 def writes_to(

@@ -43,7 +43,7 @@ from iris.cluster.constraints import (
 from iris.cluster.constraints import (
     region_constraint as make_region_constraint,
 )
-from iris.cluster.controller import db, reads
+from iris.cluster.controller import db, reads, writes
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
@@ -69,7 +69,6 @@ from iris.cluster.controller.codec import (
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.projections import assert_owned_tables_not_externally_written
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.provider import TaskProvider
@@ -98,7 +97,7 @@ from iris.cluster.controller.schema import (
     workers_table,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.task_state import job_scheduling_deadline, task_row_can_be_scheduled
+from iris.cluster.controller.task_state import hint_rare_state, job_scheduling_deadline, task_row_can_be_scheduled
 from iris.cluster.controller.transitions import (
     DIRECT_PROVIDER_PROMOTION_RATE,
     RESERVATION_HOLDER_JOB_NAME,
@@ -142,7 +141,7 @@ _UNLIMITED = sys.maxsize
 # every other RPC, including the worker heartbeats that would unblock the
 # drain. Install a wider, named pool so a burst of slow handlers cannot
 # starve the rest.
-_RPC_HANDLER_THREADS = 64
+_RPC_HANDLER_THREADS = 1024
 
 
 def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
@@ -607,9 +606,12 @@ def _preempt_solo(
             continue
         if victim.device_variant != wanted_variant:
             continue
-        # Can only preempt strictly lower priority (higher band_sort_key)
+        # Can only preempt strictly lower priority (higher band_sort_key).
+        # `solo_victims` is sorted by descending band_sort_key, so once this
+        # gate trips every later victim also fails — break, don't continue,
+        # to avoid scanning the unpreemptible tail (issue #5888).
         if victim.band_sort_key <= candidate.band:
-            continue
+            break
 
         cap = context.capacities.get(victim.worker_id)
         if cap is None:
@@ -1238,9 +1240,8 @@ class ControllerConfig:
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(1.0))
     """Polling reconcile cadence. The polling thread wakes every ``poll_interval``
     (or sooner if ``_polling_wake`` is set) and runs ``_reconcile_worker_batch``
-    against every healthy worker. Workers push state changes themselves via
-    ``UpdateTaskStatus``; this loop is the recovery channel for ASSIGNED→BUILDING
-    when the push is dropped, plus the dispatch path for fresh ASSIGNED rows."""
+    against every healthy worker. The Reconcile RPC is the sole channel that
+    dispatches new ASSIGNED rows and observes worker-side state changes."""
 
     max_dispatch_parallelism: int = 32
     """Maximum number of concurrent RPC dispatch operations."""
@@ -1296,11 +1297,6 @@ class ControllerConfig:
     """Resolved cluster endpoints: logical name -> concrete URL. Built from
     cluster_config.endpoints by the daemon entrypoint. Registered into the
     controller service's _system_endpoints during start()."""
-
-    reconcile_rpc_enabled: bool = False
-    """When True, the controller dispatches the Reconcile RPC instead of the
-    legacy StartTasks+PollTasks wire. Resolved once at startup from
-    ``IRIS_RECONCILE_RPC_ENABLED``."""
 
 
 def _log_client_interceptors(config: "ControllerConfig") -> tuple:
@@ -1382,7 +1378,7 @@ class Controller:
         self._health = WorkerHealthTracker()
         self._endpoints = EndpointsProjection(self._db)
         self._worker_attrs = WorkerAttrsProjection(self._db)
-        assert_owned_tables_not_externally_written()
+        writes.validate()
         self._seed_liveness_from_workers()
         self._db.register_reopen_hook(self._seed_liveness_from_workers)
 
@@ -1736,8 +1732,9 @@ class Controller:
         assignments possible). Resets to min interval when woken by a producer
         that may free capacity or by a new job submission.
 
-        Reconciliation (StartTasks + PollTasks) runs on the separate polling
-        thread (``_run_polling_loop``) on its own 250 ms cadence. Sharing the
+        Reconciliation runs on the separate polling thread
+        (``_run_polling_loop``) on its own cadence via the Reconcile RPC.
+        Sharing the
         same write transaction is no longer required: producers write
         ``tasks.state = ASSIGNED`` and the polling thread reads that state via
         a snapshot query, so dispatch never crosses a transaction boundary.
@@ -1770,13 +1767,14 @@ class Controller:
 
         Each tick:
           1. Snapshot every healthy active worker.
-          2. Fan out ``StartTasks`` for ASSIGNED rows and ``PollTasks`` for
-             BUILDING/RUNNING rows.
-          3. Apply heartbeat-style results in one write txn.
+          2. Fan out the Reconcile RPC carrying the desired-attempt set per
+             worker (ASSIGNED rows to start, BUILDING/RUNNING rows to keep
+             alive, and stops for everything else).
+          3. Apply observation-driven results in one write txn.
 
         The polling thread is the sole path that pushes work to a worker.
-        Worker auto-kill is implicit: any task absent from the worker's
-        ``expected_tasks`` set on the next poll is killed locally.
+        Worker auto-kill is implicit: any attempt absent from the desired
+        set on the next reconcile is killed locally by the worker.
         """
         tick_seconds = self._config.poll_interval.to_seconds()
         while not stop_event.is_set():
@@ -2141,7 +2139,7 @@ class Controller:
         recomputing from current spend on every tick.
 
         The polling reconcile thread reads ASSIGNED rows on its next tick
-        (woken via ``_polling_wake``) and fans out the StartTasks RPCs.
+        (woken via ``_polling_wake``) and fans out the Reconcile RPCs.
         """
         if self._config.dry_run:
             for task_id, worker_id in assignments:
@@ -2158,7 +2156,7 @@ class Controller:
         with self._db.transaction() as cur:
             self._transitions.queue_assignments(cur, command)
         # Wake the polling thread; every tick reconciles every healthy worker,
-        # so the new ASSIGNED rows turn into StartTasks RPCs on the next tick.
+        # so the new ASSIGNED rows turn into Reconcile RPCs on the next tick.
         self._polling_wake.set()
 
     def _apply_preemptions(
@@ -2270,7 +2268,7 @@ class Controller:
                     )
                 )
                 .where(
-                    tasks_table.c.state.in_(bindparam("executing_states", expanding=True)),
+                    hint_rare_state(tasks_table.c.state.in_(bindparam("executing_states", expanding=True))),
                     job_config_table.c.timeout_ms.is_not(None),
                     job_config_table.c.timeout_ms > 0,
                     task_attempts_table.c.started_at_ms.is_not(None),
@@ -2339,12 +2337,13 @@ class Controller:
             # RUNNING) drive normal reconciliation; rows whose task has
             # already moved to a terminal state but whose attempt is still
             # worker-bound (worker_id set, finished_at_ms NULL) are stranded
-            # attempts whose terminal UpdateTaskStatus push was dropped.
-            # Including them in expected_tasks gives the worker a second
+            # attempts whose terminal Reconcile observation was lost.
+            # Including them in the desired set gives the worker a second
             # chance to report -- either with the real terminal status or
-            # via _missing_task_status -- so the heartbeat path can stamp
-            # finished_at_ms. Without this, a single lost RPC strands the
-            # attempt forever, since no other code path polls about it.
+            # via the MISSING synthesis in ``handle_reconcile`` -- so the
+            # heartbeat path can stamp finished_at_ms. Without this, a single
+            # lost RPC strands the attempt forever, since no other code path
+            # polls about it.
             target_ids: set[WorkerId] = set(worker_ids)
             raw_rows = snap.execute(
                 select(
@@ -2398,11 +2397,7 @@ class Controller:
 
         plans = reconcile_workers(inputs)
         now = Timestamp.now()
-        results = self._provider.reconcile_workers(
-            plans,
-            addresses,
-            use_reconcile_rpc=self._config.reconcile_rpc_enabled,
-        )
+        results = self._provider.reconcile_workers(plans, addresses)
 
         plan_by_worker: dict[WorkerId, WorkerReconcilePlan] = {p.worker_id: p for p in plans}
         with self._db.transaction() as cur:
@@ -2469,11 +2464,9 @@ class Controller:
         polling tick (or, for K8s, the sync loop) picks up the kills.
 
         Deliberately does **not** wake the scheduling loop. The scheduler
-        re-evaluates capacity on its own backoff cadence; the worker push
-        path (``update_task_status``) is the only writer that wakes
-        scheduling, since it can free capacity by stamping ``finished_at_ms``
-        on the heartbeat. Polling-thread heartbeats firing every tick used
-        to short-circuit the backoff entirely.
+        re-evaluates capacity on its own backoff cadence; polling-thread
+        heartbeats firing every tick used to short-circuit the backoff
+        entirely.
         """
         with self._db.transaction() as cur:
             self._transitions.apply_heartbeats_batch(cur, requests)
@@ -2633,8 +2626,8 @@ class Controller:
     def external_host(self) -> str:
         """Externally-reachable host address.
 
-        When bound to 0.0.0.0, probes for the real network IP (same technique
-        workers use in env_probe._get_ip_address).
+        When bound to 0.0.0.0, probes for the real network IP via
+        ``probe_outbound_ip``.
         """
         return resolve_external_host(self._config.host)
 

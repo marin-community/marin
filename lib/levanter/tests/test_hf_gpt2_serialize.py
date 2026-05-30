@@ -236,6 +236,7 @@ def test_hf_save_to_fs_spec():
                 assert onp.allclose(simple_p, loaded_p), f"{key}: {onp.linalg.norm(simple_p - loaded_p, ord=onp.inf)}"
 
 
+@pytest.mark.slow
 def test_hf_save_to_gcs_roundtrip():
     pytest.importorskip("gcsfs")
 

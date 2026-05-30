@@ -92,13 +92,13 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 import draccus
 import levanter.utils.fsspec_utils as fsspec_utils
 from fray.current_client import current_client
 from fray.iris_backend import FrayIrisClient
-from fray.types import ResourceConfig, TpuConfig
+from fray.types import TpuConfig
 from iris.cluster.constraints import WellKnownAttribute
 from iris.rpc import config_pb2
 from rigging.filesystem import (
@@ -119,6 +119,15 @@ from marin.execution.executor_step_status import (
 from marin.execution.remote import RemoteCallable
 from marin.execution.step_runner import StepRunner, worker_id
 from marin.execution.step_spec import StepSpec, _is_relative_path
+from marin.execution.types import (
+    ExecutorFunction,
+    ExecutorStep,
+    InputName,
+    OutputName,
+    T_co,
+    VersionedValue,
+    output_path_of,
+)
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger(__name__)
@@ -159,10 +168,6 @@ def _get_local_data_browser_port(default: int = 5000) -> int:
 
 
 ConfigT = TypeVar("ConfigT")
-ConfigT_co = TypeVar("ConfigT_co", covariant=True)
-T_co = TypeVar("T_co", covariant=True)
-
-ExecutorFunction = Callable | None
 
 
 _NON_REGIONAL_BUCKET_LOCATIONS = {"us", "eu", "asia", "nam4", "eur4", "asia1"}
@@ -688,184 +693,6 @@ def resolve_executor_step(
         fn=final_fn,
         resources=step.resources,
     )
-
-
-@dataclass(frozen=True)
-class ExecutorStep(Generic[ConfigT_co]):
-    """
-    An `ExecutorStep` represents a single step of a larger pipeline (e.g.,
-    transforming HTML to text).  It is specified by:
-     - a name (str), which is used to determine the `output_path`.
-     - a function `fn` (Callable), and
-     - a configuration `config` which gets passed into `fn`.
-     - a pip dependencies list (Optional[list[str]]) which are the pip dependencies required for the step.
-     These can be keys of project.optional-dependencies in the project's pyproject.toml file or any other pip package.
-
-    When a step is run, we compute the following two things for each step:
-    - `version`: represents all the upstream dependencies of the step
-    - `output_path`: the path where the output of the step are stored, based on
-    the name and a hash of the version.
-
-    The `config` is a dataclass object that recursively might have special
-    values of the following form:
-    - `InputName(step, name)`: a dependency on another `step`, resolve to the step.output_path / name
-    - `OutputName(name)`: resolves to the output_path / name
-    - `VersionedValue(value)`: a value that should be part of the version
-    The `config` is instantiated by replacing these special values with the
-    actual paths during execution.
-
-    Note: `step: ExecutorStep` is interpreted as `InputName(step, None)`.
-    """
-
-    name: str
-    fn: ExecutorFunction
-    config: ConfigT_co
-    description: str | None = None
-
-    override_output_path: str | None = None
-    """Specifies the `output_path` that should be used.  Print warning if it
-    doesn't match the automatically computed one."""
-
-    resources: ResourceConfig | None = None
-    """If set, this step is submitted as its own Fray job using these
-    resources. ``fn`` is invoked inside the submitted job.
-
-    If ``None``, behavior is determined by ``fn``: a ``RemoteCallable``
-    submits as a Fray job; a plain callable runs inline in-process.
-    """
-
-    def cd(self, name: str) -> "InputName":
-        """Refer to the `name` under `self`'s output_path."""
-        return InputName(self, name=name)
-
-    def __truediv__(self, other: str) -> "InputName":
-        """Alias for `cd`. That looks more Pythonic."""
-        return InputName(self, name=other)
-
-    def __hash__(self):
-        """Hash based on the ID (every object is different)."""
-        return hash(id(self))
-
-    def with_output_path(self, output_path: str) -> "ExecutorStep":
-        """Return a copy of the step with the given output_path."""
-        return replace(self, override_output_path=output_path)
-
-    def as_input_name(self) -> "InputName":
-        return InputName(step=self, name=None)
-
-
-@dataclass(frozen=True)
-class InputName:
-    """To be interpreted as a previous `step`'s output_path joined with `name`."""
-
-    step: ExecutorStep | None
-    name: str | None
-    block_on_step: bool = True
-    """
-    If False, the step that uses this InputName
-    will not block (or attempt to execute) `step`. We use this for
-    documenting dependencies in the config, but where that step might not have technically finished...
-
-    For instance, we sometimes use training checkpoints before the training step has finished.
-
-    These "pseudo-dependencies" still impact the hash of the step, but they don't block execution.
-    """
-
-    def cd(self, name: str) -> "InputName":
-        return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
-
-    def __truediv__(self, other: str) -> "InputName":
-        """Alias for `cd` that looks more Pythonic."""
-        return self.cd(other)
-
-    @staticmethod
-    def hardcoded(path: str) -> "InputName":
-        """
-        Sometimes we want to specify a path that is not part of the pipeline but is still relative to the prefix.
-        Try to use this sparingly.
-        """
-        return InputName(None, name=path)
-
-    def nonblocking(self) -> "InputName":
-        """
-        the step will not block on (or attempt to execute) the parent step.
-
-         (Note that if another step depends on the parent step, it will still block on it.)
-        """
-        return dataclasses.replace(self, block_on_step=False)
-
-
-def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
-    """
-    Helper function to extract the ExecutorStep from an InputName or ExecutorStep.
-
-    Args:
-        run (ExecutorStep | InputName): The input to extract the step from.
-
-    Returns:
-        ExecutorStep: The extracted step.
-    """
-    if isinstance(run, ExecutorStep):
-        return run
-    elif isinstance(run, InputName):
-        step = run.step
-        if step is None:
-            raise ValueError(f"Hardcoded path {run.name} is not part of the pipeline")
-        return step
-    else:
-        raise ValueError(f"Unexpected type {type(run)} for run: {run}")
-
-
-def output_path_of(step: ExecutorStep, name: str | None = None) -> InputName:
-    return InputName(step=step, name=name)
-
-
-if TYPE_CHECKING:
-
-    class OutputName(str):
-        """Type-checking stub treated as a string so defaults like THIS_OUTPUT_PATH fit `str`."""
-
-        name: str | None
-
-else:
-
-    @dataclass(frozen=True)
-    class OutputName:
-        """To be interpreted as part of this step's output_path joined with `name`."""
-
-        name: str | None
-
-
-def this_output_path(name: str | None = None):
-    return OutputName(name=name)
-
-
-# constant so we can use it in fields of dataclasses
-THIS_OUTPUT_PATH = OutputName(None)
-
-
-@dataclass(frozen=True)
-class VersionedValue(Generic[T_co]):
-    """Wraps a value, to signal that this value (part of a config) should be part of the version."""
-
-    value: T_co
-
-
-def versioned(value: T_co) -> VersionedValue[T_co]:
-    if isinstance(value, VersionedValue):
-        raise ValueError("Can't nest VersionedValue")
-    elif isinstance(value, InputName):
-        # TODO: We have also run into Versioned([InputName(...), ...])
-        raise ValueError("Can't version an InputName")
-
-    return VersionedValue(value)
-
-
-def ensure_versioned(value: VersionedValue[T_co] | T_co) -> VersionedValue[T_co]:
-    """
-    Ensure that the value is wrapped in a VersionedValue. If it is already wrapped, return it as is.
-    """
-    return value if isinstance(value, VersionedValue) else VersionedValue(value)
 
 
 def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:

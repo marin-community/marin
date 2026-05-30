@@ -16,10 +16,14 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finelog.server import LogServiceImpl
+from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller import service as service_module
+from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.codec import constraints_from_json
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.schema import jobs_table, task_attempts_table
 from iris.cluster.controller.service import (
@@ -29,6 +33,7 @@ from iris.cluster.controller.service import (
     ControllerServiceImpl,
     _check_client_freshness,
     _job_status_counts,
+    _live_user_stats,
 )
 from iris.cluster.controller.transitions import (
     Assignment,
@@ -36,8 +41,11 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
+from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
 from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func
 from sqlalchemy import update as sa_update
@@ -139,6 +147,29 @@ def test_launch_job_returns_job_id(service):
     assert status_response.job.state == job_pb2.JOB_STATE_PENDING
 
 
+def test_get_job_status_reports_parent_job_id(service):
+    """get_job_status surfaces parent_job_id for child jobs (empty for roots).
+
+    The dashboard's child-job view uses this to render a "back to parent job"
+    link, so the parent relationship must travel over the RPC, not just the DB.
+    """
+    parent_name = "/test-user/parent"
+    child_name = "/test-user/parent/child"
+    service.launch_job(make_job_request("parent"), None)
+    service.launch_job(make_job_request(child_name), None)
+
+    child_status = service.get_job_status(
+        controller_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string(child_name).to_wire()), None
+    )
+    assert child_status.job.parent_job_id == JobName.from_string(parent_name).to_wire()
+
+    parent_status = service.get_job_status(
+        controller_pb2.Controller.GetJobStatusRequest(job_id=JobName.from_string(parent_name).to_wire()), None
+    )
+    assert parent_status.job.parent_job_id == ""
+    assert parent_status.job.has_children
+
+
 def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state):
     request = make_job_request("bundle-job")
     request.bundle_blob = b"bundle-bytes"
@@ -206,6 +237,38 @@ def test_launch_job_accepts_same_shape_alternatives(service):
 
     response = service.launch_job(request, None)
     assert response.job_id == JobName.root("test-user", "matched-tpu-variants").to_wire()
+
+
+def test_launch_job_externalizes_large_workdir_files(service, state):
+    request = make_job_request("big-pickle-job")
+    small_file = b"tiny"
+    large_file = b"x" * (32 * 1024)  # 32KB, above 10KB threshold
+    request.entrypoint.workdir_files["small.txt"] = small_file
+    request.entrypoint.workdir_files["_callable.pkl"] = large_file
+    service.launch_job(request, None)
+
+    job_id = JobName.root("test-user", "big-pickle-job")
+    with state._db.read_snapshot() as snap:
+        template = state.run_request_template(snap, job_id)
+    assert template is not None
+    # Small file stays inline
+    assert dict(template.entrypoint.workdir_files) == {"small.txt": small_file}
+    # Large file externalized to a 64-char SHA-256 blob ref
+    assert len(template.entrypoint.workdir_file_refs["_callable.pkl"]) == 64
+
+
+def test_launch_job_keeps_small_workdir_files_inline(service, state):
+    request = make_job_request("small-pickle-job")
+    small_file = b"x" * 1024  # 1KB
+    request.entrypoint.workdir_files["_callable.pkl"] = small_file
+    service.launch_job(request, None)
+
+    job_id = JobName.root("test-user", "small-pickle-job")
+    with state._db.read_snapshot() as snap:
+        template = state.run_request_template(snap, job_id)
+    assert template is not None
+    assert dict(template.entrypoint.workdir_files) == {"_callable.pkl": small_file}
+    assert "_callable.pkl" not in template.entrypoint.workdir_file_refs
 
 
 def test_launch_job_rejects_duplicate_name(service):
@@ -474,8 +537,6 @@ def test_get_job_status_not_found(service):
 
 def test_redact_request_env_vars_does_not_mutate_original():
     """Verify redact_request_env_vars returns a copy and does not mutate the input."""
-    from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
-
     original = controller_pb2.Controller.LaunchJobRequest(
         name="/test-user/job",
         entrypoint=make_test_entrypoint(),
@@ -529,8 +590,6 @@ def test_submit_argv_empty_when_omitted(service):
 
 def test_get_job_status_redacts_sensitive_env_vars(service):
     """Verify get_job_status redacts env var values whose keys match sensitive patterns."""
-    from iris.cluster.redaction import REDACTED_VALUE
-
     job_name = JobName.root("test-user", "redact-test")
     launch_req = controller_pb2.Controller.LaunchJobRequest(
         name=job_name.to_wire(),
@@ -723,8 +782,6 @@ def test_terminate_job_skips_already_finished_children(service, state):
 
 def test_terminate_job_allowed_by_owner(service):
     """Job owner can terminate their own job."""
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
-
     service.launch_job(make_job_request("/alice/my-job"), None)
 
     token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
@@ -740,13 +797,6 @@ def test_terminate_job_allowed_by_owner(service):
 
 def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
     """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
-    from iris.cluster.bundle import BundleStore
-    from iris.cluster.controller.auth import ControllerAuth
-    from iris.cluster.controller.projections.endpoints import EndpointsProjection
-    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
-
     auth_service = ControllerServiceImpl(
         state,
         controller=mock_controller,
@@ -777,13 +827,6 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
 
 def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_path):
     """Cannot submit a child job under another user's hierarchy."""
-    from iris.cluster.bundle import BundleStore
-    from iris.cluster.controller.auth import ControllerAuth
-    from iris.cluster.controller.projections.endpoints import EndpointsProjection
-    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
-
     auth_service = ControllerServiceImpl(
         state,
         controller=mock_controller,
@@ -1164,8 +1207,6 @@ def test_task_summaries_sql_group_by(state, service):
 
 def test_live_user_stats_sql_aggregation(state, service):
     """_live_user_stats SQL GROUP BY produces correct per-user counts."""
-    from iris.cluster.controller.service import _live_user_stats
-
     service.launch_job(make_job_request("job-x", replicas=2), None)
     service.launch_job(make_job_request("job-y"), None)
 
@@ -1192,8 +1233,6 @@ def test_live_user_stats_sql_aggregation(state, service):
 
 def test_list_workers_returns_all(service, state):
     """Verify list_workers returns all registered workers."""
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
-
     db = state._db
     with db.transaction() as _tx:
         writes.ensure_user(_tx, "system:worker", Timestamp.now(), role="worker")
@@ -1222,8 +1261,6 @@ def test_list_workers_returns_all(service, state):
 
 
 def _register_workers_for_query(service, state, *, count_cpu: int, count_gpu: int) -> None:
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
-
     with state._db.transaction() as _tx:
         writes.ensure_user(_tx, "system:worker", Timestamp.now(), role="worker")
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
@@ -1396,13 +1433,6 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
 
 def test_register_requires_worker_role(state, mock_controller, tmp_path):
     """Non-worker user gets PERMISSION_DENIED on register()."""
-    from iris.cluster.bundle import BundleStore
-    from iris.cluster.controller.auth import ControllerAuth
-    from iris.cluster.controller.projections.endpoints import EndpointsProjection
-    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
-
     db = state._db
     now = Timestamp.now()
     with db.transaction() as _tx:
@@ -1439,13 +1469,6 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
 
 def test_register_allows_worker_role(state, mock_controller, tmp_path):
     """Worker-role user can call register()."""
-    from iris.cluster.bundle import BundleStore
-    from iris.cluster.controller.auth import ControllerAuth
-    from iris.cluster.controller.projections.endpoints import EndpointsProjection
-    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
-
     db = state._db
     now = Timestamp.now()
     with db.transaction() as _tx:
@@ -1481,8 +1504,6 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
 
 def test_get_scheduler_state_with_running_task(controller_service, state):
     """get_scheduler_state aggregates a running task into a (band, user, worker, job) bucket."""
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
-
     # Submit a job and move a task to RUNNING
     job_id = JobName.root("alice", "sched-test")
     request = controller_pb2.Controller.LaunchJobRequest(
@@ -1628,22 +1649,6 @@ def test_launch_job_nested_with_stale_client_date_is_exempt(service):
     assert response.job_id == child_id.to_wire()
 
 
-def test_set_task_status_text_persists_via_store(service):
-    """set_task_status_text persists the supplied markdown via the store."""
-    service.launch_job(make_job_request("stats-job"), None)
-    task_id = JobName.root("test-user", "stats-job").task(0)
-    detail_text = "Physical stages:\n→ 1. Map\n\nShards: 3/10 complete, 2 in-flight, 5 queued"
-    summary_text = "**Map** 30% (3/10) 1.2 MiB/s"
-    request = job_pb2.SetTaskStatusTextRequest(
-        task_id=task_id.to_wire(),
-        status_text_detail_md=detail_text,
-        status_text_summary_md=summary_text,
-    )
-    service.set_task_status_text(request, None)
-    assert service._transitions.get_status_text_detail(task_id.to_wire()) == detail_text
-    assert service._transitions.get_status_text_summary(task_id.to_wire()) == summary_text
-
-
 def test_list_tasks_returns_current_attempt_timing(service, state):
     """ListTasks must surface the current attempt's started_at and exactly one attempt entry.
 
@@ -1675,3 +1680,19 @@ def test_list_tasks_returns_current_attempt_timing(service, state):
     # exactly one attempt entry — the current one — even if more existed
     assert len(proto.attempts) == 1
     assert proto.attempts[0].attempt_id == proto.current_attempt_id
+
+
+def test_set_task_status_text_handler_is_noop(service):
+    """Deprecated handler must accept and discard the payload without error.
+
+    Old clients still call this RPC; new clients write to iris.task_status.
+    """
+    response = service.set_task_status_text(
+        job_pb2.SetTaskStatusTextRequest(
+            task_id="/u/job/0",
+            status_text_detail_md="ignored",
+            status_text_summary_md="ignored",
+        ),
+        None,
+    )
+    assert isinstance(response, job_pb2.SetTaskStatusTextResponse)

@@ -24,7 +24,7 @@ from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
 from iris.cli.bug_report import file_github_issue, format_bug_report, gather_bug_report
-from iris.cli.main import require_controller_url
+from iris.cli.connect import require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
 from iris.cluster.constraints import (
@@ -37,6 +37,7 @@ from iris.cluster.constraints import (
     zone_constraint,
 )
 from iris.cluster.redaction import redact_submit_argv
+from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
     TERMINAL_TASK_STATES,
     CoschedulingConfig,
@@ -45,7 +46,6 @@ from iris.cluster.types import (
     JobName,
     ReservationEntry,
     ResourceSpec,
-    get_tpu_topology,
     gpu_device,
     tpu_device,
 )

@@ -20,12 +20,12 @@ the execution backend.
    - `marin_dev` / `marin-dev` -> `lib/iris/config/marin-dev.yaml`
    - `coreweave` -> `lib/iris/config/coreweave.yaml`
 3. `resubmit_command` — exact Iris submit command for resubmission; must include `--no-wait`
-4. For Marin TPU training jobs, use `--extra marin:tpu` (not `--extra marin:cpu`)
+4. For Marin TPU training jobs, use `--extra marin-core:tpu` (not `--extra marin-core:cpu`)
 5. For TPU jobs, the resubmit command must request TPU resources with `--tpu <variant>`.
    `--reserve <variant>` only holds capacity; it does not attach TPU devices to the task container.
 
 Example resubmit command:
-`uv run iris --config lib/iris/config/marin.yaml job run --no-wait --extra marin:tpu --tpu v5litepod-16 -- python experiments/tutorials/train_tiny_model_tpu.py`
+`uv run iris --config lib/iris/config/marin.yaml job run --no-wait --extra marin-core:tpu --tpu v5litepod-16 -- python experiments/tutorials/train_tiny_model_tpu.py`
 
 If any required field is missing, ask for it before proceeding.
 
@@ -70,7 +70,7 @@ job through MCP tools, not only Iris CLI commands.
   (`screen`, `tmux`, or one long-running exec session). Record session names,
   ports, and log paths in the state file.
 - Start MCP with a stable local controller URL and streamable HTTP transport:
-  `uv run --package marin marin-mcp-babysitter --controller-url <URL> --cluster <CLUSTER> --transport streamable-http --host 127.0.0.1 --port <PORT>`
+  `uv run --package marin-core marin-mcp-babysitter --controller-url <URL> --cluster <CLUSTER> --transport streamable-http --host 127.0.0.1 --port <PORT>`
 - Verify with `iris_job_summary` and `iris_tail_logs`. For heartbeat monitoring,
   report: job state, latest progress/tick/log line, timestamp, error signal.
 - If the MCP server is reachable but tool calls fail with connection refused to

@@ -98,8 +98,6 @@ export interface TaskStatus {
   pendingReason?: string
   canBeScheduled?: boolean
   containerId?: string
-  statusTextDetailMd?: string
-  statusTextSummaryMd?: string
 }
 
 // -- Jobs --
@@ -125,6 +123,7 @@ export interface JobStatus {
   completedCount?: number
   pendingReason?: string
   hasChildren?: boolean
+  parentJobId?: string
 }
 
 export interface JobQuery {

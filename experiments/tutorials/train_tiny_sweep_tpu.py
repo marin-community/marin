@@ -16,8 +16,8 @@ from fray import client as fray_client
 from fray.cluster import ResourceConfig
 from fray.types import Entrypoint, JobRequest, create_environment
 from levanter.main.train_lm import TrainLmConfig
-from marin.execution.executor import versioned
 from marin.execution.sweep import SweepTarget, claim_and_run
+from marin.execution.types import versioned
 from marin.training.training import extras_for_resources, resolve_training_env
 
 from experiments.defaults import _run_training_on_worker, prepare_lm_train

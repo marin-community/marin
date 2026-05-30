@@ -19,7 +19,7 @@ import levanter.tracker
 from levanter.callbacks import StepInfo
 
 from ..data import DataLoader
-from ..tracker.histogram import Histogram
+from ..tracker.histogram import SummaryStats
 
 
 B = TypeVar("B")
@@ -121,12 +121,12 @@ def compute_entropy_histogram(
     test_data,
     max_tokens: int = 1024 * 1024,
     num_bins: int = 64,
-) -> Histogram:
+) -> SummaryStats:
     """
     Compute entropy histograms for a given model and dataset.
 
     Returns:
-        Histogram: A Histogram object containing the entropy values.
+        SummaryStats: A SummaryStats object containing the entropy values.
     """
     entropies = _collect_per_token_values(
         model,
@@ -136,7 +136,7 @@ def compute_entropy_histogram(
         on_device_fn=_compute_entropy_on_device,
         max_tokens=max_tokens,
     )
-    return Histogram.from_array(entropies, num_bins=num_bins)
+    return SummaryStats.from_array(entropies, num_bins=num_bins)
 
 
 def compute_top2_gap_histogram(
@@ -146,7 +146,7 @@ def compute_top2_gap_histogram(
     test_data,
     max_tokens: int = 1024 * 1024,
     num_bins: int = 64,
-) -> Histogram:
+) -> SummaryStats:
     gaps = _collect_per_token_values(
         model,
         Vocab,
@@ -155,11 +155,11 @@ def compute_top2_gap_histogram(
         on_device_fn=_compute_top2_gap_on_device,
         max_tokens=max_tokens,
     )
-    return Histogram.from_array(gaps, num_bins=num_bins)
+    return SummaryStats.from_array(gaps, num_bins=num_bins)
 
 
 def _make_histogram_callback(
-    histogram_fn: Callable[..., Histogram],
+    histogram_fn: Callable[..., SummaryStats],
     metric_name: str,
     *,
     logit_fn,

@@ -304,9 +304,6 @@ class LocalCluster:
             )
         return ControllerStatus(running=False, address="", healthy=False)
 
-    def fetch_startup_logs(self, tail_lines: int = 100) -> str | None:
-        return "(local controller — no startup logs)"
-
 
 def make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
     """Build a fully-configured IrisClusterConfig for local execution.

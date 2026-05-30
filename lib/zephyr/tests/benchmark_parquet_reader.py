@@ -15,9 +15,13 @@ Usage:
     uv run python tests/benchmark_parquet_reader.py --size-gb 1 --modes dataset,iter_row_groups
 """
 
+import base64
 import gc
+import json
 import logging
 import os
+import random
+import subprocess
 import sys
 import tempfile
 import time
@@ -27,6 +31,7 @@ import click
 import psutil
 import pyarrow as pa
 import pyarrow.parquet as pq
+from zephyr.readers import iter_parquet_row_groups
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -46,8 +51,6 @@ def _generate_batch(rows: int, shard_idx: int, chunk_idx: int, offset: int = 0) 
 
     Uses os.urandom text so Parquet compression can't hide the real size.
     """
-    import base64
-    import random
 
     ids = list(range(offset, offset + rows))
     scores = [random.random() * 100 for _ in range(rows)]
@@ -83,9 +86,8 @@ def write_test_file(path: str, target_bytes: int, row_group_mb: int = 100) -> di
     # Calibrate rows per row group from a sample
     sample = _generate_batch(1000, 0, 0)
     sample_table = pa.Table.from_batches([sample])
-    import tempfile as _tf
 
-    with _tf.NamedTemporaryFile(suffix=".parquet") as tmp:
+    with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
         pq.write_table(sample_table, tmp.name)
         disk_bytes_per_row = os.path.getsize(tmp.name) / len(sample_table)
 
@@ -186,7 +188,6 @@ def read_dataset_full(path: str, limit: int | None = None) -> dict[str, Any]:
 
 def read_rowgroups_full(path: str, limit: int | None = None) -> dict[str, Any]:
     """Full scan via iter_parquet_row_groups."""
-    from zephyr.readers import iter_parquet_row_groups
 
     def run():
         n = 0
@@ -224,63 +225,10 @@ def read_dataset_scatter(path: str, limit: int | None = None) -> dict[str, Any]:
     return {"reader": "dataset_scatter", **_measure(run)}
 
 
-def read_rowgroups_scatter(path: str, limit: int | None = None) -> dict[str, Any]:
-    """Read one (shard, chunk) via iter_parquet_row_groups — the new scatter reader.
-
-    Uses equality_predicates for row-group-level skipping via statistics.
-    No row_filter needed because each row group has exactly one (shard, chunk)
-    pair — statistics are exact (min == max), so every row in a matching row
-    group is a hit.
-    """
-    from zephyr.readers import iter_parquet_row_groups
-
-    target_shard = _NUM_SHARDS // 2
-    target_chunk = _CHUNKS_PER_SHARD // 2
-
-    def run():
-        n = 0
-        for table in iter_parquet_row_groups(
-            path,
-            columns=["item"],
-            equality_predicates={"shard_idx": target_shard, "chunk_idx": target_chunk},
-        ):
-            n += len(table)
-            del table
-        return n
-
-    return {"reader": "rowgroups_scatter", **_measure(run)}
-
-
-def read_rowgroups_scatter_no_skip(path: str, limit: int | None = None) -> dict[str, Any]:
-    """Read one (shard, chunk) via iter_parquet_row_groups WITHOUT statistics skipping.
-
-    Reads every row group and filters post-hoc. Shows the cost of not having
-    row-group-level predicate pushdown.
-    """
-    import pyarrow.compute as pc
-    from zephyr.readers import iter_parquet_row_groups
-
-    target_shard = _NUM_SHARDS // 2
-    target_chunk = _CHUNKS_PER_SHARD // 2
-
-    def run():
-        filt = (pc.field("shard_idx") == target_shard) & (pc.field("chunk_idx") == target_chunk)
-        n = 0
-        for table in iter_parquet_row_groups(path):
-            table = table.filter(filt).select(["item"])
-            n += len(table)
-            del table
-        return n
-
-    return {"reader": "rowgroups_no_skip", **_measure(run)}
-
-
 READERS = {
     "dataset_full": read_dataset_full,
     "rowgroups_full": read_rowgroups_full,
     "dataset_scatter": read_dataset_scatter,
-    "rowgroups_scatter": read_rowgroups_scatter,
-    "rowgroups_no_skip": read_rowgroups_scatter_no_skip,
 }
 
 
@@ -308,9 +256,6 @@ def print_results(results: list[dict[str, Any]]) -> None:
 
 
 def _run_in_subprocess(mode: str, path: str, script_path: str) -> dict[str, Any]:
-    import json
-    import subprocess
-
     cmd = [sys.executable, script_path, "--file", path, "--modes", mode, "--json"]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     if proc.returncode != 0:

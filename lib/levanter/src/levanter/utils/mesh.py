@@ -82,25 +82,21 @@ class MeshConfig:
 
         per_slice = num_devices // num_slices
 
-        default_axes = {"data": -1, "replica": 1, "model": 1}
-        default_dcn_axes = {"replica_dcn": -1}
+        axes = {**DEFAULT_ICI_AXIS_SPEC, **self.axes}
+        dcn_axes = {**DEFAULT_DCN_AXIS_SPEC, **self.dcn_axes}
 
-        axes = dict(default_axes)
-        axes.update(self.axes)
-
-        absorbers = [k for k, v in axes.items() if v == -1]
-        if len(absorbers) > 1 and "data" in axes and "data" not in self.axes:
+        # If the user added another absorber (-1), drop the default absorber so exactly one remains.
+        if sum(1 for v in axes.values() if v == -1) > 1 and "data" in axes and "data" not in self.axes:
             axes["data"] = 1
-
-        dcn_axes = dict(default_dcn_axes)
-        dcn_axes.update(self.dcn_axes)
-
-        dcn_absorbers = [k for k, v in dcn_axes.items() if v == -1]
-        if len(dcn_absorbers) > 1 and "replica_dcn" in dcn_axes and "replica_dcn" not in self.dcn_axes:
+        if (
+            sum(1 for v in dcn_axes.values() if v == -1) > 1
+            and "replica_dcn" in dcn_axes
+            and "replica_dcn" not in self.dcn_axes
+        ):
             dcn_axes["replica_dcn"] = 1
 
-        if set(axes.keys()) & set(dcn_axes.keys()):
-            overlap = set(axes.keys()) & set(dcn_axes.keys())
+        overlap = set(axes) & set(dcn_axes)
+        if overlap:
             raise ValueError(f"Axis names cannot appear in both axes and dcn_axes: {sorted(overlap)}")
 
         unknown_ici = [n for n, v in axes.items() if v == -1]
@@ -119,20 +115,16 @@ class MeshConfig:
             if remaining * known_dcn != num_slices:
                 raise ValueError(f"DCN product {known_dcn} does not divide num_slices {num_slices}.")
             dcn_axes[unknown_dcn[0]] = remaining
-            known_dcn *= remaining
-        else:
-            if known_dcn != num_slices:
-                raise ValueError(f"DCN product {known_dcn} must equal num_slices {num_slices}.")
+        elif known_dcn != num_slices:
+            raise ValueError(f"DCN product {known_dcn} must equal num_slices {num_slices}.")
 
         if unknown_ici:
             remaining = per_slice // known_ici
             if remaining * known_ici != per_slice:
                 raise ValueError(f"ICI product {known_ici} does not divide devices_per_slice {per_slice}.")
             axes[unknown_ici[0]] = remaining
-            known_ici *= remaining
-        else:
-            if known_ici != per_slice:
-                raise ValueError(f"ICI product {known_ici} must equal devices_per_slice {per_slice}.")
+        elif known_ici != per_slice:
+            raise ValueError(f"ICI product {known_ici} must equal devices_per_slice {per_slice}.")
 
         return axes, dcn_axes
 
