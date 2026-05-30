@@ -39,14 +39,18 @@ DEFAULT_ZONES = ("europe-west4-b", "us-west4-a")
 
 @dataclass
 class ProbeResult:
+    # name and started_at are supplied by the runner, which owns this metadata;
+    # the probe fn only reports is_success. wall_time is filled in once the run
+    # completes.
     is_success: bool
-    # name and started_at are stamped by the runner, not the probe fn.
-    name: str | None = None
-    started_at: datetime | None = None  # UTC wall-clock time at probe start
+    name: str
+    started_at: datetime  # UTC wall-clock time at probe start
     wall_time: float | None = None
 
 
-ProbeFn = Callable[[], ProbeResult]
+# A probe fn reports only whether the probe succeeded; the runner stamps the
+# rest of the ProbeResult.
+ProbeFn = Callable[[], bool]
 
 
 @dataclass
@@ -86,14 +90,13 @@ class ProbeRunner:
             started_at = datetime.now(timezone.utc)
             start = time.monotonic()
             try:
-                result = await asyncio.wait_for(asyncio.to_thread(probe.fn), timeout=probe.timeout)
+                is_success = await asyncio.wait_for(asyncio.to_thread(probe.fn), timeout=probe.timeout)
             except asyncio.TimeoutError:
-                result = ProbeResult(is_success=False)
+                is_success = False
             except Exception:
                 logger.exception("probe %s raised", probe.name)
-                result = ProbeResult(is_success=False)
-            result.name = probe.name
-            result.started_at = started_at
+                is_success = False
+            result = ProbeResult(is_success=is_success, name=probe.name, started_at=started_at)
             result.wall_time = time.monotonic() - start
             level = logging.INFO if result.is_success else logging.ERROR
             status = "ok" if result.is_success else "fail"
@@ -111,12 +114,12 @@ class ProbeRunner:
 # ---- probes ---------------------------------------------------------------
 
 
-def probe_controller_ping(iris: RemoteClusterClient) -> ProbeResult:
+def probe_controller_ping(iris: RemoteClusterClient) -> bool:
     iris.list_workers()
-    return ProbeResult(is_success=True)
+    return True
 
 
-def probe_iris_job_submit(iris: RemoteClusterClient, zone: str) -> ProbeResult:
+def probe_iris_job_submit(iris: RemoteClusterClient, zone: str) -> bool:
     job_id = JobName.root("probes", f"canary-{zone}-{int(time.time())}")
     submitted = iris.submit_job(
         job_id=job_id,
@@ -129,10 +132,10 @@ def probe_iris_job_submit(iris: RemoteClusterClient, zone: str) -> ProbeResult:
         timeout=Duration.from_seconds(60),
     )
     status = iris.wait_for_job(submitted, timeout=100.0)
-    return ProbeResult(is_success=status.state == job_pb2.JOB_STATE_SUCCEEDED)
+    return status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
-def probe_finelog_write(finelog: LogClient) -> ProbeResult:
+def probe_finelog_write(finelog: LogClient) -> bool:
     nonce = uuid.uuid4().hex
     ts_ms = int(time.time() * 1000)
     finelog.write_batch(
@@ -149,7 +152,7 @@ def probe_finelog_write(finelog: LogClient) -> ProbeResult:
     response = finelog.fetch_logs(
         logging_pb2.FetchLogsRequest(source="/canary/finelog-write-probe", since_ms=ts_ms - 1000, max_lines=64)
     )
-    return ProbeResult(is_success=any(e.data == nonce for e in response.entries))
+    return any(e.data == nonce for e in response.entries)
 
 
 # ---- entrypoint -----------------------------------------------------------

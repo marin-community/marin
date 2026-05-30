@@ -11,7 +11,7 @@ import logging
 import time
 
 import pytest
-from marin_infra_probes import ProbeResult, ProbeRunner
+from marin_infra_probes import ProbeRunner
 
 
 def _run_briefly(runner, duration=0.15):
@@ -29,7 +29,7 @@ def _messages(caplog) -> list[str]:
 
 def test_success_probe_logs_ok(caplog):
     runner = ProbeRunner()
-    runner.add_probe("ok", lambda: ProbeResult(is_success=True), timeout=1.0, cadence=0.05)
+    runner.add_probe("ok", lambda: True, timeout=1.0, cadence=0.05)
     with caplog.at_level(logging.INFO, logger="probes"):
         _run_briefly(runner)
     msgs = _messages(caplog)
@@ -51,7 +51,7 @@ def test_raising_probe_logs_fail(caplog):
 def test_timeout_probe_logs_fail(caplog):
     def slow():
         time.sleep(1.0)
-        return ProbeResult(is_success=True)
+        return True
 
     runner = ProbeRunner()
     runner.add_probe("slow", slow, timeout=0.05, cadence=0.05)
@@ -68,8 +68,8 @@ def test_run_with_no_probes_raises():
 
 def test_multiple_probes_run_independently(caplog):
     runner = ProbeRunner()
-    runner.add_probe("a", lambda: ProbeResult(is_success=True), timeout=1.0, cadence=0.05)
-    runner.add_probe("b", lambda: ProbeResult(is_success=True), timeout=1.0, cadence=0.05)
+    runner.add_probe("a", lambda: True, timeout=1.0, cadence=0.05)
+    runner.add_probe("b", lambda: True, timeout=1.0, cadence=0.05)
     with caplog.at_level(logging.INFO, logger="probes"):
         _run_briefly(runner, duration=0.2)
     msgs = _messages(caplog)
