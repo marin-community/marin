@@ -6,7 +6,7 @@
 #
 # Subcommands:
 #   build    — docker build, tag with git sha + "latest", push to Artifact Registry
-#   apply    — gcloud compute instances update-container probes --container-image <tag>
+#   apply    — gcloud compute instances update-container infra-probes --container-image <tag>
 #   status   — show the VM state + tail container logs
 #
 # One-time VM creation is documented in infra/probes/README.md.
@@ -16,7 +16,7 @@ set -euo pipefail
 PROJECT="${MARIN_PROBES_PROJECT:-hai-gcp-models}"
 REGION="${MARIN_PROBES_REGION:-us-central1}"
 ZONE="${MARIN_PROBES_ZONE:-us-central1-a}"
-VM_NAME="${MARIN_PROBES_VM:-probes}"
+VM_NAME="${MARIN_PROBES_VM:-infra-probes}"
 REPO="${MARIN_PROBES_REPO:-marin}"
 IMAGE_NAME="probes"
 

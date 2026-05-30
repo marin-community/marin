@@ -77,7 +77,7 @@ Send SIGTERM/SIGINT to shut down. Tail stdout to see results.
 
 ## Deployment
 
-Single Container-Optimized OS GCP VM named `probes`, one container, `restartPolicy=always`, no orchestrator. State (logs) goes to Cloud Logging via Docker's stdout pickup.
+Single Container-Optimized OS GCP VM named `infra-probes`, one container, `restartPolicy=always`, no orchestrator. State (logs) goes to Cloud Logging via Docker's stdout pickup.
 
 ```bash
 infra/probes/deploy/deploy.sh build   # docker build, push :sha and :latest
@@ -94,7 +94,7 @@ Set flags on the VM via container args; cloud-init isn't needed.
 ```bash
 PROJECT=hai-gcp-models
 ZONE=us-central1-a
-VM=probes
+VM=infra-probes
 IMAGE=us-central1-docker.pkg.dev/${PROJECT}/marin/probes:latest
 SA=probes@${PROJECT}.iam.gserviceaccount.com
 
