@@ -714,7 +714,15 @@ def test_terminal_observation_transitions_task_and_job(
         assert job.state == expected_job_state
 
 
-def test_missing_observation_fails_attempt_with_worker_lost_spec():
+def test_missing_observation_on_active_task_charges_preemption_budget():
+    """A MISSING observation for a still-active task is worker loss, not app failure.
+
+    With ``max_retries_preemption=0`` the active RUNNING task goes terminal
+    WORKER_FAILED (preemption budget exhausted) rather than FAILED. The
+    distinction matters: a worker that restarts and loses a still-running
+    container reports MISSING, which must consume the preemption budget — not
+    fail the task at ``max_retries_failure=0``.
+    """
     with make_controller_state() as state:
         task_id, attempt_id, uid = _setup_running_task(state)
         _apply_observations(state, _W1, [_obs(uid, job_pb2.TASK_STATE_MISSING)])
@@ -722,10 +730,61 @@ def test_missing_observation_fails_attempt_with_worker_lost_spec():
         task = query_task(state, task_id)
         attempt = query_attempt(state, task_id, attempt_id)
         assert task is not None and attempt is not None
-        assert task.state == job_pb2.TASK_STATE_FAILED
+        assert task.state == job_pb2.TASK_STATE_WORKER_FAILED
         assert task.error == "worker_lost_spec"
-        assert attempt.state == job_pb2.TASK_STATE_FAILED
-        assert attempt.error == "worker_lost_spec"
+        assert task.preemption_count == 1
+        assert task.failure_count == 0
+        assert attempt.state == job_pb2.TASK_STATE_WORKER_FAILED
+
+
+def test_missing_observation_on_active_task_retries_with_preemption_budget():
+    """A MISSING observation for an active task with preemption budget retries it."""
+    with make_controller_state() as state:
+        register_worker(state, _W1, f"{_W1}:8080", make_worker_metadata())
+        tasks = submit_job(
+            state, "retry-job", make_job_request(name="retry-job", max_retries_preemption=2, max_retries_failure=0)
+        )
+        task_row = tasks[0]
+        dispatch_task(state, task_row, WorkerId(_W1))
+        refreshed = query_task(state, task_row.task_id)
+        assert refreshed is not None
+        uid = _attempt_uid(state, task_row.task_id, refreshed.current_attempt_id)
+
+        _apply_observations(state, _W1, [_obs(uid, job_pb2.TASK_STATE_MISSING)])
+
+        task = query_task(state, task_row.task_id)
+        assert task is not None
+        # Retried to PENDING on the preemption budget, NOT failed at
+        # max_retries_failure=0.
+        assert task.state == job_pb2.TASK_STATE_PENDING
+        assert task.preemption_count == 1
+        assert task.failure_count == 0
+
+
+def test_missing_observation_on_terminal_task_finalizes_failed():
+    """A MISSING observation for an already-terminal task finalizes the stranded attempt.
+
+    This is the stranded-terminal-attempt case: the task already reached a
+    terminal state but the worker-bound attempt's ``finished_at_ms`` is NULL. A
+    re-poll surfaces MISSING, which stays FAILED and stamps the attempt so its
+    capacity is released.
+    """
+    with make_controller_state() as state:
+        task_id, attempt_id, uid = _setup_running_task(state)
+        # Drive the task terminal FAILED first (max_retries_failure=0).
+        _apply_observations(state, _W1, [_obs(uid, job_pb2.TASK_STATE_FAILED, error="boom")])
+        terminal = query_task(state, task_id)
+        assert terminal is not None and terminal.state == job_pb2.TASK_STATE_FAILED
+
+        # A later MISSING re-poll for the same now-terminal task stays FAILED and
+        # finalizes the attempt rather than charging the preemption budget.
+        _apply_observations(state, _W1, [_obs(uid, job_pb2.TASK_STATE_MISSING)])
+        task = query_task(state, task_id)
+        attempt = query_attempt(state, task_id, attempt_id)
+        assert task is not None and attempt is not None
+        assert task.state == job_pb2.TASK_STATE_FAILED
+        assert task.preemption_count == 0
+        assert attempt.finished_at_ms is not None
 
 
 def test_duplicate_terminal_observation_does_not_overwrite_finished_at():
@@ -1064,8 +1123,13 @@ def test_e2e_converges_to_succeeded(make_controller):
     assert query_job(state, task_final.job_id).state == job_pb2.JOB_STATE_SUCCEEDED
 
 
-def test_e2e_missing_observation_fails_attempt_with_worker_lost_spec(make_controller):
-    """End-to-end MISSING cascade: dispatch → MISSING → FAILED("worker_lost_spec")."""
+def test_e2e_missing_observation_on_assigned_task_retries_to_pending(make_controller):
+    """End-to-end MISSING cascade on an ASSIGNED task: dispatch → MISSING → PENDING retry.
+
+    A worker that accepted the assignment but lost the spec reports MISSING. The
+    task is still ASSIGNED (worker loss before the process ran), so it retries to
+    PENDING without charging any budget rather than going terminal FAILED.
+    """
     script = [
         lambda _plan: [],  # tick 1: ASSIGNED dispatch
         lambda plan: _observation_for_all_run(plan, job_pb2.TASK_STATE_MISSING),
@@ -1091,5 +1155,6 @@ def test_e2e_missing_observation_fails_attempt_with_worker_lost_spec(make_contro
     ctrl._reconcile_worker_batch()
 
     task = query_task(state, task_id)
-    assert task.state == job_pb2.TASK_STATE_FAILED
-    assert task.error == "worker_lost_spec"
+    assert task.state == job_pb2.TASK_STATE_PENDING
+    assert task.preemption_count == 0
+    assert task.failure_count == 0

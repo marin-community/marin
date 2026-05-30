@@ -265,11 +265,21 @@ def observations_to_updates(
         error: str | None = obs.error or None
         container_id: str | None = obs.container_id or None
         if obs.state == job_pb2.TASK_STATE_MISSING:
+            # A worker reports MISSING when it can't resolve a desired attempt to
+            # a live local one. While the task is still ACTIVE this is worker loss
+            # (the worker restarted and failed to re-adopt a still-running
+            # container) -> WORKER_FAILED so it consumes the preemption budget
+            # rather than going terminal at max_retries_failure=0. Once the task
+            # is already TERMINAL in the snapshot, MISSING is the stranded
+            # terminal-attempt finalize case -> FAILED stamps the dead attempt.
+            snapshot_task = snapshot.tasks.get(task_id)
+            task_active = snapshot_task is not None and snapshot_task.state in ACTIVE_TASK_STATES
+            missing_state = job_pb2.TASK_STATE_WORKER_FAILED if task_active else job_pb2.TASK_STATE_FAILED
             updates.append(
                 TaskUpdate(
                     task_id=task_id,
                     attempt_id=attempt_id,
-                    new_state=job_pb2.TASK_STATE_FAILED,
+                    new_state=missing_state,
                     error="worker_lost_spec",
                 )
             )

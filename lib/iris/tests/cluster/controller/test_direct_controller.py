@@ -353,7 +353,7 @@ def test_apply_failed_directly_from_assigned(state):
 
     task = query_task(state, task_id)
     assert task.state == job_pb2.TASK_STATE_FAILED
-    assert task.error == "kubectl apply failed: RequestEntityTooLarge"
+    assert task.failure_count == 1
 
 
 def test_apply_worker_failed_from_running_retries(state):

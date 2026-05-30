@@ -34,10 +34,12 @@ from iris.cluster.controller.pruner import PruneResult, prune_old_data
 from iris.cluster.controller.reads import WorkerResourceUsage
 from iris.cluster.controller.reconcile.batches import _kill_non_terminal_tasks
 from iris.cluster.controller.reconcile.effects import JobRowDelta, apply_effects
+from iris.cluster.controller.reconcile.job import recompute_state
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.policy import MAX_REPLICAS_PER_JOB
 from iris.cluster.controller.reconcile.snapshot import (
     JobStateBasis,
+    TaskHistogramRow,
     TaskUpdate,
     TransitionSnapshot,
 )
@@ -2836,6 +2838,43 @@ def test_failed_from_building_bumps_health_tracker(state):
     assert build_failures == 1
 
 
+def test_worker_failed_from_building_bumps_health_tracker(state):
+    """WORKER_FAILED originating from BUILDING charges the build-failure reaper.
+
+    A bad-TPU/infra-missing host commonly fails the build phase via
+    WORKER_FAILED-from-BUILDING (the worker announces BUILDING before the
+    container runs). That host must be charged a build failure — same as the
+    FAILED-from-BUILDING and WORKER_FAILED-from-ASSIGNED cases — so the reaper
+    eventually trips instead of letting the host re-attract and poison jobs.
+    """
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    req = make_job_request("job1")
+    req.max_retries_preemption = 5
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    with state._db.transaction() as cur:
+        ops.task.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+    transition_task(state, task.task_id, job_pb2.TASK_STATE_BUILDING)
+    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_BUILDING
+    # No build failures recorded yet.
+    assert state._health.snapshot().get(worker_id, (0, 0))[1] == 0
+
+    transition_task(
+        state,
+        task.task_id,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        error="TPU bad node during build",
+    )
+
+    # Charged the preemption budget (worker had started bringing the task up)...
+    t = _query_task(state, task.task_id)
+    assert t.preemption_count == 1
+    # ...and the worker is charged a build failure, like the ASSIGNED/FAILED twins.
+    _, build_failures = state._health.snapshot()[worker_id]
+    assert build_failures == 1
+
+
 def test_failed_from_running_does_not_bump_health_tracker(state):
     """FAILED from RUNNING is treated as user code and must NOT move the score."""
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
@@ -4527,3 +4566,94 @@ def test_cascade_kill_noops_on_already_terminal_job():
         )
     )
     assert jid not in ws.effects.jobs
+
+
+def _recompute_snapshot(job_id: JobName, task_states: list[int], max_task_failures: int):
+    """A RUNNING job snapshot whose tasks carry ``task_states``.
+
+    ``started_at`` is set on the basis so a job that does not otherwise finalize
+    falls through to the RUNNING strand the #5 fix closes. ``job_basis`` rebuilds
+    the task histogram from ``all_tasks_by_job``, so the histogram lives there.
+    """
+    basis = JobStateBasis(
+        job_id=job_id,
+        state=job_pb2.JOB_STATE_RUNNING,
+        started_at=Timestamp.from_ms(500),
+        max_task_failures=max_task_failures,
+        task_state_counts={},
+        first_task_error="boom",
+    )
+    rows = tuple(
+        TaskHistogramRow(
+            task_id=JobName.from_wire(f"{job_id.to_wire()}/{i}"),
+            task_index=i,
+            state=st,
+            error="boom" if st == job_pb2.TASK_STATE_FAILED else None,
+        )
+        for i, st in enumerate(task_states)
+    )
+    return TransitionSnapshot(
+        now=Timestamp.from_ms(1000),
+        tasks={},
+        attempts={},
+        attempt_uid_index={},
+        job_configs={},
+        job_state_basis={job_id: basis},
+        job_descendants={},
+        all_tasks_by_job={job_id: rows},
+        active_tasks_by_job={},
+        active_workers=frozenset(),
+    )
+
+
+def test_recompute_fails_job_when_a_task_exhausts_its_retries():
+    """All tasks terminal with a FAILED task within max_task_failures fails the job.
+
+    Histogram {FAILED:1, SUCCEEDED:2} with max_task_failures=1: no FAILED-over-
+    threshold (so the early-abort branch did not fire), no worker_failed/
+    preempted/cosched, not all-succeeded. The one FAILED task exhausted its
+    retries and can never succeed, so the job as a whole FAILS. Pre-fix this fell
+    through the started_at branch and hung JOB_STATE_RUNNING forever.
+    """
+    jid = JobName.from_wire("/u/tolerant")
+    task_states = [
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_SUCCEEDED,
+        job_pb2.TASK_STATE_SUCCEEDED,
+    ]
+    ws = WorkingState(_recompute_snapshot(jid, task_states, max_task_failures=1))
+
+    new_state = recompute_state(ws, jid)
+
+    # A terminal task that exhausted its retries fails the job, not RUNNING.
+    assert new_state == job_pb2.JOB_STATE_FAILED
+    assert ws.effects.jobs[jid].state == job_pb2.JOB_STATE_FAILED
+    assert ws.effects.jobs[jid].finished_at is not None
+
+
+def test_recompute_fails_job_on_single_terminally_failed_task():
+    """A single terminal-FAILED task with max_task_failures>=1 fails the job.
+
+    The task is terminal FAILED with failure_count within budget, so it is never
+    rescheduled; it can never succeed, so the job FAILS rather than waiting. The
+    max_task_failures threshold only delays the failure to here (vs the early
+    FAILED-over-threshold abort). Pre-fix the job hung RUNNING.
+    """
+    jid = JobName.from_wire("/u/timed-out")
+    ws = WorkingState(_recompute_snapshot(jid, [job_pb2.TASK_STATE_FAILED], max_task_failures=1))
+
+    new_state = recompute_state(ws, jid)
+
+    assert new_state == job_pb2.JOB_STATE_FAILED
+    assert ws.effects.jobs[jid].state == job_pb2.JOB_STATE_FAILED
+
+
+def test_recompute_still_running_when_a_task_is_active():
+    """The terminal branch must not fire while any task is still active."""
+    jid = JobName.from_wire("/u/active")
+    task_states = [job_pb2.TASK_STATE_FAILED, job_pb2.TASK_STATE_RUNNING]
+    ws = WorkingState(_recompute_snapshot(jid, task_states, max_task_failures=1))
+
+    new_state = recompute_state(ws, jid)
+
+    assert new_state == job_pb2.JOB_STATE_RUNNING

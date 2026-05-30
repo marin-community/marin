@@ -464,41 +464,42 @@ def apply_one_transition(
             task_exit = 0
         if update.new_state == job_pb2.TASK_STATE_UNSCHEDULABLE and task_error is None:
             task_error = "Scheduling timeout exceeded"
-        if update.new_state == job_pb2.TASK_STATE_FAILED:
-            failure_count += 1
-            # A FAILED originating while the task was still BUILDING almost
-            # always means the worker couldn't pull the image or set up the
-            # runtime. Mark the worker as build-failed so the scheduler
-            # avoids it.
-            if (
-                charge_worker_build_failures
-                and prior_state == job_pb2.TASK_STATE_BUILDING
-                and attempt_worker_id is not None
-            ):
-                state.record_worker_build_failed(WorkerId(str(attempt_worker_id)))
-        if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state in EXECUTING_TASK_STATES:
-            # A worker that truly died will also miss its next ping/heartbeat
-            # RPC, which bumps the tracker on the observer side. We don't
-            # double-count that signal here.
-            preemption_count += 1
-        if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state == job_pb2.TASK_STATE_ASSIGNED:
-            task_state = job_pb2.TASK_STATE_PENDING
-            terminal_ms = None
-            # ASSIGNED -> WORKER_FAILED means the worker accepted the task but
-            # couldn't bring it up. Attribute the failure to the worker so a
-            # host that keeps failing launches gets reaped.
-            if charge_worker_build_failures and attempt_worker_id is not None:
-                state.record_worker_build_failed(WorkerId(str(attempt_worker_id)))
-        if update.new_state == job_pb2.TASK_STATE_FAILED and failure_count <= task.max_retries_failure:
-            task_state = job_pb2.TASK_STATE_PENDING
-            terminal_ms = None
-        if (
+
+        # Charge the host build-failure reaper when a worker failed to bring the
+        # attempt up — a launch (ASSIGNED) or build/setup (BUILDING) failure — so
+        # a host that keeps failing launches gets reaped. A WORKER_FAILED here is
+        # infra (bad/missing node); a FAILED-from-BUILDING is a failed image pull
+        # or runtime setup. A FAILED-from-ASSIGNED is not a host fault (and the
+        # worker never reports it: it announces BUILDING before running). Direct
+        # providers manage their own hosts, so this is gated on
+        # charge_worker_build_failures (worker path only).
+        launch_or_build_failure = (
             update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
-            and preemption_count <= task.max_retries_preemption
-            and prior_state in EXECUTING_TASK_STATES
-        ):
-            task_state = job_pb2.TASK_STATE_PENDING
-            terminal_ms = None
+            and prior_state in (job_pb2.TASK_STATE_ASSIGNED, job_pb2.TASK_STATE_BUILDING)
+        ) or (update.new_state == job_pb2.TASK_STATE_FAILED and prior_state == job_pb2.TASK_STATE_BUILDING)
+        if charge_worker_build_failures and launch_or_build_failure and attempt_worker_id is not None:
+            state.record_worker_build_failed(WorkerId(str(attempt_worker_id)))
+
+        if update.new_state == job_pb2.TASK_STATE_FAILED:
+            # Application failure (non-zero exit / setup error): failure budget.
+            failure_count += 1
+            if failure_count <= task.max_retries_failure:
+                task_state = job_pb2.TASK_STATE_PENDING
+                terminal_ms = None
+        elif update.new_state == job_pb2.TASK_STATE_WORKER_FAILED:
+            # Worker loss / infra -> preemption budget. ASSIGNED retries without
+            # charge (the worker never ran the process); EXECUTING (BUILDING/
+            # RUNNING) charges and gates on max_retries_preemption. A truly-dead
+            # worker also misses its next ping/heartbeat (bumped observer-side),
+            # so we don't double-count here.
+            task_state, preemption_count = resolve_task_failure_state(
+                prior_state,
+                preemption_count,
+                task.max_retries_preemption,
+                terminal_state=job_pb2.TASK_STATE_WORKER_FAILED,
+            )
+            if task_state == job_pb2.TASK_STATE_PENDING:
+                terminal_ms = None
 
     # An attempt is terminal whenever the update itself is terminal, even
     # if the TASK rolls back to PENDING for a retry. terminal_ms above

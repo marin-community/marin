@@ -1151,11 +1151,16 @@ class K8sTaskProvider:
                 self._apply_pod(run_req)
             except KubectlError as exc:
                 logger.error("Failed to apply pod for task %s: %s", run_req.task_id, exc)
+                # The pod was never created, so there is no k8s verdict to track
+                # and nothing ran. Treat any apply failure as worker loss so the
+                # task retries (ASSIGNED -> WORKER_FAILED rolls back to PENDING
+                # without charging the preemption budget) and the next sync
+                # re-applies. The raw k8s error is logged above.
                 apply_failures.append(
                     TaskUpdate(
                         task_id=JobName.from_wire(run_req.task_id),
                         attempt_id=run_req.attempt_id,
-                        new_state=job_pb2.TASK_STATE_FAILED,
+                        new_state=job_pb2.TASK_STATE_WORKER_FAILED,
                         error=str(exc),
                     )
                 )

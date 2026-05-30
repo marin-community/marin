@@ -51,6 +51,16 @@ def recompute_state(state: WorkingState, job_id: JobName) -> int | None:
         and all(s in TERMINAL_TASK_STATES for s in counts)
     ):
         new_state = job_pb2.JOB_STATE_WORKER_FAILED
+    elif total > 0 and all(s in TERMINAL_TASK_STATES for s in counts):
+        # All tasks terminal but not all SUCCEEDED, none of the harder terminal
+        # states above (worker_failed/preempted/cosched/unschedulable/killed),
+        # and within the max_task_failures threshold: at least one task exhausted
+        # its retries and is terminally FAILED. A task that can never succeed
+        # fails the whole job. (max_task_failures only controls early abort at the
+        # FAILED-over-threshold branch above; once every task is terminal a lone
+        # tolerated FAILED still fails the job.) Without this branch the job falls
+        # through to the started_at branch and hangs RUNNING forever.
+        new_state = job_pb2.JOB_STATE_FAILED
     elif (
         counts.get(job_pb2.TASK_STATE_ASSIGNED, 0) > 0
         or counts.get(job_pb2.TASK_STATE_BUILDING, 0) > 0
