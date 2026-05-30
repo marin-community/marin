@@ -39,6 +39,7 @@ import numpy as np
 import pandas as pd
 import wandb
 from matplotlib.lines import Line2D
+from matplotlib.ticker import FuncFormatter, NullFormatter
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +201,10 @@ def _plots_dir(sweep_id: str) -> Path:
     return _sweep_dir(sweep_id) / "plots"
 
 
+def _cdval_history_path(sweep_id: str) -> Path:
+    return _sweep_dir(sweep_id) / "cdval_history.csv"
+
+
 # ---------------------------------------------------------------------------
 # Metric selection
 # ---------------------------------------------------------------------------
@@ -211,6 +216,10 @@ def _plots_dir(sweep_id: str) -> Path:
 # are excluded.
 EVAL_METRIC_RE = re.compile(r"^eval/.+-(val|test)(-[^/]*)?/loss$")
 TRAIN_METRIC = "train/loss"
+
+# Full W&B key for the cd-val eval loss curve (``cd-val`` is its short label).
+# Used by the loss-curve fetch in addition to the single-step snapshot.
+CDVAL_METRIC = "eval/protein-docs-cd-val/loss"
 
 
 def _is_keep_metric(name: str) -> bool:
@@ -587,6 +596,124 @@ def load_or_build_snapshot(sweep: SweepConfig, *, refresh: bool) -> tuple[pd.Dat
 
 
 # ---------------------------------------------------------------------------
+# cd-val loss curves (full history) + power-law fit
+# ---------------------------------------------------------------------------
+
+
+def _fetch_cdval_history(run, tokens_per_step: int) -> pd.DataFrame:
+    """cd-val loss curve for one run, with per-step tokens + cumulative FLOPs.
+
+    ``cd-val`` is logged sparsely (every ``steps_per_eval``) while
+    ``throughput/total_gflops`` is logged every step; both are scanned in one
+    pass and the dense FLOPs series is interpolated onto the cd-val steps so
+    each curve point carries its cumulative training FLOPs. Returns columns
+    ``step``, ``tokens``, ``total_flops``, ``cd_val_loss`` (empty frame if the
+    run lacks either series).
+    """
+    rows = list(run.scan_history(keys=["_step", CDVAL_METRIC, TOTAL_GFLOPS_KEY], page_size=10_000))
+    cols = ["step", "tokens", "total_flops", "cd_val_loss"]
+    if not rows:
+        return pd.DataFrame(columns=cols)
+    df = pd.DataFrame(rows)
+    df["_step"] = df["_step"].astype(int)
+    flops = df[["_step", TOTAL_GFLOPS_KEY]].dropna().sort_values("_step")
+    cd = df[["_step", CDVAL_METRIC]].dropna().sort_values("_step")
+    if cd.empty or flops.empty:
+        return pd.DataFrame(columns=cols)
+    steps = cd["_step"].to_numpy()
+    total_flops = np.interp(steps, flops["_step"].to_numpy(), flops[TOTAL_GFLOPS_KEY].to_numpy()) * 1e9
+    return pd.DataFrame(
+        {
+            "step": steps,
+            "tokens": steps * tokens_per_step,
+            "total_flops": total_flops,
+            "cd_val_loss": cd[CDVAL_METRIC].to_numpy(dtype=float),
+        }
+    )
+
+
+def load_or_build_cdval_history(sweep: SweepConfig, meta: EvalMeta, *, refresh: bool) -> pd.DataFrame:
+    """Cached long-form cd-val loss curves for every run in the sweep.
+
+    Columns: ``mixture_id``, ``mixture_name``, ``run_name``, ``step``,
+    ``tokens``, ``total_flops``, ``cd_val_loss``. ``tokens = step * (train
+    batch * seq)``; ``total_flops`` is the cumulative ``throughput/total_gflops``
+    interpolated onto each cd-val step. Cached as ``cdval_history.csv``;
+    ``--refresh`` forces a re-pull.
+    """
+    path = _cdval_history_path(sweep.id)
+    if not refresh and path.exists():
+        logger.info("Loading cached cd-val history from %s", path)
+        return pd.read_csv(path)
+    tokens_per_step = meta.eval_batch_size * meta.eval_seq_len
+    frames: list[pd.DataFrame] = []
+    for run, mixture in _list_runs(sweep):
+        history = _fetch_cdval_history(run, tokens_per_step)
+        if history.empty:
+            logger.warning("No cd-val history for %s; skipping", run.display_name)
+            continue
+        history.insert(0, "run_name", run.display_name)
+        history.insert(0, "mixture_name", MIXTURE_NAMES.get(mixture, mixture))
+        history.insert(0, "mixture_id", mixture)
+        frames.append(history)
+    if not frames:
+        raise RuntimeError(f"No cd-val history fetched for sweep {sweep.id}")
+    out = pd.concat(frames, ignore_index=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    out.to_csv(path, index=False)
+    logger.info("Wrote %d cd-val history rows to %s", len(out), path)
+    return out
+
+
+@dataclass(frozen=True)
+class PowerLawFit:
+    """Pure power law ``L(D) = A * D^(-alpha)`` fit in log-log space.
+
+    ``alpha`` is the per-token decay exponent; ``coef_a`` the scale. ``data_lo``
+    / ``data_hi`` bound the ``n_points`` cd-val samples actually fit (i.e. the
+    span of in-window data, which may be narrower than the nominal window since
+    the floor can fall below the first eval point) — use these to draw the fit
+    only over the portion of training it was fit on.
+    """
+
+    coef_a: float
+    alpha: float
+    r_squared: float
+    data_lo: float
+    data_hi: float
+    n_points: int
+
+    def predict(self, tokens: np.ndarray) -> np.ndarray:
+        return self.coef_a * np.power(tokens, -self.alpha)
+
+
+def fit_power_law(tokens: np.ndarray, loss: np.ndarray, t_lo: float, t_hi: float) -> PowerLawFit | None:
+    """Least-squares ``log L = log A - alpha * log D`` over ``[t_lo, t_hi]``.
+
+    ``r_squared`` is the coefficient of determination of that line in log-log
+    space (1.0 == perfect power law). Returns None when fewer than two in-window
+    samples survive (can't fit a line); callers skip overlaying a fit then.
+    """
+    mask = (tokens >= t_lo) & (tokens <= t_hi) & (tokens > 0) & (loss > 0)
+    t, lo = tokens[mask], loss[mask]
+    if t.size < 2:
+        return None
+    log_t, log_l = np.log(t), np.log(lo)
+    slope, intercept = np.polyfit(log_t, log_l, 1)
+    residuals = log_l - (slope * log_t + intercept)
+    ss_tot = float(np.sum((log_l - log_l.mean()) ** 2))
+    r_squared = 1.0 - float(np.sum(residuals**2)) / ss_tot if ss_tot > 0 else float("nan")
+    return PowerLawFit(
+        coef_a=float(np.exp(intercept)),
+        alpha=float(-slope),
+        r_squared=r_squared,
+        data_lo=float(t.min()),
+        data_hi=float(t.max()),
+        n_points=int(t.size),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Heatmap
 # ---------------------------------------------------------------------------
 
@@ -634,6 +761,20 @@ GROUP_COLORS: dict[str, str] = {
     "Blends": "#54A24B",
 }
 GROUP_BY_MIXTURE: dict[str, str] = {mid: label for label, mixtures in MIXTURE_GROUPS for mid in mixtures}
+
+# Staged-curriculum mixtures whose training distribution shifts mid-run
+# (L->H, H->L, multi-stage). Their loss curve has stage-transition kinks, so a
+# single power law is ill-posed; they're excluded from the projected-vs-actual
+# rank-correlation panel (only stationary single-quality + static-blend mixes
+# count there). Names per ``MIXTURE_NAMES``.
+STAGED_MIXTURES: frozenset[str] = frozenset({"m7", "m8", "m9", "m12", "m13"})
+
+# Power-law fit window as a fraction of num_train_steps. The lower bound (0.1)
+# skips the warmup ramp and the early super-fast-descent regime. The upper
+# bound stays within the WSD stable phase (decay begins at 0.8); 0.5 fits only
+# the first half and projects the rest, probing how early the trend is set.
+FIT_LOW_STEP_FRAC: float = 0.1
+FIT_HIGH_STEP_FRAC: float = 0.5
 
 
 # Full-dataset example count for the offline cd-val eval — packed-sequence
@@ -845,6 +986,242 @@ def render_cdval_bars(snapshot: pd.DataFrame, sweep: SweepConfig, meta: EvalMeta
     out_dir.mkdir(parents=True, exist_ok=True)
     pdf_path = out_dir / "cdval_loss_by_mixture.pdf"
     png_path = out_dir / "cdval_loss_by_mixture.png"
+    fig.savefig(pdf_path, dpi=300, bbox_inches="tight")
+    fig.savefig(png_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved %s and %s", pdf_path, png_path)
+
+
+def _flops_per_token(history: pd.DataFrame) -> float:
+    """Consensus FLOPs/token across runs (for the paired FLOPs x-axis).
+
+    ``total_flops`` accumulates ~linearly in tokens, so FLOPs/token is roughly
+    constant; the median is robust to the ``step==0`` row (tokens==0 -> dropped
+    as non-finite).
+    """
+    fpt = (history["total_flops"] / history["tokens"]).replace([np.inf, -np.inf], np.nan).dropna()
+    if fpt.empty:
+        raise RuntimeError("Cannot derive FLOPs/token: no finite ratios in history")
+    return float(fpt.median())
+
+
+def _rank_ascending(values: dict[str, float]) -> dict[str, int]:
+    """1-based rank per key, lowest value == rank 1 (best, for losses)."""
+    return {key: r for r, key in enumerate(sorted(values, key=values.__getitem__), start=1)}
+
+
+def _project_final(curve: pd.DataFrame, lo_tokens: float, hi_tokens: float, end_tokens: float) -> float | None:
+    """Power-law projection of cd-val at ``end_tokens`` from a fit over the window."""
+    gp = curve[curve["tokens"] > 0]
+    fit = fit_power_law(
+        gp["tokens"].to_numpy(dtype=float), gp["cd_val_loss"].to_numpy(dtype=float), lo_tokens, hi_tokens
+    )
+    if fit is None:
+        return None
+    return float(fit.predict(np.array([end_tokens]))[0])
+
+
+# High-side fit-bound sweep for the rank-correlation panel (fraction of steps).
+# Starts at 0.2 so the [low, hi] window holds >=2 cd-val evals; ends at the WSD
+# decay boundary (0.8).
+RANK_CORR_HI_FRACS: tuple[float, ...] = (0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8)
+
+
+def _render_rank_corr_panel(
+    ax,
+    by_mixture: dict[str, pd.DataFrame],
+    mixture_ids: list[str],
+    actual_final: dict[str, float],
+    meta: EvalMeta,
+    tokens_per_step: int,
+    lo_tokens: float,
+    end_tokens: float,
+) -> None:
+    """Spearman rho(projected, actual final) vs the fit's upper-bound fraction.
+
+    The low bound is fixed; the upper bound sweeps ``RANK_CORR_HI_FRACS``. Only
+    ``mixture_ids`` (stationary mixes) are ranked — staged curricula are excluded
+    upstream. A vertical guide marks the figure's active ``FIT_HIGH_STEP_FRAC``.
+    """
+    actual = pd.Series([actual_final[m] for m in mixture_ids]).rank()
+    fracs, rhos = [], []
+    for frac in RANK_CORR_HI_FRACS:
+        hi_tokens = frac * meta.num_train_steps * tokens_per_step
+        projected = [_project_final(by_mixture[m], lo_tokens, hi_tokens, end_tokens) for m in mixture_ids]
+        if any(p is None for p in projected):
+            continue
+        rho = float(pd.Series(projected).rank().corr(actual))
+        fracs.append(frac * 100)
+        rhos.append(rho)
+
+    ax.axvline(FIT_HIGH_STEP_FRAC * 100, color="grey", linestyle="--", linewidth=1.0, alpha=0.6)
+    ax.plot(fracs, rhos, marker="o", markersize=4, linewidth=1.3, color="#333333")
+    ax.set_xlabel("Fit upper bound (% of steps)", fontsize=9)
+    ax.set_ylabel("Spearman $\\rho$\n(proj vs actual)", fontsize=9)
+    ax.set_title(
+        f"Projected vs actual final-loss rank agreement (n={len(mixture_ids)} stationary mixes: "
+        + ", ".join(MIXTURE_NAMES.get(m, m).split(" ", 1)[-1].strip("()") for m in mixture_ids)
+        + ")",
+        fontsize=9,
+    )
+    lo = min([*rhos, 0.0]) if rhos else 0.0
+    ax.set_ylim(lo - 0.08, 1.08)
+    ax.grid(True, linestyle="--", alpha=0.3)
+
+
+def render_cdval_scale_curves(history: pd.DataFrame, sweep: SweepConfig, meta: EvalMeta, out_dir: Path) -> None:
+    """Grid of log-log cd-val loss curves, one cell per run, with power-law fits.
+
+    Columns are the sweep's groups (Single quality / Blends for the scale
+    sweep); rows are the runs within each group, so each cell is a single
+    mixture. The bottom row carries the shared training-tokens axis and the top
+    row a paired training-FLOPs axis (FLOPs is a constant multiple of tokens, so
+    the scales align tick-for-tick in log space); inner tick labels are dropped.
+    A pure power law ``L = A * D^(-alpha)`` is fit over the step window
+    ``[FIT_LOW_STEP_FRAC, FIT_HIGH_STEP_FRAC]`` and drawn dashed with short end
+    caps marking the window; alpha/R^2 annotate each cell and final/projected
+    losses + ranks sit in the lower-left.
+
+    A full-width panel below the grid (reading as a near-separate figure under
+    the grid's x-axis label) shows how the projected-vs-actual final-loss rank
+    correlation, over stationary mixes only, varies with the fit's upper bound.
+    """
+    if meta.num_train_steps is None:
+        logger.warning("Sweep %s has no num_train_steps; skipping cd-val curve plot", sweep.id)
+        return
+    groups = MIXTURE_GROUPS_BY_SWEEP.get(sweep.id, MIXTURE_GROUPS)
+    tokens_per_step = meta.eval_batch_size * meta.eval_seq_len
+    lo_tokens = FIT_LOW_STEP_FRAC * meta.num_train_steps * tokens_per_step
+    hi_tokens = FIT_HIGH_STEP_FRAC * meta.num_train_steps * tokens_per_step
+    end_tokens = meta.num_train_steps * tokens_per_step
+    flops_per_token = _flops_per_token(history)
+    by_mixture = {mid: g.sort_values("tokens") for mid, g in history.groupby("mixture_id")}
+
+    # Per-run power-law fits over the step window, plus two end-of-training
+    # numbers per run: the loss the stable-phase trend projects at the full
+    # token budget, and the actual final cd-val. Each is ranked across runs
+    # (1 = lowest loss = best) to compare the projected vs realized ordering.
+    pos = history[history["tokens"] > 0]
+    fits: dict[str, PowerLawFit | None] = {}
+    actual_final: dict[str, float] = {}
+    for mid, g in by_mixture.items():
+        gp = g[g["tokens"] > 0].sort_values("tokens")
+        if gp.empty:
+            continue
+        fits[mid] = fit_power_law(
+            gp["tokens"].to_numpy(dtype=float), gp["cd_val_loss"].to_numpy(dtype=float), lo_tokens, hi_tokens
+        )
+        actual_final[mid] = float(gp["cd_val_loss"].iloc[-1])
+    projected = {mid: float(f.predict(np.array([end_tokens]))[0]) for mid, f in fits.items() if f is not None}
+    rank_proj = _rank_ascending(projected)
+    rank_actual = _rank_ascending(actual_final)
+
+    # Shared, tight axis ranges. Token grid is identical across runs; pad x
+    # lightly in log space, y just past the data (multiplicative, ~1%), and
+    # tick every 0.2 over the covered decade-fraction so cells stay readable.
+    tok = pos["tokens"]
+    x_lo, x_hi = float(tok.min()) / 1.1, float(tok.max()) * 1.1
+    y_min, y_max = float(pos["cd_val_loss"].min()), float(pos["cd_val_loss"].max())
+    y_lo, y_hi = y_min * 0.99, y_max * 1.01
+    yticks = np.arange(np.floor(y_min * 10) / 10, np.ceil(y_max * 10) / 10 + 1e-9, 0.2)
+
+    ncols = len(groups)
+    nrows = max(len(mids) for _, mids in groups)
+
+    # Two stacked subfigures: the per-run grid on top, the rank-correlation
+    # panel below it spanning the full width. Width trimmed and height grown
+    # versus the bare grid to make room for the panel.
+    fig = plt.figure(figsize=(3.2 * ncols, 1.5 * nrows + 2.4), constrained_layout=True)
+    sf_grid, sf_panel = fig.subfigures(2, 1, height_ratios=[1.5 * nrows, 1.5])
+    axes = np.asarray(sf_grid.subplots(nrows, ncols, sharex=True, sharey=True)).reshape(nrows, ncols)
+
+    for j, (group_label, mixture_ids) in enumerate(groups):
+        for i in range(nrows):
+            ax = axes[i, j]
+            if i >= len(mixture_ids):
+                ax.set_visible(False)
+                continue
+            mid = mixture_ids[i]
+            color = GROUP_COLORS.get(group_label, "#4C78A8")
+            ax.set_xscale("log")
+            ax.set_yscale("log")
+            ax.set_xlim(x_lo, x_hi)
+            ax.set_ylim(y_lo, y_hi)
+            ax.set_yticks(yticks)
+            ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
+            ax.yaxis.set_minor_formatter(NullFormatter())
+            ax.grid(True, which="both", linestyle="--", alpha=0.3)
+
+            curve = by_mixture.get(mid)
+            if curve is None or curve.empty:
+                logger.warning("No cd-val history for mixture %s; skipping curve", mid)
+            else:
+                # Log axes can't show the step==0 point (tokens==0); drop it.
+                pts = curve[curve["tokens"] > 0]
+                tokens = pts["tokens"].to_numpy(dtype=float)
+                loss = pts["cd_val_loss"].to_numpy(dtype=float)
+                ax.plot(tokens, loss, marker="o", markersize=3.0, linewidth=1.0, color=color, alpha=0.9)
+                label = MIXTURE_NAMES.get(mid, mid)
+                fit = fits.get(mid)
+                if fit is not None:
+                    grid = np.geomspace(fit.data_lo, fit.data_hi, 100)
+                    ax.plot(grid, fit.predict(grid), linestyle="--", linewidth=1.4, color="black", alpha=0.9)
+                    # Short vertical end caps mark the fit-window bounds.
+                    ends = np.array([fit.data_lo, fit.data_hi])
+                    ax.plot(
+                        ends,
+                        fit.predict(ends),
+                        linestyle="none",
+                        marker="|",
+                        markersize=6,
+                        markeredgewidth=1.3,
+                        color="black",
+                    )
+                    label = f"{label}\n$\\alpha$={fit.alpha:.3f}, $R^2$={fit.r_squared:.3f}"
+                    # Final/projected losses + cross-run ranks ("#" is compact
+                    # rank, lower loss = better) in the empty lower-left corner.
+                    ranks = (
+                        f"final {actual_final[mid]:.3f} #{rank_actual[mid]}\n"
+                        f"proj {projected[mid]:.3f} #{rank_proj[mid]}"
+                    )
+                    ax.text(0.04, 0.06, ranks, transform=ax.transAxes, ha="left", va="bottom", fontsize=8)
+                ax.text(0.96, 0.94, label, transform=ax.transAxes, ha="right", va="top", fontsize=8)
+
+            # FLOPs axis on the top row only; group header above it. FLOPs =
+            # flops_per_token * tokens, so the matched log axis aligns
+            # tick-for-tick (the constant factor cancels in log space).
+            if i == 0:
+                flops_ax = ax.twiny()
+                flops_ax.set_xscale("log")
+                flops_ax.set_xlim(x_lo * flops_per_token, x_hi * flops_per_token)
+                # Stacks top-down: group header (title) > FLOPs label > ticks.
+                flops_ax.set_xlabel("Training FLOPs (C)", fontsize=8)
+                flops_ax.set_title(group_label, fontsize=10, pad=8)
+
+    sf_grid.supxlabel("Training tokens (D)", fontsize=9)
+    sf_grid.supylabel("cd-val loss", fontsize=9)
+
+    # Bottom panel: projected-vs-actual rank correlation vs the fit's upper
+    # bound, over stationary mixes only (staged curricula excluded).
+    corr_mixtures = [m for _, mids in groups for m in mids if m not in STAGED_MIXTURES and m in by_mixture]
+    ax_panel = sf_panel.subplots(1, 1)
+    _render_rank_corr_panel(
+        ax_panel, by_mixture, corr_mixtures, actual_final, meta, tokens_per_step, lo_tokens, end_tokens
+    )
+
+    subtitle = (
+        f"{meta.params_exact / 1e9:.2f}B params · {meta.tokens_exact / 1e9:.1f}B tokens · "
+        f"fit $L = A\\,D^{{-\\alpha}}$ over steps {FIT_LOW_STEP_FRAC:.0%}-{FIT_HIGH_STEP_FRAC:.0%} "
+        f"(D ∈ [{lo_tokens / 1e9:.1f}B, {hi_tokens / 1e9:.1f}B] tokens)"
+    )
+    fig.suptitle(
+        f"{TITLE_PREFIX} — {sweep.display_name}: cd-val loss curves + power-law fits\n{subtitle}",
+        fontsize=10,
+    )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = out_dir / "cdval_loss_curves.pdf"
+    png_path = out_dir / "cdval_loss_curves.png"
     fig.savefig(pdf_path, dpi=300, bbox_inches="tight")
     fig.savefig(png_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -1111,12 +1488,10 @@ def render_mix_vs_scale_scatter(
     )
 
     ax.set_xlabel(
-        f"Stage 1 cd-val loss  "
-        f"(N={mix_meta.params_exact / 1e9:.2f}B, D={mix_meta.tokens_exact / 1e9:.1f}B)"
+        f"Stage 1 cd-val loss  " f"(N={mix_meta.params_exact / 1e9:.2f}B, D={mix_meta.tokens_exact / 1e9:.1f}B)"
     )
     ax.set_ylabel(
-        f"Stage 2 cd-val loss  "
-        f"(N={scale_meta.params_exact / 1e9:.2f}B, D={scale_meta.tokens_exact / 1e9:.1f}B)"
+        f"Stage 2 cd-val loss  " f"(N={scale_meta.params_exact / 1e9:.2f}B, D={scale_meta.tokens_exact / 1e9:.1f}B)"
     )
     ax.set_title(
         f"{TITLE_PREFIX} — cd-val loss: scale sweep vs mix sweep on shared mixtures\n"
@@ -1158,6 +1533,9 @@ def main(argv: list[str] | None = None) -> int:
     plots_dir = _plots_dir(sweep.id)
     render_heatmap(snapshot, sweep, plots_dir)
     render_cdval_bars(snapshot, sweep, meta, plots_dir)
+
+    cdval_history = load_or_build_cdval_history(sweep, meta, refresh=args.refresh)
+    render_cdval_scale_curves(cdval_history, sweep, meta, plots_dir)
 
     eval_sweep_id = EVAL_OF.get(args.sweep)
     if eval_sweep_id is not None:
