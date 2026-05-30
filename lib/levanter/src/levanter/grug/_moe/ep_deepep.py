@@ -167,7 +167,7 @@ def _moe_mlp_ep_deepep_local(
         moe_dim = moe_w2_local.shape[1]
         gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
         out_dispatch = tree_checkpoint_name(
-            ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes),
+            ragged_dot(activation_fn(gate) * up, moe_w2_local, local_assignments.local_group_sizes),
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
 

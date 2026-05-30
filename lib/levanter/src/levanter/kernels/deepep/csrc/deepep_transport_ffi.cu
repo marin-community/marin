@@ -148,6 +148,13 @@ void ThrowOnCuda(cudaError_t status, const char* context) {
   }
 }
 
+int ReadDeviceScalarInt(cudaStream_t stream, const int* value, const char* context) {
+  int host_value = -1;
+  ThrowOnCuda(cudaMemcpyAsync(&host_value, value, sizeof(int), cudaMemcpyDeviceToHost, stream), context);
+  ThrowOnCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(read device scalar)");
+  return host_value;
+}
+
 __global__ void CastInt32ToInt64Kernel(const int* src, int64_t* dst, size_t count) {
   const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (idx < count) {
@@ -840,8 +847,14 @@ ffi::Error DispatchIntranodeCached(
     }
     const int num_tokens = static_cast<int>(x_dims[0]);
     const int hidden = static_cast<int>(x_dims[1]);
-    const int max_recv_tokens = static_cast<int>(recv_x_dims[0]);
+    const int num_recv_tokens = ReadDeviceScalarInt(
+        stream,
+        num_recv_tokens_buffer.typed_data(),
+        "cudaMemcpyAsync(read cached dispatch num_recv_tokens)");
     const int num_channels = runtime.dispatch_num_channels();
+    if (num_recv_tokens < 0 || num_recv_tokens > recv_x_dims[0]) {
+      return ffi::Error::InvalidArgument("DeepEP intranode cached dispatch num_recv_tokens is out of range");
+    }
     if (hidden <= 0 || (hidden * static_cast<int>(ffi::ByteWidth(ffi::BF16))) % sizeof(int4) != 0) {
       return ffi::Error::InvalidArgument(
           "DeepEP intranode cached dispatch requires hidden*element_size divisible by int4");
@@ -890,7 +903,7 @@ ffi::Error DispatchIntranodeCached(
         is_token_in_rank.typed_data(),
         channel_prefix_matrix.typed_data(),
         num_tokens,
-        max_recv_tokens,
+        num_recv_tokens,
         hidden * static_cast<int>(ffi::ByteWidth(ffi::BF16)) / sizeof(int4),
         0,
         0,
@@ -923,7 +936,7 @@ ffi::Error DispatchIntranodeCached(
         is_token_in_rank.typed_data(),
         channel_prefix_matrix.typed_data(),
         num_tokens,
-        max_recv_tokens,
+        num_recv_tokens,
         hidden * static_cast<int>(ffi::ByteWidth(ffi::BF16)) / sizeof(int4),
         0,
         0,
@@ -973,10 +986,16 @@ ffi::Error CombineIntranode(
     }
     const int hidden = static_cast<int>(recv_x_dims[1]);
     const int num_topk = static_cast<int>(recv_topk_dims[1]);
-    const int max_recv_tokens = static_cast<int>(recv_x_dims[0]);
+    const int num_recv_tokens = ReadDeviceScalarInt(
+        stream,
+        num_recv_tokens_buffer.typed_data(),
+        "cudaMemcpyAsync(read combine num_recv_tokens)");
     const int combined_tokens = static_cast<int>(send_head_dims[0]);
     if (recv_topk_dims[0] != recv_x_dims[0] || src_dims[0] != recv_x_dims[0]) {
       return ffi::Error::InvalidArgument("DeepEP intranode combine recv tensors must share the same leading dim");
+    }
+    if (num_recv_tokens < 0 || num_recv_tokens > recv_x_dims[0]) {
+      return ffi::Error::InvalidArgument("DeepEP intranode combine num_recv_tokens is out of range");
     }
     if (rank_dims[0] != runtime.num_ranks || rank_dims[1] != runtime.num_ranks ||
         channel_dims[0] != runtime.num_ranks || channel_dims[1] != runtime.combine_num_channels() ||
@@ -1029,7 +1048,7 @@ ffi::Error CombineIntranode(
         rank_prefix_matrix.typed_data(),
         channel_prefix_matrix.typed_data(),
         send_head_out->typed_data(),
-        max_recv_tokens,
+        num_recv_tokens,
         combined_tokens,
         hidden,
         num_topk,
