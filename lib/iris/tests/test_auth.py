@@ -3,10 +3,13 @@
 """Auth tests for Iris controller with static token authentication."""
 
 import pytest
+from connectrpc.errors import ConnectError
 from iris.cluster.providers.local.cluster import LocalCluster
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.version import client_revision_date
 
 from .conftest import _make_controller_only_config
 
@@ -30,8 +33,6 @@ def _quick():
 
 def test_static_auth_rpc_access():
     """Static auth rejects unauthenticated and wrong-token RPCs, accepts valid JWT."""
-    from connectrpc.errors import ConnectError
-    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 
     config = _make_controller_only_config()
     config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
@@ -64,8 +65,6 @@ def test_static_auth_rpc_access():
 
 def test_static_auth_job_ownership():
     """Job ownership: user A cannot terminate user B's job."""
-    from connectrpc.errors import ConnectError
-    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 
     _TOKEN_A = "token-user-a"
     _TOKEN_B = "token-user-b"
@@ -88,6 +87,7 @@ def test_static_auth_job_ownership():
             name="/user-a/auth-owned-job",
             entrypoint=entrypoint.to_proto(),
             resources=ResourceSpec(cpu=1, memory="1g").to_proto(),
+            client_revision_date=client_revision_date(),
         )
         resp = client_a.launch_job(launch_req)
         job_id = resp.job_id

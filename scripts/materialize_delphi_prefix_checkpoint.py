@@ -49,12 +49,11 @@ from levanter.models.qwen import Qwen3Config
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
-    ExecutorStep,
     MirroredValue,
     executor_main,
     mirrored,
-    this_output_path,
 )
+from marin.execution.types import ExecutorStep, this_output_path
 from marin.midtraining import assert_checkpoint_complete_for_model_type
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm, temporary_checkpoint_base_path
 

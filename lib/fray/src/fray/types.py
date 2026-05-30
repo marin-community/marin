@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal, Self
 
+from fray.device_flops import device_flops as _device_flops
+
 # ---------------------------------------------------------------------------
 # TPU topology
 # ---------------------------------------------------------------------------
@@ -256,9 +258,7 @@ class GpuConfig:
         return self.count
 
     def device_flops(self, dtype: str = "bf16") -> float:
-        from fray.device_flops import device_flops
-
-        flops = device_flops(self.variant, dtype)
+        flops = _device_flops(self.variant, dtype)
         if flops is None:
             raise ValueError(f"Unknown device/dtype: {self.variant}/{dtype}")
         return flops
@@ -291,9 +291,7 @@ class TpuConfig:
         return get_tpu_topology(self.variant).vm_count
 
     def device_flops(self, dtype: str = "bf16") -> float:
-        from fray.device_flops import device_flops
-
-        flops = device_flops(self.variant, dtype)
+        flops = _device_flops(self.variant, dtype)
         if flops is None:
             raise ValueError(f"Unknown device/dtype: {self.variant}/{dtype}")
         return flops

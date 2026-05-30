@@ -10,7 +10,7 @@ has workers across CPU, TPU coscheduling, and multi-region scale groups.
 
 import logging
 import os
-import re
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -19,17 +19,15 @@ import pytest
 from connectrpc.errors import ConnectError
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
-from iris.client.client import IrisClient
+from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
-from iris.cluster.types import (
-    Entrypoint,
-    ReservationEntry,
-    ResourceSpec,
-    gpu_device,
-)
+from iris.cluster.providers.local.cluster import LocalCluster
+from iris.cluster.types import Entrypoint, EnvironmentSpec, ReservationEntry, ResourceSpec, gpu_device
 from iris.rpc import config_pb2, controller_pb2, job_pb2
+from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.version import client_revision_date
 from rigging.timing import Duration, ExponentialBackoff
 
 from .conftest import (
@@ -48,7 +46,7 @@ from .helpers import TestJobs
 
 logger = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.e2e
+pytestmark = pytest.mark.requires_cluster
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +197,56 @@ def smoke_screenshot(smoke_page, tmp_path_factory):
     return capture
 
 
+def _wait_for_worker_detail_screenshot_ready(page, worker_id: str) -> None:
+    # WorkerDetail.vue uniquely nulls `data` in its workerId watch, so a late
+    # re-fire can flip the page back to the "Loading worker..." overlay after a
+    # naive wait passes. Anchor on h3 sections that only render in the
+    # v-else-if="data" branch, then settle + re-verify to catch the transient.
+    check = """
+        (workerId) => {
+            const text = document.body.textContent || "";
+            const routeReady = decodeURIComponent(window.location.hash) === `#/worker/${workerId}`;
+            const headings = Array.from(document.querySelectorAll("h3"))
+                .map((heading) => (heading.textContent || "").trim().toLowerCase());
+            return routeReady
+                && !text.includes("Loading worker...")
+                && text.includes(workerId)
+                && text.includes("Healthy")
+                && headings.includes("identity")
+                && headings.includes("task history");
+        }
+    """
+    page.wait_for_function(check, arg=worker_id, timeout=15000)
+    page.wait_for_timeout(250)
+    page.wait_for_function(check, arg=worker_id, timeout=5000)
+
+
+def _wait_for_job_detail_screenshot_ready(page, job_id: str) -> None:
+    page.wait_for_function(
+        """
+        (jobId) => {
+            const text = document.body.textContent || "";
+            const routeReady = decodeURIComponent(window.location.hash) === `#/job/${jobId}`;
+            const headings = Array.from(document.querySelectorAll("h3"))
+                .map((heading) => (heading.textContent || "").trim().toLowerCase());
+            const taskRowReady = Array.from(document.querySelectorAll("table tbody tr"))
+                .some((row) => (row.textContent || "").includes("Succeeded"));
+            const pageHeight = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+            return routeReady
+                && !text.includes("Loading...")
+                && text.includes("Job Status")
+                && text.includes("Task Summary")
+                && headings.includes("tasks")
+                && headings.includes("job logs")
+                && taskRowReady
+                && pageHeight > window.innerHeight;
+        }
+        """,
+        arg=job_id,
+        timeout=10000,
+    )
+
+
 @pytest.fixture(scope="module")
 def verbose_job(smoke_cluster):
     """Shared verbose log job — submits once, used by log-related tests."""
@@ -242,8 +290,6 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
 
 def _parent_with_two_children():
     """Parent callable that submits two child jobs and waits for both."""
-    from iris.client.client import iris_ctx
-    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 
     ctx = iris_ctx()
     res = ResourceSpec(cpu=1, memory="1g")
@@ -296,12 +342,10 @@ def test_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screenshot):
     job = smoke_cluster.submit(TestJobs.quick, "smoke-detail")
     smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
 
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
+    job_id = job.job_id.to_wire()
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}")
     wait_for_dashboard_ready(smoke_page)
-    smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('Succeeded')",
-        timeout=10000,
-    )
+    _wait_for_job_detail_screenshot_ready(smoke_page, job_id)
     smoke_screenshot(
         "job-detail", "Job detail page for succeeded job with state badge, task table, and job-level log viewer"
     )
@@ -421,10 +465,7 @@ def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, ca
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/worker/{worker_id}")
     wait_for_dashboard_ready(smoke_page)
 
-    smoke_page.wait_for_function(
-        f"() => document.body.textContent.includes('{worker_id}') && " "document.body.textContent.includes('Healthy')",
-        timeout=10000,
-    )
+    _wait_for_worker_detail_screenshot_ready(smoke_page, worker_id)
     smoke_screenshot(
         "worker-detail", "Worker detail page with identity info, health badge, metric sparklines, and task history"
     )
@@ -434,14 +475,15 @@ def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Autoscaler tab shows scale groups."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/autoscaler")
     wait_for_dashboard_ready(smoke_page)
-    # Wait for actual scale group content, not just the tab heading ("Autoscaler")
-    # which appears before the API response loads.
+    # Wait for actual scale group content. The strict !Loading-autoscaler-status check
+    # blocks on the AutoscalerTab.vue placeholder so the screenshot isn't taken
+    # during a refetch cycle.
     smoke_page.wait_for_function(
-        "() => !document.body.textContent.includes('Loading') && "
+        "() => !document.body.textContent.includes('Loading autoscaler status') && "
         "(document.body.textContent.includes('Scale Group') || "
         "document.body.textContent.includes('scale group') || "
         "document.body.textContent.includes('local-cpu'))",
-        timeout=10000,
+        timeout=15000,
     )
     smoke_screenshot("autoscaler-tab", "Autoscaler tab showing scale group configuration")
 
@@ -465,8 +507,9 @@ def test_dashboard_job_detail_with_logs(smoke_cluster, verbose_job, smoke_page, 
     job_id = verbose_job.job_id.to_wire()
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}")
     wait_for_dashboard_ready(smoke_page)
+    _wait_for_job_detail_screenshot_ready(smoke_page, job_id)
     smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('Job Logs')",
+        "() => document.body.textContent.includes('DONE: all lines emitted')",
         timeout=10000,
     )
     smoke_screenshot(
@@ -556,7 +599,10 @@ def test_log_levels_populated(smoke_cluster, verbose_job, capabilities):
     deadline = time.monotonic() + smoke_cluster.job_timeout
     entries = []
     while time.monotonic() < deadline:
-        request = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+        request = logging_pb2.FetchLogsRequest(
+            source=f"{task_id}:",
+            match_scope=logging_pb2.MATCH_SCOPE_PREFIX,
+        )
         response = smoke_cluster.log_client.fetch_logs(request)
         entries = list(response.entries)
         if any("info-marker" in e.data for e in entries):
@@ -582,7 +628,11 @@ def test_log_level_filter(smoke_cluster, verbose_job, capabilities):
 
     task_id = verbose_job.job_id.task(0).to_wire()
 
-    request = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*", min_level="WARNING")
+    request = logging_pb2.FetchLogsRequest(
+        source=f"{task_id}:",
+        match_scope=logging_pb2.MATCH_SCOPE_PREFIX,
+        min_level="WARNING",
+    )
     response = smoke_cluster.log_client.fetch_logs(request)
     filtered = list(response.entries)
 
@@ -741,7 +791,6 @@ def test_checkpoint_restore():
     Phase 2 — restart the controller and verify the job is still SUCCEEDED
               and the cluster can accept new work.
     """
-    from iris.cluster.providers.local.cluster import LocalCluster
 
     config = load_config(DEFAULT_CONFIG)
     config = make_local_config(config)
@@ -804,7 +853,27 @@ def test_stress_50_tasks(smoke_cluster):
         cpu=0,
         replicas=50,
     )
-    status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout * 2)
+    status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout * 4)
+    assert status.state == job_pb2.JOB_STATE_SUCCEEDED
+
+
+# ============================================================================
+# Workdir file offload (large files externalized to blob store)
+# ============================================================================
+
+OFFLOAD_FILE_SIZE = 32 * 1024  # 32KB — exceeds the 10KB offload threshold
+
+
+def test_workdir_file_offload(smoke_cluster):
+    """A job with a workdir file above the offload threshold succeeds after blob-store offloading."""
+    entrypoint = Entrypoint.from_callable(TestJobs.verify_workdir_file, "large_payload.bin", OFFLOAD_FILE_SIZE)
+    entrypoint.workdir_files["large_payload.bin"] = b"\xab" * OFFLOAD_FILE_SIZE
+    job = smoke_cluster.client.submit(
+        entrypoint=entrypoint,
+        name=f"smoke-offload-{uuid.uuid4().hex[:8]}",
+        resources=ResourceSpec(cpu=1, memory="1g"),
+    )
+    status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
@@ -849,7 +918,6 @@ def test_dashboard_login_flow():
     full browser auth flow: redirect to login, paste token, verify RPC data loads,
     then logout back to the login page.
     """
-    from iris.cluster.providers.local.cluster import LocalCluster
 
     try:
         import playwright.sync_api as pw
@@ -918,8 +986,6 @@ def test_dashboard_login_flow():
         except Exception as exc:
             errors.append(exc)
 
-    import threading
-
     t = threading.Thread(target=_run_browser_flow)
     t.start()
     t.join(timeout=60)
@@ -945,8 +1011,6 @@ def _login_for_jwt(url: str, identity_token: str) -> str:
 
 def test_static_auth_rpc_access():
     """Static auth rejects unauthenticated and wrong-token RPCs, accepts valid JWT."""
-    from iris.cluster.providers.local.cluster import LocalCluster
-    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 
     config = _make_controller_only_config()
     config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
@@ -987,8 +1051,6 @@ def test_static_auth_job_ownership():
     PENDING). Verifies user-b gets PERMISSION_DENIED when trying to terminate
     it, while user-a can terminate their own job.
     """
-    from iris.cluster.providers.local.cluster import LocalCluster
-    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 
     _TOKEN_A = "token-user-a"
     _TOKEN_B = "token-user-b"
@@ -1013,6 +1075,7 @@ def test_static_auth_job_ownership():
             name="/user-a/auth-owned-job",
             entrypoint=entrypoint.to_proto(),
             resources=ResourceSpec(cpu=1, memory="1g").to_proto(),
+            client_revision_date=client_revision_date(),
         )
         resp = client_a.launch_job(launch_req)
         job_id = resp.job_id

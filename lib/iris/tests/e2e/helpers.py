@@ -7,6 +7,14 @@ All methods use logging as the primary communication channel. They are
 serialized via cloudpickle (Entrypoint.from_callable) so static methods
 work fine — cloudpickle pickles bytecode, not import paths.
 """
+import logging
+import os
+import time
+
+from iris.cluster.client import get_job_info
+from iris.rpc import controller_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
+from rigging.timing import Duration
 
 
 class TestJobs:
@@ -22,16 +30,12 @@ class TestJobs:
 
     @staticmethod
     def sleep(duration: float):
-        import time
-
         time.sleep(duration)
         return 1
 
     @staticmethod
     def log_periodic(duration: float, interval: float = 1.0):
         """Log a message every `interval` seconds for `duration` seconds."""
-        import logging
-        import time
 
         logger = logging.getLogger("iris.test.log_periodic")
         start = time.monotonic()
@@ -59,7 +63,6 @@ class TestJobs:
     @staticmethod
     def busy_loop(duration: float = 3.0):
         """CPU-bound busy loop for profiling tests."""
-        import time
 
         end = time.monotonic() + duration
         while time.monotonic() < end:
@@ -74,7 +77,6 @@ class TestJobs:
         named markers (info-marker, warning-marker, error-marker) for precise
         level assertions.
         """
-        import logging
 
         logger = logging.getLogger("iris.test.verbose")
         for i in range(num_lines):
@@ -93,9 +95,6 @@ class TestJobs:
     @staticmethod
     def register_endpoint(prefix):
         """Register an endpoint via RPC and verify it's listed."""
-        from iris.cluster.client import get_job_info
-        from iris.rpc import controller_pb2
-        from iris.rpc.controller_connect import ControllerServiceClientSync
 
         info = get_job_info()
         if info is None:
@@ -124,7 +123,6 @@ class TestJobs:
     @staticmethod
     def validate_ports():
         """Validate that requested ports are allocated via JobInfo."""
-        from iris.cluster.client import get_job_info
 
         info = get_job_info()
         if info is None:
@@ -135,11 +133,21 @@ class TestJobs:
         assert info.ports["grpc"] > 0
 
     @staticmethod
+    def verify_workdir_file(filename: str, expected_size: int):
+        """Verify a workdir file exists with the expected size."""
+
+        workdir = os.environ.get("IRIS_WORKDIR", "/app")
+        path = os.path.join(workdir, filename)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Workdir file {filename} not found at {path}")
+        actual_size = os.path.getsize(path)
+        if actual_size != expected_size:
+            raise ValueError(f"Expected {expected_size} bytes, got {actual_size}")
+        return actual_size
+
+    @staticmethod
     def validate_job_context():
         """Validate job context via get_job_info() in a coscheduled job."""
-        import logging
-
-        from iris.cluster.client import get_job_info
 
         logger = logging.getLogger("iris.test.context")
         info = get_job_info()
@@ -151,7 +159,6 @@ class TestJobs:
     @staticmethod
     def wait_for_sentinel(s):
         """Wait on a sentinel with a short timeout, used for concurrency tests."""
-        from rigging.timing import Duration
 
         s.wait(timeout=Duration.from_seconds(2))
         return "done"

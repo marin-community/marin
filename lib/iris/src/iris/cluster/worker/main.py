@@ -54,7 +54,11 @@ def serve(worker_config: str):
     with open(worker_config) as f:
         wc_proto = ParseDict(json.load(f), config_pb2.WorkerConfig())
 
-    bundle = create_provider_bundle(platform_config=wc_proto.platform, ssh_config=config_pb2.SshConfig())
+    bundle = create_provider_bundle(
+        platform_config=wc_proto.platform,
+        worker_port=wc_proto.port,
+        ssh_config=config_pb2.SshConfig(),
+    )
     zone = detect_gcp_zone()
 
     def resolve_image(image: str) -> str:
@@ -67,7 +71,7 @@ def serve(worker_config: str):
 
     config = worker_config_from_proto(wc_proto, resolve_image=resolve_image)
 
-    container_runtime = DockerRuntime(cache_dir=config.cache_dir)
+    container_runtime = DockerRuntime(cache_dir=config.cache_dir, capacity_type=config.capacity_type)
 
     worker = Worker(config, container_runtime=container_runtime)
 

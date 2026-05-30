@@ -1,0 +1,124 @@
+name: "Marin - Release Libs Wheels"
+
+# Builds the eight pure-Python marin-* lib wheels and publishes them to PyPI
+# via OIDC trusted publishing -- no API token is stored anywhere. Triggers:
+#   schedule          -> nightly dev release (<base>.dev<stamp>)
+#   push tag          -> stable release, version from the marin-libs-v* tag
+#   workflow_dispatch -> manual cut (nightly / stable / manual)
+#   pull_request      -> build-only smoke when the build script or this
+#                        workflow file changes
+# Trusted-publisher setup is documented in docs/dev-guide/releasing.md.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Build mode"
+        type: choice
+        options: [nightly, stable, manual]
+        default: manual
+      version:
+        description: "Version (required for stable mode, e.g. 0.2.0)"
+        type: string
+  schedule:
+    - cron: "0 6 * * *"   # 06:00 UTC daily
+  push:
+    tags:
+      - "marin-libs-v*"
+  pull_request:
+    paths:
+      - "scripts/python_libs_package.py"
+      - ".github/workflows/marin-release-libs-wheels.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false  # don't kill an in-flight publish
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.pick.outputs.mode }}
+      version: ${{ steps.resolved.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # Hoist user-supplied dispatch inputs into env so they reach the shell as
+      # variables, not as `${{ ... }}` template substitutions -- free-form
+      # inputs interpolated into a shell script are an injection vector.
+      - id: pick
+        env:
+          INPUT_MODE: ${{ github.event.inputs.mode }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == refs/tags/marin-libs-v* ]]; then
+            echo "mode=stable" >> "$GITHUB_OUTPUT"
+            echo "input_version=${GITHUB_REF_NAME#marin-libs-v}" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
+            echo "mode=nightly" >> "$GITHUB_OUTPUT"
+            echo "input_version=" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "mode=${INPUT_MODE}" >> "$GITHUB_OUTPUT"
+            echo "input_version=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
+          else
+            # pull_request: build-only smoke
+            echo "mode=manual" >> "$GITHUB_OUTPUT"
+            echo "input_version=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Resolve the version exactly once for the whole run so the build job
+      # stamps the identical value -- a run straddling midnight UTC would
+      # otherwise compute a different nightly date in build vs resolve.
+      - id: resolved
+        env:
+          MODE: ${{ steps.pick.outputs.mode }}
+          INPUT_VERSION: ${{ steps.pick.outputs.input_version }}
+        run: |
+          python3 scripts/python_libs_package.py \
+            --mode "$MODE" --version "$INPUT_VERSION" --resolve-only
+
+  build:
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Build wheels + sdists
+        env:
+          MODE: ${{ needs.resolve.outputs.mode }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          python3 scripts/python_libs_package.py --mode "$MODE" --version "$VERSION"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: marin-libs-dist
+          path: dist/*
+          retention-days: 14
+
+  publish:
+    # Manual mode produces local-version identifiers (`X.Y.Z+manual.<sha>`)
+    # which PyPI rejects, so manual cuts -- and every pull_request smoke --
+    # are build-only regardless of how they were triggered.
+    if: |
+      github.event_name != 'pull_request'
+      && needs.resolve.outputs.mode != 'manual'
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    environment: pypi-publish
+    permissions:
+      id-token: write   # mint the OIDC token for trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: marin-libs-dist
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.12.4
+        with:
+          packages-dir: dist/

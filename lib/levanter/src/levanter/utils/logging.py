@@ -7,8 +7,10 @@ import time
 from pathlib import Path
 from typing import Iterable, Iterator, TypeVar, Union
 
-import rigging.log_setup as iris_logging
 import jax
+import rigging.log_setup as iris_logging
+
+from levanter.tracker.wandb import is_wandb_available
 
 pylogger = pylogging.getLogger(__name__)
 
@@ -51,10 +53,6 @@ def init_logging(log_dir: Union[str, Path], run_id: str, level: int = pylogging.
 
 
 def save_xla_dumps_to_wandb(initial_time: float):
-    import os
-
-    from levanter.tracker.wandb import is_wandb_available
-
     if not is_wandb_available():
         pylogger.warning("Wandb is not available, so we can't save XLA dumps")
         return

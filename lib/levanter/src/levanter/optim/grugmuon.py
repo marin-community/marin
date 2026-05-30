@@ -17,6 +17,7 @@ import jax
 import jax.numpy as jnp
 import optax
 from jax.sharding import PartitionSpec
+from jax.sharding import reshard
 from optax import tree_utils as otu
 
 from levanter.optim.config import OptimizerConfig
@@ -39,13 +40,6 @@ def _target_sharding(array) -> jax.sharding.Sharding | None:
 
     aval = jax.typeof(array)
     return getattr(aval, "sharding", None)
-
-
-def _partition_spec(array) -> PartitionSpec | None:
-    sharding = _target_sharding(array)
-    if sharding is None:
-        return None
-    return getattr(sharding, "spec", None)
 
 
 def _batch_sharded_stack_target_pspec(array) -> PartitionSpec | None:
@@ -136,7 +130,11 @@ class GrugMuonConfig(MuonConfig):
                 return "adamw"
             elif hasattr(param, "ndim") and param.ndim == 2:
                 return "muon"
-            elif hasattr(param, "ndim") and param.ndim == 3 and ("w_up_gate" in path_lower or "w_down" in path_lower):
+            elif (
+                hasattr(param, "ndim")
+                and param.ndim == 3
+                and ("w_up_gate" in path_lower or "w_gate_up" in path_lower or "w_down" in path_lower)
+            ):
                 return "muon"
             else:
                 return "adamw"
@@ -282,8 +280,7 @@ def _zeropower_via_newtonschulz_replicated(
     ambiguities in the X @ X.T contractions. The caller is responsible for
     restoring the final parameter layout. Kept for A/B benchmarking.
     """
-    from jax.sharding import PartitionSpec as P, reshard
-
+    P = PartitionSpec
     assert X.ndim == 2
     del target_pspec  # Kept for signature parity with the other Newton-Schulz helpers.
 
@@ -319,8 +316,6 @@ def _zeropower_via_newtonschulz_batched_stack_sharded(
     target_pspec: PartitionSpec | None = None,
 ) -> jax.Array:
     """Run Newton-Schulz on a stacked batch of matrices with only the batch axis sharded."""
-    from jax.sharding import reshard
-
     assert X.ndim == 3
 
     coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]

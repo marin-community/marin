@@ -6,12 +6,11 @@
 Receives log entries via PushLogs and serves them via FetchLogs.
 """
 
-from finelog.client import LogPusher, LogServiceProxy, RemoteLogHandler
+from finelog.client import LogClient, RemoteLogHandler
 from finelog.server.service import LogServiceImpl
 
 __all__ = [
-    "LogPusher",
+    "LogClient",
     "LogServiceImpl",
-    "LogServiceProxy",
     "RemoteLogHandler",
 ]

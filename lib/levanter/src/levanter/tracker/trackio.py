@@ -13,7 +13,8 @@ import numpy as np
 from draccus import field
 
 from levanter.tracker import Tracker
-from levanter.tracker.histogram import Histogram
+from levanter.tracker.background import maybe_wrap_background
+from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.tracker import NoopTracker, TrackerConfig
 
 logger = logging.getLogger(__name__)
@@ -78,16 +79,25 @@ def _convert_value_to_loggable_rec(value: Any):
         return [_convert_value_to_loggable_rec(v) for v in value]
     elif isinstance(value, typing.Mapping):
         return {k: _convert_value_to_loggable_rec(v) for k, v in value.items()}
-    elif isinstance(value, Histogram):
-        counts, limits = value.to_numpy_histogram()
-        return {
-            "counts": counts.tolist(),
-            "limits": limits.tolist(),
-            "min": value.min.item(),
-            "max": value.max.item(),
-            "mean": value.mean.item(),
-            "variance": value.variance.item(),
+    elif isinstance(value, SummaryStats):
+        out = {
+            "min": _convert_value_to_loggable_rec(value.min),
+            "max": _convert_value_to_loggable_rec(value.max),
+            "num": _convert_value_to_loggable_rec(value.num),
+            "nonzero_count": _convert_value_to_loggable_rec(value.nonzero_count),
+            "sum": _convert_value_to_loggable_rec(value.sum),
+            "sum_squares": _convert_value_to_loggable_rec(value.sum_squares),
+            "mean": _convert_value_to_loggable_rec(value.mean),
+            "variance": _convert_value_to_loggable_rec(value.variance),
+            "rms": _convert_value_to_loggable_rec(value.rms),
         }
+        if value.histogram is not None:
+            counts, limits = value.histogram.to_numpy_histogram()
+            out["histogram"] = {
+                "counts": counts.tolist(),
+                "limits": limits.tolist(),
+            }
+        return out
     elif isinstance(value, np.ndarray):
         return value.tolist()
     elif isinstance(value, np.generic):
@@ -118,6 +128,13 @@ class TrackioConfig(TrackerConfig):
 
     resume: str = "auto"
 
+    background: bool = True
+    """If True (default), forward all log calls through a background thread that catches
+    exceptions from Trackio. Keeps training jobs alive across transient tracker failures."""
+
+    background_max_queue_size: int = 10000
+    background_finish_timeout: float = 120.0
+
     def init(self, run_id: Optional[str]) -> Tracker:
         import trackio
 
@@ -147,4 +164,9 @@ class TrackioConfig(TrackerConfig):
             resume=resume,
             embed=False,
         )
-        return TrackioTracker(r)
+        return maybe_wrap_background(
+            TrackioTracker(r),
+            enabled=self.background,
+            max_queue_size=self.background_max_queue_size,
+            finish_timeout=self.background_finish_timeout,
+        )

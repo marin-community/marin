@@ -20,8 +20,11 @@ The run_once() flow splits into two phases:
 from __future__ import annotations
 
 import logging
+import urllib.error
+import urllib.request
 from collections import deque
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 
 from rigging.timing import Duration, Timestamp
 
@@ -30,9 +33,6 @@ from iris.cluster.controller.autoscaler.models import (
     DemandEntry,
     ScalingAction,
     ScalingDecision,
-)
-from iris.cluster.controller.autoscaler.operations import (
-    restart_worker as restart_worker_operation,
 )
 from iris.cluster.controller.autoscaler.operations import (
     terminate_slices_for_workers as terminate_slices_for_workers_operation,
@@ -47,6 +47,7 @@ from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, build
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import (
     CloudSliceState,
@@ -62,11 +63,34 @@ from iris.time_proto import duration_from_proto, timestamp_to_proto
 logger = logging.getLogger(__name__)
 
 
-# Slices that die within this time of creation trigger backoff (preemption detection)
-SHORT_LIVED_SLICE_THRESHOLD = Duration.from_minutes(5)
-
 # After this long in UNKNOWN state, treat the slice as FAILED (quota timeout is 5 min, so this is conservative)
 DEFAULT_UNRESOLVABLE_TIMEOUT = Duration.from_minutes(15)
+
+# How long the autoscaler waits for a worker /health response per probe.
+_HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
+
+# Bypass any HTTP_PROXY env var: worker addresses are private cluster IPs,
+# never reachable via an upstream proxy.
+_HEALTH_PROBE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+# Cap concurrent /health probes. ~1000 VMs in production; serializing 3 s
+# timeouts would blow past evaluation_interval (10 s default).
+_HEALTH_PROBE_MAX_WORKERS = 64
+
+
+def _probe_worker_health(worker_url: str) -> bool:
+    """Probe a worker's /health endpoint. ``worker_url`` is an ``http://host:port`` base URL.
+
+    Returns True iff the response is 2xx.
+    """
+    try:
+        resp = _HEALTH_PROBE_OPENER.open(
+            f"{worker_url}/health",
+            timeout=_HEALTH_PROBE_TIMEOUT_SECONDS,
+        )
+        return 200 <= resp.status < 300
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
+        return False
 
 
 class Autoscaler:
@@ -308,6 +332,9 @@ class Autoscaler:
             decisions: List of scaling decisions to execute.
             timestamp: Current timestamp.
         """
+        # Aggregate rate-limited decisions per group so we emit a single summary
+        # line per group per cycle instead of one per deferred slice (#5580).
+        rate_limited: dict[str, list[ScalingDecision]] = {}
         for decision in decisions:
             group = self._groups.get(decision.scale_group)
             if not group:
@@ -315,15 +342,27 @@ class Autoscaler:
                 continue
 
             if decision.action == ScalingAction.SCALE_UP:
-                if not group.acquire_scale_up_token(timestamp):
-                    logger.info("Rate-limited scale-up for %s: %s", decision.scale_group, decision.reason)
-                    self._log_action(
-                        "rate_limited",
-                        decision.scale_group,
-                        reason=decision.reason,
-                    )
+                if not group.try_acquire_scale_up(timestamp):
+                    rate_limited.setdefault(decision.scale_group, []).append(decision)
                     continue
                 self._execute_scale_up(group, timestamp, reason=decision.reason)
+
+        for scale_group, deferred in rate_limited.items():
+            # All decisions in a cycle share the same target/demand snapshot;
+            # the first reason is representative of the whole batch.
+            sample_reason = deferred[0].reason
+            summary = f"deferred={len(deferred)} sample_reason={sample_reason}"
+            logger.info(
+                "Rate-limited scale-up for %s: deferred %d slice(s) (sample reason: %s)",
+                scale_group,
+                len(deferred),
+                sample_reason,
+            )
+            self._log_action(
+                "rate_limited",
+                scale_group,
+                reason=summary,
+            )
 
     def _execute_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> None:
         """Initiate async scale-up for a scale group.
@@ -378,7 +417,7 @@ class Autoscaler:
             logger.exception("Failed to create slice for %s: %s", group.name, e)
             action.status = "failed"
             action.reason = f"{reason} - error: {e}"
-            group.record_failure(ts)
+            group.record_create_failed(ts)
             return False
 
     def _per_group_worker_config(self, group: ScalingGroup) -> config_pb2.WorkerConfig | None:
@@ -414,7 +453,8 @@ class Autoscaler:
 
                 if status.state == CloudSliceState.READY:
                     worker_ids = [w.worker_id for w in status.workers]
-                    group.mark_slice_ready(slice_id, worker_ids)
+                    worker_urls = self._worker_urls(status.workers)
+                    group.mark_slice_ready(slice_id, worker_ids, worker_urls=worker_urls)
                     self._register_slice_workers(status.workers, slice_id, group.name)
                     self._log_action(
                         "slice_ready",
@@ -426,7 +466,7 @@ class Autoscaler:
                     group.mark_slice_failed(slice_id, error_message=status.error_message)
                     group.scale_down(slice_id)
                     self._unregister_slice_workers(slice_id)
-                    group.record_failure()
+                    group.record_slice_boot_failed(slice_id, timestamp)
                     reason = status.error_message if status.error_message else "bootstrap failed"
                     self._log_action(
                         "slice_failed",
@@ -441,7 +481,7 @@ class Autoscaler:
                         group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
                         group.scale_down(slice_id)
                         self._unregister_slice_workers(slice_id)
-                        group.record_failure()
+                        group.record_slice_boot_failed(slice_id, timestamp)
                         self._log_action(
                             "slice_failed",
                             group.name,
@@ -470,6 +510,95 @@ class Autoscaler:
                     reason=f"idle slice (target={target_capacity}, ready={ready_before})",
                 )
 
+    def probe_health(self, timestamp: Timestamp | None = None) -> None:
+        """Probe each READY slice's worker /health endpoint and terminate dead slices.
+
+        Catches zombie slices whose VM is still up in the cloud but whose
+        worker process is dead — these would otherwise be invisible to the
+        heartbeat path (no worker row → no heartbeat to time out) and pin the
+        scale group at max_slices indefinitely.
+
+        Per-worker counters live on SliceState. PING_FAILURE_THRESHOLD
+        consecutive failures (~100s at the default 10s evaluation interval,
+        matching the heartbeat-path threshold) trip termination. Worker URLs
+        come from the slice handle, refreshed lazily via ``handle.describe()``
+        when SliceState has none cached (e.g. after a controller restart).
+        Probes are fanned out across a thread pool so a partitioned AZ
+        doesn't burn the entire evaluation interval at the 3s per-probe
+        timeout. Slice teardown runs serially after all probes complete.
+        """
+        timestamp = timestamp or Timestamp.now()
+
+        # Phase 1: collect every (group, slice_id, worker_id, worker_url) probe target.
+        probes: list[tuple[ScalingGroup, str, str, str]] = []
+        for group in self._groups.values():
+            for slice_id, handle, worker_urls in group.ready_slice_probe_targets():
+                if not worker_urls:
+                    worker_urls = self._refresh_slice_worker_urls(group, slice_id, handle)
+                    if not worker_urls:
+                        continue  # describe() failed or partial; retry next tick
+                for worker_id, worker_url in worker_urls.items():
+                    probes.append((group, slice_id, worker_id, worker_url))
+        if not probes:
+            return
+
+        # Phase 2: fan out probes. Bound the pool so we don't melt the controller.
+        workers = min(_HEALTH_PROBE_MAX_WORKERS, len(probes))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="health-probe") as pool:
+            results = list(pool.map(lambda p: _probe_worker_health(p[3]), probes))
+
+        # Phase 3: record results and collect slices that tripped the threshold.
+        tripped: dict[str, tuple[ScalingGroup, str]] = {}  # slice_id -> (group, reason)
+        for (group, slice_id, worker_id, _url), healthy in zip(probes, results, strict=True):
+            count = group.record_health_probe_result(slice_id, worker_id, healthy)
+            if count >= PING_FAILURE_THRESHOLD and slice_id not in tripped:
+                reason = f"worker {worker_id} failed /health {count}x"
+                logger.warning("Slice %s: %s; terminating", slice_id, reason)
+                tripped[slice_id] = (group, reason)
+
+        # Phase 4: terminate tripped slices. Record as a PREEMPTED-style death,
+        # not a boot failure — these slices booted cleanly and only died at
+        # runtime, so the BackoffDetector's scale-up budget shouldn't decay.
+        for slice_id, (group, reason) in tripped.items():
+            group.mark_slice_failed(slice_id, error_message=reason)
+            group.scale_down(slice_id, timestamp)
+            self._unregister_slice_workers(slice_id)
+            self._log_action(
+                "slice_failed",
+                group.name,
+                slice_id,
+                reason=reason,
+                status="failed",
+            )
+
+    def _worker_urls(self, workers: Sequence[RemoteWorkerHandle]) -> dict[str, str]:
+        """Map worker_id to the worker's reachable ``http://host:port`` URL.
+
+        Workers with no internal address yet (mid-boot) report an empty
+        ``worker_url`` and are skipped.
+        """
+        return {w.worker_id: w.worker_url for w in workers if w.worker_url}
+
+    def _refresh_slice_worker_urls(self, group: ScalingGroup, slice_id: str, handle: SliceHandle) -> dict[str, str]:
+        """Resolve worker URLs for a slice by calling handle.describe().
+
+        Returns the full map only when every worker has a URL. A partial set
+        is dropped: caching it would permanently exclude the missing workers
+        from probing, and probing the incomplete set risks terminating a
+        slice for a worker that simply hasn't published its IP yet. Next tick
+        re-describes.
+        """
+        try:
+            status = handle.describe()
+        except Exception as e:
+            logger.warning("Failed to describe slice %s for health probe: %s", slice_id, e)
+            return {}
+        worker_urls = self._worker_urls(status.workers)
+        if len(worker_urls) != len(status.workers):
+            return {}
+        group.set_worker_urls(slice_id, worker_urls)
+        return worker_urls
+
     def update(
         self,
         demand_entries: list[DemandEntry],
@@ -491,20 +620,12 @@ class Autoscaler:
         worker_status_map: WorkerStatusMap,
         timestamp: Timestamp | None = None,
     ) -> list[ScalingDecision]:
-        """Full cycle: refresh + update. Preserved for tests."""
+        """Full cycle: refresh + probe_health + update. Preserved for tests."""
         timestamp = timestamp or Timestamp.now()
         logger.debug("Autoscaler run_once: demand_entries=%s", demand_entries)
         self.refresh(worker_status_map, timestamp)
+        self.probe_health(timestamp)
         return self.update(demand_entries, timestamp)
-
-    def get_tracked_worker(self, worker_id: str) -> TrackedWorker | None:
-        """Look up a tracked worker by ID."""
-        return self._worker_registry.tracked_worker(worker_id)
-
-    def restart_worker(self, worker_id: str) -> None:
-        """Restart a worker with a fresh bootstrap script using the latest image."""
-
-        restart_worker_operation(self._groups, self._db, worker_id, self._per_group_worker_config)
 
     def restore_tracked_workers(self, workers: dict[str, TrackedWorker]) -> None:
         """Restore tracked worker state from a snapshot. Called before loops start."""
@@ -581,10 +702,6 @@ class Autoscaler:
             status.last_routing_decision.CopyFrom(routing_proto)
         return status
 
-    def get_group(self, name: str) -> ScalingGroup | None:
-        """Get a scale group by name."""
-        return self._groups.get(name)
-
     @property
     def groups(self) -> dict[str, ScalingGroup]:
         """All scale groups."""
@@ -602,7 +719,6 @@ class Autoscaler:
             unregister_slice_workers=self._unregister_slice_workers,
             log_action=self._log_action,
             timestamp=Timestamp.now(),
-            short_lived_slice_threshold=SHORT_LIVED_SLICE_THRESHOLD,
         )
         for request in result.termination_requests:
 

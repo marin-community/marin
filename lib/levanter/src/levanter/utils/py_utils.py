@@ -9,9 +9,11 @@ import enum
 import json
 import os
 import pathlib
-import sys
+import random
 import uuid
 from dataclasses import asdict, dataclass, is_dataclass
+
+import numpy as np
 
 
 def logical_cpu_core_count() -> int:
@@ -55,36 +57,10 @@ def dataclass_with_default_init(_cls=None, *args, **kwargs):
         return wrap(_cls)
 
 
-def actual_sizeof(obj):
-    """similar to sys.getsizeof, but recurses into dicts and lists and other objects"""
-    seen = set()
-    size = 0
-    objects = [obj]
-    while objects:
-        need_to_see = []
-        for obj in objects:
-            if id(obj) in seen:
-                continue
-            seen.add(id(obj))
-            size += sys.getsizeof(obj)
-            if isinstance(obj, dict):
-                need_to_see.extend(obj.values())
-            elif hasattr(obj, "__dict__"):
-                need_to_see.extend(obj.__dict__.values())
-            elif isinstance(obj, (list, tuple, set, frozenset)):
-                need_to_see.extend(obj)
-        objects = need_to_see
-    return size
-
-
 @contextlib.contextmanager
 def set_global_rng_seeds(seed):
-    import numpy as np
-
     current_np_seed = np.random.get_state()
     np.random.seed(seed)
-
-    import random
 
     current_random_seed = random.getstate()
     random.seed(seed)

@@ -29,6 +29,7 @@ class ProviderBundle:
 
 def create_provider_bundle(
     platform_config: config_pb2.PlatformConfig,
+    worker_port: int,
     cluster_config: config_pb2.IrisClusterConfig | None = None,
     ssh_config: config_pb2.SshConfig | None = None,
 ) -> ProviderBundle:
@@ -36,6 +37,7 @@ def create_provider_bundle(
 
     Args:
         platform_config: Provider type and provider-specific settings.
+        worker_port: RPC port workers serve on, used to build their reachable URLs.
         cluster_config: Full cluster configuration when provider-specific defaults
             need controller/worker settings beyond platform_config.
         ssh_config: SSH settings (used by GCP and manual providers).
@@ -55,6 +57,7 @@ def create_provider_bundle(
         worker_provider = GcpWorkerProvider(
             gcp_config=platform_config.gcp,
             label_prefix=label_prefix,
+            worker_port=worker_port,
             ssh_config=ssh_config,
         )
         return ProviderBundle(
@@ -72,6 +75,7 @@ def create_provider_bundle(
     if which == "manual":
         worker_provider = ManualWorkerProvider(
             label_prefix=label_prefix,
+            worker_port=worker_port,
             ssh_config=ssh_config,
         )
         return ProviderBundle(
@@ -85,6 +89,7 @@ def create_provider_bundle(
         worker_provider = GcpWorkerProvider(
             gcp_config=local_gcp_config,
             label_prefix=label_prefix,
+            worker_port=worker_port,
             gcp_service=gcp_service,
         )
         return ProviderBundle(

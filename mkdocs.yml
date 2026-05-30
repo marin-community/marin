@@ -65,6 +65,7 @@ nav:
       - Setting up a Local GPU Environment: tutorials/local-gpu.md
       - Prepare a Storage Bucket: tutorials/storage-bucket.md
       - Executor 101: tutorials/executor-101.md
+      - Executor Sweeps: tutorials/executor-sweeps.md
       - Training an LM: tutorials/train-an-lm.md
   - Explanations:
       - The Language Modeling Pipeline: explanations/lm-pipeline.md
@@ -85,6 +86,7 @@ nav:
       - Internal Guidelines: dev-guide/guidelines-internal.md
       - Forking Policy: dev-guide/forking-policy.md
       - Building Docs: dev-guide/building-docs.md
+      - Releasing to PyPI: dev-guide/releasing.md
       - Snapshot Tests: dev-guide/snapshot-tests.md
   - Technical Reference:
       - Specifying Hardware Resources: references/resource-config.md
@@ -92,6 +94,7 @@ nav:
       - Default Steps: references/default-steps.md
       - Training Configuration: references/train-config.md
       - HBM Optimization: references/hbm-optimization.md
+      - Perplexity Gap Analysis: references/perplexity-gap-analysis.md
 
 markdown_extensions:
   - markdown.extensions.footnotes

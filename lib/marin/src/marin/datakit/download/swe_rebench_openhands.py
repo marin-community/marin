@@ -14,7 +14,7 @@ from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import load_parquet_batched
+from marin.datakit.download.rollout_transforms import load_parquet_batched, render_role_message
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -30,12 +30,6 @@ def resolved_to_tag(resolved: int | None) -> str | None:
     return "This trajectory failed to solve the task."
 
 
-def render_message(msg: dict) -> str:
-    role = msg.get("role", "unknown")
-    content = msg.get("content") or ""
-    return f"<{role}>\n{content}\n</{role}>"
-
-
 def row_to_doc(row: dict) -> list[dict]:
     trajectory = row.get("trajectory")
     if not trajectory:
@@ -43,7 +37,7 @@ def row_to_doc(row: dict) -> list[dict]:
         return []
 
     tag = resolved_to_tag(row.get("resolved"))
-    rendered = "\n\n".join(render_message(m) for m in trajectory)
+    rendered = "\n\n".join(render_role_message(m) for m in trajectory)
     text = f"{tag}\n\n{rendered}" if tag else rendered
 
     counters.increment("swe_rebench_openhands/kept")

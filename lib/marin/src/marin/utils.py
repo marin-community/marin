@@ -1,15 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import functools
 import logging
 import os
 import subprocess
-from collections.abc import Callable
+from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import fields, is_dataclass
 from datetime import datetime
-from typing import Any, TypeVar
+from typing import Any
 
 import braceexpand
 import datasets
@@ -20,10 +18,9 @@ from rigging.filesystem import url_to_fs
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 logger = logging.getLogger(__name__)
-T = TypeVar("T")
 
 
-def fsspec_exists(file_path):
+def fsspec_exists(file_path: str) -> bool:
     """
     Check if a file exists in a fsspec filesystem.
 
@@ -39,7 +36,7 @@ def fsspec_exists(file_path):
     return fs.exists(file_path)
 
 
-def fsspec_glob(file_path):
+def fsspec_glob(file_path: str) -> list[str]:
     """
     Get a list of files in a fsspec filesystem that match a pattern.
 
@@ -49,19 +46,19 @@ def fsspec_glob(file_path):
         file_path (str): a file path or pattern, possibly with *, **, ?, or {}'s
 
     Returns:
-        list: A list of files that match the pattern. returned files have the protocol prepended to them.
+        list[str]: A list of files that match the pattern. returned files have the protocol prepended to them.
     """
 
     # Use fsspec to get a list of files
     fs = url_to_fs(file_path)[0]
     protocol = fsspec.core.split_protocol(file_path)[0]
 
-    def join_protocol(file):
+    def join_protocol(file: str) -> str:
         if protocol:
             return f"{protocol}://{file}"
         return file
 
-    out = []
+    out: list[str] = []
 
     # glob has to come after braceexpand
     for file in braceexpand.braceexpand(file_path):
@@ -70,7 +67,7 @@ def fsspec_glob(file_path):
     return out
 
 
-def fsspec_mkdirs(dir_path, exist_ok=True):
+def fsspec_mkdirs(dir_path: str, exist_ok: bool = True) -> None:
     """
     Create a directory in a fsspec filesystem.
 
@@ -83,7 +80,7 @@ def fsspec_mkdirs(dir_path, exist_ok=True):
     fs.makedirs(dir_path, exist_ok=exist_ok)
 
 
-def fsspec_isdir(dir_path):
+def fsspec_isdir(dir_path: str) -> bool:
     """
     Check if a path is a directory in fsspec filesystem.
     """
@@ -115,24 +112,6 @@ def _hf_should_retry(exc: Exception) -> bool:
     return any(keyword in message for keyword in _HF_RETRY_KEYWORDS)
 
 
-def call_with_hf_backoff(
-    fn: Callable[[], T],
-    *,
-    context: str,
-    max_attempts: int = 6,
-    initial_delay: float = 2.0,
-    max_delay: float = 60.0,
-) -> T:
-    """Call ``fn`` with exponential backoff tuned for HF rate limits."""
-    return retry_with_backoff(
-        fn,
-        retryable=_hf_should_retry,
-        max_attempts=max_attempts,
-        backoff=ExponentialBackoff(initial=initial_delay, maximum=max_delay, factor=2.0, jitter=0.25),
-        operation=context,
-    )
-
-
 def load_dataset_with_backoff(
     *,
     context: str,
@@ -141,12 +120,13 @@ def load_dataset_with_backoff(
     max_delay: float = 120.0,
     **dataset_kwargs: Any,
 ):
-    return call_with_hf_backoff(
+    """Call ``datasets.load_dataset`` with exponential backoff tuned for HF rate limits."""
+    return retry_with_backoff(
         lambda: datasets.load_dataset(**dataset_kwargs),
-        context=context,
+        retryable=_hf_should_retry,
         max_attempts=max_attempts,
-        initial_delay=initial_delay,
-        max_delay=max_delay,
+        backoff=ExponentialBackoff(initial=initial_delay, maximum=max_delay, factor=2.0, jitter=0.25),
+        operation=context,
     )
 
 
@@ -164,6 +144,22 @@ def fsspec_mtime(file_path: str) -> datetime:
     return fs.modified(file_path)
 
 
+def fsspec_url(fs: fsspec.AbstractFileSystem, path: str) -> str:
+    """Re-attach ``fs``'s protocol to a bare ``path`` so it round-trips through ``url_to_fs``.
+
+    ``fsspec`` glob/find results drop the protocol prefix (e.g. ``gs://``), which makes them
+    ambiguous to reopen on a non-local filesystem. Local paths are returned unchanged.
+    """
+    protocol = fs.protocol
+    if isinstance(protocol, (list, tuple)):
+        protocol = protocol[0]
+    if protocol in (None, "file"):
+        return path
+    if path.startswith(f"{protocol}://"):
+        return path
+    return f"{protocol}://{path}"
+
+
 def is_path_like(path: str) -> bool:
     """Return True if path is a URL (gs://, s3://, etc.) or an existing local path.
 
@@ -175,7 +171,13 @@ def is_path_like(path: str) -> bool:
     return os.path.exists(path)
 
 
-def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None, old_extension=None):
+def rebase_file_path(
+    base_in_path: str,
+    file_path: str,
+    base_out_path: str,
+    new_extension: str | None = None,
+    old_extension: str | None = None,
+) -> str:
     """
     Rebase a file path from one directory to another, with an option to change the file extension.
 
@@ -185,8 +187,9 @@ def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None,
         base_out_path (str): The base directory of the output file
         new_extension (str, optional): If provided, the new file extension to use (including the dot, e.g., '.txt')
         old_extension (str, optional): If provided along with new_extension, specifies the old extension to replace.
+                                       Must be the actual suffix of ``file_path``; a ``ValueError`` is raised if not.
                                        If not provided (but `new_extension` is), the function will replace everything
-                                       after the last dot.
+                                       after the last dot. If there is no dot, ``new_extension`` is appended.
 
     Returns:
         str: The rebased file path
@@ -194,44 +197,29 @@ def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None,
 
     rel_path = os.path.relpath(file_path, base_in_path)
 
-    # Construct the output file path
     if old_extension and not new_extension:
         raise ValueError("old_extension requires new_extension to be set")
 
     if new_extension:
         if old_extension:
-            rel_path = rel_path[: rel_path.rfind(old_extension)] + new_extension
+            # Use endswith rather than rfind so we fail loudly on a mismatch instead of
+            # silently truncating the path (rfind returns -1, and rel_path[:-1] drops
+            # the last character).
+            if not rel_path.endswith(old_extension):
+                raise ValueError(
+                    f"Cannot rebase {file_path!r}: relative path {rel_path!r} does not end with "
+                    f"old_extension={old_extension!r}"
+                )
+            rel_path = rel_path[: -len(old_extension)] + new_extension
         else:
-            rel_path = rel_path[: rel_path.rfind(".")] + new_extension
-    result = os.path.join(base_out_path, rel_path)
-    return result
-
-
-def remove_tpu_lockfile_on_exit(fn=None):
-    """
-    Context manager to remove the TPU lockfile on exit. Can be used as a context manager or decorator.
-
-    Example:
-    ```
-    with remove_tpu_lockfile_on_exit():
-        # do something with TPU
-    ```
-
-    """
-    if fn is None:
-        return _remove_tpu_lockfile_on_exit_cm()
-    else:
-
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
-            with _remove_tpu_lockfile_on_exit_cm():
-                return fn(*args, **kwargs)
-
-        return wrapper
+            dot_idx = rel_path.rfind(".")
+            rel_path = (rel_path[:dot_idx] if dot_idx != -1 else rel_path) + new_extension
+    return os.path.join(base_out_path, rel_path)
 
 
 @contextmanager
-def _remove_tpu_lockfile_on_exit_cm():
+def remove_tpu_lockfile_on_exit() -> Iterator[None]:
+    """Context manager that removes the TPU lockfile when the block exits."""
     try:
         yield
     finally:
@@ -261,31 +249,3 @@ def _hacky_remove_tpu_lockfile():
 def get_directory_friendly_name(name: str) -> str:
     """Convert a huggingface repo name to a directory friendly name."""
     return name.replace("/", "--").replace(".", "-").replace("#", "-")
-
-
-def asdict_excluding(obj, exclude: set[str]) -> dict:
-    """
-    Convert a dataclass to a dictionary, excluding specified fields.
-    Useful when you have not easily serializable fields, such as `RuntimeEnv` in ResourceConfig.
-    This does not check recursively for nested dataclasses- it checks only the top-level dataclass for
-    the specified fields to exclude.
-
-    Args:
-        obj: The dataclass object to convert.
-        exclude: A set of field names to exclude from the dictionary.
-
-    Returns:
-        A dictionary representation of the dataclass, excluding the specified fields.
-    """
-    if not is_dataclass(obj):
-        raise ValueError("Only dataclasses are supported")
-
-    result = {}
-    for f in fields(obj):
-        if f.name not in exclude:
-            value = getattr(obj, f.name)
-            if is_dataclass(value):
-                result[f.name] = asdict_excluding(value, exclude=set())  # nested objects
-            else:
-                result[f.name] = value
-    return result

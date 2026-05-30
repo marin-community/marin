@@ -13,13 +13,10 @@ from rigging.timing import Duration
 
 from iris.chaos import chaos
 from iris.cluster.controller.provider import ProviderError
-from iris.cluster.controller.transitions import (
-    RunningTaskEntry,
-    TaskUpdate,
-    task_updates_from_proto,
-)
+from iris.cluster.controller.reconcile import ReconcileResult, WorkerReconcilePlan
 from iris.cluster.types import WorkerId
 from iris.rpc import job_pb2, worker_pb2
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.worker_connect import WorkerServiceClient
 
 logger = logging.getLogger(__name__)
@@ -33,7 +30,6 @@ class PingResult:
 
     worker_id: WorkerId
     worker_address: str | None
-    resource_snapshot: job_pb2.WorkerResourceSnapshot | None = None
     healthy: bool = True
     health_error: str = ""
     error: str | None = None
@@ -49,7 +45,7 @@ class WorkerStubFactory(Protocol):
 
 class RpcWorkerStubFactory:
     """Caches async WorkerServiceClient stubs by address so each worker gets
-    one persistent async HTTP client instead of a new one per RPC."""
+    one persistent async HTTP client across RPCs."""
 
     def __init__(self, timeout: Duration = DEFAULT_WORKER_RPC_TIMEOUT) -> None:
         self._timeout = timeout
@@ -67,6 +63,8 @@ class RpcWorkerStubFactory:
                 stub = WorkerServiceClient(
                     address=f"http://{address}",
                     timeout_ms=self._timeout.to_ms(),
+                    accept_compression=IRIS_RPC_COMPRESSIONS,
+                    send_compression=None,
                 )
                 self._stubs[address] = stub
             return stub
@@ -161,9 +159,6 @@ class WorkerProvider:
                     return PingResult(
                         worker_id=wid,
                         worker_address=addr,
-                        resource_snapshot=(
-                            response.resource_snapshot if response.resource_snapshot.ByteSize() > 0 else None
-                        ),
                         healthy=response.healthy,
                         health_error=response.health_error,
                     )
@@ -176,98 +171,42 @@ class WorkerProvider:
 
         return asyncio.run(_run())
 
-    def start_tasks(
+    async def _reconcile_one_via_reconcile(
         self,
-        jobs: list[tuple[WorkerId, str, list[job_pb2.RunTaskRequest]]],
-    ) -> list[tuple[WorkerId, worker_pb2.Worker.StartTasksResponse | None, str | None]]:
-        """Send StartTasks RPCs to many workers concurrently."""
-        if not jobs:
+        sem: asyncio.Semaphore,
+        plan: WorkerReconcilePlan,
+        address: str,
+    ) -> ReconcileResult:
+        """Issue a single Reconcile RPC to one worker under the shared semaphore."""
+        async with sem:
+            try:
+                if rule := chaos("controller.reconcile"):
+                    await asyncio.sleep(rule.delay_seconds)
+                    raise ProviderError("chaos: controller.reconcile")
+                stub = self.stub_factory.get_stub(address)
+                response = await stub.reconcile(plan.request)
+                return ReconcileResult(
+                    worker_id=plan.worker_id,
+                    observations=list(response.observed),
+                    error=None,
+                )
+            except Exception as e:
+                return ReconcileResult(worker_id=plan.worker_id, observations=[], error=str(e))
+
+    def reconcile_workers(
+        self,
+        plans: list[WorkerReconcilePlan],
+        addresses: dict[WorkerId, str],
+    ) -> list[ReconcileResult]:
+        """Fan out the Reconcile RPC across all workers concurrently, capped at self.parallelism."""
+        if not plans:
             return []
 
-        async def _one(
-            sem: asyncio.Semaphore, wid: WorkerId, addr: str, tasks: list[job_pb2.RunTaskRequest]
-        ) -> tuple[WorkerId, worker_pb2.Worker.StartTasksResponse | None, str | None]:
-            async with sem:
-                try:
-                    if rule := chaos("controller.start_tasks"):
-                        await asyncio.sleep(rule.delay_seconds)
-                        raise ProviderError("chaos: controller.start_tasks")
-                    stub = self.stub_factory.get_stub(addr)
-                    response = await stub.start_tasks(worker_pb2.Worker.StartTasksRequest(tasks=tasks))
-                    return (wid, response, None)
-                except Exception as e:
-                    return (wid, None, str(e))
-
-        async def _run() -> list[tuple[WorkerId, worker_pb2.Worker.StartTasksResponse | None, str | None]]:
+        async def _run() -> list[ReconcileResult]:
             sem = asyncio.Semaphore(self.parallelism)
-            return await asyncio.gather(*(_one(sem, wid, addr, tasks) for wid, addr, tasks in jobs))
-
-        return asyncio.run(_run())
-
-    def stop_tasks(
-        self,
-        jobs: list[tuple[WorkerId, str, list[str]]],
-    ) -> list[tuple[WorkerId, str | None]]:
-        """Send StopTasks RPCs to many workers concurrently."""
-        if not jobs:
-            return []
-
-        async def _one(sem: asyncio.Semaphore, wid: WorkerId, addr: str, ids: list[str]) -> tuple[WorkerId, str | None]:
-            async with sem:
-                try:
-                    if rule := chaos("controller.stop_tasks"):
-                        await asyncio.sleep(rule.delay_seconds)
-                        raise ProviderError("chaos: controller.stop_tasks")
-                    stub = self.stub_factory.get_stub(addr)
-                    await stub.stop_tasks(worker_pb2.Worker.StopTasksRequest(task_ids=ids))
-                    return (wid, None)
-                except Exception as e:
-                    return (wid, str(e))
-
-        async def _run() -> list[tuple[WorkerId, str | None]]:
-            sem = asyncio.Semaphore(self.parallelism)
-            return await asyncio.gather(*(_one(sem, wid, addr, ids) for wid, addr, ids in jobs))
-
-        return asyncio.run(_run())
-
-    def poll_workers(
-        self,
-        running: dict[WorkerId, list[RunningTaskEntry]],
-        worker_addresses: dict[WorkerId, str],
-    ) -> list[tuple[WorkerId, list[TaskUpdate] | None, str | None]]:
-        """Poll all workers for task state via PollTasks RPC concurrently.
-
-        Returns a list of (worker_id, updates_or_none, error_or_none).
-        """
-        if not running:
-            return []
-
-        async def _one(
-            sem: asyncio.Semaphore, wid: WorkerId, entries: list[RunningTaskEntry], addr: str | None
-        ) -> tuple[WorkerId, list[TaskUpdate] | None, str | None]:
-            async with sem:
-                if not addr:
-                    return (wid, None, f"Worker {wid} has no address")
-                try:
-                    if rule := chaos("controller.poll_tasks"):
-                        await asyncio.sleep(rule.delay_seconds)
-                        raise ProviderError("chaos: controller.poll_tasks")
-                    expected = []
-                    for entry in entries:
-                        if iter_rule := chaos("controller.poll_iteration"):
-                            await asyncio.sleep(iter_rule.delay_seconds)
-                        expected.append(
-                            job_pb2.WorkerTaskStatus(task_id=entry.task_id.to_wire(), attempt_id=entry.attempt_id)
-                        )
-                    stub = self.stub_factory.get_stub(addr)
-                    response = await stub.poll_tasks(worker_pb2.Worker.PollTasksRequest(expected_tasks=expected))
-                    return (wid, task_updates_from_proto(response.tasks), None)
-                except Exception as e:
-                    return (wid, None, str(e))
-
-        async def _run() -> list[tuple[WorkerId, list[TaskUpdate] | None, str | None]]:
-            sem = asyncio.Semaphore(self.parallelism)
-            return await asyncio.gather(*(_one(sem, wid, running[wid], worker_addresses.get(wid)) for wid in running))
+            return await asyncio.gather(
+                *(self._reconcile_one_via_reconcile(sem, p, addresses[p.worker_id]) for p in plans)
+            )
 
         return asyncio.run(_run())
 

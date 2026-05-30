@@ -25,12 +25,10 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote
 
-import requests
-from requests.adapters import HTTPAdapter
 from rigging.filesystem import open_url, url_to_fs
-from urllib3.util import Retry
 from zephyr.writers import atomic_rename
 
+from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
     IngestionPolicy,
@@ -42,7 +40,7 @@ from marin.datakit.ingestion_manifest import (
     UsagePolicy,
     write_ingestion_metadata_json,
 )
-from marin.execution.executor import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, versioned
+from marin.execution.types import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, versioned
 from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
@@ -172,21 +170,6 @@ class DownloadNpmRegistryMetadataConfig:
     cache_key: dict[str, Any] | VersionedValue[dict[str, Any]] = field(default_factory=dict, repr=False)
 
 
-def _build_session() -> requests.Session:
-    retry = Retry(
-        total=5,
-        connect=5,
-        read=5,
-        backoff_factor=1.0,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset({"GET"}),
-    )
-    session = requests.Session()
-    session.mount("http://", HTTPAdapter(max_retries=retry))
-    session.mount("https://", HTTPAdapter(max_retries=retry))
-    return session
-
-
 def _package_url(source: NpmRegistryMetadataSource, package_name: str) -> str:
     return f"{source.registry_base_url}{quote(package_name, safe='')}"
 
@@ -245,7 +228,7 @@ def download_npm_registry_metadata(config: DownloadNpmRegistryMetadataConfig) ->
     fsspec_mkdirs(output_path, exist_ok=True)
 
     output_file = posixpath.join(output_path, config.output_filename)
-    session = _build_session()
+    session = build_retrying_session()
     records_written = 0
     package_summaries: list[dict[str, Any]] = []
     try:

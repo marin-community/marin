@@ -3,6 +3,9 @@
 
 """Tests for adaptive curriculum learning system."""
 
+import json
+from dataclasses import asdict
+
 import numpy as np
 import pytest
 from marin.rl.curriculum import (
@@ -12,9 +15,11 @@ from marin.rl.curriculum import (
     LessonDependency,
     LessonStats,
     PerformanceStats,
+    compute_smoothed_success,
     is_plateaued,
     update_performance_stats,
 )
+from marin.rl.decoding import DecodingConfig, RolloutDecodingTrace
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
 
@@ -22,7 +27,10 @@ from marin.rl.types import RolloutStats
 def create_test_rollout_stats(episode_reward: float, lesson_id: str = "test") -> RolloutStats:
     """Helper to create rollout stats for testing."""
     return RolloutStats(
-        lesson_id=lesson_id, episode_reward=episode_reward, env_example_id="test_example", temperature=1.0, top_k=8
+        lesson_id=lesson_id,
+        episode_reward=episode_reward,
+        env_example_id="test_example",
+        decoding=DecodingConfig(temperature=1.0, top_k=8).as_trace(),
     )
 
 
@@ -49,7 +57,6 @@ def test_update_performance_stats():
     assert stats.last_update_step == 2
 
     # Compute smoothed success on demand
-    from marin.rl.curriculum import compute_smoothed_success
 
     smoothed = compute_smoothed_success(stats.reward_history)
     assert 0.0 < smoothed < 1.0  # Should be between 0 and 1
@@ -211,7 +218,6 @@ def test_sampling_distribution():
 
 def test_lesson_stats_serialization():
     """Test that LessonStats can be serialized and deserialized via JSON."""
-    import json
 
     stats = LessonStats(
         training_stats=PerformanceStats(
@@ -861,7 +867,10 @@ def test_checkpoint_graduated_lessons(tmp_path):
 def test_rollout_stats_dataclass():
     """Test RolloutStats dataclass creation and serialization."""
     rollout_stats = RolloutStats(
-        lesson_id="test_lesson", episode_reward=1.5, env_example_id="example_123", temperature=1.0, top_k=8
+        lesson_id="test_lesson",
+        episode_reward=1.5,
+        env_example_id="example_123",
+        decoding=DecodingConfig(temperature=1.0, top_k=8).as_trace(),
     )
 
     assert rollout_stats.lesson_id == "test_lesson"
@@ -869,16 +878,17 @@ def test_rollout_stats_dataclass():
     assert rollout_stats.env_example_id == "example_123"
 
     # Test that it's serializable for distributed execution.
-    from dataclasses import asdict
 
     stats_dict = asdict(rollout_stats)
     assert stats_dict["lesson_id"] == "test_lesson"
     assert stats_dict["episode_reward"] == 1.5
 
     # Test reconstruction
+    stats_dict["decoding"] = RolloutDecodingTrace(**stats_dict["decoding"])
     reconstructed = RolloutStats(**stats_dict)
     assert reconstructed.lesson_id == rollout_stats.lesson_id
     assert reconstructed.episode_reward == rollout_stats.episode_reward
+    assert reconstructed.decoding == rollout_stats.decoding
 
 
 def test_curriculum_update_lesson_stats():

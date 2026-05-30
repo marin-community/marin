@@ -4,6 +4,7 @@
 import abc
 import io
 import json
+import logging
 import os
 import warnings
 from functools import cached_property
@@ -26,6 +27,8 @@ from ._preprocessor import (
     _MapTransform,
 )
 from .utils import batched
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 T_contra = TypeVar("T_contra", contravariant=True)
@@ -85,7 +88,7 @@ class ShardedDataSource(Generic[T_co]):
         """
 
         source, processor = _construct_composite_batch_processor(self)
-        from ..store.cache import build_or_load_cache
+        from ..store.cache import build_or_load_cache  # lazy: store.cache imports levanter.data modules
 
         cache = build_or_load_cache(
             path,
@@ -155,6 +158,26 @@ def datasource_from_hf(id: str, *, split, **kwargs) -> ShardedDataSource[dict]:
     Create a ShardedDataset from a HuggingFace dataset. Arguments are passed to load_dataset.
     """
     return WrappedHFDataSource(id, split=split, **kwargs)
+
+
+def datasource_from_hf_or_none(id: str, *, split, **kwargs) -> ShardedDataSource[dict] | None:
+    """
+    Like `datasource_from_hf`, but returns None when the requested split is missing or empty.
+
+    HuggingFace raises a ``ValueError`` whose message starts with "Bad split" when the split does
+    not exist; we treat that (and a source with no shards) as an absent dataset rather than an error.
+    """
+    try:
+        source = datasource_from_hf(id, split=split, **kwargs)
+    except ValueError as e:
+        if str(e).startswith("Bad split"):
+            logger.warning("Split %s not found for HF dataset %s %s", split, id, kwargs.get("name"))
+            return None
+        raise
+
+    if len(source.shard_names) == 0:
+        return None
+    return source
 
 
 def datasource_from_jsonl(urls_or_paths: Sequence[str]) -> ShardedDataSource[dict]:

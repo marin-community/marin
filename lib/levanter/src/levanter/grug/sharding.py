@@ -13,17 +13,5 @@ Plm_head = P(Pbatch[0], "model")
 Plogits = P(Pbatch[0], None, "model")
 
 
-def embed_vocab_pspec(batch_axis) -> P:
-    return P("model", batch_axis)
-
-
-def lm_head_pspec(batch_axis) -> P:
-    return P(batch_axis, "model")
-
-
-def logits_pspec(batch_axis) -> P:
-    return P(batch_axis, None, "model")
-
-
 def unshard(x: jax.Array) -> jax.Array:
     return reshard(x, P(None))

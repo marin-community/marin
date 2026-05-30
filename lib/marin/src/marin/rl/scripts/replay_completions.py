@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 import socket
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -99,7 +100,6 @@ def create_inference_server(config: ReplayConfig) -> tuple[InferenceServer, Asyn
         host="localhost",
         port=port,
         tokenizer=tokenizer_path,
-        model=config.model,
         trainer=config.trainer,
         service=config.service,
     )
@@ -116,8 +116,6 @@ def create_inference_server(config: ReplayConfig) -> tuple[InferenceServer, Asyn
     server = InferenceServer.create(server_config)
 
     # run serving in background
-    import threading
-
     threading.Thread(target=server.serve, daemon=True).start()
 
     # Create client
@@ -172,7 +170,7 @@ async def send_batch_requests(
             "failing_requests": [],
         }
 
-    except (asyncio.TimeoutError, Exception):
+    except Exception:
         logger.error(f"Failing batch contained {len(requests)} requests, writing to /tmp/failing_batch.json")
         # write bad batch to disk
         with open("/tmp/failing_batch.json", "w") as f:
@@ -200,6 +198,8 @@ async def replay_all_with_warmup(
     logger.info(f"Processing {len(requests)} requests in {total_batches} batches of " f"size {config.batch_size}")
 
     current_start = 0
+    results: list[dict[str, Any]] = []
+    start_time = time.time()
 
     # First batch without timeout for warm-up
     if requests:
@@ -212,9 +212,19 @@ async def replay_all_with_warmup(
     while current_start < len(requests):
         end_idx = min(current_start + config.batch_size, len(requests))
         batch = requests[current_start:end_idx]
-        await send_batch_requests(client, batch, batch_idx, timeout=config.timeout)
+        results.append(await send_batch_requests(client, batch, batch_idx, timeout=config.timeout))
         current_start = end_idx
         batch_idx += 1
+
+    # send_batch_requests raises on any failure, so every collected result succeeded.
+    return {
+        "total_requests": len(requests),
+        "total_batches": total_batches,
+        "completed_batches": len(results),
+        "failed_batches": [],
+        "total_time": time.time() - start_time,
+        "results": results,
+    }
 
 
 class CompletionReplayer:

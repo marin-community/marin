@@ -9,9 +9,11 @@ from marin.datakit.download.common_corpus import (
     filter_common_corpus_step,
     normalize_common_corpus_step,
 )
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
+
+from experiments.marin_models import marin_tokenizer
 
 common_corpus_download = normalize_common_corpus_step(
     filter_common_corpus_step(download_common_corpus_raw_step())
@@ -21,8 +23,6 @@ common_corpus_download = normalize_common_corpus_step(
 def tokenize_common_corpus(*, tokenizer: str | None = None) -> TokenizerStep:
     """Tokenize the filtered Common Corpus (English, open types)."""
     if tokenizer is None:
-        from experiments.marin_models import marin_tokenizer
-
         tokenizer = marin_tokenizer
 
     return ExecutorStep(

@@ -92,6 +92,7 @@ class ContainerConfig:
     workdir_host_path: Path | None = None
     task_id: str | None = None
     attempt_id: int | None = None
+    attempt_uid: str | None = None
     job_id: str | None = None
     worker_id: str | None = None
     worker_metadata: job_pb2.WorkerMetadata | None = None
@@ -105,11 +106,6 @@ class ContainerConfig:
         if not self.resources or not self.resources.memory_bytes:
             return None
         return self.resources.memory_bytes // (1024 * 1024)
-
-    def get_disk_bytes(self) -> int | None:
-        if not self.resources or not self.resources.disk_bytes:
-            return None
-        return self.resources.disk_bytes
 
 
 @dataclass
@@ -281,6 +277,7 @@ class DiscoveredContainer:
     container_id: str
     task_id: str
     attempt_id: int
+    attempt_uid: str
     job_id: str
     worker_id: str
     phase: ExecutionStage

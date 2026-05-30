@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from collections.abc import Callable, Iterable, Iterator
@@ -13,10 +14,11 @@ from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 import fsspec
 from braceexpand import braceexpand
+from pyarrow import RecordBatch
 from rigging.filesystem import url_to_fs
 
 from zephyr.expr import Expr
-from zephyr.readers import InputFileSpec
+from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
 
 logger = logging.getLogger(__name__)
 
@@ -126,8 +128,7 @@ def _normalize_output_pattern(output_pattern: str | Callable[[int, int], str]) -
         Callable that takes (shard_idx, total_shards) and returns the output path
     """
     if isinstance(output_pattern, str):
-        pattern_str = output_pattern
-        return lambda shard_idx, total: format_shard_path(pattern_str, shard_idx, total)
+        return functools.partial(format_shard_path, output_pattern)
     return output_pattern
 
 
@@ -205,18 +206,16 @@ class WindowOp:
 class WriteOp:
     """Unified write operation for all output formats.
 
-    Supports writing to JSONL, Parquet, Levanter cache, or binary formats.
+    Supports writing to JSONL, Parquet, or binary formats.
     The writer_type determines which writer function is used.
     Supports path patterns with {shard}, {total}, {basename} substitutions,
     or a callable that takes (shard_idx, total_shards) and returns the output path.
     """
 
     output_pattern: Callable[[int, int], str]
-    writer_type: Literal["jsonl", "parquet", "levanter_cache", "binary", "vortex"]
+    writer_type: Literal["jsonl", "parquet", "binary", "vortex"]
 
     # Format-specific parameters (only used by relevant writer)
-    levanter_metadata: dict[str, Any] | None = None
-    levanter_batch_size: int | None = None
     schema: object | None = None  # For parquet (pyarrow.Schema)
     skip_existing: bool = False  # Skip writing if output file already exists
 
@@ -240,6 +239,10 @@ class LoadFileOp:
 
     format: Literal["auto", "parquet", "jsonl", "vortex"] = "auto"
     columns: list[str] | None = None
+    approx_shard_bytes: int | None = None
+    include_file_paths: bool = False
+    file_path_column: str = DEFAULT_FILE_PATH_COLUMN
+    batch_mode: bool = False
 
     def __repr__(self):
         return f"LoadFileOp(format={self.format}, columns={self.columns})"
@@ -566,11 +569,23 @@ class Dataset(Generic[T]):
         """
         return Dataset(self.source, [*self.operations, FlatMapOp(fn)])
 
-    def load_file(self, columns: list[str] | None = None) -> Dataset[dict]:
+    def load_file(
+        self,
+        columns: list[str] | None = None,
+        approx_shard_bytes: int | None = None,
+        include_file_paths: bool = False,
+        file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
+    ) -> Dataset[dict]:
         """Load records from file sources, auto-detecting format.
 
         Args:
             columns: Optional column projection (for parquet files)
+            approx_shard_bytes: If set, split parquet files into approximately this many
+                bytes per shard, aligned to row-group boundaries. Best-effort: a single
+                row group will never be split, so shards may exceed this size.
+            include_file_paths: If True, add a column containing the source file path
+                for each record.
+            file_path_column: Name of the column to add when include_file_paths is True.
 
         Returns:
             Dataset yielding records as dictionaries
@@ -584,19 +599,99 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = ctx.execute(ds).results
         """
-        return Dataset(self.source, [*self.operations, LoadFileOp("auto", columns)])
+        return Dataset(
+            self.source,
+            [*self.operations, LoadFileOp("auto", columns, approx_shard_bytes, include_file_paths, file_path_column)],
+        )
 
-    def load_parquet(self, columns: list[str] | None = None) -> Dataset[dict]:
-        """Load records from parquet files."""
-        return Dataset(self.source, [*self.operations, LoadFileOp("parquet", columns)])
+    @overload
+    def load_parquet(
+        self,
+        columns: list[str] | None = ...,
+        approx_shard_bytes: int | None = ...,
+        include_file_paths: bool = ...,
+        file_path_column: str = ...,
+        *,
+        batch_mode: Literal[False] = ...,
+    ) -> Dataset[dict]: ...
 
-    def load_jsonl(self) -> Dataset[dict]:
-        """Load records from JSONL files."""
-        return Dataset(self.source, [*self.operations, LoadFileOp("jsonl", None)])
+    @overload
+    def load_parquet(
+        self,
+        columns: list[str] | None = ...,
+        approx_shard_bytes: int | None = ...,
+        include_file_paths: bool = ...,
+        file_path_column: str = ...,
+        *,
+        batch_mode: Literal[True],
+    ) -> Dataset[RecordBatch]: ...
 
-    def load_vortex(self, columns: list[str] | None = None) -> Dataset[dict]:
-        """Load records from Vortex files."""
-        return Dataset(self.source, [*self.operations, LoadFileOp("vortex", columns)])
+    def load_parquet(
+        self,
+        columns: list[str] | None = None,
+        approx_shard_bytes: int | None = None,
+        include_file_paths: bool = False,
+        file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
+        *,
+        batch_mode: bool = False,
+    ) -> Dataset[dict] | Dataset[RecordBatch]:
+        """Load records from parquet files.
+
+        Args:
+            columns: Optional column projection.
+            approx_shard_bytes: If set, split each file into approximately this many
+                bytes per shard, aligned to row-group boundaries. Best-effort: a single
+                row group will never be split, so shards may exceed this size.
+            include_file_paths: If True, add a column containing the source file path
+                for each record or batch.
+            file_path_column: Name of the column to add when include_file_paths is True.
+            batch_mode: If True, yield ``pa.RecordBatch`` objects instead of dicts.
+        """
+        op = LoadFileOp(
+            format="parquet",
+            columns=columns,
+            approx_shard_bytes=approx_shard_bytes,
+            include_file_paths=include_file_paths,
+            file_path_column=file_path_column,
+            batch_mode=batch_mode,
+        )
+        return Dataset(self.source, [*self.operations, op])
+
+    def load_jsonl(
+        self,
+        include_file_paths: bool = False,
+        file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
+    ) -> Dataset[dict]:
+        """Load records from JSONL files.
+
+        Args:
+            include_file_paths: If True, add a column containing the source file path
+                for each record.
+            file_path_column: Name of the column to add when include_file_paths is True.
+        """
+        return Dataset(
+            self.source,
+            [*self.operations, LoadFileOp("jsonl", None, None, include_file_paths, file_path_column)],
+        )
+
+    def load_vortex(
+        self,
+        columns: list[str] | None = None,
+        include_file_paths: bool = False,
+        file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
+    ) -> Dataset[dict]:
+        """Load records from Vortex files.
+
+        Args:
+            columns: Optional column projection.
+            include_file_paths: If True, add a column containing the source file path
+                for each record.
+            file_path_column: Name of the column to add when include_file_paths is True.
+        """
+        return Dataset(
+            self.source,
+            [*self.operations, LoadFileOp("vortex", columns, None, include_file_paths, file_path_column)],
+        )
 
     def map_shard(
         self,
@@ -758,38 +853,6 @@ class Dataset(Generic[T]):
             ],
         )
 
-    def write_levanter_cache(
-        self,
-        output_pattern: str | Callable[[int, int], str],
-        metadata: dict[str, Any],
-        skip_existing: bool = False,
-        batch_size: int | None = None,
-    ) -> Dataset[str]:
-        """Write tokenized records to Levanter cache format.
-
-        Writes records to Levanter's TreeStore/JaggedArrayStore format for use
-        in training. Each shard creates a separate cache directory.
-        The output pattern supports substitutions: {shard:05d}, {total:05d}, {basename}
-        or can be a callable that takes (shard_idx, total_shards) and returns the output path.
-
-        Args:
-            batch_size: Number of records to accumulate before flushing to disk.
-                Defaults to 16384. Lower values reduce peak memory for large documents.
-        """
-        return Dataset(
-            self.source,
-            [
-                *self.operations,
-                WriteOp(
-                    _normalize_output_pattern(output_pattern),
-                    writer_type="levanter_cache",
-                    levanter_metadata=metadata,
-                    levanter_batch_size=batch_size,
-                    skip_existing=skip_existing,
-                ),
-            ],
-        )
-
     @overload
     def group_by(
         self,
@@ -892,7 +955,7 @@ class Dataset(Generic[T]):
 
         def keep_first(k, items: Iterator[T]) -> T:
             """Reducer that keeps the first item."""
-            return next(iter(items))
+            return next(items)
 
         return self.map_shard(streaming_dedup).group_by(key=key, reducer=keep_first, num_output_shards=num_output_shards)
 

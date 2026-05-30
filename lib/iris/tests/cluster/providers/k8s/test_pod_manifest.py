@@ -96,9 +96,12 @@ def test_build_pod_manifest_fields():
     assert container["command"][1] == "-lc"
     assert "exec python train.py" in container["command"][2]
 
-    resources = container["resources"]["limits"]
-    assert resources["cpu"] == "1000m"
-    assert resources["memory"] == str(4 * 1024**3)
+    # CPU is requested only (no limit) so containers can burst onto idle node
+    # CPU; memory is both requested and limited (overshoot is fatal).
+    assert container["resources"]["requests"]["cpu"] == "1000m"
+    assert "cpu" not in container["resources"].get("limits", {})
+    assert container["resources"]["limits"]["memory"] == str(4 * 1024**3)
+    assert container["resources"]["requests"]["memory"] == str(4 * 1024**3)
 
 
 def test_build_pod_manifest_env_vars():
@@ -121,6 +124,16 @@ def test_build_pod_manifest_gpu():
     manifest = _build_pod_manifest(req, pod_config())
     limits = manifest["spec"]["containers"][0]["resources"]["limits"]
     assert limits["nvidia.com/gpu"] == "4"
+    assert "rdma/ib" not in limits
+
+
+def test_build_pod_manifest_gpu_host_network_requests_rdma():
+    req = make_run_req("/test-job/0")
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))
+    manifest = _build_pod_manifest(req, pod_config(host_network=True))
+    limits = manifest["spec"]["containers"][0]["resources"]["limits"]
+    assert limits["nvidia.com/gpu"] == "4"
+    assert limits["rdma/ib"] == "4"
 
 
 def test_build_pod_manifest_runtime_label():
@@ -778,6 +791,66 @@ def test_init_container_bundle_and_workdir_files():
     assert "IRIS_WORKDIR_FILES_SRC" in env_by_name
     assert configmap_name is not None
     assert len(extra_volumes) == 1
+
+
+def test_init_container_for_workdir_file_refs():
+    """Blob refs produce an init container with IRIS_WORKDIR_BLOB_REFS env var."""
+    req = make_run_req("/my-job/task-0")
+    req.entrypoint.workdir_file_refs["_callable.pkl"] = "abcd1234" * 8
+
+    init_containers, _extra_volumes, configmap_name = _build_init_container_spec(
+        req,
+        "iris-pod-name",
+        "myrepo/iris:latest",
+        "http://ctrl:8080",
+    )
+
+    assert len(init_containers) == 1
+    ic = init_containers[0]
+    env_by_name = {e["name"]: e["value"] for e in ic["env"]}
+    assert env_by_name["IRIS_CONTROLLER_URL"] == "http://ctrl:8080"
+    assert "IRIS_WORKDIR_BLOB_REFS" in env_by_name
+
+    refs = json.loads(env_by_name["IRIS_WORKDIR_BLOB_REFS"])
+    assert refs == {"_callable.pkl": "abcd1234" * 8}
+    assert configmap_name is None
+
+
+def test_no_init_container_for_blob_refs_without_controller():
+    """Blob refs without controller_address are ignored (no way to fetch)."""
+    req = make_run_req("/my-job/task-0")
+    req.entrypoint.workdir_file_refs["_callable.pkl"] = "abcd1234" * 8
+
+    init_containers, _extra_volumes, configmap_name = _build_init_container_spec(
+        req,
+        "iris-pod-name",
+        "myrepo/iris:latest",
+        None,
+    )
+
+    assert init_containers == []
+    assert configmap_name is None
+
+
+def test_init_container_workdir_files_and_blob_refs():
+    """Both inline files and blob refs produce ConfigMap + blob ref env var."""
+    req = make_run_req("/my-job/task-0")
+    req.entrypoint.workdir_files["small.txt"] = b"tiny"
+    req.entrypoint.workdir_file_refs["big.pkl"] = "deadbeef" * 8
+
+    init_containers, _extra_volumes, configmap_name = _build_init_container_spec(
+        req,
+        "iris-pod-name",
+        "myrepo/iris:latest",
+        "http://ctrl:8080",
+    )
+
+    assert len(init_containers) == 1
+    ic = init_containers[0]
+    env_by_name = {e["name"]: e["value"] for e in ic["env"]}
+    assert "IRIS_WORKDIR_FILES_SRC" in env_by_name
+    assert "IRIS_WORKDIR_BLOB_REFS" in env_by_name
+    assert configmap_name is not None
 
 
 # ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ This module provides Python types for the Iris cluster API:
 Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.proto.
 """
 
+import functools
 import hashlib
 import os
 import sys
@@ -22,8 +23,10 @@ from typing import Any, NewType
 
 import cloudpickle
 import humanfriendly
+from rigging.timing import Timestamp
 
 from iris.cluster.constraints import Constraint
+from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
 
@@ -57,21 +60,16 @@ class JobName:
     def from_string(cls, s: str) -> "JobName":
         """Parse a job name string like '/user/root/child/grandchild'.
 
+        Parsed names are interned in a process-wide LRU cache (names are
+        immutable) so repeated decodes — the TypeDecorator path that fires
+        once per row read — collapse to a dict lookup.
+
         Examples:
             JobName.from_string("/alice/my-job") -> JobName(("alice", "my-job"))
             JobName.from_string("/alice/parent/child") -> JobName(("alice", "parent", "child"))
             JobName.from_string("/alice/job/0") -> JobName(("alice", "job", "0"))
         """
-        if not s:
-            raise ValueError("Job name must use canonical '/<user>/<job>[...]' format")
-        if not s.startswith("/"):
-            raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
-        parts = tuple(s[1:].split("/"))
-        if len(parts) < 2:
-            raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
-        if any(not part or not part.strip() for part in parts):
-            raise ValueError(f"Job name contains empty or whitespace-only component: {s}")
-        return cls(parts)
+        return _parse_job_name(s)
 
     @classmethod
     def root(cls, user: str, name: str) -> "JobName":
@@ -205,6 +203,26 @@ class JobName:
         return cls.from_string(s)
 
 
+@functools.lru_cache(maxsize=2**18)
+def _parse_job_name(s: str) -> JobName:
+    """Cached parser backing JobName.from_string / from_wire.
+
+    Hot SA Core read paths decode the same job_id / task_id strings on every
+    row; this collapses repeated decodes to a dict lookup. ``JobName`` is
+    frozen+slots so cached instances can be shared without aliasing risk.
+    """
+    if not s:
+        raise ValueError("Job name must use canonical '/<user>/<job>[...]' format")
+    if not s.startswith("/"):
+        raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
+    parts = tuple(s[1:].split("/"))
+    if len(parts) < 2:
+        raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
+    if any(not part or not part.strip() for part in parts):
+        raise ValueError(f"Job name contains empty or whitespace-only component: {s}")
+    return JobName(parts)
+
+
 @dataclass(frozen=True, slots=True)
 class TaskAttempt:
     """A task identity combining a task-level JobName with an optional attempt qualifier.
@@ -297,6 +315,50 @@ def get_tpu_count(device: job_pb2.DeviceConfig) -> int:
 
 WorkerId = NewType("WorkerId", str)
 EndpointId = NewType("EndpointId", str)
+AttemptUid = NewType("AttemptUid", str)
+
+
+@dataclass(frozen=True, slots=True)
+class PendingTask:
+    """Controller-side scheduling input projected from task, job, and config rows."""
+
+    task_id: JobName
+    job_id: JobName
+    state: int
+    current_attempt_id: int
+    failure_count: int
+    preemption_count: int
+    max_retries_failure: int
+    max_retries_preemption: int
+    submitted_at_ms: Timestamp
+    priority_band: int
+    priority_neg_depth: int
+    priority_root_submitted_ms: int
+    priority_insertion: int
+    job_state: int
+    scheduling_deadline_epoch_ms: int | None
+    is_reservation_holder: bool
+    has_reservation: bool
+    scheduling_timeout_ms: int | None
+    has_coscheduling: bool
+    coscheduling_group_by: str | None
+    constraints_json: str | None
+    res_cpu_millicores: int
+    res_memory_bytes: int
+    res_disk_bytes: int
+    res_device_json: str | None
+
+
+@dataclass
+class UserBudgetDefaults:
+    """Budget settings applied when a user has no override row in ``user_budgets``.
+
+    ``budget_limit=0`` means unlimited; positive values cap spend before
+    ``compute_effective_band`` downgrades INTERACTIVE work to BATCH.
+    """
+
+    budget_limit: int = 1000
+    max_band: int = job_pb2.PRIORITY_BAND_INTERACTIVE
 
 
 @dataclass(frozen=True)
@@ -605,6 +667,7 @@ TERMINAL_TASK_STATES: frozenset[int] = frozenset(
         job_pb2.TASK_STATE_UNSCHEDULABLE,
         job_pb2.TASK_STATE_WORKER_FAILED,
         job_pb2.TASK_STATE_PREEMPTED,
+        job_pb2.TASK_STATE_COSCHED_FAILED,
     }
 )
 
@@ -626,92 +689,9 @@ JobState = job_pb2.JobState
 TaskState = job_pb2.TaskState
 
 
-@dataclass(frozen=True)
-class TpuTopologyInfo:
-    """TPU topology configuration."""
-
-    name: str
-    chip_count: int
-    host_count: int
-    vm_count: int
-    chips_per_vm: int
-
-
-TPU_TOPOLOGIES: list[TpuTopologyInfo] = [
-    # https://cloud.google.com/tpu/docs/v4
-    TpuTopologyInfo("v4-8", 4, 1, 1, 4),
-    TpuTopologyInfo("v4-16", 8, 2, 2, 4),
-    TpuTopologyInfo("v4-32", 16, 4, 4, 4),
-    TpuTopologyInfo("v4-64", 32, 8, 8, 4),
-    TpuTopologyInfo("v4-128", 64, 16, 16, 4),
-    TpuTopologyInfo("v4-256", 128, 32, 32, 4),
-    TpuTopologyInfo("v4-512", 256, 64, 64, 4),
-    TpuTopologyInfo("v4-1024", 512, 128, 128, 4),
-    TpuTopologyInfo("v4-2048", 1024, 256, 256, 4),
-    TpuTopologyInfo("v4-4096", 2048, 512, 512, 4),
-    # https://cloud.google.com/tpu/docs/v5e
-    TpuTopologyInfo("v5litepod-1", 1, 1, 1, 1),
-    TpuTopologyInfo("v5litepod-2", 2, 1, 1, 2),
-    TpuTopologyInfo("v5litepod-4", 4, 1, 1, 4),
-    TpuTopologyInfo("v5litepod-8", 8, 1, 1, 8),
-    TpuTopologyInfo("v5litepod-16", 16, 2, 4, 4),
-    TpuTopologyInfo("v5litepod-32", 32, 4, 8, 4),
-    TpuTopologyInfo("v5litepod-64", 64, 8, 16, 4),
-    TpuTopologyInfo("v5litepod-128", 128, 16, 32, 4),
-    TpuTopologyInfo("v5litepod-256", 256, 32, 64, 4),
-    # https://cloud.google.com/tpu/docs/v5p
-    TpuTopologyInfo("v5p-8", 4, 1, 1, 4),
-    TpuTopologyInfo("v5p-16", 8, 2, 2, 4),
-    TpuTopologyInfo("v5p-32", 16, 4, 4, 4),
-    TpuTopologyInfo("v5p-64", 32, 8, 8, 4),
-    TpuTopologyInfo("v5p-128", 64, 16, 16, 4),
-    TpuTopologyInfo("v5p-256", 128, 32, 32, 4),
-    TpuTopologyInfo("v5p-512", 256, 64, 64, 4),
-    TpuTopologyInfo("v5p-1024", 512, 128, 128, 4),
-    TpuTopologyInfo("v5p-2048", 1024, 256, 256, 4),
-    TpuTopologyInfo("v5p-4096", 2048, 512, 512, 4),
-    TpuTopologyInfo("v5p-8192", 4096, 1024, 1024, 4),
-    TpuTopologyInfo("v5p-12288", 6144, 1536, 1536, 4),
-    # https://cloud.google.com/tpu/docs/v6e
-    TpuTopologyInfo("v6e-1", 1, 1, 1, 1),
-    TpuTopologyInfo("v6e-4", 4, 1, 1, 4),
-    TpuTopologyInfo("v6e-8", 8, 1, 1, 8),
-    TpuTopologyInfo("v6e-16", 16, 4, 4, 4),
-    TpuTopologyInfo("v6e-32", 32, 8, 8, 4),
-    TpuTopologyInfo("v6e-64", 64, 16, 16, 4),
-    TpuTopologyInfo("v6e-128", 128, 32, 32, 4),
-    TpuTopologyInfo("v6e-256", 256, 64, 64, 4),
-]
-
-
-TPU_FAMILY_VARIANT_PREFIX: dict[str, str] = {
-    "v4": "v4",
-    "v5e": "v5litepod",
-    "v5p": "v5p",
-    "v6e": "v6e",
-}
-
-
-def tpu_variant_name(family: str, size: int) -> str:
-    """Build the device_variant string for a TPU family and chip-count size.
-
-    >>> tpu_variant_name("v5e", 16)
-    'v5litepod-16'
-    >>> tpu_variant_name("v6e", 32)
-    'v6e-32'
-    """
-    prefix = TPU_FAMILY_VARIANT_PREFIX.get(family)
-    if prefix is None:
-        raise ValueError(f"Unknown TPU family '{family}'. Known families: {sorted(TPU_FAMILY_VARIANT_PREFIX)}")
-    return f"{prefix}-{size}"
-
-
-def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
-    """Get TPU topology by type name."""
-    for config in TPU_TOPOLOGIES:
-        if config.name == tpu_type:
-            return config
-    raise ValueError(f"Unknown TPU type: {tpu_type}")
+# TPU topology table and lookup helpers live in iris.cluster.tpu_topology so
+# both this module and iris.cluster.constraints can reference them without an
+# import cycle. Re-exported via the top-level import above.
 
 
 def adjust_tpu_replicas(device: "job_pb2.DeviceConfig | None", replicas: int) -> int:
@@ -770,11 +750,13 @@ class Entrypoint:
         *,
         command: list[str],
         workdir_files: dict[str, bytes] | None = None,
+        workdir_file_refs: dict[str, str] | None = None,
     ):
         if not command:
             raise ValueError("Command must have at least one argument")
         self.command = command
         self.workdir_files: dict[str, bytes] = workdir_files or {}
+        self.workdir_file_refs: dict[str, str] = workdir_file_refs or {}
 
     def resolve(self) -> tuple[Callable[..., Any], tuple, dict[str, Any]]:
         """Deserialize the callable, args, kwargs from pickle bytes.
@@ -832,6 +814,8 @@ class Entrypoint:
         proto.run_command.argv[:] = self.command
         for name, data in self.workdir_files.items():
             proto.workdir_files[name] = data
+        for name, blob_id in self.workdir_file_refs.items():
+            proto.workdir_file_refs[name] = blob_id
         return proto
 
     @classmethod
@@ -839,4 +823,5 @@ class Entrypoint:
         """Create from protobuf representation."""
         command = list(proto.run_command.argv)
         workdir_files = dict(proto.workdir_files) if proto.workdir_files else None
-        return cls(command=command, workdir_files=workdir_files)
+        workdir_file_refs = dict(proto.workdir_file_refs) if proto.workdir_file_refs else None
+        return cls(command=command, workdir_files=workdir_files, workdir_file_refs=workdir_file_refs)

@@ -6,9 +6,11 @@
 import os.path
 
 from marin.datakit.download.dolma import DOLMA_DATASETS, download_dolma_step
-from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
+from marin.execution.types import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
+
+from experiments.llama import llama3_tokenizer
 
 _dolma_download = download_dolma_step().as_executor_step()
 
@@ -59,8 +61,6 @@ DOLMA_LLAMA3_OVERRIDES = {
 
 def tokenize_dolma(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all Dolma 1.7 dataset splits."""
-    from experiments.llama import llama3_tokenizer
-
     if tokenizer is None:
         tokenizer = llama3_tokenizer
 

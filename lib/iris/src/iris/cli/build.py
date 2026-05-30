@@ -21,32 +21,21 @@ def _is_verbose(ctx: click.Context) -> bool:
 
 
 def get_git_sha() -> str:
-    """Get a short hash representing the current working tree state.
+    """Short hash of the current working tree content.
 
-    Uses ``git stash create`` to produce a commit object that captures both
-    staged and unstaged changes without side effects. If the tree is clean,
-    stash create returns empty and we fall back to HEAD.
+    Returns the tree hash (``^{tree}``) of HEAD plus any staged/unstaged
+    changes. This is deterministic: the same tree content always produces
+    the same hash, so ``iris build`` and a later ``worker-restart
+    --skip-current-hash`` see matching values without having to be invoked
+    back-to-back. A commit hash would not be stable because ``git stash
+    create`` mints a new commit with the current timestamp on every call.
     """
-    # Try to capture dirty state as a temporary commit hash
-    stash = subprocess.run(
-        ["git", "stash", "create"],
-        capture_output=True,
-        text=True,
-    )
-    stash_ref = stash.stdout.strip()
-    if stash_ref:
-        # Dirty tree — use the stash commit hash
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", stash_ref],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-
-    # Clean tree — use HEAD
+    # `git stash create` captures dirty state as a transient commit object;
+    # we then deref to its tree to drop the timestamp.
+    stash = subprocess.run(["git", "stash", "create"], capture_output=True, text=True)
+    ref = stash.stdout.strip() or "HEAD"
     result = subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"],
+        ["git", "rev-parse", "--short", f"{ref}^{{tree}}"],
         capture_output=True,
         text=True,
     )
@@ -55,9 +44,8 @@ def get_git_sha() -> str:
     return result.stdout.strip()
 
 
-def _default_versioned_tag(image_base: str) -> str:
-    """Default image tag: latest + git short hash."""
-    return f"{image_base}:latest-{get_git_sha()}"
+def _versioned_tag(image_base: str, git_sha: str) -> str:
+    return f"{image_base}:latest-{git_sha}"
 
 
 def find_marin_root() -> Path:
@@ -172,33 +160,13 @@ def _ensure_protos() -> None:
     click.echo("Protobuf bindings regenerated.")
 
 
-def _ensure_dashboard_dist() -> None:
-    """Build Vue dashboard assets.
-
-    Called automatically before building controller/worker images so that
-    ``COPY dashboard/dist`` in the Dockerfile always has fresh assets.
-    """
-    iris_root = find_iris_root()
-    dashboard_dir = iris_root / "dashboard"
-    if not (dashboard_dir / "package.json").exists():
-        raise click.ClickException(
-            f"Dashboard source not found at {dashboard_dir}. " "Cannot build dashboard assets for Docker image."
-        )
-    click.echo("Building frontend assets...")
-    subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True)
-    result = subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, capture_output=True, text=True)
-    if result.returncode != 0:
-        click.echo(result.stderr, err=True)
-        raise click.ClickException("Dashboard build failed")
-    click.echo("Dashboard built successfully.")
-
-
 def build_image(
     image_type: str,
     tag: str,
     push: bool,
     context: str | None,
     platform: str,
+    git_sha: str,
     ghcr_org: str = GHCR_DEFAULT_ORG,
     verbose: bool = False,
 ) -> None:
@@ -212,10 +180,6 @@ def build_image(
     and the registry cache is updated in the same operation. The images are NOT
     loaded into the local Docker daemon (buildx cannot do both simultaneously).
     """
-    # Controller and worker images COPY dashboard/dist — ensure it exists.
-    if image_type in ("controller", "worker"):
-        _ensure_dashboard_dist()
-
     iris_root = find_iris_root()
     dockerfile_path = iris_root / "Dockerfile"
     # Controller/worker Dockerfiles expect the marin repo root as build context
@@ -232,7 +196,6 @@ def build_image(
 
     # Derive image base name from tag (e.g. "iris-worker:latest" -> "iris-worker")
     image_base = tag.split(":")[0]
-    git_sha = get_git_sha()
     sha_tag = f"{image_base}:{git_sha}"
     latest_tag = f"{image_base}:latest"
 
@@ -249,6 +212,13 @@ def build_image(
         )
     else:
         all_tags = dict.fromkeys([tag, sha_tag, latest_tag])
+
+    if "," in platform:
+        subprocess.run(
+            ["docker", "run", "--privileged", "--rm", "tonistiigi/binfmt", "--install", "all"],
+            check=True,
+            capture_output=not verbose,
+        )
 
     cmd = ["docker", "buildx", "build", "--platform", platform]
     cmd.extend(["--target", image_type])
@@ -311,28 +281,32 @@ def _build_all(
     push: bool,
     platform: str,
     ghcr_org: str,
+    verbose: bool = False,
 ) -> None:
     """Build all Iris images (worker, controller, task).
 
     Tags are derived automatically: git SHA + latest.
     """
+    git_sha = get_git_sha()
     marin_root = find_marin_root()
 
     _ensure_protos()
 
     for image_type in ("worker", "controller"):
-        tag = _default_versioned_tag(f"iris-{image_type}")
-        build_image(image_type, tag, push, None, platform, ghcr_org)
+        tag = _versioned_tag(f"iris-{image_type}", git_sha)
+        build_image(image_type, tag, push, None, platform, git_sha, ghcr_org, verbose)
         click.echo()
 
     # Task target uses the same Dockerfile but needs marin root as context
     build_image(
         "task",
-        _default_versioned_tag("iris-task"),
+        _versioned_tag("iris-task", git_sha),
         push,
         str(marin_root),
         platform,
+        git_sha,
         ghcr_org,
+        verbose,
     )
 
 
@@ -347,7 +321,7 @@ def build(ctx, push: bool, platform: str, ghcr_org: str):
     When invoked without a subcommand, builds all images (worker, controller, task).
     """
     if ctx.invoked_subcommand is None:
-        _build_all(push, platform, ghcr_org)
+        _build_all(push, platform, ghcr_org, verbose=_is_verbose(ctx))
 
 
 @build.command("all")
@@ -362,7 +336,7 @@ def build_all(
     ghcr_org: str,
 ):
     """Build all Iris images (worker, controller, task)."""
-    _build_all(push, platform, ghcr_org)
+    _build_all(push, platform, ghcr_org, verbose=_is_verbose(ctx))
 
 
 @build.command("worker-image")
@@ -382,9 +356,10 @@ def build_worker_image(
 ):
     """Build Docker image for Iris worker."""
     verbose = _is_verbose(ctx)
+    git_sha = get_git_sha()
     _ensure_protos()
-    tag = tag or _default_versioned_tag("iris-worker")
-    build_image("worker", tag, push, context, platform, ghcr_org, verbose=verbose)
+    tag = tag or _versioned_tag("iris-worker", git_sha)
+    build_image("worker", tag, push, context, platform, git_sha, ghcr_org, verbose=verbose)
 
 
 @build.command("controller-image")
@@ -404,9 +379,10 @@ def build_controller_image(
 ):
     """Build Docker image for Iris controller."""
     verbose = _is_verbose(ctx)
+    git_sha = get_git_sha()
     _ensure_protos()
-    tag = tag or _default_versioned_tag("iris-controller")
-    build_image("controller", tag, push, context, platform, ghcr_org, verbose=verbose)
+    tag = tag or _versioned_tag("iris-controller", git_sha)
+    build_image("controller", tag, push, context, platform, git_sha, ghcr_org, verbose=verbose)
 
 
 @build.command("task-image")
@@ -430,8 +406,9 @@ def build_task_image(
     marin_root = find_marin_root()
 
     verbose = _is_verbose(ctx)
+    git_sha = get_git_sha()
     _ensure_protos()
-    resolved_tag = tag or _default_versioned_tag("iris-task")
+    resolved_tag = tag or _versioned_tag("iris-task", git_sha)
 
     build_image(
         "task",
@@ -439,6 +416,7 @@ def build_task_image(
         push,
         str(marin_root),
         platform,
+        git_sha,
         ghcr_org,
         verbose=verbose,
     )

@@ -30,41 +30,51 @@ from pathlib import Path
 
 import click
 import duckdb
-from scripts.storage.constants import (
+import fsspec
+from tqdm import tqdm
+
+from scripts.ops.storage.constants import (
     BUCKET_LOCATIONS,
     DISCOUNT_FACTOR,
     STORAGE_CLASS_PRICING,
 )
-from tqdm import tqdm
 
 
 def _download_gcs_parquet(gcs_dir: str, local_dir: Path) -> Path:
-    """Download all *.parquet files from gcs_dir to local_dir using gcloud.
+    """Mirror all *.parquet files from gcs_dir to local_dir via fsspec.
 
-    Skips files already present locally. Returns the local directory.
+    Deletes local parquets that no longer exist at the source — without
+    this, segments from prior scans accumulate locally and the report ends
+    up reading a stale union of every historical scan.
+
+    Returns the local directory.
     """
-    import subprocess
 
     local_dir.mkdir(parents=True, exist_ok=True)
-    src = gcs_dir.rstrip("/") + "/*.parquet"
-    print(f"Downloading {src} -> {local_dir} ...")
-    result = subprocess.run(
-        [
-            "gcloud",
-            "storage",
-            "rsync",
-            "--recursive",
-            gcs_dir.rstrip("/"),
-            str(local_dir),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"gcloud rsync failed: {result.stderr}")
-    file_count = len(list(local_dir.glob("*.parquet")))
-    print(f"  {file_count} parquet files local")
+    fs, _ = fsspec.core.url_to_fs(gcs_dir)
+    pattern = f"{gcs_dir.rstrip('/')}/*.parquet"
+    remote_paths = fs.glob(pattern)
+    remote_basenames = {Path(p).name for p in remote_paths}
+
+    pruned = 0
+    for existing in local_dir.glob("*.parquet"):
+        if existing.name not in remote_basenames:
+            existing.unlink()
+            pruned += 1
+    if pruned:
+        print(f"  pruned {pruned} stale local parquets")
+
+    print(f"Mirroring {len(remote_paths)} parquets {gcs_dir} -> {local_dir} ...")
+    pbar = tqdm(remote_paths, unit="file", dynamic_ncols=True)
+    for remote in pbar:
+        name = Path(remote).name
+        local = local_dir / name
+        if local.exists() and local.stat().st_size == fs.info(remote)["size"]:
+            continue
+        with fs.open(remote, "rb") as src, open(local, "wb") as dst:
+            while chunk := src.read(8 * 1024 * 1024):
+                dst.write(chunk)
+    print(f"  {len(remote_paths)} parquet files local")
     return local_dir
 
 
@@ -159,6 +169,20 @@ def _build_summaries(
     time_leaves = leaf_root / "time"
     for d in (dir_leaves, time_leaves):
         d.mkdir(parents=True, exist_ok=True)
+
+    # Prune leaves from prior runs whose batch keys are not in the current
+    # batch set. Otherwise stale per-batch aggregates (from objects parquets
+    # that have since been removed) silently fold into the dir_summary view
+    # below and the report shows ghost objects.
+    expected_keys = {_batch_key(batch, DIR_DEPTH) for batch in batches}
+    pruned = 0
+    for leaves_dir in (dir_leaves, time_leaves):
+        for existing in leaves_dir.glob("*.parquet"):
+            if existing.stem not in expected_keys:
+                existing.unlink()
+                pruned += 1
+    if pruned:
+        print(f"pruned {pruned} stale summary leaves from {leaf_root}", file=sys.stderr)
 
     total_objects = 0
     total_bytes = 0
@@ -721,14 +745,13 @@ def generate_report(conn: duckdb.DuckDBPyConnection) -> str:
 @click.option(
     "--output",
     "-o",
-    type=click.Path(),
-    help="Write markdown report to file (default: stdout).",
+    help="Write markdown report to file (local path or gs:// URL; default: stdout).",
 )
 def main(parquet_dir: str, output: str | None) -> None:
     """Generate a storage usage report from parquet output of a scan.
 
     PARQUET_DIR may be a local directory or a gs:// path (auto-downloaded
-    to /tmp/storage-scan-cache via gcloud rsync).
+    to /tmp/storage-scan-cache via fsspec).
 
     Examples:
         uv run scripts/ops/storage/report.py gs://marin-us-central2/tmp/storage-scan-v7
@@ -737,7 +760,13 @@ def main(parquet_dir: str, output: str | None) -> None:
     conn = load_parquet_db(parquet_dir)
     report = generate_report(conn)
     if output:
-        Path(output).write_text(report)
+        if output.startswith("gs://"):
+            import fsspec
+
+            with fsspec.open(output, "w") as f:
+                f.write(report)
+        else:
+            Path(output).write_text(report)
         print(f"Report written to {output}", file=sys.stderr)
     else:
         print(report)

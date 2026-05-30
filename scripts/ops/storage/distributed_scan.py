@@ -15,7 +15,7 @@ Architecture:
 
 Usage:
     uv run iris --cluster=marin job run \\
-        --cpu 2 --memory 10GB --enable-extra-resources -- \\
+        --cpu 2 --memory 30GB --enable-extra-resources -- \\
         uv run python scripts/ops/storage/distributed_scan.py \\
         --staging-dir gs://marin-us-central2/tmp/storage-scan \\
         --workers 128
@@ -33,11 +33,18 @@ from dataclasses import field as dataclass_field
 from typing import Any
 
 import click
+import fsspec
 import google.auth
 import pyarrow as pa
 import pyarrow.parquet as pq
 from google.cloud import storage
-from scripts.storage.constants import (
+from iris.actor import ActorServer
+from iris.actor.client import ActorClient
+from iris.client import iris_ctx
+from iris.cluster.client import get_job_info
+from iris.cluster.types import Entrypoint, ResourceSpec
+
+from scripts.ops.storage.constants import (
     ADAPTIVE_MAX_DEPTH,
     ADAPTIVE_SPLIT_THRESHOLD,
     BLOB_FIELDS,
@@ -61,6 +68,19 @@ WORKER_THREADS = 16
 # ~2M objects x ~150 bytes/row ≈ 300MB uncompressed, ~50-80MB zstd parquet.
 # Coordinator runs with 30GB so this leaves plenty of headroom.
 COORDINATOR_FLUSH_THRESHOLD = 2_000_000
+
+# Abandon stragglers when the queue has been empty AND no progress has been
+# reported for this long. "Progress" means either a task completed *or* a
+# worker streamed objects to the coordinator — workers scanning a huge flat
+# prefix can take many minutes between task completions while still streaming
+# steady chunks of objects, and we don't want to abandon those mid-flight.
+# Truly hung workers (no RPCs at all) get timed out here; everything else is
+# bounded by MAX_SCAN_SECONDS.
+STRAGGLER_GRACE_SECONDS = 300
+
+# Hard wall-clock cap on the whole scan. Beyond this we terminate workers
+# and finalize whatever we have, even if some tasks are still in flight.
+MAX_SCAN_SECONDS = 90 * 60
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +139,6 @@ class ColumnBuffer:
 
 def _write_parquet_to_gcs(table: pa.Table, staging_dir: str) -> str:
     """Write an Arrow table as a zstd-compressed parquet segment to GCS."""
-    import fsspec
 
     segment_id = uuid.uuid4().hex[:12]
     path = f"{staging_dir}/objects_{segment_id}.parquet"
@@ -135,7 +154,6 @@ def _truncate_staging_dir(staging_dir: str) -> None:
     files — without this, every re-run strictly appends and the consumer
     sees N-way duplicated (bucket, name) rows.
     """
-    import fsspec
 
     fs, _ = fsspec.core.url_to_fs(staging_dir)
     pattern = f"{staging_dir.rstrip('/')}/objects_*.parquet"
@@ -173,6 +191,11 @@ class ScanCoordinatorActor:
         self._active_workers = 0
         self._buf = ColumnBuffer()
         self._flush_thread: threading.Thread | None = None
+        # Wall-clock of the last forward-progress signal from any worker —
+        # either a streamed batch of objects or a task completion. Used to
+        # distinguish slow-but-progressing scans from genuinely hung workers
+        # in the straggler-timeout check.
+        self._last_progress_at: float | None = None
 
     def load_tasks(self, tasks: list[ScanTask]) -> None:
         with self._lock:
@@ -192,6 +215,7 @@ class ScanCoordinatorActor:
             added_bytes = self._buf.extend(objects)
             self._total_objects += len(objects)
             self._total_bytes += added_bytes
+            self._last_progress_at = time.monotonic()
             if self._buf.count >= COORDINATOR_FLUSH_THRESHOLD:
                 self._swap_and_flush()
 
@@ -200,6 +224,7 @@ class ScanCoordinatorActor:
         with self._lock:
             self._tasks_completed += 1
             self._active_workers -= 1
+            self._last_progress_at = time.monotonic()
             if new_prefixes:
                 self._queue.extend(new_prefixes)
                 self._tasks_total += len(new_prefixes)
@@ -209,6 +234,7 @@ class ScanCoordinatorActor:
             self._errors.append(f"{prefix}: {error}")
             self._tasks_completed += 1
             self._active_workers -= 1
+            self._last_progress_at = time.monotonic()
 
     def flush(self) -> None:
         """Force-flush remaining buffered objects. Blocks until complete."""
@@ -247,6 +273,18 @@ class ScanCoordinatorActor:
 
     def get_status(self) -> dict[str, Any]:
         with self._lock:
+            queue_empty = len(self._queue) == 0
+            all_completed = queue_empty and self._active_workers == 0 and self._tasks_completed == self._tasks_total
+            # Only declare stragglers timed out when the queue is empty AND
+            # nothing has reported progress (objects or task completion) for
+            # STRAGGLER_GRACE_SECONDS. Workers that are still streaming a huge
+            # flat prefix keep _last_progress_at fresh via report_objects, so
+            # they won't be killed mid-scan.
+            stragglers_timed_out = (
+                queue_empty
+                and self._last_progress_at is not None
+                and time.monotonic() - self._last_progress_at >= STRAGGLER_GRACE_SECONDS
+            )
             return {
                 "total_objects": self._total_objects,
                 "total_bytes": self._total_bytes,
@@ -257,12 +295,7 @@ class ScanCoordinatorActor:
                 "parquet_count": len(self._parquet_paths),
                 "buffered": self._buf.count,
                 "error_count": len(self._errors),
-                "done": (
-                    len(self._queue) == 0
-                    and self._active_workers == 0
-                    and self._tasks_completed == self._tasks_total
-                    and self._tasks_total > 0
-                ),
+                "done": self._tasks_total > 0 and (all_completed or stragglers_timed_out),
             }
 
     def get_parquet_paths(self) -> list[str]:
@@ -489,8 +522,6 @@ def worker_job_entrypoint(
     Discovers the coordinator actor, then runs WORKER_THREADS threads
     that pull tasks and scan prefixes.
     """
-    from iris.actor.client import ActorClient
-    from iris.client import iris_ctx
 
     ctx = iris_ctx()
     resolver = ctx.resolver
@@ -569,9 +600,6 @@ def run_distributed(
     Coordinator accumulates objects in memory and writes consolidated
     parquet segments (~100MB each) to staging_dir on GCS.
     """
-    from iris.actor import ActorServer
-    from iris.client import iris_ctx
-    from iris.cluster.types import Entrypoint, ResourceSpec
 
     ctx = iris_ctx()
     client = ctx.client
@@ -584,8 +612,6 @@ def run_distributed(
     server = ActorServer(host="0.0.0.0")
     server.register(actor_name, coordinator)
     actual_port = server.serve_background()
-
-    from iris.cluster.client import get_job_info
 
     job_info = get_job_info()
     address = f"http://{job_info.advertise_host}:{actual_port}"
@@ -625,6 +651,10 @@ def run_distributed(
             )
 
             if status["done"]:
+                break
+
+            if elapsed >= MAX_SCAN_SECONDS:
+                print(f"Wall-clock cap of {MAX_SCAN_SECONDS}s hit; abandoning stragglers and finalizing")
                 break
 
             time.sleep(30)
@@ -676,7 +706,7 @@ def main(
     Submit via iris job run:
 
         uv run iris --cluster=marin job run \\
-            --cpu 2 --memory 10GB --enable-extra-resources -- \\
+            --cpu 2 --memory 30GB --enable-extra-resources -- \\
             uv run python scripts/ops/storage/distributed_scan.py \\
             --staging-dir gs://marin-us-central2/tmp/storage-scan \\
             --workers 128

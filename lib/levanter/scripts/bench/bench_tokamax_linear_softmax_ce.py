@@ -8,10 +8,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.sharding import Mesh, PartitionSpec as P
+from absl import flags as absl_flags
 
 
 def main() -> None:
-    from absl import flags as absl_flags
     from tokamax._src.ops.linear_softmax_cross_entropy_loss.api import (
         linear_softmax_cross_entropy_loss,
     )

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { useControllerRpc } from '@/composables/useRpc'
+import { useControllerRpc, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
 import type {
@@ -9,6 +9,8 @@ import type {
   GetTaskStatusResponse,
 } from '@/types/rpc'
 import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime } from '@/utils/formatting'
+import { decodeArrowIpc } from '@/utils/arrow'
+import { detailSql } from '@/utils/taskStatus'
 
 import { controllerRpcCall } from '@/composables/useRpc'
 import { useProfileAction } from '@/composables/useProfileAction'
@@ -19,6 +21,7 @@ import InfoRow from '@/components/shared/InfoRow.vue'
 import ResourceGauge from '@/components/shared/ResourceGauge.vue'
 import Sparkline from '@/components/shared/Sparkline.vue'
 import ProfileButtons from '@/components/shared/ProfileButtons.vue'
+import ProfileHistory from '@/components/shared/ProfileHistory.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
 
@@ -56,26 +59,87 @@ const startedDisplay = computed(() =>
   startedMs.value ? formatRelativeTime(startedMs.value) : '-'
 )
 
-// Resource gauge values from resourceUsage (MB -> bytes for the gauge)
-const cpuUsed = computed(() => (task.value?.resourceUsage?.cpuMillicores ?? 0) / 1000)
-const memUsedMb = computed(() => {
-  const raw = task.value?.resourceUsage?.memoryMb
-  return raw ? parseFloat(raw) : 0
-})
-const memPeakMb = computed(() => {
-  const raw = task.value?.resourceUsage?.memoryPeakMb
-  return raw ? parseFloat(raw) : 0
-})
-const diskUsedMb = computed(() => {
-  const raw = task.value?.resourceUsage?.diskMb
-  return raw ? parseFloat(raw) : 0
+// --- Per-task resource history sourced from finelog stats (iris.task) ---
+//
+// One row per attempt-resource update emitted by the worker. The namespace
+// is registered eagerly by every worker at startup, so any task we can
+// navigate to has a registered table. Rows come back ts DESC; reverse for
+// the sparkline (oldest -> newest). Filtered by attempt_id so retried tasks
+// do not mix samples from prior attempts.
+interface TaskStatRow {
+  ts?: string
+  cpu_millicores?: number
+  memory_mb?: number
+  memory_peak_mb?: number
+  disk_mb?: number
+}
+
+interface QueryResponse {
+  arrowIpc?: string
+}
+
+function buildTaskStatsSql(taskId: string, attemptId: number | undefined): string {
+  // QueryRequest has no param binding; manual DuckDB single-quote escape.
+  const escaped = taskId.replace(/'/g, "''")
+  const attemptPredicate =
+    attemptId !== undefined && attemptId !== null
+      ? `AND attempt_id = ${Number(attemptId)}`
+      : ''
+  return `
+SELECT ts, cpu_millicores, memory_mb, memory_peak_mb, disk_mb
+FROM "iris.task"
+WHERE task_id = '${escaped}'
+${attemptPredicate}
+ORDER BY ts DESC
+LIMIT 200
+`.trim()
+}
+
+const { data: taskStatsData, refresh: fetchTaskStats } = useLogServerStatsRpc<QueryResponse>(
+  'Query',
+  () => ({ sql: buildTaskStatsSql(props.taskId, task.value?.currentAttemptId) }),
+)
+
+const taskStatsRows = computed<TaskStatRow[]>(() => {
+  const ipc = taskStatsData.value?.arrowIpc
+  if (!ipc) return []
+  return decodeArrowIpc(ipc).rows as TaskStatRow[]
 })
 
+// Latest status text row for this task (see detailSql in utils/taskStatus).
+interface StatusTextRow {
+  status_text_detail_md?: string
+  status_text_summary_md?: string
+}
+
+const { data: statusTextData, refresh: fetchStatusText } = useLogServerStatsRpc<QueryResponse>(
+  'Query',
+  () => ({ sql: detailSql(props.taskId) }),
+)
+
+const statusTextDetail = computed<string>(() => {
+  const ipc = statusTextData.value?.arrowIpc
+  if (!ipc) return ''
+  const rows = decodeArrowIpc(ipc).rows as StatusTextRow[]
+  return rows[0]?.status_text_detail_md ?? ''
+})
+
+const orderedTaskStats = computed(() => taskStatsRows.value.slice().reverse())
+
+// Latest sample drives the current-value gauges and labels. resource_usage
+// is no longer populated on TaskStatus — the iris.task stats namespace is
+// the single source of truth for per-attempt usage.
+const latestStat = computed<TaskStatRow | null>(() => taskStatsRows.value[0] ?? null)
+const cpuUsed = computed(() => Number(latestStat.value?.cpu_millicores ?? 0) / 1000)
+const memUsedMb = computed(() => Number(latestStat.value?.memory_mb ?? 0))
+const memPeakMb = computed(() => Number(latestStat.value?.memory_peak_mb ?? 0))
+const diskUsedMb = computed(() => Number(latestStat.value?.disk_mb ?? 0))
+
 const cpuHistory = computed(() =>
-  (task.value?.resourceHistory ?? []).map(r => (r.cpuMillicores ?? 0) / 1000)
+  orderedTaskStats.value.map((r) => Number(r.cpu_millicores ?? 0) / 1000)
 )
 const memHistory = computed(() =>
-  (task.value?.resourceHistory ?? []).map(r => r.memoryMb ? parseFloat(r.memoryMb) : 0)
+  orderedTaskStats.value.map((r) => Number(r.memory_mb ?? 0))
 )
 
 // Use job-level resource limits for gauge totals when available.
@@ -116,15 +180,38 @@ const { active: autoRefreshActive, start: startRefresh, stop: stopRefresh } = us
   5_000,
   false,
 )
+const { start: startStatsRefresh, stop: stopStatsRefresh } = useAutoRefresh(
+  fetchTaskStats,
+  5_000,
+  false,
+)
+const { start: startStatusTextRefresh, stop: stopStatusTextRefresh } = useAutoRefresh(
+  fetchStatusText,
+  5_000,
+  false,
+)
 
 watch(isActive, (active) => {
-  if (active) startRefresh()
-  else stopRefresh()
+  if (active) {
+    startRefresh()
+    startStatsRefresh()
+    startStatusTextRefresh()
+  } else {
+    stopRefresh()
+    stopStatsRefresh()
+    stopStatusTextRefresh()
+  }
 })
 
 onMounted(async () => {
   await fetchTask()
-  if (isActive.value) startRefresh()
+  fetchTaskStats()
+  fetchStatusText()
+  if (isActive.value) {
+    startRefresh()
+    startStatsRefresh()
+    startStatusTextRefresh()
+  }
 })
 
 const router = useRouter()
@@ -152,9 +239,15 @@ function selectAttempt(attemptId: number) {
 // Clear stale data first so loading/error states render correctly if the fetch fails.
 watch(() => props.taskId, async () => {
   taskResponse.value = null
+  taskStatsData.value = null
   stopRefresh()
+  stopStatsRefresh()
   await fetchTask()
-  if (isActive.value) startRefresh()
+  fetchTaskStats()
+  if (isActive.value) {
+    startRefresh()
+    startStatsRefresh()
+  }
 })
 </script>
 
@@ -221,9 +314,9 @@ watch(() => props.taskId, async () => {
           </div>
         </InfoCard>
 
-        <!-- Resources card -->
+        <!-- Resources card. Driven entirely by the latest iris.task sample. -->
         <InfoCard title="Resources">
-          <template v-if="task.resourceUsage">
+          <template v-if="latestStat">
             <div class="space-y-3">
               <ResourceGauge label="CPU" :used="cpuUsed" :total="cpuTotal" unit="cores" />
               <ResourceGauge
@@ -241,11 +334,11 @@ watch(() => props.taskId, async () => {
               />
             </div>
             <div class="mt-2 text-xs text-text-muted space-y-0.5">
-              <div v-if="task.resourceUsage.processCount">
-                Processes: {{ task.resourceUsage.processCount }}
+              <div v-if="latestStat.cpu_millicores">
+                CPU: {{ formatCpuMillicores(Number(latestStat.cpu_millicores)) }}
               </div>
-              <div v-if="task.resourceUsage.cpuMillicores">
-                CPU: {{ formatCpuMillicores(task.resourceUsage.cpuMillicores) }}
+              <div v-if="memPeakMb > 0">
+                Peak Memory: {{ memPeakMb.toFixed(0) }} MB
               </div>
             </div>
           </template>
@@ -288,9 +381,9 @@ watch(() => props.taskId, async () => {
       </div>
 
       <!-- Status text -->
-      <InfoCard v-if="task.statusTextDetailMd" title="Status Text" class="mb-6">
+      <InfoCard v-if="statusTextDetail" title="Status Text" class="mb-6">
         <div class="text-sm text-text">
-          <MarkdownRenderer :content="task.statusTextDetailMd" />
+          <MarkdownRenderer :content="statusTextDetail" />
         </div>
       </InfoCard>
 
@@ -315,6 +408,9 @@ watch(() => props.taskId, async () => {
               <tr class="border-b border-surface-border">
                 <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">
                   Attempt
+                </th>
+                <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">
+                  UID
                 </th>
                 <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">
                   State
@@ -345,6 +441,9 @@ watch(() => props.taskId, async () => {
                   {{ attempt.attemptId }}
                   <span v-if="attempt.attemptId === task.currentAttemptId" class="ml-1 text-xs text-accent font-semibold">current</span>
                 </td>
+                <td class="px-3 py-2 text-[13px] font-mono text-text-muted">
+                  {{ attempt.attemptUid ? attempt.attemptUid.slice(0, 8) : '-' }}
+                </td>
                 <td class="px-3 py-2 text-[13px]">
                   <StatusBadge :status="attempt.state" size="sm" />
                 </td>
@@ -373,6 +472,8 @@ watch(() => props.taskId, async () => {
           </table>
         </div>
       </div>
+
+      <ProfileHistory :source="taskId" class="mb-6" />
 
       <!-- Task logs -->
       <div id="task-logs-section" class="mb-6">

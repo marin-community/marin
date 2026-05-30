@@ -3,12 +3,14 @@
 
 import json
 import os
+from functools import cache
 from pathlib import Path
 
 import cloudpickle
 from marin.execution.artifact import Artifact
 from marin.execution.disk_cache import disk_cache
 from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile, distributed_lock
+from marin.execution.step_runner import check_cache, run_step
 from marin.execution.step_spec import StepSpec
 
 
@@ -83,7 +85,7 @@ def test_composition_with_save_load(tmp_path: Path):
         distributed_lock(counting_fn),
         output_path=output_path,
         save_fn=Artifact.save,
-        load_fn=Artifact.load,
+        load_fn=Artifact.from_path,
     )
 
     result1 = cached_fn(output_path)
@@ -149,7 +151,6 @@ def test_decorator_auto_path_from_marin_prefix(tmp_path: Path, monkeypatch):
 
 def test_run_step_with_cache_and_lock(tmp_path: Path):
     """run_step acquires a lock, runs the function, saves the artifact, and writes STATUS_SUCCESS."""
-    from marin.execution.step_runner import check_cache, run_step
 
     call_count = 0
 
@@ -174,7 +175,6 @@ def test_run_step_with_cache_and_lock(tmp_path: Path):
 
 def test_functools_cache_with_disk_cache(tmp_path: Path, monkeypatch):
     """@cache + @disk_cache: in-memory cache avoids repeated disk reads."""
-    from functools import cache
 
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
 

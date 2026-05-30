@@ -1,0 +1,30 @@
+name: "CodeQL — Python (security + code quality)"
+
+# Scope: source of every first-party Marin sub-package. Upstream-vendored
+# sibling libraries lib/levanter and lib/haliax are intentionally excluded —
+# they carry their own lint/scan configs. This scope is shared by both the
+# security and code-quality analyses. Add experiments/ here if you also want
+# the experiment scripts scanned.
+paths:
+  - lib/marin/src
+  - lib/iris/src
+  - lib/finelog/src
+  - lib/zephyr/src
+  - lib/fray/src
+  - lib/rigging/src
+paths-ignore:
+  - tests/**
+  - "**/*_pb2.py"
+  - "**/*_connect.py"
+
+# Code-quality suppressions: the two highest-volume, lowest-signal checks.
+#   - py/ineffectual-statement fires on `...` ellipsis bodies in Protocol/stub
+#     methods and on docstring-style string expressions. ruff's B018 already
+#     flags the genuinely-ineffectual cases while ignoring `...`/docstrings.
+#   - py/import-and-import-from flags modules reached via both `import x` and
+#     `from x import y`; too common across the repo to be actionable.
+query-filters:
+  - exclude:
+      id: py/ineffectual-statement
+  - exclude:
+      id: py/import-and-import-from

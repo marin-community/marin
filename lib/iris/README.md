@@ -123,30 +123,39 @@ Workers communicate with the controller using internal VPC IPs. External clients
 
 ## Worker Lifecycle
 
-### Registration and Heartbeat
+### Registration and Reconcile
 
 Workers register with the controller once at startup via the `Register` RPC.
-After registration, the worker enters a serve loop and waits for controller-
-initiated heartbeats.
+After registration, the worker serves the `WorkerService` gRPC and waits for
+controller-initiated `Reconcile` calls.
 
-The controller sends `Heartbeat` RPCs to all registered workers on each
-scheduler tick (~5s). The heartbeat request carries:
-- `tasks_to_run`: new task assignments for this worker
-- `tasks_to_kill`: task IDs to terminate
+The controller issues one `Reconcile` RPC per worker on each scheduler tick
+(~5s). The request carries the controller's complete **desired attempt set**
+for that worker: each `DesiredAttempt` is keyed by `attempt_uid` and contains
+either an `AttemptSpec.run` intent (with the `RunTaskRequest` payload on the
+dispatch tick) or a `StopReason` intent.
 
-The worker responds with:
-- `running_tasks`: tasks currently executing (task_id + attempt_id)
-- `completed_tasks`: tasks that finished since the last heartbeat
+The worker responds with the complete **observed set** plus a `WorkerHealth`
+block:
+- `AttemptObservation` per attempt the controller asked about (`attempt_uid`,
+  current `TaskState`, `exit_code`, `error`, `finished_at`, `container_id`,
+  `resource_usage`).
+- `WorkerHealth` carries `healthy`/`health_error` and a
+  `WorkerResourceSnapshot`.
 
 The controller reconciles the response:
 
 1. **Worker missing expected tasks** (e.g., worker restarted mid-task):
-   - Controller marks missing tasks as `WORKER_FAILED`
-   - Tasks are retried on another worker
+   - The worker emits `TASK_STATE_MISSING` observations for run intents that
+     resolved to nothing locally.
+   - Controller marks those tasks as `WORKER_FAILED` and retries them on
+     another worker.
 
-2. **Worker reports unknown tasks** (e.g., controller restarted):
-   - Controller sends kill requests for unknown tasks on next heartbeat
-   - Worker terminates orphaned containers
+2. **Worker has unknown tasks** (e.g., controller restarted):
+   - The worker kills any local attempt not in the desired set ("zombie") and
+     returns an observation for the kill on this tick.
+
+See [`docs/reconcile_rpc.md`](docs/reconcile_rpc.md) for the protocol details.
 
 ## Job State Transitions
 
@@ -233,7 +242,10 @@ The controller will **fail at startup** if `storage.remote_state_dir` is not con
 
 ## CLI Reference
 
-**Note:** The `--cluster` option resolves a cluster name to a config file (e.g., `--cluster=marin` finds `lib/iris/examples/marin.yaml`) and works from any directory. It is a global option that must appear after `iris` but before the subcommand (e.g., `iris --cluster=marin cluster start`).
+**Cluster selection:** Prefer `--cluster=<name>` for known clusters; it resolves named configs such as
+`marin` from the configured search paths. Use `--config=<path>` when you need to pin an exact YAML file,
+such as a custom config or local experiment. Both flags are global and must appear before the subcommand:
+`iris --cluster=marin cluster start`.
 
 ### Cluster Commands
 
@@ -250,8 +262,8 @@ iris --cluster=marin cluster status
 
 ```bash
 # Controller-specific operations
-iris --config=... cluster controller start          # Boot controller GCE VM
-iris --config=... cluster controller status          # Controller status
+iris --cluster=marin cluster controller start       # Boot controller GCE VM
+iris --cluster=marin cluster controller status      # Controller status
 ```
 
 ### VM Operations (via controller RPC)
@@ -274,8 +286,8 @@ iris build controller-image -t iris-controller:v1 --push --region us-central1
 
 ```bash
 # Remote clusters: opens SSH tunnel to controller dashboard
-iris --config=... cluster dashboard
-iris --config=... cluster dashboard --port 8080
+iris --cluster=marin cluster dashboard
+iris --cluster=marin cluster dashboard --port 8080
 
 # Local clusters: dashboard is at the URL printed by `cluster start --local`
 ```
@@ -287,13 +299,13 @@ iris --config=... cluster dashboard --port 8080
 iris --config cluster.yaml job run -- python train.py
 iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 iris --config cluster.yaml job run --no-wait -- python long_job.py
+# Pin a zone when you need to colocate with data or target a specific pool.
 iris --config cluster.yaml job run --zone us-central2-b -- python train.py
 
-# Stream logs for a job (batch-fetches from all tasks in one RPC)
+# Stream logs for a job and child jobs (batch-fetches matching tasks in one RPC)
 iris --config cluster.yaml job logs /my-job
 iris --config cluster.yaml job logs /my-job --follow
 iris --config cluster.yaml job logs /my-job --since-seconds 300
-iris --config cluster.yaml job logs /my-job --include-children
 
 # Stop one or more jobs
 iris --config cluster.yaml job stop /my-job
@@ -307,17 +319,17 @@ dashboard rendering, log levels, profiling, and constraint routing.
 
 ```bash
 # Local mode (in-process cluster, default)
-uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e -o "addopts=" -v
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster -o "addopts=" -v
 
 # Cloud mode: start cluster via CLI, then run tests against it
 # iris --cluster=smoke-gcp cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
-uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url "$(cat /tmp/url)" -o "addopts="
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster --iris-controller-url "$(cat /tmp/url)" -o "addopts="
 
 # Cloud mode: connect to existing cluster
-uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url http://localhost:8080 -o "addopts="
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster --iris-controller-url http://localhost:8080 -o "addopts="
 
 # Screenshots saved to custom directory
-IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e -o "addopts="
+IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster -o "addopts="
 ```
 
 ## Configuration
@@ -421,4 +433,3 @@ src/iris/
 ## References
 
 - [Task States](docs/task-states.md) - Task state machine and retry semantics
-- [Constraints](docs/constraints.md) - Constraint system design

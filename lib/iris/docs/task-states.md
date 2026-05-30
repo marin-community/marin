@@ -76,14 +76,15 @@ independent job state machine.
 | `UNSPECIFIED` | 0 | -- | -- | Default zero value; never used in practice | `unspecified` (grey) |
 | `PENDING` | 1 | No | -- | Job submission (`_on_job_submitted`), retry requeue (`_requeue_task`) | `pending` (amber) |
 | `ASSIGNED` | 9 | No | -- | Scheduler dispatch (`_on_task_assigned` / `create_attempt`) | `assigned` (orange) |
-| `BUILDING` | 2 | No | -- | Worker PollTasks report; worker sets this during bundle download and dependency sync | `building` (purple) |
-| `RUNNING` | 3 | No | -- | Worker PollTasks report; worker sets this when user command starts | `running` (blue) |
-| `SUCCEEDED` | 4 | Yes | No | Worker PollTasks report; task exited with code 0 | `succeeded` (green) |
-| `FAILED` | 5 | Yes | Yes | Worker PollTasks report; task exited with non-zero code | `failed` (red) |
+| `BUILDING` | 2 | No | -- | Worker Reconcile observation; worker sets this during bundle download and dependency sync | `building` (purple) |
+| `RUNNING` | 3 | No | -- | Worker Reconcile observation; worker sets this when user command starts | `running` (blue) |
+| `SUCCEEDED` | 4 | Yes | No | Worker Reconcile observation; task exited with code 0 | `succeeded` (green) |
+| `FAILED` | 5 | Yes | Yes | Worker Reconcile observation; task exited with non-zero code | `failed` (red) |
 | `KILLED` | 6 | Yes | No | Controller: job cancellation (`_on_job_cancelled`), job failure cascade (`_mark_remaining_tasks_killed`), per-task timeout | `killed` (grey) |
-| `WORKER_FAILED` | 7 | Yes | Yes | Controller: worker death cascade (`_on_worker_failed`), coscheduled sibling kill | `worker_failed` (purple) |
+| `WORKER_FAILED` | 7 | Yes | Yes | Controller: worker death cascade (`_on_worker_failed`) | `worker_failed` (purple) |
 | `UNSCHEDULABLE` | 8 | Yes | No | Controller: scheduling timeout expired (`_mark_task_unschedulable`) | `unschedulable` (red) |
 | `PREEMPTED` | 10 | Yes | Yes | Controller: priority preemption with budget exhausted (`preempt_task`) | `preempted` (orange) |
+| `COSCHED_FAILED` | 11 | Yes | No | Controller: coscheduled sibling cascade (`_terminate_coscheduled_siblings`) | `cosched_failed` (red) |
 
 
 ## State Transitions in Detail
@@ -108,11 +109,13 @@ resources. `create_attempt` creates a new `ControllerTaskAttempt` in
 consuming its resources.
 
 The worker has not yet acknowledged the task -- it will receive the dispatch
-via a StartTasks RPC on the next controller cycle.
+in the next controller Reconcile cycle (the `DesiredAttempt.run` intent
+carries the `AttemptSpec.request` payload on this one tick).
 
 ### BUILDING
 
-Reported by the worker via PollTasks. The worker transitions internally:
+Reported by the worker as a Reconcile observation. The worker transitions
+internally:
 
 - `PENDING -> BUILDING` when bundle download starts (`task_attempt.py:433`)
 - Later, `BUILDING` again when dependency sync starts (`task_attempt.py:549`)
@@ -123,19 +126,19 @@ worker reports `PENDING`, the controller ignores it to prevent regressing an
 
 ### RUNNING
 
-Reported by the worker via PollTasks after the user command starts executing
+Reported by the worker via Reconcile after the user command starts executing
 (`task_attempt.py:570`). The controller records `started_at` on the attempt.
 
 ### SUCCEEDED
 
-Reported by the worker via PollTasks when the task process exits with code 0.
+Reported by the worker via Reconcile when the task process exits with code 0.
 The controller sets `exit_code=0`, `finished_at`, and marks the task terminal.
 No retry logic applies.
 
 ### FAILED
 
-Reported by the worker via PollTasks when the task process exits with a non-zero
-code. Triggers retry evaluation:
+Reported by the worker via Reconcile when the task process exits with a
+non-zero code. Triggers retry evaluation:
 
 1. `handle_attempt_result` calls `_handle_failure`, which increments
    `failure_count` and compares against `max_retries_failure`.
@@ -179,9 +182,9 @@ Retry evaluation uses the preemption budget:
    and is terminal.
 
 **Coscheduled jobs**: When a task in a coscheduled (gang-scheduled) job fails
-terminally, `_cascade_coscheduled_failure` exhausts the preemption budget of
-all running siblings and transitions them to `WORKER_FAILED` (terminal). This
-prevents other hosts from hanging on collective operations.
+terminally, `_terminate_coscheduled_siblings` transitions all running siblings
+to `COSCHED_FAILED` (always terminal — see below). This prevents other hosts
+from hanging on collective operations.
 
 ### PREEMPTED
 
@@ -204,7 +207,7 @@ Retry evaluation uses `_resolve_task_failure_state` with the preemption budget:
 When a coscheduled task becomes terminally `PREEMPTED`, the job state is
 recomputed. If all tasks in the job are terminal, `_finalize_terminal_job`
 kills any remaining non-terminal tasks and cascades to child jobs. Note that
-unlike `WORKER_FAILED` reported via PollTasks, `preempt_task` does not
+unlike `WORKER_FAILED` reported via Reconcile, `preempt_task` does not
 directly cascade coscheduled siblings — the cascade only occurs through job
 finalization.
 
@@ -218,6 +221,20 @@ derived from the job's `scheduling_timeout` field.
 entire job transitions to `JOB_STATE_UNSCHEDULABLE` and all remaining tasks
 are killed.
 
+### COSCHED_FAILED
+
+Set by the controller in `_terminate_coscheduled_siblings` when a coscheduled
+(gang-scheduled) sibling task hits its terminal failure budget. The cascaded
+task itself was healthy, so the state is distinct from `WORKER_FAILED` (which
+implies a real worker death and bumps the preemption counter) and from
+`KILLED` (which implies operator-initiated cancellation).
+
+`COSCHED_FAILED` is always terminal — `task_is_finished` returns `True`
+unconditionally, with no counter math involved. At the job level, it rolls up
+into `JOB_STATE_WORKER_FAILED` alongside `WORKER_FAILED` and `PREEMPTED`,
+because the triggering event was a worker-failure pattern on the originating
+task.
+
 ## Retry Semantics
 
 Iris maintains two independent retry budgets per task:
@@ -229,7 +246,7 @@ Iris maintains two independent retry budgets per task:
 
 ### Retry flow
 
-1. Worker reports terminal state via PollTasks.
+1. Worker reports terminal state via Reconcile.
 2. `handle_attempt_result` delegates to `_handle_failure`.
 3. The appropriate counter is incremented.
 4. If `counter <= limit`: `TaskTransitionResult.SHOULD_RETRY`.

@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from finelog.rpc import logging_pb2
@@ -22,20 +24,23 @@ from iris.cluster.providers.k8s.tasks import (
     _POD_NOT_FOUND_GRACE_CYCLES,
     _RUNTIME_LABEL_VALUE,
     K8sTaskProvider,
+    LogCollector,
+    ResourceCollector,
     _LogPod,
     _pod_name,
     _sanitize_label_value,
     _task_hash,
 )
-from iris.cluster.providers.k8s.types import ExecResult, K8sResource, PodResourceUsage
+from iris.cluster.providers.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage
 from iris.cluster.types import JobName, TaskAttempt
+from iris.cluster.worker.stats import IrisTaskStat
 from iris.rpc import job_pb2
 
 from .conftest import make_batch, make_run_req, populate_node, populate_pod, populate_running_pod_resource
 
 
 def _fetch_logs(log_service: LogServiceImpl, key: str, max_lines: int = 100) -> list[logging_pb2.LogEntry]:
-    resp = log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=key, max_lines=max_lines), ctx=None)
+    resp = asyncio.run(log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=key, max_lines=max_lines), ctx=None))
     return list(resp.entries)
 
 
@@ -66,8 +71,6 @@ def test_sync_propagates_non_kubectl_failure(provider, k8s):
 
 
 def test_sync_catches_kubectl_error_and_returns_task_failure(provider, k8s):
-    from iris.cluster.providers.k8s.types import KubectlError
-
     k8s.inject_failure(
         "apply_json",
         KubectlError("kubectl apply failed: Error from server (RequestEntityTooLarge): limit is 3145728"),
@@ -84,24 +87,72 @@ def test_sync_catches_kubectl_error_and_returns_task_failure(provider, k8s):
 
 
 # ---------------------------------------------------------------------------
-# sync(): tasks_to_kill
+# sync(): stray pod deletion (kill via desired-set diff)
 # ---------------------------------------------------------------------------
 
 
-def test_sync_deletes_pods_for_tasks_to_kill(provider, k8s):
+def test_sync_deletes_pods_not_in_desired_set(provider, k8s):
+    """A managed pod whose (task_hash, attempt_id) is not in tasks_to_run|running_tasks
+    is considered a stray and gets deleted."""
     task_id = "/test-job/0"
     populate_pod(
         k8s,
         "iris-test-job-0-0",
         "Running",
-        labels={_LABEL_TASK_HASH: _task_hash(task_id), _LABEL_JOB_ID: _sanitize_label_value("/test-job")},
+        labels={
+            _LABEL_TASK_HASH: _task_hash(task_id),
+            "iris.attempt_id": "0",
+            _LABEL_JOB_ID: _sanitize_label_value("/test-job"),
+        },
     )
-    batch = make_batch(tasks_to_kill=[task_id])
+    # Empty batch: nothing desired → existing pod is stray.
+    batch = make_batch()
 
     result = provider.sync(batch)
 
     assert k8s.get_json(K8sResource.PODS, "iris-test-job-0-0") is None
     assert result.updates == []
+
+
+def test_sync_keeps_pods_in_desired_running_set(provider, k8s):
+    """A managed pod for a desired (task_hash, attempt_id) is kept across the diff."""
+    task_id = JobName.from_wire("/test-job/0")
+    pod_name = _pod_name(task_id, 0)
+    populate_pod(
+        k8s,
+        pod_name,
+        "Running",
+        labels={
+            _LABEL_TASK_HASH: _task_hash(task_id.to_wire()),
+            "iris.attempt_id": "0",
+        },
+    )
+    batch = make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=0)])
+
+    provider.sync(batch)
+
+    assert k8s.get_json(K8sResource.PODS, pod_name) is not None
+
+
+def test_sync_deletes_pod_for_stale_attempt(provider, k8s):
+    """A pod for an older attempt of a still-active task is a stray (attempt_id mismatch)."""
+    task_id = JobName.from_wire("/test-job/0")
+    old_pod = _pod_name(task_id, 0)
+    populate_pod(
+        k8s,
+        old_pod,
+        "Running",
+        labels={
+            _LABEL_TASK_HASH: _task_hash(task_id.to_wire()),
+            "iris.attempt_id": "0",
+        },
+    )
+    # Desired = attempt 1 (task was preempted and re-promoted).
+    batch = make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=1)])
+
+    provider.sync(batch)
+
+    assert k8s.get_json(K8sResource.PODS, old_pod) is None
 
 
 def test_delete_pods_uses_task_hash_label(provider, k8s):
@@ -571,8 +622,9 @@ def test_sync_node_failure_yields_no_capacity(provider, k8s):
 # ---------------------------------------------------------------------------
 
 
-def test_resource_stats_from_kubectl_top(provider, k8s):
-    """Running pods get resource_usage populated by background ResourceCollector."""
+def test_resource_stats_from_kubectl_top(provider, k8s, task_stats_table):
+    """Running pods emit IrisTaskStat rows via the background ResourceCollector."""
+
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
     pod_name = _pod_name(task_id, attempt_id)
@@ -584,20 +636,23 @@ def test_resource_stats_from_kubectl_top(provider, k8s):
     batch = make_batch(running_tasks=[entry])
     # First sync registers the pod with the ResourceCollector.
     provider.sync(batch)
-    # Wait for background collector to fetch.
+    # Wait for background collector to fetch and write.
     time.sleep(6)
-    # Second sync reads the cached resource usage.
-    result = provider.sync(batch)
+    # No more sync needed — the row has already been written to the table.
 
-    assert len(result.updates) == 1
-    usage = result.updates[0].resource_usage
-    assert usage is not None
-    assert usage.cpu_millicores == 500
-    assert usage.memory_mb == 1024
+    rows = [row for batch_rows in task_stats_table.writes for row in batch_rows]
+    assert rows, "ResourceCollector did not write any IrisTaskStat rows"
+    assert all(isinstance(r, IrisTaskStat) for r in rows)
+    latest = rows[-1]
+    assert latest.task_id == task_id.to_wire()
+    assert latest.attempt_id == attempt_id
+    assert latest.worker_id == pod_name
+    assert latest.cpu_millicores == 500
+    assert latest.memory_mb == 1024
 
 
-def test_resource_stats_none_when_metrics_unavailable(provider, k8s):
-    """resource_usage stays None when kubectl top returns None."""
+def test_resource_stats_skipped_when_metrics_unavailable(provider, k8s, task_stats_table):
+    """No IrisTaskStat row is written when kubectl top returns None."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
     pod_name = _pod_name(task_id, attempt_id)
@@ -607,17 +662,14 @@ def test_resource_stats_none_when_metrics_unavailable(provider, k8s):
     k8s.set_top_pod(pod_name, None)
 
     batch = make_batch(running_tasks=[entry])
-    # Even after background collector runs, None top_pod stays None.
     provider.sync(batch)
     time.sleep(6)
-    result = provider.sync(batch)
 
-    assert len(result.updates) == 1
-    assert result.updates[0].resource_usage is None
+    assert task_stats_table.writes == []
 
 
-def test_resource_stats_none_when_top_pod_raises(provider, k8s):
-    """resource_usage stays None when kubectl top raises an exception."""
+def test_resource_stats_skipped_when_top_pod_raises(provider, k8s, task_stats_table):
+    """No IrisTaskStat row is written when kubectl top raises an exception."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
     pod_name = _pod_name(task_id, attempt_id)
@@ -629,14 +681,12 @@ def test_resource_stats_none_when_top_pod_raises(provider, k8s):
     batch = make_batch(running_tasks=[entry])
     provider.sync(batch)
     time.sleep(6)
-    result = provider.sync(batch)
 
-    assert len(result.updates) == 1
-    assert result.updates[0].resource_usage is None
+    assert task_stats_table.writes == []
 
 
-def test_resource_stats_none_for_non_running_pods(provider, k8s):
-    """resource_usage is None for pods in terminal phases."""
+def test_resource_stats_skipped_for_non_running_pods(provider, k8s, task_stats_table):
+    """Terminal pods are not registered with the resource collector, so no rows land."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
     pod_name = _pod_name(task_id, attempt_id)
@@ -645,10 +695,10 @@ def test_resource_stats_none_for_non_running_pods(provider, k8s):
     populate_pod(k8s, pod_name, "Succeeded")
 
     batch = make_batch(running_tasks=[entry])
-    result = provider.sync(batch)
+    provider.sync(batch)
+    time.sleep(6)
 
-    assert len(result.updates) == 1
-    assert result.updates[0].resource_usage is None
+    assert task_stats_table.writes == []
 
 
 # ---------------------------------------------------------------------------
@@ -730,7 +780,7 @@ def test_profile_memory_flamegraph_via_kubectl_exec(provider, k8s):
     # Two exec calls: attach + transform
     k8s.set_exec_response(pod_name, _success_cp())
     k8s.set_exec_response(pod_name, _success_cp())
-    k8s.set_file_content(pod_name, "/tmp/iris-memray.html", b"<html>flamegraph</html>")
+    k8s.set_file_content(pod_name, "/tmp/iris-profile.html", b"<html>flamegraph</html>")
 
     request = job_pb2.ProfileTaskRequest(
         target="/job/0",
@@ -880,8 +930,8 @@ def test_sync_creates_pdb_for_coordinator_task(provider, k8s):
     assert pdb["metadata"]["labels"][_LABEL_TASK_HASH] == _task_hash("/coord-job/0")
 
 
-def test_bulk_delete_defers_pdb_cleanup_to_gc(provider, k8s):
-    """_bulk_delete_task_pods deletes pods immediately but defers PDB/CM cleanup to GC."""
+def test_stray_delete_defers_pdb_cleanup_to_gc(provider, k8s):
+    """_delete_stray_pods deletes pods immediately but defers PDB/CM cleanup to GC."""
     task_id = "/coord-job/0"
     task_hash = _task_hash(task_id)
     labels = {
@@ -890,7 +940,12 @@ def test_bulk_delete_defers_pdb_cleanup_to_gc(provider, k8s):
         _LABEL_TASK_HASH: task_hash,
     }
 
-    populate_pod(k8s, "iris-coord-pod", "Running", labels={_LABEL_TASK_HASH: task_hash})
+    populate_pod(
+        k8s,
+        "iris-coord-pod",
+        "Running",
+        labels={_LABEL_TASK_HASH: task_hash, "iris.attempt_id": "0"},
+    )
     pdb = {
         "kind": "PodDisruptionBudget",
         "metadata": {"name": "iris-coord-pod-pdb", "labels": labels},
@@ -899,7 +954,8 @@ def test_bulk_delete_defers_pdb_cleanup_to_gc(provider, k8s):
     k8s.seed_resource(K8sResource.PDBS, "iris-coord-pod-pdb", pdb)
 
     cached_pods = k8s.list_json(K8sResource.PODS, labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
-    provider._bulk_delete_task_pods([task_id], cached_pods)
+    # Empty desired set → pod is stray.
+    provider._delete_stray_pods(cached_pods, desired_keys=set())
 
     # Pod deleted immediately.
     assert k8s.get_json(K8sResource.PODS, "iris-coord-pod") is None
@@ -951,8 +1007,6 @@ def _seed_configmap(k8s, name: str, task_hash: str, created: str) -> None:
 
 
 def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
-    from datetime import datetime, timedelta, timezone
-
     now = datetime.now(timezone.utc)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
     recent_ts = (now - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -985,7 +1039,6 @@ def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
 
 def test_gc_respects_interval(provider, k8s):
     """_maybe_gc_terminal_resources should only run every _GC_INTERVAL_SECONDS."""
-    from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1000,7 +1053,7 @@ def test_gc_respects_interval(provider, k8s):
 
 
 def test_gc_cleans_up_deferred_configmaps(provider, k8s):
-    """GC deletes configmaps for task hashes enqueued by _bulk_delete_task_pods."""
+    """GC deletes configmaps for task hashes enqueued by _delete_stray_pods."""
     task_id = "/deferred-job/0"
     task_hash = _task_hash(task_id)
     labels = {
@@ -1016,7 +1069,7 @@ def test_gc_cleans_up_deferred_configmaps(provider, k8s):
     }
     k8s.seed_resource(K8sResource.CONFIGMAPS, "deferred-cm", cm)
 
-    # Simulate _bulk_delete_task_pods enqueuing the hash.
+    # Simulate _delete_stray_pods enqueuing the hash.
     provider._pending_gc_hashes.add(task_hash)
 
     # GC picks it up and deletes the configmap.
@@ -1026,9 +1079,9 @@ def test_gc_cleans_up_deferred_configmaps(provider, k8s):
 
 def test_gc_retains_pending_hash_when_pod_still_in_snapshot(provider, k8s):
     """Deferred hashes must not be dropped when the killed pod is still in the
-    pre-delete managed_pods snapshot (the common tasks_to_kill path).
+    pre-delete managed_pods snapshot.
 
-    Reproduces: sync fetches managed_pods, _bulk_delete_task_pods deletes the pod
+    Reproduces: sync fetches managed_pods, _delete_stray_pods deletes the pod
     and enqueues hash, then _maybe_gc sees the hash as "active" from the stale
     snapshot. The hash must be retained for the next GC cycle.
     """
@@ -1037,7 +1090,7 @@ def test_gc_retains_pending_hash_when_pod_still_in_snapshot(provider, k8s):
     labels = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE, _LABEL_TASK_HASH: task_hash}
 
     # Seed the pod and its configmap.
-    populate_pod(k8s, "iris-kill-me-0-0", "Running", labels={_LABEL_TASK_HASH: task_hash})
+    populate_pod(k8s, "iris-kill-me-0-0", "Running", labels={_LABEL_TASK_HASH: task_hash, "iris.attempt_id": "0"})
     cm = {"kind": "ConfigMap", "metadata": {"name": "iris-kill-me-0-0-wf", "labels": labels}}
     k8s.seed_resource(K8sResource.CONFIGMAPS, "iris-kill-me-0-0-wf", cm)
 
@@ -1046,8 +1099,8 @@ def test_gc_retains_pending_hash_when_pod_still_in_snapshot(provider, k8s):
         K8sResource.PODS, labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE}
     )
 
-    # Kill the pod — hash goes into _pending_gc_hashes.
-    provider._bulk_delete_task_pods([task_id], pre_delete_pods)
+    # Kill the pod via stray-set diff (empty desired) — hash goes into _pending_gc_hashes.
+    provider._delete_stray_pods(pre_delete_pods, desired_keys=set())
     assert k8s.get_json(K8sResource.PODS, "iris-kill-me-0-0") is None
     assert task_hash in provider._pending_gc_hashes
 
@@ -1069,7 +1122,6 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
     terminal (old) and attempt 1 is still Running, deleting by task_hash would
     remove the active attempt's configmap and PDB protection.
     """
-    from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1114,12 +1166,10 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
 # ---------------------------------------------------------------------------
 
 
-def test_log_collector_set_pods_adds_and_removes(k8s, log_pusher):
+def test_log_collector_set_pods_adds_and_removes(k8s, log_client):
     """LogCollector.set_pods() adds new pods and removes absent ones."""
-    from iris.cluster.providers.k8s.tasks import LogCollector
-    from iris.cluster.types import JobName
 
-    collector = LogCollector(k8s, log_pusher, concurrency=1)
+    collector = LogCollector(k8s, log_client, concurrency=1)
     task_a = JobName.from_wire("/job/0")
     task_b = JobName.from_wire("/job/1")
     key_a = f"{task_a.to_wire()}:0"
@@ -1153,14 +1203,10 @@ def test_log_collector_set_pods_adds_and_removes(k8s, log_pusher):
     collector.close()
 
 
-def test_log_collector_set_pods_preserves_cursor_state(k8s, log_pusher):
+def test_log_collector_set_pods_preserves_cursor_state(k8s, log_client):
     """set_pods() preserves last_timestamp for pods that remain tracked."""
-    from datetime import datetime, timezone
 
-    from iris.cluster.providers.k8s.tasks import LogCollector
-    from iris.cluster.types import JobName
-
-    collector = LogCollector(k8s, log_pusher, concurrency=1)
+    collector = LogCollector(k8s, log_client, concurrency=1)
     task_id = JobName.from_wire("/job/0")
     key = f"{task_id.to_wire()}:0"
 
@@ -1187,28 +1233,40 @@ def test_log_collector_set_pods_preserves_cursor_state(k8s, log_pusher):
     collector.close()
 
 
-def test_resource_collector_set_pods_adds_and_removes(k8s):
-    """ResourceCollector.set_pods() adds new pods and cleans up removed ones."""
-    from iris.cluster.providers.k8s.tasks import ResourceCollector
+def test_resource_collector_set_pods_replaces_active_set(k8s, task_stats_table):
+    """set_pods() replaces the tracked pod set wholesale."""
 
-    collector = ResourceCollector(k8s, concurrency=1)
-    key_a = "/job/0:0"
-    key_b = "/job/1:0"
+    collector = ResourceCollector(k8s, task_stats_table, concurrency=1)
+    key_a = ("/job/0", 0)
+    key_b = ("/job/1", 0)
 
     collector.set_pods({key_a: "pod-a", key_b: "pod-b"})
     with collector._lock:
-        assert key_a in collector._pods
-        assert key_b in collector._pods
+        assert collector._pods == {key_a: "pod-a", key_b: "pod-b"}
 
-    # Inject a cached result for pod A.
-    with collector._lock:
-        collector._results[key_a] = job_pb2.ResourceUsage(cpu_millicores=100, memory_mb=512)
-
-    # Remove pod A — its cached result should also be cleaned up.
     collector.set_pods({key_b: "pod-b"})
     with collector._lock:
-        assert key_a not in collector._pods
-        assert key_a not in collector._results
-        assert key_b in collector._pods
+        assert collector._pods == {key_b: "pod-b"}
 
     collector.close()
+
+
+def test_resource_collector_writes_iris_task_rows(k8s, task_stats_table):
+    """A successful kubectl top read appends one IrisTaskStat row to the Table."""
+
+    k8s.set_top_pod("pod-a", PodResourceUsage(cpu_millicores=750, memory_bytes=2 * 1024 * 1024 * 1024))
+
+    collector = ResourceCollector(k8s, task_stats_table, concurrency=1)
+    collector.set_pods({("/job/0", 3): "pod-a"})
+    time.sleep(6)
+    collector.close()
+
+    rows = [row for batch_rows in task_stats_table.writes for row in batch_rows]
+    assert rows, "no rows emitted"
+    row = rows[-1]
+    assert isinstance(row, IrisTaskStat)
+    assert row.task_id == "/job/0"
+    assert row.attempt_id == 3
+    assert row.worker_id == "pod-a"
+    assert row.cpu_millicores == 750
+    assert row.memory_mb == 2048

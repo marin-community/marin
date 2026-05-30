@@ -10,7 +10,8 @@ from dataclasses import replace
 
 from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.executor import executor_main
+from marin.execution.types import ExecutorStep
 
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import MULTILINGUAL_LM_EVAL_LOGPROB_TASKS
@@ -57,6 +58,7 @@ multilingual_eval_steps = [
 
 
 if __name__ == "__main__":
-    for i in range(0, len(multilingual_eval_steps), 4):
-        batch = multilingual_eval_steps[i : i + 4]
-        executor_main(steps=batch)
+    # Cap concurrency at 4 to avoid swamping the cluster scheduler with 1,122
+    # ready eval steps. A single executor_main call walks the shared dependency
+    # DAG once instead of once per batch.
+    executor_main(steps=multilingual_eval_steps, max_concurrent=4)

@@ -42,8 +42,8 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("float32", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
     },
     "NVIDIA": {
-        ("bfloat16", "tiny"): BlockSizes(b_block_size=64, h_block_size=64, v_block_size=128),
-        ("float32", "tiny"): BlockSizes(b_block_size=64, h_block_size=64, v_block_size=128),
+        ("bfloat16", "tiny"): BlockSizes(b_block_size=128, h_block_size=64, v_block_size=128),
+        ("float32", "tiny"): BlockSizes(b_block_size=128, h_block_size=64, v_block_size=128),
         ("bfloat16", "small-vocab"): BlockSizes(b_block_size=128, h_block_size=256, v_block_size=1024),
         ("float32", "small-vocab"): BlockSizes(b_block_size=128, h_block_size=256, v_block_size=1024),
         ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=1024),
@@ -54,20 +54,20 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
     },
     "NVIDIA GB10": {
-        ("bfloat16", "tiny"): BlockSizes(b_block_size=32, h_block_size=64, v_block_size=128),
-        ("float32", "tiny"): BlockSizes(b_block_size=32, h_block_size=64, v_block_size=128),
-        ("bfloat16", "small-vocab"): BlockSizes(b_block_size=32, h_block_size=64, v_block_size=256),
-        ("float32", "small-vocab"): BlockSizes(b_block_size=32, h_block_size=64, v_block_size=256),
-        ("bfloat16", "small-h-small-vocab"): BlockSizes(b_block_size=32, h_block_size=64, v_block_size=128),
-        ("float32", "small-h-small-vocab"): BlockSizes(b_block_size=32, h_block_size=64, v_block_size=128),
+        ("bfloat16", "tiny"): BlockSizes(b_block_size=128, h_block_size=64, v_block_size=128),
+        ("float32", "tiny"): BlockSizes(b_block_size=128, h_block_size=64, v_block_size=128),
+        ("bfloat16", "small-vocab"): BlockSizes(b_block_size=128, h_block_size=64, v_block_size=256),
+        ("float32", "small-vocab"): BlockSizes(b_block_size=128, h_block_size=64, v_block_size=256),
+        ("bfloat16", "small-h-small-vocab"): BlockSizes(b_block_size=128, h_block_size=64, v_block_size=128),
+        ("float32", "small-h-small-vocab"): BlockSizes(b_block_size=128, h_block_size=64, v_block_size=128),
         ("bfloat16", "gb10-large-vocab-mid-batch"): BlockSizes(b_block_size=1024, h_block_size=32, v_block_size=1024),
         ("float32", "gb10-large-vocab-mid-batch"): BlockSizes(b_block_size=1024, h_block_size=32, v_block_size=1024),
-        ("bfloat16", "gb10-fallback"): BlockSizes(b_block_size=32, h_block_size=128, v_block_size=64),
-        ("float32", "gb10-fallback"): BlockSizes(b_block_size=32, h_block_size=128, v_block_size=64),
+        ("bfloat16", "gb10-fallback"): BlockSizes(b_block_size=128, h_block_size=128, v_block_size=64),
+        ("float32", "gb10-fallback"): BlockSizes(b_block_size=128, h_block_size=128, v_block_size=64),
     },
     "NVIDIA H100": {
-        ("bfloat16", "tiny"): BlockSizes(b_block_size=64, h_block_size=64, v_block_size=128),
-        ("float32", "tiny"): BlockSizes(b_block_size=64, h_block_size=64, v_block_size=128),
+        ("bfloat16", "tiny"): BlockSizes(b_block_size=128, h_block_size=64, v_block_size=128),
+        ("float32", "tiny"): BlockSizes(b_block_size=128, h_block_size=64, v_block_size=128),
         ("bfloat16", "small-vocab"): BlockSizes(b_block_size=128, h_block_size=256, v_block_size=1024),
         ("float32", "small-vocab"): BlockSizes(b_block_size=128, h_block_size=256, v_block_size=1024),
         ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=1024),
@@ -78,8 +78,8 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("float32", "medium-batch-medium-h"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048),
     },
     "NVIDIA A100": {
-        ("bfloat16", "tiny"): BlockSizes(b_block_size=64, h_block_size=64, v_block_size=128),
-        ("float32", "tiny"): BlockSizes(b_block_size=64, h_block_size=64, v_block_size=128),
+        ("bfloat16", "tiny"): BlockSizes(b_block_size=128, h_block_size=64, v_block_size=128),
+        ("float32", "tiny"): BlockSizes(b_block_size=128, h_block_size=64, v_block_size=128),
         ("bfloat16", "small-vocab"): BlockSizes(b_block_size=128, h_block_size=256, v_block_size=1024),
         ("float32", "small-vocab"): BlockSizes(b_block_size=128, h_block_size=256, v_block_size=1024),
         ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=256, h_block_size=256, v_block_size=1024),
@@ -459,12 +459,6 @@ def _device_key(device_kind: Optional[str]) -> Optional[str]:
     if "tpu" in device_kind:
         return "TPU"
     return None
-
-
-def _dtype_name(dtype: Optional[jnp.dtype]) -> Optional[str]:
-    if dtype is None:
-        return None
-    return jnp.dtype(dtype).name
 
 
 def widest_dtype_name(

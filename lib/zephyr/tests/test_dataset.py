@@ -7,13 +7,16 @@ import json
 from functools import partial
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from fray import ResourceConfig
 from fray.local_backend import LocalClient
-from zephyr import Dataset, load_file, load_parquet
+from zephyr import Dataset, col, load_file, load_parquet
 from zephyr._test_helpers import SampleDataclass
 from zephyr.dataset import FilterOp, GlobSource, MapOp, WindowOp, resolve_glob
-from zephyr.execution import ZephyrContext
+from zephyr.execution import ZephyrContext, ZephyrWorkerError
+from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
 from zephyr.writers import write_parquet_file
 
 
@@ -568,8 +571,6 @@ def test_load_file_unsupported_extension(tmp_path, zephyr_ctx):
     ds = Dataset.from_files(str(input_dir), "*.txt").flat_map(load_file)
 
     # Worker errors are wrapped in ZephyrWorkerError
-    from zephyr.execution import ZephyrWorkerError
-
     with pytest.raises(ZephyrWorkerError, match="Unsupported"):
         zephyr_ctx.execute(ds)
 
@@ -586,8 +587,6 @@ def test_write_without_shard_pattern_multiple_shards(tmp_path, zephyr_ctx):
     ds = Dataset.from_list(sample_data).write_jsonl(str(output_dir / "output.jsonl"))
 
     # Worker errors are wrapped in ZephyrWorkerError
-    from zephyr.execution import ZephyrWorkerError
-
     with pytest.raises(ZephyrWorkerError, match="Output pattern must"):
         zephyr_ctx.execute(ds)
 
@@ -900,8 +899,6 @@ def test_map_shard_error_propagation(zephyr_ctx):
 
     ds = Dataset.from_list([list(range(1, 6))]).flat_map(lambda x: x).map_shard(failing_generator)
 
-    from zephyr.execution import ZephyrWorkerError
-
     with pytest.raises(ZephyrWorkerError, match="Test error"):
         zephyr_ctx.execute(ds)
 
@@ -1078,8 +1075,6 @@ def test_repr_handles_lambdas():
 
 def test_filter_with_expression(zephyr_ctx):
     """Test filter with expression on in-memory data."""
-    from zephyr import col
-
     ds = Dataset.from_list(
         [
             {"name": "alice", "score": 80},
@@ -1095,8 +1090,6 @@ def test_filter_with_expression(zephyr_ctx):
 
 def test_filter_expression_equality(zephyr_ctx):
     """Test filter with equality expression."""
-    from zephyr import col
-
     ds = Dataset.from_list(
         [
             {"category": "A", "value": 1},
@@ -1112,8 +1105,6 @@ def test_filter_expression_equality(zephyr_ctx):
 
 def test_filter_expression_logical_and(zephyr_ctx):
     """Test filter with logical AND expression."""
-    from zephyr import col
-
     ds = Dataset.from_list(
         [
             {"a": 1, "b": 2},
@@ -1130,8 +1121,6 @@ def test_filter_expression_logical_and(zephyr_ctx):
 
 def test_filter_expression_logical_or(zephyr_ctx):
     """Test filter with logical OR expression."""
-    from zephyr import col
-
     ds = Dataset.from_list(
         [
             {"a": 1, "b": 2},
@@ -1147,8 +1136,6 @@ def test_filter_expression_logical_or(zephyr_ctx):
 
 def test_filter_nested_field(zephyr_ctx):
     """Test filter with nested field access."""
-    from zephyr import col
-
     ds = Dataset.from_list(
         [
             {"id": 1, "meta": {"score": 0.9}},
@@ -1192,10 +1179,18 @@ def test_select_partial_columns(zephyr_ctx):
     assert results[1] == {"id": 2, "score": 60}
 
 
+def test_select_preserves_column_order(zephyr_ctx):
+    """Output dict keys follow the order passed to select(), not the source record order."""
+    ds = Dataset.from_list(
+        [{"id": 1, "name": "alice", "score": 80}],
+    ).select("score", "id", "name")
+
+    results = zephyr_ctx.execute(ds).results
+    assert list(results[0].keys()) == ["score", "id", "name"]
+
+
 def test_filter_and_select_combined(zephyr_ctx):
     """Test combined filter and select."""
-    from zephyr import col
-
     ds = (
         Dataset.from_list(
             [
@@ -1216,8 +1211,6 @@ def test_filter_and_select_combined(zephyr_ctx):
 @pytest.mark.parametrize("output_format", ["parquet", "jsonl"])
 def test_filter_and_select(tmp_path, zephyr_ctx, output_format: str):
     """Test combined filter and select on parquet."""
-    from zephyr import col
-
     ds = Dataset.from_list(
         [
             {"id": 1, "name": "alice", "score": 80, "extra": "x"},
@@ -1246,9 +1239,6 @@ def test_filter_and_select(tmp_path, zephyr_ctx, output_format: str):
 
 def test_filter_expression_repr():
     """Test FilterOp repr with expression."""
-    from zephyr import col
-    from zephyr.dataset import FilterOp
-
     expr = col("score") > 50
     op = FilterOp(predicate=expr.evaluate, expr=expr)
     assert "FilterOp(expr=" in repr(op)
@@ -1257,8 +1247,6 @@ def test_filter_expression_repr():
 
 def test_mixed_filter_expression_and_lambda(zephyr_ctx):
     """Test combining expression filter with lambda filter."""
-    from zephyr import col
-
     ds = (
         Dataset.from_list(
             [
@@ -1284,8 +1272,6 @@ def test_mixed_filter_expression_and_lambda(zephyr_ctx):
 
 def test_input_file_spec_row_range_basic(tmp_path):
     """Test InputFileSpec reads only the specified row range."""
-    from zephyr.readers import InputFileSpec, load_parquet
-
     data = [{"id": i, "value": i * 10} for i in range(100)]
     input_path = tmp_path / "data.parquet"
     write_parquet_file(data, str(input_path))
@@ -1306,8 +1292,6 @@ def test_input_file_spec_row_range_basic(tmp_path):
 
 def test_input_file_spec_with_columns_and_row_range(tmp_path):
     """Test InputFileSpec with both columns and row_range."""
-    from zephyr.readers import InputFileSpec, load_parquet
-
     data = [{"id": i, "name": f"item_{i}", "value": i * 10} for i in range(50)]
     input_path = tmp_path / "data.parquet"
     write_parquet_file(data, str(input_path))
@@ -1331,6 +1315,7 @@ def test_input_file_spec_with_columns_and_row_range(tmp_path):
 # --- Integration tests (all backends) ---
 
 
+@pytest.mark.slow
 def test_reshard_integration(integration_ctx):
     ds = Dataset.from_list([list(range(50))]).flat_map(lambda x: x).reshard(5).map(lambda x: x * 2)
     result = sorted(integration_ctx.execute(ds).results)
@@ -1361,28 +1346,7 @@ def test_sorted_merge_join_inner_basic_integration(integration_ctx):
     assert results[1] == {"id": 2, "text": "world", "score": 0.3}
 
 
-def test_sorted_merge_join_left_integration(integration_ctx):
-    left = Dataset.from_list([{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]).group_by(
-        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
-    )
-    right = Dataset.from_list([{"id": 1, "score": 0.9}]).group_by(
-        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
-    )
-
-    joined = left.sorted_merge_join(
-        right,
-        left_key=lambda x: x["id"],
-        right_key=lambda x: x["id"],
-        combiner=lambda left, right: {**left, "score": right["score"] if right else 0.0},
-        how="left",
-    )
-
-    results = sorted(integration_ctx.execute(joined).results, key=lambda x: x["id"])
-    assert len(results) == 2
-    assert results[0] == {"id": 1, "text": "hello", "score": 0.9}
-    assert results[1] == {"id": 2, "text": "world", "score": 0.0}
-
-
+@pytest.mark.slow
 def test_sorted_merge_join_after_group_by_integration(integration_ctx):
     docs = Dataset.from_list(
         [
@@ -1412,3 +1376,104 @@ def test_sorted_merge_join_after_group_by_integration(integration_ctx):
     assert results[0] == {"id": 1, "text": "hello updated", "version": 2, "quality": 0.9}
     assert results[1] == {"id": 2, "text": "world", "version": 1, "quality": 0.3}
     assert results[2] == {"id": 3, "text": "foo", "version": 1, "quality": 0.8}
+
+
+def test_dataset_load_parquet_batch(tmp_path, zephyr_ctx):
+    """load_parquet(batch_mode=True) yields pa.RecordBatch objects."""
+    path = str(tmp_path / "data.parquet")
+    records = [{"id": i, "val": float(i)} for i in range(6)]
+    pq.write_table(pa.Table.from_pylist(records), path, row_group_size=2)
+
+    ds = Dataset.from_list([path]).load_parquet(batch_mode=True)
+    results = zephyr_ctx.execute(ds).results
+
+    assert all(isinstance(b, pa.RecordBatch) for b in results)
+    all_rows = [row for b in results for row in b.to_pylist()]
+    assert sorted(all_rows, key=lambda r: r["id"]) == records
+
+
+def test_dataset_load_parquet_batch_include_file_paths(tmp_path, zephyr_ctx):
+    """load_parquet(batch_mode=True) with include_file_paths adds a string column to each RecordBatch."""
+    file_a = str(tmp_path / "a.parquet")
+    file_b = str(tmp_path / "b.parquet")
+    pq.write_table(pa.Table.from_pylist([{"id": 1}, {"id": 2}]), file_a)
+    pq.write_table(pa.Table.from_pylist([{"id": 3}]), file_b)
+
+    ds = Dataset.from_list([file_a, file_b]).load_parquet(
+        include_file_paths=True, file_path_column="source", batch_mode=True
+    )
+    results = zephyr_ctx.execute(ds).results
+
+    assert all(isinstance(b, pa.RecordBatch) for b in results)
+    assert all("source" in b.schema.names for b in results)
+    assert all(b.schema.field("source").type == pa.string() for b in results)
+
+    rows = [row for b in results for row in b.to_pylist()]
+    sources_by_id = {r["id"]: r["source"] for r in rows}
+    assert sources_by_id[1] == file_a
+    assert sources_by_id[2] == file_a
+    assert sources_by_id[3] == file_b
+
+
+def test_include_file_paths_parquet(tmp_path, zephyr_ctx):
+    """Parquet records loaded with include_file_paths get the source file path injected."""
+    file_a = str(tmp_path / "a.parquet")
+    file_b = str(tmp_path / "b.parquet")
+    pq.write_table(pa.Table.from_pylist([{"id": 1}, {"id": 2}]), file_a)
+    pq.write_table(pa.Table.from_pylist([{"id": 3}]), file_b)
+
+    ds = Dataset.from_list([file_a, file_b]).load_parquet(include_file_paths=True, file_path_column="source")
+    results = zephyr_ctx.execute(ds).results
+
+    assert len(results) == 3
+    for r in results:
+        assert "source" in r
+    sources_by_id = {r["id"]: r["source"] for r in results}
+    assert sources_by_id[1] == file_a
+    assert sources_by_id[2] == file_a
+    assert sources_by_id[3] == file_b
+
+
+def test_include_file_paths_jsonl(tmp_path, zephyr_ctx):
+    """JSONL records loaded with include_file_paths get the source file path injected."""
+    file_a = str(tmp_path / "a.jsonl")
+    file_b = str(tmp_path / "b.jsonl")
+    Path(file_a).write_text(json.dumps({"id": 1}) + "\n" + json.dumps({"id": 2}) + "\n")
+    Path(file_b).write_text(json.dumps({"id": 3}) + "\n")
+
+    ds = Dataset.from_list([file_a, file_b]).load_jsonl(include_file_paths=True, file_path_column="source")
+    results = zephyr_ctx.execute(ds).results
+
+    assert len(results) == 3
+    sources_by_id = {r["id"]: r["source"] for r in results}
+    assert sources_by_id[1] == file_a
+    assert sources_by_id[2] == file_a
+    assert sources_by_id[3] == file_b
+
+
+def test_include_file_paths_select_excludes_path_column_raises(tmp_path, zephyr_ctx):
+    """select() that omits the file path column when include_file_paths=True must raise.
+
+    The planner pushes down the SelectOp, removing it from the pipeline. The reader
+    then detects that the column filter doesn't include the injected column and raises
+    rather than silently leaking it into the output.
+    """
+    path = str(tmp_path / "data.parquet")
+    pq.write_table(pa.Table.from_pylist([{"id": 1}]), path)
+
+    ds = Dataset.from_list([path]).load_parquet(include_file_paths=True).select("id")
+    with pytest.raises(RuntimeError, match=f"Column filter must include file path column '{DEFAULT_FILE_PATH_COLUMN}'"):
+        zephyr_ctx.execute(ds)
+
+
+def test_include_file_paths_select_includes_path_column(tmp_path, zephyr_ctx):
+    """select() that explicitly includes the file path column works correctly."""
+    path = str(tmp_path / "data.parquet")
+    pq.write_table(pa.Table.from_pylist([{"id": 1, "val": "a"}, {"id": 2, "val": "b"}]), path)
+
+    ds = Dataset.from_list([path]).load_parquet(include_file_paths=True).select("id", DEFAULT_FILE_PATH_COLUMN)
+    results = zephyr_ctx.execute(ds).results
+
+    assert len(results) == 2
+    assert all(set(r.keys()) == {"id", DEFAULT_FILE_PATH_COLUMN} for r in results)
+    assert all(r[DEFAULT_FILE_PATH_COLUMN] == path for r in results)

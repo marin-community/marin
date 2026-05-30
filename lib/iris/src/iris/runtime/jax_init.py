@@ -14,8 +14,9 @@ from __future__ import annotations
 import atexit
 import logging
 import os
+import time
 
-from rigging.timing import Duration, ExponentialBackoff
+from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
@@ -79,22 +80,17 @@ def _poll_for_coordinator(
     Raises:
         TimeoutError: If the coordinator is not found within timeout.
     """
-    result: list[str] = []
-
-    def _check() -> bool:
+    backoff = ExponentialBackoff(initial=poll_interval, maximum=max(poll_interval, 30.0))
+    deadline = Deadline.from_now(Duration.from_seconds(timeout))
+    while True:
         resolved = resolver.resolve(endpoint_name)
         if not resolved.is_empty:
-            result.append(resolved.first().url)
-            return True
-        return False
-
-    backoff = ExponentialBackoff(initial=poll_interval, maximum=max(poll_interval, 30.0))
-    backoff.wait_until_or_raise(
-        _check,
-        timeout=Duration.from_seconds(timeout),
-        error_message=f"Timed out after {timeout}s waiting for coordinator endpoint '{endpoint_name}'",
-    )
-    return result[0]
+            return resolved.first().url
+        if deadline.expired():
+            raise TimeoutError(f"Timed out after {timeout}s waiting for coordinator endpoint '{endpoint_name}'")
+        interval = min(backoff.next_interval(), deadline.remaining_seconds())
+        if interval > 0:
+            time.sleep(interval)
 
 
 def initialize_jax(
@@ -113,8 +109,9 @@ def initialize_jax(
     initialization is skipped — JAX works correctly without distributed
     init when there is only one process.
 
-    On TPU, JAX handles distributed init natively via the TPU runtime —
-    calling jax.distributed.initialize would conflict, so this is a no-op.
+    On TPU, JAX handles coordinator discovery via the TPU runtime, so this
+    function calls ``jax.distributed.initialize()`` with no arguments and
+    returns — the TPU runtime supplies all necessary addresses automatically.
 
     Args:
         port: Coordinator port. Overridden by IRIS_PORT_jax if allocated.
@@ -124,22 +121,18 @@ def initialize_jax(
         poll_timeout: Maximum seconds for non-coordinator tasks to wait.
         poll_interval: Initial backoff delay for polling (seconds).
     """
-    import jax
+    import jax  # heavy import; lazy by design
 
-    # Single-host TPU has its own distributed init via the TPU runtime;
-    # skip the coordinator dance to avoid conflicts.  Multi-host TPU
-    # (num_tasks > 1) still needs Iris-managed coordinator discovery
-    # because the container doesn't inherit TPU_WORKER_HOSTNAMES.
-    is_tpu = os.environ.get("PJRT_DEVICE", "").upper() == "TPU" or os.environ.get("JAX_PLATFORMS", "") == "tpu"
-    if is_tpu:
-        job_info_peek = get_job_info()
-        if job_info_peek is None or job_info_peek.num_tasks <= 1:
-            logger.info("Single-host TPU detected; skipping Iris JAX distributed init (TPU runtime handles it)")
-            return
-        logger.info(
-            "Multi-host TPU detected (%d tasks); using Iris coordinator for jax.distributed.initialize",
-            job_info_peek.num_tasks,
-        )
+    # TPU has its own coordinator discovery via the TPU runtime, so avoid the
+    # Iris endpoint dance. We still call JAX distributed initialization to
+    # create the host-side distributed client used by Levanter multihost
+    # utilities. levanter.distributed delegates here when running under Iris
+    # (see lib/levanter/src/levanter/distributed.py initialize_distributed),
+    # so this is the single init site on the Iris+TPU path.
+    if os.environ.get("PJRT_DEVICE", "").upper() == "TPU" or os.environ.get("JAX_PLATFORMS", "") == "tpu":
+        logger.info("TPU detected; initializing JAX distributed via TPU runtime autodiscovery")
+        jax.distributed.initialize()
+        return
 
     job_info = get_job_info()
     _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)

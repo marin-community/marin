@@ -15,8 +15,8 @@
 edition = "2023";
 
 // Worker-specific request/response messages and the WorkerService RPC.
-// Shared types (including RunTaskRequest and WorkerTaskStatus) live in
-// job.proto; controller-specific types live in controller.proto.
+// Shared types (including RunTaskRequest) live in job.proto; controller-
+// specific types live in controller.proto.
 //
 // Package deliberately kept as iris.cluster to preserve the wire-protocol URL
 // /iris.cluster.WorkerService/... for all existing workers and the controller.
@@ -70,33 +70,83 @@ message Worker {
 
   message PingRequest {}
   message PingResponse {
-    iris.job.WorkerResourceSnapshot resource_snapshot = 1;
+    reserved 1;  // was: WorkerResourceSnapshot resource_snapshot (now in iris.worker stats)
     bool healthy = 2;
     string health_error = 3;
   }
 
-  message StartTasksRequest {
-    repeated iris.job.RunTaskRequest tasks = 1;
-  }
-  message StartTasksResponse {
-    repeated TaskAck acks = 1;
-  }
-  message TaskAck {
-    string task_id = 1;
-    bool accepted = 2;
-    string error = 3;
+  // ============================================================
+  // RECONCILE RPC (controller -> worker, unary)
+  // ============================================================
+
+  message ReconcileRequest {
+    string worker_id = 1;
+    repeated DesiredAttempt desired = 2;        // complete expected set
   }
 
-  message StopTasksRequest {
-    repeated string task_ids = 1;
+  message ReconcileResponse {
+    string worker_id = 1;
+    repeated AttemptObservation observed = 2;   // complete observed set
+    WorkerHealth health = 3;
   }
-  message StopTasksResponse {}
 
-  message PollTasksRequest {
-    repeated iris.job.WorkerTaskStatus expected_tasks = 1;
+  message DesiredAttempt {
+    // Routing key. 16 hex chars (128-bit random).
+    string attempt_uid = 1;
+
+    oneof intent {
+      AttemptSpec run = 10;
+      StopReason stop = 11;
+    }
+
+    // Legacy composite key. Retained as a rollover fallback so a worker that
+    // adopted a pre-UID-label container (created before 2026-05-19) can
+    // route by (task_id, attempt_id) and stamp the UID onto its local
+    // attempt on the first reconcile tick. Scheduled for removal once
+    // label-less containers have aged out of the cluster.
+    string task_id = 100;
+    int32 attempt_id = 101;
   }
-  message PollTasksResponse {
-    repeated iris.job.WorkerTaskStatus tasks = 1;
+
+  message AttemptSpec {
+    // Populated only when the DB attempt state is ASSIGNED (the one
+    // dispatch tick that hands the worker the spec). Omitted on every
+    // subsequent tick — the worker is expected to have it cached.
+    iris.job.RunTaskRequest request = 1;
+  }
+
+  message AttemptObservation {
+    string attempt_uid = 1;
+
+    iris.job.TaskState state = 2;
+    int32 exit_code = 3;
+    string error = 4;
+    string container_id = 5;
+    iris.time.Timestamp finished_at = 6;
+    iris.job.ResourceUsage resource_usage = 7;
+
+    // Legacy composite key. Set so the controller can route an observation
+    // emitted by a pre-UID-label adopted attempt (empty attempt_uid) back to
+    // its DB row via (task_id, attempt_id). Scheduled for removal alongside
+    // the matching DesiredAttempt fields.
+    string task_id = 100;
+    int32 attempt_id = 101;
+  }
+
+  enum StopReason {
+    STOP_REASON_UNSPECIFIED = 0;
+    STOP_REASON_CANCELLED = 1;
+    STOP_REASON_PREEMPTED = 2;
+    STOP_REASON_SUPERSEDED = 3;
+    STOP_REASON_JOB_TERMINATED = 4;
+    STOP_REASON_TASK_TIMEOUT = 5;
+    STOP_REASON_WORKER_DRAIN = 6;
+  }
+
+  message WorkerHealth {
+    bool healthy = 1;
+    string health_error = 2;
+    iris.job.WorkerResourceSnapshot resources = 3;
   }
 }
 
@@ -118,7 +168,8 @@ service WorkerService {
 
   // --- Worker lifecycle / task RPCs (controller -> worker) ---
   rpc Ping(Worker.PingRequest) returns (Worker.PingResponse);
-  rpc StartTasks(Worker.StartTasksRequest) returns (Worker.StartTasksResponse);
-  rpc StopTasks(Worker.StopTasksRequest) returns (Worker.StopTasksResponse);
-  rpc PollTasks(Worker.PollTasksRequest) returns (Worker.PollTasksResponse);
+  // Reconcile RPC: controller -> worker, unary. One request carries the
+  // controller's complete desired attempt set for this worker; one response
+  // carries the complete observed set plus a WorkerHealth block.
+  rpc Reconcile(Worker.ReconcileRequest) returns (Worker.ReconcileResponse);
 }

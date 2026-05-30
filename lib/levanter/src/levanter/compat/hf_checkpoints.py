@@ -57,7 +57,6 @@ from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.jax_utils import best_effort_sharding, sync_global_devices, use_cpu_device
-from levanter.utils.json_utils import ConfigJSONEncoder
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.py_utils import dataclass_with_default_init
 
@@ -74,6 +73,7 @@ from transformers.dynamic_module_utils import get_class_from_dynamic_module  # n
 from transformers.models.auto.auto_factory import _get_model_class  # noqa: E402
 
 if TYPE_CHECKING:
+    # transformers is an optional dep; keep guard to avoid import at type-check time only
     from transformers import FeatureExtractionMixin, ProcessorMixin
 
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
@@ -1107,7 +1107,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 self.feature_extractor.save_pretrained(local_path)
 
             with open(os.path.join(local_path, "config.json"), "w") as f:
-                json.dump(dict_config, f, cls=ConfigJSONEncoder)
+                json.dump(dict_config, f)
 
             if generation_config is not None:
                 logger.info(

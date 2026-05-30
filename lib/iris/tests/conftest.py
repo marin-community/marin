@@ -14,6 +14,7 @@ import warnings
 from pathlib import Path
 
 import pytest
+from iris.client.local_client import make_local_client
 from iris.cluster.config import load_config, make_local_config
 from iris.managed_thread import thread_container_scope
 from iris.rpc import config_pb2
@@ -21,7 +22,7 @@ from iris.test_util import SentinelFile
 from rigging.timing import Duration, ExponentialBackoff
 
 IRIS_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "config" / "test.yaml"
 
 
 def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
@@ -105,6 +106,22 @@ def _ensure_logging_health():
 def sentinel(tmp_path) -> SentinelFile:
     """Per-test sentinel file for blocking/unblocking job threads."""
     return SentinelFile(str(tmp_path / "sentinel"))
+
+
+@pytest.fixture
+def local_iris_client():
+    """Boot an in-process LocalCluster and yield an IrisClient connected to it.
+
+    Cluster is torn down on teardown even if the test raises. For module-scoped
+    reuse, override this fixture in your test file with ``scope="module"`` and
+    the same body — ``make_local_client`` does not depend on per-test state.
+    """
+
+    client = make_local_client()
+    try:
+        yield client
+    finally:
+        client.shutdown()
 
 
 @pytest.fixture(autouse=True)

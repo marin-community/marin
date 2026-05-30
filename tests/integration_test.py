@@ -32,13 +32,9 @@ from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import Artifact
-from marin.execution.executor import (
-    ExecutorMainConfig,
-    ExecutorStep,
-    executor_main,
-    this_output_path,
-)
+from marin.execution.executor import ExecutorMainConfig, executor_main
 from marin.execution.step_spec import StepSpec
+from marin.execution.types import ExecutorStep, this_output_path
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
 from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
 from marin.processing.tokenize import lm_data_config
@@ -88,7 +84,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         hash_attrs={"mode": "exact_paragraph"},
         deps=[normalize_hq_spec],
         fn=lambda output_path: dedup_exact_paragraph(
-            input_paths=[Artifact.load(normalize_hq_spec, NormalizedData).main_output_dir],
+            input_paths=[Artifact.from_path(normalize_hq_spec, NormalizedData).main_output_dir],
             output_path=output_path,
             max_parallelism=4,
             worker_resources=ResourceConfig(cpu=1, ram="1g"),
@@ -101,7 +97,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         name=os.path.join(prefix, "cleaned"),
         deps=[normalize_hq_spec, dedup_exact_paragraph_spec],
         fn=lambda output_path: consolidate(
-            input_path=Artifact.load(normalize_hq_spec, NormalizedData).main_output_dir,
+            input_path=Artifact.from_path(normalize_hq_spec, NormalizedData).main_output_dir,
             output_path=output_path,
             # Normalize emits parquet; override the jsonl.gz default.
             filetype="parquet",

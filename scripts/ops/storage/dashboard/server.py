@@ -17,6 +17,7 @@ import asyncio
 import functools
 import hashlib
 import hmac
+import json
 import logging
 import os
 import secrets
@@ -59,7 +60,7 @@ SYNC_INTERVAL = 600  # 10 minutes
 _db_lock = threading.RLock()
 
 
-class _LoginRequest(BaseModel):
+class LoginRequest(BaseModel):
     password: str
 
 
@@ -296,7 +297,7 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
         return await call_next(request)
 
     @app.post("/api/login")
-    def login(body: _LoginRequest) -> dict[str, str]:
+    def login(body: LoginRequest) -> dict[str, str]:
         password = os.environ.get("DASHBOARD_PASSWORD", "")
         if not hmac.compare_digest(body.password, password):
             raise HTTPException(status_code=401, detail="Incorrect password")
@@ -344,12 +345,19 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
         ]:
             local_dir.mkdir(parents=True, exist_ok=True)
             log.info("syncing %s from %s", name, gcs_prefix)
+            # --delete-unmatched-destination-objects: `distributed_scan.py`
+            # writes parquet segments under fresh UUIDs and truncates the
+            # GCS staging dir each run, so plain rsync would leave stale
+            # segments from prior scans in the container's local cache and
+            # the dashboard would aggregate ghost objects from a union of
+            # every historical scan.
             subprocess.run(
                 [
                     "gcloud",
                     "storage",
                     "rsync",
                     "--recursive",
+                    "--delete-unmatched-destination-objects",
                     f"{gcs_prefix}/{name}/",
                     str(local_dir) + "/",
                 ],
@@ -750,10 +758,9 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
     def create_protect_rule(req: ProtectRuleCreate) -> dict[str, Any]:
         conn = db()
         new_id = _next_rule_id(conn, "protect_rules")
-        import json as _json
 
         path = catalog.protect_rules_json
-        rules = _json.loads(path.read_text()) if path.exists() else []
+        rules = json.loads(path.read_text()) if path.exists() else []
         new_rule = {
             "id": new_id,
             "bucket": req.bucket,
@@ -764,20 +771,18 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
             "sources": None,
         }
         rules.append(new_rule)
-        path.write_text(_json.dumps(rules, indent=2) + "\n")
+        path.write_text(json.dumps(rules, indent=2) + "\n")
         flush_protect_rules(conn, catalog)
         return new_rule
 
     @app.delete("/api/rules/{rule_id}")
     @serialized
     def remove_protect_rule(rule_id: int) -> dict[str, Any]:
-        import json as _json
-
         conn = db()
         path = catalog.protect_rules_json
-        rules = _json.loads(path.read_text()) if path.exists() else []
+        rules = json.loads(path.read_text()) if path.exists() else []
         rules = [r for r in rules if r["id"] != rule_id]
-        path.write_text(_json.dumps(rules, indent=2) + "\n")
+        path.write_text(json.dumps(rules, indent=2) + "\n")
         flush_protect_rules(conn, catalog)
         return {"deleted": rule_id}
 
@@ -993,13 +998,11 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
     @app.post("/api/delete-rules")
     @serialized
     def create_delete_rule(req: DeleteRuleCreate) -> dict[str, Any]:
-        import json as _json
-
         conn = db()
         new_id = _next_rule_id(conn, "delete_rules")
         now = datetime.now(UTC).isoformat()
         path = catalog.delete_rules_json
-        rules = _json.loads(path.read_text()) if path.exists() else []
+        rules = json.loads(path.read_text()) if path.exists() else []
         new_rule = {
             "id": new_id,
             "pattern": req.pattern,
@@ -1008,20 +1011,18 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
             "created_at": now,
         }
         rules.append(new_rule)
-        path.write_text(_json.dumps(rules, indent=2) + "\n")
+        path.write_text(json.dumps(rules, indent=2) + "\n")
         flush_delete_rules(conn, catalog)
         return new_rule
 
     @app.delete("/api/delete-rules/{rule_id}")
     @serialized
     def remove_delete_rule(rule_id: int) -> dict[str, Any]:
-        import json as _json
-
         conn = db()
         path = catalog.delete_rules_json
-        rules = _json.loads(path.read_text()) if path.exists() else []
+        rules = json.loads(path.read_text()) if path.exists() else []
         rules = [r for r in rules if r["id"] != rule_id]
-        path.write_text(_json.dumps(rules, indent=2) + "\n")
+        path.write_text(json.dumps(rules, indent=2) + "\n")
         flush_delete_rules(conn, catalog)
         return {"deleted": rule_id}
 

@@ -204,6 +204,17 @@ enum TaskState {
   TASK_STATE_UNSCHEDULABLE = 8;
   TASK_STATE_ASSIGNED = 9;
   TASK_STATE_PREEMPTED = 10;
+  // Terminal: this task was cancelled by the controller because a coscheduled
+  // sibling hit its terminal failure budget. The task itself was healthy —
+  // distinguishing this from KILLED (operator-initiated) avoids spurious
+  // "user killed my job" tickets, and from WORKER_FAILED (real worker death)
+  // avoids polluting the preemption counter.
+  TASK_STATE_COSCHED_FAILED = 11;
+  // Reconcile-protocol sentinel: worker received a run directive for an
+  // attempt_uid but has no cached spec and cannot start it. The controller
+  // treats this as a terminal failure (worker_lost_spec) and re-queues the
+  // task under a fresh uid. Not a valid persistent DB state.
+  TASK_STATE_MISSING = 12;
 }
 
 // Status of a single task within a job
@@ -221,6 +232,10 @@ message TaskStatus {
   iris.time.Timestamp finished_at = 10;
 
   map<string, int32> ports = 11;      // Per-task port allocations
+  // Worker-resident in-memory ResourceUsage. Filled by Worker self-RPCs
+  // (Worker.GetTaskStatus / Worker.ListTasks). The controller does NOT set
+  // this — controller-served TaskStatus carries no resource_usage; consumers
+  // must query the iris.task stats namespace for per-attempt time series.
   ResourceUsage resource_usage = 12;
   BuildMetrics build_metrics = 13;
 
@@ -232,13 +247,8 @@ message TaskStatus {
   bool can_be_scheduled = 17;         // Whether task is currently schedulable
   // field 18 was log_directory, removed
   string container_id = 19;           // Platform container identifier (Docker container ID, K8s pod name)
-  // Historical resource snapshots (oldest first). Populated only in GetTaskStatus detail view.
-  repeated ResourceUsage resource_history = 20;
-  // Markdown status text pushed by the task (held in memory only, not in history).
-  // Full detail view shown on the task detail page.
-  string status_text_detail_md = 21;
-  // Short summary shown in the task list table (up to ~3 lines).
-  string status_text_summary_md = 22;
+  reserved 20;                        // was: repeated ResourceUsage resource_history (now in iris.task stats)
+  reserved 21, 22;                    // was: status_text_detail_md, status_text_summary_md (now in iris.task_status stats)
 }
 
 // Record of a single task execution attempt
@@ -251,6 +261,9 @@ message TaskAttempt {
   iris.time.Timestamp started_at = 6;
   iris.time.Timestamp finished_at = 7;
   bool is_worker_failure = 8;
+  // Controller-minted 16-hex-char routing key for this attempt. Surfaced to
+  // operators (dashboard) for traceability.
+  string attempt_uid = 9;
 }
 
 message ResourceUsage {
@@ -276,9 +289,10 @@ message WorkerResourceSnapshot {
   // Aggregate task stats
   int32 running_task_count = 7;
   int32 total_process_count = 8;
-  // Network bandwidth (bytes/sec, computed as delta between Ping snapshots)
-  int64 net_recv_bps = 9;
-  int64 net_sent_bps = 10;
+  // Cumulative network byte counters from /proc/net/dev. Consumers compute
+  // rates from successive samples (e.g. via LAG() in SQL).
+  int64 net_recv_bytes = 9;
+  int64 net_sent_bytes = 10;
 }
 
 message BuildMetrics {
@@ -299,7 +313,7 @@ message JobStatus {
   // Port allocations
   map<string, int32> ports = 7;
 
-  ResourceUsage resource_usage = 8;
+  reserved 8;  // was: ResourceUsage resource_usage (never populated; per-task usage lives in iris.task stats)
 
   // Status message for current phase (e.g., "downloading bundle", "populating uv cache")
   string status_message = 9;
@@ -332,6 +346,10 @@ message JobStatus {
 
   // Whether this job currently has direct child jobs.
   bool has_children = 32;
+
+  // Parent job id, if this job was launched as a child of another job.
+  // Empty for root jobs.
+  string parent_job_id = 33;
 }
 
 // ============================================================================
@@ -588,30 +606,21 @@ message RunTaskRequest {
   // custom runtime (e.g. an image with runsc/skopeo for sandboxing
   // untrusted child workloads).
   string task_image = 11;
+
+  // Controller-minted attempt routing key (16 hex chars). The worker echoes
+  // it back on Reconcile observations so the controller can route by UID.
+  string attempt_uid = 12;
 }
 
-// Lean task status reported by the worker via PollTasks / UpdateTaskStatus.
-// Covers both running and completed tasks in a single type.
-// Elevated from the Controller message namespace to break the circular
-// dependency between controller.proto and worker.proto.
-message WorkerTaskStatus {
-  string task_id = 1;
-  int32 attempt_id = 2;
-  TaskState state = 3;
-  int32 exit_code = 4;
-  string error = 5;
-  iris.time.Timestamp finished_at = 6;
-  // field 7 was log_directory, removed
-  ResourceUsage resource_usage = 8;
-  reserved 9;  // was log_entries (pushed via LogService now)
-  string container_id = 10;         // Platform container identifier (Docker container ID, K8s pod name)
-}
-
-// Status text update pushed by a running task to the coordinator.
+// Deprecated. Kept for one release so pre-cutover clients don't crash on the
+// controller's missing RPC; the handler discards the payload and the data
+// flows through the iris.task_status finelog namespace now. Remove once all
+// clients are guaranteed to be running the new binary (deadline tracked in
+// the iris-status-cleanup cron reminder).
 message SetTaskStatusTextRequest {
-  string task_id = 1;                    // Full task ID: "/job/full/path/with/task/0"
-  string status_text_detail_md = 2;     // Full markdown detail for the task detail page
-  string status_text_summary_md = 3;    // Short summary (up to ~3 lines) for the task list table
+  string task_id = 1;
+  string status_text_detail_md = 2;
+  string status_text_summary_md = 3;
 }
 
 message SetTaskStatusTextResponse {}

@@ -104,15 +104,14 @@ def _load_model(config: SampleLmConfig, Vocab: Axis, *, key) -> LmHeadModel:
 def main(config: SampleLmConfig):
     levanter.initialize(config)
     tok_string: str | None = config.tokenizer
-    if config.tokenizer is None:
-        if config.hf_checkpoint is not None:
-            # If we have an HF checkpoint, we can load the tokenizer from it
-            tok_string = config.hf_checkpoint.model_name_or_path
+    if tok_string is None and config.hf_checkpoint is not None:
+        # If we have an HF checkpoint, we can load the tokenizer from it
+        tok_string = config.hf_checkpoint.model_name_or_path
 
     if tok_string is None:
         raise ValueError("Must specify a tokenizer or an HF checkpoint with a tokenizer")
 
-    tokenizer = load_tokenizer(config.tokenizer)
+    tokenizer = load_tokenizer(tok_string)
 
     key = jrandom.PRNGKey(config.seed)
 
@@ -184,6 +183,7 @@ def main(config: SampleLmConfig):
                         max_num_tokens=jnp.array(len(toks) + config.max_new_tokens, dtype=jnp.int32),
                         stop_tokens=stop_ids,
                         temperature=jnp.array(config.temperature, dtype=jnp.float32),
+                        top_p=jnp.array(1.0, dtype=jnp.float32),
                         key=jrandom.fold_in(base_key, ridx),
                     )
                     reqs.append(

@@ -28,13 +28,16 @@ Current datasets:
 13. bespokelabs/Bespoke-Stratos-17k
 14. HuggingFaceTB/smoltalk
 15. PrimeIntellect/verifiable-math-problems
-16. sherryy/tulu-3-sft-personas-instruction-following-expanded
-17. facebook/natural_reasoning
-18. HuggingFaceTB/smoltalk2
-19. nvidia/Nemotron-Post-Training-Dataset-v1
-20. nvidia/Nemotron-Post-Training-Dataset-v2
-21. HuggingFaceH4/no_robots
-22. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
+16. PrimeIntellect/SYNTHETIC-2-SFT-verified
+17. sherryy/tulu-3-sft-personas-instruction-following-expanded
+18. facebook/natural_reasoning
+19. HuggingFaceTB/smoltalk2
+20. nvidia/Nemotron-Post-Training-Dataset-v1
+21. nvidia/Nemotron-Post-Training-Dataset-v2
+22. HuggingFaceH4/no_robots
+23. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
+24. lm-provers/FineProofs-SFT
+25. lm-provers/FineProofs-SFT/proof-only
 """
 
 import dataclasses
@@ -44,13 +47,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from marin.execution.executor import (
-    ExecutorStep,
-    executor_main,
-    output_path_of,
-    this_output_path,
-    versioned,
-)
+from marin.execution.executor import executor_main
+from marin.execution.types import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.conversation_to_dolma import (
     ConversationToDolmaConfig,
@@ -246,6 +244,19 @@ class ReasoningToChatKwargs:
 
 reasoning_to_chat_kwargs = ReasoningToChatKwargs()
 
+SYNTHETIC2_SFT_VERIFIED_HF_ID = "PrimeIntellect/SYNTHETIC-2-SFT-verified"
+SYNTHETIC2_SFT_VERIFIED_REVISION = "fce247fe48af8ff9624fb51d1de63aa1b2332cef"
+SYNTHETIC2_SFT_VERIFIED_METADATA_COLUMNS = ["problem_id", "task_type", "reward"]
+
+FINEPROOFS_SFT_REVISION = "73661e6"
+FINEPROOFS_SFT_METADATA_COLUMNS = [
+    "category",
+    "competition",
+    "gemini-3-pro-grade",
+    "qwen3-4b-thinking-reward@128",
+    "source",
+]
+
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
     "meta-math/MetaMathQA": InstructionDatasetConfig(
@@ -388,6 +399,36 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         ),
         metadata_columns=["source", "task_type", "problem_id"],
         name="PrimeIntellect/verifiable-math-problems",
+    ),
+    SYNTHETIC2_SFT_VERIFIED_HF_ID: InstructionDatasetConfig(
+        hf_dataset_id=SYNTHETIC2_SFT_VERIFIED_HF_ID,
+        revision=SYNTHETIC2_SFT_VERIFIED_REVISION,
+        adapter=multi_turn_adapter(),
+        metadata_columns=SYNTHETIC2_SFT_VERIFIED_METADATA_COLUMNS,
+        name=SYNTHETIC2_SFT_VERIFIED_HF_ID,
+        subsets=["default"],
+        splits=["train"],
+    ),
+    "lm-provers/FineProofs-SFT": InstructionDatasetConfig(
+        hf_dataset_id="lm-provers/FineProofs-SFT",
+        revision=FINEPROOFS_SFT_REVISION,
+        adapter=multi_turn_adapter(),
+        metadata_columns=FINEPROOFS_SFT_METADATA_COLUMNS,
+        name="lm-provers/FineProofs-SFT",
+        subsets=["default"],
+        splits=["train"],
+    ),
+    "lm-provers/FineProofs-SFT/proof-only": InstructionDatasetConfig(
+        hf_dataset_id="lm-provers/FineProofs-SFT",
+        revision=FINEPROOFS_SFT_REVISION,
+        adapter=instruction_response_adapter(
+            instruction_column="problem",
+            response_column="proof",
+        ),
+        metadata_columns=FINEPROOFS_SFT_METADATA_COLUMNS,
+        name="lm-provers/FineProofs-SFT/proof-only",
+        subsets=["default"],
+        splits=["train"],
     ),
     "sherryy/tulu-3-sft-personas-instruction-following-expanded": InstructionDatasetConfig(
         hf_dataset_id="sherryy/tulu-3-sft-personas-instruction-following-expanded",

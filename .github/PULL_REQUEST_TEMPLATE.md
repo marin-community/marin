@@ -1,4 +1,4 @@
-<!-- See .agents/skills/pull-request/ for full PR guidelines. -->
+<!-- See .agents/skills/author-pr/ for full PR guidelines. -->
 
 Describe what changed and why. Follow with bullets for
 specific changes if needed. Keep it concise — this text becomes the squash-merge

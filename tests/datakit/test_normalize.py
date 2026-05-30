@@ -104,6 +104,39 @@ def test_custom_id_field(tmp_path: Path, write_jsonl_gz):
     assert "my_custom_id" not in results[0]
 
 
+def test_bare_mode_strips_extra_columns(tmp_path: Path, write_jsonl_gz):
+    """bare=True drops every column that isn't id, text, or source_id.
+
+    Motivating case: sources whose extra columns vary across shards (e.g.
+    starcoderdata's 87 language subdirs each ship a different set of
+    GitHub-meta columns, or proof-pile-2's nested ``meta`` dict with
+    optional-typed fields). A uniform schema is the only safe option,
+    so dump everything but id/text/source_id at the record level before
+    the writer sees it.
+    """
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+
+    records = [
+        {"id": "a", "text": "row a", "meta": {"max_stars_count": 3}, "lang": "en"},
+        {"id": "b", "text": "row b", "meta": None, "lang": "fr"},
+    ]
+    write_jsonl_gz(input_dir / "data.jsonl.gz", records)
+
+    normalize_to_parquet(
+        input_path=str(input_dir),
+        output_path=str(output_dir),
+        bare=True,
+    )
+
+    results = _read_all_parquet(output_dir)
+    assert len(results) == 2
+    for r in results:
+        assert set(r.keys()) == {"id", "text", "source_id"}
+    assert {r["source_id"] for r in results} == {"a", "b"}
+    assert {r["text"] for r in results} == {"row a", "row b"}
+
+
 def test_missing_id_field_silently_skipped(tmp_path: Path, write_jsonl_gz):
     """When id_field is absent from records, source_id is omitted (not an error)."""
     input_dir = tmp_path / "input"

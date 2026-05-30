@@ -4,11 +4,11 @@
 """Tests for worker environment probing."""
 
 import sys
-import time
 
 import iris.cluster.worker.env_probe as env_probe
 import pytest
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.worker import worker as worker_mod
 from iris.cluster.worker.env_probe import (
     DefaultEnvironmentProvider,
     HardwareProbe,
@@ -18,6 +18,7 @@ from iris.cluster.worker.env_probe import (
     check_worker_health,
     construct_worker_id,
 )
+from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import config_pb2
 
 
@@ -277,8 +278,6 @@ def test_worker_id_from_slice_id_and_tpu_worker_index(tmp_path, monkeypatch):
     This is the slice_id resolution path (priority 2), which takes precedence over
     GCP metadata inference but not an explicit config.worker_id.
     """
-    from iris.cluster.worker import worker as worker_mod
-    from iris.cluster.worker.worker import Worker, WorkerConfig
 
     hardware = _make_hardware(tpu_worker_id="2", tpu_name="some-tpu-slice")
 
@@ -297,8 +296,6 @@ def test_worker_id_from_slice_id_and_tpu_worker_index(tmp_path, monkeypatch):
 
 def test_worker_id_explicit_config_overrides_slice_id(tmp_path, monkeypatch):
     """An explicit config.worker_id (priority 1) takes precedence over slice_id resolution."""
-    from iris.cluster.worker import worker as worker_mod
-    from iris.cluster.worker.worker import Worker, WorkerConfig
 
     hardware = _make_hardware(tpu_worker_id="2", tpu_name="some-tpu-slice")
     monkeypatch.setattr(worker_mod, "probe_hardware", lambda: hardware)
@@ -324,19 +321,8 @@ def test_read_net_dev_bytes_returns_nonzero_on_linux():
     assert sent >= 0
 
 
-def test_host_metrics_collector_network_first_call_returns_zero():
-    """First network collection establishes baseline and reports 0 B/s."""
-    collector = HostMetricsCollector()
-    snapshot = collector.collect()
-    assert snapshot.net_recv_bps == 0
-    assert snapshot.net_sent_bps == 0
-
-
-def test_host_metrics_collector_network_delta(monkeypatch):
-    """Second network collection computes bytes/sec from the delta."""
-    fake_time = [100.0]
-    monkeypatch.setattr(time, "monotonic", lambda: fake_time[0])
-
+def test_host_metrics_collector_network_writes_cumulative_bytes(monkeypatch):
+    """Snapshot reports cumulative byte counters straight from /proc/net/dev."""
     call_count = [0]
     net_values = [
         (1000, 2000),
@@ -353,14 +339,12 @@ def test_host_metrics_collector_network_delta(monkeypatch):
     collector = HostMetricsCollector()
 
     snapshot1 = collector.collect()
-    assert snapshot1.net_recv_bps == 0
-    assert snapshot1.net_sent_bps == 0
-
-    fake_time[0] = 105.0
+    assert snapshot1.net_recv_bytes == 1000
+    assert snapshot1.net_sent_bytes == 2000
 
     snapshot2 = collector.collect()
-    assert snapshot2.net_recv_bps == 1000
-    assert snapshot2.net_sent_bps == 2000
+    assert snapshot2.net_recv_bytes == 6000
+    assert snapshot2.net_sent_bytes == 12000
 
 
 # --- Network metrics ---
@@ -435,5 +419,5 @@ def test_host_metrics_collector_network_graceful_on_non_linux(monkeypatch):
 
     collector = HostMetricsCollector()
     snapshot = collector.collect()
-    assert snapshot.net_recv_bps == 0
-    assert snapshot.net_sent_bps == 0
+    assert snapshot.net_recv_bytes == 0
+    assert snapshot.net_sent_bytes == 0
