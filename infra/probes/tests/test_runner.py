@@ -11,7 +11,7 @@ import logging
 import time
 
 import pytest
-from marin_infra_probes import ProbeRunner
+from infra_probes import ProbeRunner
 
 
 def _run_briefly(runner, duration=0.15):

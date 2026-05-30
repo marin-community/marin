@@ -24,7 +24,8 @@ infra/probes/
 │   ├── Dockerfile.dockerignore
 │   └── deploy.sh           # build / apply / status
 ├── src/
-│   └── marin_infra_probes.py  # ProbeResult, Probe, ProbeRunner, the three probes, main()
+│   ├── infra_probes.py        # ProbeResult, Probe, ProbeRunner, the three probes, main()
+│   └── sinks.py               # ProbeSink + JSONL/GCS and finelog-namespace sinks
 └── tests/test_runner.py
 ```
 
@@ -32,7 +33,7 @@ The package is **standalone** — not a member of the root marin uv workspace. I
 
 ## Public API
 
-`src/marin_infra_probes.py` defines:
+`src/infra_probes.py` defines:
 
 ```python
 @dataclass
@@ -68,7 +69,7 @@ To add a probe, write a function returning `bool` and call `runner.add_probe(nam
 
 ```bash
 cd infra/probes
-uv run python -m marin_infra_probes \
+uv run python -m infra_probes \
   --iris-endpoint http://iris-controller-marin.c.hai-gcp-models.internal:10000
 ```
 

@@ -13,7 +13,7 @@ import logging
 import tempfile
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +26,7 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpe
 from iris.rpc import job_pb2
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration
+from sinks import FinelogTableSink, JsonlGcsSink, ProbeSink
 
 logger = logging.getLogger("probes")
 
@@ -69,6 +70,13 @@ FINELOG_FLUSH_TIMEOUT = 8.0
 FINELOG_READBACK_TIMEOUT = 5.0
 FINELOG_READBACK_POLL_INTERVAL = 0.25
 
+# Where each ProbeResult is persisted (beyond the stdout log line). The local
+# dir is the VM's /var/lib/probes volume; finished daily files roll up to GCS in
+# the same region as the VM (no cross-region egress).
+PROBE_RESULTS_DIR = Path("/var/lib/probes")
+PROBE_RESULTS_GCS_PREFIX = "gs://marin-us-central1/infra/probes"
+PROBE_RESULTS_NAMESPACE = "infra.canary.probes"
+
 
 @dataclass
 class ProbeResult:
@@ -104,8 +112,9 @@ class ProbeRunner:
     logged as ``probe <name>: ok|fail [<wall_ms>ms] start=<utc-iso>`` and
     that's the only output — operator log aggregation does the rest."""
 
-    def __init__(self) -> None:
+    def __init__(self, sinks: Sequence[ProbeSink] = ()) -> None:
         self._probes: list[Probe] = []
+        self._sinks = tuple(sinks)
 
     def add_probe(self, name: str, fn: ProbeFn, *, timeout: float, cadence: float) -> None:
         self._probes.append(Probe(name, fn, timeout, cadence))
@@ -141,6 +150,11 @@ class ProbeRunner:
                 result.wall_time * 1000,
                 started_at.isoformat(timespec="milliseconds"),
             )
+            for sink in self._sinks:
+                try:
+                    sink.record(result)
+                except Exception:
+                    logger.exception("sink %s failed for probe %s", type(sink).__name__, result.name)
             await asyncio.sleep(probe.cadence)
 
 
@@ -223,6 +237,21 @@ def make_canary_workspace() -> Path:
     return workspace
 
 
+def build_sinks(finelog: LogClient) -> list[ProbeSink]:
+    """Construct the result sinks, skipping any that fail to initialize so the
+    canary still runs (and reports probe results) on a sink-side fault."""
+    sinks: list[ProbeSink] = []
+    try:
+        sinks.append(JsonlGcsSink(PROBE_RESULTS_DIR, PROBE_RESULTS_GCS_PREFIX))
+    except Exception:
+        logger.exception("failed to init JSONL/GCS sink; continuing without it")
+    try:
+        sinks.append(FinelogTableSink(finelog, PROBE_RESULTS_NAMESPACE))
+    except Exception:
+        logger.exception("failed to init finelog sink; continuing without it")
+    return sinks
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="probes")
     p.add_argument("--iris-endpoint", required=True, help="e.g. http://10.128.0.3:10001")
@@ -241,7 +270,7 @@ def main(argv: list[str] | None = None) -> None:
         resolver=lambda name: resolve_finelog_address(iris, name),
     )
 
-    runner = ProbeRunner()
+    runner = ProbeRunner(sinks=build_sinks(finelog))
     runner.add_probe("controller-ping", lambda: probe_controller_ping(iris), timeout=5.0, cadence=60.0)
     runner.add_probe("finelog-write", lambda: probe_finelog_write(finelog), timeout=15.0, cadence=60.0)
     for zone in zones:

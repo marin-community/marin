@@ -53,4 +53,4 @@ USER infra-probes
 # ENTRYPOINT (not CMD) so COS --container-arg values append as arguments
 # instead of replacing the command — otherwise the first arg is exec'd as the
 # binary.
-ENTRYPOINT ["python", "-m", "marin_infra_probes"]
+ENTRYPOINT ["python", "-m", "infra_probes"]

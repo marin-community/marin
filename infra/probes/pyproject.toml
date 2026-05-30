@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-probes = "marin_infra_probes:main"
+probes = "infra_probes:main"
 
 [dependency-groups]
 dev = ["pytest >= 8.4"]
@@ -31,7 +31,7 @@ find-links = [
 ]
 
 [tool.hatch.build.targets.wheel]
-only-include = ["src/marin_infra_probes.py"]
+only-include = ["src/infra_probes.py", "src/sinks.py"]
 sources = ["src"]
 
 [tool.pytest.ini_options]
