@@ -33,6 +33,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 
 import click
 import tomllib
@@ -237,6 +238,8 @@ def check_black(files: list[pathlib.Path], fix: bool, config: pathlib.Path | Non
 
 
 def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pathlib.Path) -> int:
+    assert license_file is not None, "license_file must be provided"
+
     if not files:
         return 0
 
@@ -801,8 +804,8 @@ PRECOMMIT_CONFIGS = [
         patterns=["lib/levanter/**/*.py"],
         checks=[
             check_ruff,
-            lambda files, fix: check_black(files, fix, config=LEVANTER_BLACK_CONFIG),
-            lambda files, fix: check_license_headers(files, fix, LEVANTER_LICENSE),
+            partial(check_black, config=LEVANTER_BLACK_CONFIG),
+            partial(check_license_headers, license_file=LEVANTER_LICENSE),
             # check_mypy,
         ],
     ),
@@ -810,8 +813,8 @@ PRECOMMIT_CONFIGS = [
         patterns=["lib/haliax/**/*.py"],
         checks=[
             check_ruff,
-            lambda files, fix: check_black(files, fix, config=HALIAX_BLACK_CONFIG),
-            lambda files, fix: check_license_headers(files, fix, HALIAX_LICENSE),
+            partial(check_black, config=HALIAX_BLACK_CONFIG),
+            partial(check_license_headers, license_file=HALIAX_LICENSE),
         ],
     ),
     PrecommitConfig(
@@ -820,7 +823,7 @@ PRECOMMIT_CONFIGS = [
         checks=[
             check_ruff,
             check_black,
-            lambda files, fix: check_license_headers(files, fix, MARIN_LICENSE),
+            partial(check_license_headers, license_file=MARIN_LICENSE),
         ],
     ),
     PrecommitConfig(
@@ -1125,6 +1128,12 @@ def run_lint_review(agent_command: str) -> int:
     return 0
 
 
+def _get_check_name(check) -> str:
+    if isinstance(check, partial):
+        return check.func.__name__
+    return check.__name__
+
+
 @click.command()
 @click.option("--fix", is_flag=True, help="Automatically fix issues where possible")
 @click.option("--all-files", is_flag=True, help="Run checks on all files, not just changed")
@@ -1156,6 +1165,8 @@ def run_lint_review(agent_command: str) -> int:
     ),
 )
 @click.option("--files", "files_opt", multiple=True, help="Files to check (alias for positional args)")
+@click.option("--skip", multiple=True, help="Skip specific checks by name (e.g. ruff, black)")
+@click.option("--only", multiple=True, help="Run only specific checks by name (e.g. ruff, black)")
 @click.argument("files", nargs=-1)
 def main(
     fix: bool,
@@ -1165,10 +1176,27 @@ def main(
     review: bool,
     agent_command: str,
     files_opt: tuple[str, ...],
+    skip: tuple[str, ...],
+    only: tuple[str, ...],
     files: tuple[str, ...],
 ):
     if review:
         sys.exit(run_lint_review(agent_command))
+
+    if skip and only:
+        click.echo("Error: --only and --skip are mutually exclusive.", err=True)
+        sys.exit(1)
+
+    known_check_names = {_get_check_name(c) for cfg in PRECOMMIT_CONFIGS for c in cfg.checks}
+    known_short_names = sorted(name.removeprefix("check_") for name in known_check_names)
+    for s in skip:
+        if f"check_{s}" not in known_check_names:
+            click.echo(f"Error: unknown --skip value '{s}'. Valid names: {', '.join(known_short_names)}", err=True)
+            sys.exit(1)
+    for o in only:
+        if f"check_{o}" not in known_check_names:
+            click.echo(f"Error: unknown --only value '{o}'. Valid names: {', '.join(known_short_names)}", err=True)
+            sys.exit(1)
 
     all_files_set: set[pathlib.Path] = set()
     input_files = files_opt + files
@@ -1192,6 +1220,9 @@ def main(
     all_files_list = sorted(list(all_files_set))
     exit_codes = []
 
+    skip_set = set(f"check_{s}" for s in skip)
+    only_set = set(f"check_{o}" for o in only)
+
     for config in PRECOMMIT_CONFIGS:
         matched_files = get_matching_files(config.patterns, all_files_list, config.exclude_patterns)
         matched_files = [f for f in matched_files if f.exists()]
@@ -1199,11 +1230,16 @@ def main(
             continue
 
         for check in config.checks:
+            check_name = _get_check_name(check)
+            if only_set and check_name not in only_set:
+                continue
+            if check_name in skip_set:
+                continue
             try:
                 exit_code = check(matched_files, fix)
                 exit_codes.append(exit_code)
             except Exception as e:
-                click.echo(f"  Error running check {check.__name__}: {e}")
+                click.echo(f"  Error running check {check_name}: {e}")
                 exit_codes.append(1)
 
     # Print failure details at the end
