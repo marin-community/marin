@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import logging
 from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any, TypeVar, overload
 
@@ -11,6 +12,8 @@ from rigging.filesystem import marin_prefix, open_url
 from marin.execution.artifact_registry import ArtifactRegistry, get_default_registry
 from marin.execution.executor_step_status import STATUS_SUCCESS, get_status_path
 from marin.execution.step_spec import StepSpec, _is_relative_path
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -91,9 +94,16 @@ class Artifact:
         """Load an artifact by registry id + version.
 
         Resolves ``(id, version)`` against ``registry`` (or the module-level default when
-        ``registry is None``) to a uri, then delegates to :meth:`from_path` — so the return value,
-        the ``PathMetadata`` fallback, and the ``artifact_type`` deserialization semantics are
-        identical to the path-based loader.
+        ``registry is None``) to an :class:`ArtifactEntry`, then delegates to :meth:`from_path` —
+        so the return value, the ``PathMetadata`` fallback, and the ``artifact_type``
+        deserialization semantics are identical to the path-based loader.
+
+        Region-aware resolution: when the entry recorded a ``relative_path`` (its uri was under
+        ``marin_prefix()`` at registration), this resolves that path against THIS process's
+        ``marin_prefix()`` first, so a reader loads the region-local replica instead of reading
+        across regions. If no region-local copy exists, it falls back to the absolute
+        ``entry.uri`` — logging a warning when that fallback crosses regions (the absolute uri is
+        under a different ``marin_prefix()``).
 
         ``id`` and ``version`` are positional-only. ``artifact_type``, if provided, MUST be a
         pydantic ``BaseModel`` subclass (the existing :meth:`from_path` contract). The registry
@@ -105,6 +115,21 @@ class Artifact:
         """
         reg = registry or get_default_registry()
         entry = reg.lookup(id, version)
+
+        if entry.relative_path is not None:
+            try:
+                return cls.from_path(entry.relative_path, artifact_type)
+            except FileNotFoundError:
+                # No region-local replica under this process's marin_prefix(); fall through to the
+                # absolute uri, warning if that means reading from another region.
+                if not entry.uri.startswith(marin_prefix().rstrip("/")):
+                    logger.warning(
+                        "artifact %s@%s has no region-local replica under %s; falling back to cross-region uri %s",
+                        id,
+                        version,
+                        marin_prefix(),
+                        entry.uri,
+                    )
         return cls.from_path(entry.uri, artifact_type)
 
     @classmethod

@@ -22,7 +22,7 @@ import uuid
 from collections.abc import Iterator
 
 import pydantic
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import is_remote_path, marin_prefix, open_url, url_to_fs
 
 DEFAULT_REGISTRY_ENV = "MARIN_ARTIFACT_REGISTRY"
 """Environment variable read by `get_default_registry` to override the registry root."""
@@ -84,7 +84,7 @@ class InvalidArtifactIdError(ArtifactRegistryError, ValueError):
     """Malformed id or version. Subclasses `ValueError` for ergonomics."""
 
 
-def validate_id(id: str) -> tuple[str, str]:
+def _validate_id(id: str) -> tuple[str, str]:
     """Return `(namespace, name)` for a well-formed artifact id.
 
     Raises `InvalidArtifactIdError` if the id is not exactly one `/`-separated pair of
@@ -99,7 +99,7 @@ def validate_id(id: str) -> tuple[str, str]:
     return namespace, name
 
 
-def validate_version(version: str) -> str:
+def _validate_version(version: str) -> str:
     """Return `version` unchanged if it is a valid CalVer string.
 
     The version MUST be `YYYY.MM.DD` with an optional `-<modifier>` suffix where the modifier
@@ -131,17 +131,28 @@ class ArtifactEntry(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True, extra="ignore")
 
     id: str
-    """Artifact id in the form `<namespace>/<name>`. Validated by `validate_id`."""
+    """Artifact id in the form `<namespace>/<name>`. Validated by `_validate_id`."""
 
     version: str
-    """CalVer version string `YYYY.MM.DD` with optional `-<modifier>` suffix. Validated by `validate_version`."""
+    """CalVer version string `YYYY.MM.DD` with optional `-<modifier>` suffix. Validated by `_validate_version`."""
 
     uri: str
-    """Location of the artifact bytes — the `base_path` argument to `Artifact.from_path`.
+    """Absolute location of the artifact bytes at registration time — the `base_path` argument to
+    `Artifact.from_path`.
 
     MUST be absolute: either a URI with scheme (`gs://...`, `file://...`) or an absolute local
     path (`/...`). Relative paths are rejected by `register` so the same entry resolves identically
-    across processes.
+    across processes. This is the cross-region-stable fallback; readers prefer `relative_path`.
+    """
+
+    relative_path: str | None = None
+    """Path of the artifact relative to `marin_prefix()` at registration time, or `None` when `uri`
+    was not under `marin_prefix()`.
+
+    Marin replicates data across regional buckets under a region-specific `marin_prefix()`
+    (`gs://marin-{region}`). Recording the relative path lets a reader resolve the region-local
+    replica via its OWN `marin_prefix()` — avoiding a cross-region read — before falling back to the
+    absolute `uri`. Optional + defaulted so manifests written before this field still load.
     """
 
 
@@ -159,10 +170,16 @@ def _is_absolute_uri(uri: str) -> bool:
     return uri.startswith("/") or _uri_scheme(uri) is not None
 
 
-def _is_local_uri(uri: str) -> bool:
-    """True if `uri` resolves on the local filesystem — a bare path or a `file://` URI."""
-    scheme = _uri_scheme(uri)
-    return scheme is None or scheme == "file"
+def _relative_to_marin_prefix(uri: str) -> str | None:
+    """Return `uri` as a path relative to the current `marin_prefix()`, or `None` if not under it.
+
+    Used by `register` to record a region-agnostic path alongside the absolute uri, so readers in
+    other regions can resolve a region-local replica via their own `marin_prefix()`.
+    """
+    prefix = marin_prefix().rstrip("/")
+    if uri.startswith(prefix + "/"):
+        return uri[len(prefix) + 1 :]
+    return None
 
 
 @typing.runtime_checkable
@@ -214,8 +231,8 @@ class FilesystemArtifactRegistry(ArtifactRegistry):
 
     def entry_path(self, id: str, version: str) -> str:
         """Return the storage path for a given entry. Pins the on-disk layout contract."""
-        namespace, name = validate_id(id)
-        validate_version(version)
+        namespace, name = _validate_id(id)
+        _validate_version(version)
         return f"{self._root}/{namespace}/{name}/{version}.json"
 
     def register(self, id: str, version: str, uri: str) -> ArtifactEntry:
@@ -224,13 +241,13 @@ class FilesystemArtifactRegistry(ArtifactRegistry):
         # A local-filesystem uri recorded in a remote (shared) registry is a broken pointer for every
         # other reader, so refuse it. The reverse — a remote uri in a local registry — is a valid,
         # resolvable pointer and is allowed.
-        if not _is_local_uri(self._root) and _is_local_uri(uri):
+        if is_remote_path(self._root) and not is_remote_path(uri):
             raise InvalidArtifactIdError(
                 f"cannot register local-filesystem uri {uri!r} in the remote registry at {self._root!r}: "
                 f"a local path is not resolvable by other readers of a shared registry"
             )
         path = self.entry_path(id, version)
-        entry = ArtifactEntry(id=id, version=version, uri=uri)
+        entry = ArtifactEntry(id=id, version=version, uri=uri, relative_path=_relative_to_marin_prefix(uri))
 
         fs, fs_path = url_to_fs(path)
         if fs.exists(fs_path):

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import logging
 import os
 
 import pytest
@@ -15,11 +16,11 @@ from marin.execution.artifact_registry import (
     ArtifactRegistryError,
     FilesystemArtifactRegistry,
     InvalidArtifactIdError,
+    _validate_id,
+    _validate_version,
     get_default_registry,
     set_default_registry,
     use_default_registry,
-    validate_id,
-    validate_version,
 )
 from marin.execution.executor_step_status import STATUS_SUCCESS, get_status_path
 from pydantic import BaseModel
@@ -44,17 +45,28 @@ def artifact_path(tmp_path):
     return str(base)
 
 
+def _save_payload(base_dir, value):
+    """Save a `_Payload` artifact at `base_dir`, returning its absolute uri."""
+    base_dir.mkdir(parents=True, exist_ok=True)
+    Artifact.save(_Payload(path=str(base_dir), value=value), str(base_dir))
+    return str(base_dir)
+
+
+def _registry_warnings(caplog):
+    return [r for r in caplog.records if r.name == "marin.execution.artifact" and r.levelno == logging.WARNING]
+
+
 # --- validation -------------------------------------------------------------
 
 
 @pytest.mark.parametrize("bad_id", ["foo", "foo/", "/bar", "a/b/c", "a b/c", "ns/na me", "", "ns//name"])
 def test_validate_id_rejects_malformed(bad_id):
     with pytest.raises(InvalidArtifactIdError):
-        validate_id(bad_id)
+        _validate_id(bad_id)
 
 
 def test_validate_id_returns_segments():
-    assert validate_id("datasets/fineweb-resiliparse") == ("datasets", "fineweb-resiliparse")
+    assert _validate_id("datasets/fineweb-resiliparse") == ("datasets", "fineweb-resiliparse")
 
 
 @pytest.mark.parametrize(
@@ -62,7 +74,7 @@ def test_validate_id_returns_segments():
     ["2026.05.29", "2026.10.01-fall-hero", "2026.10.01-rc1", "2024.02.29"],
 )
 def test_validate_version_accepts_calver(good_version):
-    assert validate_version(good_version) == good_version
+    assert _validate_version(good_version) == good_version
 
 
 @pytest.mark.parametrize(
@@ -80,7 +92,7 @@ def test_validate_version_accepts_calver(good_version):
 )
 def test_validate_version_rejects_non_calver(bad_version):
     with pytest.raises(InvalidArtifactIdError):
-        validate_version(bad_version)
+        _validate_version(bad_version)
 
 
 # --- register / lookup ------------------------------------------------------
@@ -150,7 +162,8 @@ def test_manifest_layout(registry, artifact_path):
     assert registry.entry_path("datasets/fineweb", "2026.05.29") == expected
     with open(expected) as fd:
         on_disk = json.load(fd)
-    assert on_disk == {"id": "datasets/fineweb", "version": "2026.05.29", "uri": artifact_path}
+    # artifact_path is outside marin_prefix() in tests, so relative_path is null.
+    assert on_disk == {"id": "datasets/fineweb", "version": "2026.05.29", "uri": artifact_path, "relative_path": None}
 
 
 def test_lookup_corrupt_manifest_raises(registry):
@@ -208,6 +221,55 @@ def test_use_default_registry_restores_previous(registry, artifact_path):
         assert get_default_registry() is scoped is registry
     # The override is scoped to the block; the prior default is restored on exit.
     assert get_default_registry() is before
+
+
+# --- region-aware (relative-path) resolution --------------------------------
+
+
+def test_register_records_relative_path(registry, tmp_path, monkeypatch):
+    region = tmp_path / "region_a"
+    monkeypatch.setenv("MARIN_PREFIX", str(region))
+    uri = _save_payload(region / "documents" / "foo", 7)
+    entry = registry.register("datasets/foo", "2026.05.29", uri)
+    assert entry.relative_path == "documents/foo"
+    assert entry.uri == uri
+
+
+def test_register_relative_path_none_outside_prefix(registry, tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "region_a"))
+    uri = _save_payload(tmp_path / "elsewhere" / "foo", 7)
+    entry = registry.register("datasets/foo", "2026.05.29", uri)
+    assert entry.relative_path is None
+
+
+def test_from_id_prefers_region_local_replica(registry, tmp_path, monkeypatch, caplog):
+    # Register under region A's prefix.
+    region_a = tmp_path / "region_a"
+    monkeypatch.setenv("MARIN_PREFIX", str(region_a))
+    registry.register("datasets/foo", "2026.05.29", _save_payload(region_a / "documents" / "foo", 7))
+
+    # A reader in region B with a local replica resolves the replica, not the registration uri.
+    region_b = tmp_path / "region_b"
+    monkeypatch.setenv("MARIN_PREFIX", str(region_b))
+    _save_payload(region_b / "documents" / "foo", 99)
+
+    with caplog.at_level(logging.WARNING):
+        loaded = Artifact.from_id("datasets/foo", "2026.05.29", _Payload, registry=registry)
+    assert loaded.value == 99
+    assert _registry_warnings(caplog) == []  # region-local hit, no cross-region warning
+
+
+def test_from_id_falls_back_to_absolute_and_warns(registry, tmp_path, monkeypatch, caplog):
+    region_a = tmp_path / "region_a"
+    monkeypatch.setenv("MARIN_PREFIX", str(region_a))
+    registry.register("datasets/foo", "2026.05.29", _save_payload(region_a / "documents" / "foo", 7))
+
+    # Region B has no replica → fall back to the absolute (region A) uri, with a cross-region warning.
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "region_b"))
+    with caplog.at_level(logging.WARNING):
+        loaded = Artifact.from_id("datasets/foo", "2026.05.29", _Payload, registry=registry)
+    assert loaded.value == 7
+    assert len(_registry_warnings(caplog)) == 1
 
 
 # --- default registry singleton ---------------------------------------------

@@ -8,6 +8,8 @@ Concrete contracts for the design in [`design.md`](./design.md). Implementation 
 |---|---|
 | New: registry protocol, default impl, errors, singleton helpers | `lib/marin/src/marin/execution/artifact_registry.py` |
 | Modified: add `Artifact.from_id` classmethod | `lib/marin/src/marin/execution/artifact.py` |
+| Modified: add `is_remote_path` helper (used by `register`'s local-in-remote guard) | `lib/rigging/src/rigging/filesystem.py` |
+| Modified: drop local `is_remote_path`, import from `rigging.filesystem` | `lib/marin/src/marin/evaluation/utils.py` + 3 evaluator call sites |
 | New: tests | `tests/execution/test_artifact_registry.py` |
 
 No proto, no schema-registry tables, no migrations. The registry's persisted format is JSON on the filesystem (described below).
@@ -47,22 +49,30 @@ class ArtifactEntry(pydantic.BaseModel):
     """
 
     id: str
-    """Artifact id in the form `<namespace>/<name>`. Validated by `validate_id`."""
+    """Artifact id in the form `<namespace>/<name>`. Validated by `_validate_id`."""
 
     version: str
     """CalVer version string `YYYY.MM.DD` with optional `-<modifier>` suffix
-       (e.g. `"2026.05.29"`, `"2026.10.01-fall-hero"`). Validated by `validate_version`,
+       (e.g. `"2026.05.29"`, `"2026.10.01-fall-hero"`). Validated by `_validate_version`,
        which both pattern-matches AND constructs a `datetime.date` to reject impossible
        calendar dates."""
 
     uri: str
-    """Location of the artifact bytes — the `base_path` argument to `Artifact.from_path`.
-       MUST be absolute: either a URI with scheme (`gs://...`, `file://...`) or an absolute
-       local path (`/...`). Relative paths are rejected by `register` to avoid having the
-       same registered entry resolve differently in different processes. A local-filesystem
-       uri (bare `/...` path or `file://`) is also rejected by `register` when the registry
-       root is remote (e.g. `gs://`) — it would be an unresolvable pointer for other readers
-       of the shared registry."""
+    """Absolute location of the artifact bytes at registration time — the `base_path` argument to
+       `Artifact.from_path`. MUST be absolute: either a URI with scheme (`gs://...`, `file://...`)
+       or an absolute local path (`/...`). Relative paths are rejected by `register` to avoid having
+       the same registered entry resolve differently in different processes. A local-filesystem uri
+       (bare `/...` path or `file://`) is also rejected by `register` when the registry root is
+       remote (e.g. `gs://`) — it would be an unresolvable pointer for other readers of the shared
+       registry. This is the cross-region-stable fallback; readers prefer `relative_path`."""
+
+    relative_path: str | None = None
+    """Path of the artifact relative to `marin_prefix()` at registration time, or `None` when `uri`
+       was not under `marin_prefix()`. Marin replicates data across regional buckets under a
+       region-specific `marin_prefix()` (`gs://marin-{region}`); recording the relative path lets a
+       reader resolve the region-local replica via its OWN `marin_prefix()` (avoiding a cross-region
+       read) before falling back to `uri`. Optional + defaulted so manifests written before this
+       field still load (`extra="ignore"` + default)."""
 ```
 
 ## `ArtifactRegistry` protocol
@@ -197,10 +207,17 @@ def from_id(
     site readable and aligns with the `from_path` shape.
 
     Resolves `(id, version)` against `registry` (or the module-level default if
-    `registry is None`) to obtain a URI, then delegates to `Artifact.from_path(uri,
+    `registry is None`) to an `ArtifactEntry`, then delegates to `Artifact.from_path(...,
     artifact_type)` — meaning the return value, the `PathMetadata` fallback (synthesized
     when the sidecar is missing but `.executor_status` reads `SUCCESS`), and the
     `artifact_type` deserialization semantics are identical to the path-based loader.
+
+    Region-aware resolution: when the entry has a `relative_path` (its uri was under
+    `marin_prefix()` at registration), it resolves that path against THIS process's
+    `marin_prefix()` first, so a reader loads the region-local replica instead of reading
+    across regions. If that copy is absent (`from_path` raises `FileNotFoundError`), it
+    falls back to the absolute `entry.uri`, logging a warning when the fallback is
+    cross-region (the absolute uri is not under the current `marin_prefix()`).
 
     `artifact_type`, if provided, MUST be a Pydantic `BaseModel` subclass (the existing
     contract on `from_path` — see `artifact.py` today). The registry does not record
@@ -221,11 +238,11 @@ VERSION_PATTERN: typing.Final = re.compile(
     r"^(?P<year>\d{4})\.(?P<month>\d{2})\.(?P<day>\d{2})(?:-(?P<suffix>[A-Za-z0-9][A-Za-z0-9._-]*))?$"
 )
 
-def validate_id(id: str) -> tuple[str, str]:
+def _validate_id(id: str) -> tuple[str, str]:
     """Returns `(namespace, name)`. Raises `InvalidArtifactIdError` if the id is not
     exactly one `/`-separated pair of non-empty segments matching `ID_PATTERN`."""
 
-def validate_version(version: str) -> str:
+def _validate_version(version: str) -> str:
     """Returns the version unchanged on success. The version MUST be CalVer:
     `YYYY.MM.DD` with optional `-<modifier>` suffix where the modifier begins with
     an alphanumeric and contains only `[A-Za-z0-9._-]`.
@@ -246,7 +263,7 @@ def validate_version(version: str) -> str:
     alphanumeric), `"2026.10.01-foo/bar"` (slash in modifier)."""
 ```
 
-The id pattern is intentionally narrow — anything we allow becomes part of a GCS path, so the alphabet excludes `/`, whitespace, and shell metacharacters. CalVer for versions gives lexical sort = chronological sort (zero-padded date prefix) and embeds provenance. The validators are exposed (no leading underscore) so callers generating ids or versions can pre-check.
+The id pattern is intentionally narrow — anything we allow becomes part of a GCS path, so the alphabet excludes `/`, whitespace, and shell metacharacters. CalVer for versions gives lexical sort = chronological sort (zero-padded date prefix) and embeds provenance. The validators are module-private (`_validate_id` / `_validate_version`); `register` / `lookup` call them at the boundary.
 
 ## Errors
 
@@ -294,10 +311,10 @@ One JSON file per `(id, version)`:
 Example (`gs://marin-us-central2/artifact_registry/datasets/fineweb-resiliparse/2026.05.29.json`):
 
 ```json
-{"id": "datasets/fineweb-resiliparse", "version": "2026.05.29", "uri": "gs://marin-us-central2/documents/fineweb-resiliparse-8c2f3a"}
+{"id": "datasets/fineweb-resiliparse", "version": "2026.05.29", "uri": "gs://marin-us-central2/documents/fineweb-resiliparse-8c2f3a", "relative_path": "documents/fineweb-resiliparse-8c2f3a"}
 ```
 
-The `uri` is typically itself a content-addressed executor output (the `_8c2f3a` suffix is the executor step hash from `step_spec.py`). The registry layer adds logical naming on top of that existing content-addressed storage.
+The `uri` is typically itself a content-addressed executor output (the `_8c2f3a` suffix is the executor step hash from `step_spec.py`). The registry layer adds logical naming on top of that existing content-addressed storage. `relative_path` is the `marin_prefix()`-relative form of `uri` recorded at registration time (`null` when the uri was not under `marin_prefix()`); readers resolve it against their own `marin_prefix()` for a region-local replica before falling back to `uri`.
 
 The file is the source of truth. There is no index file, no companion `_meta`, no schema-registry registration. Listing all versions of an id is a recursive prefix scan under `{root}/{namespace}/{name}/`.
 
