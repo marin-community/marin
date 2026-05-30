@@ -55,6 +55,7 @@ from marin.execution.executor import (
     mirrored,
     this_output_path,
 )
+from marin.midtraining import assert_checkpoint_complete_for_model_type
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm, temporary_checkpoint_base_path
 
 from experiments.delphi_models import DelphiModel, get_delphi_model
@@ -127,6 +128,14 @@ class MaterializationPlan:
     @property
     def target_percent(self) -> float:
         return 100 * self.request.target_step / self.original_num_train_steps
+
+
+@dataclass(frozen=True)
+class MaterializationTrainConfig:
+    train_on_pod: TrainLmOnPodConfig
+    destination_checkpoint_paths: tuple[str, ...]
+    model_type: str
+    num_layers: int
 
 
 def parse_args() -> argparse.Namespace:
@@ -288,6 +297,12 @@ def validate_checkpoint_io(plan: MaterializationPlan) -> None:
             f"metadata={metadata_step}, expected={plan.request.source_step}"
         )
 
+    assert_checkpoint_complete_for_model_type(
+        plan.source_checkpoint_path,
+        model_type=DELPHI_MODEL_TYPE,
+        num_layers=plan.model.num_layers,
+    )
+
     if not plan.request.allow_existing_destination:
         for destination in plan.destination_checkpoint_paths:
             if path_exists_or_has_children(destination):
@@ -437,18 +452,33 @@ def build_executor_step(plan: MaterializationPlan) -> ExecutorStep:
             f"from step-{plan.request.source_step} while preserving the original "
             f"{plan.original_num_train_steps}-step LR schedule."
         ),
-        fn=run_levanter_train_lm,
-        config=TrainLmOnPodConfig(
-            train_config=plan.train_config,
-            resources=ResourceConfig.with_tpu(
-                plan.request.tpu,
-                ram=plan.request.ram,
-                regions=plan.request.regions or None,
+        fn=run_materialization_train,
+        config=MaterializationTrainConfig(
+            train_on_pod=TrainLmOnPodConfig(
+                train_config=plan.train_config,
+                resources=ResourceConfig.with_tpu(
+                    plan.request.tpu,
+                    ram=plan.request.ram,
+                    regions=plan.request.regions or None,
+                ),
+                output_path=this_output_path(),
             ),
-            output_path=this_output_path(),
+            destination_checkpoint_paths=plan.destination_checkpoint_paths,
+            model_type=DELPHI_MODEL_TYPE,
+            num_layers=plan.model.num_layers,
         ),
         override_output_path=plan.request.output_root.rstrip("/"),
     )
+
+
+def run_materialization_train(config: MaterializationTrainConfig) -> None:
+    run_levanter_train_lm(config.train_on_pod)
+    for checkpoint_path in config.destination_checkpoint_paths:
+        assert_checkpoint_complete_for_model_type(
+            checkpoint_path,
+            model_type=config.model_type,
+            num_layers=config.num_layers,
+        )
 
 
 def load_source_train_config(model: DelphiModel) -> TrainLmConfig:

@@ -11999,4 +11999,71 @@ prefix). Relaunch the 6 invalidated cooldown30 cells (3e18 / 3e19 ×
 materialized prefixes. Plus 3e18/9e18/2e19/3e19/9e19/2e20/3e20 × 3
 mixes × 2 ratios = 42 cells of true-cooldown for the small ladder.
 
+## 2026-05-30T01:25Z — QK-norm materialization audit and helper hardening
+
+Ahmed asked for an extremely thorough check after the previous 70%
+materialized prefix helper dropped Qwen3 `q_norm`/`k_norm` arrays.
+
+Audit result: the `5afac0bdf` fix was necessary but not sufficient by
+itself. The helper did force old untyped `.executor_info` model payloads
+through `type: qwen3` and refused non-`Qwen3Config` decodes, but the
+direct materialization executor step did not independently schema-check
+the saved materialized output. That meant a future regression could still
+look like a successful materialization until a downstream cooldown launch
+failed.
+
+Hardening added in this session:
+
+- `scripts/materialize_delphi_prefix_checkpoint.py`
+  - `validate_checkpoint_io()` now calls
+    `assert_checkpoint_complete_for_model_type(..., model_type="qwen3")`
+    on the source checkpoint before submission. A source missing QK-norm
+    arrays fails before any executor step is launched.
+  - `build_executor_step()` now uses a new `MaterializationTrainConfig`
+    and `run_materialization_train()` wrapper instead of calling
+    `run_levanter_train_lm()` directly.
+  - `run_materialization_train()` runs training, then schema-checks every
+    intended destination checkpoint path, including all `--also-save-step`
+    outputs and the final `--target-step`. Any missing QK-norm arrays make
+    the executor step fail.
+- `tests/test_materialize_delphi_prefix_checkpoint.py`
+  - Added regression coverage proving old untyped `.executor_info`
+    decodes to `Qwen3Config`.
+  - Added an assertion that decoded Qwen3 attention config has `qk_norm`
+    enabled even when the old payload contains `use_qk_norm: False`.
+  - Added source schema-check tests and destination post-train schema-check
+    tests, including failure propagation.
+- `docs/debug-log-qk-norm-materialization.md`
+  - Added a structured debug log with proof points and validation commands.
+
+Validation:
+
+- Targeted tests:
+  `uv run --with pytest --with pytest-timeout python -m pytest tests/test_materialize_delphi_prefix_checkpoint.py tests/midtraining/test_checkpoint_schema.py tests/midtraining/test_spec_validators.py tests/midtraining/test_val_set_equivalence.py -q --timeout=180`
+  passed (`102 passed`).
+- Broad midtraining/materialization tests:
+  `uv run --with pytest --with pytest-timeout python -m pytest tests/midtraining tests/test_materialize_delphi_prefix_checkpoint.py -q --timeout=180`
+  passed (`155 passed`).
+- Safe GCS metadata/schema check for all seven planned qwen3
+  materializations passed. Each source `.executor_info` decoded as
+  `Qwen3Config`; each canonical source checkpoint passed schema; each
+  us-east5 mirror was present and schema-clean; and the intended new
+  destination step dirs were absent.
+  - `3e18`: source `20000`, targets `(26134, 29868)`
+  - `9e18`: source `30000`, targets `(31021, 35453)`
+  - `2e19`: source `30000`, targets `(38587, 44100)`
+  - `3e19`: source `20000`, targets `(26609, 30411)`
+  - `9e19`: source `20000`, targets `(28198, 32226)`
+  - `2e20`: source `30000`, targets `(39533, 45181)`
+  - `3e20`: source `20000`, targets `(24857, 28408)`
+- Safe GCS schema check rejected all three known-bad invalidated 70%
+  materialized outputs (`3e18`, `3e19`, `3e20`) with missing `q_norm` and
+  `k_norm`.
+- `./infra/pre-commit.py --all-files --fix` passed, including pyrefly.
+
+No jobs were launched and no checkpoint data was copied. Do not flip
+`checkpoint_candidates.yaml` to the new qwen3 paths until the actual
+materialization jobs complete and the new 70%/80% destination step dirs
+exist. With this hardening, a bad materialization should now fail at the
+materialization step itself rather than surfacing later in cooldown.
 

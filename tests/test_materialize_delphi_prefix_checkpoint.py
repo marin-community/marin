@@ -23,6 +23,8 @@ from scripts.materialize_delphi_prefix_checkpoint import (
     levanter_stop_step_for_checkpoint_step,
     print_plan,
     regionalize_readonly_marin_uris,
+    run_materialization_train,
+    validate_checkpoint_io,
 )
 
 
@@ -123,6 +125,7 @@ def test_decode_delphi_executor_info_defaults_untyped_model_to_qwen3():
 
     assert isinstance(train_config.model, Qwen3Config)
     assert train_config.model.hidden_dim == 1024
+    assert train_config.model.attention_config().qk_norm is not None
 
 
 def test_rejects_output_under_original_delphi_root():
@@ -186,7 +189,7 @@ def test_stop_target_is_separate_from_lr_schedule_length():
     collected_gcs_paths = [path for _, path in collect_gcs_paths(plan.train_config)]
     assert not any("marin-us-central2" in path for path in collected_gcs_paths)
     step = build_executor_step(plan)
-    assert step.config.resources.regions == ("us-east5",)
+    assert step.config.train_on_pod.resources.regions == ("us-east5",)
 
     tracker = trainer.tracker
     assert isinstance(tracker, WandbConfig)
@@ -397,3 +400,92 @@ def test_multi_target_dry_run_plan_lists_every_destination(capsys):
     assert "destination checkpoints:" in out
     for dest in plan.destination_checkpoint_paths:
         assert dest in out
+
+
+def test_validate_checkpoint_io_checks_source_qwen3_schema():
+    model = get_delphi_model("3e18")
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-east5/scratch"}),
+    ):
+        plan = build_materialization_plan(request(), model, source_train_config())
+
+    with (
+        patch("scripts.materialize_delphi_prefix_checkpoint.missing_checkpoint_artifacts", return_value=[]),
+        patch("scripts.materialize_delphi_prefix_checkpoint.read_metadata_step", return_value=20_000),
+        patch("scripts.materialize_delphi_prefix_checkpoint.path_exists_or_has_children", return_value=False),
+        patch("scripts.materialize_delphi_prefix_checkpoint.assert_checkpoint_complete_for_model_type") as check,
+    ):
+        validate_checkpoint_io(plan)
+
+    check.assert_called_once_with(
+        plan.source_checkpoint_path,
+        model_type="qwen3",
+        num_layers=model.num_layers,
+    )
+
+
+def test_validate_checkpoint_io_rejects_source_missing_qk_norm():
+    model = get_delphi_model("3e18")
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-east5/scratch"}),
+    ):
+        plan = build_materialization_plan(request(), model, source_train_config())
+
+    with (
+        patch("scripts.materialize_delphi_prefix_checkpoint.missing_checkpoint_artifacts", return_value=[]),
+        patch("scripts.materialize_delphi_prefix_checkpoint.read_metadata_step", return_value=20_000),
+        patch(
+            "scripts.materialize_delphi_prefix_checkpoint.assert_checkpoint_complete_for_model_type",
+            side_effect=ValueError("missing Qwen3 QK-norm arrays"),
+        ),
+    ):
+        with pytest.raises(ValueError, match="missing Qwen3 QK-norm arrays"):
+            validate_checkpoint_io(plan)
+
+
+def test_run_materialization_train_checks_every_destination_after_training():
+    model = get_delphi_model("3e18")
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-east5/scratch"}),
+    ):
+        plan = build_materialization_plan(
+            _multi_target_request(extras=(23_000, 24_500), target_step=25_900),
+            model,
+            source_train_config(),
+        )
+    step = build_executor_step(plan)
+
+    with (
+        patch("scripts.materialize_delphi_prefix_checkpoint.run_levanter_train_lm") as train,
+        patch("scripts.materialize_delphi_prefix_checkpoint.assert_checkpoint_complete_for_model_type") as check,
+    ):
+        run_materialization_train(step.config)
+
+    train.assert_called_once_with(step.config.train_on_pod)
+    assert check.call_count == len(plan.destination_checkpoint_paths)
+    assert [call.args[0] for call in check.call_args_list] == list(plan.destination_checkpoint_paths)
+    for call in check.call_args_list:
+        assert call.kwargs == {"model_type": "qwen3", "num_layers": model.num_layers}
+
+
+def test_run_materialization_train_propagates_destination_schema_failure():
+    model = get_delphi_model("3e18")
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-east5/scratch"}),
+    ):
+        plan = build_materialization_plan(_multi_target_request(), model, source_train_config())
+    step = build_executor_step(plan)
+
+    with (
+        patch("scripts.materialize_delphi_prefix_checkpoint.run_levanter_train_lm"),
+        patch(
+            "scripts.materialize_delphi_prefix_checkpoint.assert_checkpoint_complete_for_model_type",
+            side_effect=ValueError("missing Qwen3 QK-norm arrays"),
+        ),
+    ):
+        with pytest.raises(ValueError, match="missing Qwen3 QK-norm arrays"):
+            run_materialization_train(step.config)
