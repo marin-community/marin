@@ -3,16 +3,18 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import socket
 import threading
 import uuid
-from collections.abc import AsyncIterator, Iterator, Mapping
-from contextlib import asynccontextmanager, contextmanager, suppress
+from collections.abc import Iterator, Mapping
+from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
+import anyio
 import uvicorn
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
@@ -68,8 +70,10 @@ class InferenceProxy:
         if backoff is None:
             backoff = ExponentialBackoff(initial=0.01, maximum=0.25, factor=2.0)
         self._backoff = backoff
-        self._pending: dict[str, asyncio.Future[InferenceResponse]] = {}
-        self._lock = asyncio.Lock()
+        self._pending: dict[str, Future[InferenceResponse]] = {}
+        self._lock = threading.Lock()
+        self._poll_stop_event: threading.Event | None = None
+        self._poll_thread: threading.Thread | None = None
         self.stats = ProxyStats()
         self.app = Starlette(
             routes=[
@@ -77,42 +81,59 @@ class InferenceProxy:
                 Route("/v1/completions", self._forward, methods=["POST"]),
                 Route("/v1/chat/completions", self._forward, methods=["POST"]),
             ],
-            lifespan=self._lifespan,
         )
 
-    @asynccontextmanager
-    async def _lifespan(self, _app: Starlette) -> AsyncIterator[None]:
+    def __enter__(self) -> InferenceProxy:
+        self.start_response_poller()
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.stop_response_poller()
+
+    def start_response_poller(self) -> None:
         logger.info(
             "InferenceProxy starting model=%s timeout_seconds=%.1f max_pending_requests=%d",
             self._model,
             self._request_timeout_seconds,
             self._max_pending_requests,
         )
-        poll_task = asyncio.create_task(self.run_forever())
-        try:
-            yield
-        finally:
-            logger.info("InferenceProxy stopping response poller")
-            poll_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await poll_task
-            logger.info("InferenceProxy stopped stats=%s", self.stats)
+        stop_event = threading.Event()
+        self._poll_stop_event = stop_event
+        self._poll_thread = threading.Thread(
+            target=lambda: self.run_forever(stop_event=stop_event),
+            name="inference-proxy-response-poller",
+        )
+        self._poll_thread.start()
 
-    async def _models(self, request: Request) -> Response:
-        return await self.forward_request(
+    def stop_response_poller(self) -> None:
+        thread = self._poll_thread
+        stop_event = self._poll_stop_event
+        if thread is None or stop_event is None:
+            return
+        logger.info("InferenceProxy stopping response poller")
+        stop_event.set()
+        thread.join()
+        self._poll_thread = None
+        self._poll_stop_event = None
+        logger.info("InferenceProxy stopped stats=%s", self.stats)
+
+    def _models(self, request: Request) -> Response:
+        return self.forward_request(
             request.url.path,
             {},
             method="GET",
             timeout_seconds=self._readiness_timeout_seconds,
         )
 
-    async def _forward(self, request: Request) -> Response:
-        request_json = await request.json()
+    def _forward(self, request: Request) -> Response:
+        # Starlette runs sync endpoints in a worker thread, but request.json()
+        # still reads the async ASGI body stream.
+        request_json = anyio.from_thread.run(request.json)
         if not isinstance(request_json, dict):
             return JSONResponse({"error": "request body must be a JSON object"}, status_code=400)
-        return await self.forward_request(request.url.path, request_json, method=request.method)
+        return self.forward_request(request.url.path, request_json, method=request.method)
 
-    async def forward_request(
+    def forward_request(
         self,
         path: str,
         request_json: Mapping[str, Any],
@@ -121,11 +142,10 @@ class InferenceProxy:
         timeout_seconds: float | None = None,
     ) -> Response:
         request_id = str(uuid.uuid4())
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[InferenceResponse] = loop.create_future()
+        future: Future[InferenceResponse] = Future()
         pending_count = 0
         timeout_seconds = self._request_timeout_seconds if timeout_seconds is None else timeout_seconds
-        async with self._lock:
+        with self._lock:
             if len(self._pending) >= self._max_pending_requests:
                 self.stats.rejected_requests += 1
                 logger.warning(
@@ -144,8 +164,7 @@ class InferenceProxy:
             pending_count = len(self._pending)
 
         try:
-            await asyncio.to_thread(
-                self._broker.submit_request,
+            self._broker.submit_request(
                 InferenceRequest(
                     request_id=request_id,
                     method=method,
@@ -161,9 +180,8 @@ class InferenceProxy:
                 pending_count,
                 self._max_pending_requests,
             )
-            async with asyncio.timeout(timeout_seconds):
-                response = await future
-        except TimeoutError:
+            response = future.result(timeout=timeout_seconds)
+        except FutureTimeoutError:
             self.stats.timed_out_requests += 1
             logger.warning(
                 "InferenceProxy timed out waiting for response request_id=%s method=%s path=%s timeout_seconds=%.1f",
@@ -174,7 +192,7 @@ class InferenceProxy:
             )
             return JSONResponse({"error": f"timed out waiting for inference response {request_id}"}, status_code=504)
         finally:
-            async with self._lock:
+            with self._lock:
                 self._pending.pop(request_id, None)
                 if not future.done():
                     future.cancel()
@@ -188,21 +206,28 @@ class InferenceProxy:
         )
         return JSONResponse(unpack_json_payload(response.payload), status_code=response.status_code)
 
-    async def run_forever(self, *, backoff: ExponentialBackoff | None = None) -> None:
+    def run_forever(
+        self,
+        *,
+        stop_event: threading.Event | None = None,
+        backoff: ExponentialBackoff | None = None,
+    ) -> None:
+        if stop_event is None:
+            stop_event = threading.Event()
         backoff = self._backoff.copy() if backoff is None else backoff.copy()
-        while True:
-            response_count = await self.tick()
+        while not stop_event.is_set():
+            response_count = self.tick()
             if response_count:
                 backoff.reset()
                 continue
-            await asyncio.sleep(backoff.next_interval())
+            stop_event.wait(backoff.next_interval())
 
-    async def tick(self, *, max_responses: int | None = None) -> int:
+    def tick(self, *, max_responses: int | None = None) -> int:
         max_responses = self._response_fetch_batch_size if max_responses is None else max_responses
-        responses = await asyncio.to_thread(self._broker.fetch_responses, max_items=max_responses)
+        responses = self._broker.fetch_responses(max_items=max_responses)
         matched_ids: list[str] = []
         dropped_ids: list[str] = []
-        async with self._lock:
+        with self._lock:
             for response in responses:
                 future = self._pending.pop(response.request_id, None)
                 if future is None or future.done():
@@ -263,21 +288,22 @@ def serve_inference_proxy(
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, name="inference-proxy")
     logger.info("Starting InferenceProxy server url=http://%s:%d/v1 model=%s", host, actual_port, model)
-    thread.start()
-    started = ExponentialBackoff(initial=0.01, maximum=1, jitter=0).wait_until(
-        lambda: server.started or not thread.is_alive(),
-        timeout=Duration.from_seconds(server_start_timeout_seconds),
-    )
-    if not started or not server.started:
-        server.should_exit = True
-        thread.join()
-        raise RuntimeError("Inference proxy failed to start")
-    try:
-        yield RunningModel(endpoint=OpenAIEndpoint(base_url=f"http://{host}:{actual_port}/v1", model=model))
-    finally:
-        logger.info("Stopping InferenceProxy server url=http://%s:%d/v1", host, actual_port)
-        server.should_exit = True
-        thread.join()
+    with proxy:
+        thread.start()
+        started = ExponentialBackoff(initial=0.01, maximum=1, jitter=0).wait_until(
+            lambda: server.started or not thread.is_alive(),
+            timeout=Duration.from_seconds(server_start_timeout_seconds),
+        )
+        if not started or not server.started:
+            server.should_exit = True
+            thread.join()
+            raise RuntimeError("Inference proxy failed to start")
+        try:
+            yield RunningModel(endpoint=OpenAIEndpoint(base_url=f"http://{host}:{actual_port}/v1", model=model))
+        finally:
+            logger.info("Stopping InferenceProxy server url=http://%s:%d/v1", host, actual_port)
+            server.should_exit = True
+            thread.join()
 
 
 def _reserve_port(host: str, port: int) -> int:

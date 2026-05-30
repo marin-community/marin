@@ -303,20 +303,23 @@ async def test_inference_proxy_matches_out_of_order_responses_to_inflight_reques
             )
 
             requests = await _fetch_until_two_requests(broker)
+            requests_by_prompt = {
+                unpack_json_payload(request.request.payload)["prompt"]: request for request in requests
+            }
             broker.submit_responses(
                 [
                     _leased_response(
-                        requests[1],
+                        requests_by_prompt["second"],
                         InferenceResponse(
-                            request_id=requests[1].request.request_id,
+                            request_id=requests_by_prompt["second"].request.request_id,
                             status_code=200,
                             payload=pack_json_payload({"prompt": "second"}),
                         ),
                     ),
                     _leased_response(
-                        requests[0],
+                        requests_by_prompt["first"],
                         InferenceResponse(
-                            request_id=requests[0].request.request_id,
+                            request_id=requests_by_prompt["first"].request.request_id,
                             status_code=200,
                             payload=pack_json_payload({"prompt": "first"}),
                         ),
@@ -414,7 +417,7 @@ async def test_inference_proxy_drops_stale_responses_with_warning(caplog: pytest
     )
 
     with caplog.at_level(logging.WARNING):
-        assert await proxy.tick() == 1
+        assert proxy.tick() == 1
 
     assert broker.fetch_responses(max_items=1) == []
     assert "dropped stale or duplicate inference responses" in caplog.text
