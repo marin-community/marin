@@ -122,7 +122,7 @@ def probe_finelog_write(finelog: LogClient) -> ProbeResult:
     nonce = uuid.uuid4().hex
     ts_ms = int(time.time() * 1000)
     finelog.write_batch(
-        key="marin.canary.probe",
+        key="infra.canary.finelog_probe",
         messages=[
             logging_pb2.LogEntry(
                 timestamp=logging_pb2.Timestamp(epoch_ms=ts_ms),
