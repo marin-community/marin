@@ -140,6 +140,9 @@ def _thd_cu_seqlens_from_segment_lengths(
     max_segments = segment_lengths.shape[1]
     segment_index = jnp.arange(max_segments, dtype=jnp.int32)
     keep = segment_index[None, :] < num_segments[:, None]
+    sharding = _sharding_of(segment_lengths)
+    if sharding is not None:
+        keep = jax.lax.with_sharding_constraint(keep, sharding)
     lengths = jnp.where(keep, segment_lengths.astype(jnp.int32), jnp.zeros_like(segment_lengths, dtype=jnp.int32))
     lengths = eqx.error_if(
         lengths,
@@ -159,6 +162,14 @@ def _thd_cu_seqlens_from_segment_lengths(
         "THD segment metadata does not cover the q/k/v token count.",
     )
     return cu_seqlens
+
+
+def _sharding_of(x: jax.Array) -> jax.sharding.Sharding | None:
+    sharding = getattr(x, "sharding", None)
+    if sharding is not None:
+        return sharding
+    aval = getattr(x, "aval", None)
+    return getattr(aval, "sharding", None) if aval is not None else None
 
 
 def _upstream_fa4_thd_forward_launcher(
