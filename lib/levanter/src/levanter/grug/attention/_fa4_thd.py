@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Experimental upstream FlashAttention-4 THD/varlen wrapper for Grug attention."""
+"""Upstream FlashAttention-4 THD/varlen wrapper for Grug attention."""
 
 import importlib
 import math
@@ -13,6 +13,9 @@ import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float
 
 from levanter.grug.attention._core import AttentionMask
+
+
+_INSTALL_HINT = "Install PyTorch and flash-attn-4 with CuTe support; use `flash-attn-4==4.0.0b15` with CUDA 13."
 
 
 @lru_cache(maxsize=1)
@@ -27,7 +30,7 @@ def _flash_attn_varlen_func() -> Any:
         except (ImportError, AttributeError) as exc:
             raise RuntimeError(
                 "gpu_fa4_thd_attention requires flash-attn-4 with the CuTe varlen API "
-                "`flash_attn.cute.flash_attn_varlen_func`."
+                f"`flash_attn.cute.flash_attn_varlen_func`. {_INSTALL_HINT}"
             ) from exc
 
 
@@ -43,7 +46,7 @@ def _flash_attn_internal_funcs() -> tuple[Any, Any]:
         except (ImportError, AttributeError) as exc:
             raise RuntimeError(
                 "gpu_fa4_thd_attention requires flash-attn-4 with the CuTe internal APIs "
-                "`flash_attn.cute.interface._flash_attn_fwd/_flash_attn_bwd`."
+                f"`flash_attn.cute.interface._flash_attn_fwd/_flash_attn_bwd`. {_INSTALL_HINT}"
             ) from exc
 
 
