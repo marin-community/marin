@@ -129,7 +129,7 @@ gcloud compute instances create-with-container ${VM} \
   --container-arg="--iris-endpoint=http://iris-controller-marin.c.hai-gcp-models.internal:10000" \
   --container-mount-host-path=mount-path=/var/lib/probes,host-path=/var/lib/probes,mode=rw \
   --metadata=startup-script='#!/bin/bash
-mkdir -p /var/lib/probes && chmod 0777 /var/lib/probes' \
+mkdir -p /var/lib/probes && chown 1000:1000 /var/lib/probes' \
   --tags=infra-probes
 ```
 
