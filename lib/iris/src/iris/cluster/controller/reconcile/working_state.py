@@ -131,6 +131,28 @@ class WorkingState:
         row = self._snapshot.tasks.get(task_id)
         return row.state if row is not None else None
 
+    def attempt_state(self, task_id: JobName, attempt_id: int) -> int | None:
+        """Overlay-aware attempt state (a same-batch delta wins over the snapshot).
+
+        The symmetric counterpart to :meth:`task_state` for the
+        ``(task_id, attempt_id)`` attempt key. A guard that reads the raw
+        ``snapshot.attempts`` row misses a sibling-requeue that PREEMPTED the
+        attempt earlier in the same batch.
+        """
+        delta = self._effects.attempts.get((task_id, attempt_id))
+        if delta is not None and delta.state is not None:
+            return delta.state
+        row = self._snapshot.attempts.get((task_id, attempt_id))
+        return row.state if row is not None else None
+
+    def attempt_finished_at(self, task_id: JobName, attempt_id: int) -> int | None:
+        """Overlay-aware attempt ``finished_at`` in epoch-ms (delta wins over snapshot)."""
+        delta = self._effects.attempts.get((task_id, attempt_id))
+        if delta is not None and delta.finished_at is not None:
+            return delta.finished_at.epoch_ms()
+        row = self._snapshot.attempts.get((task_id, attempt_id))
+        return row.finished_at_ms if row is not None else None
+
     def active_tasks_for_job(
         self,
         job_id: JobName,

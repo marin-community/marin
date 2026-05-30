@@ -71,10 +71,16 @@ def test_sync_propagates_non_kubectl_failure(provider, k8s):
         provider.sync(batch)
 
 
-def test_sync_catches_kubectl_error_and_returns_task_failure(provider, k8s):
+def test_sync_apply_error_yields_worker_failed(provider, k8s):
+    """A pod-apply KubectlError -> WORKER_FAILED (retryable worker loss).
+
+    The pod was never created, so there is no k8s verdict to track and nothing
+    ran. Any apply failure is treated as worker loss so the task retries on the
+    next sync rather than permanently failing the job.
+    """
     k8s.inject_failure(
         "apply_json",
-        KubectlError("kubectl apply failed: Error from server (RequestEntityTooLarge): limit is 3145728"),
+        KubectlError("apply Pod/x failed: apiserver unavailable"),
     )
     req = make_run_req("/test-job/0")
     batch = make_batch(tasks_to_run=[req])
@@ -82,9 +88,7 @@ def test_sync_catches_kubectl_error_and_returns_task_failure(provider, k8s):
     result = provider.sync(batch)
 
     assert len(result.updates) == 1
-    update = result.updates[0]
-    assert update.new_state == job_pb2.TASK_STATE_FAILED
-    assert "RequestEntityTooLarge" in update.error
+    assert result.updates[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
 
 
 # ---------------------------------------------------------------------------

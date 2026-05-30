@@ -1158,3 +1158,243 @@ def test_e2e_missing_observation_on_assigned_task_retries_to_pending(make_contro
     assert task.state == job_pb2.TASK_STATE_PENDING
     assert task.preemption_count == 0
     assert task.failure_count == 0
+
+
+# ===========================================================================
+# Section 6: same-batch coscheduling split-slice corruption (#2 / #3)
+# ===========================================================================
+#
+# ``apply_reconcile`` (the batch verb) shares one WorkingState overlay across
+# every worker in a batch. When a coscheduled member's terminal update requeues
+# its sibling, the sibling's PENDING task state + PREEMPTED attempt state are
+# written into the overlay only. Reconcile guards that later read the raw
+# snapshot miss those mutations, so the outcome depends on the (non-deterministic)
+# per-worker processing order and can split a coscheduled gang. The fix routes
+# the attempt-state guards through ``WorkingState.attempt_state`` /
+# ``attempt_finished_at`` and the RPC-failure synthesis through the overlay task
+# state. These regressions drive both worker orderings and assert the gang
+# converges identically (order-independence).
+
+
+@dataclass
+class _CoschedPair:
+    state: ControllerTestState
+    t0: JobName
+    t1: JobName
+    a0: int
+    a1: int
+    u0: str
+    u1: str
+
+
+def _setup_coscheduled_running_pair(
+    state: ControllerTestState,
+    *,
+    max_retries_failure: int = 0,
+    max_retries_preemption: int = 0,
+    sibling_assigned: bool = False,
+) -> _CoschedPair:
+    """Submit a 2-replica coscheduled job and place both replicas on workers.
+
+    Replica 0 lands RUNNING on ``_W1``. Replica 1 lands on ``_W2``: RUNNING by
+    default, or left ASSIGNED (never heartbeated) when ``sibling_assigned`` is
+    set — the state the RPC-failure WORKER_FAILED synthesis targets (#2).
+    """
+    wid1, wid2 = WorkerId(_W1), WorkerId(_W2)
+    register_worker(state, _W1, f"{_W1}:8080", make_worker_metadata())
+    register_worker(state, _W2, f"{_W2}:8080", make_worker_metadata())
+
+    req = make_job_request(
+        name="cosched-job",
+        replicas=2,
+        max_retries_failure=max_retries_failure,
+        max_retries_preemption=max_retries_preemption,
+    )
+    req.coscheduling.group_by = "job"
+    tasks = submit_job(state, "cosched-job", req)
+    assert len(tasks) == 2
+    t0, t1 = tasks[0].task_id, tasks[1].task_id
+
+    with state._db.transaction() as cur:
+        ops.task.queue_assignments(
+            cur,
+            [Assignment(task_id=t0, worker_id=wid1), Assignment(task_id=t1, worker_id=wid2)],
+            health=state._health,
+        )
+    a0 = query_task(state, t0).current_attempt_id
+    a1 = query_task(state, t1).current_attempt_id
+
+    running = [WorkerTaskUpdates(wid1, [TaskUpdate(t0, a0, job_pb2.TASK_STATE_RUNNING)])]
+    if not sibling_assigned:
+        running.append(WorkerTaskUpdates(wid2, [TaskUpdate(t1, a1, job_pb2.TASK_STATE_RUNNING)]))
+    with state._db.transaction() as cur:
+        apply_task_observations(
+            cur,
+            running,
+            health=state._health,
+            endpoints=state._endpoints,
+            now=_NOW,
+        )
+    return _CoschedPair(
+        state=state,
+        t0=t0,
+        t1=t1,
+        a0=a0,
+        a1=a1,
+        u0=_attempt_uid(state, t0, a0),
+        u1=_attempt_uid(state, t1, a1),
+    )
+
+
+def _run_plan(worker_id: str, task_id: JobName, attempt_id: int, attempt_uid: str) -> WorkerReconcilePlan:
+    """A single-attempt plan whose desired entry carries an inline ``run.request``.
+
+    The RPC-failure synthesis only fires for desired entries that carry a
+    ``run.request`` (it reads ``task_id`` / ``attempt_id`` from it), and the
+    success path drops any observation whose ``attempt_uid`` is not in the plan.
+    """
+    spec = _spec()
+    spec.task_id = task_id.to_wire()
+    spec.attempt_id = attempt_id
+    spec.attempt_uid = attempt_uid
+    return _make_plan(worker_id, desired=[_desired_run(attempt_uid, spec=spec)])
+
+
+def _apply_batch(
+    state: ControllerTestState,
+    plans: dict[WorkerId, WorkerReconcilePlan],
+    results: list[ReconcileResult],
+):
+    """Apply a multi-worker reconcile batch through the production verb.
+
+    ``results`` order is the per-worker processing order (``apply_reconcile``
+    iterates it in order), so it controls which worker is seen first.
+    """
+    with state._db.transaction() as cur:
+        return apply_reconcile(
+            cur,
+            plans,
+            results,
+            health=state._health,
+            endpoints=state._endpoints,
+            now=_NOW,
+        )
+
+
+def test_coscheduled_running_repoll_does_not_revive_after_sibling_requeue():
+    """#3: a same-batch RUNNING re-poll must not revive a sibling requeued to PENDING.
+
+    One batch: worker A reports t0=FAILED (with retry budget, so t0 -> PENDING,
+    which requeues sibling t1 to PENDING + its attempt PREEMPTED in the overlay),
+    and worker B reports t1=RUNNING. Processing A first means B's RUNNING re-poll
+    lands while t1's attempt is PREEMPTED-in-overlay. Pre-fix the guard read the
+    raw snapshot (attempt still RUNNING), revived t1, and split the gang.
+    """
+    with make_controller_state() as state:
+        pair = _setup_coscheduled_running_pair(state, max_retries_failure=1)
+        plans = {
+            WorkerId(_W1): _run_plan(_W1, pair.t0, pair.a0, pair.u0),
+            WorkerId(_W2): _run_plan(_W2, pair.t1, pair.a1, pair.u1),
+        }
+        # Process A (the FAILED trigger) FIRST, then B's RUNNING re-poll.
+        results = [
+            ReconcileResult(
+                worker_id=WorkerId(_W1), observations=[_obs(pair.u0, job_pb2.TASK_STATE_FAILED)], error=None
+            ),
+            ReconcileResult(
+                worker_id=WorkerId(_W2), observations=[_obs(pair.u1, job_pb2.TASK_STATE_RUNNING)], error=None
+            ),
+        ]
+        _apply_batch(state, plans, results)
+
+        # The gang must not split: the trigger retries to PENDING and the sibling
+        # stays PENDING (its RUNNING re-poll is dropped, not applied to revive it).
+        assert query_task(state, pair.t0).state == job_pb2.TASK_STATE_PENDING
+        assert query_task(state, pair.t1).state == job_pb2.TASK_STATE_PENDING
+        # The sibling's old attempt is terminal (PREEMPTED) in the overlay; the
+        # re-poll must not revive it back to RUNNING.
+        assert query_attempt(state, pair.t1, pair.a1).state == job_pb2.TASK_STATE_PREEMPTED
+
+
+def test_coscheduled_rpc_failure_does_not_split_slice():
+    """#2: an RPC failure must not fabricate WORKER_FAILED for a same-batch requeued sibling.
+
+    One batch through the production ``apply_reconcile`` verb: worker W0 succeeds
+    reporting t0=WORKER_FAILED (with preemption budget, so t0 -> PENDING, which
+    requeues sibling t1 to PENDING in the overlay), and worker W1's reconcile RPC
+    fails. Processing W0 first means the RPC-failure synthesis for W1 runs after
+    t1 is already PENDING in the overlay. Pre-fix the synthesis gated on the raw
+    snapshot (t1 still ASSIGNED-equivalent), fabricated a synthetic WORKER_FAILED
+    for t1, drove it terminal, and split the gang.
+    """
+    with make_controller_state() as state:
+        # t1 stays ASSIGNED so the RPC-failure WORKER_FAILED synthesis is in
+        # scope for it (the gate only fires on ASSIGNED tasks). t0 is RUNNING.
+        pair = _setup_coscheduled_running_pair(state, max_retries_preemption=1, sibling_assigned=True)
+        assert query_task(state, pair.t1).state == job_pb2.TASK_STATE_ASSIGNED
+        plans = {
+            WorkerId(_W1): _run_plan(_W1, pair.t0, pair.a0, pair.u0),
+            WorkerId(_W2): _run_plan(_W2, pair.t1, pair.a1, pair.u1),
+        }
+        # Process W0 (the WORKER_FAILED trigger) FIRST, then W1's RPC failure.
+        # W0's WORKER_FAILED requeues sibling t1 to PENDING in the overlay; W1's
+        # RPC failure then runs while t1's raw snapshot still reads ASSIGNED.
+        results = [
+            ReconcileResult(
+                worker_id=WorkerId(_W1), observations=[_obs(pair.u0, job_pb2.TASK_STATE_WORKER_FAILED)], error=None
+            ),
+            ReconcileResult(worker_id=WorkerId(_W2), observations=[], error="rpc boom"),
+        ]
+        _apply_batch(state, plans, results)
+
+        # No split: both members return to PENDING for a fresh coscheduled placement.
+        assert query_task(state, pair.t0).state == job_pb2.TASK_STATE_PENDING
+        assert query_task(state, pair.t1).state == job_pb2.TASK_STATE_PENDING
+        # The sibling must NOT be driven terminal by a fabricated WORKER_FAILED.
+        assert query_attempt(state, pair.t1, pair.a1).state != job_pb2.TASK_STATE_WORKER_FAILED
+        assert query_attempt(state, pair.t1, pair.a1).finished_at_ms is None
+
+
+@pytest.mark.parametrize("trigger_first", [True, False])
+def test_reconcile_batch_order_independent_coscheduled_failure(trigger_first):
+    """Durable guard: the same coscheduled-failure batch converges to the same DB
+    state under BOTH worker orderings.
+
+    Builds the #3 batch (worker A: t0=FAILED-with-budget; worker B: t1=RUNNING)
+    and applies it with A-first and B-first. Both orderings must reach the same
+    final task states, attempt states, attempt-finished-ness, and preemption
+    counts. Pre-fix the two orderings diverged (one revived t1 to RUNNING).
+    """
+
+    def run(trigger_first_order: bool) -> dict[str, Any]:
+        with make_controller_state() as state:
+            pair = _setup_coscheduled_running_pair(state, max_retries_failure=1)
+            plans = {
+                WorkerId(_W1): _run_plan(_W1, pair.t0, pair.a0, pair.u0),
+                WorkerId(_W2): _run_plan(_W2, pair.t1, pair.a1, pair.u1),
+            }
+            trigger = ReconcileResult(
+                worker_id=WorkerId(_W1), observations=[_obs(pair.u0, job_pb2.TASK_STATE_FAILED)], error=None
+            )
+            repoll = ReconcileResult(
+                worker_id=WorkerId(_W2), observations=[_obs(pair.u1, job_pb2.TASK_STATE_RUNNING)], error=None
+            )
+            results = [trigger, repoll] if trigger_first_order else [repoll, trigger]
+            _apply_batch(state, plans, results)
+            return {
+                "t0_state": query_task(state, pair.t0).state,
+                "t1_state": query_task(state, pair.t1).state,
+                "t0_attempt_state": query_attempt(state, pair.t0, pair.a0).state,
+                "t1_attempt_state": query_attempt(state, pair.t1, pair.a1).state,
+                "t1_attempt_finished": query_attempt(state, pair.t1, pair.a1).finished_at_ms is not None,
+                "t1_preemption_count": query_task(state, pair.t1).preemption_count,
+            }
+
+    observed = run(trigger_first)
+    reference = run(True)
+    # Both orderings converge to the same final state, and that state is the
+    # un-split gang (both PENDING, sibling attempt terminal not RUNNING).
+    assert observed == reference
+    assert observed["t0_state"] == job_pb2.TASK_STATE_PENDING
+    assert observed["t1_state"] == job_pb2.TASK_STATE_PENDING
+    assert observed["t1_attempt_state"] == job_pb2.TASK_STATE_PREEMPTED

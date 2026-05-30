@@ -190,7 +190,7 @@ def _apply_transitions(
 
     A worker-reported failure that rolls a parent task back to PENDING under a
     ``TERMINATE_CHILDREN`` policy queues its descendant-job cascade into
-    ``pending_child_cascades`` (run by ``_finalize_assertive_batch``), matching
+    ``pending_child_cascades`` (run by ``_finalize_touched_jobs``), matching
     the controller-asserted paths' ``_fan_out_outcome``.
 
     ``source`` selects caller-specific health side effects: worker reconcile
@@ -243,7 +243,7 @@ def _apply_and_recompute(
     acc = _TouchedJobs()
     pending_child_cascades: dict[JobName, str] = {}
     _apply_transitions(state, snapshot, updates, now_ms, acc, pending_child_cascades, source=source)
-    return _finalize_assertive_batch(state, acc, pending_child_cascades, now_ms)
+    return _finalize_touched_jobs(state, acc, pending_child_cascades, now_ms)
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +279,7 @@ def _fan_out_outcome(
     _defer_pending_child_cascade(state, outcome, pending_child_cascades, child_cascade_reason)
 
 
-def _finalize_assertive_batch(
+def _finalize_touched_jobs(
     state: WorkingState,
     acc: _TouchedJobs,
     pending_child_cascades: dict[JobName, str],
@@ -345,7 +345,15 @@ def apply_reconcile_batch(
                 if not desired.HasField("run") or not desired.run.HasField("request"):
                     continue
                 req_proto = desired.run.request
-                candidates.append((JobName.from_wire(req_proto.task_id), req_proto.attempt_id))
+                cand_task_id = JobName.from_wire(req_proto.task_id)
+                # Overlay-aware gate: a sibling already requeued to PENDING earlier
+                # in this same batch is no longer ASSIGNED, so it must not be
+                # fabricated into a synthetic WORKER_FAILED (split-slice corruption).
+                # ``assigned_updates_from_plan`` re-checks the snapshot, but that
+                # read is blind to same-batch overlay mutations.
+                if state.task_state(cand_task_id) != job_pb2.TASK_STATE_ASSIGNED:
+                    continue
+                candidates.append((cand_task_id, req_proto.attempt_id))
             if not candidates:
                 continue
             assigned_updates = worker.assigned_updates_from_plan(snapshot, candidates, result.error)
@@ -370,7 +378,7 @@ def apply_reconcile_batch(
             continue
         _apply_transitions(state, snapshot, all_updates, now_ms, acc, pending_child_cascades)
 
-    _finalize_assertive_batch(state, acc, pending_child_cascades, now_ms)
+    _finalize_touched_jobs(state, acc, pending_child_cascades, now_ms)
     return state.effects
 
 
@@ -484,7 +492,7 @@ def apply_worker_failures_batch(
             )
         )
 
-    _finalize_assertive_batch(state, acc, pending_child_cascades, now_ms)
+    _finalize_touched_jobs(state, acc, pending_child_cascades, now_ms)
     return state.effects
 
 
@@ -577,7 +585,7 @@ def apply_terminal_decisions_batch(
             )
         # TIMEOUT handled above.
 
-    _finalize_assertive_batch(state, acc, pending_child_cascades, now_ms)
+    _finalize_touched_jobs(state, acc, pending_child_cascades, now_ms)
     return state.effects
 
 

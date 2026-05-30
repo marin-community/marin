@@ -379,7 +379,8 @@ def apply_one_transition(
             and update.attempt_id == task.current_attempt_id
         ):
             attempt = attempt_map.get((update.task_id, update.attempt_id))
-            if attempt is not None and attempt.worker_id is not None and attempt.finished_at_ms is None:
+            overlay_finished_at = state.attempt_finished_at(update.task_id, update.attempt_id)
+            if attempt is not None and attempt.worker_id is not None and overlay_finished_at is None:
                 state.record_attempt(
                     AttemptRowDelta(
                         task_id=update.task_id,
@@ -390,8 +391,7 @@ def apply_one_transition(
         return None
 
     if update.attempt_id != task.current_attempt_id:
-        stale_attempt = attempt_map.get((update.task_id, update.attempt_id))
-        stale_state = stale_attempt.state if stale_attempt is not None else None
+        stale_state = state.attempt_state(update.task_id, update.attempt_id)
         if stale_state is not None and stale_state not in TERMINAL_TASK_STATES:
             logger.error(
                 "Stale attempt precondition violation: task=%s reported=%d current=%d stale_state=%s",
@@ -415,12 +415,17 @@ def apply_one_transition(
     attempt = attempt_map.get((update.task_id, update.attempt_id))
     if attempt is None:
         return None
+    # Overlay-aware attempt state: a same-batch cascade (e.g. a coscheduled
+    # sibling requeue that drove this attempt PREEMPTED in the overlay) must be
+    # visible here, so read through the accessor rather than the stale snapshot.
+    overlay_attempt_state = state.attempt_state(update.task_id, update.attempt_id)
     # The attempt is already terminal (e.g. preempted, killed) but the task
     # has been rolled back to PENDING for retry and current_attempt_id still
     # points at the dead attempt. Reviving it would produce an inconsistent
     # row where state contradicts finished_at_ms/error.
-    if attempt.state in TERMINAL_TASK_STATES:
-        if attempt.finished_at_ms is None and int(update.new_state) in TERMINAL_TASK_STATES:
+    if overlay_attempt_state is not None and overlay_attempt_state in TERMINAL_TASK_STATES:
+        overlay_finished_at = state.attempt_finished_at(update.task_id, update.attempt_id)
+        if overlay_finished_at is None and int(update.new_state) in TERMINAL_TASK_STATES:
             state.record_attempt(
                 AttemptRowDelta(
                     task_id=update.task_id,
@@ -432,7 +437,7 @@ def apply_one_transition(
             "Dropping late update for terminal attempt: task=%s attempt=%d attempt_state=%d reported=%d",
             update.task_id,
             update.attempt_id,
-            attempt.state,
+            overlay_attempt_state,
             int(update.new_state),
         )
         return None
