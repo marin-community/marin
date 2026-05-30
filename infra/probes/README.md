@@ -82,7 +82,7 @@ Send SIGTERM/SIGINT to shut down. Tail stdout to see results.
 
 ## Deployment
 
-Single Container-Optimized OS GCP VM named `infra-probes`, one container, `restartPolicy=always`, no orchestrator. State (logs) goes to Cloud Logging via Docker's stdout pickup.
+Single Container-Optimized OS GCP VM named `infra-probes`, one container, `restartPolicy=always`, no orchestrator. Results go to Cloud Logging (Docker stdout), the `infra.canary.probes` finelog namespace, and a daily local JSONL file that rolls up to `gs://marin-us-central1/infra/probes/dt=<date>/` on UTC-day rollover. The JSONL dir `/var/lib/probes` is a host-path bind mount (not an anonymous volume, which konlet orphans on recreate) so the in-progress day survives container restarts; a VM startup-script makes it writable by the uid-1000 container.
 
 ```bash
 infra/probes/deploy/deploy.sh build   # docker build, push :sha and :latest
@@ -115,6 +115,10 @@ gcloud artifacts repositories add-iam-policy-binding marin \
 gcloud projects add-iam-policy-binding ${PROJECT} \
   --member="serviceAccount:${SA}" --role=roles/logging.logWriter --condition=None
 
+# Write the daily JSONL roll-ups to GCS (same region as the VM; no egress).
+gcloud storage buckets add-iam-policy-binding gs://marin-us-central1 \
+  --member="serviceAccount:${SA}" --role=roles/storage.objectCreator
+
 gcloud compute instances create-with-container ${VM} \
   --project=${PROJECT} --zone=${ZONE} \
   --machine-type=e2-small \
@@ -123,6 +127,9 @@ gcloud compute instances create-with-container ${VM} \
   --container-image=${IMAGE} \
   --container-restart-policy=always \
   --container-arg="--iris-endpoint=http://iris-controller-marin.c.hai-gcp-models.internal:10000" \
+  --container-mount-host-path=mount-path=/var/lib/probes,host-path=/var/lib/probes,mode=rw \
+  --metadata=startup-script='#!/bin/bash
+mkdir -p /var/lib/probes && chmod 0777 /var/lib/probes' \
   --tags=infra-probes
 ```
 

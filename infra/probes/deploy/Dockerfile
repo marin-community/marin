@@ -41,12 +41,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ── runtime stage ────────────────────────────────────────────────────
 FROM deps AS runtime
 
+# /var/lib/probes holds the JSONL result sink. In the COS deployment it is a
+# host-path bind mount (see README) so it survives container restarts; an
+# anonymous VOLUME would be orphaned on every konlet recreate. The in-image
+# mkdir/chown is only the fallback for a plain `docker run` with no mount.
 RUN groupadd --system --gid 1000 infra-probes \
     && useradd --system --uid 1000 --gid infra-probes --home-dir /app --no-create-home infra-probes \
     && mkdir -p /var/lib/probes \
     && chown infra-probes:infra-probes /var/lib/probes
-
-VOLUME ["/var/lib/probes"]
 
 USER infra-probes
 
