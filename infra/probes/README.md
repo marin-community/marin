@@ -65,8 +65,7 @@ To add a probe, write a function returning `ProbeResult` and call `runner.add_pr
 ```bash
 cd infra/probes
 uv run python -m marin_infra_probes \
-  --iris-endpoint https://iris-controller.internal:10001 \
-  --zone us-central1-a --zone europe-west4-b
+  --iris-endpoint https://iris-controller.internal:10001
 ```
 
 Send SIGTERM/SIGINT to shut down. Tail stdout to see results.
@@ -74,7 +73,7 @@ Send SIGTERM/SIGINT to shut down. Tail stdout to see results.
 | Flag                  | Env (n/a, all flag-driven) | Notes                                  |
 | --------------------- | -------------------------- | -------------------------------------- |
 | `--iris-endpoint`     | *(required)*               | Iris controller RPC endpoint; the finelog address is resolved from its endpoint registry (`/system/log-server`). |
-| `--zone` (repeatable) | *(required)*               | One canary job per zone every 5 min.   |
+| `--zone` (repeatable) | `europe-west4-b`, `us-west4-a` | One canary job per zone every 5 min.   |
 
 ## Deployment
 
@@ -110,8 +109,6 @@ gcloud compute instances create-with-container ${VM} \
   --container-image=${IMAGE} \
   --container-restart-policy=always \
   --container-arg="--iris-endpoint=https://iris-controller.internal:10001" \
-  --container-arg="--zone=us-central1-a" \
-  --container-arg="--zone=europe-west4-b" \
   --tags=probes
 ```
 

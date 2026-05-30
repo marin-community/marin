@@ -31,6 +31,10 @@ logger = logging.getLogger("probes")
 # iris worker uses).
 LOG_SERVER_ENDPOINT_NAME = "/system/log-server"
 
+# Default zones to canary when --zone is not given: the busiest europe-west4 and
+# us-west4 zones in the fleet.
+DEFAULT_ZONES = ("europe-west4-b", "us-west4-a")
+
 
 @dataclass
 class ProbeResult:
@@ -149,8 +153,14 @@ def resolve_finelog_address(iris: RemoteClusterClient, name: str) -> str:
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="probes")
     p.add_argument("--iris-endpoint", required=True, help="e.g. http://10.128.0.3:10001")
-    p.add_argument("--zone", action="append", required=True, help="GCP zone for iris-job-submit; repeat for multiple")
+    p.add_argument(
+        "--zone",
+        action="append",
+        help=f"GCP zone for iris-job-submit; repeat for multiple (default: {', '.join(DEFAULT_ZONES)})",
+    )
     args = p.parse_args(argv)
+    # append default would accumulate onto args.zone, so fall back here instead.
+    zones = args.zone or list(DEFAULT_ZONES)
 
     iris = RemoteClusterClient(controller_address=args.iris_endpoint)
     finelog = LogClient.connect(
@@ -161,7 +171,7 @@ def main(argv: list[str] | None = None) -> None:
     runner = ProbeRunner()
     runner.add_probe("controller-ping", lambda: probe_controller_ping(iris), timeout=5.0, cadence=60.0)
     runner.add_probe("finelog-write", lambda: probe_finelog_write(finelog), timeout=10.0, cadence=60.0)
-    for zone in args.zone:
+    for zone in zones:
         runner.add_probe(
             f"iris-job-submit/{zone}",
             lambda z=zone: probe_iris_job_submit(iris, z),
