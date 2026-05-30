@@ -72,8 +72,8 @@ FINELOG_READBACK_TIMEOUT = 5.0
 FINELOG_READBACK_POLL_INTERVAL = 0.25
 
 # Where each ProbeResult is persisted (beyond the stdout log line). The local
-# dir is the VM's /var/lib/probes volume; finished daily files roll up to GCS in
-# the same region as the VM (no cross-region egress).
+# dir is the VM's /var/lib/probes host mount; finished daily files roll up to GCS
+# in the same region as the VM (no cross-region egress).
 PROBE_RESULTS_DIR = Path("/var/lib/probes")
 PROBE_RESULTS_GCS_PREFIX = "gs://marin-us-central1/infra/probes"
 PROBE_RESULTS_NAMESPACE = "infra.canary.probes"
@@ -244,7 +244,7 @@ def build_sinks(finelog: LogClient) -> list[ProbeSink]:
 
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="probes")
-    p.add_argument("--iris-endpoint", required=True, help="e.g. http://10.128.0.3:10001")
+    p.add_argument("--iris-endpoint", required=True, help="controller RPC, e.g. http://10.128.0.3:10000")
     p.add_argument(
         "--zone",
         action="append",
