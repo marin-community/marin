@@ -21,6 +21,7 @@ from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.constraints import zone_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.rpc import job_pb2
+from rigging.log_setup import configure_logging
 from rigging.timing import Duration
 
 logger = logging.getLogger("probes")
@@ -132,14 +133,12 @@ def probe_finelog_write(finelog: LogClient) -> ProbeResult:
 # ---- entrypoint -----------------------------------------------------------
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="probes")
     p.add_argument("--iris-endpoint", required=True, help="e.g. https://iris-controller.internal:10001")
     p.add_argument("--finelog-endpoint", help="defaults to --iris-endpoint")
     p.add_argument("--zone", action="append", required=True, help="GCP zone for iris-job-submit; repeat for multiple")
     args = p.parse_args(argv)
-
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
     iris = RemoteClusterClient(controller_address=args.iris_endpoint)
     finelog = LogClient.connect(args.finelog_endpoint or args.iris_endpoint)
@@ -155,10 +154,8 @@ def main(argv: list[str] | None = None) -> int:
             cadence=300.0,
         )
     runner.run()
-    return 0
 
 
 if __name__ == "__main__":
-    import sys
-
-    sys.exit(main())
+    configure_logging()
+    main()
