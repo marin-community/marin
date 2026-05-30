@@ -12173,3 +12173,49 @@ Follow-up 2026-05-30T02:46Z:
   `config.yaml`; Levanter logged that it was dropping the tracker update and
   continuing. Monitor should keep watching for actual training progress or
   terminal failure.
+
+Follow-up 2026-05-30T03:45Z:
+
+- The `97b0a89` child is still running on
+  `marin-tpu-v6e-preemptible-4-us-east5-b-20260530-0318-cc7dcd3b-worker-0`
+  with `preemption_count=2`.
+- Startup invariants remain correct on the resumed attempt:
+  - output path `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-prefixes-qwen3`
+  - run id `delphi-3e18-prefixes-qwen3`
+  - W&B run `https://wandb.ai/marin-community/marin/runs/delphi-3e18-prefixes-qwen3`
+  - Levanter resumed from step `20001`
+- The run has now progressed through the duplicate-step window and is making
+  forward progress again:
+  - `03:34Z`: temporary checkpoint saved at step `22269`
+  - `03:45Z`: temporary checkpoint save started at step `25001`
+  - latest observed training progress: `25.0kit/37.3kit`
+- The materialized target checkpoints are still absent:
+  - `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-prefixes-qwen3/checkpoints/step-26134`
+  - `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-prefixes-qwen3/checkpoints/step-29868`
+- Current read: the code path is now correct and stable enough to train, but we
+  still need the worker to stay alive long enough to materialize the 70% and
+  80% checkpoints.
+
+Follow-up 2026-05-30T04:14Z — materialization SUCCEEDED:
+
+- Both target prefix checkpoints are now present and complete in GCS under
+  `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-prefixes-qwen3/checkpoints/`:
+  - `step-29868/` (80%, the stop step): 9 objects, 5,366,963,909 bytes
+    (5.00 GiB). Complete OCDBT checkpoint: `d/` shard tree, `metadata.json`,
+    and `manifest.ocdbt`. The commit markers (`manifest.ocdbt` +
+    `metadata.json`) were written LAST at `2026-05-30T04:03:20Z`, after all
+    `d/` shards (`04:02:50Z`–`04:03:13Z`). Manifest-written-last is the atomic
+    OCDBT commit signal, so the checkpoint is finalized, not partial.
+  - `step-26134/` (70%, extra save): 5,366,961,493 bytes (5.00 GiB), same
+    complete OCDBT structure.
+- `eval_metrics.jsonl` contains the final evaluation at the exact stop step
+  `29868` (`eval/bpb` 1.2611, `eval/loss` 3.6661, `eval/paloma/bpb` 1.2663,
+  `eval/uncheatable_eval/bpb` 1.2144), plus the prior periodic evals at steps
+  26000/27000/28000/29000. Eval reaching step 29868 confirms the run trained
+  through the stop step.
+- Timeline: the `03:45Z` entry had the run at temp step ~25001 on worker
+  `...-20260530-0318-cc7dcd3b-worker-0` after `preemption_count=2`. Between then
+  and `04:03:20Z` the surviving worker trained through 29868 and committed both
+  prefix checkpoints. The previous agent's open question ("will the worker stay
+  alive long enough to materialize the 70% and 80% checkpoints") is answered:
+  yes.
