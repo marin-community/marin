@@ -11813,3 +11813,190 @@ because the materialized paths don't exist yet.
 No code/config drift since `7e511d8f3` — this is a "ready to launch"
 checkpoint entry only. Pre-commit clean. Tests still pass (151).
 
+## 2026-05-29T00:00Z — Operator runbook: launching the 7 prefix materializations from a marin-configured client
+
+The 3e18 sanity-check launch was attempted from skampere3 and blocked
+at the fray backend layer (executor falls back to `LocalClient`
+outside an iris job → tries to run Levanter in-process → no
+accelerator). All client-side environment workarounds were chased
+(ADC, `WANDB_API_KEY`, `MARIN_PREFIX` for region detection) but the
+fray-backend issue requires constructing a `FrayIrisClient` manually
+and that's a brittle layer-on-layer hack from a non-marin-dev host.
+
+**Path forward: launch from a properly-configured marin development
+client** (the user's laptop has the working iris/fray setup that the
+prior `submit_delphi_prefix_3e19.py` / `_3e20.py` scripts used
+successfully). No code changes needed — the materialize helper Just
+Works from a marin-configured host.
+
+### Pre-flight (ALREADY DONE — do NOT redo)
+
+- ✅ 7 source ckpts pre-copied to us-east5 (97.18 GiB, see the prior
+  entry for the table). `mirror://` resolution will find them locally
+  when the materialization TPU lands in us-east5; no second
+  cross-region copy.
+- ✅ `experiments/delphi_models.py` NTS aligned with `.executor_info`
+  for all 7 small-ladder bases.
+- ✅ `checkpoint_candidates.yaml` target steps recomputed so every
+  70%/80% prefix lands at exactly 70.00%/80.00% of the true schedule
+  (4-decimal precision).
+- ✅ Helper extension `--also-save-step` shipped (commit `5cb06d791`)
+  with D5 post-train check on every saved step.
+
+### Launch commands (run from laptop, one per base)
+
+Order: **3e18 first as sanity check** (~3-4 h wall on v6e-4). When
+3e18 succeeds — both `step-26134` and `step-29868` written under
+`gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-prefixes-qwen3/checkpoints/`,
+both passing `assert_checkpoint_complete_for_model_type` — fire the
+other 6 in parallel. They all start independently; bottleneck is 2e20
+at ~22 h on v5p-8.
+
+Each command runs the helper directly; the helper internally calls
+`executor_main` which uses fray's iris backend (auto-detected on the
+laptop). The single training run writes the 70% prefix at the
+intermediate `--also-save-step` and the 80% prefix at the final
+`--target-step` (forced save at training end).
+
+```bash
+# 3e18 (sanity check first; ~3-4 h on v6e-4)
+uv run python scripts/materialize_delphi_prefix_checkpoint.py \
+    --base 3e18 --source-step 20000 --target-step 29868 --also-save-step 26134 \
+    --output-root gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-prefixes-qwen3 \
+    --tpu v6e-4 --ram 128g --region us-east5
+
+# 9e18 (~2 h on v6e-4)
+uv run python scripts/materialize_delphi_prefix_checkpoint.py \
+    --base 9e18 --source-step 30000 --target-step 35453 --also-save-step 31021 \
+    --output-root gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-9e18-prefixes-qwen3 \
+    --tpu v6e-4 --ram 128g --region us-east5
+
+# 2e19 (~2 h on v6e-8)
+uv run python scripts/materialize_delphi_prefix_checkpoint.py \
+    --base 2e19 --source-step 30000 --target-step 44100 --also-save-step 38587 \
+    --output-root gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-2e19-prefixes-qwen3 \
+    --tpu v6e-8 --ram 128g --region us-east5
+
+# 3e19 (~3.5 h on v6e-8)
+uv run python scripts/materialize_delphi_prefix_checkpoint.py \
+    --base 3e19 --source-step 20000 --target-step 30411 --also-save-step 26609 \
+    --output-root gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e19-prefixes-qwen3 \
+    --tpu v6e-8 --ram 128g --region us-east5
+
+# 9e19 (~10 h on v6e-8)
+uv run python scripts/materialize_delphi_prefix_checkpoint.py \
+    --base 9e19 --source-step 20000 --target-step 32226 --also-save-step 28198 \
+    --output-root gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-9e19-prefixes-qwen3 \
+    --tpu v6e-8 --ram 128g --region us-east5
+
+# 2e20 (~22 h on v5p-8; in us-east5-a since v5p lives there, not -b)
+uv run python scripts/materialize_delphi_prefix_checkpoint.py \
+    --base 2e20 --source-step 30000 --target-step 45181 --also-save-step 39533 \
+    --output-root gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-2e20-prefixes-qwen3 \
+    --tpu v5p-8 --ram 256g --region us-east5
+
+# 3e20 (~17 h on v5p-16)
+uv run python scripts/materialize_delphi_prefix_checkpoint.py \
+    --base 3e20 --source-step 20000 --target-step 28408 --also-save-step 24857 \
+    --output-root gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e20-prefixes-qwen3 \
+    --tpu v5p-16 --ram 256g --region us-east5
+```
+
+Pre-flight is enforced by the helper itself
+(`validate_static_request`): each `also-save-step` is verified to be
+strictly inside `(source_step, target_step)` and distinct from any
+other extras, source/target are validated against the true
+`num_train_steps` from `.executor_info`, and the destination
+existence check rejects any prior partial write under the same
+`output_root` unless `--allow-existing-destination` is passed.
+
+### Per-run verification
+
+After each materialization completes, confirm:
+
+1. Two step directories under
+   `<output_root>/checkpoints/step-{also-save}` and
+   `step-{target}`.
+2. Each contains `manifest.ocdbt`, `metadata.json`, and `d/`.
+3. Each `metadata.json` has `all_target_steps: [70%-target,
+   80%-target]`, `materialization: "delphi_prefix_checkpoint"`, and
+   the appropriate `step`.
+4. Each OCDBT kvstore contains `q_norm` and `k_norm` keys (the bug
+   that triggered this whole workstream); the D5 post-train check
+   inside the launcher runs this for you, but you can also re-run
+   manually:
+
+   ```python
+   from marin.midtraining import assert_qwen3_qk_norm_present
+   from experiments.delphi_models import get_delphi_model
+   for step in (also_save, target):
+       assert_qwen3_qk_norm_present(
+           f"<output_root>/checkpoints/step-{step}",
+           num_layers=get_delphi_model("<base>").num_layers,
+       )
+   ```
+
+### Post-materialization yaml flip
+
+Once a base's prefixes are clean, update its three candidate rows in
+`experiments/midtrain_specs/true_midtrain/nemotron_math_only/configs/checkpoint_candidates.yaml`:
+
+- For `delphi-<base>-cooldown30` (70% target): set
+  `suggested_checkpoint_path` to the new
+  `<output_root>/checkpoints/step-{70-target}`, set
+  `suggested_step` to the 70%-target step,
+  `suggested_step_delta: 0`,
+  `suggested_relation_to_target: exact_target`,
+  `suggested_progress_percent: 70.0000`,
+  `materialized_checkpoint: true`,
+  `review_status: approved`. Move any prior bad path to
+  `invalidated_materialized_checkpoint_path`.
+- For `delphi-<base>-cooldown20` (80% target): same flip for the
+  80%-target step.
+- For `delphi-<base>-cooldown10` (90% target): unchanged — we did
+  not materialize 90% prefixes in this batch.
+
+The launcher's preflight (D4) will then validate the new ckpt's
+OCDBT-key completeness before any cooldown launch.
+
+### Why this isn't automated yet
+
+The yaml flip happens AFTER materialization completes, with paths
+that don't exist at submit time. It would need a small post-train
+hook on the materialize helper (or a one-off script that takes a
+list of base/run-id pairs and rewrites the yaml). For now: manual
+edit per base when each finishes.
+
+### If anything goes wrong
+
+- **`missing Qwen3 QK-norm arrays`** on the materialization output
+  → the source ckpt is actually degraded. Re-verify with
+  `assert_qwen3_qk_norm_present` on the staged us-east5 mirror; if
+  the mirror is degraded, re-fetch from us-central2 via gsutil cp.
+- **`q_norm/k_norm restore error`** on a cooldown launch that consumes
+  a materialized prefix → the D4 preflight should have caught it
+  earlier. Inspect the prefix's OCDBT keys directly with tensorstore.
+- **TPU acquisition stalls > 24 h** → check iris scheduler priority.
+  These launches use the default (interactive); should not get
+  starved by BATCH-priority tasks. If a v5p-8 / v5p-16 / v6e slot is
+  hard to acquire, the 2e20 / 3e20 runs may be the slowest to start.
+
+### Files / commits this batch depends on
+
+- `5cb06d791` — `--also-save-step` extension + D5 multi-step check
+- `7e511d8f3` — registry NTS sync + yaml regeneration
+- `0b50cb168` — D1-D5 defenses + `checkpoint_schema` module
+- `5afac0bdf` — Qwen3 fail-closed in materialize helper (the bug fix)
+
+All on `origin/midtrain_data`. `git pull` on the laptop picks them up.
+
+### After all 7 materializations land
+
+The cooldown30 / cooldown20 sweep for the full 7-base small ladder
+becomes scientifically clean (every cell starts from an exact-target
+prefix). Relaunch the 6 invalidated cooldown30 cells (3e18 / 3e19 ×
+3 mixes) from `2026-05-25T21:28Z` — they died on the bad
+materialized prefixes. Plus 3e18/9e18/2e19/3e19/9e19/2e20/3e20 × 3
+mixes × 2 ratios = 42 cells of true-cooldown for the small ladder.
+
+
