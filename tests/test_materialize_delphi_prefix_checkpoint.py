@@ -180,7 +180,7 @@ def test_stop_target_is_separate_from_lr_schedule_length():
         "checkpoints/isoflop/isoflop-3e+18-d1024-L11-B8-adamh_scaling_v6/checkpoints/step-20000"
     )
     assert trainer.initialize_from.budget_gb == SOURCE_CHECKPOINT_MIRROR_BUDGET_GB
-    assert trainer.load_checkpoint is False
+    assert trainer.load_checkpoint is None
 
     checkpointer = trainer.checkpointer
     assert checkpointer.base_path == f"{req.output_root}/checkpoints"

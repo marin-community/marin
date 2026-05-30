@@ -12507,3 +12507,50 @@ full-state checkpoints (model + QK-norm + full AdamH optimizer state), logically
 identical to their known-good sources. SAFE as cooldown resume points. The
 2e20/3e20 prefixes will get the same OCDBT-key + logical-array check before
 Phase 2 consumes them.
+
+## 2026-05-30T18:25Z — RESUME-FROM-TEMP fix IN PROGRESS (handoff)
+
+Root cause of prefix thrashing: helper set trainer.load_checkpoint=False, so each
+preemption COLD-RESTARTED from source step (e.g. 9e19 reached temp step-31857,
+369 steps from target 32226, got preempted, restarted from 20001). save_interval
+was 10min (fine); frequency was NOT the issue — the cold-restart was.
+
+FIX APPLIED to scripts/materialize_delphi_prefix_checkpoint.py (NOT yet committed):
+- load_checkpoint=False -> load_checkpoint=None (Levanter: resume from latest
+  temp/permanent ckpt in base_path/temporary_base_path if present, else
+  initialize_from=source). Fresh run loads source; post-preemption resumes temp.
+- Added TEMPORARY_CHECKPOINT_SAVE_INTERVAL=timedelta(minutes=5); set
+  checkpointer save_interval=that (10min -> 5min) to bound loss/preemption.
+- timedelta already imported.
+
+REMAINING STEPS (next context MUST finish):
+1. Update test: tests/test_materialize_delphi_prefix_checkpoint.py — the
+   `assert trainer.load_checkpoint is False` -> `is None`. (grep load_checkpoint)
+2. Run: .venv/bin/python -m pytest tests/test_materialize_delphi_prefix_checkpoint.py
+   then ./infra/pre-commit.py --all-files --fix ; commit.
+3. Relaunch all 3 in-flight (must be NEW iris job run to pick up new code; Iris
+   auto-restart reuses OLD bundle):
+   - 9e19: STOPPED already (root+child), step-31857 temp FROZEN/present. Relaunch
+     MUST add --allow-existing-destination (70% step-28198 already committed) so
+     preflight passes; will resume from 31857 -> finishes ~9 min. Cmd shape:
+     uv(/Users/ahmed/.local/bin/uv) run iris --config lib/iris/config/marin.yaml
+     job run --no-wait --priority interactive --region us-east5 --extra
+     marin-core:tpu --job-name delphi-9e19-prefixes-qwen3-v6e8-r2-<HASH> -e
+     WANDB_API_KEY "$WANDB_API_KEY" -- uv run python
+     scripts/materialize_delphi_prefix_checkpoint.py --base 9e19 --source-step
+     20000 --target-step 32226 --also-save-step 28198 --output-root
+     gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-9e19-prefixes-qwen3
+     --tpu v6e-8 --ram 128g --region us-east5 --allow-existing-destination
+   - 2e20: STILL RUNNING root /ahmed/delphi-2e20-prefixes-qwen3-r3-a65439d (v5p-8).
+     Stop root+child, relaunch (NO --allow-existing; both dests absent). 30000->45181
+     also-save 39533. Has SIGSEGV'd 2x on v5p-8 — if again, try different v5p zone.
+   - 3e20: STILL RUNNING root /ahmed/delphi-3e20-prefixes-qwen3-r2-a65439d (v5p-16).
+     Stop root+child, relaunch (NO --allow-existing). 20000->28408 also-save 24857.
+4. Verify each relaunch logs "Resuming training from step <temp>" (9e19) / loads
+   source (2e20/3e20), then babysit to 7/7.
+5. Before Phase 2 consumes 9e19/2e20/3e20: run scratch/verify_ocdbt_keys.py-style
+   logical-array check on them (as done for the 4 verified bases).
+
+VERIFIED COMPLETE (OCDBT logical-array == source, QK-norm + full opt_state):
+3e18,9e18,2e19,3e19 x {70%,80%}. Note IMPORTANT: uv is at /Users/ahmed/.local/bin/uv
+(bare `uv` not on PATH in this shell). .env has WANDB_API_KEY (source it first).

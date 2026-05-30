@@ -65,6 +65,10 @@ CHECKPOINTS_DIR = "checkpoints"
 EXECUTOR_INFO_FILENAME = ".executor_info"
 RESERVED_CHECKPOINT_METADATA_KEYS = frozenset({"step", "timestamp", "is_temporary"})
 SOURCE_CHECKPOINT_MIRROR_BUDGET_GB = 40.0
+# Temporary (time-policy) checkpoint cadence for materialization runs. Tighter
+# than the source pretraining config's 10 min so a preemption on Marin's
+# preemptible TPUs loses at most ~5 min of recompute once resume-from-temp is on.
+TEMPORARY_CHECKPOINT_SAVE_INTERVAL = timedelta(minutes=5)
 DELPHI_MODEL_TYPE = "qwen3"
 TPU_PIP_DEPENDENCY_GROUP = "tpu"
 
@@ -394,7 +398,13 @@ def materialized_train_config(
         source_config.trainer,
         id=None,
         initialize_from=cast(str, load_checkpoint_path),
-        load_checkpoint=False,
+        # None (not False) is Levanter's "resume from the latest checkpoint in
+        # base_path/temporary_base_path if one exists, else fall back to
+        # initialize_from". On a fresh run both dirs are empty -> loads the source
+        # prefix from initialize_from. After a preemption a temp checkpoint exists
+        # -> resumes from it with full optimizer state, instead of cold-restarting
+        # from the source step (which discarded ~all progress every preemption).
+        load_checkpoint=None,
         load_checkpoint_path=None,
         stop_step=levanter_stop_step_for_checkpoint_step(request.target_step),
         checkpointer=checkpointer,
