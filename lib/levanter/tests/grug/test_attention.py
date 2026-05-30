@@ -95,24 +95,30 @@ def test_thd_segment_metadata_rejects_mismatched_q_kv_segments():
         jax.block_until_ready(mask.thd_segment_metadata.segment_lengths)
 
 
-def test_gpu_fa4_thd_registered_backend_jits_with_callbacks(monkeypatch):
-    def fake_fwd(q, k, v, segment_lengths, num_segments):
-        del k, v, segment_lengths, num_segments
-        return np.asarray(q) * np.asarray(2, dtype=q.dtype)
+def test_gpu_fa4_thd_registered_backend_jits_with_cutlass_boundary(monkeypatch):
+    def fake_fwd(q, k, v, cu_seqlens, *, softmax_scale, kernel_config):
+        del k, v, cu_seqlens, softmax_scale, kernel_config
+        return q * jnp.asarray(2, dtype=q.dtype), jnp.zeros((q.shape[1], q.shape[0]), dtype=jnp.float32)
 
-    def fake_bwd(q, k, v, dout, segment_lengths, num_segments):
-        del segment_lengths, num_segments
+    def fake_bwd(q, k, v, out, dout, lse, cu_seqlens, *, softmax_scale, kernel_config):
+        del out, lse, cu_seqlens, softmax_scale, kernel_config
         return (
-            np.asarray(q),
-            np.asarray(dout) * np.asarray(2, dtype=dout.dtype),
-            np.zeros_like(np.asarray(k)),
-            np.zeros_like(np.asarray(v)),
+            dout * jnp.asarray(2, dtype=dout.dtype),
+            jnp.zeros_like(k),
+            jnp.zeros_like(v),
         )
 
-    monkeypatch.setattr(fa4_thd, "torch_fa4_thd_attention_internal_from_lengths", fake_fwd)
-    monkeypatch.setattr(fa4_thd, "torch_fa4_thd_attention_internal_fwd_bwd_from_lengths", fake_bwd)
-    monkeypatch.setattr(fa4_thd, "_torch_from_jax", lambda x: x)
-    monkeypatch.setattr(fa4_thd, "_jax_from_torch", lambda x: x)
+    monkeypatch.setattr(fa4_thd, "fa4_thd_attention_forward", fake_fwd)
+    monkeypatch.setattr(fa4_thd, "fa4_thd_attention_backward", fake_bwd)
+    monkeypatch.setattr(
+        fa4_thd,
+        "_thd_kernel_config",
+        lambda head_dim: fa4_thd.Flash4CuteKernelConfig(
+            forward_tile=(128, 128),
+            backward_tile=(128, 128),
+            num_threads=384,
+        ),
+    )
     monkeypatch.setattr(fa4_thd.jax, "default_backend", lambda: "gpu")
 
     q = jnp.ones((1, 4, 2, 8), dtype=jnp.float32)
