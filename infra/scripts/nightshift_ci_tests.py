@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import re
-import secrets
 import subprocess
 import tempfile
 import zipfile
@@ -341,7 +340,6 @@ def select_candidates(ranked: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def build_prompt(
     *,
     date: str,
-    haiku_seed: str,
     candidate_file: Path,
     log_root: Path,
     repo: str,
@@ -350,10 +348,6 @@ def build_prompt(
     """Build the agent prompt for one CI-test audit run."""
     return f"""\
 You are the Nightshift CI Test Audit agent.
-
-Your random seed is: {haiku_seed}
-Use this seed to compose a haiku about test maintenance. Include it as the
-epigraph of any PR you create.
 
 ## Context
 
@@ -378,6 +372,8 @@ Treat `unstable` as a hypothesis from log evidence, not a proven flake. Confirm
 against the code and test intent before changing behavior.
 
 Read `AGENTS.md` for project conventions.
+Before opening any PR, read `.agents/skills/author-pr/SKILL.md`; its
+plain-text PR format is mandatory.
 
 ## Rules of Engagement
 
@@ -402,7 +398,10 @@ Read `AGENTS.md` for project conventions.
   1. Create or use branch `nightshift/ci-tests-{date.replace('-', '')}`.
   2. Push and open a PR titled `[nightshift] investigate slow/flaky CI tests`.
   3. Add labels `agent-generated` and `nightshift`.
-  4. Begin the PR body with your haiku.
+  4. Body: follow `.agents/skills/author-pr/SKILL.md` exactly — plain text,
+     commit-style, no markdown headers, bullet lists, tables, or emoji,
+     under ~80 words. Reference any related issue with `Fixes #NNNN` or
+     `Part of #NNNN`; omit the link only if no related issue exists.
   5. Enable automerge with squash.
 - Otherwise, exit cleanly and explain in plain text why no fix was justified.
   Do not open an issue. Do not create an empty PR. Do not edit unrelated files.
@@ -492,7 +491,6 @@ def main() -> None:
 
         prompt = build_prompt(
             date=date,
-            haiku_seed=secrets.token_hex(4),
             candidate_file=candidate_file,
             log_root=logs_root,
             repo=repo,

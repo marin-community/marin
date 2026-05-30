@@ -6,7 +6,6 @@
 import datetime
 import json
 import logging
-import secrets
 import shutil
 import subprocess
 import tempfile
@@ -19,8 +18,6 @@ SUBPROJECTS = ["lib/marin/src/marin", "lib/iris/src/iris", "lib/zephyr/src/zephy
 
 SCOUT_PROMPT = """\
 You are a Nightshift Scout Agent assigned to: {subproject}
-
-Your random seed is: {haiku_seed}
 
 ## Your Mission
 
@@ -81,10 +78,6 @@ If you find nothing worth changing, write:
 MERGE_PROMPT = """\
 You are the Nightshift Merge Agent.
 
-Your random seed is: {haiku_seed}
-Use this seed to compose a haiku about code maintenance. Include it
-as the epigraph of your PR description.
-
 ## Context
 
 Parallel scout agents searched these subprojects for cleanup opportunities.
@@ -113,9 +106,17 @@ The scout worktrees with their commits are at these paths:
    git rebase origin/main
    ```
 
-4. Open a PR:
+4. Read `AGENTS.md` for project conventions and read
+   `.agents/skills/author-pr/SKILL.md` before authoring the PR — its
+   plain-text format is mandatory.
+
+5. Open a PR:
    - Title: `[nightshift] {date} multi-cleanup`
-   - Body: your haiku as epigraph, then a combined summary of all scout findings
+   - Body: follow `.agents/skills/author-pr/SKILL.md` exactly — plain text,
+     commit-style, no markdown headers, bullet lists, tables, or emoji,
+     under ~80 words. Briefly summarize what each scout changed and why.
+     Reference any related issue with `Fixes #NNNN` or `Part of #NNNN`;
+     omit the link only if no related issue exists.
    - Labels: `agent-generated`, `nightshift`
 
 5. Enable automerge:
@@ -160,11 +161,9 @@ def run_scout(subproject: str, worktree_path: Path) -> tuple[str, dict, str]:
     """Run a single scout agent in a pre-created git worktree."""
     with tempfile.NamedTemporaryFile(suffix=".json", prefix=f"nightshift-{worktree_path.name}-", delete=False) as f:
         result_file = f.name
-    haiku_seed = secrets.token_hex(4)
 
     prompt = SCOUT_PROMPT.format(
         subproject=subproject,
-        haiku_seed=haiku_seed,
         result_file=result_file,
     )
 
@@ -196,7 +195,7 @@ def run_scout(subproject: str, worktree_path: Path) -> tuple[str, dict, str]:
     return subproject, result, str(worktree_path)
 
 
-def run_merge(date: str, haiku_seed: str, scout_results: list[dict], worktree_info: list[tuple[str, str]]) -> None:
+def run_merge(date: str, scout_results: list[dict], worktree_info: list[tuple[str, str]]) -> None:
     """Run the merge agent to combine scout results into a single PR."""
     results_text = "\n".join(
         f"### {r['subproject']}\n- Status: {r['status']}\n- Summary: {r.get('summary', 'N/A')}" for r in scout_results
@@ -204,7 +203,6 @@ def run_merge(date: str, haiku_seed: str, scout_results: list[dict], worktree_in
     worktree_text = "\n".join(f"- `{subproject}`: `{path}`" for subproject, path in worktree_info)
 
     prompt = MERGE_PROMPT.format(
-        haiku_seed=haiku_seed,
         scout_results=results_text,
         worktree_info=worktree_text,
         date=date,
@@ -279,9 +277,8 @@ def main() -> None:
         cleanup_worktrees(repo_root)
         return
 
-    haiku_seed = secrets.token_hex(4)
     try:
-        run_merge(date, haiku_seed, scout_results, worktree_info)
+        run_merge(date, scout_results, worktree_info)
     finally:
         cleanup_worktrees(repo_root)
 

@@ -9,20 +9,16 @@ import subprocess
 DOC_DRIFT_PROMPT = """\
 You are the Nightshift Doc Drift detector.
 
-## Ritual
-
-Your random seed is: {run_id}-{run_attempt}
-Before you begin, use this seed to inspire a haiku about
-documentation drift. Keep the haiku — you will include it as an epigraph
-in any PR or issue you create.
-
 ## Scope
 
-Sample a single subfolder of `docs/` to focus on. Use your random seed
-to pick one at random. If the chosen subfolder has fewer than 3 markdown
-files, expand to its parent.
+Your random seed is: {run_id}-{run_attempt}
+Sample a single subfolder of `docs/` to focus on. Use this seed to pick
+one at random. If the chosen subfolder has fewer than 3 markdown files,
+expand to its parent.
 
 Read `AGENTS.md` for project conventions.
+Before opening any PR, read `.agents/skills/author-pr/SKILL.md`; its
+plain-text PR format is mandatory.
 
 ## Mission
 
@@ -56,17 +52,21 @@ is found, exit cleanly with a brief summary of what you checked.
 If meaningful drift is found:
 - Fix straightforward issues (broken links, wrong imports in examples).
 - For larger issues, file a GitHub issue with labels `documentation`,
-  `agent-generated`, and `nightshift`. Begin the body with your haiku.
+  `agent-generated`, and `nightshift`. Keep the title and body terse:
+  describe the observed drift and the concrete follow-up needed.
 - If you made fixes, open a PR following these steps:
   1. Before pushing, ensure your branch is up to date with origin/main:
      ```
      git fetch origin main
      git rebase origin/main
      ```
-  2. Push and open the PR:
+  2. Push and open the PR. Follow `.agents/skills/author-pr/SKILL.md`
+     exactly: plain-text commit-style body (no markdown headers, bullet
+     lists, tables, or emoji), under ~80 words. Reference any related
+     issue with `Fixes #NNNN` or `Part of #NNNN`; if you filed a tracking
+     issue in the step above, link it with `Part of #NNNN`.
      - Title: `[nightshift] fix documentation drift`
      - Labels: `agent-generated`, `nightshift`
-     - Begin the PR body with your haiku.
   3. Enable automerge on the PR:
      ```
      gh pr merge --auto --squash <PR_NUMBER>
@@ -74,7 +74,7 @@ If meaningful drift is found:
   4. Pick a reviewer by finding who has recently touched the files you changed.
      Use GitHub login names (NOT emails):
      ```
-     gh api '/repos/{owner}/{repo}/commits?path=<changed_file>&per_page=20' \
+     gh api '/repos/{{owner}}/{{repo}}/commits?path=<changed_file>&per_page=20' \
        --jq '.[].author.login' | grep -v '\\[bot\\]' | sort | uniq -c | sort -rn | head -5
      ```
      Pick the top human contributor and request their review:
