@@ -79,6 +79,9 @@ def test_grug_lm_example_with_max_segments_stacks_padded_packed_rows():
 
 
 def test_thd_segment_metadata_rejects_mismatched_q_kv_segments():
+    if jax.default_backend() == "tpu":
+        pytest.skip("TPU checkify reports the error but does not raise a Python exception.")
+
     q_segment_ids = jnp.array([0, 0, 1, 1], dtype=jnp.int32)
     kv_segment_ids = jnp.array([0, 0, 2, 2], dtype=jnp.int32)
 
