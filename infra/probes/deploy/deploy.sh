@@ -15,7 +15,7 @@ set -euo pipefail
 
 PROJECT="${MARIN_PROBES_PROJECT:-hai-gcp-models}"
 REGION="${MARIN_PROBES_REGION:-us-central1}"
-ZONE="${MARIN_PROBES_ZONE:-us-central1-a}"
+ZONE="${MARIN_PROBES_ZONE:-us-central1-b}"
 VM_NAME="${MARIN_PROBES_VM:-infra-probes}"
 REPO="${MARIN_PROBES_REPO:-marin}"
 IMAGE_NAME="probes"
