@@ -187,7 +187,6 @@ async def test_inference_worker_refills_slots_while_slow_request_is_in_flight() 
         broker.submit_request(_completion_inference_request(request_id=request_id, prompt=prompt))
 
     release_slow_request = threading.Event()
-    stop_event = threading.Event()
     with serve_deterministic_openai_stub(
         blocked_prompts={"slow": release_slow_request},
     ) as upstream_stub:
@@ -197,21 +196,16 @@ async def test_inference_worker_refills_slots_while_slow_request_is_in_flight() 
             upstream=upstream,
             request_timeout_seconds=5,
         )
-        worker_task = asyncio.create_task(
-            worker.run_forever(
-                stop_event=stop_event,
-                max_in_flight=2,
-                backoff=ExponentialBackoff(initial=0.01, maximum=0.01, jitter=0),
-            )
-        )
-        try:
-            responses = await _fetch_until_responses(broker, count=2)
-            assert {response.request_id for response in responses} == {"fast-a", "fast-b"}
-        finally:
-            release_slow_request.set()
-            stop_event.set()
-            async with asyncio.timeout(5):
-                await worker_task
+        with run_inference_worker(
+            worker,
+            max_in_flight=2,
+            backoff=ExponentialBackoff(initial=0.01, maximum=0.01, jitter=0),
+        ):
+            try:
+                responses = await _fetch_until_responses(broker, count=2)
+                assert {response.request_id for response in responses} == {"fast-a", "fast-b"}
+            finally:
+                release_slow_request.set()
 
 
 @pytest.mark.asyncio
@@ -220,7 +214,6 @@ async def test_inference_worker_returns_504_for_upstream_timeout() -> None:
     broker.submit_request(_completion_inference_request(request_id="slow", prompt="slow"))
 
     release_slow_request = threading.Event()
-    stop_event = threading.Event()
     with serve_deterministic_openai_stub(blocked_prompts={"slow": release_slow_request}) as upstream_stub:
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
         worker = InferenceWorker(
@@ -228,20 +221,15 @@ async def test_inference_worker_returns_504_for_upstream_timeout() -> None:
             upstream=upstream,
             request_timeout_seconds=0.05,
         )
-        worker_task = asyncio.create_task(
-            worker.run_forever(
-                stop_event=stop_event,
-                max_in_flight=1,
-                backoff=ExponentialBackoff(initial=0.01, maximum=0.01, jitter=0),
-            )
-        )
-        try:
-            responses = await _fetch_until_responses(broker, count=1)
-        finally:
-            release_slow_request.set()
-            stop_event.set()
-            async with asyncio.timeout(5):
-                await worker_task
+        with run_inference_worker(
+            worker,
+            max_in_flight=1,
+            backoff=ExponentialBackoff(initial=0.01, maximum=0.01, jitter=0),
+        ):
+            try:
+                responses = await _fetch_until_responses(broker, count=1)
+            finally:
+                release_slow_request.set()
 
     assert responses[0].request_id == "slow"
     assert responses[0].status_code == 504
@@ -254,26 +242,18 @@ async def test_inference_worker_returns_504_for_upstream_timeout() -> None:
 async def test_inference_worker_returns_502_for_upstream_connection_failure() -> None:
     broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     broker.submit_request(_completion_inference_request(request_id="connect-failure", prompt="connect failure"))
-    stop_event = threading.Event()
     upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=f"http://127.0.0.1:{_closed_port()}/v1", model="gpt2"))
     worker = InferenceWorker(
         broker=broker,
         upstream=upstream,
         request_timeout_seconds=1,
     )
-    worker_task = asyncio.create_task(
-        worker.run_forever(
-            stop_event=stop_event,
-            max_in_flight=1,
-            backoff=ExponentialBackoff(initial=0.01, maximum=0.01, jitter=0),
-        )
-    )
-    try:
+    with run_inference_worker(
+        worker,
+        max_in_flight=1,
+        backoff=ExponentialBackoff(initial=0.01, maximum=0.01, jitter=0),
+    ):
         responses = await _fetch_until_responses(broker, count=1)
-    finally:
-        stop_event.set()
-        async with asyncio.timeout(5):
-            await worker_task
 
     assert responses[0].request_id == "connect-failure"
     assert responses[0].status_code == 502
@@ -286,26 +266,18 @@ async def test_inference_worker_returns_502_for_upstream_connection_failure() ->
 async def test_inference_worker_preserves_status_for_non_json_upstream_response() -> None:
     broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     broker.submit_request(_completion_inference_request(request_id="non-json", prompt="non json"))
-    stop_event = threading.Event()
     with _serve_text_upstream(status_code=503, body="temporarily unavailable") as upstream:
         worker = InferenceWorker(
             broker=broker,
             upstream=upstream,
             request_timeout_seconds=1,
         )
-        worker_task = asyncio.create_task(
-            worker.run_forever(
-                stop_event=stop_event,
-                max_in_flight=1,
-                backoff=ExponentialBackoff(initial=0.01, maximum=0.01, jitter=0),
-            )
-        )
-        try:
+        with run_inference_worker(
+            worker,
+            max_in_flight=1,
+            backoff=ExponentialBackoff(initial=0.01, maximum=0.01, jitter=0),
+        ):
             responses = await _fetch_until_responses(broker, count=1)
-        finally:
-            stop_event.set()
-            async with asyncio.timeout(5):
-                await worker_task
 
     payload = unpack_json_payload(responses[0].payload)
     assert responses[0].request_id == "non-json"

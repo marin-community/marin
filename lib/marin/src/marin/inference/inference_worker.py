@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import threading
 from collections import Counter
 from collections.abc import Iterator
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from typing import Any
 
@@ -45,7 +45,7 @@ class InferenceWorker:
         self._upstream = upstream
         self._request_timeout_seconds = request_timeout_seconds
 
-    async def run_forever(
+    def run_forever(
         self,
         *,
         max_in_flight: int,
@@ -57,7 +57,7 @@ class InferenceWorker:
         if stop_event is None:
             stop_event = threading.Event()
         backoff = ExponentialBackoff() if backoff is None else backoff.copy()
-        in_flight: set[asyncio.Task[LeasedInferenceResponse]] = set()
+        in_flight: set[Future[LeasedInferenceResponse]] = set()
         logger.info(
             "InferenceWorker starting upstream=%s model=%s max_in_flight=%d timeout_seconds=%.1f",
             self._upstream.endpoint.base_url,
@@ -66,14 +66,17 @@ class InferenceWorker:
             self._request_timeout_seconds,
         )
         try:
-            async with httpx.AsyncClient(timeout=self._request_timeout_seconds) as client:
+            with (
+                httpx.Client(timeout=self._request_timeout_seconds) as client,
+                ThreadPoolExecutor(max_workers=max_in_flight, thread_name_prefix="inference-worker-request") as pool,
+            ):
                 while not stop_event.is_set():
                     available_slots = max_in_flight - len(in_flight)
                     if available_slots:
                         # `max_in_flight` counts individual HTTP requests; vLLM does its own continuous batching.
-                        leased_requests = await asyncio.to_thread(self._broker.fetch_requests, max_items=available_slots)
+                        leased_requests = self._broker.fetch_requests(max_items=available_slots)
                         for leased_request in leased_requests:
-                            in_flight.add(asyncio.create_task(self._forward_one(client, leased_request)))
+                            in_flight.add(pool.submit(self._forward_one, client, leased_request))
                         if leased_requests:
                             logger.info(
                                 "InferenceWorker fetched requests count=%d in_flight=%d/%d request_ids=%s",
@@ -87,18 +90,18 @@ class InferenceWorker:
                             backoff.reset()
 
                     if not in_flight:
-                        await asyncio.sleep(backoff.next_interval())
+                        stop_event.wait(backoff.next_interval())
                         continue
 
-                    done, _ = await asyncio.wait(
+                    done, _ = wait(
                         in_flight,
                         timeout=backoff.next_interval(),
-                        return_when=asyncio.FIRST_COMPLETED,
+                        return_when=FIRST_COMPLETED,
                     )
                     in_flight.difference_update(done)
                     if done:
-                        responses = [task.result() for task in done]
-                        await asyncio.to_thread(self._broker.submit_responses, responses)
+                        responses = [future.result() for future in done]
+                        self._broker.submit_responses(responses)
                         logger.info(
                             "InferenceWorker submitted responses count=%d in_flight=%d/%d statuses=%s request_ids=%s",
                             len(responses),
@@ -110,31 +113,25 @@ class InferenceWorker:
                         backoff.reset()
         finally:
             logger.info("InferenceWorker stopping in_flight=%d", len(in_flight))
-            if in_flight:
-                for task in in_flight:
-                    task.cancel()
-                await asyncio.gather(*in_flight, return_exceptions=True)
 
-    async def _forward_one(
-        self, client: httpx.AsyncClient, leased_request: LeasedInferenceRequest
-    ) -> LeasedInferenceResponse:
+    def _forward_one(self, client: httpx.Client, leased_request: LeasedInferenceRequest) -> LeasedInferenceResponse:
         request = leased_request.request
         # The proxy receives /v1/... paths, while RunningModel.endpoint.url() already points at /v1.
         upstream_path = request.path.removeprefix("/v1/")
         url = self._upstream.endpoint.url(upstream_path)
         try:
-            response = await self._send(client, request, url)
+            response = self._send(client, request, url)
             inference_response = _response_from_upstream(request, response)
         except Exception as exc:
             inference_response = _response_from_exception(request, exc, timeout_seconds=self._request_timeout_seconds)
         return LeasedInferenceResponse(lease_id=leased_request.lease_id, response=inference_response)
 
-    async def _send(self, client: httpx.AsyncClient, request: InferenceRequest, url: str) -> httpx.Response:
+    def _send(self, client: httpx.Client, request: InferenceRequest, url: str) -> httpx.Response:
         method = request.method.upper()
         if method == "GET":
-            return await client.get(url)
+            return client.get(url)
         if method == "POST":
-            return await client.post(url, json=unpack_json_payload(request.payload))
+            return client.post(url, json=unpack_json_payload(request.payload))
         return httpx.Response(
             status_code=405,
             json={"error": f"unsupported brokered request method {request.method!r}"},
@@ -151,9 +148,7 @@ def run_inference_worker(
 ) -> Iterator[None]:
     stop_event = threading.Event()
     thread = threading.Thread(
-        target=lambda: asyncio.run(
-            worker.run_forever(stop_event=stop_event, max_in_flight=max_in_flight, backoff=backoff)
-        ),
+        target=lambda: worker.run_forever(stop_event=stop_event, max_in_flight=max_in_flight, backoff=backoff),
         name="inference-worker",
     )
     logger.info("Starting InferenceWorker thread max_in_flight=%d", max_in_flight)

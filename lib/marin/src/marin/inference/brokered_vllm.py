@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 import uuid
@@ -232,7 +231,7 @@ def _run_iris_inference_worker(config: BrokeredVllmSystemConfig, broker_handle: 
             request_timeout_seconds=config.workers.request_timeout_seconds,
         )
         # Worker jobs poll until the parent job terminates them after the eval client exits.
-        asyncio.run(worker.run_forever(max_in_flight=config.workers.max_in_flight_per_worker))
+        worker.run_forever(max_in_flight=config.workers.max_in_flight_per_worker)
 
 
 @contextlib.contextmanager
