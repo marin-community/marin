@@ -33,7 +33,6 @@ from marin.rl.train_worker import TrainWorker
 from marin.rl.weight_transfer import WeightTransferMode
 from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
 from marin.training.run_environment import add_run_env_variables
-from marin.utils import remove_tpu_lockfile_on_exit
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -310,29 +309,27 @@ def _create_runtime_handles(client: Client, config: RLJobConfig) -> _HostedRunti
 def _train_worker_entry(train_config, runtime: RLRuntimeHandles) -> None:
     """Entrypoint for the training worker child job."""
     configure_logging(level=logging.INFO)
-    with remove_tpu_lockfile_on_exit():
-        try:
-            worker = TrainWorker(config=train_config, runtime=runtime)
-            worker.train()
-            runtime.run_state.mark_completed.remote().result()
-        except Exception:
-            logger.exception("TRAIN WORKER CRASHED (orchestration entrypoint)")
-            # Do not mark the shared run state failed here. This function runs
-            # inside a single trainer task attempt, and Iris may retry the same
-            # child job under the still-running coordinator. If we flip the
-            # shared run_state to FAILED on an attempt-local crash, rollout
-            # workers interpret that as whole-run terminal failure and exit
-            # cleanly, leaving the retried trainer without rollout jobs.
-            raise
+    try:
+        worker = TrainWorker(config=train_config, runtime=runtime)
+        worker.train()
+        runtime.run_state.mark_completed.remote().result()
+    except Exception:
+        logger.exception("TRAIN WORKER CRASHED (orchestration entrypoint)")
+        # Do not mark the shared run state failed here. This function runs
+        # inside a single trainer task attempt, and Iris may retry the same
+        # child job under the still-running coordinator. If we flip the
+        # shared run_state to FAILED on an attempt-local crash, rollout
+        # workers interpret that as whole-run terminal failure and exit
+        # cleanly, leaving the retried trainer without rollout jobs.
+        raise
 
 
 def _rollout_worker_entry(rollout_config, runtime: RLRuntimeHandles) -> None:
     """Entrypoint for a rollout worker child job."""
     configure_logging(level=logging.INFO)
-    with remove_tpu_lockfile_on_exit():
-        try:
-            worker = RolloutWorker(config=rollout_config, runtime=runtime)
-            worker.run()
-        except Exception:
-            logger.exception("ROLLOUT WORKER CRASHED (orchestration entrypoint)")
-            raise
+    try:
+        worker = RolloutWorker(config=rollout_config, runtime=runtime)
+        worker.run()
+    except Exception:
+        logger.exception("ROLLOUT WORKER CRASHED (orchestration entrypoint)")
+        raise
