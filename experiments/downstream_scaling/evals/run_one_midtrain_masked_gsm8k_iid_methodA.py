@@ -31,16 +31,24 @@ from experiments.downstream_scaling.evals.run_delphi_masked_gsm8k_iid import (
     make_algorithm,
 )
 from experiments.downstream_scaling.evals.tasks.gsm8k_masked import MaskedGSM8KTask, MaskedGSM8KTaskConfig
-from experiments.downstream_scaling.models.midtrain import DELPHI_MIDTRAIN_MATRIX
+from experiments.downstream_scaling.models.midtrain import DELPHI_MIDTRAIN_CHECKPOINTS, DELPHI_MIDTRAIN_MATRIX
 from experiments.llama import llama3_tokenizer
 
 MASK_FRACTION = 0.0
 
 
 def build_steps(slug: str, eval_tpu: str = "v5p-8"):
-    if slug not in DELPHI_MIDTRAIN_MATRIX:
-        raise ValueError(f"Unknown slug {slug!r}. Available: {sorted(DELPHI_MIDTRAIN_MATRIX)}")
-    checkpoint = DELPHI_MIDTRAIN_MATRIX[slug]
+    # Fall back to the SFT-pipeline registry (DELPHI_MIDTRAIN_CHECKPOINTS) for
+    # 1e20-iso 4p94b slugs that aren't in the matrix's canonical 3-scale set.
+    if slug in DELPHI_MIDTRAIN_MATRIX:
+        checkpoint = DELPHI_MIDTRAIN_MATRIX[slug]
+    elif slug in DELPHI_MIDTRAIN_CHECKPOINTS:
+        checkpoint = DELPHI_MIDTRAIN_CHECKPOINTS[slug]
+    else:
+        raise ValueError(
+            f"Unknown slug {slug!r}. Available in matrix: {sorted(DELPHI_MIDTRAIN_MATRIX)}; "
+            f"available in checkpoints: {sorted(DELPHI_MIDTRAIN_CHECKPOINTS)}"
+        )
     task = MaskedGSM8KTask(
         config=MaskedGSM8KTaskConfig(
             tokenizer_path=llama3_tokenizer,
