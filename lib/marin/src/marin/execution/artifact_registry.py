@@ -12,21 +12,27 @@ backed by GCS or local filesystem via `rigging.filesystem`. See `.agents/project
 for the design and spec.
 """
 
+import contextlib
+import contextvars
 import datetime
 import os
 import re
 import typing
 import uuid
+from collections.abc import Iterator
 
 import pydantic
 from rigging.filesystem import open_url, url_to_fs
 
 DEFAULT_REGISTRY_ENV = "MARIN_ARTIFACT_REGISTRY"
-"""Environment variable read by `get_default_registry` to locate the default registry root.
+"""Environment variable read by `get_default_registry` to override the registry root."""
 
-Required: there is no implicit fallback. When unset, `get_default_registry` raises so a missing
-configuration fails loudly instead of silently resolving to a wrong root. Canonical value is
-`gs://marin-us-central1/artifact_registry`.
+DEFAULT_REGISTRY_ROOT = "gs://marin-us-central1/artifact_registry"
+"""Canonical registry root used by `get_default_registry` when `DEFAULT_REGISTRY_ENV` is unset.
+
+A single global location so an artifact id resolves identically from every region and cloud
+(the manifests are tiny JSON, so cross-region/cross-cloud reads are cheap). Tests must NOT hit
+this — `tests/conftest.py` installs an autouse fixture that redirects the default to a temp dir.
 """
 
 ID_SEPARATOR = "/"
@@ -230,40 +236,51 @@ class FilesystemArtifactRegistry(ArtifactRegistry):
             raise ArtifactRegistryError(f"manifest at {path!r} is unreadable or invalid: {e}") from e
 
 
-_default_registry: ArtifactRegistry | None = None
+_default_registry: contextvars.ContextVar[ArtifactRegistry | None] = contextvars.ContextVar(
+    "marin_default_artifact_registry", default=None
+)
 
 
 def get_default_registry() -> ArtifactRegistry:
-    """Return the process-wide default registry, constructing it on first call.
+    """Return the default registry for the current context, constructing it on first use.
 
-    The root comes from `os.environ[DEFAULT_REGISTRY_ENV]`. There is no implicit fallback: if the
-    env var is unset (or empty) and no registry has been installed via `set_default_registry`, this
-    raises `RuntimeError` rather than guessing a root. The instance is cached at module scope; clear
-    the cache with `set_default_registry(None)` to re-read the environment.
+    The root comes from `os.environ[DEFAULT_REGISTRY_ENV]`, falling back to `DEFAULT_REGISTRY_ROOT`.
+    The constructed instance is cached in the context var, so repeated calls in the same context
+    return the same object; `set_default_registry(None)` clears it so the next call re-reads the
+    environment.
 
-    Thread-safety: the first call is not lock-guarded. Call it once during startup before forking
-    threads. Concurrent first-call races may construct multiple instances, of which one wins the
-    cache slot.
+    Context semantics: the default lives in a `ContextVar`, so an override installed via
+    `set_default_registry` / `use_default_registry` is visible to the current context and to async
+    tasks/copies derived from it, and is automatically isolated from other contexts. New OS threads
+    start with a fresh context and therefore fall back to the env-var / `DEFAULT_REGISTRY_ROOT`
+    default — explicit overrides do not cross thread boundaries, but the configured default does.
     """
-    global _default_registry
-    if _default_registry is None:
-        root = os.environ.get(DEFAULT_REGISTRY_ENV)
-        if not root:
-            raise RuntimeError(
-                f"no default artifact registry configured: set ${DEFAULT_REGISTRY_ENV} "
-                f"(e.g. 'gs://marin-us-central1/artifact_registry'), pass registry= explicitly, "
-                f"or call set_default_registry(...)"
-            )
-        _default_registry = FilesystemArtifactRegistry(root)
-    return _default_registry
+    registry = _default_registry.get()
+    if registry is None:
+        root = os.environ.get(DEFAULT_REGISTRY_ENV) or DEFAULT_REGISTRY_ROOT
+        registry = FilesystemArtifactRegistry(root)
+        _default_registry.set(registry)
+    return registry
 
 
 def set_default_registry(registry: ArtifactRegistry | None) -> None:
-    """Override (or clear) the module-level default.
+    """Install (or clear) the context-local default registry.
 
-    Passing `None` clears the cache so the next `get_default_registry` call re-reads the
-    environment. In-flight callers retain whatever reference they already resolved; swapping the
-    default does not invalidate already-resolved registries.
+    Passing `None` clears it so the next `get_default_registry` call re-reads the environment. For
+    scoped overrides that restore automatically, prefer `use_default_registry`.
     """
-    global _default_registry
-    _default_registry = registry
+    _default_registry.set(registry)
+
+
+@contextlib.contextmanager
+def use_default_registry(registry: ArtifactRegistry) -> Iterator[ArtifactRegistry]:
+    """Install `registry` as the context-local default for the duration of the `with` block.
+
+    Restores the previous default on exit (even on exception). Primary consumers are tests and
+    notebooks that need a non-default registry without threading `registry=` through every call.
+    """
+    token = _default_registry.set(registry)
+    try:
+        yield registry
+    finally:
+        _default_registry.reset(token)

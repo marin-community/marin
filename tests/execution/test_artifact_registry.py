@@ -8,6 +8,7 @@ import pytest
 from marin.execution.artifact import Artifact, PathMetadata
 from marin.execution.artifact_registry import (
     DEFAULT_REGISTRY_ENV,
+    DEFAULT_REGISTRY_ROOT,
     ArtifactAlreadyExistsError,
     ArtifactEntry,
     ArtifactNotFoundError,
@@ -16,6 +17,7 @@ from marin.execution.artifact_registry import (
     InvalidArtifactIdError,
     get_default_registry,
     set_default_registry,
+    use_default_registry,
     validate_id,
     validate_version,
 )
@@ -180,12 +182,18 @@ def test_from_id_propagates_not_found(registry):
 
 def test_from_id_uses_default_registry(registry, artifact_path):
     registry.register("datasets/fineweb", "2026.05.29", artifact_path)
-    set_default_registry(registry)
-    try:
+    with use_default_registry(registry):
         loaded = Artifact.from_id("datasets/fineweb", "2026.05.29", _Payload)
         assert loaded == _Payload(path=artifact_path, value=7)
-    finally:
-        set_default_registry(None)
+
+
+def test_use_default_registry_restores_previous(registry, artifact_path):
+    registry.register("datasets/fineweb", "2026.05.29", artifact_path)
+    before = get_default_registry()
+    with use_default_registry(registry) as scoped:
+        assert get_default_registry() is scoped is registry
+    # The override is scoped to the block; the prior default is restored on exit.
+    assert get_default_registry() is before
 
 
 # --- default registry singleton ---------------------------------------------
@@ -203,10 +211,9 @@ def test_get_default_registry_reads_env(monkeypatch, tmp_path, reset_default):
     assert get_default_registry().root == str(tmp_path / "envroot")
 
 
-def test_get_default_registry_unset_fails_loudly(monkeypatch, reset_default):
+def test_get_default_registry_falls_back_to_canonical_root(monkeypatch, reset_default):
     monkeypatch.delenv(DEFAULT_REGISTRY_ENV, raising=False)
-    with pytest.raises(RuntimeError):
-        get_default_registry()
+    assert get_default_registry().root == DEFAULT_REGISTRY_ROOT
 
 
 def test_get_default_registry_caches(monkeypatch, tmp_path, reset_default):

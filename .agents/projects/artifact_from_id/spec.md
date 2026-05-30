@@ -18,9 +18,12 @@ No proto, no schema-registry tables, no migrations. The registry's persisted for
 # lib/marin/src/marin/execution/artifact_registry.py
 
 DEFAULT_REGISTRY_ENV: str = "MARIN_ARTIFACT_REGISTRY"
-"""Environment variable read by `get_default_registry()` to locate the default registry root.
-   Required — there is no implicit fallback; when unset, `get_default_registry()` raises.
-   Canonical value is `gs://marin-us-central1/artifact_registry`."""
+"""Environment variable read by `get_default_registry()` to override the registry root."""
+
+DEFAULT_REGISTRY_ROOT: str = "gs://marin-us-central1/artifact_registry"
+"""Canonical default root used when `DEFAULT_REGISTRY_ENV` is unset. One global location so an id
+   resolves identically from every region/cloud. Tests are kept off it by an autouse fixture in
+   `tests/conftest.py` that redirects the default to a temp dir."""
 
 ID_SEPARATOR: str = "/"
 """Separator between namespace and name in an artifact id."""
@@ -133,34 +136,39 @@ class FilesystemArtifactRegistry(ArtifactRegistry):
 
 ## Singleton helpers
 
+The default is held in a module-level `contextvars.ContextVar`, so overrides are context-local
+and async-safe (a `with`-block or `set_default_registry` override is visible to the current
+context and tasks derived from it, isolated from other contexts).
+
 ```python
 def get_default_registry() -> ArtifactRegistry:
-    """Return the process-wide default registry, constructing it on first call from
-    `os.environ[DEFAULT_REGISTRY_ENV]`. There is NO implicit fallback root.
-    Raises `RuntimeError` if the env var is unset/empty AND no registry has been
-    installed via `set_default_registry` — the registry has no sensible default and
-    the caller must configure one explicitly (canonical: `gs://marin-us-central1/artifact_registry`).
+    """Return the default registry for the current context, constructing it on first use from
+    `os.environ[DEFAULT_REGISTRY_ENV]`, falling back to `DEFAULT_REGISTRY_ROOT`
+    (`gs://marin-us-central1/artifact_registry`). Tests must not hit the canonical
+    root: an autouse fixture in `tests/conftest.py` installs a temp-dir registry as the
+    context-local default for every test (via `use_default_registry`).
 
-    The returned instance is cached at module scope. Re-reading the env var requires
-    `set_default_registry(None)` to clear the cache; this is intentional — env-var
-    flips mid-process are not a supported use case.
+    The constructed instance is cached in the context var; `set_default_registry(None)` clears it
+    so the next call re-reads the environment.
 
-    Thread-safety: the first call is NOT guarded by a lock. In multi-threaded entrypoints,
-    call `get_default_registry()` once during startup before forking threads so the cache
-    is populated. Concurrent first-call races may construct multiple instances, of which
-    one wins the cache slot; the others are GC'd. This is safe but wasteful."""
+    Context semantics: a new OS thread starts with a fresh context and so falls back to the
+    env-var / `DEFAULT_REGISTRY_ROOT` default — explicit overrides do not cross thread boundaries,
+    but the configured default does, so every thread resolves the same root in the absence of an
+    override."""
 
 
 def set_default_registry(registry: ArtifactRegistry | None) -> None:
-    """Override (or clear) the module-level default. Passing `None` clears the cache
-    so the next `get_default_registry()` call re-reads the environment.
+    """Install (or clear) the context-local default. Passing `None` clears it so the next
+    `get_default_registry()` call re-reads the environment. For scoped overrides that restore
+    automatically, prefer `use_default_registry`."""
 
-    In-flight callers retain whatever reference `get_default_registry()` already returned
-    to them — swapping the default does not invalidate already-resolved registries. Tests
-    that flip the default should use a fixture that restores the prior value in teardown.
 
-    Primary consumer: tests, notebooks, and any caller that needs a non-default registry
-    without threading it through every `Artifact.from_id` call site."""
+@contextlib.contextmanager
+def use_default_registry(registry: ArtifactRegistry) -> Iterator[ArtifactRegistry]:
+    """Install `registry` as the context-local default for the duration of the `with` block,
+    restoring the previous default on exit (even on exception). Primary consumers are tests and
+    notebooks that need a non-default registry without threading `registry=` through every
+    `Artifact.from_id` call site."""
 ```
 
 ## `Artifact.from_id`
@@ -301,7 +309,6 @@ Listed explicitly so reviewers know what *not* to push back on. Each is a clean 
 - **Deletion / garbage collection.** No `delete(id, version)` at v1. The registry is append-only by convention.
 - **Multi-writer transactional semantics** (GCS CAS via `if-generation-match`, distributed locking, etc.).
 - **Listing APIs** (`list_ids()`, `list_versions(id)`). When a consumer needs one, we add it.
-- **Test helper context manager** (`use_registry(reg)`). Deferred — callers can write a local pytest fixture; we'll formalize one when a consumer asks.
 - **Per-region federation.** One registry root per process. Cross-region resolution is out of scope.
 - **Migrating existing `from_path` call sites.** `from_id` is purely additive; `from_path` stays.
 - **Path sharding in the manifest layout.** Considered and rejected at v1 — see Decisions in `design.md`.
