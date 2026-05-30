@@ -12359,3 +12359,50 @@ relaunch, not 1bb059a). Also, the post-failure temp-checkpoint dir was EMPTY
 (no step-31500); r2 restarts from source step 30000, which is correct and
 idempotent via override_output_path. Verified single live r2 root: child
 pending v5p-8 capacity; old ...-d165cbc root remains FAILED/superseded.
+
+## 2026-05-30T06:20Z — Phase-2 cooldown plan locked (decisions from Ahmed)
+
+Phase 2 = "80% midtraining cooldown for 3e18..3e20". Studied the launcher
+`experiments/midtrain_specs/true_midtrain/nemotron_math_only/launcher.py` and
+`lib/marin/src/marin/midtraining/modes.py`. Key facts:
+
+- "Cooldown at 80%" == `--cooldown-ratio 0.20` (the `cooldown20` candidates).
+  CooldownMode resumes a pretrain checkpoint with FULL optimizer state, swaps to
+  the cooldown data mix, and trains the final 20% to `base.num_train_steps`.
+- Launcher is strictly config-gated: it refuses dynamic checkpoint choice. For
+  each (base, mix, cooldown_ratio) it requires:
+  - `configs/checkpoint_candidates.yaml` row `delphi-<base>-cooldown20` with
+    `review_status: approved` + `suggested_checkpoint_path` + `suggested_step`.
+  - `configs/<mix>.yaml` cell for that (base, ratio, candidate_id). All present.
+- All seven `cooldown20` rows are already `review_status: approved`, BUT their
+  `suggested_checkpoint_path` points at the coarse NATIVE isoflop checkpoints
+  (~80.35%, e.g. 3e18 step-30000), not our exact-80% prefixes. Three rows carry
+  an `invalidated_materialized_checkpoint_path` (old Gen-1 paths).
+
+Decisions (AskUserQuestion, 2026-05-30T06:20Z):
+1. RESUME FROM the exact-80% prefixes-qwen3 checkpoints we are materializing now
+   (not the native ~80.35% checkpoints). → I will edit checkpoint_candidates.yaml
+   to repoint each `delphi-<base>-cooldown20` row's `suggested_checkpoint_path`
+   to `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-<base>-prefixes-qwen3/checkpoints/step-<80%>`
+   and `suggested_step` to the exact 80% step, then re-approve. Bonus: prefixes
+   live in us-east5 == output region, so NO cross-region staging needed.
+2. RUN ALL THREE mixes (p33m67, p50m50, p67m33) per base → 21 cooldown runs
+   across the 7 ladder bases (3e18..3e20).
+
+Exact 80% steps to repoint to (base: step):
+  3e18:29868  9e18:35453  2e19:44100  3e19:30411  9e19:32226  2e20:45181  3e20:28408
+(These equal each cooldown20 row's existing `target_step`, confirming the prefix
+is the exact 80% point; cooldown then trains target_cooldown_steps to the full
+schedule length = base.num_train_steps.)
+
+Phase-2 launch (per base × mix, 21 total), interactive priority:
+  uv run python .../nemotron_math_only/launcher.py \
+    --base <base> --mix <mix> --cooldown-ratio 0.20 --tpu <tpu> [--ram ...]
+The launcher's coordinator stages the checkpoint, writes manifest/config,
+submits the TPU child, and waits. Will dry-run each (base,mix) first; the YAML
+repoint will be validated against the REAL existing prefix checkpoints right
+before launch (not now — paths must exist for preflight).
+
+Sequencing: per the goal, finish ALL 7 prefixes (70%+80%) first, THEN launch the
+21 cooldowns. Holding the YAML edit until prefixes are near-complete so I can
+validate each repointed path against a committed checkpoint.
