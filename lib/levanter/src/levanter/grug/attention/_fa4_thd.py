@@ -14,6 +14,7 @@ import jax
 import jax.numpy as jnp
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
+from jax.sharding import reshard
 from jaxtyping import Array, Bool, Float
 
 from levanter.grug.attention._core import AttentionMask
@@ -144,7 +145,7 @@ def _thd_cu_seqlens_from_segment_lengths(
     keep = segment_index[None, :] < num_segments[:, None]
     sharding = _segment_lengths_sharding(segment_lengths, num_segments)
     if sharding is not None:
-        keep = jax.lax.with_sharding_constraint(keep, sharding)
+        keep = reshard(keep, sharding)
     lengths = jnp.where(keep, segment_lengths.astype(jnp.int32), jnp.zeros_like(segment_lengths, dtype=jnp.int32))
     lengths = eqx.error_if(
         lengths,
@@ -186,10 +187,13 @@ def _segment_lengths_sharding(segment_lengths: jax.Array, num_segments: jax.Arra
 
 def _sharding_of(x: jax.Array) -> jax.sharding.Sharding | None:
     sharding = getattr(x, "sharding", None)
-    if sharding is not None:
+    if isinstance(sharding, NamedSharding) and not getattr(sharding.mesh, "empty", False):
         return sharding
     aval = getattr(x, "aval", None)
-    return getattr(aval, "sharding", None) if aval is not None else None
+    sharding = getattr(aval, "sharding", None) if aval is not None else None
+    if isinstance(sharding, NamedSharding) and not getattr(sharding.mesh, "empty", False):
+        return sharding
+    return None
 
 
 def _upstream_fa4_thd_forward_launcher(
