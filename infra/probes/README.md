@@ -105,6 +105,15 @@ SA=infra-probes@${PROJECT}.iam.gserviceaccount.com
 gcloud iam service-accounts create infra-probes \
   --project=${PROJECT} --display-name="probes daemon"
 
+# The SA needs two roles or the VM silently fails: pull the image from Artifact
+# Registry, and ship container stdout to Cloud Logging.
+gcloud artifacts repositories add-iam-policy-binding marin \
+  --project=${PROJECT} --location=us-central1 \
+  --member="serviceAccount:${SA}" --role=roles/artifactregistry.reader
+
+gcloud projects add-iam-policy-binding ${PROJECT} \
+  --member="serviceAccount:${SA}" --role=roles/logging.logWriter --condition=None
+
 gcloud compute instances create-with-container ${VM} \
   --project=${PROJECT} --zone=${ZONE} \
   --machine-type=e2-small \
