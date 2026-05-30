@@ -30,6 +30,7 @@ class Lease(Generic[T]):
     item: T
     lease_id: str
     timestamp: float
+    timeout: float
 
 
 class MemoryQueue(Generic[T]):
@@ -38,7 +39,7 @@ class MemoryQueue(Generic[T]):
     def __init__(self, *, clock: Callable[[], float] = time.time) -> None:
         self._clock = clock
         self._queue: list[T] = []
-        self._leases: dict[str, tuple[T, float, float]] = {}
+        self._leases: dict[str, Lease[T]] = {}
 
     def push(self, item: T) -> None:
         self._queue.append(item)
@@ -49,8 +50,8 @@ class MemoryQueue(Generic[T]):
             return None
 
         item = self._queue.pop(0)
-        lease = Lease(item=item, lease_id=str(uuid.uuid4()), timestamp=self._clock())
-        self._leases[lease.lease_id] = (item, lease.timestamp, lease_timeout)
+        lease = Lease(item=item, lease_id=str(uuid.uuid4()), timestamp=self._clock(), timeout=lease_timeout)
+        self._leases[lease.lease_id] = lease
         return lease
 
     def done(self, lease: Lease[T]) -> bool:
@@ -65,10 +66,10 @@ class MemoryQueue(Generic[T]):
 
     def _recover_expired_leases(self) -> None:
         now = self._clock()
-        expired = [lease_id for lease_id, (_, timestamp, timeout) in self._leases.items() if now - timestamp >= timeout]
+        expired = [lease_id for lease_id, lease in self._leases.items() if now - lease.timestamp >= lease.timeout]
         for lease_id in expired:
-            item, _, _ = self._leases.pop(lease_id)
-            self._queue.insert(0, item)
+            lease = self._leases.pop(lease_id)
+            self._queue.insert(0, lease.item)
 
 
 class InMemoryInferenceBroker:
