@@ -17,12 +17,15 @@ DISABLE_SM90_ENV = "DISABLE_SM90_FEATURES"
 BUILD_WITH_TORCH_EXTENSION_ENV = "DEEPEP_BUILD_WITH_TORCH_EXTENSION"
 LOAD_AS_PYTHON_MODULE_ENV = "DEEPEP_LOAD_AS_PYTHON_MODULE"
 
-LAYOUT_REQUIRED_FILES = ("csrc/kernels/layout.cu",)
+LAYOUT_SOURCE_CANDIDATES = (
+    "csrc/kernels/layout.cu",
+    "csrc/kernels/legacy/layout.cu",
+)
+LAYOUT_REQUIRED_FILES: tuple[str, ...] = ()
 TRANSPORT_REQUIRED_FILES = (
     "csrc/config.hpp",
     "csrc/kernels/api.cuh",
     "csrc/kernels/configs.cuh",
-    "csrc/kernels/layout.cu",
     "csrc/kernels/runtime.cu",
     "csrc/kernels/intranode.cu",
 )
@@ -96,10 +99,21 @@ def missing_deepep_source_files(root: Path, required_files: tuple[str, ...]) -> 
     return tuple(root / relative for relative in required_files if not (root / relative).is_file())
 
 
+def deepep_layout_source(root: Path) -> Path:
+    """Return the DeepEP dispatch-layout CUDA source path for supported source layouts."""
+    for relative in LAYOUT_SOURCE_CANDIDATES:
+        path = root / relative
+        if path.is_file():
+            return path
+    candidates = ", ".join(LAYOUT_SOURCE_CANDIDATES)
+    raise RuntimeError(f"DeepEP layout source is missing; expected one of: {candidates}")
+
+
 def deepep_source_root(
     *,
     required_files: tuple[str, ...],
     purpose: str,
+    requires_layout_source: bool = False,
 ) -> Path:
     raw = os.environ.get(DEEPEP_SRC_ENV)
     if not raw:
@@ -109,6 +123,13 @@ def deepep_source_root(
     if missing:
         missing_text = ", ".join(str(path.relative_to(root)) for path in missing)
         raise RuntimeError(f"{DEEPEP_SRC_ENV}={root} is missing DeepEP files required for {purpose}: {missing_text}")
+    if requires_layout_source:
+        try:
+            deepep_layout_source(root)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"{DEEPEP_SRC_ENV}={root} is missing DeepEP files required for {purpose}: {exc}"
+            ) from exc
     return root
 
 
@@ -116,6 +137,7 @@ def deepep_preflight_status(
     *,
     required_files: tuple[str, ...] = TRANSPORT_REQUIRED_FILES,
     component: str = "deepep_transport_ffi",
+    requires_layout_source: bool = True,
 ) -> DeepEPPreflightStatus:
     errors: list[str] = []
     warnings: list[str] = []
@@ -134,6 +156,11 @@ def deepep_preflight_status(
                 except ValueError:
                     relative_missing.append(str(path))
             errors.append(f"{DEEPEP_SRC_ENV} is missing required files: {', '.join(relative_missing)}")
+        if requires_layout_source:
+            try:
+                deepep_layout_source(root)
+            except RuntimeError as exc:
+                errors.append(f"{DEEPEP_SRC_ENV} is missing required files: {exc}")
     else:
         errors.append(f"{DEEPEP_SRC_ENV} is not set")
 

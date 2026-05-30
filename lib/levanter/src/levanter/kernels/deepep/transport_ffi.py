@@ -29,7 +29,9 @@ from levanter.kernels.deepep.availability import (
     LOAD_AS_PYTHON_MODULE_ENV,
     TRANSPORT_REQUIRED_FILES,
     deepep_cache_root,
+    deepep_cuda_arch,
     deepep_cuda_arch_flag,
+    deepep_layout_source,
     deepep_source_root,
     deepep_torch_cuda_arch_list,
     env_flag,
@@ -45,8 +47,11 @@ _PROBE_DISPATCH_SYMBOL = "levanter_deepep_probe_dispatch_kernel_attributes"
 _RUN_HOST_DISPATCH_SYMBOL = "levanter_deepep_run_host_dispatch_round"
 _EXTENDED_INTRNODE_DISPATCH_MACRO = "LEVANTER_DEEPEP_EXTENDED_INTRNODE_DISPATCH"
 _PYEXT_MODULE_NAME_MACRO = "LEVANTER_DEEPEP_PYEXT_MODULE_NAME"
-_BUILD_CACHE_SCHEMA_VERSION = "transport_ffi_raw_dlink_v5"
+_DISPATCH_THREADS_ENV = "DEEPEP_DISPATCH_NUM_THREADS"
+_BUILD_CACHE_SCHEMA_VERSION = "transport_ffi_raw_dlink_v17"
 _LIBRARY_DLOPEN_MODE = getattr(os, "RTLD_NOW", 0) | getattr(ctypes, "RTLD_GLOBAL", 0)
+_SM100_TMA_DISPATCH_THREADS = 512
+_UPSTREAM_DISPATCH_THREADS = 768
 
 
 @dataclass(frozen=True)
@@ -87,17 +92,29 @@ def _python_extension_source() -> Path:
     return Path(__file__).resolve().parent / "csrc" / "deepep_transport_pyext.cc"
 
 
+def _launch_compat_header() -> Path:
+    return Path(__file__).resolve().parent / "csrc" / "deepep_launch_compat.cuh"
+
+
+def _intranode_source(deepep_root: Path) -> Path:
+    return deepep_root / "csrc" / "kernels" / "intranode.cu"
+
+
 def _cuda_sources(deepep_root: Path) -> tuple[Path, ...]:
     return (
         _ffi_source(),
         deepep_root / "csrc" / "kernels" / "runtime.cu",
-        deepep_root / "csrc" / "kernels" / "layout.cu",
-        deepep_root / "csrc" / "kernels" / "intranode.cu",
+        deepep_layout_source(deepep_root),
+        _intranode_source(deepep_root),
     )
 
 
 def _deepep_source_root() -> Path:
-    return deepep_source_root(required_files=TRANSPORT_REQUIRED_FILES, purpose="the DeepEP JAX FFI transport kernels")
+    return deepep_source_root(
+        required_files=TRANSPORT_REQUIRED_FILES,
+        purpose="the DeepEP JAX FFI transport kernels",
+        requires_layout_source=True,
+    )
 
 
 def _cache_root() -> Path:
@@ -131,10 +148,13 @@ def _cuda_arch_flag() -> list[str]:
     return deepep_cuda_arch_flag()
 
 
-def _sm90_compile_flags() -> list[str]:
+def _sm90_compile_flags(*, include_launch_compat: bool = True) -> list[str]:
+    flags: list[str] = []
+    if include_launch_compat:
+        flags.extend(["-include", str(_launch_compat_header())])
     if env_flag(DISABLE_SM90_ENV):
-        return ["-DDISABLE_SM90_FEATURES"]
-    return []
+        flags.append("-DDISABLE_SM90_FEATURES")
+    return flags
 
 
 def _use_torch_extension_build() -> bool:
@@ -147,6 +167,79 @@ def _load_as_python_module() -> bool:
 
 def _torch_cuda_arch_list() -> str:
     return deepep_torch_cuda_arch_list()
+
+
+def _dispatch_thread_override() -> int | None:
+    raw = os.environ.get(_DISPATCH_THREADS_ENV)
+    if raw is not None:
+        try:
+            threads = int(raw)
+        except ValueError as exc:
+            raise RuntimeError(f"{_DISPATCH_THREADS_ENV} must be an integer, got {raw!r}") from exc
+        if threads < 256 or threads % 32 != 0:
+            raise RuntimeError(f"{_DISPATCH_THREADS_ENV} must be a multiple of 32 and at least 256, got {threads}")
+        return threads
+    if deepep_cuda_arch() == "sm_100" and not env_flag(DISABLE_SM90_ENV):
+        return _SM100_TMA_DISPATCH_THREADS
+    return None
+
+
+def _intranode_source_bytes(deepep_root: Path) -> bytes:
+    source = _intranode_source(deepep_root)
+    text = source.read_text()
+    dispatch_threads = _dispatch_thread_override()
+    if dispatch_threads is not None and dispatch_threads != _UPSTREAM_DISPATCH_THREADS:
+        dispatch_start = text.find("\nvoid dispatch(")
+        combine_start = text.find("\nvoid combine(", dispatch_start)
+        needle = f"    constexpr int kNumThreads = {_UPSTREAM_DISPATCH_THREADS};"
+        threads_start = text.find(needle, dispatch_start)
+        if dispatch_start < 0 or threads_start < 0 or (combine_start >= 0 and threads_start > combine_start):
+            raise RuntimeError("Could not patch DeepEP intranode dispatch thread count for this source tree")
+        text = (
+            text[:threads_start]
+            + f"    constexpr int kNumThreads = {dispatch_threads};"
+            + text[threads_start + len(needle) :]
+        )
+
+    replacements = (
+        (
+            "    auto kernel = dispatch<ranks, kNumThreads, kNumTMABytesPerWarp>; \\\n"
+            "    SET_SHARED_MEMORY_FOR_TMA(kernel); \\",
+            "    SET_SHARED_MEMORY_FOR_TMA((dispatch<ranks, kNumThreads, kNumTMABytesPerWarp>)); \\\n"
+            "    auto kernel = dispatch<ranks, kNumThreads, kNumTMABytesPerWarp>; \\",
+        ),
+        (
+            "    auto kernel = combine<dtype, ranks, kNumThreads, kNumTMABytesPerWarp>; \\\n"
+            "    SET_SHARED_MEMORY_FOR_TMA(kernel); \\",
+            "    SET_SHARED_MEMORY_FOR_TMA((combine<dtype, ranks, kNumThreads, kNumTMABytesPerWarp>)); \\\n"
+            "    auto kernel = combine<dtype, ranks, kNumThreads, kNumTMABytesPerWarp>; \\",
+        ),
+    )
+    for old, new in replacements:
+        if old not in text and not env_flag(DISABLE_SM90_ENV):
+            raise RuntimeError("Could not patch DeepEP intranode TMA launch pattern for this source tree")
+        text = text.replace(old, new, 1)
+
+    return text.encode("utf-8")
+
+
+def _prepare_intranode_source(build_dir: Path, deepep_root: Path) -> Path:
+    dispatch_threads = _dispatch_thread_override()
+    if dispatch_threads is None or dispatch_threads == _UPSTREAM_DISPATCH_THREADS:
+        return _intranode_source(deepep_root)
+    patched_source = build_dir / "generated" / "intranode.cu"
+    patched_source.parent.mkdir(parents=True, exist_ok=True)
+    patched_source.write_bytes(_intranode_source_bytes(deepep_root))
+    return patched_source
+
+
+def _prepared_cuda_sources(build_dir: Path, deepep_root: Path) -> tuple[Path, ...]:
+    return (
+        _ffi_source(),
+        deepep_root / "csrc" / "kernels" / "runtime.cu",
+        deepep_layout_source(deepep_root),
+        _prepare_intranode_source(build_dir, deepep_root),
+    )
 
 
 def _preload_torch_shared_libraries() -> None:
@@ -179,15 +272,21 @@ def _build_artifact() -> BuildArtifact:
         deepep_root / "csrc" / "kernels" / "configs.cuh",
     )
     for path in sources:
-        key.update(path.read_bytes())
+        key.update(str(path).encode("utf-8"))
+        if path == _intranode_source(deepep_root):
+            key.update(_intranode_source_bytes(deepep_root))
+        else:
+            key.update(path.read_bytes())
     if _load_as_python_module():
         key.update(_python_extension_source().read_bytes())
+    key.update(_launch_compat_header().read_bytes())
     key.update(Path(__file__).read_bytes())
     key.update(str(_jaxlib_include_dir()).encode("utf-8"))
     key.update(str(deepep_root).encode("utf-8"))
     key.update(_BUILD_CACHE_SCHEMA_VERSION.encode("utf-8"))
     key.update(" ".join(_cuda_arch_flag()).encode("utf-8"))
     key.update(" ".join(_sm90_compile_flags()).encode("utf-8"))
+    key.update(str(_dispatch_thread_override()).encode("utf-8"))
     key.update(str(int(_has_extended_intranode_dispatch_signature(deepep_root))).encode("utf-8"))
     key.update(str(int(_use_torch_extension_build())).encode("utf-8"))
     key.update(str(int(_load_as_python_module())).encode("utf-8"))
@@ -207,7 +306,12 @@ def _shared_library_path() -> Path:
     return _build_artifact().library_path
 
 
-def _nvcc_common_flags(deepep_root: Path, compatibility_flags: list[str]) -> list[str]:
+def _nvcc_common_flags(
+    deepep_root: Path,
+    compatibility_flags: list[str],
+    *,
+    include_launch_compat: bool = True,
+) -> list[str]:
     return [
         "-std=c++17",
         "-Xcompiler",
@@ -217,7 +321,7 @@ def _nvcc_common_flags(deepep_root: Path, compatibility_flags: list[str]) -> lis
         "-DDISABLE_NVSHMEM",
         "-DDISABLE_AGGRESSIVE_PTX_INSTRS",
         *compatibility_flags,
-        *_sm90_compile_flags(),
+        *_sm90_compile_flags(include_launch_compat=include_launch_compat),
         *_cuda_arch_flag(),
         "-I",
         str(_jaxlib_include_dir()),
@@ -225,6 +329,8 @@ def _nvcc_common_flags(deepep_root: Path, compatibility_flags: list[str]) -> lis
         str(deepep_root),
         "-I",
         str(deepep_root / "csrc"),
+        "-I",
+        str(deepep_root / "csrc" / "kernels"),
     ]
 
 
@@ -246,7 +352,7 @@ def _build_object_files(
     ]
 
     object_paths: list[Path] = []
-    for source in _cuda_sources(deepep_root):
+    for source in _prepared_cuda_sources(objects_dir, deepep_root):
         object_path = objects_dir / f"{source.stem}.o"
         cmd = [
             *compile_flags,
@@ -288,7 +394,7 @@ def _device_link_objects(
     object_paths: list[Path],
 ) -> Path:
     dlink_object = build_dir / "deepep_transport_ffi.dlink.o"
-    common_flags = _nvcc_common_flags(deepep_root, compatibility_flags)
+    common_flags = _nvcc_common_flags(deepep_root, compatibility_flags, include_launch_compat=False)
     cmd = [
         "nvcc",
         *common_flags,
@@ -382,10 +488,7 @@ def _build_with_torch_extension(out_path: Path, deepep_root: Path, compatibility
         cpp_extension.load(
             name=name,
             sources=[
-                str(_ffi_source()),
-                str(deepep_root / "csrc" / "kernels" / "runtime.cu"),
-                str(deepep_root / "csrc" / "kernels" / "layout.cu"),
-                str(deepep_root / "csrc" / "kernels" / "intranode.cu"),
+                *[str(source) for source in _prepared_cuda_sources(build_dir, deepep_root)],
             ],
             extra_cuda_cflags=[
                 "-O3",
@@ -444,7 +547,7 @@ def _load_torch_extension_python_module(artifact: BuildArtifact):
                 "from torch.utils.cpp_extension import BuildExtension, CUDAExtension",
                 "",
                 f"MODULE_NAME = {artifact.module_name!r}",
-                f"SOURCES = {([str(_python_extension_source()), str(_ffi_source()), *[str(path) for path in _cuda_sources(deepep_root)[1:]]])!r}",
+                f"SOURCES = {([str(_python_extension_source()), str(_ffi_source()), *[str(path) for path in _prepared_cuda_sources(build_dir, deepep_root)[1:]]])!r}",
                 f"INCLUDE_DIRS = {[str(_jaxlib_include_dir()), str(deepep_root), str(deepep_root / 'csrc')]!r}",
                 f"CXX_FLAGS = {['-O3', f'-D{_PYEXT_MODULE_NAME_MACRO}={artifact.module_name}']!r}",
                 (
@@ -760,7 +863,7 @@ def _dispatch_intranode_impl(
     )
 
     x_bf16 = jnp.asarray(x, dtype=jnp.bfloat16)
-    topk_idx_i64 = jnp.asarray(topk_idx, dtype=jnp.int64)
+    topk_idx_i32 = jnp.asarray(topk_idx, dtype=jnp.int32)
     topk_weights_f32 = jnp.asarray(topk_weights, dtype=jnp.float32)
     num_tokens_per_rank_i32 = jnp.asarray(num_tokens_per_rank, dtype=jnp.int32)
     num_tokens_per_expert_i32 = jnp.asarray(num_tokens_per_expert, dtype=jnp.int32)
@@ -770,10 +873,10 @@ def _dispatch_intranode_impl(
     elif max_recv_tokens <= 0:
         raise ValueError(f"max_recv_tokens must be positive, got {max_recv_tokens}")
     num_channels = resolved_dispatch_config.num_sms // 2
-    topk = topk_idx_i64.shape[1]
+    topk = topk_idx_i32.shape[1]
     result_shape_dtypes = (
         jax.ShapeDtypeStruct((max_recv_tokens, x_bf16.shape[1]), x_bf16.dtype),
-        jax.ShapeDtypeStruct((max_recv_tokens, topk), jnp.int64),
+        jax.ShapeDtypeStruct((max_recv_tokens, topk), jnp.int32),
         jax.ShapeDtypeStruct((max_recv_tokens, topk), jnp.float32),
         jax.ShapeDtypeStruct((max_recv_tokens,), jnp.int32),
         jax.ShapeDtypeStruct((num_ranks, num_ranks), jnp.int32),
@@ -782,21 +885,24 @@ def _dispatch_intranode_impl(
         jax.ShapeDtypeStruct((x_bf16.shape[0], num_ranks), jnp.int32),
         jax.ShapeDtypeStruct((local_experts,), jnp.int32),
         jax.ShapeDtypeStruct((1,), jnp.int32),
+        jax.ShapeDtypeStruct((x_bf16.shape[0], topk * 2), jnp.int32),
+        jax.ShapeDtypeStruct((max_recv_tokens, topk * 2), jnp.int32),
     )
-    return jax.ffi.ffi_call(
+    results = jax.ffi.ffi_call(
         _DISPATCH_TARGET,
         result_shape_dtypes,
         has_side_effect=True,
         vmap_method="broadcast_all",
     )(
         x_bf16,
-        topk_idx_i64,
+        topk_idx_i32,
         topk_weights_f32,
         num_tokens_per_rank_i32,
         num_tokens_per_expert_i32,
         is_token_in_rank,
         num_experts=np.int32(num_experts),
     )
+    return results[:10]
 
 
 def _dispatch_intranode_cached_impl(

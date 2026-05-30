@@ -64,7 +64,6 @@ struct DeviceRuntime {
   int* moe_recv_counter_mapped = nullptr;
   volatile int* moe_recv_expert_counter = nullptr;
   int* moe_recv_expert_counter_mapped = nullptr;
-  int last_num_recv_tokens = -1;
 
   cudaStream_t aux_stream = nullptr;
 
@@ -149,6 +148,34 @@ void ThrowOnCuda(cudaError_t status, const char* context) {
   }
 }
 
+__global__ void CastInt32ToInt64Kernel(const int* src, int64_t* dst, size_t count) {
+  const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (idx < count) {
+    dst[idx] = static_cast<int64_t>(src[idx]);
+  }
+}
+
+__global__ void CastInt64ToInt32Kernel(const int64_t* src, int* dst, size_t count) {
+  const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (idx < count) {
+    dst[idx] = static_cast<int>(src[idx]);
+  }
+}
+
+void LaunchCastInt32ToInt64(const int* src, int64_t* dst, size_t count, cudaStream_t stream) {
+  constexpr int kThreads = 256;
+  const int blocks = static_cast<int>((count + kThreads - 1) / kThreads);
+  CastInt32ToInt64Kernel<<<blocks, kThreads, 0, stream>>>(src, dst, count);
+  ThrowOnCuda(cudaGetLastError(), "CastInt32ToInt64Kernel");
+}
+
+void LaunchCastInt64ToInt32(const int64_t* src, int* dst, size_t count, cudaStream_t stream) {
+  constexpr int kThreads = 256;
+  const int blocks = static_cast<int>((count + kThreads - 1) / kThreads);
+  CastInt64ToInt32Kernel<<<blocks, kThreads, 0, stream>>>(src, dst, count);
+  ThrowOnCuda(cudaGetLastError(), "CastInt64ToInt32Kernel");
+}
+
 void EnablePeerAccess(int peer_device_id) {
   cudaError_t status = cudaDeviceEnablePeerAccess(peer_device_id, 0);
   if (status == cudaSuccess) {
@@ -178,6 +205,7 @@ size_t GetNvlBufferSizeHint(const DispatchConfig& config, int64_t hidden_bytes, 
   size_t num_bytes = 0;
   num_bytes += static_cast<size_t>(num_channels) * num_nvl_ranks * (2 * num_rdma_ranks + 3) * sizeof(int);
   num_bytes += static_cast<size_t>(num_channels) * num_nvl_ranks * config.num_max_recv_tokens * hidden_bytes;
+  num_bytes += static_cast<size_t>(num_channels) * num_nvl_ranks * config.num_max_recv_tokens * sizeof(int);
   num_bytes += static_cast<size_t>(num_channels) * num_nvl_ranks * config.num_max_recv_tokens * kNumMaxTopK * sizeof(int64_t);
   num_bytes += static_cast<size_t>(num_channels) * num_nvl_ranks * config.num_max_recv_tokens * kNumMaxTopK * sizeof(float);
   num_bytes += static_cast<size_t>(num_channels) * num_nvl_ranks * config.num_max_recv_tokens * kNumMaxScales * sizeof(float);
@@ -383,10 +411,14 @@ class RuntimeManager {
       }
       DeviceRuntime& runtime = *runtime_ptr;
       cudaSetDevice(runtime.device_id);
-      if (runtime.peer_synced && runtime.barrier_signal_ptrs_gpu != nullptr && runtime.aux_stream != nullptr) {
-        deep_ep::intranode::barrier(runtime.barrier_signal_ptrs_gpu, runtime.rank, runtime.num_ranks, runtime.aux_stream);
-        cudaStreamSynchronize(runtime.aux_stream);
+      cudaDeviceSynchronize();
+    }
+    for (auto& runtime_ptr : runtimes_) {
+      if (runtime_ptr == nullptr) {
+        continue;
       }
+      DeviceRuntime& runtime = *runtime_ptr;
+      cudaSetDevice(runtime.device_id);
       if (runtime.aux_stream != nullptr) {
         cudaStreamDestroy(runtime.aux_stream);
       }
@@ -470,8 +502,10 @@ void DispatchOnCurrentDevice(
     int* recv_channel_prefix_matrix,
     int* send_head,
     int* local_expert_counts,
-    int* num_recv_tokens_out,
+    int* num_recv_tokens_host_out,
+    int* num_recv_tokens_device_out,
     int max_recv_tokens,
+    bool wait_for_recv_counts,
     bool synchronize_after_launch) {
   if (hidden <= 0 || (hidden * static_cast<int>(sizeof(nv_bfloat16))) % sizeof(int4) != 0) {
     throw std::runtime_error("DeepEP intranode dispatch requires hidden*element_size divisible by int4");
@@ -504,28 +538,49 @@ void DispatchOnCurrentDevice(
       runtime.dispatch_num_channels());
   LogHostDispatchStage(runtime.rank, "after_notify_dispatch", num_tokens, hidden, num_experts, num_topk);
 
-  int num_recv_tokens = -1;
-  WaitForRecvCounts(runtime, num_local_experts, &num_recv_tokens);
-  LogHostDispatchStage(
-      runtime.rank,
-      "after_wait_for_recv_counts",
-      num_tokens,
-      hidden,
-      num_experts,
-      num_topk,
-      num_recv_tokens);
-  if (num_recv_tokens > max_recv_tokens) {
-    throw std::runtime_error("DeepEP intranode dispatch recv buffer is smaller than actual recv tokens");
+  int num_recv_tokens = max_recv_tokens;
+  if (wait_for_recv_counts) {
+    WaitForRecvCounts(runtime, num_local_experts, &num_recv_tokens);
+    LogHostDispatchStage(
+        runtime.rank,
+        "after_wait_for_recv_counts",
+        num_tokens,
+        hidden,
+        num_experts,
+        num_topk,
+        num_recv_tokens);
+    if (num_recv_tokens > max_recv_tokens) {
+      throw std::runtime_error("DeepEP intranode dispatch recv buffer is smaller than actual recv tokens");
+    }
+    ThrowOnCuda(
+        cudaMemcpyAsync(
+            local_expert_counts,
+            const_cast<int*>(runtime.moe_recv_expert_counter),
+            sizeof(int) * num_local_experts,
+            cudaMemcpyHostToDevice,
+            stream),
+        "cudaMemcpyAsync(local_expert_counts)");
+    if (num_recv_tokens_host_out != nullptr) {
+      *num_recv_tokens_host_out = num_recv_tokens;
+    }
+  } else {
+    if (num_recv_tokens_device_out == nullptr) {
+      throw std::runtime_error("DeepEP intranode async dispatch requires a device receive-count output");
+    }
+    const int rank_prefix_offset = (runtime.num_ranks - 1) * runtime.num_ranks + runtime.rank;
+    ThrowOnCuda(
+        cudaMemcpyAsync(
+            num_recv_tokens_device_out,
+            rank_prefix_matrix + rank_prefix_offset,
+            sizeof(int),
+            cudaMemcpyDeviceToDevice,
+            stream),
+        "cudaMemcpyAsync(num_recv_tokens_device)");
+    ThrowOnCuda(
+        cudaMemsetAsync(local_expert_counts, 0, sizeof(int) * num_local_experts, stream),
+        "cudaMemsetAsync(local_expert_counts)");
   }
-  ThrowOnCuda(
-      cudaMemcpyAsync(
-          local_expert_counts,
-          const_cast<int*>(runtime.moe_recv_expert_counter),
-          sizeof(int) * num_local_experts,
-          cudaMemcpyHostToDevice,
-          stream),
-      "cudaMemcpyAsync(local_expert_counts)");
-  *num_recv_tokens_out = num_recv_tokens;
+  const int num_worst_tokens = wait_for_recv_counts ? 0 : max_recv_tokens;
 
 #if defined(LEVANTER_DEEPEP_EXTENDED_INTRNODE_DISPATCH)
   deep_ep::intranode::dispatch(
@@ -545,7 +600,7 @@ void DispatchOnCurrentDevice(
       is_token_in_rank,
       channel_prefix_matrix,
       num_tokens,
-      0,
+      num_worst_tokens,
       hidden * static_cast<int>(sizeof(nv_bfloat16)) / sizeof(int4),
       num_topk,
       num_experts,
@@ -578,7 +633,7 @@ void DispatchOnCurrentDevice(
       is_token_in_rank,
       channel_prefix_matrix,
       num_tokens,
-      0,
+      num_worst_tokens,
       hidden * static_cast<int>(sizeof(nv_bfloat16)) / sizeof(int4),
       num_topk,
       num_experts,
@@ -619,14 +674,14 @@ void DispatchOnCurrentDevice(
 ffi::Error DispatchIntranode(
     cudaStream_t stream,
     ffi::Buffer<ffi::BF16, 2> x,
-    ffi::Buffer<ffi::S64, 2> topk_idx,
+    ffi::Buffer<ffi::S32, 2> topk_idx,
     ffi::Buffer<ffi::F32, 2> topk_weights,
     ffi::Buffer<ffi::S32, 1> num_tokens_per_rank,
     ffi::Buffer<ffi::S32, 1> num_tokens_per_expert,
     ffi::Buffer<ffi::PRED, 2> is_token_in_rank,
     int32_t num_experts,
     ffi::Result<ffi::Buffer<ffi::BF16, 2>> recv_x,
-    ffi::Result<ffi::Buffer<ffi::S64, 2>> recv_topk_idx,
+    ffi::Result<ffi::Buffer<ffi::S32, 2>> recv_topk_idx,
     ffi::Result<ffi::Buffer<ffi::F32, 2>> recv_topk_weights,
     ffi::Result<ffi::Buffer<ffi::S32, 1>> recv_src_idx,
     ffi::Result<ffi::Buffer<ffi::S32, 2>> rank_prefix_matrix,
@@ -634,7 +689,9 @@ ffi::Error DispatchIntranode(
     ffi::Result<ffi::Buffer<ffi::S32, 2>> recv_channel_prefix_matrix,
     ffi::Result<ffi::Buffer<ffi::S32, 2>> send_head,
     ffi::Result<ffi::Buffer<ffi::S32, 1>> local_expert_counts,
-    ffi::Result<ffi::Buffer<ffi::S32, 1>> num_recv_tokens_buffer) {
+    ffi::Result<ffi::Buffer<ffi::S32, 1>> num_recv_tokens_buffer,
+    ffi::Result<ffi::Buffer<ffi::S32, 2>> topk_idx_s64_scratch,
+    ffi::Result<ffi::Buffer<ffi::S32, 2>> recv_topk_idx_s64_scratch) {
   try {
     DeviceRuntime& runtime = RuntimeManager::Instance().RuntimeForCurrentDevice();
     const auto x_dims = x.dimensions();
@@ -642,6 +699,8 @@ ffi::Error DispatchIntranode(
     const auto rank_dims = num_tokens_per_rank.dimensions();
     const auto expert_dims = num_tokens_per_expert.dimensions();
     const auto token_rank_dims = is_token_in_rank.dimensions();
+    const auto topk_scratch_dims = topk_idx_s64_scratch->dimensions();
+    const auto recv_topk_scratch_dims = recv_topk_idx_s64_scratch->dimensions();
     if (x_dims.size() != 2 || topk_dims.size() != 2) {
       return ffi::Error::InvalidArgument("DeepEP intranode dispatch expects rank-2 x and topk_idx");
     }
@@ -661,6 +720,12 @@ ffi::Error DispatchIntranode(
     }
     if (expert_dims[0] != num_experts) {
       return ffi::Error::InvalidArgument("DeepEP intranode dispatch expert metadata shape mismatch");
+    }
+    if (topk_scratch_dims.size() != 2 || topk_scratch_dims[0] != num_tokens ||
+        topk_scratch_dims[1] != num_topk * 2 ||
+        recv_topk_scratch_dims.size() != 2 || recv_topk_scratch_dims[0] != recv_x->dimensions()[0] ||
+        recv_topk_scratch_dims[1] != num_topk * 2) {
+      return ffi::Error::InvalidArgument("DeepEP intranode dispatch int64 scratch tensor shapes are invalid");
     }
     if (hidden <= 0 || (hidden * static_cast<int>(ffi::ByteWidth(ffi::BF16))) % sizeof(int4) != 0) {
       return ffi::Error::InvalidArgument("DeepEP intranode dispatch requires hidden*element_size divisible by int4");
@@ -699,12 +764,17 @@ ffi::Error DispatchIntranode(
       return ffi::Error::InvalidArgument("DeepEP intranode dispatch recv tensor shapes are invalid");
     }
 
-    int num_recv_tokens = -1;
+    const size_t topk_count = static_cast<size_t>(num_tokens) * num_topk;
+    const size_t recv_topk_count = static_cast<size_t>(recv_x->dimensions()[0]) * num_topk;
+    auto* topk_idx_s64 = reinterpret_cast<int64_t*>(topk_idx_s64_scratch->typed_data());
+    auto* recv_topk_idx_s64 = reinterpret_cast<int64_t*>(recv_topk_idx_s64_scratch->typed_data());
+    LaunchCastInt32ToInt64(topk_idx.typed_data(), topk_idx_s64, topk_count, stream);
+
     DispatchOnCurrentDevice(
         runtime,
         stream,
         reinterpret_cast<const nv_bfloat16*>(x.typed_data()),
-        topk_idx.typed_data(),
+        topk_idx_s64,
         topk_weights.typed_data(),
         num_tokens_per_rank.typed_data(),
         num_tokens_per_expert.typed_data(),
@@ -714,7 +784,7 @@ ffi::Error DispatchIntranode(
         num_topk,
         num_experts,
         reinterpret_cast<nv_bfloat16*>(recv_x->typed_data()),
-        recv_topk_idx->typed_data(),
+        recv_topk_idx_s64,
         recv_topk_weights->typed_data(),
         recv_src_idx->typed_data(),
         rank_prefix_matrix->typed_data(),
@@ -722,21 +792,16 @@ ffi::Error DispatchIntranode(
         recv_channel_prefix_matrix->typed_data(),
         send_head->typed_data(),
         local_expert_counts->typed_data(),
-        &num_recv_tokens,
-        static_cast<int>(recv_x->dimensions()[0]),
-        false);
-
-    cudaError_t status = cudaSuccess;
-    runtime.last_num_recv_tokens = num_recv_tokens;
-    status = cudaMemcpyAsync(
+        nullptr,
         num_recv_tokens_buffer->typed_data(),
-        &runtime.last_num_recv_tokens,
-        sizeof(int),
-        cudaMemcpyHostToDevice,
+        static_cast<int>(recv_x->dimensions()[0]),
+        false,
+        false);
+    LaunchCastInt64ToInt32(
+        recv_topk_idx_s64,
+        recv_topk_idx->typed_data(),
+        recv_topk_count,
         stream);
-    if (status != cudaSuccess) {
-      return CudaError(status, "cudaMemcpyAsync(num_recv_tokens)");
-    }
     return ffi::Error::Success();
   } catch (const std::exception& exc) {
     return ffi::Error::Internal(exc.what());
@@ -760,21 +825,6 @@ ffi::Error DispatchIntranodeCached(
       return ffi::Error::InvalidArgument(
           "DeepEP intranode cached dispatch expects num_recv_tokens shape [1]");
     }
-    int num_recv_tokens = -1;
-    cudaError_t status = cudaMemcpyAsync(
-        &num_recv_tokens,
-        num_recv_tokens_buffer.typed_data(),
-        sizeof(int),
-        cudaMemcpyDeviceToHost,
-        stream);
-    if (status != cudaSuccess) {
-      return CudaError(status, "cudaMemcpyAsync(read num_recv_tokens)");
-    }
-    status = cudaStreamSynchronize(stream);
-    if (status != cudaSuccess) {
-      return CudaError(status, "cudaStreamSynchronize(read num_recv_tokens)");
-    }
-
     const auto x_dims = x.dimensions();
     const auto token_rank_dims = is_token_in_rank.dimensions();
     const auto rank_dims = rank_prefix_matrix.dimensions();
@@ -790,6 +840,7 @@ ffi::Error DispatchIntranodeCached(
     }
     const int num_tokens = static_cast<int>(x_dims[0]);
     const int hidden = static_cast<int>(x_dims[1]);
+    const int max_recv_tokens = static_cast<int>(recv_x_dims[0]);
     const int num_channels = runtime.dispatch_num_channels();
     if (hidden <= 0 || (hidden * static_cast<int>(ffi::ByteWidth(ffi::BF16))) % sizeof(int4) != 0) {
       return ffi::Error::InvalidArgument(
@@ -804,14 +855,11 @@ ffi::Error DispatchIntranodeCached(
       return ffi::Error::InvalidArgument(
           "DeepEP intranode cached dispatch handle tensor shapes are invalid");
     }
-    if (recv_x_dims[1] != hidden || recv_src_dims[0] != recv_x_dims[0] || recv_x_dims[0] < num_recv_tokens ||
+    if (recv_x_dims[1] != hidden || recv_src_dims[0] != recv_x_dims[0] ||
         recv_channel_dims[0] != runtime.num_ranks || recv_channel_dims[1] != num_channels ||
         send_head_dims[0] != num_tokens || send_head_dims[1] != runtime.num_ranks) {
       return ffi::Error::InvalidArgument(
           "DeepEP intranode cached dispatch output tensor shapes are invalid");
-    }
-    if (num_recv_tokens < 0) {
-      return ffi::Error::InvalidArgument("DeepEP intranode cached dispatch num_recv_tokens is out of range");
     }
 
     const int num_memset_int = runtime.dispatch_num_channels() * runtime.num_ranks * 4;
@@ -842,7 +890,7 @@ ffi::Error DispatchIntranodeCached(
         is_token_in_rank.typed_data(),
         channel_prefix_matrix.typed_data(),
         num_tokens,
-        num_recv_tokens,
+        max_recv_tokens,
         hidden * static_cast<int>(ffi::ByteWidth(ffi::BF16)) / sizeof(int4),
         0,
         0,
@@ -875,7 +923,7 @@ ffi::Error DispatchIntranodeCached(
         is_token_in_rank.typed_data(),
         channel_prefix_matrix.typed_data(),
         num_tokens,
-        num_recv_tokens,
+        max_recv_tokens,
         hidden * static_cast<int>(ffi::ByteWidth(ffi::BF16)) / sizeof(int4),
         0,
         0,
@@ -913,21 +961,6 @@ ffi::Error CombineIntranode(
     if (num_recv_tokens_buffer.dimensions().size() != 1 || num_recv_tokens_buffer.dimensions()[0] != 1) {
       return ffi::Error::InvalidArgument("DeepEP intranode combine expects num_recv_tokens shape [1]");
     }
-    int num_recv_tokens = -1;
-    cudaError_t status = cudaMemcpyAsync(
-        &num_recv_tokens,
-        num_recv_tokens_buffer.typed_data(),
-        sizeof(int),
-        cudaMemcpyDeviceToHost,
-        stream);
-    if (status != cudaSuccess) {
-      return CudaError(status, "cudaMemcpyAsync(read num_recv_tokens)");
-    }
-    status = cudaStreamSynchronize(stream);
-    if (status != cudaSuccess) {
-      return CudaError(status, "cudaStreamSynchronize(read num_recv_tokens)");
-    }
-
     const auto recv_x_dims = recv_x.dimensions();
     const auto recv_topk_dims = recv_topk_weights.dimensions();
     const auto src_dims = recv_src_idx.dimensions();
@@ -940,12 +973,10 @@ ffi::Error CombineIntranode(
     }
     const int hidden = static_cast<int>(recv_x_dims[1]);
     const int num_topk = static_cast<int>(recv_topk_dims[1]);
+    const int max_recv_tokens = static_cast<int>(recv_x_dims[0]);
     const int combined_tokens = static_cast<int>(send_head_dims[0]);
     if (recv_topk_dims[0] != recv_x_dims[0] || src_dims[0] != recv_x_dims[0]) {
       return ffi::Error::InvalidArgument("DeepEP intranode combine recv tensors must share the same leading dim");
-    }
-    if (num_recv_tokens < 0 || num_recv_tokens > recv_x_dims[0]) {
-      return ffi::Error::InvalidArgument("DeepEP intranode combine num_recv_tokens is out of range");
     }
     if (rank_dims[0] != runtime.num_ranks || rank_dims[1] != runtime.num_ranks ||
         channel_dims[0] != runtime.num_ranks || channel_dims[1] != runtime.combine_num_channels() ||
@@ -964,7 +995,7 @@ ffi::Error CombineIntranode(
     }
 
     if (send_head_out->typed_data() != send_head.typed_data()) {
-      status = cudaMemcpyAsync(
+      cudaError_t status = cudaMemcpyAsync(
           send_head_out->typed_data(),
           send_head.typed_data(),
           sizeof(int) * combined_tokens * runtime.num_ranks,
@@ -998,7 +1029,7 @@ ffi::Error CombineIntranode(
         rank_prefix_matrix.typed_data(),
         channel_prefix_matrix.typed_data(),
         send_head_out->typed_data(),
-        num_recv_tokens,
+        max_recv_tokens,
         combined_tokens,
         hidden,
         num_topk,
@@ -1019,14 +1050,14 @@ auto DispatchBinding() {
   return ffi::Ffi::Bind()
       .Ctx<ffi::PlatformStream<cudaStream_t>>()
       .Arg<ffi::Buffer<ffi::BF16, 2>>()
-      .Arg<ffi::Buffer<ffi::S64, 2>>()
+      .Arg<ffi::Buffer<ffi::S32, 2>>()
       .Arg<ffi::Buffer<ffi::F32, 2>>()
       .Arg<ffi::Buffer<ffi::S32, 1>>()
       .Arg<ffi::Buffer<ffi::S32, 1>>()
       .Arg<ffi::Buffer<ffi::PRED, 2>>()
       .Attr<int32_t>("num_experts")
       .Ret<ffi::Buffer<ffi::BF16, 2>>()
-      .Ret<ffi::Buffer<ffi::S64, 2>>()
+      .Ret<ffi::Buffer<ffi::S32, 2>>()
       .Ret<ffi::Buffer<ffi::F32, 2>>()
       .Ret<ffi::Buffer<ffi::S32, 1>>()
       .Ret<ffi::Buffer<ffi::S32, 2>>()
@@ -1034,7 +1065,9 @@ auto DispatchBinding() {
       .Ret<ffi::Buffer<ffi::S32, 2>>()
       .Ret<ffi::Buffer<ffi::S32, 2>>()
       .Ret<ffi::Buffer<ffi::S32, 1>>()
-      .Ret<ffi::Buffer<ffi::S32, 1>>();
+      .Ret<ffi::Buffer<ffi::S32, 1>>()
+      .Ret<ffi::Buffer<ffi::S32, 2>>()
+      .Ret<ffi::Buffer<ffi::S32, 2>>();
 }
 
 auto DispatchCachedBinding() {
@@ -1256,7 +1289,9 @@ extern "C" int levanter_deepep_run_host_dispatch_round(
               send_head,
               local_expert_counts,
               &num_recv_tokens,
+              nullptr,
               recv_capacity,
+              true,
               false);
           LogHostDispatchStage(
               rank,
