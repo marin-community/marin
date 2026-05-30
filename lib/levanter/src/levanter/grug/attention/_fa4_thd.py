@@ -12,6 +12,8 @@ from typing import Any
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Bool, Float
 
 from levanter.grug.attention._core import AttentionMask
@@ -68,9 +70,9 @@ def _optional_dependency_error() -> RuntimeError:
 
 
 def _validate_simple_causal_self_attention(
-    q: Any,
-    k: Any,
-    v: Any,
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     backend_name: str,
@@ -140,7 +142,7 @@ def _thd_cu_seqlens_from_segment_lengths(
     max_segments = segment_lengths.shape[1]
     segment_index = jnp.arange(max_segments, dtype=jnp.int32)
     keep = segment_index[None, :] < num_segments[:, None]
-    sharding = _sharding_of(segment_lengths)
+    sharding = _segment_lengths_sharding(segment_lengths, num_segments)
     if sharding is not None:
         keep = jax.lax.with_sharding_constraint(keep, sharding)
     lengths = jnp.where(keep, segment_lengths.astype(jnp.int32), jnp.zeros_like(segment_lengths, dtype=jnp.int32))
@@ -162,6 +164,24 @@ def _thd_cu_seqlens_from_segment_lengths(
         "THD segment metadata does not cover the q/k/v token count.",
     )
     return cu_seqlens
+
+
+def _segment_lengths_sharding(segment_lengths: jax.Array, num_segments: jax.Array) -> jax.sharding.Sharding | None:
+    mesh = jax.sharding.get_abstract_mesh()
+    if (
+        not getattr(mesh, "empty", False)
+        and segment_lengths.ndim == 2
+        and "data" in mesh.axis_names
+        and "expert" in mesh.axis_names
+    ):
+        return NamedSharding(mesh, P(("data", "expert"), None))
+    sharding = _sharding_of(segment_lengths)
+    if sharding is not None:
+        return sharding
+    num_segments_sharding = _sharding_of(num_segments)
+    if isinstance(num_segments_sharding, NamedSharding) and len(num_segments_sharding.spec) == 1:
+        return NamedSharding(num_segments_sharding.mesh, P(num_segments_sharding.spec[0], None))
+    return None
 
 
 def _sharding_of(x: jax.Array) -> jax.sharding.Sharding | None:
