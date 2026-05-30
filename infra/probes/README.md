@@ -1,130 +1,58 @@
 # probes
 
-Synthetic infra canary. A small always-on daemon that runs three probes
-against Iris and Finelog on a fixed cadence and logs the result of each.
+Synthetic infra canary: an always-on daemon that runs three probes against Iris
+and Finelog on a fixed cadence.
 
-v1 probes:
+- `controller-ping` — `list_workers()` on the Iris controller.
+- `iris-job-submit/<zone>` — submit a tiny job per zone, wait for SUCCEEDED.
+- `finelog-write` — write a nonce and read it back.
 
-- **`controller-ping`** — `RemoteClusterClient.list_workers()` against the Iris controller.
-- **`iris-job-submit/<zone>`** — submits a tiny CPU job in each GCP zone, polls to terminal, asserts SUCCEEDED.
-- **`finelog-write`** — pushes a unique-nonce `LogEntry` and reads it back to verify the indexer is alive.
+Each result is logged to stdout (`probe <name>: ok|fail [<ms>ms] start=<utc>`),
+written to the `infra.canary.probes` finelog namespace, and appended to a daily
+JSONL that rolls up to `gs://marin-us-central1/infra/probes/dt=<date>/` at UTC
+rollover.
 
-Results land on stdout as structured log lines (Docker → Cloud Logging on COS). Each line is `probe <name>: ok|fail [<wall_time_ms>ms] start=<utc-iso>`.
+Standalone package (own `pyproject.toml`/`uv.lock`): pulls `marin-iris`,
+`marin-finelog`, `marin-rigging` from the rolling GitHub releases via
+`find-links`. Bump to today's nightly with `uv lock -U` inside `infra/probes/`.
 
-Design + spec: `.agents/projects/infra_canary/` (kept for historical context — the implementation is now much smaller than what the spec described).
-
-## Layout
-
-```
-infra/probes/
-├── pyproject.toml          # standalone; not a root workspace member
-├── uv.lock                 # own lockfile, pinned to today's marin-* nightly wheels
-├── deploy/
-│   ├── Dockerfile          # build context = infra/probes/
-│   ├── Dockerfile.dockerignore
-│   └── deploy.sh           # build / apply / status
-├── src/
-│   ├── infra_probes.py        # ProbeResult, Probe, ProbeRunner, the three probes, main()
-│   └── sinks.py               # ProbeSink + JSONL/GCS and finelog-namespace sinks
-└── tests/test_runner.py
-```
-
-The package is **standalone** — not a member of the root marin uv workspace. It pulls `marin-iris`, `marin-finelog`, and `marin-rigging` from the per-package rolling GitHub releases (`marin-iris-latest`, `marin-finelog-latest`, `marin-rigging-latest`) via `find-links` in its own `pyproject.toml`. To bump to today's nightly: `uv lock -U` inside `infra/probes/`.
-
-## Public API
-
-`src/infra_probes.py` defines:
-
-```python
-@dataclass
-class ProbeResult:
-    is_success: bool
-    name: str                       # stamped by the runner, which owns this metadata
-    started_at: datetime            # UTC wall-clock time at probe start
-    wall_time: float | None = None  # filled in by the runner once the run completes
-
-# A probe fn reports only whether the probe succeeded; the runner stamps the rest.
-ProbeFn = Callable[[], bool]
-
-@dataclass
-class Probe:
-    name: str
-    fn: ProbeFn
-    timeout: float
-    cadence: float
-
-class ProbeRunner:
-    def add_probe(self, name: str, fn: ProbeFn, *, timeout: float, cadence: float) -> None: ...
-    def run(self) -> None: ...   # blocks forever; Ctrl-C (KeyboardInterrupt) kills the process
-
-# Concrete probes (callables you pass to add_probe):
-def probe_controller_ping(iris: RemoteClusterClient) -> bool: ...
-def probe_iris_job_submit(iris: RemoteClusterClient, zone: str) -> bool: ...
-def probe_finelog_write(finelog: LogClient) -> bool: ...
-```
-
-To add a probe, write a function returning `bool` and call `runner.add_probe(name, fn, timeout=..., cadence=...)`.
-
-## Running locally
+## Run
 
 ```bash
 cd infra/probes
-uv run python -m infra_probes \
-  --iris-endpoint http://iris-controller-marin.c.hai-gcp-models.internal:10000
+uv run python -m infra_probes --iris-endpoint http://<controller>:10000
+# --zone defaults to europe-west4-b, us-west4-a
 ```
 
-Send SIGTERM/SIGINT to shut down. Tail stdout to see results.
+## Deploy
 
-| Flag                  | Env (n/a, all flag-driven) | Notes                                  |
-| --------------------- | -------------------------- | -------------------------------------- |
-| `--iris-endpoint`     | *(required)*               | Iris controller RPC endpoint; the finelog address is resolved from its endpoint registry (`/system/log-server`). |
-| `--zone` (repeatable) | `europe-west4-b`, `us-west4-a` | One canary job per zone every 5 min.   |
-
-## Deployment
-
-Single Container-Optimized OS GCP VM named `infra-probes`, one container, `restartPolicy=always`, no orchestrator. Results go to Cloud Logging (Docker stdout), the `infra.canary.probes` finelog namespace, and a daily local JSONL file that rolls up to `gs://marin-us-central1/infra/probes/dt=<date>/` on UTC-day rollover. The JSONL dir `/var/lib/probes` is a host-path bind mount (not an anonymous volume, which konlet orphans on recreate) so the in-progress day survives container restarts; a VM startup-script makes it writable by the uid-1000 container.
+Single COS VM `infra-probes` (us-central1-b), one container, `restart=always`.
 
 ```bash
-infra/probes/deploy/deploy.sh build   # docker build, push :sha and :latest
-infra/probes/deploy/deploy.sh apply   # roll the VM to :latest
-infra/probes/deploy/deploy.sh status  # VM state + last 50 container log lines
+infra/probes/deploy/deploy.sh build    # build + push :sha and :latest
+infra/probes/deploy/deploy.sh apply    # roll the VM to :latest
+infra/probes/deploy/deploy.sh status   # VM state + recent logs
 ```
-
-Environment overrides: `MARIN_PROBES_PROJECT`, `MARIN_PROBES_REGION`, `MARIN_PROBES_ZONE`, `MARIN_PROBES_VM`, `MARIN_PROBES_REPO`.
 
 ### One-time VM creation
 
-Set flags on the VM via container args; cloud-init isn't needed.
-
 ```bash
-PROJECT=hai-gcp-models
-ZONE=us-central1-b
-VM=infra-probes
-IMAGE=us-central1-docker.pkg.dev/${PROJECT}/marin/infra-probes:latest
-SA=infra-probes@${PROJECT}.iam.gserviceaccount.com
+PROJECT=hai-gcp-models; ZONE=us-central1-b; SA=infra-probes@${PROJECT}.iam.gserviceaccount.com
 
-gcloud iam service-accounts create infra-probes \
-  --project=${PROJECT} --display-name="probes daemon"
+gcloud iam service-accounts create infra-probes --project=${PROJECT}
 
-# The SA needs two roles or the VM silently fails: pull the image from Artifact
-# Registry, and ship container stdout to Cloud Logging.
-gcloud artifacts repositories add-iam-policy-binding marin \
-  --project=${PROJECT} --location=us-central1 \
+# SA needs: pull image, ship stdout to Cloud Logging, write GCS roll-ups.
+gcloud artifacts repositories add-iam-policy-binding marin --project=${PROJECT} --location=us-central1 \
   --member="serviceAccount:${SA}" --role=roles/artifactregistry.reader
-
 gcloud projects add-iam-policy-binding ${PROJECT} \
   --member="serviceAccount:${SA}" --role=roles/logging.logWriter --condition=None
-
-# Write the daily JSONL roll-ups to GCS (same region as the VM; no egress).
 gcloud storage buckets add-iam-policy-binding gs://marin-us-central1 \
   --member="serviceAccount:${SA}" --role=roles/storage.objectCreator
 
-gcloud compute instances create-with-container ${VM} \
-  --project=${PROJECT} --zone=${ZONE} \
-  --machine-type=e2-small \
-  --service-account=${SA} \
-  --scopes=cloud-platform \
-  --container-image=${IMAGE} \
+gcloud compute instances create-with-container infra-probes \
+  --project=${PROJECT} --zone=${ZONE} --machine-type=e2-small \
+  --service-account=${SA} --scopes=cloud-platform \
+  --container-image=us-central1-docker.pkg.dev/${PROJECT}/marin/infra-probes:latest \
   --container-restart-policy=always \
   --container-arg="--iris-endpoint=http://iris-controller-marin.c.hai-gcp-models.internal:10000" \
   --container-mount-host-path=mount-path=/var/lib/probes,host-path=/var/lib/probes,mode=rw \
@@ -133,19 +61,5 @@ mkdir -p /var/lib/probes && chown 1000:1000 /var/lib/probes' \
   --tags=infra-probes
 ```
 
-After this, every rollout is `infra/probes/deploy/deploy.sh apply`.
-
-## Querying results
-
-```bash
-gcloud compute ssh infra-probes -- docker logs $(docker ps -q --filter ancestor=...infra-probes) | tail -200
-```
-
-Or via Cloud Logging once Docker stdout is shipped.
-
-## Tests
-
-```bash
-cd infra/probes
-uv run pytest tests
-```
+The host mount persists the JSONL across container restarts; the startup-script
+makes `/var/lib/probes` writable by the uid-1000 container.
