@@ -11,13 +11,10 @@ from marin.execution.artifact_registry import (
     DEFAULT_REGISTRY_ENV,
     DEFAULT_REGISTRY_ROOT,
     ArtifactAlreadyExistsError,
-    ArtifactEntry,
     ArtifactNotFoundError,
     ArtifactRegistryError,
     FilesystemArtifactRegistry,
     InvalidArtifactIdError,
-    _validate_id,
-    _validate_version,
     get_default_registry,
     set_default_registry,
     use_default_registry,
@@ -56,25 +53,18 @@ def _registry_warnings(caplog):
     return [r for r in caplog.records if r.name == "marin.execution.artifact" and r.levelno == logging.WARNING]
 
 
-# --- validation -------------------------------------------------------------
+# --- id / version validation (through the public register surface) ----------
 
 
 @pytest.mark.parametrize("bad_id", ["foo", "foo/", "/bar", "a/b/c", "a b/c", "ns/na me", "", "ns//name"])
-def test_validate_id_rejects_malformed(bad_id):
+def test_register_rejects_malformed_id(registry, bad_id):
     with pytest.raises(InvalidArtifactIdError):
-        _validate_id(bad_id)
+        registry.register(bad_id, "2026.05.29", "/tmp/x")
 
 
-def test_validate_id_returns_segments():
-    assert _validate_id("datasets/fineweb-resiliparse") == ("datasets", "fineweb-resiliparse")
-
-
-@pytest.mark.parametrize(
-    "good_version",
-    ["2026.05.29", "2026.10.01-fall-hero", "2026.10.01-rc1", "2024.02.29"],
-)
-def test_validate_version_accepts_calver(good_version):
-    assert _validate_version(good_version) == good_version
+@pytest.mark.parametrize("good_version", ["2026.05.29", "2026.10.01-fall-hero", "2026.10.01-rc1", "2024.02.29"])
+def test_register_accepts_calver_version(registry, good_version):
+    assert registry.register("datasets/foo", good_version, "/tmp/x").version == good_version
 
 
 @pytest.mark.parametrize(
@@ -90,35 +80,27 @@ def test_validate_version_accepts_calver(good_version):
         "2025.02.29",
     ],
 )
-def test_validate_version_rejects_non_calver(bad_version):
+def test_register_rejects_non_calver_version(registry, bad_version):
     with pytest.raises(InvalidArtifactIdError):
-        _validate_version(bad_version)
+        registry.register("datasets/foo", bad_version, "/tmp/x")
 
 
 # --- register / lookup ------------------------------------------------------
 
 
-def test_register_returns_entry(registry, artifact_path):
+def test_register_then_lookup_round_trips(registry, artifact_path):
+    # register returns the entry; lookup reads back an equal one (id, version, uri, relative_path).
     entry = registry.register("datasets/fineweb", "2026.05.29", artifact_path)
-    assert entry == ArtifactEntry(id="datasets/fineweb", version="2026.05.29", uri=artifact_path)
-
-
-def test_lookup_round_trips(registry, artifact_path):
-    registry.register("datasets/fineweb", "2026.05.29", artifact_path)
-    assert registry.lookup("datasets/fineweb", "2026.05.29").uri == artifact_path
+    assert entry.uri == artifact_path
+    assert registry.lookup("datasets/fineweb", "2026.05.29") == entry
 
 
 def test_lookup_missing_raises(registry):
     with pytest.raises(ArtifactNotFoundError) as exc:
         registry.lookup("datasets/fineweb", "2026.05.29")
-    assert exc.value.id == "datasets/fineweb"
-    assert exc.value.version == "2026.05.29"
-
-
-def test_lookup_missing_is_keyerror(registry):
-    # Subclasses KeyError so dict-style consumers keep working.
-    with pytest.raises(KeyError):
-        registry.lookup("datasets/fineweb", "2026.05.29")
+    # Subclasses KeyError (dict-style consumers keep working) and exposes the missing key.
+    assert isinstance(exc.value, KeyError)
+    assert (exc.value.id, exc.value.version) == ("datasets/fineweb", "2026.05.29")
 
 
 def test_register_is_append_only(registry, artifact_path):
@@ -149,18 +131,10 @@ def test_register_allows_remote_uri_in_local_registry(registry):
     assert registry.register("datasets/fineweb", "2026.05.29", uri).uri == uri
 
 
-def test_register_validates_id_and_version(registry, artifact_path):
-    with pytest.raises(InvalidArtifactIdError):
-        registry.register("no-namespace", "2026.05.29", artifact_path)
-    with pytest.raises(InvalidArtifactIdError):
-        registry.register("datasets/fineweb", "v1", artifact_path)
-
-
 def test_manifest_layout(registry, artifact_path):
+    # A registered entry lands at {root}/{namespace}/{name}/{version}.json with the wire-format JSON.
     registry.register("datasets/fineweb", "2026.05.29", artifact_path)
-    expected = f"{registry._root}/datasets/fineweb/2026.05.29.json"
-    assert registry._entry_path("datasets/fineweb", "2026.05.29") == expected
-    with open(expected) as fd:
+    with open(f"{registry._root}/datasets/fineweb/2026.05.29.json") as fd:
         on_disk = json.load(fd)
     # artifact_path is outside marin_prefix() in tests, so relative_path is null.
     assert on_disk == {"id": "datasets/fineweb", "version": "2026.05.29", "uri": artifact_path, "relative_path": None}
