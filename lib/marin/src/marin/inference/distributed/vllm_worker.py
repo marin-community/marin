@@ -92,10 +92,43 @@ def _engine_key(model_spec: ModelSpec, region: str) -> str:
 
 
 def _load_vllm_engine(model: str, engine_kwargs: Mapping[str, object]) -> InferenceEngine:
-    """Default factory: import vLLM and construct an `LLM` engine."""
+    """Default factory: import vLLM and construct an `LLM` engine.
+
+    Applies the Marin-downstream-scaling `ragged_paged_attention` kernel patch
+    before constructing the engine. The patch halves prefill block sizes
+    (`bq_sz`, `bq_csz`, `bkv_sz`, `bkv_csz`) for non-DECODE cases to keep v5p
+    HBM headroom positive — mirrors the patch in
+    `experiments/downstream_scaling/evals/algorithms/iid.py:_load_vllm` so this
+    factory is a drop-in for that codepath. Idempotent via the
+    `_marin_iid_patched` sentinel on the patched function.
+    """
+    _apply_rpa_kernel_patch()
     import vllm  # local import: vLLM is optional at import time
 
     return vllm.LLM(model=model, **dict(engine_kwargs))  # type: ignore[return-value]
+
+
+def _apply_rpa_kernel_patch() -> None:
+    """Apply the Marin RPA kernel block-size patch (idempotent)."""
+    import tpu_inference.kernels.ragged_paged_attention.v3.kernel as rpa_kernel
+
+    original = rpa_kernel.get_default_block_sizes
+    if getattr(original, "_marin_iid_patched", False):
+        return
+
+    def patched(*args, **kwargs):
+        sizes = dict(original(*args, **kwargs))
+        case = kwargs.get("case")
+        if case is not rpa_kernel.RpaCase.DECODE:
+            page_size = args[5]
+            sizes["bq_sz"] = max(1, sizes["bq_sz"] // 2)
+            sizes["bq_csz"] = max(1, sizes["bq_csz"] // 2)
+            sizes["bkv_sz"] = max(page_size, sizes["bkv_sz"] // 2)
+            sizes["bkv_csz"] = max(page_size, sizes["bkv_csz"] // 2)
+        return sizes
+
+    patched._marin_iid_patched = True  # type: ignore[attr-defined]
+    rpa_kernel.get_default_block_sizes = patched
 
 
 def _default_sampling(sampling: SamplingParams) -> Any:
