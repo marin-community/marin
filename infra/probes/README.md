@@ -9,7 +9,7 @@ v1 probes:
 - **`iris-job-submit/<zone>`** — submits a tiny CPU job in each GCP zone, polls to terminal, asserts SUCCEEDED.
 - **`finelog-write`** — pushes a unique-nonce `LogEntry` and reads it back to verify the indexer is alive.
 
-Results land on stdout as structured log lines (Docker → Cloud Logging on COS). Each line is `probe <name>: ok|fail [<wall_time_ms>ms]`.
+Results land on stdout as structured log lines (Docker → Cloud Logging on COS). Each line is `probe <name>: ok|fail [<wall_time_ms>ms] start=<utc-iso>`.
 
 Design + spec: `.agents/projects/infra_canary/` (kept for historical context — the implementation is now much smaller than what the spec described).
 
@@ -38,27 +38,31 @@ The package is **standalone** — not a member of the root marin uv workspace. I
 @dataclass
 class ProbeResult:
     is_success: bool
-    wall_time: float | None = None
+    name: str                       # stamped by the runner, which owns this metadata
+    started_at: datetime            # UTC wall-clock time at probe start
+    wall_time: float | None = None  # filled in by the runner once the run completes
+
+# A probe fn reports only whether the probe succeeded; the runner stamps the rest.
+ProbeFn = Callable[[], bool]
 
 @dataclass
 class Probe:
     name: str
-    fn: Callable[[], ProbeResult]
+    fn: ProbeFn
     timeout: float
     cadence: float
 
 class ProbeRunner:
-    def __init__(self, on_result: Callable[[str, ProbeResult], None] | None = None): ...
-    def add_probe(self, name: str, fn: Callable[[], ProbeResult], *, timeout: float, cadence: float) -> None: ...
+    def add_probe(self, name: str, fn: ProbeFn, *, timeout: float, cadence: float) -> None: ...
     def run(self) -> None: ...   # blocks forever; Ctrl-C (KeyboardInterrupt) kills the process
 
 # Concrete probes (callables you pass to add_probe):
-def probe_controller_ping(iris: RemoteClusterClient) -> ProbeResult: ...
-def probe_iris_job_submit(iris: RemoteClusterClient, zone: str) -> ProbeResult: ...
-def probe_finelog_write(finelog: LogClient) -> ProbeResult: ...
+def probe_controller_ping(iris: RemoteClusterClient) -> bool: ...
+def probe_iris_job_submit(iris: RemoteClusterClient, zone: str) -> bool: ...
+def probe_finelog_write(finelog: LogClient) -> bool: ...
 ```
 
-To add a probe, write a function returning `ProbeResult` and call `runner.add_probe(name, fn, timeout=..., cadence=...)`.
+To add a probe, write a function returning `bool` and call `runner.add_probe(name, fn, timeout=..., cadence=...)`.
 
 ## Running locally
 
@@ -96,9 +100,9 @@ PROJECT=hai-gcp-models
 ZONE=us-central1-b
 VM=infra-probes
 IMAGE=us-central1-docker.pkg.dev/${PROJECT}/marin/infra-probes:latest
-SA=probes@${PROJECT}.iam.gserviceaccount.com
+SA=infra-probes@${PROJECT}.iam.gserviceaccount.com
 
-gcloud iam service-accounts create probes \
+gcloud iam service-accounts create infra-probes \
   --project=${PROJECT} --display-name="probes daemon"
 
 gcloud compute instances create-with-container ${VM} \
@@ -108,8 +112,8 @@ gcloud compute instances create-with-container ${VM} \
   --scopes=cloud-platform \
   --container-image=${IMAGE} \
   --container-restart-policy=always \
-  --container-arg="--iris-endpoint=https://iris-controller.internal:10001" \
-  --tags=probes
+  --container-arg="--iris-endpoint=http://iris-controller.internal:10001" \
+  --tags=infra-probes
 ```
 
 After this, every rollout is `infra/probes/deploy/deploy.sh apply`.
@@ -117,7 +121,7 @@ After this, every rollout is `infra/probes/deploy/deploy.sh apply`.
 ## Querying results
 
 ```bash
-gcloud compute ssh probes -- docker logs $(docker ps -q --filter ancestor=...probes) | tail -200
+gcloud compute ssh infra-probes -- docker logs $(docker ps -q --filter ancestor=...infra-probes) | tail -200
 ```
 
 Or via Cloud Logging once Docker stdout is shipped.
