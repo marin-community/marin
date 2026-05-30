@@ -19,7 +19,8 @@ No proto, no schema-registry tables, no migrations. The registry's persisted for
 
 DEFAULT_REGISTRY_ENV: str = "MARIN_ARTIFACT_REGISTRY"
 """Environment variable read by `get_default_registry()` to locate the default registry root.
-   When unset, the default is `f"{marin_prefix()}/artifact_registry"`."""
+   Required — there is no implicit fallback; when unset, `get_default_registry()` raises.
+   Canonical value is `gs://marin-us-central1/artifact_registry`."""
 
 ID_SEPARATOR: str = "/"
 """Separator between namespace and name in an artifact id."""
@@ -135,10 +136,10 @@ class FilesystemArtifactRegistry(ArtifactRegistry):
 ```python
 def get_default_registry() -> ArtifactRegistry:
     """Return the process-wide default registry, constructing it on first call from
-    `os.environ[DEFAULT_REGISTRY_ENV]` (fallback: `f"{marin_prefix()}/artifact_registry"`).
-    Raises `RuntimeError` if both the env var is unset AND `marin_prefix()` is unset /
-    raises — the registry has no sensible default in that case and the caller must set
-    one explicitly via `set_default_registry` or the env var.
+    `os.environ[DEFAULT_REGISTRY_ENV]`. There is NO implicit fallback root.
+    Raises `RuntimeError` if the env var is unset/empty AND no registry has been
+    installed via `set_default_registry` — the registry has no sensible default and
+    the caller must configure one explicitly (canonical: `gs://marin-us-central1/artifact_registry`).
 
     The returned instance is cached at module scope. Re-reading the env var requires
     `set_default_registry(None)` to clear the cache; this is intentional — env-var

@@ -79,7 +79,7 @@ def from_id(
     return cls.from_path(entry.uri, artifact_type)
 ```
 
-`get_default_registry()` returns a module-level singleton built from `MARIN_ARTIFACT_REGISTRY` (default `{marin_prefix()}/artifact_registry`). Tests and notebook users pass `registry=` to override.
+`get_default_registry()` returns a module-level singleton built from `MARIN_ARTIFACT_REGISTRY` (canonical `gs://marin-us-central1/artifact_registry`). The env var is required — there is no implicit fallback; an unset var fails loudly rather than silently resolving to a region-dependent `marin_prefix()` root. Tests and notebook users pass `registry=` to override.
 
 **IDs** are strict `<namespace>/<name>` (one slash, both segments non-empty, restricted character set). `register` and `lookup` validate this up-front; ambiguous inputs raise immediately.
 

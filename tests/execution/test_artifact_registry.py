@@ -203,6 +203,12 @@ def test_get_default_registry_reads_env(monkeypatch, tmp_path, reset_default):
     assert get_default_registry().root == str(tmp_path / "envroot")
 
 
+def test_get_default_registry_unset_fails_loudly(monkeypatch, reset_default):
+    monkeypatch.delenv(DEFAULT_REGISTRY_ENV, raising=False)
+    with pytest.raises(RuntimeError):
+        get_default_registry()
+
+
 def test_get_default_registry_caches(monkeypatch, tmp_path, reset_default):
     monkeypatch.setenv(DEFAULT_REGISTRY_ENV, str(tmp_path / "envroot"))
     assert get_default_registry() is get_default_registry()

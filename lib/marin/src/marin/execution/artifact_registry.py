@@ -19,12 +19,14 @@ import typing
 import uuid
 
 import pydantic
-from rigging.filesystem import marin_prefix, open_url, url_to_fs
+from rigging.filesystem import open_url, url_to_fs
 
 DEFAULT_REGISTRY_ENV = "MARIN_ARTIFACT_REGISTRY"
 """Environment variable read by `get_default_registry` to locate the default registry root.
 
-When unset, the default is `f"{marin_prefix()}/artifact_registry"`.
+Required: there is no implicit fallback. When unset, `get_default_registry` raises so a missing
+configuration fails loudly instead of silently resolving to a wrong root. Canonical value is
+`gs://marin-us-central1/artifact_registry`.
 """
 
 ID_SEPARATOR = "/"
@@ -234,9 +236,10 @@ _default_registry: ArtifactRegistry | None = None
 def get_default_registry() -> ArtifactRegistry:
     """Return the process-wide default registry, constructing it on first call.
 
-    The root comes from `os.environ[DEFAULT_REGISTRY_ENV]`, falling back to
-    `f"{marin_prefix()}/artifact_registry"`. The instance is cached at module scope; clear the
-    cache with `set_default_registry(None)` to re-read the environment.
+    The root comes from `os.environ[DEFAULT_REGISTRY_ENV]`. There is no implicit fallback: if the
+    env var is unset (or empty) and no registry has been installed via `set_default_registry`, this
+    raises `RuntimeError` rather than guessing a root. The instance is cached at module scope; clear
+    the cache with `set_default_registry(None)` to re-read the environment.
 
     Thread-safety: the first call is not lock-guarded. Call it once during startup before forking
     threads. Concurrent first-call races may construct multiple instances, of which one wins the
@@ -244,7 +247,13 @@ def get_default_registry() -> ArtifactRegistry:
     """
     global _default_registry
     if _default_registry is None:
-        root = os.environ.get(DEFAULT_REGISTRY_ENV) or f"{marin_prefix()}/artifact_registry"
+        root = os.environ.get(DEFAULT_REGISTRY_ENV)
+        if not root:
+            raise RuntimeError(
+                f"no default artifact registry configured: set ${DEFAULT_REGISTRY_ENV} "
+                f"(e.g. 'gs://marin-us-central1/artifact_registry'), pass registry= explicitly, "
+                f"or call set_default_registry(...)"
+            )
         _default_registry = FilesystemArtifactRegistry(root)
     return _default_registry
 
