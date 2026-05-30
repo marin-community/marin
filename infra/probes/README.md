@@ -69,7 +69,7 @@ To add a probe, write a function returning `bool` and call `runner.add_probe(nam
 ```bash
 cd infra/probes
 uv run python -m marin_infra_probes \
-  --iris-endpoint https://iris-controller.internal:10001
+  --iris-endpoint http://iris-controller-marin.c.hai-gcp-models.internal:10000
 ```
 
 Send SIGTERM/SIGINT to shut down. Tail stdout to see results.
@@ -121,7 +121,7 @@ gcloud compute instances create-with-container ${VM} \
   --scopes=cloud-platform \
   --container-image=${IMAGE} \
   --container-restart-policy=always \
-  --container-arg="--iris-endpoint=http://iris-controller.internal:10001" \
+  --container-arg="--iris-endpoint=http://iris-controller-marin.c.hai-gcp-models.internal:10000" \
   --tags=infra-probes
 ```
 
