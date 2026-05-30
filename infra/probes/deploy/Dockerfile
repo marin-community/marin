@@ -42,13 +42,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM deps AS runtime
 
 # SQLite database lives on a PD-SSD mounted at /var/lib/probes by the VM.
-RUN groupadd --system --gid 1000 probes \
-    && useradd --system --uid 1000 --gid probes --home-dir /app --no-create-home probes \
+RUN groupadd --system --gid 1000 infra-probes \
+    && useradd --system --uid 1000 --gid infra-probes --home-dir /app --no-create-home infra-probes \
     && mkdir -p /var/lib/probes \
-    && chown probes:probes /var/lib/probes
+    && chown infra-probes:infra-probes /var/lib/probes
 
 VOLUME ["/var/lib/probes"]
 
-USER probes
+USER infra-probes
 
 CMD ["python", "-m", "marin_infra_probes"]
