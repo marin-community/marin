@@ -7,13 +7,19 @@ description: Add, modify, or autotune a TPU/GPU Pallas kernel.
 
 This is a specialization of `.agents/skills/run-research/SKILL.md`.
 
-Use `run-research` for the generic research lifecycle (branching, issue/logbook cadence, snapshot/tag discipline, reporting). This skill adds kernel-specific standards for numerics and gradient safety, backend/fallback API design, TPU/GPU performance diagnosis, and block-size autotuning.
+Use `run-research` for the generic research lifecycle. It composes the reusable
+logbook, issue-update, W&B reporting, docs, and snapshot skills. This skill adds
+kernel-specific standards for numerics and gradient safety, backend/fallback API
+design, TPU/GPU performance diagnosis, and block-size autotuning.
 
 ## How to apply this skill
 
-1. Load and follow `.agents/skills/run-research/SKILL.md` first.
+1. Load and follow `.agents/skills/run-research/SKILL.md` first for
+   long-running kernel research, or load only the narrower task skills it
+   references for an atomic kernel change.
 2. Apply the additional kernel rules in this document.
-3. Keep shared process details in `run-research`; keep this file focused on kernel-specific constraints.
+3. Keep shared process details in the reusable task skills; keep this file
+   focused on kernel-specific constraints.
 
 ## Kernel Deliverables
 
