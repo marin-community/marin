@@ -36,6 +36,15 @@ LOG_SERVER_ENDPOINT_NAME = "/system/log-server"
 # us-west4 zones in the fleet.
 DEFAULT_ZONES = ("europe-west4-b", "us-west4-a")
 
+# finelog-write probe: the key/source the canary writes under, and how long to
+# keep re-reading our own write before declaring failure. The write path flushes
+# asynchronously and the index lags the flush by a beat, so a single immediate
+# read races and spuriously fails.
+FINELOG_PROBE_KEY = "infra.canary.finelog_probe"
+FINELOG_PROBE_SOURCE = "/canary/finelog-write-probe"
+FINELOG_READBACK_TIMEOUT = 5.0
+FINELOG_READBACK_POLL_INTERVAL = 0.25
+
 
 @dataclass
 class ProbeResult:
@@ -139,20 +148,29 @@ def probe_finelog_write(finelog: LogClient) -> bool:
     nonce = uuid.uuid4().hex
     ts_ms = int(time.time() * 1000)
     finelog.write_batch(
-        key="infra.canary.finelog_probe",
+        key=FINELOG_PROBE_KEY,
         messages=[
             logging_pb2.LogEntry(
                 timestamp=logging_pb2.Timestamp(epoch_ms=ts_ms),
-                source="/canary/finelog-write-probe",
+                source=FINELOG_PROBE_SOURCE,
                 data=nonce,
                 level=logging_pb2.LOG_LEVEL_INFO,
             )
         ],
     )
-    response = finelog.fetch_logs(
-        logging_pb2.FetchLogsRequest(source="/canary/finelog-write-probe", since_ms=ts_ms - 1000, max_lines=64)
-    )
-    return any(e.data == nonce for e in response.entries)
+    finelog.flush()
+    # Re-read our own write until the nonce shows up or the readback budget is
+    # spent: the flush is durable but the index lags it, so a single fetch races.
+    deadline = time.monotonic() + FINELOG_READBACK_TIMEOUT
+    while True:
+        response = finelog.fetch_logs(
+            logging_pb2.FetchLogsRequest(source=FINELOG_PROBE_SOURCE, since_ms=ts_ms - 1000, max_lines=64)
+        )
+        if any(e.data == nonce for e in response.entries):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(FINELOG_READBACK_POLL_INTERVAL)
 
 
 # ---- entrypoint -----------------------------------------------------------
