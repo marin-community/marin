@@ -129,7 +129,6 @@ def probe_finelog_write(finelog: LogClient) -> ProbeResult:
                 source="/canary/finelog-write-probe",
                 data=nonce,
                 level=logging_pb2.LOG_LEVEL_INFO,
-                key=nonce,
             )
         ],
     )
