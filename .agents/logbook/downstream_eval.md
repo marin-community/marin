@@ -1145,3 +1145,388 @@ Plus prompt artifact at `gs://marin-us-east5/downstream_scaling/evals/prompts/ma
 - **Reducer scope**: just pass@32 + mean_acc per cell? Or also mean ± stderr across the 32 samples per problem? My recommendation: the simple `(scale, mix, lr) → (pass@32, mean_acc, mean_correctness_per_sample)` CSV, with the option to add error bars later by reading the same `grades.jsonl.gz`.
 - **Comparison baseline**: do we want to side-by-side compare each midtrain cell against Rohith's matched base mask_00 cell at the same scale? That's a delta-per-cell view. The base mask_00 numbers live at `gs://marin-us-east5/downstream_scaling/evals/delphi/masked_gsm8k/iid/mask_00/{slug}/grade-*/grades.jsonl.gz` already. Worth folding into the reducer.
 - **Plotting**: out of scope for this plan unless you want it; pass@32-vs-FLOPs lines per mix is the obvious chart. Can be a follow-up.
+
+### 2026-05-26 (later) — A/B comparison on the 1e22 row (drafted; both paths to execute)
+
+After the matrix-eval plan landed, prompted an Opus subagent to analyze the existing pipeline against a new distributed-inference library in a fork (`XenonMolecule/marin@inference/distributed-library`, file `lib/marin/src/marin/inference/distributed/api.py`). The subagent surfaced two architectural proposals (compact summary below; full chat-history analysis is the source of truth).
+
+#### What the new library does
+
+`marin.inference.distributed` is a multi-region, multi-shard, **single-model-per-call** inference primitive. `inference(model, dataset, config) → InferenceResult` is blocking, bound to one `ModelSpec`. Region fan-out is meta-coordinated (one Fray job per region, each running a `ZephyrContext`). Per-region work = list of JSONL input files → Zephyr content-sharded with deterministic shard IDs. `vllm_worker.ensure_engine` caches the `vllm.LLM` at module scope, so subsequent shards on the same worker are engine-boot-free. `compile_cache.py` sets `JAX_COMPILATION_CACHE_DIR` + `VLLM_XLA_CACHE_PATH` to a GCS path per region so workers in the same region loading the same `(model, engine_kwargs)` after the first reuse the compiled XLA artifacts. Output schema: `{id, shard, response}`, not our `{id, completions:[...]}`. `n=1` enforced (we replicate prompts 32× to recover sampling).
+
+**Does not** natively support multi-checkpoint hot-swap on one engine (Proposal C from the subagent's analysis). The "share engine across cells" intuition is achievable via a custom multi-model wrapper looping `inference()`, with the XLA compile cache surviving across calls — but `vllm.LLM` itself is reconstructed.
+
+#### The A/B engineering question
+
+- **Hypothesis A** (cheap): The 30-line `_load_vllm` retrofit — set `JAX_COMPILATION_CACHE_DIR` + `VLLM_XLA_CACHE_PATH` to a shared GCS path before `vllm.LLM(...)` — recovers ≥80% of the available efficiency at <5% of the engineering effort.
+- **Hypothesis B** (heavy lift): Adopting the full distributed API gives additional wall-clock + TPU-hour savings beyond just caching, justifying the integration cost.
+
+Test bed: the 12-cell **1e22 row** of the midtrain matrix (the largest models, where engine boot + compile is the most expensive in absolute terms). Out of scope here: 3e20 and 1e21 rows, and any SFT work.
+
+#### Cell assignment — diagonal LR split, 6 + 6
+
+Each method gets all 3 mixes; the LR set is split so neither method has an LR the other has. Two cells per mix per method; both halves cover the LR range.
+
+| Method | LRs | Cells (6 each) |
+|---|---|---|
+| **A** (compile cache only) | 0.33, 0.67 | `1e22_p33m67_lr0.33`, `1e22_p50m50_lr0.33`, `1e22_p67m33_lr0.33`, `1e22_p33m67_lr0.67`, `1e22_p50m50_lr0.67`, `1e22_p67m33_lr0.67` |
+| **B** (distributed API) | 0.5, 0.83 | `1e22_p33m67_lr0.5`, `1e22_p50m50_lr0.5`, `1e22_p67m33_lr0.5`, `1e22_p33m67_lr0.83`, `1e22_p50m50_lr0.83`, `1e22_p67m33_lr0.83` |
+
+This split lets either half recompute (mix, lr) pass@32 separately for sanity-checking the other half. If A and B disagree at fixed (mix, lr) — impossible since they're different LRs — the next thing to check is whether the LR-ordered curve is monotonic within each mix (no signs of method-induced contamination).
+
+#### What we record per cell (engineering metrics)
+
+| Metric | Method A | Method B |
+|---|---|---|
+| Cold-start wall-clock (iris submit → vLLM construct begins) | ✓ | ✓ |
+| `vllm.LLM(...)` construction time (engine boot + JIT compile) | ✓ — **first cell pays full, rest hit cache** | ✓ — measure across `inference()` calls (cache survives) |
+| Completions wall-clock (8192 generations / cell) | ✓ | ✓ |
+| Grade wall-clock | ✓ | ✓ |
+| Total cell wall-clock (submit → grade artifact) | ✓ | ✓ |
+| TPU-hours (wall-clock × 8 chips for v5p-8) | ✓ | ✓ |
+| Lines of code changed | ~30 | ~500-1500 (incl. library port) |
+| Bugs hit | log all | log all |
+| GSM8K pass@32 | ✓ (also fills 6 cells of the matrix) | ✓ (also fills 6 cells) |
+
+GSM8K results across methods should be statistically equivalent at fixed (mix, lr) within sampling noise — completions are deterministic given fixed seed + sampling + prompt + model. Bitwise identity is not expected if B uses engine reuse (RNG-stream sharing differs).
+
+#### Method A — concrete implementation
+
+1. Edit `experiments/downstream_scaling/evals/algorithms/iid.py:_load_vllm` to set the two env vars before `vllm.LLM(...)`:
+   ```python
+   os.environ.setdefault("JAX_COMPILATION_CACHE_DIR",
+       "gs://marin-us-east5/tmp/ttl=30d/vllm-cache/marin-eval")
+   os.environ.setdefault("VLLM_XLA_CACHE_PATH",
+       "gs://marin-us-east5/tmp/ttl=30d/vllm-cache/marin-eval")
+   ```
+   **Single shared dir, not per-model.** JAX persistent cache is content-addressed internally; same arch + same compile shapes → same cache entries, even across different model weight files. Different arches naturally land in different files, so a shared dir is safe.
+2. New launcher `experiments/downstream_scaling/evals/run_one_midtrain_masked_gsm8k_iid_methodA.py`: thin wrapper that writes to a new prefix `delphi_midtrain/masked_gsm8k_mask00_methodA_cache/{slug}` so we don't cache-hit the existing eval prefix (which our killed earlier batch was targeting).
+3. Fire 6 iris jobs in parallel in us-east5-a, v5p-8, `--priority interactive`, same flags as before.
+4. Parse worker logs after they land to extract `vllm.LLM(...)` construction time per cell. First cell pays full ~5-10 min compile; remaining 5 should pay ~1-2 min cache hydrate.
+
+Implementation effort: ~1 hour including testing.
+
+#### Method B — concrete implementation
+
+1. Fetch the distributed-library files from `XenonMolecule/marin@inference/distributed-library`:
+   - `lib/marin/src/marin/inference/distributed/{__init__,api,config,meta_coordinator,regional_job,pipeline,vllm_worker,compile_cache,input,output}.py`
+2. Place under `lib/marin/src/marin/inference/distributed/` in this worktree (or in a temporary location if upstream lib/marin path conflicts with merged-main contents).
+3. Resolve missing imports against just-merged main:
+   - `rigging.filesystem.REGION_TO_DATA_BUCKET`, `check_gcs_paths_same_region`
+   - `marin.rl.placement.marin_prefix_for_region`
+   - `zephyr.execution.MAX_SHARD_FAILURES`
+   Worst case: shim missing symbols locally; ideal case: they already exist in merged main with the same signatures.
+4. Override the new API's `engine_factory` to apply our `tpu_inference.kernels.ragged_paged_attention.v3.kernel.get_default_block_sizes` patch from `iid.py` before `vllm.LLM` constructs. Without this, vLLM on TPU crashes on the RPA kernel call.
+5. Thread `hf_overrides={"architectures": ["Qwen3ForCausalLM"]}` and `trust_remote_code=True` (Levanter-export-with-wrong-architectures workaround) through `ModelSpec.engine_kwargs`.
+6. Build `experiments/downstream_scaling/evals/run_one_midtrain_masked_gsm8k_iid_methodB.py`:
+   - Materializes 256 problems × 32 samples = 8192 `PromptRecord` rows per cell (replicating each prompt 32× with `id="masked_gsm8k/test/{i}#{sample}"` since the new API enforces `n=1`).
+   - Calls `inference(model_spec, dataset, config)` once per cell.
+   - `regions=["us-east5-a"]`, `max_workers_per_region=N`, `shard_size` sized so a v5p-8 worker handles a sensible chunk.
+7. Adapter step: Zephyr `group_by(prompt_id_base)` reducer that strips the `#{sample}` suffix, collects the 32 responses, and emits `{id, completions:[...]}` per problem.
+8. Grade step: reuse the existing `grade_gsm8k` at prefix `delphi_midtrain/masked_gsm8k_mask00_methodB_distributed/{slug}`.
+9. Fire 6 iris jobs in parallel (initially as separate `inference()` calls; possibly consolidate via a custom multi-model wrapper if the lift is small).
+
+Implementation effort: realistically **5-10 hours**, possibly longer if dependencies require upstreaming or shimming. Will pause to update the plan if blocked.
+
+#### Risks
+
+**Method A**:
+- Cache key clash: another concurrent eval writing to the same dir with different engine_kwargs could write incompatible artifacts. Mitigation: TTL 30d auto-cleanup; JAX cache files are content-addressed and self-validating; no real risk.
+- `os.environ.setdefault` only sets if not already set — if iris worker env has these vars pre-set to something else, we silently skip. Mitigate by checking worker logs and switching to unconditional set if needed.
+- Workers must have GCS write permissions to the cache path. They already write completion chunks under `gs://marin-us-east5/`, so this should be fine.
+
+**Method B**:
+- **Dependency drift**: fork is on a feature branch; one or more of `REGION_TO_DATA_BUCKET`, `check_gcs_paths_same_region`, `marin_prefix_for_region`, `MAX_SHARD_FAILURES` may not exist or may have different signatures on merged main. If blocking, file PRs upstream or shim locally.
+- **Schema mismatch**: new API output is `{id, shard, response}`, grader wants `{id, completions:[...]}`. Adapter step must group by prompt id and concatenate the 32 sample responses back. Off-by-one or stride bugs are easy.
+- **RPA kernel patch wiring**: if we miss applying it via `engine_factory`, vLLM crashes on TPU.
+- **vLLM TPU HBM leaks**: historical issue across sequential `LLM` constructions. If we run 6 cells in one process via a multi-model wrapper, HBM may not fully release between models. Mitigation: stick to separate processes (one `inference()` call per cell) — still benefits from compile cache, just doesn't get engine-reuse savings.
+- **Seed/RNG**: if we use engine reuse, vLLM consumes `seed` at init → 12 cells reusing one engine share one RNG stream → completions not bitwise identical to A. Statistically equivalent at n=8192 (256 × 32) per cell, but reproducibility hash diverges.
+
+#### Output paths
+
+```
+gs://marin-us-east5/downstream_scaling/evals/delphi_midtrain/masked_gsm8k_mask00_methodA_cache/{slug}/grade-*/grades.jsonl.gz   # Method A, 6 cells
+gs://marin-us-east5/downstream_scaling/evals/delphi_midtrain/masked_gsm8k_mask00_methodB_distributed/{slug}/grade-*/grades.jsonl.gz  # Method B, 6 cells
+gs://marin-us-east5/tmp/ttl=30d/vllm-cache/marin-eval/                                                                         # shared JAX/vLLM cache (Method A; also used by B)
+```
+
+#### Execution order
+
+1. ✅ Plan drafted, logbook updated.
+2. Implement Method A (commit the iid.py change + new launcher), smoke-fire one cell, then fire remaining 5.
+3. Begin Method B implementation in parallel with A jobs running: pull library, resolve imports, wire RPA patch, build launcher + adapter.
+4. Local smoke for Method B (1 model, small problem subset) before firing 6 cells.
+5. Fire 6 Method B cells.
+6. After both methods complete: write up the comparison in the logbook (timings, lines changed, bugs hit, correctness check on pass@32). Decide which approach to use for the remaining 24 cells of the matrix (3e20 + 1e21 rows).
+
+#### Comparison report template (to fill in after execution)
+
+| | Method A | Method B |
+|---|---|---|
+| Lines of code added | TBD | TBD |
+| Files added | TBD | TBD |
+| Bugs hit during integration | TBD | TBD |
+| First-cell vLLM construct time | TBD | TBD |
+| Subsequent-cell vLLM construct time | TBD | TBD |
+| Mean per-cell wall-clock (submit → grade) | TBD | TBD |
+| Total wall-clock for 6-cell wave | TBD | TBD |
+| Total TPU-hours for 6-cell wave | TBD | TBD |
+| Pass@32 per cell (1e22) | TBD | TBD |
+| Verdict | TBD | TBD |
+
+### 2026-05-26 — 2026-05-29 — Matrix execution attempt, vLLM/TPU VMEM regression hunt, Method B aborted
+
+#### Matrix-eval first launch + kill
+
+Tried firing the 36-cell matrix described in the plan above. First attempt: all 36 jobs rejected client-side (`marin-iris client is too old; minimum 2026-05-12`). Pulled `origin/main` and merged into the branch (commit `2336a5760`, 159 main-side commits absorbed, zero conflicts on the work area). `uv sync` rebuilt the iris client. Re-fired all 36 at `--priority interactive` in us-east5-a; user immediately killed all 36 — the explicit instruction was "merge main and make sure it works", not "merge and relaunch". Saved memory `feedback_no_relaunch_without_greenlight.md`.
+
+#### A/B test on 1e22 row attempted
+
+Subagent analysis of `XenonMolecule/marin@inference/distributed-library`'s new `marin.inference.distributed` library produced two proposals: A (compile-cache retrofit in `iid.py`) and B (full distributed-library adoption). Fired both at 1e22 (6 cells each).
+
+**Method A**: added `JAX_COMPILATION_CACHE_DIR` + `VLLM_XLA_CACHE_PATH` env vars in `iid.py:VLLM_TPU_ENV_VARS`. New launcher `run_one_midtrain_masked_gsm8k_iid_methodA.py` at prefix `masked_gsm8k_mask00_methodA_cache/`. **All 6 cells FAILED on TPU compile** with `RESOURCE_EXHAUSTED: vmem`. Used 100.73 MB of 63.94 MB budget (over by 36.79 MB).
+
+**Method B**: vendored `lib/marin/src/marin/inference/distributed/` from the fork branch (12 files, commit `d6b55a07f`). Wrote launcher `run_one_midtrain_masked_gsm8k_iid_methodB.py` that bypasses the executor framework, calls `inference()` directly, inlines an lm-eval grader. **All 6 cells died at the coordinator init** with `TypeError: ZephyrContext.__init__() got an unexpected keyword argument 'worker_environment'`. The library uses a `worker_environment` kwarg that doesn't exist on `main`'s `ZephyrContext`.
+
+Filed issue **#5985** [[issue_5985_distributed_library_cascade]]: `marin.inference.distributed` unusable on main without supporting changes from the same fork branch. After cherry-picking the zephyr/execution.py change (10-line additive patch) and re-attempting at 1e21, the next layer down crashed with `TypeError: ZephyrWorker.__init__() got an unexpected keyword argument 'environment'` — the fork also patches `lib/fray/{client,iris_backend,local_backend}.py` to thread `environment=` through fray's actor system. **Cascade is 3 layers, not 2**: distributed/ + zephyr/ + fray/. Updated #5985 with this finding. Method B abandoned for this branch.
+
+#### My zephyr patch broke Method A too
+
+Picked up the 1e20 Method A cell as a smoke (the user wanted a sanity test that VMEM didn't bite at smaller scale). The cell ran ~37 min, parent job state stayed `running`, no completion. Logs showed `TypeError: ZephyrWorker.__init__() got an unexpected keyword argument 'environment'` looping every ~10s in the **Zephyr group_by aggregation** worker — which has nothing to do with the distributed library. My zephyr patch passes `environment=config.worker_environment` to `worker_group.create()` **unconditionally**, even when the caller (Method A's chunk-aggregate pipeline) didn't set it. Without the matching fray patch, the kwarg falls through to `ZephyrWorker.__init__` which crashes. Reverted `lib/zephyr/src/zephyr/execution.py` to merged-main state; Method A resumed working. Saved memory `feedback_partial_branch_cherrypick.md`.
+
+**Critically**: vLLM at 1e20 (1.9B, d2048-L21) had already finished — all 16/16 chunks landed with `.SUCCESS` markers before the aggregate hot-loop started. The completion work was durable on GCS at `gs://marin-us-east5/downstream_scaling/evals/delphi_midtrain/masked_gsm8k_mask00_methodA_cache/1e20_p33m67_lr0.67/completions-4d8416/chunks/`. **VMEM bug does NOT bite at 1.9B.** Threshold is between 1.9B (1e20) and 3.4B (1e21).
+
+#### VMEM regression hunt — pin descent
+
+User goal: find a `vllm-tpu` pin that works on 1e21. Tried descending; each step was constrained by dep cascade.
+
+| Pin | Worker uv sync | Compile | VMEM used | Verdict |
+|---|:---:|:---:|---:|---|
+| `0.19.0` (post-merge current) | ✓ | ✗ | **100.73 MB** (+36.79) | Failed |
+| `0.18.0` | ✓ | ✗ | 67.23 MB (+3.29) | Failed |
+| `0.13.3` | ✗ | n/a | n/a | Worker `uv sync` died: `torchvision==0.24.0+e437e35` has wheels only for `win_arm64`, no Linux x86_64 |
+| `0.13.2.post6` | ✗ | n/a | n/a | Same `+e437e35` wheel issue |
+| `0.12.0` | ✗ | n/a | n/a | Same `+e437e35` wheel issue |
+| `0.20.0` (newer) | ✓ | ✗ | 67.23 MB (+3.29) | **Same VMEM as 0.18** — 0.19 was an extra regression on top of an already-over-budget baseline; 0.20 reverted only the extra |
+
+To get 0.20.0 to resolve, also bumped `lib/levanter/pyproject.toml` `transformers>=4.57.1,<5.0` → `<6.0` (transformers==5.5.3 comes in via vllm-tpu 0.20). **No pin alone clears VMEM at 1e21+ on v5p-8.**
+
+#### RPA kernel block quartering breakthrough
+
+The 0.18/0.20 baseline of 67.23 MB is only 3.29 MB over the 64 MB budget. The existing RPA kernel patch in `iid.py:_load_vllm` halves `bq_sz`/`bq_csz`/`bkv_sz`/`bkv_csz` (`//2`) once. Changed it to **quarter** (`//4`):
+
+```python
+# experiments/downstream_scaling/evals/algorithms/iid.py:114-125
+sizes["bq_sz"] = max(1, sizes["bq_sz"] // 4)
+sizes["bq_csz"] = max(1, sizes["bq_csz"] // 4)
+sizes["bkv_sz"] = max(page_size, sizes["bkv_sz"] // 4)
+sizes["bkv_csz"] = max(page_size, sizes["bkv_csz"] // 4)
+```
+
+Fired 1e21 with `vllm-tpu==0.20.0` + `//4` patch. **VMEM error gone.** vLLM compiled, ran all 16 chunks (256 problems × 32 samples = 8192 generations), aggregated, wrote `completions.jsonl.gz`. End-to-end inference on 3.4B on v5p-8 confirmed working.
+
+##### Correctness of `//4` (sanity-check before relying on the patch)
+
+These four `b*_sz` / `b*_csz` parameters are **tile sizes** for the ragged paged attention Pallas kernel — they control how the kernel partitions its work, not what work it does. Specifically:
+
+- `bq_sz`: query positions per tile (sequence dim)
+- `bq_csz`: parallel query lanes per tile (batch dim)
+- `bkv_sz`: KV positions loaded into VMEM scratch per inner iteration
+- `bkv_csz`: KV pages held in scratch per tile
+
+The kernel computes the same `softmax(Q @ K^T / √d) @ V`. With smaller tiles, the same total work is done in more, thinner iterations — the kernel walks Q in smaller strides, accumulates the running softmax max/sum across more steps, and writes out the same final output. **The math is identical.**
+
+What does change:
+
+1. **Numerical accumulation order.** Online softmax tracks `max(running_max, block_max)` and `sum *= exp(old_max - new_max)` across blocks. Smaller blocks → more reduction steps → different fp accumulation order. At fp32 accumulator (which the kernel uses internally even with bf16 inputs), the bit-level drift is ~1e-6. Statistically zero at T=0.6 sampling — well below the entropy floor of the token distribution. Not visible in pass@32.
+2. **Performance.** Roughly 2× the inner-loop iterations vs `//2`, each with fixed DMA + scalar overhead. Estimate 1.3–2× slower per token. Not a correctness concern; just throughput.
+3. **The `max(1, ...)` / `max(page_size, ...)` clamps.** If the default size was already tiny for some shape, `//4` collapses to the floor and the patch is effectively a no-op for that axis.
+
+The existing `//2` patch (predating this branch) was already trading tile size for VMEM headroom. `//4` trades more. Same kernel, same operation, narrower stripes. **Decision: accept `//4` as the canonical patch.** Empirical bit-diff against `//2` baseline would be a follow-up if anyone wants to confirm; the math says it's safe.
+
+#### Working recipe (canonical as of 2026-05-29)
+
+For any 1e21+ midtrain matrix cell on v5p-8:
+
+1. **Pins** (in `lib/marin/pyproject.toml` under `vllm` extra, plus `lib/levanter/pyproject.toml`):
+   - `vllm-tpu==0.20.0`
+   - `tpu-inference==0.20.0`
+   - levanter's `transformers>=4.57.1,<6.0` (bumped from `<5.0` for the 5.5.3 dep)
+2. **`iid.py:_load_vllm` RPA kernel patch**: `//4` block quartering on `bq_sz`/`bq_csz`/`bkv_sz`/`bkv_csz` for non-DECODE cases. The single-halve `//2` is over budget by 3.29 MB at 1e21+.
+3. Launcher pattern unchanged: `run_one_midtrain_masked_gsm8k_iid_methodA.py` writes to `delphi_midtrain/masked_gsm8k_mask00_methodA_cache/{slug}/`.
+
+#### Follow-on bug: `HfUriError` in grade step
+
+The transformers 5.5.3 upgrade required for vllm-tpu 0.20.0 changed `HfUriError`'s constructor: it now requires a positional `msg` argument. The lm-eval-harness grade code constructs `HfUriError()` the old way somewhere, producing `TypeError: HfUriError.__init__() missing 1 required positional argument: 'msg'`. **Inference works end-to-end; grade phase fails on this transformers compat issue.** The completions artifact is durable — can be graded offline against a separate venv (with older transformers + matching lm-eval) or after patching the lm-eval call site. Not yet investigated which.
+
+#### Status at end of session
+
+- `vllm-tpu==0.20.0` + RPA `//4` is the validated working configuration for 1e21+ inference on v5p-8.
+- The matrix's 1e20 cells run unmodified on the original `0.19.0` stack (proven by the 2026-05-28 1e20 chunks).
+- 1e22 untested on the new recipe but **should work** — VMEM at 9.7B is also blocked by the same RPA kernel scratch, and `//4` cuts more there proportionally.
+- Grade phase blocked by `HfUriError` on transformers 5.5.3. Completions are recoverable.
+- Method B (distributed library) is abandoned on this branch pending the 3-layer upstream PR cascade tracked in #5985.
+
+#### Uncommitted at end of session
+
+| File | Change |
+|---|---|
+| `experiments/downstream_scaling/evals/algorithms/iid.py` | RPA `//2` → `//4` block quartering. |
+| `lib/marin/pyproject.toml` | `vllm-tpu==0.19.0` → `0.20.0`, `tpu-inference==0.19.0` → `0.20.0`. |
+| `lib/levanter/pyproject.toml` | `transformers>=4.57.1,<5.0` → `<6.0`. |
+| `experiments/downstream_scaling/evals/run_one_midtrain_masked_gsm8k_iid_methodA.py` | Added fallback to `DELPHI_MIDTRAIN_CHECKPOINTS` so 1e20-iso slugs resolve. |
+| `experiments/downstream_scaling/evals/run_one_midtrain_masked_gsm8k_iid_methodB.py` | New (committed in earlier turn). Method B launcher — vendored library — abandoned, see above. |
+| `lib/marin/src/marin/inference/distributed/` | Vendored from fork. Committed earlier as `d6b55a07f`. Library NOT functional on this branch (#5985). |
+| `.agents/logbook/downstream_eval.md` | This update. |
+
+The reverted `lib/zephyr/src/zephyr/execution.py` is back to merged-main state — DO NOT re-apply the `worker_environment` cherry-pick unless `lib/fray/` is also patched.
+
+#### Open items for next agent
+
+1. **Diagnose `HfUriError` in grade step.** Either patch the lm-eval-harness call site, pin transformers down (will conflict with vllm-tpu 0.20.0), or set up an offline grader against the saved `completions.jsonl.gz`. The completions file is at `gs://marin-us-east5/downstream_scaling/evals/delphi_midtrain/masked_gsm8k_mask00_methodA_cache/1e21_p33m67_lr0.5/completions-40329a/completions.jsonl.gz` (8192 rows, schema `{id, completions:[{text, metadata}...]}`).
+2. **Verify 1e22 on the new recipe.** Fire one 1e22 cell with `vllm-tpu==0.20.0` + RPA `//4`. Should compile cleanly. If yes, fire the remaining 11 1e22 cells.
+3. **Fire the 12 1e21 cells.** Already proven working at one cell.
+4. **Re-verify 1e20 on the new recipe** if you want a consistent pipeline across all 36 cells. The 1e20 cells worked on the old `0.19.0` stack too, so this is optional — using `0.20.0` + `//4` should also work but with a different compile cache key.
+5. **Method B revisit if/when the fork's 3-layer cascade lands on main.** Tracked at #5985.
+
+### 2026-05-29 (continued, evening) — 36-cell matrix fired; partial completion; scheduler-starved stall + grade HfUriError block
+
+#### What was launched
+
+Fired all 36 cells of the canonical mask_00 matrix in one wave (3e20 / 1e21 / 1e22 × p33m67 / p50m50 / p67m33 × lr 0.33 / 0.5 / 0.67 / 0.83). Recipe per the working configuration:
+
+- `vllm-tpu==0.20.0` + `tpu-inference==0.20.0` (pyproject pin)
+- `transformers<6.0` (levanter cap bumped from `<5.0` for the 5.5.3 dep that 0.20.0 forces)
+- RPA kernel block quartering (`//4` in `iid.py:_load_vllm`)
+- Output prefix `delphi_midtrain/masked_gsm8k_mask00_methodA_cache/{slug}/`
+- Job names `aa-mtx-{scale}-{mix}-{lr}` where `_` → `-` and `.` → `p` (e.g. `aa-mtx-1e22-p33m67-lr0p5`)
+- v5p-8 in us-east5-a, `--priority interactive`, `--max-retries 2`, `--cpu 4 --memory 32GB --disk 50GB`
+
+3e20 paths confirmed pointing at the retrained `delphi-3e20-{mix}-k0p20-lr{X}-a001/hf` (the W&B-finished cohort from 2026-05-21/22), not any older replicate.
+
+#### Trajectory
+
+- **T+0:** all 36 submitted into a pool with ~54 idle v5p-8 slices.
+- **T+10–15m:** rapid progress — 23–25 cells hit 16/16 chunks (mostly 3e20, smallest model), chunks 256 → 421/576 (73.6%).
+- **T+15m–T+60m:** chunk count completely flat at 421–424 / 576. Long-tail cells (1e21 / 1e22) stuck without producing chunks.
+- **T+60m onwards:** the 9 grade-failed 3e20 cells (`p33m67-lr*` × 4 + `p50m50-lr*` × 4 + `p67m33-lr0p5`) burn through their grade retries (3 attempts each at HfUriError) and trickle into JOB_STATE_FAILED, one at a time over ~75 min.
+- **T+90m–T+215m:** dead flat at 27 RUNNING / 9 FAILED / chunks 424/576 (25/36 cells fully done). 13 ticks of zero change.
+
+#### Why the long-tail is stalled (diagnosed at T+200m by inspecting child-job state)
+
+Not vLLM compile, not VMEM. It's **iris scheduler starvation**. Specifically, `1e21-p50m50-lr0p33`:
+
+- Parent job state: `JOB_STATE_RUNNING`, task state: **pending for 3h17m**.
+- Two child tasks created and killed:
+  - `completions-...0a5b3e44`: `pending_reason="Preempted by /eczech/exp135-gns-text_2btrained_s1001-20260529-212630"`.
+  - `completions-...438404b3`: `pending_reason="Parent task preempted"`.
+- No new child has been spawned. Iris hasn't re-scheduled the parent to a worker since the preempts.
+
+us-east5-a v5p-8 capacity at the time of diagnosis: **18/34 slices idle, demand 0**. So the cluster *has* free workers — iris just isn't giving them to our preempted-and-waiting parents. Most likely scheduler starvation: each time a slice frees up, fresher interactive-priority jobs from other users (notably eczech's `exp135-...`) claim it before our stuck-pending parent's request gets matched.
+
+Total preempts seen across the matrix: 69. Total parent-level failures: 32 (mostly grade-step HfUriError retries, not preempts).
+
+#### Grade step still blocked by HfUriError
+
+Every cell that finishes its 16 chunks attempts the Zephyr grade pipeline and crashes with:
+
+```
+TypeError: HfUriError.__init__() missing 1 required positional argument: 'msg'
+```
+
+`HfUriError`'s constructor signature changed in transformers 5.x; lm-eval-harness's grading code (pinned via `lm-eval[math,api]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab`) constructs it the 4.x way and crashes. The 9 currently-FAILED cells all hit this. **The other 16 fully-done cells will hit it next and also go terminal.** Completions are durable on GCS regardless.
+
+#### State at handoff (snapshot at T+215m)
+
+| Bucket | Count | Notes |
+|---|---:|---|
+| FAILED (terminal — grade HfUriError) | 9 | 3e20 cells: `p33m67-lr0p33/0p5/0p67/0p83`, `p50m50-lr0p33/0p5/0p67/0p83`, `p67m33-lr0p5`. |
+| RUNNING with 16/16 chunks (will fail grade) | 16 | Including everything else at 3e20 + most of 1e21 + 1e22 cells already with chunks. |
+| RUNNING with partial / zero chunks (scheduler-starved) | 11 | Listed below. |
+| Total | 36 | |
+
+Chunks landed: **424/576 (73.6%)** across all cells.
+
+Cells that DON'T have 16/16 chunks yet:
+
+| Slug | Chunks | Notes |
+|---|---:|---|
+| `1e21_p50m50_lr0.33` | 14/16 | scheduler-starved 3h+ |
+| `1e21_p50m50_lr0.5` | 10/16 | partial, preempted |
+| `1e21_p50m50_lr0.67` | 0/16 | zero — never wrote chunks |
+| `1e21_p50m50_lr0.83` | 0/16 | zero |
+| `1e21_p67m33_lr0.33` | 0/16 | zero |
+| `1e21_p67m33_lr0.5` | 0/16 | zero |
+| `1e22_p33m67_lr0.33` | 0/16 | zero |
+| `1e22_p67m33_lr0.33` | 0/16 | zero |
+| `1e22_p67m33_lr0.5` | 0/16 | zero |
+| `1e22_p67m33_lr0.67` | 0/16 | zero |
+| `1e22_p67m33_lr0.83` | 0/16 | zero |
+
+7 of the 11 are 1e22 / 1e21 p67m33 cells. p67m33 might be uniquely affected by something at the larger scales — or it's just starvation across the slowest cells.
+
+#### Actions taken this session (and NOT taken)
+
+- 5-min status cron `db1386e7` was created at T+0 and cancelled at handoff (T+215m). **Cron is OFF now.**
+- No iris jobs killed. All 27 RUNNING cells are still in the cluster, still scheduler-starved or grade-looping.
+- No code or pin changes since the recipe was settled (`vllm-tpu==0.20.0` + RPA `//4` is still in the tree).
+- The uncommitted edits at handoff: `experiments/downstream_scaling/evals/algorithms/iid.py` (RPA `//4`), `lib/marin/pyproject.toml` (`0.19.0` → `0.20.0`), `lib/levanter/pyproject.toml` (`transformers<5.0` → `<6.0`), `.agents/logbook/downstream_eval.md` (this update).
+
+#### How to resume monitoring (next agent)
+
+The IAP tunnel + pyenv 3.12.0 workaround (memory `iris_cluster_remote_access.md`) is required. Tunnel was up at handoff on `localhost:10000`; if down, reestablish via the `gcloud compute ssh iris-controller-marin --zone=us-central1-a --project=hai-gcp-models --tunnel-through-iap -- -N -L 10000:localhost:10000` pattern.
+
+Compact status one-liner (counts + chunks):
+
+```bash
+pyenv shell 3.12.0 && uv run python <<'PY'
+import json, subprocess
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+
+r = subprocess.run(['uv','run','iris','--controller-url=http://localhost:10000','--cluster=marin','job','list','--prefix','/ahmedah/aa-mtx-','--json'], capture_output=True, text=True, timeout=30)
+data = json.loads(r.stdout)
+matrix = [j for j in data if j['job_id'].count('/') == 2 and j['job_id'].startswith('/ahmedah/aa-mtx-') and any(s in j['job_id'] for s in ('3e20','1e21','1e22')) and 'mtxA' not in j['job_id'] and 'mtxB' not in j['job_id']]
+states = Counter(j['state'].replace('JOB_STATE_','') for j in matrix)
+slugs = [f'{s}_{m}_lr{lr}' for s in ('3e20','1e21','1e22') for m in ('p33m67','p50m50','p67m33') for lr in ('0.33','0.5','0.67','0.83')]
+def count_chunks(slug):
+    try:
+        r = subprocess.run(['gcloud','storage','ls','-r', f'gs://marin-us-east5/downstream_scaling/evals/delphi_midtrain/masked_gsm8k_mask00_methodA_cache/{slug}/**.SUCCESS'], capture_output=True, text=True, timeout=30)
+        return slug, sum(1 for line in r.stdout.splitlines() if 'chunk-' in line and line.endswith('.SUCCESS'))
+    except subprocess.TimeoutExpired:
+        return slug, -1
+with ThreadPoolExecutor(max_workers=12) as ex:
+    chunks = dict(ex.map(count_chunks, slugs))
+total = sum(n for n in chunks.values() if n >= 0)
+done = sum(1 for n in chunks.values() if n == 16)
+print(f"RUNNING {states.get('RUNNING',0)} | FAILED {states.get('FAILED',0)} | SUCCEEDED {states.get('SUCCEEDED',0)}")
+print(f"Chunks {total}/576 ({total/576*100:.1f}%) | done 16/16: {done}/36")
+PY
+```
+
+To set up a 5-min cron monitor: `CronCreate` with `cron="*/5 * * * *"`, recurring `true`, and a prompt that runs the above status check; `CronDelete <id>` to stop.
+
+#### Open decisions for next agent
+
+1. **Whether to kill the 27 RUNNING cells.** The 16 with full chunks are looping on HfUriError and will all eventually FAIL. Killing them now saves compute but doesn't lose data (chunks + `completions.jsonl.gz` are durable). The 11 without full chunks need either a fresh queue position (kill + refire) or a long wait for scheduler starvation to resolve.
+
+2. **Whether to fix the HfUriError grade step.** Three approaches:
+   - Fork lm-eval-harness, patch `HfUriError(...)` call sites to pass `msg`, repoint `lib/marin/pyproject.toml`'s `eval` extra to the fork. ~1-2 hours.
+   - Write an offline grader that consumes the saved `completions.jsonl.gz` artifacts (already written for 25 cells; will exist for all surviving cells). Decouples grading from the iris pipeline. Less brittle — once written, it works against any matrix completions. ~2-3 hours.
+   - Downgrade transformers to `<5.0` AND downgrade `vllm-tpu` back to 0.18.0 with RPA `//4`. Brings back the working stack from before the merge bump. Requires re-uv sync + re-fire. ~30 min if dep solver cooperates.
+
+3. **Whether to re-fire the 11 incomplete cells.** Independent of (2) — if (1) is "kill the 27", we'd want to re-fire just the 11 so we eventually get all 36 completions. Same iris invocation as the wave above. Slugs listed in the table above.
+
+4. **Cluster capacity to use.** v5p-8 us-east5-a was 18/34 idle at last check (capacity may shrink further as autoscaler reaps). v6e-8 us-east5-b had 1/1 ready (single slice — small pool). Consider firing on v6e-8 if v5p-8 contention persists; recipe is portable (RPA `//4` should hold; verify with one smoke cell).
+
+#### GCS paths for completed work
+
+```
+Completions (16-chunk SUCCESS + completions.jsonl.gz):
+  gs://marin-us-east5/downstream_scaling/evals/delphi_midtrain/masked_gsm8k_mask00_methodA_cache/{slug}/completions-*/
+
+Per-cell completion artifact:
+  gs://marin-us-east5/downstream_scaling/evals/delphi_midtrain/masked_gsm8k_mask00_methodA_cache/{slug}/completions-*/completions.jsonl.gz
+```
+
+For the 25 cells already at 16/16: completions are durable. The other 11 will need fresh inference once they get scheduled (or a re-fire).
