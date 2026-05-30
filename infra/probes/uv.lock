@@ -727,7 +727,7 @@ wheels = [
 
 [[package]]
 name = "marin-finelog"
-version = "0.99.dev20260521"
+version = "0.99.dev20260529"
 source = { registry = "https://github.com/marin-community/marin/releases/expanded_assets/marin-finelog-latest" }
 dependencies = [
     { name = "click" },
@@ -745,7 +745,7 @@ dependencies = [
     { name = "zstandard" },
 ]
 wheels = [
-    { url = "https://github.com/marin-community/marin/releases/download/marin-finelog-latest/marin_finelog-0.99.dev20260521-py3-none-any.whl" },
+    { url = "https://github.com/marin-community/marin/releases/download/marin-finelog-latest/marin_finelog-0.99.dev20260529-py3-none-any.whl" },
 ]
 
 [[package]]
@@ -775,7 +775,7 @@ dev = [{ name = "pytest", specifier = ">=8.4" }]
 
 [[package]]
 name = "marin-iris"
-version = "0.99.dev20260521"
+version = "0.99.dev20260529"
 source = { registry = "https://github.com/marin-community/marin/releases/expanded_assets/marin-iris-latest" }
 dependencies = [
     { name = "click" },
@@ -802,20 +802,21 @@ dependencies = [
     { name = "zstandard" },
 ]
 wheels = [
-    { url = "https://github.com/marin-community/marin/releases/download/marin-iris-latest/marin_iris-0.99.dev20260521-py3-none-any.whl" },
+    { url = "https://github.com/marin-community/marin/releases/download/marin-iris-latest/marin_iris-0.99.dev20260529-py3-none-any.whl" },
 ]
 
 [[package]]
 name = "marin-rigging"
-version = "0.99.dev20260521"
+version = "0.99.dev20260529"
 source = { registry = "https://github.com/marin-community/marin/releases/expanded_assets/marin-rigging-latest" }
 dependencies = [
+    { name = "connect-python" },
     { name = "fsspec" },
     { name = "gcsfs" },
     { name = "s3fs" },
 ]
 wheels = [
-    { url = "https://github.com/marin-community/marin/releases/download/marin-rigging-latest/marin_rigging-0.99.dev20260521-py3-none-any.whl" },
+    { url = "https://github.com/marin-community/marin/releases/download/marin-rigging-latest/marin_rigging-0.99.dev20260529-py3-none-any.whl" },
 ]
 
 [[package]]
