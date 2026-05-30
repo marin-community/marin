@@ -59,7 +59,10 @@ class ArtifactEntry(pydantic.BaseModel):
     """Location of the artifact bytes — the `base_path` argument to `Artifact.from_path`.
        MUST be absolute: either a URI with scheme (`gs://...`, `file://...`) or an absolute
        local path (`/...`). Relative paths are rejected by `register` to avoid having the
-       same registered entry resolve differently in different processes."""
+       same registered entry resolve differently in different processes. A local-filesystem
+       uri (bare `/...` path or `file://`) is also rejected by `register` when the registry
+       root is remote (e.g. `gs://`) — it would be an unresolvable pointer for other readers
+       of the shared registry."""
 ```
 
 ## `ArtifactRegistry` protocol
@@ -75,8 +78,9 @@ class ArtifactRegistry(typing.Protocol):
 
         Raises `ArtifactAlreadyExistsError` if an entry for `(id, version)` already
         exists; the existing entry is not modified. Raises `InvalidArtifactIdError`
-        on a malformed id, version, or non-absolute uri. Returns the newly-written
-        entry on success.
+        on a malformed id, version, non-absolute uri, or a local-filesystem uri
+        registered in a remote (shared) registry. Returns the newly-written entry on
+        success.
 
         Implementations MUST write to storage before returning, and MUST do so atomically
         — the manifest file is either fully present and valid, or absent. On local

@@ -145,9 +145,24 @@ class ArtifactEntry(pydantic.BaseModel):
     """
 
 
+_SCHEME_PATTERN: typing.Final = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*)://")
+
+
+def _uri_scheme(uri: str) -> str | None:
+    """Return the lowercased URL scheme of `uri` (e.g. `gs`, `s3`, `file`), or `None` for a bare path."""
+    match = _SCHEME_PATTERN.match(uri)
+    return match.group(1).lower() if match else None
+
+
 def _is_absolute_uri(uri: str) -> bool:
     """True if `uri` has a URL scheme (`gs://`, `file://`, ...) or is an absolute local path."""
-    return uri.startswith("/") or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", uri) is not None
+    return uri.startswith("/") or _uri_scheme(uri) is not None
+
+
+def _is_local_uri(uri: str) -> bool:
+    """True if `uri` resolves on the local filesystem — a bare path or a `file://` URI."""
+    scheme = _uri_scheme(uri)
+    return scheme is None or scheme == "file"
 
 
 @typing.runtime_checkable
@@ -158,8 +173,9 @@ class ArtifactRegistry(typing.Protocol):
         """Record `(id, version) → uri`.
 
         Raises `ArtifactAlreadyExistsError` if an entry for `(id, version)` already exists (the
-        existing entry is not modified), `InvalidArtifactIdError` on a malformed id, version, or
-        non-absolute uri. Returns the newly-written entry on success.
+        existing entry is not modified), `InvalidArtifactIdError` on a malformed id, version,
+        non-absolute uri, or a local-filesystem uri registered in a remote (shared) registry.
+        Returns the newly-written entry on success.
         """
         ...
 
@@ -205,6 +221,14 @@ class FilesystemArtifactRegistry(ArtifactRegistry):
     def register(self, id: str, version: str, uri: str) -> ArtifactEntry:
         if not _is_absolute_uri(uri):
             raise InvalidArtifactIdError(f"uri must be absolute (URI with scheme or '/'-rooted path), got {uri!r}")
+        # A local-filesystem uri recorded in a remote (shared) registry is a broken pointer for every
+        # other reader, so refuse it. The reverse — a remote uri in a local registry — is a valid,
+        # resolvable pointer and is allowed.
+        if not _is_local_uri(self._root) and _is_local_uri(uri):
+            raise InvalidArtifactIdError(
+                f"cannot register local-filesystem uri {uri!r} in the remote registry at {self._root!r}: "
+                f"a local path is not resolvable by other readers of a shared registry"
+            )
         path = self.entry_path(id, version)
         entry = ArtifactEntry(id=id, version=version, uri=uri)
 
