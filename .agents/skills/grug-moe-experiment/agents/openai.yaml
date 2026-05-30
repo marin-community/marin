@@ -1,0 +1,4 @@
+interface:
+  display_name: "Grug MoE Experiment"
+  short_description: "Run and evaluate Grug MoE scaling experiments."
+  default_prompt: "Run a Grug MoE experiment using Marin infrastructure."
