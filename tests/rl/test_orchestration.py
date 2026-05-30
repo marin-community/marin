@@ -424,6 +424,76 @@ def test_run_rl_coordinator_assigns_stable_rollout_wandb_names(monkeypatch):
     assert rollout1_config.tracker_config.name == "rl-test-rollout-1"
 
 
+def test_run_rl_coordinator_rejects_zero_rollout_workers_without_noise_rollout(monkeypatch):
+    """num_rollout_workers=0 is only legal when noise_rollout mode is enabled."""
+    client = _FakeClient()
+    hosted_runtime = _HostedRuntime(runtime=SimpleNamespace(), hosted_actors=[])
+    config = SimpleNamespace(
+        run_id="rl-test",
+        resolved_instance_id="rl-test",
+        pip_dependency_groups=["math"],
+        run_config=RunConfig(
+            train_tpu_type="v6e-16",
+            inference_tpu_type="v6e-16",
+            num_rollout_workers=0,
+            regions=["us-east1"],
+            zone="us-east1-d",
+        ),
+    )
+
+    monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
+    monkeypatch.setattr("marin.rl.orchestration.RLJob", _FakeRLJob)
+    monkeypatch.setattr(
+        "marin.rl.orchestration._create_runtime_handles",
+        lambda _client, _config: hosted_runtime,
+    )
+
+    with pytest.raises(ValueError, match="noise-rollout mode"):
+        _run_rl_coordinator(config)
+
+
+def test_run_rl_coordinator_skips_rollout_jobs_in_noise_mode(monkeypatch):
+    """In noise-rollout mode, only the trainer job is submitted."""
+    client = _FakeClient()
+    hosted_runtime = _HostedRuntime(runtime=SimpleNamespace(), hosted_actors=[])
+    config = SimpleNamespace(
+        run_id="rl-test",
+        resolved_instance_id="rl-test",
+        pip_dependency_groups=["math"],
+        run_config=RunConfig(
+            train_tpu_type="v6e-16",
+            inference_tpu_type="v6e-16",
+            num_rollout_workers=0,
+            regions=["us-east1"],
+            zone="us-east1-d",
+        ),
+    )
+
+    # Train config that has noise_rollout set; orchestration must accept this
+    # and skip rollout-worker submission.
+    class _NoiseRLJob(_FakeRLJob):
+        def to_worker_configs(self):
+            train_config = _FakeWorkerConfig(seed=7, run_id="train")
+            # Stamp noise_rollout via object.__setattr__ because the fake is frozen.
+            object.__setattr__(train_config, "noise_rollout", SimpleNamespace(seed=42))
+            rollout_config = _FakeWorkerConfig(seed=11, run_id="rollout")
+            return train_config, rollout_config
+
+    monkeypatch.setattr("marin.rl.orchestration.current_client", lambda: client)
+    monkeypatch.setattr("marin.rl.orchestration.RLJob", _NoiseRLJob)
+    monkeypatch.setattr(
+        "marin.rl.orchestration._create_runtime_handles",
+        lambda _client, _config: hosted_runtime,
+    )
+    monkeypatch.setattr("marin.rl.orchestration.wait_all", lambda _jobs, raise_on_failure: None)
+
+    _run_rl_coordinator(config)
+
+    # Exactly one job submitted: the trainer.
+    assert len(client.submissions) == 1
+    assert client.submissions[0].name == "rl-rl-test-train"
+
+
 def test_train_worker_entry_does_not_mark_run_state_failed_on_attempt_crash(monkeypatch):
     runtime = SimpleNamespace(run_state=_FakeRunStateHandle())
 

@@ -28,6 +28,7 @@ from marin.rl.environments.inference_ctx import (
     LevanterInferenceContextConfig,
     vLLMInferenceContextConfig,
 )
+from marin.rl.noise_rollout_loader import NoiseRolloutConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
@@ -164,6 +165,12 @@ class RLJobConfig:
 
     pip_dependency_groups: list[str] = field(default_factory=list)
     """Extra pip dependency groups to include for all workers."""
+
+    noise_rollout: NoiseRolloutConfig | None = None
+    """If set, the train worker runs with synthetic random-tensor batches and
+    no rollout workers are launched. Used to isolate trainer + weight-export
+    failures from the rollout pipeline. Must be combined with
+    ``run_config.num_rollout_workers=0``."""
 
     @property
     def resolved_instance_id(self) -> str:
@@ -309,6 +316,7 @@ class RLJob:
             run_id=self.config.run_id,
             curriculum_config=self.config.curriculum,
             seed=self.config.seed,
+            noise_rollout=self.config.noise_rollout,
         )
 
         # Create rollout worker config

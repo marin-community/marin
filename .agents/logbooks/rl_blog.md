@@ -3877,3 +3877,266 @@ Not landed on `origin/rl_blog` as of `1f630a15d`. The live 500-step run uses
 `base=42` only, so it is not affected. Should land **before** any K-seed
 ablation launch; otherwise the resulting "seed variance" numbers will be
 correlated and not honestly defensible.
+
+## CLAUDE 2026-05-28 — Seed-0 K-seed ablation: three infra failures, two new rules, one working run
+
+After the `fold_in` patch landed, the first K-seed ablation launch (3 jobs:
+seed=0/1/2 at TS `20260527-175909`) all died inside iris. The session walked
+through three distinct failure modes back-to-back, fixed each, and finally got
+seed=0 training in steady state. Two new feedback memories were saved and a
+new agent reference file (`~/code/marin/AGENT_IRIS.md`) was written.
+
+### F1 — Workspace bundle 404 (all 3 ablation jobs)
+
+`iris` deduplicated three identical workspace bundle uploads to one content-
+addressed bundle `2dd4b232...`. Jobs queued ~7 hours waiting for v5p capacity.
+When workers finally got scheduled, the bundle had been GC'd from the
+controller side; every retry hit the same 404:
+
+```
+RuntimeError: Failed to fetch 2dd4b232...: HTTP Error 404: Not Found
+FileNotFoundError: Bundle not found: 2dd4b232...
+```
+
+`failure_count=1, preemption_count=0` correctly classified it as a real
+failure, not infra preemption — which is why iris stopped retrying after the
+failure cap. The "Parent task preempted" reason on child tasks was a cascade
+label, not a real GCP preemption.
+
+**Lesson:** bundle TTL on the iris controller is < 7h. For high-queue-wait
+launches, expect this to recur. Fix is to re-launch (re-uploads bundle).
+
+### F2 — Worktree missing `.marin.yaml` (gap that crashed seed=0)
+
+Re-launched seed=0 fresh from `us-east5-a` (capacity-richer zone, 55 v5p-32
+workers vs 4 in us-central1-a). New failure within ~4 minutes:
+
+```
+wandb.errors.errors.UsageError: No API key configured. Use `wandb login` to log in.
+```
+
+Root cause: `iris job run` reads `Path(".marin.yaml")` relative to CWD to
+inject `WANDB_API_KEY` and `HF_TOKEN` into the job env
+(`lib/iris/src/iris/cli/job.py:111`). The canonical `.marin.yaml` lives at
+`~/code/marin/.marin.yaml`; **worktrees under `.claude/worktrees/<branch>/`
+do NOT inherit it** (it's gitignored, line 230). Launching from the worktree
+silently submitted a job with no wandb env → both train and rollout workers
+crashed on `wandb.init()`.
+
+**Fix:** symlink the canonical file into the worktree before launching.
+
+```bash
+ln -sf ~/code/marin/.marin.yaml <worktree>/.marin.yaml
+```
+
+`.marin.yaml` is gitignored (`.gitignore` line 230) so the symlink won't be
+committed. New memory `feedback_worktree_marin_yaml_symlink`.
+
+The previous 3 ablation jobs would have hit this same wandb error if F1
+hadn't fired first.
+
+### F3 — Stale Flight server addresses after train preempt (real RL bug)
+
+Re-launched seed=0 again, this time with the symlink in place. Got to step 1
+training successfully. Then train got preempted. The NEW train instance
+came up on a different worker, but the rollout worker kept polling stale
+Flight server addresses:
+
+```
+pyarrow._flight.FlightUnavailableError: ...
+ipv4:10.202.0.196:22247: Failed to connect to remote host: Connection refused
+```
+
+Rollout's `_fetch_param` at `arrow_flight.py:648` polled the dead train's
+Flight ports forever; train's new Flight server addresses never got
+re-published to surviving rollout workers. `failure_count` stayed 0 because
+rollout catches and retries the `FlightUnavailableError` — so iris thought
+the job was healthy. **It was deadlocked.**
+
+This bug is preempt-specific. Rollout preempts seem to reconnect cleanly
+(observed later in the working run); only train preempts trigger the stale-
+address pattern. Fix for the live job is to kill + relaunch fresh.
+
+Documented in `~/code/marin/AGENT_IRIS.md` under the failure-modes section
+for future agents.
+
+### The working seed-0 run (TS `20260528-224616`)
+
+Third launch came up clean: train + rollout-0 both `p=0` on stable v5p-8
+workers in us-east5-a, fresh Flight addresses agreed. Bootstrap ~10 min.
+
+Training progression observed:
+
+| step | iteration | loss | reward_mean | notes |
+|------|-----------|------|-------------|-------|
+| 1 | 79.4s | — | — | First step, includes JIT compile |
+| 2 | 135.96s | -0.0157 | 0.362 | |
+| 3 | 64.29s | -0.0140 | 0.375 | Buffer warmed up |
+| 4 | 99.37s | -0.0167 | 0.396 | Checkpoint saved |
+| 5 | 120.30s | -0.0235 | 0.414 | |
+| 6 | 131.38s | -0.0114 | 0.438 | rollout-0 preempted ~24min idle |
+| 7 | 64.37s | -0.0144 | 0.458 | rollout_wait=0s, buffer full |
+
+Steady-state throughput is **rollout-bound**: vLLM generates 500 prompts ×
+max_tokens=1024 on v5p-8 in ~574s. Train compute is ~60s/step. So one rollout
+batch = one step ≈ ~10 min/step. 500 steps ≈ ~83 hours (~3.5 days).
+
+After each preempt cycle, vLLM cold-start eats ~14 min. Two preempts so far
+(one train at p=1, one rollout at p=1); both recovered. The current run is
+healthy and progressing.
+
+### New rule learned: goal-driven fix-and-refire
+
+User said "always do this!" after I paused for permission to relaunch
+seed=0 after both F1 and F2. When the user has set an explicit `/goal`
+(here: "run the seed 0"), the fix-and-refire loop on infra blockers is
+standing authorization — don't pause between cycles. New memory
+`feedback_goal_driven_fix_and_refire`. This is distinct from
+`feedback_no_relaunch_without_greenlight`, which governs the case where the
+user **killed** a batch (deliberate stop).
+
+### Files written this session
+
+- `~/code/marin/AGENT_IRIS.md` — agent reference for the iris cluster: auth
+  pitfalls (ADC vs gcloud), daily commands, job-state machine, failure
+  modes (bundle 404, missing `.marin.yaml`, stale Flight addresses,
+  HBM exhaustion), capacity queries, tunnel setup
+- `.claude/worktrees/rl_blog/.marin.yaml` — symlink to main checkout
+- `scratch/iris_status_check.py`, `scratch/iris_monitor_seed0.sh` — adaptive
+  iris-job poller used by Monitor tool; emits one summary line per poll,
+  marks `*TERMINAL*` so the loop exits on terminal state
+- Two memory files: `feedback_goal_driven_fix_and_refire`,
+  `feedback_worktree_marin_yaml_symlink`
+
+## CLAUDE 2026-05-29 — Multi-host RL on v6e-16 (`marin#4287`): noise-trainer cure
+
+Background: by mid-day the v5p pool in us-east5-a was 100% saturated (25/25 v5p workers busy, 0 idle). Both ablation runs (`seed0-e5-20260528-224616` and `seed1-e5-20260529-035501`) were burning wall-clock on preempt-recovery and 1-hour rollout-wait `TimeoutError`s. Meanwhile `tpu_v6e-preemptible_16-us-east1-d` had 3 idle slices but multi-host RL was known-broken per [issue #4287](https://github.com/marin-community/marin/issues/4287).
+
+### The investigation
+
+Spawned a planning subagent in a fresh worktree at `.claude/worktrees/multihost_rl/` checked out to branch `multi_host_rl` (base `origin/iris_rl` @ `59601ab7660013797b6ae7f095d5b9c7e9615151`, HEAD `6bd40453e`). Brief constrained the agent to read `synopsis.md`/issue comments and propose a dummy-data approach that isolates the trainer + weight-export from rollout/curriculum/vLLM/grading. Output: `multihost_rl/synopsis.md` (434 lines), diagnosis:
+
+- `_export_weights_tree_jit` (`arrow_flight.py:446`): JIT-wrapped; distributed-safe; sitting on an HBM cliff under repeated v6e-16 serves (bf16 cast transients of 32 MiB/112 MiB/1002 MiB leaves).
+- `_export_weights_sequential_host_flatten` (`arrow_flight.py:480`): low-peak path that calls `hsd.to_state_dict(model)` **eagerly outside JIT** → Haliax `_unstack_state_dict` enumerates a scan-stacked Llama layer → asserts `is_fully_replicated or is_fully_addressable` and fails on a multi-host concrete sharded global.
+
+Plan: replace the rollout pipeline with a `NoiseRolloutLoader` yielding sharded `TrainingBatch`-shaped random tensors. Trainer + optimizer + loss + export run at full production scale; replay buffer, curriculum, rollout reader, Flight client side, vLLM, math grading all skipped. 9 PRs ordered so single-host CPU smoke gates everything before v6e-16.
+
+### The execution
+
+Spawned an implementation subagent in the same worktree with permission to launch v6e (not v5p). It implemented PRs 1–3 + 5 + 6 as one commit `51e9d43df`, ran PR-7 (no v6e-8 capacity in window so skipped), then **PR 8 (v6e-16) succeeded on the first try**:
+
+- iris job `/ahmedah/multihost-rl-noise-v6e16-20260529-074549` → `JOB_STATE_SUCCEEDED`, 4 task instances (one per host) each `exit=0`, dur ≈ 600 s.
+- W&B `marin_iris_rl_debug/multihost-rl-noise-v6e16-20260529-074549-train`: `global_step=49` (50 steps total), `_runtime=555.9 s`, `backend=tpu`. Real Llama-scale gradient norms logged across `transformer.layers.0…N`.
+- 50 train steps × 1 weight transfer/step + 1 bootstrap = 51 successful `TREE_JIT` serves, each ~5.9 s, 291 params × 15.3 GiB sharded state. **No allocator misses, no exceptions.**
+
+This is synopsis §6 **outcome A**: the multi-host bug is solely the eager `sequential_host_flatten` path. `TREE_JIT` survives v6e-16 under repeated serves of a real-sized model. The cure is to delete `sequential_host_flatten` (or guard it `single-host only`).
+
+### Honest scope of validation
+
+What was proved:
+- Multi-host JAX init + the `barrier_sync` patterns at `arrow_flight.py:606/695` cohere across 4 processes
+- Llama-3.1-scale model fits HBM under repeated `TREE_JIT` serves on v6e-16
+- The 2-process CPU regression test (`tests/rl/test_noise_trainer_multiprocess.py`) reproduces the eager-state-dict bug locally with `xfail-strict` — exactly the regression test #4287 was missing
+
+What this does NOT prove:
+- No rollout side ran. vLLM, math grading, replay buffer, Flight client side, on-policy invariants are all bypassed. Synopsis explicitly punts on these.
+- 555 s ≠ stable. Production RL is hours; HBM creep over longer runs is still untested.
+- N=1. One run is one data point.
+- The run wasn't preempted in its window — recovery path is untested.
+- Loss is meaningless on noise; computational path is exercised but learning isn't.
+
+The next experiment that closes the broader question is a real-rollout multi-host trial: v6e-16 trainer + v6e-8 rollout, no noise loader, for at least a few hundred steps.
+
+### Applying the changes to rl_blog
+
+Per user direction, ported `51e9d43df` onto `rl_blog` (the live branch). Strategy:
+
+- The 5 new files copied via `git checkout 51e9d43df -- <file>`: `experiments/exp_iris_rl_noise_trainer.py`, `lib/marin/src/marin/rl/batch_prep_timing.py`, `lib/marin/src/marin/rl/noise_rollout_loader.py`, `tests/rl/test_noise_rollout_loader.py`, `tests/rl/test_noise_trainer_multiprocess.py`.
+- iris `.proto` rename (`logging.proto` → `iris_logging.proto` + `cluster.proto`/`query.proto` namespace fixes) **skipped** — rl_blog already has `iris_logging.proto` in place from a prior commit; the multi_host_rl branch needed those fixes only because it was based on an older iris_rl tree.
+- 4 modified files diffed `6bd40453e..51e9d43df` then `git apply --3way` onto rl_blog. Three applied cleanly (`orchestration.py`, `rl_job.py`, `tests/rl/test_orchestration.py`). `train_worker.py` had 3 conflict regions, resolved by hand:
+  - Inline `BatchPrepTiming` dataclass deleted (now imported from `batch_prep_timing.py` to break the train_worker↔noise_loader cycle); rl_blog's `_initial_rollout_state` kept.
+  - Outer with-block changed to combined `Trainer + replay_loader_ctx` from theirs; rl_blog's resume-aware `weight_step=startup_rollout_state.weight_step` arg on `_wait_for_initial_rollouts` preserved; inner `with self.replay_loader:` removed.
+  - The `_wait_for_initial_rollouts` call wrapped in `if self.config.noise_rollout is None:` from theirs.
+
+Verification on rl_blog after the merge:
+- All affected files parse cleanly (`ast.parse`).
+- `marin.rl.noise_rollout_loader` + `marin.rl.batch_prep_timing` import successfully.
+- `pytest tests/rl/test_noise_rollout_loader.py tests/rl/test_orchestration.py tests/rl/test_rl_job.py tests/rl/test_rollout_schedule.py` → 30 passed, 0 failed.
+
+Changes are staged but **not committed** on rl_blog. The 2-process multiprocess regression test is included but not re-run (it needs `jax.distributed.initialize` and a few minutes; rerun before push).
+
+### Follow-ups
+1. Push the multi_host_rl branch's commit `51e9d43df` to `origin` for review/CI
+2. Decide whether to delete `_export_weights_sequential_host_flatten` or guard it `single_host_only`
+3. Run the real-rollout v6e-16 + v6e-8 pair trial — the actual answer to "is multihost RL working end-to-end"
+4. Land the 2-process regression test into `multi_host_rl` so #4287 has a CI guard for the eager-state-dict bug
+
+## CLAUDE 2026-05-30 — Live RL run handoff: seed 0/1/2 status + multihost arrow_flight port
+
+Pausing the active monitoring loop to hand off context. **Three live iris jobs and four live Monitor tasks remain running**; the next agent should pick them up.
+
+### Live jobs (snapshot at hand-off)
+
+| seed | iris job_id | wandb run-name | latest step | TPU | state |
+|---|---|---|---|---|---|
+| 0 | `/ahmedah/iris-rl-blog-rlooIS-500-1s-seed0-e5-20260529-191923-resume` | `llama-3.1-8bi-math500-rlooIS-500-1s-seed0-e5-20260528-224616` | **~59** | v5p-8 us-east5-a | RUNNING, f=0, exec p=1, rollout p=1 |
+| 1 | `/ahmedah/iris-rl-blog-rlooIS-500-1s-seed1-e5-20260529-191930-resume` | `llama-3.1-8bi-math500-rlooIS-500-1s-seed1-e5-20260529-035501` | **~40** | v5p-8 us-east5-a | RUNNING, f=0, train p=1, exec p=1 |
+| 2 | `/ahmedah/iris-rl-blog-rlooIS-500-1s-seed2-v6e-20260529-213206-e5b` | `llama-3.1-8bi-math500-rlooIS-500-1s-seed2-v6e-20260529-213206-e5b` | — (queued) | v6e-16 + v6e-8 us-east5-b | TRAIN tasks all PENDING capacity, ROLLOUT RUNNING |
+
+Seed 0/1 are RESUMED runs — both use the **original `--run-name`** so they continue from the GCS checkpoint and W&B run rather than starting fresh. Important: do NOT relaunch them with a fresh timestamped `--run-name` if they need restart — that loses all progress. See `feedback_marin_rl_relaunch_resume.md`.
+
+### Live Monitor tasks
+
+| task_id | what | cadence |
+|---|---|---|
+| `bdzgdgip9` | seed 0 status | every 3 min |
+| `bo6q24w5t` | seed 1 status | every 2 min for first 30 min, then 30 min |
+| `bnbp3l6lq` | seed 2 status | every 2 min for first 30 min, then 30 min |
+| `bc0ii9xfh` | **10-min status digest** | every 10 min — emits one line summarising all 3 jobs + capacity, marks `STOP` if any target scale group has 0 workers |
+
+Each digest event was being relayed to the user via `PushNotification` (per their standing instruction: "give me alerts every 10 min until all jobs finish training"). The next agent should keep that contract — call `PushNotification` for each digest event, stay quiet on routine per-job ticks. **Push only when the digest line has meaningful change or a STOP flag.** Don't push on routine 3-min "same" ticks from the per-job monitors.
+
+The status digest script is at `scratch/status_digest.py`; the loop at `scratch/status_digest_loop.sh`. Per-seed monitor scripts are `scratch/iris_monitor_seed{0,1,2}.sh`. The active job id for each seed is recorded in `scratch/seed{0,1,2}_current_job.txt` (the digest reads these).
+
+### The big code change this session: arrow_flight.py multi-host port
+
+Seed 2 (v6e-16 multi-host trainer + v6e-8 rollout) hit `JaxRuntimeError: DEADLINE_EXCEEDED: Barrier timed out. Id: levanter_barrier_sync_3::0` during the bootstrap `serve_weights(state.step, state.model)` call. Root cause: `lib/marin/src/marin/rl/weight_transfer/arrow_flight.py` on `rl_blog` had the **pre-multi-host-fix** code — `if jax.process_index() == 0: ... copy_and_flatten(model) ... jax.device_get(flat_dict) ...` gated the heavy work to process 0 only, but those calls trigger `multihost_utils.process_allgather` and other collectives that need ALL hosts to participate. Hosts 1–3 jumped to the closing `barrier_sync()` and waited; host 0 stalled inside the jit. After 200 s (`barrier_sync` default timeout in `levanter/utils/jax_utils.py:163`) all hosts timed out → JAX coordination service called `SetError` → `Fatal Python error: Aborted` (the SIGSEGV we saw on host idx=1).
+
+The **fix already existed on `multi_host_rl`**: the new `_export_weights_tree_jit` and `_export_weights_sequential_host_flatten` functions, with a strategy dispatch in `serve_weights`. The noise trainer's 50-step v6e-16 success ran on the fixed code. My earlier merge of commit `51e9d43df` brought only the noise-trainer additions; it missed the prerequisite arrow_flight.py overhaul which landed in an earlier `iris_rl` commit.
+
+Ported 5 files from `multi_host_rl` HEAD (`51e9d43df`) onto `rl_blog`:
+- `lib/marin/src/marin/rl/weight_transfer/arrow_flight.py` (897 lines, was 553 — adds `_export_weights_tree_jit`, removes `process_index() == 0` guard)
+- `lib/marin/src/marin/rl/weight_transfer/base.py` (adds `ArrowFlightExportStrategy` enum + `export_strategy: ArrowFlightExportStrategy = TREE_JIT` field on `WeightTransferConfig`; also `WeightTransferMode.JAX_TRANSFER_SERVER` mode)
+- `lib/marin/src/marin/rl/weight_transfer/checkpoint.py` (small import-order)
+- `lib/marin/src/marin/rl/weight_transfer/__init__.py` (re-exports + JAX backend dispatch)
+- `lib/marin/src/marin/rl/weight_transfer/jax.py` (new — for JAX transfer backend, not used by us)
+
+Verification: ast.parse green on all 5; imports load; `WeightTransferConfig().export_strategy == ArrowFlightExportStrategy.TREE_JIT`; **37 pytests pass**; pre-commit + ruff + pyrefly green. **Staged, not committed.**
+
+Seed 0 and seed 1 keep using the OLD arrow_flight.py because iris locks the workspace bundle at job-submit time (their submit predated this port). They're on single-host v5p-8 so the `process_index() == 0` guard is a degenerate no-op for them. **Don't kill them to pick up the new code** — the port matters for v6e multi-host only.
+
+Seed 2 was killed and resubmitted at `213206-e5b` AFTER the port, so when it eventually gets a v6e-16 slice it will execute the multi-host-correct path. The bug fix is unverified end-to-end on real-rollout v6e-16 — only the noise trainer has proved that path so far. Once seed 2 allocates and bootstraps cleanly past `serve_weights`, that confirms the merged port works under real RL workload.
+
+### Capacity situation at hand-off
+
+| scale_group | total | busy | note |
+|---|---|---|---|
+| v5p-8 us-east5-a | ~18 | ~18 | volatile through the day (started 5, peaked at 118, fluctuated down to 15) |
+| v5p-8 us-central1-a | small | mixed | not in use by our runs |
+| v5p-32 us-east5-a | 32 | 32 | not requested by us |
+| v6e-16 us-east5-b | **8** (oscillating to 24) | **all busy** for ~3 hours | this is what seed 2 is waiting on |
+| v6e-8 us-east5-b | 1–4 | all busy | seed 2's rollout slot was already assigned |
+| v6e-16 us-east1-d | 0 | — | autoscaled to zero earlier today; do NOT resubmit there |
+
+The cluster autoscaler **moves v6e-16 between zones** over hours. On 2026-05-29 morning it was in us-east1-d (3 idle slices); by afternoon it had migrated to us-east5-b. Same multi_host_rl branch capacity that the noise trainer used at 14:49 UTC is now elsewhere.
+
+### Two earlier launches were wasted from a relaunch mistake
+
+Mid-session, after the original seed 0 (`20260528-224616`, step 41) and seed 1 (`20260529-035501`, step 19) had both terminal-failed (rollout f=4 exhaustion), I relaunched them with **fresh timestamped `--run-name`s** — which means brand-new GCS dirs and W&B runs, starting from step 0 against the base Llama checkpoint. User noticed within ~5 steps. I killed those and re-relaunched with the **original `--run-name`** (new iris `--job-name` with `-resume` suffix), which triggered `Trainer recovered state.step=42` for seed 0 and `state.step=20` for seed 1. Both have been continuing from there since. Memory `feedback_marin_rl_relaunch_resume.md` is written; future agent must respect it.
+
+### Open follow-ups for the next agent
+1. **Hand the seed-2 v6e-16 outcome back to issue #4287** — once seed 2 allocates a v6e-16 slice and clears the bootstrap weight serve, that's the closing experiment for the multi-host RL question. If it stalls or hits a different bug, that bug is novel and needs its own writeup.
+2. **Push commit on the weight_transfer port** — the changes are staged on `rl_blog` but not committed. Once the seed 2 v6e-16 run validates the port end-to-end, this should be a discrete commit ("[rl] Port multi-host-correct arrow_flight serve_weights from multi_host_rl").
+3. **Possibly relaunch seed 2 in a different zone** — if v6e-16 e5b stays 100% busy with no head room for >12 more hours, the run won't make progress. Consider us-east5-b alternatives if any come online, or wait. User explicitly instructed "if there's clearly no compute in one region STOP send me an alert and i'll tell you to move or not" — don't autonomously rezone seed 2.
+4. **Watch for log endpoint glitches** — twice today the iris log API returned 0 lines for active jobs; the W&B step summary lagged similarly. Don't infer "stuck" just from missing logs — check `job summary` + `failure_count` first.
+5. **Both seed 0/1 are at f=0 fresh-resume** — they have full retry budget (max_retries_failure=3) again. They handle preempts inside iris without needing intervention.

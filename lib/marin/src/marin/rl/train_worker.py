@@ -40,6 +40,8 @@ from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.runtime import RLRuntimeHandles
 from marin.rl.weight_transfer import WeightTransferConfig
 
+from .batch_prep_timing import BatchPrepTiming
+from .noise_rollout_loader import NoiseRolloutConfig, NoiseRolloutLoader, NoopReplayBuffer
 from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader, RolloutWithCount
 from .rl_losses import RLLossModule
 from .rollout_storage import RolloutStorageConfig
@@ -99,19 +101,6 @@ def _initial_rollout_state(train_step: int) -> InitialRolloutState:
     return InitialRolloutState(weight_step=train_step, published_train_step=train_step)
 
 
-@dataclass(frozen=True)
-class BatchPrepTiming:
-    """Timing breakdown for preparing one trainer batch."""
-
-    fetch_time: float = 0.0
-    batch_time: float = 0.0
-    shard_time: float = 0.0
-
-    @property
-    def total_time(self) -> float:
-        return self.fetch_time + self.batch_time + self.shard_time
-
-
 def _training_step_timing_metrics(step_duration: float, batch_prep_timing: BatchPrepTiming) -> dict[str, float]:
     """Return RL trainer timing metrics with non-overlapping phase semantics.
 
@@ -155,6 +144,12 @@ class TrainWorkerConfig:
 
     seed: int = 0
     """Random seed for replay buffer sampling and model construction."""
+
+    noise_rollout: NoiseRolloutConfig | None = None
+    """If set, replace the rollout pipeline (replay buffer + streaming loader)
+    with a `NoiseRolloutLoader` that feeds synthetic batches. Used to isolate
+    the trainer + weight-export path from the rollout/vLLM/curriculum stack
+    when bisecting multi-host failures."""
 
 
 class StreamingRolloutLoader:
@@ -258,17 +253,33 @@ class StopTrainerException(Exception):
     pass
 
 
+class _NullContext:
+    """Trivial no-op context manager.
+
+    Used as a stand-in for `self.replay_loader` when the train worker is in
+    noise-rollout mode and there is no background replay thread to manage.
+    """
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+
 class TrainWorker:
     """Training worker that reads rollout data from a queue and trains the model using Levanter."""
 
     config: TrainWorkerConfig
-    replay_buffer: ReplayBuffer
-    replay_loader: ReplayDataLoader
+    replay_buffer: ReplayBuffer | NoopReplayBuffer
+    replay_loader: ReplayDataLoader | None
     transfer_server: weight_transfer.WeightTransferServer
     tokenizer: MarinTokenizer
     loss_module: RLLossModule
     initial_model: LmHeadModel | None
     reference_model: LmHeadModel | None
+    rollout_reader: object | None
+    data_loader: StreamingRolloutLoader | NoiseRolloutLoader
 
     def __init__(
         self,
@@ -294,26 +305,36 @@ class TrainWorker:
         self.tokenizer = config.tokenizer
         self.loss_module = config.loss
 
-        self.rollout_reader = config.rollout_storage.create_reader()
+        if config.noise_rollout is None:
+            self.rollout_reader = config.rollout_storage.create_reader()
 
-        self.replay_buffer = ReplayBuffer.from_config(
-            config=config.replay_buffer,
-            local_batch_size=config.trainer.train_batch_size,
-            total_processes=jax.process_count(),
-            loss_module=self.loss_module,
-            seed=config.seed,
-        )
+            self.replay_buffer = ReplayBuffer.from_config(
+                config=config.replay_buffer,
+                local_batch_size=config.trainer.train_batch_size,
+                total_processes=jax.process_count(),
+                loss_module=self.loss_module,
+                seed=config.seed,
+            )
 
-        self.replay_loader = ReplayDataLoader(
-            rollout_reader=self.rollout_reader,
-            replay_buffer=self.replay_buffer,
-            rollout_fetch_interval=0.1,
-        )
+            self.replay_loader = ReplayDataLoader(
+                rollout_reader=self.rollout_reader,
+                replay_buffer=self.replay_buffer,
+                rollout_fetch_interval=0.1,
+            )
 
-        self.data_loader = StreamingRolloutLoader(
-            self.replay_loader,
-            config,
-        )
+            self.data_loader = StreamingRolloutLoader(
+                self.replay_loader,
+                config,
+            )
+        else:
+            # Noise-trainer mode: skip the entire rollout + replay stack and
+            # substitute a synthetic data loader. NoopReplayBuffer satisfies
+            # the `set_current_step` / `size` / `_current_step` surface the
+            # train loop and debug snapshot use.
+            self.rollout_reader = None
+            self.replay_buffer = NoopReplayBuffer()
+            self.replay_loader = None
+            self.data_loader = NoiseRolloutLoader(config=config, noise_config=config.noise_rollout)
 
         self.transfer_server = weight_transfer.create_weight_transfer_server(
             config.weight_transfer,
@@ -323,13 +344,19 @@ class TrainWorker:
         )
 
         self._curriculum_actor = runtime.curriculum
-        checkpoint_dir = config.trainer.checkpointer.expanded_path(config.run_id)
-        try:
-            self._curriculum_actor.restore_checkpoint.remote(checkpoint_dir).result()
-        except Exception as e:
-            logger.warning("Failed to restore curriculum checkpoint from %s: %s, starting fresh", checkpoint_dir, e)
+        if config.noise_rollout is None:
+            checkpoint_dir = config.trainer.checkpointer.expanded_path(config.run_id)
+            try:
+                self._curriculum_actor.restore_checkpoint.remote(checkpoint_dir).result()
+            except Exception as e:
+                logger.warning("Failed to restore curriculum checkpoint from %s: %s, starting fresh", checkpoint_dir, e)
 
-        logger.info("Connected to curriculum actor: %s", config.curriculum_config.actor_name)
+            logger.info("Connected to curriculum actor: %s", config.curriculum_config.actor_name)
+        else:
+            logger.info(
+                "Noise-trainer mode enabled; skipping curriculum checkpoint restore and "
+                "real rollout pipeline construction."
+            )
 
         self._build_models()
 
@@ -460,7 +487,11 @@ class TrainWorker:
             def _loss_function(model, batch, key):
                 return loss_fn(model, batch, key)
 
-            with Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function) as trainer:
+            replay_loader_ctx = self.replay_loader if self.replay_loader is not None else _NullContext()
+            with (
+                Trainer(config=config.trainer, optimizer=optimizer, loss_fn=_loss_function) as trainer,
+                replay_loader_ctx,
+            ):
                 if debug_checkpointer:
                     install_tensorstore_metrics_hook(trainer, every=1)
                 _, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 2)
@@ -483,20 +514,21 @@ class TrainWorker:
                         config.trainer.parameter_axis_mapping,
                     )
 
-                with self.replay_loader:
-                    # Always transfer startup weights to rollout workers before we attempt to train.
-                    self.transfer_server.serve_weights(startup_rollout_state.weight_step, state.model)
+                # Always transfer startup weights to rollout workers before we attempt to train.
+                self.transfer_server.serve_weights(startup_rollout_state.weight_step, state.model)
 
-                    # Wait for startup rollouts so both fresh runs and resumed runs begin with
-                    # rollouts that match the currently served weights.
+                # Wait for startup rollouts so both fresh runs and resumed runs begin with
+                # rollouts that match the currently served weights. Noise-trainer mode
+                # synthesizes batches in-process so there is nothing to wait for.
+                if self.config.noise_rollout is None:
                     if not self._wait_for_initial_rollouts(weight_step=startup_rollout_state.weight_step):
                         raise RuntimeError("Timed out waiting for initial rollouts; aborting training.")
 
-                    self._configure_training_hooks(trainer)
-                    try:
-                        trainer.train(state, self.data_loader)
-                    except StopTrainerException:
-                        pass
+                self._configure_training_hooks(trainer)
+                try:
+                    trainer.train(state, self.data_loader)
+                except StopTrainerException:
+                    pass
         except StopTrainerException:
             pass
         except Exception:
@@ -576,14 +608,16 @@ class TrainWorker:
             every=1,
         )
 
-        def _curriculum_checkpoint_hook(info: levanter.callbacks.StepInfo):
-            checkpoint_dir = self.config.trainer.checkpointer.expanded_path(self.config.run_id)
-            try:
-                self._curriculum_actor.save_checkpoint.remote(checkpoint_dir).result()
-            except Exception as e:
-                logger.error(f"Failed to save curriculum checkpoint: {e}")
+        if self.config.noise_rollout is None:
 
-        trainer.add_hook(_curriculum_checkpoint_hook, every=self.config.curriculum_config.checkpoint_steps)
+            def _curriculum_checkpoint_hook(info: levanter.callbacks.StepInfo):
+                checkpoint_dir = self.config.trainer.checkpointer.expanded_path(self.config.run_id)
+                try:
+                    self._curriculum_actor.save_checkpoint.remote(checkpoint_dir).result()
+                except Exception as e:
+                    logger.error(f"Failed to save curriculum checkpoint: {e}")
+
+            trainer.add_hook(_curriculum_checkpoint_hook, every=self.config.curriculum_config.checkpoint_steps)
 
     def _record_train_step(self, step: int) -> None:
         """Publish the latest completed trainer step to local and shared state."""

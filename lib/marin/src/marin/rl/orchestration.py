@@ -83,6 +83,15 @@ def _rollout_worker_extras(config: RLJobConfig) -> list[str]:
     return sorted({*config.pip_dependency_groups, "tpu", "vllm"})
 
 
+def _noise_rollout_active(train_config) -> bool:
+    """True iff the trainer config requests noise-rollout (rollout-free) mode.
+
+    The field lives on `TrainWorkerConfig`, but we accept any object exposing
+    `noise_rollout` to keep this helper test-friendly.
+    """
+    return getattr(train_config, "noise_rollout", None) is not None
+
+
 def submit_rl_job(config: RLJobConfig) -> JobHandle:
     """Submit an RL training job as a single coordinator job.
 
@@ -126,6 +135,13 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
     train_config, rollout_config = rl_job.to_worker_configs()
     run_config = config.run_config
     hosted_runtime: _HostedRuntime | None = None
+
+    if run_config.num_rollout_workers == 0 and not _noise_rollout_active(train_config):
+        raise ValueError(
+            "num_rollout_workers=0 is only legal in noise-rollout mode. Set "
+            "TrainWorkerConfig.noise_rollout to a NoiseRolloutConfig, or raise "
+            "num_rollout_workers above 0."
+        )
 
     try:
         # Create shared control-plane actors (non-preemptible, CPU-only)
