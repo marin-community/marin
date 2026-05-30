@@ -41,7 +41,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ── runtime stage ────────────────────────────────────────────────────
 FROM deps AS runtime
 
-# SQLite database lives on a PD-SSD mounted at /var/lib/probes by the VM.
 RUN groupadd --system --gid 1000 infra-probes \
     && useradd --system --uid 1000 --gid infra-probes --home-dir /app --no-create-home infra-probes \
     && mkdir -p /var/lib/probes \
