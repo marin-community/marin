@@ -145,8 +145,10 @@ def _thd_cu_seqlens_from_segment_lengths(
 
     max_segments = segment_lengths.shape[1]
     if max_segments == 1:
-        keep = jnp.ones_like(segment_lengths, dtype=jnp.bool_)
-        lengths = segment_lengths.astype(jnp.int32)
+        if total_tokens % batch_size != 0:
+            raise ValueError(f"total_tokens={total_tokens} is not divisible by batch_size={batch_size}.")
+        tokens_per_row = total_tokens // batch_size
+        return jnp.arange(batch_size + 1, dtype=jnp.int32) * tokens_per_row
     else:
         segment_index = jnp.arange(max_segments, dtype=jnp.int32)
         keep = segment_index[None, :] < num_segments[:, None]
