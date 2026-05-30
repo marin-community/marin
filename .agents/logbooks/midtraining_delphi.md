@@ -12332,3 +12332,23 @@ relaunching the same interactive job (override_output_path makes it idempotent;
 Iris auto-resumes preemptions), confirm each 70/80% target lands with an atomic
 OCDBT commit. When all 7 ladder points have both prefixes → Phase 2: 80%
 midtraining cooldown for 3e18..3e20.
+
+Follow-up 2026-05-30T06:10Z — 2e20 SIGSEGV recovery + v6e capacity freed:
+
+- v6e capacity freed: 9e18, 9e19, 3e19 children now RUNNING; 2e19 child still
+  pending v6e-8.
+- 2e20 FAILED: child `Exit code 139 SIGSEGV` in libtpu at 05:55:00Z (transient
+  TPU-runtime crash) after progressing to ~step 31712; root then exited
+  `RuntimeError: 1 step(s) failed`. 3e20 on the same code path (v5p-16) kept
+  running, confirming this is a transient bad-node crash, not a config bug.
+  Iris classified it as a step failure (not preemption) so it did NOT
+  auto-restart.
+  - A temp checkpoint exists at step-31500 in the temp dir; no committed steps
+    in the 2e20 output root (expected — 70% target is 39533).
+  - Recovered by resubmitting the identical interactive job; the helper's
+    `override_output_path` pins the same output root
+    `delphi-2e20-prefixes-qwen3`, and the 70/80% destination steps do not exist
+    yet so the existence check passes (no --allow-existing-destination needed).
+    New root: `/ahmed/delphi-2e20-prefixes-qwen3-v5p8-r2-1bb059a` (submit exit=0).
+- In-flight after recovery: 9e18 (v6e-4), 2e19/3e19/9e19 (v6e-8), 3e20 (v5p-16),
+  2e20-r2 (v5p-8). 3e18 complete.
