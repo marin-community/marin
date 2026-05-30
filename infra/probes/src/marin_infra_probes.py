@@ -10,11 +10,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import tempfile
 import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 from finelog.client.log_client import FlushResult, LogClient
 from finelog.rpc import logging_pb2
@@ -35,6 +37,20 @@ LOG_SERVER_ENDPOINT_NAME = "/system/log-server"
 # Default zones to canary when --zone is not given: the busiest europe-west4 and
 # us-west4 zones in the fleet.
 DEFAULT_ZONES = ("europe-west4-b", "us-west4-a")
+
+# The iris worker unconditionally runs `uv sync` against the job's bundle, which
+# fails without a pyproject.toml. The canary sleep job needs no deps, so ship a
+# throwaway workspace whose only content is a minimal pyproject (resolves to an
+# empty venv). package=false skips building it as a package.
+CANARY_PYPROJECT = """\
+[project]
+name = "iris-canary"
+version = "0"
+requires-python = ">=3.11"
+
+[tool.uv]
+package = false
+"""
 
 # finelog-write probe: the key/source the canary writes under. Reads match on
 # the KEY column (FetchLogsRequest.source + MatchScope are key matchers despite
@@ -194,6 +210,14 @@ def resolve_finelog_address(iris: RemoteClusterClient, name: str) -> str:
     return endpoints[0].address
 
 
+def make_canary_workspace() -> Path:
+    """Create the throwaway workspace bundled with the iris-job-submit canary so
+    the worker's `uv sync` build step has a pyproject.toml to resolve against."""
+    workspace = Path(tempfile.mkdtemp(prefix="iris-canary-workspace-"))
+    (workspace / "pyproject.toml").write_text(CANARY_PYPROJECT)
+    return workspace
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="probes")
     p.add_argument("--iris-endpoint", required=True, help="e.g. http://10.128.0.3:10001")
@@ -206,7 +230,7 @@ def main(argv: list[str] | None = None) -> None:
     # append default would accumulate onto args.zone, so fall back here instead.
     zones = args.zone or list(DEFAULT_ZONES)
 
-    iris = RemoteClusterClient(controller_address=args.iris_endpoint)
+    iris = RemoteClusterClient(controller_address=args.iris_endpoint, workspace=make_canary_workspace())
     finelog = LogClient.connect(
         LOG_SERVER_ENDPOINT_NAME,
         resolver=lambda name: resolve_finelog_address(iris, name),
