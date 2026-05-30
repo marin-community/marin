@@ -770,11 +770,11 @@ GROUP_BY_MIXTURE: dict[str, str] = {mid: label for label, mixtures in MIXTURE_GR
 STAGED_MIXTURES: frozenset[str] = frozenset({"m7", "m8", "m9", "m12", "m13"})
 
 # Power-law fit window as a fraction of num_train_steps. The lower bound (0.1)
-# skips the warmup ramp and the early super-fast-descent regime. The upper
-# bound stays within the WSD stable phase (decay begins at 0.8); 0.5 fits only
-# the first half and projects the rest, probing how early the trend is set.
+# skips the warmup ramp and the early super-fast-descent regime; the upper bound
+# (0.8) is the start of the WSD decay phase (warmup=0.1, decay=0.2), so the fit
+# covers the stable schedule up to where the LR cooldown begins.
 FIT_LOW_STEP_FRAC: float = 0.1
-FIT_HIGH_STEP_FRAC: float = 0.5
+FIT_HIGH_STEP_FRAC: float = 0.8
 
 
 # Full-dataset example count for the offline cd-val eval — packed-sequence
