@@ -12304,3 +12304,31 @@ Follow-up 2026-05-30T05:31Z — startup verified, all 4 healthy:
   finish in one sitting; monitor for preemptions and for each target checkpoint
   to land with an atomic OCDBT commit (manifest+metadata written last).
 - W&B: https://wandb.ai/marin-community/marin/runs/delphi-<base>-prefixes-qwen3
+
+Follow-up 2026-05-30T05:46Z — filled ladder gap (9e18, 2e19) + Phase-1 babysit:
+
+Goal (Ahmed, /goal): drive ALL scaling-ladder prefix materializations to
+completion (70% + 80% each across 3e18..3e20), then run the 80% midtraining
+cooldown for 3e18..3e20.
+
+Ladder audit showed 9e18 and 2e19 had no Gen-2 prefixes-qwen3 outputs, so I
+launched them (dry-runs passed: 9e18 schedule 44,317 → 80%=35,453 / 70%=31,021
+on v6e-4; 2e19 schedule 55,125 → 80%=44,100 / 70%=38,587 on v6e-8). Launcher:
+`scratch/20260530T0540Z_launch_delphi_prefix_9e18_2e19.sh` (git HEAD 1bb059a).
+Submitted (exit=0):
+- 9e18 → `/ahmed/delphi-9e18-prefixes-qwen3-v6e4-1bb059a`
+- 2e19 → `/ahmed/delphi-2e19-prefixes-qwen3-v6e8-1bb059a`
+
+Full-ladder status @05:46Z:
+- 3e18: 70%(26134)=DONE, 80%(29868)=DONE.
+- 2e20: child RUNNING on v5p-8 (resumed @30001).
+- 3e20: child RUNNING on v5p-16.
+- 3e19, 9e19, 2e20→ v6e-8 children PENDING (v6e saturated: "Insufficient TPUs need 4, available 0").
+- 9e18 (v6e-4), 2e19 (v6e-8): children PENDING capacity.
+All children carry override_output_path pin to delphi-<base>-prefixes-qwen3.
+
+Plan: paced monitor loop (~20 min cadence) — recover any FAILED child by
+relaunching the same interactive job (override_output_path makes it idempotent;
+Iris auto-resumes preemptions), confirm each 70/80% target lands with an atomic
+OCDBT commit. When all 7 ladder points have both prefixes → Phase 2: 80%
+midtraining cooldown for 3e18..3e20.
