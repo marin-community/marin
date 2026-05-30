@@ -12156,3 +12156,20 @@ Follow-up 2026-05-30T02:24Z:
   `/ahmed/delphi-3e18-prefixes-qwen3-v6e4-97b0a89/checkpoints-delphi-prefix-3e18-step29868-stop29869_375d5d5e-63139d5c`;
   it is pending v6e capacity with one pending task. Recent logs had no
   `No accelerator found` or `libtpu` errors.
+
+Follow-up 2026-05-30T02:46Z:
+
+- The `97b0a89` child started on
+  `marin-tpu-v6e-preemptible-4-us-east5-b-20260530-0239-72fb2b02-worker-0`.
+- Startup invariants verified:
+  - output path `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-prefixes-qwen3`
+  - run id `delphi-3e18-prefixes-qwen3`
+  - W&B resumed `https://wandb.ai/marin-community/marin/runs/delphi-3e18-prefixes-qwen3`
+  - Levanter logged `Resuming training from step 20001`
+- The previous `libtpu`/`No accelerator found` failure did not recur. JAX
+  initialized through Iris TPU autodiscovery, cache loading completed, and the
+  first train step began tracing/lowering.
+- Observed one nonfatal W&B background-artifact traceback for a temporary
+  `config.yaml`; Levanter logged that it was dropping the tracker update and
+  continuing. Monitor should keep watching for actual training progress or
+  terminal failure.
