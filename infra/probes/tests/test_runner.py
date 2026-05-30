@@ -1,8 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""ProbeRunner basics. Output is hardcoded to the ``probes`` logger; tests
-use pytest's ``caplog`` to assert on it. asyncio.wait_for bounds duration."""
+"""ProbeRunner basics. Output goes to the module logger (``infra_probes`` when
+imported here); tests use pytest's ``caplog`` to assert on it. asyncio.wait_for
+bounds duration."""
 
 from __future__ import annotations
 
@@ -24,13 +25,13 @@ def _run_briefly(runner, duration=0.15):
 
 
 def _messages(caplog) -> list[str]:
-    return [r.getMessage() for r in caplog.records if r.name == "probes"]
+    return [r.getMessage() for r in caplog.records if r.name == "infra_probes"]
 
 
 def test_success_probe_logs_ok(caplog):
     runner = ProbeRunner()
     runner.add_probe("ok", lambda: True, timeout=1.0, cadence=0.05)
-    with caplog.at_level(logging.INFO, logger="probes"):
+    with caplog.at_level(logging.INFO, logger="infra_probes"):
         _run_briefly(runner)
     msgs = _messages(caplog)
     assert any(m.startswith("probe ok: ok [") for m in msgs), msgs
@@ -42,7 +43,7 @@ def test_raising_probe_logs_fail(caplog):
 
     runner = ProbeRunner()
     runner.add_probe("boom", boom, timeout=1.0, cadence=0.05)
-    with caplog.at_level(logging.INFO, logger="probes"):
+    with caplog.at_level(logging.INFO, logger="infra_probes"):
         _run_briefly(runner)
     msgs = _messages(caplog)
     assert any(m.startswith("probe boom: fail [") for m in msgs), msgs
@@ -55,7 +56,7 @@ def test_timeout_probe_logs_fail(caplog):
 
     runner = ProbeRunner()
     runner.add_probe("slow", slow, timeout=0.05, cadence=0.05)
-    with caplog.at_level(logging.INFO, logger="probes"):
+    with caplog.at_level(logging.INFO, logger="infra_probes"):
         _run_briefly(runner, duration=0.25)
     msgs = _messages(caplog)
     assert any(m.startswith("probe slow: fail [") for m in msgs), msgs
@@ -70,7 +71,7 @@ def test_multiple_probes_run_independently(caplog):
     runner = ProbeRunner()
     runner.add_probe("a", lambda: True, timeout=1.0, cadence=0.05)
     runner.add_probe("b", lambda: True, timeout=1.0, cadence=0.05)
-    with caplog.at_level(logging.INFO, logger="probes"):
+    with caplog.at_level(logging.INFO, logger="infra_probes"):
         _run_briefly(runner, duration=0.2)
     msgs = _messages(caplog)
     assert any(m.startswith("probe a: ") for m in msgs), msgs

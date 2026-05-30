@@ -29,7 +29,7 @@ from typing import ClassVar, Protocol, TextIO
 from finelog.client.log_client import LogClient, Table
 from rigging.filesystem import open_url
 
-logger = logging.getLogger("probes")
+logger = logging.getLogger(__name__)
 
 
 class ProbeResultLike(Protocol):

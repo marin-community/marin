@@ -28,7 +28,7 @@ from rigging.log_setup import configure_logging
 from rigging.timing import Duration
 from sinks import FinelogTableSink, JsonlGcsSink, ProbeSink
 
-logger = logging.getLogger("probes")
+logger = logging.getLogger(__name__)
 
 # Iris advertises the finelog log-server under this logical name in its endpoint
 # registry; resolve it to a concrete address via list_endpoints (same name the
