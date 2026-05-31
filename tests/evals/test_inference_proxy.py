@@ -186,9 +186,9 @@ async def test_inference_worker_refills_slots_while_slow_request_is_in_flight() 
     for request_id, prompt in [("slow", "slow"), ("fast-a", "fast a"), ("fast-b", "fast b")]:
         broker.submit_request(_completion_inference_request(request_id=request_id, prompt=prompt))
 
-    release_slow_request = threading.Event()
+    release_slow = threading.Event()
     with serve_deterministic_openai_stub(
-        blocked_prompts={"slow": release_slow_request},
+        prompt_pauses={"slow": release_slow},
     ) as upstream_stub:
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
         worker = InferenceWorker(
@@ -205,7 +205,7 @@ async def test_inference_worker_refills_slots_while_slow_request_is_in_flight() 
                 responses = await _fetch_until_responses(broker, count=2)
                 assert {response.request_id for response in responses} == {"fast-a", "fast-b"}
             finally:
-                release_slow_request.set()
+                release_slow.set()
 
 
 @pytest.mark.asyncio
@@ -213,8 +213,8 @@ async def test_inference_worker_returns_504_for_upstream_timeout() -> None:
     broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     broker.submit_request(_completion_inference_request(request_id="slow", prompt="slow"))
 
-    release_slow_request = threading.Event()
-    with serve_deterministic_openai_stub(blocked_prompts={"slow": release_slow_request}) as upstream_stub:
+    release_slow = threading.Event()
+    with serve_deterministic_openai_stub(prompt_pauses={"slow": release_slow}) as upstream_stub:
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
         worker = InferenceWorker(
             broker=broker,
@@ -229,7 +229,7 @@ async def test_inference_worker_returns_504_for_upstream_timeout() -> None:
             try:
                 responses = await _fetch_until_responses(broker, count=1)
             finally:
-                release_slow_request.set()
+                release_slow.set()
 
     assert responses[0].request_id == "slow"
     assert responses[0].status_code == 504

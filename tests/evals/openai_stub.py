@@ -23,7 +23,8 @@ class OpenAIStubRequest:
 @dataclass
 class OpenAIStubState:
     requests: list[OpenAIStubRequest] = field(default_factory=list)
-    blocked_prompts: Mapping[str, threading.Event] = field(default_factory=dict)
+    # Lets tests keep selected prompt requests in flight until the event is set.
+    prompt_pauses: Mapping[str, threading.Event] = field(default_factory=dict)
 
 
 @dataclass
@@ -84,8 +85,9 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
         if request.echo is not True or request.logprobs is None:
             self._write_json(400, {"error": "scoring requests must set echo=true and logprobs"})
             return
-        if prompt in self._stub_server.state.blocked_prompts:
-            self._stub_server.state.blocked_prompts[prompt].wait()
+        pause = self._stub_server.state.prompt_pauses.get(prompt)
+        if pause is not None:
+            pause.wait()
         text = prompt
         if request.max_tokens > 0:
             text += " answer"
@@ -158,9 +160,9 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
 def serve_deterministic_openai_stub(
     *,
     model: str = "gpt2",
-    blocked_prompts: Mapping[str, threading.Event] | None = None,
+    prompt_pauses: Mapping[str, threading.Event] | None = None,
 ) -> Iterator[DeterministicOpenAIStub]:
-    state = OpenAIStubState(blocked_prompts={} if blocked_prompts is None else blocked_prompts)
+    state = OpenAIStubState(prompt_pauses={} if prompt_pauses is None else prompt_pauses)
     server = _DeterministicOpenAIServer(("127.0.0.1", 0), _DeterministicOpenAIHandler)
     server.model = model
     server.state = state
