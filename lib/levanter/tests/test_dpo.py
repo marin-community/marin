@@ -289,12 +289,12 @@ def test_canonical_lora_dpo_config_parses_from_yaml(tmp_path: Path):
     assert isinstance(config.reference, AdapterBaseReferenceConfig)
 
 
-def test_legacy_lora_dpo_config_translates_to_canonical(tmp_path: Path):
+def test_legacy_lora_dpo_config_translates_to_canonical(tmp_path: Path, monkeypatch):
     config_path = tmp_path / "legacy_lora_dpo.yaml"
     config_path.write_text(
         "\n".join(
             [
-                "initialize_from_hf: meta-llama/Llama-3.1-8B-Instruct",
+                "initialize_from_hf: test-model",
                 "lora:",
                 "  r: 8",
                 "  alpha: 8.0",
@@ -306,6 +306,10 @@ def test_legacy_lora_dpo_config_translates_to_canonical(tmp_path: Path):
     )
 
     legacy_config = draccus.parse(LoraDpoConfig, str(config_path), args=[])
+    monkeypatch.setattr(
+        "levanter.main.lora_dpo.HFCheckpointConverter.from_hf",
+        lambda *args, **kwargs: SimpleNamespace(default_config=Gpt2Config()),
+    )
 
     translated = _translate_legacy_lora_dpo_config(legacy_config)
 
