@@ -13,8 +13,9 @@ from typing import Any
 
 import fsspec
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, InputName, MirroredValue, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, InputName, MirroredValue
 from marin.execution.remote import remote
+from marin.execution.types import this_output_path, versioned
 from marin.utils import fsspec_exists
 from zephyr import Dataset, ZephyrContext
 
@@ -22,7 +23,7 @@ from experiments.downstream_scaling.evals.framework.schema import (
     completions_file,
     read_prompt_rows,
 )
-from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints, version_path
+from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints, localize_mirror_path, version_path
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +116,7 @@ def _load_vllm(model_path: str, seed: int):
     from vllm import LLM, SamplingParams
 
     resolved_model_path = discover_hf_checkpoints(model_path)[-1]
+    resolved_model_path = localize_mirror_path(resolved_model_path)
     logger.info("Resolved %s -> %s", model_path, resolved_model_path)
 
     with fsspec.open(f"{resolved_model_path}/config.json", "r") as f:

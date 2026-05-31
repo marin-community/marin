@@ -19,10 +19,9 @@ from marin.execution.executor import (
     InputName,
     MirroredValue,
     output_path_of,
-    this_output_path,
-    versioned,
 )
 from marin.execution.remote import remote
+from marin.execution.types import this_output_path, versioned
 
 from experiments.downstream_scaling.evals.algorithms.iid import (
     IIDConfig,

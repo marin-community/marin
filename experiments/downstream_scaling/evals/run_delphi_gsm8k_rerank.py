@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sys
 
 from fray.cluster import ResourceConfig
@@ -28,7 +29,7 @@ N_SAMPLES = 32
 N_PROBLEMS = 256
 NUM_WORKERS = 1
 CHUNK_SIZE = 64
-TPU_TYPE = "v5p-8"
+TPU_TYPES: tuple[str, ...] = ("v5p-8",)
 
 TEMPERATURE = 0.6
 TOP_P = 1.0
@@ -53,7 +54,9 @@ def make_task() -> GSM8KTask:
     )
 
 
-def make_algorithm(tpu_type: str, candidate_count: int, scoring_model_path: InputName) -> RerankCompletionAlgorithm:
+def make_algorithm(
+    tpu_types: list[str], region: str, candidate_count: int, scoring_model_path: InputName
+) -> RerankCompletionAlgorithm:
     return RerankCompletionAlgorithm(
         config=RerankConfig(
             sampling=RerankSamplingConfig(
@@ -73,21 +76,21 @@ def make_algorithm(tpu_type: str, candidate_count: int, scoring_model_path: Inpu
             execution=RerankExecutionConfig(
                 num_workers=NUM_WORKERS,
                 chunk_size=CHUNK_SIZE,
-                worker_resources=ResourceConfig.with_tpu(tpu_type),
-                scorer_actor_resources=ResourceConfig.with_tpu(tpu_type),
+                worker_resources=dataclasses.replace(ResourceConfig.with_tpu(tpu_types), regions=[region]),
+                scorer_actor_resources=dataclasses.replace(ResourceConfig.with_tpu(tpu_types), regions=[region]),
             ),
         )
     )
 
 
-def build_steps(tpu_type: str):
+def build_steps(tpu_types: list[str], region: str):
     scoring_model_path = output_path_of(qwen2_5_7b)
     return [
         make_eval_step(
             name=f"downstream_scaling/evals/delphi/gsm8k/rerank/candidates_{candidate_count:02d}/{slug}",
             model_path=InputName.hardcoded(checkpoint),
             task=make_task(),
-            alg=make_algorithm(tpu_type, candidate_count, scoring_model_path),
+            alg=make_algorithm(tpu_types, region, candidate_count, scoring_model_path),
         )
         for candidate_count in CANDIDATE_COUNTS
         for slug, checkpoint in DELPHI_CHECKPOINTS.items()
@@ -96,11 +99,12 @@ def build_steps(tpu_type: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--tpu-type", type=str, default=TPU_TYPE)
+    parser.add_argument("--tpu-types", nargs="+", default=list(TPU_TYPES))
+    parser.add_argument("--region", type=str, required=True)
     args, remaining_args = parser.parse_known_args()
     sys.argv = [sys.argv[0], *remaining_args]
 
     executor_main(
-        steps=build_steps(args.tpu_type),
+        steps=build_steps(args.tpu_types, args.region),
         description="Delphi scaling-ladder rerank evals on GSM8K.",
     )

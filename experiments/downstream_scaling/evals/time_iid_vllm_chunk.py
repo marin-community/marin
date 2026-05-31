@@ -15,7 +15,7 @@ import argparse
 import os
 import time
 
-from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints
+from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints, localize_mirror_path
 from experiments.downstream_scaling.models.delphi import DELPHI_CHECKPOINTS
 
 MARIN_EAST5_PREFIX = "gs://marin-us-east5"
@@ -35,6 +35,7 @@ def _load_vllm_for_timing(model_path: str, seed: int, max_model_len: int):
     from vllm import LLM, SamplingParams
 
     resolved_model_path = discover_hf_checkpoints(model_path)[-1]
+    resolved_model_path = localize_mirror_path(resolved_model_path)
     llm = LLM(
         model=resolved_model_path,
         trust_remote_code=True,

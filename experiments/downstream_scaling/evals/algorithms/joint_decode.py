@@ -30,8 +30,9 @@ from typing import Any
 
 import fsspec
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, InputName, MirroredValue, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, InputName, MirroredValue
 from marin.execution.remote import remote
+from marin.execution.types import this_output_path, versioned
 from marin.utils import fsspec_exists
 from zephyr import Dataset, ZephyrContext
 
@@ -39,7 +40,7 @@ from experiments.downstream_scaling.evals.framework.schema import (
     completions_file,
     read_prompt_rows,
 )
-from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints, version_path
+from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints, localize_mirror_path, version_path
 
 logger = logging.getLogger(__name__)
 
@@ -602,6 +603,7 @@ def _run_worker(args: argparse.Namespace) -> None:
     from vllm import LLM, SamplingParams  # imported after TPU_VISIBLE_CHIPS is set
 
     resolved_path = discover_hf_checkpoints(args.model_path)[-1]
+    resolved_path = localize_mirror_path(resolved_path)
     logger.info("Joint-decode worker chip=%d resolved %s -> %s", args.chip, args.model_path, resolved_path)
 
     kwargs: dict[str, Any] = {

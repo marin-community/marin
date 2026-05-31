@@ -30,7 +30,8 @@ from experiments.defaults import default_tokenize
 from experiments.models import ModelConfig, download_model_step
 from fray.cluster import ResourceConfig
 from marin.evaluation.save_logprobs import default_save_logprobs
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, unwrap_versioned_value, versioned
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of, unwrap_versioned_value
+from marin.execution.types import versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 from marin.utils import get_directory_friendly_name
 

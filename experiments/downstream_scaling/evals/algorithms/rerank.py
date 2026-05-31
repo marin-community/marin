@@ -16,8 +16,9 @@ from typing import Any
 
 import fsspec
 from fray import ActorGroup, ResourceConfig, current_client
-from marin.execution.executor import ExecutorStep, InputName, MirroredValue, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, InputName, MirroredValue
 from marin.execution.remote import remote
+from marin.execution.types import this_output_path, versioned
 from marin.utils import fsspec_exists
 from zephyr import Dataset, ZephyrContext
 
@@ -26,7 +27,7 @@ from experiments.downstream_scaling.evals.framework.schema import (
     completions_file,
     read_prompt_rows,
 )
-from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints, version_path
+from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints, localize_mirror_path, version_path
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +136,7 @@ class VLLMScorerActor:
         from experiments.rerank_decode.scorer import VLLMLogprobScorerTPU
 
         resolved_model_path = discover_hf_checkpoints(model_path)[-1]
+        resolved_model_path = localize_mirror_path(resolved_model_path)
         logger.info("Resolved scoring model %s -> %s", model_path, resolved_model_path)
         tensor_parallel_size = _tensor_parallel_size_for_model(resolved_model_path)
         self._scorer = VLLMLogprobScorerTPU(
@@ -242,6 +244,7 @@ def _load_proposal_vllm(model_path: str, proposal: RerankProposalConfig, seed: i
     from vllm import LLM, SamplingParams
 
     resolved_model_path = discover_hf_checkpoints(model_path)[-1]
+    resolved_model_path = localize_mirror_path(resolved_model_path)
     logger.info("Resolved proposal model %s -> %s", model_path, resolved_model_path)
     tensor_parallel_size = _tensor_parallel_size_for_model(resolved_model_path)
     kwargs: dict[str, Any] = {

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sys
 
 from fray.cluster import ResourceConfig
@@ -25,7 +26,7 @@ from experiments.llama import llama3_tokenizer
 N_SAMPLES = 32
 N_PROBLEMS = 256
 NUM_WORKERS = 1
-TPU_TYPE = "v5p-8"
+TPU_TYPES: tuple[str, ...] = ("v5p-8",)
 
 TEMPERATURE = 0.6
 TOP_P = 1.0
@@ -53,7 +54,7 @@ def make_task(mask_fraction: float) -> MaskedGSM8KTask:
     )
 
 
-def make_algorithm(tpu_type: str) -> IIDCompletionAlgorithm:
+def make_algorithm(tpu_types: list[str], region: str) -> IIDCompletionAlgorithm:
     return IIDCompletionAlgorithm(
         config=IIDConfig(
             sampling=IIDSamplingConfig(
@@ -67,19 +68,19 @@ def make_algorithm(tpu_type: str) -> IIDCompletionAlgorithm:
             ),
             execution=IIDExecutionConfig(
                 num_workers=NUM_WORKERS,
-                worker_resources=ResourceConfig.with_tpu(tpu_type),
+                worker_resources=dataclasses.replace(ResourceConfig.with_tpu(tpu_types), regions=[region]),
             ),
         )
     )
 
 
-def build_steps(tpu_type: str):
+def build_steps(tpu_types: list[str], region: str):
     return [
         make_eval_step(
             name=f"downstream_scaling/evals/delphi/masked_gsm8k/iid/mask_{i:02d}/{slug}",
             model_path=InputName.hardcoded(checkpoint),
             task=make_task(mask_fraction),
-            alg=make_algorithm(tpu_type),
+            alg=make_algorithm(tpu_types, region),
         )
         for i, mask_fraction in enumerate(MASK_FRACTIONS)
         for slug, checkpoint in DELPHI_CHECKPOINTS.items()
@@ -88,11 +89,12 @@ def build_steps(tpu_type: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--tpu-type", type=str, default=TPU_TYPE)
+    parser.add_argument("--tpu-types", nargs="+", default=list(TPU_TYPES))
+    parser.add_argument("--region", type=str, required=True)
     args, remaining_args = parser.parse_known_args()
     sys.argv = [sys.argv[0], *remaining_args]
 
     executor_main(
-        steps=build_steps(args.tpu_type),
+        steps=build_steps(args.tpu_types, args.region),
         description="Delphi scaling-ladder IID evals on masked GSM8K.",
     )

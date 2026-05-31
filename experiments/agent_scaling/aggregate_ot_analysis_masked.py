@@ -23,7 +23,8 @@ from zephyr import Dataset, ZephyrContext
 from experiments.agent_scaling.download_ot_traces import BASE_MODEL, build_steps as build_trace_steps
 from experiments.agent_scaling.ot_trace_logprobs import build_steps as build_eval_steps
 from experiments.chat_templates.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of
+from marin.execution.types import this_output_path
 from marin.utils import fsspec_exists
 
 

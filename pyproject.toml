@@ -101,6 +101,11 @@ conflicts = [
         { package = "marin-levanter", extra = "gpu" },
         { package = "marin-fray", group = "fray_tpu_test" },
     ],
+    [
+        # vllm's tpu-inference fork pins libtpu 0.0.31; levanter[tpu] pins 0.0.39.
+        { package = "marin-core", extra = "vllm" },
+        { package = "marin-levanter", extra = "tpu" },
+    ],
 ]
 
 [tool.uv.workspace]

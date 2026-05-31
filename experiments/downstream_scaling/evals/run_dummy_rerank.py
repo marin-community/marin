@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sys
 
 from fray.cluster import ResourceConfig
@@ -26,7 +27,7 @@ from experiments.models import qwen2_5_7b
 
 MODEL_KEY = "3e18"
 SCORING_MODEL_KEY = "3e18"
-TPU_TYPE = "v5p-8"
+TPU_TYPES: tuple[str, ...] = ("v5p-8",)
 
 N_PROMPTS = 1
 N_SAMPLES = 1
@@ -47,7 +48,7 @@ def make_task() -> DummyTask:
     return DummyTask(config=DummyTaskConfig(n_prompts=N_PROMPTS))
 
 
-def make_algorithm(tpu_type: str) -> RerankCompletionAlgorithm:
+def make_algorithm(tpu_types: list[str], region: str) -> RerankCompletionAlgorithm:
     return RerankCompletionAlgorithm(
         config=RerankConfig(
             sampling=RerankSamplingConfig(
@@ -67,31 +68,32 @@ def make_algorithm(tpu_type: str) -> RerankCompletionAlgorithm:
             execution=RerankExecutionConfig(
                 num_workers=NUM_WORKERS,
                 chunk_size=CHUNK_SIZE,
-                worker_resources=ResourceConfig.with_tpu(tpu_type),
-                scorer_actor_resources=ResourceConfig.with_tpu(tpu_type),
+                worker_resources=dataclasses.replace(ResourceConfig.with_tpu(tpu_types), regions=[region]),
+                scorer_actor_resources=dataclasses.replace(ResourceConfig.with_tpu(tpu_types), regions=[region]),
             ),
         )
     )
 
 
-def build_steps(tpu_type: str):
+def build_steps(tpu_types: list[str], region: str):
     return [
         make_eval_step(
             name=f"downstream_scaling/evals/dummy/rerank/{MODEL_KEY}/scorer_{SCORING_MODEL_KEY}",
             model_path=InputName.hardcoded(DELPHI_CHECKPOINTS[MODEL_KEY]),
             task=make_task(),
-            alg=make_algorithm(tpu_type),
+            alg=make_algorithm(tpu_types, region),
         )
     ]
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--tpu-type", type=str, default=TPU_TYPE)
+    parser.add_argument("--tpu-types", nargs="+", default=list(TPU_TYPES))
+    parser.add_argument("--region", type=str, required=True)
     args, remaining_args = parser.parse_known_args()
     sys.argv = [sys.argv[0], *remaining_args]
 
     executor_main(
-        steps=build_steps(args.tpu_type),
+        steps=build_steps(args.tpu_types, args.region),
         description="Tiny rerank downstream-scaling eval on the dummy task.",
     )

@@ -28,9 +28,8 @@ from marin.execution.executor import (
     ExecutorStep,
     executor_main,
     output_path_of,
-    this_output_path,
-    versioned,
 )
+from marin.execution.types import this_output_path, versioned
 
 LEADERBOARD_URL = "https://ot-agent-leaderboard.replit.app/api/leaderboard-pivoted-with-improvement"
 BENCHMARK = "swebench-verified-random-100-folders"

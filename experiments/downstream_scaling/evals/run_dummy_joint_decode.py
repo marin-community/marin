@@ -10,6 +10,7 @@ Advisor (B) = llama 3.1 8B (no patch).
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sys
 
 from fray.cluster import ResourceConfig
@@ -29,7 +30,7 @@ from experiments.models import llama_3_1_8b
 
 DECODER_MODEL_KEY = "3e18"
 ADVISOR_MODEL_NAME = "llama_3_1_8b"
-TPU_TYPE = "v5p-8"
+TPU_TYPES: tuple[str, ...] = ("v5p-8",)
 
 N_PROMPTS = 1
 N_SAMPLES = 1  # joint_decode is deterministic; must be 1
@@ -47,7 +48,7 @@ def make_task() -> DummyTask:
     return DummyTask(config=DummyTaskConfig(n_prompts=N_PROMPTS))
 
 
-def make_algorithm(tpu_type: str) -> JointDecodeCompletionAlgorithm:
+def make_algorithm(tpu_types: list[str], region: str) -> JointDecodeCompletionAlgorithm:
     return JointDecodeCompletionAlgorithm(
         config=JointDecodeConfig(
             sampling=JointDecodeSamplingConfig(
@@ -63,14 +64,14 @@ def make_algorithm(tpu_type: str) -> JointDecodeCompletionAlgorithm:
             advisor_model=JointDecodeModelConfig(),
             execution=JointDecodeExecutionConfig(
                 num_workers=NUM_WORKERS,
-                worker_resources=ResourceConfig.with_tpu(tpu_type),
+                worker_resources=dataclasses.replace(ResourceConfig.with_tpu(tpu_types), regions=[region]),
                 chunk_size=CHUNK_SIZE,
             ),
         )
     )
 
 
-def build_steps(tpu_type: str):
+def build_steps(tpu_types: list[str], region: str):
     return [
         make_eval_step(
             name=(
@@ -79,18 +80,19 @@ def build_steps(tpu_type: str):
             ),
             model_path=InputName.hardcoded(DELPHI_CHECKPOINTS[DECODER_MODEL_KEY]),
             task=make_task(),
-            alg=make_algorithm(tpu_type),
+            alg=make_algorithm(tpu_types, region),
         )
     ]
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--tpu-type", type=str, default=TPU_TYPE)
+    parser.add_argument("--tpu-types", nargs="+", default=list(TPU_TYPES))
+    parser.add_argument("--region", type=str, required=True)
     args, remaining_args = parser.parse_known_args()
     sys.argv = [sys.argv[0], *remaining_args]
 
     executor_main(
-        steps=build_steps(args.tpu_type),
+        steps=build_steps(args.tpu_types, args.region),
         description="Tiny joint-decode downstream-scaling eval on the dummy task.",
     )

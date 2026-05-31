@@ -10,8 +10,9 @@ import logging
 from dataclasses import dataclass
 
 import fsspec
-from marin.execution.executor import ExecutorStep, InputName, MirroredValue, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, InputName, MirroredValue
 from marin.execution.remote import remote
+from marin.execution.types import this_output_path, versioned
 
 from experiments.downstream_scaling.evals.framework.schema import (
     grades_file,

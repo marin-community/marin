@@ -10,6 +10,7 @@ Advisor (B) = llama 3.1 8B (no patch). Sweeps top_k_a x top_k_b.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sys
 
 from fray.cluster import ResourceConfig
@@ -31,7 +32,7 @@ N_SAMPLES = 1  # joint_decode is deterministic; must be 1
 N_PROBLEMS = 256
 NUM_WORKERS = 1
 CHUNK_SIZE = 64
-TPU_TYPE = "v5p-8"
+TPU_TYPES: tuple[str, ...] = ("v5p-8",)
 
 # Generous enough to absorb the first-step XLA compilation skew between the
 # two engines for the largest delphi sizes (60s was too short for 1e22).
@@ -93,7 +94,8 @@ def make_task() -> GSM8KTask:
 
 
 def make_algorithm(
-    tpu_type: str,
+    tpu_types: list[str],
+    region: str,
     top_k_a: int,
     top_k_b: int,
     advisor_model_path,
@@ -114,7 +116,7 @@ def make_algorithm(
             advisor_model=JointDecodeModelConfig(),
             execution=JointDecodeExecutionConfig(
                 num_workers=NUM_WORKERS,
-                worker_resources=ResourceConfig.with_tpu(tpu_type),
+                worker_resources=dataclasses.replace(ResourceConfig.with_tpu(tpu_types), regions=[region]),
                 chunk_size=CHUNK_SIZE,
                 microbatch_size=microbatch_size,
                 barrier_timeout_s=BARRIER_TIMEOUT_S,
@@ -123,7 +125,7 @@ def make_algorithm(
     )
 
 
-def build_steps(tpu_type: str):
+def build_steps(tpu_types: list[str], region: str):
     advisor_model_path = output_path_of(llama_3_1_8b)
     return [
         make_eval_step(
@@ -131,7 +133,8 @@ def build_steps(tpu_type: str):
             model_path=InputName.hardcoded(checkpoint),
             task=make_task(),
             alg=make_algorithm(
-                tpu_type,
+                tpu_types,
+                region,
                 top_k_a,
                 top_k_b,
                 advisor_model_path,
@@ -146,11 +149,12 @@ def build_steps(tpu_type: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--tpu-type", type=str, default=TPU_TYPE)
+    parser.add_argument("--tpu-types", nargs="+", default=list(TPU_TYPES))
+    parser.add_argument("--region", type=str, required=True)
     args, remaining_args = parser.parse_known_args()
     sys.argv = [sys.argv[0], *remaining_args]
 
     executor_main(
-        steps=build_steps(args.tpu_type),
+        steps=build_steps(args.tpu_types, args.region),
         description="Delphi scaling-ladder joint-decode evals on GSM8K (top_k_a x top_k_b sweep).",
     )

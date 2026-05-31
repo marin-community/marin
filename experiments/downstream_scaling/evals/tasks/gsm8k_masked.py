@@ -14,8 +14,9 @@ from dataclasses import dataclass
 import fsspec
 from fray.cluster import ResourceConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
-from marin.execution.executor import ExecutorStep, InputName, MirroredValue, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, InputName, MirroredValue
 from marin.execution.remote import remote
+from marin.execution.types import this_output_path, versioned
 
 from experiments.downstream_scaling.evals.framework.schema import prompts_file
 from experiments.downstream_scaling.evals.tasks.gsm8k import GSM8KTask
