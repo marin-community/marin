@@ -42,7 +42,7 @@ def _last_non_null(old: _T | None, new: _T | None) -> _T | None:
     return new if new is not None else old
 
 
-class WorkingState:
+class Overlay:
     """Mutable in-memory view of a :class:`TransitionSnapshot`.
 
     Wraps a read-only snapshot and a pending :class:`ControllerEffects`. The
@@ -50,16 +50,16 @@ class WorkingState:
     on top of the snapshot so iteration N+1 sees iteration N's prospective
     state, and the same dicts are flushed to SQL once per entity at commit.
 
-    Recording is split:
+    Mutation is split by a strict prefix rule:
 
-    * ``record_task`` / ``record_attempt`` / ``record_job_state`` /
-      ``record_cascade_kill`` MERGE a typed delta into the accumulator per the
-      per-field rules (see each method). Reads (:meth:`task_state`,
+    * ``merge_*`` (``merge_task`` / ``merge_attempt`` / ``merge_job_state`` /
+      ``merge_cascade_kill``) folds a typed row delta into the accumulator per
+      the per-field rules (see each method). Reads (:meth:`task_state`,
       :meth:`job_basis`, ...) consult the accumulator, so prospective state and
       the persisted SQL cannot drift.
-    * Named ``record_*`` methods emit the cross-aggregate effect categories
-      (endpoint deletions, worker health, structured audit log events). These
-      fire after commit and so are not row deltas.
+    * ``emit_*`` appends a cross-aggregate effect category (endpoint deletions,
+      worker health, structured audit log events). These fire after commit and
+      so are not row deltas.
     """
 
     def __init__(self, snapshot: TransitionSnapshot) -> None:
@@ -73,6 +73,10 @@ class WorkingState:
     @property
     def effects(self) -> ControllerEffects:
         return self._effects
+
+    @property
+    def snapshot(self) -> TransitionSnapshot:
+        return self._snapshot
 
     @property
     def now(self) -> Timestamp:
@@ -208,7 +212,7 @@ class WorkingState:
     # Accumulator merge entry points
     # ------------------------------------------------------------------
 
-    def record_task(self, delta: TaskRowDelta) -> None:
+    def merge_task(self, delta: TaskRowDelta) -> None:
         """Merge a task delta into the accumulator.
 
         Per-field fold (earlier accumulated ``old`` then newer ``delta``):
@@ -232,7 +236,7 @@ class WorkingState:
             container_id=_last_non_null(old.container_id, delta.container_id),
         )
 
-    def record_attempt(self, delta: AttemptRowDelta) -> None:
+    def merge_attempt(self, delta: AttemptRowDelta) -> None:
         """Merge an attempt delta into the accumulator.
 
         Per-field fold: state/exit_code/error last-non-null; started_at and
@@ -254,7 +258,7 @@ class WorkingState:
             error=_last_non_null(old.error, delta.error),
         )
 
-    def record_job_state(self, delta: JobRowDelta) -> None:
+    def merge_job_state(self, delta: JobRowDelta) -> None:
         """Merge a recompute job-state write into the accumulator.
 
         state last-wins; started_at first-non-null; finished_at last-wins;
@@ -278,7 +282,7 @@ class WorkingState:
             allow_overwrite_worker_failed=old.allow_overwrite_worker_failed,
         )
 
-    def record_cascade_kill(self, delta: JobRowDelta) -> None:
+    def merge_cascade_kill(self, delta: JobRowDelta) -> None:
         """Merge a guarded cascade-kill write into the accumulator.
 
         Guard against the accumulated-or-snapshot state: if that state is in the
@@ -309,17 +313,17 @@ class WorkingState:
     # post-commit categories, kept separate from the row-delta setters.
     # ------------------------------------------------------------------
 
-    def record_endpoint_deletion(self, task_id: JobName) -> None:
+    def emit_endpoint_deletion(self, task_id: JobName) -> None:
         self._effects.endpoint_deletions.append(EndpointDeletion(task_id=task_id))
 
-    def record_log_event(self, event: LogEvent) -> None:
+    def emit_log_event(self, event: LogEvent) -> None:
         self._effects.log_events.append(event)
 
-    def record_worker_heartbeat(self, worker_ids: Iterable[WorkerId]) -> None:
+    def emit_worker_heartbeat(self, worker_ids: Iterable[WorkerId]) -> None:
         self._effects.health.heartbeat.extend(worker_ids)
 
-    def record_worker_build_failed(self, worker_id: WorkerId) -> None:
+    def emit_worker_build_failed(self, worker_id: WorkerId) -> None:
         self._effects.health.build_failed.append(worker_id)
 
-    def record_worker_make_unhealthy(self, worker_id: WorkerId) -> None:
+    def emit_worker_make_unhealthy(self, worker_id: WorkerId) -> None:
         self._effects.health.make_unhealthy.append(worker_id)

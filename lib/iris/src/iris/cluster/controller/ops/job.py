@@ -19,8 +19,8 @@ from iris.cluster.controller.codec import (
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.direct_provider import RunTemplateCache
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
-from iris.cluster.controller.reconcile.batches import apply_cancel_job_batch
-from iris.cluster.controller.reconcile.effects import apply_effects
+from iris.cluster.controller.reconcile import ReconcileState
+from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.policy import (
     DEFAULT_MAX_RETRIES_PREEMPTION,
@@ -327,7 +327,7 @@ def cancel(
 
     Loads a snapshot covering every job in the subtree and all their active
     tasks (so the kernel can fire coscheduled-peer cascades on killed tasks),
-    runs :func:`apply_cancel_job_batch`, then applies the resulting effects.
+    runs :meth:`ReconcileState.cancel_job`, then applies the resulting effects.
 
     Fixes the latent coscheduled-skip bug in the legacy direct-SQL cancel:
     when one half of an atomic coscheduled group is cancelled, the kernel
@@ -342,8 +342,8 @@ def cancel(
         return
     # No per-job state preload: the cascade-kill merge guard skips already-
     # terminal rows (excluding WORKER_FAILED, which cancel overwrites).
-    effects = apply_cancel_job_batch(snapshot, job_id, reason, now)
-    apply_effects(cur, effects, health=health, endpoints=endpoints, now=now)
+    effects = ReconcileState.open(snapshot).cancel_job(job_id, reason, now)
+    commit_effects(cur, effects, health=health, endpoints=endpoints, now=now)
     # Sweep endpoints that survived because their owning task was already
     # terminal before cancel ran (kernel only emits EndpointDeletion for
     # tasks we actively killed). Derive the same subtree the kernel cancelled

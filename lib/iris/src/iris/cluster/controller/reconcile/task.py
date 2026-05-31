@@ -16,9 +16,9 @@ from typing import Any
 from rigging.timing import Timestamp
 
 from iris.cluster.controller.reconcile.effects import AttemptRowDelta, TaskRowDelta
+from iris.cluster.controller.reconcile.overlay import Overlay
 from iris.cluster.controller.reconcile.policy import FAILURE_TASK_STATES
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate, TransitionSnapshot
-from iris.cluster.controller.reconcile.working_state import WorkingState
 from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     EXECUTING_TASK_STATES,
@@ -46,7 +46,7 @@ class TerminalKind(StrEnum):
     """Variant tag for :class:`TerminalDecision`.
 
     Each kind drives a different per-task terminal transition inside
-    :func:`apply_terminal_decisions_batch`:
+    :meth:`ReconcileState.apply_terminal_decisions`:
 
     - ``PREEMPT``: mark the task PREEMPTED (or retry to PENDING if budget remains).
     - ``TIMEOUT``: mark the task FAILED with no retry; cascade siblings.
@@ -120,8 +120,8 @@ def active_row_from_snapshot(snapshot: TransitionSnapshot, task_id: JobName) -> 
 # ─── Per-attempt transitions ───
 
 
-def _record_task_termination(
-    state: WorkingState,
+def _merge_task_termination(
+    state: Overlay,
     task_id: str,
     attempt_id: int | None,
     task_state: int,
@@ -146,7 +146,7 @@ def _record_task_termination(
     task_name = JobName.from_wire(task_id)
 
     if attempt_id is not None and attempt_id >= 0:
-        state.record_attempt(
+        state.merge_attempt(
             AttemptRowDelta(
                 task_id=task_name,
                 attempt_id=attempt_id,
@@ -156,7 +156,7 @@ def _record_task_termination(
             )
         )
 
-    state.record_task(
+    state.merge_task(
         TaskRowDelta(
             task_id=task_name,
             state=task_state,
@@ -166,11 +166,11 @@ def _record_task_termination(
             preemption_count=preemption_count,
         )
     )
-    state.record_endpoint_deletion(task_name)
+    state.emit_endpoint_deletion(task_name)
 
 
 def finalize_attempt(
-    state: WorkingState,
+    state: Overlay,
     task_id: str,
     attempt_id: int | None,
     task_state: int,
@@ -182,7 +182,7 @@ def finalize_attempt(
     preemption_count: int | None = None,
 ) -> None:
     """Move the task to ``task_state`` and stamp the attempt's ``finished_at_ms``."""
-    _record_task_termination(
+    _merge_task_termination(
         state,
         task_id,
         attempt_id,
@@ -197,7 +197,7 @@ def finalize_attempt(
 
 
 def mark_task_terminating(
-    state: WorkingState,
+    state: Overlay,
     task_id: str,
     attempt_id: int | None,
     task_state: int,
@@ -209,7 +209,7 @@ def mark_task_terminating(
     preemption_count: int | None = None,
 ) -> None:
     """Move the task to ``task_state`` without stamping the attempt's ``finished_at_ms``."""
-    _record_task_termination(
+    _merge_task_termination(
         state,
         task_id,
         attempt_id,
@@ -255,7 +255,7 @@ def resolve_task_failure_state(
 
 
 def unschedulable_one(
-    state: WorkingState,
+    state: Overlay,
     snapshot: TransitionSnapshot,
     task_id: JobName,
     reason: str,
@@ -277,7 +277,7 @@ def unschedulable_one(
 
 
 def preempt_one(
-    state: WorkingState,
+    state: Overlay,
     snapshot: TransitionSnapshot,
     task_id: JobName,
     reason: str,
@@ -321,7 +321,7 @@ def preempt_one(
 
 
 def apply_one_transition(
-    state: WorkingState,
+    state: Overlay,
     snapshot: TransitionSnapshot,
     update: TaskUpdate,
     now_ms: int,
@@ -378,7 +378,7 @@ def apply_one_transition(
             attempt = attempt_map.get((update.task_id, update.attempt_id))
             overlay_finished_at = state.attempt_finished_at(update.task_id, update.attempt_id)
             if attempt is not None and attempt.worker_id is not None and overlay_finished_at is None:
-                state.record_attempt(
+                state.merge_attempt(
                     AttemptRowDelta(
                         task_id=update.task_id,
                         attempt_id=update.attempt_id,
@@ -423,7 +423,7 @@ def apply_one_transition(
     if overlay_attempt_state is not None and overlay_attempt_state in TERMINAL_TASK_STATES:
         overlay_finished_at = state.attempt_finished_at(update.task_id, update.attempt_id)
         if overlay_finished_at is None and int(update.new_state) in TERMINAL_TASK_STATES:
-            state.record_attempt(
+            state.merge_attempt(
                 AttemptRowDelta(
                     task_id=update.task_id,
                     attempt_id=update.attempt_id,
@@ -484,7 +484,7 @@ def apply_one_transition(
             and prior_state in (job_pb2.TASK_STATE_ASSIGNED, job_pb2.TASK_STATE_BUILDING)
         ) or (update.new_state == job_pb2.TASK_STATE_FAILED and prior_state == job_pb2.TASK_STATE_BUILDING)
         if charge_worker_build_failures and launch_or_build_failure and attempt_worker_id is not None:
-            state.record_worker_build_failed(WorkerId(str(attempt_worker_id)))
+            state.emit_worker_build_failed(WorkerId(str(attempt_worker_id)))
 
         if update.new_state == job_pb2.TASK_STATE_FAILED:
             # Application failure (non-zero exit / setup error): failure budget.
@@ -514,7 +514,7 @@ def apply_one_transition(
     started_at = Timestamp.from_ms(started_ms) if started_ms is not None else None
     task_finished_at = Timestamp.from_ms(terminal_ms) if terminal_ms is not None else None
 
-    state.record_attempt(
+    state.merge_attempt(
         AttemptRowDelta(
             task_id=update.task_id,
             attempt_id=update.attempt_id,
@@ -525,7 +525,7 @@ def apply_one_transition(
             error=update.error,
         )
     )
-    state.record_task(
+    state.merge_task(
         TaskRowDelta(
             task_id=update.task_id,
             state=task_state,
@@ -540,7 +540,7 @@ def apply_one_transition(
     )
 
     if update.new_state in TERMINAL_TASK_STATES:
-        state.record_endpoint_deletion(update.task_id)
+        state.emit_endpoint_deletion(update.task_id)
 
     jc = state.job_config(task.job_id)
     has_cosched = bool(jc is not None and jc.has_coscheduling and int(update.new_state) in FAILURE_TASK_STATES)
@@ -558,7 +558,7 @@ def apply_one_transition(
 
 
 def timeout_one(
-    state: WorkingState,
+    state: Overlay,
     row: ActiveTaskRow,
     reason: str,
     now_ms: int,

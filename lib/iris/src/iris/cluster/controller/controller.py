@@ -54,7 +54,7 @@ from iris.cluster.controller.ops.task import (
     apply_provider_updates as apply_direct_provider_updates,
 )
 from iris.cluster.controller.ops.worker import (
-    apply_reconcile_observations as apply_reconcile,
+    reconcile as apply_reconcile,
 )
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
@@ -185,7 +185,7 @@ class ControllerConfig:
 
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(1.0))
     """Polling reconcile cadence. The polling thread wakes every ``poll_interval``
-    (or sooner if ``_polling_wake`` is set) and runs ``_reconcile_worker_batch``
+    (or sooner if ``_polling_wake`` is set) and runs ``_reconcile_tick``
     against every healthy worker. The Reconcile RPC is the sole channel that
     dispatches new ASSIGNED rows and observes worker-side state changes."""
 
@@ -418,7 +418,7 @@ class Controller:
 
         self._autoscaler: Autoscaler | None = autoscaler
 
-        # Throttles the execution-timeout deadline scan in _reconcile_worker_batch.
+        # Throttles the execution-timeout deadline scan in _reconcile_tick.
         # The reconcile tick runs frequently (poll cadence); the timeout query
         # only needs minute-granularity, so we gate it behind a 60s limiter.
         self._timeout_rate_limiter: RateLimiter = RateLimiter(interval_seconds=60.0)
@@ -724,7 +724,7 @@ class Controller:
             if stop_event.is_set():
                 break
             try:
-                self._reconcile_worker_batch()
+                self._reconcile_tick()
             except Exception:
                 logger.exception("Polling reconcile tick failed")
 
@@ -1284,7 +1284,7 @@ class Controller:
         inputs = ReconcileInputs(job_specs=job_specs, worker_ids=worker_ids, rows_by_worker=rows_by_worker)
         return inputs, addresses, timeout_decisions
 
-    def _reconcile_worker_batch(self) -> None:
+    def _reconcile_tick(self) -> None:
         """One polling-tick reconcile pass: snapshot, fan out, apply.
 
         The execution-timeout deadline scan is folded into this tick (gated by

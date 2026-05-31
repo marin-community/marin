@@ -32,9 +32,11 @@ from iris.cluster.controller.projections.endpoints import EndpointQuery, Endpoin
 from iris.cluster.controller.pruner import PruneResult, prune_old_data
 from iris.cluster.controller.reads import WorkerResourceUsage
 from iris.cluster.controller.reconcile.batches import _kill_non_terminal_tasks
-from iris.cluster.controller.reconcile.effects import JobRowDelta, apply_effects
+from iris.cluster.controller.reconcile.commit import commit_effects
+from iris.cluster.controller.reconcile.effects import JobRowDelta
 from iris.cluster.controller.reconcile.job import recompute_state
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
+from iris.cluster.controller.reconcile.overlay import Overlay
 from iris.cluster.controller.reconcile.policy import MAX_REPLICAS_PER_JOB
 from iris.cluster.controller.reconcile.snapshot import (
     JobStateBasis,
@@ -43,7 +45,6 @@ from iris.cluster.controller.reconcile.snapshot import (
     TransitionSnapshot,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
-from iris.cluster.controller.reconcile.working_state import WorkingState
 from iris.cluster.controller.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     JobRequirements,
@@ -1474,7 +1475,7 @@ def test_worker_failure_drives_coscheduled_job_terminal(state, fail_both):
     is terminal — not leave it stranded RUNNING.
 
     Regression for the recompute-before-cascade ordering in
-    ``apply_worker_failures_batch``: the per-task job recompute must observe the
+    ``ReconcileState.fail_workers``: the per-task job recompute must observe the
     cascaded COSCHED_FAILED siblings. Before the fix it recomputed while the
     siblings were still active (job stayed RUNNING) and never recomputed after
     the cascade, so a job whose direct victim exhausted its retry budget was
@@ -3708,7 +3709,7 @@ def test_reconcile_worker_failed_pending_rollback_cascades_children(state):
 
     Reconcile-path analogue of ``test_worker_death_preemption_policy_terminate``:
     the failure arrives as a worker observation (through ``apply_task_observations``
-    -> ``apply_reconcile_batch``) rather than as a controller-asserted worker death.
+    -> ``ReconcileState.reconcile``) rather than as a controller-asserted worker death.
     With retry budget the parent task rolls back to PENDING (its job stays RUNNING,
     so terminal finalize never fires), and the single-task default
     ``TERMINATE_CHILDREN`` policy must still kill descendant jobs.
@@ -4381,14 +4382,14 @@ def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harnes
             seed_task_ids=[holder_tasks[0].task_id],
         )
 
-        kill_state = WorkingState(snapshot=snapshot)
+        kill_state = Overlay(snapshot=snapshot)
         _kill_non_terminal_tasks(
             kill_state,
             holder_job_id,
             "Job finalized",
             0,
         )
-        apply_effects(
+        commit_effects(
             cur,
             kill_state.effects,
             health=harness.state._health,
@@ -4514,8 +4515,8 @@ def test_cascade_kill_noops_on_worker_failed_without_allow_overwrite():
     """A cascade kill is a no-op on a WORKER_FAILED job unless allow_overwrite is set."""
     jid = JobName.from_wire("/u/j")
     snap = _empty_snapshot(job_state_basis={jid: _basis(jid, job_pb2.JOB_STATE_WORKER_FAILED)})
-    ws = WorkingState(snap)
-    ws.record_cascade_kill(
+    ws = Overlay(snap)
+    ws.merge_cascade_kill(
         JobRowDelta(
             job_id=jid,
             state=job_pb2.JOB_STATE_KILLED,
@@ -4533,8 +4534,8 @@ def test_cascade_kill_overwrites_worker_failed_with_allow_overwrite():
     """allow_overwrite_worker_failed widens the guard so WORKER_FAILED is killed (cancel)."""
     jid = JobName.from_wire("/u/j")
     snap = _empty_snapshot(job_state_basis={jid: _basis(jid, job_pb2.JOB_STATE_WORKER_FAILED)})
-    ws = WorkingState(snap)
-    ws.record_cascade_kill(
+    ws = Overlay(snap)
+    ws.merge_cascade_kill(
         JobRowDelta(
             job_id=jid,
             state=job_pb2.JOB_STATE_KILLED,
@@ -4551,8 +4552,8 @@ def test_cascade_kill_overwrites_worker_failed_with_allow_overwrite():
 def test_cascade_kill_noops_on_already_terminal_job():
     jid = JobName.from_wire("/u/j")
     snap = _empty_snapshot(job_state_basis={jid: _basis(jid, job_pb2.JOB_STATE_SUCCEEDED)})
-    ws = WorkingState(snap)
-    ws.record_cascade_kill(
+    ws = Overlay(snap)
+    ws.merge_cascade_kill(
         JobRowDelta(
             job_id=jid,
             state=job_pb2.JOB_STATE_KILLED,
@@ -4617,7 +4618,7 @@ def test_recompute_fails_job_when_a_task_exhausts_its_retries():
         job_pb2.TASK_STATE_SUCCEEDED,
         job_pb2.TASK_STATE_SUCCEEDED,
     ]
-    ws = WorkingState(_recompute_snapshot(jid, task_states, max_task_failures=1))
+    ws = Overlay(_recompute_snapshot(jid, task_states, max_task_failures=1))
 
     new_state = recompute_state(ws, jid)
 
@@ -4636,7 +4637,7 @@ def test_recompute_fails_job_on_single_terminally_failed_task():
     FAILED-over-threshold abort). Pre-fix the job hung RUNNING.
     """
     jid = JobName.from_wire("/u/timed-out")
-    ws = WorkingState(_recompute_snapshot(jid, [job_pb2.TASK_STATE_FAILED], max_task_failures=1))
+    ws = Overlay(_recompute_snapshot(jid, [job_pb2.TASK_STATE_FAILED], max_task_failures=1))
 
     new_state = recompute_state(ws, jid)
 
@@ -4648,7 +4649,7 @@ def test_recompute_still_running_when_a_task_is_active():
     """The terminal branch must not fire while any task is still active."""
     jid = JobName.from_wire("/u/active")
     task_states = [job_pb2.TASK_STATE_FAILED, job_pb2.TASK_STATE_RUNNING]
-    ws = WorkingState(_recompute_snapshot(jid, task_states, max_task_failures=1))
+    ws = Overlay(_recompute_snapshot(jid, task_states, max_task_failures=1))
 
     new_state = recompute_state(ws, jid)
 

@@ -5,8 +5,8 @@
 
 from collections.abc import Iterable
 
+from iris.cluster.controller.reconcile.overlay import Overlay
 from iris.cluster.controller.reconcile.task import mark_task_terminating
-from iris.cluster.controller.reconcile.working_state import WorkingState
 from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     ActiveTaskRow,
@@ -16,7 +16,7 @@ from iris.rpc import job_pb2
 
 
 def find_coscheduled_siblings(
-    state: WorkingState,
+    state: Overlay,
     job_id: JobName,
     exclude_task_id: JobName,
     has_coscheduling: bool,
@@ -32,7 +32,7 @@ def find_coscheduled_siblings(
 
 
 def terminate_coscheduled_siblings(
-    state: WorkingState,
+    state: Overlay,
     siblings: Iterable[ActiveTaskRow],
     failed_task_id: JobName,
     now_ms: int,
@@ -61,7 +61,7 @@ def terminate_coscheduled_siblings(
 
 
 def requeue_coscheduled_siblings(
-    state: WorkingState,
+    state: Overlay,
     siblings: Iterable[ActiveTaskRow],
     failed_task_id: JobName,
     now_ms: int,

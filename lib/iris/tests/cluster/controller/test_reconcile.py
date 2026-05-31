@@ -11,7 +11,7 @@ Three layers, exercised in order:
    fake stub factory and synthesizes ``ReconcileResult.observations``.
 3. **Apply + e2e** — ``apply_reconcile`` against real SQLite DB state, plus a
    handful of end-to-end convergence ticks driven through
-   ``Controller._reconcile_worker_batch``.
+   ``Controller._reconcile_tick``.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from typing import Any
 import pytest
 from iris.cluster.controller import ops, writes
 from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.ops.worker import apply_reconcile_observations as apply_reconcile
+from iris.cluster.controller.ops.worker import reconcile as apply_reconcile
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.worker import (
@@ -1093,7 +1093,7 @@ def test_e2e_converges_to_succeeded(make_controller):
         ops.task.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
 
     # Tick 1: ASSIGNED — controller dispatches the inline spec.
-    ctrl._reconcile_worker_batch()
+    ctrl._reconcile_tick()
     tick1_desired = list(provider.calls[0][0][0].request.desired)
     assert len(tick1_desired) == 1
     assert tick1_desired[0].HasField("run") and tick1_desired[0].run.HasField(
@@ -1102,11 +1102,11 @@ def test_e2e_converges_to_succeeded(make_controller):
     assert tick1_desired[0].attempt_uid, "controller must emit a non-empty attempt_uid"
 
     # Tick 2: worker reports RUNNING.
-    ctrl._reconcile_worker_batch()
+    ctrl._reconcile_tick()
     assert query_task(state, task_id).state == job_pb2.TASK_STATE_RUNNING
 
     # Tick 3: subsequent run intents must not carry inline spec (cache-hit invariant).
-    ctrl._reconcile_worker_batch()
+    ctrl._reconcile_tick()
     tick3_desired = list(provider.calls[2][0][0].request.desired)
     assert tick3_desired and tick3_desired[0].HasField("run")
     assert not tick3_desired[0].run.HasField("request"), "subsequent ticks must not carry inline spec"
@@ -1144,8 +1144,8 @@ def test_e2e_missing_observation_on_assigned_task_retries_to_pending(make_contro
     with state._db.transaction() as cur:
         ops.task.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
 
-    ctrl._reconcile_worker_batch()
-    ctrl._reconcile_worker_batch()
+    ctrl._reconcile_tick()
+    ctrl._reconcile_tick()
 
     task = query_task(state, task_id)
     assert task.state == job_pb2.TASK_STATE_PENDING
@@ -1157,13 +1157,13 @@ def test_e2e_missing_observation_on_assigned_task_retries_to_pending(make_contro
 # Section 6: same-batch coscheduling split-slice corruption (#2 / #3)
 # ===========================================================================
 #
-# ``apply_reconcile`` (the batch verb) shares one WorkingState overlay across
+# ``apply_reconcile`` (the batch verb) shares one Overlay overlay across
 # every worker in a batch. When a coscheduled member's terminal update requeues
 # its sibling, the sibling's PENDING task state + PREEMPTED attempt state are
 # written into the overlay only. Reconcile guards that later read the raw
 # snapshot miss those mutations, so the outcome depends on the (non-deterministic)
 # per-worker processing order and can split a coscheduled gang. The fix routes
-# the attempt-state guards through ``WorkingState.attempt_state`` /
+# the attempt-state guards through ``Overlay.attempt_state`` /
 # ``attempt_finished_at`` and the RPC-failure synthesis through the overlay task
 # state. These regressions drive both worker orderings and assert the gang
 # converges identically (order-independence).

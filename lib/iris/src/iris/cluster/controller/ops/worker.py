@@ -15,8 +15,8 @@ from iris.cluster.controller.codec import proto_to_json
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.reconcile.batches import apply_reconcile_batch, apply_worker_failures_batch
-from iris.cluster.controller.reconcile.effects import ControllerEffects, apply_effects
+from iris.cluster.controller.reconcile import ControllerEffects, ReconcileState
+from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
 from iris.cluster.controller.schema import worker_attributes_table, workers_table
@@ -42,7 +42,7 @@ class WorkerFailureBatchResult:
 
     ``_terminate_workers`` calls ``provider.on_worker_failed`` for each entry
     and forwards the IDs to the autoscaler for slice-sibling teardown. Per-
-    task kill targets and log events are already applied by ``apply_effects``
+    task kill targets and log events are already applied by ``commit_effects``
     inside the batch, so they don't need to surface in the return value.
     """
 
@@ -235,8 +235,8 @@ def _apply_worker_failures_chunk(
     """Glue: load the worker slice for ``failures``, run the worker-failure
     kernel, apply effects.
 
-    Per-chunk shape: one closed snapshot, one :class:`WorkingState`, then
-    ``writes.remove_worker`` after ``apply_effects``.
+    Per-chunk shape: one closed snapshot, one :class:`Overlay`, then
+    ``writes.remove_worker`` after ``commit_effects``.
     """
     if not failures:
         return
@@ -246,16 +246,16 @@ def _apply_worker_failures_chunk(
     # their jobs' peer/descendant graph), so the batch derives its per-worker
     # task rows from the snapshot.
     snapshot = load_closed_snapshot(cur, now=now, seed_worker_ids=worker_ids)
-    effects = apply_worker_failures_batch(snapshot, failures)
+    effects = ReconcileState.open(snapshot).fail_workers(failures)
 
-    # apply_effects before remove_worker: task mutations reference attempt rows
+    # commit_effects before remove_worker: task mutations reference attempt rows
     # that would be CASCADE-deleted by remove_worker; order must be preserved.
-    apply_effects(cur, effects, health=health, endpoints=endpoints, now=now)
+    commit_effects(cur, effects, health=health, endpoints=endpoints, now=now)
     for worker_id, _, _ in failures:
         writes.remove_worker(cur, worker_id, health=health, worker_attrs=worker_attrs)
 
 
-def apply_reconcile_observations(
+def reconcile(
     cur: Tx,
     plans_by_worker: dict[WorkerId, WorkerReconcilePlan],
     results: list[ReconcileResult],
@@ -266,7 +266,7 @@ def apply_reconcile_observations(
 ) -> ControllerEffects:
     """Load ONE snapshot covering every (plan, result) pair, then apply once.
 
-    The pure :func:`apply_reconcile_batch` shares a ``WorkingState`` across
+    The pure :meth:`ReconcileState.reconcile` shares one ``Overlay`` across
     all pairs so cascade kills triggered by earlier workers are visible to
     later ones.
     """
@@ -305,6 +305,6 @@ def apply_reconcile_observations(
         seed_task_ids=all_task_ids,
         extra_attempt_keys=all_attempt_keys,
     )
-    effects = apply_reconcile_batch(snapshot, plan_results, now)
-    apply_effects(cur, effects, health=health, endpoints=endpoints, now=now)
+    effects = ReconcileState.open(snapshot).reconcile(plan_results, now)
+    commit_effects(cur, effects, health=health, endpoints=endpoints, now=now)
     return effects

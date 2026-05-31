@@ -4,7 +4,7 @@
 """Test driver for landing task-state updates through the production path.
 
 The live controller lands worker-reported task states through the reconcile
-loop (``ops.worker.apply_reconcile_observations``). To keep tests exercising
+loop (``ops.worker.reconcile``). To keep tests exercising
 the same code the controller runs, ``apply_task_observations`` rebuilds a
 per-worker batch of :class:`WorkerTaskUpdates` into reconcile
 ``AttemptObservation`` protos and applies them through that production verb.
@@ -13,7 +13,7 @@ per-worker batch of :class:`WorkerTaskUpdates` into reconcile
 from dataclasses import dataclass
 
 from iris.cluster.controller.db import Tx
-from iris.cluster.controller.ops.worker import apply_reconcile_observations
+from iris.cluster.controller.ops.worker import reconcile as apply_reconcile_observations
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.reconcile.effects import ControllerEffects
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate

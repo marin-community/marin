@@ -112,8 +112,7 @@ class ActiveTaskRow:
     """Task projection joined with ``jobs`` + ``job_config``.
 
     Shared by every cascade/scheduling query (``_kill_non_terminal_tasks``,
-    ``peers.find_coscheduled_siblings``, ``cancel_job``, ``apply_terminal_decisions_batch``,
-    ``apply_worker_failures_batch``, poll paths).
+    ``peers.find_coscheduled_siblings``, ``ReconcileState`` verbs, poll paths).
     Callers that need resource info for RPC payloads use ``PendingDispatchRow``
     instead; ``ActiveTaskRow`` carries only the fields needed for state-machine
     and cascade logic.

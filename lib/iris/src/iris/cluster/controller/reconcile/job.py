@@ -4,8 +4,8 @@
 """Pure rules for the job aggregate: state recomputation."""
 
 from iris.cluster.controller.reconcile.effects import JobRowDelta
+from iris.cluster.controller.reconcile.overlay import Overlay
 from iris.cluster.controller.reconcile.policy import ERROR_STATES
-from iris.cluster.controller.reconcile.working_state import WorkingState
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
@@ -14,7 +14,7 @@ from iris.cluster.types import (
 from iris.rpc import job_pb2
 
 
-def recompute_state(state: WorkingState, job_id: JobName) -> int | None:
+def recompute_state(state: Overlay, job_id: JobName) -> int | None:
     """Recompute job state from the prospective task histogram.
 
     Returns the new state (which may equal current). Returns ``None`` when
@@ -74,7 +74,7 @@ def recompute_state(state: WorkingState, job_id: JobName) -> int | None:
     if new_state == current_state:
         return new_state
     error = basis.first_task_error
-    state.record_job_state(
+    state.merge_job_state(
         JobRowDelta(
             job_id=job_id,
             state=new_state,

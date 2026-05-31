@@ -5,12 +5,12 @@
 
 The ``apply_*`` glues here are the small per-tick wrappers around the
 transition kernel: load a closed snapshot covering the affected tasks via a
-scoped loader, call the matching ``batches.apply_*_batch``, drain effects
-through ``apply_effects``. ``queue_assignments`` is the only scheduler-driven
+scoped loader, call the matching ``ReconcileState`` verb, drain effects
+through ``commit_effects``. ``queue_assignments`` is the only scheduler-driven
 write that doesn't go through the kernel — PENDING → ASSIGNED is a
 direct-write transition with no cascade semantics.
 
-Worker-reported task states land through ``ops.worker.apply_reconcile_observations``
+Worker-reported task states land through ``ops.worker.reconcile``
 (the reconcile loop), not here.
 """
 
@@ -24,14 +24,14 @@ from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
-from iris.cluster.controller.reconcile.batches import (
-    apply_direct_provider_updates_batch,
-    apply_terminal_decisions_batch,
+from iris.cluster.controller.reconcile import (
+    ControllerEffects,
+    ReconcileState,
+    TaskUpdate,
+    TerminalDecision,
 )
-from iris.cluster.controller.reconcile.effects import ControllerEffects, apply_effects
+from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
-from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.reconcile.task import TerminalDecision
 from iris.cluster.controller.schema import jobs_table
 from iris.cluster.controller.task_state import task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerHealthTracker
@@ -156,8 +156,8 @@ def apply_provider_updates(
         seed_task_ids=relevant_task_ids,
         extra_attempt_keys=attempt_keys,
     )
-    effects = apply_direct_provider_updates_batch(snapshot, updates)
-    apply_effects(cur, effects, health=health, endpoints=endpoints, now=now)
+    effects = ReconcileState.open(snapshot).apply_provider_updates(updates)
+    commit_effects(cur, effects, health=health, endpoints=endpoints, now=now)
     return effects
 
 
@@ -181,6 +181,6 @@ def apply_terminal_decisions(
 
     all_task_ids: list[JobName] = sorted({d.task_id for d in decisions}, key=lambda tid: tid.to_wire())
     snapshot = load_closed_snapshot(cur, now=now, seed_task_ids=all_task_ids)
-    effects = apply_terminal_decisions_batch(snapshot, decisions)
-    apply_effects(cur, effects, health=health, endpoints=endpoints, now=now)
+    effects = ReconcileState.open(snapshot).apply_terminal_decisions(decisions)
+    commit_effects(cur, effects, health=health, endpoints=endpoints, now=now)
     return effects
