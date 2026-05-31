@@ -45,4 +45,7 @@ jobs:
         run: uv sync
 
       - name: Run egress report
+        env:
+          DISCORD_WEBHOOK_INTERNAL_DISCUSS: ${{ secrets.DISCORD_WEBHOOK_INTERNAL_DISCUSS }}
+          GH_TOKEN: ${{ secrets.GIST_PAT }}
         run: uv run python scripts/ops/egress_report.py

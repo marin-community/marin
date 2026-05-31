@@ -1,8 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import contextvars
 import json
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import patch
@@ -13,10 +15,11 @@ from fray.types import ResourceConfig
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact, PathMetadata
-from marin.execution.executor import Executor, ExecutorStep, _dag_tpu_regions, resolve_executor_step
+from marin.execution.executor import Executor, _dag_tpu_regions, resolve_executor_step
 from marin.execution.remote import RemoteCallable, remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from marin.execution.types import ExecutorStep
 from pydantic import BaseModel
 from rigging.filesystem import MARIN_CROSS_REGION_OVERRIDE_ENV
 
@@ -261,6 +264,32 @@ def test_resolve_executor_step_preserves_deps():
     assert resolved.dep_paths == ["/out/download-abc123", "/out/tokenize-def456"]
 
 
+def test_resolved_executor_step_resources_dispatch_via_fray(tmp_path: Path, fray_client):
+    """Old-style ExecutorStep resources should survive resolution and trigger Fray dispatch."""
+
+    spy = _SubmitSpy(fray_client)
+    resources = ResourceConfig.with_cpu(cpu=1, ram="8g")
+
+    def report_step(config: dict[str, str]) -> PathMetadata:
+        return PathMetadata(path=config["expected_path"])
+
+    step = ExecutorStep(name="report", fn=report_step, config=None, resources=resources)
+    resolved = resolve_executor_step(
+        step,
+        config={"expected_path": tmp_path.as_posix()},
+        output_path=tmp_path.as_posix(),
+    )
+
+    assert resolved.resources == resources
+    with set_current_client(spy):
+        StepRunner().run([resolved])
+
+    assert len(spy.requests) == 1
+    assert spy.requests[0].resources == resources
+    loaded = Artifact.from_path(tmp_path.as_posix(), PathMetadata)
+    assert loaded.path == tmp_path.as_posix()
+
+
 def test_step_spec_as_executor_step_round_trip():
     """StepSpec -> ExecutorStep -> StepSpec should preserve identity."""
     prefix = "gs://test-bucket"
@@ -276,6 +305,7 @@ def test_step_spec_as_executor_step_round_trip():
         hash_attrs={"tokenizer": "llama3"},
         deps=[dep],
         fn=lambda output_path: output_path,
+        resources=ResourceConfig.with_cpu(cpu=2, ram="8g"),
     )
 
     executor_step = step.as_executor_step()
@@ -297,6 +327,7 @@ def test_step_spec_as_executor_step_round_trip():
     assert resolved.output_path == step.output_path
     assert resolved.output_path_prefix == prefix
     assert resolved.dep_paths == [dep.output_path]
+    assert resolved.resources == step.resources
 
 
 def _build_three_level_dag(prefix: str) -> tuple[StepSpec, StepSpec, StepSpec]:
@@ -448,7 +479,7 @@ def test_runner_skips_completed_steps(tmp_path: Path):
     runner1.run(steps)
 
     # Record modification times
-    tokenize_artifact_path = os.path.join(steps[1].output_path, "artifact.json")
+    tokenize_artifact_path = os.path.join(steps[1].output_path, ".artifact.json")
     mtime_before = os.path.getmtime(tokenize_artifact_path)
 
     # Re-run — all steps should be skipped
@@ -563,7 +594,6 @@ def test_runner_consumes_unbounded_iterator(tmp_path: Path):
     implementation would try to exhaust the generator before running any step
     and hang (caught by the per-test timeout).
     """
-    import threading
 
     stop = threading.Event()
     executed: list[str] = []
@@ -1146,7 +1176,6 @@ def test_runner_propagates_context_vars(tmp_path):
     functions dispatched by the thread pool, so ZephyrContext (and anything
     else that calls ``current_client()``) picks up the correct client.
     """
-    import contextvars
 
     test_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("test_var", default=None)
     observed: list[str | None] = []

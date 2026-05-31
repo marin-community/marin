@@ -228,14 +228,12 @@ def leaf_key_paths(
     elif isinstance(pytree, tuple):
         out = tuple(rec(v, str(i)) for i, v in enumerate(pytree))
     elif isinstance(pytree, eqx.Module):
-        names = []
         rec_values = []
         for field in fields(pytree):
             if field.metadata.get("static", False):
                 continue
             field_name = field.name
             field_value = getattr(pytree, field_name)
-            names.append(field_name)
 
             if use_state_dict_keys and hasattr(pytree, "_state_dict_key_map"):
                 field_name = pytree._state_dict_key_map().get(field_name, field_name)
@@ -263,7 +261,6 @@ def leaf_key_paths(
                     out_leaves.append(join_key(prefix, ""))
                 else:
                     key_str = key_path_to_str([key])
-                    # out_leaves.append(join_key(prefix, key_str))
                     rec_pref = join_key(prefix, key_str)
                     out_leaves.append(
                         leaf_key_paths(leaf, rec_pref, is_leaf=is_leaf, use_state_dict_keys=use_state_dict_keys)

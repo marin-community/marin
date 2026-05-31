@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import json
 import math
 import os
@@ -25,6 +26,7 @@ from levanter.analysis.model_perplexity import (
     write_model_score_files,
 )
 import levanter.analysis.perplexity_gap as gap_analysis
+import levanter.main.perplexity_gap as perplexity_gap_main
 from levanter.analysis.perplexity_gap import (
     GapReportBuilder,
     RawTextDocument,
@@ -46,10 +48,12 @@ from levanter.distributed import DistributedConfig
 from levanter.main.perplexity_gap import (
     GapFinderConfig,
     GapFinderModelConfig,
+    ModelPerplexityConfig,
     _accumulate_token_losses,
     _check_finite_losses,
     _log_report_artifact,
     main,
+    score_main,
 )
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.tracker import current_tracker
@@ -572,6 +576,88 @@ def test_model_score_files_write_token_count_summary():
         "token_id": 1,
         "token_text": "<bos>",
     }
+
+
+def test_score_main_writes_outputs_without_uploading_model_score_artifact(monkeypatch):
+    document = RawTextDocument(
+        dataset_name="paloma/example",
+        tags=("paloma", "paloma/example"),
+        shard_name="docs",
+        row_index=0,
+        text="abc",
+        score_byte_end=3,
+    )
+
+    class FakeTrainer:
+        eval_batch_size = 1
+        compute_axis_mapping = {}
+        parameter_axis_mapping = {}
+
+        def use_device_mesh(self):
+            return contextlib.nullcontext()
+
+    class FakeTokenizer:
+        def __len__(self):
+            return 4
+
+    class FakeHfTokenizer:
+        def convert_ids_to_tokens(self, token_ids):
+            return [f"tok_{token_id}" for token_id in token_ids]
+
+    class FakeRunner:
+        label = "fake-model"
+        tokenizer = FakeTokenizer()
+        hf_tokenizer = FakeHfTokenizer()
+
+        def score_texts(self, texts):
+            assert texts == ["abc"]
+            return [
+                TokenizedDocument(
+                    token_ids=np.asarray([1, 2], dtype=np.int32),
+                    byte_starts=np.asarray([0, 1], dtype=np.int32),
+                    byte_ends=np.asarray([1, 3], dtype=np.int32),
+                    num_bytes=3,
+                )
+            ], [np.asarray([0.1, 0.2, 0.3], dtype=np.float64)]
+
+    def fake_iter_raw_text_documents(*args, **kwargs):
+        yield document
+
+    monkeypatch.setattr(perplexity_gap_main.levanter, "initialize", lambda config: None)
+    monkeypatch.setattr(perplexity_gap_main, "_load_model_runner", lambda **kwargs: FakeRunner())
+    monkeypatch.setattr(perplexity_gap_main, "iter_raw_text_documents", fake_iter_raw_text_documents)
+
+    tracker = DictTracker()
+
+    def fail_artifact_upload(*args, **kwargs):
+        raise AssertionError("model perplexity scores should only be written to output_path")
+
+    tracker.log_artifact = fail_artifact_upload  # type: ignore[method-assign]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config = ModelPerplexityConfig(
+            model=GapFinderModelConfig(
+                checkpoint_path="fake-checkpoint",
+                model=LlamaConfig(num_layers=1, num_heads=1, num_kv_heads=1, hidden_dim=8, max_seq_len=8),
+                tokenizer="fake-tokenizer",
+            ),
+            datasets={"paloma/example": DatasetComponent(format=TextLmDatasetFormat())},
+            trainer=FakeTrainer(),  # type: ignore[arg-type]
+            output_path=tmpdir,
+            max_eval_length=8,
+            max_docs_per_dataset=1,
+        )
+
+        with current_tracker(tracker):
+            score_main(config)
+
+        loaded_summary = read_model_score_summary(tmpdir)
+        loaded_documents = read_scored_documents(tmpdir)
+        token_count_summary = read_token_count_summary(tmpdir)
+
+    assert loaded_summary["model"] == "fake-model"
+    assert loaded_documents[0].document == document
+    assert token_count_summary["overall"]["total_tokens"] == 2
 
 
 def test_compare_scored_documents_matches_direct_gap_builder():

@@ -214,6 +214,7 @@ archive/
 
 # wandb logs
 wandb
+artifacts
 
 # Ignore generated credentials from google-github-actions/auth
 gha-creds-*.json
@@ -237,6 +238,7 @@ scr/*
 .agents/tmp/
 .codex
 .entire
+.beads
 
 # Generated protobuf and Connect RPC files (rebuilt by hatch build hook)
 # Excluded via .git/info/exclude instead of here, so Ray job submission includes them.

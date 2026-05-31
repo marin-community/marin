@@ -10,6 +10,7 @@ The dashboard serves a web UI that fetches data via RPC calls.
 from unittest.mock import Mock
 
 import pytest
+from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
@@ -29,10 +30,19 @@ from iris.cluster.controller.scheduler import (
 )
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
+from iris.cluster.controller.transitions import (
+    Assignment,
+    ControllerTransitions,
+    DirectProviderBatch,
+    HeartbeatApplyRequest,
+    TaskUpdate,
+)
+from iris.cluster.providers.k8s.fake import InMemoryK8sService
+from iris.cluster.providers.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE, K8sTaskProvider
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
+from iris.rpc.auth import StaticTokenVerifier
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
 from sqlalchemy import func, select
@@ -898,6 +908,105 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
     assert all(a["taskId"] == task_id.to_wire() for a in attempts)
 
 
+def test_get_worker_status_recent_attempts_carry_attempt_uid(client, state, job_request):
+    """GetWorkerStatus per-attempt rows surface the controller-minted
+    attempt_uid for operator traceability.
+
+    Covers ``_attempts_for_worker``: the projection reads ``attempt_uid``
+    from ``ATTEMPT_COLS`` and stamps it onto each ``TaskAttempt`` proto. The
+    UID is minted by ``insert_attempt`` when the attempt row is placed, so it
+    must be a non-empty 16-hex-char string on every attempt.
+    """
+    wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
+    job_id = submit_job(state, "uid-worker-job", job_request)
+    task_id = job_id.task(0)
+    with state._db.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+    with state._db.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid,
+                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+            ),
+        )
+
+    # The minted UID lives on the attempt row; read it directly to compare.
+    with state._db.read_snapshot() as tx:
+        db_uid = tx.execute(
+            select(task_attempts_table.c.attempt_uid).where(
+                task_attempts_table.c.task_id == task_id,
+                task_attempts_table.c.attempt_id == 0,
+            )
+        ).scalar_one()
+    assert len(db_uid) == 16 and all(c in "0123456789abcdef" for c in db_uid)
+
+    resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
+    attempts = resp.get("recentAttempts", [])
+    assert len(attempts) == 1
+    attempt = attempts[0]["attempt"]
+    assert attempt.get("attemptUid") == db_uid
+
+
+def test_get_task_status_attempts_carry_attempt_uid(client, state, job_request):
+    """GetTaskStatus attempts surface attempt_uid via ``task_to_proto``.
+
+    Each retry mints its own UID, so a task with two attempts yields two
+    ``TaskAttempt`` protos with distinct, non-empty UIDs matching the rows.
+    """
+    wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
+    request = controller_pb2.Controller.LaunchJobRequest(
+        name=JobName.root("test-user", "uid-task-job").to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+        replicas=1,
+        max_retries_preemption=2,
+    )
+    job_id = submit_job(state, "uid-task-job", request)
+    task_id = job_id.task(0)
+
+    # Attempt 0: placed then WORKER_FAILED so it retries to a fresh attempt.
+    with state._db.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+    with state._db.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid,
+                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED)],
+            ),
+        )
+    # Attempt 1: re-placed and RUNNING.
+    with state._db.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+    with state._db.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid,
+                updates=[TaskUpdate(task_id=task_id, attempt_id=1, new_state=job_pb2.TASK_STATE_RUNNING)],
+            ),
+        )
+
+    with state._db.read_snapshot() as tx:
+        db_uids = dict(
+            tx.execute(
+                select(task_attempts_table.c.attempt_id, task_attempts_table.c.attempt_uid).where(
+                    task_attempts_table.c.task_id == task_id
+                )
+            ).all()
+        )
+    assert set(db_uids) == {0, 1}
+    assert db_uids[0] != db_uids[1]
+
+    resp = rpc_post(client, "GetTaskStatus", {"taskId": task_id.to_wire()})
+    attempts = resp.get("task", resp).get("attempts", [])
+    assert len(attempts) == 2
+    proto_uids = {a["attemptId"]: a.get("attemptUid") for a in attempts}
+    assert proto_uids == db_uids
+
+
 def test_get_worker_status_by_worker_id(client, state):
     """GetWorkerStatus looks up purely by worker ID — no autoscaler cross-referencing."""
     register_worker(state, "w1", "10.0.0.5:8080", make_worker_metadata())
@@ -982,7 +1091,6 @@ def test_fetch_logs_backward_compat_proxy(client):
 
 def test_fetch_logs_backward_compat_proxy_proto_binary(client):
     """Old clients using default Connect proto encoding hit the compat endpoint."""
-    from finelog.rpc import logging_pb2
 
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     req = logging_pb2.FetchLogsRequest(
@@ -1151,7 +1259,6 @@ def test_auth_config_returns_disabled_by_default(client):
 
 def test_auth_config_returns_enabled_when_verifier_set(service, log_service):
     """Auth config endpoint reports auth enabled with provider name."""
-    from iris.rpc.auth import StaticTokenVerifier
 
     verifier = StaticTokenVerifier({"test-token": "test-user"})
     dashboard = ControllerDashboard(service, log_service=log_service, auth_verifier=verifier, auth_provider="gcp")
@@ -1203,8 +1310,6 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
 
 def _make_k8s_dashboard_client(state, scheduler, tmp_path):
     """Build a TestClient wired to a real K8sTaskProvider backed by InMemoryK8sService."""
-    from iris.cluster.providers.k8s.fake import InMemoryK8sService
-    from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 
     k8s = InMemoryK8sService(namespace="iris")
     provider = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest")
@@ -1228,8 +1333,6 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path):
 
 def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path):
     """GetKubernetesClusterStatus returns node capacity and pod statuses after sync."""
-    from iris.cluster.controller.transitions import DirectProviderBatch
-    from iris.cluster.providers.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
 
     client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path)
 

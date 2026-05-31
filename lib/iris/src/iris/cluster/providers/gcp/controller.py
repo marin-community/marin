@@ -21,9 +21,9 @@ from rigging.timing import ExponentialBackoff, retry_with_backoff
 from iris.cluster.controller.vm_lifecycle import restart_controller as vm_restart_controller
 from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
-from iris.cluster.providers.gcp.ssh import ssh_impersonate_service_account, ssh_key_file
+from iris.cluster.providers.gcp.service import GcpService
+from iris.cluster.providers.gcp.ssh import ssh_impersonate_service_account
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
-from iris.cluster.providers.remote_exec import resolve_current_os_login_user
 from iris.cluster.providers.types import (
     Labels,
     default_stop_all,
@@ -34,15 +34,6 @@ from iris.cluster.service_mode import ServiceMode
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
-
-_FALLBACK_SSH_ERROR_MARKERS = (
-    "permission denied",
-    "os login",
-    "not in the sudoers",
-    "requested access to the resource is denied",
-    "could not fetch resource",
-    "login profile",
-)
 
 
 @dataclass
@@ -117,6 +108,7 @@ class GcpControllerProvider:
         if self.worker_provider.gcp_service.mode == ServiceMode.LOCAL:
             return nullcontext(address)
         return _gcp_tunnel(
+            gcp_service=self.worker_provider.gcp_service,
             project=self.worker_provider.project_id,
             label_prefix=self.worker_provider.label_prefix,
             ssh_config=self.worker_provider.ssh_config,
@@ -158,50 +150,29 @@ def _check_gcloud_ssh_key(key_file: str | None = None) -> None:
         )
 
 
-def _ssh_auth_mode(ssh_config: config_pb2.SshConfig | None) -> int:
-    if ssh_config is None:
-        return config_pb2.SshConfig.SSH_AUTH_MODE_METADATA
-    return ssh_config.auth_mode or config_pb2.SshConfig.SSH_AUTH_MODE_METADATA
-
-
-def _should_retry_metadata(stderr: str) -> bool:
-    normalized = stderr.lower()
-    return any(marker in normalized for marker in _FALLBACK_SSH_ERROR_MARKERS)
-
-
 def _build_tunnel_ssh_cmd(
     *,
     project: str,
     zone: str,
     vm_name: str,
     local_port: int,
-    ssh_config: config_pb2.SshConfig | None,
     effective_service_account: str | None,
-    force_metadata: bool = False,
 ) -> list[str]:
-    auth_mode = _ssh_auth_mode(ssh_config)
-    use_os_login = auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN and not force_metadata
-    key_file = ssh_key_file(ssh_config, effective_service_account)
+    """Build a `gcloud compute ssh` tunnel command.
 
-    target = vm_name
-    if use_os_login:
-        os_login_user = ssh_config.os_login_user or resolve_current_os_login_user(
-            impersonate_service_account=effective_service_account
-        )
-        target = f"{os_login_user}@{vm_name}"
-
+    No explicit user or key flag: gcloud auto-detects OS Login from the VM's
+    enable-oslogin metadata and picks the right user/key itself.
+    """
     cmd = [
         "gcloud",
         "compute",
         "ssh",
-        target,
+        vm_name,
         f"--project={project}",
         f"--zone={zone}",
     ]
     if effective_service_account:
         cmd.append(f"--impersonate-service-account={effective_service_account}")
-    if key_file:
-        cmd.append(f"--ssh-key-file={key_file}")
     cmd.extend(
         [
             "--",
@@ -245,56 +216,23 @@ def _establish_tunnel(
     zone: str,
     vm_name: str,
     local_port: int,
-    ssh_config: config_pb2.SshConfig | None,
     effective_service_account: str | None,
     timeout: float,
 ) -> subprocess.Popen:
-    """Start an SSH tunnel subprocess and wait for the port to be ready.
-
-    Returns the running Popen; raises RuntimeError on failure.
-    """
-    auth_mode = _ssh_auth_mode(ssh_config)
+    """Open an SSH tunnel to the controller VM."""
     cmd = _build_tunnel_ssh_cmd(
         project=project,
         zone=zone,
         vm_name=vm_name,
         local_port=local_port,
-        ssh_config=ssh_config,
         effective_service_account=effective_service_account,
     )
-
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         start_new_session=True,
     )
-
-    if auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN and not wait_for_port(
-        local_port, host="127.0.0.1", timeout=timeout
-    ):
-        stderr = proc.stderr.read().decode() if proc.stderr else ""
-        proc.terminate()
-        proc.wait()
-        if _should_retry_metadata(stderr):
-            logger.warning("OS Login tunnel failed; retrying controller tunnel with metadata SSH fallback")
-            cmd = _build_tunnel_ssh_cmd(
-                project=project,
-                zone=zone,
-                vm_name=vm_name,
-                local_port=local_port,
-                ssh_config=ssh_config,
-                effective_service_account=effective_service_account,
-                force_metadata=True,
-            )
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                start_new_session=True,
-            )
-        else:
-            raise RuntimeError(f"SSH tunnel failed to establish: {stderr}")
 
     if not wait_for_port(local_port, host="127.0.0.1", timeout=timeout):
         stderr = proc.stderr.read().decode() if proc.stderr else ""
@@ -307,6 +245,7 @@ def _establish_tunnel(
 
 @contextmanager
 def _gcp_tunnel(
+    gcp_service: GcpService,
     project: str,
     label_prefix: str,
     ssh_config: config_pb2.SshConfig | None,
@@ -315,59 +254,42 @@ def _gcp_tunnel(
 ) -> Iterator[str]:
     """SSH tunnel to the controller VM, yielding the local URL.
 
-    Binds explicitly to 127.0.0.1 to avoid conflicts with other processes
-    that may be listening on the same port on a different address family (IPv6).
-    Picks a free port automatically if none is specified.
+    Discovers the controller VM via the iris-controller label and shells out
+    to `gcloud compute ssh`; gcloud auto-detects OS Login vs metadata SSH
+    from the VM's own enable-oslogin metadata.
     """
     effective_service_account = ssh_impersonate_service_account(ssh_config)
-    key_file = ssh_key_file(ssh_config, effective_service_account)
-    _check_gcloud_ssh_key(key_file)
+    _check_gcloud_ssh_key()
 
     if local_port is None:
         local_port = find_free_port(start=10000)
 
     labels = Labels(label_prefix)
-    label_filter = f"labels.{labels.iris_controller}=true AND status=RUNNING"
-    cmd = [
-        "gcloud",
-        "compute",
-        "instances",
-        "list",
-        f"--project={project}",
-        f"--filter={label_filter}",
-        "--format=value(name,zone)",
-        "--limit=1",
-    ]
-    if effective_service_account:
-        cmd.append(f"--impersonate-service-account={effective_service_account}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0 or not result.stdout.strip():
+    vms = gcp_service.vm_list(zones=[], labels={labels.iris_controller: "true"})
+    running = [vm for vm in vms if vm.status == "RUNNING"]
+    if not running:
         raise RuntimeError(f"No controller VM found (label={labels.iris_controller}=true, project={project})")
+    vm = running[0]
 
-    parts = result.stdout.strip().split()
-    vm_name = parts[0]
-    zone = parts[1] if len(parts) > 1 else ""
-
-    logger.info("Establishing SSH tunnel to %s (zone=%s)...", vm_name, zone)
+    logger.info("Establishing SSH tunnel to %s (zone=%s)...", vm.name, vm.zone)
 
     proc = retry_with_backoff(
         lambda: _establish_tunnel(
             project=project,
-            zone=zone,
-            vm_name=vm_name,
+            zone=vm.zone,
+            vm_name=vm.name,
             local_port=local_port,
-            ssh_config=ssh_config,
             effective_service_account=effective_service_account,
             timeout=timeout,
         ),
         retryable=lambda e: isinstance(e, RuntimeError) and _is_transient_ssh_error(str(e)),
         max_attempts=3,
         backoff=ExponentialBackoff(initial=5.0, maximum=30.0, factor=2.0),
-        operation=f"SSH tunnel to {vm_name}",
+        operation=f"SSH tunnel to {vm.name}",
     )
 
     try:
-        logger.info("Tunnel ready: 127.0.0.1:%d -> %s:10000", local_port, vm_name)
+        logger.info("Tunnel ready: 127.0.0.1:%d -> %s:10000", local_port, vm.name)
         yield f"http://127.0.0.1:{local_port}"
     finally:
         proc.terminate()

@@ -25,15 +25,13 @@ import shutil
 import tarfile
 import tempfile
 
-import requests
 from fray import ResourceConfig
-from requests.adapters import HTTPAdapter
 from rigging.filesystem import open_url, url_to_fs
-from urllib3.util import Retry
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_jsonl
 from zephyr.writers import atomic_rename
 
+from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_exists
@@ -661,15 +659,7 @@ def row_to_doc(row: dict) -> list[dict]:
 
 def _download_tarball(url: str, dest_path: str) -> None:
     """Stream a URL to a local file with retry on transient HTTP errors."""
-    session = requests.Session()
-    retries = Retry(
-        total=5,
-        backoff_factor=1.0,
-        status_forcelist=[500, 502, 503, 504],
-        allowed_methods=["GET"],
-    )
-    session.mount("https://", HTTPAdapter(max_retries=retries))
-    session.mount("http://", HTTPAdapter(max_retries=retries))
+    session = build_retrying_session(status_forcelist=(500, 502, 503, 504))
     headers = {"user-agent": "marin-massive-fc/1.0"}
     with session.get(url, stream=True, headers=headers) as response:
         response.raise_for_status()

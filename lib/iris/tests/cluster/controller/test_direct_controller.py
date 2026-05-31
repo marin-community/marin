@@ -10,7 +10,7 @@ from iris.cluster.controller.transitions import (
     TaskUpdate,
 )
 from iris.cluster.types import JobName
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 
 from .conftest import (
@@ -100,7 +100,6 @@ def test_drain_default_task_image_is_empty(state):
 
 def test_drain_includes_workdir_files(state):
     """Workdir files stored in job_workdir_files are included in the RunTaskRequest."""
-    from iris.rpc import controller_pb2
 
     job_name = JobName.from_wire("/test-user/drain-workdir")
     entrypoint = job_pb2.RuntimeEntrypoint()

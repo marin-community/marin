@@ -21,6 +21,7 @@ from datetime import timedelta
 import fsspec
 import jmp
 from fray.cluster import ResourceConfig
+from haliax import ScanCheckpointPolicy
 from haliax.partitioning import ResourceAxis
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import DatasetComponent, LMMixtureDatasetConfig
@@ -28,7 +29,8 @@ from levanter.main import train_lm
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import executor_main
+from marin.execution.types import ExecutorStep, this_output_path
 from marin.processing.tokenize import step_to_lm_mixture_component
 from marin.scaling_laws import ScalingFit, predict_optimal_config
 from marin.scaling_laws.tpu_utils import V5P_SPEC, pick_v5p_type
@@ -149,8 +151,6 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
     # Following exp1295_32b.py pattern: offload only carries, not inputs
     model_config = candidate.model_config
     if config.target_budget >= 1e21:
-        from haliax import ScanCheckpointPolicy
-
         model_config = replace(model_config, gradient_checkpointing=ScanCheckpointPolicy(save_carries="offload"))
         logger.info("Using offload carries gradient checkpointing for large model")
 

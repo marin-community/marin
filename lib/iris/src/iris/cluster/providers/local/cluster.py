@@ -115,6 +115,7 @@ def create_local_autoscaler(
     platform = GcpWorkerProvider(
         gcp_config=local_gcp_config,
         label_prefix=label_prefix,
+        worker_port=config.defaults.worker.port,
         gcp_service=gcp_service,
     )
 
@@ -302,9 +303,6 @@ class LocalCluster:
                 healthy=True,
             )
         return ControllerStatus(running=False, address="", healthy=False)
-
-    def fetch_startup_logs(self, tail_lines: int = 100) -> str | None:
-        return "(local controller — no startup logs)"
 
 
 def make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:

@@ -22,8 +22,8 @@ from rigging.filesystem import open_url, url_to_fs
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext, atomic_rename
 
-from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.execution.step_spec import StepSpec
+from marin.execution.types import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
 
 logger = logging.getLogger(__name__)

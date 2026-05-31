@@ -3,7 +3,7 @@
 
 import numpy as np
 
-from levanter.optim.config import AdamConfig
+from levanter.optim.config import AdamConfig, InvSqrtDecayLrSchedule, PolynomialLrSchedule
 
 
 def test_no_stable_weirdness():
@@ -250,7 +250,6 @@ def test_wsds_schedule_with_cycle_points():
 
 def test_polynomial_schedule_quadratic():
     """Quadratic decay: (1-t)^2 shape via PolynomialLrSchedule."""
-    from levanter.optim.config import PolynomialLrSchedule
 
     optimizer = AdamConfig(
         learning_rate=1e-3,
@@ -275,7 +274,6 @@ def test_polynomial_schedule_quadratic():
 
 def test_polynomial_schedule_linear():
     """Power=1 should match linear decay."""
-    from levanter.optim.config import PolynomialLrSchedule
 
     optimizer = AdamConfig(
         learning_rate=1e-3,
@@ -294,7 +292,6 @@ def test_polynomial_schedule_linear():
 
 def test_polynomial_schedule_sqrt():
     """Power=0.5 (sqrt decay) holds LR higher early, drops faster at end."""
-    from levanter.optim.config import PolynomialLrSchedule
 
     optimizer = AdamConfig(
         learning_rate=1e-3,
@@ -313,7 +310,6 @@ def test_polynomial_schedule_sqrt():
 
 def test_polynomial_schedule_with_min_lr():
     """Polynomial decay with a floor (min_lr_ratio > 0)."""
-    from levanter.optim.config import PolynomialLrSchedule
 
     optimizer = AdamConfig(
         learning_rate=1e-3,
@@ -331,7 +327,6 @@ def test_polynomial_schedule_with_min_lr():
 
 def test_inv_sqrt_decay_lr_schedule():
     """InvSqrtDecayLrSchedule: lr / sqrt(1 + c * t / T)."""
-    from levanter.optim.config import InvSqrtDecayLrSchedule
 
     optimizer = AdamConfig(
         learning_rate=1e-3,
@@ -361,7 +356,6 @@ def test_inv_sqrt_decay_lr_schedule():
 
 def test_inv_sqrt_decay_lr_schedule_honors_min_lr():
     """InvSqrtDecayLrSchedule should clamp to min_lr when decay_constant is large."""
-    from levanter.optim.config import InvSqrtDecayLrSchedule
 
     optimizer = AdamConfig(
         learning_rate=1e-3,

@@ -118,7 +118,7 @@ Most promotable changes will land in one of three files:
 
 Create a new branch for each experiment issue. Branch off `main`.
 
-Follow `.agents/skills/agent-research/SKILL.md` for all documentation, logbooks,
+Follow `.agents/skills/run-research/SKILL.md` for all documentation, logbooks,
 W&B tracking, and GitHub experiment issue management tied to work in this
 directory. Pay attention to this file carefully.
 

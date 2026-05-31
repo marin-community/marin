@@ -53,7 +53,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
           track_progress: ${{ github.event_name == 'pull_request' }}
           prompt: |
-            /github-pr-review --comment ${{ github.event.pull_request.number || github.event.issue.number }}
+            /review-pr --comment ${{ github.event.pull_request.number || github.event.issue.number }}
 
             ${{ github.event_name == 'issue_comment' && format('EXTRA INSTRUCTIONS FROM COMMENT:\n{0}', github.event.comment.body) || '' }}
           claude_args: |

@@ -1502,8 +1502,8 @@ def test_holder_task_worker_death_no_failure_record(state):
 def test_get_running_tasks_for_poll_excludes_reservation_holders(state):
     """get_running_tasks_for_poll must filter reservation-holder tasks.
 
-    Regression: the ping/poll loop feeds its output directly into
-    PollTasksRequest.expected_tasks. Holders are virtual — they never reach
+    Regression: the ping/poll loop feeds its output directly into the
+    Reconcile request's desired set. Holders are virtual — they never reach
     the worker's _tasks dict — so including them makes the worker reconcile,
     miss, and return WORKER_FAILED("Task not found on worker") every cycle.
     That drains the holder's preemption budget and (with the ASSIGNED→

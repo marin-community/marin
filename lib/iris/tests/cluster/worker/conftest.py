@@ -3,6 +3,7 @@
 
 """Shared fixtures for worker tests (both mock and Docker-based)."""
 
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from unittest.mock import Mock
@@ -175,7 +176,15 @@ def create_run_task_request(
     ports: list[str] | None = None,
     attempt_id: int = 0,
     task_image: str = "",
+    attempt_uid: str | None = None,
 ):
+    # Worker.submit_task requires a non-empty attempt_uid. Default to a value
+    # derived from the task identity so tests that don't care about UID still
+    # get a unique-per-attempt one.
+    if attempt_uid is None:
+        digest = hashlib.sha1(f"{task_id}#{attempt_id}".encode()).hexdigest()
+        attempt_uid = digest[:16]
+
     def test_fn():
         print("Hello from test")
 
@@ -196,6 +205,7 @@ def create_run_task_request(
         task_id=task_id,
         num_tasks=num_tasks,
         attempt_id=attempt_id,
+        attempt_uid=attempt_uid,
         entrypoint=entrypoint_proto,
         environment=env_config,
         bundle_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

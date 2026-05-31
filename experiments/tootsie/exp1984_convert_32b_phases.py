@@ -15,7 +15,8 @@ from dataclasses import dataclass
 
 from fray.cluster import ResourceConfig
 from levanter.trainer import TrainerConfig
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.executor import executor_main
+from marin.execution.types import ExecutorStep
 from marin.export import convert_checkpoint_to_hf_step
 
 from experiments.tootsie.exp1295_32b import llama_32b_remat, llama_32b_tootsie

@@ -10,7 +10,7 @@ backed by in-memory fakes rather than MagicMock.
 
 import threading
 
-from iris.cluster.constraints import DeviceType
+from iris.cluster.constraints import DeviceType, PlacementRequirements
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry, ScalingAction
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
@@ -18,7 +18,7 @@ from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.types import CloudSliceState
 from iris.cluster.service_mode import ServiceMode
-from iris.rpc import config_pb2
+from iris.rpc import config_pb2, job_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 
@@ -206,9 +206,6 @@ class TestAutoscalerWaterfallEndToEnd:
             config=config,
         )
 
-        from iris.cluster.constraints import PlacementRequirements
-        from iris.rpc import job_pb2
-
         big_resources = job_pb2.ResourceSpecProto(cpu_millicores=128000, memory_bytes=128 * 1024**3)
         normalized = PlacementRequirements(
             device_type=DeviceType.TPU,
@@ -387,7 +384,7 @@ def test_pending_counter_prevents_double_scaleup():
     )
     service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project", label_prefix="iris")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central1-a"])
-    platform = SlowGcpWorkerProvider(gcp_config=gcp_config, label_prefix="iris", gcp_service=service)
+    platform = SlowGcpWorkerProvider(gcp_config=gcp_config, label_prefix="iris", worker_port=10001, gcp_service=service)
     group = ScalingGroup(
         sg_config,
         platform,

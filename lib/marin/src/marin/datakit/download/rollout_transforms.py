@@ -31,3 +31,13 @@ def load_parquet_batched(path: str) -> Iterator[dict]:
 
 def strip_think_tags(text: str) -> str:
     return text.replace("<think>", "").replace("</think>", "").strip()
+
+
+def render_role_message(msg: dict) -> str:
+    """Render a single chat message as ``<role>\\ncontent\\n</role>``.
+
+    Missing or null content renders as an empty body.
+    """
+    role = msg.get("role", "unknown")
+    content = msg.get("content") or ""
+    return f"<{role}>\n{content}\n</{role}>"

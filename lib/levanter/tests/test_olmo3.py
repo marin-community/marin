@@ -14,15 +14,16 @@ import dataclasses
 import tempfile
 
 import chex
+import haliax as hax
 import numpy as np
 import pytest
 from jax import random
-
-import haliax as hax
+from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
 
 from levanter.layers.attention import AttentionMask
+from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
+from levanter.models.olmo3 import Olmo3Config, Olmo3DecoderLayer, Olmo3LMHeadModel
 from levanter.utils.jax_utils import parameter_count
-from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
 
 pytestmark = skip_if_module_missing("transformers")
 
@@ -37,7 +38,6 @@ def _get_olmo3_config(use_flash=False, num_kv_heads=4, seq_len=128, sliding_wind
         sliding_window: Size of sliding window for sliding attention layers
     """
     # Import here to avoid import errors before implementation exists
-    from levanter.models.olmo3 import Olmo3Config
 
     return Olmo3Config(
         max_seq_len=seq_len,
@@ -84,7 +84,6 @@ def test_olmo3_config_hf_roundtrip():
     assert hf_config.num_key_value_heads == 4
 
     # Convert back and check fields
-    from levanter.models.olmo3 import Olmo3Config
 
     config2 = Olmo3Config.from_hf_config(hf_config)
     assert config2.hidden_dim == 16
@@ -112,7 +111,6 @@ def test_olmo3_layer_types():
 
 def test_olmo3_layer_types_8_layers():
     """Test layer types with 8 layers."""
-    from levanter.models.olmo3 import Olmo3Config
 
     config = Olmo3Config(
         max_seq_len=128,
@@ -142,7 +140,6 @@ def test_olmo3_layer_types_8_layers():
 
 def test_olmo3_custom_layer_types():
     """Test that custom layer_types override the default pattern."""
-    from levanter.models.olmo3 import Olmo3Config, Olmo3LMHeadModel
 
     # Custom pattern: alternating full/sliding
     custom_pattern = [
@@ -203,8 +200,6 @@ def test_olmo3_attention_vs_hf(use_yarn, num_kv_heads):
     import torch
     from transformers.models.olmo3.modeling_olmo3 import Olmo3Attention as HFOlmo3Attention
     from transformers.models.olmo3.modeling_olmo3 import Olmo3RotaryEmbedding as HFOlmo3RotaryEmbedding
-
-    from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
 
     if use_yarn:
         rope_config = YarnRotaryEmbeddingsConfig(
@@ -268,8 +263,6 @@ def test_olmo3_decoder_layer_vs_hf(num_kv_heads, layer_idx):
     import torch
     from transformers.models.olmo3.modeling_olmo3 import Olmo3DecoderLayer as HFOlmo3DecoderLayer
     from transformers.models.olmo3.modeling_olmo3 import Olmo3RotaryEmbedding as HFOlmo3RotaryEmbedding
-
-    from levanter.models.olmo3 import Olmo3DecoderLayer
 
     olmo3_config = _get_olmo3_config(num_kv_heads=num_kv_heads, seq_len=256)
     key = random.PRNGKey(0)
@@ -359,9 +352,6 @@ def test_olmo3_roundtrip(scan_layers, num_kv_heads):
     """
     import torch
     from transformers import AutoModelForCausalLM, Olmo3ForCausalLM
-
-    from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
-    from levanter.models.olmo3 import Olmo3Config, Olmo3LMHeadModel
 
     converter = Olmo3Config().hf_checkpoint_converter()
 
@@ -456,7 +446,6 @@ def test_olmo3_roundtrip(scan_layers, num_kv_heads):
 
 def test_olmo3_param_counts_dont_change_with_seqlen():
     """Test that parameter counts are independent of sequence length."""
-    from levanter.models.olmo3 import Olmo3LMHeadModel
 
     model = Olmo3LMHeadModel.init(hax.Axis("v", 1024), _get_olmo3_config(seq_len=64), key=random.PRNGKey(0))
     model2 = Olmo3LMHeadModel.init(hax.Axis("v", 1024), _get_olmo3_config(seq_len=128), key=random.PRNGKey(0))
@@ -468,8 +457,6 @@ def test_olmo3_param_counts_dont_change_with_seqlen():
 def test_olmo3_state_dict_consistency(num_kv_heads):
     """Test state dict keys match HuggingFace."""
     from transformers import Olmo3ForCausalLM
-
-    from levanter.models.olmo3 import Olmo3Config, Olmo3LMHeadModel
 
     config = Olmo3Config(
         max_seq_len=128,
@@ -493,7 +480,6 @@ def test_olmo3_state_dict_consistency(num_kv_heads):
 @pytest.mark.parametrize("num_kv_heads", [2])
 def test_olmo3_seq_len_doesnt_change_predictions(num_kv_heads):
     """Test that predictions are consistent across sequence lengths."""
-    from levanter.models.olmo3 import Olmo3LMHeadModel
 
     config = _get_olmo3_config(num_kv_heads=num_kv_heads, seq_len=128)
     Vocab = hax.Axis("vocab", 256)
@@ -518,7 +504,6 @@ def test_olmo3_seq_len_doesnt_change_predictions(num_kv_heads):
 
 def test_olmo3_all_layers_have_correct_attention_type():
     """Test that all layers in a model have the expected attention type."""
-    from levanter.models.olmo3 import Olmo3Config, Olmo3LMHeadModel
 
     config = Olmo3Config(
         max_seq_len=128,

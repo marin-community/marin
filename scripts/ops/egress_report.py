@@ -4,16 +4,16 @@
 
 """Daily cross-region egress digest.
 
-Runs ``scripts/ops/cross_region.py`` over the last 24h of Iris logs, uploads
-the resulting report + appendix + summary to a dated GCS prefix, and posts a
-short summary to Discord with a link into the GCP console.
+Runs ``scripts/ops/cross_region.py`` over the last 24h of Iris logs, publishes
+the resulting report + appendix as a secret gist, and posts a short summary
+to Discord linking to the gist.
 
 Always posts (writes "No offenders today." when nobody crosses the per-user
 threshold).
 
 NOTE: This script runs in a public GitHub Actions log. Do not log message
 bodies or summary contents at INFO/WARN — the per-user counts are only safe
-inside the Discord message and the GCS-hosted report.
+inside the Discord message and the gist.
 """
 
 from __future__ import annotations
@@ -29,9 +29,6 @@ import click
 
 LARGE_TIER_USER_THRESHOLD = 10
 MAX_OFFENDERS_IN_MESSAGE = 20
-
-GCS_PREFIX = "gs://marin-us-central2/iris/marin/ops/egress-reports"
-CONSOLE_PREFIX = "https://console.cloud.google.com/storage/browser/marin-us-central2/iris/marin/ops/egress-reports"
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -54,19 +51,23 @@ def _run_cross_region(hours: float, outdir: Path) -> dict:
     return json.loads((outdir / "cross_region_ops_summary.json").read_text())
 
 
-def _upload_to_gcs(outdir: Path, gcs_dest: str) -> None:
-    subprocess.run(
+def _create_gist(outdir: Path, description: str) -> str:
+    """Create a secret gist with the report files; return its URL."""
+    result = subprocess.run(
         [
-            "gsutil",
-            "-m",
-            "cp",
+            "gh",
+            "gist",
+            "create",
+            "--desc",
+            description,
             str(outdir / "cross_region_ops_report.md"),
             str(outdir / "cross_region_ops_appendix.csv"),
-            str(outdir / "cross_region_ops_summary.json"),
-            gcs_dest,
         ],
         check=True,
+        text=True,
+        capture_output=True,
     )
+    return result.stdout.strip().splitlines()[-1]
 
 
 def _post_to_discord(channel: str, message: str) -> None:
@@ -92,7 +93,7 @@ def _compose_message(
     date: str,
     total: int,
     offenders: list[tuple[str, int]],
-    console_url: str,
+    report_url: str,
 ) -> str:
     if offenders:
         shown = offenders[:MAX_OFFENDERS_IN_MESSAGE]
@@ -108,7 +109,7 @@ def _compose_message(
     return (
         f"**Daily cross-region egress report** ({hours:.0f}h window, UTC {date})\n"
         f"- total cross-region mentions: **{total}**\n"
-        f"- report: {console_url}\n\n"
+        f"- report: {report_url}\n\n"
         f"{offender_section}"
     )
 
@@ -119,7 +120,7 @@ def _compose_message(
 @click.option(
     "--dry-run/--no-dry-run",
     default=False,
-    help="Skip GCS upload and Discord post; print the message that would have been sent.",
+    help="Skip gist creation and Discord post; print the message that would have been sent.",
 )
 def main(hours: float, channel: str, dry_run: bool) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -133,23 +134,26 @@ def main(hours: float, channel: str, dry_run: bool) -> None:
     offenders = [(u, n) for u, n in large_users.items() if n >= LARGE_TIER_USER_THRESHOLD and u != "<unknown>"]
 
     date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
-    gcs_dest = f"{GCS_PREFIX}/{date}/"
-    console_url = f"{CONSOLE_PREFIX}/{date}/"
+    description = f"Marin cross-region egress {date} ({hours:.0f}h window)"
+
+    if dry_run:
+        report_url = "<dry-run gist URL>"
+    else:
+        report_url = _create_gist(outdir, description)
 
     message = _compose_message(
         hours=hours,
         date=date,
         total=total,
         offenders=offenders,
-        console_url=console_url,
+        report_url=report_url,
     )
 
     if dry_run:
-        logging.info("Dry run — would upload to %s and post to #%s.", gcs_dest, channel)
+        logging.info("Dry run — would create gist %r and post to #%s.", description, channel)
         print(message)
         return
 
-    _upload_to_gcs(outdir, gcs_dest)
     _post_to_discord(channel, message)
     logging.info("Posted egress report for %s to #%s.", date, channel)
 

@@ -13,6 +13,9 @@ from iris.cluster.providers.gcp.bootstrap import (
     rewrite_ghcr_to_ar_remote,
     zone_to_multi_region,
 )
+from iris.cluster.providers.gcp.fake import InMemoryGcpService
+from iris.cluster.providers.gcp.workers import GcpWorkerProvider
+from iris.cluster.service_mode import ServiceMode
 from iris.rpc import config_pb2
 
 
@@ -161,13 +164,10 @@ def test_build_controller_bootstrap_script_from_config_rewrites_ghcr_to_ar() -> 
 
 def _make_gcp_worker_provider(project_id: str = "my-proj"):
     """Build a GcpWorkerProvider backed by InMemoryGcpService for testing."""
-    from iris.cluster.providers.gcp.fake import InMemoryGcpService
-    from iris.cluster.providers.gcp.workers import GcpWorkerProvider
-    from iris.cluster.service_mode import ServiceMode
 
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id=project_id)
     gcp_config = config_pb2.GcpPlatformConfig(project_id=project_id)
-    return GcpWorkerProvider(gcp_config=gcp_config, label_prefix="iris", gcp_service=gcp_service)
+    return GcpWorkerProvider(gcp_config=gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
 
 def test_gcp_provider_resolve_image_rewrites_ghcr() -> None:

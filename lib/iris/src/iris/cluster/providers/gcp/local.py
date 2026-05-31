@@ -44,6 +44,7 @@ class _LocalWorkerHandle:
 
     _vm_id: str
     _internal_address: str
+    _port: int = 0
     _bootstrap_log_lines: list[str] = field(default_factory=list)
 
     @property
@@ -57,6 +58,12 @@ class _LocalWorkerHandle:
     @property
     def internal_address(self) -> str:
         return self._internal_address
+
+    @property
+    def worker_url(self) -> str:
+        if not self._internal_address:
+            return ""
+        return f"http://{self._internal_address}:{self._port}"
 
     @property
     def external_address(self) -> str | None:
@@ -157,10 +164,10 @@ class LocalSliceHandle:
     def describe(self) -> SliceStatus:
         if self._terminated:
             return SliceStatus(state=CloudSliceState.DELETING, worker_count=0)
-        workers = [
-            _LocalWorkerHandle(_vm_id=vm_id, _internal_address=addr)
-            for vm_id, addr in zip(self._vm_ids, self._addresses, strict=True)
-        ]
+        workers = []
+        for vm_id, endpoint in zip(self._vm_ids, self._addresses, strict=True):
+            host, _, port = endpoint.rpartition(":")
+            workers.append(_LocalWorkerHandle(_vm_id=vm_id, _internal_address=host, _port=int(port)))
         return SliceStatus(state=CloudSliceState.READY, worker_count=len(self._vm_ids), workers=workers)
 
     def terminate(self, *, wait: bool = False) -> None:

@@ -1,12 +1,12 @@
 ---
 name: organize-experiments
-description: Curate the experiment report index after new experiments are harvested. Use when asked to organize, categorize, or update the experiment reports index.
+description: Curate the experiment report index at docs/reports/index.md.
 ---
 
 # Skill: Organize Experiment Reports
 
 ## Overview
-Use this skill to curate `docs/reports/index.md` after new experiment issues are harvested. The goal is to keep the report index tidy by folding fresh entries into the right sections, refreshing links, and leaving `## Uncategorized` empty.
+Curate `docs/reports/index.md` after new experiment issues are harvested: fold fresh entries into the right sections, refresh links, and leave `## Uncategorized` empty.
 
 ## Prerequisites
 - Local checkout of the marin repository with write access.

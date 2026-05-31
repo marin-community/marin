@@ -28,7 +28,7 @@ from levanter.data import AsyncDataset
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.dataset import MappedAsyncDataset
 from levanter.data.mixture import MixtureDataset, StopStrategy
-from levanter.data.sharded_datasource import AudioTextUrlDataSource, ShardedDataSource, WrappedHFDataSource
+from levanter.data.sharded_datasource import AudioTextUrlDataSource, ShardedDataSource, datasource_from_hf_or_none
 from levanter.data.text import BatchTokenizer
 from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 
@@ -165,17 +165,8 @@ class AudioDatasetSourceConfig:
 
     def get_shard_source(self, split) -> Optional[ShardedDataSource[Tuple[np.ndarray, int, str]]]:
         if self.id is not None:
-            try:
-                ds = WrappedHFDataSource(self.id, split=split, name=self.name, streaming=self.stream)
-            except ValueError as e:
-                # if the message starts with Bad split, then just return None
-                if str(e).startswith("Bad split"):
-                    logger.warning(f"Splits {split} not found for {self.id} {self.name}")
-                    return None
-                else:
-                    raise
-
-            if len(ds.shard_names) == 0:
+            ds = datasource_from_hf_or_none(self.id, split=split, name=self.name, streaming=self.stream)
+            if ds is None:
                 return None
 
             def decode(x):

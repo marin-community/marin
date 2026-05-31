@@ -39,6 +39,7 @@ def build_steps(max_parallelism: int) -> list[StepSpec]:
             input_paths=os.path.join(download.output_path, "sample/10BT"),
             output_path=op,
             max_parallelism=max_parallelism,
+            worker_resources=ResourceConfig(cpu=3.5, ram="32g", disk="5g"),
         ),
     )
     return [download, dedup_step]
@@ -49,7 +50,7 @@ def main() -> None:
     parser.add_argument(
         "--max-parallelism",
         type=int,
-        default=128,
+        default=64,
         metavar="N",
         help="Maximum parallelism passed to dedup_exact_paragraph (default: %(default)s).",
     )

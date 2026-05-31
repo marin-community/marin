@@ -35,7 +35,7 @@ def prepare_vllm_inference_config_for_inflight(
     inference_config: vLLMInferenceContextConfig,
 ) -> vLLMInferenceContextConfig:
     """Stage remote model metadata locally for inflight vLLM startup."""
-    model_path = inference_config.model_name
+    model_path = inference_config.engine.model_name
     if urlparse(model_path).scheme not in {"gs", "s3"}:
         return inference_config
 
@@ -47,8 +47,11 @@ def prepare_vllm_inference_config_for_inflight(
     )
     return dataclasses.replace(
         inference_config,
-        model_name=local_model_path,
-        load_format="dummy",
+        engine=dataclasses.replace(
+            inference_config.engine,
+            model_name=local_model_path,
+            load_format="dummy",
+        ),
     )
 
 

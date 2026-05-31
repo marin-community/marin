@@ -13,11 +13,7 @@ from rigging.timing import Duration
 
 from iris.chaos import chaos
 from iris.cluster.controller.provider import ProviderError
-from iris.cluster.controller.transitions import (
-    RunningTaskEntry,
-    TaskUpdate,
-    task_updates_from_proto,
-)
+from iris.cluster.controller.reconcile import ReconcileResult, WorkerReconcilePlan
 from iris.cluster.types import WorkerId
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -37,37 +33,6 @@ class PingResult:
     healthy: bool = True
     health_error: str = ""
     error: str | None = None
-
-
-@dataclass(frozen=True)
-class WorkerReconcilePlan:
-    """Per-worker reconcile work for one polling tick.
-
-    ``start_tasks`` is the list of fresh ASSIGNED rows to dispatch (empty if
-    none). ``expected_tasks`` is the full set the worker should currently
-    have running — anything outside this set the worker auto-kills locally.
-    """
-
-    worker_id: WorkerId
-    address: str | None
-    start_tasks: list[job_pb2.RunTaskRequest]
-    expected_tasks: list[RunningTaskEntry]
-
-
-@dataclass(frozen=True)
-class WorkerReconcileResult:
-    """Combined StartTasks + PollTasks outcome for one worker.
-
-    ``start_*`` fields are populated only when the plan included a
-    StartTasks payload; ``poll_*`` are populated for every plan since every
-    healthy worker is polled each tick.
-    """
-
-    worker_id: WorkerId
-    start_response: worker_pb2.Worker.StartTasksResponse | None
-    start_error: str | None
-    poll_updates: list[TaskUpdate] | None
-    poll_error: str | None
 
 
 class WorkerStubFactory(Protocol):
@@ -206,82 +171,42 @@ class WorkerProvider:
 
         return asyncio.run(_run())
 
-    async def _reconcile_one(
+    async def _reconcile_one_via_reconcile(
         self,
         sem: asyncio.Semaphore,
-        plan: "WorkerReconcilePlan",
-    ) -> "WorkerReconcileResult":
-        """Per-worker reconcile: StartTasks (if any) followed by PollTasks.
-
-        Order matters within a single worker — the worker's task table must
-        be populated by the dispatch before PollTasks lands, otherwise the
-        worker's ``_missing_task_status`` path would auto-kill freshly
-        dispatched tasks. Different workers run independently under the
-        shared semaphore.
-        """
+        plan: WorkerReconcilePlan,
+        address: str,
+    ) -> ReconcileResult:
+        """Issue a single Reconcile RPC to one worker under the shared semaphore."""
         async with sem:
-            if not plan.address:
-                err = f"Worker {plan.worker_id} has no address"
-                return WorkerReconcileResult(
-                    worker_id=plan.worker_id,
-                    start_response=None,
-                    start_error=err if plan.start_tasks else None,
-                    poll_updates=None,
-                    poll_error=err,
-                )
-
-            stub = self.stub_factory.get_stub(plan.address)
-            start_response: worker_pb2.Worker.StartTasksResponse | None = None
-            start_error: str | None = None
-            if plan.start_tasks:
-                try:
-                    if rule := chaos("controller.start_tasks"):
-                        await asyncio.sleep(rule.delay_seconds)
-                        raise ProviderError("chaos: controller.start_tasks")
-                    start_response = await stub.start_tasks(worker_pb2.Worker.StartTasksRequest(tasks=plan.start_tasks))
-                except Exception as e:
-                    start_error = str(e)
-
-            poll_updates: list[TaskUpdate] | None = None
-            poll_error: str | None = None
             try:
-                if rule := chaos("controller.poll_tasks"):
+                if rule := chaos("controller.reconcile"):
                     await asyncio.sleep(rule.delay_seconds)
-                    raise ProviderError("chaos: controller.poll_tasks")
-                expected = []
-                for entry in plan.expected_tasks:
-                    if iter_rule := chaos("controller.poll_iteration"):
-                        await asyncio.sleep(iter_rule.delay_seconds)
-                    expected.append(
-                        job_pb2.WorkerTaskStatus(task_id=entry.task_id.to_wire(), attempt_id=entry.attempt_id)
-                    )
-                response = await stub.poll_tasks(worker_pb2.Worker.PollTasksRequest(expected_tasks=expected))
-                poll_updates = task_updates_from_proto(response.tasks)
+                    raise ProviderError("chaos: controller.reconcile")
+                stub = self.stub_factory.get_stub(address)
+                response = await stub.reconcile(plan.request)
+                return ReconcileResult(
+                    worker_id=plan.worker_id,
+                    observations=list(response.observed),
+                    error=None,
+                )
             except Exception as e:
-                poll_error = str(e)
+                return ReconcileResult(worker_id=plan.worker_id, observations=[], error=str(e))
 
-            return WorkerReconcileResult(
-                worker_id=plan.worker_id,
-                start_response=start_response,
-                start_error=start_error,
-                poll_updates=poll_updates,
-                poll_error=poll_error,
-            )
-
-    def reconcile_workers(self, plans: list["WorkerReconcilePlan"]) -> list["WorkerReconcileResult"]:
-        """Run one reconcile pass across many workers under a single event loop.
-
-        Each plan describes the work for one worker (StartTasks payload,
-        expected_tasks for the poll). Workers reconcile concurrently, capped
-        at ``self.parallelism``; within one worker StartTasks completes
-        before PollTasks (see ``_reconcile_one``).
-        """
+    def reconcile_workers(
+        self,
+        plans: list[WorkerReconcilePlan],
+        addresses: dict[WorkerId, str],
+    ) -> list[ReconcileResult]:
+        """Fan out the Reconcile RPC across all workers concurrently, capped at self.parallelism."""
         if not plans:
             return []
 
-        async def _run() -> list["WorkerReconcileResult"]:
+        async def _run() -> list[ReconcileResult]:
             sem = asyncio.Semaphore(self.parallelism)
-            return await asyncio.gather(*(self._reconcile_one(sem, p) for p in plans))
+            return await asyncio.gather(
+                *(self._reconcile_one_via_reconcile(sem, p, addresses[p.worker_id]) for p in plans)
+            )
 
         return asyncio.run(_run())
 

@@ -18,8 +18,8 @@ from marin.processing.tokenize.tokenize import (
     MIN_GROUP_BYTES,
     HfTokenizeConfig,
     TokenizeConfig,
-    _bundle_files_by_size,
-    _compute_target_group_bytes,
+    bundle_files_by_size,
+    compute_target_group_bytes,
     tokenize,
 )
 from zephyr.dataset import FileEntry
@@ -142,7 +142,7 @@ def test_mixed_paths_one_invalid_inputname():
     ],
 )
 def test_compute_target_group_bytes(total_bytes, max_workers, expected):
-    assert _compute_target_group_bytes(total_bytes, max_workers) == expected
+    assert compute_target_group_bytes(total_bytes, max_workers) == expected
 
 
 def _fe(path: str, size: int) -> FileEntry:
@@ -154,10 +154,10 @@ def test_bundle_files_produces_expected_groups():
     files = [_fe(f"file_{i}.jsonl", 500_000_000) for i in range(20)]
     total_bytes = sum(f.size for f in files)  # 10 GB total
     max_workers = 4
-    target = _compute_target_group_bytes(total_bytes, max_workers)  # 2.5 GB per group
+    target = compute_target_group_bytes(total_bytes, max_workers)  # 2.5 GB per group
 
-    groups = list(_bundle_files_by_size(files, target))
-    # _bundle_files_by_size yields a group when adding the next file would reach
+    groups = list(bundle_files_by_size(files, target))
+    # bundle_files_by_size yields a group when adding the next file would reach
     # the target (uses >=). With target=2.5 GB and 500 MB files, each group fits
     # 4 files (2 GB < 2.5 GB), yielding 5 groups.
     assert len(groups) == 5
@@ -173,7 +173,7 @@ def test_bundle_files_single_large_file():
         _fe("small2.jsonl", 100_000_000),
     ]
     target = 1_000_000_000  # 1 GB
-    groups = list(_bundle_files_by_size(files, target))
+    groups = list(bundle_files_by_size(files, target))
     assert groups[0] == ["big.jsonl"]
     assert groups[1] == ["small1.jsonl", "small2.jsonl"]
 

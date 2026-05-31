@@ -10,6 +10,7 @@ import type {
 } from '@/types/rpc'
 import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
+import { detailSql } from '@/utils/taskStatus'
 
 import { controllerRpcCall } from '@/composables/useRpc'
 import { useProfileAction } from '@/composables/useProfileAction'
@@ -105,6 +106,24 @@ const taskStatsRows = computed<TaskStatRow[]>(() => {
   return decodeArrowIpc(ipc).rows as TaskStatRow[]
 })
 
+// Latest status text row for this task (see detailSql in utils/taskStatus).
+interface StatusTextRow {
+  status_text_detail_md?: string
+  status_text_summary_md?: string
+}
+
+const { data: statusTextData, refresh: fetchStatusText } = useLogServerStatsRpc<QueryResponse>(
+  'Query',
+  () => ({ sql: detailSql(props.taskId) }),
+)
+
+const statusTextDetail = computed<string>(() => {
+  const ipc = statusTextData.value?.arrowIpc
+  if (!ipc) return ''
+  const rows = decodeArrowIpc(ipc).rows as StatusTextRow[]
+  return rows[0]?.status_text_detail_md ?? ''
+})
+
 const orderedTaskStats = computed(() => taskStatsRows.value.slice().reverse())
 
 // Latest sample drives the current-value gauges and labels. resource_usage
@@ -166,23 +185,32 @@ const { start: startStatsRefresh, stop: stopStatsRefresh } = useAutoRefresh(
   5_000,
   false,
 )
+const { start: startStatusTextRefresh, stop: stopStatusTextRefresh } = useAutoRefresh(
+  fetchStatusText,
+  5_000,
+  false,
+)
 
 watch(isActive, (active) => {
   if (active) {
     startRefresh()
     startStatsRefresh()
+    startStatusTextRefresh()
   } else {
     stopRefresh()
     stopStatsRefresh()
+    stopStatusTextRefresh()
   }
 })
 
 onMounted(async () => {
   await fetchTask()
   fetchTaskStats()
+  fetchStatusText()
   if (isActive.value) {
     startRefresh()
     startStatsRefresh()
+    startStatusTextRefresh()
   }
 })
 
@@ -353,9 +381,9 @@ watch(() => props.taskId, async () => {
       </div>
 
       <!-- Status text -->
-      <InfoCard v-if="task.statusTextDetailMd" title="Status Text" class="mb-6">
+      <InfoCard v-if="statusTextDetail" title="Status Text" class="mb-6">
         <div class="text-sm text-text">
-          <MarkdownRenderer :content="task.statusTextDetailMd" />
+          <MarkdownRenderer :content="statusTextDetail" />
         </div>
       </InfoCard>
 
@@ -380,6 +408,9 @@ watch(() => props.taskId, async () => {
               <tr class="border-b border-surface-border">
                 <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">
                   Attempt
+                </th>
+                <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">
+                  UID
                 </th>
                 <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">
                   State
@@ -409,6 +440,9 @@ watch(() => props.taskId, async () => {
                 <td class="px-3 py-2 text-[13px] font-mono">
                   {{ attempt.attemptId }}
                   <span v-if="attempt.attemptId === task.currentAttemptId" class="ml-1 text-xs text-accent font-semibold">current</span>
+                </td>
+                <td class="px-3 py-2 text-[13px] font-mono text-text-muted">
+                  {{ attempt.attemptUid ? attempt.attemptUid.slice(0, 8) : '-' }}
                 </td>
                 <td class="px-3 py-2 text-[13px]">
                   <StatusBadge :status="attempt.state" size="sm" />

@@ -68,6 +68,7 @@
   "task_attempts": [
     {
       "attempt_id": 0,
+      "attempt_uid": "<masked-0>",
       "created_at_ms": 1704067200000,
       "error": "transient-tpu-init",
       "exit_code": null,
@@ -79,6 +80,7 @@
     },
     {
       "attempt_id": 0,
+      "attempt_uid": "<masked-1>",
       "created_at_ms": 1704067200000,
       "error": "Coscheduled sibling /test-user/cosched-fail/0 bounced for atomic re-scheduling",
       "exit_code": null,

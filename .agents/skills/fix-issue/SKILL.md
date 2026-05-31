@@ -1,31 +1,27 @@
 ---
 name: fix-issue
-description: End-to-end workflow for fixing a GitHub issue. Use when asked to fix, investigate, or resolve a GitHub issue in marin-community/marin.
+description: End-to-end workflow to fix a GitHub issue in marin-community/marin.
 ---
 
 # Skill: Fix GitHub Issue
 
-You are to fix the Github issue indicated by the user.
+Fix the Github issue indicated by the user.
 
 ## Background
 
 Read first:
 
 @AGENTS.md
-@.agents/skills/architecture/SKILL.md
 
-You may not proceed to a new task until you have completed all prior tasks. If
-you cannot complete a task, write a Github comment with your last status and why
-you failed. A task list is at the end of this document.
+Complete tasks in order; the task list is at the end of this document. If you
+cannot complete a task, write a Github comment with your last status and why.
 
 ## Writing Style for All GitHub Comments
 
-**Be terse.** Every sentence must convey information that the reader does not
-already have. Follow these rules in all comments you post:
+**Be terse.** Every sentence must convey new information:
 
-- No preamble, no filler, no editorializing ("I've thoroughly investigated...",
-  "After careful analysis...", "This is an interesting problem...").
-- No repeating information already in the issue body.
+- No preamble, filler, or editorializing ("I've thoroughly investigated...").
+- No repeating the issue body.
 - No restating what code does when a link suffices.
 - Max 3-4 sentences of prose per comment section. Use links and code, not words.
 - Annotate code links, don't narrate them. Bad: "The transfer happens in
@@ -34,19 +30,16 @@ already have. Follow these rules in all comments you post:
 
 ## Research
 
-Use `gh` to fetch the issue. Read the codebase to find all relevant source
-files. Post a single comment combining your research and proposed fix.
+Use `gh` to fetch the issue. Read the codebase for all relevant source files.
+Post a single comment with two sections: **Research** and **Proposed Fix**.
 
-Before you write code, run a duplicate-work preflight:
+Before writing code, run a duplicate-work preflight:
 
-- Check open pull requests for the same issue or subsystem (`gh pr list --state open --search "<issue-id or keyword>"`).
+- Check open PRs for the same issue or subsystem (`gh pr list --state open --search "<issue-id or keyword>"`).
 - Check open issues for the same root cause (`gh issue list --state open --search "<keyword>"`).
-- If overlapping work already exists, do not open a parallel implementation PR.
-  Add a short issue comment summarizing what you found and either:
-  - hand off to the existing PR, or
-  - scope your change explicitly to non-overlapping follow-up work.
-
-The comment has two sections: **Research** and **Proposed Fix**.
+- If overlapping work exists, do not open a parallel implementation PR. Add a
+  short issue comment summarizing what you found, and either hand off to the
+  existing PR or scope your change to non-overlapping follow-up work.
 
 ### Research section
 
@@ -78,7 +71,7 @@ There are 2 cases:
   > Fix: unwrap the tuple in `RolloutWorker._step()` before passing to `foo()`.
 
 * **Design change**: The design doc replaces the `# Proposed Fix` section.
-  Write it per `.agents/skills/design-doc/` directly in the issue comment
+  Write it per `.agents/skills/write-design-doc/` directly in the issue comment
   (agents cannot commit files before the PR). The 3-4 sentence prose cap
   applies to `# Research`; the design doc follows its own length guidelines.
   Keep everything in one comment.
@@ -87,46 +80,35 @@ In both cases: find the minimally disruptive fix. Do not over-engineer.
 
 ## Implementation
 
-Once you have researched and prepared your design or planned fix, you may
-proceed to implementation. You MUST implement your changes in a branch with the
-following format `agent/{YYYYMMDD}-fix-{issue-id}`. You are allowed to create
-branches on github as well as submit PRs from those branches.
-
-You will implement a test which demonstrates your changed behavior before
-beginning work. Your tests will be minimal and refrain from using mocks.
+Implement changes in a branch named `agent/{YYYYMMDD}-fix-{issue-id}`. You may
+create branches on github and submit PRs from them.
 
 ## Testing
 
-* You write your test _before_ you make your fix, and validate your fix works.
-* You use an existing test file in `tests/` if appropriate.
-* You never use mocks when testing.
-* You keep tests simple and minimal. You do not test obvious behavior like "object has an attr".
-* You run `./infra/pre-commit.py --all-files --fix` and resolve all reported issues before uploading.
-* You will test using `uv run pytest -m 'not slow'` before uploading.
-* You will ensure _all_ tests pass.
+* Write the test _before_ the fix, then validate the fix works.
+* Use an existing test file in `tests/` if appropriate.
+* Never use mocks.
+* Keep tests simple and minimal. Do not test obvious behavior like "object has an attr".
+* Run `./infra/pre-commit.py --all-files --fix` and resolve all reported issues.
+* Run `uv run pytest -m 'not slow'` and ensure _all_ tests pass before uploading.
 
 ## Uploading
 
-When all tests pass, you may proceed to upload your branch.
-Open a pull request following `.agents/skills/pull-request/SKILL.md` **exactly**.
-Read that file and use the plain-text format it specifies — no markdown headers,
-no bullet lists, no `## Summary` sections. Violations will be rejected.
-Attach it to the Github issue with a comment summarizing the fix.
+When all tests pass, upload your branch and open a PR following
+`.agents/skills/author-pr/SKILL.md` **exactly** — use the plain-text format it
+specifies (no markdown headers, bullet lists, or `## Summary` sections;
+violations are rejected). Attach a comment to the Github issue summarizing the fix.
 
 ## Verify CI Status
 
-After opening the pull request, you must verify that CI checks pass:
+After opening the PR, verify CI checks pass:
 
-* Monitor the PR using `gh pr view <number> --json statusCheckRollup`
-* Wait for the unit tests to complete
-* If tests fail, investigate and fix any issues
-* Push additional commits to address CI failures
-* Do not consider the PR complete until all relevant checks pass
+* Monitor with `gh pr view <number> --json statusCheckRollup`.
+* Wait for unit tests; if they fail, investigate and push fixes.
+* Do not consider the PR complete until all relevant checks pass.
 
-Key checks to monitor:
-- **unit tests**: Must pass - validates your changes don't break existing functionality
-- **lint-and-format**: Must pass - ensures code style compliance
-- **build-docs**: Should pass if you modified documentation
+Key checks: **unit tests** (must pass), **lint-and-format** (must pass),
+**build-docs** (should pass if you modified documentation).
 
 # Tasks
 

@@ -34,11 +34,18 @@ from levanter.optim import AdamConfig
 from levanter.tokenizers import load_tokenizer
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
-from marin.rl.curriculum import Curriculum
-from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
+from marin.rl.curriculum import Curriculum, CurriculumConfig, LessonConfig, SamplingParams
+from marin.rl.decoding import DecodingConfig
+from marin.rl.environments import EnvConfig
+from marin.rl.environments.inference_ctx import (
+    VLLMEngineConfig,
+    VLLMFallbackSamplingConfig,
+    vLLMInferenceContextConfig,
+)
+from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLOOLoss
-from marin.rl.rollout_storage import RolloutStorageConfig
+from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutWorker, find_open_port
 from marin.rl.run_state import RLRunState
 from marin.rl.runtime import RLRuntimeHandles, WeightTransferRuntime
@@ -49,12 +56,6 @@ from marin.rl.weight_transfer.base import WeightTransferMode
 from optax import softmax_cross_entropy_with_integer_labels
 
 logger = logging.getLogger(__name__)
-
-try:
-    from vllm import SamplingParams
-except ImportError:
-    logger.warning("vLLM is not installed, so we will not be able to use vLLM inference context.")
-    SamplingParams = None
 
 
 def create_test_runtime(curriculum_config, weight_transfer_config: WeightTransferConfig) -> RLRuntimeHandles:
@@ -241,7 +242,7 @@ def create_weight_transfer_config():
 
 def create_qwen_config():
     return Qwen3Config(
-        seq_len=4096,
+        max_seq_len=4096,
         hidden_dim=1024,
         intermediate_dim=3072,
         num_heads=16,
@@ -258,16 +259,13 @@ def create_qwen_tokenizer():
 
 def create_vllm_inference_config():
     return vLLMInferenceContextConfig(
-        model_name="Qwen/Qwen3-0.6B",
-        max_model_len=1024,
-        tensor_parallel_size=1,
-        gpu_memory_utilization=0.90,
-        sampling_params=SamplingParams(
-            temperature=1.0,
-            n=4,
-            max_tokens=16,
-            logprobs=1,
-            stop=None,
+        engine=VLLMEngineConfig(
+            model_name="Qwen/Qwen3-0.6B",
+            max_model_len=1024,
+            tensor_parallel_size=1,
+            gpu_memory_utilization=0.90,
+        ),
+        fallback_sampling=VLLMFallbackSamplingConfig(
             # Workaround for vllm-project/tpu-inference#1386: default top_k forces greedy sampling
             top_k=4096,
         ),
@@ -276,8 +274,6 @@ def create_vllm_inference_config():
 
 def create_test_curriculum_config(actor_name: str = "test_curriculum"):
     """Create a minimal CurriculumConfig for testing."""
-    from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
-    from marin.rl.environments import EnvConfig
 
     return CurriculumConfig(
         lessons={
@@ -288,7 +284,9 @@ def create_test_curriculum_config(actor_name: str = "test_curriculum"):
                     env_args={"task_type": "cats", "seed": 42},
                 ),
                 sampling_params=SamplingParams(
-                    temperature=1.0, n_prompts=4, n_generations_per_prompt=4, max_output_tokens=32
+                    n_prompts=4,
+                    n_generations_per_prompt=4,
+                    train_decoding=DecodingConfig(temperature=1.0, max_output_tokens=32),
                 ),
             )
         },
@@ -318,7 +316,11 @@ def create_nano_train_worker_config(rollout_storage: RolloutStorageConfig, outpu
             max_samples=1,
             max_rollout_step_delay=0,
         ),
-        loss=RLOOLoss(kl_coef=0.0, clip_epsilon=5.0),
+        loss=RLOOLoss(
+            kl=KLConfig(mode=KLMode.NONE, beta=0.0),
+            clip_epsilon_low=5.0,
+            clip_epsilon_high=5.0,
+        ),
         initial_checkpoint=None,
     )
 
@@ -340,7 +342,6 @@ def create_test_inference_server_config(model_config: LlamaConfig, output_dir: s
 
 def create_test_rollout_storage_config() -> RolloutStorageConfig:
     """Create in-memory storage config for testing."""
-    from marin.rl.rollout_storage import StorageType
 
     test_id = uuid.uuid4().hex[:8]
     return RolloutStorageConfig(storage_type=StorageType.IN_MEMORY, queue_name=f"test_{test_id}")

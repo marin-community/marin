@@ -402,9 +402,9 @@ class TestPreemptionReassignment:
         """Cascaded requeue does not free the slice until terminal heartbeats land.
 
         Pre-Jumbo, this scenario relied on a separate ``_workers_pending_kill``
-        in-memory guard while StopTasks RPCs were in flight. Post-Jumbo, the
-        worker auto-kills via the polling reconcile loop and the only thing
-        keeping the slice reserved is the unfinished attempt rows. This test
+        in-memory guard while explicit stop RPCs were in flight. Post-Jumbo, the
+        worker auto-kills via the reconcile loop and the only thing keeping the
+        slice reserved is the unfinished attempt rows. This test
         asserts that a scheduling tick run *immediately* after a sibling
         requeue (no heartbeats yet) cannot place gang B on the still-busy
         slice — the conservative-state property described in design §6.1.

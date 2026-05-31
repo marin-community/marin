@@ -92,7 +92,6 @@ class ListShard:
 # ---------------------------------------------------------------------------
 
 _SCATTER_META_SUFFIX = ".scatter_meta"
-_SCATTER_DATA_SUFFIX = ".shuffle"
 
 # Number of parallel sidecar reads each reducer issues when building its
 # ScatterReader. Sidecars are small msgpack files (a few KB) and reads are
@@ -109,8 +108,6 @@ _ESTIMATE_WRITE_SAMPLE_INTERVAL = 10
 # EMA weight given to each new observation. 0.3 converges to a 2x step-change
 # in item size within ~3 samples while staying stable under small fluctuations.
 _ESTIMATE_EMA_ALPHA = 0.3
-# Fraction of total memory budgeted for read-side decompression buffers.
-_SCATTER_READ_BUFFER_FRACTION = 0.25
 
 _ZSTD_COMPRESS_LEVEL = 3
 # Items per pickle.dump call within a chunk. Larger = faster (less per-call
@@ -132,12 +129,17 @@ def _default_scatter_write_buffer_bytes() -> int:
     """Return the scatter write buffer budget based on the cgroup memory limit.
 
     Uses 25% of the container memory limit so the budget scales with the
-    worker size. Falls back to 256 MB when the limit cannot be read.
+    worker size, divided by the number of concurrent workers sharing this
+    actor's RAM. Falls back to 256 MB (divided by the same factor) when the
+    cgroup limit cannot be read.
     """
+    from zephyr.execution import _worker_ctx_var  # local import breaks the shuffle↔execution cycle
+
+    num_workers = _worker_ctx_var.get().num_workers
     memory = TaskResources.from_environment().memory_bytes
     if memory > 0:
-        return int(memory * _SCATTER_WRITE_BUFFER_FRACTION)
-    return _SCATTER_WRITE_BUFFER_BYTES_FALLBACK
+        return int(memory * _SCATTER_WRITE_BUFFER_FRACTION / num_workers)
+    return _SCATTER_WRITE_BUFFER_BYTES_FALLBACK // max(1, num_workers)
 
 
 # ---------------------------------------------------------------------------

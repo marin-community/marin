@@ -204,10 +204,15 @@ def _seed_workers_and_attempts(db: ControllerDB) -> None:
                 cur.execute(
                     text(
                         "INSERT INTO task_attempts ("
-                        "  task_id, attempt_id, worker_id, state, created_at_ms"
-                        ") VALUES (:tid, 0, :wid, :state, 2000)"
+                        "  task_id, attempt_id, worker_id, state, created_at_ms, attempt_uid"
+                        ") VALUES (:tid, 0, :wid, :state, 2000, :uid)"
                     ),
-                    {"tid": task_id, "wid": worker_id, "state": job_pb2.TASK_STATE_RUNNING},
+                    {
+                        "tid": task_id,
+                        "wid": worker_id,
+                        "state": job_pb2.TASK_STATE_RUNNING,
+                        "uid": f"{w_idx:08x}{t_idx:08x}",
+                    },
                 )
 
 

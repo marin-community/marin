@@ -37,7 +37,7 @@ from zephyr import Dataset, ZephyrContext
 from zephyr.dataset import FileEntry
 from zephyr.readers import load_file
 
-from marin.execution.executor import InputName, VersionedValue
+from marin.execution.types import InputName, VersionedValue
 from marin.processing.tokenize._core import (
     MIN_GROUP_BYTES,
     bundle_files_by_size,
@@ -61,15 +61,11 @@ __all__ = [
     "HfTokenizeConfig",
     "TokenizeConfig",
     "TokenizeConfigBase",
-    "_bundle_files_by_size",
-    "_compute_target_group_bytes",
+    "bundle_files_by_size",
+    "compute_target_group_bytes",
     "main",
     "tokenize",
 ]
-
-# Backward-compatible aliases — kept because tests import these names.
-_bundle_files_by_size = bundle_files_by_size
-_compute_target_group_bytes = compute_target_group_bytes
 
 
 @dataclasses.dataclass(frozen=True)
@@ -78,6 +74,7 @@ class HfDatasetSpec:
 
     id: str
     name: str | None = None
+    revision: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)

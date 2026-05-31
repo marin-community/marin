@@ -8,7 +8,7 @@ export function App() {
   const [autoRefresh, setAutoRefresh] = useAtom(autoRefreshAtom);
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
+    <div className="mx-auto max-w-[128rem] px-6 py-8">
       <header className="mb-8 flex items-baseline justify-between">
         <h1 className="text-3xl font-bold tracking-tight">Marin Infra Status</h1>
         <label className="flex items-center gap-2 text-sm text-slate-400">

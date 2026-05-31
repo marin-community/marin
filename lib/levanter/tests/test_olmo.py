@@ -5,17 +5,17 @@ import tempfile
 
 import chex
 import equinox as eqx
+import haliax as hax
+import haliax.nn as hnn
 import numpy as np
 import pytest
 from jax import random
-
-import haliax as hax
-import haliax.nn as hnn
+from test_utils import skip_if_no_torch, use_test_mesh
 
 from levanter.layers.attention import AttentionMask
+from levanter.models.llama import LlamaMlp
 from levanter.models.olmo import Olmo2Attention, Olmo2Config, Olmo2DecoderLayer, Olmo2LMHeadModel
 from levanter.utils.jax_utils import parameter_count
-from test_utils import skip_if_no_torch, use_test_mesh
 
 
 def _get_olmo2_config(use_flash=False, num_kv_heads=4, seq_len=128) -> Olmo2Config:
@@ -100,8 +100,6 @@ def test_olmo2_rms_norm():
 def test_olmo2_mlp(num_kv_heads):
     config = _get_olmo2_config(num_kv_heads=num_kv_heads)
     key = random.PRNGKey(0)
-
-    from levanter.models.llama import LlamaMlp
 
     mlp = LlamaMlp.init(config.Embed, config.Mlp, config.activation_function, key=key, use_bias=config.use_bias)
 

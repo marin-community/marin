@@ -46,12 +46,14 @@ import pyarrow.ipc as paipc
 from finelog.rpc import logging_pb2
 from finelog.store.catalog import Catalog
 from finelog.store.compactor import CompactionConfig
+from finelog.store.cursor import LogCursor
 from finelog.store.layout_migration import LOG_NAMESPACE_DIR
 from finelog.store.log_namespace import (
     LOG_REGISTERED_SCHEMA,
     DiskLogNamespace,
     MemoryLogNamespace,
 )
+from finelog.store.policy import StoragePolicy
 from finelog.store.rwlock import RWLock
 from finelog.store.schema import (
     MAX_WRITE_ROWS_BYTES,
@@ -356,7 +358,13 @@ class DuckDBLogStore:
         self._rehydrate_from_registry()
         self._ensure_log_namespace_registered()
 
-    def _make_namespace(self, name: str, schema: Schema, namespace_dir: Path | None) -> LogNamespaceProtocol:
+    def _make_namespace(
+        self,
+        name: str,
+        schema: Schema,
+        namespace_dir: Path | None,
+        policy: StoragePolicy = StoragePolicy(),
+    ) -> LogNamespaceProtocol:
         if self._data_dir is None:
             return MemoryLogNamespace(
                 name=name,
@@ -373,13 +381,15 @@ class DuckDBLogStore:
             query_visibility_lock=self._query_visibility_lock,
             read_pool=self._pool,
             catalog=self.catalog,
+            storage_policy=policy,
             **self._disk_namespace_kwargs,
         )
 
     def _rehydrate_from_registry(self) -> None:
         for name, schema in self.catalog.list_all().items():
             namespace_dir = self._namespace_dir(name)
-            ns = self._make_namespace(name, schema, namespace_dir)
+            policy = self.catalog.get_policy(name)
+            ns = self._make_namespace(name, schema, namespace_dir, policy)
             self.catalog.insert_live(name, ns)
 
     def _ensure_log_namespace_registered(self) -> None:
@@ -392,7 +402,7 @@ class DuckDBLogStore:
         self.catalog.register_or_evolve(
             LOG_NAMESPACE_NAME,
             stored_schema,
-            lambda schema: self._make_namespace(LOG_NAMESPACE_NAME, schema, log_dir),
+            lambda schema, policy: self._make_namespace(LOG_NAMESPACE_NAME, schema, log_dir, policy),
             on_existing=lambda existing: existing.schema,
         )
 
@@ -406,11 +416,22 @@ class DuckDBLogStore:
             return self._data_dir / LOG_NAMESPACE_DIR
         return _validate_namespace_name(name, self._data_dir)
 
-    def register_table(self, name: str, schema: Schema) -> Schema:
+    def register_table(
+        self,
+        name: str,
+        schema: Schema,
+        policy: StoragePolicy = StoragePolicy(),
+    ) -> Schema:
         """Register or evolve ``name`` to ``schema``; return the effective schema.
 
         Implicit ``seq`` is stamped at this boundary so the on-disk layout
-        is uniform across namespaces.
+        is uniform across namespaces. ``policy`` is a per-namespace
+        retention override; an empty policy inherits the cluster-wide
+        defaults. On re-register an empty policy is treated as
+        "no opinion" and the existing policy is kept — otherwise an old
+        client that doesn't know about policies would wipe a tighter
+        policy a newer client had installed. A non-empty policy
+        overwrites whole-record.
         """
         namespace_dir = self._namespace_dir(name)
         resolve_key_column(schema)
@@ -422,17 +443,21 @@ class DuckDBLogStore:
             if effective != existing_ns.schema:
                 self.catalog.upsert(name, effective)
                 existing_ns.update_schema(effective)
+            if not policy.is_empty():
+                self.catalog.upsert_policy(name, policy)
+                existing_ns.update_policy(policy)
             return effective
 
         return self.catalog.register_or_evolve(
             name,
             stored_schema,
-            lambda effective_schema: self._make_namespace(name, effective_schema, namespace_dir),
+            lambda eff_schema, eff_policy: self._make_namespace(name, eff_schema, namespace_dir, eff_policy),
             on_existing=on_existing,
+            policy=policy,
         )
 
-    def list_namespaces_with_stats(self) -> list[tuple[str, Schema, NamespaceStats]]:
-        """Return ``(name, schema, stats)`` for every live namespace.
+    def list_namespaces_with_stats(self) -> list[tuple[str, Schema, NamespaceStats, StoragePolicy]]:
+        """Return ``(name, schema, stats, policy)`` for every live namespace.
 
         Backs ``StatsService.ListNamespaces`` — the dashboard relies on
         it to render the summary table without issuing per-namespace
@@ -444,7 +469,7 @@ class DuckDBLogStore:
         # registry snapshot to release the catalog lock before any stats()
         # call so a slow namespace can't stall this call for every other.
         namespaces = self.catalog.snapshot_live()
-        return [(name, ns.schema, ns.stats()) for name, ns in namespaces]
+        return [(name, ns.schema, ns.stats(), self.catalog.get_policy(name)) for name, ns in namespaces]
 
     def get_table_schema(self, name: str) -> Schema:
         return self.catalog.require_live(name).schema
@@ -525,17 +550,16 @@ class DuckDBLogStore:
         opens Parquet files lazily during execution, so dropping the lock
         before fetch would let compaction unlink files mid-scan.
 
-        Only namespaces whose quoted identifier appears in ``sql`` get their
-        view rebuilt — for a typical single-namespace query this cuts the
-        per-call setup from O(all namespaces) to O(1). A false positive
-        (literal string containing a quoted name) just rebuilds an unused
-        view; a false negative would surface as a ``CatalogException`` so
-        the substring check is intentionally permissive.
+        Every live namespace gets a view registered before the query runs.
+        Per-namespace setup is microseconds (a segment-list snapshot plus a
+        DuckDB catalog op) and deployments stay in the low-tens of
+        namespaces, so the cost is negligible. Registering everything
+        avoids the whole class of "user wrote ``log`` instead of ``"log"``"
+        false negatives that a substring-based fast path would produce.
 
         Unknown namespaces in the FROM clause surface as DuckDB
         ``CatalogException`` (the view doesn't exist).
         """
-        view_names: list[str] = []
         self._query_visibility_lock.read_acquire()
         try:
             with self._pool.cursor() as cursor:
@@ -547,9 +571,6 @@ class DuckDBLogStore:
                 try:
                     for ns_name, ns in ns_snapshot:
                         ns_quoted = quote_ident(ns_name)
-                        if ns_quoted not in sql:
-                            continue
-                        view_names.append(ns_quoted)
                         segments = ns.query_snapshot()
                         if not segments:
                             cols_sql = ", ".join(
@@ -565,8 +586,8 @@ class DuckDBLogStore:
                         )
                     return cursor.execute(sql).fetch_arrow_table()
                 finally:
-                    for vname in view_names:
-                        cursor.execute(f"DROP VIEW IF EXISTS {vname}")
+                    for ns_name, _ in ns_snapshot:
+                        cursor.execute(f"DROP VIEW IF EXISTS {quote_ident(ns_name)}")
         finally:
             self._query_visibility_lock.read_release()
 
@@ -645,9 +666,7 @@ class DuckDBLogStore:
         result = self.get_logs(key, max_lines=1)
         return len(result.entries) > 0
 
-    def cursor(self, key: str):
-        from finelog.store import LogCursor  # circular import: duckdb_store -> store.__init__ -> duckdb_store
-
+    def cursor(self, key: str) -> LogCursor:
         return LogCursor(self, key)
 
     def close(self) -> None:
