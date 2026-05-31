@@ -60,6 +60,7 @@ def _translate_legacy_lora_dpo_config(config: LoraDpoConfig) -> TrainDpoConfig:
         alpha=config.lora.alpha,
         dropout=config.lora.dropout,
         zero_init_b=config.lora.zero_init_b,
+        a_init_mode=config.lora.a_init_mode,
         exclude_modules=config.lora.exclude_modules,
     )
 

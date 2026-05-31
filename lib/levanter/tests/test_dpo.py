@@ -298,7 +298,8 @@ def test_legacy_lora_dpo_config_translates_to_canonical(tmp_path: Path):
                 "lora:",
                 "  r: 8",
                 "  alpha: 8.0",
-                "  zero_init_b: true",
+                "  zero_init_b: false",
+                "  a_init_mode: zero",
                 "hf_save_steps: 100",
             ]
         )
@@ -310,6 +311,8 @@ def test_legacy_lora_dpo_config_translates_to_canonical(tmp_path: Path):
 
     assert isinstance(translated.adapter, LoraAdaptationConfig)
     assert isinstance(translated.reference, AdapterBaseReferenceConfig)
+    assert translated.adapter.zero_init_b is False
+    assert translated.adapter.a_init_mode == "zero"
 
 
 def test_preference_chat_processor_skips_invalid_rows(tokenizer_path: Path):
