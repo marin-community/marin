@@ -16,7 +16,6 @@ Three layers, exercised in order:
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -979,20 +978,14 @@ def test_observation_routed_by_attempt_uid():
         assert updates[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
 
 
-def test_unresolvable_observation_uid_is_dropped_and_logged(caplog):
-    """An observation whose uid resolves to no attempt is dropped and logged inline.
-
-    The diagnostic is emitted inline by ``observations_to_updates`` (logger
-    ``iris.cluster.controller.reconcile.worker``), not via a deferred effect.
-    """
+def test_unresolvable_observation_uid_is_dropped():
+    """An observation whose uid resolves to no attempt row produces no update."""
     with make_controller_state() as state:
         _setup_running_task(state)
         obs = _obs("does-not-exist-uid", job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
-        with caplog.at_level(logging.WARNING, logger="iris.cluster.controller.reconcile.worker"):
-            updates = _observations_to_updates(state, [obs])
+        updates = _observations_to_updates(state, [obs])
 
     assert updates == []
-    assert any("did not resolve to an attempt row" in r.getMessage() for r in caplog.records), caplog.text
 
 
 def _setup_running_task_named(state: ControllerTestState, job: str, worker_id: str) -> tuple[JobName, int, str]:

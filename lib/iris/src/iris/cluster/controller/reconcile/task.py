@@ -89,7 +89,7 @@ class TransitionOutcome:
     job_id: JobName
     prior_state: int
     new_task_state: int
-    has_coscheduling: bool
+    cascade_to_peers: bool
 
 
 # ─── Snapshot lookups ───
@@ -281,8 +281,8 @@ class PreemptOutcome:
     """Result of ``preempt_one``, consumed by batches.py to drive cascade."""
 
     job_id: JobName
-    new_state: int
-    has_coscheduling: bool
+    new_task_state: int
+    cascade_to_peers: bool
 
 
 def preempt_one(
@@ -317,7 +317,7 @@ def preempt_one(
         attempt_state=job_pb2.TASK_STATE_PREEMPTED,
         preemption_count=preemption_count,
     )
-    return PreemptOutcome(job_id=row.job_id, new_state=new_state, has_coscheduling=row.has_coscheduling)
+    return PreemptOutcome(job_id=row.job_id, new_task_state=new_state, cascade_to_peers=row.has_coscheduling)
 
 
 # ─── The per-update transition core ───
@@ -447,6 +447,10 @@ def apply_one_transition(
     task_state = prior_state
     task_error = update.error
     task_exit = update.exit_code
+    # Budget counters read from the raw snapshot row (not the overlay): safe because
+    # current_attempt_id is immutable within a batch (it is not a TaskRowDelta field)
+    # and the terminal-attempt revival guard above drops any second non-terminal update
+    # for the same current attempt, so each counter is charged at most once per batch.
     failure_count = task.failure_count
     preemption_count = task.preemption_count
     charge_worker_build_failures = source is TransitionSource.WORKER_RECONCILE
@@ -549,7 +553,7 @@ def apply_one_transition(
         job_id=task.job_id,
         prior_state=prior_state,
         new_task_state=task_state,
-        has_coscheduling=has_cosched,
+        cascade_to_peers=has_cosched,
     )
 
 

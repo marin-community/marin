@@ -119,7 +119,7 @@ def _cascade_to_peers(
     now_ms: int,
 ) -> None:
     """Coscheduled-sibling cascade for one transition. No job recompute."""
-    if not outcome.has_coscheduling:
+    if not outcome.cascade_to_peers:
         return
     siblings = peers.find_coscheduled_siblings(state, outcome.job_id, outcome.task_id, True)
     if outcome.new_task_state in FAILURE_TASK_STATES:
@@ -155,9 +155,9 @@ def _defer_pending_child_cascade(
 ) -> None:
     """Queue the descendant-job cascade for a PENDING rollback under TERMINATE_CHILDREN.
 
-    Deferred (deduped per job) to the recompute pass so it runs once per job
-    after every sibling in the batch has settled. Shared by the reconcile apply
-    pass and the controller-asserted fan-out so all paths kill descendants when a
+    Deferred (deduped per job) and drained by ``_finalize_touched_jobs`` so it runs
+    once per job after every sibling in the batch has settled. Shared by the reconcile
+    apply pass and the controller-asserted fan-out so all paths kill descendants when a
     parent task rolls back to PENDING.
     """
     if outcome.new_task_state != job_pb2.TASK_STATE_PENDING:
@@ -476,7 +476,7 @@ def apply_worker_failures_batch(
                 job_id=parent_job_id,
                 prior_state=prior_state,
                 new_task_state=new_task_state,
-                has_coscheduling=not is_reservation_holder and task_row.has_coscheduling,
+                cascade_to_peers=not is_reservation_holder and task_row.has_coscheduling,
             )
             _fan_out_outcome(state, outcome, acc, pending_child_cascades, "Parent task preempted", now_ms)
 
@@ -550,8 +550,8 @@ def apply_terminal_decisions_batch(
                     task_id=decision.task_id,
                     job_id=outcome.job_id,
                     prior_state=effective_state,
-                    new_task_state=outcome.new_state,
-                    has_coscheduling=outcome.has_coscheduling,
+                    new_task_state=outcome.new_task_state,
+                    cascade_to_peers=outcome.cascade_to_peers,
                 ),
                 acc,
                 pending_child_cascades,

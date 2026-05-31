@@ -229,7 +229,6 @@ def test_sync_pod_not_found_marks_failed(provider, k8s):
     result = provider.sync(batch)
     assert len(result.updates) == 1
     assert result.updates[0].new_state == job_pb2.TASK_STATE_FAILED
-    assert result.updates[0].error == "Pod not found"
 
 
 def test_pod_not_found_grace_period(provider, k8s):

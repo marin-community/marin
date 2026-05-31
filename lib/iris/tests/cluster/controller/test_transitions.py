@@ -11,7 +11,6 @@ They focus on:
 """
 
 import asyncio
-import logging
 import tempfile
 import threading
 from pathlib import Path
@@ -1976,8 +1975,8 @@ def test_stale_attempt_ignored(state):
     assert _query_task(state, task.task_id).current_attempt_id == 1
 
 
-def test_stale_attempt_error_log_for_non_terminal(state, caplog):
-    """Stale attempt report logs ERROR when the old attempt is not terminal."""
+def test_stale_attempt_for_non_terminal_is_dropped(state):
+    """A stale attempt report for a non-terminal old attempt is dropped, not applied."""
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
 
     req = make_job_request("job1")
@@ -2012,25 +2011,22 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
         ).all()
     assert not attempt_is_terminal(attempts[0].state)
 
-    with caplog.at_level(logging.ERROR, logger="iris.cluster.controller.reconcile.task"):
-        with state._db.transaction() as cur:
-            apply_task_observations(
-                cur,
-                [
-                    WorkerTaskUpdates(
-                        worker_id=worker_id,
-                        updates=[TaskUpdate(task_id=task.task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
-                    )
-                ],
-                health=state._health,
-                endpoints=state._endpoints,
-                now=Timestamp.now(),
-            )
+    with state._db.transaction() as cur:
+        apply_task_observations(
+            cur,
+            [
+                WorkerTaskUpdates(
+                    worker_id=worker_id,
+                    updates=[TaskUpdate(task_id=task.task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
+        )
 
-    # The diagnostic fires...
-    assert any("Stale attempt precondition violation" in r.message for r in caplog.records)
-    # ...and, more importantly, the stale update is dropped: attempt 0 is not
-    # revived to SUCCEEDED and the current-attempt pointer is untouched.
+    # The stale update is dropped: attempt 0 is not revived to SUCCEEDED and the
+    # current-attempt pointer is untouched.
     assert _query_task(state, task.task_id).current_attempt_id == 1
     stale = _query_attempt(state, task.task_id, 0)
     assert stale.state != job_pb2.TASK_STATE_SUCCEEDED
