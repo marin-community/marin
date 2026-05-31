@@ -22,7 +22,7 @@ from iris.cluster.controller import direct_provider, ops, reads, writes
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.codec import constraints_from_json
-from iris.cluster.controller.ops.task import Assignment, apply_terminal_decisions
+from iris.cluster.controller.ops.task import Assignment, finalize
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import TaskJobSummary
@@ -77,7 +77,7 @@ def _register_worker(state: ControllerTestState, worker_id: WorkerId) -> None:
         disk_bytes=100 * 1024**3,
     )
     with state._db.transaction() as cur:
-        ops.worker.register_or_refresh(
+        ops.worker.register(
             cur,
             worker_id=worker_id,
             address=f"{worker_id}:8080",
@@ -102,7 +102,7 @@ def _assign_and_transition(
     error: str | None = None,
 ) -> None:
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=worker_id)], health=state._health)
     with state._db.transaction() as cur:
         apply_task_observations(
             cur,
@@ -400,7 +400,7 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
     child_task = _query_tasks_with_attempts(state, child_job)[0]
     _assign_and_transition(state, child_task.task_id, worker, job_pb2.TASK_STATE_RUNNING)
     with state._db.transaction() as cur:
-        apply_terminal_decisions(
+        finalize(
             cur,
             [TerminalDecision(TerminalKind.PREEMPT, child_task.task_id, "evicted by prod tenant")],
             health=state._health,
@@ -471,7 +471,7 @@ def test_existing_job_policy_keep_force_reaps_after_drain_wait(service, state, m
     child_task = _query_tasks_with_attempts(state, child_job)[0]
     _assign_and_transition(state, child_task.task_id, worker, job_pb2.TASK_STATE_RUNNING)
     with state._db.transaction() as cur:
-        apply_terminal_decisions(
+        finalize(
             cur,
             [TerminalDecision(TerminalKind.PREEMPT, child_task.task_id, "evicted, worker stuck")],
             health=state._health,
@@ -1545,7 +1545,7 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
 
     w1 = WorkerId("w1")
     with state._db.transaction() as cur:
-        ops.worker.register_or_refresh(
+        ops.worker.register(
             cur,
             worker_id=w1,
             address="w1:8080",

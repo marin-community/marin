@@ -372,7 +372,7 @@ def test_register_worker_with_n_attributes_perf(register_perf_db: ControllerTest
             attributes=attrs,
         )
         with state._db.transaction() as cur:
-            ops.worker.register_or_refresh(
+            ops.worker.register(
                 cur,
                 worker_id=wid,
                 address=f"{wid}:8080",

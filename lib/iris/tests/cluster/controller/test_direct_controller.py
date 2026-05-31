@@ -9,7 +9,7 @@ from iris.cluster.controller.direct_provider import (
     DirectProviderBatch,
     DirectProviderSyncResult,
 )
-from iris.cluster.controller.ops.task import apply_provider_updates as apply_direct_provider_updates
+from iris.cluster.controller.ops.task import apply_direct_provider_updates
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2

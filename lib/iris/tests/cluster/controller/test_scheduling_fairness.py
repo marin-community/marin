@@ -446,7 +446,7 @@ def test_unplaceable_tasks_do_not_starve_placeable_tasks(make_controller, tmp_pa
 
     # Register exactly 1 CPU worker — no TPU workers
     with ctrl._db.transaction() as cur:
-        ops.worker.register_or_refresh(
+        ops.worker.register(
             cur,
             worker_id=WorkerId("cpu-worker"),
             address="cpu-worker:8080",

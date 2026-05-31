@@ -46,7 +46,7 @@ class TerminalKind(StrEnum):
     """Variant tag for :class:`TerminalDecision`.
 
     Each kind drives a different per-task terminal transition inside
-    :meth:`ReconcileState.apply_terminal_decisions`:
+    :meth:`ReconcileState.finalize_tasks`:
 
     - ``PREEMPT``: mark the task PREEMPTED (or retry to PENDING if budget remains).
     - ``TIMEOUT``: mark the task FAILED with no retry; cascade siblings.

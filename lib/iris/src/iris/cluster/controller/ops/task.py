@@ -3,14 +3,15 @@
 
 """Aggregate-scoped commands for tasks and attempts.
 
-The ``apply_*`` glues here are the small per-tick wrappers around the
-transition kernel: load a closed snapshot covering the affected tasks via a
-scoped loader, call the matching ``ReconcileState`` verb, drain effects
-through ``commit_effects``. ``queue_assignments`` is the only scheduler-driven
-write that doesn't go through the kernel — PENDING → ASSIGNED is a
-direct-write transition with no cascade semantics.
+The glues here are small per-tick wrappers around the transition kernel: load
+a closed snapshot covering the affected tasks via a scoped loader, call the
+matching ``ReconcileState`` verb, drain effects through ``commit_effects``.
+``finalize`` wraps the kernel's ``finalize_tasks``; ``apply_direct_provider_updates``
+wraps ``record_updates``. ``assign`` is the only scheduler-driven write that
+doesn't go through the kernel — PENDING → ASSIGNED is a direct-write transition
+with no cascade semantics.
 
-Worker-reported task states land through ``ops.worker.reconcile``
+Worker-reported task states land through ``ops.worker.apply_reconcile``
 (the reconcile loop), not here.
 """
 
@@ -58,7 +59,7 @@ class Assignment:
     priority_band: int | None = None
 
 
-def queue_assignments(
+def assign(
     cur: Tx,
     assignments: list[Assignment],
     *,
@@ -135,7 +136,7 @@ def queue_assignments(
         )
 
 
-def apply_provider_updates(
+def apply_direct_provider_updates(
     cur: Tx,
     updates: list[TaskUpdate],
     *,
@@ -156,12 +157,12 @@ def apply_provider_updates(
         seed_task_ids=relevant_task_ids,
         extra_attempt_keys=attempt_keys,
     )
-    effects = ReconcileState.open(snapshot).apply_provider_updates(updates)
+    effects = ReconcileState.open(snapshot).record_updates(updates)
     commit_effects(cur, effects, health=health, endpoints=endpoints, now=now)
     return effects
 
 
-def apply_terminal_decisions(
+def finalize(
     cur: Tx,
     decisions: list[TerminalDecision],
     *,
@@ -181,6 +182,6 @@ def apply_terminal_decisions(
 
     all_task_ids: list[JobName] = sorted({d.task_id for d in decisions}, key=lambda tid: tid.to_wire())
     snapshot = load_closed_snapshot(cur, now=now, seed_task_ids=all_task_ids)
-    effects = ReconcileState.open(snapshot).apply_terminal_decisions(decisions)
+    effects = ReconcileState.open(snapshot).finalize_tasks(decisions)
     commit_effects(cur, effects, health=health, endpoints=endpoints, now=now)
     return effects

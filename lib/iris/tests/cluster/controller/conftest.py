@@ -110,7 +110,7 @@ class FakeProvider:
     def ping_workers(self, workers):
         return []
 
-    def reconcile_workers(self, plans, addresses):
+    def dispatch_reconcile_plans(self, plans, addresses):
         from iris.cluster.controller.reconcile.worker import ReconcileResult
 
         return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]
@@ -447,7 +447,7 @@ def register_worker(
 ) -> WorkerId:
     wid = WorkerId(worker_id)
     with state._db.transaction() as cur:
-        ops.worker.register_or_refresh(
+        ops.worker.register(
             cur,
             worker_id=wid,
             address=address,
@@ -677,7 +677,7 @@ def healthy_active_workers(state: ControllerTestState) -> list[SchedulableWorker
 
 def dispatch_task(state: ControllerTestState, task, worker_id: WorkerId) -> None:
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
     with state._db.transaction() as cur:
         apply_task_observations(
             cur,

@@ -91,7 +91,7 @@ class ReconcileResult:
 # ---------------------------------------------------------------------------
 
 
-def reconcile_workers(inputs: ReconcileInputs) -> list[WorkerReconcilePlan]:
+def build_reconcile_plans(inputs: ReconcileInputs) -> list[WorkerReconcilePlan]:
     """Compute one reconcile plan per worker from a batch snapshot."""
     return [_reconcile_worker(wid, inputs.rows_by_worker.get(wid, []), inputs.job_specs) for wid in inputs.worker_ids]
 

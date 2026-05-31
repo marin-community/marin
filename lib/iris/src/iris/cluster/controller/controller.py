@@ -48,13 +48,11 @@ from iris.cluster.controller.direct_provider import (
 )
 from iris.cluster.controller.ops.task import (
     Assignment,
-    apply_terminal_decisions,
-)
-from iris.cluster.controller.ops.task import (
-    apply_provider_updates as apply_direct_provider_updates,
+    apply_direct_provider_updates,
+    finalize,
 )
 from iris.cluster.controller.ops.worker import (
-    reconcile as apply_reconcile,
+    apply_reconcile,
 )
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
@@ -66,7 +64,7 @@ from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
     ReconcileRow,
     WorkerReconcilePlan,
-    reconcile_workers,
+    build_reconcile_plans,
 )
 from iris.cluster.controller.scheduler import (
     JobRequirements,
@@ -1023,7 +1021,7 @@ class Controller:
             for task_id, worker_id in assignments
         ]
         with self._db.transaction() as cur:
-            ops.task.queue_assignments(cur, command, health=self._health)
+            ops.task.assign(cur, command, health=self._health)
         # Wake the polling thread; every tick reconciles every healthy worker,
         # so the new ASSIGNED rows turn into Reconcile RPCs on the next tick.
         self._polling_wake.set()
@@ -1057,7 +1055,7 @@ class Controller:
             if preemptions:
                 with self._db.transaction() as cur:
                     now = Timestamp.now()
-                    apply_terminal_decisions(
+                    finalize(
                         cur,
                         [
                             TerminalDecision(
@@ -1186,7 +1184,7 @@ class Controller:
                 )
             )
         with self._db.transaction() as cur:
-            apply_terminal_decisions(
+            finalize(
                 cur,
                 decisions,
                 health=self._health,
@@ -1301,8 +1299,8 @@ class Controller:
         if not inputs.worker_ids and not timeout_decisions:
             return
 
-        plans = reconcile_workers(inputs) if inputs.worker_ids else []
-        results = self._provider.reconcile_workers(plans, addresses) if plans else []
+        plans = build_reconcile_plans(inputs) if inputs.worker_ids else []
+        results = self._provider.dispatch_reconcile_plans(plans, addresses) if plans else []
 
         plan_by_worker: dict[WorkerId, WorkerReconcilePlan] = {p.worker_id: p for p in plans}
         for result in results:
@@ -1319,7 +1317,7 @@ class Controller:
                     now=now,
                 )
             if timeout_decisions:
-                apply_terminal_decisions(
+                finalize(
                     cur,
                     timeout_decisions,
                     health=self._health,

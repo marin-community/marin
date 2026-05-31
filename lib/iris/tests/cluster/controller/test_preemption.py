@@ -6,7 +6,7 @@
 from iris.cluster.constraints import AttributeValue, Constraint, ConstraintOp
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.budget import compute_effective_band
-from iris.cluster.controller.ops.task import Assignment, apply_terminal_decisions
+from iris.cluster.controller.ops.task import Assignment, finalize
 from iris.cluster.controller.reconcile.policy import RESERVATION_HOLDER_JOB_NAME
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
@@ -614,7 +614,7 @@ def test_preempted_task_retries():
 
         # Preempt
         with state._db.transaction() as cur:
-            apply_terminal_decisions(
+            finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Preempted by /bob/prod-job:0")],
                 health=state._health,
@@ -647,7 +647,7 @@ def test_preempted_task_exhausted_retries():
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
 
         with state._db.transaction() as cur:
-            apply_terminal_decisions(
+            finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted")],
                 health=state._health,
@@ -947,7 +947,7 @@ def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
 def _dispatch_with_band(state, task, worker_id, priority_band: int) -> None:
     """Dispatch task with an explicit stamped band, advancing it to RUNNING."""
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(
+        ops.task.assign(
             cur,
             [Assignment(task_id=task.task_id, worker_id=worker_id, priority_band=priority_band)],
             health=state._health,
@@ -990,11 +990,11 @@ def test_preempted_assigned_task_always_retries():
 
         # Only assign, don't advance to RUNNING
         with state._db.transaction() as cur:
-            ops.task.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=w1)], health=state._health)
+            ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=w1)], health=state._health)
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
 
         with state._db.transaction() as cur:
-            apply_terminal_decisions(
+            finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted while assigned")],
                 health=state._health,
@@ -1118,7 +1118,7 @@ def test_preemption_nonexistent_task_is_noop():
     """Preempting a non-existent task is a no-op."""
     with make_controller_state() as state:
         with state._db.transaction() as cur:
-            result = apply_terminal_decisions(
+            result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, JobName.from_wire("/ghost/job:0"), "does not exist")],
                 health=state._health,
@@ -1150,7 +1150,7 @@ def test_preempt_then_worker_terminal_heartbeat_stamps_finished_at_ms():
 
         # Producer transition: attempt PREEMPTED, finished_at_ms left NULL on purpose.
         with state._db.transaction() as cur:
-            apply_terminal_decisions(
+            finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted by /bob/prod-job:0")],
                 health=state._health,
@@ -1205,7 +1205,7 @@ def test_preemption_terminal_task_is_noop():
 
         # Preempt should be no-op
         with state._db.transaction() as cur:
-            apply_terminal_decisions(
+            finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "too late")],
                 health=state._health,
@@ -1303,7 +1303,7 @@ def test_preempt_task_retries_when_budget_remains():
 
         attempt_id_before = query_task(state, task.task_id).current_attempt_id
         with state._db.transaction() as cur:
-            result = apply_terminal_decisions(
+            result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Evicted by /bob/prod:0")],
                 health=state._health,
@@ -1342,7 +1342,7 @@ def test_preempt_task_terminal_when_budget_exhausted():
         harness.dispatch(task, w1)
 
         with state._db.transaction() as cur:
-            result = apply_terminal_decisions(
+            result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "budget gone")],
                 health=state._health,
@@ -1395,7 +1395,7 @@ def test_preempt_task_requeues_coscheduled_siblings_on_retry():
             dispatch_task(state, task, WorkerId(f"w{i}"))
 
         with state._db.transaction() as cur:
-            result = apply_terminal_decisions(
+            result = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, tasks[0].task_id, "evicted")],
                 health=state._health,
@@ -1460,7 +1460,7 @@ def test_preempt_task_cascades_coscheduled_siblings():
 
         # Preempt the first task terminally (no retry budget).
         with state._db.transaction() as cur:
-            result0 = apply_terminal_decisions(
+            result0 = finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, tasks[0].task_id, "preempted by prod")],
                 health=state._health,
@@ -1553,7 +1553,7 @@ def test_preemption_retry_preserves_reservation_holder():
 
         # Preempt the parent task — it should retry (go PENDING)
         with state._db.transaction() as cur:
-            apply_terminal_decisions(
+            finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, parent_task.task_id, "Preempted by higher priority")],
                 health=state._health,
@@ -1622,7 +1622,7 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
         assert dead_attempt_id == 0
 
         with state._db.transaction() as cur:
-            apply_terminal_decisions(
+            finalize(
                 cur,
                 [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Preempted by /bob/prod-job:0")],
                 health=state._health,

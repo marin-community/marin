@@ -16,8 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from iris.cluster.controller import direct_provider, ops, reads, writes
-from iris.cluster.controller.ops.task import Assignment, apply_terminal_decisions
-from iris.cluster.controller.ops.task import apply_provider_updates as apply_direct_provider_updates
+from iris.cluster.controller.ops.task import Assignment, apply_direct_provider_updates, finalize
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.reads import ReservationClaim
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
@@ -151,7 +150,7 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     cur, job_id=job_id, reason=reason, endpoints=transitions._endpoints, health=transitions._health
                 )
             case RegisterOrRefreshWorker(worker_id, address, metadata, ts, slice_id, scale_group):
-                return ops.worker.register_or_refresh(
+                return ops.worker.register(
                     cur,
                     worker_id=worker_id,
                     address=address,
@@ -163,7 +162,7 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     scale_group=scale_group,
                 )
             case QueueAssignments(assignments):
-                return ops.task.queue_assignments(cur, assignments, health=transitions._health)
+                return ops.task.assign(cur, assignments, health=transitions._health)
             case ApplyTaskUpdates(request):
                 return apply_task_observations(
                     cur,
@@ -173,7 +172,7 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     now=Timestamp.now(),
                 )
             case PreemptTask(task_id, reason):
-                return apply_terminal_decisions(
+                return finalize(
                     cur,
                     [TerminalDecision(TerminalKind.PREEMPT, task_id, reason)],
                     health=transitions._health,
@@ -181,7 +180,7 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     now=Timestamp.now(),
                 )
             case CancelTasksForTimeout(task_ids, reason):
-                return apply_terminal_decisions(
+                return finalize(
                     cur,
                     [
                         TerminalDecision(TerminalKind.TIMEOUT, tid, reason)

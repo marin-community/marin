@@ -211,7 +211,7 @@ def _start_running_job(
 
     worker_id = WorkerId(f"w-{user}")
     with state._db.transaction() as cur:
-        ops.worker.register_or_refresh(
+        ops.worker.register(
             cur,
             worker_id=worker_id,
             address=f"{worker_id}:8080",
@@ -229,7 +229,7 @@ def _start_running_job(
     for idx in range(replicas):
         task_id = job_id.task(idx)
         with state._db.transaction() as cur:
-            ops.task.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=worker_id)], health=state._health)
+            ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=worker_id)], health=state._health)
         with state._db.transaction() as cur:
             apply_task_observations(
                 cur,

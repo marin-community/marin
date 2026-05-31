@@ -1493,7 +1493,7 @@ class ControllerServiceImpl:
         worker_id = WorkerId(request.worker_id)
 
         with self._db.transaction() as cur:
-            ops.worker.register_or_refresh(
+            ops.worker.register(
                 cur,
                 worker_id=worker_id,
                 address=request.address,

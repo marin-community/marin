@@ -5,9 +5,9 @@
 
 Three layers, exercised in order:
 
-1. **Pure compute** — ``reconcile_workers`` builds one ``ReconcileRequest``
+1. **Pure compute** — ``build_reconcile_plans`` builds one ``ReconcileRequest``
    proto per worker from a ``ReconcileInputs`` snapshot. No DB.
-2. **Wire & dispatch** — ``WorkerProvider.reconcile_workers`` fans out via a
+2. **Wire & dispatch** — ``WorkerProvider.dispatch_reconcile_plans`` fans out via a
    fake stub factory and synthesizes ``ReconcileResult.observations``.
 3. **Apply + e2e** — ``apply_reconcile`` against real SQLite DB state, plus a
    handful of end-to-end convergence ticks driven through
@@ -22,7 +22,7 @@ from typing import Any
 import pytest
 from iris.cluster.controller import ops, writes
 from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.ops.worker import reconcile as apply_reconcile
+from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.worker import (
@@ -30,7 +30,7 @@ from iris.cluster.controller.reconcile.worker import (
     ReconcileResult,
     ReconcileRow,
     WorkerReconcilePlan,
-    reconcile_workers,
+    build_reconcile_plans,
 )
 from iris.cluster.controller.reconcile.worker import (
     observations_to_updates as worker_observations_to_updates,
@@ -261,7 +261,7 @@ def _plan_for(
         worker_ids=[wid],
         rows_by_worker={wid: list(rows)},
     )
-    return reconcile_workers(inputs)[0]
+    return build_reconcile_plans(inputs)[0]
 
 
 def _spec(image: str = "spec-image") -> job_pb2.RunTaskRequest:
@@ -480,7 +480,7 @@ def test_reconcile_worker_emits_distinct_uids_for_distinct_rows():
 
 
 # ===========================================================================
-# Section 2: wire & dispatch (WorkerProvider.reconcile_workers)
+# Section 2: wire & dispatch (WorkerProvider.dispatch_reconcile_plans)
 # ===========================================================================
 
 
@@ -530,12 +530,12 @@ def _provider_with_stub(stub: _FakeWorkerStub | None = None) -> tuple[WorkerProv
 
 
 def _reconcile_one(provider: WorkerProvider, plan: WorkerReconcilePlan, *, address: str = _W1_ADDR):
-    return provider.reconcile_workers([plan], {WorkerId(_W1): address})
+    return provider.dispatch_reconcile_plans([plan], {WorkerId(_W1): address})
 
 
-def test_reconcile_workers_empty_short_circuits():
+def test_dispatch_reconcile_plans_empty_short_circuits():
     provider, _ = _provider_with_stub()
-    assert provider.reconcile_workers([], {}) == []
+    assert provider.dispatch_reconcile_plans([], {}) == []
 
 
 def test_reconcile_rpc_forwards_observations():
@@ -612,7 +612,7 @@ def _setup_assigned_task(state: ControllerTestState, worker_id: str = _W1) -> tu
     tasks = submit_job(state, "test-job", make_job_request(name="test-job"))
     task_row = tasks[0]
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(cur, [Assignment(task_id=task_row.task_id, worker_id=wid)], health=state._health)
+        ops.task.assign(cur, [Assignment(task_id=task_row.task_id, worker_id=wid)], health=state._health)
     refreshed = query_task(state, task_row.task_id)
     assert refreshed is not None
     assert refreshed.state == job_pb2.TASK_STATE_ASSIGNED
@@ -906,7 +906,7 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
         task_id_1, task_id_2 = tasks[0].task_id, tasks[1].task_id
 
         with state._db.transaction() as cur:
-            ops.task.queue_assignments(
+            ops.task.assign(
                 cur,
                 [
                     Assignment(task_id=task_id_1, worker_id=wid1),
@@ -1023,7 +1023,7 @@ def test_observations_to_updates_routes_batch_by_uid():
 
 @dataclass
 class _ScriptedProvider:
-    """In-process TaskProvider whose ``reconcile_workers`` returns scripted observations.
+    """In-process TaskProvider whose ``dispatch_reconcile_plans`` returns scripted observations.
 
     Each tick consumes one ``script`` entry (a callable taking the plan and
     returning a list of observations). Records every call so tests can assert
@@ -1045,7 +1045,7 @@ class _ScriptedProvider:
     def ping_workers(self, workers):
         return []
 
-    def reconcile_workers(self, plans, addresses):
+    def dispatch_reconcile_plans(self, plans, addresses):
         self.calls.append((list(plans), dict(addresses)))
         tick = len(self.calls) - 1
         responder = self.script[tick] if tick < len(self.script) else (lambda plan: [])
@@ -1090,7 +1090,7 @@ def test_e2e_converges_to_succeeded(make_controller):
     task_id = tasks[0].task_id
 
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
+        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
 
     # Tick 1: ASSIGNED — controller dispatches the inline spec.
     ctrl._reconcile_tick()
@@ -1142,7 +1142,7 @@ def test_e2e_missing_observation_on_assigned_task_retries_to_pending(make_contro
     task_id = tasks[0].task_id
 
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
+        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
 
     ctrl._reconcile_tick()
     ctrl._reconcile_tick()
@@ -1209,7 +1209,7 @@ def _setup_coscheduled_running_pair(
     t0, t1 = tasks[0].task_id, tasks[1].task_id
 
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(
+        ops.task.assign(
             cur,
             [Assignment(task_id=t0, worker_id=wid1), Assignment(task_id=t1, worker_id=wid2)],
             health=state._health,

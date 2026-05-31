@@ -809,7 +809,7 @@ def refresh_reservation_claims(
 
     Claims are read outside any scheduling transaction. This creates a narrow
     race window where a worker could be removed between the claim read and
-    scheduling, but it's benign: ``queue_assignments`` re-validates assignments
+    scheduling, but it's benign: ``assign`` re-validates assignments
     transactionally and stale claims are cleaned up on the next cycle. Pass
     ``persist=False`` to compute the updated claims without writing them
     (dry-run).

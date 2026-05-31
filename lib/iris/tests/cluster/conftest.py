@@ -16,8 +16,7 @@ from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribut
 from iris.cluster.controller import direct_provider, ops
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.direct_provider import RunTemplateCache, new_run_template_cache
-from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.ops.task import apply_provider_updates as apply_direct_provider_updates
+from iris.cluster.controller.ops.task import Assignment, apply_direct_provider_updates
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
@@ -276,7 +275,7 @@ class ServiceTestHarness:
         metadata.attributes["preemptible"].string_value = str(preemptible).lower()
         metadata.attributes["region"].string_value = region
         with self.db.transaction() as cur:
-            ops.worker.register_or_refresh(
+            ops.worker.register(
                 cur,
                 worker_id=wid,
                 address=f"{worker_id}:8080",
@@ -374,7 +373,7 @@ class ServiceTestHarness:
             if worker_row is None:
                 raise ValueError("No GCP workers registered -- call register_gcp_worker first")
             with self.db.transaction() as cur:
-                ops.task.queue_assignments(
+                ops.task.assign(
                     cur, [Assignment(task_id=task_id, worker_id=worker_row.worker_id)], health=self.state._health
                 )
 

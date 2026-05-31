@@ -166,7 +166,7 @@ def _schedule_and_commit(scheduler, state):
         task = _query_task(state, tid)
         if task:
             with state._db.transaction() as cur:
-                ops.task.queue_assignments(cur, [Assignment(task_id=tid, worker_id=wid)], health=state._health)
+                ops.task.assign(cur, [Assignment(task_id=tid, worker_id=wid)], health=state._health)
     return result
 
 

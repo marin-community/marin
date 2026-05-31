@@ -5,8 +5,8 @@
 
 :class:`ReconcileState` is one batch session over a closed
 :class:`TransitionSnapshot`. Its public methods are the controller's state
-operations — ``reconcile``, ``fail_workers``, ``apply_provider_updates``,
-``apply_terminal_decisions``, ``cancel_job`` — each of which runs the same
+operations — ``reconcile``, ``fail_workers``, ``record_updates``,
+``finalize_tasks``, ``cancel_job`` — each of which runs the same
 two-pass contract and returns the accumulated effects:
 
 * **apply pass** — per task-update or controller-asserted outcome: apply the
@@ -187,7 +187,7 @@ class ReconcileState:
         self._recompute_and_finalize(now_ms)
         return self.overlay.effects
 
-    def apply_provider_updates(self, updates: list[TaskUpdate]) -> ControllerEffects:
+    def record_updates(self, updates: list[TaskUpdate]) -> ControllerEffects:
         """Apply a batch of task-state updates from a direct (e.g. Kubernetes) provider."""
         now_ms = self._snapshot.now.epoch_ms()
         # Direct providers manage their own hosts -> no build-failed reaping.
@@ -234,7 +234,7 @@ class ReconcileState:
         self._recompute_and_finalize(now_ms)
         return self.overlay.effects
 
-    def apply_terminal_decisions(self, decisions: list[task.TerminalDecision]) -> ControllerEffects:
+    def finalize_tasks(self, decisions: list[task.TerminalDecision]) -> ControllerEffects:
         """Batched terminal-state assertions: preempt / timeout / unschedulable."""
         if not decisions:
             return self.overlay.effects
@@ -501,7 +501,7 @@ class ReconcileState:
         )
 
     # ------------------------------------------------------------------
-    # apply_terminal_decisions() helpers
+    # finalize_tasks() helpers
     # ------------------------------------------------------------------
 
     def _apply_preempt_decision(self, decision: task.TerminalDecision, now_ms: int) -> None:

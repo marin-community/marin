@@ -193,7 +193,7 @@ class WorkerProvider:
             except Exception as e:
                 return ReconcileResult(worker_id=plan.worker_id, observations=[], error=str(e))
 
-    def reconcile_workers(
+    def dispatch_reconcile_plans(
         self,
         plans: list[WorkerReconcilePlan],
         addresses: dict[WorkerId, str],

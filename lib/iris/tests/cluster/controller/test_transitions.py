@@ -26,8 +26,7 @@ from iris.cluster.controller import direct_provider, ops, reads, writes
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.ops.task import Assignment, apply_terminal_decisions
-from iris.cluster.controller.ops.task import apply_provider_updates as apply_direct_provider_updates
+from iris.cluster.controller.ops.task import Assignment, apply_direct_provider_updates, finalize
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow
 from iris.cluster.controller.pruner import PruneResult, prune_old_data
 from iris.cluster.controller.reads import WorkerResourceUsage
@@ -187,7 +186,7 @@ def test_sa_core_typed_values_roundtrip(state) -> None:
     )
     [task] = submit_job(state, "projection", request)
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=wid)], health=state._health)
+        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=wid)], health=state._health)
 
     running = worker_running_tasks(state, wid)
 
@@ -598,7 +597,7 @@ def test_dispatch_failure_marks_worker_failed_and_requeues_task(state):
 
     # Task gets assigned (creates attempt, puts in ASSIGNED state)
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
     assert _query_task(state, task.task_id).current_attempt_id == 0
 
@@ -637,7 +636,7 @@ def test_task_assigned_to_missing_worker_is_ignored(state):
     with state._db.transaction() as cur:
         writes.remove_worker(cur, worker_id, health=state._health, worker_attrs=state._worker_attrs)
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
 
     # Task remains schedulable and no attempt/resources are committed.
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_PENDING
@@ -939,7 +938,7 @@ def test_endpoint_survives_building_state(state):
 
     # Assign task and transition to BUILDING
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
     task = _query_task(state, task.task_id)
     with state._db.transaction() as cur:
         apply_task_observations(
@@ -1852,7 +1851,7 @@ def test_coscheduled_terminal_preempt_cascades_siblings(state):
         dispatch_task(state, task, WorkerId(f"w{i}"))
 
     with state._db.transaction() as cur:
-        apply_terminal_decisions(
+        finalize(
             cur,
             [TerminalDecision(TerminalKind.PREEMPT, tasks[0].task_id, "reclaim")],
             health=state._health,
@@ -2693,7 +2692,7 @@ def test_worker_failed_from_assigned_is_delivery_failure(state):
 
     # Assign but do NOT transition to RUNNING
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
 
     # Worker reports WORKER_FAILED (e.g., "Task not found on worker")
@@ -2750,7 +2749,7 @@ def test_worker_failed_from_building_counts_as_preemption(state):
 
     # Assign and transition to BUILDING (worker confirmed it received the task)
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
     transition_task(state, task.task_id, job_pb2.TASK_STATE_BUILDING)
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_BUILDING
 
@@ -2782,7 +2781,7 @@ def test_worker_failed_from_assigned_bumps_health_tracker(state):
     task = tasks[0]
 
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
     # No build failures recorded yet (worker registered, but no failure events).
     assert state._health.snapshot().get(worker_id, (0, 0))[1] == 0
@@ -2816,7 +2815,7 @@ def test_failed_from_building_bumps_health_tracker(state):
     task = tasks[0]
 
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
     transition_task(state, task.task_id, job_pb2.TASK_STATE_BUILDING)
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_BUILDING
 
@@ -2851,7 +2850,7 @@ def test_worker_failed_from_building_bumps_health_tracker(state):
     task = tasks[0]
 
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
     transition_task(state, task.task_id, job_pb2.TASK_STATE_BUILDING)
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_BUILDING
     # No build failures recorded yet.
@@ -3373,9 +3372,7 @@ def test_holder_tasks_consume_zero_resources(state):
 
     # Assign holder task
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(
-            cur, [Assignment(task_id=holder_tasks[0].task_id, worker_id=wid)], health=state._health
-        )
+        ops.task.assign(cur, [Assignment(task_id=holder_tasks[0].task_id, worker_id=wid)], health=state._health)
 
     # Holder tasks have zero res_device_json so they contribute 0 GPUs to
     # the derived usage, even after assignment.
@@ -3401,9 +3398,7 @@ def test_holder_task_cleanup_releases_no_resources(state):
 
     # Assign holder task
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(
-            cur, [Assignment(task_id=holder_tasks[0].task_id, worker_id=wid)], health=state._health
-        )
+        ops.task.assign(cur, [Assignment(task_id=holder_tasks[0].task_id, worker_id=wid)], health=state._health)
 
     gpu_used_before = _usage_for_worker(state, wid).gpu_count
     assert gpu_used_before == 0, "holder must not contribute to derived usage"
@@ -3439,9 +3434,7 @@ def test_holder_tasks_excluded_from_building_counts(state):
 
     # Assign holder task — it goes to ASSIGNED state
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(
-            cur, [Assignment(task_id=holder_tasks[0].task_id, worker_id=wid)], health=state._health
-        )
+        ops.task.assign(cur, [Assignment(task_id=holder_tasks[0].task_id, worker_id=wid)], health=state._health)
     assert _query_task(state, holder_tasks[0].task_id).state == job_pb2.TASK_STATE_ASSIGNED
 
     # Building counts should NOT include the holder task
@@ -4465,7 +4458,7 @@ def test_job_expands_to_replicas_and_retry_limits(harness) -> None:
 def test_job_becomes_unschedulable_when_task_unschedulable(harness) -> None:
     tasks = harness.submit("unsched", replicas=2)
     with harness.state._db.transaction() as cur:
-        apply_terminal_decisions(
+        finalize(
             cur,
             [TerminalDecision(TerminalKind.UNSCHEDULABLE, tasks[0].task_id, "no capacity")],
             health=harness.state._health,

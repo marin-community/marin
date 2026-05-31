@@ -49,7 +49,7 @@ class WorkerFailureBatchResult:
     removed_workers: list[tuple[WorkerId, str | None]]
 
 
-def register_or_refresh(
+def register(
     cur: Tx,
     *,
     worker_id: WorkerId,
@@ -255,7 +255,7 @@ def _apply_worker_failures_chunk(
         writes.remove_worker(cur, worker_id, health=health, worker_attrs=worker_attrs)
 
 
-def reconcile(
+def apply_reconcile(
     cur: Tx,
     plans_by_worker: dict[WorkerId, WorkerReconcilePlan],
     results: list[ReconcileResult],

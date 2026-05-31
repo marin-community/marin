@@ -108,7 +108,7 @@ def _worker_attr(state: ControllerTestState, worker_id: WorkerId, key: str):
 
 def assign_task_to_worker(state: ControllerTestState, task, worker_id: WorkerId) -> None:
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
 
 
 def transition_task_to_running(state: ControllerTestState, task) -> None:

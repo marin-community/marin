@@ -243,7 +243,7 @@ def _register_worker(
 ) -> WorkerId:
     wid = WorkerId(worker_id)
     with state._db.transaction() as cur:
-        ops.worker.register_or_refresh(
+        ops.worker.register(
             cur,
             worker_id=wid,
             address=f"{worker_id}:8080",
@@ -1479,9 +1479,7 @@ def test_holder_task_worker_death_no_failure_record(state):
 
         # Assign the holder task to the worker (mimics what the scheduler does).
         with state._db.transaction() as cur:
-            ops.task.queue_assignments(
-                cur, [Assignment(task_id=holder_task.task_id, worker_id=worker_id)], health=state._health
-            )
+            ops.task.assign(cur, [Assignment(task_id=holder_task.task_id, worker_id=worker_id)], health=state._health)
         current_holder = _query_task_with_attempts(state, holder_task.task_id)
         assert current_holder is not None
         assert current_holder.state == job_pb2.TASK_STATE_ASSIGNED
@@ -1547,13 +1545,9 @@ def test_holder_task_removed_from_worker_when_parent_succeeds(state):
     wid_parent = _register_worker(state, "worker-parent")
 
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(
-            cur, [Assignment(task_id=holder_task.task_id, worker_id=wid_holder)], health=state._health
-        )
+        ops.task.assign(cur, [Assignment(task_id=holder_task.task_id, worker_id=wid_holder)], health=state._health)
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(
-            cur, [Assignment(task_id=parent_task.task_id, worker_id=wid_parent)], health=state._health
-        )
+        ops.task.assign(cur, [Assignment(task_id=parent_task.task_id, worker_id=wid_parent)], health=state._health)
 
     assert holder_task.task_id in _worker_running_tasks(state, wid_holder)
 
@@ -1610,7 +1604,7 @@ def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already
 
     wid = _register_worker(state, "worker")
     with state._db.transaction() as cur:
-        ops.task.queue_assignments(cur, [Assignment(task_id=holder_task.task_id, worker_id=wid)], health=state._health)
+        ops.task.assign(cur, [Assignment(task_id=holder_task.task_id, worker_id=wid)], health=state._health)
 
     assert holder_task.task_id in _worker_running_tasks(state, wid)
 
