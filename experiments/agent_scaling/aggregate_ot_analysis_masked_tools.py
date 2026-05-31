@@ -105,7 +105,7 @@ def aggregate_results(config: AggregateConfig):
 
     ctx = ZephyrContext(name="aggregate-ot-results-masked-tools")
     pipeline = Dataset.from_list(pairs).map(lambda p: compute_pair_stats(p["eval_model"], p["trace_model"]))
-    results = list(ctx.execute(pipeline))
+    results = ctx.execute(pipeline).results
 
     output_file = os.path.join(config.output_path, "results.jsonl.gz")
     with fsspec.open(output_file, "wt", compression="gzip") as f:

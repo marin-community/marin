@@ -25,7 +25,7 @@ from experiments.agent_scaling.download_ot_traces import (
     K,
     build_steps as build_trace_steps,
 )
-from iris.marin_fs import marin_prefix
+from rigging.filesystem import marin_prefix
 from experiments.defaults import default_tokenize
 from experiments.models import ModelConfig, download_model_step
 from fray.cluster import ResourceConfig

@@ -20,8 +20,8 @@ import pandas as pd
 import requests
 
 import levanter.utils.fsspec_utils as fsspec_utils
-from iris.marin_fs import marin_prefix
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
+from rigging.filesystem import marin_prefix
+from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from experiments.models import ModelConfig, download_model_step
 from marin.utils import fsspec_glob, get_directory_friendly_name
 from marin.execution.executor import (
