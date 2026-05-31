@@ -551,13 +551,7 @@ def apply_terminal_decisions_batch(
                 continue
             _fan_out_outcome(
                 state,
-                task.TransitionOutcome(
-                    task_id=decision.task_id,
-                    job_id=outcome.job_id,
-                    prior_state=effective_state,
-                    new_task_state=outcome.new_task_state,
-                    cascade_to_peers=outcome.cascade_to_peers,
-                ),
+                outcome,
                 acc,
                 pending_child_cascades,
                 decision.reason,

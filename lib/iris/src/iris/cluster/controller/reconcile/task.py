@@ -276,15 +276,6 @@ def unschedulable_one(
     return task.job_id
 
 
-@dataclass(frozen=True, slots=True)
-class PreemptOutcome:
-    """Result of ``preempt_one``, consumed by batches.py to drive cascade."""
-
-    job_id: JobName
-    new_task_state: int
-    cascade_to_peers: bool
-
-
 def preempt_one(
     state: WorkingState,
     snapshot: TransitionSnapshot,
@@ -292,7 +283,7 @@ def preempt_one(
     reason: str,
     *,
     row: ActiveTaskRow | None,
-) -> PreemptOutcome | None:
+) -> TransitionOutcome | None:
     """Preempt one task on the shared ``state``. Pure per-task mutation only."""
     if row is None:
         return None
@@ -317,7 +308,13 @@ def preempt_one(
         attempt_state=job_pb2.TASK_STATE_PREEMPTED,
         preemption_count=preemption_count,
     )
-    return PreemptOutcome(job_id=row.job_id, new_task_state=new_state, cascade_to_peers=row.has_coscheduling)
+    return TransitionOutcome(
+        task_id=task_id,
+        job_id=row.job_id,
+        prior_state=prior_state,
+        new_task_state=new_state,
+        cascade_to_peers=row.has_coscheduling,
+    )
 
 
 # ─── The per-update transition core ───
