@@ -382,6 +382,10 @@ def _submit_iris_job(
             extras=pip_dependency_groups or [],
             env_vars=env_vars or {},
         ),
+        # SIGSEGVs / TPU runtime crashes / ping-fails on preemptible v5p hosts are
+        # common but transient — let the child auto-retry up to 10 times before
+        # the parent sees a failure and tears down the gang.
+        max_retries_failure=10,
     )
     handle = current_client().submit(request)
     handle.wait(raise_on_failure=True)

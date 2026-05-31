@@ -566,7 +566,14 @@ def default_train(
             f"= {total_examples * train_length} tokens."
         ),
         fn=run_levanter_train_lm,
-        resources=train_config.resources,
+        # Don't set step-level resources: the marin executor's _submit_iris_job
+        # would otherwise schedule the step on a separate iris job (CPU or TPU
+        # gang). Leaving this None makes the executor run run_levanter_train_lm
+        # inline in the L1 CPU parent, and _dispatch_training_job then submits
+        # the v5p-64 train_lm child directly (the pre-merge 2-level pattern).
+        # Putting the step itself on a TPU gang caused first-finisher cascade
+        # kills (one gang task exits clean after submit/wait, reaping the rest).
+        resources=None,
         config=config,
         override_output_path=override_output_path,
     )
