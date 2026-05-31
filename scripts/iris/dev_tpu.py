@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import atexit
 import getpass
+import json
 import logging
 import os
 import shlex
@@ -20,6 +21,7 @@ from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import click
 import yaml
@@ -63,6 +65,12 @@ class Context:
     session_name: str | None = None
     verbose: bool = False
     state_dir: Path = STATE_DIR
+
+
+@dataclass(frozen=True)
+class WorkerResolutionMetadata:
+    address: str
+    metadata: job_pb2.WorkerMetadata
 
 
 def run_logged(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -181,7 +189,119 @@ def controller_client(config_file: str) -> Iterable[IrisClient]:
             client.shutdown()
 
 
-def resolve_node_ref(host: str, project: str) -> GcpNodeRef:
+def _parse_tpu_worker_id(raw_worker_id: str) -> int:
+    if not raw_worker_id:
+        return 0
+    try:
+        return int(raw_worker_id)
+    except ValueError as exc:
+        raise click.ClickException(f"Invalid TPU worker id in worker metadata: {raw_worker_id!r}") from exc
+
+
+def resolve_node_ref_from_worker_metadata(
+    metadata: job_pb2.WorkerMetadata,
+    project: str,
+) -> GcpNodeRef | None:
+    if metadata.tpu_name:
+        zone = metadata.gce_zone
+        if not zone:
+            tpu_match = gcp.find_tpu_by_name(metadata.tpu_name, project, zone="-")
+            if tpu_match:
+                _name, zone = tpu_match
+        if zone:
+            return GcpNodeRef(
+                kind="tpu",
+                name=metadata.tpu_name,
+                zone=zone,
+                project=project,
+                tpu_worker_id=_parse_tpu_worker_id(metadata.tpu_worker_id),
+            )
+
+    if metadata.gce_instance_name and metadata.gce_zone:
+        return GcpNodeRef(
+            kind="vm",
+            name=metadata.gce_instance_name,
+            zone=metadata.gce_zone,
+            project=project,
+        )
+
+    return None
+
+
+def _sql_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _worker_address_lookup_values(worker_address: str) -> list[str]:
+    if not worker_address:
+        return []
+    values = [worker_address]
+    if "://" in worker_address:
+        parsed = urlsplit(worker_address)
+    else:
+        parsed = urlsplit(f"//{worker_address}")
+    if parsed.netloc:
+        values.append(parsed.netloc)
+    return list(dict.fromkeys(values))
+
+
+def worker_resolution_metadata_from_response(response) -> WorkerResolutionMetadata | None:
+    if not response.rows:
+        return None
+
+    columns = {column.name: index for index, column in enumerate(response.columns)}
+    row = json.loads(response.rows[0])
+    metadata = job_pb2.WorkerMetadata(
+        ip_address=row[columns["md_ip_address"]] or "",
+        tpu_name=row[columns["md_tpu_name"]] or "",
+        tpu_worker_id=row[columns["md_tpu_worker_id"]] or "",
+        gce_instance_name=row[columns["md_gce_instance_name"]] or "",
+        gce_zone=row[columns["md_gce_zone"]] or "",
+    )
+    return WorkerResolutionMetadata(address=row[columns["address"]] or "", metadata=metadata)
+
+
+def worker_resolution_metadata(
+    client: IrisClient,
+    *,
+    worker_id: str,
+    worker_address: str,
+) -> WorkerResolutionMetadata | None:
+    conditions = []
+    if worker_id:
+        conditions.append(f"worker_id = {_sql_quote(worker_id)}")
+    for address in _worker_address_lookup_values(worker_address):
+        conditions.append(f"address = {_sql_quote(address)}")
+    if not conditions:
+        return None
+
+    response = client.execute_raw_query(
+        "SELECT address, md_ip_address, md_tpu_name, md_tpu_worker_id, md_gce_instance_name, md_gce_zone "
+        f"FROM workers WHERE {' OR '.join(conditions)} LIMIT 1"
+    )
+    return worker_resolution_metadata_from_response(response)
+
+
+def resolve_node_ref(host: str, project: str, *, alternate_hosts: Iterable[str] = ()) -> GcpNodeRef:
+    candidates = [host, *alternate_hosts]
+    seen: set[str] = set()
+    unique_candidates = []
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        unique_candidates.append(candidate)
+
+    for candidate in unique_candidates:
+        resolved = _resolve_node_ref_by_ip(candidate, project)
+        if resolved is not None:
+            return resolved
+
+    searched = ", ".join(unique_candidates) if unique_candidates else "<none>"
+    raise click.ClickException(f"Could not resolve a GCP TPU or VM for worker host(s): {searched}")
+
+
+def _resolve_node_ref_by_ip(host: str, project: str) -> GcpNodeRef | None:
     tpu_match = gcp.find_tpu_by_ip(host, project, zone="-")
     if tpu_match:
         name, zone, worker_id = tpu_match
@@ -192,7 +312,7 @@ def resolve_node_ref(host: str, project: str) -> GcpNodeRef:
         name, zone = vm_match
         return GcpNodeRef(kind="vm", name=name, zone=zone, project=project)
 
-    raise click.ClickException(f"Could not resolve a GCP TPU or VM for worker host {host}")
+    return None
 
 
 def gcloud_ssh_cmd(node: GcpNodeRef, *, command: str | None = None) -> list[str]:
@@ -308,7 +428,7 @@ cd "$HOME/marin"
     return "bash -lc " + shlex.quote(script)
 
 
-def wait_for_workers(job, *, timeout: float, project: str) -> list[DevTpuWorker]:
+def wait_for_workers(job, client: IrisClient, *, timeout: float, project: str) -> list[DevTpuWorker]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         status = job.status()
@@ -330,8 +450,25 @@ def wait_for_workers(job, *, timeout: float, project: str) -> list[DevTpuWorker]
                 if task_status.state != job_pb2.TASK_STATE_RUNNING or not task_status.worker_address:
                     all_running = False
                     break
-                host = parse_worker_host(task_status.worker_address)
-                node = resolve_node_ref(host, project)
+                rpc_host = parse_worker_host(task_status.worker_address)
+                node = None
+                host = rpc_host
+                alternate_hosts: list[str] = []
+                worker_metadata = worker_resolution_metadata(
+                    client,
+                    worker_id=task_status.worker_id,
+                    worker_address=task_status.worker_address,
+                )
+                if worker_metadata is not None:
+                    metadata = worker_metadata.metadata
+                    node = resolve_node_ref_from_worker_metadata(metadata, project)
+                    if metadata.ip_address:
+                        host = metadata.ip_address
+                        alternate_hosts.append(metadata.ip_address)
+                    if worker_metadata.address:
+                        alternate_hosts.append(parse_worker_host(worker_metadata.address))
+                if node is None:
+                    node = resolve_node_ref(rpc_host, project, alternate_hosts=alternate_hosts)
                 resolved.append(
                     DevTpuWorker(
                         task_id=str(task.task_id),
@@ -523,7 +660,7 @@ def allocate(
         except JobAlreadyExists as exc:
             raise click.ClickException(f"Job already exists for session '{session_name}': {exc}") from exc
 
-        workers = wait_for_workers(job, timeout=timeout, project=project)
+        workers = wait_for_workers(job, client, timeout=timeout, project=project)
         for worker in workers:
             ensure_ssh_access(worker.node)
 
