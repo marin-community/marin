@@ -181,7 +181,7 @@ def finalize_attempt(
     failure_count: int | None = None,
     preemption_count: int | None = None,
 ) -> None:
-    """Stamp ``finished_at_ms`` on the attempt and move the task to ``task_state``."""
+    """Move the task to ``task_state`` and stamp the attempt's ``finished_at_ms``."""
     _record_task_termination(
         state,
         task_id,
@@ -208,7 +208,7 @@ def mark_task_terminating(
     failure_count: int | None = None,
     preemption_count: int | None = None,
 ) -> None:
-    """Update the attempt's reporting state without stamping ``finished_at_ms``."""
+    """Move the task to ``task_state`` without stamping the attempt's ``finished_at_ms``."""
     _record_task_termination(
         state,
         task_id,

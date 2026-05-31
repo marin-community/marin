@@ -267,12 +267,17 @@ def _fan_out_outcome(
 ) -> None:
     """Drive the cross-aggregate effects of one controller-asserted transition.
 
-    Mirrors the reconcile kernel's per-update step: cascade to coscheduled
-    siblings immediately (so later items in the batch observe the
-    terminate/requeue) and record the job for the deferred recompute pass. When
-    the task rolled back to PENDING under a ``TERMINATE_CHILDREN`` policy, the
-    descendant-job cascade is deferred (deduped per job) to the recompute pass so
-    it runs once per job after every sibling has settled.
+    Peer cascade (so later items in the batch observe the terminate/requeue),
+    note the job for the deferred recompute pass, and -- when the task rolled
+    back to PENDING under a ``TERMINATE_CHILDREN`` policy -- defer its
+    descendant-job cascade (deduped per job) to ``_finalize_touched_jobs``.
+
+    The worker-reconcile loop (``_apply_transitions``) does these same steps
+    inline rather than calling this, because it must cascade unconditionally but
+    gate the note/defer on an actual state change: ``apply_one_transition`` emits
+    no-op outcomes (new data, unchanged state) that must not touch the recompute
+    work-list. Controller-asserted callers only build an outcome for a real
+    transition, so they have no such gate and reuse this helper directly.
     """
     _cascade_to_peers(state, outcome, now_ms)
     acc.note(outcome.job_id)
