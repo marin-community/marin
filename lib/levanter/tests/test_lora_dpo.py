@@ -14,7 +14,7 @@ import jax.random as jrandom
 from levanter.data.text import DpoExample
 from levanter.dpo import _logp_sum, dpo_loss_from_logps
 from levanter.layers.attention import AttentionMask
-from levanter.lora import (
+from levanter.adaptor.lora import (
     LoraConfig,
     LoraLinear,
     lora_trainable_params_filter,
@@ -59,7 +59,7 @@ def test_unwrap_lora_modules_returns_base_model():
     model = _make_gpt2_model(model_key)
     model = inference_mode(model, True)
 
-    loraized = loraize(model, LoraConfig(r=4), key=lora_key)
+    loraized = loraize(model, LoraConfig(r=4, a_init_mode="random"), key=lora_key)
     unwrapped = unwrap_lora_modules(loraized)
 
     input_tokens = hax.random.randint(input_key, Pos, 0, Vocab.size)
@@ -79,7 +79,7 @@ def test_unwrap_lora_modules_no_lora_linear_nodes():
     model_key, lora_key = jrandom.split(key)
 
     model = _make_gpt2_model(model_key)
-    loraized = loraize(model, LoraConfig(r=4), key=lora_key)
+    loraized = loraize(model, LoraConfig(r=4, a_init_mode="random"), key=lora_key)
 
     # Verify LoraLinear exists in the loraized model
     lora_leaves = jax.tree_util.tree_leaves(loraized, is_leaf=lambda x: isinstance(x, LoraLinear))
@@ -100,7 +100,7 @@ def test_lora_dpo_loss_computes_correctly():
     model_key, lora_key, example_key, loss_key = jrandom.split(key, 4)
 
     model = _make_gpt2_model(model_key)
-    loraized = loraize(model, LoraConfig(r=4), key=lora_key)
+    loraized = loraize(model, LoraConfig(r=4, a_init_mode="random"), key=lora_key)
     example = _make_dpo_example(example_key)
 
     reference_model = unwrap_lora_modules(loraized)
@@ -134,7 +134,7 @@ def test_lora_dpo_trainable_filter_only_lora_params():
     model_key, lora_key = jrandom.split(key)
 
     model = _make_gpt2_model(model_key)
-    loraized = loraize(model, LoraConfig(r=4), key=lora_key)
+    loraized = loraize(model, LoraConfig(r=4, a_init_mode="random"), key=lora_key)
 
     trainable_filter = lora_trainable_params_filter(loraized)
 
@@ -158,7 +158,7 @@ def test_lora_dpo_gradient_only_flows_to_lora_params():
     model_key, lora_key, example_key, loss_key = jrandom.split(key, 4)
 
     model = _make_gpt2_model(model_key)
-    loraized = loraize(model, LoraConfig(r=4), key=lora_key)
+    loraized = loraize(model, LoraConfig(r=4, a_init_mode="random"), key=lora_key)
     example = _make_dpo_example(example_key)
 
     def compute_loss(model):
@@ -207,7 +207,7 @@ def test_save_merged_hf_model_passes_generation_config():
     model_key, lora_key = jrandom.split(key)
 
     model = _make_gpt2_model(model_key)
-    loraized = loraize(model, LoraConfig(r=4), key=lora_key)
+    loraized = loraize(model, LoraConfig(r=4, a_init_mode="random"), key=lora_key)
     converter = _CapturingConverter()
     generation_config = {"eos_token_id": [2, 50]}
 
@@ -242,7 +242,7 @@ def test_unwrap_lora_modules_with_stacked():
     k0 = jrandom.PRNGKey(5)
     module: hnn.Stacked[Module] = hnn.Stacked.init(Layers, Module)(key=jrandom.split(k0, Layers.size))
 
-    loraized = loraize(module, LoraConfig(r=4, target_modules=["first"]), key=k0)
+    loraized = loraize(module, LoraConfig(r=4, target_modules=["first"], a_init_mode="random"), key=k0)
     assert isinstance(loraized.stacked.first, LoraLinear)
 
     unwrapped = unwrap_lora_modules(loraized)
@@ -266,7 +266,7 @@ def test_zero_init_b_makes_lora_identity():
     model = _make_gpt2_model(model_key)
     model = inference_mode(model, True)
 
-    loraized = loraize(model, LoraConfig(r=4, zero_init_b=True), key=lora_key)
+    loraized = loraize(model, LoraConfig(r=4, zero_init_b=True, a_init_mode="random"), key=lora_key)
 
     input_tokens = hax.random.randint(input_key, Pos, 0, Vocab.size)
     attn_mask = AttentionMask.causal()
@@ -285,7 +285,7 @@ def test_zero_init_b_dpo_loss_starts_near_log2():
     model_key, lora_key, example_key, loss_key = jrandom.split(key, 4)
 
     model = _make_gpt2_model(model_key)
-    loraized = loraize(model, LoraConfig(r=4, zero_init_b=True), key=lora_key)
+    loraized = loraize(model, LoraConfig(r=4, zero_init_b=True, a_init_mode="random"), key=lora_key)
     example = _make_dpo_example(example_key)
 
     reference_model = unwrap_lora_modules(loraized)

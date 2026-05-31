@@ -15,7 +15,7 @@ from haliax.quantization import QuantizationConfig
 
 import levanter.main.train_lm as train_lm
 import tiny_test_corpus
-from levanter.adaptation import LoraAdaptationConfig
+from levanter.adaptor import LoraAdaptorConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text import DirectDatasetComponent, GrugLmExample, LmDataConfig
 from levanter.distributed import DistributedConfig
@@ -115,7 +115,7 @@ def test_train_lm_with_lora_adapter():
                     require_accelerator=False,
                     distributed=DistributedConfig(initialize_jax_distributed=False),
                 ),
-                adapter=LoraAdaptationConfig(r=4),
+                adapter=LoraAdaptorConfig(r=4),
             )
             train_lm.main(config)
         finally:
@@ -137,7 +137,7 @@ def test_restore_lm_model_from_partial_checkpoint_recovers_base_model():
     Vocab = Axis("vocab", 32)
     base_key, wrong_base_key, adapter_key, wrong_adapter_key = jrandom.split(jrandom.PRNGKey(0), 4)
 
-    adapter = LoraAdaptationConfig(r=4)
+    adapter = LoraAdaptorConfig(r=4, a_init_mode="random")
     trained_model = adapter.apply(config.build(Vocab, key=base_key), key=adapter_key)
     wrong_resume_skeleton = adapter.apply(config.build(Vocab, key=wrong_base_key), key=wrong_adapter_key)
     correct_source_skeleton = adapter.apply(config.build(Vocab, key=base_key), key=wrong_adapter_key)

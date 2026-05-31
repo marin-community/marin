@@ -19,7 +19,7 @@ We recommend using None, which was found to be better than the other options: ht
 https://arxiv.org/pdf/2305.14314.pdf Section 4.
 
 LoRA is implemented by doing "tree surgery" on the model, replacing [haliax.nn.Linear][] layers with a
-[levanter.lora.LoraLinear][] layer that wraps the original linear layer.
+[levanter.adaptor.lora.LoraLinear][] layer that wraps the original linear layer.
 
 Consider a simple model with two parameters, attention and mlp. That might look like:
    ```python
@@ -109,23 +109,26 @@ class LoraConfig:
     alpha: float = 8.0  # scaling factor for LoRA transform
     dropout: float = 0.0  # dropout probability for LoRA layers
     zero_init_b: bool = False
-    """Zero-initialize the B matrix so LoRA starts as identity (W + 0 = W).
-    This is the standard PEFT convention and is critical for DPO, where
-    non-zero initialization causes immediate policy-reference divergence.
-    Default is False for backward compatibility with existing SFT configs."""
-    a_init_mode: Literal["random", "zero"] = "random"
-    """How to initialize the LoRA A matrix.
+    """Zero-initialize the B matrix (``W + (alpha/r) * B @ A = W`` when ``B = 0``)
+    so the adapter starts as identity. This is the standard PEFT convention and
+    one of the two ways to get a zero adapter delta at init; the other — and the
+    default — is :attr:`a_init_mode` ``= "zero"``. For DPO, exactly one factor may
+    be zero (see :func:`levanter.main.train_dpo._validate_dpo_config`); zeroing
+    both leaves no path for gradients to flow."""
+    a_init_mode: Literal["random", "zero"] = "zero"
+    """How to initialize the LoRA A matrix. Defaults to ``"zero"``.
 
-    - ``"random"`` (default): the standard LoRA-paper convention. A is drawn
-      from the default :class:`haliax.nn.Linear` init; whether ``B@A`` is zero
-      at init is then controlled by ``zero_init_b``.
-    - ``"zero"``: A is identically zero and B is randomly initialized. ``B@A``
-      is still zero at init (so the policy matches the reference for DPO),
-      but the first live optimizer step flows through the full-rank A matrix
-      instead of the degenerate zero-init B matrix. This avoids the FSDP
-      all-reduce-noise sigma-sensitivity issue near pi=pi_ref documented in
-      ``.agents/logbooks/bug_1_dpo_lora_physical_topology.md`` and is the
-      DPO-correct default chosen by :func:`experiments.defaults.default_dpo`.
+    - ``"zero"`` (default): A is identically zero and B is randomly initialized.
+      ``B @ A = 0`` at init (so a LoRA model matches its base, and a DPO policy
+      matches its reference), but the first optimizer step flows through the
+      full-rank A matrix instead of the degenerate zero-init B matrix. This
+      avoids the FSDP all-reduce-noise sigma-sensitivity issue near pi=pi_ref
+      documented in ``.agents/logbooks/bug_1_dpo_lora_physical_topology.md``.
+      The previous default (``"random"`` with ``zero_init_b = False``) left
+      ``B @ A != 0`` at init, which silently broke LoRA-DPO — hence the change.
+    - ``"random"``: the LoRA-paper convention. A is drawn from the default
+      :class:`haliax.nn.Linear` init; whether ``B @ A`` is zero at init is then
+      controlled by :attr:`zero_init_b`.
     """
     exclude_modules: Optional[List[str]] = None
     """modules to exclude from LoRA. Defaults to ["lm_head"] to avoid breaking get_lm_head().weight access."""
@@ -192,7 +195,7 @@ class LowRankLinear(eqx.Module):
         *,
         key,
         zero_init_b: bool = False,
-        a_init_mode: Literal["random", "zero"] = "random",
+        a_init_mode: Literal["random", "zero"] = "zero",
     ):
         """
         Initializes a LowRankLinear module.
@@ -200,10 +203,12 @@ class LowRankLinear(eqx.Module):
         Args:
             zero_init_b: If True, zero-initialize the B matrix so the adapter starts as identity
                 (W + alpha/r * B @ A = W). This is the standard PEFT convention.
-            a_init_mode: ``"random"`` (default) initializes A from the default Linear init.
-                ``"zero"`` initializes A to zeros, leaving B random — ``B @ A = 0`` at init
-                either way, but the first live optimizer step flows through A instead of B,
-                which avoids the DPO sigma-sensitivity issue documented in Bug-1.
+            a_init_mode: ``"zero"`` (default) initializes A to zeros, leaving B random —
+                ``B @ A = 0`` at init, but the first optimizer step flows through A instead
+                of the degenerate zero-init B, which avoids the DPO sigma-sensitivity issue
+                documented in Bug-1. ``"random"`` initializes A from the default Linear init
+                (the LoRA-paper convention), in which case ``zero_init_b`` controls whether
+                ``B @ A`` is zero at init.
         """
         _R = hax.Axis(LORA_R, r)
         key_A, key_B = jax.random.split(key)
@@ -259,7 +264,7 @@ class LoraLinear(ModuleWithStateDictSerialization):
         *,
         key,
         zero_init_b: bool = False,
-        a_init_mode: Literal["random", "zero"] = "random",
+        a_init_mode: Literal["random", "zero"] = "zero",
     ):
         """
         Initializes a LoraLinear module.
@@ -579,7 +584,7 @@ def save_merged_hf_checkpoint_callback(
 ):
     """
     Saves a merged HF checkpoint for the given model. This method essentially combines the base model with the LoRA
-    model using [levanter.lora.combine_lora_params][], and then saves the combined model as a HuggingFace checkpoint
+    model using [levanter.adaptor.lora.combine_lora_params][], and then saves the combined model as a HuggingFace checkpoint
     using the given converter.
 
     If hf_repo is provided, this will upload the checkpoint to the huggingface hub, passing any additional kwargs to the
@@ -634,7 +639,7 @@ def save_merged_hf_model(
 ):
     """
     Saves a merged HF checkpoint for the given model. This method essentially combines the base model with the LoRA
-    model using [levanter.lora.merge_lora_modules][], and then saves the combined model as a HuggingFace checkpoint
+    model using [levanter.adaptor.lora.merge_lora_modules][], and then saves the combined model as a HuggingFace checkpoint
     """
     merged_model = merge_lora_modules(lora_model)
     if upload_to_hf is None:

@@ -20,7 +20,7 @@ from levanter.callbacks import StepInfo
 from levanter.checkpoint import Checkpointer
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.layers.attention import AttentionMask
-from levanter.lora import (
+from levanter.adaptor.lora import (
     LoraConfig,
     LoraLinear,
     lora_trainable_params_filter,
@@ -52,11 +52,11 @@ def test_loraize_simple():
 
     module = Module(first=hnn.Linear.init(In, Mid, key=k0), second=hnn.Linear.init(Mid, Out, key=k1))
 
-    loraized = loraize(module, LoraConfig(r=8, target_modules=["first"]), key=k0)
+    loraized = loraize(module, LoraConfig(r=8, target_modules=["first"], a_init_mode="random"), key=k0)
     assert isinstance(loraized.first, LoraLinear)
     assert isinstance(loraized.second, hnn.Linear)
 
-    loraized = loraize(module, LoraConfig(r=8, target_modules=["second"]), key=k0)
+    loraized = loraize(module, LoraConfig(r=8, target_modules=["second"], a_init_mode="random"), key=k0)
     assert isinstance(loraized.first, hnn.Linear)
     assert isinstance(loraized.second, LoraLinear)
 
@@ -84,7 +84,7 @@ def test_lora_scan_layers():
     k0 = jax.random.PRNGKey(0)
     module: hnn.Stacked[Module] = hnn.Stacked.init(Layers, Module)(key=jax.random.split(k0, 3))
 
-    loraized = loraize(module, LoraConfig(r=8, target_modules=["first"]), key=k0)
+    loraized = loraize(module, LoraConfig(r=8, target_modules=["first"], a_init_mode="random"), key=k0)
     assert isinstance(loraized, hnn.Stacked)
     assert isinstance(loraized.stacked.first, LoraLinear)
     assert isinstance(loraized.stacked.second, hnn.Linear)
@@ -129,7 +129,7 @@ def test_merge_lora():
     k0 = jax.random.PRNGKey(0)
     module: hnn.Stacked[Module] = hnn.Stacked.init(Layers, Module)(key=jax.random.split(k0, Layers.size))
 
-    loraized = loraize(module, LoraConfig(r=8, target_modules=["second"]), key=k0)
+    loraized = loraize(module, LoraConfig(r=8, target_modules=["second"], a_init_mode="random"), key=k0)
     assert isinstance(loraized, hnn.Stacked)
 
     merged = merge_lora_modules(loraized)
@@ -172,7 +172,7 @@ def test_lora_load_in_peft():
 
         converter.save_pretrained(model, f"{tmpdir}/model")
 
-        lora_config = LoraConfig(r=8, target_modules=["c_attn"])
+        lora_config = LoraConfig(r=8, target_modules=["c_attn"], a_init_mode="random")
         loraized = loraize(model, lora_config, key=jax.random.PRNGKey(0))
         save_peft_pretrained(loraized, lora_config, f"{tmpdir}/model", f"{tmpdir}/loraized")
         peft_config = PeftConfig.from_pretrained(f"{tmpdir}/loraized")
@@ -220,7 +220,7 @@ def test_lora_merged_load_in_hf():
     with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
         converter.save_pretrained(model, f"{tmpdir}/model")
 
-        lora_config = LoraConfig(r=8, target_modules=["c_attn"])
+        lora_config = LoraConfig(r=8, target_modules=["c_attn"], a_init_mode="random")
         loraized = loraize(model, lora_config, key=jax.random.PRNGKey(0))
         save_merged_hf_model(loraized, converter, f"{tmpdir}/loraized")
 
@@ -271,6 +271,7 @@ def test_lora_merged_load_in_hf_llama():
         r=8,
         alpha=8,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        a_init_mode="random",
     )
 
     input_ids = hax.random.randint(jax.random.PRNGKey(1), config.max_Pos.resize(16), 0, vocab.size)
@@ -379,7 +380,7 @@ def test_lora_works_with_checkpointer():
 
         module = Module(first=hnn.Linear.init(In, Mid, key=k0), second=hnn.Linear.init(Mid, Out, key=k1))
 
-        loraized = loraize(module, LoraConfig(r=8, target_modules=["first"]), key=k0)
+        loraized = loraize(module, LoraConfig(r=8, target_modules=["first"], a_init_mode="random"), key=k0)
         lora_filter = lora_trainable_params_filter(loraized)
 
         optimizer = optax.adam(1e-3)

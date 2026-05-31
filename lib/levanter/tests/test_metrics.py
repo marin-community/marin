@@ -235,11 +235,11 @@ def test_eval_loss_loop(has_metrics, max_batches):
     expected_loss = sum(range(1, n_batches + 1)) / n_batches
 
     assert jnp.allclose(avg_loss, expected_loss, atol=1e-5)
-    assert avg_metrics["timing/load_time"] >= 0.0
-    assert avg_metrics["timing/loss_time"] >= 0.0
-    assert avg_metrics["timing/num_batches"] == float(n_batches)
+    assert avg_metrics["eval/timing/load_time"] >= 0.0
+    assert avg_metrics["eval/timing/loss_time"] >= 0.0
+    assert avg_metrics["eval/timing/num_batches"] == float(n_batches)
 
-    metric_keys = {key for key in avg_metrics if not key.startswith("timing/")}
+    metric_keys = {key for key in avg_metrics if not key.startswith("eval/timing/")}
 
     if has_metrics:
         assert jnp.allclose(avg_metrics["metric_a"], expected_loss * 2, atol=1e-5)

@@ -198,12 +198,12 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
 
     config = bake_output_path(pod_config.train_config, pod_config.output_path)
 
-    from levanter.adaptation import NoAdaptationConfig
+    from levanter.adaptor import NoAdaptorConfig
     from levanter.main.train_dpo import TrainDpoConfig
     from levanter.main.train_lm import TrainLmConfig
 
     # Adapter LM/DPO exports PEFT by default; merged HF export is explicit.
-    if isinstance(config, (TrainDpoConfig, TrainLmConfig)) and not isinstance(config.adapter, NoAdaptationConfig):
+    if isinstance(config, (TrainDpoConfig, TrainLmConfig)) and not isinstance(config.adapter, NoAdaptorConfig):
         peft_save_path = config.peft_save_path
         if peft_save_path is None and config.hf_save_steps is not None:
             peft_save_path = config.hf_save_path

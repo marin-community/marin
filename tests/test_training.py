@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 from fray import ResourceConfig
-from levanter.adaptation import LoraAdaptationConfig
+from levanter.adaptor import LoraAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import DatasetComponent, PreferenceChatLmDatasetFormat, PreferenceLmDataConfig
 from levanter.main import train_lm
@@ -117,7 +117,7 @@ def test_update_config_to_use_out_path_does_not_enable_adapter_hf_export_without
         config = TrainDpoOnPodConfig(
             train_config=TrainDpoConfig(
                 trainer=dataclasses.replace(trainer_config, num_train_steps=1),
-                adapter=LoraAdaptationConfig(),
+                adapter=LoraAdaptorConfig(),
                 hf_save_steps=None,
             ),
             resources=ResourceConfig.with_tpu("v4-8"),
@@ -137,7 +137,7 @@ def test_update_config_to_use_out_path_routes_adapter_hf_export_to_peft(trainer_
         config = TrainDpoOnPodConfig(
             train_config=TrainDpoConfig(
                 trainer=dataclasses.replace(trainer_config, num_train_steps=1),
-                adapter=LoraAdaptationConfig(),
+                adapter=LoraAdaptorConfig(),
                 hf_save_steps=10,
             ),
             resources=ResourceConfig.with_tpu("v4-8"),

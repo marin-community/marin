@@ -4,7 +4,7 @@
 from dataclasses import dataclass, field
 
 from fray.cluster import ResourceConfig
-from levanter.adaptation import AdaptationConfig, NoAdaptationConfig
+from levanter.adaptor import AdaptorConfig, NoAdaptorConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.dpo import ReferenceEvalCacheConfig
 from levanter.main.train_dpo import DpoReferenceConfig, SeparateReferenceConfig
@@ -30,7 +30,7 @@ class SimpleDPOConfig:
     model_name_or_path: str | None = None
     initialize_from_checkpoint_path: str | None = None
 
-    adapter: AdaptationConfig = field(default_factory=NoAdaptationConfig)
+    adapter: AdaptorConfig = field(default_factory=NoAdaptorConfig)
     reference: DpoReferenceConfig = field(default_factory=SeparateReferenceConfig)
     reference_model_path: str | None = None
     reference_is_hf: bool = True

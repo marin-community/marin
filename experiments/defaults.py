@@ -19,7 +19,7 @@ from fray import ResourceConfig, current_client
 from fray.types import Entrypoint, JobRequest, create_environment
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
-from levanter.adaptation import AdaptationConfig, LoraAdaptationConfig, NoAdaptationConfig
+from levanter.adaptor import AdaptorConfig, LoraAdaptorConfig, NoAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import (
     DEFAULT_LM_DATA_SHUFFLE,
@@ -36,7 +36,7 @@ from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
 from levanter.optim.model_averaging import EmaModelAveragingConfig
 from levanter.schedule import BatchSchedule
-from levanter.tracker.wandb import WandbConfig
+from levanter.tracker.wandb import WandbConfig, truncate_wandb_run_name
 from levanter.trainer import TrainerConfig
 from levanter.utils import fsspec_utils
 from levanter.utils.mesh import MeshConfig
@@ -77,10 +77,6 @@ logger = logging.getLogger(__name__)
 
 HF_BUCKET_URI_PREFIX = "hf://buckets/"
 HF_BUCKET_PATH_PREFIX = "buckets/"
-_WANDB_NAME_MAX_LENGTH = 64
-_WANDB_NAME_MIN_PREFIX_LENGTH = 24
-_WANDB_NAME_AGGRESSIVE_TRUNCATION_CHARS = 16
-_WANDB_SUFFIX_MARKERS = ("_seed", "-seed", "_step", "-step")
 
 
 def _is_hf_bucket_path(path: str) -> bool:
@@ -91,78 +87,6 @@ def _normalize_hf_bucket_path(path: str) -> str:
     if path.startswith(HF_BUCKET_URI_PREFIX):
         return path.removeprefix("hf://")
     return path
-
-
-def _preferred_wandb_suffix_start(name: str) -> int | None:
-    """Return the preferred suffix start for a truncated W&B run name.
-
-    We prefer underscore-delimited semantic tails like ``lr7.5e-7_seed2`` or
-    ``foo_step400``. This avoids splitting on the ``-`` inside scientific
-    notation, which would corrupt names like ``lr7.5e-7``.
-    """
-    for marker in _WANDB_SUFFIX_MARKERS:
-        marker_start = name.rfind(marker)
-        if marker_start == -1:
-            continue
-
-        prior_slash = name.rfind("/", 0, marker_start)
-        prior_underscore = name.rfind("_", 0, marker_start)
-        if prior_underscore > prior_slash:
-            return prior_underscore
-        return marker_start
-
-    last_underscore = name.rfind("_")
-    if last_underscore == -1:
-        return None
-
-    prior_slash = name.rfind("/", 0, last_underscore)
-    second_last_underscore = name.rfind("_", 0, last_underscore)
-    if second_last_underscore > prior_slash:
-        return second_last_underscore
-
-    return last_underscore
-
-
-def _truncate_wandb_name(name: str) -> str:
-    """Truncate a run name to fit W&B's 64-character limit without mangling semantic suffixes."""
-    if len(name) <= _WANDB_NAME_MAX_LENGTH:
-        return name
-
-    old_name = name
-    suffix_start = _preferred_wandb_suffix_start(name)
-
-    if suffix_start is None:
-        name = name[:_WANDB_NAME_MAX_LENGTH]
-        preserved_suffix = ""
-    else:
-        suffix = name[suffix_start:]
-        preserved_suffix = suffix
-        if len(suffix) >= _WANDB_NAME_MAX_LENGTH:
-            name = name[:_WANDB_NAME_MAX_LENGTH]
-            preserved_suffix = ""
-        else:
-            prefix_budget = _WANDB_NAME_MAX_LENGTH - len(suffix)
-            prefix = name[:prefix_budget]
-
-            # Prefer trimming at a token boundary so the retained prefix stays readable.
-            boundary = max(prefix.rfind("_"), prefix.rfind("/"))
-            if boundary >= _WANDB_NAME_MIN_PREFIX_LENGTH:
-                prefix = prefix[:boundary]
-
-            name = prefix + suffix
-
-    logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
-
-    removed_chars = len(old_name) - len(name)
-    retained_prefix_len = len(name) - len(preserved_suffix)
-    if removed_chars >= _WANDB_NAME_AGGRESSIVE_TRUNCATION_CHARS or retained_prefix_len < _WANDB_NAME_MIN_PREFIX_LENGTH:
-        logger.warning(
-            "W&B run name %r required aggressive truncation to %r. Consider shortening the explicit name.",
-            old_name,
-            name,
-        )
-
-    return name
 
 
 def _resolve_hf_export_steps(steps_per_hf_export: int | None, steps_per_export: int | None) -> int | None:
@@ -428,7 +352,7 @@ def _build_train_lm_config(
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
-    adapter: AdaptationConfig | None = None,
+    adapter: AdaptorConfig | None = None,
 ) -> tuple[str, TrainLmConfig]:
     """Build the shared ``TrainLmConfig`` body used by ``default_train`` and ``prepare_lm_train``.
 
@@ -443,7 +367,7 @@ def _build_train_lm_config(
     if wandb_group is None:
         wandb_group = os.environ.get("WANDB_GROUP")
 
-    name = _truncate_wandb_name(name)
+    name = truncate_wandb_run_name(name)
 
     if eval_harness_tasks:
         harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(eval_harness_tasks))
@@ -549,7 +473,7 @@ def _build_train_lm_config(
         data_seed=train_config.data_seed,
         eval_harness_steps=train_config.steps_per_task_eval or 10000,
         eval_harness=harness_config,
-        adapter=adapter if adapter is not None else NoAdaptationConfig(),
+        adapter=adapter if adapter is not None else NoAdaptorConfig(),
     )
 
     return name, inner_config
@@ -566,7 +490,7 @@ def default_train(
     wandb_name: str | None = None,
     wandb_group: str | None = None,
     override_output_path: str | None = None,
-    adapter: AdaptationConfig | None = None,
+    adapter: AdaptorConfig | None = None,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -808,7 +732,7 @@ def default_sft(
     model_config: LlamaConfig,
     sft_config: SimpleSFTConfig,
     tags: Sequence[str] = (),
-    adapter: AdaptationConfig | None = None,
+    adapter: AdaptorConfig | None = None,
 ) -> ExecutorStep:
     """
     Creates an ExecutorStep for supervised fine-tuning of a language model.
@@ -920,7 +844,7 @@ def default_dpo(
         include_raw_paths=False,
     )
 
-    name = _truncate_wandb_name(name)
+    name = truncate_wandb_run_name(name)
 
     steps_per_export = dpo_config.steps_per_checkpoint
     steps_per_export_hf = _resolve_hf_export_steps(dpo_config.steps_per_hf_export, steps_per_export)
@@ -957,7 +881,7 @@ def default_dpo(
     # Standard LoRA init is fragile here; see
     # https://github.com/marin-community/marin/issues/4755.
     # Users who need paper init can construct TrainDpoConfig directly.
-    if isinstance(dpo_config.adapter, LoraAdaptationConfig):
+    if isinstance(dpo_config.adapter, LoraAdaptorConfig):
         dpo_config = dataclasses.replace(
             dpo_config,
             adapter=dataclasses.replace(
@@ -968,7 +892,7 @@ def default_dpo(
         )
 
     hf_save_dtype = dpo_config.hf_save_dtype
-    if not isinstance(dpo_config.adapter, NoAdaptationConfig) and hf_save_dtype is not None:
+    if not isinstance(dpo_config.adapter, NoAdaptorConfig) and hf_save_dtype is not None:
         raise ValueError("hf_save_dtype is not supported with adapter-based DPO exports.")
 
     inner_config = TrainDpoConfig(

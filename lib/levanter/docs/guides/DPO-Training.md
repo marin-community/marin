@@ -97,8 +97,9 @@ adapter:
   r: 64
   alpha: 64.0
   dropout: 0.0
-  zero_init_b: true
   target_modules: null  # null = all linear modules (recommended)
+  # Init defaults to a_init_mode: zero (zero adapter delta at step 0); see
+  # "Adapter Initialization" below.
 
 reference:
   type: adapter_base
@@ -113,14 +114,45 @@ With `adapter_base`, the base model (without LoRA adapters) serves as the
 frozen reference, eliminating the second model copy and roughly halving
 model-parameter memory.
 
-#### B Matrix Initialization
+#### Adapter Initialization (`a_init_mode` and `zero_init_b`)
 
-**`zero_init_b: true` is required for LoRA-DPO.** Zero-initializing the B
-matrix makes the adapter start as identity (`W + alpha/r * 0 * A = W`), so
-the policy exactly matches the reference at step 0. Without this, the policy
-immediately diverges, producing catastrophically wrong log-probability margins
-and a loss that starts at ~12 instead of ~0.69. `train_dpo.py` rejects
-`zero_init_b: false` for LoRA-DPO configs.
+LoRA-DPO requires the adapter delta `B @ A` to be **zero at init**, so the
+policy exactly matches the reference at step 0 (implicit reward 0, DPO loss
+`ln 2 ≈ 0.693`). If the delta is non-zero at init, the policy immediately
+diverges from the reference, producing catastrophically wrong log-probability
+margins and a loss that starts around ~12 instead of ~0.69.
+
+Two independent knobs control the LoRA factors, and there are two ways to make
+the delta zero:
+
+- **`a_init_mode`** — how the `A` matrix is initialized.
+    - `zero` *(default)*: `A = 0`, `B` random. `B @ A = 0` at init, and the
+      first optimizer step flows through the full-rank `A` (its gradient is
+      non-zero because `B` is random). This is the **default for all LoRA** and
+      the DPO-robust choice: it avoids the FSDP all-reduce-noise
+      sigma-sensitivity near `π = π_ref` (see
+      [#4755](https://github.com/marin-community/marin/issues/4755) and the
+      Bug-1 logbook).
+    - `random`: `A` is drawn from the standard Linear init (the LoRA-paper
+      convention); whether the delta is zero is then left to `zero_init_b`.
+- **`zero_init_b`** *(default `false`)* — if `true`, `B = 0` (the standard PEFT
+  convention). With `a_init_mode: random` this is the classic LoRA identity
+  init, but a zero `B` makes the first gradient flow through the degenerate
+  zero-init `B` — the fragile path Bug-1 documents.
+
+**Validation.** For `reference.type: adapter_base`, `train_dpo.py` requires
+*exactly one* zero factor — set **either** `a_init_mode: zero` **or**
+`zero_init_b: true`, but not both. Both-zero leaves no path for gradients to
+flow; neither-zero leaves a non-zero delta at init. With the default
+(`a_init_mode: zero`) you normally set neither flag. (`reference.type: separate`
+has no such check, but the same zero-delta-at-init reasoning applies whenever
+the reference is the policy's own base model.)
+
+> **Correction:** earlier versions of this guide stated that `zero_init_b: true`
+> was *required* for LoRA-DPO and that `train_dpo.py` *rejects*
+> `zero_init_b: false`. That was a documentation bug. `a_init_mode: zero` (now
+> the default) produces a zero delta with `zero_init_b: false`, and is the
+> recommended setting.
 
 #### LoRA Checkpoint Saving
 

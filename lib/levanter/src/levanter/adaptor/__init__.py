@@ -1,6 +1,22 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Model-adaptation strategies for training.
+
+An :class:`AdaptorConfig` describes how a base model is adapted before training
+and how the adapted model is exported, giving the trainer one interface over
+full-parameter fine-tuning (:class:`NoAdaptorConfig`) and parameter-efficient
+methods such as LoRA (:class:`LoraAdaptorConfig`). Each adaptor implements
+``apply`` (transform the model), ``trainable_filter`` (which parameters train),
+``base_model_view`` (recover the unadapted model, e.g. as a DPO reference), and
+``install_export_hooks`` (HF/PEFT checkpoint export).
+
+This is a package so each method's mechanism can live in its own submodule: the
+LoRA layers and (de)serialization helpers are in :mod:`levanter.adaptor.lora`.
+Add future adaptors as new submodules and register them with
+``@AdaptorConfig.register_subclass(...)``.
+"""
+
 import abc
 import logging
 import os
@@ -17,7 +33,7 @@ from levanter.compat.hf_checkpoints import (
     save_hf_checkpoint_callback,
 )
 from levanter.dpo import DpoModel
-from levanter.lora import (
+from levanter.adaptor.lora import (
     LoraConfig,
     lora_trainable_params_filter,
     loraize,
@@ -33,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class AdaptationExportConfig:
+class AdaptorExportConfig:
     hf_save_path: str | None = None
     hf_upload: bool | str | RepoRef | None = False
     hf_save_steps: int | None = None
@@ -46,7 +62,7 @@ class AdaptationExportConfig:
     merged_hf_upload: str | RepoRef | None = None
 
 
-class AdaptationConfig(abc.ABC, draccus.ChoiceRegistry):
+class AdaptorConfig(abc.ABC, draccus.ChoiceRegistry):
     @classmethod
     def default_choice_name(cls) -> str | None:
         return "none"
@@ -70,7 +86,7 @@ class AdaptationConfig(abc.ABC, draccus.ChoiceRegistry):
         trainer,
         converter: HFCheckpointConverter | None,
         tokenizer,
-        export: AdaptationExportConfig,
+        export: AdaptorExportConfig,
     ) -> None:
         raise NotImplementedError
 
@@ -92,9 +108,9 @@ def _parse_hf_save_dtype(hf_save_dtype: str | None) -> jnp.dtype | None:
         return None
 
 
-@AdaptationConfig.register_subclass("none")
+@AdaptorConfig.register_subclass("none")
 @dataclass(frozen=True)
-class NoAdaptationConfig(AdaptationConfig):
+class NoAdaptorConfig(AdaptorConfig):
     def apply(self, model, *, key, axis_mapping=None):
         del key, axis_mapping
         return model
@@ -113,7 +129,7 @@ class NoAdaptationConfig(AdaptationConfig):
         trainer,
         converter: HFCheckpointConverter | None,
         tokenizer,
-        export: AdaptationExportConfig,
+        export: AdaptorExportConfig,
     ) -> None:
         del tokenizer
 
@@ -140,9 +156,9 @@ class NoAdaptationConfig(AdaptationConfig):
         )
 
 
-@AdaptationConfig.register_subclass("lora")
+@AdaptorConfig.register_subclass("lora")
 @dataclass(frozen=True)
-class LoraAdaptationConfig(LoraConfig, AdaptationConfig):
+class LoraAdaptorConfig(LoraConfig, AdaptorConfig):
     def apply(self, model, *, key, axis_mapping=None):
         if axis_mapping is None:
             return loraize(model, self, key=key)
@@ -165,7 +181,7 @@ class LoraAdaptationConfig(LoraConfig, AdaptationConfig):
         trainer,
         converter: HFCheckpointConverter | None,
         tokenizer,
-        export: AdaptationExportConfig,
+        export: AdaptorExportConfig,
     ) -> None:
         if export.hf_save_path is not None:
             raise ValueError("adapter.type: lora does not support hf_save_path. Use merged_hf_save_path instead.")

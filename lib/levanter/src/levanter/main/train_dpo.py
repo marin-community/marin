@@ -19,11 +19,11 @@ import levanter
 import levanter.callbacks
 import levanter.eval
 from levanter import callbacks
-from levanter.adaptation import (
-    AdaptationConfig,
-    AdaptationExportConfig,
-    LoraAdaptationConfig,
-    NoAdaptationConfig,
+from levanter.adaptor import (
+    AdaptorConfig,
+    AdaptorExportConfig,
+    LoraAdaptorConfig,
+    NoAdaptorConfig,
 )
 from levanter.compat.hf_checkpoints import build_generation_config
 from levanter.data.dataset import AsyncDataset
@@ -283,7 +283,7 @@ class AdapterBaseReferenceConfig(DpoReferenceConfig):
 
 @dataclass(frozen=True)
 class AdapterBaseReferenceModelProvider:
-    adapter: AdaptationConfig
+    adapter: AdaptorConfig
 
     def model_for(self, policy_model: LmHeadModel) -> LmHeadModel:
         reference_model = self.adapter.base_model_view(policy_model)
@@ -301,7 +301,7 @@ class TrainDpoConfig:
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
 
     reference: DpoReferenceConfig = field(default_factory=SeparateReferenceConfig)
-    adapter: AdaptationConfig = field(default_factory=NoAdaptationConfig)
+    adapter: AdaptorConfig = field(default_factory=NoAdaptorConfig)
 
     beta: float = 0.1
 
@@ -375,9 +375,9 @@ def _validate_dpo_config(config: TrainDpoConfig) -> None:
         return
 
     if isinstance(config.reference, AdapterBaseReferenceConfig):
-        if isinstance(config.adapter, NoAdaptationConfig):
+        if isinstance(config.adapter, NoAdaptorConfig):
             raise ValueError("reference.type=adapter_base requires a non-none adapter.")
-        if isinstance(config.adapter, LoraAdaptationConfig):
+        if isinstance(config.adapter, LoraAdaptorConfig):
             # Require B @ A = 0 so policy == reference at step 0: implicit reward is 0 and DPO loss is log 2.
             # Exactly one factor must be zero so gradients can still flow.
             has_zero_b = config.adapter.zero_init_b
@@ -519,7 +519,7 @@ def _install_separate_reference_export_hooks(
     *,
     trainer,
     converter,
-    export: AdaptationExportConfig,
+    export: AdaptorExportConfig,
 ) -> None:
     if export.peft_save_path is not None or export.merged_hf_save_path is not None:
         raise ValueError("peft_save_path and merged_hf_save_path require adapter.type: lora.")
@@ -695,7 +695,7 @@ def main(config: TrainDpoConfig):
         else:
             logger.info(f"Resuming from step {state.step}, using checkpoint policy weights.")
             policy_model = state.model.policy if isinstance(state.model, DpoModel) else state.model
-            if not isinstance(config.adapter, NoAdaptationConfig):
+            if not isinstance(config.adapter, NoAdaptorConfig):
                 logger.info(
                     "Adapter checkpoints only store trainable weights. Reconstructing the base policy model from the "
                     "configured source before overlaying resumed adapter parameters."
@@ -856,7 +856,7 @@ def main(config: TrainDpoConfig):
         else:
             logger.warning("No validation datasets provided.")
 
-        export_config = AdaptationExportConfig(
+        export_config = AdaptorExportConfig(
             hf_save_path=config.hf_save_path,
             hf_upload=config.hf_upload,
             hf_save_steps=config.hf_save_steps,
@@ -867,7 +867,7 @@ def main(config: TrainDpoConfig):
             merged_hf_save_path=config.merged_hf_save_path,
             merged_hf_upload=config.merged_hf_upload,
         )
-        if isinstance(config.reference, SeparateReferenceConfig) and isinstance(config.adapter, NoAdaptationConfig):
+        if isinstance(config.reference, SeparateReferenceConfig) and isinstance(config.adapter, NoAdaptorConfig):
             _install_separate_reference_export_hooks(
                 trainer=trainer,
                 converter=model_context.converter,

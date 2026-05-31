@@ -20,7 +20,7 @@ import levanter.callbacks
 import levanter.eval
 import levanter.eval_harness
 from levanter import callbacks
-from levanter.adaptation import AdaptationConfig, AdaptationExportConfig, NoAdaptationConfig
+from levanter.adaptor import AdaptorConfig, AdaptorExportConfig, NoAdaptorConfig
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config
@@ -65,7 +65,7 @@ class TrainLmConfig:
     hf_save_dtype: Optional[str] = None
     hf_generation_eos_token_ids: Optional[list[int]] = None
 
-    adapter: AdaptationConfig = field(default_factory=NoAdaptationConfig)
+    adapter: AdaptorConfig = field(default_factory=NoAdaptorConfig)
     peft_save_path: Optional[str] = None
     peft_hf_upload: Optional[str] = None
     merged_hf_save_path: Optional[str] = None
@@ -121,7 +121,7 @@ def _load_lm_model_from_configured_source(
     else:
         model = config.model.build(Vocab, key=model_key)
 
-    if not isinstance(config.adapter, NoAdaptationConfig):
+    if not isinstance(config.adapter, NoAdaptorConfig):
         model = config.adapter.apply(model, key=adapter_key, axis_mapping=parameter_axis_mapping)
 
     return model
@@ -224,7 +224,7 @@ def main(config: TrainLmConfig):
         tagged_eval_datasets = config.data.tagged_eval_sets(Pos)
 
         adapter_key = jrandom.fold_in(model_key, ord("a"))
-        if isinstance(config.adapter, NoAdaptationConfig):
+        if isinstance(config.adapter, NoAdaptorConfig):
             state = trainer.initial_state(training_key, model_init=lambda: config.model.build(Vocab, key=model_key))
         else:
             initial_model = config.adapter.apply(
@@ -268,7 +268,7 @@ def main(config: TrainLmConfig):
                 state = dataclasses.replace(state, model=model)
             else:
                 logger.info("No checkpoint found. Starting from scratch.")
-        elif not isinstance(config.adapter, NoAdaptationConfig):
+        elif not isinstance(config.adapter, NoAdaptorConfig):
             logger.info(
                 "Adapter checkpoints only store trainable weights. Reconstructing the base LM model from the "
                 "configured source before overlaying resumed adapter parameters."
@@ -344,7 +344,7 @@ def main(config: TrainLmConfig):
             trainer=trainer,
             converter=converter,
             tokenizer=tokenizer,
-            export=AdaptationExportConfig(
+            export=AdaptorExportConfig(
                 hf_save_path=config.hf_save_path,
                 hf_upload=config.hf_upload,
                 hf_save_steps=config.hf_save_steps,

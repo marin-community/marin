@@ -82,9 +82,9 @@ def eval_loss_loop(
         total_loss /= n
 
     plain_metrics = unwrap_metrics(accumulated_metrics)
-    plain_metrics["timing/load_time"] = total_load_time
-    plain_metrics["timing/loss_time"] = total_loss_time
-    plain_metrics["timing/num_batches"] = float(n)
+    plain_metrics["eval/timing/load_time"] = total_load_time
+    plain_metrics["eval/timing/loss_time"] = total_loss_time
+    plain_metrics["eval/timing/num_batches"] = float(n)
     return total_loss, plain_metrics
 
 
@@ -101,9 +101,11 @@ def compute_validation_loss(
         if name:
             prefix += "/" + name
 
-        # Log loss and metrics
+        # Log loss and metrics. eval_loss_loop already namespaces its loop-timing
+        # keys under "eval/"; strip it so this prefix (e.g. "eval/<name>") is applied
+        # once, yielding "eval/<name>/timing/..." instead of "eval/eval/timing/...".
         to_log = {f"{prefix}/loss": loss}
-        to_log.update({f"{prefix}/{k}": v for k, v in metrics.items()})
+        to_log.update({f"{prefix}/{k.removeprefix('eval/')}": v for k, v in metrics.items()})
         levanter.tracker.log(to_log, step=info.step)
 
         if name:

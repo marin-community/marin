@@ -34,7 +34,7 @@ from levanter.data.text import (
     PreferencePairDataset,
     TextLmDatasetFormat,
 )
-from levanter.adaptation import AdaptationExportConfig, LoraAdaptationConfig, NoAdaptationConfig
+from levanter.adaptor import AdaptorExportConfig, LoraAdaptorConfig, NoAdaptorConfig
 from levanter.dpo import (
     CachedDpoExample,
     DpoModel,
@@ -152,7 +152,7 @@ def test_adapter_base_reference_requires_non_none_adapter():
     config = TrainDpoConfig(
         model=_tiny_gpt2_config(),
         reference=AdapterBaseReferenceConfig(),
-        adapter=NoAdaptationConfig(),
+        adapter=NoAdaptorConfig(),
     )
 
     with pytest.raises(ValueError, match="requires a non-none adapter"):
@@ -163,7 +163,7 @@ def test_lora_adapter_base_reference_requires_zero_initial_delta():
     config = TrainDpoConfig(
         model=_tiny_gpt2_config(),
         reference=AdapterBaseReferenceConfig(),
-        adapter=LoraAdaptationConfig(zero_init_b=False, a_init_mode="random"),
+        adapter=LoraAdaptorConfig(zero_init_b=False, a_init_mode="random"),
     )
 
     with pytest.raises(ValueError, match="requires zero adapter delta at init"):
@@ -178,7 +178,7 @@ def test_lora_adapter_base_reference_accepts_one_zero_factor(zero_init_b, a_init
     config = TrainDpoConfig(
         model=_tiny_gpt2_config(),
         reference=AdapterBaseReferenceConfig(),
-        adapter=LoraAdaptationConfig(zero_init_b=zero_init_b, a_init_mode=a_init_mode),
+        adapter=LoraAdaptorConfig(zero_init_b=zero_init_b, a_init_mode=a_init_mode),
     )
 
     _validate_dpo_config(config)
@@ -188,7 +188,7 @@ def test_lora_adapter_base_reference_rejects_both_factors_zero():
     config = TrainDpoConfig(
         model=_tiny_gpt2_config(),
         reference=AdapterBaseReferenceConfig(),
-        adapter=LoraAdaptationConfig(zero_init_b=True, a_init_mode="zero"),
+        adapter=LoraAdaptorConfig(zero_init_b=True, a_init_mode="zero"),
     )
 
     with pytest.raises(ValueError, match="exactly one zero LoRA factor"):
@@ -257,7 +257,7 @@ def test_canonical_dpo_config_parses_from_yaml(tmp_path: Path):
 
     config = draccus.parse(TrainDpoConfig, str(config_path), args=[])
 
-    assert isinstance(config.adapter, NoAdaptationConfig)
+    assert isinstance(config.adapter, NoAdaptorConfig)
     assert isinstance(config.reference, SeparateReferenceConfig)
     assert config.reference_eval_cache == ReferenceEvalCacheConfig(
         mode="build_or_load",
@@ -276,7 +276,6 @@ def test_canonical_lora_dpo_config_parses_from_yaml(tmp_path: Path):
                 "  type: lora",
                 "  r: 8",
                 "  alpha: 8.0",
-                "  zero_init_b: true",
                 "reference:",
                 "  type: adapter_base",
             ]
@@ -285,7 +284,7 @@ def test_canonical_lora_dpo_config_parses_from_yaml(tmp_path: Path):
 
     config = draccus.parse(TrainDpoConfig, str(config_path), args=[])
 
-    assert isinstance(config.adapter, LoraAdaptationConfig)
+    assert isinstance(config.adapter, LoraAdaptorConfig)
     assert isinstance(config.reference, AdapterBaseReferenceConfig)
 
 
@@ -313,7 +312,7 @@ def test_legacy_lora_dpo_config_translates_to_canonical(tmp_path: Path, monkeypa
 
     translated = _translate_legacy_lora_dpo_config(legacy_config)
 
-    assert isinstance(translated.adapter, LoraAdaptationConfig)
+    assert isinstance(translated.adapter, LoraAdaptorConfig)
     assert isinstance(translated.reference, AdapterBaseReferenceConfig)
     assert translated.adapter.zero_init_b is False
     assert translated.adapter.a_init_mode == "zero"
@@ -684,7 +683,7 @@ def test_restore_policy_model_from_partial_checkpoint_recovers_base_model():
     Vocab = Axis("vocab", 32)
     base_key, wrong_base_key, adapter_key, wrong_adapter_key, example_key = jrandom.split(jrandom.PRNGKey(0), 5)
 
-    adapter = LoraAdaptationConfig(r=4, zero_init_b=False)
+    adapter = LoraAdaptorConfig(r=4, zero_init_b=False, a_init_mode="random")
     trained_policy = adapter.apply(config.build(Vocab, key=base_key), key=adapter_key)
     wrong_resume_skeleton = adapter.apply(config.build(Vocab, key=wrong_base_key), key=wrong_adapter_key)
     correct_source_skeleton = adapter.apply(config.build(Vocab, key=base_key), key=wrong_adapter_key)
@@ -733,7 +732,7 @@ def test_separate_reference_lora_merged_export_saves_policy_model():
     Vocab = Axis("vocab", 32)
     base_key, reference_key, adapter_key = jrandom.split(jrandom.PRNGKey(0), 3)
 
-    adapter = LoraAdaptationConfig(r=4)
+    adapter = LoraAdaptorConfig(r=4)
     policy = adapter.apply(config.build(Vocab, key=base_key), key=adapter_key)
     reference = config.build(Vocab, key=reference_key)
     trainer = _CapturingTrainer()
@@ -743,7 +742,7 @@ def test_separate_reference_lora_merged_export_saves_policy_model():
         trainer=trainer,
         converter=converter,
         tokenizer=None,
-        export=AdaptationExportConfig(
+        export=AdaptorExportConfig(
             hf_save_steps=1,
             merged_hf_save_path="/tmp/export",
         ),
@@ -762,7 +761,7 @@ def test_separate_reference_lora_peft_export_saves_policy_adapter(tmp_path):
     Vocab = Axis("vocab", 32)
     base_key, reference_key, adapter_key = jrandom.split(jrandom.PRNGKey(0), 3)
 
-    adapter = LoraAdaptationConfig(r=4)
+    adapter = LoraAdaptorConfig(r=4)
     policy = adapter.apply(config.build(Vocab, key=base_key), key=adapter_key)
     reference = config.build(Vocab, key=reference_key)
     trainer = _CapturingTrainer()
@@ -771,7 +770,7 @@ def test_separate_reference_lora_peft_export_saves_policy_adapter(tmp_path):
         trainer=trainer,
         converter=_CapturingConverter(),
         tokenizer=None,
-        export=AdaptationExportConfig(
+        export=AdaptorExportConfig(
             hf_save_steps=1,
             peft_save_path=str(tmp_path),
         ),
@@ -796,7 +795,7 @@ def test_separate_reference_hf_export_passes_generation_config():
     _install_separate_reference_export_hooks(
         trainer=trainer,
         converter=converter,
-        export=AdaptationExportConfig(
+        export=AdaptorExportConfig(
             hf_save_path="/tmp/export",
             hf_save_steps=1,
             generation_config=generation_config,
