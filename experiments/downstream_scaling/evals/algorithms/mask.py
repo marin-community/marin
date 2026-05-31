@@ -14,7 +14,6 @@ from typing import Any
 import fsspec
 from fray.cluster import ResourceConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
-from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
@@ -41,6 +40,7 @@ from experiments.downstream_scaling.evals.framework.schema import (
     read_grade_rows,
     read_prompt_rows,
 )
+from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints
 from experiments.downstream_scaling.evals.utils import version_path
 
 logger = logging.getLogger(__name__)

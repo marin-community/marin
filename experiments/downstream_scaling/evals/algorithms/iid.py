@@ -13,7 +13,6 @@ from typing import Any
 
 import fsspec
 from fray.cluster import ResourceConfig
-from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.executor import ExecutorStep, InputName, MirroredValue, this_output_path, versioned
 from marin.execution.remote import remote
 from marin.utils import fsspec_exists
@@ -23,7 +22,7 @@ from experiments.downstream_scaling.evals.framework.schema import (
     completions_file,
     read_prompt_rows,
 )
-from experiments.downstream_scaling.evals.utils import version_path
+from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints, version_path
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +131,16 @@ def _load_vllm(model_path: str, seed: int):
     return llm, SamplingParams
 
 
+def _reseed_sampler(worker, seed: int) -> None:
+    import jax
+    from flax import nnx
+
+    assert hasattr(worker.model_runner, "rng_params_for_sampling"), (
+        "tpu_inference runner missing rng_params_for_sampling; upstream API may have changed"
+    )
+    worker.model_runner.rng_params_for_sampling = nnx.Rngs(jax.random.key(seed)).params()
+
+
 def make_iid_completion_step(
     *,
     name: str,
@@ -198,6 +207,11 @@ def _process_iid_shard(
         if fsspec_exists(chunk.success_path):
             yield {"chunk_id": chunk.chunk_id, "output_path": chunk.output_path, "skipped": True}
             continue
+
+        # Reseed per chunk: TPU vLLM ignores SamplingParams.seed, so resume-safety requires
+        # making the sampler RNG a deterministic function of (base_seed, chunk_id). See
+        # .agents/projects/20260520_iid_per_chunk_seed.md for the trace.
+        llm.collective_rpc(_reseed_sampler, args=(config.sampling.seed + chunk.chunk_id,))
 
         request_indices = range(chunk.chunk_start, chunk.chunk_end)
         chunk_prompt_ids = [prompt_ids[i // n_samples] for i in request_indices]

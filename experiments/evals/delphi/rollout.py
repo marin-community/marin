@@ -214,6 +214,16 @@ def _load_vllm(model_path: str, seed: int):
     return llm, SamplingParams
 
 
+def _reseed_sampler(worker, seed: int) -> None:
+    import jax
+    from flax import nnx
+
+    assert hasattr(worker.model_runner, "rng_params_for_sampling"), (
+        "tpu_inference runner missing rng_params_for_sampling; upstream API may have changed"
+    )
+    worker.model_runner.rng_params_for_sampling = nnx.Rngs(jax.random.key(seed)).params()
+
+
 def _load_prompt_rows(dataset_path: str, n_problems: int | None) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     paths = sorted(fsspec_glob(os.path.join(dataset_path, "*.jsonl.gz")))
@@ -236,6 +246,7 @@ def _process_chunk(
     problem_ids: list[Any],
     prompts: list[str],
     sampling: dict[str, Any],
+    seed: int,
     llm,
     SamplingParams,
 ) -> int:
@@ -243,6 +254,12 @@ def _process_chunk(
     success_path = os.path.join(chunk_dir, f"rollouts-chunk-{chunk_start:08d}.SUCCESS")
     if fsspec_exists(success_path):
         return 0
+
+    # Reseed per chunk: TPU vLLM ignores SamplingParams.seed, so resume-safety requires
+    # making the sampler RNG a deterministic function of (base_seed, chunk_start).
+    # chunk_start is globally unique across workers via stride partitioning.
+    # See .agents/projects/20260520_iid_per_chunk_seed.md for the trace.
+    llm.collective_rpc(_reseed_sampler, args=(seed + chunk_start,))
 
     chunk_end = min(chunk_start + chunk_size, total_requests)
     chunk_problem_ids = [problem_ids[k // n_samples] for k in range(chunk_start, chunk_end)]
@@ -307,6 +324,7 @@ def run_rollout_worker(config: RolloutWorkerConfig) -> None:
             problem_ids,
             prompts,
             sampling,
+            config.seed,
             llm,
             SamplingParams,
         )

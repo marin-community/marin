@@ -16,7 +16,6 @@ from typing import Any
 
 import fsspec
 from fray import ActorGroup, ResourceConfig, current_client
-from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.executor import ExecutorStep, InputName, MirroredValue, this_output_path, versioned
 from marin.execution.remote import remote
 from marin.utils import fsspec_exists
@@ -27,7 +26,7 @@ from experiments.downstream_scaling.evals.framework.schema import (
     completions_file,
     read_prompt_rows,
 )
-from experiments.downstream_scaling.evals.utils import version_path
+from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints, version_path
 
 logger = logging.getLogger(__name__)
 

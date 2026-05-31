@@ -15,8 +15,7 @@ import argparse
 import os
 import time
 
-from marin.evaluation.utils import discover_hf_checkpoints
-
+from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints
 from experiments.downstream_scaling.models.delphi import DELPHI_CHECKPOINTS
 
 MARIN_EAST5_PREFIX = "gs://marin-us-east5"

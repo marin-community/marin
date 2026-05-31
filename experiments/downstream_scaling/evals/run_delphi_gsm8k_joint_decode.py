@@ -4,7 +4,7 @@
 """Run joint-decode downstream-scaling evals on GSM8K for the Delphi ladder.
 
 Decoder (A) = each Delphi checkpoint in turn (RPA block-size patch on).
-Advisor (B) = llama 3.1 8B (no patch). Sweeps top_k_a × top_k_b.
+Advisor (B) = llama 3.1 8B (no patch). Sweeps top_k_a x top_k_b.
 """
 
 from __future__ import annotations
@@ -45,14 +45,41 @@ NUM_FEWSHOT = 5
 FEWSHOT_SEED = 1234
 
 TOP_K_PAIRS: tuple[tuple[int, int], ...] = (
-    (2, 16), (3, 16), (4, 16), (6, 16), (8, 16), (12, 16), (16, 16),
+    (2, 16),
+    (3, 16),
+    (4, 16),
+    (6, 16),
+    (8, 16),
+    (12, 16),
+    (16, 16),
     (1, 1),
-    (8, 1), (8, 2), (8, 4), (8, 8),
+    (8, 1),
+    (8, 2),
+    (8, 4),
+    (8, 8),
+    (2, 1),
+    (3, 1),
+    (4, 1),
+    (6, 1),
+    (8, 1),
+    (12, 1),
+    (16, 1),
+    (2, 2),
+    (3, 2),
+    (4, 2),
+    (6, 2),
+    (8, 2),
+    (12, 2),
+    (16, 2),
 )
 
 # 1e23 doesn't fit on a single TPU chip at TP=1; tensor-parallelism support
 # is on the todo list. Skip for now.
 SKIP_DELPHI_KEYS = frozenset({"1e23"})
+
+# Microbatch the largest delphi sizes whose A/B vLLM schedulers otherwise
+# desync; absent keys → None (whole chunk in one round-trip).
+MICROBATCH_SIZE_BY_DELPHI_KEY: dict[str, int] = {"1e22": 8}
 
 
 def make_task() -> GSM8KTask:
@@ -70,6 +97,7 @@ def make_algorithm(
     top_k_a: int,
     top_k_b: int,
     advisor_model_path,
+    microbatch_size: int | None,
 ) -> JointDecodeCompletionAlgorithm:
     return JointDecodeCompletionAlgorithm(
         config=JointDecodeConfig(
@@ -88,6 +116,7 @@ def make_algorithm(
                 num_workers=NUM_WORKERS,
                 worker_resources=ResourceConfig.with_tpu(tpu_type),
                 chunk_size=CHUNK_SIZE,
+                microbatch_size=microbatch_size,
                 barrier_timeout_s=BARRIER_TIMEOUT_S,
             ),
         )
@@ -98,13 +127,16 @@ def build_steps(tpu_type: str):
     advisor_model_path = output_path_of(llama_3_1_8b)
     return [
         make_eval_step(
-            name=(
-                f"downstream_scaling/evals/delphi/gsm8k/joint_decode/"
-                f"topk_a{top_k_a:02d}_b{top_k_b:02d}/{slug}"
-            ),
+            name=(f"downstream_scaling/evals/delphi/gsm8k/joint_decode/" f"topk_a{top_k_a:02d}_b{top_k_b:02d}/{slug}"),
             model_path=InputName.hardcoded(checkpoint),
             task=make_task(),
-            alg=make_algorithm(tpu_type, top_k_a, top_k_b, advisor_model_path),
+            alg=make_algorithm(
+                tpu_type,
+                top_k_a,
+                top_k_b,
+                advisor_model_path,
+                MICROBATCH_SIZE_BY_DELPHI_KEY.get(slug),
+            ),
         )
         for top_k_a, top_k_b in TOP_K_PAIRS
         for slug, checkpoint in DELPHI_CHECKPOINTS.items()
@@ -120,5 +152,5 @@ if __name__ == "__main__":
 
     executor_main(
         steps=build_steps(args.tpu_type),
-        description="Delphi scaling-ladder joint-decode evals on GSM8K (top_k_a × top_k_b sweep).",
+        description="Delphi scaling-ladder joint-decode evals on GSM8K (top_k_a x top_k_b sweep).",
     )

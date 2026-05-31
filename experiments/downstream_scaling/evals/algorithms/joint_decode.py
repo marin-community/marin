@@ -30,7 +30,6 @@ from typing import Any
 
 import fsspec
 from fray.cluster import ResourceConfig
-from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.executor import ExecutorStep, InputName, MirroredValue, this_output_path, versioned
 from marin.execution.remote import remote
 from marin.utils import fsspec_exists
@@ -40,7 +39,7 @@ from experiments.downstream_scaling.evals.framework.schema import (
     completions_file,
     read_prompt_rows,
 )
-from experiments.downstream_scaling.evals.utils import version_path
+from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints, version_path
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +67,7 @@ class JointDecodeSamplingConfig:
     top_k_a: int
     top_k_b: int
     seed: int
+    # Retained for executor cache-key stability; no longer consumed.
     temperature: float = 1.0
     top_p: float = 1.0
     stop: tuple[str, ...] | None = None
@@ -76,10 +76,7 @@ class JointDecodeSamplingConfig:
         if self.top_k_a < 1 or self.top_k_b < 1:
             raise ValueError("top_k_a and top_k_b must both be >= 1")
         if self.n_samples != 1:
-            raise ValueError(
-                "joint_decode is deterministic per prompt; n_samples must be 1 "
-                f"(got {self.n_samples})"
-            )
+            raise ValueError("joint_decode is deterministic per prompt; n_samples must be 1 " f"(got {self.n_samples})")
 
 
 @dataclass(frozen=True)
@@ -98,10 +95,18 @@ class JointDecodeExecutionConfig:
     num_workers: int
     worker_resources: ResourceConfig
     chunk_size: int = 512
+    # In-flight requests per generate() IPC round-trip. None → whole chunk in
+    # one round-trip (no microbatching). Smaller values keep A's and B's
+    # vLLM schedulers in lockstep at the cost of engine batch parallelism.
+    microbatch_size: int | None = None
     chip_a: int = 0
     chip_b: int = 1
     barrier_timeout_s: float = 60.0
     server_port: int = 0
+
+    def __post_init__(self) -> None:
+        if self.microbatch_size is not None and self.microbatch_size < 1:
+            raise ValueError(f"microbatch_size must be >= 1 or None (got {self.microbatch_size})")
 
 
 @dataclass(frozen=True)
@@ -124,6 +129,7 @@ class JointDecodeCompletionStepConfig:
     advisor_model: JointDecodeModelConfig
     num_workers: int
     chunk_size: int
+    microbatch_size: int
     worker_resources: ResourceConfig
     chip_a: int
     chip_b: int
@@ -166,6 +172,9 @@ def make_joint_decode_completion_step(
     prompts_path: str | InputName | MirroredValue,
     config: JointDecodeConfig,
 ) -> ExecutorStep:
+    microbatch_size = (
+        config.execution.chunk_size if config.execution.microbatch_size is None else config.execution.microbatch_size
+    )
     return ExecutorStep(
         name=name,
         fn=remote(
@@ -184,6 +193,7 @@ def make_joint_decode_completion_step(
             advisor_model=versioned(config.advisor_model),  # type: ignore[arg-type]
             num_workers=config.execution.num_workers,
             chunk_size=versioned(config.execution.chunk_size),  # type: ignore[arg-type]
+            microbatch_size=microbatch_size,
             worker_resources=config.execution.worker_resources,
             chip_a=config.execution.chip_a,
             chip_b=config.execution.chip_b,
@@ -193,9 +203,7 @@ def make_joint_decode_completion_step(
     )
 
 
-def _chunk_specs(
-    chunks_dir: str, num_prompts: int, n_samples: int, chunk_size: int
-) -> list[JointDecodeChunkSpec]:
+def _chunk_specs(chunks_dir: str, num_prompts: int, n_samples: int, chunk_size: int) -> list[JointDecodeChunkSpec]:
     total_requests = num_prompts * n_samples
     return [
         JointDecodeChunkSpec(
@@ -285,10 +293,10 @@ class _Coordinator:
 class _DecisionHandler(BaseHTTPRequestHandler):
     coordinator: _Coordinator | None = None
 
-    def log_message(self, format: str, *args: Any) -> None:  # silence access logs
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002  # silence access logs
         return
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         try:
             length = int(self.headers.get("Content-Length") or 0)
             body = self.rfile.read(length)
@@ -305,7 +313,7 @@ class _DecisionHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(response_bytes)))
             self.end_headers()
             self.wfile.write(response_bytes)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.exception("Error handling token-decision POST")
             self.send_error(500, str(exc))
 
@@ -325,6 +333,7 @@ class JointDecoder:
         chip_b: int = 1,
         server_port: int = 0,
         barrier_timeout_s: float = 60.0,
+        microbatch_size: int,
     ) -> None:
         self.decoder_model_path = decoder_model_path
         self.advisor_model_path = advisor_model_path
@@ -335,6 +344,7 @@ class JointDecoder:
         self.chip_b = chip_b
         self.server_port = server_port
         self.barrier_timeout_s = barrier_timeout_s
+        self.microbatch_size = microbatch_size
 
         self._coordinator: _Coordinator | None = None
         self._http_server: ThreadingHTTPServer | None = None
@@ -343,7 +353,7 @@ class JointDecoder:
         self._proc_b: subprocess.Popen | None = None
         self._chunk_seq = 0
 
-    def __enter__(self) -> "JointDecoder":
+    def __enter__(self) -> JointDecoder:
         self._coordinator = _Coordinator(self.barrier_timeout_s)
         _DecisionHandler.coordinator = self._coordinator
         self._http_server = ThreadingHTTPServer(("127.0.0.1", self.server_port), _DecisionHandler)
@@ -414,10 +424,6 @@ class JointDecoder:
             str(model_cfg.max_model_len),
             "--seed",
             str(self.sampling.seed),
-            "--temperature",
-            str(self.sampling.temperature),
-            "--top-p",
-            str(self.sampling.top_p),
         ]
         if model_cfg.gpu_memory_utilization is not None:
             cmd += ["--gpu-memory-utilization", str(model_cfg.gpu_memory_utilization)]
@@ -444,9 +450,7 @@ class JointDecoder:
             line = proc.stdout.readline()
             if not line:
                 rc = proc.poll()
-                raise RuntimeError(
-                    f"Joint-decode worker (pid={proc.pid}) exited with rc={rc} before sending IPC"
-                )
+                raise RuntimeError(f"Joint-decode worker (pid={proc.pid}) exited with rc={rc} before sending IPC")
             line = line.rstrip("\n")
             if line.startswith(IPC_PREFIX):
                 payload = json.loads(line[len(IPC_PREFIX) :])
@@ -470,6 +474,12 @@ class JointDecoder:
             )
 
     def generate(self, prompts: list[str]) -> list[_GenerateOutput]:
+        outputs: list[_GenerateOutput] = []
+        for start in range(0, len(prompts), self.microbatch_size):
+            outputs.extend(self._generate_microbatch(prompts[start : start + self.microbatch_size]))
+        return outputs
+
+    def _generate_microbatch(self, prompts: list[str]) -> list[_GenerateOutput]:
         request_ids = [f"jd-c{self._chunk_seq}-r{i:06d}" for i in range(len(prompts))]
         self._chunk_seq += 1
         request = {
@@ -490,7 +500,7 @@ class JointDecoder:
         def reader(name: str, proc: subprocess.Popen) -> None:
             try:
                 results[name] = self._read_ipc(proc, expect_kind="result")
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 results[name] = exc
 
         threads = [
@@ -499,7 +509,7 @@ class JointDecoder:
         ]
         for t in threads:
             t.start()
-        # Generous deadline: chunk processing is bounded by max_tokens × steps
+        # Generous deadline: chunk processing is bounded by max_tokens x steps
         # plus the barrier timeout per step. We don't enforce a wall-clock
         # cap here — let the barrier be the source of truth for hangs.
         for t in threads:
@@ -536,7 +546,7 @@ class JointDecoder:
                         pass
                     try:
                         proc.stdin.close()
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
                 if proc.poll() is None:
                     try:
@@ -544,7 +554,7 @@ class JointDecoder:
                     except subprocess.TimeoutExpired:
                         proc.kill()
                         proc.wait()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("Error shutting down joint-decode worker %s", name)
         if self._http_server is not None:
             self._http_server.shutdown()
@@ -568,14 +578,6 @@ def _patch_rpa_kernel_block_sizes() -> None:
         return (max(1, bkv_p // 2), bq_sz)
 
     rpa_kernel.get_tuned_block_sizes = patched_get_tuned
-
-
-def _add_request(engine: Any, request_id: str, prompt: Any, sampling_params: Any) -> None:
-    """vLLM has shifted between keyword and positional add_request signatures."""
-    try:
-        engine.add_request(request_id=request_id, prompt=prompt, params=sampling_params)
-    except TypeError:
-        engine.add_request(request_id, prompt, sampling_params)
 
 
 def _emit_ipc(payload: dict[str, Any]) -> None:
@@ -621,8 +623,6 @@ def _run_worker(args: argparse.Namespace) -> None:
 
     sampling_params = SamplingParams(
         max_tokens=args.max_tokens,
-        temperature=args.temperature,
-        top_p=args.top_p,
         ignore_eos=False,
         stop_token_ids=[eos_id] if eos_id is not None else None,
         stop=json.loads(args.stop) if args.stop else None,
@@ -645,21 +645,21 @@ def _run_worker(args: argparse.Namespace) -> None:
         request_ids: list[str] = msg["request_ids"]
         prompts: list[str] = msg["prompts"]
         for rid, prompt in zip(request_ids, prompts, strict=True):
-            _add_request(engine, rid, prompt, sampling_params)
+            engine.add_request(request_id=rid, prompt=prompt, params=sampling_params)
 
         live = set(request_ids)
         text_results: dict[str, str] = {}
         finish_reasons: dict[str, str] = {}
         while live:
             for output in engine.step():
-                if not getattr(output, "finished", False):
+                if not output.finished:
                     continue
                 rid = output.request_id
                 if rid not in live:
                     continue
                 completion = output.outputs[0]
-                text_results[rid] = getattr(completion, "text", "") or ""
-                finish_reasons[rid] = getattr(completion, "finish_reason", None) or "unknown"
+                text_results[rid] = completion.text
+                finish_reasons[rid] = completion.finish_reason or "unknown"
                 live.discard(rid)
 
         _emit_ipc(
@@ -692,6 +692,7 @@ def _process_joint_decode_shard(
         chip_b=config.chip_b,
         server_port=config.server_port,
         barrier_timeout_s=config.barrier_timeout_s,
+        microbatch_size=config.microbatch_size,
     )
 
     with JointDecoder(**decoder_kwargs) as decoder:
@@ -782,8 +783,6 @@ def _main() -> None:
     parser.add_argument("--max-tokens", type=int, required=True)
     parser.add_argument("--max-model-len", type=int, required=True)
     parser.add_argument("--seed", type=int, required=True)
-    parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--gpu-memory-utilization", type=float, default=None)
     parser.add_argument("--enable-prefix-caching", action="store_true")
     parser.add_argument("--apply-rpa-block-size-patch", action="store_true")
