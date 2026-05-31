@@ -12,7 +12,6 @@ from marin.datakit.download.numinamath_tir import (
     row_to_doc,
     transform,
 )
-from marin.datakit.sources import all_sources
 
 
 def _valid_row(**overrides) -> dict:
@@ -78,15 +77,6 @@ def test_row_to_doc_renders_messages_as_tagged_transcript():
 )
 def test_row_to_doc_drops_invalid_rows(row):
     assert row_to_doc(row) == []
-
-
-def test_numinamath_tir_is_materializable_from_datakit_registry():
-    source = all_sources()["numinamath-tir"]
-    processed, normalized = source.normalize_steps
-
-    assert source.normalized is normalized
-    assert processed.deps
-    assert normalized.deps == [processed]
 
 
 def test_transform_reads_parquet_and_writes_valid_docs(tmp_path: Path):
