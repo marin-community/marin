@@ -124,6 +124,21 @@ def test_non_v5p_executor_step_regions_follow_current_launcher_region(monkeypatc
     assert resources.regions == ["europe-west4"]
 
 
+def test_gpu_only_launcher_region_preserves_uppercase_region():
+    resources = ResourceConfig.with_gpu(
+        "H100",
+        count=1,
+        cpu=32,
+        ram="240g",
+        disk="128g",
+        regions=["ORD1"],
+    )
+    config = _test_config(train_resources=resources, rollout_resources=resources)
+
+    assert launcher_region_for_rl_experiment(config) == "ORD1"
+    assert executor_step_resources_for_rl_experiment(config).regions == ["ORD1"]
+
+
 def test_launcher_region_raises_when_root_region_conflicts_with_requested_compute(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-eu-west4")
 

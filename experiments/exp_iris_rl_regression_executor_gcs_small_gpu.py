@@ -3,14 +3,18 @@
 
 # nodryrun because vLLM is not installed by default
 
-"""Regression probe: executor + small GPU-only RL launch."""
+"""Regression probe: executor + small GPU-only RL launch.
+
+Example:
+    uv run python experiments/exp_iris_rl_regression_executor_gcs_small_gpu.py --region us-central1
+"""
 
 import argparse
 import datetime
 import logging
 import os
 
-from levanter.models.llama import LlamaConfig
+from levanter.models.qwen import Qwen3Config
 from marin.execution.executor import executor_main
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.rl_experiment_utils import (
@@ -18,6 +22,7 @@ from marin.rl.rl_experiment_utils import (
     ModelConfig,
     RLExperimentConfig,
     config_class_path,
+    default_train_decoding_for_experiment,
     executor_main_config_for_rl_experiment,
     make_rl_step,
 )
@@ -75,15 +80,20 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Model artifact path or Hugging Face model id. Defaults to the executor-managed canonical artifact.",
     )
+    parser.add_argument(
+        "--executor-prefix",
+        default=None,
+        help="Output prefix for executor-managed artifacts. Defaults to the Marin bucket for --region.",
+    )
     return parser.parse_args()
 
 
 def build_model_config(model_artifact: ModelArtifact) -> ModelConfig:
     return ModelConfig(
         name=CANONICAL_MODEL_NAME,
-        type="llama",
+        type="qwen",
         artifact=model_artifact,
-        config_class_path=config_class_path(LlamaConfig),
+        config_class_path=config_class_path(Qwen3Config),
     )
 
 
@@ -95,6 +105,7 @@ def build_debug_config(
     gpu_type: str,
     gpu_count: int,
     model_path: str | None,
+    executor_prefix: str | None = None,
 ) -> RLExperimentConfig:
     model_artifact = resolve_gpu_smoke_model_artifact(region=region, model_path=model_path)
     tags = ["rl", "iris-debug", "regression", "gpu", experiment_name_suffix]
@@ -128,6 +139,7 @@ def build_debug_config(
         weight_transfer_sync_interval_steps=1,
         max_weight_transfer_wait_time=300,
         inflight_weight_updates=False,
+        executor_prefix=executor_prefix,
     )
 
 
@@ -144,6 +156,7 @@ def main() -> None:
         gpu_type=args.gpu_type,
         gpu_count=args.gpu_count,
         model_path=args.model_path,
+        executor_prefix=args.executor_prefix,
     )
 
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -151,8 +164,8 @@ def main() -> None:
     curriculum = gpu_smoke_curriculum(
         run_id=name,
         max_input_tokens=debug_config.max_input_tokens,
-        max_output_tokens=debug_config.max_output_tokens,
         num_generations=debug_config.n_generations_per_prompt,
+        train_decoding=default_train_decoding_for_experiment(debug_config),
     )
     step = make_rl_step(
         name=name,

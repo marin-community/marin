@@ -57,10 +57,9 @@ TF_CPP_CHECKPOINT_DEBUG_VMODULE = ",".join(
 )
 _DEVICE_DEPENDENCY_GROUPS = {"gpu", "tpu"}
 _VLLM_DEPENDENCY_GROUPS = {"vllm"}
-# Keep CUDA vLLM pinned at the worker boundary instead of a Marin extra. vLLM's
-# numba pin conflicts with the workspace test environment, but the rollout
-# workers still need a reproducible package set.
-_GPU_VLLM_PIP_PACKAGES = ("vllm==0.13.0",)
+# Keep CUDA vLLM pinned at the worker boundary instead of a Marin extra. The
+# runai extra provides vLLM's object-store streaming loader for GCS/S3 models.
+_GPU_VLLM_PIP_PACKAGES = ("vllm[runai]==0.13.0",)
 
 
 @dataclasses.dataclass(frozen=True)

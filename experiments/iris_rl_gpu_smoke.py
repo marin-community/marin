@@ -8,19 +8,19 @@ from urllib.parse import urlparse
 from fray.types import ResourceConfig
 from marin.execution.executor import ExecutorStep
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
+from marin.rl.decoding import DecodingConfig
 from marin.rl.environments import EnvConfig
 from marin.rl.placement import marin_prefix_for_region
 from rigging.filesystem import REGION_TO_DATA_BUCKET
 
-from experiments.models import llama_3_1_8b_instruct
+from experiments.models import qwen3_0_6b
 
-CANONICAL_MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
-MODEL_ARTIFACT_SUBPATH = "models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f"
-DEFAULT_MODEL_ARTIFACT = llama_3_1_8b_instruct
+CANONICAL_MODEL_NAME = "Qwen/Qwen3-0.6B"
+DEFAULT_MODEL_ARTIFACT = qwen3_0_6b
 
 DEFAULT_EXPERIMENT_REGION = "us-central1"
 DEFAULT_GPU_TYPE = "H100"
-DEFAULT_GPU_COUNT = 4
+DEFAULT_GPU_COUNT = 1
 DEFAULT_NUM_TRAIN_STEPS = 5
 
 DEFAULT_MAX_INPUT_TOKENS = 256
@@ -56,18 +56,18 @@ def gpu_smoke_train_batch_size(gpu_count: int) -> int:
 
 
 def gpu_smoke_rollout_count(gpu_count: int) -> int:
-    """Keep rollout count aligned with the trainer batch for the first GPU milestone."""
+    """Return the smallest RLOO-valid rollout group for the GPU smoke path."""
     if gpu_count <= 0:
         raise ValueError("gpu_count must be positive")
-    return gpu_count
+    return max(2, gpu_count)
 
 
 def gpu_smoke_curriculum(
     *,
     run_id: str,
     max_input_tokens: int = DEFAULT_MAX_INPUT_TOKENS,
-    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
     num_generations: int,
+    train_decoding: DecodingConfig,
 ) -> CurriculumConfig:
     """Single-lesson math curriculum sized for a short GPU smoke run."""
     return CurriculumConfig(
@@ -80,12 +80,9 @@ def gpu_smoke_curriculum(
                 ),
                 dependencies=[],
                 sampling_params=SamplingParams(
-                    temperature=1.0,
                     n_prompts=1,
                     n_generations_per_prompt=num_generations,
-                    max_output_tokens=max_output_tokens,
-                    top_k=4096,
-                    stop_tokens=None,
+                    train_decoding=train_decoding,
                 ),
             ),
         },
@@ -93,7 +90,7 @@ def gpu_smoke_curriculum(
         micro_eval_frequency=None,
         actor_name=f"curriculum-{run_id}",
         eval_n_examples=max(4, num_generations),
-        max_seq_len=max_input_tokens + max_output_tokens,
+        max_seq_len=max_input_tokens + train_decoding.max_output_tokens,
     )
 
 
@@ -104,7 +101,7 @@ def gpu_smoke_prefix(region: str) -> str:
 
 def gpu_smoke_model_path(region: str) -> str:
     """Return the canonical region-local GCS model artifact path."""
-    return f"{gpu_smoke_prefix(region)}/{MODEL_ARTIFACT_SUBPATH}"
+    return f"{gpu_smoke_prefix(region)}/{DEFAULT_MODEL_ARTIFACT.name}"
 
 
 def validate_gpu_smoke_model_path(*, region: str, model_path: str) -> None:

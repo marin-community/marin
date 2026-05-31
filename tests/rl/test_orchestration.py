@@ -112,6 +112,19 @@ def _run_config(
     )
 
 
+def test_gpu_vllm_worker_installs_runai_extra():
+    resources = ResourceConfig.with_gpu("H100", count=1, cpu=32, ram="240g", disk="128g", regions=["us-central1"])
+
+    extras, pip_packages = _worker_dependency_groups(
+        SimpleNamespace(pip_dependency_groups=["math", "vllm"]),
+        resources,
+        needs_vllm=True,
+    )
+
+    assert extras == ["gpu", "math"]
+    assert pip_packages == ["vllm[runai]==0.13.0"]
+
+
 def test_run_rl_coordinator_shuts_down_hosted_actors_when_child_job_fails(monkeypatch):
     shutdown_calls: list[str] = []
     client = _FakeClient()
