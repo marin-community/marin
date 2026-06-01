@@ -96,17 +96,13 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
         """Encode one over-long text by splitting at safe whitespace boundaries
         and concatenating ids in-place.
 
-        Splits are buffered in groups of ``_LONG_STRING_BATCH_SIZE`` pieces;
-        each group is passed through ``encode_batch`` and the resulting ids
-        are extended into the running ``ids`` list before the next group is
+        A cursor walks the original string, slicing only the emitted piece
+        (bounded by ``_workaround_len``) so total work stays O(N) in the text
+        length. Splits are buffered in groups of ``_LONG_STRING_BATCH_SIZE``
+        pieces; each group is passed through ``encode_batch`` and the resulting
+        ids are extended into the running ``ids`` list before the next group is
         produced. Peak in-flight memory is one sub-batch's input strings +
         tokens, regardless of how long the original text is.
-
-        A cursor walks the original string rather than re-slicing the unconsumed
-        tail each step. Rebinding ``remaining = remaining[split:]`` copies the
-        whole suffix every ~``_workaround_len`` chars, which is O(N^2) in the
-        text length and dominates runtime on multi-MB documents; advancing
-        ``pos`` and slicing only the emitted piece keeps total work O(N).
         """
         ids: list[int] = []
         pieces: list[str] = []
