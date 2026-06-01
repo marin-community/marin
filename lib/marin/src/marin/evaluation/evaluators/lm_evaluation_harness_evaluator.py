@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Evaluator adapter for running EleutherAI lm-eval through vLLM."""
+
 import logging
 import os
 import shutil
@@ -120,6 +122,7 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                             limit=max_eval_instances if max_eval_instances is not None else None,
                             evaluation_tracker=evaluation_tracker,
                             log_samples=True,
+                            metadata=eval_task.metadata,
                         )
                         if results is not None:
                             samples = results.pop("samples")
@@ -182,7 +185,7 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                             )
                         _run_with_tokenizer(staged_tokenizer_dir)
                 else:
-                    _run_with_tokenizer(None)
+                    _run_with_tokenizer(env.model_name_or_path)
 
                 return
 

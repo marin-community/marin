@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Shared configuration objects for Marin evaluation jobs."""
+
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -25,6 +27,9 @@ class EvalTaskConfig:
 
     task_kwargs: dict | None = None
     """Additional keyword arguments specifically for this task."""
+
+    metadata: dict | None = None
+    """Additional metadata passed to lm-eval's TaskManager."""
 
 
 @dataclass(frozen=True)

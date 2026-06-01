@@ -4795,6 +4795,11 @@ math = [
     { name = "math-verify", extra = ["antlr4-11-0"] },
     { name = "sympy" },
 ]
+ruler = [
+    { name = "nltk" },
+    { name = "scipy" },
+    { name = "wonderwords" },
+]
 
 [[package]]
 name = "lm-format-enforcer"
@@ -4944,7 +4949,7 @@ dedup = [
     { name = "marin-dupekit" },
 ]
 eval = [
-    { name = "lm-eval", extra = ["api", "math"] },
+    { name = "lm-eval", extra = ["api", "math", "ruler"] },
 ]
 evalchemy = [
     { name = "antlr4-python3-runtime" },
@@ -5103,7 +5108,7 @@ requires-dist = [
     { name = "jaxopt", specifier = ">=0.8.3" },
     { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.39" },
     { name = "lm-eval", extras = ["math"], marker = "extra == 'evalchemy'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
-    { name = "lm-eval", extras = ["math", "api"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
+    { name = "lm-eval", extras = ["math", "api", "ruler"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "lxml", extras = ["html-clean"] },
     { name = "lxml-html-clean", specifier = ">=0.4.4" },
     { name = "marin-dupekit", marker = "extra == 'dedup'" },
@@ -12224,6 +12229,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b3/8f/705086c9d734d3b663af0e9bb3d4de6578d08f46b1b101c2442fd9aecaa2/win32_setctime-1.2.0.tar.gz", hash = "sha256:ae1fdf948f5640aae05c511ade119313fb6a30d7eabe25fef9764dca5873c4c0", size = 4867, upload-time = "2024-12-07T15:28:28.314Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e1/07/c6fe3ad3e685340704d314d765b7912993bcb8dc198f0e7a89382d37974b/win32_setctime-1.2.0-py3-none-any.whl", hash = "sha256:95d644c4e708aba81dc3704a116d8cbc974d70b3bdb8be1d150e36be6e9d1390", size = 4083, upload-time = "2024-12-07T15:28:26.465Z" },
+]
+
+[[package]]
+name = "wonderwords"
+version = "3.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ff/23/e144fc3dfabb845dc1d94c45315d97b308cf75a664e3db3a89aeb1cb505d/wonderwords-3.0.1.tar.gz", hash = "sha256:5ee43ab6f13823a857a7c3d58c7b4db6a1350bd3aa5f914ed379ad49042a1c36", size = 73339, upload-time = "2025-10-30T17:30:44.231Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a4/75/855c2062d28b8e9247939f8262fb2f4ff3b12a49e4bab9fd1ba16cc5df82/wonderwords-3.0.1-py3-none-any.whl", hash = "sha256:4dd66deb6a76ca9e0b0422d1d3e111f9b910d7c16922d42de733ee8def98f8d0", size = 51658, upload-time = "2025-10-30T17:30:42.785Z" },
 ]
 
 [[package]]

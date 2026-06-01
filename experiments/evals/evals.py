@@ -32,6 +32,7 @@ from experiments.evals.task_configs import (
     MMLU_PRO_5_SHOT,
     OPEN_LM_LEADERBOARD_GEN,
     OPEN_LM_LEADERBOARD_MCQ,
+    RULER_CONTEXT_LENGTHS,
 )
 
 EVAL_DEPENDENCY_GROUPS = ["eval", "vllm", "tpu"]
@@ -378,6 +379,82 @@ def default_key_evals(
             max_eval_instances=max_eval_instances,
         ),
     ]
+
+
+def _ruler_context_lengths_for_model(context_lengths: Sequence[int], model_max_length: int) -> tuple[int, ...]:
+    """Return RULER context lengths that fit the model window."""
+    if model_max_length <= 0:
+        raise ValueError(f"model_max_length must be positive, got {model_max_length}.")
+
+    # Length filter
+    selected_lengths = tuple(length for length in context_lengths if length <= model_max_length)
+    if not selected_lengths:
+        raise ValueError(
+            f"No RULER context lengths fit model_max_length={model_max_length}; "
+            f"available lengths are {tuple(context_lengths)}."
+        )
+
+    return selected_lengths
+
+
+def _ruler_engine_kwargs(engine_kwargs: dict | None, max_context_length: int) -> dict:
+    """Return vLLM and lm-eval context settings for RULER."""
+    configured_kwargs = dict(engine_kwargs or {})
+
+    # Context knobs
+    max_model_len = configured_kwargs.get("max_model_len")
+    max_length = configured_kwargs.get("max_length")
+    if max_model_len is None and max_length is None:
+        configured_kwargs["max_model_len"] = max_context_length
+        configured_kwargs["max_length"] = max_context_length
+        return configured_kwargs
+
+    if max_model_len is None:
+        max_model_len = max_length
+        configured_kwargs["max_model_len"] = max_model_len
+    if max_length is None:
+        max_length = max_model_len
+        configured_kwargs["max_length"] = max_length
+
+    if max_model_len < max_context_length or max_length < max_context_length:
+        raise ValueError(
+            "RULER requires both max_model_len and max_length to cover the largest selected "
+            f"context length ({max_context_length}); got max_model_len={max_model_len}, max_length={max_length}."
+        )
+
+    return configured_kwargs
+
+
+def default_ruler_eval(
+    step: ExecutorStep | InputName | str,
+    model_max_length: int,
+    resource_config: ResourceConfig = ResourceConfig.with_tpu("v6e-8"),
+    context_lengths: Sequence[int] = RULER_CONTEXT_LENGTHS,
+    max_eval_instances: int | None = None,
+    engine_kwargs: dict | None = None,
+    apply_chat_template: bool = False,
+    discover_latest_checkpoint: bool = True,
+    wandb_tags: list[str] | None = None,
+) -> ExecutorStep:
+    """Create a vLLM-backed lm-eval RULER evaluation step."""
+    selected_lengths = _ruler_context_lengths_for_model(context_lengths, model_max_length)
+    configured_engine_kwargs = _ruler_engine_kwargs(engine_kwargs, max(selected_lengths))
+
+    # RULER task
+    name, model_step_path = extract_model_name_and_path(step)
+    ruler_task = EvalTaskConfig("ruler", 0, metadata={"max_seq_lengths": list(selected_lengths)})
+
+    return evaluate_lm_evaluation_harness(
+        name,
+        model_step_path,
+        [ruler_task],
+        max_eval_instances=max_eval_instances,
+        engine_kwargs=configured_engine_kwargs,
+        resource_config=resource_config,
+        apply_chat_template=apply_chat_template,
+        discover_latest_checkpoint=discover_latest_checkpoint,
+        wandb_tags=wandb_tags,
+    )
 
 
 def evaluate_harbor(

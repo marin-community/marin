@@ -1,9 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Canonical lm-eval task groups used by Marin experiments."""
+
 from collections.abc import Sequence
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
+
+RULER_CONTEXT_LENGTHS = (4096, 8192, 16384, 32768, 65536, 131072)
 
 # tasks to run (corresponding to lm_eval_harness tasks)
 # subset from from page 43 of the DCLM paper: https://arxiv.org/pdf/2406.11794
