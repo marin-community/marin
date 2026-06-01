@@ -6,7 +6,14 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Protocol
 from urllib.parse import urlsplit
+
+from iris.rpc import job_pb2, query_pb2
+
+
+class TpuNameLookup(Protocol):
+    def __call__(self, name: str, project: str, *, zone: str = "-") -> tuple[str, str] | None: ...
 
 
 @dataclass(frozen=True)
@@ -29,6 +36,12 @@ class DevTpuWorker:
     worker_address: str
     host: str
     node: GcpNodeRef
+
+
+@dataclass(frozen=True)
+class WorkerResolutionMetadata:
+    address: str
+    metadata: job_pb2.WorkerMetadata
 
 
 @dataclass(frozen=True)
@@ -85,3 +98,77 @@ def parse_worker_host(worker_address: str) -> str:
         raise ValueError(f"worker address does not include a host: {worker_address}")
 
     return host
+
+
+def parse_tpu_worker_id(raw_worker_id: str) -> int:
+    """Parse the TPU worker id stored in Iris worker metadata."""
+    if not raw_worker_id:
+        return 0
+    try:
+        return int(raw_worker_id)
+    except ValueError as exc:
+        raise ValueError(f"invalid TPU worker id in worker metadata: {raw_worker_id!r}") from exc
+
+
+def resolve_node_ref_from_worker_metadata(
+    metadata: job_pb2.WorkerMetadata,
+    project: str,
+    *,
+    find_tpu_by_name: TpuNameLookup | None = None,
+) -> GcpNodeRef | None:
+    """Resolve a GCP SSH target from Iris worker metadata."""
+    if metadata.tpu_name:
+        zone = metadata.gce_zone
+        if not zone and find_tpu_by_name is not None:
+            tpu_match = find_tpu_by_name(metadata.tpu_name, project, zone="-")
+            if tpu_match:
+                _name, zone = tpu_match
+        if zone:
+            return GcpNodeRef(
+                kind="tpu",
+                name=metadata.tpu_name,
+                zone=zone,
+                project=project,
+                tpu_worker_id=parse_tpu_worker_id(metadata.tpu_worker_id),
+            )
+
+    if metadata.gce_instance_name and metadata.gce_zone:
+        return GcpNodeRef(
+            kind="vm",
+            name=metadata.gce_instance_name,
+            zone=metadata.gce_zone,
+            project=project,
+        )
+
+    return None
+
+
+def worker_address_lookup_values(worker_address: str) -> list[str]:
+    """Return worker address forms used by different Iris controller versions."""
+    if not worker_address:
+        return []
+    values = [worker_address]
+    if "://" in worker_address:
+        parsed = urlsplit(worker_address)
+    else:
+        parsed = urlsplit(f"//{worker_address}")
+    if parsed.netloc:
+        values.append(parsed.netloc)
+    return list(dict.fromkeys(values))
+
+
+def worker_resolution_metadata_from_response(response: query_pb2.RawQueryResponse) -> WorkerResolutionMetadata | None:
+    """Decode the worker metadata row shape selected by the dev TPU script."""
+    if not response.rows:
+        return None
+
+    columns = {column.name: index for index, column in enumerate(response.columns)}
+    row = json.loads(response.rows[0])
+    metadata = job_pb2.WorkerMetadata(
+        ip_address=row[columns["md_ip_address"]] or "",
+        tpu_name=row[columns["md_tpu_name"]] or "",
+        tpu_worker_id=row[columns["md_tpu_worker_id"]] or "",
+        gce_instance_name=row[columns["md_gce_instance_name"]] or "",
+        gce_zone=row[columns["md_gce_zone"]] or "",
+    )
+    return WorkerResolutionMetadata(address=row[columns["address"]] or "", metadata=metadata)
