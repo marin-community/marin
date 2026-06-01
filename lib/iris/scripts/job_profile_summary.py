@@ -19,7 +19,8 @@ This script:
    and downloads the speedscope blobs.
 3. Parses the speedscope stacks, aggregates sample weights across captures, and
    reports the breakdown **per worker sub-job** (each task's immediate parent
-   job), plus the merged top leaf frames for the whole job.
+   job): CPU rolled up by library/binary, plus a hot-path Mermaid call graph
+   that renders inline in GitHub markdown.
 4. Optionally writes a merged folded-stack file (for ``flamegraph.pl`` /
    speedscope) and a flamegraph SVG.
 
@@ -59,6 +60,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("job-profile")
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
+
+# In --per-subjob mode, only emit a full detail section for sub-jobs at or above
+# this share of total job CPU; smaller ones stay in the overview table only.
+SUBJOB_DETAIL_MIN_SHARE = 0.01
 
 
 def finelog_config_for_cluster(cluster: str) -> str:
@@ -235,6 +240,39 @@ def leaf_of(stack: str) -> str:
     return stack.rsplit(";", 1)[-1]
 
 
+# A frame is "native" if py-spy couldn't symbolize it (``<addr>``) or it lives in
+# a shared object (``*.so``/``*.dylib``). The interpreter binary (``python3.11``)
+# and ``.py`` frames are kept — they carry meaningful symbols (e.g. gc).
+_NATIVE_LIB_RE = re.compile(r"\.so(\.\d+)*$|\.dylib$")
+
+
+def _is_native_frame(frame: str) -> bool:
+    name, _, lib = frame.partition(" (")
+    if name.startswith("<addr>"):
+        return True
+    return bool(_NATIVE_LIB_RE.search(lib.rstrip(")")))
+
+
+def meaningful_leaf(stack: str) -> str:
+    """The deepest frame worth naming: roll the leaf up past native frames.
+
+    A stack often tops out in ``<addr> (libc.so.6)`` or a ``*.abi3.so`` symbol,
+    which says little about *what* is running. Walk from the leaf toward the root
+    and return the deepest non-native frame (the application/Python operation
+    responsible); fall back to the deepest symbolized frame, then the raw leaf.
+    The full stack is left untouched — native frames still drive the library
+    rollup and the call graph.
+    """
+    frames = stack.split(";")
+    for frame in reversed(frames):
+        if not _is_native_frame(frame):
+            return frame
+    for frame in reversed(frames):
+        if not frame.startswith("<addr>"):
+            return frame
+    return frames[-1]
+
+
 # ---------------------------------------------------------------------------
 # Aggregation
 # ---------------------------------------------------------------------------
@@ -245,19 +283,27 @@ class Aggregate:
     """Merged folded stacks plus bookkeeping for a set of tasks."""
 
     stacks: dict[str, float]
-    leaves: dict[str, float]
+    leaves: dict[str, float]  # true topmost frame — drives the library rollup
+    app_leaves: dict[str, float]  # leaf rolled up past native frames (meaningful_leaf)
     total: float
     tasks: set[str]
 
     @classmethod
     def empty(cls) -> Aggregate:
-        return cls(stacks=defaultdict(float), leaves=defaultdict(float), total=0.0, tasks=set())
+        return cls(
+            stacks=defaultdict(float),
+            leaves=defaultdict(float),
+            app_leaves=defaultdict(float),
+            total=0.0,
+            tasks=set(),
+        )
 
     def add(self, source: str, parsed: ParsedProfile) -> None:
         self.tasks.add(source)
         for stack, weight in parsed.stacks.items():
             self.stacks[stack] += weight
             self.leaves[leaf_of(stack)] += weight
+            self.app_leaves[meaningful_leaf(stack)] += weight
             self.total += weight
 
 
@@ -327,6 +373,118 @@ def fmt_int(n: int) -> str:
 
 def fmt_pct(part: float, total: float) -> str:
     return f"{(100.0 * part / total) if total else 0.0:5.1f}%"
+
+
+# ---------------------------------------------------------------------------
+# Library rollup — group self time by the binary/file a leaf frame lives in.
+# This is what makes unsymbolized native time legible: every `<addr> (libc.so.6)`
+# / `free (libc.so.6)` / `malloc (libc.so.6)` leaf rolls into one `libc.so.6` row.
+# ---------------------------------------------------------------------------
+
+_LIBRARY_RE = re.compile(r"\(([^()]*)\)\s*$")
+
+
+def library_of(leaf_label: str) -> str:
+    m = _LIBRARY_RE.search(leaf_label)
+    return m.group(1) if m and m.group(1) else "(builtin)"
+
+
+def library_rollup_rows(agg: Aggregate, top: int) -> list[list[str]]:
+    by_lib: dict[str, float] = defaultdict(float)
+    for leaf, weight in agg.leaves.items():
+        by_lib[library_of(leaf)] += weight
+    ranked = sorted(by_lib.items(), key=lambda kv: -kv[1])[:top]
+    return [[f"{w:,.1f}", fmt_pct(w, agg.total), lib] for lib, w in ranked]
+
+
+# ---------------------------------------------------------------------------
+# Call-tree → Mermaid flowchart
+#
+# Build a weighted call tree (root → leaf), keep only nodes above a cumulative
+# share, collapse single-child chains into one node, and render the result as a
+# Mermaid flowchart (renders inline in GitHub markdown). This shows the call
+# path responsible for CPU, not a flat list of leaves.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CallNode:
+    label: str
+    value: float
+    children: dict[str, CallNode]
+
+
+def build_call_tree(stacks: dict[str, float]) -> CallNode:
+    root = CallNode("(all)", 0.0, {})
+    for stack, weight in stacks.items():
+        root.value += weight
+        node = root
+        for frame in stack.split(";"):
+            child = node.children.get(frame)
+            if child is None:
+                child = CallNode(frame, 0.0, {})
+                node.children[frame] = child
+            child.value += weight
+            node = child
+    return root
+
+
+def _short_frame(label: str, maxlen: int = 38) -> str:
+    """A compact node label: function name only (drop the ``(file)`` suffix)."""
+    name = label.split(" (", 1)[0]
+    if name.startswith("process N"):
+        name = "process"
+    if len(name) > maxlen:
+        name = name[: maxlen - 1] + "…"
+    return name
+
+
+def _mermaid_escape(s: str) -> str:
+    return (
+        s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("(", "&#40;")
+        .replace(")", "&#41;")
+    )
+
+
+def render_mermaid_calltree(root: CallNode, total: float, *, min_share: float = 0.05, max_nodes: int = 18) -> str:
+    """Render the hot-path call tree as a fenced Mermaid flowchart block."""
+    min_value = total * min_share
+    node_lines: list[str] = []
+    edge_lines: list[str] = []
+    counter = {"n": 0}
+
+    def emit(node: CallNode) -> str:
+        # Collapse a run of single-significant-child frames into one chain node.
+        chain = [node]
+        cur = node
+        while True:
+            kids = [c for c in cur.children.values() if c.value >= min_value]
+            if len(kids) == 1:
+                cur = kids[0]
+                chain.append(cur)
+            else:
+                break
+        nid = f"N{counter['n']}"
+        counter["n"] += 1
+        shown: list[str] = []
+        for name in (_short_frame(n.label) for n in chain if n.label != "(all)"):
+            if not shown or shown[-1] != name:
+                shown.append(name)
+        shown = shown or ["(all)"]
+        label = ("… → " if len(shown) > 2 else "") + " → ".join(shown[-2:])
+        node_lines.append(f'  {nid}["{_mermaid_escape(label)}<br/>{100.0 * cur.value / total:.0f}%"]')
+        for kid in sorted((c for c in cur.children.values() if c.value >= min_value), key=lambda c: -c.value):
+            if counter["n"] >= max_nodes:
+                break
+            edge_lines.append(f"  {nid} --> {emit(kid)}")
+        return nid
+
+    emit(root)
+    return "\n".join(["```mermaid", "flowchart TD", *node_lines, *edge_lines, "```"])
 
 
 # ---------------------------------------------------------------------------
@@ -493,13 +651,30 @@ def main() -> int:
 
     md = args.markdown
 
-    def leaf_rows(agg: Aggregate) -> list[list[str]]:
-        top = sorted(agg.leaves.items(), key=lambda kv: -kv[1])[: args.top]
-        return [[f"{w:,.1f}", fmt_pct(w, agg.total), s] for s, w in top]
+    def print_detail(agg: Aggregate, *, level: int) -> None:
+        """Rollup-by-library table + hot-path Mermaid call graph for one aggregate."""
+        print_table(
+            "CPU by library (self time)",
+            ["weight", "share", "library"],
+            library_rollup_rows(agg, min(args.top, 10)),
+            markdown=md,
+            level=level,
+        )
+        if md:
+            print(f"\n{'#' * level} Hot call paths\n")
+        else:
+            print("\nHot call paths")
+        print(render_mermaid_calltree(build_call_tree(agg.stacks), agg.total))
 
-    def stack_rows(agg: Aggregate) -> list[list[str]]:
+    def print_stacks(agg: Aggregate, *, level: int) -> None:
         top = sorted(agg.stacks.items(), key=lambda kv: -kv[1])[: args.top]
-        return [[f"{w:,.1f}", fmt_pct(w, agg.total), s] for s, w in top]
+        print_table(
+            f"Top {len(top)} raw stacks",
+            ["weight", "share", "stack"],
+            [[f"{w:,.1f}", fmt_pct(w, agg.total), s] for s, w in top],
+            markdown=md,
+            level=level,
+        )
 
     # --- Summary header ---------------------------------------------------
     summary = [
@@ -522,19 +697,19 @@ def main() -> int:
     # --- Per worker sub-job overview -------------------------------------
     sub_rows = []
     for label, agg in sorted(per_subjob.items(), key=lambda kv: -kv[1].total):
-        top_leaf, top_leaf_w = max(agg.leaves.items(), key=lambda kv: kv[1], default=("-", 0.0))
+        top_fn, top_fn_w = max(agg.app_leaves.items(), key=lambda kv: kv[1], default=("-", 0.0))
         sub_rows.append(
             [
                 label,
                 fmt_int(len(agg.tasks)),
                 f"{agg.total:,.1f}",
                 fmt_pct(agg.total, overall.total),
-                f"{top_leaf} [{fmt_pct(top_leaf_w, agg.total)}]",
+                f"{top_fn} [{fmt_pct(top_fn_w, agg.total)}]",
             ]
         )
     print_table(
-        "CPU by worker sub-job (share of job total; hottest leaf within the sub-job)",
-        ["sub-job", "tasks", "weight", "job share", "hottest leaf"],
+        "CPU by worker sub-job (share of job total; hottest function, native rolled up to nearest named frame)",
+        ["sub-job", "tasks", "weight", "job share", "hottest fn"],
         sub_rows,
         markdown=md,
         level=2,
@@ -552,48 +727,30 @@ def main() -> int:
 
     # --- Full section per worker sub-job (optional) ----------------------
     if args.per_subjob:
+        ranked = sorted(per_subjob.items(), key=lambda kv: -kv[1].total)
+        detailed = [(lbl, agg) for lbl, agg in ranked if agg.total >= overall.total * SUBJOB_DETAIL_MIN_SHARE]
         if md:
             print("\n## Per worker sub-job")
-        for label, agg in sorted(per_subjob.items(), key=lambda kv: -kv[1].total):
+        for label, agg in detailed:
             heading = f"{label} — {agg.total:,.1f} ({fmt_pct(agg.total, overall.total)} of job, {len(agg.tasks)} tasks)"
             if md:
                 print(f"\n### {heading}")
             else:
                 print(f"\n{'=' * len(heading)}\n{heading}\n{'=' * len(heading)}")
-            print_table(
-                f"Top {len(leaf_rows(agg))} leaf frames",
-                ["weight", "share", "frame"],
-                leaf_rows(agg),
-                markdown=md,
-                level=4,
-            )
+            print_detail(agg, level=4)
             if args.show_stacks:
-                print_table(
-                    f"Top {len(stack_rows(agg))} stacks",
-                    ["weight", "share", "stack"],
-                    stack_rows(agg),
-                    markdown=md,
-                    level=4,
-                )
+                print_stacks(agg, level=4)
+        omitted = len(ranked) - len(detailed)
+        if omitted:
+            note = f"{omitted} sub-jobs below {SUBJOB_DETAIL_MIN_SHARE:.0%} of job CPU omitted (see overview table)."
+            print(f"\n_{note}_" if md else f"\n{note}")
 
-    # --- Whole-job top stacks (optional) ---------------------------------
-    if args.show_stacks and not args.per_subjob:
-        print_table(
-            f"Top {len(stack_rows(overall))} stacks (merged across captures)",
-            ["weight", "share", "stack"],
-            stack_rows(overall),
-            markdown=md,
-            level=2,
-        )
-
-    # --- Whole-job top leaves --------------------------------------------
-    print_table(
-        f"Top {len(leaf_rows(overall))} leaf frames (where CPU is actually spent)",
-        ["weight", "share", "frame"],
-        leaf_rows(overall),
-        markdown=md,
-        level=2,
-    )
+    # --- Whole-job rollup + hot paths ------------------------------------
+    if md:
+        print("\n## Whole job")
+    print_detail(overall, level=2)
+    if args.show_stacks:
+        print_stacks(overall, level=2)
 
     # --- Optional folded-stack output ------------------------------------
     if args.output:
