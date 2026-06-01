@@ -209,6 +209,26 @@ def test_stop_intent_kills_running_attempt(worker, mock_runtime):
     assert task.status == job_pb2.TASK_STATE_KILLED
 
 
+def test_stop_intent_unknown_attempt_reports_missing(worker):
+    """intent=stop for an attempt the worker has forgotten → TASK_STATE_MISSING.
+
+    The controller sends 'stop' for a controller-terminated attempt that is
+    still worker-bound. If the worker has since forgotten it (e.g. restarted),
+    the stop resolves to nothing; reporting MISSING lets the controller finalize
+    the stranded attempt instead of re-polling it forever."""
+    uid = "uid-stop-unknown"
+    assert worker.task_by_uid(uid) is None
+
+    response = _reconcile(worker, [_stop_desired(uid, task_id=_task_id("stop-unknown"), attempt_id=2)])
+
+    obs = _observations_by_uid(response)
+    assert uid in obs
+    assert obs[uid].state == job_pb2.TASK_STATE_MISSING
+    # Composite is echoed so the controller can route the observation.
+    assert obs[uid].task_id == _task_id("stop-unknown")
+    assert obs[uid].attempt_id == 2
+
+
 def test_zombie_attempt_is_killed(worker, mock_runtime):
     """Attempt running locally but absent from desired is killed (zombie kill)."""
     task_id = _task_id("zombie")

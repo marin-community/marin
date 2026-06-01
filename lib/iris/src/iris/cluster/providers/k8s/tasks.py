@@ -31,15 +31,15 @@ from finelog.types import LogWriterProtocol, str_to_log_level
 from rigging.log_setup import parse_log_level
 from rigging.timing import Timestamp
 
-from iris.cluster.controller.transitions import (
+from iris.cluster.controller.direct_provider import (
     ClusterCapacity,
     DirectProviderBatch,
     DirectProviderSyncResult,
-    RunningTaskEntry,
     SchedulingEvent,
-    TaskUpdate,
 )
-from iris.cluster.log_store_helpers import task_log_key
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.log_keys import task_log_key
 from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity
@@ -1200,11 +1200,16 @@ class K8sTaskProvider:
                 self._apply_pod(run_req)
             except KubectlError as exc:
                 logger.error("Failed to apply pod for task %s: %s", run_req.task_id, exc)
+                # The pod was never created, so there is no k8s verdict to track
+                # and nothing ran. Treat any apply failure as worker loss so the
+                # task retries (ASSIGNED -> WORKER_FAILED rolls back to PENDING
+                # without charging the preemption budget) and the next sync
+                # re-applies. The raw k8s error is logged above.
                 apply_failures.append(
                     TaskUpdate(
                         task_id=JobName.from_wire(run_req.task_id),
                         attempt_id=run_req.attempt_id,
-                        new_state=job_pb2.TASK_STATE_FAILED,
+                        new_state=job_pb2.TASK_STATE_WORKER_FAILED,
                         error=str(exc),
                     )
                 )

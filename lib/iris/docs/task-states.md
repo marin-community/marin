@@ -82,8 +82,8 @@ independent job state machine.
 | `FAILED` | 5 | Yes | Yes | Worker Reconcile observation; task exited with non-zero code | `failed` (red) |
 | `KILLED` | 6 | Yes | No | Controller: job cancellation (`_on_job_cancelled`), job failure cascade (`_mark_remaining_tasks_killed`), per-task timeout | `killed` (grey) |
 | `WORKER_FAILED` | 7 | Yes | Yes | Controller: worker death cascade (`_on_worker_failed`) | `worker_failed` (purple) |
-| `UNSCHEDULABLE` | 8 | Yes | No | Controller: scheduling timeout expired (`_mark_task_unschedulable`) | `unschedulable` (red) |
-| `PREEMPTED` | 10 | Yes | Yes | Controller: priority preemption with budget exhausted (`preempt_task`) | `preempted` (orange) |
+| `UNSCHEDULABLE` | 8 | Yes | No | Controller: scheduling timeout expired (`apply_terminal_decisions_batch`) | `unschedulable` (red) |
+| `PREEMPTED` | 10 | Yes | Yes | Controller: priority preemption with budget exhausted (`apply_terminal_decisions_batch`) | `preempted` (orange) |
 | `COSCHED_FAILED` | 11 | Yes | No | Controller: coscheduled sibling cascade (`_terminate_coscheduled_siblings`) | `cosched_failed` (red) |
 
 
@@ -189,8 +189,8 @@ from hanging on collective operations.
 ### PREEMPTED
 
 Set by the controller when a higher-priority task evicts a lower-priority
-running task via `preempt_task`. The preemption loop (`_run_preemption_pass`)
-selects victims from lower priority bands and calls `preempt_task` for each.
+running task. The preemption loop (`_run_preemption_pass`) selects victims
+from lower priority bands and submits them to `apply_terminal_decisions_batch`.
 
 Retry evaluation uses `_resolve_task_failure_state` with the preemption budget:
 
@@ -205,16 +205,17 @@ Retry evaluation uses `_resolve_task_failure_state` with the preemption budget:
 
 `PREEMPTED` is in both `TERMINAL_TASK_STATES` and `FAILURE_TASK_STATES`.
 When a coscheduled task becomes terminally `PREEMPTED`, the job state is
-recomputed. If all tasks in the job are terminal, `_finalize_terminal_job`
+recomputed. If all tasks in the job are terminal, the batches.py
+`_finalize_terminal_job` orchestrator
 kills any remaining non-terminal tasks and cascades to child jobs. Note that
-unlike `WORKER_FAILED` reported via Reconcile, `preempt_task` does not
+unlike `WORKER_FAILED` reported via Reconcile, PREEMPT decisions do not
 directly cascade coscheduled siblings — the cascade only occurs through job
 finalization.
 
 ### UNSCHEDULABLE
 
 Set by the controller's scheduling loop when a task's scheduling deadline
-expires (`_mark_task_unschedulable` in `controller.py`). The deadline is
+expires (via `apply_terminal_decisions_batch`). The deadline is
 derived from the job's `scheduling_timeout` field.
 
 `UNSCHEDULABLE` is always terminal. If any task becomes unschedulable, the
