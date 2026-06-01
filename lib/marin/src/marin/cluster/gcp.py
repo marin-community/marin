@@ -59,6 +59,20 @@ def _parse_tpu_node_name(full_name: str, fallback_zone: str) -> tuple[str, str]:
     return full_name, fallback_zone
 
 
+def _find_tpu_by_name_in_nodes(
+    target_name: str,
+    tpu_nodes: list[dict[str, Any]],
+    *,
+    fallback_zone: str,
+) -> tuple[str, str] | None:
+    for node in tpu_nodes:
+        simple_name, node_zone = _parse_tpu_node_name(node["name"], fallback_zone)
+        if simple_name == target_name or node["name"] == target_name:
+            return simple_name, node_zone
+
+    return None
+
+
 def find_tpu_by_name(target_name: str, project: str, zone: str = "-") -> tuple[str, str] | None:
     """Find TPU node by name.
 
@@ -69,10 +83,22 @@ def find_tpu_by_name(target_name: str, project: str, zone: str = "-") -> tuple[s
     """
     tpu_nodes = list_tpu_nodes(project, zone)
 
+    return _find_tpu_by_name_in_nodes(target_name, tpu_nodes, fallback_zone=zone)
+
+
+def _find_tpu_by_ip_in_nodes(
+    target_ip: str,
+    tpu_nodes: list[dict[str, Any]],
+    *,
+    fallback_zone: str,
+) -> tuple[str, str, int] | None:
     for node in tpu_nodes:
-        simple_name, node_zone = _parse_tpu_node_name(node["name"], zone)
-        if simple_name == target_name or node["name"] == target_name:
-            return simple_name, node_zone
+        network_endpoints = node.get("networkEndpoints", [])
+        for worker_index, endpoint in enumerate(network_endpoints):
+            external_ip = (endpoint.get("accessConfig") or {}).get("externalIp")
+            if endpoint.get("ipAddress") == target_ip or external_ip == target_ip:
+                simple_name, node_zone = _parse_tpu_node_name(node["name"], fallback_zone)
+                return simple_name, node_zone, worker_index
 
     return None
 
@@ -87,15 +113,7 @@ def find_tpu_by_ip(target_ip: str, project: str, zone: str = "-") -> tuple[str, 
     """
     tpu_nodes = list_tpu_nodes(project, zone)
 
-    for node in tpu_nodes:
-        network_endpoints = node.get("networkEndpoints", [])
-        for worker_index, endpoint in enumerate(network_endpoints):
-            external_ip = (endpoint.get("accessConfig") or {}).get("externalIp")
-            if endpoint.get("ipAddress") == target_ip or external_ip == target_ip:
-                simple_name, node_zone = _parse_tpu_node_name(node["name"], zone)
-                return simple_name, node_zone, worker_index
-
-    return None
+    return _find_tpu_by_ip_in_nodes(target_ip, tpu_nodes, fallback_zone=zone)
 
 
 def find_vm_by_ip(target_ip: str, project: str) -> tuple[str, str] | None:
