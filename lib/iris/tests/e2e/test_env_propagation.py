@@ -134,9 +134,12 @@ def test_env_propagates_through_job_chain(tmp_path):
         job = client.submit(entrypoint, "job-a", resources, environment=environment)
         job.wait(timeout=120, raise_on_failure=True, stream_logs=True)
 
-    state_a = json.loads(open(out_a).read())
-    state_b = json.loads(open(out_b).read())
-    state_c = json.loads(open(out_c).read())
+    with open(out_a) as f:
+        state_a = json.load(f)
+    with open(out_b) as f:
+        state_b = json.load(f)
+    with open(out_c) as f:
+        state_c = json.load(f)
 
     # env_vars propagate through the full chain
     assert state_a["env"]["TEST_PROPAGATION_KEY"] == "hello_chain"

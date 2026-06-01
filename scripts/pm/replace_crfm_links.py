@@ -21,6 +21,7 @@ Requires:
 import argparse
 import os
 import re
+import sys
 
 from github import Github
 
@@ -52,7 +53,7 @@ def main():
     token = os.environ.get("GITHUB_TOKEN")
     if not token:
         print("Error: GITHUB_TOKEN environment variable not set.")
-        exit(1)
+        sys.exit(1)
     g = Github(token)
     repo = g.get_repo("marin-community/marin")
 

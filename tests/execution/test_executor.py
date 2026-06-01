@@ -218,7 +218,8 @@ def test_model_perplexity_score_step_hash_changes_when_tokenizer_changes():
 def test_force_run_failed():
     log = create_log()
 
-    temp_file_to_mark_failure = tempfile.NamedTemporaryFile(prefix="executor-fail-", delete=False)
+    # delete=False: the file must outlive this handle so its path can be reused below.
+    temp_file_to_mark_failure = tempfile.NamedTemporaryFile(prefix="executor-fail-", delete=False)  # noqa: SIM115
     # make sure it exists
     temp_file_to_mark_failure.write(b"hello")
     temp_file_to_mark_failure.close()

@@ -103,14 +103,30 @@ def _composite_slice_state(
     cloud_state: CloudSliceState,
     bootstrap_state: CloudSliceState | None,
 ) -> CloudSliceState:
-    """Compose cloud lifecycle with bootstrap lifecycle into effective slice state."""
-    if cloud_state != CloudSliceState.READY:
+    """Compose cloud lifecycle with bootstrap lifecycle into effective slice state.
+
+    Worker health is canonical for liveness: once bootstrap is READY the slice
+    is READY even if the GCP-reported cloud state still lags at CREATING — a TPU
+    can boot and serve long before its create operation flips to READY. A slice
+    rediscovered on controller restart (no bootstrap monitoring) carries a READY
+    bootstrap sentinel, so it too becomes READY and is validated by the
+    autoscaler's health probe, which reaps it if the workers are in fact dead.
+
+    Cloud states that mean "gone or doomed" — FAILED, DELETING, and UNKNOWN (no
+    longer describable) — are authoritative and override the bootstrap verdict,
+    so a torn-down or vanished node never lingers as READY on a stale sentinel.
+    """
+    if cloud_state in (CloudSliceState.FAILED, CloudSliceState.DELETING, CloudSliceState.UNKNOWN):
         return cloud_state
-    if bootstrap_state is None:
-        return CloudSliceState.BOOTSTRAPPING
     if bootstrap_state == CloudSliceState.FAILED:
         return CloudSliceState.FAILED
-    return CloudSliceState.READY
+    if bootstrap_state == CloudSliceState.READY:
+        return CloudSliceState.READY
+    # Bootstrap still in progress: surface BOOTSTRAPPING once cloud is READY,
+    # otherwise reflect the raw cloud state (CREATING/REPAIRING).
+    if cloud_state == CloudSliceState.READY:
+        return CloudSliceState.BOOTSTRAPPING
+    return cloud_state
 
 
 # ============================================================================
@@ -225,6 +241,7 @@ class GcpSliceHandle:
         _service_account: str | None = None,
         _bootstrapping: bool = False,
         _is_queued_resource: bool = False,
+        _create_operation: str = "",
     ):
         self._slice_id = _slice_id
         self._zone = _zone
@@ -239,6 +256,7 @@ class GcpSliceHandle:
         self._ssh_config = _ssh_config
         self._service_account = _service_account
         self.is_queued_resource: bool = _is_queued_resource
+        self._create_operation = _create_operation
         self._bootstrap_state: CloudSliceState | None = None if _bootstrapping else CloudSliceState.READY
         self._bootstrap_lock = threading.Lock()
 

@@ -17,10 +17,16 @@ from dataclasses import dataclass
 import pytest
 from iris.cluster.providers.gcp.controller import GcpControllerProvider
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
-from iris.cluster.providers.gcp.handles import GcpVmSliceHandle, _build_gce_resource_name
-from iris.cluster.providers.gcp.service import VmCreateRequest
+from iris.cluster.providers.gcp.handles import (
+    GcpSliceHandle,
+    GcpVmSliceHandle,
+    _build_gce_resource_name,
+    _composite_slice_state,
+)
+from iris.cluster.providers.gcp.service import OperationStatus, VmCreateRequest
 from iris.cluster.providers.gcp.workers import (
     GcpWorkerProvider,
+    _run_tpu_bootstrap,
     _run_vm_slice_bootstrap,
     _validate_slice_config,
 )
@@ -1061,3 +1067,126 @@ def test_vm_bootstrap_cloud_not_ready_raises_phase1_timeout():
             cloud_ready_timeout=0.05,
             bootstrap_timeout=300.0,
         )
+
+
+def _make_tpu_slice_for_bootstrap(
+    gcp_service: InMemoryGcpService,
+    zone: str = "us-central2-b",
+) -> GcpSliceHandle:
+    """Create a TPU slice (bootstrap thread suppressed) for direct _run_tpu_bootstrap testing.
+
+    The fake leaves the node at CREATING with synthetic worker IPs — the #6087
+    scenario where workers are up while the cloud create-status still lags.
+    """
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-tpu",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5litepod-8",
+    )
+    cfg.gcp.zone = zone
+    cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
+    wc = config_pb2.WorkerConfig(
+        docker_image="test-image:latest",
+        port=10001,
+        controller_address="controller:10000",
+        cache_dir="/var/cache/iris",
+    )
+
+    with unittest.mock.patch("iris.cluster.providers.gcp.workers.threading.Thread"):
+        handle = platform.create_slice(cfg, worker_config=wc)
+    assert isinstance(handle, GcpSliceHandle)
+    return handle
+
+
+def test_tpu_bootstrap_marks_ready_while_cloud_stuck_creating():
+    """Regression for #6087: a TPU whose cloud status is stuck CREATING but whose
+    workers answer /health becomes READY and is never deleted."""
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    handle = _make_tpu_slice_for_bootstrap(gcp_service)
+    assert gcp_service.tpu_describe(handle.slice_id, handle.zone).state == "CREATING"
+
+    with unittest.mock.patch("iris.cluster.providers.gcp.workers._probe_worker_health", return_value=True):
+        _run_tpu_bootstrap(
+            gcp_service,
+            "test-project",
+            handle,
+            poll_interval=0.01,
+            ip_wait_timeout=5.0,
+            bootstrap_timeout=5.0,
+        )
+
+    assert handle._bootstrap_state == CloudSliceState.READY
+    assert handle.describe().state == CloudSliceState.READY
+    # Slice was kept despite the cloud status never reaching READY.
+    surviving = gcp_service.tpu_describe(handle.slice_id, handle.zone)
+    assert surviving is not None
+    assert surviving.state == "CREATING"
+
+
+@pytest.mark.parametrize(
+    "error_code, expected_exc",
+    [(8, QuotaExhaustedError), (13, InfraError)],
+)
+def test_tpu_bootstrap_fails_fast_on_create_operation_error(error_code, expected_exc):
+    """A create LRO that completes with an error aborts bootstrap immediately,
+    mapping RESOURCE_EXHAUSTED to QuotaExhaustedError and other codes to InfraError."""
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    handle = _make_tpu_slice_for_bootstrap(gcp_service)
+    gcp_service.set_operation_status(
+        handle._create_operation,
+        OperationStatus(done=True, error_code=error_code, error_message="boom"),
+    )
+
+    with unittest.mock.patch("iris.cluster.providers.gcp.workers._probe_worker_health", return_value=False):
+        with pytest.raises(expected_exc):
+            _run_tpu_bootstrap(
+                gcp_service,
+                "test-project",
+                handle,
+                poll_interval=0.01,
+                ip_wait_timeout=5.0,
+                bootstrap_timeout=5.0,
+            )
+
+
+def test_tpu_bootstrap_aborts_when_slice_enters_deleting():
+    """A slice torn down (terminal cloud state) during bootstrap aborts rather than waiting out the timeout."""
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    handle = _make_tpu_slice_for_bootstrap(gcp_service)
+    gcp_service.advance_tpu_state(handle.slice_id, handle.zone, "DELETING")
+
+    with unittest.mock.patch("iris.cluster.providers.gcp.workers._probe_worker_health", return_value=False):
+        with pytest.raises(InfraError):
+            _run_tpu_bootstrap(
+                gcp_service,
+                "test-project",
+                handle,
+                poll_interval=0.01,
+                ip_wait_timeout=5.0,
+                bootstrap_timeout=5.0,
+            )
+
+
+@pytest.mark.parametrize(
+    "cloud_state, bootstrap_state, expected",
+    [
+        # #6087 fix: confirmed-healthy workers win over a laggy CREATING cloud state.
+        (CloudSliceState.CREATING, CloudSliceState.READY, CloudSliceState.READY),
+        # Bootstrap still in progress: reflect the raw cloud state.
+        (CloudSliceState.CREATING, None, CloudSliceState.CREATING),
+        (CloudSliceState.READY, None, CloudSliceState.BOOTSTRAPPING),
+        (CloudSliceState.READY, CloudSliceState.READY, CloudSliceState.READY),
+        # Gone/doomed cloud states override the bootstrap verdict so a vanished
+        # node never lingers as READY on a stale sentinel.
+        (CloudSliceState.DELETING, CloudSliceState.READY, CloudSliceState.DELETING),
+        (CloudSliceState.FAILED, CloudSliceState.READY, CloudSliceState.FAILED),
+        (CloudSliceState.UNKNOWN, CloudSliceState.READY, CloudSliceState.UNKNOWN),
+        # Bootstrap failure surfaces as FAILED.
+        (CloudSliceState.CREATING, CloudSliceState.FAILED, CloudSliceState.FAILED),
+    ],
+)
+def test_composite_slice_state(cloud_state, bootstrap_state, expected):
+    assert _composite_slice_state(cloud_state, bootstrap_state) == expected

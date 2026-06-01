@@ -242,7 +242,7 @@ def create_weight_transfer_config():
 
 def create_qwen_config():
     return Qwen3Config(
-        seq_len=4096,
+        max_seq_len=4096,
         hidden_dim=1024,
         intermediate_dim=3072,
         num_heads=16,
