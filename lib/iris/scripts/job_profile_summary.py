@@ -2,42 +2,47 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Summarize stored CPU profiles for an Iris job and its descendants.
+"""Summarize stored CPU profiles for an Iris job and its descendant sub-jobs.
 
-The Iris controller periodically captures py-spy ``--format raw`` (folded-stack)
-profiles for every running task and stores them in the ``profiles`` SQLite DB
-attached to the controller DB. The DBs are checkpointed under
-``{remote_state_dir}/controller-state/{epoch_ms}/`` (zstd-compressed).
+Iris workers periodically capture py-spy CPU profiles (speedscope JSON) for
+every running task and ship them to the cluster's finelog server under the
+``iris.profile`` stats namespace (see ``lib/iris/OPS.md`` → "Stats Namespaces").
+Each row carries a ``source`` (the task path ``/user/job/.../<index>``), a
+``captured_at`` timestamp, and the raw speedscope ``profile_data`` blob.
 
 This script:
 
-1. Locates the latest checkpoint under the configured cluster's state dir
-   (default ``gs://marin-us-central2/iris/marin/state``).
-2. Downloads + decompresses ``controller.sqlite3`` and ``profiles.sqlite3``
-   into a local cache (``~/.cache/iris-job-profile/<cluster>/<epoch_ms>``).
-3. Selects the latest CPU profile for every task whose task_id is the given
-   job_id or a descendant, parses the folded stacks, and merges them.
-4. Prints summary tables (per-task sample counts, top stacks, top leaf
-   frames) and optionally writes the merged folded-stack file for piping
-   into ``flamegraph.pl`` or speedscope.
+1. Resolves the cluster's finelog deployment (``log_server_config`` in
+   ``config/<cluster>.yaml``; defaults to the cluster name) and opens a tunnel
+   to it, exactly as ``finelog query`` does.
+2. Queries every CPU profile whose ``source`` is the given job or a descendant
+   and downloads the speedscope blobs.
+3. Parses the speedscope stacks, aggregates sample weights across captures, and
+   reports the breakdown **per worker sub-job** (each task's immediate parent
+   job), plus the merged top leaf frames for the whole job.
+4. Optionally writes a merged folded-stack file (for ``flamegraph.pl`` /
+   speedscope) and a flamegraph SVG.
 
 Usage:
     uv run python scripts/job_profile_summary.py \\
-        'https://iris.oa.dev/#/job/%2Frav%2Firis-run-tokenize.../zephyr.../zephyr-...workers-a0'
+        'https://iris.oa.dev/#/job/%2Frav%2Firis-run-job-20260601-054954'
 
-    uv run python scripts/job_profile_summary.py /rav/iris-run-tokenize.../...
+    uv run python scripts/job_profile_summary.py /rav/iris-run-job-20260601-054954
 
-    # Write a merged folded-stack file for flamegraph.pl
-    uv run python scripts/job_profile_summary.py <job> -o merged.folded
+    # Drill into a single worker sub-job and show its top stacks.
+    uv run python scripts/job_profile_summary.py /rav/iris-run-job-... \\
+        --subjob zephyr-fuzzy-dups-aa8bcf4c-p0-workers-a0 --show-stacks
+
+    # Write a merged folded-stack file + flamegraph SVG.
+    uv run python scripts/job_profile_summary.py <job> -o merged.folded --svg flame.svg
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import re
-import sqlite3
-import subprocess
 import sys
 import urllib.parse
 from collections import defaultdict
@@ -45,52 +50,55 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
-import zstandard
+from finelog.client.log_client import LogClient
+from finelog.deploy.config import FinelogConfig, load_finelog_config
+from iris.cluster.runtime.profile import PROFILE_NAMESPACE, ProfileType
+from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, TunnelTarget, open_tunnel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
 logger = logging.getLogger("job-profile")
 
-CONTROLLER_DB = "controller.sqlite3"
-PROFILES_DB = "profiles.sqlite3"
-
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 
 
-def remote_state_dir_for_cluster(cluster: str) -> str:
-    """Look up ``storage.remote_state_dir`` from ``config/<cluster>.yaml``."""
+def finelog_config_for_cluster(cluster: str) -> str:
+    """Return the finelog deployment name for an Iris cluster.
+
+    Reads ``log_server_config`` from ``config/<cluster>.yaml`` (the field that
+    names the cluster's finelog deployment); falls back to the cluster name.
+    """
     config_path = CONFIG_DIR / f"{cluster}.yaml"
     if not config_path.exists():
         raise FileNotFoundError(f"No cluster config at {config_path}")
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
-    state_dir = cfg.get("storage", {}).get("remote_state_dir")
-    if not state_dir:
-        raise ValueError(f"{config_path} has no storage.remote_state_dir")
-    return state_dir
+    return cfg.get("log_server_config") or cluster
 
 
-# Active task states in the iris controller schema. See lib/iris/OPS.md.
-ACTIVE_STATES = {2, 3, 9}  # BUILDING, RUNNING, ASSIGNED
-STATE_NAMES = {
-    1: "PENDING",
-    2: "BUILDING",
-    3: "RUNNING",
-    4: "SUCCEEDED",
-    5: "FAILED",
-    6: "KILLED",
-    7: "WORKER_FAILED",
-    8: "UNSCHEDULABLE",
-    9: "ASSIGNED",
-    10: "PREEMPTED",
-}
+def tunnel_target(cfg: FinelogConfig) -> TunnelTarget:
+    """Build a rigging tunnel target from a finelog deployment block.
+
+    Mirrors ``finelog.deploy.cli._tunnel_target``: GCP forwards over IAP SSH
+    impersonating the deployment service account; k8s uses ``kubectl
+    port-forward``.
+    """
+    if cfg.deployment.gcp is not None:
+        gcp = cfg.deployment.gcp
+        return GcpSshForwardTarget(
+            project=gcp.project,
+            zone=gcp.zone,
+            instance=cfg.name,
+            port=cfg.port,
+            impersonate_service_account=gcp.service_account,
+        )
+    assert cfg.deployment.k8s is not None
+    k8s = cfg.deployment.k8s
+    return K8sPortForwardTarget(namespace=k8s.namespace, service=cfg.name, port=cfg.port)
 
 
 @dataclass(frozen=True)
 class TaskProfile:
-    task_id: str
-    job_id: str
-    state: int
-    captured_at_ms: int
+    source: str
     profile_bytes: bytes
 
 
@@ -105,183 +113,55 @@ def parse_job_id(arg: str) -> str:
     Dashboard URLs look like ``https://iris.oa.dev/#/job/<percent-encoded path>``.
     """
     if arg.startswith(("http://", "https://")):
-        # Strip the URL fragment and percent-decode.
         if "#" not in arg:
             raise ValueError(f"URL has no fragment: {arg}")
         fragment = arg.split("#", 1)[1]
         if not fragment.startswith("/job/"):
             raise ValueError(f"Unexpected fragment in URL: {fragment!r}")
-        encoded = fragment[len("/job/") :]
-        decoded = urllib.parse.unquote(encoded)
+        decoded = urllib.parse.unquote(fragment[len("/job/") :])
         if not decoded.startswith("/"):
             raise ValueError(f"Decoded job id missing leading '/': {decoded!r}")
-        return decoded
+        return decoded.rstrip("/")
     if not arg.startswith("/"):
         raise ValueError(f"Job id must start with '/': {arg!r}")
-    return arg
+    return arg.rstrip("/")
 
 
 # ---------------------------------------------------------------------------
-# Checkpoint download
+# finelog query
 # ---------------------------------------------------------------------------
 
 
-def find_latest_checkpoint(remote_state_dir: str, after_timestamp: int | None = None) -> str:
-    """Return the gs:// URI of the most recent timestamped checkpoint dir.
+def fetch_task_profiles(client: LogClient, root_job_id: str, *, max_rows: int) -> list[TaskProfile]:
+    """Pull every CPU profile capture under ``root_job_id`` from ``iris.profile``.
 
-    If ``after_timestamp`` is provided, returns the earliest checkpoint whose
-    timestamp is > ``after_timestamp``.
+    A descendant task has a ``source`` of the form ``<root>/.../<index>``; the
+    ``LIKE`` filter matches the root and all descendants. We keep every capture
+    (not just the latest) so the aggregate reflects the whole run, not a single
+    10-minute snapshot.
     """
-    prefix = remote_state_dir.rstrip("/") + "/controller-state/"
-    result = subprocess.run(
-        ["gcloud", "storage", "ls", prefix],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    timestamps: list[tuple[int, str]] = []
-    for line in result.stdout.splitlines():
-        line = line.strip().rstrip("/")
-        if not line:
-            continue
-        basename = line.rsplit("/", 1)[-1]
-        if basename.isdigit():
-            timestamps.append((int(basename), line))
-    if not timestamps:
-        raise RuntimeError(f"No timestamped checkpoint directories under {prefix}")
-
-    if after_timestamp is not None:
-        # Find the earliest checkpoint that is AFTER the given timestamp.
-        timestamps.sort()  # Ascending
-        for ts, path in timestamps:
-            if ts > after_timestamp:
-                return path + "/"
-        raise RuntimeError(f"No checkpoint found after timestamp {after_timestamp} under {prefix}")
-
-    timestamps.sort(reverse=True)
-    return timestamps[0][1] + "/"
-
-
-def download_checkpoint(remote_dir: str, local_dir: Path) -> None:
-    """rsync the checkpoint dir locally; idempotent (skips up-to-date files)."""
-    local_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("Syncing %s -> %s", remote_dir, local_dir)
-    subprocess.run(
-        ["gcloud", "storage", "rsync", remote_dir, str(local_dir) + "/"],
-        check=True,
-    )
-
-
-def decompress_zst(src: Path, dst: Path) -> None:
-    if dst.exists() and dst.stat().st_mtime >= src.stat().st_mtime:
-        return
-    logger.info("Decompressing %s", src.name)
-    dctx = zstandard.ZstdDecompressor()
-    with open(src, "rb") as f_in, open(dst, "wb") as f_out:
-        dctx.copy_stream(f_in, f_out)
-
-
-# ---------------------------------------------------------------------------
-# SQLite queries
-# ---------------------------------------------------------------------------
-
-
-def open_db(controller_path: Path, profiles_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(f"file:{controller_path}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    conn.execute(f"ATTACH DATABASE 'file:{profiles_path}?mode=ro' AS profiles")
-    return conn
-
-
-def fetch_task_profiles(conn: sqlite3.Connection, root_job_id: str) -> list[TaskProfile]:
-    """Pull the latest cpu profile per task under ``root_job_id``.
-
-    A descendant task has a task_id of the form ``<root>/<...>/<index>``; the
-    LIKE filter matches both direct tasks and sub-job tasks because sub-job
-    rows are stored as separate jobs whose task_ids share the prefix.
+    like = root_job_id + "/%"
+    # SQL string literals: job ids are controller-generated (alnum/dash/slash),
+    # so simple quoting is safe here. Single quotes cannot appear in a task id.
+    sql = f"""
+        SELECT source, profile_data
+        FROM "{PROFILE_NAMESPACE}"
+        WHERE (source = '{root_job_id}' OR source LIKE '{like}')
+          AND type = '{ProfileType.CPU.value}'
+        ORDER BY source, captured_at
     """
-    like = root_job_id.rstrip("/") + "/%"
-    rows = conn.execute(
-        """
-        SELECT
-            t.task_id   AS task_id,
-            t.job_id    AS job_id,
-            t.state     AS state,
-            p.captured_at_ms AS captured_at_ms,
-            p.profile_data   AS profile_data
-        FROM tasks AS t
-        JOIN profiles.task_profiles AS p
-          ON p.task_id = t.task_id
-        WHERE (t.task_id = ? OR t.task_id LIKE ?)
-          AND p.profile_kind = 'cpu'
-          AND p.id = (
-              SELECT id FROM profiles.task_profiles
-              WHERE task_id = t.task_id AND profile_kind = 'cpu'
-              ORDER BY id DESC LIMIT 1
-          )
-        ORDER BY t.task_id
-        """,
-        (root_job_id, like),
-    ).fetchall()
-    return [
-        TaskProfile(
-            task_id=r["task_id"],
-            job_id=r["job_id"],
-            state=r["state"],
-            captured_at_ms=r["captured_at_ms"],
-            profile_bytes=r["profile_data"],
-        )
-        for r in rows
-    ]
-
-
-# ---------------------------------------------------------------------------
-# Folded-stack parsing
-# ---------------------------------------------------------------------------
-
-
-def parse_folded(data: bytes) -> list[tuple[str, int]]:
-    """Parse py-spy ``--format raw`` output into ``[(stack, count), ...]``.
-
-    Each line is ``frame1;frame2;...;frameN <count>``. Frames may contain
-    spaces (e.g. ``foo (file.py)``), so we split on the last whitespace.
-    Lines that cannot be parsed are skipped with a debug log.
-    """
-    out: list[tuple[str, int]] = []
-    text = data.decode("utf-8", errors="replace")
-    for line in text.splitlines():
-        line = line.rstrip()
-        if not line:
-            continue
-        idx = line.rfind(" ")
-        if idx < 0:
-            continue
-        stack, count_str = line[:idx], line[idx + 1 :]
-        try:
-            count = int(count_str)
-        except ValueError:
-            continue
-        out.append((stack, count))
-    return out
-
-
-def leaf_of(stack: str) -> str:
-    """The last frame of a semicolon-delimited stack."""
-    return stack.rsplit(";", 1)[-1]
+    table = client.query(sql, max_rows=max_rows)
+    sources = table.column("source").to_pylist()
+    blobs = table.column("profile_data").to_pylist()
+    return [TaskProfile(source=src, profile_bytes=bytes(blob)) for src, blob in zip(sources, blobs, strict=True) if blob]
 
 
 # ---------------------------------------------------------------------------
 # Frame normalization
 #
-# py-spy raw frames carry per-task noise that prevents identical-by-meaning
-# frames from merging in a shared-parent tree:
-#   - process headers contain a PID and unique tmp paths:
-#       process 87:"/app/.venv/bin/python -u -m zephyr.subprocess_worker
-#                   /tmp/tmpML_bq91r.pkl /tmp/tmp5dblzotf.pkl"
-#   - native frames sometimes appear as raw addresses:
-#       0x7fb890d30b7b (libc.so.6)
-#   - thread ids: "(tid: 8730996992)"
-#   - rust monomorphization hashes: "::h3d171a55bcef49b9"
+# py-spy frames carry per-task noise that prevents identical-by-meaning frames
+# from merging: PIDs and unique tmp paths in the process header, raw native
+# addresses, thread ids, and rust monomorphization hashes.
 # ---------------------------------------------------------------------------
 
 _TMPFILE_RE = re.compile(r"/tmp/tmp[A-Za-z0-9_]+(\.[A-Za-z0-9]+)?")
@@ -291,17 +171,108 @@ _PID_RE = re.compile(r"\b(process|pid:)\s*\d+", re.IGNORECASE)
 _RUST_HASH_RE = re.compile(r"::h[0-9a-f]{16}\b")
 
 
-def normalize_frame(frame: str) -> str:
-    frame = _TMPFILE_RE.sub(r"/tmp/<tmp>\1", frame)
-    frame = _HEX_ADDR_RE.sub("<addr>", frame)
-    frame = _TID_RE.sub("tid:N", frame)
-    frame = _PID_RE.sub(lambda m: f"{m.group(1).lower()} N" if m.group(1).lower() == "process" else "pid:N", frame)
-    frame = _RUST_HASH_RE.sub("", frame)
-    return frame
+def normalize_frame(name: str, file: str | None) -> str:
+    """Render one speedscope frame to a stable folded-stack token.
+
+    Combines the function name with the file basename (matching py-spy's
+    ``func (file.py)`` folded style) and scrubs per-task noise.
+    """
+    label = name
+    if file:
+        base = file.rsplit("/", 1)[-1]
+        if base and base not in label:
+            label = f"{label} ({base})"
+    label = _TMPFILE_RE.sub(r"/tmp/<tmp>\1", label)
+    label = _HEX_ADDR_RE.sub("<addr>", label)
+    label = _TID_RE.sub("tid:N", label)
+    label = _PID_RE.sub(lambda m: "process N" if m.group(1).lower() == "process" else "pid:N", label)
+    label = _RUST_HASH_RE.sub("", label)
+    return label
 
 
-def normalize_stack(stack: str) -> str:
-    return ";".join(normalize_frame(f) for f in stack.split(";"))
+# ---------------------------------------------------------------------------
+# speedscope parsing
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ParsedProfile:
+    """Folded stacks parsed from one speedscope blob (root-first frame order)."""
+
+    stacks: dict[str, float]  # "frame0;frame1;...;leaf" -> summed weight
+    total: float
+
+
+def parse_speedscope(data: bytes) -> ParsedProfile:
+    """Parse a py-spy speedscope JSON blob into weighted folded stacks.
+
+    speedscope ``profiles[*].samples`` are stacks of frame indices ordered
+    root → leaf; ``weights`` is the parallel per-sample weight (py-spy emits
+    sampling-interval seconds). We sum weights across all per-thread profiles.
+    """
+    doc = json.loads(data)
+    frames = doc.get("shared", {}).get("frames", [])
+    rendered = [normalize_frame(f.get("name", "?"), f.get("file")) for f in frames]
+
+    stacks: dict[str, float] = defaultdict(float)
+    total = 0.0
+    for prof in doc.get("profiles", []):
+        samples = prof.get("samples", [])
+        weights = prof.get("weights", [])
+        for sample, weight in zip(samples, weights, strict=False):
+            if not sample:
+                continue
+            stack = ";".join(rendered[i] for i in sample if 0 <= i < len(rendered))
+            if not stack:
+                continue
+            w = float(weight)
+            stacks[stack] += w
+            total += w
+    return ParsedProfile(stacks=dict(stacks), total=total)
+
+
+def leaf_of(stack: str) -> str:
+    return stack.rsplit(";", 1)[-1]
+
+
+# ---------------------------------------------------------------------------
+# Aggregation
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Aggregate:
+    """Merged folded stacks plus bookkeeping for a set of tasks."""
+
+    stacks: dict[str, float]
+    leaves: dict[str, float]
+    total: float
+    tasks: set[str]
+
+    @classmethod
+    def empty(cls) -> Aggregate:
+        return cls(stacks=defaultdict(float), leaves=defaultdict(float), total=0.0, tasks=set())
+
+    def add(self, source: str, parsed: ParsedProfile) -> None:
+        self.tasks.add(source)
+        for stack, weight in parsed.stacks.items():
+            self.stacks[stack] += weight
+            self.leaves[leaf_of(stack)] += weight
+            self.total += weight
+
+
+def subjob_of(source: str, root_job_id: str) -> str:
+    """The worker sub-job a task belongs to: its immediate parent job path.
+
+    ``/root/sub/workers-a0/3`` → ``sub/workers-a0`` (relative to the root job).
+    Coordinator tasks like ``/root/sub/0`` group under ``sub``; the root job's
+    own tasks (``/root/0``) group under ``(root)``.
+    """
+    parent = source.rsplit("/", 1)[0]
+    if parent == root_job_id:
+        return "(root)"
+    prefix = root_job_id + "/"
+    return parent[len(prefix) :] if parent.startswith(prefix) else parent
 
 
 # ---------------------------------------------------------------------------
@@ -309,25 +280,52 @@ def normalize_stack(stack: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def print_table(title: str, headers: list[str], rows: list[list[str]], stream=sys.stdout) -> None:
+def _md_cell(s: str) -> str:
+    """Escape one GitHub-markdown table cell; wrap code-ish text in backticks.
+
+    Frame/stack text contains ``<>`` and ``;`` that would otherwise render as
+    HTML, so cells carrying those are rendered as inline code.
+    """
+    if any(c in s for c in "<>`;"):
+        return "`" + s.replace("`", "'").replace("|", "\\|") + "`"
+    return s.replace("|", "\\|")
+
+
+def render_table(headers: list[str], rows: list[list[str]], *, markdown: bool = False) -> str:
+    if markdown:
+        lines = [
+            "| " + " | ".join(headers) + " |",
+            "| " + " | ".join("---" for _ in headers) + " |",
+            *["| " + " | ".join(_md_cell(c) for c in row) + " |" for row in rows],
+        ]
+        return "\n".join(lines)
     widths = [len(h) for h in headers]
     for row in rows:
         for i, cell in enumerate(row):
             widths[i] = max(widths[i], len(cell))
     fmt = "  ".join(f"{{:<{w}}}" for w in widths)
-    print(f"\n{title}", file=stream)
-    print("-" * len(title), file=stream)
-    print(fmt.format(*headers), file=stream)
-    print("  ".join("-" * w for w in widths), file=stream)
-    for row in rows:
-        print(fmt.format(*row), file=stream)
+    lines = [fmt.format(*headers), "  ".join("-" * w for w in widths)]
+    lines += [fmt.format(*row) for row in rows]
+    return "\n".join(lines)
+
+
+def print_table(
+    title: str, headers: list[str], rows: list[list[str]], *, markdown: bool = False, level: int = 3
+) -> None:
+    if markdown:
+        print(f"\n{'#' * level} {title}\n")
+        print(render_table(headers, rows, markdown=True))
+    else:
+        print(f"\n{title}")
+        print("-" * len(title))
+        print(render_table(headers, rows))
 
 
 def fmt_int(n: int) -> str:
     return f"{n:,}"
 
 
-def fmt_pct(part: int, total: int) -> str:
+def fmt_pct(part: float, total: float) -> str:
     return f"{(100.0 * part / total) if total else 0.0:5.1f}%"
 
 
@@ -350,8 +348,8 @@ def _frame_color(name: str) -> str:
 
 
 def render_flame_svg(
-    merged_stacks: dict[str, int],
-    total: int,
+    merged_stacks: dict[str, float],
+    total: float,
     out_path: Path,
     *,
     width: int = 1400,
@@ -359,12 +357,12 @@ def render_flame_svg(
     title: str = "",
 ) -> None:
     """Write a basic flamegraph SVG from merged folded stacks (root at bottom)."""
-    root: dict = {"name": "all", "value": 0, "kids": {}}
+    root: dict = {"name": "all", "value": 0.0, "kids": {}}
     for stack, count in merged_stacks.items():
         node = root
         node["value"] += count
         for frame in stack.split(";"):
-            node = node["kids"].setdefault(frame, {"name": frame, "value": 0, "kids": {}})
+            node = node["kids"].setdefault(frame, {"name": frame, "value": 0.0, "kids": {}})
             node["value"] += count
 
     def depth(n: dict) -> int:
@@ -375,13 +373,12 @@ def render_flame_svg(
     height = max_depth * row_height + header + 10
     min_visible = 0.15  # px; skip slivers
 
-    rects: list[tuple[float, int, float, str, int]] = []
+    rects: list[tuple[float, float, float, str, float]] = []
 
     def visit(node: dict, x: float, level: int) -> None:
         w = width * node["value"] / total
         if w < min_visible:
             return
-        # Conventional flamegraph: deeper frames on top, root rows at bottom.
         y = height - 5 - (level + 1) * row_height
         rects.append((x, y, w, node["name"], node["value"]))
         cx = x
@@ -403,110 +400,25 @@ def render_flame_svg(
     ]
     for x, y, w, name, val in rects:
         clipped = name
-        # ~6.5 px/char in Verdana 11 — clip to avoid overflowing the rect.
         max_chars = max(0, int((w - 4) / 6.5))
         if max_chars < len(name):
             clipped = name[: max_chars - 1] + "…" if max_chars > 1 else ""
-        title_text = f"{name} ({val:,} samples, {100 * val / total:.2f}%)"
+        title_text = f"{name} ({val:,.1f}, {100 * val / total:.2f}%)"
         parts.append(
             f"<g><title>{_xml_escape(title_text)}</title>"
-            f'<rect x="{x:.2f}" y="{y}" width="{w:.2f}" height="{row_height - 1}"'
+            f'<rect x="{x:.2f}" y="{y:.0f}" width="{w:.2f}" height="{row_height - 1}"'
             f' fill="{_frame_color(name)}" stroke="#000" stroke-width="0.2"/>'
         )
         if clipped:
-            parts.append(f'<text x="{x + 3:.2f}" y="{y + row_height - 4}">{_xml_escape(clipped)}</text>')
+            parts.append(f'<text x="{x + 3:.2f}" y="{y + row_height - 4:.0f}">{_xml_escape(clipped)}</text>')
         parts.append("</g>")
     parts.append("</svg>")
     out_path.write_text("\n".join(parts), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
-# Local cache lookup
-# ---------------------------------------------------------------------------
-
-
-def list_cached_checkpoints(cache_dir: Path, cluster: str) -> list[tuple[int, Path]]:
-    cluster_cache = cache_dir / cluster
-    if not cluster_cache.exists():
-        return []
-
-    # Checkpoint directories are named by timestamp (epoch_ms)
-    checkpoints = []
-    for d in cluster_cache.iterdir():
-        if d.is_dir() and d.name.isdigit():
-            checkpoints.append((int(d.name), d))
-
-    return checkpoints
-
-
-def find_job_times_in_local_cache(cache_dir: Path, cluster: str, job_id: str) -> tuple[int | None, int | None]:
-    """Look for the most recent local checkpoint and fetch job start/end times if available."""
-    try:
-        checkpoints = list_cached_checkpoints(cache_dir, cluster)
-    except OSError:
-        return None, None
-
-    if not checkpoints:
-        return None, None
-
-    checkpoints.sort(reverse=True)
-
-    for _, local_dir in checkpoints:
-        controller_path = local_dir / CONTROLLER_DB
-        # If the uncompressed DB doesn't exist, try to decompress it.
-        if not controller_path.exists():
-            zst = local_dir / f"{CONTROLLER_DB}.zst"
-            if zst.exists():
-                try:
-                    decompress_zst(zst, controller_path)
-                except Exception as e:
-                    logger.debug("Failed to decompress %s: %s", zst, e)
-                    continue
-            else:
-                continue
-
-        try:
-            # Open the DB and look for the job.
-            conn = sqlite3.connect(f"file:{controller_path}?mode=ro", uri=True)
-            conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT started_at_ms, finished_at_ms FROM jobs WHERE job_id = ?",
-                (job_id,),
-            ).fetchone()
-            conn.close()
-            if row:
-                return row["started_at_ms"], row["finished_at_ms"]
-        except sqlite3.Error:
-            continue
-
-    return None, None
-
-
-def find_best_checkpoint(cached_checkpoints: list[tuple[int, Path]], end_ms: int, max_lag_ms: int) -> Path | None:
-    eligible = [(ts, path) for ts, path in cached_checkpoints if end_ms <= ts <= end_ms + max_lag_ms]
-
-    if eligible:
-        eligible.sort()
-        found_ts, found_path = eligible[0]
-        logger.info(
-            "Found snapshot within %.1fh after job end: %s (at %d ms)", max_lag_ms / 3600000, found_path, found_ts
-        )
-        return found_path
-
-    return None
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-
-
-def download_latest(cluster: str, cache_dir: Path, after_timestamp: int | None = None) -> Path:
-    remote_dir = find_latest_checkpoint(remote_state_dir_for_cluster(cluster), after_timestamp=after_timestamp)
-    epoch_label = remote_dir.rstrip("/").rsplit("/", 1)[-1]
-    local_dir = cache_dir / cluster / epoch_label
-    download_checkpoint(remote_dir, local_dir)
-    return local_dir
 
 
 def main() -> int:
@@ -515,183 +427,187 @@ def main() -> int:
     p.add_argument(
         "--cluster",
         default="marin",
-        help="Cluster name; resolves storage.remote_state_dir from lib/iris/config/<cluster>.yaml (default: marin)",
+        help="Cluster name; resolves the finelog deployment via config/<cluster>.yaml (default: marin)",
     )
+    p.add_argument("--finelog-config", help="finelog deployment name (default: resolved from the cluster config)")
+    p.add_argument("--tunnel-timeout", type=float, default=60.0, help="Seconds to wait for the tunnel (default 60)")
     p.add_argument(
-        "--cache-dir",
-        type=Path,
-        default=Path.home() / ".cache" / "iris-job-profile",
-        help="Local cache directory for downloaded checkpoints",
+        "--subjob",
+        help="Restrict to one worker sub-job (its label from the per-sub-job table, or any source substring)",
     )
-    p.add_argument(
-        "--checkpoint-dir",
-        type=Path,
-        help="Use this local checkpoint directory directly (bypasses remote discovery/download)",
-    )
-    p.add_argument("--top", type=int, default=20, help="Top-N stacks/leaves/tasks to print (default 20)")
-    p.add_argument("--show-stacks", action="store_true", help="Print the top stacks table")
+    p.add_argument("--top", type=int, default=20, help="Top-N leaves/stacks/tasks to print (default 20)")
+    p.add_argument("--show-stacks", action="store_true", help="Print the top merged stacks table")
     p.add_argument("--show-tasks", action="store_true", help="Print the top tasks table")
+    p.add_argument(
+        "--per-subjob",
+        action="store_true",
+        help="Emit a full section (top leaves, and stacks with --show-stacks) for every worker sub-job",
+    )
+    p.add_argument("--markdown", action="store_true", help="Render the report as GitHub markdown")
     p.add_argument("-o", "--output", type=Path, help="Write merged folded-stack profile to this path")
-    p.add_argument(
-        "--svg",
-        type=Path,
-        help="Write a basic flamegraph SVG to this path (default: <cache>/<cluster>/<epoch>/flame.svg)",
-    )
-    p.add_argument("--refresh", action="store_true", help="Force re-download even if cache is present")
-    p.add_argument(
-        "--max-snapshot-lag",
-        type=float,
-        default=2.0,
-        help="Max hours to look past job end for a snapshot (default 2.0)",
-    )
+    p.add_argument("--svg", type=Path, help="Write a flamegraph SVG to this path")
+    p.add_argument("--max-rows", type=int, default=500_000, help="Reject results larger than this (default 500k)")
     args = p.parse_args()
 
     job_id = parse_job_id(args.job)
     logger.info("Job ID: %s", job_id)
 
-    max_lag_ms = int(args.max_snapshot_lag * 3600 * 1000)
+    finelog_name = args.finelog_config or finelog_config_for_cluster(args.cluster)
+    cfg = load_finelog_config(finelog_name)
+    logger.info("finelog deployment: %s (%s)", finelog_name, cfg.name)
 
-    if args.checkpoint_dir:
-        best_checkpoint = args.checkpoint_dir
-    else:
-        if args.refresh:
-            best_checkpoint = download_latest(args.cluster, args.cache_dir)
-        else:
-            cached_checkpoints = list_cached_checkpoints(args.cache_dir, args.cluster)
-            if not cached_checkpoints:
-                download_latest(args.cluster, args.cache_dir)
-                cached_checkpoints = list_cached_checkpoints(args.cache_dir, args.cluster)
+    with open_tunnel(tunnel_target(cfg), timeout=args.tunnel_timeout) as url:
+        client = LogClient.connect(url)
+        try:
+            profiles = fetch_task_profiles(client, job_id, max_rows=args.max_rows)
+        finally:
+            client.close()
 
-            start_ms, end_ms = find_job_times_in_local_cache(args.cache_dir, args.cluster, job_id)
-            if start_ms is None or end_ms is None:
-                download_latest(args.cluster, args.cache_dir)
-                start_ms, end_ms = find_job_times_in_local_cache(args.cache_dir, args.cluster, job_id)
-
-            logger.info("Job times: %s - %s", start_ms, end_ms)
-
-            best_checkpoint = None
-            if end_ms:
-                best_checkpoint = find_best_checkpoint(cached_checkpoints, end_ms, max_lag_ms)
-                if best_checkpoint is None:
-                    download_latest(args.cluster, args.cache_dir, end_ms)
-                    cached_checkpoints = list_cached_checkpoints(args.cache_dir, args.cluster)
-                    best_checkpoint = find_best_checkpoint(cached_checkpoints, end_ms, max_lag_ms)
-            else:
-                # Still running? Use latest.
-                if not cached_checkpoints:
-                    download_latest(args.cluster, args.cache_dir)
-                    cached_checkpoints = list_cached_checkpoints(args.cache_dir, args.cluster)
-
-                if checkpoints := sorted(cached_checkpoints):
-                    best_checkpoint = checkpoints[-1][1]
-
-    if best_checkpoint is None:
-        logger.error("Could not find a suitable checkpoint for job %s", job_id)
-        return 1
-
-    logger.info("Using checkpoint: %s", best_checkpoint)
-
-    for name in (CONTROLLER_DB, PROFILES_DB):
-        zst = best_checkpoint / f"{name}.zst"
-        if zst.exists():
-            decompress_zst(zst, best_checkpoint / name)
-
-    controller_path = best_checkpoint / CONTROLLER_DB
-    profiles_path = best_checkpoint / PROFILES_DB
-    if not controller_path.exists():
-        logger.error("Missing %s in %s", CONTROLLER_DB, best_checkpoint)
-        return 1
-    if not profiles_path.exists():
-        logger.error("Missing %s in %s (controller may not have written profiles yet)", PROFILES_DB, best_checkpoint)
-        return 1
-
-    conn = open_db(controller_path, profiles_path)
-    profiles = fetch_task_profiles(conn, job_id)
+    if args.subjob:
+        profiles = [pr for pr in profiles if args.subjob in pr.source]
     if not profiles:
-        logger.error("No CPU profiles found under %s in checkpoint %s", job_id, best_checkpoint)
+        logger.error("No CPU profiles found under %s%s", job_id, f" matching {args.subjob!r}" if args.subjob else "")
         return 2
 
-    merged_stacks: dict[str, int] = defaultdict(int)
-    merged_leaves: dict[str, int] = defaultdict(int)
-    per_task_samples: dict[str, int] = {}
-    per_task_state: dict[str, int] = {}
-    per_task_captured: dict[str, int] = {}
+    overall = Aggregate.empty()
+    per_subjob: dict[str, Aggregate] = defaultdict(Aggregate.empty)
+    per_task: dict[str, float] = defaultdict(float)
+    n_captures = 0
 
     for prof in profiles:
-        parsed = parse_folded(prof.profile_bytes)
-        task_total = 0
-        for stack, count in parsed:
-            normalized = normalize_stack(stack)
-            merged_stacks[normalized] += count
-            merged_leaves[leaf_of(normalized)] += count
-            task_total += count
-        per_task_samples[prof.task_id] = task_total
-        per_task_state[prof.task_id] = prof.state
-        per_task_captured[prof.task_id] = prof.captured_at_ms
+        try:
+            parsed = parse_speedscope(prof.profile_bytes)
+        except (ValueError, json.JSONDecodeError) as e:
+            logger.warning("Skipping unparseable profile for %s: %s", prof.source, e)
+            continue
+        if parsed.total <= 0:
+            continue
+        n_captures += 1
+        overall.add(prof.source, parsed)
+        per_subjob[subjob_of(prof.source, job_id)].add(prof.source, parsed)
+        per_task[prof.source] += parsed.total
 
-    grand_total = sum(per_task_samples.values())
+    if overall.total <= 0:
+        logger.error("Profiles contained no samples")
+        return 2
+
+    md = args.markdown
+
+    def leaf_rows(agg: Aggregate) -> list[list[str]]:
+        top = sorted(agg.leaves.items(), key=lambda kv: -kv[1])[: args.top]
+        return [[f"{w:,.1f}", fmt_pct(w, agg.total), s] for s, w in top]
+
+    def stack_rows(agg: Aggregate) -> list[list[str]]:
+        top = sorted(agg.stacks.items(), key=lambda kv: -kv[1])[: args.top]
+        return [[f"{w:,.1f}", fmt_pct(w, agg.total), s] for s, w in top]
 
     # --- Summary header ---------------------------------------------------
-    print(f"Job:        {job_id}")
-    print(f"Checkpoint: {best_checkpoint}")
-    print(f"Tasks with profiles: {len(profiles)}")
-    print(f"Merged samples:      {fmt_int(grand_total)}")
-    print(f"Distinct stacks:     {fmt_int(len(merged_stacks))}")
+    summary = [
+        f"**Job:** `{job_id}`",
+        f"**finelog:** {finelog_name} ({cfg.name})",
+        f"**CPU captures:** {fmt_int(n_captures)} across {fmt_int(len(overall.tasks))} tasks",
+        f"**Aggregate weight:** {overall.total:,.1f} py-spy speedscope sample-seconds",
+        f"**Distinct stacks:** {fmt_int(len(overall.stacks))}",
+    ]
+    if args.subjob:
+        summary.insert(2, f"**Filter:** source contains `{args.subjob}`")
+    if md:
+        print(f"# CPU profile — `{job_id}`\n")
+        for line in summary:
+            print(f"- {line}")
+    else:
+        for line in summary:
+            print(line.replace("**", "").replace("`", ""))
 
-    # --- Per-task table (top N only; full job paths are long) ------------
-    sorted_tasks = sorted(per_task_samples.items(), key=lambda kv: -kv[1])
-    if args.show_tasks:
-        rows = []
-        job_prefix = job_id.rstrip("/") + "/"
-        for task_id, samples in sorted_tasks[: args.top]:
-            state = per_task_state[task_id]
-            # Strip the common job prefix so per-task rows stay readable.
-            short = task_id[len(job_prefix) :] if task_id.startswith(job_prefix) else task_id
-            rows.append(
-                [
-                    short,
-                    STATE_NAMES.get(state, str(state)),
-                    fmt_int(samples),
-                    fmt_pct(samples, grand_total),
-                    str(per_task_captured[task_id]),
-                ]
-            )
-        print_table(
-            f"Top {len(rows)} of {len(sorted_tasks)} tasks by samples (relative to '{job_prefix}')",
-            ["task", "state", "samples", "share", "captured_at_ms"],
-            rows,
+    # --- Per worker sub-job overview -------------------------------------
+    sub_rows = []
+    for label, agg in sorted(per_subjob.items(), key=lambda kv: -kv[1].total):
+        top_leaf, top_leaf_w = max(agg.leaves.items(), key=lambda kv: kv[1], default=("-", 0.0))
+        sub_rows.append(
+            [
+                label,
+                fmt_int(len(agg.tasks)),
+                f"{agg.total:,.1f}",
+                fmt_pct(agg.total, overall.total),
+                f"{top_leaf} [{fmt_pct(top_leaf_w, agg.total)}]",
+            ]
         )
-
-    # --- Top stacks -------------------------------------------------------
-    if args.show_stacks:
-        top_stacks = sorted(merged_stacks.items(), key=lambda kv: -kv[1])[: args.top]
-        print_table(
-            f"Top {len(top_stacks)} stacks (merged across tasks)",
-            ["samples", "share", "stack"],
-            [[fmt_int(c), fmt_pct(c, grand_total), s] for s, c in top_stacks],
-        )
-
-    # --- Top leaves -------------------------------------------------------
-    top_leaves = sorted(merged_leaves.items(), key=lambda kv: -kv[1])[: args.top]
     print_table(
-        f"Top {len(top_leaves)} leaf frames (merged across tasks)",
-        ["samples", "share", "frame"],
-        [[fmt_int(c), fmt_pct(c, grand_total), s] for s, c in top_leaves],
+        "CPU by worker sub-job (share of job total; hottest leaf within the sub-job)",
+        ["sub-job", "tasks", "weight", "job share", "hottest leaf"],
+        sub_rows,
+        markdown=md,
+        level=2,
+    )
+
+    # --- Per-task (optional) ---------------------------------------------
+    if args.show_tasks:
+        sorted_tasks = sorted(per_task.items(), key=lambda kv: -kv[1])[: args.top]
+        prefix = job_id + "/"
+        rows = [
+            [src[len(prefix) :] if src.startswith(prefix) else src, f"{w:,.1f}", fmt_pct(w, overall.total)]
+            for src, w in sorted_tasks
+        ]
+        print_table(f"Top {len(rows)} tasks by CPU weight", ["task", "weight", "share"], rows, markdown=md, level=2)
+
+    # --- Full section per worker sub-job (optional) ----------------------
+    if args.per_subjob:
+        if md:
+            print("\n## Per worker sub-job")
+        for label, agg in sorted(per_subjob.items(), key=lambda kv: -kv[1].total):
+            heading = f"{label} — {agg.total:,.1f} ({fmt_pct(agg.total, overall.total)} of job, {len(agg.tasks)} tasks)"
+            if md:
+                print(f"\n### {heading}")
+            else:
+                print(f"\n{'=' * len(heading)}\n{heading}\n{'=' * len(heading)}")
+            print_table(
+                f"Top {len(leaf_rows(agg))} leaf frames",
+                ["weight", "share", "frame"],
+                leaf_rows(agg),
+                markdown=md,
+                level=4,
+            )
+            if args.show_stacks:
+                print_table(
+                    f"Top {len(stack_rows(agg))} stacks",
+                    ["weight", "share", "stack"],
+                    stack_rows(agg),
+                    markdown=md,
+                    level=4,
+                )
+
+    # --- Whole-job top stacks (optional) ---------------------------------
+    if args.show_stacks and not args.per_subjob:
+        print_table(
+            f"Top {len(stack_rows(overall))} stacks (merged across captures)",
+            ["weight", "share", "stack"],
+            stack_rows(overall),
+            markdown=md,
+            level=2,
+        )
+
+    # --- Whole-job top leaves --------------------------------------------
+    print_table(
+        f"Top {len(leaf_rows(overall))} leaf frames (where CPU is actually spent)",
+        ["weight", "share", "frame"],
+        leaf_rows(overall),
+        markdown=md,
+        level=2,
     )
 
     # --- Optional folded-stack output ------------------------------------
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
-            for stack, count in sorted(merged_stacks.items(), key=lambda kv: -kv[1]):
-                f.write(f"{stack} {count}\n")
-        logger.info("Wrote merged folded profile to %s (%d stacks)", args.output, len(merged_stacks))
+            for stack, count in sorted(overall.stacks.items(), key=lambda kv: -kv[1]):
+                f.write(f"{stack} {round(count)}\n")
+        logger.info("Wrote merged folded profile to %s (%d stacks)", args.output, len(overall.stacks))
 
     # --- Flame SVG --------------------------------------------------------
-    svg_path = args.svg or (best_checkpoint / "flame.svg")
-    svg_title = f"{job_id}  ({len(profiles)} tasks, {grand_total:,} samples, ckpt {best_checkpoint})"
-    render_flame_svg(merged_stacks, grand_total, svg_path, title=svg_title)
-    logger.info("Wrote flame SVG to %s", svg_path)
-    print(f"\nFlame SVG: {svg_path}")
+    if args.svg:
+        title = f"{job_id}  ({n_captures} captures, {overall.total:,.0f} weight)"
+        render_flame_svg(overall.stacks, overall.total, args.svg, title=title)
+        logger.info("Wrote flame SVG to %s", args.svg)
+        print(f"\nFlame SVG: {args.svg}")
 
     return 0
 
