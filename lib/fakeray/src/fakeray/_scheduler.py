@@ -53,18 +53,43 @@ _POISON = object()  # sentinel pushed to the ready queue to stop worker threads
 
 @dataclass
 class FakeRayConfig:
-    """Pool sizing and per-actor resources. Read once at ``init``."""
+    """Pool sizing and per-actor resources. Read once at ``init``.
+
+    ``device`` selects the worker hardware for the actor pool. ``"cpu"`` uses a
+    plain CPU ResourceConfig; a TPU variant string (e.g. ``"v6e-4"``) borrows
+    that TPU host's VM for CPU-bound duckdb work (the chips sit idle). With
+    ``preemptible=True`` and a TPU device the pool lands on the cheap
+    preemptible TPU groups — pair with ``max_task_retries`` so the scheduler
+    survives actor preemption (see Scheduler re-dispatch).
+    """
 
     pool_size: int = 4
     cpu: float = 1.0
     ram: str = "4g"
+    device: str = "cpu"
+    preemptible: bool = True
+    region: str | None = None
+    max_task_retries: int = 3
 
     @staticmethod
     def from_env(num_cpus: int | None = None) -> FakeRayConfig:
         pool = int(os.environ.get("FAKERAY_POOL_SIZE", num_cpus or 4))
         cpu = float(os.environ.get("FAKERAY_ACTOR_CPU", "1"))
         ram = os.environ.get("FAKERAY_ACTOR_RAM", "4g")
-        return FakeRayConfig(pool_size=max(1, pool), cpu=cpu, ram=ram)
+        device = os.environ.get("FAKERAY_DEVICE", "cpu")
+        region = os.environ.get("FAKERAY_REGION") or None
+        preemptible = os.environ.get("FAKERAY_PREEMPTIBLE", "1") != "0"
+        return FakeRayConfig(
+            pool_size=max(1, pool), cpu=cpu, ram=ram, device=device, region=region, preemptible=preemptible
+        )
+
+    def resource_config(self) -> ResourceConfig:
+        """Build the Fray ResourceConfig for one actor in the pool."""
+        regions = [self.region] if self.region else None
+        if self.device and self.device != "cpu":
+            # TPU host VM: with_tpu sets sensible cpu/ram defaults for the host.
+            return ResourceConfig.with_tpu(self.device, preemptible=self.preemptible, regions=regions)
+        return ResourceConfig(cpu=self.cpu, ram=self.ram, preemptible=self.preemptible, regions=regions)
 
 
 @dataclass
@@ -78,6 +103,7 @@ class _Node:
     opts: dict
     pending: set[str] = field(default_factory=set)  # dep ref ids not yet completed
     queued: bool = False
+    attempts: int = 0  # dispatch attempts so far (for preemption re-dispatch)
 
 
 class Scheduler:
@@ -104,13 +130,22 @@ class Scheduler:
         if self._started:
             return
         n = self._config.pool_size
-        logger.info("fakeray: starting actor pool of %d", n)
+        resources = self._config.resource_config()
+        logger.info(
+            "fakeray: starting actor pool of %d (device=%s preemptible=%s region=%s)",
+            n,
+            self._config.device,
+            self._config.preemptible,
+            self._config.region,
+        )
         self._group = self._client.create_actor_group(
             FakeRayExecutor,
             name="fakeray-exec",
             count=n,
-            resources=ResourceConfig(cpu=self._config.cpu, ram=self._config.ram),
-            actor_config=ActorConfig(max_concurrency=1),
+            resources=resources,
+            # Auto-restart preempted actors; bound task retries so the scheduler's
+            # re-dispatch (on actor death) doesn't loop forever.
+            actor_config=ActorConfig(max_concurrency=1, max_task_retries=self._config.max_task_retries),
         )
         handles = self._group.wait_ready(count=n)
         for i, handle in enumerate(handles):
@@ -205,6 +240,7 @@ class Scheduler:
             node: _Node = item
             if node.ref.future.done():
                 continue  # poisoned by a failed dependency before we got to it
+            node.attempts += 1
             try:
                 values = [self._deref(a) for a in node.args]
                 kwargs = {k: self._deref(v) for k, v in node.kwargs.items()}
@@ -212,8 +248,28 @@ class Scheduler:
                 result_bytes = actor_handle.run.remote(payload).result()
                 result = cloudpickle.loads(result_bytes)
             except Exception as e:
-                logger.warning("fakeray: task %s failed: %s", node.ref.id[:8], e)
-                self._settle_failure(node.ref.id, e)
+                # An exception here is either a real task error or a dead actor
+                # (preemption). We can't always tell them apart, so retry up to
+                # max_task_retries: smallpond tasks are idempotent (shared-root
+                # markers + unique output keys), so re-running a genuinely failing
+                # task just re-fails deterministically and settles after the cap.
+                # A surviving worker thread picks up the re-queued node.
+                if node.attempts <= self._config.max_task_retries:
+                    logger.warning(
+                        "fakeray: task %s attempt %d failed (%s); re-dispatching",
+                        node.ref.id[:8],
+                        node.attempts,
+                        type(e).__name__,
+                    )
+                    self._ready.put(node)
+                else:
+                    logger.warning(
+                        "fakeray: task %s failed after %d attempts: %s",
+                        node.ref.id[:8],
+                        node.attempts,
+                        e,
+                    )
+                    self._settle_failure(node.ref.id, e)
                 continue
             self._settle_success(node.ref.id, result)
 
