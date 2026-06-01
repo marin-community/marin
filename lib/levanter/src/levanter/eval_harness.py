@@ -338,7 +338,7 @@ class _LmEvalHarnessWorker:
                 raise ValueError(f"Unknown message type: {message}")
 
     def _receive_message(self):
-        stop_message = jnp.array(_Message.STOP)
+        stop_message = np.array(_Message.STOP)
         message = broadcast_shard(stop_message, PartitionSpec())
         return message.item()
 
@@ -354,7 +354,7 @@ class _LmEvalHarnessWorker:
 
     def _send_message(self, message):
         assert jax.process_index() == 0
-        out = broadcast_shard(jnp.array(message), PartitionSpec())
+        out = broadcast_shard(np.array(message), PartitionSpec())
         return out
 
     def _send_payload(self, payload):
@@ -622,16 +622,11 @@ class LevanterHarnessLM(TemplateLM):
             # Handle profiler start/stop based on step
             self._handle_profiler_step()
 
-            batch = hax.shard(batch, self.axis_resources)
-
             segments_this_batch = get_segment_ids_from_batch(
                 batch, self.leader.max_packed_segments * self.EvalBatch.size
             )
 
             padding_count, batch_tokens = get_padding_count_from_batch(batch, self.tokenizer.pad_token_id)
-            batch = jax.device_put(batch)
-
-            batch = jax.device_put(batch)
 
             out_ids, out_lls, out_correct = self.leader.dispatch_loglikelihood(batch)
 
