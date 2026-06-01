@@ -30,8 +30,14 @@ class FakeRayExecutor:
     """
 
     def __init__(self) -> None:
-        # Per-process warmup happens lazily on first import inside the payload.
-        logger.info("FakeRayExecutor actor started")
+        # Each actor is a separate process (a separate Iris job replica) and did
+        # NOT inherit the driver's sys.modules. Re-install the shim here so that
+        # `import ray` inside an unpickled task payload binds to fakeray rather
+        # than failing (the bundle ships no real `ray`).
+        import fakeray
+
+        fakeray.install()
+        logger.info("FakeRayExecutor actor started (ray shim installed)")
 
     def run(self, payload: bytes) -> bytes:
         """Execute a cloudpickled (fn, args, kwargs) and return pickled result.

@@ -135,8 +135,19 @@ def wait(
 
 
 def timeline(filename: str) -> None:
-    """Ray-compat no-op. Iris provides its own dashboard/timeline."""
-    logger.debug("fakeray.timeline(%s): no-op (use the Iris dashboard)", filename)
+    """Write an empty Chrome-trace timeline.
+
+    fakeray has no Ray timeline to export (use the Iris dashboard for real
+    observability), but callers like smallpond immediately re-open the file and
+    ``json.load`` it, so we must produce a valid empty trace rather than no file.
+    """
+    import json
+
+    try:
+        with open(filename, "w") as f:
+            json.dump([], f)
+    except OSError as e:
+        logger.debug("fakeray.timeline(%s): could not write placeholder: %s", filename, e)
 
 
 class RemoteFunction:
