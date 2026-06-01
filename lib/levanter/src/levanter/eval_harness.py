@@ -418,6 +418,19 @@ def get_padding_count_from_batch(batch: LmExample, pad_token_id: int) -> tuple[i
     return padding_count, total_tokens
 
 
+def _eval_pad_token_id(tokenizer: MarinTokenizer) -> int:
+    pad_token_id = tokenizer.pad_token_id
+    if pad_token_id is not None:
+        return pad_token_id
+
+    eos_token_id = tokenizer.eos_token_id
+    if eos_token_id is None:
+        raise ValueError("LM eval harness requires either a pad token or an eos token for packed batches.")
+
+    logger.warning("No pad token set. Using eos token for evaluation padding.")
+    return eos_token_id
+
+
 class LevanterHarnessLM(TemplateLM):
     """
     Levanter implementation of the LM Eval Harness TemplateLM interface.
@@ -587,9 +600,7 @@ class LevanterHarnessLM(TemplateLM):
         Downstream tasks should attempt to use loglikelihood instead of other
         LM calls whenever possible.
         """
-        if self.tokenizer.pad_token_id is None:
-            logger.warning("No pad token set. Setting to eos token.")
-            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        pad_token_id = _eval_pad_token_id(self.tokenizer)
 
         current_task = getattr(self, "_current_task", "loglikelihood_task")
         for request in requests:
@@ -605,7 +616,13 @@ class LevanterHarnessLM(TemplateLM):
                 }
             )
 
-        packed = _pack_requests(requests, self.tokenizer, self.EvalPos, self.leader.max_packed_segments)
+        packed = _pack_requests(
+            requests,
+            self.tokenizer,
+            self.EvalPos,
+            self.leader.max_packed_segments,
+            pad_token_id=pad_token_id,
+        )
         packed_iterator = stack_batches(iter(packed), self.EvalPos, self.EvalBatch)
         packed_iterator = BackgroundIterator(packed_iterator, max_capacity=1024)
 
@@ -626,7 +643,7 @@ class LevanterHarnessLM(TemplateLM):
                 batch, self.leader.max_packed_segments * self.EvalBatch.size
             )
 
-            padding_count, batch_tokens = get_padding_count_from_batch(batch, self.tokenizer.pad_token_id)
+            padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token_id)
 
             out_ids, out_lls, out_correct = self.leader.dispatch_loglikelihood(batch)
 
@@ -766,9 +783,7 @@ class LevanterHarnessLM(TemplateLM):
         # Implement simple generation using InferenceEngine.
         # requests: list[Instance] where args[0] = prompt, args[1] may be stop strings (list[str])
         # kwargs may include max_gen_toks, temperature, n (n_generations), seed
-        if self.tokenizer.pad_token_id is None:
-            logger.warning("No pad token set. Setting to eos token.")
-            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        _eval_pad_token_id(self.tokenizer)
 
         # Require a model with paged decode support
         if not hasattr(self.leader.model, "initial_cache") or not hasattr(self.leader.model, "decode"):
@@ -1730,6 +1745,7 @@ def _pack_requests(
     tokenizer: MarinTokenizer,
     Pos: hax.Axis,
     max_pack_size: int,
+    pad_token_id: int,
 ) -> list[LmExample]:
     packed_iterator = _iterate_tokenized_requests(requests, tokenizer, Pos.size, batch_size=128)
     # TODO: use a better packing algorithm?
@@ -1737,7 +1753,7 @@ def _pack_requests(
         Pos,
         packed_iterator,
         max_segments_per_example=max_pack_size,
-        pad_token=tokenizer.pad_token_id,
+        pad_token=pad_token_id,
     )
 
 
