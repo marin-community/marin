@@ -3,6 +3,7 @@
 
 import json
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -162,6 +163,61 @@ def test_merge_split_encodings(local_gpt2_marin_tokenizer):
     reg_out = batch_tokenizer(batch)
 
     assert short_out == reg_out
+
+
+def test_long_string_workaround_matches_whole_encoding_across_many_chunks(local_gpt2_marin_tokenizer):
+    """Cursor-based long-string splitting must match whole-string encoding over many chunks.
+
+    ``_encode_long_string`` walks a cursor over the original text instead of
+    re-slicing the unconsumed tail. This exercises hundreds of cursor advances
+    (~650 chunks at ``_workaround_len=500``) and asserts the ids are byte-for-byte
+    identical to the single-shot path, guarding the O(N) rewrite against drift.
+    """
+    tokenizer = local_gpt2_marin_tokenizer
+    text = "lorem ipsum dolor sit amet " * 12_000  # ~324k chars
+
+    split_tok = BatchTokenizer(tokenizer, _workaround_len=500, long_string_workaround=True)
+    # _workaround_len above any realistic length => never splits => reference path.
+    whole_tok = BatchTokenizer(tokenizer, _workaround_len=10**9, long_string_workaround=True)
+    batch = [{"text": text}]
+
+    assert split_tok(batch) == whole_tok(batch)
+
+
+def test_long_string_workaround_scales_linearly(local_gpt2_marin_tokenizer):
+    """``_encode_long_string`` must be O(N) in document length, not O(N^2).
+
+    The pre-fix loop rebuilt the unconsumed tail with ``remaining = remaining[split:]``
+    every ``_workaround_len`` chars, so a single multi-MB document copied ~N^2/(2w)
+    characters and took minutes — which serialized real tokenize jobs on their
+    largest shard. This is a performance contract, so it asserts on *scaling*:
+    quadrupling the input must grow runtime ~4x (linear), not ~16x (quadratic).
+    The assertion is a ratio, which is robust to absolute machine speed.
+    """
+    tokenizer = local_gpt2_marin_tokenizer
+    # Small _workaround_len => many chunks per doc, so the old per-chunk tail-copy
+    # dominates and its quadratic growth is observable at a few MB rather than GB.
+    bt = BatchTokenizer(tokenizer, _workaround_len=200, long_string_workaround=True)
+
+    # Whitespace every 6 chars => each split lands just past _workaround_len,
+    # forcing ~N/200 iterations: the regime where the old tail-copy was quadratic.
+    unit = "token "
+    small = unit * (2_000_000 // len(unit))  # ~2.0M chars
+    large = unit * (8_000_000 // len(unit))  # ~8.0M chars (4x small)
+
+    bt([{"text": unit * 1000}])  # warm up one-time costs (regex cache, allocator)
+
+    def _encode_seconds(text: str) -> float:
+        start = time.perf_counter()
+        bt([{"text": text}])
+        return time.perf_counter() - start
+
+    t_small = _encode_seconds(small)
+    t_large = _encode_seconds(large)
+
+    ratio = t_large / t_small
+    # ~4x for O(N), ~16x for O(N^2); 8x is a noise-tolerant midpoint.
+    assert ratio < 8.0, f"4x input took {ratio:.1f}x time (expected ~4x for O(N); O(N^2) regression?)"
 
 
 # ---------------------------------------------------------------------------
