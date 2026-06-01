@@ -94,6 +94,16 @@ def parse_args() -> argparse.Namespace:
         help="Force the nested TPU training child onto non-preemptible capacity when that capacity exists.",
     )
     parser.set_defaults(child_preemptible=True)
+    parser.add_argument(
+        "--eval-target-points",
+        type=int,
+        default=None,
+        help=(
+            "Override MidtrainSpec.eval_target_points (default 40). Controls eval cadence: "
+            "eval_steps = clamp(cooldown_tail_steps // eval_target_points, eval_min, eval_max). "
+            "Higher = more eval points = finer val-loss curves at the cost of training-time eval overhead."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", help="Build and print the plan; do not stage or submit.")
     return parser.parse_args()
 
@@ -112,6 +122,7 @@ def main() -> int:
         output_region=args.output_region,
         ram=args.ram,
         child_preemptible=args.child_preemptible,
+        eval_target_points=args.eval_target_points,
     )
     resolved = resolve_midtrain_spec(spec)
     validate_midtrain_spec(resolved)
@@ -251,6 +262,7 @@ def build_spec(
     output_region: str,
     ram: str,
     child_preemptible: bool,
+    eval_target_points: int | None = None,
 ) -> MidtrainSpec:
     base = get_delphi_model(candidate["base"])
     run = build_run_identity(
@@ -266,6 +278,9 @@ def build_spec(
             staged_output_path=run.output_path,
         )
     )
+    spec_kwargs: dict[str, Any] = {}
+    if eval_target_points is not None:
+        spec_kwargs["eval_target_points"] = eval_target_points
     return MidtrainSpec(
         base=base,
         run=run,
@@ -295,6 +310,7 @@ def build_spec(
             f"checkpoint_relation:{candidate['suggested_relation_to_target']}",
             f"checkpoint_candidate:{candidate['candidate_id']}",
         ),
+        **spec_kwargs,
     )
 
 

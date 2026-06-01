@@ -88,6 +88,12 @@ class MaterializeRequest:
     # multiple prefix targets that share a single at-or-before native source —
     # one training run, multiple committed outputs.
     extra_target_steps: tuple[int, ...] = ()
+    # Override the source TrainerConfig's ``checkpointer.save_interval``
+    # (time-based temporary saves). All iris TPU compute is preemptible,
+    # so frequent temp checkpoints cap progress loss on preemption / GCP
+    # bounce without forcing a permanent save (which is gated by the
+    # ``keep`` policy). ``None`` preserves the source's save_interval.
+    temp_save_interval: timedelta | None = None
 
 
 @dataclass(frozen=True)
@@ -172,7 +178,39 @@ def parse_args() -> argparse.Namespace:
             "Useful when two cooldown prefixes share a single at-or-before native source."
         ),
     )
+    parser.add_argument(
+        "--temp-save-interval",
+        dest="temp_save_interval",
+        type=_parse_duration,
+        default=None,
+        help=(
+            "Override the source TrainerConfig's checkpointer.save_interval. "
+            "Format: '5m', '300s', '1h'. Caps the wall-time of progress that "
+            "can be lost on TPU preemption (all iris TPUs are preemptible). "
+            "Default: inherit the source value."
+        ),
+    )
     return parser.parse_args()
+
+
+def _parse_duration(value: str) -> timedelta:
+    """Parse a short duration string ('5m', '300s', '1h') into a timedelta."""
+    if not value:
+        raise argparse.ArgumentTypeError("--temp-save-interval must not be empty")
+    suffix = value[-1].lower()
+    try:
+        magnitude = int(value[:-1])
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"--temp-save-interval magnitude must be an integer, got {value!r}") from exc
+    if magnitude <= 0:
+        raise argparse.ArgumentTypeError(f"--temp-save-interval must be positive, got {value!r}")
+    if suffix == "s":
+        return timedelta(seconds=magnitude)
+    if suffix == "m":
+        return timedelta(minutes=magnitude)
+    if suffix == "h":
+        return timedelta(hours=magnitude)
+    raise argparse.ArgumentTypeError(f"--temp-save-interval suffix must be 's', 'm', or 'h'; got {value!r}")
 
 
 def main() -> int:
@@ -187,6 +225,7 @@ def main() -> int:
         regions=tuple(args.regions),
         allow_existing_destination=args.allow_existing_destination,
         extra_target_steps=tuple(args.extra_target_steps),
+        temp_save_interval=args.temp_save_interval,
     )
     model = get_delphi_model(request.base)
     source_config = load_source_train_config(model)
@@ -341,14 +380,16 @@ def materialized_train_config(
     # end (trainer.py:568,581), so it would write whether or not a keep policy
     # mentioned it.
     keep_policies = [{"every": step, "until": step} for step in sorted(request.extra_target_steps)]
-    checkpointer = dataclasses.replace(
-        source_config.trainer.checkpointer,
-        base_path=join_path(output_root, CHECKPOINTS_DIR),
-        temporary_base_path=temporary_checkpoint_base_path(output_root),
-        keep=keep_policies,
-        append_run_id_to_base_path=False,
-        metadata=checkpoint_metadata(model=model, request=request, source_checkpoint_path=source_checkpoint_path),
-    )
+    checkpointer_replace_kwargs: dict[str, Any] = {
+        "base_path": join_path(output_root, CHECKPOINTS_DIR),
+        "temporary_base_path": temporary_checkpoint_base_path(output_root),
+        "keep": keep_policies,
+        "append_run_id_to_base_path": False,
+        "metadata": checkpoint_metadata(model=model, request=request, source_checkpoint_path=source_checkpoint_path),
+    }
+    if request.temp_save_interval is not None:
+        checkpointer_replace_kwargs["save_interval"] = request.temp_save_interval
+    checkpointer = dataclasses.replace(source_config.trainer.checkpointer, **checkpointer_replace_kwargs)
     trainer = dataclasses.replace(
         source_config.trainer,
         id=None,
