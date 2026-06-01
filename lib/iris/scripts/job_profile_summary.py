@@ -240,6 +240,39 @@ def leaf_of(stack: str) -> str:
     return stack.rsplit(";", 1)[-1]
 
 
+# A frame is "native" if py-spy couldn't symbolize it (``<addr>``) or it lives in
+# a shared object (``*.so``/``*.dylib``). The interpreter binary (``python3.11``)
+# and ``.py`` frames are kept — they carry meaningful symbols (e.g. gc).
+_NATIVE_LIB_RE = re.compile(r"\.so(\.\d+)*$|\.dylib$")
+
+
+def _is_native_frame(frame: str) -> bool:
+    name, _, lib = frame.partition(" (")
+    if name.startswith("<addr>"):
+        return True
+    return bool(_NATIVE_LIB_RE.search(lib.rstrip(")")))
+
+
+def meaningful_leaf(stack: str) -> str:
+    """The deepest frame worth naming: roll the leaf up past native frames.
+
+    A stack often tops out in ``<addr> (libc.so.6)`` or a ``*.abi3.so`` symbol,
+    which says little about *what* is running. Walk from the leaf toward the root
+    and return the deepest non-native frame (the application/Python operation
+    responsible); fall back to the deepest symbolized frame, then the raw leaf.
+    The full stack is left untouched — native frames still drive the library
+    rollup and the call graph.
+    """
+    frames = stack.split(";")
+    for frame in reversed(frames):
+        if not _is_native_frame(frame):
+            return frame
+    for frame in reversed(frames):
+        if not frame.startswith("<addr>"):
+            return frame
+    return frames[-1]
+
+
 # ---------------------------------------------------------------------------
 # Aggregation
 # ---------------------------------------------------------------------------
@@ -250,19 +283,27 @@ class Aggregate:
     """Merged folded stacks plus bookkeeping for a set of tasks."""
 
     stacks: dict[str, float]
-    leaves: dict[str, float]
+    leaves: dict[str, float]  # true topmost frame — drives the library rollup
+    app_leaves: dict[str, float]  # leaf rolled up past native frames (meaningful_leaf)
     total: float
     tasks: set[str]
 
     @classmethod
     def empty(cls) -> Aggregate:
-        return cls(stacks=defaultdict(float), leaves=defaultdict(float), total=0.0, tasks=set())
+        return cls(
+            stacks=defaultdict(float),
+            leaves=defaultdict(float),
+            app_leaves=defaultdict(float),
+            total=0.0,
+            tasks=set(),
+        )
 
     def add(self, source: str, parsed: ParsedProfile) -> None:
         self.tasks.add(source)
         for stack, weight in parsed.stacks.items():
             self.stacks[stack] += weight
             self.leaves[leaf_of(stack)] += weight
+            self.app_leaves[meaningful_leaf(stack)] += weight
             self.total += weight
 
 
@@ -656,19 +697,19 @@ def main() -> int:
     # --- Per worker sub-job overview -------------------------------------
     sub_rows = []
     for label, agg in sorted(per_subjob.items(), key=lambda kv: -kv[1].total):
-        top_leaf, top_leaf_w = max(agg.leaves.items(), key=lambda kv: kv[1], default=("-", 0.0))
+        top_fn, top_fn_w = max(agg.app_leaves.items(), key=lambda kv: kv[1], default=("-", 0.0))
         sub_rows.append(
             [
                 label,
                 fmt_int(len(agg.tasks)),
                 f"{agg.total:,.1f}",
                 fmt_pct(agg.total, overall.total),
-                f"{top_leaf} [{fmt_pct(top_leaf_w, agg.total)}]",
+                f"{top_fn} [{fmt_pct(top_fn_w, agg.total)}]",
             ]
         )
     print_table(
-        "CPU by worker sub-job (share of job total; hottest leaf within the sub-job)",
-        ["sub-job", "tasks", "weight", "job share", "hottest leaf"],
+        "CPU by worker sub-job (share of job total; hottest function, native rolled up to nearest named frame)",
+        ["sub-job", "tasks", "weight", "job share", "hottest fn"],
         sub_rows,
         markdown=md,
         level=2,
