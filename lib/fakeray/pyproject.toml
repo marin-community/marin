@@ -1,0 +1,35 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# NOTE: intentionally NOT a member of the root [tool.uv.workspace] yet — this is
+# a sketch. Run it via PYTHONPATH=lib/fakeray/src against the marin venv (which
+# already provides marin-fray + marin-iris). Wire into the workspace once the
+# design is accepted.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marin-fakeray"
+version = "0.0.1"
+description = "A Ray-Core-compatible shim that executes tasks on Iris via Fray."
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "marin-fray",
+]
+
+[project.optional-dependencies]
+# Convenience: pull the real package smallpond targets, only for parity testing.
+# Not needed to use the shim.
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fakeray"]
+
+# The sibling distribution that is *named* `ray` (the uv override target) lives
+# in ./ray-shim and is built separately. See README "Exposing as `ray`".
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]

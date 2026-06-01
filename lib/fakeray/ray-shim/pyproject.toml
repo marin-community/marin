@@ -1,0 +1,29 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# A distribution literally named `ray`. Its sole purpose is to be forced in via
+# uv `override-dependencies`, beating a requirer's transitive `ray>=x`
+# constraint, so that `import ray` resolves to the fakeray shim.
+#
+# Build: `uv build` here -> dist/ray-<version>-py3-none-any.whl
+# Then in the consuming project:
+#   [tool.uv]
+#   override-dependencies = ["ray @ file:///abs/path/to/ray-<version>-py3-none-any.whl"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ray"
+# Cosmetic: override ignores the requirer's specifier. Kept >= smallpond's
+# `ray >= 2.10.0` floor so any *non*-overridden resolver is still satisfied.
+version = "2.55.0"
+description = "Shim distribution: redirects `import ray` to the fakeray/Fray backend."
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "marin-fakeray",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ray"]
