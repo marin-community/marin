@@ -80,19 +80,16 @@ def _patch_numpy_copy_compat() -> None:
 def _load_model_local(model_bin_path: str):
     """Stream the model.bin to a temp file and return ``(model, local_path)``."""
     fs, resolved = url_to_fs(model_bin_path)
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".bin")
-    try:
-        with fs.open(resolved, "rb") as src:
-            while True:
-                chunk = src.read(8 * 1024 * 1024)
-                if not chunk:
-                    break
-                tmp.write(chunk)
-    finally:
-        tmp.close()
+    fd, local_path = tempfile.mkstemp(suffix=".bin")
+    with os.fdopen(fd, "wb") as tmp, fs.open(resolved, "rb") as src:
+        while True:
+            chunk = src.read(8 * 1024 * 1024)
+            if not chunk:
+                break
+            tmp.write(chunk)
     import fasttext
 
-    return fasttext.load_model(tmp.name), tmp.name
+    return fasttext.load_model(local_path), local_path
 
 
 def predict_p_high(model, text: str, max_chars: int = MAX_TEXT_CHARS) -> float:
