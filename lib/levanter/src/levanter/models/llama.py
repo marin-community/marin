@@ -76,9 +76,6 @@ class LlamaConfig(HFCompatConfig):
     upcast_attn: bool = False
     attn_backend: Optional[AttentionBackend] = None
     flash_attention_block_size: Optional[int] = None
-    rpa_num_kv_pages_per_block: Optional[int] = None
-    rpa_num_queries_per_block: Optional[int] = None
-    rpa_vmem_limit_bytes: Optional[int] = None
 
     gradient_checkpointing: bool | ScanCheckpointPolicy | str = True
     scan_layers: bool = True
@@ -244,9 +241,6 @@ class LlamaConfig(HFCompatConfig):
             upcast_attn=self.upcast_attn,
             attn_backend=self.attn_backend,
             flash_attention_block_size=self.flash_attention_block_size,
-            rpa_num_kv_pages_per_block=self.rpa_num_kv_pages_per_block,
-            rpa_num_queries_per_block=self.rpa_num_queries_per_block,
-            rpa_vmem_limit_bytes=self.rpa_vmem_limit_bytes,
             rope=self.rope,
             qk_norm=self.norm_config if self.use_qk_norm else None,
         )

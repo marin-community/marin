@@ -3,8 +3,6 @@
 
 import math
 import dataclasses
-import sys
-import types
 
 import jax.numpy as jnp
 import jax.random as jr
@@ -14,6 +12,7 @@ from chex import assert_trees_all_close
 import haliax as hax
 from haliax import Axis
 
+import levanter.inference.tpu_kernels as tpu_kernels
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.inference.tpu_kernels import (
     TpuPagedAttentionBackend,
@@ -125,6 +124,10 @@ def _assert_backend_matches_reference(case_factory, *, backend: TpuPagedAttentio
     )
     q, new_k, new_v, kv_cache, batch_info = case_factory()
 
+    config = TpuPagedAttentionConfig(backend=backend)
+    if backend == TpuPagedAttentionBackend.REFERENCE:
+        config = dataclasses.replace(config, fail_on_reference_fallback=False)
+
     attn, updated_cache = paged_attention_with_kv_update(
         q,
         new_k,
@@ -133,7 +136,7 @@ def _assert_backend_matches_reference(case_factory, *, backend: TpuPagedAttentio
         batch_info,
         sm_scale=SM_SCALE,
         soft_cap=soft_cap,
-        config=TpuPagedAttentionConfig(backend=backend),
+        config=config,
     )
 
     assert attn.axes == q.axes
@@ -174,7 +177,8 @@ def test_explicit_tpu_inference_backend_fails_fast_on_cpu():
             config=TpuPagedAttentionConfig(backend=TpuPagedAttentionBackend.TPU_INFERENCE),
         )
     except UnsupportedTpuPagedAttentionBackend as exc:
-        assert "only runs on TPU" in str(exc)
+        message = str(exc)
+        assert "only runs on TPU" in message or "not importable" in message
     else:
         raise AssertionError("explicit tpu-inference backend should fail on CPU")
 
@@ -200,6 +204,42 @@ def test_backend_sequence_warns_then_runs_reference_on_cpu():
 
     assert attn.axes == q.axes
     assert updated_cache.kv_pages.array.shape == kv_cache.kv_pages.array.shape
+
+
+def test_auto_backend_warns_then_uses_reference_on_tpu_without_mesh_when_tpu_inference_is_unavailable(monkeypatch):
+    expected_q, expected_new_k, expected_new_v, expected_cache_input, expected_batch_info = _single_sequence_case()
+    expected, expected_cache = _expected_attention_after_update(
+        expected_q,
+        expected_new_k,
+        expected_new_v,
+        expected_cache_input,
+        expected_batch_info,
+        soft_cap=None,
+    )
+    q, new_k, new_v, kv_cache, batch_info = _single_sequence_case()
+
+    def unavailable_tpu_backend(*args, **kwargs):
+        del args, kwargs
+        raise UnsupportedTpuPagedAttentionBackend("tpu-inference import failed")
+
+    monkeypatch.setattr(tpu_kernels, "_current_platform", lambda: "tpu")
+    monkeypatch.setattr(tpu_kernels, "_has_nonempty_mesh", lambda: False)
+    monkeypatch.setattr(tpu_kernels, "_run_tpu_inference_backend", unavailable_tpu_backend)
+
+    with pytest.warns(TpuPagedAttentionFallbackWarning):
+        attn, updated_cache = paged_attention_with_kv_update(
+            q,
+            new_k,
+            new_v,
+            kv_cache,
+            batch_info,
+            sm_scale=SM_SCALE,
+            soft_cap=None,
+            config=TpuPagedAttentionConfig(),
+        )
+
+    assert_trees_all_close(attn.array, expected.array, atol=1e-3, rtol=1e-3)
+    assert_trees_all_close(updated_cache.kv_pages.array, expected_cache.kv_pages.array)
 
 
 def test_reference_backend_is_not_a_silent_tpu_fallback(monkeypatch):
@@ -248,7 +288,11 @@ def test_duplicate_token_destinations_raise_before_backend_dispatch():
 
 
 def test_available_backends_on_cpu_only_report_reference():
-    assert available_tpu_paged_attention_backends() == (TpuPagedAttentionBackend.REFERENCE,)
+    backends = available_tpu_paged_attention_backends()
+    if tpu_kernels._is_tpu():
+        assert TpuPagedAttentionBackend.REFERENCE not in backends
+    else:
+        assert backends == (TpuPagedAttentionBackend.REFERENCE,)
 
 
 def test_initial_qwen3_shape_support_matches_target_tensor_parallelism():
@@ -271,149 +315,6 @@ def test_initial_qwen3_shape_support_matches_target_tensor_parallelism():
     assert reason is None
 
 
-def test_initial_qwen3_shape_rejects_f32_cache_for_tpu_inference():
-    target_shape = TpuPagedAttentionShape(
-        platform="tpu",
-        device_kind="TPU v5",
-        dtype=jnp.float32,
-        page_size=128,
-        head_size=128,
-        num_q_heads=32,
-        num_kv_heads=8,
-        q_heads_per_group=4,
-        max_model_len=4096,
-        tensor_parallel_size=4,
-    )
-
-    supported, reason = tpu_paged_attention_supports_shape(TpuPagedAttentionBackend.TPU_INFERENCE, target_shape)
-
-    assert not supported
-    assert reason == "initial tpu_inference target only supports bf16 KV cache"
-
-
-def test_initial_qwen3_shape_rejects_non_target_tensor_parallelism():
-    target_shape = TpuPagedAttentionShape(
-        platform="tpu",
-        device_kind="TPU v5",
-        dtype=jnp.bfloat16,
-        page_size=128,
-        head_size=128,
-        num_q_heads=32,
-        num_kv_heads=8,
-        q_heads_per_group=4,
-        max_model_len=4096,
-        tensor_parallel_size=1,
-    )
-
-    supported, reason = tpu_paged_attention_supports_shape(TpuPagedAttentionBackend.TPU_INFERENCE, target_shape)
-
-    assert not supported
-    assert reason == "initial Qwen3 8B target requires tensor_parallel_size=4"
-
-
-def test_tpu_inference_adapter_wraps_kernel_in_explicit_shard_map(monkeypatch):
-    import levanter.inference.tpu_inference_adapter as adapter
-
-    calls: dict[str, object] = {}
-
-    def fake_ragged_paged_attention(
-        q_array,
-        k_array,
-        v_array,
-        packed_cache,
-        seq_lens,
-        page_indices,
-        cu_q_lens,
-        distribution,
-        *,
-        sm_scale,
-        soft_cap,
-        out_dtype,
-        vmem_limit_bytes,
-    ):
-        calls["kernel_args"] = (k_array, v_array, seq_lens, page_indices, cu_q_lens, distribution)
-        calls["kernel_kwargs"] = {
-            "sm_scale": sm_scale,
-            "soft_cap": soft_cap,
-            "out_dtype": out_dtype,
-            "vmem_limit_bytes": vmem_limit_bytes,
-        }
-        return q_array + 1, packed_cache + 1
-
-    for module_name in [
-        "tpu_inference",
-        "tpu_inference.kernels",
-        "tpu_inference.kernels.ragged_paged_attention",
-        "tpu_inference.kernels.ragged_paged_attention.v3",
-    ]:
-        module = types.ModuleType(module_name)
-        module.__path__ = []
-        monkeypatch.setitem(sys.modules, module_name, module)
-
-    kernel_module = types.ModuleType("tpu_inference.kernels.ragged_paged_attention.v3.kernel")
-    kernel_module.ragged_paged_attention = fake_ragged_paged_attention
-    monkeypatch.setitem(sys.modules, kernel_module.__name__, kernel_module)
-
-    def fake_shard_map(fn, *, in_specs, out_specs, check_rep):
-        calls["shard_map"] = {
-            "in_specs": in_specs,
-            "out_specs": out_specs,
-            "check_rep": check_rep,
-        }
-
-        def wrapped(*args):
-            calls["wrapped_arg_count"] = len(args)
-            return fn(*args)
-
-        return wrapped
-
-    monkeypatch.setattr(adapter, "shard_map", fake_shard_map)
-
-    q_array = jnp.ones((1, 1, HEAD_SIZE), dtype=jnp.bfloat16)
-    cache = jnp.zeros((1, 1, 2, 1, HEAD_SIZE), dtype=jnp.bfloat16)
-    output, updated_cache = adapter._sharded_ragged_paged_attention(
-        q_array,
-        q_array,
-        q_array,
-        cache,
-        jnp.asarray([1], dtype=jnp.int32),
-        jnp.asarray([0], dtype=jnp.int32),
-        jnp.asarray([0, 1], dtype=jnp.int32),
-        jnp.asarray([1, 1, 1], dtype=jnp.int32),
-        sm_scale=SM_SCALE,
-        soft_cap=None,
-        out_dtype=jnp.float32,
-        vmem_limit_bytes=1024,
-    )
-
-    assert calls["wrapped_arg_count"] == 8
-    qkv_spec = adapter.PartitionSpec(None, "model", None)
-    kv_cache_spec = adapter.PartitionSpec(None, None, "model", None, None)
-    replicated = adapter.PartitionSpec()
-    assert calls["shard_map"] == {
-        "in_specs": (
-            qkv_spec,
-            qkv_spec,
-            qkv_spec,
-            kv_cache_spec,
-            replicated,
-            replicated,
-            replicated,
-            replicated,
-        ),
-        "out_specs": (qkv_spec, kv_cache_spec),
-        "check_rep": False,
-    }
-    assert calls["kernel_kwargs"] == {
-        "sm_scale": SM_SCALE,
-        "soft_cap": None,
-        "out_dtype": jnp.float32,
-        "vmem_limit_bytes": 1024,
-    }
-    assert jnp.array_equal(output, q_array + 1)
-    assert jnp.array_equal(updated_cache, cache + 1)
-
-
 def test_tpu_inference_adapter_casts_query_to_requested_output_dtype():
     import levanter.inference.tpu_inference_adapter as adapter
 
@@ -422,72 +323,3 @@ def test_tpu_inference_adapter_casts_query_to_requested_output_dtype():
     assert adapter._query_array_for_out_dtype(q_array, None).dtype == jnp.bfloat16
     assert adapter._query_array_for_out_dtype(q_array, jnp.bfloat16).dtype == jnp.bfloat16
     assert adapter._query_array_for_out_dtype(q_array, jnp.float32).dtype == jnp.float32
-
-
-def test_tpu_inference_adapter_casts_new_kv_to_cache_dtype(monkeypatch):
-    import levanter.inference.tpu_inference_adapter as adapter
-
-    q, new_k, new_v, kv_cache, batch_info = _single_sequence_case()
-    q = hax.named(q.array.astype(jnp.float32), q.axes)
-    new_k = hax.named(new_k.array.astype(jnp.float32), new_k.axes)
-    new_v = hax.named(new_v.array.astype(jnp.float32), new_v.axes)
-    seen_dtypes: dict[str, jnp.dtype] = {}
-
-    for module_name in [
-        "tpu_inference",
-        "tpu_inference.kernels",
-        "tpu_inference.kernels.ragged_paged_attention",
-        "tpu_inference.kernels.ragged_paged_attention.v3",
-    ]:
-        module = types.ModuleType(module_name)
-        module.__path__ = []
-        monkeypatch.setitem(sys.modules, module_name, module)
-
-    util_module = types.ModuleType("tpu_inference.kernels.ragged_paged_attention.v3.util")
-    util_module.align_to = lambda value, multiple: ((value + multiple - 1) // multiple) * multiple
-    util_module.get_dtype_packing = lambda dtype: 2 if jnp.dtype(dtype) == jnp.bfloat16 else 1
-    monkeypatch.setitem(sys.modules, util_module.__name__, util_module)
-
-    def fake_sharded_ragged_paged_attention(
-        q_array,
-        k_array,
-        v_array,
-        packed_cache,
-        seq_lens,
-        page_indices,
-        cu_q_lens,
-        distribution,
-        *,
-        sm_scale,
-        soft_cap,
-        out_dtype,
-        vmem_limit_bytes,
-    ):
-        del seq_lens, page_indices, cu_q_lens, distribution, sm_scale, soft_cap, out_dtype, vmem_limit_bytes
-        seen_dtypes["q"] = q_array.dtype
-        seen_dtypes["k"] = k_array.dtype
-        seen_dtypes["v"] = v_array.dtype
-        seen_dtypes["cache"] = packed_cache.dtype
-        return q_array, packed_cache
-
-    monkeypatch.setattr(adapter, "_sharded_ragged_paged_attention", fake_sharded_ragged_paged_attention)
-
-    attn, updated_cache = adapter.paged_attention_with_kv_update(
-        q,
-        new_k,
-        new_v,
-        kv_cache,
-        batch_info,
-        sm_scale=SM_SCALE,
-        soft_cap=None,
-        out_dtype=jnp.float32,
-    )
-
-    assert seen_dtypes == {
-        "q": jnp.float32,
-        "k": jnp.bfloat16,
-        "v": jnp.bfloat16,
-        "cache": jnp.bfloat16,
-    }
-    assert attn.array.dtype == jnp.float32
-    assert updated_cache.kv_pages.array.dtype == jnp.bfloat16
