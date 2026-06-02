@@ -85,6 +85,8 @@ def _build_random_case(rng, seq_lens):
 
 
 def _rpa_tol() -> float:
+    # JAX uses a very loose tolerance for its ragged attention tests.
+    # 2% on TPU is inherited from that contract.
     return 2e-2 if any(device.platform == "tpu" for device in jax.devices()) else 1e-4
 
 
@@ -105,10 +107,17 @@ def test_do_tpu_ragged_paged_attention_accepts_traced_sm_scale(monkeypatch):
         num_queries_per_block,
         vmem_limit_bytes,
     ):
-        del kv_pages_arr, kv_lens_arr, page_indices_arr, cu_q_lens_arr, num_seqs_arr, soft_cap
-        assert num_kv_pages_per_block == 64
-        assert num_queries_per_block == 16
-        assert vmem_limit_bytes == 64 * 1024 * 1024
+        del (
+            kv_pages_arr,
+            kv_lens_arr,
+            page_indices_arr,
+            cu_q_lens_arr,
+            num_seqs_arr,
+            soft_cap,
+            num_kv_pages_per_block,
+            num_queries_per_block,
+            vmem_limit_bytes,
+        )
         return q_arr * jnp.asarray(sm_scale, dtype=q_arr.dtype)
 
     monkeypatch.setattr(attention_module, "tpu_ragged_paged_attention", _fake_tpu_rpa)

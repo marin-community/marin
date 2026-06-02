@@ -12,17 +12,17 @@ from chex import assert_trees_all_close
 import haliax as hax
 from haliax import Axis
 
-import levanter.inference.tpu_kernels as tpu_kernels
+import levanter.inference.paged_attention_kernels as paged_attention_kernels
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
-from levanter.inference.tpu_kernels import (
-    TpuPagedAttentionBackend,
-    TpuPagedAttentionConfig,
-    TpuPagedAttentionFallbackWarning,
-    TpuPagedAttentionShape,
-    UnsupportedTpuPagedAttentionBackend,
-    available_tpu_paged_attention_backends,
+from levanter.inference.paged_attention_kernels import (
+    PagedAttentionBackend,
+    PagedAttentionConfig,
+    PagedAttentionFallbackWarning,
+    PagedAttentionShape,
+    UnsupportedPagedAttentionBackend,
+    available_paged_attention_backends,
     paged_attention_with_kv_update,
-    tpu_paged_attention_supports_shape,
+    paged_attention_supports_shape,
 )
 from levanter.inference.utils import INVALID
 from levanter.layers.attention import default_ragged_paged_attention
@@ -98,6 +98,8 @@ def _multi_sequence_page_boundary_case():
 
 
 def _expected_attention_after_update(q, new_k, new_v, kv_cache, batch_info, *, soft_cap):
+    """Reference path for backend tests: update the KV cache, then run pure-JAX paged attention."""
+
     expected_cache = kv_cache.update(batch_info, new_k, new_v)
     expected = default_ragged_paged_attention(
         q,
@@ -112,7 +114,9 @@ def _expected_attention_after_update(q, new_k, new_v, kv_cache, batch_info, *, s
     return expected, expected_cache
 
 
-def _assert_backend_matches_reference(case_factory, *, backend: TpuPagedAttentionBackend, soft_cap: float | None):
+def _assert_backend_matches_reference(case_factory, *, backend: PagedAttentionBackend, soft_cap: float | None):
+    """Exercise backend dispatch through the coupled KV-update plus paged-attention path."""
+
     expected_q, expected_new_k, expected_new_v, expected_cache_input, expected_batch_info = case_factory()
     expected, expected_cache = _expected_attention_after_update(
         expected_q,
@@ -124,8 +128,8 @@ def _assert_backend_matches_reference(case_factory, *, backend: TpuPagedAttentio
     )
     q, new_k, new_v, kv_cache, batch_info = case_factory()
 
-    config = TpuPagedAttentionConfig(backend=backend)
-    if backend == TpuPagedAttentionBackend.REFERENCE:
+    config = PagedAttentionConfig(backend=backend)
+    if backend == PagedAttentionBackend.REFERENCE:
         config = dataclasses.replace(config, fail_on_reference_fallback=False)
 
     attn, updated_cache = paged_attention_with_kv_update(
@@ -147,12 +151,12 @@ def _assert_backend_matches_reference(case_factory, *, backend: TpuPagedAttentio
 def test_auto_backend_updates_cache_and_matches_reference_on_cpu():
     _assert_backend_matches_reference(
         _single_sequence_case,
-        backend=TpuPagedAttentionBackend.AUTO,
+        backend=PagedAttentionBackend.AUTO,
         soft_cap=None,
     )
 
 
-@pytest.mark.parametrize("backend", [TpuPagedAttentionBackend.AUTO, TpuPagedAttentionBackend.REFERENCE])
+@pytest.mark.parametrize("backend", [PagedAttentionBackend.AUTO, PagedAttentionBackend.REFERENCE])
 @pytest.mark.parametrize("soft_cap", [None, 30.0])
 def test_backend_matches_reference_on_multi_sequence_page_boundary_grouped_heads(backend, soft_cap):
     _assert_backend_matches_reference(
@@ -174,9 +178,9 @@ def test_explicit_tpu_inference_backend_fails_fast_on_cpu():
             batch_info,
             sm_scale=SM_SCALE,
             soft_cap=None,
-            config=TpuPagedAttentionConfig(backend=TpuPagedAttentionBackend.TPU_INFERENCE),
+            config=PagedAttentionConfig(backend=PagedAttentionBackend.TPU_INFERENCE),
         )
-    except UnsupportedTpuPagedAttentionBackend as exc:
+    except UnsupportedPagedAttentionBackend as exc:
         message = str(exc)
         assert "only runs on TPU" in message or "not importable" in message
     else:
@@ -185,12 +189,12 @@ def test_explicit_tpu_inference_backend_fails_fast_on_cpu():
 
 def test_backend_sequence_warns_then_runs_reference_on_cpu():
     q, new_k, new_v, kv_cache, batch_info = _single_sequence_case()
-    config = TpuPagedAttentionConfig(
-        backend=(TpuPagedAttentionBackend.TPU_INFERENCE, TpuPagedAttentionBackend.REFERENCE),
+    config = PagedAttentionConfig(
+        backend=(PagedAttentionBackend.TPU_INFERENCE, PagedAttentionBackend.REFERENCE),
         fail_on_reference_fallback=False,
     )
 
-    with pytest.warns(TpuPagedAttentionFallbackWarning):
+    with pytest.warns(PagedAttentionFallbackWarning):
         attn, updated_cache = paged_attention_with_kv_update(
             q,
             new_k,
@@ -220,13 +224,13 @@ def test_auto_backend_warns_then_uses_reference_on_tpu_without_mesh_when_tpu_inf
 
     def unavailable_tpu_backend(*args, **kwargs):
         del args, kwargs
-        raise UnsupportedTpuPagedAttentionBackend("tpu-inference import failed")
+        raise UnsupportedPagedAttentionBackend("tpu-inference import failed")
 
-    monkeypatch.setattr(tpu_kernels, "_current_platform", lambda: "tpu")
-    monkeypatch.setattr(tpu_kernels, "_has_nonempty_mesh", lambda: False)
-    monkeypatch.setattr(tpu_kernels, "_run_tpu_inference_backend", unavailable_tpu_backend)
+    monkeypatch.setattr(paged_attention_kernels, "_current_platform", lambda: "tpu")
+    monkeypatch.setattr(paged_attention_kernels, "_has_nonempty_mesh", lambda: False)
+    monkeypatch.setattr(paged_attention_kernels, "_run_tpu_inference_backend", unavailable_tpu_backend)
 
-    with pytest.warns(TpuPagedAttentionFallbackWarning):
+    with pytest.warns(PagedAttentionFallbackWarning):
         attn, updated_cache = paged_attention_with_kv_update(
             q,
             new_k,
@@ -235,7 +239,7 @@ def test_auto_backend_warns_then_uses_reference_on_tpu_without_mesh_when_tpu_inf
             batch_info,
             sm_scale=SM_SCALE,
             soft_cap=None,
-            config=TpuPagedAttentionConfig(),
+            config=PagedAttentionConfig(),
         )
 
     assert_trees_all_close(attn.array, expected.array, atol=1e-3, rtol=1e-3)
@@ -244,7 +248,7 @@ def test_auto_backend_warns_then_uses_reference_on_tpu_without_mesh_when_tpu_inf
 
 def test_reference_backend_is_not_a_silent_tpu_fallback(monkeypatch):
     q, new_k, new_v, kv_cache, batch_info = _single_sequence_case()
-    monkeypatch.setattr("levanter.inference.tpu_kernels._current_platform", lambda: "tpu")
+    monkeypatch.setattr("levanter.inference.paged_attention_kernels._current_platform", lambda: "tpu")
 
     try:
         paged_attention_with_kv_update(
@@ -255,7 +259,7 @@ def test_reference_backend_is_not_a_silent_tpu_fallback(monkeypatch):
             batch_info,
             sm_scale=SM_SCALE,
             soft_cap=None,
-            config=TpuPagedAttentionConfig(backend=TpuPagedAttentionBackend.REFERENCE),
+            config=PagedAttentionConfig(backend=PagedAttentionBackend.REFERENCE),
         )
     except ValueError as exc:
         assert "fail_on_reference_fallback=True" in str(exc)
@@ -279,7 +283,7 @@ def test_duplicate_token_destinations_raise_before_backend_dispatch():
             duplicate_batch_info,
             sm_scale=SM_SCALE,
             soft_cap=None,
-            config=TpuPagedAttentionConfig(),
+            config=PagedAttentionConfig(),
         )
     except ValueError as exc:
         assert "duplicate valid destinations" in str(exc)
@@ -288,15 +292,15 @@ def test_duplicate_token_destinations_raise_before_backend_dispatch():
 
 
 def test_available_backends_on_cpu_only_report_reference():
-    backends = available_tpu_paged_attention_backends()
-    if tpu_kernels._is_tpu():
-        assert TpuPagedAttentionBackend.REFERENCE not in backends
+    backends = available_paged_attention_backends()
+    if paged_attention_kernels._is_tpu():
+        assert PagedAttentionBackend.REFERENCE not in backends
     else:
-        assert backends == (TpuPagedAttentionBackend.REFERENCE,)
+        assert backends == (PagedAttentionBackend.REFERENCE,)
 
 
 def test_initial_qwen3_shape_support_matches_target_tensor_parallelism():
-    target_shape = TpuPagedAttentionShape(
+    target_shape = PagedAttentionShape(
         platform="tpu",
         device_kind="TPU v5",
         dtype=jnp.bfloat16,
@@ -309,7 +313,7 @@ def test_initial_qwen3_shape_support_matches_target_tensor_parallelism():
         tensor_parallel_size=4,
     )
 
-    supported, reason = tpu_paged_attention_supports_shape(TpuPagedAttentionBackend.TPU_INFERENCE, target_shape)
+    supported, reason = paged_attention_supports_shape(PagedAttentionBackend.TPU_INFERENCE, target_shape)
 
     assert supported
     assert reason is None
