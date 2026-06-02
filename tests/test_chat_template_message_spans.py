@@ -4,6 +4,12 @@
 from itertools import pairwise
 
 import pytest
+from levanter.data.text import TraceChatProcessor
+from levanter.data.text.trace_chat import (
+    TRACE_LABEL_ASSISTANT_TOOL_CALL,
+    TRACE_LABEL_FINAL_ASSISTANT,
+    TRACE_LABEL_OBSERVATION,
+)
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
 from experiments.chat_templates.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
@@ -81,3 +87,53 @@ def test_apply_chat_template_message_spans_real_templates(case_name, tokenizer_n
     for message, (start, end) in zip(conversation, spans, strict=True):
         span_text = tokenizer.decode(input_ids[start:end], skip_special_tokens=False)
         assert message["content"] in span_text
+
+
+@pytest.mark.parametrize(
+    "case_name,tokenizer_name,chat_template,template_kwargs",
+    _MESSAGE_SPAN_REAL_TEMPLATE_CASES[:3],
+    ids=[case[0] for case in _MESSAGE_SPAN_REAL_TEMPLATE_CASES[:3]],
+)
+def test_trace_chat_processor_labels_real_templates(case_name, tokenizer_name, chat_template, template_kwargs):
+    tokenizer = _load_optional_tokenizer(tokenizer_name)
+    processor = TraceChatProcessor(
+        tokenizer,
+        chat_template=chat_template,
+        loss_tags=("assistant", "tool_call", "observation", "final_assistant"),
+    )
+
+    result = processor(
+        [
+            {
+                "messages": [
+                    {"role": "user", "content": f"{case_name} call the lookup tool."},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_lookup",
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": {"key": case_name}},
+                            }
+                        ],
+                    },
+                    {"role": "tool", "content": '{"result": 3}'},
+                    {"role": "assistant", "content": f"{case_name} final answer is done."},
+                ],
+                "chat_template_kwargs": template_kwargs,
+            }
+        ]
+    )[0]
+
+    labels = result["loss_labels"]
+    input_ids = result["input_ids"]
+    tool_call_text = tokenizer.decode(input_ids[labels == TRACE_LABEL_ASSISTANT_TOOL_CALL].tolist())
+    observation_text = tokenizer.decode(input_ids[labels == TRACE_LABEL_OBSERVATION].tolist())
+    final_text = tokenizer.decode(input_ids[labels == TRACE_LABEL_FINAL_ASSISTANT].tolist())
+
+    assert "lookup" in tool_call_text
+    assert case_name in tool_call_text
+    assert "result" in observation_text
+    assert "3" in observation_text
+    assert f"{case_name} final answer is done." in final_text

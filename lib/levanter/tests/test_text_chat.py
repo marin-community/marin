@@ -5,7 +5,9 @@ from __future__ import annotations
 
 from typing import Sequence
 
+import numpy as np
 import pytest
+from haliax import Axis
 
 from levanter.data.text import ChatProcessor, TraceChatProcessor
 from levanter.data.text.trace_chat import (
@@ -14,7 +16,9 @@ from levanter.data.text.trace_chat import (
     TRACE_LABEL_FINAL_ASSISTANT,
     TRACE_LABEL_OBSERVATION,
     TRACE_LABEL_PATCH,
+    TraceChatDataset,
 )
+from levanter.store.cache import SerialCacheWriter
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
 
@@ -485,6 +489,56 @@ def test_trace_chat_processor_splits_text_tool_calls(tokenizer: MarinTokenizer):
     assert "I will read it." in assistant_text
     assert '"name": "open_file"' in tool_call_text
     assert '"path": "README.md"' in tool_call_text
+
+
+@pytest.mark.asyncio
+async def test_trace_chat_dataset_shifts_labels_without_cross_document_bleed(tmp_path):
+    exemplar = {
+        "input_ids": np.zeros((0,), dtype=np.int32),
+        "loss_labels": np.zeros((0,), dtype=np.int32),
+    }
+    with SerialCacheWriter(str(tmp_path), exemplar) as writer:
+        writer.write_batch(
+            [
+                {
+                    "input_ids": np.array([10, 11, 12], dtype=np.int32),
+                    "loss_labels": np.array([TRACE_LABEL_ASSISTANT_TEXT] * 3, dtype=np.int32),
+                },
+                {
+                    "input_ids": np.array([20, 21, 22], dtype=np.int32),
+                    "loss_labels": np.array([TRACE_LABEL_ASSISTANT_TOOL_CALL] * 3, dtype=np.int32),
+                },
+            ]
+        )
+
+    dataset = TraceChatDataset(
+        writer.result(),
+        Axis("position", 6),
+        max_segments_per_example=2,
+        slice_strategy="raise",
+        block_cross_document_attention=True,
+    )
+    example = await dataset.getitem_async(0)
+
+    np.testing.assert_array_equal(example.tokens, np.array([10, 11, 12, 20, 21, 22], dtype=np.int32))
+    np.testing.assert_array_equal(
+        example.loss_labels,
+        np.array(
+            [
+                TRACE_LABEL_ASSISTANT_TEXT,
+                TRACE_LABEL_ASSISTANT_TEXT,
+                0,
+                TRACE_LABEL_ASSISTANT_TOOL_CALL,
+                TRACE_LABEL_ASSISTANT_TOOL_CALL,
+                0,
+            ],
+            dtype=np.int32,
+        ),
+    )
+    assert example.attn_mask.segment_ids is not None
+    query_segment_ids, key_segment_ids = example.attn_mask.segment_ids
+    np.testing.assert_array_equal(query_segment_ids, np.array([0, 0, 0, 1, 1, 1], dtype=np.int32))
+    np.testing.assert_array_equal(key_segment_ids, np.array([0, 0, 0, 1, 1, 1], dtype=np.int32))
 
 
 def test_tool_call_masking_behavior(tokenizer: MarinTokenizer):
