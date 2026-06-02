@@ -23,7 +23,7 @@ from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
 from iris.cluster.worker.stats import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
-from iris.rpc import controller_pb2, job_pb2, query_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.errors import call_with_retry, format_connect_error, poll_with_retries
@@ -419,23 +419,20 @@ class RemoteClusterClient:
             raise ConnectionError(f"No {endpoint_name!r} endpoint registered on controller")
         return endpoints[0].address
 
-    def list_workers(self) -> list[controller_pb2.Controller.WorkerHealthStatus]:
+    def list_workers(
+        self,
+        query: controller_pb2.Controller.WorkerQuery | None = None,
+    ) -> list[controller_pb2.Controller.WorkerHealthStatus]:
         """List all workers registered with the controller."""
 
         def _call():
             request = controller_pb2.Controller.ListWorkersRequest()
+            if query is not None:
+                request.query.CopyFrom(query)
             response = self._client.list_workers(request)
             return list(response.workers)
 
         return call_with_retry("list_workers", _call)
-
-    def execute_raw_query(self, request: query_pb2.RawQueryRequest) -> query_pb2.RawQueryResponse:
-        """Execute a read-only controller query."""
-
-        def _call():
-            return self._client.execute_raw_query(request)
-
-        return call_with_retry("execute_raw_query", _call)
 
     def list_jobs(
         self,
