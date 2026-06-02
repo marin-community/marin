@@ -5,7 +5,7 @@ Issue: https://github.com/marin-community/marin/issues/6106
 ## Branches
 
 - Marin: [`grugmoe-vllm-tpu-support`](https://github.com/marin-community/marin/tree/grugmoe-vllm-tpu-support) in `/home/romain/dev/marin-wt/grugmoe-vllm-tpu-support`
-  - Commit: [`999ae16e8`](https://github.com/marin-community/marin/commit/999ae16e859a39d3a4ebd5d5ee74d20c0ee16630)
+  - Commit: [`faa26e2a3`](https://github.com/marin-community/marin/commit/faa26e2a3fd6efb3700e796917565435f0773321)
 - vLLM: [`grugmoe-vllm-tpu-support`](https://github.com/marin-community/vllm/tree/grugmoe-vllm-tpu-support) in `/home/romain/dev/marin-wt/grugmoe-vllm-tpu-vllm`
   - Commit: [`86c81da58`](https://github.com/marin-community/vllm/commit/86c81da58c53065d463390b2f4778f01aecc5862)
 - tpu-inference: [`grugmoe-vllm-tpu-support`](https://github.com/marin-community/tpu-inference/tree/grugmoe-vllm-tpu-support) in `/home/romain/dev/marin-wt/grugmoe-vllm-tpu-inference`
