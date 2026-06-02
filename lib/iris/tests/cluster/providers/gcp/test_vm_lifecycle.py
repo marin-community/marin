@@ -7,6 +7,8 @@ These tests use GcpWorkerProvider with InMemoryGcpService(DRY_RUN) and don't
 need a full cluster fixture.
 """
 
+import unittest.mock
+
 import pytest
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
@@ -51,12 +53,19 @@ def test_tpu_quota_exceeded_retry():
 
 
 def test_tpu_init_stuck():
-    """TPU never becomes READY (stuck in CREATING)."""
+    """A monitored TPU whose workers never become healthy stays non-READY (CREATING)."""
     service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     platform = GcpWorkerProvider(_make_gcp_config(), label_prefix="test", worker_port=10001, gcp_service=service)
-    handle = platform.create_slice(_make_slice_config("stuck"))
 
-    # TPU stays in CREATING (we never advance it to READY)
+    # Bootstrap-monitored slice (worker_config) with the bootstrap thread
+    # suppressed: bootstrap never reports healthy, so the slice must not present
+    # as READY while the node sits in CREATING.
+    wc = config_pb2.WorkerConfig(
+        docker_image="img:latest", port=10001, controller_address="c:10000", cache_dir="/var/cache/iris"
+    )
+    with unittest.mock.patch("iris.cluster.providers.gcp.workers.threading.Thread"):
+        handle = platform.create_slice(_make_slice_config("stuck"), worker_config=wc)
+
     status = handle.describe()
     assert status.state == CloudSliceState.CREATING
 

@@ -30,7 +30,6 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, hash_token, resolve_auth
 from rigging.timing import Timestamp
@@ -40,6 +39,7 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from tests.cluster.conftest import fake_log_client_from_service
+from tests.cluster.controller._test_support import ControllerTestState
 
 _TEST_TOKEN = "valid-test-token"
 _TEST_USER = "test-user"
@@ -58,7 +58,7 @@ def db(tmp_path):
 
 @pytest.fixture
 def state(db, tmp_path):
-    s = ControllerTransitions(db)
+    s = ControllerTestState(db)
     yield s
 
 
@@ -75,7 +75,6 @@ def service(state, tmp_path, log_service):
     controller_mock.provider = Mock()
     controller_mock.has_direct_provider = False
     return ControllerServiceImpl(
-        state,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(log_service),

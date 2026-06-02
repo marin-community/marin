@@ -18,6 +18,7 @@ from collections.abc import Callable
 import yaml
 from google.protobuf.json_format import MessageToDict
 
+from iris.cluster.config_serde import config_to_dict
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -492,9 +493,6 @@ def build_controller_bootstrap_script_from_config(
         fresh: When True, pass ``--fresh`` to the controller serve command so
             it starts with an empty local database and skips checkpoint restore.
     """
-    # circular import: config → factory → gcp.workers → bootstrap → config
-    from iris.cluster.config import config_to_dict
-
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)
     port = config.controller.gcp.port or config.controller.manual.port or 10000
     image = config.controller.image

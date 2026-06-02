@@ -51,7 +51,7 @@ from iris.cluster.types import (
 )
 from iris.rpc import job_pb2
 from iris.rpc.auth import TokenProvider
-from iris.rpc.proto_utils import (
+from iris.rpc.proto_display import (
     PRIORITY_BAND_NAMES,
     job_state_friendly,
     priority_band_value,

@@ -407,7 +407,10 @@ class HfMarinTokenizer:
         # rejects "@" in pretrained_model_name_or_path. Pass the revision via
         # the dedicated kwarg instead.
         repo, revision = _parse_repo_revision(self._name_or_path)
-        return AutoTokenizer.from_pretrained(repo, revision=revision, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(repo, revision=revision, trust_remote_code=True)
+        if self._chat_template is not None and getattr(tokenizer, "chat_template", None) != self._chat_template:
+            tokenizer.chat_template = self._chat_template
+        return tokenizer
 
 
 @dataclasses.dataclass(frozen=True)
@@ -572,7 +575,10 @@ class KitokenMarinTokenizer:
         # rejects "@" in pretrained_model_name_or_path. Pass the revision via
         # the dedicated kwarg instead.
         repo, revision = _parse_repo_revision(self._name_or_path)
-        return AutoTokenizer.from_pretrained(repo, revision=revision, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(repo, revision=revision, trust_remote_code=True)
+        if self._chat_template is not None and getattr(tokenizer, "chat_template", None) != self._chat_template:
+            tokenizer.chat_template = self._chat_template
+        return tokenizer
 
 
 class TokenizerBackend(StrEnum):

@@ -1,8 +1,8 @@
 # DPO Training in Levanter
 
 Direct Preference Optimization (DPO) fine-tunes a language model to prefer
-chosen responses over rejected ones. Levanter supports DPO through a dedicated
-training script and preference data format.
+chosen responses over rejected ones. Levanter supports both standard DPO and
+LoRA-DPO through the same `train_dpo.py` entrypoint and preference data format.
 
 ## Data Format
 
@@ -56,8 +56,14 @@ trainer:
   mp: p=f32,c=bfloat16
 
 # DPO-specific fields
-reference_model_path: "meta-llama/Llama-3.1-8B-Instruct"
-reference_is_hf: true     # true if reference_model_path is a HuggingFace ID
+adapter:
+  type: none
+
+reference:
+  type: separate
+  model_path: "meta-llama/Llama-3.1-8B-Instruct"
+  is_hf: true
+
 beta: 0.1                 # Regularization strength
 
 initialize_from_hf: "meta-llama/Llama-3.1-8B-Instruct"  # Policy initialization
@@ -72,16 +78,116 @@ validation_split_fraction: 0.1  # Auto-split from training data; null to disable
 
 ### Key Fields
 
-- **`reference_model_path`** (required): The frozen reference model. Typically
-  the same pretrained model used to initialize the policy.
+- **`adapter`**: How the policy model is adapted before training.
+  Standard full-parameter DPO uses `adapter.type: none`.
+- **`reference`**: How the frozen reference log-probabilities are obtained.
+  Standard DPO uses `reference.type: separate` and points at a frozen model.
 - **`beta`**: Controls how much the policy can deviate from the reference.
   Smaller values (0.01) allow more deviation; larger values (0.5) keep the
   policy closer to the reference.
-- **`reference_is_hf`**: Set to `true` when `reference_model_path` is a
-  HuggingFace model ID. Set to `false` for a Levanter checkpoint path.
 - **`validation_split_fraction`**: Automatically holds out a fraction of the
   training data for validation. Set to `null` to use separately configured
   validation sets.
+
+For LoRA-DPO, flip only the adapter/reference blocks:
+
+```yaml
+adapter:
+  type: lora
+  r: 64
+  alpha: 64.0
+  dropout: 0.0
+  target_modules: null  # null = all linear modules (recommended)
+  # Init defaults to a_init_mode: zero (zero adapter delta at step 0); see
+  # "Adapter Initialization" below.
+
+reference:
+  type: adapter_base
+
+optimizer:
+  # LoRA needs ~10x higher LR than full fine-tuning.
+  # Standard DPO full-FT uses 5e-7; LoRA DPO should start at 5e-6.
+  learning_rate: 5e-6
+```
+
+With `adapter_base`, the base model (without LoRA adapters) serves as the
+frozen reference, eliminating the second model copy and roughly halving
+model-parameter memory.
+
+#### Adapter Initialization (`a_init_mode` and `zero_init_b`)
+
+LoRA-DPO requires the adapter delta `B @ A` to be **zero at init**, so the
+policy exactly matches the reference at step 0 (implicit reward 0, DPO loss
+`ln 2 ≈ 0.693`). If the delta is non-zero at init, the policy immediately
+diverges from the reference, producing catastrophically wrong log-probability
+margins and a loss that starts around ~12 instead of ~0.69.
+
+Two independent knobs control the LoRA factors, and there are two ways to make
+the delta zero:
+
+- **`a_init_mode`** — how the `A` matrix is initialized.
+    - `zero` *(default)*: `A = 0`, `B` random. `B @ A = 0` at init, and the
+      first optimizer step flows through the full-rank `A` (its gradient is
+      non-zero because `B` is random). This is the **default for all LoRA** and
+      the DPO-robust choice: it avoids the FSDP all-reduce-noise
+      sigma-sensitivity near `π = π_ref` (see
+      [#4755](https://github.com/marin-community/marin/issues/4755) and the
+      Bug-1 logbook).
+    - `random`: `A` is drawn from the standard Linear init (the LoRA-paper
+      convention); whether the delta is zero is then left to `zero_init_b`.
+- **`zero_init_b`** *(default `false`)* — if `true`, `B = 0` (the standard PEFT
+  convention). With `a_init_mode: random` this is the classic LoRA identity
+  init, but a zero `B` makes the first gradient flow through the degenerate
+  zero-init `B` — the fragile path Bug-1 documents.
+
+**Validation.** For `reference.type: adapter_base`, `train_dpo.py` requires
+*exactly one* zero factor — set **either** `a_init_mode: zero` **or**
+`zero_init_b: true`, but not both. Both-zero leaves no path for gradients to
+flow; neither-zero leaves a non-zero delta at init. With the default
+(`a_init_mode: zero`) you normally set neither flag. (`reference.type: separate`
+has no such check, but the same zero-delta-at-init reasoning applies whenever
+the reference is the policy's own base model.)
+
+> **Correction:** earlier versions of this guide stated that `zero_init_b: true`
+> was *required* for LoRA-DPO and that `train_dpo.py` *rejects*
+> `zero_init_b: false`. That was a documentation bug. `a_init_mode: zero` (now
+> the default) produces a zero delta with `zero_init_b: false`, and is the
+> recommended setting.
+
+#### LoRA Checkpoint Saving
+
+LoRA DPO supports two checkpoint formats:
+
+```yaml
+peft_save_path: gs://bucket/checkpoints/peft       # Adapter-only (small)
+merged_hf_save_path: gs://bucket/checkpoints/merged # Full merged model
+hf_save_steps: 1000
+```
+
+- **PEFT checkpoints** save only LoRA adapter weights. Load with
+  `peft.PeftModel.from_pretrained()`.
+- **Merged checkpoints** fold LoRA weights into the base model and save a
+  standard HuggingFace checkpoint ready for direct inference.
+
+### Reference Eval Cache
+
+Set `reference_eval_cache.mode: build_or_load` to precompute validation-set
+reference log-probs before training starts, write them to a durable sidecar
+cache, and reuse them on later resumes or reruns:
+
+```yaml
+reference_eval_cache:
+  mode: build_or_load
+  # Optional override. By default Levanter writes a hashed cache under a
+  # sibling `reference_logprobs/` directory next to the validation cache.
+  cache_dir: "gs://my-bucket/dpo/reference_eval"
+```
+
+This cache is eval-only. Training still computes reference log-probs in the
+normal way. The first run pays a one-time build cost; later runs load the
+completed cache and skip the reference forward passes during validation. If a
+job is preempted mid-build, the unfinished cache is ignored and rebuilt on the
+next start.
 
 ### Generation Stop Tokens
 
@@ -120,11 +226,14 @@ python -m levanter.main.train_dpo --config_path my_dpo_config.yaml
 
 ## Architecture
 
-DPO training wraps two copies of the model in a `DpoModel`:
+The runtime model shape depends on the configured reference path:
 
-- **Policy model** — trainable, updated by the optimizer.
-- **Reference model** — frozen, loaded fresh each run (not saved in
-  checkpoints).
+- **`reference.type: separate`** keeps `DpoModel(policy, reference)` in
+  trainer state so the frozen reference is passed into the train step as an
+  explicit input. Only the policy side is trainable/saveable.
+- **`reference.type: adapter_base`** keeps only the adapted policy model in
+  trainer state and derives the reference view from the adapter-free base
+  model inside the step.
 
 The DPO loss encourages the policy to assign higher log-probability margins to
 chosen responses than the reference does:
@@ -133,9 +242,9 @@ chosen responses than the reference does:
 loss = softplus(-beta * ((log_pi_chosen - log_pi_rejected) - (log_ref_chosen - log_ref_rejected)))
 ```
 
-Only the policy model's parameters are saved in training checkpoints. The
-reference model is reloaded from `reference_model_path` on every
-start/resume.
+Only the policy parameters are saved in training checkpoints. When
+`reference.type: separate` is used, the frozen reference weights are reloaded
+from the configured path on every start/resume.
 
 ## Metrics
 
