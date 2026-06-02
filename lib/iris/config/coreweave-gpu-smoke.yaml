@@ -20,9 +20,14 @@ image: ghcr.io/marin-community/iris-task:latest
 job:
   name: gpu-gang-smoke
   replicas: 3
-  # "pool" => Kueue preferred (soft) podset topology on the leafgroup, so the
-  # 3 nodes prefer the same IB spine for multi-host NCCL. Use "nvlink" to make
-  # it a hard requirement on a single NVLink domain instead.
+  # group_by selects the Kueue podset topology from the provider's CoreWeave
+  # defaults (iris follows CKS conventions, see tasks.py _CW_DEFAULT_TOPOLOGIES):
+  #   pool     -> preferred (soft) ib.coreweave.cloud/leafgroup
+  #   nvlink   -> required (hard)  ds.coreweave.com/nvlink.domain
+  #   tpu-name -> required (hard)  ds.coreweave.com/nvlink.domain
+  # "pool" keeps the 3 nodes preferring the same IB leafgroup for multi-host
+  # NCCL without making it a hard constraint. A cluster config can override these
+  # via kubernetes_provider.kueue.topologies.
   group_by: pool
   priority_band: batch
   cpu: "32"                     # cores per task (matches H100 node sizing)

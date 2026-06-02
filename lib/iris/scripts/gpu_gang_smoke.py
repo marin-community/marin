@@ -66,14 +66,6 @@ _PRIORITY_BANDS = {
     "batch": job_pb2.PRIORITY_BAND_BATCH,
 }
 
-# WorkloadPriorityClass names the provider stamps onto pods (see tasks.py
-# _BAND_TO_WPC). On kind we create these; on CKS an admin provisions them.
-_WPC_NAMES = {
-    job_pb2.PRIORITY_BAND_PRODUCTION: ("iris-production", 3000),
-    job_pb2.PRIORITY_BAND_INTERACTIVE: ("iris-interactive", 2000),
-    job_pb2.PRIORITY_BAND_BATCH: ("iris-batch", 1000),
-}
-
 _TERMINAL_OK = {job_pb2.TASK_STATE_SUCCEEDED}
 _TERMINAL_BAD = {
     job_pb2.TASK_STATE_FAILED,
@@ -348,18 +340,6 @@ def _kueue_queues_manifest(cfg: SmokeConfig) -> str:
             """
         ).strip(),
     ]
-    for _band, (name, value) in _WPC_NAMES.items():
-        docs.append(
-            textwrap.dedent(
-                f"""
-                apiVersion: kueue.x-k8s.io/v1beta1
-                kind: WorkloadPriorityClass
-                metadata:
-                  name: {name}
-                value: {value}
-                """
-            ).strip()
-        )
     return "\n---\n".join(docs)
 
 

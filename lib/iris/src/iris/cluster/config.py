@@ -29,7 +29,7 @@ from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import parse_memory_string
-from iris.rpc import config_pb2
+from iris.rpc import config_pb2, job_pb2
 from iris.time_proto import duration_to_proto
 
 logger = logging.getLogger(__name__)
@@ -77,6 +77,14 @@ _COREWEAVE_TOPOLOGY_LABEL_PREFIXES = (
     "ib.coreweave.cloud/",
     "node.coreweave.cloud/",
 )
+
+# Maps the band names used as keys in KueueConfig.priority_classes to the
+# PriorityBand enum the provider stamps onto pods.
+_KUEUE_PRIORITY_BANDS = {
+    "production": job_pb2.PRIORITY_BAND_PRODUCTION,
+    "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
+    "batch": job_pb2.PRIORITY_BAND_BATCH,
+}
 
 
 def _normalize_accelerator_type_field(d: dict) -> None:
@@ -1166,6 +1174,13 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
         namespace = kp.namespace or "iris"
         label_prefix = cluster_config.platform.label_prefix
         managed_label = f"iris-{label_prefix}-managed" if label_prefix else ""
+        priority_classes = {
+            _KUEUE_PRIORITY_BANDS[band_name]: wpc for band_name, wpc in kp.kueue.priority_classes.items()
+        }
+        topologies = {group_by: (topo.node_label, topo.required) for group_by, topo in kp.kueue.topologies.items()}
+        provider_kwargs: dict[str, object] = {}
+        if topologies:
+            provider_kwargs["kueue_topologies"] = topologies
         return K8sTaskProvider(
             kubectl=CloudK8sService(namespace=namespace, kubeconfig_path=kp.kubeconfig or None),
             namespace=namespace,
@@ -1177,7 +1192,9 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
             controller_address=kp.controller_address or None,
             managed_label=managed_label,
             task_env=dict(cluster_config.defaults.task_env),
-            local_queue=kp.local_queue or "",
+            local_queue=kp.kueue.local_queue or "",
+            kueue_priority_classes=priority_classes,
+            **provider_kwargs,
         )
     if which == "worker_provider":
         from iris.cluster.controller.worker_provider import RpcWorkerStubFactory

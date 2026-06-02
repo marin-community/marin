@@ -483,8 +483,40 @@ class WorkerProviderConfig(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
+class KueueTopology(_message.Message):
+    __slots__ = ("node_label", "required")
+    NODE_LABEL_FIELD_NUMBER: _ClassVar[int]
+    REQUIRED_FIELD_NUMBER: _ClassVar[int]
+    node_label: str
+    required: bool
+    def __init__(self, node_label: _Optional[str] = ..., required: _Optional[bool] = ...) -> None: ...
+
+class KueueConfig(_message.Message):
+    __slots__ = ("local_queue", "priority_classes", "topologies")
+    class PriorityClassesEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    class TopologiesEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: KueueTopology
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[KueueTopology, _Mapping]] = ...) -> None: ...
+    LOCAL_QUEUE_FIELD_NUMBER: _ClassVar[int]
+    PRIORITY_CLASSES_FIELD_NUMBER: _ClassVar[int]
+    TOPOLOGIES_FIELD_NUMBER: _ClassVar[int]
+    local_queue: str
+    priority_classes: _containers.ScalarMap[str, str]
+    topologies: _containers.MessageMap[str, KueueTopology]
+    def __init__(self, local_queue: _Optional[str] = ..., priority_classes: _Optional[_Mapping[str, str]] = ..., topologies: _Optional[_Mapping[str, KueueTopology]] = ...) -> None: ...
+
 class KubernetesProviderConfig(_message.Message):
-    __slots__ = ("namespace", "kubeconfig", "default_image", "colocation_topology_key", "service_account", "host_network", "cache_dir", "controller_address", "local_queue")
+    __slots__ = ("namespace", "kubeconfig", "default_image", "colocation_topology_key", "service_account", "host_network", "cache_dir", "controller_address", "kueue")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     KUBECONFIG_FIELD_NUMBER: _ClassVar[int]
     DEFAULT_IMAGE_FIELD_NUMBER: _ClassVar[int]
@@ -493,7 +525,7 @@ class KubernetesProviderConfig(_message.Message):
     HOST_NETWORK_FIELD_NUMBER: _ClassVar[int]
     CACHE_DIR_FIELD_NUMBER: _ClassVar[int]
     CONTROLLER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
-    LOCAL_QUEUE_FIELD_NUMBER: _ClassVar[int]
+    KUEUE_FIELD_NUMBER: _ClassVar[int]
     namespace: str
     kubeconfig: str
     default_image: str
@@ -502,8 +534,8 @@ class KubernetesProviderConfig(_message.Message):
     host_network: bool
     cache_dir: str
     controller_address: str
-    local_queue: str
-    def __init__(self, namespace: _Optional[str] = ..., kubeconfig: _Optional[str] = ..., default_image: _Optional[str] = ..., colocation_topology_key: _Optional[str] = ..., service_account: _Optional[str] = ..., host_network: _Optional[bool] = ..., cache_dir: _Optional[str] = ..., controller_address: _Optional[str] = ..., local_queue: _Optional[str] = ...) -> None: ...
+    kueue: KueueConfig
+    def __init__(self, namespace: _Optional[str] = ..., kubeconfig: _Optional[str] = ..., default_image: _Optional[str] = ..., colocation_topology_key: _Optional[str] = ..., service_account: _Optional[str] = ..., host_network: _Optional[bool] = ..., cache_dir: _Optional[str] = ..., controller_address: _Optional[str] = ..., kueue: _Optional[_Union[KueueConfig, _Mapping]] = ...) -> None: ...
 
 class UserBudgetTier(_message.Message):
     __slots__ = ("user_ids", "budget_limit", "max_band")

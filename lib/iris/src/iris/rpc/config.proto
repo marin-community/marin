@@ -436,6 +436,38 @@ message AuthConfig {
 // No fields needed — all configuration is in defaults.worker and scale_groups.
 message WorkerProviderConfig {}
 
+// One Kueue topology placement rule (see KueueConfig.topologies).
+message KueueTopology {
+  // Node label the gang shares. Must be a level in the cluster's Kueue
+  // Topology CR for topology-aware scheduling to honor it, e.g.
+  // "ib.coreweave.cloud/leafgroup" or "ds.coreweave.com/nvlink.domain".
+  string node_label = 1;
+  // true  => kueue.x-k8s.io/podset-required-topology  (hard: one domain).
+  // false => kueue.x-k8s.io/podset-preferred-topology (soft: best effort).
+  bool required = 2;
+}
+
+// Kueue gang-admission config for the K8s direct provider. Iris follows the
+// cluster's Kueue conventions rather than dictating its own: these fields map
+// Iris concepts (priority bands, coscheduling group_by) onto whatever
+// WorkloadPriorityClasses and Topology levels the cluster admin provisioned.
+message KueueConfig {
+  // LocalQueue name stamped as kueue.x-k8s.io/queue-name on coscheduled pods.
+  // Empty disables Kueue gang admission (pods fall back to soft podAffinity
+  // colocation — the status quo on clusters without Kueue).
+  string local_queue = 1;
+  // PriorityBand -> WorkloadPriorityClass name. A band with no entry is left
+  // unstamped so Kueue applies its default priority; Iris never invents a class
+  // name, since a missing WorkloadPriorityClass makes Kueue reject the pod.
+  // Keys: "production" | "interactive" | "batch".
+  map<string, string> priority_classes = 2;
+  // group_by attribute -> topology placement. A group_by with no entry gets no
+  // topology annotation (the gang still admits atomically via
+  // pod-group-total-count, just unconstrained). When the whole map is empty the
+  // provider falls back to CoreWeave-convention defaults (see make_provider).
+  map<string, KueueTopology> topologies = 3;
+}
+
 // Configuration for KubernetesProvider: direct Pod dispatch without worker daemons.
 message KubernetesProviderConfig {
   string namespace = 1;    // Kubernetes namespace for task pods (default: "iris")
@@ -450,11 +482,7 @@ message KubernetesProviderConfig {
   bool host_network = 6;         // Run task pods with hostNetwork (for NCCL/IB)
   string cache_dir = 7;          // hostPath base for cache mounts (default: "/cache")
   string controller_address = 8; // Controller URL injected into task pods
-  // Kueue LocalQueue name stamped on coscheduled task pods
-  // (kueue.x-k8s.io/queue-name). Required for gang admission of coscheduled
-  // jobs; empty disables Kueue integration (coscheduled pods then schedule
-  // without gang admission). Admin provisions the LocalQueue out of band.
-  string local_queue = 9;
+  KueueConfig kueue = 9;  // Kueue gang admission; empty kueue.local_queue disables it
 }
 
 // ============================================================================

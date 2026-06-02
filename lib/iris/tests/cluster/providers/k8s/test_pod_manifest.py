@@ -17,7 +17,6 @@ from iris.cluster.providers.k8s.tasks import (
     _KUEUE_REQUIRED_TOPOLOGY,
     _LABEL_JOB_ID,
     _LABEL_TASK_HASH,
-    _band_to_wpc,
     _build_init_container_spec,
     _build_pdb_manifest,
     _build_pod_manifest,
@@ -919,7 +918,7 @@ def _cosched_req(task_id: str, attempt_id: int = 0, num_tasks: int = 64, group_b
 
 
 def test_kueue_labels_for_coscheduled_pod():
-    """Coscheduled pod + configured LocalQueue gets the full Kueue gang label/annotation set."""
+    """Coscheduled pod + configured LocalQueue gets the gang label/annotation set."""
     req = _cosched_req("/job/task/0", num_tasks=64, priority=job_pb2.PRIORITY_BAND_BATCH)
     manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
 
@@ -927,8 +926,25 @@ def test_kueue_labels_for_coscheduled_pod():
     annotations = manifest["metadata"]["annotations"]
     assert labels[_KUEUE_POD_GROUP_NAME] == _pod_group_name(JobName.from_wire("/job/task/0"), 0)
     assert labels[_KUEUE_QUEUE_NAME] == "iris-lq"
-    assert labels[_KUEUE_PRIORITY_CLASS] == "iris-batch"
     assert annotations[_KUEUE_POD_GROUP_TOTAL] == "64"
+
+
+def test_kueue_priority_class_not_stamped_without_config():
+    """With no configured priority-class mapping, pods carry no WorkloadPriorityClass label
+    (the cluster's Kueue default applies)."""
+    req = _cosched_req("/job/task/0", num_tasks=64, priority=job_pb2.PRIORITY_BAND_BATCH)
+    manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
+    assert _KUEUE_PRIORITY_CLASS not in manifest["metadata"]["labels"]
+
+
+def test_kueue_priority_class_stamped_from_config():
+    """A configured band->WorkloadPriorityClass mapping stamps the label for that band."""
+    req = _cosched_req("/job/task/0", num_tasks=64, priority=job_pb2.PRIORITY_BAND_BATCH)
+    manifest = _build_pod_manifest(
+        req,
+        pod_config(local_queue="iris-lq", kueue_priority_classes={job_pb2.PRIORITY_BAND_BATCH: "iris-batch"}),
+    )
+    assert manifest["metadata"]["labels"][_KUEUE_PRIORITY_CLASS] == "iris-batch"
 
 
 def test_kueue_required_topology_for_tpu():
@@ -949,7 +965,7 @@ def test_kueue_preferred_topology_for_pool():
     """group_by=pool -> preferred (soft) leafgroup topology."""
     manifest = _build_pod_manifest(_cosched_req("/job/task/0", group_by="pool"), pod_config(local_queue="iris-lq"))
     annotations = manifest["metadata"]["annotations"]
-    assert annotations[_KUEUE_PREFERRED_TOPOLOGY] == "backend.coreweave.cloud/leafgroup"
+    assert annotations[_KUEUE_PREFERRED_TOPOLOGY] == "ib.coreweave.cloud/leafgroup"
     assert _KUEUE_REQUIRED_TOPOLOGY not in annotations
 
 
@@ -1027,14 +1043,12 @@ def test_non_coscheduled_pod_has_no_kueue_labels():
     assert "annotations" not in manifest["metadata"]
 
 
-@pytest.mark.parametrize(
-    "band,expected",
-    [
-        (job_pb2.PRIORITY_BAND_PRODUCTION, "iris-production"),
-        (job_pb2.PRIORITY_BAND_INTERACTIVE, "iris-interactive"),
-        (job_pb2.PRIORITY_BAND_BATCH, "iris-batch"),
-        (job_pb2.PRIORITY_BAND_UNSPECIFIED, "iris-interactive"),
-    ],
-)
-def test_band_to_wpc(band, expected):
-    assert _band_to_wpc(band) == expected
+def test_kueue_topologies_override_config():
+    """A configured topologies mapping overrides the CoreWeave defaults for a group_by."""
+    manifest = _build_pod_manifest(
+        _cosched_req("/job/task/0", group_by="pool"),
+        pod_config(local_queue="iris-lq", kueue_topologies={"pool": ("rack.example.com/pod", True)}),
+    )
+    annotations = manifest["metadata"]["annotations"]
+    assert annotations[_KUEUE_REQUIRED_TOPOLOGY] == "rack.example.com/pod"
+    assert _KUEUE_PREFERRED_TOPOLOGY not in annotations

@@ -116,32 +116,20 @@ _KUEUE_PRIORITY_CLASS = "kueue.x-k8s.io/priority-class"
 _KUEUE_REQUIRED_TOPOLOGY = "kueue.x-k8s.io/podset-required-topology"
 _KUEUE_PREFERRED_TOPOLOGY = "kueue.x-k8s.io/podset-preferred-topology"
 
-# WorkloadPriorityClass names (admin-provisioned, see cluster bootstrap).
-_BAND_TO_WPC: dict[int, str] = {
-    job_pb2.PRIORITY_BAND_PRODUCTION: "iris-production",
-    job_pb2.PRIORITY_BAND_INTERACTIVE: "iris-interactive",
-    job_pb2.PRIORITY_BAND_BATCH: "iris-batch",
+# CoreWeave-convention fallback for KueueConfig.topologies: group_by -> (node
+# label, required?). Used only when the cluster config leaves topologies unset.
+# The node labels are levels in CoreWeave's Kueue Topology CRs: pool is a soft
+# (preferred) multi-node IB colocation on a leafgroup; nvlink/tpu-name are hard
+# (required) single NVLink domains (GB200 only — H100 has no nvlink.domain
+# label). A cluster whose Topology uses different levels overrides this via
+# kubernetes_provider.kueue.topologies. Priority classes have NO default: Iris
+# never invents WorkloadPriorityClass names (a missing one is rejected by
+# Kueue), so a band is stamped only when the config maps it explicitly.
+_CW_DEFAULT_TOPOLOGIES: dict[str, tuple[str, bool]] = {
+    "pool": ("ib.coreweave.cloud/leafgroup", False),
+    "nvlink": ("ds.coreweave.com/nvlink.domain", True),
+    "tpu-name": ("ds.coreweave.com/nvlink.domain", True),
 }
-
-# group_by attribute -> (topology annotation key, node topology label, hard?).
-# A hard unit (single TPU slice / NVLink domain) MUST land on one topology
-# domain -> required topology. A soft unit (a multi-node GPU job that cannot
-# fit one leafgroup) -> preferred topology; Kueue falls back to a coarser tier.
-# Unknown group_by -> no topology annotation (the gang still admits atomically
-# via pod-group-total-count, it just isn't placement-constrained).
-_GROUP_BY_TO_TOPOLOGY: dict[str, tuple[str, str, bool]] = {
-    "tpu-name": (_KUEUE_REQUIRED_TOPOLOGY, "ds.coreweave.com/nvlink.domain", True),
-    "nvlink": (_KUEUE_REQUIRED_TOPOLOGY, "ds.coreweave.com/nvlink.domain", True),
-    "pool": (_KUEUE_PREFERRED_TOPOLOGY, "backend.coreweave.cloud/leafgroup", False),
-}
-
-
-def _band_to_wpc(priority: int) -> str:
-    """Map a PriorityBand to its Kueue WorkloadPriorityClass name.
-
-    UNSPECIFIED defaults to interactive, matching the proto comment.
-    """
-    return _BAND_TO_WPC.get(priority, "iris-interactive")
 
 
 def _job_path(task_id: JobName) -> str:
@@ -320,6 +308,12 @@ class PodConfig:
     # coscheduled pods then fall back to the soft podAffinity colocation and
     # get no atomic startup (status quo on clusters without Kueue).
     local_queue: str = ""
+    # PriorityBand -> WorkloadPriorityClass name. A band with no entry is not
+    # stamped (Kueue uses its default priority); Iris never invents class names.
+    kueue_priority_classes: dict[int, str] = field(default_factory=dict)
+    # coscheduling group_by -> (node label, required?). Defaults to CoreWeave
+    # conventions; a group_by with no entry carries no topology annotation.
+    kueue_topologies: dict[str, tuple[str, bool]] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
 
 
 def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
@@ -577,11 +571,16 @@ def _build_pod_manifest(
     if kueue_enabled:
         labels[_KUEUE_POD_GROUP_NAME] = _pod_group_name(task_id, attempt_id)
         labels[_KUEUE_QUEUE_NAME] = config.local_queue
-        labels[_KUEUE_PRIORITY_CLASS] = _band_to_wpc(run_req.priority)
+        # Stamp the WorkloadPriorityClass only when the cluster maps this band:
+        # an unmapped band gets Kueue's default priority, never an invented name.
+        wpc = config.kueue_priority_classes.get(run_req.priority)
+        if wpc:
+            labels[_KUEUE_PRIORITY_CLASS] = wpc
         annotations: dict[str, str] = {_KUEUE_POD_GROUP_TOTAL: str(run_req.num_tasks)}
-        topo = _GROUP_BY_TO_TOPOLOGY.get(run_req.coscheduling.group_by)
+        topo = config.kueue_topologies.get(run_req.coscheduling.group_by)
         if topo is not None:
-            anno_key, node_label, _hard = topo
+            node_label, required = topo
+            anno_key = _KUEUE_REQUIRED_TOPOLOGY if required else _KUEUE_PREFERRED_TOPOLOGY
             annotations[anno_key] = node_label
         metadata["annotations"] = annotations
 
@@ -1245,6 +1244,8 @@ class K8sTaskProvider:
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
     local_queue: str = ""
+    kueue_priority_classes: dict[int, str] = field(default_factory=dict)
+    kueue_topologies: dict[str, tuple[str, bool]] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
     log_client: LogWriterProtocol | None = None
     # Pre-resolved iris.task Table handle. The controller injects this after
     # constructing the LogClient (see controller.py); when None — e.g. tests
@@ -1430,6 +1431,8 @@ class K8sTaskProvider:
             managed_label=self.managed_label,
             task_env=self.task_env,
             local_queue=self.local_queue,
+            kueue_priority_classes=self.kueue_priority_classes,
+            kueue_topologies=self.kueue_topologies,
         )
 
     def _apply_pod(self, run_req: job_pb2.RunTaskRequest) -> None:
