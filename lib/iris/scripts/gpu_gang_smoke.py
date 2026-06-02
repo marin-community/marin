@@ -568,29 +568,77 @@ class CoreweaveTarget:
         return self._iris_config_cache
 
     def _assert_namespace_unowned(self) -> None:
-        """Refuse to run if another Iris controller already owns the target namespace.
+        """Refuse to run if a live Iris controller owns the target namespace.
 
-        The standalone K8sTaskProvider reconciles the WHOLE namespace — it deletes
-        every iris.managed pod not in the batch — so it must run in a namespace it
-        exclusively owns. Bail out (before any mutation) if we find a live
-        iris-controller Deployment or pre-existing iris.managed task pods, which is
-        what pointing at a shared cluster namespace like iris-ci looks like. A
-        not-yet-created namespace lists empty and passes.
+        The standalone K8sTaskProvider reconciles the WHOLE namespace, and the smoke
+        cleans that namespace at boot — so it must run only in a namespace it owns
+        exclusively. A live iris-controller Deployment is the reliable signal of
+        foreign ownership: each Iris controller runs in and manages its own namespace
+        (verified: the production iris-ci controller carries app=iris-controller). Bail
+        out before any cleanup or mutation if one exists. Orphan iris.managed pods with
+        no such controller are this smoke's own leftovers from an interrupted run and
+        are cleared by _delete_ns_artifacts(), not a reason to refuse.
         """
         ns = self.cfg.namespace
         controllers = self.kubectl.get("deploy", "-n", ns, "-l", "app=iris-controller", "-o", "name").split()
-        managed = self.kubectl.get("pods", "-n", ns, "-l", "iris.managed=true", "-o", "name").split()
-        if controllers or managed:
+        if controllers:
             raise RuntimeError(
-                f"refusing to run: namespace {ns!r} is already owned by an Iris controller "
-                f"(iris-controller deployments={len(controllers)}, iris.managed pods={len(managed)}). "
-                "The smoke reconciles the whole namespace and would delete those pods. "
-                "Point it at a dedicated namespace it exclusively owns."
+                f"refusing to run: namespace {ns!r} hosts a live Iris controller "
+                f"({len(controllers)} iris-controller deployment(s)). The smoke reconciles and "
+                "cleans the whole namespace and would delete that controller's pods. Point it at a "
+                "dedicated namespace it exclusively owns."
+            )
+
+    def _delete_ns_artifacts(self) -> None:
+        """Delete the gang pods, their Kueue Workloads, and the LocalQueue in our namespace.
+
+        Run at boot (clear a prior interrupted run) and shutdown. Does NOT touch the
+        NodePool (see _delete_nodepools). Best-effort: --ignore-not-found, never raises.
+        """
+        ns = self.cfg.namespace
+        k = self.kubectl
+        k.raw("delete", "pods", "-n", ns, "-l", "iris.managed=true", "--ignore-not-found", "--wait=false", check=False)
+        k.raw("delete", "workloads.kueue.x-k8s.io", "-n", ns, "--all", "--ignore-not-found", check=False)
+        k.raw(
+            "delete",
+            "localqueues.kueue.x-k8s.io",
+            local_queue_name(_CW_LABEL_PREFIX),
+            "-n",
+            ns,
+            "--ignore-not-found",
+            check=False,
+        )
+
+    def _delete_nodepools(self, *, wait: bool) -> None:
+        """Delete the NodePool(s) this smoke provisions, by EXACT name.
+
+        Surgical on the shared cluster (no label selector, immune to label-key drift).
+        wait=True at boot blocks until the object is gone so a fresh ensure_nodepools
+        recreates it at targetNodes=0 (clean scale-from-zero); wait=False at teardown is
+        fire-and-forget since CKS deprovisions H100s asynchronously.
+        """
+        controller = self._controller_provider()
+        for scale_group in self._iris_config().scale_groups:
+            pool = controller._nodepool_name(scale_group)
+            logger.info("deleting NodePool %s (wait=%s; CKS deprovisions asynchronously)", pool, wait)
+            self.kubectl.raw(
+                "delete",
+                "nodepools.compute.coreweave.com",
+                pool,
+                "--ignore-not-found",
+                f"--wait={'true' if wait else 'false'}",
+                check=False,
             )
 
     def setup(self) -> None:
         cfg = self.cfg
         self._assert_namespace_unowned()
+        # Boot cleanup: clear any artifacts a prior interrupted run left behind so we
+        # start from a clean slate (a fresh NodePool comes up at targetNodes=0, the
+        # scale-from-zero path). Safe: the guard above ensures no foreign controller
+        # owns this namespace.
+        self._delete_ns_artifacts()
+        self._delete_nodepools(wait=True)
         controller = self._controller_provider()
         config = self._iris_config()
         controller.ensure_rbac()
@@ -619,20 +667,15 @@ class CoreweaveTarget:
         return provider
 
     def teardown(self) -> None:
-        # Pods + Workloads are released by teardown_gang_pods(); here we drop the
-        # NodePool(s) we created so CKS stops billing for the H100s. Delete by EXACT
-        # name (not a label selector) — surgical on the shared cluster, and immune to
-        # the label-key drift that a `-l` selector is prone to.
+        # Shutdown cleanup: drop our namespaced artifacts (pods/Workloads/LocalQueue),
+        # then the NodePool(s) so CKS stops billing for the H100s. teardown_gang_pods()
+        # already released the gang via the provider; this also clears the LocalQueue
+        # and does not need a provider.
+        self._delete_ns_artifacts()
         if not self.cfg.coreweave.delete_nodepools_on_teardown:
             logger.warning("delete_nodepools_on_teardown=false: leaving NodePool up — it is STILL BILLING")
             return
-        controller = self._controller_provider()
-        for scale_group in self._iris_config().scale_groups:
-            pool = controller._nodepool_name(scale_group)
-            logger.info("deleting NodePool %s (CKS deprovisions asynchronously)", pool)
-            self.kubectl.raw(
-                "delete", "nodepools.compute.coreweave.com", pool, "--ignore-not-found", "--wait=false", check=False
-            )
+        self._delete_nodepools(wait=False)
 
 
 def make_target(cfg: SmokeConfig):
