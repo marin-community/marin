@@ -1002,8 +1002,8 @@ class ScalingGroup:
 
         Also consumes a token from the shared global create limiter when one is
         attached, so a single call answers both the per-group and global caps.
-        The global token is taken after the per-group one, so a saturated global
-        budget never burns a per-group token on a launch that won't happen.
+        The per-group token is taken first, so a group already at its regional
+        rate limit never burns a global token on a launch that won't happen.
         """
         timestamp = timestamp or Timestamp.now()
         if not self._detector.try_acquire_scale_up(timestamp):
