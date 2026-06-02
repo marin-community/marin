@@ -80,6 +80,7 @@ class RemoteCallable(Generic[P, R]):
                     extras=self.pip_dependency_groups,
                     env_vars=self.env_vars,
                 ),
+                max_retries_failure=100,  # ping timeouts from preempted TPUs are misclassified as failures
             )
         )
         handle.wait(raise_on_failure=True)

@@ -9,6 +9,9 @@ seeds and logging averaged metrics to wandb. It is used as the `fn` argument
 to an `ExecutorStep` created by `compile_evalchemy_results` in `evals.py`.
 """
 
+import sys
+sys.set_int_max_str_digits(0)
+
 import json
 import logging
 import os

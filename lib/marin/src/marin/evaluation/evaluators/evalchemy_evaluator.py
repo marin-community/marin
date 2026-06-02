@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+
 """
 Evalchemy evaluator for reasoning benchmarks.
 
@@ -703,6 +704,30 @@ _patch_autoconfig_for_gcs()
             # Set environment variables (replaces _get_subprocess_env)
             for key, value in env_vars_to_set.items():
                 os.environ[key] = value
+
+            # Remove Python 3.11+ limit on integer-to-string conversion.
+            # sympy can produce huge integers (e.g. 2025!) that exceed the default
+            # 4300-digit limit, crashing the answer parser.
+            sys.set_int_max_str_digits(0)
+
+            # datasets pinned to <4 in pyproject.toml override-dependencies
+            # (v4+ dropped dataset script support, breaking LiveCodeBench)
+
+            # Compatibility shim: lm-eval imports get_open_port from vllm.utils,
+            # but newer vLLM versions moved/removed it.
+            try:
+                from vllm.utils import get_open_port  # noqa: F401
+            except ImportError:
+                import socket
+                import vllm.utils as _vllm_utils
+
+                def _get_open_port() -> int:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.bind(("", 0))
+                        return s.getsockname()[1]
+
+                _vllm_utils.get_open_port = _get_open_port
+                logger.info("Patched vllm.utils.get_open_port (missing in this vLLM version)")
 
             # Insert evalchemy repo at front of sys.path
             if cwd not in sys.path:
