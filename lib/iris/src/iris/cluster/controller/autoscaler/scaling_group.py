@@ -108,12 +108,11 @@ class AvailabilityState:
 DEFAULT_SCALE_UP_RATE_LIMIT = 16  # per minute
 DEFAULT_SCALE_DOWN_RATE_LIMIT = 32  # per minute
 
-# GCP's TPU Admin API permits 91 CreateNode requests/min/project. Cap autoscaler
+# GCP's TPU Admin API permits 91 CreateNode requests/min/project; cap autoscaler
 # launches below that so manual create-slice and controller VM provisioning,
 # which share the same quota, retain headroom. A single bucket is shared across
 # all scale groups; per-group buckets only bound one group, so this is the only
 # limiter that bounds the aggregate CreateNode rate.
-CREATE_NODE_QUOTA_PER_MINUTE = 91
 DEFAULT_CREATE_RATE_LIMIT_PER_MINUTE = 80
 DEFAULT_IDLE_THRESHOLD = Duration.from_minutes(10)
 DEFAULT_QUOTA_TIMEOUT = Duration.from_minutes(5)
