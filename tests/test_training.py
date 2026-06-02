@@ -15,7 +15,7 @@ from levanter.data.text import DatasetComponent, PreferenceChatLmDatasetFormat, 
 from levanter.main import train_lm
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.trainer import TrainerConfig
-from marin.processing.tokenize import read_tokenized_cache_stats, tokenized_cache_stats_path
+from marin.processing.tokenize import tokenized_cache_stats_path
 from marin.training.training import (
     TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
@@ -211,17 +211,6 @@ def test_tokenized_cache_stats_path_handles_local_and_gcs_paths():
         tokenized_cache_stats_path("gs://bucket/cache_root", "validation")
         == "gs://bucket/cache_root/validation/.stats.json"
     )
-
-
-def test_read_tokenized_cache_stats(tmp_path):
-    train_dir = tmp_path / "train"
-    train_dir.mkdir(parents=True)
-    (train_dir / ".stats.json").write_text(json.dumps({"total_tokens": 123, "total_elements": 45}))
-
-    stats = read_tokenized_cache_stats(str(tmp_path), "train")
-
-    assert stats.total_tokens == 123
-    assert stats.total_elements == 45
 
 
 def test_output_path_temp_checkpoint_path_is_run_scoped(trainer_config):

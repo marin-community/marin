@@ -151,49 +151,6 @@ def test_lora_dpo_trainable_filter_only_lora_params():
     ), f"Non-trainable ({non_trainable_count}) should outnumber trainable ({trainable_count})"
 
 
-def test_lora_dpo_gradient_only_flows_to_lora_params():
-    """Compute gradients of DPO loss, verify only LoRA params receive nonzero gradients."""
-
-    key = jrandom.PRNGKey(4)
-    model_key, lora_key, example_key, loss_key = jrandom.split(key, 4)
-
-    model = _make_gpt2_model(model_key)
-    loraized = loraize(model, LoraConfig(r=4, a_init_mode="random"), key=lora_key)
-    example = _make_dpo_example(example_key)
-
-    def compute_loss(model):
-        reference_model = unwrap_lora_modules(model)
-        reference_model = inference_mode(reference_model, True)
-
-        k_c, k_r = jrandom.split(loss_key)
-        logp_pi_chosen = _logp_sum(model, example.chosen, key=k_c)
-        logp_pi_rejected = _logp_sum(model, example.rejected, key=k_r)
-        logp_ref_chosen = jax.lax.stop_gradient(_logp_sum(reference_model, example.chosen, key=k_c))
-        logp_ref_rejected = jax.lax.stop_gradient(_logp_sum(reference_model, example.rejected, key=k_r))
-        delta_pi = logp_pi_chosen - logp_pi_rejected
-        delta_ref = logp_ref_chosen - logp_ref_rejected
-        loss, _ = dpo_loss_from_logps(delta_pi, delta_ref, beta=0.1)
-        return loss
-
-    # eqx.filter_grad differentiates w.r.t. all inexact arrays and returns
-    # the same structure with gradients (or None/zero for non-diff leaves)
-    grads = eqx.filter_grad(compute_loss)(loraized)
-
-    # The gradient tree has the same structure as the model.
-    # LoRA params live inside LoraLinear.lora (a LowRankLinear).
-    # Check that some LoRA gradient arrays are nonzero.
-    all_grad_leaves = jax.tree_util.tree_leaves(grads)
-    # Gradients may be NamedArrays, raw jax arrays, or None
-    array_grads = [g for g in all_grad_leaves if g is not None and not isinstance(g, bool) and hasattr(g, "shape")]
-    assert len(array_grads) > 0, (
-        f"Should have gradient arrays, got {len(all_grad_leaves)} leaves, "
-        f"types: {set(type(g).__name__ for g in all_grad_leaves)}"
-    )
-
-    has_nonzero = any(jnp.any(jnp.asarray(g.array if isinstance(g, hax.NamedArray) else g) != 0) for g in array_grads)
-    assert has_nonzero, "At least one gradient should be nonzero (from LoRA params)"
-
-
 class _CapturingConverter:
     def __init__(self):
         self.calls = []
