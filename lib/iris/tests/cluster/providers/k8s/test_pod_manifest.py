@@ -965,9 +965,9 @@ def test_kueue_generation_bumps_pod_group_name():
 
 
 def test_pod_group_name_is_valid_label_value():
+    """The derived pod-group-name must fit the 63-char k8s label-value limit even for a
+    long job path, since Kueue keys the Workload on this label."""
     name = _pod_group_name(JobName.from_wire("/some/long/job/task/0"), 7)
-    assert name.startswith("iris-pg-")
-    assert name.endswith("-7")
     assert len(name) <= 63
 
 

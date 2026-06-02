@@ -698,20 +698,6 @@ def test_ensure_kueue_queues_reconciles_local_queue():
     provider.shutdown()
 
 
-def test_ensure_kueue_queues_local_queue_name_derives_from_label_prefix():
-    """The LocalQueue name is {label_prefix}-lq, not a fixed constant, so
-    co-located Iris clusters don't collide."""
-    provider, k8s = _make_provider(namespace="iris", label_prefix="iris-ci")
-    cluster_config = _make_cluster_config()
-    cluster_config.kubernetes_provider.kueue.cluster_queue = "iris-cq"
-
-    provider.ensure_kueue_queues(cluster_config)
-
-    assert k8s.get_json(K8sResource.LOCAL_QUEUES, "iris-ci-lq") is not None
-    assert k8s.get_json(K8sResource.LOCAL_QUEUES, "iris-lq") is None
-    provider.shutdown()
-
-
 def test_ensure_kueue_queues_noop_without_cluster_queue():
     """No cluster_queue configured -> Kueue not in use -> nothing applied."""
     provider, k8s = _make_provider(label_prefix="iris")

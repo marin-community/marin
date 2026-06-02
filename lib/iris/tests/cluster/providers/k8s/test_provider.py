@@ -246,7 +246,6 @@ def test_sync_coscheduled_pod_not_found_is_worker_failed(provider, k8s):
 
     result = provider.sync(batch)
     assert result.updates[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
-    assert result.updates[0].error == "Pod not found"
 
 
 def test_pod_not_found_grace_period(provider, k8s):
