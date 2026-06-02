@@ -21,6 +21,13 @@ Token budgets (``num_evals=8`` each, so the step counts match the issue):
 18 configs = 3 budgets x 6 mixtures. Each config has id ``<budget>-<mixture>``
 (e.g. ``t1-m10``) and is selected with ``RUNS``.
 
+A data-ordering seed sweep adds 24 more configs: the ``t1`` (500M) budget x 6
+mixtures x 4 extra ``data_seed`` values. Index 0 is the default 1729 and keeps
+the original bare id/name; the variants have id ``t1-s<i>-<mixture>`` (e.g.
+``t1-s1-m10``, i in 1..4) and only vary the data permutation — model init stays
+fixed. Variants are selected *only* when the ``SEEDS`` env var opts in, so with
+``SEEDS`` unset the original 18 are returned for any ``RUNS`` needle.
+
 Structure mirrors ``exp29_arch_sweep`` / ``exp11_data_mix_sweep``: this script
 runs as a lightweight CPU driver that submits ONE Fray training job (a v5p-8
 worker via ``ResourceConfig.with_tpu``) for the selected config(s);
@@ -28,8 +35,10 @@ worker via ``ResourceConfig.with_tpu``) for the selected config(s);
 caches were built once by ``exp11_data_mix_sweep`` (hardcoded paths below), so
 there is no tokenize step here.
 
-Env vars: ``RUNS`` (CSV substring filter on config id), ``PREVIEW=yes`` (list
-targets, submit nothing), ``TPU`` (override worker TPU; default v5p-8).
+Env vars: ``RUNS`` (CSV substring filter on config id), ``SEEDS`` (CSV of seed
+indices into ``DATA_SEEDS``; 0=default 1729, unset=default only — variants are
+never selected without it), ``PREVIEW=yes`` (list targets, submit nothing),
+``TPU`` (override worker TPU; default v5p-8).
 
 Submission — one iris CPU driver per config, ``RUNS=<config>`` (hold <=12 at
 once; shortest budget ``t1`` first). The driver is a CPU job
@@ -53,9 +62,28 @@ form used to launch the sweep::
             -- python -m experiments.protein.exp44_token_scaling_sweep
     done
 
-Preview without submitting::
+Seed sweep (``t1`` / 500M only) — one driver per (mixture, seed); ``SEEDS``
+selects the seed index and ``RUNS`` the variant id::
+
+    for s in 1 2 3 4; do
+      for m in m10 m11 m12 m13 m14 m15; do
+        cfg=t1-s${s}-${m}
+        uv run iris --cluster=marin job run --user "$USERNAME" --no-wait \\
+            --job-name prot-exp44-ts-${cfg}-${TIMESTAMP} \\
+            --region us-east5 --memory=1GB \\
+            -e HF_TOKEN "$HF_TOKEN" -e HUGGING_FACE_HUB_TOKEN "$HF_TOKEN" \\
+            -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_ENTITY "$WANDB_ENTITY" \\
+            -e WANDB_PROJECT "$WANDB_PROJECT" \\
+            -e SEEDS ${s} -e RUNS ${cfg} \\
+            -- python -m experiments.protein.exp44_token_scaling_sweep
+      done
+    done
+
+Preview without submitting (seed variants need ``SEEDS`` to appear)::
 
     RUNS=t1-m10 PREVIEW=yes \\
+        uv run python -m experiments.protein.exp44_token_scaling_sweep
+    SEEDS=1,2,3,4 RUNS=t1 PREVIEW=yes \\
         uv run python -m experiments.protein.exp44_token_scaling_sweep
 """
 
@@ -188,6 +216,16 @@ LR_DECAY: float = 0.2
 # Pinned so cross-run comparisons share the same data permutation (matches the
 # exp11 scale sweep so cd-val numbers stay directly comparable).
 DATA_SEED: int = 1729
+
+# Data-ordering seed sweep (500M / ``t1`` budget only). Index 0 is the default
+# 1729 — its runs are byte-identical to the original sweep (no seed tag, same
+# config id and trial name). Indices 1..4 add the ``s1``..``s4`` variants that
+# only vary ``data_seed`` (model init / training key stay fixed at the levanter
+# default ``trainer.seed=0``), so this isolates data-permutation noise. Variants
+# are selected only via the ``SEEDS`` env var; see :func:`selected_configs`.
+DATA_SEEDS: tuple[int, ...] = (DATA_SEED, 1730, 1731, 1732, 1733)
+SEED_SWEEP_BUDGET_ID: str = "t1"
+
 SHUFFLE: bool = True
 PERMUTATION_TYPE: str = "feistel"
 MIXTURE_BLOCK_SIZE: int = 2048
@@ -323,18 +361,48 @@ TOKEN_BUDGETS: tuple[TokenBudget, ...] = (
 
 @dataclass(frozen=True)
 class Config:
-    """One trial: a (token budget, mixture) pair."""
+    """One trial: a (token budget, mixture, data-seed) triple.
+
+    ``seed_index`` indexes :data:`DATA_SEEDS`; 0 is the default seed and yields
+    the original bare id/name (so existing runs are untouched).
+    """
 
     budget: TokenBudget
     mixture: Mixture
+    seed_index: int = 0
+
+    @property
+    def data_seed(self) -> int:
+        return DATA_SEEDS[self.seed_index]
+
+    @property
+    def seed_tag(self) -> str:
+        """``""`` for the default seed (index 0), else ``s1``..``s4``."""
+        return "" if self.seed_index == 0 else f"s{self.seed_index}"
 
     @property
     def config_id(self) -> str:
-        """Short selector id, e.g. ``t1-m10`` (used by ``RUNS``)."""
-        return f"{self.budget.id}-{self.mixture.id}"
+        """Short selector id: ``t1-m10`` (default) or ``t1-s1-m10`` (variant).
+
+        The seed token sits *between* budget and mixture so a fully-qualified
+        original id (``t1-m10``) is never a substring of a variant id — a
+        ``RUNS=t1-m10`` resubmit can't accidentally pull in a seed variant.
+        """
+        seed_seg = f"{self.seed_tag}-" if self.seed_tag else ""
+        return f"{self.budget.id}-{seed_seg}{self.mixture.id}"
 
 
-ALL_CONFIGS: tuple[Config, ...] = tuple(Config(b, m) for b in TOKEN_BUDGETS for m in SCALE_MIXTURES)
+# The original 18 configs (every budget x mixture, default seed) — unchanged.
+_DEFAULT_CONFIGS: tuple[Config, ...] = tuple(Config(b, m) for b in TOKEN_BUDGETS for m in SCALE_MIXTURES)
+# Data-seed variants: ``t1`` (500M) only x 6 mixtures x seed indices 1..4 = 24.
+_SEED_VARIANT_CONFIGS: tuple[Config, ...] = tuple(
+    Config(b, m, seed_index=i)
+    for b in TOKEN_BUDGETS
+    if b.id == SEED_SWEEP_BUDGET_ID
+    for m in SCALE_MIXTURES
+    for i in range(1, len(DATA_SEEDS))
+)
+ALL_CONFIGS: tuple[Config, ...] = _DEFAULT_CONFIGS + _SEED_VARIANT_CONFIGS
 CONFIG_BY_ID: dict[str, Config] = {c.config_id: c for c in ALL_CONFIGS}
 
 
@@ -359,12 +427,20 @@ def fmt_lr(lr: float) -> str:
 
 
 def trial_name(config: Config) -> str:
-    """Stable per-trial run id (also the per-target dir under ``SWEEP_ROOT``)."""
+    """Stable per-trial run id (also the per-target dir under ``SWEEP_ROOT``).
+
+    The default seed (index 0) emits no seed token, so its name is byte-identical
+    to the original sweep; variants insert ``s{i}-`` before the mixture token.
+    Because ``data_seed`` is not a ``versioned()`` value it never enters the
+    output-path hash — the seed token in this name is the *only* differentiator
+    between seeds, so it must stay here.
+    """
     num_train_steps, _ = config.budget.schedule()
     tokens_tag = fmt_count(BATCH_SIZE * SEQ_LEN * num_train_steps)
+    seed_seg = f"{config.seed_tag}-" if config.seed_tag else ""
     return (
         f"{RUN_NAME_PREFIX}-1_5b-{config.budget.id}-{tokens_tag}-"
-        f"{config.mixture.id}-lr{fmt_lr(LEARNING_RATE)}-{VERSION}"
+        f"{seed_seg}{config.mixture.id}-lr{fmt_lr(LEARNING_RATE)}-{VERSION}"
     )
 
 
@@ -486,29 +562,34 @@ def build_trial(config: Config) -> tuple[str, object]:
         steps_per_eval=steps_per_eval,
         steps_per_export=None,
         max_eval_batches=MAX_EVAL_BATCHES,
-        data_seed=DATA_SEED,
+        data_seed=config.data_seed,
         per_device_parallelism=per_device_parallelism,
     )
     params = compute_num_parameters(MODEL_CONFIG, PROTEIN_VOCAB_SIZE)
     tokens = BATCH_SIZE * SEQ_LEN * num_train_steps
+    tags = [
+        "protein",
+        "exp44",
+        "token-scaling",
+        "1_5b",
+        config.mixture.id,
+        config.budget.id,
+        f"params={fmt_count(params)}",
+        f"params_exact={params}",
+        f"tokens={fmt_count(tokens)}",
+        f"tokens_exact={tokens}",
+        f"steps={num_train_steps}",
+    ]
+    # Seed tags only on variants — default-seed runs stay byte-identical to the
+    # original sweep (and to the baseline runs already logged without them).
+    if config.seed_index != 0:
+        tags += [f"seed={config.seed_tag}", f"data_seed={config.data_seed}"]
     job_name, raw_config = prepare_lm_train(
         name=trial_name(config),
         tokenized=build_data_config(config, num_train_steps),
         model_config=MODEL_CONFIG,
         train_config=train_config,
-        tags=[
-            "protein",
-            "exp44",
-            "token-scaling",
-            "1_5b",
-            config.mixture.id,
-            config.budget.id,
-            f"params={fmt_count(params)}",
-            f"params_exact={params}",
-            f"tokens={fmt_count(tokens)}",
-            f"tokens_exact={tokens}",
-            f"steps={num_train_steps}",
-        ],
+        tags=tags,
         eval_harness_tasks=[],
         use_default_validation=False,
         wandb_group=WANDB_GROUP,
@@ -532,13 +613,43 @@ def build_trial(config: Config) -> tuple[str, object]:
 # --- Selection / preview ----------------------------------------------------
 
 
+def selected_seed_indices() -> frozenset[int]:
+    """``SEEDS`` is a CSV of seed indices into :data:`DATA_SEEDS` (0 = default).
+
+    Unset/empty selects only the default seed (index 0). This is the gate that
+    keeps the original sweep intact: with ``SEEDS`` unset, no variant is ever
+    selected regardless of the ``RUNS`` needle (broad needles like ``RUNS=t1``
+    included), so a co-running session resubmitting the original configs is
+    unaffected.
+    """
+    raw = os.environ.get("SEEDS", "")
+    parts = [s.strip() for s in raw.split(",") if s.strip()]
+    if not parts:
+        return frozenset({0})
+    indices = set()
+    for p in parts:
+        idx = int(p)
+        if not 0 <= idx < len(DATA_SEEDS):
+            raise ValueError(f"SEEDS index {idx} out of range 0..{len(DATA_SEEDS) - 1}")
+        indices.add(idx)
+    return frozenset(indices)
+
+
 def selected_configs() -> tuple[Config, ...]:
-    """``RUNS`` is a CSV substring filter on ``config_id``; empty = all 18."""
+    """Configs passing both filters: ``RUNS`` (substring on id) AND ``SEEDS``.
+
+    ``RUNS`` empty = all mixtures/budgets; ``SEEDS`` empty = default seed only.
+    A config must satisfy both, so seed variants appear only when ``SEEDS`` opts
+    in.
+    """
+    seeds = selected_seed_indices()
     raw = os.environ.get("RUNS", "")
     needles = tuple(s.strip() for s in raw.split(",") if s.strip())
-    if not needles:
-        return ALL_CONFIGS
-    return tuple(c for c in ALL_CONFIGS if any(n in c.config_id for n in needles))
+
+    def runs_match(c: Config) -> bool:
+        return not needles or any(n in c.config_id for n in needles)
+
+    return tuple(c for c in ALL_CONFIGS if c.seed_index in seeds and runs_match(c))
 
 
 def preview() -> bool:
@@ -559,7 +670,8 @@ def print_preview(configs: tuple[Config, ...]) -> None:
         print(
             f"    budget={c.budget.id} batch={BATCH_SIZE} steps={num_train_steps} "
             f"steps_per_eval={steps_per_eval} lr={LEARNING_RATE:.4g} beta2={BETA2:.4g} "
-            f"tokens={tokens_tag} schedule={LR_SCHEDULE},decay={LR_DECAY} data_seed={DATA_SEED}",
+            f"tokens={tokens_tag} schedule={LR_SCHEDULE},decay={LR_DECAY} "
+            f"seed={c.seed_tag or 's0'} data_seed={c.data_seed}",
             flush=True,
         )
         if isinstance(weights, dict):
