@@ -1,16 +1,15 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend dispatch for paged TPU inference kernels."""
+"""Backend dispatch for paged attention inference kernels."""
 
 from __future__ import annotations
 
 import dataclasses
 import warnings
-from collections.abc import Sequence
-from enum import StrEnum
 from typing import Any
 
+from draccus import ChoiceRegistry
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -20,35 +19,62 @@ from levanter.inference.page_table import PageBatchInfo
 from levanter.layers.kv_cache import KvPageCache
 
 
-class TpuPagedAttentionBackend(StrEnum):
-    AUTO = "auto"
-    TPU_INFERENCE = "tpu_inference"
-    JAX_RPA = "jax_rpa"
-    REFERENCE = "reference"
+class PagedAttentionConfig(ChoiceRegistry):
+    """Execution policy for paged attention during decode."""
+
+    @classmethod
+    def default_choice_name(cls) -> str | None:
+        return "auto"
 
 
+@PagedAttentionConfig.register_subclass("auto")
 @dataclasses.dataclass(frozen=True, slots=True)
-class TpuPagedAttentionConfig:
-    backend: TpuPagedAttentionBackend | Sequence[TpuPagedAttentionBackend] = TpuPagedAttentionBackend.AUTO
-    allow_autotune: bool = False
+class AutoPagedAttentionConfig(PagedAttentionConfig):
+    """Pick the fastest supported backend for the current platform."""
+
     fail_on_reference_fallback: bool = True
-    tpu_inference_out_dtype: str | None = None
+
+
+@PagedAttentionConfig.register_subclass("reference")
+@dataclasses.dataclass(frozen=True, slots=True)
+class ReferencePagedAttentionConfig(PagedAttentionConfig):
+    """Use the pure JAX reference paged-attention path."""
+
+    fail_on_reference_fallback: bool = True
+
+
+@PagedAttentionConfig.register_subclass("tpu-inference")
+@dataclasses.dataclass(frozen=True, slots=True)
+class TpuInferencePagedAttentionConfig(PagedAttentionConfig):
+    """Use the tpu-inference paged-attention kernel."""
+
+    fail_on_reference_fallback: bool = True
+    out_dtype: str | None = None
     preserve_attention_output_dtype: bool = False
+    vmem_limit_bytes: int | None = None
+
+
+@PagedAttentionConfig.register_subclass("jax-rpa")
+@dataclasses.dataclass(frozen=True, slots=True)
+class JaxRpaPagedAttentionConfig(PagedAttentionConfig):
+    """Use Levanter's JAX/Pallas ragged paged-attention path."""
+
+    fail_on_reference_fallback: bool = True
     num_kv_pages_per_block: int | None = None
     num_queries_per_block: int | None = None
     vmem_limit_bytes: int | None = None
 
 
-class UnsupportedTpuPagedAttentionBackend(RuntimeError):
+class UnsupportedPagedAttentionBackend(RuntimeError):
     """Raised when a selected paged-attention backend cannot run for the current platform or shape."""
 
 
-class TpuPagedAttentionFallbackWarning(UserWarning):
+class PagedAttentionFallbackWarning(UserWarning):
     """Warning emitted when backend dispatch falls back from one configured backend to another."""
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
-class TpuPagedAttentionShape:
+class PagedAttentionShape:
     platform: str
     device_kind: str
     dtype: jnp.dtype
@@ -65,7 +91,7 @@ def _current_platform() -> str:
     try:
         return jax.default_backend()
     except Exception as exc:
-        raise UnsupportedTpuPagedAttentionBackend(f"Could not determine JAX backend: {exc}") from exc
+        raise UnsupportedPagedAttentionBackend(f"Could not determine JAX backend: {exc}") from exc
 
 
 def _current_device_kind() -> str:
@@ -83,82 +109,78 @@ def _has_nonempty_mesh() -> bool:
     return not jax.sharding.get_abstract_mesh().empty
 
 
-def _normalize_backend(backend: TpuPagedAttentionBackend | str) -> TpuPagedAttentionBackend:
-    if isinstance(backend, TpuPagedAttentionBackend):
-        return backend
-    return TpuPagedAttentionBackend(backend)
+def _config_name(config: PagedAttentionConfig) -> str:
+    if isinstance(config, AutoPagedAttentionConfig):
+        return "auto"
+    if isinstance(config, ReferencePagedAttentionConfig):
+        return "reference"
+    if isinstance(config, TpuInferencePagedAttentionConfig):
+        return "tpu-inference"
+    if isinstance(config, JaxRpaPagedAttentionConfig):
+        return "jax-rpa"
+    raise TypeError(f"Unknown paged attention config type: {type(config)}")
 
 
-def _is_auto_backend(backend: TpuPagedAttentionBackend | Sequence[TpuPagedAttentionBackend]) -> bool:
-    return (
-        isinstance(backend, TpuPagedAttentionBackend | str)
-        and _normalize_backend(backend) == TpuPagedAttentionBackend.AUTO
-    )
+def paged_attention_config_name(config: PagedAttentionConfig) -> str:
+    """Return the draccus choice name for a paged-attention config."""
+
+    return _config_name(config)
 
 
-def _backend_order(config: TpuPagedAttentionConfig) -> tuple[TpuPagedAttentionBackend, ...]:
-    backend = config.backend
-    if isinstance(backend, TpuPagedAttentionBackend | str):
-        selected = (_normalize_backend(backend),)
+def _expand_config(config: PagedAttentionConfig) -> tuple[PagedAttentionConfig, ...]:
+    if not isinstance(config, AutoPagedAttentionConfig):
+        return (config,)
+
+    if not _is_tpu():
+        return (ReferencePagedAttentionConfig(fail_on_reference_fallback=config.fail_on_reference_fallback),)
+
+    configs: list[PagedAttentionConfig] = [
+        TpuInferencePagedAttentionConfig(fail_on_reference_fallback=config.fail_on_reference_fallback)
+    ]
+    if _has_nonempty_mesh():
+        configs.append(JaxRpaPagedAttentionConfig(fail_on_reference_fallback=config.fail_on_reference_fallback))
     else:
-        selected = tuple(_normalize_backend(item) for item in backend)
-        if len(selected) == 0:
-            raise ValueError("tpu_paged_attention backend sequence must not be empty")
-
-    expanded: list[TpuPagedAttentionBackend] = []
-    for item in selected:
-        if item == TpuPagedAttentionBackend.AUTO:
-            if _is_tpu():
-                expanded.append(TpuPagedAttentionBackend.TPU_INFERENCE)
-                if _has_nonempty_mesh():
-                    expanded.append(TpuPagedAttentionBackend.JAX_RPA)
-                else:
-                    expanded.append(TpuPagedAttentionBackend.REFERENCE)
-            else:
-                expanded.append(TpuPagedAttentionBackend.REFERENCE)
-        else:
-            expanded.append(item)
-    return tuple(expanded)
+        configs.append(ReferencePagedAttentionConfig(fail_on_reference_fallback=False))
+    return tuple(configs)
 
 
-def available_tpu_paged_attention_backends() -> tuple[TpuPagedAttentionBackend, ...]:
-    """Return backends importable and platform-supported in the current process, excluding `AUTO`."""
+def available_paged_attention_configs() -> tuple[PagedAttentionConfig, ...]:
+    """Return paged-attention configs importable and platform-supported in the current process, excluding `auto`."""
 
     platform = _current_platform()
     if platform != "tpu":
-        return (TpuPagedAttentionBackend.REFERENCE,)
+        return (ReferencePagedAttentionConfig(),)
 
-    backends: list[TpuPagedAttentionBackend] = []
-    from levanter.inference import tpu_inference_adapter
+    configs: list[PagedAttentionConfig] = []
+    from levanter.inference import tpu_inference_adapter  # noqa: PLC0415
 
     if tpu_inference_adapter.is_available():
-        backends.append(TpuPagedAttentionBackend.TPU_INFERENCE)
+        configs.append(TpuInferencePagedAttentionConfig())
 
-    from levanter.layers import attention as attention_module
+    from levanter.layers import attention as attention_module  # noqa: PLC0415
 
     if _has_nonempty_mesh() and attention_module.tpu_ragged_paged_attention is not None:
-        backends.append(TpuPagedAttentionBackend.JAX_RPA)
+        configs.append(JaxRpaPagedAttentionConfig())
 
-    return tuple(backends)
+    return tuple(configs)
 
 
-def tpu_paged_attention_supports_shape(
-    backend: TpuPagedAttentionBackend,
-    shape: TpuPagedAttentionShape,
+def paged_attention_supports_shape(
+    config: PagedAttentionConfig,
+    shape: PagedAttentionShape,
 ) -> tuple[bool, str | None]:
-    """Return whether `backend` supports `shape`, plus a rejection reason when unsupported."""
+    """Return whether `config` supports `shape`, plus a rejection reason when unsupported."""
 
-    backend = _normalize_backend(backend)
-    if backend == TpuPagedAttentionBackend.AUTO:
+    if isinstance(config, AutoPagedAttentionConfig):
         return False, "AUTO is a dispatch policy, not a concrete backend"
-    if backend == TpuPagedAttentionBackend.REFERENCE:
+    if isinstance(config, ReferencePagedAttentionConfig):
         return True, None
     if shape.platform != "tpu":
-        return False, f"{backend.value} only runs on TPU"
+        return False, f"{_config_name(config)} only runs on TPU"
     if "tpu v2" in shape.device_kind.lower() or "tpu v3" in shape.device_kind.lower():
-        return False, f"{backend.value} does not support {shape.device_kind}"
+        return False, f"{_config_name(config)} does not support {shape.device_kind}"
     if shape.dtype != jnp.bfloat16:
-        return False, f"initial {backend.value} target only supports bf16 KV cache"
+        return False, f"initial {_config_name(config)} target only supports bf16 KV cache"
     if shape.page_size != 128:
         return False, "initial Qwen3 8B target requires page_size=128"
     if shape.head_size != 128:
@@ -168,6 +190,12 @@ def tpu_paged_attention_supports_shape(
     if shape.max_model_len != 4096:
         return False, "initial Qwen3 8B target requires max_model_len=4096"
     return True, None
+
+
+def paged_attention_preserves_output_dtype(config: PagedAttentionConfig) -> bool:
+    """Return whether the attention output projection should see the backend output dtype."""
+
+    return isinstance(config, TpuInferencePagedAttentionConfig) and config.preserve_attention_output_dtype
 
 
 def _concrete_array(value: Any) -> np.ndarray | None:
@@ -190,8 +218,8 @@ def _validate_no_duplicate_token_dests(batch_info: PageBatchInfo) -> None:
         raise ValueError("batch_info.new_token_dests contains duplicate valid destinations")
 
 
-def _unsupported(backend: TpuPagedAttentionBackend, reason: str) -> UnsupportedTpuPagedAttentionBackend:
-    return UnsupportedTpuPagedAttentionBackend(f"{backend.value} paged attention backend is unsupported: {reason}")
+def _unsupported(config: PagedAttentionConfig, reason: str) -> UnsupportedPagedAttentionBackend:
+    return UnsupportedPagedAttentionBackend(f"{_config_name(config)} paged attention backend is unsupported: {reason}")
 
 
 def _run_reference_backend(
@@ -204,7 +232,7 @@ def _run_reference_backend(
     sm_scale: float | jax.Array,
     soft_cap: float | None,
 ) -> tuple[NamedArray, KvPageCache]:
-    from levanter.layers.attention import default_ragged_paged_attention
+    from levanter.layers.attention import default_ragged_paged_attention  # noqa: PLC0415
 
     kv_cache = kv_cache.update(batch_info, new_k, new_v)
     attn = default_ragged_paged_attention(
@@ -229,12 +257,12 @@ def _run_jax_rpa_backend(
     *,
     sm_scale: float | jax.Array,
     soft_cap: float | None,
-    config: TpuPagedAttentionConfig,
+    config: JaxRpaPagedAttentionConfig,
 ) -> tuple[NamedArray, KvPageCache]:
     if not _is_tpu():
-        raise _unsupported(TpuPagedAttentionBackend.JAX_RPA, "JAX RPA only runs on TPU")
+        raise _unsupported(config, "JAX RPA only runs on TPU")
 
-    from levanter.layers.attention import _do_tpu_ragged_paged_attention
+    from levanter.layers.attention import _do_tpu_ragged_paged_attention  # noqa: PLC0415
 
     kv_cache = kv_cache.update(batch_info, new_k, new_v)
     attn = _do_tpu_ragged_paged_attention(
@@ -262,22 +290,22 @@ def _run_tpu_inference_backend(
     *,
     sm_scale: float | jax.Array,
     soft_cap: float | None,
-    config: TpuPagedAttentionConfig,
+    config: TpuInferencePagedAttentionConfig,
 ) -> tuple[NamedArray, KvPageCache]:
     if not _is_tpu():
-        raise _unsupported(TpuPagedAttentionBackend.TPU_INFERENCE, "tpu-inference only runs on TPU")
+        raise _unsupported(config, "tpu-inference only runs on TPU")
 
-    from levanter.inference import tpu_inference_adapter
+    from levanter.inference import tpu_inference_adapter  # noqa: PLC0415
 
     if not tpu_inference_adapter.is_available():
         raise _unsupported(
-            TpuPagedAttentionBackend.TPU_INFERENCE,
+            config,
             "the tpu-inference package or one of its runtime dependencies is not importable",
         )
 
     out_dtype = None
-    if config.tpu_inference_out_dtype is not None:
-        out_dtype = jnp.dtype(config.tpu_inference_out_dtype)
+    if config.out_dtype is not None:
+        out_dtype = jnp.dtype(config.out_dtype)
 
     try:
         return tpu_inference_adapter.paged_attention_with_kv_update(
@@ -293,13 +321,13 @@ def _run_tpu_inference_backend(
         )
     except ImportError as exc:
         raise _unsupported(
-            TpuPagedAttentionBackend.TPU_INFERENCE,
+            config,
             f"the tpu-inference kernel import failed: {exc}",
         ) from exc
 
 
 def _run_backend(
-    backend: TpuPagedAttentionBackend,
+    backend_config: PagedAttentionConfig,
     q: NamedArray,
     new_k: NamedArray,
     new_v: NamedArray,
@@ -308,10 +336,9 @@ def _run_backend(
     *,
     sm_scale: float | jax.Array,
     soft_cap: float | None,
-    config: TpuPagedAttentionConfig,
 ) -> tuple[NamedArray, KvPageCache]:
-    if backend == TpuPagedAttentionBackend.REFERENCE:
-        if _is_tpu() and config.fail_on_reference_fallback:
+    if isinstance(backend_config, ReferencePagedAttentionConfig):
+        if _is_tpu() and backend_config.fail_on_reference_fallback:
             raise ValueError(
                 "REFERENCE paged attention backend was selected on TPU with fail_on_reference_fallback=True"
             )
@@ -324,7 +351,7 @@ def _run_backend(
             sm_scale=sm_scale,
             soft_cap=soft_cap,
         )
-    if backend == TpuPagedAttentionBackend.JAX_RPA:
+    if isinstance(backend_config, JaxRpaPagedAttentionConfig):
         return _run_jax_rpa_backend(
             q,
             new_k,
@@ -333,9 +360,9 @@ def _run_backend(
             batch_info,
             sm_scale=sm_scale,
             soft_cap=soft_cap,
-            config=config,
+            config=backend_config,
         )
-    if backend == TpuPagedAttentionBackend.TPU_INFERENCE:
+    if isinstance(backend_config, TpuInferencePagedAttentionConfig):
         return _run_tpu_inference_backend(
             q,
             new_k,
@@ -344,9 +371,11 @@ def _run_backend(
             batch_info,
             sm_scale=sm_scale,
             soft_cap=soft_cap,
-            config=config,
+            config=backend_config,
         )
-    raise ValueError(f"Unsupported paged attention backend: {backend}")
+    if isinstance(backend_config, AutoPagedAttentionConfig):
+        raise ValueError("AutoPagedAttentionConfig must be expanded before backend dispatch")
+    raise TypeError(f"Unknown paged attention config type: {type(backend_config)}")
 
 
 def paged_attention_with_kv_update(
@@ -358,22 +387,18 @@ def paged_attention_with_kv_update(
     *,
     sm_scale: float | jax.Array,
     soft_cap: float | None,
-    config: TpuPagedAttentionConfig,
+    config: PagedAttentionConfig,
 ) -> tuple[NamedArray, KvPageCache]:
     """Compute paged attention for packed tokens and return the updated KV cache."""
 
     _validate_no_duplicate_token_dests(batch_info)
-    backends = _backend_order(config)
+    backend_configs = _expand_config(config)
     failures: list[Exception] = []
 
-    for index, backend in enumerate(backends):
-        backend_config = config
-        if backend == TpuPagedAttentionBackend.REFERENCE and failures and _is_auto_backend(config.backend):
-            backend_config = dataclasses.replace(config, fail_on_reference_fallback=False)
-
+    for index, backend_config in enumerate(backend_configs):
         try:
             return _run_backend(
-                backend,
+                backend_config,
                 q,
                 new_k,
                 new_v,
@@ -381,15 +406,16 @@ def paged_attention_with_kv_update(
                 batch_info,
                 sm_scale=sm_scale,
                 soft_cap=soft_cap,
-                config=backend_config,
             )
-        except (UnsupportedTpuPagedAttentionBackend, ValueError) as exc:
+        except (UnsupportedPagedAttentionBackend, ValueError) as exc:
             failures.append(exc)
-            if index == len(backends) - 1:
+            if index == len(backend_configs) - 1:
                 raise
+            next_backend_config = backend_configs[index + 1]
             warnings.warn(
-                f"{backend.value} paged attention backend failed; trying {backends[index + 1].value}: {exc}",
-                TpuPagedAttentionFallbackWarning,
+                f"{_config_name(backend_config)} paged attention backend failed; "
+                f"trying {_config_name(next_backend_config)}: {exc}",
+                PagedAttentionFallbackWarning,
                 stacklevel=2,
             )
 

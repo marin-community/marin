@@ -30,7 +30,7 @@ from levanter.inference.jit_scheduler import (
     _DecodeOutputs,
 )
 from levanter.inference.page_table import PageTable
-from levanter.inference.tpu_kernels import TpuPagedAttentionConfig
+from levanter.inference.tpu_kernels import AutoPagedAttentionConfig, PagedAttentionConfig
 from levanter.inference.utils import INVALID, is_valid
 from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import PageCache
@@ -101,7 +101,7 @@ class InferenceEngineConfig:
     max_tokens_per_round: int | None = None
     """Pack size for each decode loop iteration. If None, set to max_seqs """
 
-    tpu_paged_attention: TpuPagedAttentionConfig = field(default_factory=TpuPagedAttentionConfig)
+    paged_attention: PagedAttentionConfig = field(default_factory=AutoPagedAttentionConfig)
     """Paged attention backend used by inference decode and prefill calls."""
 
     use_streaming_greedy_lm_head: bool = False
@@ -459,7 +459,7 @@ def _prefill_kernel(
     sampler: Sampler,
     queue: TokenQueue,
     max_seqs_in_prefill: int,  # static
-    tpu_paged_attention: TpuPagedAttentionConfig,  # static
+    paged_attention: PagedAttentionConfig,  # static
     max_top_k: int | None,  # static
     apply_top_p: bool,  # static
     return_logprobs: bool,  # static
@@ -483,7 +483,7 @@ def _prefill_kernel(
     #     pos=pos_ids.array,
     #     lens=decode_state.seq_lens.array,
     # )
-    logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids, tpu_paged_attention=tpu_paged_attention)
+    logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids, paged_attention=paged_attention)
     logits_at_samples = logits["position", sample_indices]
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
@@ -612,7 +612,7 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
 @functools.partial(
     jax.jit,
     donate_argnums=0,
-    static_argnames=("max_seqs_in_prefill", "tpu_paged_attention", "max_top_k", "apply_top_p", "return_logprobs"),
+    static_argnames=("max_seqs_in_prefill", "paged_attention", "max_top_k", "apply_top_p", "return_logprobs"),
 )
 def _run_prefill(
     gen_state: GenState,
@@ -620,7 +620,7 @@ def _run_prefill(
     sampler: Sampler,
     work: PrefillWork,
     max_seqs_in_prefill: int,
-    tpu_paged_attention: TpuPagedAttentionConfig,
+    paged_attention: PagedAttentionConfig,
     max_top_k: int | None,
     apply_top_p: bool,
     return_logprobs: bool,
@@ -632,7 +632,7 @@ def _run_prefill(
         sampler,
         work.queue,
         max_seqs_in_prefill,
-        tpu_paged_attention,
+        paged_attention,
         max_top_k,
         apply_top_p,
         return_logprobs,
@@ -770,7 +770,7 @@ def _run_generation_loop(
     sampler: Sampler,
     max_tokens_per_round: int,
     max_rounds: int,
-    tpu_paged_attention: TpuPagedAttentionConfig,
+    paged_attention: PagedAttentionConfig,
     max_top_k: int | None,
     apply_top_p: bool,
     return_logprobs: bool,
@@ -827,7 +827,7 @@ def _run_generation_loop(
                 gen_state.cache,
                 binfo,
                 pos_ids,
-                tpu_paged_attention=tpu_paged_attention,
+                paged_attention=paged_attention,
             )
             logits_at_samples = logits["position", sample_indices]
             new_tokens, log_probs = hax.vmap(sampler, "position")(
@@ -849,7 +849,7 @@ def _run_generation_loop(
                     gen_state.cache,
                     binfo,
                     pos_ids,
-                    tpu_paged_attention=tpu_paged_attention,
+                    paged_attention=paged_attention,
                 )
                 hidden_at_samples = hidden["position", sample_indices]
                 new_tokens, log_probs = _streaming_greedy_lm_head(
@@ -902,7 +902,7 @@ def _run_generation_loop_without_lm_head(
     model: Any,
     max_tokens_per_round: int,
     max_rounds: int,
-    tpu_paged_attention: TpuPagedAttentionConfig,
+    paged_attention: PagedAttentionConfig,
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run decode through transformer/cache update, then enqueue dummy tokens without LM head or sampling."""
 
@@ -932,7 +932,7 @@ def _run_generation_loop_without_lm_head(
             gen_state.cache,
             binfo,
             pos_ids,
-            tpu_paged_attention=tpu_paged_attention,
+            paged_attention=paged_attention,
         )
 
         num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
@@ -961,7 +961,7 @@ def _run_generation_loop_with_lm_head_no_sampling(
     model: Any,
     max_tokens_per_round: int,
     max_rounds: int,
-    tpu_paged_attention: TpuPagedAttentionConfig,
+    paged_attention: PagedAttentionConfig,
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run decode through the LM head, then enqueue dummy tokens without sampling.
 
@@ -995,7 +995,7 @@ def _run_generation_loop_with_lm_head_no_sampling(
             gen_state.cache,
             binfo,
             pos_ids,
-            tpu_paged_attention=tpu_paged_attention,
+            paged_attention=paged_attention,
         )
         logits = model.lm_head_logits(hidden)
         logits_checksum = hax.sum(logits).scalar()
@@ -1212,7 +1212,7 @@ class InferenceEngine:
             self.sampler,
             prefill_work,
             self.config.max_seqs_in_prefill,
-            self.config.tpu_paged_attention,
+            self.config.paged_attention,
             self.config.max_top_k,
             apply_top_p,
             return_logprobs,
@@ -1517,7 +1517,7 @@ class InferenceEngine:
                 # TODO: tune max_tokens_per_round
                 self.config.imputed_max_tokens_per_round,
                 self.config.max_rounds,
-                self.config.tpu_paged_attention,
+                self.config.paged_attention,
                 self.config.max_top_k,
                 apply_top_p,
                 return_logprobs,
@@ -1629,7 +1629,7 @@ class InferenceEngine:
                 self.model,
                 self.config.imputed_max_tokens_per_round,
                 self.config.max_rounds,
-                self.config.tpu_paged_attention,
+                self.config.paged_attention,
             )
             _block_until_ready_optional((future_state, decode_outputs))
             self.gen_state = future_state
@@ -1698,7 +1698,7 @@ class InferenceEngine:
                 self.model,
                 self.config.imputed_max_tokens_per_round,
                 self.config.max_rounds,
-                self.config.tpu_paged_attention,
+                self.config.paged_attention,
             )
             _block_until_ready_optional((future_state, decode_outputs))
             self.gen_state = future_state
@@ -1749,7 +1749,7 @@ class InferenceEngine:
             # TODO: tune max_tokens_per_round
             self.config.imputed_max_tokens_per_round,
             self.config.max_rounds,
-            self.config.tpu_paged_attention,
+            self.config.paged_attention,
             self.config.max_top_k,
             False,
             return_logprobs,
@@ -1793,7 +1793,7 @@ class InferenceEngine:
             self.sampler,
             eqx.filter_eval_shape(_create_dummy_work),
             self.config.max_seqs_in_prefill,
-            self.config.tpu_paged_attention,
+            self.config.paged_attention,
             self.config.max_top_k,
             False,
             return_logprobs,

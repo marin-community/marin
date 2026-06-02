@@ -19,7 +19,7 @@ from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
-from levanter.inference.tpu_kernels import TpuPagedAttentionConfig
+from levanter.inference.tpu_kernels import AutoPagedAttentionConfig, PagedAttentionConfig
 from levanter.layers import LayerNormConfigBase, RmsNormConfig
 from levanter.layers.attention import Attention, AttentionBackend, AttentionConfig, AttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache
@@ -354,7 +354,7 @@ class LlamaDecoderLayer(eqx.Module):
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
-        tpu_paged_attention: TpuPagedAttentionConfig = TpuPagedAttentionConfig(),
+        paged_attention: PagedAttentionConfig = AutoPagedAttentionConfig(),
         key=None,
     ) -> tuple[NamedArray, KvPageCache]:
         k_attn, k_mlp = maybe_rng_split(key, 2)
@@ -366,7 +366,7 @@ class LlamaDecoderLayer(eqx.Module):
             kv_cache,
             batch_info,
             pos_ids=pos_ids,
-            tpu_paged_attention=tpu_paged_attention,
+            paged_attention=paged_attention,
             key=k_attn,
         )
 
@@ -428,7 +428,7 @@ class LlamaTransformer(eqx.Module):
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
-        tpu_paged_attention: TpuPagedAttentionConfig = TpuPagedAttentionConfig(),
+        paged_attention: PagedAttentionConfig = AutoPagedAttentionConfig(),
         key=None,
     ) -> tuple[NamedArray, ListCache[KvPageCache]]:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
@@ -456,7 +456,7 @@ class LlamaTransformer(eqx.Module):
                 this_cache,
                 batch_info,
                 pos_ids=pos_ids,
-                tpu_paged_attention=tpu_paged_attention,
+                paged_attention=paged_attention,
                 key=keys[i] if keys is not None else None,
             )
             with jax.named_scope("update cache"):
@@ -638,7 +638,7 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
-        tpu_paged_attention: TpuPagedAttentionConfig = TpuPagedAttentionConfig(),
+        paged_attention: PagedAttentionConfig = AutoPagedAttentionConfig(),
         key=None,
     ) -> tuple[NamedArray, ListCache[KvPageCache]]:
         """Run one decode / pre-fill step with an existing paged-KV *state*.
@@ -668,7 +668,7 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
             kv_cache,
             batch_info,
             pos_ids,
-            tpu_paged_attention=tpu_paged_attention,
+            paged_attention=paged_attention,
             key=key,
         )
         logits = self.lm_head_logits(x)
@@ -682,7 +682,7 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
-        tpu_paged_attention: TpuPagedAttentionConfig = TpuPagedAttentionConfig(),
+        paged_attention: PagedAttentionConfig = AutoPagedAttentionConfig(),
         key=None,
     ) -> tuple[NamedArray, ListCache[KvPageCache]]:
         """Run paged decode through the transformer and return hidden states before the LM head."""
@@ -694,7 +694,7 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
             x,
             batch_info,
             pos_ids,
-            tpu_paged_attention=tpu_paged_attention,
+            paged_attention=paged_attention,
             key=k_t,
         )
 
