@@ -68,6 +68,45 @@ from .weight_transfer.base import WeightUpdate
 logger = logging.getLogger(__name__)
 
 
+TPU_ROLLOUT_SHARED_MAPPING = {
+    "heads": "model",
+    "kv_head": "model",
+    "mlp": "model",
+    "vocab": "model",
+}
+
+
+def _physical_axes(physical: str | list[str] | tuple[str, ...]) -> set[str]:
+    if isinstance(physical, str):
+        return {physical}
+    return set(physical)
+
+
+def _filter_mapping_to_mesh_axes(
+    mapping: Mapping[str, str | list[str] | tuple[str, ...]],
+    physical_axes: set[str],
+) -> dict[str, str | list[str] | tuple[str, ...]]:
+    return {
+        logical: physical for logical, physical in mapping.items() if _physical_axes(physical).issubset(physical_axes)
+    }
+
+
+def _levanter_rollout_inference_mesh(train_mesh: MeshConfig) -> MeshConfig:
+    inference_axes = {"data": 1, "model": -1}
+    available_physical_axes = set(inference_axes) | set(train_mesh.dcn_axes)
+    shared_mapping = _filter_mapping_to_mesh_axes(train_mesh.shared_mapping, available_physical_axes)
+    shared_mapping.update(TPU_ROLLOUT_SHARED_MAPPING)
+
+    return MeshConfig(
+        axes=inference_axes,
+        dcn_axes=train_mesh.dcn_axes,
+        batch_axis_name=train_mesh.batch_axis_name,
+        shared_mapping=shared_mapping,
+        compute_mapping=_filter_mapping_to_mesh_axes(train_mesh.compute_mapping, available_physical_axes),
+        param_mapping=_filter_mapping_to_mesh_axes(train_mesh.param_mapping, available_physical_axes),
+    )
+
+
 @dataclass(frozen=True)
 class RolloutTransferCounterSnapshot:
     """Attempt-local weight receive counters for a rollout worker process."""
@@ -338,12 +377,16 @@ def create_inference_context(
     if inference_type == "levanter":
         # Infer model_axis_size from the actual TPU configuration now that JAX is initialized.
         # For inference servers, we shard across all local devices on a single host.
+        inference_trainer = dataclasses.replace(
+            inference_config.inference_server_config.trainer,
+            mesh=_levanter_rollout_inference_mesh(inference_config.inference_server_config.trainer.mesh),
+        )
         inference_config.inference_server_config = dataclasses.replace(
             inference_config.inference_server_config,
-            trainer=dataclasses.replace(
-                inference_config.inference_server_config.trainer, mesh=MeshConfig(axes={"data": 1, "model": -1})
-            ),
+            trainer=inference_trainer,
         )
+        inference_config.mesh = inference_trainer.device_mesh
+        inference_config.axis_mapping = inference_trainer.compute_axis_mapping
         return LevanterInferenceContext(
             inference_config=inference_config,
         )

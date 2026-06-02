@@ -6,6 +6,10 @@ from types import SimpleNamespace
 
 import fsspec
 import pytest
+from levanter.inference.openai import InferenceServerConfig
+from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
+from marin.rl.environments.inference_ctx.levanter import LevanterInferenceContextConfig
 from marin.rl.environments.inference_ctx.staging import stage_vllm_metadata_locally
 from marin.rl.environments.inference_ctx.vllm import (
     VLLMEngineConfig,
@@ -248,6 +252,43 @@ def test_create_inference_context_uses_local_metadata_for_remote_inflight_vllm(m
     assert captured["config"].engine.model_name == "/tmp/staged-model"
     assert captured["config"].engine.load_format == "dummy"
     assert captured["config"].engine.kv_cache_metrics is True
+
+
+def test_create_inference_context_uses_tpu_serving_sharding_for_levanter(monkeypatch):
+    captured = {}
+    trainer = TrainerConfig(
+        mesh=MeshConfig(
+            axes={"context": 1, "model": 1},
+            shared_mapping={"mlp": "model", "heads": "model", "position": "context"},
+        ),
+    )
+
+    class _FakeLevanterContext:
+        def __init__(self, *, inference_config):
+            captured["config"] = inference_config
+
+    monkeypatch.setattr("marin.rl.rollout_worker.LevanterInferenceContext", _FakeLevanterContext)
+
+    ctx = create_inference_context(
+        "levanter",
+        LevanterInferenceContextConfig(
+            inference_server_config=InferenceServerConfig(trainer=trainer),
+            tokenizer=None,
+            mesh=trainer.device_mesh,
+            axis_mapping=trainer.compute_axis_mapping,
+        ),
+        inflight_weight_updates=False,
+    )
+
+    assert isinstance(ctx, _FakeLevanterContext)
+    inference_trainer = captured["config"].inference_server_config.trainer
+    assert inference_trainer.mesh.axes == {"data": 1, "model": -1}
+    assert inference_trainer.compute_axis_mapping["heads"] == "model"
+    assert inference_trainer.compute_axis_mapping["kv_head"] == "model"
+    assert inference_trainer.compute_axis_mapping["mlp"] == "model"
+    assert inference_trainer.compute_axis_mapping["vocab"] == "model"
+    assert "position" not in inference_trainer.compute_axis_mapping
+    assert captured["config"].axis_mapping == inference_trainer.compute_axis_mapping
 
 
 @pytest.mark.parametrize(

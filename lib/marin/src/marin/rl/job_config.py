@@ -209,9 +209,16 @@ def build_worker_configs(config: RLJobConfig) -> tuple[TrainWorkerConfig, Rollou
 
     # Scan over sampling params for max seqs, must be able to fit a single lesson prompt
     max_seqs = 0
+    max_top_k: int | None = None
     for lesson in config.curriculum.lessons.values():
         total_seqs = lesson.sampling_params.n_generations_per_prompt
         max_seqs = max(max_seqs, total_seqs)
+        decodings = [lesson.sampling_params.train_decoding]
+        if lesson.sampling_params.eval_decoding is not None:
+            decodings.append(lesson.sampling_params.eval_decoding)
+        for decoding in decodings:
+            if decoding.top_k is not None:
+                max_top_k = max(decoding.top_k, max_top_k or 0)
 
     max_seq_len = config.curriculum.max_seq_len
     assert max_seq_len > 0, "Max seq len must be positive across curriculum lessons."
@@ -239,6 +246,7 @@ def build_worker_configs(config: RLJobConfig) -> tuple[TrainWorkerConfig, Rollou
                 max_seq_len=max_seq_len,
                 page_size=128,
                 hbm_utilization=0.5,
+                max_top_k=max_top_k,
             ),
             port=0,
         )

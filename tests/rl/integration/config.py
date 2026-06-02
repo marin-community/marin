@@ -457,6 +457,8 @@ def run_inference_with_engine(
             stop_tokens=None,
             max_num_tokens=jnp.array(len(prompt_tokens) + max_tokens, dtype=jnp.int32),
             temperature=jnp.array(temperature, dtype=jnp.float32),
+            top_p=jnp.array(1.0, dtype=jnp.float32),
+            top_k=jnp.array(0, dtype=jnp.int32),
             key=jrandom.PRNGKey(i),
         )
 
