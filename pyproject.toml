@@ -93,7 +93,7 @@ conflicts = [
     ],
     [
         { package = "marin-core", extra = "gpu" },
-        { package = "marin-levanter", extra = "vllm" },
+        { package = "marin-levanter", extra = "vllm-tpu" },
     ],
     [
         { package = "marin-core", extra = "gpu" },
