@@ -4,7 +4,6 @@
 import dataclasses
 import gc
 import logging
-import os
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -19,18 +18,12 @@ import levanter.callbacks
 import levanter.eval
 import levanter.eval_harness
 from levanter import callbacks
+from levanter.callbacks.labeled_eval import LabeledLmEvalConfig, add_labeled_lm_eval_callbacks
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config, save_hf_checkpoint_callback
 from levanter.data.mixture import MixtureDataset
-from levanter.data.sharded_datasource import FirstRowsShardedDataSource, ShardedDataSource
-from levanter.data.text import (
-    LmDataConfig,
-    LmDatasetSourceConfigBase,
-    TraceChatEvaluationFormat,
-    build_trace_chat_dataset_cache,
-    dataset_for_trace_chat_format,
-)
+from levanter.data.text import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
@@ -39,29 +32,6 @@ from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class LabeledLmEvalDatasetConfig:
-    """A trace-chat dataset to evaluate with per-label LM loss during training."""
-
-    source: LmDatasetSourceConfigBase
-    split: str
-    trace_format: TraceChatEvaluationFormat = field(default_factory=TraceChatEvaluationFormat)
-    cache_dir: str | None = None
-    max_examples: int | None = None
-
-
-@dataclass(frozen=True)
-class LabeledLmEvalConfig:
-    """Configuration for periodic labeled LM eval callbacks."""
-
-    datasets: dict[str, LabeledLmEvalDatasetConfig] = field(default_factory=dict)
-    cache_dir: str | None = None
-    prefix: str = "labeled_eval"
-    steps: int | None = None
-    eval_current: bool = True
-    eval_model: bool = True
 
 
 @dataclass
@@ -104,32 +74,6 @@ class TrainLmConfig:
 
     # TODO: really need to add callback framework
     log_entropy: bool = False
-
-
-def _labeled_eval_cache_dir(
-    data_config: LmDataConfig,
-    labeled_eval_config: LabeledLmEvalConfig,
-    dataset_name: str,
-    dataset_config: LabeledLmEvalDatasetConfig,
-) -> str:
-    if dataset_config.cache_dir is not None:
-        return dataset_config.cache_dir
-
-    cache_root = labeled_eval_config.cache_dir
-    if cache_root is None and data_config.cache_dir is not None:
-        cache_root = os.path.join(data_config.cache_dir, "labeled_eval")
-    if cache_root is None:
-        raise ValueError(f"No cache_dir provided for labeled eval dataset {dataset_name}")
-    return os.path.join(cache_root, dataset_name)
-
-
-def _source_for_labeled_eval_dataset(dataset_config: LabeledLmEvalDatasetConfig) -> ShardedDataSource[dict]:
-    source = dataset_config.source.get_shard_source(dataset_config.split)
-    if source is None:
-        raise ValueError(f"No shard source for split {dataset_config.split!r} in {dataset_config.source!r}")
-    if dataset_config.max_examples is None:
-        return source
-    return FirstRowsShardedDataSource(source, dataset_config.max_examples)
 
 
 def main(config: TrainLmConfig):
@@ -286,44 +230,18 @@ def main(config: TrainLmConfig):
             trainer.add_hook(cb, every=config.trainer.steps_per_eval)
 
         if config.labeled_eval is not None:
-            labeled_eval_config = config.labeled_eval
-            if not labeled_eval_config.datasets:
-                logger.warning("labeled_eval was configured without any datasets.")
-
-            for dataset_name, dataset_config in labeled_eval_config.datasets.items():
-                source = _source_for_labeled_eval_dataset(dataset_config)
-                cache_dir = _labeled_eval_cache_dir(config.data, labeled_eval_config, dataset_name, dataset_config)
-                cache = build_trace_chat_dataset_cache(
-                    cache_dir,
-                    source,
-                    dataset_config.trace_format,
-                    tokenizer,
-                    config.data.cache_options,
-                )
-                dataset = dataset_for_trace_chat_format(
-                    dataset_config.trace_format,
-                    Pos,
-                    cache,
-                    block_cross_document_attention=config.data.block_cross_document_attention,
-                )
-                if max_eval_examples_per_ds is not None:
-                    dataset = dataset.take(max_eval_examples_per_ds)
-
-                trainer.add_hook(
-                    levanter.eval.cb_labeled_lm_evaluate(
-                        EvalBatch,
-                        dataset,
-                        dataset_config.trace_format.loss_label_spec(),
-                        tokenizer,
-                        trainer.device_mesh,
-                        compute_axis_mapping,
-                        prefix=os.path.join(labeled_eval_config.prefix, dataset_name),
-                        eval_current=labeled_eval_config.eval_current,
-                        eval_model=labeled_eval_config.eval_model,
-                        mp=config.trainer.mp,
-                    ),
-                    every=labeled_eval_config.steps or config.trainer.steps_per_eval,
-                )
+            add_labeled_lm_eval_callbacks(
+                trainer,
+                labeled_eval_config=config.labeled_eval,
+                data_config=config.data,
+                trainer_config=config.trainer,
+                EvalBatch=EvalBatch,
+                Pos=Pos,
+                tokenizer=tokenizer,
+                device_mesh=trainer.device_mesh,
+                axis_mapping=compute_axis_mapping,
+                max_eval_examples_per_dataset=max_eval_examples_per_ds,
+            )
 
         flops_per_token = config.model.flops_per_token(vocab_size, Pos.size)
         flops_per_example = 3 * flops_per_token * Pos.size if flops_per_token is not None else None

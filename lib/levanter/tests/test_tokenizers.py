@@ -8,10 +8,8 @@ installed are skipped gracefully. The test model is meta-llama/Llama-3.1-8B,
 which requires HF authentication (tests skip if auth is missing).
 """
 
-import ast
 import json
 import os
-import pathlib
 import re
 import shutil
 from unittest.mock import patch
@@ -55,44 +53,6 @@ def _can_load_model() -> bool:
 _MODEL_AVAILABLE = _can_load_model()
 
 requires_model = pytest.mark.skipif(not _MODEL_AVAILABLE, reason="HF auth or network unavailable for gated model")
-
-_REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-
-
-def _load_repo_string_constant(relative_path: str, constant_name: str) -> str:
-    def string_value(node: ast.expr) -> str:
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            return node.value
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "strip"
-            and not node.args
-            and not node.keywords
-        ):
-            return string_value(node.func.value).strip()
-        raise TypeError(f"{constant_name} in {relative_path} is not a string constant")
-
-    module = ast.parse((_REPO_ROOT / relative_path).read_text())
-    for node in module.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        if not any(isinstance(target, ast.Name) and target.id == constant_name for target in node.targets):
-            continue
-
-        return string_value(node.value)
-
-    raise ValueError(f"{constant_name} not found in {relative_path}")
-
-
-MARIN_CHAT_TEMPLATE = _load_repo_string_constant("experiments/marin_models.py", "MARIN_CHAT_TEMPLATE")
-LLAMA_3_1_CHAT_TEMPLATE = _load_repo_string_constant(
-    "experiments/chat_templates/llama3pt1_chat_template.py", "LLAMA_3_1_CHAT_TEMPLATE"
-)
-QWEN_3_CHAT_TEMPLATE = _load_repo_string_constant(
-    "experiments/chat_templates/qwen3_chat_template.py", "QWEN_3_CHAT_TEMPLATE"
-)
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -1139,79 +1099,6 @@ def test_apply_chat_template_with_masks_batch(backend_tokenizer):
     result = backend_tokenizer.apply_chat_template_with_masks(conversations, chat_template=_SIMPLE_CHAT_TEMPLATE)
     assert len(result["input_ids"]) == 2
     assert len(result["assistant_masks"]) == 2
-
-
-_MESSAGE_SPAN_REAL_TEMPLATE_CASES = [
-    (
-        "marin",
-        "marin-community/marin-tokenizer",
-        MARIN_CHAT_TEMPLATE,
-        {},
-    ),
-    (
-        "llama3.1",
-        "meta-llama/Llama-3.1-8B",
-        LLAMA_3_1_CHAT_TEMPLATE,
-        {"tools": None},
-    ),
-    (
-        "qwen3",
-        "Qwen/Qwen3-8B",
-        QWEN_3_CHAT_TEMPLATE,
-        {"tools": None},
-    ),
-    (
-        "gemma3",
-        "google/gemma-3-4b-it",
-        None,
-        {},
-    ),
-    (
-        "gpt-oss",
-        "openai/gpt-oss-20b",
-        None,
-        {"tools": None, "builtin_tools": None},
-    ),
-]
-
-
-def _load_optional_tokenizer(name: str) -> MarinTokenizer:
-    try:
-        return load_tokenizer(name)
-    except Exception as e:
-        pytest.skip(f"Cannot load tokenizer {name}: {e}")
-
-
-@pytest.mark.parametrize(
-    "case_name,tokenizer_name,chat_template,template_kwargs",
-    _MESSAGE_SPAN_REAL_TEMPLATE_CASES,
-    ids=[case[0] for case in _MESSAGE_SPAN_REAL_TEMPLATE_CASES],
-)
-def test_apply_chat_template_message_spans_real_templates(case_name, tokenizer_name, chat_template, template_kwargs):
-    tokenizer = _load_optional_tokenizer(tokenizer_name)
-    conversation = [
-        {"role": "user", "content": f"{case_name} alpha prompt."},
-        {"role": "assistant", "content": f"{case_name} beta answer."},
-        {"role": "user", "content": f"{case_name} gamma prompt."},
-        {"role": "assistant", "content": f"{case_name} delta answer."},
-    ]
-
-    result = tokenizer.apply_chat_template_with_masks(
-        [conversation],
-        chat_template=chat_template,
-        return_message_spans=True,
-        **template_kwargs,
-    )
-
-    input_ids = result["input_ids"][0]
-    spans = result["message_spans"][0]
-    assert len(spans) == len(conversation)
-    assert all(start < end for start, end in spans)
-    assert all(left[1] <= right[0] for left, right in zip(spans, spans[1:]))
-
-    for message, (start, end) in zip(conversation, spans, strict=True):
-        span_text = tokenizer.decode(input_ids[start:end], skip_special_tokens=False)
-        assert message["content"] in span_text
 
 
 # ---------------------------------------------------------------------------

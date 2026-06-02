@@ -75,6 +75,29 @@ TOOL_TEMPLATE = """{{ bos_token }}
 {%- endif -%}
 """
 
+MULTI_TOOL_TEMPLATE = """{{ bos_token }}
+{%- for message in messages -%}
+  {%- if message['role'] == 'assistant' -%}
+<|start_header_id|>assistant<|end_header_id|>
+{% generation %}{{ message['content'] | trim }}
+{%- for tool_call in message.get('tool_calls', []) -%}
+  {%- set call = tool_call['function'] -%}
+{{ '{"name": "' + call['name'] + '", "arguments": ' }}{{ call['arguments'] | tojson }}{{ '}' }}
+{%- endfor -%}
+<|eot_id|>{% endgeneration %}
+  {%- elif message['role'] == 'tool' -%}
+<|start_header_id|>tool<|end_header_id|>
+{{ message['content'] | tojson }}<|eot_id|>
+  {%- else -%}
+<|start_header_id|>{{ message['role'] }}<|end_header_id|>
+{{ message['content'] | trim }}<|eot_id|>
+  {%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+<|start_header_id|>assistant<|end_header_id|>
+{%- endif -%}
+"""
+
 
 @pytest.fixture(scope="module")
 def tokenizer() -> MarinTokenizer:
@@ -373,6 +396,95 @@ def test_trace_chat_processor_can_label_only_explicit_message_tags(tokenizer: Ma
     assert (labels == TRACE_LABEL_ASSISTANT_TEXT).sum() == 0
     assert (labels == TRACE_LABEL_OBSERVATION).sum() == 0
     assert "diff --git" in patch_text
+
+
+def test_trace_chat_processor_labels_multi_tool_and_interleaved_user_turns(tokenizer: MarinTokenizer):
+    processor = TraceChatProcessor(
+        tokenizer,
+        chat_template=MULTI_TOOL_TEMPLATE,
+        loss_tags=("assistant", "assistant_text", "tool_call", "observation", "final_assistant"),
+    )
+
+    result = processor(
+        [
+            {
+                "messages": [
+                    {"role": "user", "content": "Find the failing test."},
+                    {"role": "user", "content": "Use the repo tools before answering."},
+                    {
+                        "role": "assistant",
+                        "content": "I will inspect two files.",
+                        "tool_calls": [
+                            {
+                                "id": "call_search",
+                                "type": "function",
+                                "function": {"name": "search", "arguments": {"query": "failing test"}},
+                            },
+                            {
+                                "id": "call_open",
+                                "type": "function",
+                                "function": {"name": "open_file", "arguments": {"path": "tests/test_eval.py"}},
+                            },
+                        ],
+                    },
+                    {"role": "user", "content": "Check the eval path first."},
+                    {"role": "tool", "content": {"matches": ["tests/test_eval.py"]}},
+                    {"role": "tool", "content": {"path": "tests/test_eval.py", "line": 345}},
+                    {"role": "assistant", "content": "The issue is in the eval callback test."},
+                ]
+            }
+        ]
+    )[0]
+
+    labels = result["loss_labels"]
+    input_ids = result["input_ids"]
+    assistant_text = decode_sequence(tokenizer, input_ids[labels == TRACE_LABEL_ASSISTANT_TEXT])
+    tool_call_text = decode_sequence(tokenizer, input_ids[labels == TRACE_LABEL_ASSISTANT_TOOL_CALL])
+    observation_text = decode_sequence(tokenizer, input_ids[labels == TRACE_LABEL_OBSERVATION])
+    final_text = decode_sequence(tokenizer, input_ids[labels == TRACE_LABEL_FINAL_ASSISTANT])
+
+    assert "I will inspect two files." in assistant_text
+    assert '"name": "search"' in tool_call_text
+    assert '"name": "open_file"' in tool_call_text
+    assert "failing test" not in observation_text
+    assert "Check the eval path first." not in observation_text
+    assert '"matches": ["tests/test_eval.py"]' in observation_text
+    assert '"line": 345' in observation_text
+    assert "The issue is in the eval callback test." in final_text
+
+
+def test_trace_chat_processor_splits_text_tool_calls(tokenizer: MarinTokenizer):
+    processor = TraceChatProcessor(
+        tokenizer,
+        chat_template=MULTI_TOOL_TEMPLATE,
+        loss_tags=("assistant", "assistant_text", "tool_call"),
+    )
+
+    result = processor(
+        [
+            {
+                "messages": [
+                    {"role": "user", "content": "Read the file."},
+                    {
+                        "role": "assistant",
+                        "content": (
+                            "I will read it.\n"
+                            '<tool_call>{"name": "open_file", "arguments": {"path": "README.md"}}</tool_call>'
+                        ),
+                    },
+                ]
+            }
+        ]
+    )[0]
+
+    labels = result["loss_labels"]
+    input_ids = result["input_ids"]
+    assistant_text = decode_sequence(tokenizer, input_ids[labels == TRACE_LABEL_ASSISTANT_TEXT])
+    tool_call_text = decode_sequence(tokenizer, input_ids[labels == TRACE_LABEL_ASSISTANT_TOOL_CALL])
+
+    assert "I will read it." in assistant_text
+    assert '"name": "open_file"' in tool_call_text
+    assert '"path": "README.md"' in tool_call_text
 
 
 def test_tool_call_masking_behavior(tokenizer: MarinTokenizer):

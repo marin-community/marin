@@ -6,6 +6,12 @@
 This module keeps the trace-specific labeled evaluation path together: it renders chat
 templates, recovers token spans for each source message, assigns exclusive integer labels
 to trace regions, and builds packed `LabeledLmExample` batches for `LabeledEvaluator`.
+
+For example, an agent trace with a user request, an assistant tool call, a tool
+observation, and a final assistant answer can produce separate loss labels for
+assistant prose, tool-call JSON, observations, and final answers. The evaluator
+then reports per-label losses such as `assistant_text/loss`, `tool_call/loss`,
+and aggregate groups like `assistant/loss`.
 """
 
 import ast
@@ -145,6 +151,19 @@ def _split_text_tool_call_messages(messages: Sequence[Mapping[str, Any]]) -> lis
     for message in messages:
         split_messages.extend(_split_text_tool_call_message(message))
     return split_messages
+
+
+def _find_subsequence(haystack: Sequence[int], needle: Sequence[int]) -> int | None:
+    if not needle or len(needle) > len(haystack):
+        return None
+
+    haystack_ids = list(haystack)
+    needle_ids = list(needle)
+    needle_len = len(needle)
+    for start in range(len(haystack) - needle_len + 1):
+        if haystack_ids[start : start + needle_len] == needle_ids:
+            return start
+    return None
 
 
 def _normalize_chat_kwargs(kwargs: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -371,7 +390,7 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
             input_ids = tokenized["input_ids"][0]
             assistant_mask = tokenized["assistant_masks"][0]
             spans = tokenized["message_spans"][0]
-            labels = self._loss_labels(conversation, spans, assistant_mask, len(input_ids), kwargs_dict)
+            labels = self._loss_labels(conversation, spans, assistant_mask, input_ids, len(input_ids), kwargs_dict)
 
             out.append(
                 {
@@ -424,6 +443,7 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
         conversation: Sequence[Mapping[str, Any]],
         spans: Sequence[tuple[int, int]],
         assistant_mask: Sequence[int],
+        input_ids: Sequence[int],
         full_length: int,
         kwargs_dict: Mapping[str, Any],
     ) -> np.ndarray:
@@ -445,15 +465,14 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
 
             role = message.get("role")
             if role == "assistant":
-                if self.include_final_assistant_tag and idx == final_assistant_idx:
-                    self._assign_label(labels, TRACE_LABEL_FINAL_ASSISTANT, start, end, assistant_positions, message)
-                elif message.get("tool_calls"):
+                if message.get("tool_calls"):
                     text_positions = self._assistant_text_positions(
                         conversation,
                         spans,
                         assistant_positions,
                         message_index=idx,
                         full_length=full_length,
+                        input_ids=input_ids,
                         kwargs_dict=kwargs_dict,
                     )
                     for pos in range(start, min(end, full_length)):
@@ -462,6 +481,8 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
                         labels[pos] = (
                             TRACE_LABEL_ASSISTANT_TEXT if text_positions[pos] else TRACE_LABEL_ASSISTANT_TOOL_CALL
                         )
+                elif self.include_final_assistant_tag and idx == final_assistant_idx:
+                    self._assign_label(labels, TRACE_LABEL_FINAL_ASSISTANT, start, end, assistant_positions, message)
                 else:
                     self._assign_label(labels, TRACE_LABEL_ASSISTANT_TEXT, start, end, assistant_positions, message)
             elif role in {"tool", "function", "ipython"}:
@@ -512,6 +533,7 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
         *,
         message_index: int,
         full_length: int,
+        input_ids: Sequence[int],
         kwargs_dict: Mapping[str, Any],
     ) -> np.ndarray:
         message = conversation[message_index]
@@ -520,6 +542,10 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
             return np.zeros((full_length,), dtype=np.int32)
 
         start, end = spans[message_index]
+        content_positions = self._content_token_positions(content, input_ids, start, end, assistant_positions)
+        if content_positions is not None:
+            return content_positions
+
         content_only_prefix = [dict(previous_message) for previous_message in conversation[:message_index]]
         content_only_prefix.append(_message_without_tool_calls(message, content))
         tokenized = self.tokenizer.apply_chat_template_with_masks(
@@ -535,6 +561,33 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
             if assistant_positions[pos] and content_only_assistant_mask[pos]:
                 content_only_positions[pos] = 1
         return content_only_positions
+
+    def _content_token_positions(
+        self,
+        content: str,
+        input_ids: Sequence[int],
+        start: int,
+        end: int,
+        assistant_positions: np.ndarray,
+    ) -> np.ndarray | None:
+        window = list(input_ids[start:end])
+        candidates = (content, content.strip())
+        for candidate in dict.fromkeys(candidates):
+            if not candidate:
+                continue
+            content_ids = self.tokenizer.encode(candidate, add_special_tokens=False)
+            offset = _find_subsequence(window, content_ids)
+            if offset is None:
+                continue
+
+            positions = np.zeros((len(input_ids),), dtype=np.int32)
+            content_start = start + offset
+            content_end = content_start + len(content_ids)
+            for pos in range(content_start, min(content_end, len(input_ids))):
+                if pos < len(assistant_positions) and assistant_positions[pos]:
+                    positions[pos] = 1
+            return positions
+        return None
 
     @staticmethod
     def _final_assistant_index(conversation: Sequence[Mapping[str, Any]]) -> int | None:
