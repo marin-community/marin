@@ -381,32 +381,41 @@ def default_key_evals(
     ]
 
 
-def _ruler_context_lengths_for_model(context_lengths: Sequence[int], model_max_length: int) -> tuple[int, ...]:
+def _ruler_context_lengths_for_model(
+    context_lengths: Sequence[int], model_max_length: int, extra_token_buffer: int = 0
+) -> tuple[int, ...]:
     """Return RULER context lengths that fit the model window."""
     if model_max_length <= 0:
         raise ValueError(f"model_max_length must be positive, got {model_max_length}.")
+    if extra_token_buffer < 0:
+        raise ValueError(f"extra_token_buffer must be nonnegative, got {extra_token_buffer}.")
 
     # Length filter
-    selected_lengths = tuple(length for length in context_lengths if length <= model_max_length)
+    selected_lengths = tuple(length for length in context_lengths if length + extra_token_buffer <= model_max_length)
     if not selected_lengths:
         raise ValueError(
             f"No RULER context lengths fit model_max_length={model_max_length}; "
-            f"available lengths are {tuple(context_lengths)}."
+            f"available lengths are {tuple(context_lengths)} and extra_token_buffer={extra_token_buffer}."
         )
 
     return selected_lengths
 
 
-def _ruler_engine_kwargs(engine_kwargs: dict | None, max_context_length: int) -> dict:
+def _ruler_engine_kwargs(engine_kwargs: dict | None, required_model_length: int, tokenizer: str | None = None) -> dict:
     """Return vLLM and lm-eval context settings for RULER."""
     configured_kwargs = dict(engine_kwargs or {})
+    if tokenizer is not None:
+        existing_tokenizer = configured_kwargs.get("tokenizer")
+        if existing_tokenizer is not None and existing_tokenizer != tokenizer:
+            raise ValueError(f"Conflicting RULER tokenizer values: {existing_tokenizer!r} and {tokenizer!r}.")
+        configured_kwargs["tokenizer"] = tokenizer
 
     # Context knobs
     max_model_len = configured_kwargs.get("max_model_len")
     max_length = configured_kwargs.get("max_length")
     if max_model_len is None and max_length is None:
-        configured_kwargs["max_model_len"] = max_context_length
-        configured_kwargs["max_length"] = max_context_length
+        configured_kwargs["max_model_len"] = required_model_length
+        configured_kwargs["max_length"] = required_model_length
         return configured_kwargs
 
     if max_model_len is None:
@@ -416,10 +425,10 @@ def _ruler_engine_kwargs(engine_kwargs: dict | None, max_context_length: int) ->
         max_length = max_model_len
         configured_kwargs["max_length"] = max_length
 
-    if max_model_len < max_context_length or max_length < max_context_length:
+    if max_model_len < required_model_length or max_length < required_model_length:
         raise ValueError(
             "RULER requires both max_model_len and max_length to cover the largest selected "
-            f"context length ({max_context_length}); got max_model_len={max_model_len}, max_length={max_length}."
+            f"request length ({required_model_length}); got max_model_len={max_model_len}, max_length={max_length}."
         )
 
     return configured_kwargs
@@ -432,13 +441,17 @@ def default_ruler_eval(
     context_lengths: Sequence[int] = RULER_CONTEXT_LENGTHS,
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = None,
+    tokenizer: str | None = None,
     apply_chat_template: bool = False,
+    chat_template_token_buffer: int = 256,
     discover_latest_checkpoint: bool = True,
     wandb_tags: list[str] | None = None,
 ) -> ExecutorStep:
     """Create a vLLM-backed lm-eval RULER evaluation step."""
-    selected_lengths = _ruler_context_lengths_for_model(context_lengths, model_max_length)
-    configured_engine_kwargs = _ruler_engine_kwargs(engine_kwargs, max(selected_lengths))
+    extra_token_buffer = chat_template_token_buffer if apply_chat_template else 0
+    selected_lengths = _ruler_context_lengths_for_model(context_lengths, model_max_length, extra_token_buffer)
+    required_model_length = max(selected_lengths) + extra_token_buffer
+    configured_engine_kwargs = _ruler_engine_kwargs(engine_kwargs, required_model_length, tokenizer)
 
     # RULER task
     name, model_step_path = extract_model_name_and_path(step)

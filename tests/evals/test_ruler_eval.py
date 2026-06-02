@@ -56,6 +56,52 @@ def test_default_ruler_eval_does_not_mutate_engine_kwargs() -> None:
     assert step.config.engine_kwargs == {"max_model_len": 8192, "max_length": 8192}
 
 
+def test_default_ruler_eval_sets_tokenizer() -> None:
+    """RULER can use a tokenizer separate from the checkpoint path."""
+    step = default_ruler_eval(
+        "gs://example/checkpoints/model/hf/step-100",
+        model_max_length=8192,
+        resource_config=ResourceConfig.with_cpu(cpu=1),
+        tokenizer="stanford-crfm/marin-tokenizer",
+        discover_latest_checkpoint=False,
+    )
+
+    assert step.config.engine_kwargs == {
+        "max_model_len": 8192,
+        "max_length": 8192,
+        "tokenizer": "stanford-crfm/marin-tokenizer",
+    }
+
+
+def test_default_ruler_eval_rejects_conflicting_tokenizers() -> None:
+    """Tokenizer should have one clear source."""
+    with pytest.raises(ValueError):
+        default_ruler_eval(
+            "gs://example/checkpoints/model/hf/step-100",
+            model_max_length=8192,
+            resource_config=ResourceConfig.with_cpu(cpu=1),
+            engine_kwargs={"tokenizer": "existing-tokenizer"},
+            tokenizer="different-tokenizer",
+            discover_latest_checkpoint=False,
+        )
+
+
+def test_default_ruler_eval_reserves_chat_template_room() -> None:
+    """Chat wrapping adds tokens after RULER generates raw-length samples."""
+    step = default_ruler_eval(
+        "gs://example/checkpoints/model/hf/step-100",
+        model_max_length=8192,
+        resource_config=ResourceConfig.with_cpu(cpu=1),
+        apply_chat_template=True,
+        chat_template_token_buffer=256,
+        discover_latest_checkpoint=False,
+    )
+
+    config = step.config
+    assert config.engine_kwargs == {"max_model_len": 4352, "max_length": 4352}
+    assert config.evals[0].metadata == {"max_seq_lengths": [4096]}
+
+
 def test_default_ruler_eval_rejects_short_explicit_context_kwargs() -> None:
     """Explicit context kwargs should not be silently enlarged."""
     with pytest.raises(ValueError):
