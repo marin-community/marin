@@ -325,6 +325,11 @@ def test_dashboard_job_expand(smoke_cluster, smoke_page, smoke_screenshot):
     parent = smoke_cluster.submit(_parent_with_two_children, "smoke-expand-parent")
     smoke_cluster.wait(parent, timeout=smoke_cluster.job_timeout)
 
+    # Route through the owner overview first so the subsequent drill-in is a
+    # genuine hash change (the smoke page is shared module-scope and may already
+    # be parked on this owner's view from an earlier test).
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
+    wait_for_dashboard_ready(smoke_page)
     # Open the owner's scoped job list (the landing page groups by owner).
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/#/?user={parent.job_id.user}")
     wait_for_dashboard_ready(smoke_page)

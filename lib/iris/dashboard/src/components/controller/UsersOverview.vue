@@ -86,6 +86,7 @@ function toRow(summary: UserSummary): UserRow {
   }
 }
 
+// Alphabetical by user id, with starred users pinned to the top.
 const rows = computed<UserRow[]>(() => {
   const term = search.value.trim().toLowerCase()
   return (data.value?.users ?? [])
@@ -93,8 +94,6 @@ const rows = computed<UserRow[]>(() => {
     .filter(r => !term || r.user.toLowerCase().includes(term))
     .sort((a, b) =>
       Number(b.starred) - Number(a.starred) ||
-      b.activeJobs - a.activeJobs ||
-      b.runningTasks - a.runningTasks ||
       a.user.localeCompare(b.user),
     )
 })
@@ -147,74 +146,65 @@ const rows = computed<UserRow[]>(() => {
       :message="search.trim() ? 'No users matching filter' : 'No users'"
     />
 
-    <!-- User cards: starred first, then by activity. -->
-    <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-      <div
-        v-for="row in rows"
-        :key="row.user"
-        class="group/card relative rounded-lg border bg-surface transition-colors hover:bg-surface-raised hover:border-accent/40"
-        :class="row.starred ? 'border-status-warning-border' : 'border-surface-border'"
-      >
-        <RouterLink
-          :to="{ path: '/', query: { user: row.user } }"
-          class="block px-4 py-3 focus:outline-none focus:ring-2 focus:ring-accent/30 rounded-lg"
-          :aria-label="`View jobs for ${row.user || 'unknown user'}`"
-        >
-          <div class="flex items-center gap-2">
-            <span class="font-mono text-sm font-semibold text-accent truncate min-w-0 flex-1">
-              {{ row.user || '(unknown)' }}
-            </span>
-            <span class="text-text-muted text-xs shrink-0 opacity-0 group-hover/card:opacity-100 transition-opacity" aria-hidden="true">
-              &rarr;
-            </span>
-          </div>
-          <!-- Aggregate counts. Each metric is labelled in text, not encoded by
-               colour alone, so the card reads without relying on hue. -->
-          <dl class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[13px]">
-            <div class="flex items-center justify-between">
-              <dt class="text-text-secondary">Running</dt>
-              <dd class="tabular-nums" :class="row.runningJobs > 0 ? 'text-accent font-semibold' : 'text-text-muted'">
-                {{ row.runningJobs }}
-              </dd>
-            </div>
-            <div class="flex items-center justify-between">
-              <dt class="text-text-secondary">Pending</dt>
-              <dd class="tabular-nums" :class="row.pendingJobs > 0 ? 'text-status-warning font-semibold' : 'text-text-muted'">
-                {{ row.pendingJobs }}
-              </dd>
-            </div>
-            <div class="flex items-center justify-between">
-              <dt class="text-text-secondary">Active jobs</dt>
-              <dd class="tabular-nums text-text">{{ row.activeJobs }}</dd>
-            </div>
-            <div class="flex items-center justify-between">
-              <dt class="text-text-secondary">Running tasks</dt>
-              <dd class="tabular-nums" :class="row.runningTasks > 0 ? 'text-accent font-semibold' : 'text-text-muted'">
-                {{ row.runningTasks }}
-              </dd>
-            </div>
-          </dl>
-        </RouterLink>
-        <!-- Star toggle, overlaid top-right so it stays clear of the card link. -->
-        <button
-          type="button"
-          :aria-label="row.starred ? `Unstar ${row.user}` : `Star ${row.user}`"
-          :aria-pressed="row.starred"
-          :title="row.starred ? 'Unstar user' : 'Star user to pin it to the top'"
-          class="absolute top-2 right-2 p-1 rounded transition-colors"
-          :class="row.starred
-            ? 'text-status-warning'
-            : 'text-text-muted opacity-0 group-hover/card:opacity-100 focus:opacity-100 hover:text-text'"
-          @click="toggleStar(row.user)"
-        >
-          <svg v-if="row.starred" class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-            <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.286 3.966a1 1 0 00.95.69h4.17c.969 0 1.371 1.24.588 1.81l-3.37 2.45a1 1 0 00-.364 1.118l1.287 3.966c.3.922-.755 1.688-1.54 1.118l-3.37-2.45a1 1 0 00-1.176 0l-3.37 2.45c-.784.57-1.838-.196-1.539-1.118l1.287-3.966a1 1 0 00-.364-1.118L2.06 9.393c-.783-.57-.38-1.81.588-1.81h4.17a1 1 0 00.95-.69l1.286-3.966z" />
-          </svg>
-          <svg v-else class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-          </svg>
-        </button>
-      </div>
+    <!-- Owner list: starred first, then alphabetical. -->
+    <div v-else class="overflow-x-auto">
+      <table class="w-full border-collapse">
+        <thead>
+          <tr class="border-b border-surface-border">
+            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">User</th>
+            <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Running</th>
+            <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Pending</th>
+            <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Active Jobs</th>
+            <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Running Tasks</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="row in rows"
+            :key="row.user"
+            class="group/row border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
+          >
+            <td class="px-3 py-2 text-[13px]">
+              <span class="inline-flex items-center gap-1.5 max-w-full">
+                <button
+                  type="button"
+                  :aria-label="row.starred ? `Unstar ${row.user}` : `Star ${row.user}`"
+                  :aria-pressed="row.starred"
+                  :title="row.starred ? 'Unstar user' : 'Star user to pin it to the top'"
+                  class="shrink-0 transition-opacity"
+                  :class="row.starred
+                    ? 'text-status-warning opacity-100'
+                    : 'text-text-muted hover:text-text opacity-0 group-hover/row:opacity-100 focus:opacity-100'"
+                  @click="toggleStar(row.user)"
+                >
+                  <svg v-if="row.starred" class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.286 3.966a1 1 0 00.95.69h4.17c.969 0 1.371 1.24.588 1.81l-3.37 2.45a1 1 0 00-.364 1.118l1.287 3.966c.3.922-.755 1.688-1.54 1.118l-3.37-2.45a1 1 0 00-1.176 0l-3.37 2.45c-.784.57-1.838-.196-1.539-1.118l1.287-3.966a1 1 0 00-.364-1.118L2.06 9.393c-.783-.57-.38-1.81.588-1.81h4.17a1 1 0 00.95-.69l1.286-3.966z" />
+                  </svg>
+                  <svg v-else class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                  </svg>
+                </button>
+                <RouterLink
+                  v-if="row.user"
+                  :to="{ path: '/', query: { user: row.user } }"
+                  class="text-accent hover:underline font-mono break-anywhere"
+                >{{ row.user }}</RouterLink>
+                <span v-else class="text-text-muted font-mono">(unknown)</span>
+              </span>
+            </td>
+            <td class="px-3 py-2 text-[13px] text-right tabular-nums">
+              <span :class="row.runningJobs > 0 ? 'text-accent font-semibold' : 'text-text-muted'">{{ row.runningJobs }}</span>
+            </td>
+            <td class="px-3 py-2 text-[13px] text-right tabular-nums">
+              <span :class="row.pendingJobs > 0 ? 'text-status-warning font-semibold' : 'text-text-muted'">{{ row.pendingJobs }}</span>
+            </td>
+            <td class="px-3 py-2 text-[13px] text-right tabular-nums text-text">{{ row.activeJobs }}</td>
+            <td class="px-3 py-2 text-[13px] text-right tabular-nums">
+              <span :class="row.runningTasks > 0 ? 'text-accent font-semibold' : 'text-text-muted'">{{ row.runningTasks }}</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </div>
 </template>
