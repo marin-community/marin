@@ -52,9 +52,11 @@ coreweave:
   region: US-WEST-04A
   scale_group: h100-8x
   instance_type: gd-8xh100ib-i128
-  # NodePool maxNodes. minNodes=0 / targetNodes=0: the pool comes up empty and
-  # the CKS cluster-autoscaler scales it up to this many nodes in response to the
-  # gang's Pending pods (production scale-from-zero path).
+  # Fixed pool size: min=max=nodes, and setup() sets targetNodes=nodes so CKS
+  # provisions them up front. Kueue TAS can't scale from zero (the gang stays
+  # SchedulingGated until it can place on existing nodes, so the CKS autoscaler
+  # never sees Pending pods); manual provisioning is a stand-in until CKS supports
+  # Kueue ProvisioningRequest.
   nodes: 3
   ensure_nodepools: true        # create the h100-8x NodePool so CKS provisions nodes
   delete_nodepools_on_teardown: true

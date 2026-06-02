@@ -36,6 +36,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import re
 import subprocess
@@ -529,12 +530,13 @@ class CoreweaveTarget:
             cfg = self.cfg
             sg = config_pb2.ScaleGroupConfig(
                 num_vms=1,
+                # Fixed-size pool: min=max=nodes. setup() then manually sets targetNodes
+                # so CKS provisions the nodes up front. Kueue TAS can't scale from zero
+                # (it keeps the gang SchedulingGated until it can place on existing nodes,
+                # so the CKS autoscaler never sees Pending pods) — until CKS supports
+                # Kueue ProvisioningRequest, the nodes must exist before admission.
                 max_slices=cfg.coreweave.nodes,
-                # buffer_slices=0 -> minNodes=0: the pool comes up empty (targetNodes=0)
-                # and the CKS cluster-autoscaler scales it 0..max_slices in response to
-                # the gang's Pending pods (matched to this pool by nodeSelector). This
-                # is the production scale-from-zero path; a warm floor would bypass it.
-                buffer_slices=0,
+                buffer_slices=cfg.coreweave.nodes,
                 resources=config_pb2.ScaleGroupResources(
                     cpu_millicores=cfg.job.cpu_millicores,
                     memory_bytes=cfg.job.memory_bytes,
@@ -609,6 +611,19 @@ class CoreweaveTarget:
             check=False,
         )
 
+    def _set_target_nodes(self, controller: K8sControllerProvider, n: int) -> None:
+        """Manually set the desired node count on the smoke's NodePool(s).
+
+        ensure_nodepools creates a pool at targetNodes=0; this merge-patches it to n so
+        CKS provisions the nodes before the gang needs them. Needed because Kueue TAS
+        cannot scale from zero (see project memory: kueue_tas_scale_from_zero).
+        """
+        patch = json.dumps({"spec": {"targetNodes": n}})
+        for scale_group in self._iris_config().scale_groups:
+            pool = controller._nodepool_name(scale_group)
+            logger.info("setting NodePool %s targetNodes=%d", pool, n)
+            self.kubectl.raw("patch", "nodepools.compute.coreweave.com", pool, "--type=merge", "-p", patch)
+
     def _delete_nodepools(self, *, wait: bool) -> None:
         """Delete the NodePool(s) this smoke provisions, by EXACT name.
 
@@ -634,8 +649,7 @@ class CoreweaveTarget:
         cfg = self.cfg
         self._assert_namespace_unowned()
         # Boot cleanup: clear any artifacts a prior interrupted run left behind so we
-        # start from a clean slate (a fresh NodePool comes up at targetNodes=0, the
-        # scale-from-zero path). Safe: the guard above ensures no foreign controller
+        # start from a clean slate. Safe: the guard above ensures no foreign controller
         # owns this namespace.
         self._delete_ns_artifacts()
         self._delete_nodepools(wait=True)
@@ -644,13 +658,18 @@ class CoreweaveTarget:
         controller.ensure_rbac()
         if cfg.coreweave.ensure_nodepools:
             logger.info(
-                "ensuring NodePool %r (minNodes=0, maxNodes=%d, %s) — CKS autoscaler "
-                "provisions on the gang's Pending pods",
+                "ensuring NodePool %r (%s) and provisioning %d node(s)",
                 controller._nodepool_name(cfg.coreweave.scale_group),
-                cfg.coreweave.nodes,
                 cfg.coreweave.instance_type,
+                cfg.coreweave.nodes,
             )
             controller.ensure_nodepools(config)
+            # ensure_nodepools creates the pool at targetNodes=0. Kueue TAS can't scale
+            # from zero (gang stays SchedulingGated until it can place on existing nodes,
+            # so the CKS autoscaler never sees Pending pods), so manually request the
+            # nodes up front; CKS provisions them, then TAS admits the gang. Stand-in for
+            # a Kueue ProvisioningRequest until CKS supports it.
+            self._set_target_nodes(controller, cfg.coreweave.nodes)
         # The namespaced LocalQueue is the controller's responsibility; drive that
         # real path (binds iris-ci -> the admin ClusterQueue).
         controller.ensure_kueue_queues(config)
