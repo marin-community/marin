@@ -26,7 +26,7 @@ dependencies = [
     "google-cloud-storage",
     "google-cloud-storage-transfer",
     "marin-haliax",
-    "jax==0.8.0",  # vllm-tpu currently requires this exact version
+    "jax>=0.9.2,<0.11",
     "jaxopt>=0.8.3",
     "marin-levanter[serve]",
     "lxml[html_clean]",
@@ -124,18 +124,6 @@ conflicts = [
         { extra = "vllm" },
         { extra = "gpu" },
     ],
-    [
-        # cpu pins torch 2.9.0; tpu pins torch 2.10.0 (jax 0.9.2 / libtpu stack).
-        { extra = "cpu" },
-        { extra = "tpu" },
-    ],
-    [
-        # tpu pins torchvision 0.25.0 (torch 2.10.0); the vllm extra's
-        # tpu-inference fork pins torchvision 0.24.0. vllm is a self-contained
-        # stack, already mutually exclusive with cpu and gpu.
-        { extra = "vllm" },
-        { extra = "tpu" },
-    ],
 ]
 
 
@@ -159,14 +147,14 @@ gpu = [
 tpu = ["jax==0.9.2", "jaxlib==0.9.2", "libtpu==0.0.39", "torch==2.10.0", "torchvision==0.25.0"]
 
 cpu = [
-  "jax==0.8.0",
-  "torch==2.9.0",
+  "jax==0.9.2",
+  "torch==2.10.0",
   # Linux x86_64
-  "torchvision==0.24.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "torchvision==0.25.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
   # Windows x86_64 (AMD64)
-  "torchvision==0.24.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
+  "torchvision==0.25.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
   # Linux aarch64, macOS arm64: PyPI default wheel
-  "torchvision==0.24.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
+  "torchvision==0.25.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
 rl = [
@@ -200,9 +188,17 @@ vizier = [
 ]
 
 vllm = [
-    "vllm-tpu @ git+https://github.com/RohithKuditipudi/vllm.git@experiment/force-next-token",
-    "tpu-inference @ git+https://github.com/RohithKuditipudi/tpu-inference.git@experiment/force-next-token",
-    "triton==3.5.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
+    "jax==0.9.2",
+    "jaxlib==0.9.2",
+    "vllm-tpu==0.19.0",
+    "tpu-inference==0.19.0",
+    "triton==3.6.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
+    # Pin torch + torchvision explicitly so the per-extra source map below
+    # routes them to the pytorch-cpu index during fresh Iris resolves.
+    "torch==2.10.0",
+    "torchvision==0.25.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torchvision==0.25.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
+    "torchvision==0.25.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
 harbor = [
@@ -221,9 +217,10 @@ url = "https://marin-community.github.io/chatnoir-resiliparse/simple"
 
 [tool.uv.sources]
 torchvision = [
-    # Default to the CPU index for TPU/CPU builds
+    # Default to the CPU index for TPU/CPU/vLLM builds
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
+    { index = "pytorch-cpu", extra = "vllm" },
     # PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
     { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
 ]
@@ -233,6 +230,7 @@ torch = [
     { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
+    { index = "pytorch-cpu", extra = "vllm" },
 ]
 
 [[tool.uv.index]]
