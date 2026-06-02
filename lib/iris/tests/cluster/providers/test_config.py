@@ -707,8 +707,7 @@ scale_groups:
             iris_root / "config" / "marin.yaml",
             iris_root / "config" / "marin-dev.yaml",
             iris_root / "config" / "coreweave.yaml",
-            iris_root / "config" / "coreweave-rno2a.yaml",
-            iris_root / "config" / "coreweave-usw09b.yaml",
+            iris_root / "config" / "coreweave-ci.yaml",
             iris_root / "config" / "test.yaml",
         ]
 
