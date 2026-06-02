@@ -900,9 +900,6 @@ def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
     return make_local_config(config)
 
 
-# GPU metadata test lives in tests/test_gpu_metadata.py
-
-
 # ============================================================================
 # Dashboard authentication flow (standalone cluster with auth enabled)
 # ============================================================================
