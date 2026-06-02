@@ -42,7 +42,6 @@ import haliax as hax
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.inference.engine import InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams, SequenceTable
-from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.inference.page_table import PageTable
 from levanter.inference.tpu_kernels import TpuPagedAttentionBackend, TpuPagedAttentionConfig
 from levanter.layers.attention import AttentionMask
@@ -1104,7 +1103,7 @@ def levanter_trainer_config(tensor_parallel_size: int, mp_policy: str = "f32") -
 def run_levanter_without_lm_head_case(
     *,
     trainer: TrainerConfig,
-    server: InferenceServer,
+    server: Any,
     tokenizer: Any,
     backend_name: str,
     hbm_used_bytes: int | None,
@@ -1219,6 +1218,10 @@ def start_levanter_server(
     reference_logit_cache_dtype_policies: list[str],
     reference_logit_only: bool,
 ) -> ServerHandle:
+    # Keep this benchmark importable in Levanter's non-serve test environment.
+    # The OpenAI server types require the optional serve extra.
+    from levanter.inference.openai import InferenceServer, InferenceServerConfig
+
     trainer = levanter_trainer_config(tensor_parallel_size, trainer_mp_policy)
     tokenizer = load_tokenizer(tokenizer_name)
     service_compute_dtype = jnp.dtype(compute_dtype)
@@ -1417,7 +1420,7 @@ def start_levanter_server(
 
 def write_levanter_kernel_artifacts(
     trainer: TrainerConfig,
-    server: InferenceServer,
+    server: Any,
     output_dir: Path,
     *,
     return_logprobs: bool,
