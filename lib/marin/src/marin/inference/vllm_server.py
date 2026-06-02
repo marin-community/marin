@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Native vLLM server lifecycle and CLI configuration."""
+
 import dataclasses
 import logging
 import os
@@ -103,6 +105,9 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     load_format = engine_kwargs.get("load_format")
     if load_format is not None:
         args.extend(["--load-format", load_format])
+    tokenizer = engine_kwargs.get("tokenizer")
+    if tokenizer is not None:
+        args.extend(["--tokenizer", str(tokenizer)])
     max_model_len = engine_kwargs.get("max_model_len")
     if max_model_len is not None:
         args.extend(["--max-model-len", str(max_model_len)])
