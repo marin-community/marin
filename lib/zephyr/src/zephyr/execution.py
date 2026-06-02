@@ -41,7 +41,7 @@ from fray.local_backend import LocalClient
 from fray.types import Entrypoint, JobRequest
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from rigging.filesystem import marin_temp_bucket, open_url, url_to_fs
+from rigging.filesystem import marin_temp_bucket, open_url, unique_temp_path, url_to_fs
 from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.dataset import Dataset
@@ -57,7 +57,7 @@ from zephyr.plan import (
     compute_plan,
 )
 from zephyr.shuffle import ListShard, MemChunk, _write_scatter
-from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, batchify, ensure_parent_dir, unique_temp_path
+from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, batchify, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 

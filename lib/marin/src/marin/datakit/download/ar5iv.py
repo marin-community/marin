@@ -13,10 +13,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 import draccus
-from rigging.filesystem import open_url
+from rigging.filesystem import atomic_rename, open_url
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext
-from zephyr.writers import atomic_rename
 
 from marin.execution.step_spec import StepSpec
 

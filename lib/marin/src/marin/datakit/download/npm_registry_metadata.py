@@ -25,8 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote
 
-from rigging.filesystem import open_url, url_to_fs
-from zephyr.writers import atomic_rename
+from rigging.filesystem import atomic_rename, open_url, url_to_fs
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.ingestion_manifest import (
