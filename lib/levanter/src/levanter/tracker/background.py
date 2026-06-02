@@ -15,15 +15,11 @@ both guarantees:
   keeps running so subsequent updates still go through.
 * If the queue fills up (e.g. the wrapped tracker is wedged), additional
   updates are dropped with a rate-limited warning rather than blocking.
-* Payloads are fully prepared on the calling thread via the wrapped tracker's
-  ``_prepare_log`` / ``_prepare_summary`` / ``_prepare_hyperparameters`` hooks
-  before they cross the queue. The default hooks call ``jax.device_get`` — for
-  sharded arrays that transfer is a cross-host collective and must be dispatched
-  from the main thread in identical program order on every host (otherwise
-  multi-host launch IDs desync and the TPU slice halts). Trackers that build
-  backend-specific objects (e.g. ``wandb.Histogram``) override the hooks so that
-  work runs on the producer thread too, leaving the worker to do nothing but the
-  upload.
+* Payloads are prepared on the calling thread via the wrapped tracker's
+  ``_prepare_*`` hooks before they cross the queue, so the worker only does I/O.
+  Keeping the ``jax.device_get`` there also matters for multi-host runs, where
+  that transfer is a collective that must stay in program order on the main
+  thread.
 
 Tracker initialization is *not* wrapped. If e.g. ``wandb.init()`` fails
 because of bad auth, that's a fatal configuration problem and the run
@@ -132,10 +128,8 @@ class BackgroundTracker(Tracker):
         """Prepare ``payload`` on the calling thread, then enqueue ``method``.
 
         ``prepare`` and ``method`` are bound methods of the wrapped tracker (e.g.
-        ``_prepare_log`` and ``log``). Preparation runs here, on the producer
-        thread, so the queue carries only inert data and the worker only does the
-        upload. A failure to prepare drops the update rather than crashing the
-        producer.
+        ``_prepare_log`` and ``log``). A failure to prepare drops the update
+        rather than crashing the producer.
         """
         if self._stopped:
             logger.debug("Background tracker '%s' already stopped; dropping %s", self.name, method.__name__)

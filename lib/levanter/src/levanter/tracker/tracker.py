@@ -31,16 +31,13 @@ class Tracker(abc.ABC):
     name: str
 
     def _prepare_log(self, metrics: typing.Mapping[str, Any]) -> Any:
-        """Materialize a ``log`` payload on the producer (caller) thread.
+        """Convert a ``log`` payload to host data, on the caller thread.
 
-        :class:`~levanter.tracker.background.BackgroundTracker` calls this on the
-        producer thread so the background worker only does I/O. The default pulls
-        every ``jax.Array`` leaf to host with ``jax.device_get``; subclasses
-        override to fold backend-specific conversion (e.g. building
-        ``wandb.Histogram``) into the producer thread too. ``log`` calls it as
-        well, so direct (non-background) use takes the same path. Must be
-        idempotent: the background worker re-invokes ``log`` on the prepared
-        payload.
+        Both ``log`` and :class:`~levanter.tracker.background.BackgroundTracker`
+        call this. The default pulls ``jax.Array`` leaves to host with
+        ``jax.device_get``; subclasses override to also fold in backend-specific
+        conversion. Must be idempotent — the background worker re-invokes ``log``
+        on the result.
         """
         return jax.device_get(metrics)
 

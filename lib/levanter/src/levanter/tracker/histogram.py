@@ -35,11 +35,8 @@ class Histogram(equinox.Module):
 class SummaryStats(equinox.Module):
     """Summary statistics for an array, optionally including a histogram.
 
-    Every statistic — including the derived ``mean``/``variance``/``rms`` — is
-    materialized eagerly at construction, inside the same trace that produced the
-    source array. Nothing is computed on attribute access, so a ``SummaryStats``
-    can be handed to another thread (e.g. a :class:`~levanter.tracker.background.BackgroundTracker`
-    worker) without ever dispatching JAX off the main thread.
+    ``mean``/``variance``/``rms`` are computed at construction rather than on
+    access, so reading them from a background thread never calls JAX.
     """
 
     min: Scalar

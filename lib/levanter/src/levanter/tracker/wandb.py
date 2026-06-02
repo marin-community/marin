@@ -68,11 +68,9 @@ class WandbTracker(Tracker):
         self._suppress_logging = suppress_logging
         self._minimum_log_step = minimum_log_step
 
-    # The prepare hooks run the full wandb-side conversion (SummaryStats
-    # expansion and ``wandb.Histogram`` construction) on the producer thread, so
-    # the background worker only does the upload. They are pure and idempotent,
-    # so the worker re-invoking the corresponding ``log_*`` method on the already
-    # prepared payload is a cheap no-op.
+    # The prepare hooks do the full wandb-side conversion (SummaryStats expansion,
+    # wandb.Histogram construction) so the background worker only uploads. They are
+    # idempotent, so re-running them on an already-prepared payload is a no-op.
 
     def _prepare_log(self, metrics):
         return _convert_metrics_to_wandb_loggable(metrics)
