@@ -30,7 +30,6 @@ from openai.types.chat import ChatCompletion
 logger = logging.getLogger(__name__)
 
 UNSUPPORTED_LEVANTER_DECODING_FIELDS = (
-    "top_k",
     "min_p",
     "repetition_penalty",
     "presence_penalty",
@@ -130,6 +129,7 @@ class LevanterInferenceContext(BaseInferenceContext):
             "max_tokens": decoding.max_output_tokens,
             "temperature": temperature,
             "top_p": decoding.top_p,
+            "top_k": decoding.top_k,
             "n": n,
             # The Levanter OpenAI surface only accepts string stop sequences.
             "stop": stop_strings_for_decoding(decoding, self.tokenizer),
