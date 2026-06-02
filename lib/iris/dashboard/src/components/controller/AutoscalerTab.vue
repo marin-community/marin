@@ -22,6 +22,7 @@ import StatusBadge from '@/components/shared/StatusBadge.vue'
 import MetricCard from '@/components/shared/MetricCard.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
+import LoadingSpinner from '@/components/shared/LoadingSpinner.vue'
 
 // -- RPC + auto-refresh --
 
@@ -743,9 +744,7 @@ function formatUptimeShort(ms: number | null): string {
 
 <template>
   <!-- Loading state -->
-  <div v-if="loading && !data" class="flex items-center justify-center py-12 text-text-muted text-sm">
-    Loading autoscaler status...
-  </div>
+  <LoadingSpinner v-if="loading && !data" label="Loading autoscaler status…" />
 
   <!-- Error state -->
   <div
@@ -879,28 +878,36 @@ function formatUptimeShort(ms: number | null): string {
         <table class="w-full border-collapse">
           <thead>
             <tr class="border-b border-surface-border bg-surface">
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left w-16">Priority</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Group</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Slices</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Demand</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Assigned</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Launch</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Decision</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Reason</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left w-16">Priority</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Group</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Slices</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Demand</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Assigned</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Launch</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Decision</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Reason</th>
             </tr>
           </thead>
           <tbody>
             <template v-for="section in poolSections" :key="section.pool || '__unpooled'">
               <!-- Pool header row -->
-              <tr class="bg-surface border-b border-surface-border cursor-pointer hover:bg-surface-raised" @click="togglePool(section.pool)">
+              <tr class="bg-surface border-b border-surface-border hover:bg-surface-raised">
                 <td colspan="8" class="px-3 py-1.5">
                   <div class="flex items-center gap-2">
-                    <span class="text-[10px] text-text-muted">
-                      {{ collapsedPools.has(section.pool) ? '▶' : '▼' }}
-                    </span>
-                    <span class="text-xs font-semibold uppercase tracking-wider text-text-secondary">
-                      {{ section.pool === '__unpooled' ? 'Unpooled' : `Pool: ${section.pool}` }}
-                    </span>
+                    <button
+                      type="button"
+                      class="inline-flex items-center gap-2 text-left cursor-pointer hover:opacity-80"
+                      :aria-expanded="!collapsedPools.has(section.pool)"
+                      :aria-label="(collapsedPools.has(section.pool) ? 'Expand ' : 'Collapse ') + (section.pool === '__unpooled' ? 'unpooled groups' : 'pool ' + section.pool)"
+                      @click="togglePool(section.pool)"
+                    >
+                      <span class="text-[10px] text-text-muted">
+                        {{ collapsedPools.has(section.pool) ? '▶' : '▼' }}
+                      </span>
+                      <span class="text-xs font-semibold uppercase tracking-wider text-text-secondary">
+                        {{ section.pool === '__unpooled' ? 'Unpooled' : `Pool: ${section.pool}` }}
+                      </span>
+                    </button>
                     <span
                       v-if="section.blockedAtTier"
                       class="inline-flex items-center px-1.5 py-0.5 rounded text-xs border
@@ -976,6 +983,8 @@ function formatUptimeShort(ms: number | null): string {
                   <button
                     v-if="groupHasSlices(gs.group)"
                     class="inline-flex items-center gap-1 cursor-pointer hover:opacity-80"
+                    :aria-expanded="expandedSlices.has(gs.group)"
+                    :aria-label="(expandedSlices.has(gs.group) ? 'Hide' : 'Show') + ' slices for ' + gs.group"
                     @click="toggleSlices(gs.group)"
                   >
                     <span class="text-[10px] text-text-muted">
@@ -1014,6 +1023,8 @@ function formatUptimeShort(ms: number | null): string {
                   <button
                     v-if="groupDemand(gs.group) > 0"
                     class="cursor-pointer hover:opacity-80"
+                    :aria-expanded="expandedDemand.has(gs.group)"
+                    :aria-label="(expandedDemand.has(gs.group) ? 'Hide' : 'Show') + ' demand for ' + gs.group"
                     @click="toggleDemand(gs.group)"
                   >
                     <span class="text-[10px] text-text-muted mr-1">
@@ -1148,11 +1159,11 @@ function formatUptimeShort(ms: number | null): string {
         <table class="w-full border-collapse">
           <thead>
             <tr class="border-b border-surface-border bg-surface">
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Job</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Reasons</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Entries</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Example Task</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Accelerator</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Job</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Reasons</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-20">Entries</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Example Task</th>
+              <th scope="col" class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Accelerator</th>
             </tr>
           </thead>
           <tbody>
