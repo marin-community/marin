@@ -136,7 +136,7 @@ jobs:
             --label-prefix "$LABEL_PREFIX" \
             --url-file /tmp/iris-controller-url \
             --wait-for-workers 1 \
-            --worker-timeout 1800 &
+            --worker-timeout 600 &
           START_PID=$!
           echo "START_PID=$START_PID" >> "$GITHUB_ENV"
           for i in $(seq 1 900); do
