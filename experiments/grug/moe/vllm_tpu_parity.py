@@ -1,42 +1,46 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tiny GrugMoE parity harness for the vLLM TPU support branch.
+"""Tiny GrugMoE parity harness for native tpu-inference JAX support.
 
 Run from the Marin worktree:
 
-    uv run python -m experiments.grug.moe.vllm_tpu_parity \
-      --vllm-root ../grugmoe-vllm-tpu-vllm
+    JAX_PLATFORMS=cpu \
+    PYTHONPATH=../grugmoe-vllm-tpu-inference:../grugmoe-vllm-tpu-vllm \
+    uv run --with-requirements ../grugmoe-vllm-tpu-inference/requirements.txt \
+      --with-requirements ../grugmoe-vllm-tpu-vllm/requirements/common.txt \
+      --with 'torch==2.10.0+cpu' \
+      --extra-index-url https://download.pytorch.org/whl/cpu \
+      python -m experiments.grug.moe.vllm_tpu_parity \
+      --tpu-inference-root ../grugmoe-vllm-tpu-inference
 
-The component check compares vLLM's PyTorch GrugMoE MLP against Levanter's
-`moe_mlp` with the same selected experts and sigmoid combine weights. The full
-check copies a tiny Levanter `Transformer` into vLLM's correctness-first model
-and compares hidden states.
+The component check compares tpu-inference's native JAX GrugMoE MLP against
+Levanter's `moe_mlp` with the same selected experts and sigmoid combine
+weights. The full check copies a tiny seeded Levanter `Transformer` into the
+tpu-inference JAX model and compares hidden states against a dense reference
+using the same Levanter parameters and equations.
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
-import importlib.util
+import importlib
 import sys
-import types
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import jax
 import jax.numpy as jnp
 import levanter.grug.grug_moe as levanter_grug_moe
 import numpy as np
-import torch
+from flax import nnx
 from jax.sharding import AxisType, Mesh
 from levanter.grug.grug_moe import moe_mlp
 
 import experiments.grug.moe.model as grug_moe_model
-from experiments.grug.moe.model import (
-    GrugModelConfig,
-    Transformer,
-)
+from experiments.grug.moe.model import GrugModelConfig, Transformer
 
 jax.config.update("jax_default_matmul_precision", "float32")
 
@@ -44,6 +48,13 @@ jax.config.update("jax_default_matmul_precision", "float32")
 class _EmptyMesh:
     empty = True
     shape: ClassVar[dict[str, int]] = {}
+
+
+class _PPGroup:
+    is_first_rank = True
+    is_last_rank = True
+    rank_in_group = 0
+    world_size = 1
 
 
 def _direct_moe_mlp(
@@ -106,63 +117,33 @@ def _use_runtime_grug_mesh(*, for_init: bool):
         levanter_grug_moe.moe_mlp = old_moe_mlp
 
 
-def _default_weight_loader(param: torch.nn.Parameter, loaded_weight: torch.Tensor):
-    param.data.copy_(loaded_weight.to(device=param.device, dtype=param.dtype))
+@contextlib.contextmanager
+def _patch_tpu_single_rank(tpu_grugmoe):
+    pp_utils = importlib.import_module("tpu_inference.layers.jax.pp_utils")
+    old_model_get_pp_group = tpu_grugmoe.get_pp_group
+    old_pp_utils_get_pp_group = pp_utils.get_pp_group
+    tpu_grugmoe.get_pp_group = lambda: _PPGroup()
+    pp_utils.get_pp_group = lambda: _PPGroup()
+    try:
+        yield
+    finally:
+        tpu_grugmoe.get_pp_group = old_model_get_pp_group
+        pp_utils.get_pp_group = old_pp_utils_get_pp_group
 
 
-def _install_vllm_import_stubs() -> None:
-    """Install enough vLLM modules to import grugmoe.py directly.
-
-    This keeps the parity harness independent from a full vLLM editable install.
-    It does not exercise vLLM registry loading; use the vLLM test command for
-    that path.
-    """
-    vllm_mod = types.ModuleType("vllm")
-    vllm_mod.__path__ = []
-    config_mod = types.ModuleType("vllm.config")
-    config_mod.VllmConfig = object
-    model_executor_mod = types.ModuleType("vllm.model_executor")
-    model_loader_mod = types.ModuleType("vllm.model_executor.model_loader")
-    weight_utils_mod = types.ModuleType(
-        "vllm.model_executor.model_loader.weight_utils"
-    )
-    weight_utils_mod.default_weight_loader = _default_weight_loader
-    sequence_mod = types.ModuleType("vllm.sequence")
-    sequence_mod.IntermediateTensors = object
-
-    sys.modules.update(
-        {
-            "vllm": vllm_mod,
-            "vllm.config": config_mod,
-            "vllm.model_executor": model_executor_mod,
-            "vllm.model_executor.model_loader": model_loader_mod,
-            "vllm.model_executor.model_loader.weight_utils": weight_utils_mod,
-            "vllm.sequence": sequence_mod,
-        }
-    )
-
-
-def _load_vllm_grugmoe(vllm_root: Path):
-    module_path = vllm_root / "vllm" / "model_executor" / "models" / "grugmoe.py"
-    if not module_path.is_file():
-        raise FileNotFoundError(f"missing vLLM grugmoe.py at {module_path}")
-
-    _install_vllm_import_stubs()
-    spec = importlib.util.spec_from_file_location("grugmoe_under_test", module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"could not load module spec for {module_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def _load_tpu_grugmoe(tpu_inference_root: Path):
+    root = str(tpu_inference_root)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    return importlib.import_module("tpu_inference.models.jax.grugmoe")
 
 
 def _np(value: Any) -> np.ndarray:
     return np.array(jax.device_get(value), copy=True)
 
 
-def _copy_param(param: torch.nn.Parameter, value: Any) -> None:
-    with torch.no_grad():
-        param.copy_(torch.as_tensor(_np(value), dtype=param.dtype))
+def _copy_param(param: nnx.Param, value: Any) -> None:
+    param.value = jnp.asarray(value, dtype=param.value.dtype)
 
 
 def _tiny_cfg() -> GrugModelConfig:
@@ -184,8 +165,9 @@ def _tiny_cfg() -> GrugModelConfig:
     )
 
 
-def _vllm_cfg(vllm_grugmoe, cfg: GrugModelConfig):
-    return vllm_grugmoe.GrugMoeConfig(
+def _hf_config(cfg: GrugModelConfig) -> SimpleNamespace:
+    return SimpleNamespace(
+        architectures=["GrugMoeForCausalLM"],
         vocab_size=cfg.vocab_size,
         hidden_dim=cfg.hidden_dim,
         intermediate_dim=cfg.intermediate_dim,
@@ -202,7 +184,25 @@ def _vllm_cfg(vllm_grugmoe, cfg: GrugModelConfig):
         initializer_std=cfg.initializer_std,
         qk_mult=cfg.qk_mult,
         rope_theta=cfg.rope.theta,
-    ).validate()
+        tie_word_embeddings=False,
+    )
+
+
+def _vllm_config(cfg: GrugModelConfig) -> SimpleNamespace:
+    model_config = SimpleNamespace(
+        hf_config=_hf_config(cfg),
+        dtype=jnp.float32,
+    )
+    return SimpleNamespace(model_config=model_config)
+
+
+def _tpu_cfg(tpu_grugmoe, cfg: GrugModelConfig):
+    return tpu_grugmoe.GrugMoeConfig.from_hf_config(_hf_config(cfg))
+
+
+def _tpu_mesh() -> Mesh:
+    devices = np.array(jax.devices()[:1]).reshape(1, 1, 1, 1)
+    return Mesh(devices, axis_names=("data", "attn_dp", "expert", "model"))
 
 
 def _route_jax(
@@ -214,8 +214,7 @@ def _route_jax(
 ) -> tuple[jax.Array, jax.Array]:
     router_logits = jnp.einsum("td,de->te", x, router).astype(jnp.float32)
     biased_logits = router_logits + router_bias.astype(jnp.float32)
-    topk = min(router.shape[1], num_experts_per_token + 1)
-    _, selected = jax.lax.top_k(biased_logits, topk)
+    _, selected = jax.lax.top_k(biased_logits, num_experts_per_token + 1)
     selected = selected[:, :num_experts_per_token]
     unbiased_topk = jnp.take_along_axis(router_logits, selected, axis=-1)
     combine_weights = jax.nn.sigmoid(unbiased_topk).astype(x.dtype)
@@ -296,10 +295,9 @@ def _jax_attention(attn: Any, x: jax.Array, positions: jax.Array, sliding_window
     weights = jax.nn.softmax(scores.astype(jnp.float32), axis=-1).astype(v.dtype)
     attn_out = jnp.einsum("bhqk,bkhd->bqhd", weights, v)
 
-    aligned_v = _jax_align_kv_heads(v, cfg.num_heads)
-    dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
-    v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
-    attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+    dot = jnp.sum(attn_out * v, axis=-1, keepdims=True)
+    v_norm_sq = jnp.sum(v * v, axis=-1, keepdims=True)
+    attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * v
     gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, attn.attn_gate))[..., None]
     attn_out = gate.astype(attn_out.dtype) * attn_out
     attn_out = attn_out.reshape(bsz, seq_len, cfg.num_heads * head_dim)
@@ -360,27 +358,21 @@ def _jax_full_forward(model: Transformer, token_ids: jax.Array) -> jax.Array:
     return _jax_gated_norm(model.final_gated_norm, _jax_rms_norm(hidden, model.final_norm.weight, model.final_norm.eps))
 
 
-def check_moe_component(vllm_grugmoe) -> None:
+def check_moe_component(tpu_grugmoe) -> None:
     cfg = _tiny_cfg()
-    v_cfg = _vllm_cfg(vllm_grugmoe, cfg)
-    torch_mlp = vllm_grugmoe.GrugMoeMLP(v_cfg)
+    native_mlp = tpu_grugmoe.GrugMoeMLP(_tpu_cfg(tpu_grugmoe, cfg), jnp.float32, nnx.Rngs(jax.random.PRNGKey(0)))
 
     rng = np.random.default_rng(0)
     x = rng.normal(size=(5, cfg.hidden_dim)).astype(np.float32)
     router = rng.normal(size=(cfg.hidden_dim, cfg.num_experts)).astype(np.float32)
     router_bias = np.array([0.0, 0.0, 3.0, -2.0], dtype=np.float32)
-    w_gate_up = rng.normal(
-        size=(cfg.num_experts, cfg.hidden_dim, 2 * cfg.intermediate_dim)
-    ).astype(np.float32)
-    w_down = rng.normal(
-        size=(cfg.num_experts, cfg.intermediate_dim, cfg.hidden_dim)
-    ).astype(np.float32)
+    w_gate_up = rng.normal(size=(cfg.num_experts, cfg.hidden_dim, 2 * cfg.intermediate_dim)).astype(np.float32)
+    w_down = rng.normal(size=(cfg.num_experts, cfg.intermediate_dim, cfg.hidden_dim)).astype(np.float32)
 
-    with torch.no_grad():
-        torch_mlp.router.copy_(torch.from_numpy(router))
-        torch_mlp.router_bias.copy_(torch.from_numpy(router_bias))
-        torch_mlp.w_gate_up.copy_(torch.from_numpy(w_gate_up))
-        torch_mlp.w_down.copy_(torch.from_numpy(w_down))
+    native_mlp.router.value = jnp.asarray(router)
+    native_mlp.router_bias.value = jnp.asarray(router_bias)
+    native_mlp.w_gate_up.value = jnp.asarray(w_gate_up)
+    native_mlp.w_down.value = jnp.asarray(w_down)
 
     selected, combine_weights = _route_jax(
         jnp.asarray(x),
@@ -398,70 +390,73 @@ def check_moe_component(vllm_grugmoe) -> None:
         implementation="scatter",
         mesh=None,
     )
-    actual = torch_mlp(torch.from_numpy(x)).detach().numpy()
-    np.testing.assert_allclose(actual, _np(expected), rtol=1e-5, atol=1e-5)
-    print("component: GrugMoeMLP matches Levanter moe_mlp")
+    actual, actual_selected = native_mlp(jnp.asarray(x))
+    np.testing.assert_array_equal(_np(actual_selected), _np(selected))
+    np.testing.assert_allclose(_np(actual), _np(expected), rtol=1e-5, atol=1e-5)
+    print("component: native GrugMoeMLP matches Levanter moe_mlp")
 
 
-def _copy_transformer(v_model: torch.nn.Module, lev_model: Transformer) -> None:
-    _copy_param(v_model.token_embed, lev_model.token_embed)
-    _copy_param(v_model.output_proj, lev_model.output_proj)
-    _copy_param(v_model.embed_norm.weight, lev_model.embed_norm.weight)
-    _copy_param(v_model.embed_gated_norm.w_down, lev_model.embed_gated_norm.w_down)
-    _copy_param(v_model.embed_gated_norm.w_up, lev_model.embed_gated_norm.w_up)
-    _copy_param(v_model.final_norm.weight, lev_model.final_norm.weight)
-    _copy_param(v_model.final_gated_norm.w_down, lev_model.final_gated_norm.w_down)
-    _copy_param(v_model.final_gated_norm.w_up, lev_model.final_gated_norm.w_up)
+def _copy_transformer(tpu_model: Any, lev_model: Transformer) -> None:
+    model = tpu_model.model
+    _copy_param(model.token_embed, lev_model.token_embed)
+    _copy_param(model.embed_norm.weight, lev_model.embed_norm.weight)
+    _copy_param(model.embed_gated_norm.w_down, lev_model.embed_gated_norm.w_down)
+    _copy_param(model.embed_gated_norm.w_up, lev_model.embed_gated_norm.w_up)
+    _copy_param(model.final_norm.weight, lev_model.final_norm.weight)
+    _copy_param(model.final_gated_norm.w_down, lev_model.final_gated_norm.w_down)
+    _copy_param(model.final_gated_norm.w_up, lev_model.final_gated_norm.w_up)
+    _copy_param(tpu_model.lm_head.weight, lev_model.output_proj)
 
-    for v_block, l_block in zip(v_model.blocks, lev_model.blocks, strict=True):
-        _copy_param(v_block.rms_attn.weight, l_block.rms_attn.weight)
-        _copy_param(v_block.attn_gated_norm.w_down, l_block.attn_gated_norm.w_down)
-        _copy_param(v_block.attn_gated_norm.w_up, l_block.attn_gated_norm.w_up)
-        _copy_param(v_block.attn.w_q, l_block.attn.w_q)
-        _copy_param(v_block.attn.w_k, l_block.attn.w_k)
-        _copy_param(v_block.attn.w_v, l_block.attn.w_v)
-        _copy_param(v_block.attn.w_o, l_block.attn.w_o)
-        _copy_param(v_block.attn.attn_gate, l_block.attn.attn_gate)
-        _copy_param(v_block.rms_mlp.weight, l_block.rms_mlp.weight)
-        _copy_param(v_block.mlp_gated_norm.w_down, l_block.mlp_gated_norm.w_down)
-        _copy_param(v_block.mlp_gated_norm.w_up, l_block.mlp_gated_norm.w_up)
-        _copy_param(v_block.mlp.router, l_block.mlp.router)
-        _copy_param(v_block.mlp.router_bias, l_block.mlp.router_bias)
-        _copy_param(v_block.mlp.w_gate_up, l_block.mlp.expert_mlp.w_gate_up)
-        _copy_param(v_block.mlp.w_down, l_block.mlp.expert_mlp.w_down)
-        if v_block.shared is not None and l_block.shared is not None:
-            _copy_param(v_block.shared.w_gate, l_block.shared.w_gate)
-            _copy_param(v_block.shared.w_up, l_block.shared.w_up)
-            _copy_param(v_block.shared.w_down, l_block.shared.w_down)
+    for tpu_block, lev_block in zip(model.layers, lev_model.blocks, strict=True):
+        _copy_param(tpu_block.rms_attn.weight, lev_block.rms_attn.weight)
+        _copy_param(tpu_block.attn_gated_norm.w_down, lev_block.attn_gated_norm.w_down)
+        _copy_param(tpu_block.attn_gated_norm.w_up, lev_block.attn_gated_norm.w_up)
+        _copy_param(tpu_block.attn.w_q, lev_block.attn.w_q)
+        _copy_param(tpu_block.attn.w_k, lev_block.attn.w_k)
+        _copy_param(tpu_block.attn.w_v, lev_block.attn.w_v)
+        _copy_param(tpu_block.attn.w_o, lev_block.attn.w_o)
+        _copy_param(tpu_block.attn.attn_gate, lev_block.attn.attn_gate)
+        _copy_param(tpu_block.rms_mlp.weight, lev_block.rms_mlp.weight)
+        _copy_param(tpu_block.mlp_gated_norm.w_down, lev_block.mlp_gated_norm.w_down)
+        _copy_param(tpu_block.mlp_gated_norm.w_up, lev_block.mlp_gated_norm.w_up)
+        _copy_param(tpu_block.mlp.router, lev_block.mlp.router)
+        _copy_param(tpu_block.mlp.router_bias, lev_block.mlp.router_bias)
+        _copy_param(tpu_block.mlp.w_gate_up, lev_block.mlp.expert_mlp.w_gate_up)
+        _copy_param(tpu_block.mlp.w_down, lev_block.mlp.expert_mlp.w_down)
+        if tpu_block.shared is not None and lev_block.shared is not None:
+            _copy_param(tpu_block.shared.w_gate, lev_block.shared.w_gate)
+            _copy_param(tpu_block.shared.w_up, lev_block.shared.w_up)
+            _copy_param(tpu_block.shared.w_down, lev_block.shared.w_down)
 
 
-def check_full_forward(vllm_grugmoe) -> None:
+def check_full_forward(tpu_grugmoe) -> None:
+    attention_metadata_mod = importlib.import_module("tpu_inference.layers.common.attention_metadata")
     cfg = _tiny_cfg()
     key = jax.random.PRNGKey(7)
     with _use_runtime_grug_mesh(for_init=True):
         lev_model = Transformer.init(cfg, key=key)
 
-    v_model = vllm_grugmoe.GrugMoeModel(_vllm_cfg(vllm_grugmoe, cfg))
-    _copy_transformer(v_model, lev_model)
+    with _patch_tpu_single_rank(tpu_grugmoe), jax.set_mesh(_tpu_mesh()):
+        tpu_model = tpu_grugmoe.GrugMoeForCausalLM(_vllm_config(cfg), jax.random.PRNGKey(0), _tpu_mesh())
+    _copy_transformer(tpu_model, lev_model)
 
-    token_ids = np.array([[1, 5, 3, 7]], dtype=np.int32)
-    positions = torch.arange(token_ids.shape[1], dtype=torch.int64)[None, :]
-    with torch.no_grad():
-        actual = v_model(torch.from_numpy(token_ids), positions).detach().numpy()
+    token_ids = jnp.array([[1, 5, 3, 7]], dtype=jnp.int32)
+    positions = jnp.arange(token_ids.shape[1], dtype=jnp.int32)
+    metadata = attention_metadata_mod.AttentionMetadata(input_positions=positions)
+    actual = tpu_model.model([None] * cfg.num_layers, token_ids[0], metadata)[1]
+    expected = jax.jit(_jax_full_forward)(lev_model, token_ids)[0]
 
-    expected = jax.jit(_jax_full_forward)(lev_model, jnp.asarray(token_ids))
-
-    np.testing.assert_allclose(actual, _np(expected), rtol=5e-4, atol=5e-4)
-    print("full: GrugMoeModel hidden states match Levanter Transformer")
+    np.testing.assert_allclose(_np(actual), _np(expected), rtol=5e-4, atol=5e-4)
+    print("full: native GrugMoeModel hidden states match Levanter Transformer reference")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--vllm-root",
+        "--tpu-inference-root",
         type=Path,
-        default=Path("../grugmoe-vllm-tpu-vllm"),
-        help="Path to the vLLM checkout containing grugmoe.py.",
+        default=Path("../grugmoe-vllm-tpu-inference"),
+        help="Path to the tpu-inference checkout containing native GrugMoE.",
     )
     parser.add_argument(
         "--component-only",
@@ -470,10 +465,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    vllm_grugmoe = _load_vllm_grugmoe(args.vllm_root.resolve())
-    check_moe_component(vllm_grugmoe)
+    tpu_grugmoe = _load_tpu_grugmoe(args.tpu_inference_root.resolve())
+    check_moe_component(tpu_grugmoe)
     if not args.component_only:
-        check_full_forward(vllm_grugmoe)
+        check_full_forward(tpu_grugmoe)
 
 
 if __name__ == "__main__":
