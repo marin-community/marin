@@ -68,26 +68,25 @@ class WandbTracker(Tracker):
         self._suppress_logging = suppress_logging
         self._minimum_log_step = minimum_log_step
 
-    def _prepare_payload_async(self, method_name: str, payload):
-        """Run the full wandb-side conversion on the producer thread.
+    # The prepare hooks run the full wandb-side conversion (SummaryStats
+    # expansion and ``wandb.Histogram`` construction) on the producer thread, so
+    # the background worker only does the upload. They are pure and idempotent,
+    # so the worker re-invoking the corresponding ``log_*`` method on the already
+    # prepared payload is a cheap no-op.
 
-        The W&B ``log`` path constructs ``wandb.Histogram`` objects and accesses
-        lazy properties on :class:`~levanter.tracker.histogram.SummaryStats`
-        (``rms``/``mean``/``variance``) that use ``jnp.sqrt`` and division —
-        those would otherwise dispatch JAX from the background worker thread,
-        which segfaults during the W&B profiler upload on the H100 canary. We
-        do the entire conversion here so the worker only does I/O.
-        """
-        if method_name == "log":
-            return _convert_metrics_to_wandb_loggable(payload)
-        if method_name in ("log_summary", "log_hyperparameters"):
-            return _convert_value_to_loggable_rec(payload)
-        return super()._prepare_payload_async(method_name, payload)
+    def _prepare_log(self, metrics):
+        return _convert_metrics_to_wandb_loggable(metrics)
+
+    def _prepare_summary(self, metrics):
+        return _convert_value_to_loggable_rec(metrics)
+
+    def _prepare_hyperparameters(self, hparams):
+        return _convert_value_to_loggable_rec(hparams)
 
     def log_hyperparameters(self, hparams: dict[str, Any]):
         if self._suppress_logging:
             return
-        self.run.config.update(_convert_value_to_loggable_rec(hparams), allow_val_change=True)
+        self.run.config.update(self._prepare_hyperparameters(hparams), allow_val_change=True)
 
     def log(self, metrics: typing.Mapping[str, Any], *, step, commit=None):
         if step is None and not commit:
@@ -104,10 +103,7 @@ class WandbTracker(Tracker):
 
         step = int(step)
 
-        # Conversion is idempotent: if metrics was already prepared on the producer
-        # thread (via ``_prepare_payload_async``), the dict has no SummaryStats and
-        # no jax.Arrays left, and this just re-wraps already-loggable values.
-        to_log = _convert_metrics_to_wandb_loggable(metrics)
+        to_log = self._prepare_log(metrics)
 
         if self._suppress_logging:
             return
@@ -125,7 +121,7 @@ class WandbTracker(Tracker):
     def log_summary(self, metrics: typing.Mapping[str, Any]):
         if self._suppress_logging:
             return
-        self.run.summary.update(_convert_value_to_loggable_rec(metrics))
+        self.run.summary.update(self._prepare_summary(metrics))
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
         if self._suppress_logging:

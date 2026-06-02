@@ -33,7 +33,14 @@ class Histogram(equinox.Module):
 
 
 class SummaryStats(equinox.Module):
-    """Summary statistics for an array, optionally including a histogram."""
+    """Summary statistics for an array, optionally including a histogram.
+
+    Every statistic — including the derived ``mean``/``variance``/``rms`` — is
+    materialized eagerly at construction, inside the same trace that produced the
+    source array. Nothing is computed on attribute access, so a ``SummaryStats``
+    can be handed to another thread (e.g. a :class:`~levanter.tracker.background.BackgroundTracker`
+    worker) without ever dispatching JAX off the main thread.
+    """
 
     min: Scalar
     max: Scalar
@@ -41,7 +48,18 @@ class SummaryStats(equinox.Module):
     nonzero_count: Scalar
     sum: Scalar
     sum_squares: Scalar
+    mean: Scalar
+    variance: Scalar
+    rms: Scalar
     histogram: Histogram | None = None
+
+    @staticmethod
+    def _with_derived(min, max, num, nonzero_count, sum, sum_squares, histogram) -> "SummaryStats":
+        """Build a ``SummaryStats``, computing the derived moments eagerly."""
+        mean = sum / num
+        variance = (sum_squares / num) - (mean**2)
+        rms = jnp.sqrt(sum_squares / num)
+        return SummaryStats(min, max, num, nonzero_count, sum, sum_squares, mean, variance, rms, histogram)
 
     @staticmethod
     def from_array(
@@ -81,7 +99,7 @@ class SummaryStats(equinox.Module):
             edges = jnp.histogram_bin_edges(jnp.stack([min, max]), bins=num_bins)
             counts = sharded_histogram_array(array, edges)
             histogram = Histogram(edges, counts)
-        return SummaryStats(min, max, num, nonzero_count, sum, sum_squares, histogram)
+        return SummaryStats._with_derived(min, max, num, nonzero_count, sum, sum_squares, histogram)
 
     @staticmethod
     def from_named_array(
@@ -101,20 +119,7 @@ class SummaryStats(equinox.Module):
         if include_histogram:
             counts, edges = sharded_histogram(array, bins=num_bins)
             histogram = Histogram(edges, counts)
-        return SummaryStats(min, max, num, nonzero_count, sum, sum_squares, histogram)
-
-    @property
-    def mean(self) -> Scalar:
-        return self.sum / self.num
-
-    @property
-    def variance(self) -> Scalar:
-        """Calculate the variance as E[X^2] - (E[X])^2."""
-        return (self.sum_squares / self.num) - (self.mean**2)
-
-    @property
-    def rms(self) -> Scalar:
-        return jnp.sqrt(self.sum_squares / self.num)
+        return SummaryStats._with_derived(min, max, num, nonzero_count, sum, sum_squares, histogram)
 
     def to_numpy_histogram(self) -> tuple[np.ndarray, np.ndarray]:
         if self.histogram is None:

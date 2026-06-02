@@ -30,21 +30,27 @@ class Tracker(abc.ABC):
 
     name: str
 
-    def _prepare_payload_async(self, method_name: str, payload: Any) -> Any:
-        """Hook: materialize a method payload on the producer (caller) thread.
+    def _prepare_log(self, metrics: typing.Mapping[str, Any]) -> Any:
+        """Materialize a ``log`` payload on the producer (caller) thread.
 
-        Used by :class:`~levanter.tracker.background.BackgroundTracker` to keep all
-        JAX work on the producer thread, so the background worker only does I/O.
-        ``method_name`` is one of ``"log"``, ``"log_summary"``, or
-        ``"log_hyperparameters"``.
-
-        Default: ``jax.device_get(payload)`` — pulls every ``jax.Array`` leaf in the
-        pytree to host as numpy. Subclasses should override when their ``log_*``
-        methods would otherwise dispatch JAX on the worker thread (e.g. via lazy
-        properties on a pytree leaf), and instead fold that work into the prepared
-        payload here so the worker only does the upload.
+        :class:`~levanter.tracker.background.BackgroundTracker` calls this on the
+        producer thread so the background worker only does I/O. The default pulls
+        every ``jax.Array`` leaf to host with ``jax.device_get``; subclasses
+        override to fold backend-specific conversion (e.g. building
+        ``wandb.Histogram``) into the producer thread too. ``log`` calls it as
+        well, so direct (non-background) use takes the same path. Must be
+        idempotent: the background worker re-invokes ``log`` on the prepared
+        payload.
         """
-        return jax.device_get(payload)
+        return jax.device_get(metrics)
+
+    def _prepare_summary(self, metrics: typing.Mapping[str, Any]) -> Any:
+        """Producer-thread counterpart to :meth:`_prepare_log` for ``log_summary``."""
+        return jax.device_get(metrics)
+
+    def _prepare_hyperparameters(self, hparams: typing.Mapping[str, Any]) -> Any:
+        """Producer-thread counterpart to :meth:`_prepare_log` for ``log_hyperparameters``."""
+        return jax.device_get(hparams)
 
     @abc.abstractmethod
     def log_hyperparameters(self, hparams: dict[str, Any]):

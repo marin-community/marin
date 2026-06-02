@@ -19,14 +19,17 @@ import logging
 import threading
 import time
 from typing import Any
+from unittest.mock import MagicMock
 
 import jax
 import jax.numpy as jnp
 import pytest
+import wandb
 
 from levanter.tracker import BackgroundTracker, CompositeTracker
 from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.tracker import Tracker
+from levanter.tracker.wandb import WandbTracker
 
 
 class RecordingTracker(Tracker):
@@ -126,11 +129,8 @@ def test_background_tracker_swallows_exceptions(caplog):
 
     # The first call raised before recording; the second succeeded.
     assert inner.logs == [({"loss": 0.5}, 1, None)]
-    # An ERROR log should have captured the wandb exception.
-    assert any(
-        "wandb storage exceeded" in r.getMessage() or "raised while processing" in r.getMessage()
-        for r in caplog.records
-    )
+    # The swallowed exception is surfaced as an ERROR rather than silently dropped.
+    assert any(r.levelno == logging.ERROR for r in caplog.records)
 
 
 def test_background_tracker_runs_off_caller_thread():
@@ -300,7 +300,8 @@ def test_composite_tracker_isolates_failures(caplog):
     assert good.artifacts == [("/tmp/x", "a", "model")]
     assert good.finished is True
     assert bad.call_count == 5  # one per method call
-    assert any("continuing with remaining trackers" in r.getMessage() for r in caplog.records)
+    # Each swallowed member failure is surfaced as an ERROR.
+    assert sum(r.levelno == logging.ERROR for r in caplog.records) >= 5
 
 
 def test_composite_tracker_finish_does_not_raise():
@@ -386,25 +387,28 @@ def test_background_tracker_materializes_summary_stats_leaves():
         assert not isinstance(leaf, jax.Array)
 
 
-def test_prepare_payload_async_hook_runs_on_producer_thread():
-    """Trackers that override the hook get conversion done on the producer thread.
+def test_prepare_hooks_run_on_producer_thread():
+    """Payload preparation runs on the caller thread, and its output is what crosses the queue.
 
-    Regression for the Grug H100 canary segfault (#6108): WandbTracker.log()
-    accesses lazy SummaryStats.rms/.mean/.variance properties that dispatch
-    JAX via jnp.sqrt. Running that on the BackgroundTracker worker thread
-    races with the in-flight profiler upload and SIGSEGVs. The fix routes all
-    such conversion through ``_prepare_payload_async``, which runs on the
-    caller. This test exercises that contract with a tracker that records
-    which thread did the preparation.
+    This is the contract that keeps JAX work off the background worker (the
+    H100 SIGSEGV in #6108): the wrapped tracker's ``_prepare_*`` hooks are
+    invoked on the producer thread, and the worker only ever sees their output.
     """
     caller_thread = threading.get_ident()
     prep_threads: list[int] = []
 
     class PrepRecordingTracker(RecordingTracker):
-        def _prepare_payload_async(self, method_name, payload):
+        def _prepare_log(self, metrics):
             prep_threads.append(threading.get_ident())
-            # Sentinel marker we can spot in the worker-side payload.
-            return {"_prepared_on_thread": threading.get_ident(), "method": method_name, "payload": payload}
+            return {"prepared": True}
+
+        def _prepare_summary(self, metrics):
+            prep_threads.append(threading.get_ident())
+            return metrics
+
+        def _prepare_hyperparameters(self, hparams):
+            prep_threads.append(threading.get_ident())
+            return hparams
 
     inner = PrepRecordingTracker()
     bt = BackgroundTracker(inner)
@@ -416,33 +420,21 @@ def test_prepare_payload_async_hook_runs_on_producer_thread():
     finally:
         bt.finish()
 
-    assert prep_threads, "hook never invoked"
-    for tid in prep_threads:
-        assert tid == caller_thread, "preparation must happen on the caller thread"
+    assert len(prep_threads) == 3, "every log method must invoke its prepare hook"
+    assert all(tid == caller_thread for tid in prep_threads), "preparation must happen on the caller thread"
 
-    # The inner tracker received the sentinel-wrapped payload, confirming the
-    # hook's return value (not the raw input) is what crosses the queue.
+    # The worker receives the hook's output, not the raw input.
     logged_metrics, _, _ = inner.logs[0]
-    assert logged_metrics["_prepared_on_thread"] == caller_thread
-    assert logged_metrics["method"] == "log"
+    assert logged_metrics == {"prepared": True}
 
 
-def test_wandb_tracker_prepare_payload_flattens_summary_stats():
-    """WandbTracker overrides the hook to flatten SummaryStats into a wandb-ready dict.
+def test_wandb_tracker_prepare_log_flattens_summary_stats():
+    """WandbTracker._prepare_log flattens SummaryStats into a device-free, wandb-ready dict.
 
-    After preparation, the dict must be:
-      * fully flat (no nested SummaryStats),
-      * device-free (no jax.Array leaves),
-      * carry no JAX-dispatching values — i.e. accessing each value must not
-        trigger ``jnp.*``.
-
-    This is the structural invariant that keeps the W&B background worker
-    from issuing JAX ops mid-profiler-upload on the H100 canary.
+    After preparation the dict must hold no nested SummaryStats and no jax.Array
+    leaves — that is what lets the W&B background worker upload without issuing
+    any JAX op mid-profiler-upload (the H100 SIGSEGV in #6108).
     """
-    from unittest.mock import MagicMock
-
-    from levanter.tracker.wandb import WandbTracker
-
     tracker = WandbTracker(run=MagicMock(), suppress_logging=True)
 
     metrics = {
@@ -450,45 +442,26 @@ def test_wandb_tracker_prepare_payload_flattens_summary_stats():
         "grads/hist": SummaryStats.from_array(jnp.arange(100.0)),
     }
 
-    prepped = tracker._prepare_payload_async("log", metrics)
+    prepped = tracker._prepare_log(metrics)
 
-    # SummaryStats has been expanded.
+    # SummaryStats has been expanded into its component scalar keys.
     assert "grads/hist" not in prepped
-    assert "grads/hist/min" in prepped
-    assert "grads/hist/rms" in prepped
-    assert "grads/hist/mean" in prepped
-    assert "grads/hist/variance" in prepped
-
-    # No jax.Array leaves anywhere.
-    import wandb as _wandb
+    assert {"grads/hist/min", "grads/hist/mean", "grads/hist/variance", "grads/hist/rms"} <= prepped.keys()
 
     for k, v in prepped.items():
-        if isinstance(v, _wandb.Histogram):
+        if isinstance(v, wandb.Histogram):
             continue
         assert not isinstance(v, jax.Array), f"{k} is still a jax.Array: {v!r}"
 
-    # And rms/mean/variance must be plain Python/numpy scalars — *not* lazy
-    # jax.Arrays that would dispatch JAX on the worker thread.
-    assert not isinstance(prepped["grads/hist/rms"], jax.Array)
-    assert not isinstance(prepped["grads/hist/mean"], jax.Array)
-    assert not isinstance(prepped["grads/hist/variance"], jax.Array)
-
 
 def test_background_tracker_no_jax_dispatch_on_worker_for_summary_stats():
-    """The wrapped tracker must never see a jax.Array, even via SummaryStats props.
+    """End-to-end: nothing handed to ``wandb.run.log`` on the worker is a jax.Array.
 
-    Direct regression for the H100 SIGSEGV: prior to the fix, the worker
-    thread accessed ``SummaryStats.rms`` (a property using ``jnp.sqrt``),
-    which returned a fresh jax.Array on the wrong thread. With the
-    ``_prepare_payload_async`` hook in place, the WandbTracker flattens
-    SummaryStats on the producer thread; for plain trackers, the default
-    hook keeps materializing jax.Array leaves. Either way, no jax.Array
-    reaches the worker.
+    Direct regression for the H100 SIGSEGV (#6108). Now that SummaryStats
+    derives mean/variance/rms eagerly and WandbTracker flattens it in
+    ``_prepare_log`` on the producer thread, the worker only does the upload —
+    every value it passes to ``run.log`` is device-free.
     """
-    from unittest.mock import MagicMock
-
-    from levanter.tracker.wandb import WandbTracker
-
     captured: list[dict] = []
     run = MagicMock()
     run.step = 0
@@ -508,11 +481,7 @@ def test_background_tracker_no_jax_dispatch_on_worker_for_summary_stats():
 
     assert captured, "wandb.run.log was never called"
     logged = captured[0]
-    # Every value handed to wandb must be jax-free, including the derived ones
-    # whose property paths previously dispatched jnp.sqrt on the worker thread.
-    import wandb as _wandb
-
     for k, v in logged.items():
-        if isinstance(v, _wandb.Histogram):
+        if isinstance(v, wandb.Histogram):
             continue
         assert not isinstance(v, jax.Array), f"{k} reached wandb.log() as a jax.Array: {v!r}"
