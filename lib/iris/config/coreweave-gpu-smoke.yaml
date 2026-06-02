@@ -1,0 +1,45 @@
+# Smoke-test config for scripts/gpu_gang_smoke.py against a REAL CoreWeave
+# cluster: provision a dedicated 3-node H100 pool, run one 3x8 = 24-GPU
+# coscheduled job through Kueue gang admission, then tear the pool down.
+#
+# WARNING: this provisions 3 x gd-8xh100ib-i128 nodes (24 H100s) on-demand.
+# That is expensive. The script only runs this when target == coreweave AND
+# --i-understand-the-cost is passed. Validate on kind first.
+#
+# Unlike the kind variant, Kueue (LocalQueue/ClusterQueue/ResourceFlavor +
+# WorkloadPriorityClasses) is assumed to be admin-provisioned on CKS already
+# (kueue.install: false) — we only reference the LocalQueue by name.
+
+target: coreweave
+namespace: iris-ci
+kubeconfig_path: ~/.kube/coreweave-iris
+# Admin-provisioned LocalQueue on the CKS cluster.
+local_queue: iris-lq
+image: ghcr.io/marin-community/iris-task:latest
+
+job:
+  name: gpu-gang-smoke
+  replicas: 3
+  # "pool" => Kueue preferred (soft) podset topology on the leafgroup, so the
+  # 3 nodes prefer the same IB spine for multi-host NCCL. Use "nvlink" to make
+  # it a hard requirement on a single NVLink domain instead.
+  group_by: pool
+  priority_band: batch
+  cpu: "32"                     # cores per task (matches H100 node sizing)
+  memory: 512Gi
+  disk: 100Gi
+  gpu_variant: H100
+  gpu_count: 8                  # 8 GPUs per task -> 3 x 8 = 24 GPUs
+  runtime_seconds: 30
+
+kueue:
+  install: false                # admin-provisioned on CKS
+
+coreweave:
+  region: US-WEST-04A
+  scale_group: h100-8x
+  instance_type: gd-8xh100ib-i128
+  # NodePool target node count; the gang needs all 3 up before Kueue admits it.
+  nodes: 3
+  ensure_nodepools: true        # create the h100-8x NodePool so CKS provisions nodes
+  delete_nodepools_on_teardown: true
