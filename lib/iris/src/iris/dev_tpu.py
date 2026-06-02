@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlsplit
 
-from iris.rpc import job_pb2, query_pb2
+from iris.rpc import job_pb2
 
 
 class TpuNameLookup(Protocol):
@@ -155,20 +155,3 @@ def worker_address_lookup_values(worker_address: str) -> list[str]:
     if parsed.netloc:
         values.append(parsed.netloc)
     return list(dict.fromkeys(values))
-
-
-def worker_resolution_metadata_from_response(response: query_pb2.RawQueryResponse) -> WorkerResolutionMetadata | None:
-    """Decode the worker metadata row shape selected by the dev TPU script."""
-    if not response.rows:
-        return None
-
-    columns = {column.name: index for index, column in enumerate(response.columns)}
-    row = json.loads(response.rows[0])
-    metadata = job_pb2.WorkerMetadata(
-        ip_address=row[columns["md_ip_address"]] or "",
-        tpu_name=row[columns["md_tpu_name"]] or "",
-        tpu_worker_id=row[columns["md_tpu_worker_id"]] or "",
-        gce_instance_name=row[columns["md_gce_instance_name"]] or "",
-        gce_zone=row[columns["md_gce_zone"]] or "",
-    )
-    return WorkerResolutionMetadata(address=row[columns["address"]] or "", metadata=metadata)

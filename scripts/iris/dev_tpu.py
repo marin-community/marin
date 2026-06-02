@@ -35,9 +35,8 @@ from iris.dev_tpu import (
     parse_worker_host,
     resolve_node_ref_from_worker_metadata,
     worker_address_lookup_values,
-    worker_resolution_metadata_from_response,
 )
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
 from marin.cluster import gcp
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -64,6 +63,7 @@ HOLDER_COMMAND = (
 )
 
 STATE_DIR = Path.home() / ".cache" / "marin" / "dev_tpu_iris"
+WORKER_LOOKUP_LIMIT = 25
 
 
 @dataclass
@@ -190,8 +190,17 @@ def controller_client(config_file: str) -> Iterable[IrisClient]:
             client.shutdown()
 
 
-def _sql_quote(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
+def _worker_resolution_metadata_from_workers(
+    workers: Iterable[controller_pb2.Controller.WorkerHealthStatus],
+    *,
+    worker_id: str,
+    worker_address: str,
+) -> WorkerResolutionMetadata | None:
+    address_values = set(worker_address_lookup_values(worker_address))
+    for worker in workers:
+        if worker.worker_id == worker_id or worker.address in address_values:
+            return WorkerResolutionMetadata(address=worker.address, metadata=worker.metadata)
+    return None
 
 
 def worker_resolution_metadata(
@@ -200,19 +209,28 @@ def worker_resolution_metadata(
     worker_id: str,
     worker_address: str,
 ) -> WorkerResolutionMetadata | None:
-    conditions = []
+    lookup_values = []
     if worker_id:
-        conditions.append(f"worker_id = {_sql_quote(worker_id)}")
-    for address in worker_address_lookup_values(worker_address):
-        conditions.append(f"address = {_sql_quote(address)}")
-    if not conditions:
+        lookup_values.append(worker_id)
+    lookup_values.extend(worker_address_lookup_values(worker_address))
+    if not lookup_values:
         return None
 
-    response = client.execute_raw_query(
-        "SELECT address, md_ip_address, md_tpu_name, md_tpu_worker_id, md_gce_instance_name, md_gce_zone "
-        f"FROM workers WHERE {' OR '.join(conditions)} LIMIT 1"
-    )
-    return worker_resolution_metadata_from_response(response)
+    for lookup_value in dict.fromkeys(lookup_values):
+        workers = client.list_workers(
+            query=controller_pb2.Controller.WorkerQuery(
+                contains=lookup_value,
+                limit=WORKER_LOOKUP_LIMIT,
+            )
+        )
+        metadata = _worker_resolution_metadata_from_workers(
+            workers,
+            worker_id=worker_id,
+            worker_address=worker_address,
+        )
+        if metadata is not None:
+            return metadata
+    return None
 
 
 def resolve_node_ref(host: str, project: str, *, alternate_hosts: Iterable[str] = ()) -> GcpNodeRef:

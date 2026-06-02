@@ -51,7 +51,7 @@ from iris.cluster.types import (
     adjust_tpu_replicas,
     is_job_finished,
 )
-from iris.rpc import controller_pb2, job_pb2, query_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.rpc.proto_utils import job_state_friendly
 from iris.time_proto import timestamp_from_proto
@@ -743,13 +743,12 @@ class IrisClient:
 
         return list(self._cluster_client.list_jobs(query=query))
 
-    def list_workers(self) -> list[controller_pb2.Controller.WorkerHealthStatus]:
+    def list_workers(
+        self,
+        query: controller_pb2.Controller.WorkerQuery | None = None,
+    ) -> list[controller_pb2.Controller.WorkerHealthStatus]:
         """List workers registered with the controller."""
-        return list(self._cluster_client.list_workers())
-
-    def execute_raw_query(self, sql: str) -> query_pb2.RawQueryResponse:
-        """Execute a read-only controller query."""
-        return self._cluster_client.execute_raw_query(query_pb2.RawQueryRequest(sql=sql))
+        return list(self._cluster_client.list_workers(query=query))
 
     def terminate_prefix(
         self,
