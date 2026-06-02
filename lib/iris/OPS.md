@@ -163,13 +163,33 @@ Namespaces:
 
 - `iris.worker` — per-tick host utilization (cpu, mem, disk, running task count, net bps), keyed by `ts`.
 - `iris.task` — per-attempt task resource snapshots, keyed by `ts`.
-- `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `captured_at`. Filter on `source` for one of `/job/.../task/N`, `/system/worker/<id>`, `/system/controller`. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`).
+- `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `captured_at`. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — periodic CPU captures are py-spy **speedscope** JSON. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`).
 
 Retention is finelog segment-based. Target for `iris.profile` is 7 days.
 
 Get a profile for a task — open the dashboard task page and use the "Profile history" panel; rows are CPU captures from the worker's 10-minute periodic loop plus any on-demand captures, click to download. To capture on demand, hit the "Profile now" button on the task page, the worker page (`/system/worker/<id>`), or the controller status page (`/system/controller`).
 
 Profiles are written by the worker (periodic CPU + on-demand all types), by `K8sTaskProvider` (on-demand only), and by the controller for `/system/controller` self-captures.
+
+Query the namespace directly with the finelog CLI (opens a tunnel to the cluster's finelog deployment named by `log_server_config`):
+
+```bash
+cd lib/finelog
+uv run finelog query marin "SELECT source, type, format, count(*) FROM \"iris.profile\"
+  WHERE source LIKE '/user/job/%' AND type='cpu' GROUP BY 1,2,3"
+```
+
+To aggregate a whole job's CPU profiles into a per-worker-sub-job breakdown + merged
+flamegraph, use `scripts/job_profile_summary.py` — it resolves the cluster's finelog
+deployment, pulls every CPU capture under a job (and its descendant sub-jobs), parses the
+speedscope stacks, and reports where CPU is spent:
+
+```bash
+uv run python scripts/job_profile_summary.py /user/job/id          # per-sub-job + top leaves
+uv run python scripts/job_profile_summary.py <dashboard-url>       # accepts iris.oa.dev URLs
+uv run python scripts/job_profile_summary.py /user/job/id --subjob <name> --show-stacks
+uv run python scripts/job_profile_summary.py /user/job/id -o merged.folded --svg flame.svg
+```
 
 ## Users & Auth
 

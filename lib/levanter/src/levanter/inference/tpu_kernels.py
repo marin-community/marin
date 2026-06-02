@@ -34,6 +34,9 @@ class TpuPagedAttentionConfig:
     fail_on_reference_fallback: bool = True
     tpu_inference_out_dtype: str | None = None
     preserve_attention_output_dtype: bool = False
+    num_kv_pages_per_block: int | None = None
+    num_queries_per_block: int | None = None
+    vmem_limit_bytes: int | None = None
 
 
 class UnsupportedTpuPagedAttentionBackend(RuntimeError):
@@ -76,10 +79,21 @@ def _is_tpu() -> bool:
     return _current_platform() == "tpu"
 
 
+def _has_nonempty_mesh() -> bool:
+    return not jax.sharding.get_abstract_mesh().empty
+
+
 def _normalize_backend(backend: TpuPagedAttentionBackend | str) -> TpuPagedAttentionBackend:
     if isinstance(backend, TpuPagedAttentionBackend):
         return backend
     return TpuPagedAttentionBackend(backend)
+
+
+def _is_auto_backend(backend: TpuPagedAttentionBackend | Sequence[TpuPagedAttentionBackend]) -> bool:
+    return (
+        isinstance(backend, TpuPagedAttentionBackend | str)
+        and _normalize_backend(backend) == TpuPagedAttentionBackend.AUTO
+    )
 
 
 def _backend_order(config: TpuPagedAttentionConfig) -> tuple[TpuPagedAttentionBackend, ...]:
@@ -94,9 +108,14 @@ def _backend_order(config: TpuPagedAttentionConfig) -> tuple[TpuPagedAttentionBa
     expanded: list[TpuPagedAttentionBackend] = []
     for item in selected:
         if item == TpuPagedAttentionBackend.AUTO:
-            expanded.extend(
-                [TpuPagedAttentionBackend.TPU_INFERENCE] if _is_tpu() else [TpuPagedAttentionBackend.REFERENCE]
-            )
+            if _is_tpu():
+                expanded.append(TpuPagedAttentionBackend.TPU_INFERENCE)
+                if _has_nonempty_mesh():
+                    expanded.append(TpuPagedAttentionBackend.JAX_RPA)
+                else:
+                    expanded.append(TpuPagedAttentionBackend.REFERENCE)
+            else:
+                expanded.append(TpuPagedAttentionBackend.REFERENCE)
         else:
             expanded.append(item)
     return tuple(expanded)
@@ -117,7 +136,7 @@ def available_tpu_paged_attention_backends() -> tuple[TpuPagedAttentionBackend, 
 
     from levanter.layers import attention as attention_module
 
-    if attention_module.tpu_ragged_paged_attention is not None:
+    if _has_nonempty_mesh() and attention_module.tpu_ragged_paged_attention is not None:
         backends.append(TpuPagedAttentionBackend.JAX_RPA)
 
     return tuple(backends)
@@ -146,8 +165,6 @@ def tpu_paged_attention_supports_shape(
         return False, "initial Qwen3 8B target requires head_size=128"
     if shape.num_q_heads != 32 or shape.num_kv_heads != 8:
         return False, "initial Qwen3 8B target requires 32 query heads and 8 KV heads"
-    if shape.tensor_parallel_size != 4:
-        return False, "initial Qwen3 8B target requires tensor_parallel_size=4"
     if shape.max_model_len != 4096:
         return False, "initial Qwen3 8B target requires max_model_len=4096"
     return True, None
@@ -212,9 +229,7 @@ def _run_jax_rpa_backend(
     *,
     sm_scale: float | jax.Array,
     soft_cap: float | None,
-    num_kv_pages_per_block: int | None,
-    num_queries_per_block: int | None,
-    vmem_limit_bytes: int | None,
+    config: TpuPagedAttentionConfig,
 ) -> tuple[NamedArray, KvPageCache]:
     if not _is_tpu():
         raise _unsupported(TpuPagedAttentionBackend.JAX_RPA, "JAX RPA only runs on TPU")
@@ -231,9 +246,9 @@ def _run_jax_rpa_backend(
         batch_info.num_seqs,
         sm_scale=sm_scale,
         soft_cap=soft_cap,
-        num_kv_pages_per_block=num_kv_pages_per_block,
-        num_queries_per_block=num_queries_per_block,
-        vmem_limit_bytes=vmem_limit_bytes,
+        num_kv_pages_per_block=config.num_kv_pages_per_block,
+        num_queries_per_block=config.num_queries_per_block,
+        vmem_limit_bytes=config.vmem_limit_bytes,
     )
     return attn, kv_cache
 
@@ -248,7 +263,6 @@ def _run_tpu_inference_backend(
     sm_scale: float | jax.Array,
     soft_cap: float | None,
     config: TpuPagedAttentionConfig,
-    vmem_limit_bytes: int | None,
 ) -> tuple[NamedArray, KvPageCache]:
     if not _is_tpu():
         raise _unsupported(TpuPagedAttentionBackend.TPU_INFERENCE, "tpu-inference only runs on TPU")
@@ -256,23 +270,32 @@ def _run_tpu_inference_backend(
     from levanter.inference import tpu_inference_adapter
 
     if not tpu_inference_adapter.is_available():
-        raise _unsupported(TpuPagedAttentionBackend.TPU_INFERENCE, "the tpu-inference package is not installed")
+        raise _unsupported(
+            TpuPagedAttentionBackend.TPU_INFERENCE,
+            "the tpu-inference package or one of its runtime dependencies is not importable",
+        )
 
     out_dtype = None
     if config.tpu_inference_out_dtype is not None:
         out_dtype = jnp.dtype(config.tpu_inference_out_dtype)
 
-    return tpu_inference_adapter.paged_attention_with_kv_update(
-        q,
-        new_k,
-        new_v,
-        kv_cache,
-        batch_info,
-        sm_scale=sm_scale,
-        soft_cap=soft_cap,
-        out_dtype=out_dtype,
-        vmem_limit_bytes=vmem_limit_bytes,
-    )
+    try:
+        return tpu_inference_adapter.paged_attention_with_kv_update(
+            q,
+            new_k,
+            new_v,
+            kv_cache,
+            batch_info,
+            sm_scale=sm_scale,
+            soft_cap=soft_cap,
+            out_dtype=out_dtype,
+            vmem_limit_bytes=config.vmem_limit_bytes,
+        )
+    except ImportError as exc:
+        raise _unsupported(
+            TpuPagedAttentionBackend.TPU_INFERENCE,
+            f"the tpu-inference kernel import failed: {exc}",
+        ) from exc
 
 
 def _run_backend(
@@ -286,9 +309,6 @@ def _run_backend(
     sm_scale: float | jax.Array,
     soft_cap: float | None,
     config: TpuPagedAttentionConfig,
-    num_kv_pages_per_block: int | None,
-    num_queries_per_block: int | None,
-    vmem_limit_bytes: int | None,
 ) -> tuple[NamedArray, KvPageCache]:
     if backend == TpuPagedAttentionBackend.REFERENCE:
         if _is_tpu() and config.fail_on_reference_fallback:
@@ -313,9 +333,7 @@ def _run_backend(
             batch_info,
             sm_scale=sm_scale,
             soft_cap=soft_cap,
-            num_kv_pages_per_block=num_kv_pages_per_block,
-            num_queries_per_block=num_queries_per_block,
-            vmem_limit_bytes=vmem_limit_bytes,
+            config=config,
         )
     if backend == TpuPagedAttentionBackend.TPU_INFERENCE:
         return _run_tpu_inference_backend(
@@ -327,7 +345,6 @@ def _run_backend(
             sm_scale=sm_scale,
             soft_cap=soft_cap,
             config=config,
-            vmem_limit_bytes=vmem_limit_bytes,
         )
     raise ValueError(f"Unsupported paged attention backend: {backend}")
 
@@ -342,9 +359,6 @@ def paged_attention_with_kv_update(
     sm_scale: float | jax.Array,
     soft_cap: float | None,
     config: TpuPagedAttentionConfig,
-    num_kv_pages_per_block: int | None = None,
-    num_queries_per_block: int | None = None,
-    vmem_limit_bytes: int | None = None,
 ) -> tuple[NamedArray, KvPageCache]:
     """Compute paged attention for packed tokens and return the updated KV cache."""
 
@@ -353,6 +367,10 @@ def paged_attention_with_kv_update(
     failures: list[Exception] = []
 
     for index, backend in enumerate(backends):
+        backend_config = config
+        if backend == TpuPagedAttentionBackend.REFERENCE and failures and _is_auto_backend(config.backend):
+            backend_config = dataclasses.replace(config, fail_on_reference_fallback=False)
+
         try:
             return _run_backend(
                 backend,
@@ -363,10 +381,7 @@ def paged_attention_with_kv_update(
                 batch_info,
                 sm_scale=sm_scale,
                 soft_cap=soft_cap,
-                config=config,
-                num_kv_pages_per_block=num_kv_pages_per_block,
-                num_queries_per_block=num_queries_per_block,
-                vmem_limit_bytes=vmem_limit_bytes,
+                config=backend_config,
             )
         except (UnsupportedTpuPagedAttentionBackend, ValueError) as exc:
             failures.append(exc)

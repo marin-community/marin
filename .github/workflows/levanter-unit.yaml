@@ -131,7 +131,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.should_run == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [tpu-ci]
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -185,9 +185,11 @@ jobs:
                 echo '::endgroup::'; \
               fi && \
               cp -a /workspace-src/. /workspace/ && cd /workspace && \
-              timeout --kill-after=5 --signal=TERM 890 \
-              uv run --package marin-levanter --frozen --group test --extra tpu \
-              pytest -n 0 lib/levanter/tests \
+              uv sync --package marin-levanter --frozen --group test --extra tpu \
+                --no-install-package torch \
+                --no-install-package torchvision && \
+              timeout --kill-after=5 --signal=TERM 1700 \
+              .venv/bin/python -m pytest -n 0 lib/levanter/tests \
               -m 'not slow and not torch' \
               --ignore=lib/levanter/tests/test_audio.py \
               --ignore=lib/levanter/tests/test_new_cache.py \

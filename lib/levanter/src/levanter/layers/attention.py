@@ -170,21 +170,6 @@ def dot_product_attention(
     if scaling_factor is None:
         scaling_factor = 1 / math.sqrt(query.resolve_axis(Key).size)
 
-    single_token_out = _single_token_attention_output(
-        QPos,
-        KPos,
-        Key,
-        query,
-        value,
-        mask=mask,
-        bias=bias,
-        dropout=dropout,
-        inference=inference,
-        attn_sink=attn_sink,
-    )
-    if single_token_out is not None:
-        return single_token_out
-
     attention_out = None
 
     match attn_backend:
@@ -310,59 +295,6 @@ def dot_product_attention(
             logits_soft_cap=logits_soft_cap,
             attn_sink=attn_sink,
         )
-
-
-def _single_token_attention_output(
-    QPos: AxisSelector,
-    KPos: AxisSelection,
-    Key: AxisSelector,
-    query: NamedArray,
-    value: NamedArray,
-    *,
-    mask: Optional[Union["AttentionMask", NamedArray]],
-    bias: Optional[NamedArray],
-    dropout: float,
-    inference: bool,
-    attn_sink: Optional[NamedArray],
-) -> NamedArray | None:
-    QPos = query.resolve_axis(QPos)
-    KPos = value.resolve_axis(KPos)
-    Key = query.resolve_axis(Key)
-
-    if QPos.size != 1 or KPos.size != 1:
-        return None
-    if bias is not None or attn_sink is not None:
-        return None
-    if dropout != 0.0 and not inference:
-        return None
-    if not _single_token_mask_is_always_visible(mask):
-        return None
-
-    out = value.rename({KPos.name: QPos.name})
-    for axis in query.axes:
-        if axis == QPos or axis == Key or out.has_axis(axis.name):
-            continue
-        out = out.broadcast_axis(axis)
-
-    desired_axes = [axis for axis in query.axes if axis != Key]
-    for axis in out.axes:
-        if not any(existing.name == axis.name for existing in desired_axes):
-            desired_axes.append(axis)
-    return out.rearrange(tuple(desired_axes))
-
-
-def _single_token_mask_is_always_visible(mask: Optional[Union["AttentionMask", NamedArray]]) -> bool:
-    if mask is None:
-        return True
-    if not isinstance(mask, AttentionMask):
-        return False
-    if mask.explicit_mask is not None or mask.segment_ids is not None:
-        return False
-    if mask.sliding_window is not None:
-        return False
-    if not mask.is_causal:
-        return True
-    return mask.causal_offset is None
 
 
 def _materialize_sink_as_dummy_kv(
@@ -1655,9 +1587,6 @@ class AttentionConfig:
     logits_soft_cap: Optional[float] = None
     qk_norm: Optional[LayerNormConfigBase] = None
     gated: Literal["none", "headwise", "elementwise"] = "none"
-    rpa_num_kv_pages_per_block: Optional[int] = None
-    rpa_num_queries_per_block: Optional[int] = None
-    rpa_vmem_limit_bytes: Optional[int] = None
 
     def __post_init__(self):
         assert (
@@ -1873,9 +1802,6 @@ class Attention(eqx.Module):
             sm_scale=sm_scale,
             soft_cap=self.config.logits_soft_cap,
             config=tpu_paged_attention,
-            num_kv_pages_per_block=self.config.rpa_num_kv_pages_per_block,
-            num_queries_per_block=self.config.rpa_num_queries_per_block,
-            vmem_limit_bytes=self.config.rpa_vmem_limit_bytes,
         )
 
         attn_output = attn_tokens.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
@@ -2053,9 +1979,6 @@ class GatedAttention(Attention):
             sm_scale=sm_scale,
             soft_cap=self.config.logits_soft_cap,
             config=tpu_paged_attention,
-            num_kv_pages_per_block=self.config.rpa_num_kv_pages_per_block,
-            num_queries_per_block=self.config.rpa_num_queries_per_block,
-            vmem_limit_bytes=self.config.rpa_vmem_limit_bytes,
         )
 
         assert self.gate_proj is not None
@@ -2067,71 +1990,6 @@ class GatedAttention(Attention):
         if not tpu_paged_attention.preserve_attention_output_dtype:
             attn_output = attn_output.astype(x.dtype)
         return self.o_proj(attn_output, key=key_o), kv_cache
-
-
-@named_call
-def ragged_paged_attention(
-    q: NamedArray,  # [Tok, KVHeads, QHeadsPerGroup, HeadSize]
-    kv_pages: NamedArray,  # [Page, PageSize, 2 * KVHeads, HeadDim]
-    kv_lens: NamedArray,  # i32[Seq]
-    page_indices: NamedArray,  # i32[Seq, PagePerSeq]
-    cu_q_lens: NamedArray,  # i32[Seq + 1] <-- cumulative lengths for the sequences, including new tokens
-    num_seqs: jnp.ndarray,
-    sm_scale: float = 1.0,
-    soft_cap: float | None = None,
-    num_kv_pages_per_block: int | None = None,
-    num_queries_per_block: int | None = None,
-    vmem_limit_bytes: int | None = None,
-) -> NamedArray:
-    """Ragged attention for paged KV caches.
-
-    This function dispatches to the TPU implementation when available and
-    supported, otherwise it falls back to :func:`default_ragged_paged_attention`.
-    """
-
-    def _tpu_rpa_available() -> bool:
-        if tpu_ragged_paged_attention is None:
-            return False
-        if jax.default_backend() != "tpu":
-            return False
-        kind = str(getattr(jax.devices()[0], "device_kind", "")).lower()
-        if "tpu v2" in kind or "tpu v3" in kind:
-            return False
-        return True
-
-    if _tpu_rpa_available():
-        try:
-            out = _do_tpu_ragged_paged_attention(
-                q,
-                kv_pages,
-                kv_lens,
-                page_indices,
-                cu_q_lens,
-                num_seqs,
-                sm_scale=sm_scale,
-                soft_cap=soft_cap,
-                num_kv_pages_per_block=num_kv_pages_per_block,
-                num_queries_per_block=num_queries_per_block,
-                vmem_limit_bytes=vmem_limit_bytes,
-            )
-            return out
-        except Exception:  # pragma: no cover - fall back if kernel fails
-            warnings.warn("TPU ragged paged attention failed. Falling back to reference implementation.")
-            logger.warning(
-                "Failed to use TPU ragged paged attention. Falling back to reference",
-                exc_info=True,
-            )
-
-    return default_ragged_paged_attention(
-        q,
-        kv_pages,
-        kv_lens,
-        page_indices,
-        cu_q_lens.array,
-        num_seqs,
-        sm_scale=sm_scale,
-        soft_cap=soft_cap,
-    )
 
 
 def _do_tpu_ragged_paged_attention(
