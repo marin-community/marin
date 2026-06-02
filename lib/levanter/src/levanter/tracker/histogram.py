@@ -51,8 +51,16 @@ class SummaryStats(equinox.Module):
     histogram: Histogram | None = None
 
     @staticmethod
-    def _with_derived(min, max, num, nonzero_count, sum, sum_squares, histogram) -> "SummaryStats":
-        """Build a ``SummaryStats``, computing the derived moments eagerly."""
+    def from_reduced_values(
+        min: Scalar,
+        max: Scalar,
+        num: Scalar,
+        nonzero_count: Scalar,
+        sum: Scalar,
+        sum_squares: Scalar,
+        histogram: Histogram | None = None,
+    ) -> "SummaryStats":
+        """Build a ``SummaryStats`` from already-reduced summary values."""
         mean = sum / num
         variance = (sum_squares / num) - (mean**2)
         rms = jnp.sqrt(sum_squares / num)
@@ -96,7 +104,7 @@ class SummaryStats(equinox.Module):
             edges = jnp.histogram_bin_edges(jnp.stack([min, max]), bins=num_bins)
             counts = sharded_histogram_array(array, edges)
             histogram = Histogram(edges, counts)
-        return SummaryStats._with_derived(min, max, num, nonzero_count, sum, sum_squares, histogram)
+        return SummaryStats.from_reduced_values(min, max, num, nonzero_count, sum, sum_squares, histogram)
 
     @staticmethod
     def from_named_array(
@@ -116,7 +124,7 @@ class SummaryStats(equinox.Module):
         if include_histogram:
             counts, edges = sharded_histogram(array, bins=num_bins)
             histogram = Histogram(edges, counts)
-        return SummaryStats._with_derived(min, max, num, nonzero_count, sum, sum_squares, histogram)
+        return SummaryStats.from_reduced_values(min, max, num, nonzero_count, sum, sum_squares, histogram)
 
     def to_numpy_histogram(self) -> tuple[np.ndarray, np.ndarray]:
         if self.histogram is None:

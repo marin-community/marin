@@ -315,7 +315,7 @@ def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
     max_value = jnp.where(num > 0, max_value, 0.0)
     bucket_limits = jnp.arange(num_experts + 1, dtype=jnp.float32)
     histogram = Histogram(bucket_limits=bucket_limits, bucket_counts=counts)
-    return SummaryStats(
+    return SummaryStats.from_reduced_values(
         min=min_value,
         max=max_value,
         num=num,
