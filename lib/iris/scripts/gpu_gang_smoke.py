@@ -75,6 +75,16 @@ _KIND_NODE_TOPOLOGY_LABELS = {
 # label_prefix Iris uses on kind; the LocalQueue it reconciles is "{prefix}-lq".
 _KIND_LABEL_PREFIX = "iris"
 
+# CoreWeave smoke: a label_prefix DISTINCT from any real Iris cluster on the
+# shared CKS cluster, so this smoke's NodePool / LocalQueue / managed-node labels
+# never collide with — or get reaped alongside — production resources. The real
+# marin cluster uses "iris-ci"; we deliberately use "iris" so iris-iris-managed /
+# iris-iris-scale-group keys are isolated.
+_CW_LABEL_PREFIX = "iris"
+# Admin-provisioned ClusterQueue (install_kueue.py --variant coreweave
+# --with-queues) that this smoke's namespaced LocalQueue binds to.
+_CW_CLUSTER_QUEUE = "iris-cq"
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("gpu_gang_smoke")
 
@@ -483,96 +493,147 @@ class KindTarget:
 
 
 class CoreweaveTarget:
+    """Provision a dedicated H100 NodePool on a real CKS cluster and run one gang.
+
+    Mirrors KindTarget: one IrisClusterConfig drives the production paths
+    (ensure_nodepools, ensure_kueue_queues, config.make_provider). Kueue's operator
+    and the cluster-scoped ClusterQueue/ResourceFlavor/Topologies are assumed
+    admin-provisioned (scripts/install_kueue.py --variant coreweave --with-queues);
+    this target creates only its own namespaced LocalQueue and NodePool, and tears
+    the NodePool down (by exact name) so CKS stops billing for the H100s.
+    """
+
     def __init__(self, cfg: SmokeConfig) -> None:
         self.cfg = cfg
         self.kubectl = Kubectl(cfg.kubeconfig_path)
-        self._controller = None
+        self._controller: K8sControllerProvider | None = None
+        self._iris_config_cache: config_pb2.IrisClusterConfig | None = None
 
-    def _controller_provider(self):
+    def _controller_provider(self) -> K8sControllerProvider:
         if self._controller is None:
-            from iris.cluster.providers.k8s.controller import K8sControllerProvider
-            from iris.rpc import config_pb2
-
             cw = config_pb2.CoreweavePlatformConfig(
                 region=self.cfg.coreweave.region,
                 namespace=self.cfg.namespace,
                 kubeconfig_path=self.cfg.kubeconfig_path,
             )
-            self._controller = K8sControllerProvider(config=cw, label_prefix="iris")
+            self._controller = K8sControllerProvider(
+                config=cw,
+                label_prefix=_CW_LABEL_PREFIX,
+                kubectl=CloudK8sService(namespace=self.cfg.namespace, kubeconfig_path=self.cfg.kubeconfig_path),
+            )
         return self._controller
 
-    def _cluster_config(self):
-        """Build the minimal IrisClusterConfig ensure_nodepools needs."""
-        from iris.rpc import config_pb2
+    def _iris_config(self) -> config_pb2.IrisClusterConfig:
+        """One IrisClusterConfig for ensure_nodepools + ensure_kueue_queues + make_provider.
 
-        cfg = self.cfg
-        sg = config_pb2.ScaleGroupConfig(
-            num_vms=1,
-            max_slices=cfg.coreweave.nodes,
-            buffer_slices=cfg.coreweave.nodes,
-            resources=config_pb2.ScaleGroupResources(
-                cpu_millicores=cfg.job.cpu_millicores,
-                memory_bytes=cfg.job.memory_bytes,
-                device_type=config_pb2.ACCELERATOR_TYPE_GPU,
-                device_variant=cfg.job.gpu_variant,
-                device_count=cfg.job.gpu_count,
-            ),
-            slice_template=config_pb2.SliceConfig(
+        Kueue is enabled by kueue.cluster_queue (the admin ClusterQueue); the
+        provider derives local_queue from label_prefix and the topology mapping from
+        _CW_DEFAULT_TOPOLOGIES, so group_by=pool stamps the leafgroup
+        podset-preferred-topology and the managed-node selector pins pods to this
+        smoke's NodePool.
+        """
+        if self._iris_config_cache is None:
+            cfg = self.cfg
+            sg = config_pb2.ScaleGroupConfig(
                 num_vms=1,
-                coreweave=config_pb2.CoreweaveSliceConfig(
-                    region=cfg.coreweave.region,
-                    instance_type=cfg.coreweave.instance_type,
-                    gpu_class=cfg.job.gpu_variant,
-                    infiniband=True,
+                max_slices=cfg.coreweave.nodes,
+                buffer_slices=cfg.coreweave.nodes,
+                resources=config_pb2.ScaleGroupResources(
+                    cpu_millicores=cfg.job.cpu_millicores,
+                    memory_bytes=cfg.job.memory_bytes,
+                    device_type=config_pb2.ACCELERATOR_TYPE_GPU,
+                    device_variant=cfg.job.gpu_variant,
+                    device_count=cfg.job.gpu_count,
                 ),
-            ),
-        )
-        cluster = config_pb2.IrisClusterConfig()
-        cluster.platform.coreweave.region = cfg.coreweave.region
-        cluster.platform.coreweave.namespace = cfg.namespace
-        cluster.scale_groups[cfg.coreweave.scale_group].CopyFrom(sg)
-        return cluster
+                slice_template=config_pb2.SliceConfig(
+                    num_vms=1,
+                    coreweave=config_pb2.CoreweaveSliceConfig(
+                        region=cfg.coreweave.region,
+                        instance_type=cfg.coreweave.instance_type,
+                        gpu_class=cfg.job.gpu_variant,
+                        infiniband=True,
+                    ),
+                ),
+            )
+            cluster = config_pb2.IrisClusterConfig()
+            cluster.platform.label_prefix = _CW_LABEL_PREFIX
+            cluster.platform.coreweave.region = cfg.coreweave.region
+            cluster.platform.coreweave.namespace = cfg.namespace
+            cluster.platform.coreweave.kubeconfig_path = cfg.kubeconfig_path
+            cluster.scale_groups[cfg.coreweave.scale_group].CopyFrom(sg)
+            kp = cluster.kubernetes_provider
+            kp.namespace = cfg.namespace
+            kp.default_image = cfg.image
+            kp.kubeconfig = cfg.kubeconfig_path
+            kp.host_network = True
+            kp.kueue.cluster_queue = _CW_CLUSTER_QUEUE
+            self._iris_config_cache = cluster
+        return self._iris_config_cache
+
+    def _assert_namespace_unowned(self) -> None:
+        """Refuse to run if another Iris controller already owns the target namespace.
+
+        The standalone K8sTaskProvider reconciles the WHOLE namespace — it deletes
+        every iris.managed pod not in the batch — so it must run in a namespace it
+        exclusively owns. Bail out (before any mutation) if we find a live
+        iris-controller Deployment or pre-existing iris.managed task pods, which is
+        what pointing at a shared cluster namespace like iris-ci looks like. A
+        not-yet-created namespace lists empty and passes.
+        """
+        ns = self.cfg.namespace
+        controllers = self.kubectl.get("deploy", "-n", ns, "-l", "app=iris-controller", "-o", "name").split()
+        managed = self.kubectl.get("pods", "-n", ns, "-l", "iris.managed=true", "-o", "name").split()
+        if controllers or managed:
+            raise RuntimeError(
+                f"refusing to run: namespace {ns!r} is already owned by an Iris controller "
+                f"(iris-controller deployments={len(controllers)}, iris.managed pods={len(managed)}). "
+                "The smoke reconciles the whole namespace and would delete those pods. "
+                "Point it at a dedicated namespace it exclusively owns."
+            )
 
     def setup(self) -> None:
         cfg = self.cfg
+        self._assert_namespace_unowned()
         controller = self._controller_provider()
+        config = self._iris_config()
         controller.ensure_rbac()
         if cfg.coreweave.ensure_nodepools:
             logger.info(
-                "ensuring NodePool %r (target %d nodes) — CKS will provision H100s",
-                cfg.coreweave.scale_group,
+                "ensuring NodePool %r (target %d nodes) — CKS will provision %s",
+                controller._nodepool_name(cfg.coreweave.scale_group),
                 cfg.coreweave.nodes,
+                cfg.coreweave.instance_type,
             )
-            controller.ensure_nodepools(self._cluster_config())
+            controller.ensure_nodepools(config)
+        # The namespaced LocalQueue is the controller's responsibility; drive that
+        # real path (binds iris-ci -> the admin ClusterQueue).
+        controller.ensure_kueue_queues(config)
         logger.info(
-            "CoreWeave target ready: namespace=%s localQueue=%s (Kueue assumed admin-provisioned)",
+            "CoreWeave target ready: namespace=%s localQueue=%s clusterQueue=%s",
             cfg.namespace,
-            cfg.local_queue,
+            local_queue_name(_CW_LABEL_PREFIX),
+            _CW_CLUSTER_QUEUE,
         )
 
     def make_provider(self) -> K8sTaskProvider:
-        cfg = self.cfg
-        kubectl = CloudK8sService(namespace=cfg.namespace, kubeconfig_path=cfg.kubeconfig_path)
-        return K8sTaskProvider(
-            kubectl=kubectl,
-            namespace=cfg.namespace,
-            default_image=cfg.image,
-            local_queue=cfg.local_queue,
-            host_network=True,
-            controller_address=None,
-        )
+        provider = build_task_provider(self._iris_config())
+        assert isinstance(provider, K8sTaskProvider)
+        return provider
 
     def teardown(self) -> None:
         # Pods + Workloads are released by teardown_gang_pods(); here we drop the
-        # NodePool so CKS stops billing for the H100s.
-        if self.cfg.coreweave.delete_nodepools_on_teardown:
+        # NodePool(s) we created so CKS stops billing for the H100s. Delete by EXACT
+        # name (not a label selector) — surgical on the shared cluster, and immune to
+        # the label-key drift that a `-l` selector is prone to.
+        if not self.cfg.coreweave.delete_nodepools_on_teardown:
+            logger.warning("delete_nodepools_on_teardown=false: leaving NodePool up — it is STILL BILLING")
+            return
+        controller = self._controller_provider()
+        for scale_group in self._iris_config().scale_groups:
+            pool = controller._nodepool_name(scale_group)
+            logger.info("deleting NodePool %s (CKS deprovisions asynchronously)", pool)
             self.kubectl.raw(
-                "delete",
-                "nodepools.compute.coreweave.com",
-                "-l",
-                "iris-scale-group",
-                "--ignore-not-found",
-                check=False,
+                "delete", "nodepools.compute.coreweave.com", pool, "--ignore-not-found", "--wait=false", check=False
             )
 
 

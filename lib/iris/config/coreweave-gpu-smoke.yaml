@@ -6,14 +6,22 @@
 # That is expensive. The script only runs this when target == coreweave AND
 # --i-understand-the-cost is passed. Validate on kind first.
 #
-# Unlike the kind variant, Kueue (LocalQueue/ClusterQueue/ResourceFlavor +
-# WorkloadPriorityClasses) is assumed to be admin-provisioned on CKS already
-# (kueue.install: false) — we only reference the LocalQueue by name.
+# Kueue's operator + the cluster-scoped ClusterQueue/ResourceFlavor/Topologies are
+# assumed admin-provisioned on CKS (install_kueue.py --variant coreweave
+# --with-queues; kueue.install: false here). This smoke creates only its OWN
+# namespaced LocalQueue (bound to that ClusterQueue) at setup.
+#
+# DEDICATED namespace: the smoke drives a standalone K8sTaskProvider, which
+# reconciles the WHOLE namespace (it deletes every iris.managed pod not in its
+# batch). It must therefore own its namespace exclusively — NEVER point this at a
+# namespace a live iris-controller manages (e.g. iris-ci), or it will delete that
+# controller's pods. setup() hard-fails if the namespace is already owned.
 
 target: coreweave
-namespace: iris-ci
+namespace: iris-smoke
 kubeconfig_path: ~/.kube/coreweave-iris
-# Admin-provisioned LocalQueue on the CKS cluster.
+# LocalQueue this smoke creates in its namespace (also derived from label_prefix
+# "iris" as {prefix}-lq); bound to the admin ClusterQueue iris-cq.
 local_queue: iris-lq
 image: ghcr.io/marin-community/iris-task:latest
 
