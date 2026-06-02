@@ -119,7 +119,7 @@ _KUEUE_PREFERRED_TOPOLOGY = "kueue.x-k8s.io/podset-preferred-topology"
 # CoreWeave-convention fallback for KueueConfig.topologies: group_by -> (node
 # label, required?). Used only when the cluster config leaves topologies unset.
 # The node labels are levels in CoreWeave's documented Kueue Topology CRs (see
-# scripts/install_kueue_coreweave.sh): pool is a soft (preferred) multi-node IB
+# scripts/install_kueue.py): pool is a soft (preferred) multi-node IB
 # colocation on a leafgroup; nvlink/tpu-name are hard (required) single NVLink
 # domains (GB200 only — H100 has no nvlink.domain label). A cluster whose
 # Topology uses different levels overrides this via
@@ -571,7 +571,7 @@ def _build_pod_manifest(
         raise ValueError(
             f"Coscheduled task {run_req.task_id!r} (group_by={run_req.coscheduling.group_by!r}) "
             "requires Kueue gang admission, but Kueue is not configured. Install Kueue "
-            "(lib/iris/scripts/install_kueue_coreweave.py) and set kubernetes_provider.kueue.cluster_queue."
+            "(lib/iris/scripts/install_kueue.py) and set kubernetes_provider.kueue.cluster_queue."
         )
     if kueue_enabled:
         labels[_KUEUE_POD_GROUP_NAME] = _pod_group_name(task_id, attempt_id)

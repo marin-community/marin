@@ -12,7 +12,9 @@ target: kind
 namespace: iris
 # kind writes its kubeconfig here during setup; the script reads it back.
 kubeconfig_path: ~/.kube/iris-kind-gpu-smoke
-# Kueue LocalQueue stamped on coscheduled pods (kueue.x-k8s.io/queue-name).
+# Kueue LocalQueue stamped on coscheduled pods (kueue.x-k8s.io/queue-name). For
+# kind the harness DERIVES this from label_prefix (iris -> iris-lq) via the real
+# controller bootup; this value is only consumed by the coreweave target.
 local_queue: iris-lq
 # Any image with bash + python on PATH. The placeholder entrypoint is pure
 # stdlib python, so the slim image is enough and pulls fast.
@@ -21,10 +23,12 @@ image: python:3.11-slim
 job:
   name: gpu-gang-smoke
   replicas: 3
-  # Arbitrary group_by: not one of {tpu-name, nvlink, pool}, so no CoreWeave
-  # topology annotation is added — the gang still admits atomically via
-  # pod-group-total-count, which is exactly what we want to validate on kind.
-  group_by: gpu-smoke
+  # group_by: pool maps (via _CW_DEFAULT_TOPOLOGIES) to a leafgroup
+  # podset-preferred-topology annotation, so the gang exercises BOTH atomic
+  # all-or-nothing admission (pod-group-total-count) AND Topology-Aware
+  # Scheduling. The harness labels the kind workers into one synthetic leafgroup
+  # (backend.coreweave.cloud/*) so TAS can place the whole podset in one domain.
+  group_by: pool
   priority_band: batch          # production | interactive | batch
   cpu: "0.25"                   # cores per task
   memory: 256Mi

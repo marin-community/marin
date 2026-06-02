@@ -556,7 +556,7 @@ class K8sControllerProvider:
 
         The Kueue operator, ClusterQueue, ResourceFlavor and Topology CRs are
         cluster-global and admin-provisioned out of band (the CKS cluster is
-        shared across tenants); see scripts/install_kueue_coreweave.py. Iris owns
+        shared across tenants); see scripts/install_kueue.py. Iris owns
         only its own LocalQueue, binding its namespace to the admin ClusterQueue.
         The LocalQueue name is derived from label_prefix, not configured. No-op
         when Kueue is not configured (cluster_queue unset).

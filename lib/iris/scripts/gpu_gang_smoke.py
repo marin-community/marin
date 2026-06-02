@@ -46,16 +46,34 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import install_kueue
 import yaml
+from iris.cluster.config import make_provider as build_task_provider
 from iris.cluster.controller.direct_provider import DirectProviderBatch
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.providers.k8s.controller import K8sControllerProvider
 from iris.cluster.providers.k8s.service import CloudK8sService
 from iris.cluster.providers.k8s.tasks import (
     _KUEUE_POD_GROUP_NAME,
     K8sTaskProvider,
 )
+from iris.cluster.providers.types import Labels, local_queue_name
 from iris.cluster.types import JobName
-from iris.rpc import job_pb2
+from iris.rpc import config_pb2, job_pb2
+
+# kind nodes carry none of CoreWeave's topology labels, so the harness stamps the
+# same label keys the cw-ib ResourceFlavor + Topology CRs reference (see
+# install_kueue.py) onto the worker nodes — putting them all in one synthetic
+# leafgroup so TAS treats the kind cluster as a single IB fabric. flavor=infiniband
+# is the ResourceFlavor node selector; fabric/superpod/leafgroup are Topology levels.
+_KIND_NODE_TOPOLOGY_LABELS = {
+    "backend.coreweave.cloud/flavor": "infiniband",
+    "backend.coreweave.cloud/fabric": "fabric-0",
+    "backend.coreweave.cloud/superpod": "superpod-0",
+    "backend.coreweave.cloud/leafgroup": "leafgroup-0",
+}
+# label_prefix Iris uses on kind; the LocalQueue it reconciles is "{prefix}-lq".
+_KIND_LABEL_PREFIX = "iris"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("gpu_gang_smoke")
@@ -238,109 +256,11 @@ class Kubectl:
         cmd += ["-f", "-"]
         _run(cmd, stdin=manifest)
 
-    def apply_url(self, url: str, *, server_side: bool = True) -> None:
-        cmd = [*self._base, "apply"]
-        if server_side:
-            cmd += ["--server-side"]
-        cmd += ["-f", url]
-        _run(cmd)
-
-    def wait(self, *args: str) -> None:
-        _run([*self._base, "wait", *args], check=False)
-
-    def rollout_restart(self, target: str, namespace: str) -> None:
-        _run([*self._base, "rollout", "restart", target, "-n", namespace], check=False)
-
     def get(self, *args: str) -> str:
         return _run([*self._base, "get", *args], check=False, quiet=True)
 
     def raw(self, *args: str, check: bool = True) -> str:
         return _run([*self._base, *args], check=check)
-
-
-# ---------------------------------------------------------------------------
-# Kueue manifests
-# ---------------------------------------------------------------------------
-def _kueue_pod_integration_configmap() -> str:
-    """ConfigMap that enables Kueue's plain-Pod integration.
-
-    Kueue does not manage bare Pods unless 'pod' is in integrations.frameworks.
-    The namespaceSelector excludes system namespaces; everything else (incl.
-    our job namespace) is in scope. Requires a controller rollout to take effect.
-    """
-    config = {
-        "apiVersion": "config.kueue.x-k8s.io/v1beta1",
-        "kind": "Configuration",
-        "health": {"healthProbeBindAddress": ":8081"},
-        "metrics": {"bindAddress": ":8443"},
-        "webhook": {"port": 9443},
-        "manageJobsWithoutQueueName": False,
-        "integrations": {
-            "frameworks": ["batch/job", "pod"],
-            "podOptions": {
-                "namespaceSelector": {
-                    "matchExpressions": [
-                        {
-                            "key": "kubernetes.io/metadata.name",
-                            "operator": "NotIn",
-                            "values": ["kube-system", "kueue-system"],
-                        }
-                    ]
-                }
-            },
-        },
-    }
-    cm = {
-        "apiVersion": "v1",
-        "kind": "ConfigMap",
-        "metadata": {"name": "kueue-manager-config", "namespace": "kueue-system"},
-        "data": {"controller_manager_config.yaml": yaml.safe_dump(config, sort_keys=False)},
-    }
-    return yaml.safe_dump(cm, sort_keys=False)
-
-
-def _kueue_queues_manifest(cfg: SmokeConfig) -> str:
-    docs = [
-        textwrap.dedent(
-            """
-            apiVersion: kueue.x-k8s.io/v1beta1
-            kind: ResourceFlavor
-            metadata:
-              name: default-flavor
-            """
-        ).strip(),
-        textwrap.dedent(
-            f"""
-            apiVersion: kueue.x-k8s.io/v1beta1
-            kind: ClusterQueue
-            metadata:
-              name: iris-cq
-            spec:
-              namespaceSelector: {{}}
-              resourceGroups:
-                - coveredResources: ["cpu", "memory"]
-                  flavors:
-                    - name: default-flavor
-                      resources:
-                        - name: cpu
-                          nominalQuota: "{cfg.kueue.cluster_queue_cpu}"
-                        - name: memory
-                          nominalQuota: "{cfg.kueue.cluster_queue_memory}"
-            """
-        ).strip(),
-        textwrap.dedent(
-            f"""
-            apiVersion: kueue.x-k8s.io/v1beta1
-            kind: LocalQueue
-            metadata:
-              name: {cfg.local_queue}
-              namespace: {cfg.namespace}
-            spec:
-              clusterQueue: iris-cq
-            """
-        ).strip(),
-    ]
-    return "\n---\n".join(docs)
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +359,7 @@ def _print_pod_groups(kubectl: Kubectl, namespace: str) -> None:
         "-n",
         namespace,
         "-l",
-        "iris.managed=true",
+        _KUEUE_POD_GROUP_NAME,
         "-L",
         _KUEUE_POD_GROUP_NAME,
         "-L",
@@ -453,9 +373,19 @@ def _print_pod_groups(kubectl: Kubectl, namespace: str) -> None:
 # Targets
 # ---------------------------------------------------------------------------
 class KindTarget:
+    """Drives the SAME production code the CoreWeave path does, on a local kind cluster.
+
+    The only kind-specific steps are creating the cluster and stamping CoreWeave
+    topology/flavor labels on the workers (kind has none). Everything else is the
+    real thing: scripts/install_kueue.py (upstream variant) installs the operator +
+    Topology CRs + ResourceFlavor + ClusterQueue; K8sControllerProvider.ensure_kueue_queues
+    reconciles the LocalQueue; config.make_provider builds the task provider.
+    """
+
     def __init__(self, cfg: SmokeConfig) -> None:
         self.cfg = cfg
         self.kubectl = Kubectl(cfg.kubeconfig_path)
+        self._iris_config_cache: config_pb2.IrisClusterConfig | None = None
 
     def setup(self) -> None:
         cfg = self.cfg
@@ -472,48 +402,81 @@ class KindTarget:
             _run(["kind", "create", "cluster", "--name", name, "--config", kind_cfg_path])
         _run(["kind", "export", "kubeconfig", "--name", name, "--kubeconfig", cfg.kubeconfig_path])
 
+        self._label_nodes()
         if cfg.kueue.install:
-            self._install_kueue()
+            # Reuse the production install script (upstream variant) so the kind run
+            # exercises the SAME operator Configuration + Topology CRs + ResourceFlavor
+            # + ClusterQueue that install_kueue.py installs on CoreWeave (cks variant).
+            install_kueue.run_install(
+                variant=install_kueue.VARIANT_UPSTREAM,
+                kubeconfig=cfg.kubeconfig_path,
+                chart_version=cfg.kueue.version.lstrip("v"),
+                with_queues=True,
+                cluster_queue="iris-cq",
+                cq_cpu=cfg.kueue.cluster_queue_cpu,
+                cq_memory=cfg.kueue.cluster_queue_memory,
+                cq_gpu="0",
+                apply=True,
+            )
         self.kubectl.apply(f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {cfg.namespace}\n")
-        self.kubectl.apply(_kueue_queues_manifest(cfg))
-        logger.info("kind cluster ready: namespace=%s localQueue=%s", cfg.namespace, cfg.local_queue)
+        # The namespaced LocalQueue is the controller's responsibility — drive that
+        # real path rather than stamping it here.
+        self._ensure_local_queue()
+        logger.info(
+            "kind cluster ready: namespace=%s localQueue=%s", cfg.namespace, local_queue_name(_KIND_LABEL_PREFIX)
+        )
 
-    def _install_kueue(self) -> None:
-        ver = self.cfg.kueue.version
-        url = f"https://github.com/kubernetes-sigs/kueue/releases/download/{ver}/manifests.yaml"
-        logger.info("installing Kueue %s", ver)
-        self.kubectl.apply_url(url, server_side=True)
-        self.kubectl.wait(
-            "--for=condition=Available",
-            "deploy/kueue-controller-manager",
-            "-n",
-            "kueue-system",
-            "--timeout=300s",
+    def _label_nodes(self) -> None:
+        """Stamp CoreWeave topology + flavor + Iris-managed labels on the kind workers.
+
+        Puts every worker in one synthetic leafgroup so the cw-ib ResourceFlavor
+        selects them (flavor=infiniband) and TAS can satisfy a leafgroup-preferred
+        podset within a single domain. The iris-managed label matches the node
+        selector the provider stamps on pods (managed_label, derived from
+        label_prefix) — CoreWeave NodePools carry it; on kind we add it by hand.
+        """
+        node_labels = dict(_KIND_NODE_TOPOLOGY_LABELS)
+        node_labels[Labels(_KIND_LABEL_PREFIX).iris_managed] = "true"
+        out = self.kubectl.get("nodes", "-l", "!node-role.kubernetes.io/control-plane", "-o", "name")
+        nodes = [n for n in out.split() if n]
+        label_args = [f"{key}={value}" for key, value in node_labels.items()]
+        for node in nodes:
+            self.kubectl.raw("label", node, *label_args, "--overwrite")
+        logger.info("labeled %d kind worker node(s): %s", len(nodes), label_args)
+
+    def _iris_config(self) -> config_pb2.IrisClusterConfig:
+        """Build the IrisClusterConfig the provider + controller bootup consume.
+
+        Kueue is enabled by kueue.cluster_queue (the admin ClusterQueue install_kueue.py
+        created). The provider derives local_queue from label_prefix and the topology
+        mapping from _CW_DEFAULT_TOPOLOGIES, so group_by=pool stamps the leafgroup
+        podset-preferred-topology annotation.
+        """
+        if self._iris_config_cache is None:
+            cfg = self.cfg
+            proto = config_pb2.IrisClusterConfig()
+            proto.platform.label_prefix = _KIND_LABEL_PREFIX
+            kp = proto.kubernetes_provider
+            kp.namespace = cfg.namespace
+            kp.default_image = cfg.image
+            kp.kubeconfig = cfg.kubeconfig_path
+            kp.kueue.cluster_queue = "iris-cq"
+            self._iris_config_cache = proto
+        return self._iris_config_cache
+
+    def _ensure_local_queue(self) -> None:
+        cw = config_pb2.CoreweavePlatformConfig(namespace=self.cfg.namespace, kubeconfig_path=self.cfg.kubeconfig_path)
+        controller = K8sControllerProvider(
+            config=cw,
+            label_prefix=_KIND_LABEL_PREFIX,
+            kubectl=CloudK8sService(namespace=self.cfg.namespace, kubeconfig_path=self.cfg.kubeconfig_path),
         )
-        # Enable the plain-Pod integration, then restart the controller to load it.
-        logger.info("enabling Kueue plain-Pod integration")
-        self.kubectl.apply(_kueue_pod_integration_configmap())
-        self.kubectl.rollout_restart("deploy/kueue-controller-manager", "kueue-system")
-        self.kubectl.wait(
-            "--for=condition=Available",
-            "deploy/kueue-controller-manager",
-            "-n",
-            "kueue-system",
-            "--timeout=300s",
-        )
-        # Webhook needs a moment to start serving after the restart.
-        time.sleep(10)
+        controller.ensure_kueue_queues(self._iris_config())
 
     def make_provider(self) -> K8sTaskProvider:
-        cfg = self.cfg
-        kubectl = CloudK8sService(namespace=cfg.namespace, kubeconfig_path=cfg.kubeconfig_path)
-        return K8sTaskProvider(
-            kubectl=kubectl,
-            namespace=cfg.namespace,
-            default_image=cfg.image,
-            local_queue=cfg.local_queue,
-            controller_address=None,
-        )
+        provider = build_task_provider(self._iris_config())
+        assert isinstance(provider, K8sTaskProvider)
+        return provider
 
     def teardown(self) -> None:
         _run(["kind", "delete", "cluster", "--name", self.cfg.kind.cluster_name], check=False)
