@@ -60,6 +60,8 @@ class GrugMoeLaunchConfig:
     # temporary checkpoints (every ``save_interval``) plus the final
     # permanent checkpoint at the end of training.
     checkpoint_keep_every: int | None = 1000
+    # Mesh size along the "expert" axis (expert-parallelism). 1 = no EP.
+    expert_parallel: int = 1
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
@@ -94,7 +96,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
-        mesh=MeshConfig(axes={"expert": 1}),
+        mesh=MeshConfig(axes={"expert": config.expert_parallel}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         checkpointer=CheckpointerConfig(

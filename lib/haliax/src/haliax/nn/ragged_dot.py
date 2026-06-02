@@ -45,7 +45,7 @@ _HAS_WARNED_AUTO_FALLBACK = False
 def _ragged_dot_megablox_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
     if _gmm_megablox is None:
         raise NotImplementedError("megablox GMM is not available (TPU-only)")
-    tile_size = (512, 1024, 1024)  # (m, k, n)
+    tile_size = (512, 512, 1024)  # (m, k, n) — halved k from 1024 to fit v4 VMEM
     m, k, n = lhs.shape[0], lhs.shape[1], rhs.shape[2]
     return _gmm_megablox(
         lhs,
