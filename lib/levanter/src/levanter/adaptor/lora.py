@@ -19,7 +19,7 @@ We recommend using None, which was found to be better than the other options: ht
 https://arxiv.org/pdf/2305.14314.pdf Section 4.
 
 LoRA is implemented by doing "tree surgery" on the model, replacing [haliax.nn.Linear][] layers with a
-[levanter.lora.LoraLinear][] layer that wraps the original linear layer.
+[levanter.adaptor.lora.LoraLinear][] layer that wraps the original linear layer.
 
 Consider a simple model with two parameters, attention and mlp. That might look like:
    ```python
@@ -49,26 +49,35 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, TypeVar, Union
+from typing import Callable, Dict, List, Literal, Optional, Tuple, TypeVar, Union
 
 import equinox as eqx
 import jax
+import numpy as np
 from jaxtyping import PyTree
 
 import haliax
 import haliax as hax
 import haliax.nn as hnn
 from haliax import Axis
-from haliax.jax_utils import shaped_rng_split
+from haliax.jax_utils import is_jax_array_like, shaped_rng_split
 from haliax.state_dict import (
     ModuleWithStateDictSerialization,
     StateDict,
+    flatten_modules_for_export,
     save_state_dict,
-    to_torch_compatible_state_dict,
+    to_state_dict,
 )
+from jax.sharding import PartitionSpec
 
 from levanter.callbacks import StepInfo
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, upload_to_hub
+from levanter.compat.hf_checkpoints import (
+    GenerationConfigDict,
+    HFCheckpointConverter,
+    RepoRef,
+    _save_tokenizer_pretrained,
+    upload_to_hub,
+)
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.jax_utils import join_key, key_iterator, leaf_key_paths
 from levanter.utils.logging import silence_transformer_nag
@@ -99,9 +108,44 @@ class LoraConfig:
     r: int = 8  # rank of LoRA transform
     alpha: float = 8.0  # scaling factor for LoRA transform
     dropout: float = 0.0  # dropout probability for LoRA layers
+    zero_init_b: bool = False
+    """Zero-initialize the B matrix (``W + (alpha/r) * B @ A = W`` when ``B = 0``)
+    so the adapter starts as identity. This is the standard PEFT convention and
+    one of the two ways to get a zero adapter delta at init; the other — and the
+    default — is :attr:`a_init_mode` ``= "zero"``. For DPO, exactly one factor may
+    be zero (see :func:`levanter.main.train_dpo._validate_dpo_config`); zeroing
+    both leaves no path for gradients to flow."""
+    a_init_mode: Literal["random", "zero"] = "zero"
+    """How to initialize the LoRA A matrix. Defaults to ``"zero"``.
+
+    - ``"zero"`` (default): A is identically zero and B is randomly initialized.
+      ``B @ A = 0`` at init (so a LoRA model matches its base, and a DPO policy
+      matches its reference), but the first optimizer step flows through the
+      full-rank A matrix instead of the degenerate zero-init B matrix. This
+      avoids the FSDP all-reduce-noise sigma-sensitivity issue near pi=pi_ref
+      documented in ``.agents/logbooks/bug_1_dpo_lora_physical_topology.md``.
+      The previous default (``"random"`` with ``zero_init_b = False``) left
+      ``B @ A != 0`` at init, which silently broke LoRA-DPO — hence the change.
+    - ``"random"``: the LoRA-paper convention. A is drawn from the default
+      :class:`haliax.nn.Linear` init; whether ``B @ A`` is zero at init is then
+      controlled by :attr:`zero_init_b`.
+    """
+    exclude_modules: Optional[List[str]] = None
+    """modules to exclude from LoRA. Defaults to ["lm_head"] to avoid breaking get_lm_head().weight access."""
     # TODO: bias
+    # TODO(IMPORTANT): lm_head is excluded by default because every model's get_lm_head() does
+    # `self.lm_head.weight`, which breaks when lm_head is a LoraLinear (no .weight attribute).
+    # The proper fix is to update get_lm_head() in ALL model classes (llama, qwen, gemma, mixtral,
+    # olmo, olmo3, apertus, mistral) to handle LoraLinear, e.g.:
+    #     if isinstance(self.lm_head, LoraLinear): return self.lm_head.wrapped.weight
+    # This would allow LoRA on lm_head, which some research suggests is beneficial
+    # (Thinking Machines 2025: "apply LoRA to all weight matrices").
+    # See also: resize_vocab() has the same .weight assumption.
 
     def matches_target(self, key_path):
+        excludes = self.exclude_modules if self.exclude_modules is not None else ["lm_head"]
+        if any(key_path.endswith(exc) for exc in excludes):
+            return False
         if isinstance(self.target_modules, str):
             compiled = re.compile(self.target_modules)
             return compiled.match(key_path) is not None
@@ -142,15 +186,46 @@ class LowRankLinear(eqx.Module):
         return z * self.scale
 
     @staticmethod
-    def init(In: hax.Axis, Out: Axis, r: int, alpha: float, dropout_prob: float, *, key):
+    def init(
+        In: hax.Axis,
+        Out: Axis,
+        r: int,
+        alpha: float,
+        dropout_prob: float,
+        *,
+        key,
+        zero_init_b: bool = False,
+        a_init_mode: Literal["random", "zero"] = "zero",
+    ):
         """
-        Initializes a LoraLinear module.
+        Initializes a LowRankLinear module.
+
+        Args:
+            zero_init_b: If True, zero-initialize the B matrix so the adapter starts as identity
+                (W + alpha/r * B @ A = W). This is the standard PEFT convention.
+            a_init_mode: ``"zero"`` (default) initializes A to zeros, leaving B random —
+                ``B @ A = 0`` at init, but the first optimizer step flows through A instead
+                of the degenerate zero-init B, which avoids the DPO sigma-sensitivity issue
+                documented in Bug-1. ``"random"`` initializes A from the default Linear init
+                (the LoRA-paper convention), in which case ``zero_init_b`` controls whether
+                ``B @ A`` is zero at init.
         """
         _R = hax.Axis(LORA_R, r)
         key_A, key_B = jax.random.split(key)
         # Peft always uses out_first=True (i.e. normal Torch convention) for linear, even for gpt2-style Conv1d
-        lora_A = hnn.Linear.init(In, _R, key=key_A, use_bias=False, out_first=True)
-        lora_B = hnn.Linear.init(_R, Out, key=key_B, use_bias=False, out_first=True)
+        if a_init_mode == "zero":
+            a_joint_spec = hax.concat_axis_specs(_R, In)
+            zero_a_weight = hax.zeros(a_joint_spec)
+            lora_A = hnn.Linear(weight=zero_a_weight, bias=None, In=In, Out=_R)
+        else:
+            lora_A = hnn.Linear.init(In, _R, key=key_A, use_bias=False, out_first=True)
+        if zero_init_b:
+            # out_first=True means weight shape is (Out, In) — matching PEFT convention
+            joint_spec = hax.concat_axis_specs(Out, _R)
+            zero_weight = hax.zeros(joint_spec)
+            lora_B = hnn.Linear(weight=zero_weight, bias=None, In=_R, Out=Out)
+        else:
+            lora_B = hnn.Linear.init(_R, Out, key=key_B, use_bias=False, out_first=True)
         dropout = hnn.Dropout(dropout_prob)
 
         return LowRankLinear(lora_A, lora_B, dropout, alpha / r)
@@ -176,15 +251,34 @@ class LoraLinear(ModuleWithStateDictSerialization):
             return self.lora(x) + self.wrapped(x)
 
     def merge(self):
-        weight = self.lora.merge() + self.wrapped.weight
+        delta = self.lora.merge().rearrange(self.wrapped.weight.axes)
+        weight = self.wrapped.weight + delta
         return dataclasses.replace(self.wrapped, weight=weight)
 
     @staticmethod
-    def init(wrapped: hnn.Linear, r: int, alpha: float, dropout: float = 0.0, *, key):
+    def init(
+        wrapped: hnn.Linear,
+        r: int,
+        alpha: float,
+        dropout: float = 0.0,
+        *,
+        key,
+        zero_init_b: bool = False,
+        a_init_mode: Literal["random", "zero"] = "zero",
+    ):
         """
         Initializes a LoraLinear module.
         """
-        lora = LowRankLinear.init(wrapped.In, wrapped.Out, r, alpha, dropout, key=key)
+        lora = LowRankLinear.init(
+            wrapped.In,
+            wrapped.Out,
+            r,
+            alpha,
+            dropout,
+            key=key,
+            zero_init_b=zero_init_b,
+            a_init_mode=a_init_mode,
+        )
         return LoraLinear(wrapped, lora)
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
@@ -284,7 +378,15 @@ def _loraize(model: M, config: LoraConfig, key: jax.random.PRNGKey, prefix: str,
         elif config.matches_target(key_path) and _is_lora_compatible_module(module):
             my_key = next(key_iter)
             batched_key = shaped_rng_split(my_key, [axis.size for axis in batch_dims])
-            return _batchify_ctor(LoraLinear.init)(module, config.r, config.alpha, config.dropout, key=batched_key)
+            return _batchify_ctor(LoraLinear.init)(
+                module,
+                config.r,
+                config.alpha,
+                config.dropout,
+                key=batched_key,
+                zero_init_b=config.zero_init_b,
+                a_init_mode=config.a_init_mode,
+            )
         else:
             return module
 
@@ -294,6 +396,23 @@ def _loraize(model: M, config: LoraConfig, key: jax.random.PRNGKey, prefix: str,
         leaf_key_paths(model, is_leaf=_is_special_module, prefix=prefix),
         is_leaf=_is_special_module,
     )
+
+
+def unwrap_lora_modules(module: M) -> M:
+    """Strips LoRA adapters, returning the base model without any LoRA parameters.
+
+    Replaces every LoraLinear with its wrapped base Linear. The returned model
+    shares the same base weight arrays as the input (JAX arrays are immutable,
+    so this is safe). This is used for computing reference-model log-probs in
+    LoRA-DPO training.
+    """
+
+    def _unwrap(node):
+        if isinstance(node, LoraLinear):
+            return node.wrapped
+        return node
+
+    return jax.tree_util.tree_map(_unwrap, module, is_leaf=lambda node: isinstance(node, LoraLinear))
 
 
 @hax.named_jit  # needs to be inside (named) jit s.t. it works with sharded parameters
@@ -314,7 +433,44 @@ def merge_lora_modules(module: M) -> M:
 
 SAFETENSORS_WEIGHTS_NAME = "adapter_model.safetensors"
 CONFIG_NAME = "adapter_config.json"
-DEFAULT_DICT_PREFIX = "base_model.model.transformer"
+PEFT_BASE_MODEL_PREFIX = "base_model.model"
+GPT2_PEFT_BASE_MODEL_PREFIX = f"{PEFT_BASE_MODEL_PREFIX}.transformer"
+DEFAULT_DICT_PREFIX = None
+COMMON_LORA_TARGET_MODULE_ORDER = (
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+)
+LORA_TARGET_MODULE_RE = re.compile(r"\.([^.]+)\.lora_[AB]\.weight$")
+
+
+def _default_peft_state_dict_prefix(model: PyTree) -> str:
+    key_map = getattr(model, "_state_dict_key_map", lambda: {})()
+    missing = object()
+    if key_map.get("transformer", missing) is None:
+        return GPT2_PEFT_BASE_MODEL_PREFIX
+    return PEFT_BASE_MODEL_PREFIX
+
+
+def _infer_target_modules_from_state_dict(state_dict: StateDict) -> list[str]:
+    targets: list[str] = []
+    seen: set[str] = set()
+    for key in state_dict:
+        match = LORA_TARGET_MODULE_RE.search(key)
+        if match is None:
+            continue
+        target = match.group(1)
+        if target in seen:
+            continue
+        targets.append(target)
+        seen.add(target)
+
+    order = {target: i for i, target in enumerate(COMMON_LORA_TARGET_MODULE_ORDER)}
+    return sorted(targets, key=lambda target: (order.get(target, len(order)), target))
 
 
 def save_peft_pretrained(
@@ -335,15 +491,21 @@ def save_peft_pretrained(
         lora_model: the LoRA model to save
         path: the path to save the model to. May be a url, in which case we will use fsspec to save to that url.
         tokenizer: if provided, will save the tokenizer to the checkpoint
-        prefix: the prefix to use for the LoRA parameters. Defaults to "base_model.model.transformer", which is what
-            Peft seems to expect.
+        prefix: the prefix to use for the LoRA parameters. Defaults to the PEFT base-model prefix for the model's HF
+            state-dict layout.
         upload_to: if provided, will upload the saved model to the given hf hub repo. If a string, will be interpreted
             as a repo name + branch
         upload_kwargs: kwargs to pass to the upload function
     """
     os.makedirs(path, exist_ok=True)
-    hf_config = to_hf_config(config, base_model_name_or_path=base_model_name_or_path)
+    base_ref = str(base_model_name_or_path) if base_model_name_or_path is not None else None
+    if prefix is None:
+        prefix = _default_peft_state_dict_prefix(lora_model)
     state_dict = lora_state_dict(lora_model, prefix=prefix)
+    target_modules = config.target_modules
+    if target_modules is None:
+        target_modules = _infer_target_modules_from_state_dict(state_dict)
+    hf_config = to_hf_config(config, base_model_name_or_path=base_ref, target_modules=target_modules)
 
     with temp_dir_before_upload(path) as local_path:
         save_state_dict(state_dict, f"{local_path}/{SAFETENSORS_WEIGHTS_NAME}")
@@ -351,9 +513,7 @@ def save_peft_pretrained(
             json.dump(hf_config, f)
 
         if tokenizer is not None:
-            if isinstance(tokenizer, MarinTokenizer):
-                tokenizer = tokenizer.as_hf_tokenizer()
-            tokenizer.save_pretrained(local_path)
+            _save_tokenizer_pretrained(tokenizer, local_path)
 
         if upload_to is True:
             upload_to = RepoRef.from_string(base_model_name_or_path)
@@ -369,6 +529,7 @@ def save_peft_checkpoint_callback(
     base_model_name_or_path,
     tokenizer: Optional[PreTrainedTokenizerBase | MarinTokenizer] = None,
     upload_to_hf: Optional[Union[bool, str, RepoRef]] = False,
+    model_getter: Optional[Callable[[StepInfo], PyTree]] = None,
     **hf_upload_kwargs,
 ):
     """
@@ -396,9 +557,10 @@ def save_peft_checkpoint_callback(
             my_upload_kwargs = hf_upload_kwargs
 
         logger.info(f"Saving PEFT checkpoint for step {step.step} to {base_path}")
+        model = model_getter(step) if model_getter is not None else step.eval_model
 
         save_peft_pretrained(
-            step.eval_model,
+            model,
             config,
             base_model_name_or_path,
             os.path.join(base_path, f"step-{step.step}"),
@@ -416,11 +578,13 @@ def save_merged_hf_checkpoint_callback(
     base_path,
     converter: HFCheckpointConverter,
     upload_to_hf: Optional[Union[str, RepoRef]] = None,
+    generation_config: Optional[GenerationConfigDict] = None,
+    model_getter: Optional[Callable[[StepInfo], PyTree]] = None,
     **hf_upload_kwargs,
 ):
     """
     Saves a merged HF checkpoint for the given model. This method essentially combines the base model with the LoRA
-    model using [levanter.lora.combine_lora_params][], and then saves the combined model as a HuggingFace checkpoint
+    model using [levanter.adaptor.lora.combine_lora_params][], and then saves the combined model as a HuggingFace checkpoint
     using the given converter.
 
     If hf_repo is provided, this will upload the checkpoint to the huggingface hub, passing any additional kwargs to the
@@ -449,9 +613,16 @@ def save_merged_hf_checkpoint_callback(
         logger.info(f"Saving merged HF model for step {step.step} to {base_path}")
         path = os.path.join(base_path, f"step-{step.step}")
 
-        model = step.eval_model
+        model = model_getter(step) if model_getter is not None else step.eval_model
 
-        save_merged_hf_model(model, converter, path, upload_to_hf=upload_to_hf, **my_upload_kwargs)
+        save_merged_hf_model(
+            model,
+            converter,
+            path,
+            upload_to_hf=upload_to_hf,
+            generation_config=generation_config,
+            **my_upload_kwargs,
+        )
 
         logger.info("Saved merged checkpoint.")
 
@@ -463,11 +634,12 @@ def save_merged_hf_model(
     converter: HFCheckpointConverter,
     path: str,
     upload_to_hf: Optional[Union[str, RepoRef]] = None,
+    generation_config: Optional[GenerationConfigDict] = None,
     **upload_kwargs,
 ):
     """
     Saves a merged HF checkpoint for the given model. This method essentially combines the base model with the LoRA
-    model using [levanter.lora.merge_lora_modules][], and then saves the combined model as a HuggingFace checkpoint
+    model using [levanter.adaptor.lora.merge_lora_modules][], and then saves the combined model as a HuggingFace checkpoint
     """
     merged_model = merge_lora_modules(lora_model)
     if upload_to_hf is None:
@@ -476,11 +648,17 @@ def save_merged_hf_model(
         merged_model,
         path,
         upload_to_hf=upload_to_hf,  # type: ignore
+        generation_config=generation_config,
         **upload_kwargs,
     )
 
 
-def to_hf_config(config: LoraConfig, base_model_name_or_path: Optional[str] = None, **kwargs) -> dict:
+def to_hf_config(
+    config: LoraConfig,
+    base_model_name_or_path: Optional[str] = None,
+    target_modules: Optional[Union[List[str], str]] = None,
+    **kwargs,
+) -> dict:
     """
     Converts a LoraConfig to a HuggingFace config.
     """
@@ -505,20 +683,38 @@ def to_hf_config(config: LoraConfig, base_model_name_or_path: Optional[str] = No
     #   ],
     #   "task_type": "CAUSAL_LM"
     # }
+    if target_modules is None:
+        target_modules = config.target_modules
+
     return {
         "base_model_name_or_path": base_model_name_or_path,
         "bias": "none",  # TODO: support bias
         "fan_in_fan_out": False,  # TODO: support fan_in_fan_out
+        "init_lora_weights": True,
         "inference_mode": True,  # TODO: support inference_mode
         "lora_alpha": config.alpha,
-        "lora_dropout": 0.00,  # TODO: support dropout
+        "lora_dropout": config.dropout,
         "modules_to_save": None,  # TODO: support modules_to_save?
         "peft_type": "LORA",
         "r": config.r,
-        "target_modules": config.target_modules,
+        "target_modules": target_modules,
         "task_type": "CAUSAL_LM",  # TODO: support task_type
+        "use_dora": False,
+        "use_rslora": False,
         **kwargs,
     }
+
+
+@eqx.filter_jit
+def _lora_state_dict_jax(model: M, prefix: str) -> StateDict:
+    lora_params = filter_lora_params(model)
+    lora_params = eqx.filter(lora_params, is_jax_array_like)
+    lora_params = flatten_modules_for_export(lora_params)
+    state_dict = to_state_dict(lora_params, prefix=prefix)
+    mesh = jax.sharding.get_abstract_mesh()
+    if mesh is not None and not mesh.empty:
+        state_dict = jax.lax.with_sharding_constraint(state_dict, PartitionSpec())
+    return state_dict
 
 
 def lora_state_dict(model: M, prefix: Optional[str] = DEFAULT_DICT_PREFIX) -> StateDict:
@@ -526,5 +722,7 @@ def lora_state_dict(model: M, prefix: Optional[str] = DEFAULT_DICT_PREFIX) -> St
     Returns a state dict of the LoRA parameters of the given model without other parameters.
     This method attempts to return a state dict compatible with PEFT's import method.
     """
-    state_dict = to_torch_compatible_state_dict(filter_lora_params(model), prefix=prefix)
-    return {k: v for k, v in state_dict.items() if v is not None}
+    if prefix is None:
+        prefix = _default_peft_state_dict_prefix(model)
+    state_dict = _lora_state_dict_jax(model, prefix)
+    return {k: np.asarray(v) for k, v in state_dict.items() if v is not None}

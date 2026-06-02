@@ -470,6 +470,94 @@ def _truncate_wandb_artifact_name(name: Optional[str]) -> Optional[str]:
     return truncated
 
 
+_WANDB_RUN_NAME_MAX_LENGTH = 64
+_WANDB_RUN_NAME_MIN_PREFIX_LENGTH = 24
+_WANDB_RUN_NAME_AGGRESSIVE_TRUNCATION_CHARS = 16
+_WANDB_RUN_NAME_SUFFIX_MARKERS = ("_seed", "-seed", "_step", "-step")
+
+
+def _preferred_wandb_suffix_start(name: str) -> int | None:
+    """Return the preferred suffix start for a truncated W&B run name.
+
+    We prefer underscore-delimited semantic tails like ``lr7.5e-7_seed2`` or
+    ``foo_step400``. This avoids splitting on the ``-`` inside scientific
+    notation, which would corrupt names like ``lr7.5e-7``.
+    """
+    for marker in _WANDB_RUN_NAME_SUFFIX_MARKERS:
+        marker_start = name.rfind(marker)
+        if marker_start == -1:
+            continue
+
+        prior_slash = name.rfind("/", 0, marker_start)
+        prior_underscore = name.rfind("_", 0, marker_start)
+        if prior_underscore > prior_slash:
+            return prior_underscore
+        return marker_start
+
+    last_underscore = name.rfind("_")
+    if last_underscore == -1:
+        return None
+
+    prior_slash = name.rfind("/", 0, last_underscore)
+    second_last_underscore = name.rfind("_", 0, last_underscore)
+    if second_last_underscore > prior_slash:
+        return second_last_underscore
+
+    return last_underscore
+
+
+def truncate_wandb_run_name(name: str) -> str:
+    """Truncate a run name to fit within W&B's run-name length limit.
+
+    W&B rejects run names longer than 64 characters. This trims an over-long name
+    while preserving a readable prefix and the trailing semantic suffix (e.g.
+    ``lr7.5e-7_seed2``), avoiding splits inside scientific-notation tails, and logs
+    a warning so the truncation is visible. Exposed as a public helper so callers
+    (e.g. experiment configs) share one run-name policy.
+    """
+    if len(name) <= _WANDB_RUN_NAME_MAX_LENGTH:
+        return name
+
+    old_name = name
+    suffix_start = _preferred_wandb_suffix_start(name)
+
+    if suffix_start is None:
+        name = name[:_WANDB_RUN_NAME_MAX_LENGTH]
+        preserved_suffix = ""
+    else:
+        suffix = name[suffix_start:]
+        preserved_suffix = suffix
+        if len(suffix) >= _WANDB_RUN_NAME_MAX_LENGTH:
+            name = name[:_WANDB_RUN_NAME_MAX_LENGTH]
+            preserved_suffix = ""
+        else:
+            prefix_budget = _WANDB_RUN_NAME_MAX_LENGTH - len(suffix)
+            prefix = name[:prefix_budget]
+
+            # Prefer trimming at a token boundary so the retained prefix stays readable.
+            boundary = max(prefix.rfind("_"), prefix.rfind("/"))
+            if boundary >= _WANDB_RUN_NAME_MIN_PREFIX_LENGTH:
+                prefix = prefix[:boundary]
+
+            name = prefix + suffix
+
+    logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
+
+    removed_chars = len(old_name) - len(name)
+    retained_prefix_len = len(name) - len(preserved_suffix)
+    if (
+        removed_chars >= _WANDB_RUN_NAME_AGGRESSIVE_TRUNCATION_CHARS
+        or retained_prefix_len < _WANDB_RUN_NAME_MIN_PREFIX_LENGTH
+    ):
+        logger.warning(
+            "W&B run name %r required aggressive truncation to %r. Consider shortening the explicit name.",
+            old_name,
+            name,
+        )
+
+    return name
+
+
 def _default_wandb_artifact_name(artifact_path: Any) -> str:
     path = os.fspath(artifact_path)
     basename = os.path.basename(path.rstrip("/\\"))
