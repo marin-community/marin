@@ -878,6 +878,7 @@ class LevanterHarnessLM(TemplateLM):
                 stop_tokens=stop_tokens,
                 temperature=jnp.array(temperature, dtype=jnp.float32),
                 top_p=jnp.array(top_p, dtype=jnp.float32),
+                top_k=jnp.array(0, dtype=jnp.int32),
                 key=jrandom.fold_in(base_key if seed is None else jrandom.PRNGKey(seed), i),
             )
             gen_requests.append(

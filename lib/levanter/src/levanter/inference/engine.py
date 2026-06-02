@@ -8,7 +8,7 @@ import os
 import time
 import warnings
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence, cast
 
 import equinox as eqx
 import haliax as hax
@@ -30,11 +30,13 @@ from levanter.inference.jit_scheduler import (
     _DecodeOutputs,
 )
 from levanter.inference.page_table import PageTable
+from levanter.inference.tpu_kernels import TpuPagedAttentionConfig
 from levanter.inference.utils import INVALID, is_valid
 from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import PageCache
-from levanter.layers.sampler import Sampler
+from levanter.layers.sampler import Sampler, SamplerTopKMode
 from levanter.models.lm_model import LmHeadModel
+from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
 from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_size
 
 logger = logging.getLogger(__name__)
@@ -99,6 +101,18 @@ class InferenceEngineConfig:
     max_tokens_per_round: int | None = None
     """Pack size for each decode loop iteration. If None, set to max_seqs """
 
+    tpu_paged_attention: TpuPagedAttentionConfig = field(default_factory=TpuPagedAttentionConfig)
+    """Paged attention backend used by inference decode and prefill calls."""
+
+    use_streaming_greedy_lm_head: bool = False
+    """Use a block-streaming LM-head argmax/logprob path for greedy decode requests."""
+
+    max_top_k: int | None = None
+    """Static top-k candidate count for sampled decoding. None disables top-k requests."""
+
+    sampler_top_k_mode: SamplerTopKMode = SamplerTopKMode.CANDIDATE
+    """Top-k implementation used by the sampler when max_top_k is configured."""
+
     def __post_init__(self):
         # this one is only required because of clones. If we really care, we could relax this
         if self.max_queued_tokens < self.max_seqs:
@@ -109,6 +123,9 @@ class InferenceEngineConfig:
 
         if self.max_queued_tokens < self.max_seqs_in_prefill:
             raise ValueError("max_queued_tokens must be >= max_seqs_in_prefill")
+
+        if self.max_top_k is not None and self.max_top_k < 1:
+            raise ValueError("max_top_k must be positive when set")
 
     @property
     def imputed_max_tokens_per_round(self) -> int:
@@ -124,6 +141,48 @@ def _tree_byte_size(tree) -> int:
     """Return the per-device number of bytes represented by ``tree``."""
 
     return sharded_tree_size(tree)
+
+
+def _block_until_ready_optional(tree) -> None:
+    if tree is not None:
+        jax.block_until_ready(tree)
+
+
+def _lm_head_token_logits(model: LmHeadModel, hidden: NamedArray, token_ids: NamedArray) -> NamedArray:
+    lm_head = model.get_lm_head().rearrange((model.Vocab, model.Embed))
+    token_weights = lm_head[model.Vocab, token_ids]
+    return hax.sum(hidden * token_weights, axis=model.Embed)
+
+
+def _streaming_greedy_lm_head(
+    model: LmHeadModel,
+    hidden: NamedArray,
+    *,
+    return_logprobs: bool,
+) -> tuple[NamedArray, NamedArray]:
+    """Return greedy token IDs and optional logprobs without materializing full logits."""
+
+    sample_axes = hax.axis.without_axes(hidden.axes, model.Embed)
+    dummy_labels = hax.zeros(sample_axes, dtype=jnp.int32)
+    dummy_loss, token_ids = fused_cross_entropy_loss_and_logsumexp_penalty(
+        hidden,
+        model.get_lm_head(),
+        Contract=model.Embed,
+        Label=model.Vocab,
+        target_y=dummy_labels,
+        reduction=None,
+        logsumexp_weight=0.0,
+        dtype=jnp.float32,
+        implementation="xla",
+        return_argmax=True,
+    )
+    if not return_logprobs:
+        return token_ids, hax.zeros(token_ids.axes, dtype=jnp.float32)
+
+    dummy_logits = _lm_head_token_logits(model, hidden, dummy_labels)
+    selected_logits = _lm_head_token_logits(model, hidden, token_ids)
+    log_z = dummy_loss + dummy_logits
+    return token_ids, (selected_logits - log_z).astype(jnp.float32)
 
 
 def _available_hbm_budget_bytes(hbm_utilization: float) -> int:
@@ -247,6 +306,7 @@ class Request:
     request_id: int
     decode_params: SeqDecodingParams
     n_generations: int
+    return_logprobs: bool = False
 
 
 @dataclasses.dataclass
@@ -399,6 +459,10 @@ def _prefill_kernel(
     sampler: Sampler,
     queue: TokenQueue,
     max_seqs_in_prefill: int,  # static
+    tpu_paged_attention: TpuPagedAttentionConfig,  # static
+    max_top_k: int | None,  # static
+    apply_top_p: bool,  # static
+    return_logprobs: bool,  # static
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run prefill using a fresh, local token queue. Newly sampled tokens are enqueued to the main decode queue via update_tokens."""
 
@@ -419,7 +483,7 @@ def _prefill_kernel(
     #     pos=pos_ids.array,
     #     lens=decode_state.seq_lens.array,
     # )
-    logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
+    logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids, tpu_paged_attention=tpu_paged_attention)
     logits_at_samples = logits["position", sample_indices]
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
@@ -440,9 +504,19 @@ def _prefill_kernel(
     # )
 
     temps = decode_state.temperature["seq", new_slot_ids]
-    top_ps = decode_state.top_p["seq", new_slot_ids]
+    top_ps = decode_state.top_p["seq", new_slot_ids] if apply_top_p else None
+    top_ks = decode_state.top_k["seq", new_slot_ids]
+    top_ks_arg = None if max_top_k is None else hax.where(top_ks > 0, top_ks, max_top_k)
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
+    new_tokens, log_probs = hax.vmap(sampler, "position")(
+        logits_at_samples,
+        temps,
+        top_ps=top_ps,
+        top_ks=top_ks_arg,
+        top_k_limit=max_top_k,
+        key=prng_keys,
+        return_log_probs=return_logprobs,
+    )
 
     # Update decode_state (also enqueues into the main decode queue)
     decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
@@ -451,7 +525,7 @@ def _prefill_kernel(
     outputs = _DecodeOutputs.init(
         max_tokens=decode_state.max_seqs * 2,
         max_seqs=decode_state.max_seqs,
-        with_logprobs=True,
+        with_logprobs=return_logprobs,
     )
     outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finished)
     gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
@@ -465,6 +539,9 @@ def _prefill_kernel(
             new_pos_ids,
             sampler,
             outputs,
+            max_top_k,
+            apply_top_p,
+            return_logprobs,
         )
 
     # Device-side release of finished sequences (jit-safe)
@@ -532,16 +609,34 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
     return jax.lax.fori_loop(0, max_slots, body, gen_state)
 
 
-@functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill",))
+@functools.partial(
+    jax.jit,
+    donate_argnums=0,
+    static_argnames=("max_seqs_in_prefill", "tpu_paged_attention", "max_top_k", "apply_top_p", "return_logprobs"),
+)
 def _run_prefill(
     gen_state: GenState,
     model: LmHeadModel,
     sampler: Sampler,
     work: PrefillWork,
     max_seqs_in_prefill: int,
+    tpu_paged_attention: TpuPagedAttentionConfig,
+    max_top_k: int | None,
+    apply_top_p: bool,
+    return_logprobs: bool,
 ) -> tuple[GenState, _DecodeOutputs]:
     gen_state = _apply_prefill_work(gen_state, work)
-    return _prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill)
+    return _prefill_kernel(
+        gen_state,
+        model,
+        sampler,
+        work.queue,
+        max_seqs_in_prefill,
+        tpu_paged_attention,
+        max_top_k,
+        apply_top_p,
+        return_logprobs,
+    )
 
 
 def _handle_clones(
@@ -551,6 +646,9 @@ def _handle_clones(
     pos_ids: ht.Int[NamedArray, " position"],  # type: ignore
     sampler: Sampler,
     outputs: _DecodeOutputs,
+    max_top_k: int | None,
+    apply_top_p: bool,
+    return_logprobs: bool,
 ) -> tuple[GenState, _DecodeOutputs]:  # type: ignore
     """
     Sample alternative tokens for the given logits, slot_ids, pos_ids, and clone_targets.
@@ -607,10 +705,20 @@ def _handle_clones(
 
     # Sample clones from the same boundary logits as their sources
     temps = gen_state.decode_state.temperature["seq", tgt_ids]
-    top_ps = gen_state.decode_state.top_p["seq", tgt_ids]
+    top_ps = gen_state.decode_state.top_p["seq", tgt_ids] if apply_top_p else None
+    top_ks = gen_state.decode_state.top_k["seq", tgt_ids]
+    top_ks_arg = None if max_top_k is None else hax.where(top_ks > 0, top_ks, max_top_k)
     prng_keys = gen_state.decode_state.prng_keys_for(tgt_ids, pos_ids_this_time)
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_this_time, temps, top_ps=top_ps, key=prng_keys)
+    new_tokens, log_probs = hax.vmap(sampler, "position")(
+        logits_this_time,
+        temps,
+        top_ps=top_ps,
+        top_ks=top_ks_arg,
+        top_k_limit=max_top_k,
+        key=prng_keys,
+        return_log_probs=return_logprobs,
+    )
 
     # update page table and cache for the clone targets
     decode_state = gen_state.decode_state
@@ -655,13 +763,18 @@ def _handle_clones(
     return gen_state, outputs
 
 
-@functools.partial(jax.jit, static_argnums=(3, 4), donate_argnames=("gen_state",))
+@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8, 9), donate_argnames=("gen_state",))
 def _run_generation_loop(
     gen_state: GenState,
     model: LmHeadModel,
     sampler: Sampler,
     max_tokens_per_round: int,
     max_rounds: int,
+    tpu_paged_attention: TpuPagedAttentionConfig,
+    max_top_k: int | None,
+    apply_top_p: bool,
+    return_logprobs: bool,
+    use_streaming_greedy_lm_head: bool,
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run autoregressive generation until all sequences finish or `max_rounds` reached."""
 
@@ -698,19 +811,62 @@ def _run_generation_loop(
         max_sample_indices = min(decode_state.page_table.max_seqs, max_tokens_per_round)
         sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices)
 
-        # Decode logits and sample new tokens
-        logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
-        logits_at_samples = logits["position", sample_indices]
-
         num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
         new_slot_ids = slot_ids["position", sample_indices]
         new_pos_ids = pos_ids["position", sample_indices]
         prng_keys = decode_state.prng_keys_for(new_slot_ids, new_pos_ids)
 
         temps = decode_state.temperature["seq", new_slot_ids]
-        top_ps = decode_state.top_p["seq", new_slot_ids]
+        top_ps = decode_state.top_p["seq", new_slot_ids] if apply_top_p else None
+        top_ks = decode_state.top_k["seq", new_slot_ids]
+        top_ks_arg = None if max_top_k is None else hax.where(top_ks > 0, top_ks, max_top_k)
 
-        new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
+        def regular_lm_head_and_sample() -> tuple[NamedArray, NamedArray, Any]:
+            logits, cache = model.decode(
+                tokens,
+                gen_state.cache,
+                binfo,
+                pos_ids,
+                tpu_paged_attention=tpu_paged_attention,
+            )
+            logits_at_samples = logits["position", sample_indices]
+            new_tokens, log_probs = hax.vmap(sampler, "position")(
+                logits_at_samples,
+                temps,
+                top_ps=top_ps,
+                top_ks=top_ks_arg,
+                top_k_limit=max_top_k,
+                key=prng_keys,
+                return_log_probs=return_logprobs,
+            )
+            return new_tokens, log_probs, cache
+
+        if use_streaming_greedy_lm_head:
+
+            def streaming_greedy_lm_head() -> tuple[NamedArray, NamedArray, Any]:
+                hidden, cache = cast(Any, model).decode_hidden(
+                    tokens,
+                    gen_state.cache,
+                    binfo,
+                    pos_ids,
+                    tpu_paged_attention=tpu_paged_attention,
+                )
+                hidden_at_samples = hidden["position", sample_indices]
+                new_tokens, log_probs = _streaming_greedy_lm_head(
+                    model,
+                    hidden_at_samples,
+                    return_logprobs=return_logprobs,
+                )
+                return new_tokens, log_probs, cache
+
+            all_greedy = hax.all(temps == 0).scalar()
+            new_tokens, log_probs, cache = jax.lax.cond(
+                all_greedy,
+                streaming_greedy_lm_head,
+                regular_lm_head_and_sample,
+            )
+        else:
+            new_tokens, log_probs, cache = regular_lm_head_and_sample()
 
         # Update decode state with the freshly sampled tokens (also enqueues them)
         decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
@@ -732,11 +888,136 @@ def _run_generation_loop(
     outputs_buf = _DecodeOutputs.init(
         max_tokens=max(max_tokens_per_round * max_rounds, 1),
         max_seqs=gen_state.decode_state.max_seqs,
-        with_logprobs=True,
+        with_logprobs=return_logprobs,
     )
     init_state = (gen_state, outputs_buf, jnp.array(0, dtype=jnp.int32))
     final_gen_state, final_outputs, _ = jax.lax.while_loop(cond, body, init_state)
     # jax.debug.print("[gen] final outputs_size={size}", size=final_outputs.num_tokens)
+    return final_gen_state, final_outputs
+
+
+@functools.partial(jax.jit, static_argnums=(2, 3, 4), donate_argnames=("gen_state",))
+def _run_generation_loop_without_lm_head(
+    gen_state: GenState,
+    model: Any,
+    max_tokens_per_round: int,
+    max_rounds: int,
+    tpu_paged_attention: TpuPagedAttentionConfig,
+) -> tuple[GenState, _DecodeOutputs]:
+    """Run decode through transformer/cache update, then enqueue dummy tokens without LM head or sampling."""
+
+    def cond(state: tuple[GenState, _DecodeOutputs, jax.Array]):
+        _gen_state, _outputs, step = state
+        return (
+            (step < max_rounds)
+            & (_gen_state.decode_state.num_queued_tokens > 0)
+            & (~hax.all(_gen_state.decode_state.finished)).scalar()
+        )
+
+    def body(state: tuple[GenState, _DecodeOutputs, jax.Array]) -> tuple[GenState, _DecodeOutputs, jax.Array]:
+        gen_state, outputs, step = state
+        decode_state, packed_seq = gen_state.decode_state.pack_next_sequence(max_tokens_per_round)
+
+        tokens = packed_seq.tokens
+        pos_ids = packed_seq.pos_ids
+        slot_ids = packed_seq.slot_ids
+
+        decode_state, binfo = decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
+        seq_lens = decode_state.seq_lens
+        max_sample_indices = min(decode_state.page_table.max_seqs, max_tokens_per_round)
+        sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices)
+
+        _, cache = model.decode_hidden(
+            tokens,
+            gen_state.cache,
+            binfo,
+            pos_ids,
+            tpu_paged_attention=tpu_paged_attention,
+        )
+
+        num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
+        new_slot_ids = slot_ids["position", sample_indices]
+        new_tokens = hax.zeros(new_slot_ids.axes, dtype=jnp.int32)
+        log_probs = hax.zeros(new_slot_ids.axes, dtype=jnp.float32)
+
+        decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
+        new_gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
+        outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finished)
+        return new_gen_state, outputs, step + 1
+
+    outputs_buf = _DecodeOutputs.init(
+        max_tokens=max(max_tokens_per_round * max_rounds, 1),
+        max_seqs=gen_state.decode_state.max_seqs,
+        with_logprobs=False,
+    )
+    init_state = (gen_state, outputs_buf, jnp.array(0, dtype=jnp.int32))
+    final_gen_state, final_outputs, _ = jax.lax.while_loop(cond, body, init_state)
+    return final_gen_state, final_outputs
+
+
+@functools.partial(jax.jit, static_argnums=(2, 3, 4), donate_argnames=("gen_state",))
+def _run_generation_loop_with_lm_head_no_sampling(
+    gen_state: GenState,
+    model: Any,
+    max_tokens_per_round: int,
+    max_rounds: int,
+    tpu_paged_attention: TpuPagedAttentionConfig,
+) -> tuple[GenState, _DecodeOutputs]:
+    """Run decode through the LM head, then enqueue dummy tokens without sampling.
+
+    This is a performance-attribution path. The logits checksum keeps the LM-head computation live while avoiding the
+    argmax/top-p/logprob work from the normal sampler path.
+    """
+
+    def cond(state: tuple[GenState, _DecodeOutputs, jax.Array]):
+        _gen_state, _outputs, step = state
+        return (
+            (step < max_rounds)
+            & (_gen_state.decode_state.num_queued_tokens > 0)
+            & (~hax.all(_gen_state.decode_state.finished)).scalar()
+        )
+
+    def body(state: tuple[GenState, _DecodeOutputs, jax.Array]) -> tuple[GenState, _DecodeOutputs, jax.Array]:
+        gen_state, outputs, step = state
+        decode_state, packed_seq = gen_state.decode_state.pack_next_sequence(max_tokens_per_round)
+
+        tokens = packed_seq.tokens
+        pos_ids = packed_seq.pos_ids
+        slot_ids = packed_seq.slot_ids
+
+        decode_state, binfo = decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
+        seq_lens = decode_state.seq_lens
+        max_sample_indices = min(decode_state.page_table.max_seqs, max_tokens_per_round)
+        sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices)
+
+        hidden, cache = model.decode_hidden(
+            tokens,
+            gen_state.cache,
+            binfo,
+            pos_ids,
+            tpu_paged_attention=tpu_paged_attention,
+        )
+        logits = model.lm_head_logits(hidden)
+        logits_checksum = hax.sum(logits).scalar()
+
+        num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
+        new_slot_ids = slot_ids["position", sample_indices]
+        dummy_token = jnp.where(jnp.isfinite(logits_checksum), 0, 1).astype(jnp.int32)
+        new_tokens = hax.zeros(new_slot_ids.axes, dtype=jnp.int32) + dummy_token
+        log_probs = hax.zeros(new_slot_ids.axes, dtype=jnp.float32)
+
+        decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
+        new_gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
+        outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finished)
+        return new_gen_state, outputs, step + 1
+
+    outputs_buf = _DecodeOutputs.init(
+        max_tokens=max(max_tokens_per_round * max_rounds, 1),
+        max_seqs=gen_state.decode_state.max_seqs,
+        with_logprobs=False,
+    )
+    init_state = (gen_state, outputs_buf, jnp.array(0, dtype=jnp.int32))
+    final_gen_state, final_outputs, _ = jax.lax.while_loop(cond, body, init_state)
     return final_gen_state, final_outputs
 
 
@@ -883,7 +1164,7 @@ class InferenceEngine:
             max_queued_tokens=config.max_queued_tokens,
         )
         vocab_axis = model.Vocab
-        sampler = Sampler(vocab_axis)
+        sampler = Sampler(vocab_axis, top_k_mode=config.sampler_top_k_mode)
         return cls(
             model=model,
             tokenizer=tokenizer,
@@ -908,7 +1189,15 @@ class InferenceEngine:
         """Score a token sequence under this engine's model."""
         return score_token_sequence_logprobs(self.model, token_ids, top_k)
 
-    def _prefill_batch(self, batch: Sequence[Request]) -> _DecodeOutputs | None:
+    @staticmethod
+    def _requests_need_top_p(requests: Sequence[Request]) -> bool:
+        return any(
+            float(np.asarray(request.decode_params.top_p, dtype=np.float32).item()) < 1.0 for request in requests
+        )
+
+    def _prefill_batch(
+        self, batch: Sequence[Request], *, apply_top_p: bool, return_logprobs: bool
+    ) -> _DecodeOutputs | None:
         """Admit a batch from the head of the queue that fits in free slots/pages.
 
         Returns the decode outputs for the admitted prefill batch, or None if no work was admitted.
@@ -918,7 +1207,15 @@ class InferenceEngine:
         if prefill_work is None:
             return None
         new_state = _run_prefill(
-            self.gen_state, self.model, self.sampler, prefill_work, self.config.max_seqs_in_prefill
+            self.gen_state,
+            self.model,
+            self.sampler,
+            prefill_work,
+            self.config.max_seqs_in_prefill,
+            self.config.tpu_paged_attention,
+            self.config.max_top_k,
+            apply_top_p,
+            return_logprobs,
         )
 
         # _run_prefill returns (GenState, _DecodeOutputs)
@@ -934,7 +1231,6 @@ class InferenceEngine:
         decode_state = self.gen_state.decode_state
         max_seqs_in_prefill = self.config.max_seqs_in_prefill
         max_prefill_size = self.config.max_prefill_size or self.model.Pos.size
-        max_seq_len = decode_state.tokens.axis_size("position")
         max_slots = decode_state.max_seqs
 
         queue_tokens = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
@@ -943,13 +1239,14 @@ class InferenceEngine:
 
         work_slot_ids = np.full((max_slots,), INVALID, dtype=np.int32)
         clone_targets = np.full((max_slots,), INVALID, dtype=np.int32)
-        prompt_tokens = np.full((max_slots, max_seq_len), INVALID, dtype=np.int32)
+        prompt_tokens = np.full((max_slots, max_prefill_size), INVALID, dtype=np.int32)
         prompt_lengths = np.zeros((max_slots,), dtype=np.int32)
 
         stop_tokens_template = decode_state.stop_tokens
         max_num_tokens = np.zeros((max_slots,), dtype=np.int32)
         temperatures = np.zeros((max_slots,), dtype=np.float32)
         top_ps = np.ones((max_slots,), dtype=np.float32)
+        top_ks = np.zeros((max_slots,), dtype=np.int32)
         prng_keys = np.zeros((max_slots, 2), dtype=np.uint32)
         if stop_tokens_template is not None:
             stop_tokens = np.full(
@@ -1004,6 +1301,7 @@ class InferenceEngine:
             max_num_tokens[prefill_idx] = np.asarray(seq_params.max_num_tokens, dtype=np.int32).item()
             temperatures[prefill_idx] = np.asarray(seq_params.temperature, dtype=np.float32).item()
             top_ps[prefill_idx] = np.asarray(seq_params.top_p, dtype=np.float32).item()
+            top_ks[prefill_idx] = np.asarray(seq_params.top_k, dtype=np.int32).item()
             prng_keys[prefill_idx] = np.asarray(seq_params.key, dtype=np.uint32)
             if stop_tokens is not None:
                 if seq_params.stop_tokens is None:
@@ -1044,6 +1342,7 @@ class InferenceEngine:
                     max_num_tokens[clone_idx] = np.asarray(child_params.max_num_tokens, dtype=np.int32).item()
                     temperatures[clone_idx] = np.asarray(child_params.temperature, dtype=np.float32).item()
                     top_ps[clone_idx] = np.asarray(child_params.top_p, dtype=np.float32).item()
+                    top_ks[clone_idx] = np.asarray(child_params.top_k, dtype=np.int32).item()
                     prng_keys[clone_idx] = np.asarray(child_params.key, dtype=np.uint32)
                     if stop_tokens is not None:
                         stop_tokens[clone_idx] = stop_tokens[prefill_idx]
@@ -1079,6 +1378,7 @@ class InferenceEngine:
                 ),
                 temperature=jnp.asarray(temperatures, dtype=jnp.float32),
                 top_p=jnp.asarray(top_ps, dtype=jnp.float32),
+                top_k=jnp.asarray(top_ks, dtype=jnp.int32),
                 key=jnp.asarray(prng_keys, dtype=jnp.uint32),
             ),
         )
@@ -1108,6 +1408,8 @@ class InferenceEngine:
         # Track outputs and finished flags using self.results for only this call's requests
         call_rids = [int(r.request_id) for r in requests]
         expected_children: dict[int, int] = {rid: int(r.n_generations) for rid, r in zip(call_rids, requests)}
+        return_logprobs = any(r.return_logprobs for r in requests)
+        apply_top_p = self._requests_need_top_p(requests)
         # Initialize fresh result buckets for this call
         for rid in call_rids:
             self.results[rid] = {
@@ -1121,6 +1423,23 @@ class InferenceEngine:
         req_stop_seqs = 0
         req_stop_len = 0
         for req in requests:
+            req_top_k = int(req.decode_params.top_k)
+            if req_top_k > 0:
+                if self.config.max_top_k is None:
+                    raise ValueError(
+                        "top_k was requested but this inference service was created without max_top_k. "
+                        "Set InferenceEngineConfig.max_top_k to the largest top_k you plan to serve."
+                    )
+                if req_top_k > self.config.max_top_k:
+                    raise ValueError(
+                        f"Requested top_k={req_top_k} exceeds configured max_top_k={self.config.max_top_k}."
+                    )
+            elif self.config.max_top_k is not None and float(req.decode_params.temperature) != 0.0:
+                raise ValueError(
+                    "Sampled requests must specify top_k when this inference service was created with max_top_k. "
+                    "Use a service without max_top_k for full-vocabulary sampling."
+                )
+
             st = req.decode_params.stop_tokens
             if st is None:
                 continue
@@ -1142,10 +1461,20 @@ class InferenceEngine:
 
         time_in = time.time()
         # Initial admission from queue and extract prompt tokens
-        decode_outputs = self._prefill_batch(requests)
+        decode_outputs = self._prefill_batch(requests, apply_top_p=apply_top_p, return_logprobs=return_logprobs)
+        prefill_submit_done = time.time()
+        prefill_device_start = time.time()
+        _block_until_ready_optional((self.gen_state, decode_outputs))
+        prefill_device_done = time.time()
         self._ingest_outputs(decode_outputs)
         initial_prefill_out = time.time()
-        logger.info(f"Initial prefill and extraction took {initial_prefill_out - time_in:.3f}s")
+        logger.info(
+            "Initial prefill: submit %.3fs, device %.3fs, extraction %.3fs, total %.3fs",
+            prefill_submit_done - time_in,
+            prefill_device_done - prefill_device_start,
+            initial_prefill_out - prefill_device_done,
+            initial_prefill_out - time_in,
+        )
 
         def _all_done() -> bool:
             for rid, n_kids in expected_children.items():
@@ -1188,11 +1517,18 @@ class InferenceEngine:
                 # TODO: tune max_tokens_per_round
                 self.config.imputed_max_tokens_per_round,
                 self.config.max_rounds,
+                self.config.tpu_paged_attention,
+                self.config.max_top_k,
+                apply_top_p,
+                return_logprobs,
+                self.config.use_streaming_greedy_lm_head,
             )
             submit_done = time.time()
-            # Time spent with device executing (and the host thread waiting)
+
+            device_start = time.time()
+            _block_until_ready_optional((future_state, decode_outputs))
+            device_time = time.time() - device_start
             self.gen_state = future_state
-            device_time = time.time() - submit_done
 
             extract_start = time.time()
             new_tokens = self._ingest_outputs(decode_outputs)
@@ -1226,7 +1562,7 @@ class InferenceEngine:
 
         # Assemble outputs in the order of the requests for this call
         outputs_list: list[list[int]] = []
-        logprobs_list: list[list[float]] = []
+        logprobs_list: list[list[float]] | None = [] if return_logprobs else None
         total_prompt_tokens = 0
         for r in requests:
             rid = int(r.request_id)
@@ -1240,7 +1576,8 @@ class InferenceEngine:
                     kid_map[k] = DecodeResult(id=rid, choice=k, token_list=[])
                     dr = kid_map[k]
                 outputs_list.append(dr.token_list)
-                logprobs_list.append(dr.logprobs if dr.logprobs is not None else [])
+                if logprobs_list is not None:
+                    logprobs_list.append(dr.logprobs if dr.logprobs is not None else [])
             self.results[rid] = kid_map
         total_generated = sum(len(seq_outputs) for seq_outputs in outputs_list)
         total_time = time.time() - time_in
@@ -1252,10 +1589,159 @@ class InferenceEngine:
                 self.results.pop(rid, None)
         return GenerationResult(tokens=outputs_list, logprobs=logprobs_list, total_generated=total_generated)
 
-    def write_kernel_jaxprs(self, path, log_artifacts: bool = True):
+    def generate_without_lm_head(self, requests: Sequence[Request]) -> GenerationResult:
+        """Diagnostic generation path that skips LM-head projection and sampling after prefill.
+
+        This is for performance attribution only. Prefill still uses normal logits and sampling so the decode queue
+        is seeded in the usual way; subsequent decode rounds run the transformer and cache update, then enqueue dummy
+        token IDs.
+        """
+        self.reset()
+
+        call_rids = [int(r.request_id) for r in requests]
+        expected_children: dict[int, int] = {rid: int(r.n_generations) for rid, r in zip(call_rids, requests)}
+        apply_top_p = self._requests_need_top_p(requests)
+        for rid in call_rids:
+            self.results[rid] = {
+                k: DecodeResult(id=rid, choice=k, token_list=[]) for k in range(expected_children[rid])
+            }
+
+        decode_outputs = self._prefill_batch(requests, apply_top_p=apply_top_p, return_logprobs=False)
+        _block_until_ready_optional((self.gen_state, decode_outputs))
+        self._ingest_outputs(decode_outputs)
+
+        def _all_done() -> bool:
+            for rid, n_kids in expected_children.items():
+                kid_map = self.results.get(rid, {})
+                for cid in range(n_kids):
+                    dr = kid_map.get(cid)
+                    if dr is None or not dr.done:
+                        return False
+            return True
+
+        stagnant_iters = 0
+        for _ in range(self.config.max_seq_len // self.config.max_rounds):
+            if _all_done():
+                break
+
+            future_state, decode_outputs = _run_generation_loop_without_lm_head(
+                self.gen_state,
+                self.model,
+                self.config.imputed_max_tokens_per_round,
+                self.config.max_rounds,
+                self.config.tpu_paged_attention,
+            )
+            _block_until_ready_optional((future_state, decode_outputs))
+            self.gen_state = future_state
+            new_tokens = self._ingest_outputs(decode_outputs)
+            if new_tokens == 0 and int(jax.device_get(self.gen_state.decode_state.num_queued_tokens)) == 0:
+                stagnant_iters += 1
+            else:
+                stagnant_iters = 0
+            if stagnant_iters >= 2:
+                logger.warning("No progress in no-LM-head decoding for 2 consecutive iterations; breaking.")
+                break
+
+        outputs_list: list[list[int]] = []
+        for r in requests:
+            rid = int(r.request_id)
+            kid_map = self.results.get(rid, {})
+            for k in range(int(r.n_generations)):
+                dr = kid_map.get(k)
+                if dr is None:
+                    kid_map[k] = DecodeResult(id=rid, choice=k, token_list=[])
+                    dr = kid_map[k]
+                outputs_list.append(dr.token_list)
+            self.results[rid] = kid_map
+        total_generated = sum(len(seq_outputs) for seq_outputs in outputs_list)
+
+        for rid in call_rids:
+            self.results.pop(rid, None)
+        return GenerationResult(tokens=outputs_list, logprobs=None, total_generated=total_generated)
+
+    def generate_with_lm_head_no_sampling(self, requests: Sequence[Request]) -> GenerationResult:
+        """Diagnostic generation path that computes LM-head logits but skips sampling after prefill.
+
+        This is for performance attribution only. It keeps the transformer, cache update, and LM-head projection live,
+        then enqueues dummy token IDs without argmax/top-p/logprob work.
+        """
+        self.reset()
+
+        call_rids = [int(r.request_id) for r in requests]
+        expected_children: dict[int, int] = {rid: int(r.n_generations) for rid, r in zip(call_rids, requests)}
+        apply_top_p = self._requests_need_top_p(requests)
+        for rid in call_rids:
+            self.results[rid] = {
+                k: DecodeResult(id=rid, choice=k, token_list=[]) for k in range(expected_children[rid])
+            }
+
+        decode_outputs = self._prefill_batch(requests, apply_top_p=apply_top_p, return_logprobs=False)
+        _block_until_ready_optional((self.gen_state, decode_outputs))
+        self._ingest_outputs(decode_outputs)
+
+        def _all_done() -> bool:
+            for rid, n_kids in expected_children.items():
+                kid_map = self.results.get(rid, {})
+                for cid in range(n_kids):
+                    dr = kid_map.get(cid)
+                    if dr is None or not dr.done:
+                        return False
+            return True
+
+        stagnant_iters = 0
+        for _ in range(self.config.max_seq_len // self.config.max_rounds):
+            if _all_done():
+                break
+
+            future_state, decode_outputs = _run_generation_loop_with_lm_head_no_sampling(
+                self.gen_state,
+                self.model,
+                self.config.imputed_max_tokens_per_round,
+                self.config.max_rounds,
+                self.config.tpu_paged_attention,
+            )
+            _block_until_ready_optional((future_state, decode_outputs))
+            self.gen_state = future_state
+            new_tokens = self._ingest_outputs(decode_outputs)
+            if new_tokens == 0 and int(jax.device_get(self.gen_state.decode_state.num_queued_tokens)) == 0:
+                stagnant_iters += 1
+            else:
+                stagnant_iters = 0
+            if stagnant_iters >= 2:
+                logger.warning("No progress in LM-head/no-sampling decoding for 2 consecutive iterations; breaking.")
+                break
+
+        outputs_list: list[list[int]] = []
+        for r in requests:
+            rid = int(r.request_id)
+            kid_map = self.results.get(rid, {})
+            for k in range(int(r.n_generations)):
+                dr = kid_map.get(k)
+                if dr is None:
+                    kid_map[k] = DecodeResult(id=rid, choice=k, token_list=[])
+                    dr = kid_map[k]
+                outputs_list.append(dr.token_list)
+            self.results[rid] = kid_map
+        total_generated = sum(len(seq_outputs) for seq_outputs in outputs_list)
+
+        for rid in call_rids:
+            self.results.pop(rid, None)
+        return GenerationResult(tokens=outputs_list, logprobs=None, total_generated=total_generated)
+
+    def write_kernel_jaxprs(
+        self,
+        path,
+        *,
+        return_logprobs: bool = False,
+        use_streaming_greedy_lm_head: bool | None = None,
+        log_artifacts: bool = True,
+    ):
         """
         Write out jaxpr and hlo for the generation loop to the given path.
         """
+        if use_streaming_greedy_lm_head is None:
+            use_streaming_greedy_lm_head = self.config.use_streaming_greedy_lm_head
+
         traced = _run_generation_loop.trace(
             self.gen_state,
             self.model,
@@ -1263,6 +1749,11 @@ class InferenceEngine:
             # TODO: tune max_tokens_per_round
             self.config.imputed_max_tokens_per_round,
             self.config.max_rounds,
+            self.config.tpu_paged_attention,
+            self.config.max_top_k,
+            False,
+            return_logprobs,
+            use_streaming_greedy_lm_head,
         )
         with open_url(os.path.join(path, "gen_loop.jaxpr.txt.gz"), "w", compression="infer") as f:
             f.write(str(traced.jaxpr))
@@ -1291,6 +1782,7 @@ class InferenceEngine:
                     stop_tokens=None,
                     temperature=jnp.zeros(max_slots, dtype=jnp.float32),
                     top_p=jnp.ones(max_slots, dtype=jnp.float32),
+                    top_k=jnp.zeros(max_slots, dtype=jnp.int32),
                     key=jnp.zeros((max_slots, 2), dtype=jnp.uint32),
                 ),
             )
@@ -1301,6 +1793,10 @@ class InferenceEngine:
             self.sampler,
             eqx.filter_eval_shape(_create_dummy_work),
             self.config.max_seqs_in_prefill,
+            self.config.tpu_paged_attention,
+            self.config.max_top_k,
+            False,
+            return_logprobs,
         )
         with open_url(os.path.join(path, "run_prefill.jaxpr.txt.gz"), "w", compression="infer") as f:
             f.write(str(prefill_traced.jaxpr))

@@ -56,6 +56,7 @@ class SeqDecodingParams(eqx.Module):
     stop_tokens: ht.i32[NamedArray, "stop_seq position"] | None
     temperature: jnp.ndarray
     top_p: jnp.ndarray
+    top_k: jnp.ndarray
     key: jaxtyping.PRNGKeyArray
 
     @staticmethod
@@ -69,6 +70,7 @@ class SeqDecodingParams(eqx.Module):
             stop_tokens=None,
             temperature=jnp.array(0.0, dtype=jnp.float32),
             top_p=jnp.array(1.0, dtype=jnp.float32),
+            top_k=jnp.array(0, dtype=jnp.int32),
             key=jax.random.PRNGKey(0),
         )
 
@@ -580,6 +582,8 @@ class DecodeState(eqx.Module):
     """temperature for sampling. 0 means greedy sampling"""
     top_p: ht.Float[NamedArray, "seq"]
     """Nucleus-sampling threshold. 1 means sampling over the full distribution."""
+    top_k: ht.i32[NamedArray, "seq"]
+    """Top-k sampling cutoff. 0 means sampling over the full distribution."""
     prng_keys: jaxtyping.PRNGKeyArray
     """one per sequence, used for sampling. This is a JAX PRNG key, so it can be split to get new keys."""
 
@@ -635,6 +639,7 @@ class DecodeState(eqx.Module):
             ),
             temperature=hax.ones({"seq": max_seqs}, dtype=jnp.float32),
             top_p=hax.ones({"seq": max_seqs}, dtype=jnp.float32),
+            top_k=hax.zeros({"seq": max_seqs}, dtype=jnp.int32),
             prng_keys=jax.vmap(jax.random.PRNGKey, axis_size=max_seqs, in_axes=None)(0),
             tqueue=TokenQueue.init(max_queued_tokens),
             finished=hax.zeros({"seq": max_seqs}, dtype=bool),
@@ -846,6 +851,7 @@ class DecodeState(eqx.Module):
                 max_num_tokens=new_state.max_num_tokens.at["seq", local_slot_id].set(seq_params.max_num_tokens),
                 temperature=new_state.temperature.at["seq", local_slot_id].set(seq_params.temperature),
                 top_p=new_state.top_p.at["seq", local_slot_id].set(seq_params.top_p),
+                top_k=new_state.top_k.at["seq", local_slot_id].set(seq_params.top_k),
                 prng_keys=self.prng_keys.at[local_slot_id].set(seq_params.key),  # type: ignore[name-defined]
             )
             match (new_state.stop_tokens, seq_params.stop_tokens):

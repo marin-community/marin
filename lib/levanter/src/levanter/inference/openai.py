@@ -84,11 +84,13 @@ class InferenceRequest:
     max_tokens: int
     temperature: float
     top_p: float | None
+    top_k: int | None
     stop_tokens: List[int] | None
     seed: int | None
     future: asyncio.Future
     n_generations: int = 1
     echo_logprobs_top_k: int | None = None
+    return_logprobs: bool = False
 
 
 @dataclass
@@ -213,11 +215,13 @@ class InferenceContext:
         max_tokens: int,
         temperature: float,
         top_p: float | None,
+        top_k: int | None,
         stop_tokens: Optional[List[int]],
         seed: int | None,
         future: asyncio.Future,
         n_generations: int = 1,
         echo_logprobs_top_k: int | None = None,
+        return_logprobs: bool = False,
     ) -> str:
         """Submit a request to the inference queue"""
         assert self.shutdown_event.is_set() is False, "InferenceContext is shut down"
@@ -230,11 +234,13 @@ class InferenceContext:
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
+            top_k=top_k,
             stop_tokens=stop_tokens,
             seed=seed,
             future=future,
             n_generations=n_generations,
             echo_logprobs_top_k=echo_logprobs_top_k,
+            return_logprobs=return_logprobs,
         )
 
         logger.info("Enqueuing request %s", request)
@@ -341,6 +347,7 @@ class InferenceContext:
                 stop_tokens=stop_ids,
                 temperature=jnp.array(req.temperature, dtype=jnp.float32),
                 top_p=jnp.array(1.0 if req.top_p is None else req.top_p, dtype=jnp.float32),
+                top_k=jnp.array(0 if req.top_k is None else req.top_k, dtype=jnp.int32),
                 key=jrandom.PRNGKey(req.seed if req.seed is not None else i),
             )
 
@@ -349,6 +356,7 @@ class InferenceContext:
                 request_id=i,  # Use batch index as service request id
                 decode_params=seq_params,
                 n_generations=req.n_generations,
+                return_logprobs=req.return_logprobs,
             )
             service_requests.append(service_req)
 
@@ -509,11 +517,13 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                 max_tokens=request.max_tokens,
                 temperature=request.temperature,
                 top_p=request.top_p,
+                top_k=request.top_k,
                 stop_tokens=stop_tokens,
                 seed=request.seed,
                 future=future,
                 n_generations=request.n or 1,
                 echo_logprobs_top_k=echo_logprobs_top_k,
+                return_logprobs=bool(request.logprobs and not request.echo),
             )
 
         # Wait for all results
@@ -637,10 +647,12 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
             max_tokens=request.max_tokens,
             temperature=request.temperature,
             top_p=request.top_p,
+            top_k=request.top_k,
             stop_tokens=stop_tokens,
             seed=request.seed,
             future=future,
             n_generations=request.n or 1,
+            return_logprobs=bool(request.logprobs),
         )
 
         # Wait for result

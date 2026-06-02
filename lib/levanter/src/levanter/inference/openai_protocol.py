@@ -39,6 +39,7 @@ class ChatCompletionRequest(BaseModel):
     stream_options: dict[str, object] | None = None
     temperature: float = Field(default=1.0, description="Sampling temperature")
     top_p: float | None = None
+    top_k: int | None = Field(default=None, gt=0)
     tools: list[dict[str, object]] | None = None
     tool_choice: str | dict[str, object] | None = None
     parallel_tool_calls: bool | None = None
@@ -65,6 +66,7 @@ class CompletionRequest(BaseModel):
     suffix: str | None = None
     temperature: float = Field(default=1.0, description="Sampling temperature")
     top_p: float | None = None
+    top_k: int | None = Field(default=None, gt=0)
     user: str | None = None
 
 
