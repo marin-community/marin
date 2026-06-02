@@ -512,7 +512,7 @@ class IrisClient:
             bundle_id=bundle_id,
             timeout_ms=timeout_ms,
             token_provider=token_provider,
-            direct_log_server=False,
+            use_controller_proxy=True,
         )
 
     @classmethod
@@ -539,7 +539,7 @@ class IrisClient:
             bundle_id=bundle_id,
             timeout_ms=timeout_ms,
             token_provider=token_provider,
-            direct_log_server=True,
+            use_controller_proxy=False,
         )
 
     @classmethod
@@ -551,7 +551,7 @@ class IrisClient:
         bundle_id: str | None,
         timeout_ms: int,
         token_provider: TokenProvider | None,
-        direct_log_server: bool,
+        use_controller_proxy: bool,
     ) -> "IrisClient":
         interceptors = []
         if token_provider is not None:
@@ -563,7 +563,7 @@ class IrisClient:
             workspace=workspace,
             timeout_ms=timeout_ms,
             interceptors=interceptors,
-            direct_log_server=direct_log_server,
+            use_controller_proxy=use_controller_proxy,
         )
         return cls(cluster)
 

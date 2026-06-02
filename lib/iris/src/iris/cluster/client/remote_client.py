@@ -72,7 +72,7 @@ class RemoteClusterClient:
         workspace: Path | None = None,
         timeout_ms: int = 30000,
         interceptors: Iterable[InterceptorSync] = (),
-        direct_log_server: bool = False,
+        use_controller_proxy: bool = True,
     ):
         """Initialize RPC cluster operations.
 
@@ -82,19 +82,20 @@ class RemoteClusterClient:
             workspace: Path to workspace directory. Bundle is created lazily on first job submission.
             timeout_ms: RPC timeout in milliseconds
             interceptors: Client-side interceptors (e.g. AuthTokenInjector for token auth)
-            direct_log_server: Resolve ``/system/log-server`` via the controller's
-                endpoint registry and connect the finelog ``LogClient`` straight to
-                that address, instead of routing log/stats RPCs through the
-                controller's StatsServiceProxy. Only safe for clients running
-                *inside* the cluster (e.g. in-task code), which can reach the
-                finelog server's internal address; external clients (CLI over a
-                tunnel) cannot and must keep the default (controller-proxied) path.
+            use_controller_proxy: Route service RPCs (currently finelog
+                logs/stats) through the controller instead of resolving the
+                backing service's address from the controller's endpoint
+                registry and connecting straight to it. The direct path is only
+                safe for clients running *inside* the cluster, which can reach
+                internal service addresses; external clients (CLI over a
+                tunnel) cannot and must keep the default proxied path.
         """
         self._address = controller_address
         self._bundle_id = bundle_id
         self._workspace = workspace.resolve() if workspace is not None else None
         self._bundle_blob: bytes | None = None
         self._timeout_ms = timeout_ms
+        self._use_controller_proxy = use_controller_proxy
         self._client = ControllerServiceClientSync(
             address=controller_address,
             timeout_ms=timeout_ms,
@@ -107,19 +108,12 @@ class RemoteClusterClient:
         # external clients route through the controller, the only ingress they
         # can reach. The resolver fires lazily on first table/log use, so this
         # adds no RPC for CLI calls that never touch logs.
-        if direct_log_server:
-            self._log_client = LogClient.connect(
-                LOG_SERVER_ENDPOINT_NAME,
-                resolver=self._resolve_log_server,
-                timeout_ms=timeout_ms,
-                interceptors=interceptors,
-            )
-        else:
-            self._log_client = LogClient.connect(
-                controller_address,
-                timeout_ms=timeout_ms,
-                interceptors=interceptors,
-            )
+        self._log_client = LogClient.connect(
+            LOG_SERVER_ENDPOINT_NAME,
+            resolver=self._resolve_endpoint,
+            timeout_ms=timeout_ms,
+            interceptors=interceptors,
+        )
         # Deferred so CLI calls that never push status (submit_job, list_jobs,
         # get_status) don't spawn a finelog flush thread.
         self._task_status_table = None
@@ -410,13 +404,16 @@ class RemoteClusterClient:
 
         return call_with_retry("list_endpoints", _call)
 
-    def _resolve_log_server(self, endpoint_name: str) -> str:
-        """Resolve ``endpoint_name`` to the finelog server's address via the registry.
+    def _resolve_endpoint(self, endpoint_name: str) -> str:
+        """Resolve ``endpoint_name`` to a service address.
 
-        Invoked by the finelog ``LogClient`` (when ``direct_log_server`` is set)
-        to turn the logical ``/system/log-server`` name into the concrete address
-        the controller advertises.
+        When ``use_controller_proxy`` is set (external clients), returns the
+        controller address so RPCs flow through its proxies; otherwise looks
+        the name up in the controller's endpoint registry and returns the
+        backing service's direct address.
         """
+        if self._use_controller_proxy:
+            return self._address
         endpoints = self.list_endpoints(endpoint_name, exact=True)
         if not endpoints:
             raise ConnectionError(f"No {endpoint_name!r} endpoint registered on controller")
