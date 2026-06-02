@@ -43,6 +43,13 @@ The smallest useful test shape keeps every Grug feature active:
 
 The focused vLLM unit test uses an even smaller MoE-only shape to isolate the router-bias semantic.
 
+## Harness Notes
+
+The parity harness sets `jax_default_matmul_precision=float32`. Without this,
+the local CPU run passes strict tolerances, but JAX on TPU uses lower default
+dot precision and the component check drifts from the PyTorch CPU model before
+testing any Grug-specific semantic.
+
 ## Commands
 
 Local component/full parity harness:
@@ -77,4 +84,23 @@ uv run --no-project \
   --with 'torch==2.10.0+cpu' \
   --extra-index-url https://download.pytorch.org/whl/cpu \
   python -m pytest tests/models/common/test_model_loader.py::TestGetModel::test_get_model_auto_resolves_to_vllm_for_grug_moe -q
+```
+
+Iris `v6e-4` TPU validation:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-vllm-tpu-support
+uv run iris --cluster=marin job run \
+  --no-wait \
+  --enable-extra-resources \
+  --extra marin-core:tpu \
+  --tpu v6e-4 \
+  --region europe-west4 \
+  --priority interactive \
+  --timeout 1800 \
+  --cpu 2 \
+  --memory 16GB \
+  --disk 50GB \
+  --job-name grugmoe-vllm-tpu-parity-fp32 \
+  -- bash -lc 'git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/vllm.git /tmp/grugmoe-vllm-tpu-vllm && uv run --with "torch==2.10.0+cpu" --extra-index-url https://download.pytorch.org/whl/cpu python -m experiments.grug.moe.vllm_tpu_parity --vllm-root /tmp/grugmoe-vllm-tpu-vllm'
 ```

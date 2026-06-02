@@ -38,6 +38,8 @@ from experiments.grug.moe.model import (
     Transformer,
 )
 
+jax.config.update("jax_default_matmul_precision", "float32")
+
 
 class _EmptyMesh:
     empty = True
