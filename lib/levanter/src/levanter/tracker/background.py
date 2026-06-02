@@ -15,9 +15,16 @@ both guarantees:
   keeps running so subsequent updates still go through.
 * If the queue fills up (e.g. the wrapped tracker is wedged), additional
   updates are dropped with a rate-limited warning rather than blocking.
-* ``jax.Array`` metric values are materialized to host memory on the calling
-  thread before they cross the queue, so the worker never issues a JAX
-  device transfer / cross-host collective off the main thread.
+* Payloads are fully prepared on the calling thread via the wrapped
+  tracker's :meth:`~levanter.tracker.tracker.Tracker._prepare_payload_async`
+  hook before they cross the queue. The default hook is ``jax.device_get`` —
+  for sharded arrays that transfer is a cross-host collective and must be
+  dispatched from the main thread in identical program order on every host
+  (otherwise multi-host launch IDs desync and the TPU slice halts). Trackers
+  that would otherwise dispatch JAX during their ``log_*`` methods (e.g. via
+  lazy properties on a pytree leaf, or by constructing backend-specific
+  objects like ``wandb.Histogram``) override the hook so that work also runs
+  on the producer thread. The worker thread does nothing but the upload.
 
 Tracker initialization is *not* wrapped. If e.g. ``wandb.init()`` fails
 because of bad auth, that's a fatal configuration problem and the run
@@ -32,8 +39,6 @@ import threading
 import time
 import typing
 from typing import Any, Optional
-
-import jax
 
 from levanter.tracker.tracker import Tracker
 
@@ -124,25 +129,27 @@ class BackgroundTracker(Tracker):
                     dropped,
                 )
 
-    def _enqueue_data(self, method, payload, **kwargs) -> None:
-        """Materialize ``jax.Array`` leaves on the calling thread, then enqueue.
+    def _enqueue_data(self, method_name: str, payload, **kwargs) -> None:
+        """Fully prepare ``payload`` on the calling thread, then enqueue.
 
-        ``jax.device_get`` pulls every array leaf to host memory; for
-        sharded arrays that transfer is a cross-host collective and must be
-        dispatched from the main thread in identical program order on every
-        host (otherwise multi-host launch IDs desync and the TPU slice halts).
-        Doing it here keeps only inert numpy/Python data on the queue.
+        Delegates preparation to the wrapped tracker's
+        :meth:`~levanter.tracker.tracker.Tracker._prepare_payload_async` hook
+        (default: ``jax.device_get``). Trackers that build backend-specific
+        objects or access lazy JAX-y properties override the hook to fold that
+        work into the producer thread, so the queue only carries inert data
+        and the worker only does the upload.
         """
+        method = getattr(self.wrapped, method_name)
         if self._stopped:
-            logger.debug("Background tracker '%s' already stopped; dropping %s", self.name, method.__name__)
+            logger.debug("Background tracker '%s' already stopped; dropping %s", self.name, method_name)
             return
         try:
-            payload = jax.device_get(payload)
+            payload = self.wrapped._prepare_payload_async(method_name, payload)
         except Exception:
             logger.exception(
-                "Background tracker '%s' failed to materialize payload for %s; dropping update.",
+                "Background tracker '%s' failed to prepare payload for %s; dropping update.",
                 self.name,
-                method.__name__,
+                method_name,
             )
             return
         self._enqueue(method, payload, **kwargs)
@@ -150,7 +157,7 @@ class BackgroundTracker(Tracker):
     # ---- Tracker API --------------------------------------------------------
 
     def log_hyperparameters(self, hparams: dict[str, Any]) -> None:
-        self._enqueue_data(self.wrapped.log_hyperparameters, hparams)
+        self._enqueue_data("log_hyperparameters", hparams)
 
     def log(
         self,
@@ -159,10 +166,10 @@ class BackgroundTracker(Tracker):
         step: Optional[int],
         commit: Optional[bool] = None,
     ) -> None:
-        self._enqueue_data(self.wrapped.log, metrics, step=step, commit=commit)
+        self._enqueue_data("log", metrics, step=step, commit=commit)
 
     def log_summary(self, metrics: dict[str, Any]) -> None:
-        self._enqueue_data(self.wrapped.log_summary, metrics)
+        self._enqueue_data("log_summary", metrics)
 
     def log_artifact(
         self,

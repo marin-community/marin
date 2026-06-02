@@ -8,6 +8,7 @@ import typing
 from typing import Any, List, Optional
 
 import draccus
+import jax
 
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,22 @@ class Tracker(abc.ABC):
     """
 
     name: str
+
+    def _prepare_payload_async(self, method_name: str, payload: Any) -> Any:
+        """Hook: materialize a method payload on the producer (caller) thread.
+
+        Used by :class:`~levanter.tracker.background.BackgroundTracker` to keep all
+        JAX work on the producer thread, so the background worker only does I/O.
+        ``method_name`` is one of ``"log"``, ``"log_summary"``, or
+        ``"log_hyperparameters"``.
+
+        Default: ``jax.device_get(payload)`` — pulls every ``jax.Array`` leaf in the
+        pytree to host as numpy. Subclasses should override when their ``log_*``
+        methods would otherwise dispatch JAX on the worker thread (e.g. via lazy
+        properties on a pytree leaf), and instead fold that work into the prepared
+        payload here so the worker only does the upload.
+        """
+        return jax.device_get(payload)
 
     @abc.abstractmethod
     def log_hyperparameters(self, hparams: dict[str, Any]):
