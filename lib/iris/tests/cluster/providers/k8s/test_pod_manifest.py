@@ -361,43 +361,15 @@ def test_coreweave_constraints_end_to_end():
 
 
 # ---------------------------------------------------------------------------
-# Rack-level colocation (pod affinity for multi-task jobs)
+# No non-Kueue colocation: it's Kueue or nothing
 # ---------------------------------------------------------------------------
 
 
-def test_build_pod_manifest_single_task_no_affinity():
-    """Single-task jobs get no podAffinity (no IB colocation needed)."""
-    req = make_run_req("/my-job/task-0", attempt_id=1)
-    req.num_tasks = 1
-    manifest = _build_pod_manifest(
-        req, pod_config(default_image="img:latest", colocation_topology_key="coreweave.cloud/spine")
-    )
-    assert "affinity" not in manifest["spec"]
-
-
-def test_build_pod_manifest_multi_task_adds_pod_affinity():
-    """Multi-task jobs get podAffinity for IB colocation on same spine."""
-    req = make_run_req("/my-job/task-0", attempt_id=1)
-    req.num_tasks = 2
-    manifest = _build_pod_manifest(
-        req, pod_config(default_image="img:latest", colocation_topology_key="coreweave.cloud/spine")
-    )
-    affinity = manifest["spec"]["affinity"]
-    pod_affinity = affinity["podAffinity"]
-    terms = pod_affinity["preferredDuringSchedulingIgnoredDuringExecution"]
-    assert len(terms) == 1
-    term = terms[0]
-    assert term["weight"] == 100
-    assert term["podAffinityTerm"]["topologyKey"] == "coreweave.cloud/spine"
-    labels = term["podAffinityTerm"]["labelSelector"]["matchLabels"]
-    assert _LABEL_JOB_ID in labels
-
-
-def test_build_pod_manifest_multi_task_no_topology_key_no_affinity():
-    """Empty colocation_topology_key disables affinity even for multi-task jobs."""
-    req = make_run_req("/my-job/task-0", attempt_id=1)
-    req.num_tasks = 2
-    manifest = _build_pod_manifest(req, pod_config(default_image="img:latest", colocation_topology_key=""))
+def test_multi_task_non_coscheduled_job_has_no_affinity():
+    """A plain multi-task job (no coscheduling) gets no podAffinity: there is no
+    non-Kueue colocation fallback. Topology placement comes only via Kueue."""
+    req = make_run_req("/my-job/task-0", attempt_id=1, num_tasks=4)
+    manifest = _build_pod_manifest(req, pod_config(default_image="img:latest"))
     assert "affinity" not in manifest["spec"]
 
 
@@ -999,15 +971,12 @@ def test_pod_group_name_is_valid_label_value():
     assert len(name) <= 63
 
 
-def test_kueue_disabled_without_local_queue_falls_back_to_affinity():
-    """Coscheduled pod with no configured LocalQueue gets no Kueue labels and falls back
-    to the soft podAffinity colocation (status quo on non-Kueue clusters)."""
+def test_coscheduled_without_local_queue_raises():
+    """A coscheduled job dispatched to a cluster with no LocalQueue is a
+    misconfiguration: Kueue gang admission is required, with no fallback."""
     req = _cosched_req("/job/task/0", num_tasks=4, group_by="pool")
-    manifest = _build_pod_manifest(req, pod_config(local_queue="", colocation_topology_key="coreweave.cloud/spine"))
-    labels = manifest["metadata"]["labels"]
-    assert _KUEUE_POD_GROUP_NAME not in labels
-    assert "annotations" not in manifest["metadata"]
-    assert "affinity" in manifest["spec"]
+    with pytest.raises(ValueError, match="requires Kueue gang admission"):
+        _build_pod_manifest(req, pod_config(local_queue=""))
 
 
 def test_kueue_drops_active_deadline_seconds():
@@ -1018,20 +987,18 @@ def test_kueue_drops_active_deadline_seconds():
     assert "activeDeadlineSeconds" not in manifest["spec"]
 
 
-def test_non_kueue_coscheduled_keeps_active_deadline_seconds():
-    """Without a LocalQueue, a coscheduled pod still gets the activeDeadlineSeconds budget."""
-    req = _cosched_req("/job/task/0")
+def test_non_coscheduled_keeps_active_deadline_seconds():
+    """A non-coscheduled job (not Kueue-gated) keeps the activeDeadlineSeconds budget."""
+    req = make_run_req("/job/task/0", num_tasks=4)
     req.timeout.milliseconds = 3600_000
-    manifest = _build_pod_manifest(req, pod_config(local_queue=""))
+    manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
     assert manifest["spec"]["activeDeadlineSeconds"] == 3600
 
 
-def test_kueue_replaces_pod_affinity():
-    """A Kueue-gated multi-task gang uses podset topology, not the soft podAffinity block."""
+def test_kueue_gang_uses_topology_not_affinity():
+    """A Kueue-gated gang carries podset topology and never a podAffinity block."""
     req = _cosched_req("/job/task/0", num_tasks=8, group_by="pool")
-    manifest = _build_pod_manifest(
-        req, pod_config(local_queue="iris-lq", colocation_topology_key="coreweave.cloud/spine")
-    )
+    manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
     assert "affinity" not in manifest["spec"]
     assert _KUEUE_PREFERRED_TOPOLOGY in manifest["metadata"]["annotations"]
 

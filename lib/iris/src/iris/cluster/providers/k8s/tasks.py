@@ -298,16 +298,15 @@ class PodConfig:
 
     namespace: str
     default_image: str
-    colocation_topology_key: str = ""
     cache_dir: str = "/cache"
     service_account: str = ""
     host_network: bool = False
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
-    # Kueue LocalQueue for coscheduled gang admission. Empty disables Kueue:
-    # coscheduled pods then fall back to the soft podAffinity colocation and
-    # get no atomic startup (status quo on clusters without Kueue).
+    # Kueue LocalQueue for coscheduled gang admission. Coscheduled jobs REQUIRE
+    # this: dispatching one with no LocalQueue configured raises (Kueue or
+    # nothing — there is no non-Kueue colocation fallback).
     local_queue: str = ""
     # PriorityBand -> WorkloadPriorityClass name. A band with no entry is not
     # stamped (Kueue uses its default priority); Iris never invents class names.
@@ -461,7 +460,6 @@ def _build_pod_manifest(
 
     namespace = config.namespace
     default_image = config.default_image
-    colocation_topology_key = config.colocation_topology_key
     cache_dir = config.cache_dir
     service_account = config.service_account
     host_network = config.host_network
@@ -565,10 +563,16 @@ def _build_pod_manifest(
         "labels": labels,
     }
 
-    # Kueue gang admission for coscheduled jobs. Requires a configured
-    # LocalQueue: without one, Kueue's webhook ignores the pod (no queue-name
-    # label) and we fall back to the soft podAffinity colocation below.
-    kueue_enabled = bool(run_req.coscheduling.group_by) and bool(config.local_queue)
+    # Kueue gang admission for coscheduled jobs. Coscheduling requires Kueue:
+    # there is no non-Kueue colocation fallback, so a coscheduled job dispatched
+    # to a cluster with no configured LocalQueue is a misconfiguration.
+    kueue_enabled = bool(run_req.coscheduling.group_by)
+    if kueue_enabled and not config.local_queue:
+        raise ValueError(
+            f"Coscheduled task {run_req.task_id!r} (group_by={run_req.coscheduling.group_by!r}) "
+            "requires Kueue gang admission, but no LocalQueue is configured. Install Kueue "
+            "(lib/iris/scripts/install_kueue_coreweave.sh) and set kubernetes_provider.kueue.local_queue."
+        )
     if kueue_enabled:
         labels[_KUEUE_POD_GROUP_NAME] = _pod_group_name(task_id, attempt_id)
         labels[_KUEUE_QUEUE_NAME] = config.local_queue
@@ -612,28 +616,6 @@ def _build_pod_manifest(
     # ever runs. The controller's own timeout accounting governs these.
     if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0 and not kueue_enabled:
         spec["activeDeadlineSeconds"] = max(1, run_req.timeout.milliseconds // 1000)
-
-    # Prefer co-locating sibling task pods on the same network spine for IB
-    # connectivity. Kueue-gated gangs use podset topology (above) instead, so
-    # this soft podAffinity applies only to non-Kueue multi-task jobs.
-    if run_req.num_tasks > 1 and colocation_topology_key and not kueue_enabled:
-        spec["affinity"] = {
-            "podAffinity": {
-                "preferredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                        "weight": 100,
-                        "podAffinityTerm": {
-                            "labelSelector": {
-                                "matchLabels": {
-                                    _LABEL_JOB_ID: job_id,
-                                },
-                            },
-                            "topologyKey": colocation_topology_key,
-                        },
-                    }
-                ],
-            }
-        }
 
     return {
         "apiVersion": "v1",
@@ -1237,7 +1219,6 @@ class K8sTaskProvider:
     kubectl: K8sService
     namespace: str
     default_image: str
-    colocation_topology_key: str = "coreweave.cloud/spine"
     cache_dir: str = "/cache"
     service_account: str = ""
     host_network: bool = False
@@ -1424,7 +1405,6 @@ class K8sTaskProvider:
         return PodConfig(
             namespace=self.namespace,
             default_image=self.default_image,
-            colocation_topology_key=self.colocation_topology_key,
             cache_dir=self.cache_dir,
             service_account=self.service_account,
             host_network=self.host_network,

@@ -473,11 +473,6 @@ message KubernetesProviderConfig {
   string namespace = 1;    // Kubernetes namespace for task pods (default: "iris")
   string kubeconfig = 2;   // Path to kubeconfig file; empty string uses in-cluster auth
   string default_image = 3; // Default container image for task pods
-  // Topology key for pod affinity on multi-VM gang-scheduled jobs.
-  // When set, sibling task pods for the same job prefer scheduling on nodes
-  // sharing this topology (e.g. "coreweave.cloud/spine" for IB colocation).
-  // Leave empty to disable. Default: "coreweave.cloud/spine".
-  string colocation_topology_key = 4;
   string service_account = 5;    // K8s ServiceAccount for task pods (default: "")
   bool host_network = 6;         // Run task pods with hostNetwork (for NCCL/IB)
   string cache_dir = 7;          // hostPath base for cache mounts (default: "/cache")

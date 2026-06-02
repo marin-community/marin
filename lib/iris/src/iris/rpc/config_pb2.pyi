@@ -516,11 +516,10 @@ class KueueConfig(_message.Message):
     def __init__(self, local_queue: _Optional[str] = ..., priority_classes: _Optional[_Mapping[str, str]] = ..., topologies: _Optional[_Mapping[str, KueueTopology]] = ...) -> None: ...
 
 class KubernetesProviderConfig(_message.Message):
-    __slots__ = ("namespace", "kubeconfig", "default_image", "colocation_topology_key", "service_account", "host_network", "cache_dir", "controller_address", "kueue")
+    __slots__ = ("namespace", "kubeconfig", "default_image", "service_account", "host_network", "cache_dir", "controller_address", "kueue")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     KUBECONFIG_FIELD_NUMBER: _ClassVar[int]
     DEFAULT_IMAGE_FIELD_NUMBER: _ClassVar[int]
-    COLOCATION_TOPOLOGY_KEY_FIELD_NUMBER: _ClassVar[int]
     SERVICE_ACCOUNT_FIELD_NUMBER: _ClassVar[int]
     HOST_NETWORK_FIELD_NUMBER: _ClassVar[int]
     CACHE_DIR_FIELD_NUMBER: _ClassVar[int]
@@ -529,13 +528,12 @@ class KubernetesProviderConfig(_message.Message):
     namespace: str
     kubeconfig: str
     default_image: str
-    colocation_topology_key: str
     service_account: str
     host_network: bool
     cache_dir: str
     controller_address: str
     kueue: KueueConfig
-    def __init__(self, namespace: _Optional[str] = ..., kubeconfig: _Optional[str] = ..., default_image: _Optional[str] = ..., colocation_topology_key: _Optional[str] = ..., service_account: _Optional[str] = ..., host_network: _Optional[bool] = ..., cache_dir: _Optional[str] = ..., controller_address: _Optional[str] = ..., kueue: _Optional[_Union[KueueConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, namespace: _Optional[str] = ..., kubeconfig: _Optional[str] = ..., default_image: _Optional[str] = ..., service_account: _Optional[str] = ..., host_network: _Optional[bool] = ..., cache_dir: _Optional[str] = ..., controller_address: _Optional[str] = ..., kueue: _Optional[_Union[KueueConfig, _Mapping]] = ...) -> None: ...
 
 class UserBudgetTier(_message.Message):
     __slots__ = ("user_ids", "budget_limit", "max_band")
