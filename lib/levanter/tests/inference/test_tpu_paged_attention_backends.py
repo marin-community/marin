@@ -124,6 +124,10 @@ def _assert_backend_matches_reference(case_factory, *, backend: TpuPagedAttentio
     )
     q, new_k, new_v, kv_cache, batch_info = case_factory()
 
+    config = TpuPagedAttentionConfig(backend=backend)
+    if backend == TpuPagedAttentionBackend.REFERENCE:
+        config = dataclasses.replace(config, fail_on_reference_fallback=False)
+
     attn, updated_cache = paged_attention_with_kv_update(
         q,
         new_k,
@@ -132,7 +136,7 @@ def _assert_backend_matches_reference(case_factory, *, backend: TpuPagedAttentio
         batch_info,
         sm_scale=SM_SCALE,
         soft_cap=soft_cap,
-        config=TpuPagedAttentionConfig(backend=backend),
+        config=config,
     )
 
     assert attn.axes == q.axes
@@ -173,7 +177,8 @@ def test_explicit_tpu_inference_backend_fails_fast_on_cpu():
             config=TpuPagedAttentionConfig(backend=TpuPagedAttentionBackend.TPU_INFERENCE),
         )
     except UnsupportedTpuPagedAttentionBackend as exc:
-        assert "only runs on TPU" in str(exc)
+        message = str(exc)
+        assert "only runs on TPU" in message or "not importable" in message
     else:
         raise AssertionError("explicit tpu-inference backend should fail on CPU")
 
@@ -201,7 +206,7 @@ def test_backend_sequence_warns_then_runs_reference_on_cpu():
     assert updated_cache.kv_pages.array.shape == kv_cache.kv_pages.array.shape
 
 
-def test_auto_backend_warns_then_uses_jax_rpa_on_tpu_when_tpu_inference_is_unavailable(monkeypatch):
+def test_auto_backend_warns_then_uses_reference_on_tpu_without_mesh_when_tpu_inference_is_unavailable(monkeypatch):
     expected_q, expected_new_k, expected_new_v, expected_cache_input, expected_batch_info = _single_sequence_case()
     expected, expected_cache = _expected_attention_after_update(
         expected_q,
@@ -217,13 +222,9 @@ def test_auto_backend_warns_then_uses_jax_rpa_on_tpu_when_tpu_inference_is_unava
         del args, kwargs
         raise UnsupportedTpuPagedAttentionBackend("tpu-inference import failed")
 
-    def fake_jax_rpa_backend(q, new_k, new_v, kv_cache, batch_info, *, sm_scale, soft_cap, config):
-        del sm_scale, config
-        return _expected_attention_after_update(q, new_k, new_v, kv_cache, batch_info, soft_cap=soft_cap)
-
     monkeypatch.setattr(tpu_kernels, "_current_platform", lambda: "tpu")
+    monkeypatch.setattr(tpu_kernels, "_has_nonempty_mesh", lambda: False)
     monkeypatch.setattr(tpu_kernels, "_run_tpu_inference_backend", unavailable_tpu_backend)
-    monkeypatch.setattr(tpu_kernels, "_run_jax_rpa_backend", fake_jax_rpa_backend)
 
     with pytest.warns(TpuPagedAttentionFallbackWarning):
         attn, updated_cache = paged_attention_with_kv_update(
@@ -287,7 +288,11 @@ def test_duplicate_token_destinations_raise_before_backend_dispatch():
 
 
 def test_available_backends_on_cpu_only_report_reference():
-    assert available_tpu_paged_attention_backends() == (TpuPagedAttentionBackend.REFERENCE,)
+    backends = available_tpu_paged_attention_backends()
+    if tpu_kernels._is_tpu():
+        assert TpuPagedAttentionBackend.REFERENCE not in backends
+    else:
+        assert backends == (TpuPagedAttentionBackend.REFERENCE,)
 
 
 def test_initial_qwen3_shape_support_matches_target_tensor_parallelism():

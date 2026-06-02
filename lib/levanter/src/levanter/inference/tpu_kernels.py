@@ -79,10 +79,21 @@ def _is_tpu() -> bool:
     return _current_platform() == "tpu"
 
 
+def _has_nonempty_mesh() -> bool:
+    return not jax.sharding.get_abstract_mesh().empty
+
+
 def _normalize_backend(backend: TpuPagedAttentionBackend | str) -> TpuPagedAttentionBackend:
     if isinstance(backend, TpuPagedAttentionBackend):
         return backend
     return TpuPagedAttentionBackend(backend)
+
+
+def _is_auto_backend(backend: TpuPagedAttentionBackend | Sequence[TpuPagedAttentionBackend]) -> bool:
+    return (
+        isinstance(backend, TpuPagedAttentionBackend | str)
+        and _normalize_backend(backend) == TpuPagedAttentionBackend.AUTO
+    )
 
 
 def _backend_order(config: TpuPagedAttentionConfig) -> tuple[TpuPagedAttentionBackend, ...]:
@@ -98,7 +109,11 @@ def _backend_order(config: TpuPagedAttentionConfig) -> tuple[TpuPagedAttentionBa
     for item in selected:
         if item == TpuPagedAttentionBackend.AUTO:
             if _is_tpu():
-                expanded.extend((TpuPagedAttentionBackend.TPU_INFERENCE, TpuPagedAttentionBackend.JAX_RPA))
+                expanded.append(TpuPagedAttentionBackend.TPU_INFERENCE)
+                if _has_nonempty_mesh():
+                    expanded.append(TpuPagedAttentionBackend.JAX_RPA)
+                else:
+                    expanded.append(TpuPagedAttentionBackend.REFERENCE)
             else:
                 expanded.append(TpuPagedAttentionBackend.REFERENCE)
         else:
@@ -121,7 +136,7 @@ def available_tpu_paged_attention_backends() -> tuple[TpuPagedAttentionBackend, 
 
     from levanter.layers import attention as attention_module
 
-    if attention_module.tpu_ragged_paged_attention is not None:
+    if _has_nonempty_mesh() and attention_module.tpu_ragged_paged_attention is not None:
         backends.append(TpuPagedAttentionBackend.JAX_RPA)
 
     return tuple(backends)
@@ -352,6 +367,10 @@ def paged_attention_with_kv_update(
     failures: list[Exception] = []
 
     for index, backend in enumerate(backends):
+        backend_config = config
+        if backend == TpuPagedAttentionBackend.REFERENCE and failures and _is_auto_backend(config.backend):
+            backend_config = dataclasses.replace(config, fail_on_reference_fallback=False)
+
         try:
             return _run_backend(
                 backend,
@@ -362,7 +381,7 @@ def paged_attention_with_kv_update(
                 batch_info,
                 sm_scale=sm_scale,
                 soft_cap=soft_cap,
-                config=config,
+                config=backend_config,
             )
         except (UnsupportedTpuPagedAttentionBackend, ValueError) as exc:
             failures.append(exc)
