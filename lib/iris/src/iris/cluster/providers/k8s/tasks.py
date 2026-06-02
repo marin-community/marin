@@ -40,7 +40,7 @@ from iris.cluster.controller.direct_provider import (
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.log_keys import task_log_key
-from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
+from iris.cluster.providers.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
@@ -603,6 +603,12 @@ def _build_pod_manifest(
 
     if gpu_count > 0:
         spec.setdefault("tolerations", []).append(NVIDIA_GPU_TOLERATION)
+        # GPU pools are normally on-demand, but a pool may come up on CoreWeave
+        # interruptable capacity (qos.coreweave.cloud/interruptable:NoExecute) when
+        # on-demand is exhausted. Tolerate it so pods can land there and Kueue TAS can
+        # place the gang (TAS excludes nodes whose NoExecute taints the pod doesn't
+        # tolerate). Iris tasks are retryable, so interruptable capacity is acceptable.
+        spec.setdefault("tolerations", []).append(COREWEAVE_INTERRUPTABLE_TOLERATION)
 
     if service_account:
         spec["serviceAccountName"] = service_account
