@@ -97,7 +97,15 @@ tpu = [
   "jaxlib==0.9.2",
   "libtpu==0.0.39",
   "tpu-inference==0.19.0",
+]
+vllm = [
+  "jax==0.9.2",
+  "jaxlib==0.9.2",
+  "libtpu==0.0.39",
+  "tpu-inference==0.19.0",
   "vllm-tpu==0.19.0",
+  # Pin torch + torchvision explicitly so the per-extra source map below
+  # routes them to the pytorch-cpu index during fresh vLLM resolves.
   "torch==2.10.0",
   "torchvision==0.25.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
   "torchvision==0.25.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
@@ -188,14 +196,18 @@ conflicts = [
     { extra = "gpu" },
     { extra = "tpu" },
   ],
-]  # Never solve for both GPU and TPU at once
+  [
+    { extra = "gpu" },
+    { extra = "vllm" },
+  ],
+]  # Never solve GPU together with TPU-only extras.
 
 [tool.uv.sources]
 torch = [
-  { index = "pytorch-cpu", extra = "tpu" },
+  { index = "pytorch-cpu", extra = "vllm" },
 ]
 torchvision = [
-  { index = "pytorch-cpu", extra = "tpu" },
+  { index = "pytorch-cpu", extra = "vllm" },
 ]
 
 [[tool.uv.index]]

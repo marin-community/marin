@@ -93,6 +93,10 @@ conflicts = [
     ],
     [
         { package = "marin-core", extra = "gpu" },
+        { package = "marin-levanter", extra = "vllm" },
+    ],
+    [
+        { package = "marin-core", extra = "gpu" },
         { package = "marin-fray", group = "fray_tpu_test" },
     ],
     [
