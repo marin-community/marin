@@ -4,7 +4,7 @@
 """Curated replay scenarios.
 
 Each scenario is a function ``def scenario_NAME(transitions, clock) -> None``
-that drives ``ControllerTransitions`` through a sequence of mutations. The
+that drives ``ControllerTestState`` through a sequence of mutations. The
 caller (the pytest fixture or an ad-hoc runner) freezes the clock to a
 deterministic monotonic counter so the DB state is byte-identical across
 runs and the committed goldens stay stable.
@@ -14,15 +14,13 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller import ops
+from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointRow
+from iris.cluster.controller.pruner import prune_old_data
 from iris.cluster.controller.reads import ReservationClaim
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import jobs_table, tasks_table
-from iris.cluster.controller.transitions import (
-    Assignment,
-    ControllerTransitions,
-    HeartbeatApplyRequest,
-    TaskUpdate,
-)
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging import timing
@@ -30,6 +28,7 @@ from rigging.timing import Duration, Timestamp
 from sqlalchemy import select
 from sqlalchemy import update as sa_update
 
+from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.replay.events import (
     AddEndpoint,
     ApplyDirectProviderUpdates,
@@ -42,9 +41,11 @@ from tests.cluster.controller.replay.events import (
     RegisterOrRefreshWorker,
     RemoveEndpoint,
     ReplaceReservationClaims,
+    RunReservationClaimCycle,
     SubmitJob,
     apply_event,
 )
+from tests.cluster.controller.transition_driver import WorkerTaskUpdates
 
 
 class FrozenClock:
@@ -129,6 +130,26 @@ def _make_metadata(*, cpu: int = 8, memory_bytes: int = 16 * 1024**3) -> job_pb2
     return meta
 
 
+def _tpu_device(variant: str, count: int) -> job_pb2.DeviceConfig:
+    return job_pb2.DeviceConfig(tpu=job_pb2.TpuDevice(variant=variant, count=count))
+
+
+def _make_tpu_metadata(variant: str = "v5p-32", *, chips: int = 4) -> job_pb2.WorkerMetadata:
+    """TPU worker advertising the device-type/variant attributes the reservation
+    matcher evaluates entries against."""
+    meta = job_pb2.WorkerMetadata(
+        hostname="replay-tpu-worker",
+        ip_address="127.0.0.1",
+        cpu_count=32,
+        memory_bytes=64 * 1024**3,
+        disk_bytes=500 * 1024**3,
+        device=_tpu_device(variant, chips),
+    )
+    meta.attributes[WellKnownAttribute.DEVICE_TYPE].string_value = "tpu"
+    meta.attributes[WellKnownAttribute.DEVICE_VARIANT].string_value = variant.lower()
+    return meta
+
+
 def _entrypoint() -> job_pb2.RuntimeEntrypoint:
     ep = job_pb2.RuntimeEntrypoint()
     ep.run_command.argv[:] = ["python", "-c", "pass"]
@@ -143,6 +164,7 @@ def _job_request(
     max_retries_preemption: int = 0,
     coscheduled: bool = False,
     reservation_entries: int = 0,
+    reservation_device: job_pb2.DeviceConfig | None = None,
 ) -> tuple[JobName, controller_pb2.Controller.LaunchJobRequest]:
     job_name = JobName.root("test-user", name)
     request = controller_pb2.Controller.LaunchJobRequest(
@@ -159,18 +181,20 @@ def _job_request(
     if reservation_entries > 0:
         for _ in range(reservation_entries):
             entry = request.reservation.entries.add()
-            entry.resources.CopyFrom(
-                job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-            )
+            resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
+            if reservation_device is not None:
+                resources.device.CopyFrom(reservation_device)
+            entry.resources.CopyFrom(resources)
     return job_name, request
 
 
 def _register_worker(
-    transitions: ControllerTransitions,
+    transitions: ControllerTestState,
     clock: FrozenClock,
     worker_id: str,
     *,
     address: str | None = None,
+    metadata: job_pb2.WorkerMetadata | None = None,
 ) -> WorkerId:
     wid = WorkerId(worker_id)
     apply_event(
@@ -178,7 +202,7 @@ def _register_worker(
         RegisterOrRefreshWorker(
             worker_id=wid,
             address=address or f"{worker_id}:8080",
-            metadata=_make_metadata(),
+            metadata=metadata or _make_metadata(),
             ts=clock.at(),
         ),
     )
@@ -186,7 +210,7 @@ def _register_worker(
 
 
 def _submit(
-    transitions: ControllerTransitions,
+    transitions: ControllerTestState,
     clock: FrozenClock,
     name: str,
     **kw,
@@ -196,7 +220,7 @@ def _submit(
     return job_id
 
 
-def _task_ids(transitions: ControllerTransitions, job_id: JobName) -> list[JobName]:
+def _task_ids(transitions: ControllerTestState, job_id: JobName) -> list[JobName]:
     with transitions._db.read_snapshot() as snap:
         rows = snap.execute(
             select(tasks_table.c.task_id)
@@ -206,7 +230,7 @@ def _task_ids(transitions: ControllerTransitions, job_id: JobName) -> list[JobNa
     return [JobName.from_wire(str(row.task_id)) for row in rows]
 
 
-def _current_attempt(transitions: ControllerTransitions, task_id: JobName) -> int:
+def _current_attempt(transitions: ControllerTestState, task_id: JobName) -> int:
     with transitions._db.read_snapshot() as snap:
         row = snap.execute(
             select(tasks_table.c.current_attempt_id).where(tasks_table.c.task_id == task_id.to_wire())
@@ -220,17 +244,17 @@ def _current_attempt(transitions: ControllerTransitions, task_id: JobName) -> in
 # ---------------------------------------------------------------------------
 
 
-def scenario_submit_simple(transitions: ControllerTransitions, clock: FrozenClock) -> None:
+def scenario_submit_simple(transitions: ControllerTestState, clock: FrozenClock) -> None:
     """Submit a single 1-replica job."""
     _submit(transitions, clock, "simple-job")
 
 
-def scenario_submit_with_reservation(transitions: ControllerTransitions, clock: FrozenClock) -> None:
+def scenario_submit_with_reservation(transitions: ControllerTestState, clock: FrozenClock) -> None:
     """Submit a job that carries a reservation entry — exercises holder creation."""
     _submit(transitions, clock, "reservation-job", reservation_entries=1)
 
 
-def scenario_register_assign_run_succeed(transitions: ControllerTransitions, clock: FrozenClock) -> None:
+def scenario_register_assign_run_succeed(transitions: ControllerTestState, clock: FrozenClock) -> None:
     """Full happy-path lifecycle: register worker, submit, assign, run, succeed."""
     worker_id = _register_worker(transitions, clock, "w-happy")
     job_id = _submit(transitions, clock, "happy-job")
@@ -243,7 +267,7 @@ def scenario_register_assign_run_succeed(transitions: ControllerTransitions, clo
     apply_event(
         transitions,
         ApplyTaskUpdates(
-            request=HeartbeatApplyRequest(
+            request=WorkerTaskUpdates(
                 worker_id=worker_id,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=attempt, new_state=job_pb2.TASK_STATE_RUNNING)],
             ),
@@ -252,7 +276,7 @@ def scenario_register_assign_run_succeed(transitions: ControllerTransitions, clo
     apply_event(
         transitions,
         ApplyTaskUpdates(
-            request=HeartbeatApplyRequest(
+            request=WorkerTaskUpdates(
                 worker_id=worker_id,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=attempt, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
             ),
@@ -260,7 +284,7 @@ def scenario_register_assign_run_succeed(transitions: ControllerTransitions, clo
     )
 
 
-def scenario_task_failure_with_retry(transitions: ControllerTransitions, clock: FrozenClock) -> None:
+def scenario_task_failure_with_retry(transitions: ControllerTestState, clock: FrozenClock) -> None:
     """Submit with retry budget, fail once, observe retry to PENDING, then succeed."""
     worker_id = _register_worker(transitions, clock, "w-retry")
     job_id = _submit(transitions, clock, "retry-job", max_retries_failure=2)
@@ -270,7 +294,7 @@ def scenario_task_failure_with_retry(transitions: ControllerTransitions, clock: 
     apply_event(
         transitions,
         ApplyTaskUpdates(
-            HeartbeatApplyRequest(
+            WorkerTaskUpdates(
                 worker_id=worker_id,
                 updates=[
                     TaskUpdate(
@@ -288,7 +312,7 @@ def scenario_task_failure_with_retry(transitions: ControllerTransitions, clock: 
     apply_event(
         transitions,
         ApplyTaskUpdates(
-            HeartbeatApplyRequest(
+            WorkerTaskUpdates(
                 worker_id=worker_id,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=second_attempt, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
             )
@@ -296,17 +320,24 @@ def scenario_task_failure_with_retry(transitions: ControllerTransitions, clock: 
     )
 
 
-def scenario_worker_failure_cascade(transitions: ControllerTransitions, clock: FrozenClock) -> None:
-    """Register → assign → fail the worker via ``fail_workers`` (multi-tx orchestrator)."""
+def scenario_worker_failure_cascade(transitions: ControllerTestState, clock: FrozenClock) -> None:
+    """Register → assign → fail the worker via ``ops.worker.fail`` (multi-tx orchestrator)."""
     worker_id = _register_worker(transitions, clock, "w-doomed")
     job_id = _submit(transitions, clock, "cascade-job")
     (task_id,) = _task_ids(transitions, job_id)
     apply_event(transitions, QueueAssignments([Assignment(task_id=task_id, worker_id=worker_id)]))
     # Direct call: fail_workers is intentionally not an IrisEvent.
-    transitions.fail_workers([(worker_id, "w-doomed:8080", "node lost")])
+    ops.worker.fail(
+        transitions._db,
+        worker_ids=[str(worker_id)],
+        reason="node lost",
+        health=transitions._health,
+        endpoints=transitions._endpoints,
+        worker_attrs=transitions._worker_attrs,
+    )
 
 
-def scenario_cancel_running_job(transitions: ControllerTransitions, clock: FrozenClock) -> None:
+def scenario_cancel_running_job(transitions: ControllerTestState, clock: FrozenClock) -> None:
     """Submit a 2-replica job, assign both tasks, then cancel."""
     worker_id = _register_worker(transitions, clock, "w-cancel", address="w-cancel:8080")
     job_id = _submit(transitions, clock, "cancel-job", replicas=2)
@@ -318,7 +349,7 @@ def scenario_cancel_running_job(transitions: ControllerTransitions, clock: Froze
     apply_event(transitions, CancelJob(job_id=job_id, reason="user-cancel"))
 
 
-def scenario_preempt_task(transitions: ControllerTransitions, clock: FrozenClock) -> None:
+def scenario_preempt_task(transitions: ControllerTestState, clock: FrozenClock) -> None:
     """Assign a task and preempt it terminally (no preemption-retry budget)."""
     worker_id = _register_worker(transitions, clock, "w-preempt")
     job_id = _submit(transitions, clock, "preempt-job", max_retries_preemption=0)
@@ -327,7 +358,7 @@ def scenario_preempt_task(transitions: ControllerTransitions, clock: FrozenClock
     apply_event(transitions, PreemptTask(task_id=task_id, reason="reclaim"))
 
 
-def scenario_coscheduled_timeout(transitions: ControllerTransitions, clock: FrozenClock) -> None:
+def scenario_coscheduled_timeout(transitions: ControllerTestState, clock: FrozenClock) -> None:
     """Coscheduled 2-replica job; timeout one task and observe sibling cascade."""
     worker_a = _register_worker(transitions, clock, "w-cosched-a", address="w-cosched-a:8080")
     worker_b = _register_worker(transitions, clock, "w-cosched-b", address="w-cosched-b:8080")
@@ -345,7 +376,7 @@ def scenario_coscheduled_timeout(transitions: ControllerTransitions, clock: Froz
     apply_event(transitions, CancelTasksForTimeout(task_ids=frozenset({tasks[0]}), reason="execution-timeout"))
 
 
-def scenario_coscheduled_failure_retry_bounces_siblings(transitions: ControllerTransitions, clock: FrozenClock) -> None:
+def scenario_coscheduled_failure_retry_bounces_siblings(transitions: ControllerTestState, clock: FrozenClock) -> None:
     """Coscheduled 2-replica job; one task hits a transient failure with retry
     budget remaining. Siblings must bounce to PENDING so the retry re-coschedules
     atomically — otherwise the lone PENDING retry can land on a different slice
@@ -377,7 +408,7 @@ def scenario_coscheduled_failure_retry_bounces_siblings(transitions: ControllerT
     apply_event(
         transitions,
         ApplyTaskUpdates(
-            HeartbeatApplyRequest(
+            WorkerTaskUpdates(
                 worker_id=worker_a,
                 updates=[TaskUpdate(task_id=tasks[0], attempt_id=a0, new_state=job_pb2.TASK_STATE_RUNNING)],
             )
@@ -386,7 +417,7 @@ def scenario_coscheduled_failure_retry_bounces_siblings(transitions: ControllerT
     apply_event(
         transitions,
         ApplyTaskUpdates(
-            HeartbeatApplyRequest(
+            WorkerTaskUpdates(
                 worker_id=worker_b,
                 updates=[TaskUpdate(task_id=tasks[1], attempt_id=a1, new_state=job_pb2.TASK_STATE_RUNNING)],
             )
@@ -395,7 +426,7 @@ def scenario_coscheduled_failure_retry_bounces_siblings(transitions: ControllerT
     apply_event(
         transitions,
         ApplyTaskUpdates(
-            HeartbeatApplyRequest(
+            WorkerTaskUpdates(
                 worker_id=worker_a,
                 updates=[
                     TaskUpdate(
@@ -410,7 +441,7 @@ def scenario_coscheduled_failure_retry_bounces_siblings(transitions: ControllerT
     )
 
 
-def scenario_coscheduled_preempt_retry_bounces_siblings(transitions: ControllerTransitions, clock: FrozenClock) -> None:
+def scenario_coscheduled_preempt_retry_bounces_siblings(transitions: ControllerTestState, clock: FrozenClock) -> None:
     """Coscheduled 2-replica job; controller preempts one task with budget remaining.
     Siblings must bounce to PENDING and the original worker must be in the kill set
     so a stale TPU process doesn't outlive its bookkeeping.
@@ -438,7 +469,43 @@ def scenario_coscheduled_preempt_retry_bounces_siblings(transitions: ControllerT
     apply_event(transitions, PreemptTask(task_id=tasks[0], reason="evicted-by-prod"))
 
 
-def scenario_direct_provider_cycle(transitions: ControllerTransitions, clock: FrozenClock) -> None:
+def scenario_coscheduled_preempt_terminal_cascades_siblings(
+    transitions: ControllerTestState, clock: FrozenClock
+) -> None:
+    """Coscheduled 2-replica job RUNNING with no preemption budget; the controller
+    preempts one task terminally. The sibling must cascade to COSCHED_FAILED — not
+    bounce to PENDING — so no task is left active on a slice whose partner is gone.
+
+    The terminal-preempt complement of ``coscheduled_preempt_retry_bounces_siblings``:
+    the retry case requeues siblings, the no-budget case terminates them.
+    """
+    worker_a = _register_worker(transitions, clock, "w-cosched-pt-a", address="w-cosched-pt-a:8080")
+    worker_b = _register_worker(transitions, clock, "w-cosched-pt-b", address="w-cosched-pt-b:8080")
+    job_id = _submit(
+        transitions,
+        clock,
+        "cosched-preempt-term",
+        replicas=2,
+        coscheduled=True,
+        max_retries_preemption=0,
+    )
+    tasks = _task_ids(transitions, job_id)
+    apply_event(
+        transitions,
+        QueueAssignments(
+            [
+                Assignment(task_id=tasks[0], worker_id=worker_a),
+                Assignment(task_id=tasks[1], worker_id=worker_b),
+            ],
+        ),
+    )
+    attempts = [_current_attempt(transitions, t) for t in tasks]
+    _observe(transitions, worker_a, tasks[0], attempts[0], job_pb2.TASK_STATE_RUNNING)
+    _observe(transitions, worker_b, tasks[1], attempts[1], job_pb2.TASK_STATE_RUNNING)
+    apply_event(transitions, PreemptTask(task_id=tasks[0], reason="evicted-by-prod"))
+
+
+def scenario_direct_provider_cycle(transitions: ControllerTestState, clock: FrozenClock) -> None:
     """Submit a job with no worker, drain to direct-provider, then mark RUNNING."""
     job_id = _submit(transitions, clock, "direct-job")
     (task_id,) = _task_ids(transitions, job_id)
@@ -452,7 +519,7 @@ def scenario_direct_provider_cycle(transitions: ControllerTransitions, clock: Fr
     )
 
 
-def scenario_prune_old_data(transitions: ControllerTransitions, clock: FrozenClock) -> None:
+def scenario_prune_old_data(transitions: ControllerTestState, clock: FrozenClock) -> None:
     """Submit, mark task succeeded, age out, then call prune_old_data directly."""
     worker_id = _register_worker(transitions, clock, "w-prune")
     job_id = _submit(transitions, clock, "prune-job")
@@ -462,7 +529,7 @@ def scenario_prune_old_data(transitions: ControllerTransitions, clock: FrozenClo
     apply_event(
         transitions,
         ApplyTaskUpdates(
-            HeartbeatApplyRequest(
+            WorkerTaskUpdates(
                 worker_id=worker_id,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=attempt, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
             )
@@ -474,14 +541,18 @@ def scenario_prune_old_data(transitions: ControllerTransitions, clock: FrozenClo
     # Advance the clock so retention math classifies the row as old.
     clock.advance_ms(10_000)
     # Direct call: prune_old_data is intentionally not an IrisEvent.
-    transitions.prune_old_data(
+    prune_old_data(
+        transitions._db,
+        transitions._health,
+        transitions._endpoints,
+        transitions._worker_attrs,
         job_retention=Duration.from_seconds(0),
         worker_retention=Duration.from_seconds(3600),
         pause_between_s=0.0,
     )
 
 
-def scenario_endpoint_register_remove(transitions: ControllerTransitions, clock: FrozenClock) -> None:
+def scenario_endpoint_register_remove(transitions: ControllerTestState, clock: FrozenClock) -> None:
     """Add an endpoint to a non-terminal task, then remove it."""
     worker_id = _register_worker(transitions, clock, "w-endpoint")
     job_id = _submit(transitions, clock, "endpoint-job")
@@ -499,7 +570,7 @@ def scenario_endpoint_register_remove(transitions: ControllerTransitions, clock:
     apply_event(transitions, RemoveEndpoint(endpoint_id="ep-replay"))
 
 
-def scenario_replace_reservation_claims(transitions: ControllerTransitions, clock: FrozenClock) -> None:
+def scenario_replace_reservation_claims(transitions: ControllerTestState, clock: FrozenClock) -> None:
     """Register two workers, replace reservation claims twice (with then without entries)."""
     wa = _register_worker(transitions, clock, "w-claim-a", address="w-claim-a:8080")
     wb = _register_worker(transitions, clock, "w-claim-b", address="w-claim-b:8080")
@@ -512,17 +583,157 @@ def scenario_replace_reservation_claims(transitions: ControllerTransitions, cloc
     apply_event(transitions, ReplaceReservationClaims(claims={}))
 
 
-SCENARIOS: dict[str, Callable[[ControllerTransitions, FrozenClock], None]] = {
+def _observe(
+    transitions: ControllerTestState,
+    worker_id: WorkerId,
+    task_id: JobName,
+    attempt: int,
+    state: int,
+    *,
+    error: str | None = None,
+) -> None:
+    """Land a single worker observation for one attempt through the reconcile path."""
+    apply_event(
+        transitions,
+        ApplyTaskUpdates(
+            WorkerTaskUpdates(
+                worker_id=worker_id,
+                updates=[TaskUpdate(task_id=task_id, attempt_id=attempt, new_state=state, error=error or "")],
+            )
+        ),
+    )
+
+
+_TPU_V5P_32 = "v5p-32"
+
+
+def scenario_reservation_subjob_completes_releases_claim(transitions: ControllerTestState, clock: FrozenClock) -> None:
+    """Reservation on a tpuv5p-32: claim a worker, run the subjob to success, and
+    confirm the claim is released once the job finishes.
+
+    Exercises the full reservation lifecycle reachable from reconcile: the claim
+    pass binds the eligible TPU worker to the entry, the job's task runs on it,
+    and the next claim cycle drops the claim because the holding job is terminal.
+    """
+    worker_id = _register_worker(transitions, clock, "w-res", metadata=_make_tpu_metadata(_TPU_V5P_32))
+    job_id = _submit(
+        transitions,
+        clock,
+        "res-job",
+        reservation_entries=1,
+        reservation_device=_tpu_device(_TPU_V5P_32, count=4),
+    )
+    apply_event(transitions, RunReservationClaimCycle())
+    (task_id,) = _task_ids(transitions, job_id)
+    apply_event(transitions, QueueAssignments([Assignment(task_id=task_id, worker_id=worker_id)]))
+    attempt = _current_attempt(transitions, task_id)
+    _observe(transitions, worker_id, task_id, attempt, job_pb2.TASK_STATE_RUNNING)
+    _observe(transitions, worker_id, task_id, attempt, job_pb2.TASK_STATE_SUCCEEDED)
+    # Job is now terminal — the claim sweep must release the worker.
+    apply_event(transitions, RunReservationClaimCycle())
+
+
+def scenario_reservation_worker_failure_reclaims_and_reschedules(
+    transitions: ControllerTestState, clock: FrozenClock
+) -> None:
+    """Reservation on a tpuv5p-32: the holding worker dies mid-run, a replacement
+    comes up, and the subjob reschedules onto it.
+
+    The original worker's claim is swept once it leaves the active set; the next
+    claim cycle binds the freshly-registered replacement, the retried attempt runs
+    there to success, and the final sweep releases that claim.
+    """
+    worker_a = _register_worker(transitions, clock, "w-res-a", metadata=_make_tpu_metadata(_TPU_V5P_32))
+    job_id = _submit(
+        transitions,
+        clock,
+        "res-failover-job",
+        max_retries_preemption=1,
+        reservation_entries=1,
+        reservation_device=_tpu_device(_TPU_V5P_32, count=4),
+    )
+    apply_event(transitions, RunReservationClaimCycle())
+    (task_id,) = _task_ids(transitions, job_id)
+    apply_event(transitions, QueueAssignments([Assignment(task_id=task_id, worker_id=worker_a)]))
+    first_attempt = _current_attempt(transitions, task_id)
+    _observe(transitions, worker_a, task_id, first_attempt, job_pb2.TASK_STATE_RUNNING)
+    # Worker A dies: running task bounces to PENDING (preemption budget remains).
+    ops.worker.fail(
+        transitions._db,
+        worker_ids=[str(worker_a)],
+        reason="node lost",
+        health=transitions._health,
+        endpoints=transitions._endpoints,
+        worker_attrs=transitions._worker_attrs,
+    )
+    # Replacement worker comes up; the claim sweep drops A and binds B.
+    worker_b = _register_worker(transitions, clock, "w-res-b", metadata=_make_tpu_metadata(_TPU_V5P_32))
+    apply_event(transitions, RunReservationClaimCycle())
+    apply_event(transitions, QueueAssignments([Assignment(task_id=task_id, worker_id=worker_b)]))
+    second_attempt = _current_attempt(transitions, task_id)
+    _observe(transitions, worker_b, task_id, second_attempt, job_pb2.TASK_STATE_RUNNING)
+    _observe(transitions, worker_b, task_id, second_attempt, job_pb2.TASK_STATE_SUCCEEDED)
+    apply_event(transitions, RunReservationClaimCycle())
+
+
+def scenario_coscheduled_five_tasks_one_fails_all_terminal(transitions: ControllerTestState, clock: FrozenClock) -> None:
+    """Coscheduled 5-replica job with no retry budget: one task fails non-retryably
+    and every sibling cascades to COSCHED_FAILED so no task is left active."""
+    workers = [_register_worker(transitions, clock, f"w-cosched5-{i}", address=f"w-cosched5-{i}:8080") for i in range(5)]
+    job_id = _submit(transitions, clock, "cosched5-job", replicas=5, coscheduled=True, max_retries_failure=0)
+    tasks = _task_ids(transitions, job_id)
+    apply_event(
+        transitions,
+        QueueAssignments([Assignment(task_id=t, worker_id=w) for t, w in zip(tasks, workers, strict=True)]),
+    )
+    attempts = [_current_attempt(transitions, t) for t in tasks]
+    for task_id, worker_id, attempt in zip(tasks, workers, attempts, strict=True):
+        _observe(transitions, worker_id, task_id, attempt, job_pb2.TASK_STATE_RUNNING)
+    # Task index 2 fails terminally; siblings must all cascade to COSCHED_FAILED.
+    _observe(transitions, workers[2], tasks[2], attempts[2], job_pb2.TASK_STATE_FAILED, error="boom")
+
+
+def scenario_independent_five_tasks_one_fails(transitions: ControllerTestState, clock: FrozenClock) -> None:
+    """Non-coscheduled 5-replica job: one task fails while the others run to success.
+
+    The negative control for the coscheduled cascade — siblings must NOT be
+    terminated, so the four survivors reach SUCCEEDED even though the job itself
+    fails on the single non-retryable task.
+    """
+    workers = [_register_worker(transitions, clock, f"w-indep5-{i}", address=f"w-indep5-{i}:8080") for i in range(5)]
+    job_id = _submit(transitions, clock, "indep5-job", replicas=5, max_retries_failure=0)
+    tasks = _task_ids(transitions, job_id)
+    apply_event(
+        transitions,
+        QueueAssignments([Assignment(task_id=t, worker_id=w) for t, w in zip(tasks, workers, strict=True)]),
+    )
+    attempts = [_current_attempt(transitions, t) for t in tasks]
+    for task_id, worker_id, attempt in zip(tasks, workers, attempts, strict=True):
+        _observe(transitions, worker_id, task_id, attempt, job_pb2.TASK_STATE_RUNNING)
+    # Survivors complete independently first — proving the failure does not cascade.
+    # (Were they still running when task 2 fails, the job-terminal finalize would
+    # kill them; succeeding them first isolates the no-peer-cascade contract.)
+    for i in (0, 1, 3, 4):
+        _observe(transitions, workers[i], tasks[i], attempts[i], job_pb2.TASK_STATE_SUCCEEDED)
+    _observe(transitions, workers[2], tasks[2], attempts[2], job_pb2.TASK_STATE_FAILED, error="boom")
+
+
+SCENARIOS: dict[str, Callable[[ControllerTestState, FrozenClock], None]] = {
     "cancel_running_job": scenario_cancel_running_job,
     "coscheduled_failure_retry_bounces_siblings": scenario_coscheduled_failure_retry_bounces_siblings,
     "coscheduled_preempt_retry_bounces_siblings": scenario_coscheduled_preempt_retry_bounces_siblings,
+    "coscheduled_preempt_terminal_cascades_siblings": scenario_coscheduled_preempt_terminal_cascades_siblings,
     "coscheduled_timeout": scenario_coscheduled_timeout,
     "direct_provider_cycle": scenario_direct_provider_cycle,
+    "coscheduled_five_tasks_one_fails_all_terminal": scenario_coscheduled_five_tasks_one_fails_all_terminal,
     "endpoint_register_remove": scenario_endpoint_register_remove,
+    "independent_five_tasks_one_fails": scenario_independent_five_tasks_one_fails,
     "preempt_task": scenario_preempt_task,
     "prune_old_data": scenario_prune_old_data,
     "register_assign_run_succeed": scenario_register_assign_run_succeed,
     "replace_reservation_claims": scenario_replace_reservation_claims,
+    "reservation_subjob_completes_releases_claim": scenario_reservation_subjob_completes_releases_claim,
+    "reservation_worker_failure_reclaims_and_reschedules": scenario_reservation_worker_failure_reclaims_and_reschedules,
     "submit_simple": scenario_submit_simple,
     "submit_with_reservation": scenario_submit_with_reservation,
     "task_failure_with_retry": scenario_task_failure_with_retry,

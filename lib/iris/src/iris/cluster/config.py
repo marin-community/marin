@@ -5,7 +5,6 @@
 
 Supports YAML config files for cluster management. This module provides:
 - Configuration loading and validation (load_config, apply_defaults)
-- Configuration serialization (config_to_dict)
 - SSH configuration resolution (get_ssh_config)
 - ScaleGroupSpec wrapper for extended group metadata
 - IrisConfig high-level wrapper with component factories
@@ -22,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from google.protobuf.json_format import MessageToDict, ParseDict
+from google.protobuf.json_format import ParseDict
 from rigging.timing import Duration
 
 from iris.cluster.constraints import WellKnownAttribute
@@ -71,13 +70,6 @@ _CAPACITY_TYPE_MAP = {
     "on_demand": "CAPACITY_TYPE_ON_DEMAND",
     "on-demand": "CAPACITY_TYPE_ON_DEMAND",
     "reserved": "CAPACITY_TYPE_RESERVED",
-}
-
-# Reverse mapping for YAML serialization: proto enum name → friendly YAML name
-_CAPACITY_TYPE_REVERSE_MAP = {
-    "CAPACITY_TYPE_PREEMPTIBLE": "preemptible",
-    "CAPACITY_TYPE_ON_DEMAND": "on-demand",
-    "CAPACITY_TYPE_RESERVED": "reserved",
 }
 
 _COREWEAVE_TOPOLOGY_LABEL_PREFIXES = (
@@ -970,37 +962,6 @@ def _parse_memory_value(value: object, field_name: str) -> int:
     if isinstance(value, str):
         return int(parse_memory_string(value))
     raise ValueError(f"{field_name} must be an int or size string (got {type(value).__name__})")
-
-
-def config_to_dict(config: config_pb2.IrisClusterConfig) -> dict:
-    """Convert config to dict for YAML serialization."""
-    data = MessageToDict(config, preserving_proto_field_name=True)
-    scale_groups = data.get("scale_groups")
-    if isinstance(scale_groups, dict):
-        for sg in scale_groups.values():
-            if not isinstance(sg, dict):
-                continue
-            resources = sg.get("resources")
-            if not isinstance(resources, dict):
-                continue
-            normalized: dict[str, object] = {}
-            if "cpu_millicores" in resources:
-                normalized["cpu"] = resources["cpu_millicores"] / 1000
-            if "memory_bytes" in resources:
-                normalized["ram"] = resources["memory_bytes"]
-            if "disk_bytes" in resources:
-                normalized["disk"] = resources["disk_bytes"]
-            if "device_type" in resources:
-                normalized["device_type"] = resources["device_type"]
-            if "device_variant" in resources:
-                normalized["device_variant"] = resources["device_variant"]
-            if "device_count" in resources:
-                normalized["device_count"] = resources["device_count"]
-            if "capacity_type" in resources:
-                raw_ct = resources["capacity_type"]
-                normalized["capacity_type"] = _CAPACITY_TYPE_REVERSE_MAP.get(raw_ct, raw_ct)
-            sg["resources"] = normalized
-    return data
 
 
 def get_ssh_config(

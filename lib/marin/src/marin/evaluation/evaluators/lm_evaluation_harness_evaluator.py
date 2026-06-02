@@ -8,11 +8,11 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import is_remote_path, open_url, url_to_fs
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
-from marin.evaluation.utils import is_remote_path, upload_to_gcs
+from marin.evaluation.utils import upload_to_gcs
 from marin.inference.vllm_server import VllmEnvironment
 
 logger = logging.getLogger(__name__)

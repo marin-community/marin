@@ -19,9 +19,16 @@ from levanter.layers.kv_cache import KvPageCache
 
 
 def is_available() -> bool:
-    """Return whether the `tpu_inference` package is importable."""
+    """Return whether the `tpu_inference` package and kernel imports are usable."""
 
-    return importlib.util.find_spec("tpu_inference") is not None
+    if importlib.util.find_spec("tpu_inference") is None:
+        return False
+
+    try:
+        from tpu_inference.kernels.ragged_paged_attention.v3 import kernel, util  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def _request_distribution(cu_q_lens: jax.Array, num_seqs: jax.Array) -> jax.Array:

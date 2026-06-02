@@ -164,6 +164,25 @@ def test_merge_split_encodings(local_gpt2_marin_tokenizer):
     assert short_out == reg_out
 
 
+def test_long_string_workaround_matches_whole_encoding_across_many_chunks(local_gpt2_marin_tokenizer):
+    """Cursor-based long-string splitting must match whole-string encoding over many chunks.
+
+    ``_encode_long_string`` walks a cursor over the original text instead of
+    re-slicing the unconsumed tail. This exercises hundreds of cursor advances
+    (~650 chunks at ``_workaround_len=500``) and asserts the ids are byte-for-byte
+    identical to the single-shot path, guarding the O(N) rewrite against drift.
+    """
+    tokenizer = local_gpt2_marin_tokenizer
+    text = "lorem ipsum dolor sit amet " * 12_000  # ~324k chars
+
+    split_tok = BatchTokenizer(tokenizer, _workaround_len=500, long_string_workaround=True)
+    # _workaround_len above any realistic length => never splits => reference path.
+    whole_tok = BatchTokenizer(tokenizer, _workaround_len=10**9, long_string_workaround=True)
+    batch = [{"text": text}]
+
+    assert split_tok(batch) == whole_tok(batch)
+
+
 # ---------------------------------------------------------------------------
 # BOS / EOS handling — regression tests for #5034
 # ---------------------------------------------------------------------------

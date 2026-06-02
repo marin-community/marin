@@ -131,9 +131,6 @@ class QwenConfig(LlamaConfig):
             upcast_attn=self.upcast_attn,
             attn_backend=self.attn_backend,
             flash_attention_block_size=self.flash_attention_block_size,
-            rpa_num_kv_pages_per_block=self.rpa_num_kv_pages_per_block,
-            rpa_num_queries_per_block=self.rpa_num_queries_per_block,
-            rpa_vmem_limit_bytes=self.rpa_vmem_limit_bytes,
             rope=self.rope,
         )
 

@@ -498,6 +498,34 @@ def test_gemma3_decoder_layer(num_kv_heads):
     chex.assert_trees_all_close(hf_out[0].detach().cpu().numpy(), lev_out.array, rtol=1e-4, atol=1e-4)
 
 
+def test_gemma3_config_from_hf_config_roundtrip():
+    """Regression: ``Gemma3Config.from_hf_config`` must be callable on the
+    class. Previously the override was missing ``@classmethod``, so calling
+    ``Gemma3Config.from_hf_config(hf_config)`` bound ``hf_config`` to ``cls``
+    and raised ``TypeError: from_hf_config() missing 1 required positional
+    argument: 'hf_config'``. The parent ``Gemma2Config.from_hf_config`` and
+    ``GemmaConfig.from_hf_config`` are already classmethods.
+    """
+    cfg = Gemma3Config(
+        max_seq_len=128,
+        hidden_dim=16,
+        num_heads=4,
+        num_kv_heads=4,
+        gradient_checkpointing=False,
+        head_dim=4,
+        query_pre_attn_scalar=4,
+        num_layers=2,
+    )
+    hf_config = cfg.to_hf_config(1000)
+    roundtripped = Gemma3Config.from_hf_config(hf_config)
+
+    assert isinstance(roundtripped, Gemma3Config)
+    assert roundtripped.hidden_dim == cfg.hidden_dim
+    assert roundtripped.num_layers == cfg.num_layers
+    assert roundtripped.num_heads == cfg.num_heads
+    assert roundtripped.num_kv_heads == cfg.num_kv_heads
+
+
 @skip_if_hf_model_not_accessible("google/gemma-3-1b-pt")
 @skip_if_no_torch
 def test_gemma3_roundtrip():
