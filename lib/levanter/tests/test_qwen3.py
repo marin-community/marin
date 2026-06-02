@@ -14,9 +14,9 @@ import haliax as hax
 from levanter.inference.jit_scheduler import SequenceTable
 from levanter.inference.page_table import PageTable
 from levanter.inference.tpu_kernels import (
-    TpuPagedAttentionBackend,
-    TpuPagedAttentionConfig,
-    available_tpu_paged_attention_backends,
+    AutoPagedAttentionConfig,
+    PagedAttentionConfig,
+    available_paged_attention_configs,
 )
 from levanter.layers.attention import AttentionMask
 from levanter.models.qwen import Qwen3Config, Qwen3LMHeadModel
@@ -57,9 +57,9 @@ def _tiny_qwen3_config() -> Qwen3Config:
     )
 
 
-def _qwen_decode_backends() -> tuple[TpuPagedAttentionBackend, ...]:
-    available = available_tpu_paged_attention_backends()
-    return (TpuPagedAttentionBackend.AUTO, *available)
+def _qwen_decode_configs() -> tuple[PagedAttentionConfig, ...]:
+    available = available_paged_attention_configs()
+    return (AutoPagedAttentionConfig(), *available)
 
 
 @skip_if_no_torch
@@ -115,8 +115,8 @@ def test_qwen3_roundtrip():
             np.testing.assert_allclose(hf_out, jax_out, rtol=1e-4, atol=1e-4)
 
 
-@pytest.mark.parametrize("backend", _qwen_decode_backends())
-def test_qwen3_paged_decode_matches_full_logits_for_available_backends(backend: TpuPagedAttentionBackend):
+@pytest.mark.parametrize("paged_attention", _qwen_decode_configs())
+def test_qwen3_paged_decode_matches_full_logits_for_available_backends(paged_attention: PagedAttentionConfig):
     Vocab = hax.Axis("vocab", 32)
     Pos = hax.Axis("position", 6)
     config = _tiny_qwen3_config()
@@ -145,7 +145,7 @@ def test_qwen3_paged_decode_matches_full_logits_for_available_backends(backend: 
                 kv_cache,
                 batch_info,
                 pos_ids,
-                tpu_paged_attention=TpuPagedAttentionConfig(backend=backend),
+                paged_attention=paged_attention,
             )
             logits_chunks.append(logits_chunk)
 

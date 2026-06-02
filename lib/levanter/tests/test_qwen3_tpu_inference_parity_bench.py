@@ -79,10 +79,10 @@ def test_main_rejects_reference_logit_check_without_levanter():
         bench.main(["--backend", "levanter", "--reference-logit-only"])
 
 
-def test_parse_args_defaults_to_auto_tpu_paged_attention_backend():
+def test_parse_args_defaults_to_auto_paged_attention():
     args = bench.parse_args(["--backend", "levanter"])
 
-    assert args.levanter_tpu_paged_attention_backend == "auto"
+    assert args.levanter_paged_attention == "auto"
     assert not args.levanter_allow_reference_fallback
     assert args.levanter_sampler_top_k_mode == "candidate"
 
@@ -93,13 +93,13 @@ def test_parse_args_defaults_to_two_warmup_rounds():
     assert args.warmup_rounds == 2
 
 
-def test_start_backend_passes_levanter_tpu_paged_attention_config(monkeypatch, tmp_path):
+def test_start_backend_passes_levanter_paged_attention_config(monkeypatch, tmp_path):
     captured: dict = {}
 
     def start_levanter_server(**kwargs):
         captured.update(kwargs)
         return bench.ServerHandle(
-            name=f"levanter:{kwargs['tpu_paged_attention_backend'].value}",
+            name=f"levanter:{bench.paged_attention_config_name(kwargs['paged_attention'])}",
             base_url="http://127.0.0.1:8000/v1",
             model_id="levanter",
             close=lambda: None,
@@ -110,8 +110,8 @@ def test_start_backend_passes_levanter_tpu_paged_attention_config(monkeypatch, t
         [
             "--backend",
             "levanter",
-            "--levanter-tpu-paged-attention-backend",
-            "jax_rpa",
+            "--levanter-paged-attention",
+            "jax-rpa",
             "--levanter-allow-reference-fallback",
             "--levanter-compute-dtype",
             "float32",
@@ -126,7 +126,7 @@ def test_start_backend_passes_levanter_tpu_paged_attention_config(monkeypatch, t
             "--reference-logit-max-prompts",
             "1",
             "--reference-logit-decode-backend",
-            "tpu_inference",
+            "tpu-inference",
             "--reference-logit-cache-dtype",
             "auto",
             "--reference-logit-cache-dtype",
@@ -147,20 +147,22 @@ def test_start_backend_passes_levanter_tpu_paged_attention_config(monkeypatch, t
         prompts={},
     )
 
-    assert handle.name == "levanter:jax_rpa"
-    assert captured["tpu_paged_attention_backend"] == bench.TpuPagedAttentionBackend.JAX_RPA
-    assert captured["allow_reference_fallback"]
+    assert handle.name == "levanter:jax-rpa"
+    assert captured["paged_attention"] == bench.JaxRpaPagedAttentionConfig(
+        fail_on_reference_fallback=False,
+        num_kv_pages_per_block=None,
+        num_queries_per_block=None,
+        vmem_limit_bytes=None,
+    )
     assert captured["compute_dtype"] == "float32"
     assert captured["trainer_mp_policy"] == "bf16"
-    assert captured["tpu_inference_out_dtype"] == "float32"
-    assert captured["preserve_attention_output_dtype"]
     assert captured["sampler_top_k_mode"] == bench.SamplerTopKMode.THRESHOLD_MASK
     assert captured["tensor_parallel_size"] == 4
     assert captured["reference_logit_check_dir"] == tmp_path
     assert captured["reference_logit_check_cases"] == []
     assert captured["reference_logit_check_prompts"] == {}
     assert captured["reference_logit_max_prompts"] == 1
-    assert captured["reference_logit_decode_backends"] == [bench.TpuPagedAttentionBackend.TPU_INFERENCE]
+    assert captured["reference_logit_decode_backends"] == ["tpu-inference"]
     assert captured["reference_logit_cache_dtype_policies"] == ["auto", "bfloat16"]
     assert captured["reference_logit_only"]
 
@@ -499,21 +501,21 @@ def test_reference_logit_error_metrics_reports_distribution_and_topk():
 def test_reference_logit_cache_dtype_uses_bf16_for_tpu_inference_policy():
     assert (
         bench._reference_logit_cache_dtype(
-            bench.TpuPagedAttentionConfig(backend=bench.TpuPagedAttentionBackend.AUTO),
+            bench.AutoPagedAttentionConfig(),
             bench.jnp.float32,
         )
         == bench.jnp.bfloat16
     )
     assert (
         bench._reference_logit_cache_dtype(
-            bench.TpuPagedAttentionConfig(backend=bench.TpuPagedAttentionBackend.TPU_INFERENCE),
+            bench.TpuInferencePagedAttentionConfig(),
             bench.jnp.float32,
         )
         == bench.jnp.bfloat16
     )
     assert (
         bench._reference_logit_cache_dtype(
-            bench.TpuPagedAttentionConfig(backend=bench.TpuPagedAttentionBackend.REFERENCE),
+            bench.ReferencePagedAttentionConfig(),
             bench.jnp.float32,
         )
         == bench.jnp.float32
@@ -521,7 +523,7 @@ def test_reference_logit_cache_dtype_uses_bf16_for_tpu_inference_policy():
 
 
 def test_reference_logit_cache_dtype_policy_can_force_f32_for_tpu_inference():
-    config = bench.TpuPagedAttentionConfig(backend=bench.TpuPagedAttentionBackend.TPU_INFERENCE)
+    config = bench.TpuInferencePagedAttentionConfig()
 
     assert bench._reference_logit_cache_dtype_for_policy(config, bench.jnp.bfloat16, "auto") == bench.jnp.bfloat16
     assert bench._reference_logit_cache_dtype_for_policy(config, bench.jnp.bfloat16, "float32") == bench.jnp.float32

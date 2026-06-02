@@ -1,13 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Benchmark Qwen3 8B decode-heavy TPU inference against vLLM TPU.
-
-This is the phase-1 parity harness from
-`.agents/projects/levanter_tpu_inference_parity/design.md`. It intentionally
-uses the OpenAI completions endpoint for both engines so the first signal is
-decode throughput rather than chat-template rendering.
-"""
+"""Benchmark Qwen3 8B decode-heavy TPU inference against vLLM TPU."""
 
 from __future__ import annotations
 
@@ -43,7 +37,14 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.inference.engine import InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams, SequenceTable
 from levanter.inference.page_table import PageTable
-from levanter.inference.tpu_kernels import TpuPagedAttentionBackend, TpuPagedAttentionConfig
+from levanter.inference.tpu_kernels import (
+    AutoPagedAttentionConfig,
+    JaxRpaPagedAttentionConfig,
+    PagedAttentionConfig,
+    ReferencePagedAttentionConfig,
+    TpuInferencePagedAttentionConfig,
+    paged_attention_config_name,
+)
 from levanter.layers.attention import AttentionMask
 from levanter.layers.sampler import SamplerTopKMode
 from levanter.models.qwen import Qwen3Config, Qwen3LMHeadModel
@@ -73,6 +74,8 @@ REFERENCE_LOGIT_ARTIFACT_MD = "levanter_reference_logits.md"
 REFERENCE_LOGIT_TOP_KS = (1, 10, 100, 1000, 4096)
 REFERENCE_LOGIT_HISTOGRAM_BOUNDS = (0.0, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1, 3e-1, 1.0)
 REFERENCE_LOGIT_CACHE_DTYPE_POLICIES = ("auto", "default", "bfloat16", "float32")
+PAGED_ATTENTION_CHOICES = ("auto", "tpu-inference", "jax-rpa", "reference")
+CONCRETE_PAGED_ATTENTION_CHOICES = ("tpu-inference", "jax-rpa", "reference")
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,7 +121,7 @@ class ServerHandle:
     name: str
     base_url: str
     model_id: str
-    close: Any
+    close: Callable[[], None]
     command: list[str] | None = None
     hbm_used_bytes: int | None = None
     compiled_shape_count: int | None = None
@@ -455,24 +458,19 @@ def _single_token_direct_attention_hidden(
     return model.transformer.norm(x)
 
 
-def _reference_logit_cache_dtype(tpu_paged_attention: TpuPagedAttentionConfig, default_dtype: jnp.dtype) -> jnp.dtype:
-    backend = tpu_paged_attention.backend
-    if isinstance(backend, TpuPagedAttentionBackend | str):
-        backends = (TpuPagedAttentionBackend(backend),)
-    else:
-        backends = tuple(TpuPagedAttentionBackend(item) for item in backend)
-    if TpuPagedAttentionBackend.AUTO in backends or TpuPagedAttentionBackend.TPU_INFERENCE in backends:
+def _reference_logit_cache_dtype(paged_attention: PagedAttentionConfig, default_dtype: jnp.dtype) -> jnp.dtype:
+    if isinstance(paged_attention, AutoPagedAttentionConfig | TpuInferencePagedAttentionConfig):
         return jnp.bfloat16
     return default_dtype
 
 
 def _reference_logit_cache_dtype_for_policy(
-    tpu_paged_attention: TpuPagedAttentionConfig,
+    paged_attention: PagedAttentionConfig,
     default_dtype: jnp.dtype,
     policy: str,
 ) -> jnp.dtype:
     if policy == "auto":
-        return _reference_logit_cache_dtype(tpu_paged_attention, default_dtype)
+        return _reference_logit_cache_dtype(paged_attention, default_dtype)
     if policy == "default":
         return default_dtype
     if policy == "bfloat16":
@@ -482,17 +480,59 @@ def _reference_logit_cache_dtype_for_policy(
     raise ValueError(f"Unknown reference-logit cache dtype policy: {policy}")
 
 
+def _paged_attention_config_from_choice(
+    choice: str,
+    *,
+    fail_on_reference_fallback: bool,
+    tpu_inference_out_dtype: str | None,
+    preserve_attention_output_dtype: bool,
+    rpa_num_kv_pages_per_block: int | None,
+    rpa_num_queries_per_block: int | None,
+    rpa_vmem_limit_bytes: int | None,
+) -> PagedAttentionConfig:
+    if choice == "auto":
+        return AutoPagedAttentionConfig(fail_on_reference_fallback=fail_on_reference_fallback)
+    if choice == "reference":
+        return ReferencePagedAttentionConfig(fail_on_reference_fallback=fail_on_reference_fallback)
+    if choice == "tpu-inference":
+        return TpuInferencePagedAttentionConfig(
+            fail_on_reference_fallback=fail_on_reference_fallback,
+            out_dtype=tpu_inference_out_dtype,
+            preserve_attention_output_dtype=preserve_attention_output_dtype,
+        )
+    if choice == "jax-rpa":
+        return JaxRpaPagedAttentionConfig(
+            fail_on_reference_fallback=fail_on_reference_fallback,
+            num_kv_pages_per_block=rpa_num_kv_pages_per_block,
+            num_queries_per_block=rpa_num_queries_per_block,
+            vmem_limit_bytes=rpa_vmem_limit_bytes,
+        )
+    raise ValueError(f"Unknown paged attention choice: {choice}")
+
+
 def _reference_logit_backend_config(
-    backend: TpuPagedAttentionBackend | str,
-    base_config: TpuPagedAttentionConfig,
-) -> TpuPagedAttentionConfig:
-    backend = TpuPagedAttentionBackend(backend)
-    return TpuPagedAttentionConfig(
-        backend=backend,
-        fail_on_reference_fallback=backend != TpuPagedAttentionBackend.REFERENCE,
-        tpu_inference_out_dtype=base_config.tpu_inference_out_dtype,
-        preserve_attention_output_dtype=base_config.preserve_attention_output_dtype,
-    )
+    choice: str,
+    base_config: PagedAttentionConfig,
+) -> PagedAttentionConfig:
+    if choice == "reference":
+        return ReferencePagedAttentionConfig(fail_on_reference_fallback=False)
+    if choice == "tpu-inference":
+        return TpuInferencePagedAttentionConfig(
+            out_dtype=base_config.out_dtype if isinstance(base_config, TpuInferencePagedAttentionConfig) else None,
+            preserve_attention_output_dtype=(
+                isinstance(base_config, TpuInferencePagedAttentionConfig)
+                and base_config.preserve_attention_output_dtype
+            ),
+        )
+    if choice == "jax-rpa":
+        if isinstance(base_config, JaxRpaPagedAttentionConfig):
+            return JaxRpaPagedAttentionConfig(
+                num_kv_pages_per_block=base_config.num_kv_pages_per_block,
+                num_queries_per_block=base_config.num_queries_per_block,
+                vmem_limit_bytes=base_config.vmem_limit_bytes,
+            )
+        return JaxRpaPagedAttentionConfig()
+    raise ValueError(f"Unknown reference-logit paged attention choice: {choice}")
 
 
 def check_levanter_reference_logits(
@@ -502,8 +542,8 @@ def check_levanter_reference_logits(
     tokenizer: Any,
     cases: list[BenchmarkCase],
     prompts: dict[str, tuple[str, int]],
-    tpu_paged_attention: TpuPagedAttentionConfig,
-    decode_backends: list[TpuPagedAttentionBackend] | None,
+    paged_attention: PagedAttentionConfig,
+    decode_backends: list[str] | None,
     cache_dtype_policies: list[str],
     default_cache_dtype: jnp.dtype,
     max_model_len: int,
@@ -517,11 +557,10 @@ def check_levanter_reference_logits(
     results: list[ReferenceLogitCheckResult] = []
     max_pages_per_seq = (max_model_len + 127) // 128
     if decode_backends is None:
-        backend_configs = [("configured", tpu_paged_attention)]
+        backend_configs = [("configured", paged_attention)]
     else:
         backend_configs = [
-            (backend.value, _reference_logit_backend_config(backend, tpu_paged_attention))
-            for backend in decode_backends
+            (backend, _reference_logit_backend_config(backend, paged_attention)) for backend in decode_backends
         ]
 
     with trainer.use_device_mesh(), hax.axis_mapping(trainer.compute_axis_mapping):
@@ -583,7 +622,7 @@ def check_levanter_reference_logits(
                         kv_cache,
                         batch_info,
                         pos_ids,
-                        tpu_paged_attention=backend_config,
+                        paged_attention=backend_config,
                     )
                     decode_logits = model.lm_head_logits(decode_hidden)
 
@@ -621,8 +660,15 @@ def check_levanter_reference_logits(
                             decode_hidden_dtype=hidden_metrics["candidate_dtype"],
                             reference_logits_dtype=error_metrics["reference_logits_dtype"],
                             decode_logits_dtype=error_metrics["decode_logits_dtype"],
-                            tpu_inference_out_dtype=backend_config.tpu_inference_out_dtype,
-                            preserve_attention_output_dtype=backend_config.preserve_attention_output_dtype,
+                            tpu_inference_out_dtype=(
+                                backend_config.out_dtype
+                                if isinstance(backend_config, TpuInferencePagedAttentionConfig)
+                                else None
+                            ),
+                            preserve_attention_output_dtype=(
+                                isinstance(backend_config, TpuInferencePagedAttentionConfig)
+                                and backend_config.preserve_attention_output_dtype
+                            ),
                             positions=len(prompt_token_ids),
                             vocab_size=reference_logits.axis_size("vocab"),
                             hidden_max_abs_error=hidden_metrics["max_abs_error"],
@@ -1194,15 +1240,9 @@ def start_levanter_server(
     max_top_k: int | None,
     tensor_parallel_size: int,
     hbm_utilization: float,
-    rpa_num_kv_pages_per_block: int | None,
-    rpa_num_queries_per_block: int | None,
-    rpa_vmem_limit_bytes: int | None,
-    tpu_paged_attention_backend: TpuPagedAttentionBackend,
-    allow_reference_fallback: bool,
+    paged_attention: PagedAttentionConfig,
     compute_dtype: str,
     trainer_mp_policy: str,
-    tpu_inference_out_dtype: str | None,
-    preserve_attention_output_dtype: bool,
     sampler_top_k_mode: SamplerTopKMode,
     use_streaming_greedy_lm_head: bool,
     batch_timeout: float,
@@ -1214,7 +1254,7 @@ def start_levanter_server(
     reference_logit_atol: float,
     reference_logit_rtol: float,
     reference_logit_max_prompts: int | None,
-    reference_logit_decode_backends: list[TpuPagedAttentionBackend] | None,
+    reference_logit_decode_backends: list[str] | None,
     reference_logit_cache_dtype_policies: list[str],
     reference_logit_only: bool,
 ) -> ServerHandle:
@@ -1239,12 +1279,7 @@ def start_levanter_server(
         sampler_top_k_mode=sampler_top_k_mode,
         max_seqs_in_prefill=max_seqs,
         max_prefill_size=max_prefill_size,
-        tpu_paged_attention=TpuPagedAttentionConfig(
-            backend=tpu_paged_attention_backend,
-            fail_on_reference_fallback=not allow_reference_fallback,
-            tpu_inference_out_dtype=tpu_inference_out_dtype,
-            preserve_attention_output_dtype=preserve_attention_output_dtype,
-        ),
+        paged_attention=paged_attention,
         use_streaming_greedy_lm_head=use_streaming_greedy_lm_head,
     )
     server_config = InferenceServerConfig(
@@ -1267,12 +1302,6 @@ def start_levanter_server(
             trust_remote_code=True,
         )
         model_config = converter.config_from_hf_checkpoint(ref=checkpoint)
-        model_config = dataclasses.replace(
-            model_config,
-            rpa_num_kv_pages_per_block=rpa_num_kv_pages_per_block,
-            rpa_num_queries_per_block=rpa_num_queries_per_block,
-            rpa_vmem_limit_bytes=rpa_vmem_limit_bytes,
-        )
         model_obj = converter.load_pretrained(
             Qwen3LMHeadModel,
             ref=checkpoint,
@@ -1294,7 +1323,7 @@ def start_levanter_server(
             tokenizer=tokenizer,
             cases=reference_logit_check_cases,
             prompts=reference_logit_check_prompts,
-            tpu_paged_attention=service_config.tpu_paged_attention,
+            paged_attention=service_config.paged_attention,
             decode_backends=reference_logit_decode_backends,
             cache_dtype_policies=reference_logit_cache_dtype_policies,
             default_cache_dtype=service_compute_dtype,
@@ -1314,7 +1343,7 @@ def start_levanter_server(
             logger.info("Benchmark reference-logit-only artifacts:")
             log_output_artifacts(reference_logit_check_dir)
             return ServerHandle(
-                name=f"levanter:{tpu_paged_attention_backend.value}:reference_logit_only",
+                name=f"levanter:{paged_attention_config_name(paged_attention)}:reference_logit_only",
                 base_url=f"http://127.0.0.1:{port}/v1",
                 model_id=model,
                 close=lambda: None,
@@ -1345,8 +1374,9 @@ def start_levanter_server(
         close()
         raise
 
-    diagnostic_backend_name = f"levanter:{tpu_paged_attention_backend.value}:no_lm_head"
-    lm_head_no_sampling_backend_name = f"levanter:{tpu_paged_attention_backend.value}:lm_head_no_sampling"
+    paged_attention_name = paged_attention_config_name(paged_attention)
+    diagnostic_backend_name = f"levanter:{paged_attention_name}:no_lm_head"
+    lm_head_no_sampling_backend_name = f"levanter:{paged_attention_name}:lm_head_no_sampling"
 
     def diagnose_without_lm_head(
         case: BenchmarkCase,
@@ -1406,7 +1436,7 @@ def start_levanter_server(
 
     logger.info("Started Levanter server at %s", base_url)
     return ServerHandle(
-        f"levanter:{tpu_paged_attention_backend.value}",
+        f"levanter:{paged_attention_name}",
         base_url,
         "levanter",
         close,
@@ -1757,6 +1787,15 @@ def start_backend(
             log_dir=output_dir / "vllm_profiles",
         )
     if backend == "levanter":
+        paged_attention = _paged_attention_config_from_choice(
+            args.levanter_paged_attention,
+            fail_on_reference_fallback=not args.levanter_allow_reference_fallback,
+            tpu_inference_out_dtype=args.levanter_tpu_inference_out_dtype,
+            preserve_attention_output_dtype=args.levanter_preserve_attention_output_dtype,
+            rpa_num_kv_pages_per_block=args.rpa_num_kv_pages_per_block,
+            rpa_num_queries_per_block=args.rpa_num_queries_per_block,
+            rpa_vmem_limit_bytes=args.rpa_vmem_limit_bytes,
+        )
         return start_levanter_server(
             model=args.model,
             checkpoint=checkpoint,
@@ -1772,15 +1811,9 @@ def start_backend(
             max_top_k=args.top_k,
             tensor_parallel_size=args.tensor_parallel_size,
             hbm_utilization=args.hbm_utilization,
-            rpa_num_kv_pages_per_block=args.rpa_num_kv_pages_per_block,
-            rpa_num_queries_per_block=args.rpa_num_queries_per_block,
-            rpa_vmem_limit_bytes=args.rpa_vmem_limit_bytes,
-            tpu_paged_attention_backend=TpuPagedAttentionBackend(args.levanter_tpu_paged_attention_backend),
-            allow_reference_fallback=args.levanter_allow_reference_fallback,
+            paged_attention=paged_attention,
             compute_dtype=args.levanter_compute_dtype,
             trainer_mp_policy=args.levanter_trainer_mp,
-            tpu_inference_out_dtype=args.levanter_tpu_inference_out_dtype,
-            preserve_attention_output_dtype=args.levanter_preserve_attention_output_dtype,
             sampler_top_k_mode=SamplerTopKMode(args.levanter_sampler_top_k_mode),
             use_streaming_greedy_lm_head=args.levanter_streaming_greedy_lm_head,
             batch_timeout=args.batch_timeout,
@@ -1793,9 +1826,7 @@ def start_backend(
             reference_logit_rtol=args.reference_logit_rtol,
             reference_logit_max_prompts=args.reference_logit_max_prompts,
             reference_logit_decode_backends=(
-                [TpuPagedAttentionBackend(backend) for backend in args.reference_logit_decode_backend]
-                if args.reference_logit_decode_backend
-                else None
+                list(args.reference_logit_decode_backend) if args.reference_logit_decode_backend else None
             ),
             reference_logit_cache_dtype_policies=args.reference_logit_cache_dtype,
             reference_logit_only=args.reference_logit_only,
@@ -1966,10 +1997,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--rpa-num-queries-per-block", type=int, default=None)
     parser.add_argument("--rpa-vmem-limit-bytes", type=int, default=None)
     parser.add_argument(
-        "--levanter-tpu-paged-attention-backend",
-        choices=[backend.value for backend in TpuPagedAttentionBackend],
-        default=TpuPagedAttentionBackend.AUTO.value,
-        help="Paged attention backend used by Levanter. AUTO requires tpu-inference on TPU.",
+        "--levanter-paged-attention",
+        choices=PAGED_ATTENTION_CHOICES,
+        default="auto",
+        help="Paged attention implementation used by Levanter. auto prefers tpu-inference on TPU.",
     )
     parser.add_argument(
         "--levanter-allow-reference-fallback",
@@ -2046,11 +2077,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--reference-logit-decode-backend",
         action="append",
-        choices=[
-            TpuPagedAttentionBackend.TPU_INFERENCE.value,
-            TpuPagedAttentionBackend.JAX_RPA.value,
-            TpuPagedAttentionBackend.REFERENCE.value,
-        ],
+        choices=CONCRETE_PAGED_ATTENTION_CHOICES,
         default=[],
         help=(
             "Concrete decode backend to check against full causal logits. Repeat to run a diagnostic matrix. "
@@ -2187,6 +2214,7 @@ def main(argv: list[str] | None = None) -> int:
         "temperature": args.temperature,
         "top_p": args.top_p,
         "top_k": args.top_k,
+        "levanter_paged_attention": args.levanter_paged_attention,
         "levanter_sampler_top_k_mode": args.levanter_sampler_top_k_mode,
         "levanter_compute_dtype": args.levanter_compute_dtype,
         "levanter_trainer_mp": args.levanter_trainer_mp,

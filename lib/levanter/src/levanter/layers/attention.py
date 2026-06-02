@@ -46,7 +46,12 @@ else:
     _SPLASH_KERNEL_SUPPORTS_SINKS = "sinks" in inspect.signature(_splash_attention).parameters
 
 from ..inference.page_table import PageBatchInfo, PageTableSpec
-from ..inference.tpu_kernels import TpuPagedAttentionConfig, paged_attention_with_kv_update
+from ..inference.tpu_kernels import (
+    AutoPagedAttentionConfig,
+    PagedAttentionConfig,
+    paged_attention_preserves_output_dtype,
+    paged_attention_with_kv_update,
+)
 from .kv_cache import KvPageCache
 from .normalization import LayerNormConfigBase
 from .rotary import RotaryEmbeddings, RotaryEmbeddingsConfig
@@ -1774,7 +1779,7 @@ class Attention(eqx.Module):
         batch_info: PageBatchInfo,
         *,
         pos_ids: NamedArray,
-        tpu_paged_attention: TpuPagedAttentionConfig = TpuPagedAttentionConfig(),
+        paged_attention: PagedAttentionConfig = AutoPagedAttentionConfig(),
         key=None,
     ) -> tuple[NamedArray, "KvPageCache"]:
         """Decode-time forward pass using a paged KV cache.
@@ -1801,11 +1806,11 @@ class Attention(eqx.Module):
             batch_info,
             sm_scale=sm_scale,
             soft_cap=self.config.logits_soft_cap,
-            config=tpu_paged_attention,
+            config=paged_attention,
         )
 
         attn_output = attn_tokens.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
-        if not tpu_paged_attention.preserve_attention_output_dtype:
+        if not paged_attention_preserves_output_dtype(paged_attention):
             attn_output = attn_output.astype(x.dtype)
         attn_output = self.o_proj(attn_output, key=key_o)
 
@@ -1958,7 +1963,7 @@ class GatedAttention(Attention):
         batch_info: PageBatchInfo,
         *,
         pos_ids: NamedArray,
-        tpu_paged_attention: TpuPagedAttentionConfig = TpuPagedAttentionConfig(),
+        paged_attention: PagedAttentionConfig = AutoPagedAttentionConfig(),
         key=None,
     ) -> tuple[NamedArray, "KvPageCache"]:
         key_proj, key_o = maybe_rng_split(key, 2)
@@ -1978,7 +1983,7 @@ class GatedAttention(Attention):
             batch_info,
             sm_scale=sm_scale,
             soft_cap=self.config.logits_soft_cap,
-            config=tpu_paged_attention,
+            config=paged_attention,
         )
 
         assert self.gate_proj is not None
@@ -1987,7 +1992,7 @@ class GatedAttention(Attention):
         attn_tokens = attn_tokens * gate
 
         attn_output = attn_tokens.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
-        if not tpu_paged_attention.preserve_attention_output_dtype:
+        if not paged_attention_preserves_output_dtype(paged_attention):
             attn_output = attn_output.astype(x.dtype)
         return self.o_proj(attn_output, key=key_o), kv_cache
 

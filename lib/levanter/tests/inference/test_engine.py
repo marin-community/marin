@@ -38,8 +38,8 @@ class DummyModel(eqx.Module):
         head_size = Axis("embed", 1)
         return KvPageCache.init(spec, kv_heads, head_size, dtype=dtype)
 
-    def decode(self, input_ids, kv_cache, batch_info, pos_ids, *, tpu_paged_attention=None):
-        del tpu_paged_attention
+    def decode(self, input_ids, kv_cache, batch_info, pos_ids, *, paged_attention=None):
+        del paged_attention
         # Produce logits that prefer `eos` for every sampled position
         Pos = input_ids.resolve_axis("position")
         Vocab = self.Vocab
@@ -48,8 +48,8 @@ class DummyModel(eqx.Module):
         logits = logits.broadcast_axis(Pos)
         return logits, kv_cache
 
-    def decode_hidden(self, input_ids, kv_cache, batch_info, pos_ids, *, tpu_paged_attention=None):
-        del batch_info, pos_ids, tpu_paged_attention
+    def decode_hidden(self, input_ids, kv_cache, batch_info, pos_ids, *, paged_attention=None):
+        del batch_info, pos_ids, paged_attention
         Pos = input_ids.resolve_axis("position")
         return hax.zeros((Pos, self.Embed), dtype=jnp.float32), kv_cache
 
