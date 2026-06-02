@@ -39,9 +39,10 @@ _actor_registry: dict[str, ActorHandle] = {}
 def _resources_from_options(opts: dict) -> ResourceConfig:
     """Map Ray ``.options(...)`` kwargs to a Fray ResourceConfig.
 
-    Recognizes ``num_cpus``/``num_gpus``/``memory``/``resources`` and unwraps a
-    ``PlacementGroupSchedulingStrategy`` into the bundle's resources. Unknown
-    keys are ignored (Ray accepts many; we map the ones that affect placement).
+    Reads ``num_cpus``/``num_gpus``/``memory`` and unwraps a
+    ``PlacementGroupSchedulingStrategy`` into the target bundle's resources.
+    Other Ray option keys are ignored (Ray accepts many; we map only the ones
+    that affect Iris placement).
     """
     num_gpus = opts.get("num_gpus")
     num_cpus = opts.get("num_cpus")
