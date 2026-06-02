@@ -432,12 +432,12 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
 
     def pre_jit(x):
         if jax.process_index() == source:
-            inp = np.array(x)
+            inp = np.asarray(jax.device_get(x))
         else:
-            inp = jnp.zeros(x.shape, dtype=x.dtype)
+            inp = np.zeros(x.shape, dtype=x.dtype)
 
         shape = (len(jax.devices()),) + inp.shape
-        inp = jnp.expand_dims(inp, axis=0)
+        inp = np.expand_dims(inp, axis=0)
         out = jax.make_array_from_callback(shape, sharding, lambda _: inp)
 
         return out
