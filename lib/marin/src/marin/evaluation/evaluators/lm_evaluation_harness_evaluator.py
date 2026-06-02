@@ -85,7 +85,7 @@ class LMEvaluationHarnessEvaluator(Evaluator):
             with VllmEnvironment(model) as env:
                 resolved_model = env.model
 
-                def _run_lm_eval(lm_eval_model_local: str, pretrained_args_local: str) -> None:
+                def _run_lm_eval(lm_eval_model_local: str, pretrained_args_local: str, tokenizer: str | None) -> None:
                     from lm_eval.evaluator import simple_evaluate
                     from lm_eval.loggers import EvaluationTracker, WandbLogger
                     from lm_eval.utils import simple_parse_args_string
@@ -101,6 +101,10 @@ class LMEvaluationHarnessEvaluator(Evaluator):
 
                         evaluation_tracker_args = simple_parse_args_string(f",output_path={result_filepath}")
                         evaluation_tracker = EvaluationTracker(**evaluation_tracker_args)
+                        metadata = dict(eval_task.metadata or {})
+                        if tokenizer is not None:
+                            metadata.setdefault("pretrained", tokenizer)
+                            metadata.setdefault("tokenizer", tokenizer)
 
                         wandb_args_dict = {
                             "project": "marin",
@@ -122,7 +126,7 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                             limit=max_eval_instances if max_eval_instances is not None else None,
                             evaluation_tracker=evaluation_tracker,
                             log_samples=True,
-                            metadata=eval_task.metadata,
+                            metadata=metadata,
                         )
                         if results is not None:
                             samples = results.pop("samples")
@@ -169,7 +173,7 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                                 continue
                             pretrained_args_local += f",{key}={value}"
 
-                    _run_lm_eval(lm_eval_model_local, pretrained_args_local)
+                    _run_lm_eval(lm_eval_model_local, pretrained_args_local, tokenizer)
 
                 if isinstance(resolved_model.engine_kwargs.get("tokenizer"), str):
                     _run_with_tokenizer(resolved_model.engine_kwargs.get("tokenizer"))
