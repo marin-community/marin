@@ -22,7 +22,7 @@ job:
   replicas: 3
   # group_by selects the Kueue podset topology from the provider's CoreWeave
   # defaults (iris follows CKS conventions, see tasks.py _CW_DEFAULT_TOPOLOGIES):
-  #   pool     -> preferred (soft) ib.coreweave.cloud/leafgroup
+  #   pool     -> preferred (soft) backend.coreweave.cloud/leafgroup
   #   nvlink   -> required (hard)  ds.coreweave.com/nvlink.domain
   #   tpu-name -> required (hard)  ds.coreweave.com/nvlink.domain
   # "pool" keeps the 3 nodes preferring the same IB leafgroup for multi-host

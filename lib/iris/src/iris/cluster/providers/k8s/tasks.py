@@ -118,15 +118,16 @@ _KUEUE_PREFERRED_TOPOLOGY = "kueue.x-k8s.io/podset-preferred-topology"
 
 # CoreWeave-convention fallback for KueueConfig.topologies: group_by -> (node
 # label, required?). Used only when the cluster config leaves topologies unset.
-# The node labels are levels in CoreWeave's Kueue Topology CRs: pool is a soft
-# (preferred) multi-node IB colocation on a leafgroup; nvlink/tpu-name are hard
-# (required) single NVLink domains (GB200 only — H100 has no nvlink.domain
-# label). A cluster whose Topology uses different levels overrides this via
+# The node labels are levels in CoreWeave's documented Kueue Topology CRs (see
+# scripts/install_kueue_coreweave.sh): pool is a soft (preferred) multi-node IB
+# colocation on a leafgroup; nvlink/tpu-name are hard (required) single NVLink
+# domains (GB200 only — H100 has no nvlink.domain label). A cluster whose
+# Topology uses different levels overrides this via
 # kubernetes_provider.kueue.topologies. Priority classes have NO default: Iris
 # never invents WorkloadPriorityClass names (a missing one is rejected by
 # Kueue), so a band is stamped only when the config maps it explicitly.
 _CW_DEFAULT_TOPOLOGIES: dict[str, tuple[str, bool]] = {
-    "pool": ("ib.coreweave.cloud/leafgroup", False),
+    "pool": ("backend.coreweave.cloud/leafgroup", False),
     "nvlink": ("ds.coreweave.com/nvlink.domain", True),
     "tpu-name": ("ds.coreweave.com/nvlink.domain", True),
 }

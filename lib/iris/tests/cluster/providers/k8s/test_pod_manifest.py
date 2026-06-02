@@ -965,7 +965,7 @@ def test_kueue_preferred_topology_for_pool():
     """group_by=pool -> preferred (soft) leafgroup topology."""
     manifest = _build_pod_manifest(_cosched_req("/job/task/0", group_by="pool"), pod_config(local_queue="iris-lq"))
     annotations = manifest["metadata"]["annotations"]
-    assert annotations[_KUEUE_PREFERRED_TOPOLOGY] == "ib.coreweave.cloud/leafgroup"
+    assert annotations[_KUEUE_PREFERRED_TOPOLOGY] == "backend.coreweave.cloud/leafgroup"
     assert _KUEUE_REQUIRED_TOPOLOGY not in annotations
 
 
