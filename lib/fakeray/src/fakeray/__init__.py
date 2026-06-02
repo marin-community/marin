@@ -29,25 +29,34 @@ from typing import Any
 
 from fray.current_client import current_client
 
-from fakeray import exceptions
+from fakeray import exceptions, util
+from fakeray._actor import ActorClass, ActorHandle
+from fakeray._actor import get_actor as _get_actor
+from fakeray._actor import kill as _kill
 from fakeray._object_ref import ObjectRef
 from fakeray._scheduler import FakeRayConfig, Scheduler
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "ActorClass",
+    "ActorHandle",
     "ObjectRef",
     "RemoteFunction",
+    "cancel",
     "exceptions",
     "get",
+    "get_actor",
     "init",
     "install",
     "is_initialized",
+    "kill",
     "put",
     "remote",
     "set_config",
     "shutdown",
     "timeline",
+    "util",
     "wait",
 ]
 
@@ -165,15 +174,41 @@ class RemoteFunction:
         return _require().submit_task(self._fn, args, kwargs, self._opts)
 
 
-def remote(fn: Any = None, **opts: Any) -> Any:
-    """``@ray.remote`` and ``@ray.remote(num_cpus=..., ...)`` decorator."""
-    if fn is not None and callable(fn) and not opts:
-        return RemoteFunction(fn)
+def _wrap_remote(target: Any, opts: dict) -> Any:
+    """Class -> stateful ActorClass; function -> RemoteFunction."""
+    if isinstance(target, type):
+        return ActorClass(target, opts)
+    return RemoteFunction(target, opts)
 
-    def wrap(f: Any) -> RemoteFunction:
-        return RemoteFunction(f, opts)
+
+def remote(fn: Any = None, **opts: Any) -> Any:
+    """``@ray.remote`` decorator for both functions and actor classes.
+
+    Bare ``@ray.remote`` or ``@ray.remote(num_gpus=1, ...)``, applied to a def
+    (-> RemoteFunction) or a class (-> ActorClass).
+    """
+    if fn is not None and not opts:
+        return _wrap_remote(fn, {})
+
+    def wrap(target: Any) -> Any:
+        return _wrap_remote(target, opts)
 
     return wrap
+
+
+def get_actor(name: str) -> ActorHandle:
+    """Resolve a named actor (Ray-compat)."""
+    return _get_actor(name)
+
+
+def kill(actor: ActorHandle) -> None:
+    """Terminate an actor (Ray-compat)."""
+    _kill(actor)
+
+
+def cancel(ref: ObjectRef) -> None:
+    """Best-effort task cancel (Ray-compat). No-op once dispatched."""
+    logger.debug("fakeray.cancel(%s): best-effort no-op", getattr(ref, "id", ref))
 
 
 def install() -> None:
@@ -184,6 +219,20 @@ def install() -> None:
     smallpond does) is NOT served by a module-level ``__getattr__`` — Python
     resolves dotted imports through ``sys.modules`` entries directly.
     """
+    import importlib
+
+    # Import the SUBMODULES by full path. (A plain `from fakeray.util import
+    # placement_group` would bind the re-exported *function* of that name in
+    # util/__init__, not the module — which then can't satisfy
+    # `from ray.util.placement_group import placement_group`.)
+    pg_mod = importlib.import_module("fakeray.util.placement_group")
+    ss_mod = importlib.import_module("fakeray.util.scheduling_strategies")
+
     sys.modules["ray"] = sys.modules[__name__]
     sys.modules["ray.exceptions"] = exceptions
-    logger.info("fakeray.install: registered shim as 'ray' in sys.modules")
+    # Dotted submodule imports resolve through sys.modules, not __getattr__, so
+    # register each ray.util.* path SkyRL imports explicitly.
+    sys.modules["ray.util"] = util
+    sys.modules["ray.util.placement_group"] = pg_mod
+    sys.modules["ray.util.scheduling_strategies"] = ss_mod
+    logger.info("fakeray.install: registered shim as 'ray' (+ ray.util.*) in sys.modules")
