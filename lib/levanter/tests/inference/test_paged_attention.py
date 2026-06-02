@@ -222,8 +222,14 @@ def test_do_tpu_ragged_paged_attention_accepts_traced_sm_scale(monkeypatch):
         *,
         sm_scale,
         soft_cap,
+        num_kv_pages_per_block,
+        num_queries_per_block,
+        vmem_limit_bytes,
     ):
         del kv_pages_arr, kv_lens_arr, page_indices_arr, cu_q_lens_arr, num_seqs_arr, soft_cap
+        assert num_kv_pages_per_block == 64
+        assert num_queries_per_block == 16
+        assert vmem_limit_bytes == 64 * 1024 * 1024
         return q_arr * jnp.asarray(sm_scale, dtype=q_arr.dtype)
 
     monkeypatch.setattr(attention_module, "tpu_ragged_paged_attention", _fake_tpu_rpa)
@@ -242,6 +248,9 @@ def test_do_tpu_ragged_paged_attention_accepts_traced_sm_scale(monkeypatch):
             num_seqs_,
             sm_scale=traced_scale,
             soft_cap=None,
+            num_kv_pages_per_block=64,
+            num_queries_per_block=16,
+            vmem_limit_bytes=64 * 1024 * 1024,
         )
 
     with use_test_mesh():

@@ -19,6 +19,7 @@ from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.inference.tpu_kernels import TpuPagedAttentionConfig
 from levanter.layers import LayerNormConfigBase, RmsNormConfig
 from levanter.layers.attention import Attention, AttentionBackend, AttentionConfig, AttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache
@@ -75,6 +76,9 @@ class LlamaConfig(HFCompatConfig):
     upcast_attn: bool = False
     attn_backend: Optional[AttentionBackend] = None
     flash_attention_block_size: Optional[int] = None
+    rpa_num_kv_pages_per_block: Optional[int] = None
+    rpa_num_queries_per_block: Optional[int] = None
+    rpa_vmem_limit_bytes: Optional[int] = None
 
     gradient_checkpointing: bool | ScanCheckpointPolicy | str = True
     scan_layers: bool = True
@@ -240,6 +244,9 @@ class LlamaConfig(HFCompatConfig):
             upcast_attn=self.upcast_attn,
             attn_backend=self.attn_backend,
             flash_attention_block_size=self.flash_attention_block_size,
+            rpa_num_kv_pages_per_block=self.rpa_num_kv_pages_per_block,
+            rpa_num_queries_per_block=self.rpa_num_queries_per_block,
+            rpa_vmem_limit_bytes=self.rpa_vmem_limit_bytes,
             rope=self.rope,
             qk_norm=self.norm_config if self.use_qk_norm else None,
         )
@@ -353,13 +360,21 @@ class LlamaDecoderLayer(eqx.Module):
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
+        tpu_paged_attention: TpuPagedAttentionConfig = TpuPagedAttentionConfig(),
         key=None,
     ) -> tuple[NamedArray, KvPageCache]:
         k_attn, k_mlp = maybe_rng_split(key, 2)
         # self attention and skip connection
         residual = x
         x = self.input_layernorm(x)
-        attn_output, kv_cache = self.self_attn.paged_decode(x, kv_cache, batch_info, pos_ids=pos_ids, key=k_attn)
+        attn_output, kv_cache = self.self_attn.paged_decode(
+            x,
+            kv_cache,
+            batch_info,
+            pos_ids=pos_ids,
+            tpu_paged_attention=tpu_paged_attention,
+            key=k_attn,
+        )
 
         if self.post_attn_layernorm is not None:
             attn_output = self.post_attn_layernorm(attn_output)
@@ -419,6 +434,7 @@ class LlamaTransformer(eqx.Module):
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
+        tpu_paged_attention: TpuPagedAttentionConfig = TpuPagedAttentionConfig(),
         key=None,
     ) -> tuple[NamedArray, ListCache[KvPageCache]]:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
@@ -446,6 +462,7 @@ class LlamaTransformer(eqx.Module):
                 this_cache,
                 batch_info,
                 pos_ids=pos_ids,
+                tpu_paged_attention=tpu_paged_attention,
                 key=keys[i] if keys is not None else None,
             )
             with jax.named_scope("update cache"):
@@ -627,6 +644,7 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
+        tpu_paged_attention: TpuPagedAttentionConfig = TpuPagedAttentionConfig(),
         key=None,
     ) -> tuple[NamedArray, ListCache[KvPageCache]]:
         """Run one decode / pre-fill step with an existing paged-KV *state*.
@@ -651,18 +669,44 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
         new_state : ListCache[KvPageCache]
             Updated cache to pass into the next decode call.
         """
+        x, new_state = self.decode_hidden(
+            input_ids,
+            kv_cache,
+            batch_info,
+            pos_ids,
+            tpu_paged_attention=tpu_paged_attention,
+            key=key,
+        )
+        logits = self.lm_head_logits(x)
+        return logits, new_state
 
-        # Embed the incoming token IDs
+    @named_call
+    def decode_hidden(
+        self,
+        input_ids: NamedArray,
+        kv_cache: ListCache[KvPageCache],
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+        *,
+        tpu_paged_attention: TpuPagedAttentionConfig = TpuPagedAttentionConfig(),
+        key=None,
+    ) -> tuple[NamedArray, ListCache[KvPageCache]]:
+        """Run paged decode through the transformer and return hidden states before the LM head."""
         x = self.embeddings.embed(input_ids)
 
-        # Propagate through the transformer with paged-KV caching
         k_t = maybe_rng_split(key, 1)[0] if key is not None else None
-        x, new_state = self.transformer.decode(kv_cache, x, batch_info, pos_ids, key=k_t)
+        return self.transformer.decode(
+            kv_cache,
+            x,
+            batch_info,
+            pos_ids,
+            tpu_paged_attention=tpu_paged_attention,
+            key=k_t,
+        )
 
-        # Project to logits
+    @named_call
+    def lm_head_logits(self, x: NamedArray) -> NamedArray:
+        """Project transformer hidden states to logits."""
         if self.lm_head is not None:
-            logits = self.lm_head(x, key=None)
-        else:
-            logits = self.embeddings.unembed(x)
-
-        return logits, new_state
+            return self.lm_head(x, key=None)
+        return self.embeddings.unembed(x)

@@ -18,6 +18,7 @@ from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.inference.tpu_kernels import TpuPagedAttentionConfig
 from levanter.layers.attention import Attention, AttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig, RotaryEmbeddingsConfig
@@ -297,12 +298,20 @@ class ApertusDecoderLayer(ModuleWithStateDictSerialization):
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
+        tpu_paged_attention: TpuPagedAttentionConfig = TpuPagedAttentionConfig(),
         key=None,
     ) -> tuple[NamedArray, KvPageCache]:
         k_attn, k_mlp = maybe_rng_split(key, 2)
         residual = x
         x = self.attention_layernorm(x)
-        attn_output, kv_cache = self.self_attn.paged_decode(x, kv_cache, batch_info, pos_ids=pos_ids, key=k_attn)
+        attn_output, kv_cache = self.self_attn.paged_decode(
+            x,
+            kv_cache,
+            batch_info,
+            pos_ids=pos_ids,
+            tpu_paged_attention=tpu_paged_attention,
+            key=k_attn,
+        )
         x = residual + attn_output
 
         residual = x
@@ -351,6 +360,7 @@ class ApertusTransformer(eqx.Module):
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
+        tpu_paged_attention: TpuPagedAttentionConfig = TpuPagedAttentionConfig(),
         key=None,
     ) -> tuple[NamedArray, ListCache[KvPageCache]]:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
@@ -368,6 +378,7 @@ class ApertusTransformer(eqx.Module):
                 this_cache,
                 batch_info,
                 pos_ids=pos_ids,
+                tpu_paged_attention=tpu_paged_attention,
                 key=keys[i] if keys is not None else None,
             )
             with jax.named_scope("update cache"):
@@ -470,11 +481,19 @@ class ApertusLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[ApertusCo
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
+        tpu_paged_attention: TpuPagedAttentionConfig = TpuPagedAttentionConfig(),
         key=None,
     ) -> tuple[NamedArray, ListCache[KvPageCache]]:
         x = self.embeddings.embed(input_ids)
         k_t = maybe_rng_split(key, 1)[0] if key is not None else None
-        x, kv_cache = self.transformer.decode(kv_cache, x, batch_info, pos_ids=pos_ids, key=k_t)
+        x, kv_cache = self.transformer.decode(
+            kv_cache,
+            x,
+            batch_info,
+            pos_ids=pos_ids,
+            tpu_paged_attention=tpu_paged_attention,
+            key=k_t,
+        )
         if self.lm_head:
             lm_logits = self.lm_head(x, key=None)
         else:
