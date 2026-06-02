@@ -156,7 +156,6 @@ def test_ppo_objective(
         loss_masks,
         clip_epsilon_low=clip_epsilon,
         clip_epsilon_high=clip_epsilon,
-        max_output_tokens=loss_masks.shape[-1],
         trainer_inference_importance_sampling_ratio=trainer_inference_importance_sampling_ratio,
     )
 

@@ -573,6 +573,37 @@ def make_local_config(
     return config
 
 
+def _validate_zone_list(zones: object, context: str) -> list[str]:
+    """Validate that *zones* is a non-empty list of unique, non-empty strings.
+
+    *context* prefixes error messages (e.g. ``"tpu_pools.foo"`` or
+    ``"Scale group 'bar'"``). Returns the validated list.
+    """
+    if not isinstance(zones, list) or not zones:
+        raise ValueError(f"{context}: zones must be a non-empty list")
+    for zone in zones:
+        if not isinstance(zone, str) or not zone.strip():
+            raise ValueError(f"{context}: each zone must be a non-empty string, got {zone!r}")
+    if len(zones) != len(set(zones)):
+        raise ValueError(f"{context}: zones list contains duplicates: {zones}")
+    return zones
+
+
+def _merge_zones_into_platform_gcp(data: dict, zones: set[str]) -> None:
+    """Merge *zones* into ``data['platform']['gcp']['zones']`` (sorted, deduped).
+
+    No-op when *zones* is empty or no ``platform.gcp`` mapping is configured.
+    """
+    if not zones:
+        return
+    platform = data.setdefault("platform", {})
+    platform_gcp = platform.get("gcp")
+    if isinstance(platform_gcp, dict):
+        existing = set(platform_gcp.get("zones", []))
+        existing.update(zones)
+        platform_gcp["zones"] = sorted(existing)
+
+
 def _expand_tpu_pools(data: dict) -> None:
     """Expand ``tpu_pools`` into per-(size, zone) scale groups.
 
@@ -592,6 +623,7 @@ def _expand_tpu_pools(data: dict) -> None:
         raise ValueError("tpu_pools must be a mapping")
 
     scale_groups = data.setdefault("scale_groups", {})
+    all_zones: set[str] = set()
 
     for pool_name, pool in tpu_pools.items():
         if not isinstance(pool, dict):
@@ -603,14 +635,8 @@ def _expand_tpu_pools(data: dict) -> None:
                 f"tpu_pools.{pool_name}: 'family' must be one of {sorted(TPU_FAMILY_VARIANT_PREFIX)}, got {family!r}"
             )
 
-        zones = pool.get("zones")
-        if not isinstance(zones, list) or not zones:
-            raise ValueError(f"tpu_pools.{pool_name}: 'zones' must be a non-empty list")
-        for z in zones:
-            if not isinstance(z, str) or not z.strip():
-                raise ValueError(f"tpu_pools.{pool_name}: each zone must be a non-empty string, got {z!r}")
-        if len(zones) != len(set(zones)):
-            raise ValueError(f"tpu_pools.{pool_name}: zones list contains duplicates: {zones}")
+        zones = _validate_zone_list(pool.get("zones"), f"tpu_pools.{pool_name}")
+        all_zones.update(zones)
 
         sizes = pool.get("sizes")
         if not isinstance(sizes, dict) or not sizes:
@@ -669,18 +695,7 @@ def _expand_tpu_pools(data: dict) -> None:
                 scale_groups[sg_name] = sg
 
     # Merge all TPU pool zones into platform.gcp.zones
-    all_zones: set[str] = set()
-    for pool in (tpu_pools or {}).values():
-        if isinstance(pool, dict):
-            for z in pool.get("zones", []):
-                all_zones.add(z)
-    if all_zones:
-        platform = data.setdefault("platform", {})
-        platform_gcp = platform.get("gcp")
-        if isinstance(platform_gcp, dict):
-            existing = set(platform_gcp.get("zones", []))
-            existing.update(all_zones)
-            platform_gcp["zones"] = sorted(existing)
+    _merge_zones_into_platform_gcp(data, all_zones)
 
 
 def _expand_multi_zone_groups(data: dict) -> None:
@@ -711,16 +726,7 @@ def _expand_multi_zone_groups(data: dict) -> None:
         if not isinstance(sg, dict) or "zones" not in sg:
             continue
 
-        zones = sg.pop("zones")
-        if not isinstance(zones, list) or not zones:
-            raise ValueError(f"Scale group '{name}': zones must be a non-empty list")
-
-        for zone in zones:
-            if not isinstance(zone, str) or not zone.strip():
-                raise ValueError(f"Scale group '{name}': each zone must be a non-empty string, got {zone!r}")
-
-        if len(zones) != len(set(zones)):
-            raise ValueError(f"Scale group '{name}': zones list contains duplicates: {zones}")
+        zones = _validate_zone_list(sg.pop("zones"), f"Scale group '{name}'")
 
         to_remove.append(name)
 
@@ -775,13 +781,7 @@ def _expand_multi_zone_groups(data: dict) -> None:
     scale_groups.update(expanded)
 
     # Merge expanded zones into platform.gcp.zones
-    if all_expanded_zones:
-        platform = data.setdefault("platform", {})
-        platform_gcp = platform.get("gcp")
-        if isinstance(platform_gcp, dict):
-            existing = set(platform_gcp.get("zones", []))
-            existing.update(all_expanded_zones)
-            platform_gcp["zones"] = sorted(existing)
+    _merge_zones_into_platform_gcp(data, all_expanded_zones)
 
 
 def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
