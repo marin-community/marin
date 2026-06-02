@@ -28,8 +28,10 @@ export DEEPEP_SRC_ROOT=/path/to/DeepEP
 export DEEPEP_CUDA_ARCH=sm_100  # B200/GB200. Use sm_90 or sm_90a for H100-class systems.
 ```
 
-That DeepEP revision is the version validated with Levanter's JAX FFI shim. The preflight warns, but does not fail, when
-`DEEPEP_SRC_ROOT` points at a different git revision so newer DeepEP checkouts can still be tested deliberately.
+That DeepEP revision is the version validated with Levanter's JAX FFI shim. The shim compiles DeepEP's current
+intranode/layout sources directly, so newer DeepEP revisions, including the newer V2 paths, should be treated as a
+separate compatibility and performance validation task. The preflight warns, but does not fail, when `DEEPEP_SRC_ROOT`
+points at a different git revision so newer DeepEP checkouts can still be tested deliberately.
 
 The raw FFI build path needs `nvcc` on `PATH`. The compiled objects are cached under `~/.cache/marin` by default. To
 put the cache somewhere else:
@@ -72,11 +74,11 @@ so the cached object targets the right device.
 For a Grug MoE block with an expert mesh axis, set the config object field:
 
 ```python
-config = dataclasses.replace(config, moe_implementation="deepep")
+config = dataclasses.replace(config, implementation="deepep")
 ```
 
 The backend currently targets intranode expert parallelism: the expert group must span all visible local GPUs in the
-process, and the hidden dimension must be divisible by 8. If those constraints do not hold, use `moe_implementation="ring"`
+process, and the hidden dimension must be divisible by 8. If those constraints do not hold, use `implementation="ring"`
 as the built-in fallback.
 
 The benchmark harness also contains capped DeepEP variants that precompute tighter receive capacities for comparing

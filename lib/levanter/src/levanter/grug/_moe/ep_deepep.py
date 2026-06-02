@@ -45,7 +45,6 @@ def _pack_deepep_local_assignments(
     recv_topk_idx: Int[Array, "TR K"],
     recv_topk_weights: Float[Array, "TR K"],
     *,
-    expert_start: Int[Array, ""],
     local_experts: int,
     num_recv_tokens: Int[Array, ""],
 ) -> DeepEPLocalAssignments:
@@ -53,9 +52,9 @@ def _pack_deepep_local_assignments(
     total_assignments = max_recv_tokens * topk
 
     recv_token_indices = jnp.repeat(jnp.arange(max_recv_tokens, dtype=jnp.int32), topk)
-    expert_flat = (recv_topk_idx.reshape(-1) - expert_start).astype(jnp.int32)
+    expert_flat = recv_topk_idx.reshape(-1).astype(jnp.int32)
     recv_valid = jnp.arange(max_recv_tokens, dtype=jnp.int32) < num_recv_tokens
-    local_mask = recv_valid[:, None] & (recv_topk_idx >= expert_start) & (recv_topk_idx < expert_start + local_experts)
+    local_mask = recv_valid[:, None] & (recv_topk_idx >= 0) & (recv_topk_idx < local_experts)
     local_mask_flat = local_mask.reshape(-1)
     local_bucket = jnp.where(local_mask_flat, expert_flat, local_experts)
     local_group_sizes = jnp.bincount(local_bucket, length=local_experts + 1).astype(jnp.int32)[:-1]
@@ -117,9 +116,7 @@ def _moe_mlp_ep_deepep_local(
     if x_local.shape[1] % 8 != 0:
         raise ValueError(f"DeepEP transport requires hidden % 8 == 0, got hidden={x_local.shape[1]}")
 
-    shard_id = jax.lax.axis_index("expert")
     ep_size = num_experts // local_experts
-    expert_start = shard_id * local_experts
     max_recv_tokens = x_local.shape[0] * ep_size
 
     with jax.named_scope("dispatch"):
@@ -154,7 +151,6 @@ def _moe_mlp_ep_deepep_local(
             recv_x,
             recv_topk_idx,
             recv_topk_weights,
-            expert_start=expert_start,
             local_experts=local_experts,
             num_recv_tokens=num_recv_tokens_scalar,
         )
