@@ -236,7 +236,9 @@ NUM_EVALS: int = 8
 
 # Rolling temp-checkpoint cadence; permanent intermediate checkpoints are not
 # kept (steps_per_export=None) — the metric is the final/eval cd-val loss.
-TEMP_CHECKPOINT_INTERVAL = timedelta(minutes=8)
+# Short (3 min) so runs bank progress before frequent v5p-preemptible preemptions
+# (longer intervals livelocked: jobs preempted before the first checkpoint).
+TEMP_CHECKPOINT_INTERVAL = timedelta(minutes=3)
 
 # --- Resources --------------------------------------------------------------
 
