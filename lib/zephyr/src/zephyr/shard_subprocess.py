@@ -28,18 +28,32 @@ from contextlib import suppress
 from typing import Any
 
 import cloudpickle
+import psutil
 import pyarrow as pa
+from finelog.client import LogClient
 from rigging.log_setup import configure_logging
 
-from zephyr.runners import _InProcessWorkerContext, _run_stage_with_ctx
+from zephyr.runners import (
+    _emit_runner_stat,
+    _InProcessWorkerContext,
+    _periodic_sampler,
+    _run_stage_with_ctx,
+    _sample_process_stats,
+)
 from zephyr.stage_io import _ensure_picklable_exception, _stage_throughput
+from zephyr.stats import (
+    ZEPHYR_WORKER_STATS_NAMESPACE,
+    ZephyrWorkerStat,
+    ZephyrWorkerStatStatus,
+)
 from zephyr.worker_context import _worker_ctx_var
 
 logger = logging.getLogger(__name__)
 
 
 SUBPROCESS_COUNTER_FLUSH_INTERVAL = 5.0
-"""How often the subprocess child flushes its counter dict to disk.
+"""How often the subprocess child flushes its counter dict to disk and samples
+its resource stats.
 
 Matches the parent's heartbeat cadence so each beat reads at most one stale
 snapshot before a fresh flush lands.
@@ -109,16 +123,36 @@ def _execute_shard_subprocess(task_file: str, result_file: str, num_workers: int
     stop_event = threading.Event()
     flusher: threading.Thread | None = None
     status_logger: threading.Thread | None = None
+    sampler: threading.Thread | None = None
     result_or_error: Any
     ctx: _InProcessWorkerContext | None = None
+    log_client: Any = None
+    log_table: Any = None
+    proc = psutil.Process()
+    start_time = time.monotonic()
+    cpu_times_at_start = proc.cpu_times()
+    cpu_s_at_start = cpu_times_at_start.user + cpu_times_at_start.system
+    proc.cpu_percent()  # prime so subsequent calls have a baseline
     try:
         with open(task_file, "rb") as f:
-            task, chunk_prefix, execution_id = cloudpickle.load(f)
+            task, chunk_prefix, execution_id, finelog_url = cloudpickle.load(f)
+
+        if finelog_url:
+            try:
+                log_client = LogClient.connect(finelog_url)
+                log_table = log_client.get_table(ZEPHYR_WORKER_STATS_NAMESPACE, ZephyrWorkerStat)
+            except Exception:
+                logger.warning("Could not connect to finelog in subprocess; worker stats disabled", exc_info=True)
+                log_client = None
 
         ctx = _InProcessWorkerContext(chunk_prefix, execution_id, num_workers=num_workers)
         _worker_ctx_var.set(ctx)
 
         shard_monotonic_start = time.monotonic()
+        if log_table is not None:
+            _emit_runner_stat(
+                log_table, task, execution_id, ZephyrWorkerStatStatus.START, start_time, ctx, proc, cpu_s_at_start
+            )
 
         flusher = threading.Thread(
             target=_periodic_counter_writer,
@@ -145,6 +179,24 @@ def _execute_shard_subprocess(task_file: str, result_file: str, num_workers: int
         )
         status_logger.start()
 
+        sampler = threading.Thread(
+            target=_periodic_sampler,
+            kwargs={
+                "stop_event": stop_event,
+                "ctx": ctx,
+                "interval": SUBPROCESS_COUNTER_FLUSH_INTERVAL,
+                "cpu_s_at_start": cpu_s_at_start,
+                "log_table": log_table,
+                "task": task,
+                "execution_id": execution_id,
+                "start_time": start_time,
+                "proc": proc,
+            },
+            daemon=True,
+            name="zephyr-subprocess-stats-sampler",
+        )
+        sampler.start()
+
         result_or_error = _run_stage_with_ctx(task, chunk_prefix, execution_id, ctx)
     except Exception as e:
         # Cloudpickling an exception drops ``__traceback__``, so a naive
@@ -164,6 +216,28 @@ def _execute_shard_subprocess(task_file: str, result_file: str, num_workers: int
             flusher.join(timeout=2.0)
         if status_logger is not None and status_logger.is_alive():
             status_logger.join(timeout=2.0)
+        if sampler is not None and sampler.is_alive():
+            sampler.join(timeout=2.0)
+        if ctx is not None:
+            with suppress(Exception):
+                _sample_process_stats(ctx, cpu_s_at_start, task.stage_name, proc)
+        if log_table is not None and ctx is not None:
+            try:
+                _emit_runner_stat(
+                    log_table,
+                    task,
+                    execution_id,
+                    ZephyrWorkerStatStatus.END,
+                    start_time,
+                    ctx,
+                    proc,
+                    cpu_s_at_start,
+                )
+            except Exception:
+                logger.warning("Failed to emit END runner stat", exc_info=True)
+        if log_client is not None:
+            with suppress(Exception):
+                log_client.close()
 
     with open(result_file, "wb") as f:
         counters_out = dict(ctx._counters) if ctx is not None else {}

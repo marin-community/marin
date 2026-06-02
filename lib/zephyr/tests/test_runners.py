@@ -7,13 +7,20 @@ from __future__ import annotations
 
 import os
 import uuid
+from contextlib import suppress
 
 import pytest
+from finelog.client import LogClient
+from finelog.embedded import EmbeddedServer
 from fray import ResourceConfig
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext, ZephyrWorkerError
 from zephyr.runners import InlineRunner, SubprocessRunner
+from zephyr.stats import (
+    ZEPHYR_STAGE_STATS_NAMESPACE,
+    ZEPHYR_WORKER_STATS_NAMESPACE,
+)
 
 
 def _ctx(local_client, tmp_path, *, stage_runner_factory) -> ZephyrContext:
@@ -155,3 +162,48 @@ def test_subprocess_runner_isolates_native_crash(local_client, tmp_path):
     rendered = str(exc_info.value)
     assert "Shard 0" in rendered
     assert "exited with code 139" in rendered or "failed" in rendered
+
+
+@pytest.fixture()
+def finelog_server(tmp_path):
+    """Start an embedded finelog server and yield its URL."""
+    server = EmbeddedServer(log_dir=str(tmp_path / "finelog"))
+    yield f"http://127.0.0.1:{server.port}"
+    server.stop()
+
+
+def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypatch):
+    """Pipeline emits rows to both zephyr.stage and zephyr.worker finelog tables."""
+    clients: list[LogClient] = []
+
+    def make_client() -> LogClient:
+        c = LogClient.connect(finelog_server)
+        clients.append(c)
+        return c
+
+    monkeypatch.setattr("zephyr.execution._make_log_client", make_client)
+    monkeypatch.setattr("zephyr.runners._make_log_client", make_client)
+
+    ctx = _ctx(local_client, tmp_path, stage_runner_factory=lambda n: InlineRunner(num_workers=n))
+    try:
+        ds = Dataset.from_list(list(range(10))).map(lambda x: x)
+        ctx.execute(ds)
+    finally:
+        ctx.shutdown()
+
+    # ctx.shutdown() closes the coordinator's client; close any runner clients too.
+    for c in clients:
+        with suppress(Exception):
+            c.close()
+
+    query_client = LogClient.connect(finelog_server)
+    try:
+        stage_rows = query_client.query(f'SELECT * FROM "{ZEPHYR_STAGE_STATS_NAMESPACE}"')
+        worker_rows = query_client.query(f'SELECT * FROM "{ZEPHYR_WORKER_STATS_NAMESPACE}"')
+    finally:
+        query_client.close()
+
+    assert stage_rows.num_rows >= 1, "Expected stage stat rows, got none"
+    assert worker_rows.num_rows >= 1, "Expected worker stat rows, got none"
+    stage_names = stage_rows.column("stage_name").to_pylist()
+    assert any("map" in s.lower() for s in stage_names), f"No map stage in {stage_names}"

@@ -38,12 +38,11 @@ from zephyr.execution import (
 from zephyr.plan import PhysicalStage, StageType, compute_plan
 from zephyr.shuffle import ListShard
 from zephyr.stage_io import (
-    ZEPHYR_STAGE_BYTES_PROCESSED_KEY,
-    ZEPHYR_STAGE_ITEM_COUNT_KEY,
     PickleDiskChunk,
     ShardTask,
     TaskResult,
 )
+from zephyr.stats import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY
 from zephyr.worker_context import CounterSnapshot, zephyr_worker_ctx
 
 

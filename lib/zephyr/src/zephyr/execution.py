@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import cloudpickle
+from finelog.client import LogClient, Table
 from fray import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig, current_actor
 from fray.client import JobHandle
 from fray.current_client import current_client, set_current_client
@@ -62,6 +63,16 @@ from zephyr.stage_io import (
     _ensure_picklable_exception,
     _shared_data_path,
     _stage_throughput,
+)
+from zephyr.stats import (
+    ZEPHYR_STAGE_STATS_NAMESPACE,
+    ZEPHYR_WORKER_CPU_MILLI_KEY,
+    ZEPHYR_WORKER_CPU_TIME_MS_KEY,
+    ZEPHYR_WORKER_IO_READ_KEY,
+    ZEPHYR_WORKER_IO_WRITE_KEY,
+    ZEPHYR_WORKER_MEM_CURRENT_KEY,
+    ZEPHYR_WORKER_MEM_PEAK_KEY,
+    ZephyrStageStat,
 )
 from zephyr.worker_context import CounterSnapshot
 from zephyr.writers import ensure_parent_dir
@@ -133,6 +144,23 @@ def _push_iris_task_status(
         iris_client.report_task_status_text(job_info.task_id, job_info.attempt_id, detail_md, summary_md)
     except Exception:
         logger.warning("Failed to report task status text to Iris controller", exc_info=True)
+
+
+def _make_log_client() -> LogClient | None:
+    """Return a LogClient connected to the finelog service via the Iris resolver.
+
+    Returns ``None`` when not running inside an Iris context (e.g. tests or
+    local runs without a controller). All callers treat ``None`` as a signal
+    to skip stats emission silently.
+    """
+    iris_ctx = get_iris_ctx()
+    if iris_ctx is None or iris_ctx.client is None:
+        return None
+    try:
+        return LogClient.connect("/system/log-server", resolver=iris_ctx.client.resolve_endpoint)
+    except Exception:
+        logger.warning("Could not connect to finelog stats service; stage/worker stats disabled", exc_info=True)
+        return None
 
 
 def _cleanup_execution(prefix: str, execution_id: str) -> None:
@@ -294,6 +322,10 @@ class ZephyrCoordinator:
         # Set at each _start_stage so _log_status can show average throughput since stage start.
         self._stage_monotonic_start: float | None = None
 
+        # Finelog stats tables — None when not running inside an Iris context.
+        self._log_client: LogClient | None = None
+        self._stage_stats_table: Table | None = None
+
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
 
@@ -333,6 +365,14 @@ class ZephyrCoordinator:
         self._heartbeat_timeout = heartbeat_timeout
         self._max_shard_failures = max_shard_failures
         self._max_shard_infra_failures = max_shard_infra_failures
+
+        self._log_client = _make_log_client()
+        if self._log_client is not None:
+            try:
+                self._stage_stats_table = self._log_client.get_table(ZEPHYR_STAGE_STATS_NAMESPACE, ZephyrStageStat)
+            except Exception:
+                logger.warning("Could not initialize finelog stage stats table; stage stats disabled", exc_info=True)
+                self._log_client = None
 
         logger.info("Coordinator initialized")
 
@@ -509,6 +549,70 @@ class ZephyrCoordinator:
         if retried:
             attempts_histogram = dict(sorted(Counter(retried.values()).items()))
             logger.warning("[%s] Shards retried (attempts: shard count): %s", self._execution_id, attempts_histogram)
+
+    def _emit_stage_stat(self) -> None:
+        """Emit one ZephyrStageStat row to finelog at stage completion."""
+        if self._stage_stats_table is None:
+            return
+        with self._lock:
+            stage_name = self._stage_name
+            execution_id = self._execution_id
+            total = self._total_shards
+            stage_start = self._stage_monotonic_start
+            all_snapshots = list(self._completed_counters)
+            inflight_snapshots = list(self._worker_counters.values())
+
+        elapsed = time.monotonic() - stage_start if stage_start else 0
+        totals_counter: Counter[str] = Counter()
+        for snap in all_snapshots + inflight_snapshots:
+            totals_counter.update(snap.counters)
+        totals = dict(totals_counter)
+        throughput = _stage_throughput(totals, stage_name, elapsed)
+
+        cpu_milli_key = ZEPHYR_WORKER_CPU_MILLI_KEY.format(stage_name=stage_name)
+        cpu_time_key = ZEPHYR_WORKER_CPU_TIME_MS_KEY.format(stage_name=stage_name)
+        mem_current_key = ZEPHYR_WORKER_MEM_CURRENT_KEY.format(stage_name=stage_name)
+        mem_peak_key = ZEPHYR_WORKER_MEM_PEAK_KEY.format(stage_name=stage_name)
+        io_read_key = ZEPHYR_WORKER_IO_READ_KEY.format(stage_name=stage_name)
+        io_write_key = ZEPHYR_WORKER_IO_WRITE_KEY.format(stage_name=stage_name)
+
+        # Filter to snapshots from this stage by key presence (keys are stage-namespaced).
+        # Unsampled shards (completed before the first sampling interval) are excluded from
+        # the numerator but counted in n_all so they don't inflate the averages.
+        snapshots = [s.counters for s in all_snapshots if cpu_milli_key in s.counters]
+        n_all = len(all_snapshots)
+        cpu_pct_values = [s.get(cpu_milli_key, 0) / 1000.0 for s in snapshots]
+        avg_cpu_pct = sum(cpu_pct_values) / n_all if n_all > 0 else 0.0
+        total_cpu_s = sum(s.get(cpu_time_key, 0) for s in snapshots) / 1000.0
+        mem_current_values = [s.get(mem_current_key, 0) for s in snapshots]
+        mem_avg_bytes = int(sum(mem_current_values) / n_all) if n_all > 0 else 0
+        mem_max_bytes = max(mem_current_values, default=0)
+        mem_peak_max = max((s.get(mem_peak_key, 0) for s in snapshots), default=0)
+        io_read_sum = sum(s.get(io_read_key, 0) for s in snapshots)
+        io_write_sum = sum(s.get(io_write_key, 0) for s in snapshots)
+
+        stat = ZephyrStageStat(
+            execution_id=execution_id,
+            stage_name=stage_name,
+            ts=datetime.now(timezone.utc).replace(tzinfo=None),
+            elapsed_s=elapsed,
+            items=throughput.items if throughput else 0,
+            bytes_processed=throughput.bytes_processed if throughput else 0,
+            item_rate=throughput.item_rate if throughput else 0.0,
+            byte_rate=throughput.byte_rate if throughput else 0.0,
+            total_shards=total,
+            avg_cpu_pct=avg_cpu_pct,
+            total_cpu_s=total_cpu_s,
+            mem_avg_bytes=mem_avg_bytes,
+            mem_max_bytes=mem_max_bytes,
+            mem_peak_bytes_max=mem_peak_max,
+            io_read_bytes_sum=io_read_sum,
+            io_write_bytes_sum=io_write_sum,
+        )
+        try:
+            self._stage_stats_table.write([stat])
+        except Exception:
+            logger.warning("Failed to write stage stat to finelog", exc_info=True)
 
     def _record_shard_failure(
         self,
@@ -976,6 +1080,7 @@ class ZephyrCoordinator:
         )
         self._start_stage(stage_label, stage_index_for_state, tasks, is_last_stage=is_last_stage)
         self._wait_for_stage()
+        self._emit_stage_stat()
 
         self._mark_stage_complete()
 
@@ -1043,6 +1148,10 @@ class ZephyrCoordinator:
         # Wait for coordinator thread to exit
         if self._coordinator_thread is not None:
             self._coordinator_thread.join(timeout=5.0)
+
+        if self._log_client is not None:
+            with suppress(Exception):
+                self._log_client.close()
 
         logger.info("Coordinator shutdown complete")
 

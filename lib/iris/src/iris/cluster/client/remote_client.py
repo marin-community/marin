@@ -417,6 +417,10 @@ class RemoteClusterClient:
             raise ConnectionError(f"No {endpoint_name!r} endpoint registered on controller")
         return endpoints[0].address
 
+    def resolve_endpoint(self, url: str) -> str:
+        """Resolve a logical endpoint URL to a concrete HTTP address via the controller registry."""
+        return self._resolve_endpoint(url)
+
     def list_workers(
         self,
         query: controller_pb2.Controller.WorkerQuery | None = None,

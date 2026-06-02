@@ -39,6 +39,19 @@ def increment(name: str, value: int = 1) -> None:
     worker.increment_counter(name, value)
 
 
+def set(name: str, value: int) -> None:  # noqa: A001
+    """Overwrite a named counter with ``value`` (not additive).
+
+    Use for point-in-time metrics (cpu percent, current RSS) that should
+    replace the previous value rather than accumulate. No-op outside a
+    Zephyr worker context.
+    """
+    worker = _worker_ctx_var.get()
+    if worker is None:
+        return
+    worker.set_counter(name, value)
+
+
 def get_counters() -> dict[str, int]:
     """Return a snapshot of the current task's counters.
 
