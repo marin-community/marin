@@ -21,6 +21,7 @@ Issue: https://github.com/marin-community/marin/issues/6106
 - 2026-06-02: Added tpu-inference auto-resolution support for `GrugMoeForCausalLM`.
 - 2026-06-02: Added this logbook, the reference note, and the tiny parity harness.
 - 2026-06-02: Ran component and composed parity successfully against the vLLM branch with the Marin harness.
+- 2026-06-02: Attempted Iris `v6e-4` validation. First attempt failed because `~/.ssh/google_compute_engine` was absent; created the standard keypair. Second attempt hung while establishing the Iris controller tunnel and never returned a job id, so no TPU job was submitted.
 
 ## Verification So Far
 
@@ -116,13 +117,28 @@ cd /home/romain/dev/marin-wt/grugmoe-vllm-tpu-inference
 
 Result: existing PyTorch venv does not have `vllm` importable.
 
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-vllm-tpu-support
+uv run iris --cluster=marin job run \
+  --no-wait \
+  --enable-extra-resources \
+  --tpu v6e-4 \
+  --region europe-west4 \
+  --priority interactive \
+  --timeout 1800 \
+  --job-name grugmoe-vllm-tpu-parity \
+  -- bash -lc 'git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/vllm.git /tmp/grugmoe-vllm-tpu-vllm && uv run --with "torch==2.10.0+cpu" --extra-index-url https://download.pytorch.org/whl/cpu python -m experiments.grug.moe.vllm_tpu_parity --vllm-root /tmp/grugmoe-vllm-tpu-vllm'
+```
+
+Result: first attempt failed with `SSH key not found at /home/romain/.ssh/google_compute_engine`. After creating the keypair, the retry hung at `Establishing SSH tunnel to iris-controller-marin (zone=us-central1-a)` for several minutes. The hung local Iris/GCloud tunnel process was terminated. No job id was emitted.
+
 ## Gate Status
 
 - Gate 1, repo map: complete. GrugMoE reference, vLLM registry/model extension points, tpu-inference model resolver, and closest MoE implementations were identified.
 - Gate 2, component parity: passed locally with the Marin harness.
 - Gate 3, composed parity: passed locally with the Marin harness.
-- Gate 4, TPU validation: not run yet. Needs Iris `v6e-4` run after local component and composed parity pass.
-- Gate 5, handoff: in progress. Branches, issue, docs, focused tests, and repro commands exist; commits/pushes/PRs still pending.
+- Gate 4, TPU validation: blocked. Iris submission did not reach job creation because the controller SSH tunnel hung after key setup. The exact command is recorded above.
+- Gate 5, handoff: complete for local work. Branches are pushed, issue exists, docs/focused tests/repro commands are recorded. TPU validation remains blocked as Gate 4.
 
 ## Next Commands
 
