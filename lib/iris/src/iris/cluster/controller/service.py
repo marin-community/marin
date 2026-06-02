@@ -668,9 +668,17 @@ _ACTIVE_JOB_STATES = (
 
 
 def _live_user_stats(db: ControllerDB) -> list[UserStats]:
-    """Aggregate job/task counts per user for active (non-terminal) jobs."""
+    """Aggregate job/task counts per user.
+
+    The user set is every owner who has ever submitted a job (any state), so the
+    landing page lists people even when none of their jobs are currently active.
+    The per-state counts only cover active (non-terminal) jobs/tasks, so the
+    Running/Pending/Active columns reflect current load and an idle user shows
+    all zeros rather than disappearing.
+    """
     active_states = list(_ACTIVE_JOB_STATES)
     with db.read_snapshot() as tx:
+        user_rows = tx.execute(select(jobs_table.c.user_id).distinct()).all()
         job_rows = tx.execute(
             select(
                 jobs_table.c.user_id,
@@ -692,7 +700,7 @@ def _live_user_stats(db: ControllerDB) -> list[UserStats]:
             .group_by(jobs_table.c.user_id, tasks_table.c.state),
             {"active_states": active_states},
         ).all()
-    by_user: dict[str, UserStats] = {}
+    by_user: dict[str, UserStats] = {str(row.user_id): UserStats(user=str(row.user_id)) for row in user_rows}
     for row in job_rows:
         stats = by_user.setdefault(str(row.user_id), UserStats(user=str(row.user_id)))
         stats.job_state_counts[int(row.state)] = int(row.cnt)
