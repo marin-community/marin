@@ -97,9 +97,10 @@ def _backend_order(config: TpuPagedAttentionConfig) -> tuple[TpuPagedAttentionBa
     expanded: list[TpuPagedAttentionBackend] = []
     for item in selected:
         if item == TpuPagedAttentionBackend.AUTO:
-            expanded.extend(
-                [TpuPagedAttentionBackend.TPU_INFERENCE] if _is_tpu() else [TpuPagedAttentionBackend.REFERENCE]
-            )
+            if _is_tpu():
+                expanded.extend((TpuPagedAttentionBackend.TPU_INFERENCE, TpuPagedAttentionBackend.JAX_RPA))
+            else:
+                expanded.append(TpuPagedAttentionBackend.REFERENCE)
         else:
             expanded.append(item)
     return tuple(expanded)
@@ -254,23 +255,32 @@ def _run_tpu_inference_backend(
     from levanter.inference import tpu_inference_adapter
 
     if not tpu_inference_adapter.is_available():
-        raise _unsupported(TpuPagedAttentionBackend.TPU_INFERENCE, "the tpu-inference package is not installed")
+        raise _unsupported(
+            TpuPagedAttentionBackend.TPU_INFERENCE,
+            "the tpu-inference package or one of its runtime dependencies is not importable",
+        )
 
     out_dtype = None
     if config.tpu_inference_out_dtype is not None:
         out_dtype = jnp.dtype(config.tpu_inference_out_dtype)
 
-    return tpu_inference_adapter.paged_attention_with_kv_update(
-        q,
-        new_k,
-        new_v,
-        kv_cache,
-        batch_info,
-        sm_scale=sm_scale,
-        soft_cap=soft_cap,
-        out_dtype=out_dtype,
-        vmem_limit_bytes=config.vmem_limit_bytes,
-    )
+    try:
+        return tpu_inference_adapter.paged_attention_with_kv_update(
+            q,
+            new_k,
+            new_v,
+            kv_cache,
+            batch_info,
+            sm_scale=sm_scale,
+            soft_cap=soft_cap,
+            out_dtype=out_dtype,
+            vmem_limit_bytes=config.vmem_limit_bytes,
+        )
+    except ImportError as exc:
+        raise _unsupported(
+            TpuPagedAttentionBackend.TPU_INFERENCE,
+            f"the tpu-inference kernel import failed: {exc}",
+        ) from exc
 
 
 def _run_backend(

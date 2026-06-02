@@ -12,6 +12,7 @@ from chex import assert_trees_all_close
 import haliax as hax
 from haliax import Axis
 
+import levanter.inference.tpu_kernels as tpu_kernels
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.inference.tpu_kernels import (
     TpuPagedAttentionBackend,
@@ -198,6 +199,46 @@ def test_backend_sequence_warns_then_runs_reference_on_cpu():
 
     assert attn.axes == q.axes
     assert updated_cache.kv_pages.array.shape == kv_cache.kv_pages.array.shape
+
+
+def test_auto_backend_warns_then_uses_jax_rpa_on_tpu_when_tpu_inference_is_unavailable(monkeypatch):
+    expected_q, expected_new_k, expected_new_v, expected_cache_input, expected_batch_info = _single_sequence_case()
+    expected, expected_cache = _expected_attention_after_update(
+        expected_q,
+        expected_new_k,
+        expected_new_v,
+        expected_cache_input,
+        expected_batch_info,
+        soft_cap=None,
+    )
+    q, new_k, new_v, kv_cache, batch_info = _single_sequence_case()
+
+    def unavailable_tpu_backend(*args, **kwargs):
+        del args, kwargs
+        raise UnsupportedTpuPagedAttentionBackend("tpu-inference import failed")
+
+    def fake_jax_rpa_backend(q, new_k, new_v, kv_cache, batch_info, *, sm_scale, soft_cap, config):
+        del sm_scale, config
+        return _expected_attention_after_update(q, new_k, new_v, kv_cache, batch_info, soft_cap=soft_cap)
+
+    monkeypatch.setattr(tpu_kernels, "_current_platform", lambda: "tpu")
+    monkeypatch.setattr(tpu_kernels, "_run_tpu_inference_backend", unavailable_tpu_backend)
+    monkeypatch.setattr(tpu_kernels, "_run_jax_rpa_backend", fake_jax_rpa_backend)
+
+    with pytest.warns(TpuPagedAttentionFallbackWarning):
+        attn, updated_cache = paged_attention_with_kv_update(
+            q,
+            new_k,
+            new_v,
+            kv_cache,
+            batch_info,
+            sm_scale=SM_SCALE,
+            soft_cap=None,
+            config=TpuPagedAttentionConfig(),
+        )
+
+    assert_trees_all_close(attn.array, expected.array, atol=1e-3, rtol=1e-3)
+    assert_trees_all_close(updated_cache.kv_pages.array, expected_cache.kv_pages.array)
 
 
 def test_reference_backend_is_not_a_silent_tpu_fallback(monkeypatch):
