@@ -10,6 +10,7 @@ import logging
 import re
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 import fsspec
@@ -308,6 +309,13 @@ class ReduceOp:
         return f"ReduceOp(local={_get_fn_name(self.local_reducer)}, global={_get_fn_name(self.global_reducer)})"
 
 
+class JoinType(StrEnum):
+    """Supported join semantics for ``sorted_merge_join``."""
+
+    INNER = "inner"
+    LEFT = "left"
+
+
 @dataclass
 class JoinOp:
     """Streaming merge join for pre-sorted, co-partitioned datasets.
@@ -325,7 +333,7 @@ class JoinOp:
     right_key_fn: Callable
     right_dataset: Dataset
     combiner_fn: Callable
-    join_type: str  # "inner" or "left"
+    join_type: JoinType
 
     def __repr__(self):
         return f"JoinOp(type={self.join_type})"
@@ -1008,7 +1016,7 @@ class Dataset(Generic[T]):
         left_key: Callable[[T], object],
         right_key: Callable[[R], object],
         combiner: Callable[[T | None, R | None], object] | None = None,
-        how: str = "inner",
+        how: str = JoinType.INNER,
     ) -> Dataset:
         """Streaming merge join for already-sorted, co-partitioned datasets.
 
@@ -1052,8 +1060,11 @@ class Dataset(Generic[T]):
             ...     right_key=lambda x: x["id"]
             ... )
         """
-        if how not in ("inner", "left"):
-            raise ValueError(f"sorted_merge_join only supports 'inner' and 'left' joins, got: {how}")
+        try:
+            join_type = JoinType(how)
+        except ValueError:
+            supported = ", ".join(repr(t.value) for t in JoinType)
+            raise ValueError(f"sorted_merge_join only supports {supported} joins, got: {how!r}") from None
 
         # Default combiner merges dicts
         if combiner is None:
@@ -1069,5 +1080,5 @@ class Dataset(Generic[T]):
 
         return Dataset(
             self.source,
-            [*self.operations, JoinOp(left_key, right_key, right, combiner, how)],
+            [*self.operations, JoinOp(left_key, right_key, right, combiner, join_type)],
         )

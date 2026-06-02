@@ -14,7 +14,6 @@ from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environmen
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.vllm_server import VllmEnvironment
-from marin.utils import remove_tpu_lockfile_on_exit
 
 
 def run_one_query(
@@ -181,24 +180,23 @@ def main(argv: list[str] | None = None) -> int:
         env_vars["VLLM_XLA_CACHE_PATH"] = args.local_cache_dir
 
     def _run() -> None:
-        with remove_tpu_lockfile_on_exit():
-            for i in range(args.repeat):
-                start = time.time()
-                try:
-                    output = run_one_query(
-                        model_name_or_path=args.model,
-                        prompt=args.prompt,
-                        load_format=args.load_format,
-                        max_model_len=args.max_model_len,
-                        port=args.port,
-                        use_completions=args.use_completions,
-                    )
-                except Exception:
-                    traceback.print_exc()
-                    raise
-                elapsed = time.time() - start
-                print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
-                print(output)
+        for i in range(args.repeat):
+            start = time.time()
+            try:
+                output = run_one_query(
+                    model_name_or_path=args.model,
+                    prompt=args.prompt,
+                    load_format=args.load_format,
+                    max_model_len=args.max_model_len,
+                    port=args.port,
+                    use_completions=args.use_completions,
+                )
+            except Exception:
+                traceback.print_exc()
+                raise
+            elapsed = time.time() - start
+            print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
+            print(output)
 
     client = current_client()
     resources = ResourceConfig.with_tpu(args.tpu_type)

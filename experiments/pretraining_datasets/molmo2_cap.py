@@ -5,7 +5,8 @@
 
 from fray import ResourceConfig
 from marin.datakit.download.molmo2_cap import molmo2_cap_normalize_steps
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import executor_main
+from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 

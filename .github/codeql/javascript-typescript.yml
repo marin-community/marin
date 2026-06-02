@@ -1,0 +1,18 @@
+name: "CodeQL — JavaScript/TypeScript (security + code quality)"
+
+# Scope: first-party dashboard/docs front-end source only. The bulk of the
+# previous JS quality noise (e.g. ~30 "eval-like DOM" hits) came from scraped
+# third-party HTML fixtures under tests/snapshots/**, which the managed Code
+# Quality default setup scanned because it did not honor path filters. Limiting
+# to authored source removes that noise at the source.
+paths:
+  - infra/status-page
+  - lib/iris/dashboard/src
+  - lib/finelog/dashboard/src
+  - scripts/ops/storage/dashboard
+  - docs/javascript
+paths-ignore:
+  - "**/node_modules/**"
+  - "**/dist/**"
+  - "**/*.min.js"
+  - tests/**

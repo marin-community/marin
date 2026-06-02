@@ -26,7 +26,7 @@ from iris.cluster.providers.types import (
     ResourceNotFoundError,
 )
 from iris.cluster.service_mode import ServiceMode
-from iris.cluster.types import TPU_TOPOLOGIES
+from iris.cluster.tpu_topology import TPU_TOPOLOGIES
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -85,18 +85,6 @@ _OPERATION_TIMEOUT = 600  # seconds to wait for an operation to complete
 _RPC_CODE_RESOURCE_EXHAUSTED = 8
 
 
-def _default_tpu_operation_timeout(accelerator_type: str) -> float:
-    """Return an LRO timeout sized for TPU topology."""
-    topology = next((topology for topology in TPU_TOPOLOGIES if topology.name == accelerator_type), None)
-    if topology is None:
-        return _OPERATION_TIMEOUT
-    if topology.vm_count >= 256:
-        return 1800.0
-    if topology.vm_count >= 64:
-        return 900.0
-    return _OPERATION_TIMEOUT
-
-
 # ============================================================================
 # Data types
 # ============================================================================
@@ -116,6 +104,34 @@ class TpuInfo:
     network_endpoints: list[str]  # Internal IP addresses
     external_network_endpoints: list[str | None]
     created_at: Timestamp
+    # Name of the in-flight create operation (LRO), populated only by
+    # tpu_create(). Empty for describe/list results. The bootstrap loop polls
+    # this via tpu_operation_status() to fail fast on quota/stockout while
+    # otherwise letting worker health — not the LRO — decide readiness.
+    operation_name: str = ""
+
+
+@dataclass(frozen=True)
+class OperationStatus:
+    """Status of an async GCP long-running operation (LRO)."""
+
+    done: bool
+    error_code: int | None = None
+    error_message: str | None = None
+
+
+def operation_error(status: OperationStatus) -> InfraError | None:
+    """Translate a completed-with-error operation into the exception to raise.
+
+    Returns None when the operation has no error (still running, or succeeded).
+    Quota/stockout (RESOURCE_EXHAUSTED) maps to QuotaExhaustedError so the
+    autoscaler backs off quietly instead of treating it as a boot failure.
+    """
+    if status.error_code is None:
+        return None
+    if status.error_code == _RPC_CODE_RESOURCE_EXHAUSTED:
+        return QuotaExhaustedError(status.error_message or "resource exhausted")
+    return InfraError(f"TPU operation failed: {status.error_message}")
 
 
 @dataclass
@@ -241,6 +257,7 @@ class GcpService(Protocol):
     def project_id(self) -> str: ...
 
     def tpu_create(self, request: TpuCreateRequest) -> TpuInfo: ...
+    def tpu_operation_status(self, operation_name: str) -> OperationStatus: ...
     def tpu_delete(self, name: str, zone: str) -> None: ...
     def tpu_describe(self, name: str, zone: str) -> TpuInfo | None: ...
     def tpu_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[TpuInfo]: ...
@@ -507,30 +524,29 @@ class CloudGcpService:
                 raise InfraError(f"Operation {operation_name} timed out after {timeout}s")
             time.sleep(backoff.next_interval())
 
-    def _wait_tpu_operation(self, operation_name: str, timeout: float = _OPERATION_TIMEOUT) -> dict:
-        url = f"{_TPU_BASE}/{operation_name}"
-        deadline = time.monotonic() + timeout
-        backoff = ExponentialBackoff(initial=1.0, maximum=30.0, factor=1.5)
-        while True:
-            resp = self._client.get(url, headers=self._headers())
-            self._classify_response(resp)
-            data = resp.json()
-            if data.get("done"):
-                if "error" in data:
-                    error = data["error"]
-                    msg = error.get("message", str(error))
-                    # Zone stockouts ("no more capacity in the zone ...") come
-                    # back as RESOURCE_EXHAUSTED on the LRO rather than on the
-                    # initial HTTP response. Surface them as QuotaExhaustedError
-                    # so the autoscaler treats them like any other quota hit
-                    # (terse warning + backoff, no stack trace).
-                    if error.get("code") == _RPC_CODE_RESOURCE_EXHAUSTED:
-                        raise QuotaExhaustedError(msg)
-                    raise InfraError(f"TPU operation failed: {msg}")
-                return data
-            if time.monotonic() >= deadline:
-                raise InfraError(f"TPU operation {operation_name} timed out after {timeout}s")
-            time.sleep(backoff.next_interval())
+    def tpu_operation_status(self, operation_name: str) -> OperationStatus:
+        """Fetch the current status of a TPU create/delete LRO (single GET).
+
+        A still-running operation returns done=False. A completed operation
+        returns done=True with error_code/error_message set when it failed.
+        Zone stockouts come back here as RESOURCE_EXHAUSTED rather than on the
+        initial create response; callers use operation_error() to classify.
+        """
+        if not operation_name or "/operations/" not in operation_name:
+            return OperationStatus(done=True)
+        resp = self._client.get(f"{_TPU_BASE}/{operation_name}", headers=self._headers())
+        self._classify_response(resp)
+        data = resp.json()
+        if not data.get("done"):
+            return OperationStatus(done=False)
+        error = data.get("error")
+        if error:
+            return OperationStatus(
+                done=True,
+                error_code=error.get("code"),
+                error_message=error.get("message", str(error)),
+            )
+        return OperationStatus(done=True)
 
     # ========================================================================
     # Low-level REST helpers
@@ -573,17 +589,31 @@ class CloudGcpService:
 
         logger.info("Creating TPU: %s (type=%s, zone=%s)", request.name, request.accelerator_type, request.zone)
 
-        # POST to create, wait for LRO, then GET the final node state
+        # POST to submit the create LRO and return immediately, reporting the node
+        # as CREATING. We do NOT wait for the operation to report done: GCP can
+        # leave a create LRO unfinished long after the node has booted and
+        # registered workers, and blocking here used to tear down live slices on a
+        # spurious timeout. The bootstrap loop polls this operation (via
+        # tpu_operation_status) only to fail fast on quota/stockout; readiness is
+        # decided by worker health, and node details are read later via describe.
         url = f"{_TPU_BASE}/{self._tpu_parent(request.zone)}/nodes"
         resp = self._client.post(url, params={"nodeId": request.name}, headers=self._headers(), json=body)
         self._classify_response(resp)
-        data = resp.json()
-        op_name = data.get("name", "")
-        if op_name and "/operations/" in op_name:
-            self._wait_tpu_operation(op_name, timeout=_default_tpu_operation_timeout(request.accelerator_type))
+        op_name = resp.json().get("name", "")
 
-        tpu_data = self._tpu_get(request.name, request.zone)
-        return _parse_tpu_info(tpu_data, request.zone)
+        return TpuInfo(
+            name=request.name,
+            state="CREATING",
+            accelerator_type=request.accelerator_type,
+            zone=request.zone,
+            labels=dict(request.labels),
+            metadata=dict(request.metadata),
+            service_account=request.service_account,
+            network_endpoints=[],
+            external_network_endpoints=[],
+            created_at=Timestamp.now(),
+            operation_name=op_name,
+        )
 
     def tpu_delete(self, name: str, zone: str) -> None:
         logger.info("Deleting TPU (async): %s", name)

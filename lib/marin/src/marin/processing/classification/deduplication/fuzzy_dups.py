@@ -237,6 +237,7 @@ def compute_fuzzy_dups_attrs(
     max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
+    map_workers_per_actor: int | None = None,
 ) -> FuzzyDupsAttrData:
     """Mark fuzzy-duplicate cluster membership across one or more ``MinHashAttrData`` inputs.
 
@@ -288,6 +289,8 @@ def compute_fuzzy_dups_attrs(
     }
     if coordinator_resources is not None:
         ctx_kwargs["coordinator_resources"] = coordinator_resources
+    if map_workers_per_actor is not None:
+        ctx_kwargs["map_workers_per_actor"] = map_workers_per_actor
     ctx = ZephyrContext(**ctx_kwargs)
 
     # Cap shard count at max_parallelism. Each group reads its attr files

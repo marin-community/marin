@@ -44,11 +44,7 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import scaling_groups_table, slices_table
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import Labels, QuotaExhaustedError, SliceHandle
-from iris.cluster.types import (
-    WorkerStatusMap,
-    get_gpu_count,
-    get_tpu_count,
-)
+from iris.cluster.types import WorkerStatusMap, get_gpu_count, get_tpu_count
 from iris.rpc import config_pb2, job_pb2, time_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 
@@ -141,6 +137,14 @@ class SliceState:
     # success. Reset on a healthy response; once any worker crosses
     # PING_FAILURE_THRESHOLD the slice is terminated. Memory-only.
     ping_failures: dict[str, int] = field(default_factory=dict)
+    # Consecutive health-probe passes where the slice's cloud allocation
+    # reported zero workers (so there was nothing to /health-probe). Reset the
+    # moment any worker becomes probeable; once it crosses PING_FAILURE_THRESHOLD
+    # the slice is terminated. This catches a slice whose backing allocation
+    # vanished while it had no cached worker URLs (e.g. preempted after a
+    # controller restart), which the per-worker counters never observe.
+    # Memory-only.
+    no_worker_probes: int = 0
     error_message: str = ""
 
 
@@ -776,11 +780,30 @@ class ScalingGroup:
             state = self._slices.get(slice_id)
             if state is None:
                 return 0
+            # Reaching here means the slice had a probeable worker, so it is not
+            # a zero-worker zombie regardless of the probe outcome.
+            state.no_worker_probes = 0
             if healthy:
                 state.ping_failures.pop(worker_id, None)
                 return 0
             state.ping_failures[worker_id] = state.ping_failures.get(worker_id, 0) + 1
             return state.ping_failures[worker_id]
+
+    def record_slice_no_workers(self, slice_id: str) -> int:
+        """Increment and return the consecutive count of probes that found no workers.
+
+        A READY slice whose cloud allocation reports zero workers cannot be
+        /health-probed at all, so the per-worker ping counters never see it.
+        Tracking the streak lets the runtime tear the slice down after
+        PING_FAILURE_THRESHOLD sustained observations -- mirroring the
+        per-worker zombie path -- while tolerating a single transient describe().
+        """
+        with self._slices_lock:
+            state = self._slices.get(slice_id)
+            if state is None:
+                return 0
+            state.no_worker_probes += 1
+            return state.no_worker_probes
 
     def get_slice(self, slice_id: str) -> SliceHandle | None:
         """Get a specific slice handle by ID."""
@@ -966,7 +989,10 @@ class ScalingGroup:
 
         Requires at least one known worker to be idle. If no workers are known at all
         (none in worker_status_map), returns False -- the slice may still be booting.
-        Zombie slices where workers have disappeared are handled by worker heartbeat timeouts.
+        Zombie slices whose workers disappeared are reaped elsewhere: a dead worker
+        process trips the heartbeat timeout (if a worker row exists) or the per-worker
+        /health probe, and a slice whose backing allocation vanished entirely (no worker
+        rows, nothing to probe) trips the no-worker counter in Autoscaler.probe_health.
         """
         has_known_worker = False
         for worker_id in self._get_slice_worker_ids(state):

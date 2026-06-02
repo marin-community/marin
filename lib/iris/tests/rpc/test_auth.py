@@ -10,10 +10,10 @@ from connectrpc._headers import Headers
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cli.main import create_client_token_provider
-from iris.cli.token_store import ClusterCredential
 from iris.cluster.controller import writes
 from iris.cluster.controller.auth import JwtTokenManager, create_api_key, revoke_api_key
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.token_store import ClusterCredential
 from iris.rpc.auth import (
     AuthInterceptor,
     AuthTokenInjector,

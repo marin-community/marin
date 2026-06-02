@@ -6,7 +6,7 @@
 import json
 
 import pytest
-from iris.cluster.controller.transitions import RunningTaskEntry
+from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.providers.k8s.tasks import (
     _INFRASTRUCTURE_FAILURE_REASONS,
     _LABEL_JOB_ID,
@@ -810,8 +810,6 @@ def test_init_container_for_workdir_file_refs():
     env_by_name = {e["name"]: e["value"] for e in ic["env"]}
     assert env_by_name["IRIS_CONTROLLER_URL"] == "http://ctrl:8080"
     assert "IRIS_WORKDIR_BLOB_REFS" in env_by_name
-
-    import json
 
     refs = json.loads(env_by_name["IRIS_WORKDIR_BLOB_REFS"])
     assert refs == {"_callable.pkl": "abcd1234" * 8}

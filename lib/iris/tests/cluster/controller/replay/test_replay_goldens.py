@@ -17,11 +17,11 @@ import pytest
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
-from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.types import TERMINAL_TASK_STATES
 from rigging.timing import Timestamp
 from sqlalchemy import Integer, case, func, literal, select
 
+from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.replay.db_dump import deterministic_dump
 from tests.cluster.controller.replay.scenarios import SCENARIO_NAMES, SCENARIOS, frozen_clock
 
@@ -39,7 +39,7 @@ def _with_scenario(name: str, fn: Callable[[ControllerDB], None]) -> None:
     with tempfile.TemporaryDirectory(prefix=f"iris-replay-test-{name}-") as db_dir_str:
         db = ControllerDB(db_dir=Path(db_dir_str))
         try:
-            transitions = ControllerTransitions(db)
+            transitions = ControllerTestState(db)
             with frozen_clock() as clock:
                 SCENARIOS[name](transitions, clock)
             fn(db)

@@ -346,6 +346,10 @@ message JobStatus {
 
   // Whether this job currently has direct child jobs.
   bool has_children = 32;
+
+  // Parent job id, if this job was launched as a child of another job.
+  // Empty for root jobs.
+  string parent_job_id = 33;
 }
 
 // ============================================================================

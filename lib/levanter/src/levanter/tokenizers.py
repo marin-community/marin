@@ -29,6 +29,7 @@ from typing import Any, Protocol, runtime_checkable
 import fsspec
 import jinja2
 import jinja2.ext
+import kitoken
 from huggingface_hub import __version__ as _hf_hub_version
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
@@ -101,19 +102,12 @@ class MarinTokenizer(Protocol):
 
     @property
     def eos_token(self) -> str | None: ...
-
     def __len__(self) -> int: ...
-
     def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]: ...
-
     def decode(self, ids: list[int], *, skip_special_tokens: bool = False) -> str: ...
-
     def encode_batch(self, texts: list[str], *, add_special_tokens: bool = False) -> list[list[int]]: ...
-
     def get_vocab(self) -> dict[str, int]: ...
-
     def convert_ids_to_tokens(self, ids: int | list[int]) -> str | list[str]: ...
-
     def convert_tokens_to_ids(self, tokens: str | list[str]) -> int | list[int]: ...
 
     @property
@@ -409,7 +403,10 @@ class HfMarinTokenizer:
     def as_hf_tokenizer(self) -> Any:
         from transformers import AutoTokenizer
 
-        return AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
+        if self._chat_template is not None and getattr(tokenizer, "chat_template", None) != self._chat_template:
+            tokenizer.chat_template = self._chat_template
+        return tokenizer
 
 
 @dataclasses.dataclass(frozen=True)
@@ -570,7 +567,10 @@ class KitokenMarinTokenizer:
     def as_hf_tokenizer(self) -> Any:
         from transformers import AutoTokenizer
 
-        return AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
+        if self._chat_template is not None and getattr(tokenizer, "chat_template", None) != self._chat_template:
+            tokenizer.chat_template = self._chat_template
+        return tokenizer
 
 
 class TokenizerBackend(StrEnum):
@@ -962,8 +962,6 @@ def _resolve_special_token_id_from_config(
 
 
 def _load_kitoken_tokenizer(name_or_path: str) -> KitokenMarinTokenizer:
-    import kitoken
-
     local_json = os.path.join(name_or_path, "tokenizer.json")
     if not os.path.isfile(local_json):
         if os.path.isdir(name_or_path):

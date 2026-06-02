@@ -28,6 +28,8 @@ import os
 from urllib.parse import urlparse
 
 import httpx
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from finelog.client.proxy import LogServiceProxy, StatsServiceProxy
 from finelog.rpc.finelog_stats_connect import (
     StatsServiceASGIApplication as FinelogStatsServiceASGIApplication,
@@ -39,7 +41,7 @@ from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from starlette.routing import Mount, Route
+from starlette.routing import Match, Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from iris.cluster.controller import endpoint_proxy
@@ -55,7 +57,14 @@ from iris.cluster.dashboard_common import (
     static_files_mount,
 )
 from iris.rpc.async_adapter import AsyncServiceAdapter
-from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
+from iris.rpc.auth import (
+    SESSION_COOKIE,
+    NullAuthInterceptor,
+    TokenVerifier,
+    extract_bearer_token,
+    identity_scope,
+    resolve_auth,
+)
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceASGIApplication
 from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, RequestTimingInterceptor
@@ -139,7 +148,6 @@ class _RouteAuthMiddleware:
 
     def _resolve_policy(self, scope: Scope) -> str:
         """Resolve the auth policy for the matched route."""
-        from starlette.routing import Match
 
         for route in self._router.routes:
             if isinstance(route, Mount):
@@ -201,8 +209,6 @@ class _DashboardAuthInterceptor:
 
     def _resolve_or_raise(self, ctx):
         """Returns (identity, fallback_to_null). Raises ConnectError on rejection."""
-        from connectrpc.code import Code
-        from connectrpc.errors import ConnectError
 
         token = extract_bearer_token(ctx.request_headers())
         try:
@@ -215,8 +221,6 @@ class _DashboardAuthInterceptor:
         return identity
 
     def intercept_unary_sync(self, call_next, request, ctx):
-        from iris.rpc.auth import _verified_identity
-
         if ctx.method().name in _UNAUTHENTICATED_RPCS:
             return call_next(request, ctx)
 
@@ -224,15 +228,10 @@ class _DashboardAuthInterceptor:
         if identity is None:
             return self._null.intercept_unary_sync(call_next, request, ctx)
 
-        reset_token = _verified_identity.set(identity)
-        try:
+        with identity_scope(identity):
             return call_next(request, ctx)
-        finally:
-            _verified_identity.reset(reset_token)
 
     async def intercept_unary(self, call_next, request, ctx):
-        from iris.rpc.auth import _verified_identity
-
         if ctx.method().name in _UNAUTHENTICATED_RPCS:
             return await call_next(request, ctx)
 
@@ -240,11 +239,8 @@ class _DashboardAuthInterceptor:
         if identity is None:
             return await self._null.intercept_unary(call_next, request, ctx)
 
-        reset_token = _verified_identity.set(identity)
-        try:
+        with identity_scope(identity):
             return await call_next(request, ctx)
-        finally:
-            _verified_identity.reset(reset_token)
 
 
 # DNS marker label that flags a Host as a per-endpoint subdomain. A request
@@ -309,11 +305,13 @@ class _SubdomainProxyMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
-            return await self._app(scope, receive, send)
+            await self._app(scope, receive, send)
+            return
 
         encoded_name = _extract_proxy_subdomain(self._extract_host(scope))
         if encoded_name is None:
-            return await self._app(scope, receive, send)
+            await self._app(scope, receive, send)
+            return
 
         if self._auth_verifier is not None:
             if not await _enforce_http_auth(scope, receive, send, self._auth_verifier, self._auth_optional):

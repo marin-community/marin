@@ -8,6 +8,7 @@ import time
 import google.auth
 from google.api_core import operations_v1
 from google.cloud import storage_transfer_v1
+from tqdm import tqdm
 
 
 EMPTY_BUCKET = "levanter-empty"
@@ -65,8 +66,6 @@ def wait_for_transfer_job(job_name: str, timeout: int, poll_interval: int, proje
     channel = transfer_client.transport.grpc_channel
     operations_client = operations_v1.OperationsClient(channel)
     start_time = time.time()
-
-    from tqdm import tqdm
 
     pbar = tqdm(desc=f"Waiting for Transfer Job :: {job_name}", unit="B", unit_scale=True)
     while time.time() - start_time < timeout:

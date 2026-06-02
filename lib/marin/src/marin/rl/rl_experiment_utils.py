@@ -19,8 +19,9 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.fsspec_utils import join_path
 from levanter.utils.mesh import MeshConfig
 from marin.execution.artifact import PathMetadata
-from marin.execution.executor import ExecutorMainConfig, ExecutorStep, InputName, output_path_of, this_output_path
+from marin.execution.executor import ExecutorMainConfig
 from marin.execution.remote import remote
+from marin.execution.types import ExecutorStep, InputName, output_path_of, this_output_path
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx import (
@@ -82,7 +83,7 @@ class RLExperimentConfig:
     num_train_steps: int = 500
     steps_per_eval: int = 100
     checkpointer_save_interval: int = 600
-    delete_previous_temporary_checkpoint_after_save: bool = True
+    keep_last_temporary_checkpoints: int = 5
     checkpoint_debug: CheckpointDebugConfig = dataclasses.field(default_factory=CheckpointDebugConfig)
 
     # wandb
@@ -270,7 +271,7 @@ def _build_rl_job_config(
         checkpointer=CheckpointerConfig(
             base_path=checkpoints_path,
             save_interval=datetime.timedelta(seconds=config.checkpointer_save_interval),
-            delete_previous_temporary_checkpoint_after_save=config.delete_previous_temporary_checkpoint_after_save,
+            keep_last_temporary_checkpoints=config.keep_last_temporary_checkpoints,
             debug=config.checkpoint_debug,
         ),
         mesh=MeshConfig(

@@ -4,7 +4,7 @@
 """Diagnostic-log dataset definitions and tokenization."""
 
 from marin.datakit.download.diagnostic_logs import ghalogs_public_normalize_steps
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
 from experiments.marin_models import marin_tokenizer

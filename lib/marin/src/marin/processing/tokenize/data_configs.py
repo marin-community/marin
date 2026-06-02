@@ -11,7 +11,7 @@ from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE, BlockShuffleConfig, Data
 from levanter.tokenizers import load_tokenizer
 
 from marin.execution import unwrap_versioned_value
-from marin.execution.executor import ExecutorStep, InputName, output_path_of
+from marin.execution.types import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.tokenize import TokenizeConfig
 
 TokenizerStep = ExecutorStep[TokenizeConfig]

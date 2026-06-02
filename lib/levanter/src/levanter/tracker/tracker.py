@@ -8,6 +8,7 @@ import typing
 from typing import Any, List, Optional
 
 import draccus
+import jax
 
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,25 @@ class Tracker(abc.ABC):
     """
 
     name: str
+
+    def _prepare_log(self, metrics: typing.Mapping[str, Any]) -> Any:
+        """Convert a ``log`` payload to host data, on the caller thread.
+
+        Both ``log`` and :class:`~levanter.tracker.background.BackgroundTracker`
+        call this. The default pulls ``jax.Array`` leaves to host with
+        ``jax.device_get``; subclasses override to also fold in backend-specific
+        conversion. Must be idempotent — the background worker re-invokes ``log``
+        on the result.
+        """
+        return jax.device_get(metrics)
+
+    def _prepare_summary(self, metrics: typing.Mapping[str, Any]) -> Any:
+        """Producer-thread counterpart to :meth:`_prepare_log` for ``log_summary``."""
+        return jax.device_get(metrics)
+
+    def _prepare_hyperparameters(self, hparams: typing.Mapping[str, Any]) -> Any:
+        """Producer-thread counterpart to :meth:`_prepare_log` for ``log_hyperparameters``."""
+        return jax.device_get(hparams)
 
     @abc.abstractmethod
     def log_hyperparameters(self, hparams: dict[str, Any]):

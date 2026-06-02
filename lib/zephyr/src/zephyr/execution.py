@@ -41,7 +41,7 @@ from fray.local_backend import LocalClient
 from fray.types import Entrypoint, JobRequest
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from rigging.filesystem import marin_temp_bucket, open_url, url_to_fs
+from rigging.filesystem import marin_temp_bucket, open_url, unique_temp_path, url_to_fs
 from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.dataset import Dataset
@@ -57,7 +57,7 @@ from zephyr.plan import (
     compute_plan,
 )
 from zephyr.shuffle import ListShard, MemChunk, _write_scatter
-from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, batchify, ensure_parent_dir, unique_temp_path
+from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, batchify, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
@@ -449,7 +449,6 @@ class StageRunner(Protocol):
         chunk_prefix: str,
         execution_id: str,
     ) -> tuple[TaskResult, dict[str, int]]: ...
-
     def live_counters(self) -> dict[str, int]: ...
 
 
@@ -1580,7 +1579,6 @@ class ZephyrWorker:
         stage-boundary exit (re-pool for next stage) from a pipeline-shutdown
         exit (break the outer loop).
         """
-        task_count = 0
         backoff = ExponentialBackoff(initial=0.1, maximum=5.0)
         future: ActorFuture | None = None
         future_start = 0.0
@@ -1647,7 +1645,6 @@ class ZephyrWorker:
                     result,
                     CounterSnapshot(counters=dict(task_counters), generation=self._counter_generation),
                 ).result()
-                task_count += 1
             except Exception:
                 logger.error("Worker %s error on shard %d", worker_id, task.shard_idx, exc_info=True)
                 coordinator.report_error.remote(

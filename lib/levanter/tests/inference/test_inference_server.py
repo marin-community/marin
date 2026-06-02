@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
+from levanter.layers.attention import AttentionMask
 from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
 
@@ -789,7 +790,6 @@ def test_logprobs_match_full_forward_pass(test_client, loaded_model, trainer_con
     print("Computing model logprobs using full forward pass")
 
     with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
-        from levanter.layers.attention import AttentionMask
 
         # Concatenate prompt + generated tokens
         full_sequence = prompt_tokens + generated_token_ids

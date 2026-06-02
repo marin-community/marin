@@ -7,10 +7,12 @@ These tests need real job execution to verify log content from actual
 callable output and chaos injection behavior.
 """
 
+import logging
 import uuid
 
 import pytest
 from iris.chaos import enable_chaos
+from iris.cluster.client import get_job_info
 from iris.rpc import job_pb2
 
 pytestmark = [pytest.mark.requires_cluster, pytest.mark.timeout(60)]
@@ -22,7 +24,6 @@ def _fail_then_succeed(attempt_marker: str):
     Uses the attempt_id from JobInfo to determine whether to fail.
     Prints attempt-specific output for log verification.
     """
-    from iris.cluster.client import get_job_info
 
     info = get_job_info()
     if info is None:
@@ -43,7 +44,6 @@ def test_multiple_attempts_preserve_logs(cluster, caplog):
     2. Verify final state is SUCCEEDED
     3. Verify logs contain output from both attempts (via attempt_id field)
     """
-    import logging
 
     run_id = uuid.uuid4().hex[:8]
     marker = f"test-{run_id}"

@@ -22,23 +22,16 @@ from iris.cluster.constraints import (
     get_device_type,
     get_device_variant,
 )
+from iris.cluster.controller import ops, writes
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.controller import (
-    RESERVATION_TAINT_KEY,
     Controller,
     ReservationClaim,
-    _find_reservation_ancestor,
-    _inject_reservation_taints,
-    _inject_taint_constraints,
-    _preference_pass,
-    _reservation_region_constraints,
-    _reserved_job_ids,
-    _worker_matches_reservation_entry,
-    apply_scheduling_gates,
-    build_scheduling_context,
-    job_requirements_from_job,
 )
+from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import SchedulableWorker
+from iris.cluster.controller.reconcile.policy import RESERVATION_HOLDER_JOB_NAME
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
@@ -47,28 +40,33 @@ from iris.cluster.controller.scheduler import (
     SchedulingContext,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.task_state import task_row_can_be_scheduled
-from iris.cluster.controller.transitions import (
-    RESERVATION_HOLDER_JOB_NAME,
-    Assignment,
-    ControllerTransitions,
-    HeartbeatApplyRequest,
-    TaskUpdate,
+from iris.cluster.controller.scheduling_policy import (
+    RESERVATION_TAINT_KEY,
+    _find_reservation_ancestor,
+    _reserved_job_ids,
+    _worker_matches_reservation_entry,
+    apply_scheduling_gates,
+    build_scheduling_context,
+    claim_workers_for_reservations,
+    cleanup_stale_claims,
+    inject_reservation_taints,
+    inject_taint_constraints,
+    job_requirements_from_job,
+    preference_pass,
+    read_reservation_claims,
 )
+from iris.cluster.controller.task_state import task_row_can_be_scheduled
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, is_job_finished
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 
 from tests.cluster.controller._test_support import (
+    ControllerTestState,
     set_task_state_for_test,
-    set_worker_attribute_for_test,
     set_worker_health_for_test,
 )
 from tests.cluster.controller.conftest import (
     hydrate_worker_attributes as _with_attrs,
-)
-from tests.cluster.controller.conftest import (
-    make_job_request,
 )
 from tests.cluster.controller.conftest import (
     query_job as _query_job,
@@ -92,11 +90,9 @@ from tests.cluster.controller.conftest import (
     schedulable_tasks as _schedulable_tasks,
 )
 from tests.cluster.controller.conftest import (
-    submit_job as _submit_job_tasks,
-)
-from tests.cluster.controller.conftest import (
     worker_running_tasks as _worker_running_tasks,
 )
+from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 
 def _cpu_device() -> job_pb2.DeviceConfig:
@@ -224,32 +220,52 @@ def ctrl(make_controller) -> Controller:
     return make_controller(remote_state_dir="file:///tmp/iris-test-bundles")
 
 
+def _claim_for_reservations(ctrl: Controller) -> None:
+    """Read claims, run the claim pass, and persist — mirrors the scheduling cycle."""
+    claims = read_reservation_claims(ctrl._db)
+    if claim_workers_for_reservations(claims, ctrl._db, ctrl._health, ctrl._worker_attrs):
+        with ctrl._db.transaction() as cur:
+            writes.replace_reservation_claims(cur, claims)
+
+
+def _cleanup_claims(ctrl: Controller) -> None:
+    """Read claims, run the stale-claim sweep, and persist."""
+    claims = read_reservation_claims(ctrl._db)
+    if cleanup_stale_claims(claims, ctrl._db, ctrl._health):
+        with ctrl._db.transaction() as cur:
+            writes.replace_reservation_claims(cur, claims)
+
+
 def _register_worker(
-    state: ControllerTransitions,
+    state: ControllerTestState,
     worker_id: str,
     metadata: job_pb2.WorkerMetadata | None = None,
 ) -> WorkerId:
     wid = WorkerId(worker_id)
     with state._db.transaction() as cur:
-        state.register_or_refresh_worker(
+        ops.worker.register(
             cur,
             worker_id=wid,
             address=f"{worker_id}:8080",
             metadata=metadata or _cpu_metadata(),
             ts=Timestamp.now(),
+            health=state._health,
+            worker_attrs=state._worker_attrs,
         )
     return wid
 
 
 def _submit_job(
-    state: ControllerTransitions,
+    state: ControllerTestState,
     job_id: str,
     request: controller_pb2.Controller.LaunchJobRequest,
 ) -> JobName:
     jid = JobName.root("test-user", job_id)
     request.name = jid.to_wire()
     with state._db.transaction() as cur:
-        state.submit_job(cur, jid, request, Timestamp.now())
+        ops.job.submit(
+            cur, job_id=jid, request=request, ts=Timestamp.now(), run_template_cache=state._run_template_cache
+        )
     return jid
 
 
@@ -321,13 +337,13 @@ def test_worker_rejects_unmet_constraint():
 
 def test_claim_eligible_worker(ctrl):
     """An eligible worker is claimed for a reservation entry."""
-    _register_worker(ctrl.state, "w1")
+    _register_worker(ctrl, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
     )
-    _submit_job(ctrl.state, "j1", req)
+    _submit_job(ctrl, "j1", req)
 
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     assert WorkerId("w1") in ctrl.reservation_claims
     claim = ctrl.reservation_claims[WorkerId("w1")]
@@ -337,26 +353,26 @@ def test_claim_eligible_worker(ctrl):
 
 def test_claim_rejects_wrong_device(ctrl):
     """A worker with the wrong device type is not claimed."""
-    _register_worker(ctrl.state, "w1", _cpu_metadata())
+    _register_worker(ctrl, "w1", _cpu_metadata())
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry(_gpu_device("H100"))],
     )
-    _submit_job(ctrl.state, "j1", req)
+    _submit_job(ctrl, "j1", req)
 
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     assert len(ctrl.reservation_claims) == 0
 
 
 def test_claim_one_per_worker(ctrl):
     """A single worker cannot be claimed by two different reservation entries."""
-    _register_worker(ctrl.state, "w1")
+    _register_worker(ctrl, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry(), _make_reservation_entry()],
     )
-    _submit_job(ctrl.state, "j1", req)
+    _submit_job(ctrl, "j1", req)
 
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     assert len(ctrl.reservation_claims) == 1
     assert WorkerId("w1") in ctrl.reservation_claims
@@ -364,14 +380,14 @@ def test_claim_one_per_worker(ctrl):
 
 def test_claim_respects_entry_count(ctrl):
     """Two workers can satisfy a 2-entry reservation."""
-    _register_worker(ctrl.state, "w1")
-    _register_worker(ctrl.state, "w2")
+    _register_worker(ctrl, "w1")
+    _register_worker(ctrl, "w2")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry(), _make_reservation_entry()],
     )
-    _submit_job(ctrl.state, "j1", req)
+    _submit_job(ctrl, "j1", req)
 
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     assert len(ctrl.reservation_claims) == 2
     job_wire = JobName.root("test-user", "j1").to_wire()
@@ -381,37 +397,37 @@ def test_claim_respects_entry_count(ctrl):
 
 def test_claim_does_not_exceed_entry_count(ctrl):
     """Extra workers beyond entry count are not claimed."""
-    _register_worker(ctrl.state, "w1")
-    _register_worker(ctrl.state, "w2")
-    _register_worker(ctrl.state, "w3")
+    _register_worker(ctrl, "w1")
+    _register_worker(ctrl, "w2")
+    _register_worker(ctrl, "w3")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
     )
-    _submit_job(ctrl.state, "j1", req)
+    _submit_job(ctrl, "j1", req)
 
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     assert len(ctrl.reservation_claims) == 1
 
 
 def test_claim_independent_per_job(ctrl):
     """Claims for different jobs don't interfere with each other."""
-    _register_worker(ctrl.state, "w1")
-    _register_worker(ctrl.state, "w2")
+    _register_worker(ctrl, "w1")
+    _register_worker(ctrl, "w2")
 
     req_a = _make_job_request_with_reservation(
         name="job-a",
         reservation_entries=[_make_reservation_entry()],
     )
-    _submit_job(ctrl.state, "job-a", req_a)
+    _submit_job(ctrl, "job-a", req_a)
 
     req_b = _make_job_request_with_reservation(
         name="job-b",
         reservation_entries=[_make_reservation_entry()],
     )
-    _submit_job(ctrl.state, "job-b", req_b)
+    _submit_job(ctrl, "job-b", req_b)
 
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     assert len(ctrl.reservation_claims) == 2
     job_ids = {c.job_id for c in ctrl.reservation_claims.values()}
@@ -423,30 +439,30 @@ def test_claim_independent_per_job(ctrl):
 
 def test_claim_skips_unhealthy_worker(ctrl):
     """Unhealthy workers are not claimed."""
-    _register_worker(ctrl.state, "w1")
+    _register_worker(ctrl, "w1")
     # Mark worker unhealthy
-    set_worker_health_for_test(ctrl.state, WorkerId("w1"), False)
+    set_worker_health_for_test(ctrl, WorkerId("w1"), False)
 
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
     )
-    _submit_job(ctrl.state, "j1", req)
+    _submit_job(ctrl, "j1", req)
 
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
 
     assert len(ctrl.reservation_claims) == 0
 
 
 def test_claim_idempotent(ctrl):
     """Running claiming twice doesn't duplicate claims."""
-    _register_worker(ctrl.state, "w1")
+    _register_worker(ctrl, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
     )
-    _submit_job(ctrl.state, "j1", req)
+    _submit_job(ctrl, "j1", req)
 
-    ctrl._claim_workers_for_reservations()
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
+    _claim_for_reservations(ctrl)
 
     assert len(ctrl.reservation_claims) == 1
 
@@ -458,12 +474,12 @@ def test_claim_idempotent(ctrl):
 
 def test_cleanup_removes_dead_worker_claims(ctrl):
     """Claims referencing workers absent from controller state are pruned."""
-    w1 = _register_worker(ctrl.state, "w1")
+    w1 = _register_worker(ctrl, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
     )
-    _submit_job(ctrl.state, "j1", req)
-    ctrl._claim_workers_for_reservations()
+    _submit_job(ctrl, "j1", req)
+    _claim_for_reservations(ctrl)
     assert len(ctrl.reservation_claims) == 1
 
     # Simulate worker disappearing by injecting a claim for a non-existent worker
@@ -472,11 +488,11 @@ def test_cleanup_removes_dead_worker_claims(ctrl):
         job_id=JobName.root("test-user", "j1").to_wire(),
         entry_idx=99,
     )
-    with ctrl.state._db.transaction() as cur:
-        ctrl.state.replace_reservation_claims(cur, claims)
+    with ctrl._db.transaction() as cur:
+        writes.replace_reservation_claims(cur, claims)
     assert len(ctrl.reservation_claims) == 2
 
-    ctrl._cleanup_stale_claims()
+    _cleanup_claims(ctrl)
 
     # dead-worker removed, w1 preserved
     assert WorkerId("dead-worker") not in ctrl.reservation_claims
@@ -485,36 +501,36 @@ def test_cleanup_removes_dead_worker_claims(ctrl):
 
 def test_cleanup_removes_finished_job_claims(ctrl):
     """Claims for finished jobs are removed."""
-    _register_worker(ctrl.state, "w1")
+    _register_worker(ctrl, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
     )
-    jid = _submit_job(ctrl.state, "j1", req)
-    ctrl._claim_workers_for_reservations()
+    jid = _submit_job(ctrl, "j1", req)
+    _claim_for_reservations(ctrl)
     assert len(ctrl.reservation_claims) == 1
 
     # Kill the job to mark it as finished.
-    with ctrl.state._db.transaction() as cur:
-        ctrl.state.cancel_job(cur, jid, reason="test")
+    with ctrl._db.transaction() as cur:
+        ops.job.cancel(cur, job_id=jid, reason="test", endpoints=ctrl._endpoints, health=ctrl._health)
 
-    job = _query_job(ctrl.state, jid)
+    job = _query_job(ctrl, jid)
     assert is_job_finished(job.state)
 
-    ctrl._cleanup_stale_claims()
+    _cleanup_claims(ctrl)
 
     assert len(ctrl.reservation_claims) == 0
 
 
 def test_cleanup_preserves_valid_claims(ctrl):
     """Valid claims (healthy worker, active job) are preserved."""
-    _register_worker(ctrl.state, "w1")
+    _register_worker(ctrl, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
     )
-    _submit_job(ctrl.state, "j1", req)
-    ctrl._claim_workers_for_reservations()
+    _submit_job(ctrl, "j1", req)
+    _claim_for_reservations(ctrl)
 
-    ctrl._cleanup_stale_claims()
+    _cleanup_claims(ctrl)
 
     assert len(ctrl.reservation_claims) == 1
 
@@ -526,12 +542,12 @@ def test_cleanup_preserves_valid_claims(ctrl):
 
 def test_gate_satisfied_when_claims_meet_entries(ctrl):
     """Gate passes a reservation task when claimed workers >= reservation entries."""
-    _register_worker(ctrl.state, "w1")
+    _register_worker(ctrl, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
     )
-    jid = _submit_job(ctrl.state, "j1", req)
-    ctrl._claim_workers_for_reservations()
+    jid = _submit_job(ctrl, "j1", req)
+    _claim_for_reservations(ctrl)
 
     claims = ctrl.reservation_claims
     ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults)
@@ -542,12 +558,12 @@ def test_gate_satisfied_when_claims_meet_entries(ctrl):
 
 def test_gate_unsatisfied_when_claims_below_entries(ctrl):
     """Gate blocks a reservation task when fewer workers are claimed than entries required."""
-    _register_worker(ctrl.state, "w1")
+    _register_worker(ctrl, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry(), _make_reservation_entry()],
     )
-    jid = _submit_job(ctrl.state, "j1", req)
-    ctrl._claim_workers_for_reservations()
+    jid = _submit_job(ctrl, "j1", req)
+    _claim_for_reservations(ctrl)
 
     # Only 1 worker available for 2 entries — gate must stay closed.
     claims = ctrl.reservation_claims
@@ -565,7 +581,7 @@ def test_gate_satisfied_for_jobs_without_reservation(ctrl):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    jid = _submit_job(ctrl.state, "no-res", req)
+    jid = _submit_job(ctrl, "no-res", req)
 
     claims: dict[WorkerId, ReservationClaim] = {}
     ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults)
@@ -574,7 +590,7 @@ def test_gate_satisfied_for_jobs_without_reservation(ctrl):
 
 
 # =============================================================================
-# _inject_reservation_taints
+# inject_reservation_taints
 # =============================================================================
 
 
@@ -589,7 +605,7 @@ def test_taint_injection_adds_attribute_to_claimed_workers():
     s2 = _make_snapshot("w2")
     claims = {WorkerId("w1"): ReservationClaim(job_id="job-a", entry_idx=0)}
 
-    result = _inject_reservation_taints([s1, s2], claims)
+    result = inject_reservation_taints([s1, s2], claims)
 
     # w1 should have the taint
     tainted = [w for w in result if w.worker_id == WorkerId("w1")]
@@ -604,7 +620,7 @@ def test_taint_injection_unclaimed_workers_no_attribute():
     s2 = _make_snapshot("w2")
     claims = {WorkerId("w1"): ReservationClaim(job_id="job-a", entry_idx=0)}
 
-    result = _inject_reservation_taints([s1, s2], claims)
+    result = inject_reservation_taints([s1, s2], claims)
 
     unclaimed = [w for w in result if w.worker_id == WorkerId("w2")]
     assert len(unclaimed) == 1
@@ -619,7 +635,7 @@ def test_taint_injection_claimed_workers_first():
     # Only w2 is claimed
     claims = {WorkerId("w2"): ReservationClaim(job_id="job-a", entry_idx=0)}
 
-    result = _inject_reservation_taints([s1, s2, s3], claims)
+    result = inject_reservation_taints([s1, s2, s3], claims)
 
     assert result[0].worker_id == WorkerId("w2")
     unclaimed_ids = [w.worker_id for w in result[1:]]
@@ -631,7 +647,7 @@ def test_taint_injection_no_claims_returns_original_list():
     s1 = _make_snapshot("w1")
     s2 = _make_snapshot("w2")
 
-    result = _inject_reservation_taints([s1, s2], {})
+    result = inject_reservation_taints([s1, s2], {})
 
     # With no claims, the function returns the input list directly
     assert result[0].worker_id == WorkerId("w1")
@@ -644,13 +660,13 @@ def test_taint_injection_does_not_mutate_original():
     original_attrs = dict(s1.attributes)
     claims = {WorkerId("w1"): ReservationClaim(job_id="job-a", entry_idx=0)}
 
-    _inject_reservation_taints([s1], claims)
+    inject_reservation_taints([s1], claims)
 
     assert s1.attributes == original_attrs
 
 
 # =============================================================================
-# _inject_taint_constraints
+# inject_taint_constraints
 # =============================================================================
 
 
@@ -674,7 +690,7 @@ def test_taint_constraint_added_to_non_reservation_jobs():
     }
     has_reservation: set[JobName] = set()
 
-    result = _inject_taint_constraints(jobs, has_reservation)
+    result = inject_taint_constraints(jobs, has_reservation)
 
     constraints = result[JobName.root("test-user", "regular")].constraints
     not_exists = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
@@ -691,7 +707,7 @@ def test_taint_constraint_not_added_to_reservation_jobs():
     has_reservation = {res_job}
     has_direct_reservation = {res_job}
 
-    result = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
+    result = inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
     constraints = result[res_job].constraints
     eq = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
@@ -713,7 +729,7 @@ def test_taint_constraint_mixed_jobs():
     has_reservation = {res_job, descendant_job}
     has_direct_reservation = {res_job}
 
-    result = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
+    result = inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
     # Direct reservation job: EQ constraint
     res_constraints = [c for c in result[res_job].constraints if c.key == RESERVATION_TAINT_KEY]
@@ -749,7 +765,7 @@ def test_taint_constraint_preserves_existing_constraints():
     has_reservation: set[JobName] = set()
     has_direct_reservation: set[JobName] = set()
 
-    result = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
+    result = inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
     constraints = result[JobName.root("test-user", "regular")].constraints
     assert len(constraints) == 2
@@ -762,7 +778,7 @@ def test_taint_constraint_preserves_existing_constraints():
 
 
 # =============================================================================
-# _preference_pass
+# preference_pass
 # =============================================================================
 
 
@@ -805,7 +821,7 @@ def test_preference_pass_assigns_to_claimed_worker():
         jobs={job_id: req},
     )
 
-    assignments = _preference_pass(context, has_reservation, claims)
+    assignments = preference_pass(context, has_reservation, claims)
 
     assert len(assignments) == 1
     assert assignments[0] == (task_id, WorkerId("w1"))
@@ -837,7 +853,7 @@ def test_preference_pass_falls_through_on_no_capacity():
         jobs={job_id: req},
     )
 
-    assignments = _preference_pass(context, has_reservation, claims)
+    assignments = preference_pass(context, has_reservation, claims)
 
     assert len(assignments) == 0
     assert task_id in context.pending_tasks
@@ -858,7 +874,7 @@ def test_preference_pass_skips_non_reservation_tasks():
         jobs={job_id: req},
     )
 
-    assignments = _preference_pass(context, has_reservation, claims)
+    assignments = preference_pass(context, has_reservation, claims)
 
     assert len(assignments) == 0
     assert task_id in context.pending_tasks
@@ -888,7 +904,7 @@ def test_preference_pass_skips_coscheduled_jobs():
         jobs={job_id: req},
     )
 
-    assignments = _preference_pass(context, has_reservation, claims)
+    assignments = preference_pass(context, has_reservation, claims)
 
     assert len(assignments) == 0
     assert task_id in context.pending_tasks
@@ -908,10 +924,87 @@ def test_preference_pass_no_claims_returns_empty():
         jobs={job_id: req},
     )
 
-    assignments = _preference_pass(context, has_reservation, {})
+    assignments = preference_pass(context, has_reservation, {})
 
     assert len(assignments) == 0
     assert task_id in context.pending_tasks
+
+
+def _req_with_constraints(constraints: list[Constraint]) -> JobRequirements:
+    return JobRequirements(
+        req_cpu_millicores=1000,
+        req_memory_bytes=1024**3,
+        req_gpu_count=0,
+        req_tpu_count=0,
+        device_variant=None,
+        constraints=constraints,
+        is_coscheduled=False,
+        coscheduling_group_by=None,
+    )
+
+
+def test_preference_pass_rejects_claimed_worker_violating_hard_constraint():
+    """A claimed worker that violates the task's own hard constraint (e.g. wrong
+    region) must NOT receive the task. ``can_fit`` checks resource counts only,
+    so without the constraint gate the task would be silently placed on the
+    wrong worker and stripped from pending_tasks before find_assignments could
+    correct it."""
+    w1 = _make_worker("w1", attributes={WellKnownAttribute.REGION: AttributeValue("us-east5")})
+    job_id = JobName.root("test-user", "res-job")
+    task_id = job_id.task(0)
+    req = _req_with_constraints(
+        [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-central2")]
+    )
+    has_reservation = {job_id}
+    claims = {WorkerId("w1"): ReservationClaim(job_id=job_id.to_wire(), entry_idx=0)}
+
+    context = _build_context_with_workers([w1], pending_tasks=[task_id], jobs={job_id: req})
+
+    assignments = preference_pass(context, has_reservation, claims)
+
+    assert assignments == []
+    assert task_id in context.pending_tasks
+
+
+def test_preference_pass_respects_matching_hard_constraint():
+    """A claimed worker that satisfies the task's hard constraint is assigned."""
+    w1 = _make_worker("w1", attributes={WellKnownAttribute.REGION: AttributeValue("us-central2")})
+    job_id = JobName.root("test-user", "res-job")
+    task_id = job_id.task(0)
+    req = _req_with_constraints(
+        [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-central2")]
+    )
+    has_reservation = {job_id}
+    claims = {WorkerId("w1"): ReservationClaim(job_id=job_id.to_wire(), entry_idx=0)}
+
+    context = _build_context_with_workers([w1], pending_tasks=[task_id], jobs={job_id: req})
+
+    assignments = preference_pass(context, has_reservation, claims)
+
+    assert assignments == [(task_id, WorkerId("w1"))]
+    assert task_id not in context.pending_tasks
+
+
+def test_preference_pass_accepts_claimed_worker_carrying_its_reservation_taint():
+    """The constraint gate must not reject a claimed worker for its own EQ
+    reservation taint. In production preference_pass runs on the tainted req: a
+    direct-reservation job carries an EQ reservation-job==<job> constraint and
+    the claimed worker carries the matching reservation-job attribute, so the
+    gate must still admit it (otherwise direct reservations would never place)."""
+    job_id = JobName.root("test-user", "res-job")
+    job_wire = job_id.to_wire()
+    task_id = job_id.task(0)
+    w1 = _make_worker("w1", attributes={RESERVATION_TAINT_KEY: AttributeValue(job_wire)})
+    req = _req_with_constraints([Constraint.create(key=RESERVATION_TAINT_KEY, op=ConstraintOp.EQ, value=job_wire)])
+    has_reservation = {job_id}
+    claims = {WorkerId("w1"): ReservationClaim(job_id=job_wire, entry_idx=0)}
+
+    context = _build_context_with_workers([w1], pending_tasks=[task_id], jobs={job_id: req})
+
+    assignments = preference_pass(context, has_reservation, claims)
+
+    assert assignments == [(task_id, WorkerId("w1"))]
+    assert task_id not in context.pending_tasks
 
 
 def test_preference_pass_deducts_capacity():
@@ -940,136 +1033,13 @@ def test_preference_pass_deducts_capacity():
         jobs={job_id: req},
     )
 
-    assignments = _preference_pass(context, has_reservation, claims)
+    assignments = preference_pass(context, has_reservation, claims)
 
     # First task assigned to w1; second stays pending (w1 already scheduled this cycle)
     assert len(assignments) == 1
     assert assignments[0] == (task_id_0, WorkerId("w1"))
     assert task_id_0 not in context.pending_tasks
     assert task_id_1 in context.pending_tasks
-
-
-# =============================================================================
-# _reservation_region_constraints
-# =============================================================================
-
-
-def test_region_constraint_injected_from_claimed_workers(ctrl):
-    """Region constraint is injected when claimed workers have a region attribute."""
-    w1 = _register_worker(ctrl.state, "w1")
-    # Set region attribute on worker
-    set_worker_attribute_for_test(ctrl.state, w1, WellKnownAttribute.REGION, AttributeValue("us-central1"))
-
-    req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
-    jid = _submit_job(ctrl.state, "j1", req)
-    ctrl._claim_workers_for_reservations()
-
-    result = _reservation_region_constraints(
-        jid.to_wire(),
-        ctrl.reservation_claims,
-        ctrl._db,
-        ctrl.state._health,
-        ctrl.state._worker_attrs,
-        [],
-    )
-
-    assert len(result) == 1
-    assert result[0].key == WellKnownAttribute.REGION
-    assert result[0].op == ConstraintOp.EQ
-    assert result[0].values[0].value == "us-central1"
-
-
-def test_region_constraint_not_injected_when_already_present(ctrl):
-    """Existing region constraint prevents injection."""
-    w1 = _register_worker(ctrl.state, "w1")
-    set_worker_attribute_for_test(ctrl.state, w1, WellKnownAttribute.REGION, AttributeValue("us-central1"))
-
-    req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
-    jid = _submit_job(ctrl.state, "j1", req)
-    ctrl._claim_workers_for_reservations()
-
-    existing = Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-east1")
-    result = _reservation_region_constraints(
-        jid.to_wire(),
-        ctrl.reservation_claims,
-        ctrl._db,
-        ctrl.state._health,
-        ctrl.state._worker_attrs,
-        [existing],
-    )
-
-    assert len(result) == 1
-    assert result[0] is existing
-
-
-def test_region_constraint_not_injected_when_no_region_attr(ctrl):
-    """No injection when claimed workers lack region attributes."""
-    _register_worker(ctrl.state, "w1")
-
-    req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
-    jid = _submit_job(ctrl.state, "j1", req)
-    ctrl._claim_workers_for_reservations()
-
-    result = _reservation_region_constraints(
-        jid.to_wire(),
-        ctrl.reservation_claims,
-        ctrl._db,
-        ctrl.state._health,
-        ctrl.state._worker_attrs,
-        [],
-    )
-
-    assert result == []
-
-
-def test_region_constraint_multiple_regions(ctrl):
-    """IN constraint injected when claimed workers span multiple regions."""
-    w1 = _register_worker(ctrl.state, "w1")
-    w2 = _register_worker(ctrl.state, "w2")
-    set_worker_attribute_for_test(ctrl.state, w1, WellKnownAttribute.REGION, AttributeValue("us-central1"))
-    set_worker_attribute_for_test(ctrl.state, w2, WellKnownAttribute.REGION, AttributeValue("us-east1"))
-
-    req = _make_job_request_with_reservation(
-        reservation_entries=[_make_reservation_entry(), _make_reservation_entry()],
-    )
-    jid = _submit_job(ctrl.state, "j1", req)
-    ctrl._claim_workers_for_reservations()
-
-    result = _reservation_region_constraints(
-        jid.to_wire(),
-        ctrl.reservation_claims,
-        ctrl._db,
-        ctrl.state._health,
-        ctrl.state._worker_attrs,
-        [],
-    )
-
-    assert len(result) == 1
-    assert result[0].key == WellKnownAttribute.REGION
-    assert result[0].op == ConstraintOp.IN
-    assert {v.value for v in result[0].values} == {"us-central1", "us-east1"}
-
-
-def test_no_injection_for_non_reservation_job(ctrl):
-    """No claims for this job → constraints returned unchanged."""
-    w1 = _register_worker(ctrl.state, "w1")
-    set_worker_attribute_for_test(ctrl.state, w1, WellKnownAttribute.REGION, AttributeValue("us-central1"))
-
-    # Claim w1 for a different job
-    req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry()])
-    _submit_job(ctrl.state, "other-job", req)
-    ctrl._claim_workers_for_reservations()
-
-    result = _reservation_region_constraints(
-        "/test-user/unrelated-job",
-        ctrl.reservation_claims,
-        ctrl._db,
-        ctrl.state._health,
-        ctrl.state._worker_attrs,
-        [],
-    )
-
-    assert result == []
 
 
 # =============================================================================
@@ -1082,7 +1052,7 @@ def test_find_reservation_ancestor_returns_parent_with_reservation(ctrl):
     parent_req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
     )
-    parent_jid = _submit_job(ctrl.state, "res-parent", parent_req)
+    parent_jid = _submit_job(ctrl, "res-parent", parent_req)
 
     child_jid = JobName.from_string("/test-user/res-parent/child")
     child_req = controller_pb2.Controller.LaunchJobRequest(
@@ -1092,8 +1062,14 @@ def test_find_reservation_ancestor_returns_parent_with_reservation(ctrl):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    with ctrl.state._db.transaction() as cur:
-        ctrl.state.submit_job(cur, child_jid, child_req, Timestamp.now())
+    with ctrl._db.transaction() as cur:
+        ops.job.submit(
+            cur,
+            job_id=child_jid,
+            request=child_req,
+            ts=Timestamp.now(),
+            run_template_cache=ctrl._run_template_cache,
+        )
 
     result = _find_reservation_ancestor(_reserved_job_ids(ctrl._db), child_jid)
     assert result == parent_jid
@@ -1105,7 +1081,7 @@ def test_find_reservation_ancestor_returns_grandparent(ctrl):
     gp_req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
     )
-    gp_jid = _submit_job(ctrl.state, "gp", gp_req)
+    gp_jid = _submit_job(ctrl, "gp", gp_req)
 
     # Parent (no reservation)
     parent_jid = JobName.from_string("/test-user/gp/parent")
@@ -1116,8 +1092,14 @@ def test_find_reservation_ancestor_returns_grandparent(ctrl):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    with ctrl.state._db.transaction() as cur:
-        ctrl.state.submit_job(cur, parent_jid, parent_req, Timestamp.now())
+    with ctrl._db.transaction() as cur:
+        ops.job.submit(
+            cur,
+            job_id=parent_jid,
+            request=parent_req,
+            ts=Timestamp.now(),
+            run_template_cache=ctrl._run_template_cache,
+        )
 
     # Grandchild
     gc_jid = JobName.from_string("/test-user/gp/parent/gc")
@@ -1128,8 +1110,10 @@ def test_find_reservation_ancestor_returns_grandparent(ctrl):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    with ctrl.state._db.transaction() as cur:
-        ctrl.state.submit_job(cur, gc_jid, gc_req, Timestamp.now())
+    with ctrl._db.transaction() as cur:
+        ops.job.submit(
+            cur, job_id=gc_jid, request=gc_req, ts=Timestamp.now(), run_template_cache=ctrl._run_template_cache
+        )
 
     result = _find_reservation_ancestor(_reserved_job_ids(ctrl._db), gc_jid)
     assert result == gp_jid
@@ -1144,7 +1128,7 @@ def test_find_reservation_ancestor_returns_none_for_root_job(ctrl):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    jid = _submit_job(ctrl.state, "no-res", req)
+    jid = _submit_job(ctrl, "no-res", req)
     assert _find_reservation_ancestor(_reserved_job_ids(ctrl._db), jid) is None
 
 
@@ -1157,7 +1141,7 @@ def test_find_reservation_ancestor_returns_none_when_no_ancestor_has_reservation
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    _submit_job(ctrl.state, "plain-parent", parent_req)
+    _submit_job(ctrl, "plain-parent", parent_req)
 
     child_jid = JobName.from_string("/test-user/plain-parent/child")
     child_req = controller_pb2.Controller.LaunchJobRequest(
@@ -1167,8 +1151,14 @@ def test_find_reservation_ancestor_returns_none_when_no_ancestor_has_reservation
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    with ctrl.state._db.transaction() as cur:
-        ctrl.state.submit_job(cur, child_jid, child_req, Timestamp.now())
+    with ctrl._db.transaction() as cur:
+        ops.job.submit(
+            cur,
+            job_id=child_jid,
+            request=child_req,
+            ts=Timestamp.now(),
+            run_template_cache=ctrl._run_template_cache,
+        )
 
     assert _find_reservation_ancestor(_reserved_job_ids(ctrl._db), child_jid) is None
 
@@ -1180,8 +1170,8 @@ def test_find_reservation_ancestor_returns_none_when_no_ancestor_has_reservation
 
 def test_taint_exemption_for_children_of_reservation_job(ctrl):
     """Children of a reservation job are not blocked from claimed workers."""
-    _register_worker(ctrl.state, "w1", _gpu_metadata("H100"))
-    _register_worker(ctrl.state, "w2", _gpu_metadata("H100"))
+    _register_worker(ctrl, "w1", _gpu_metadata("H100"))
+    _register_worker(ctrl, "w2", _gpu_metadata("H100"))
 
     # Parent job with reservation claiming both GPU workers
     parent_req = _make_job_request_with_reservation(
@@ -1190,8 +1180,8 @@ def test_taint_exemption_for_children_of_reservation_job(ctrl):
             _make_reservation_entry(_gpu_device("H100")),
         ],
     )
-    _submit_job(ctrl.state, "res-parent", parent_req)
-    ctrl._claim_workers_for_reservations()
+    _submit_job(ctrl, "res-parent", parent_req)
+    _claim_for_reservations(ctrl)
     assert len(ctrl.reservation_claims) == 2
 
     # Child job (NO reservation) requesting GPU
@@ -1207,16 +1197,22 @@ def test_taint_exemption_for_children_of_reservation_job(ctrl):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    with ctrl.state._db.transaction() as cur:
-        ctrl.state.submit_job(cur, child_jid, child_req, Timestamp.now())
+    with ctrl._db.transaction() as cur:
+        ops.job.submit(
+            cur,
+            job_id=child_jid,
+            request=child_req,
+            ts=Timestamp.now(),
+            run_template_cache=ctrl._run_template_cache,
+        )
 
     # Build scheduling state — child should be in has_reservation
-    pending = _schedulable_tasks(ctrl.state)
+    pending = _schedulable_tasks(ctrl)
     jobs: dict[JobName, JobRequirements] = {}
     has_reservation: set[JobName] = set()
     for task in pending:
-        job_row = _query_job_row(ctrl.state, task.job_id)
-        job_detail = _query_job(ctrl.state, task.job_id)
+        job_row = _query_job_row(ctrl, task.job_id)
+        job_detail = _query_job(ctrl, task.job_id)
         if job_row and not is_job_finished(job_row.state):
             jobs[task.job_id] = job_requirements_from_job(job_row)
             if job_detail and job_detail.reservation_json is not None:
@@ -1229,12 +1225,12 @@ def test_taint_exemption_for_children_of_reservation_job(ctrl):
     # Track direct reservations
     has_direct_reservation: set[JobName] = set()
     for task in pending:
-        job_detail = _query_job(ctrl.state, task.job_id)
+        job_detail = _query_job(ctrl, task.job_id)
         if job_detail and not is_job_finished(job_detail.state) and job_detail.reservation_json is not None:
             has_direct_reservation.add(task.job_id)
 
     # Child does NOT get NOT_EXISTS constraint (descendant, no constraint at all)
-    modified_jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
+    modified_jobs = inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
     child_constraints = modified_jobs[child_jid].constraints
     taint = [c for c in child_constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(taint) == 0
@@ -1249,10 +1245,10 @@ def test_taint_exemption_for_children_of_reservation_job(ctrl):
 
 def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
     """Grandchildren of a reservation job inherit taint exemption."""
-    _register_worker(ctrl.state, "h1", _gpu_metadata("H100"))
-    _register_worker(ctrl.state, "h2", _gpu_metadata("H100"))
-    _register_worker(ctrl.state, "a1", _gpu_metadata("A100"))
-    _register_worker(ctrl.state, "a2", _gpu_metadata("A100"))
+    _register_worker(ctrl, "h1", _gpu_metadata("H100"))
+    _register_worker(ctrl, "h2", _gpu_metadata("H100"))
+    _register_worker(ctrl, "a1", _gpu_metadata("A100"))
+    _register_worker(ctrl, "a2", _gpu_metadata("A100"))
 
     # Root job (CPU, no reservation)
     root_req = controller_pb2.Controller.LaunchJobRequest(
@@ -1262,7 +1258,7 @@ def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    _submit_job(ctrl.state, "root", root_req)
+    _submit_job(ctrl, "root", root_req)
 
     # Child-A reserves 2 H100
     child_a_jid = JobName.from_string("/test-user/root/child-a")
@@ -1273,8 +1269,14 @@ def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
         ],
     )
     child_a_req.name = child_a_jid.to_wire()
-    with ctrl.state._db.transaction() as cur:
-        ctrl.state.submit_job(cur, child_a_jid, child_a_req, Timestamp.now())
+    with ctrl._db.transaction() as cur:
+        ops.job.submit(
+            cur,
+            job_id=child_a_jid,
+            request=child_a_req,
+            ts=Timestamp.now(),
+            run_template_cache=ctrl._run_template_cache,
+        )
 
     # Child-B reserves 2 A100
     child_b_jid = JobName.from_string("/test-user/root/child-b")
@@ -1285,10 +1287,16 @@ def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
         ],
     )
     child_b_req.name = child_b_jid.to_wire()
-    with ctrl.state._db.transaction() as cur:
-        ctrl.state.submit_job(cur, child_b_jid, child_b_req, Timestamp.now())
+    with ctrl._db.transaction() as cur:
+        ops.job.submit(
+            cur,
+            job_id=child_b_jid,
+            request=child_b_req,
+            ts=Timestamp.now(),
+            run_template_cache=ctrl._run_template_cache,
+        )
 
-    ctrl._claim_workers_for_reservations()
+    _claim_for_reservations(ctrl)
     assert len(ctrl.reservation_claims) == 4
 
     # Grandchild-A (under child-A) requesting H100
@@ -1304,8 +1312,10 @@ def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    with ctrl.state._db.transaction() as cur:
-        ctrl.state.submit_job(cur, gc_a_jid, gc_a_req, Timestamp.now())
+    with ctrl._db.transaction() as cur:
+        ops.job.submit(
+            cur, job_id=gc_a_jid, request=gc_a_req, ts=Timestamp.now(), run_template_cache=ctrl._run_template_cache
+        )
 
     # Grandchild-B (under child-B) requesting A100
     gc_b_jid = JobName.from_string("/test-user/root/child-b/gc-b")
@@ -1320,16 +1330,18 @@ def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    with ctrl.state._db.transaction() as cur:
-        ctrl.state.submit_job(cur, gc_b_jid, gc_b_req, Timestamp.now())
+    with ctrl._db.transaction() as cur:
+        ops.job.submit(
+            cur, job_id=gc_b_jid, request=gc_b_req, ts=Timestamp.now(), run_template_cache=ctrl._run_template_cache
+        )
 
     # Build scheduling state
-    pending = _schedulable_tasks(ctrl.state)
+    pending = _schedulable_tasks(ctrl)
     jobs: dict[JobName, JobRequirements] = {}
     has_reservation: set[JobName] = set()
     for task in pending:
-        job_row = _query_job_row(ctrl.state, task.job_id)
-        job_detail = _query_job(ctrl.state, task.job_id)
+        job_row = _query_job_row(ctrl, task.job_id)
+        job_detail = _query_job(ctrl, task.job_id)
         if job_row and not is_job_finished(job_row.state):
             jobs[task.job_id] = job_requirements_from_job(job_row)
             if job_detail and job_detail.reservation_json is not None:
@@ -1344,12 +1356,12 @@ def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
     # Track direct reservations
     has_direct_reservation: set[JobName] = set()
     for task in pending:
-        job_detail = _query_job(ctrl.state, task.job_id)
+        job_detail = _query_job(ctrl, task.job_id)
         if job_detail and not is_job_finished(job_detail.state) and job_detail.reservation_json is not None:
             has_direct_reservation.add(task.job_id)
 
     # Neither grandchild gets any taint constraint (descendants)
-    modified_jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
+    modified_jobs = inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
     for gc_jid in [gc_a_jid, gc_b_jid]:
         gc_constraints = modified_jobs[gc_jid].constraints
         taint = [c for c in gc_constraints if c.key == RESERVATION_TAINT_KEY]
@@ -1375,7 +1387,7 @@ def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
         coscheduling_group_by=None,
     )
     jobs[unrelated_jid] = unrelated_req
-    modified_jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
+    modified_jobs = inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
     unrelated_constraints = modified_jobs[unrelated_jid].constraints
     not_exists = [c for c in unrelated_constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(not_exists) == 1
@@ -1384,8 +1396,8 @@ def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
 
 def test_unrelated_job_blocked_when_all_workers_claimed(ctrl):
     """A job with no reservation ancestor gets NOT_EXISTS and is blocked from claimed workers."""
-    _register_worker(ctrl.state, "w1", _gpu_metadata("H100"))
-    _register_worker(ctrl.state, "w2", _gpu_metadata("H100"))
+    _register_worker(ctrl, "w1", _gpu_metadata("H100"))
+    _register_worker(ctrl, "w2", _gpu_metadata("H100"))
 
     parent_req = _make_job_request_with_reservation(
         reservation_entries=[
@@ -1393,8 +1405,8 @@ def test_unrelated_job_blocked_when_all_workers_claimed(ctrl):
             _make_reservation_entry(_gpu_device("H100")),
         ],
     )
-    _submit_job(ctrl.state, "res-parent", parent_req)
-    ctrl._claim_workers_for_reservations()
+    _submit_job(ctrl, "res-parent", parent_req)
+    _claim_for_reservations(ctrl)
     assert len(ctrl.reservation_claims) == 2
 
     # Unrelated job requesting GPU
@@ -1413,7 +1425,7 @@ def test_unrelated_job_blocked_when_all_workers_claimed(ctrl):
     jobs = {unrelated_jid: unrelated_req}
     has_reservation: set[JobName] = set()
 
-    modified_jobs = _inject_taint_constraints(jobs, has_reservation)
+    modified_jobs = inject_taint_constraints(jobs, has_reservation)
     constraints = modified_jobs[unrelated_jid].constraints
     not_exists = [c for c in constraints if c.key == RESERVATION_TAINT_KEY]
     assert len(not_exists) == 1
@@ -1467,7 +1479,7 @@ def test_holder_task_worker_death_no_failure_record(state):
 
         # Assign the holder task to the worker (mimics what the scheduler does).
         with state._db.transaction() as cur:
-            state.queue_assignments(cur, [Assignment(task_id=holder_task.task_id, worker_id=worker_id)])
+            ops.task.assign(cur, [Assignment(task_id=holder_task.task_id, worker_id=worker_id)], health=state._health)
         current_holder = _query_task_with_attempts(state, holder_task.task_id)
         assert current_holder is not None
         assert current_holder.state == job_pb2.TASK_STATE_ASSIGNED
@@ -1478,7 +1490,14 @@ def test_holder_task_worker_death_no_failure_record(state):
         assert active_wid == worker_id
 
         # Kill the worker — holder task must NOT go through WORKER_FAILED.
-        state.fail_workers([(worker_id, None, "simulated crash")])
+        ops.worker.fail(
+            state._db,
+            worker_ids=[str(worker_id)],
+            reason="simulated crash",
+            health=state._health,
+            endpoints=state._endpoints,
+            worker_attrs=state._worker_attrs,
+        )
 
         holder_task = _query_task_with_attempts(state, holder_task.task_id)
         assert holder_task is not None
@@ -1497,52 +1516,6 @@ def test_holder_task_worker_death_no_failure_record(state):
         assert holder_task.attempts[-1].state == job_pb2.TASK_STATE_WORKER_FAILED
         assert holder_task.state == job_pb2.TASK_STATE_PENDING, "no active worker after death"
         assert task_row_can_be_scheduled(holder_task), "holder task must be schedulable again"
-
-
-def test_get_running_tasks_for_poll_excludes_reservation_holders(state):
-    """get_running_tasks_for_poll must filter reservation-holder tasks.
-
-    Regression: the ping/poll loop feeds its output directly into the
-    Reconcile request's desired set. Holders are virtual — they never reach
-    the worker's _tasks dict — so including them makes the worker reconcile,
-    miss, and return WORKER_FAILED("Task not found on worker") every cycle.
-    That drains the holder's preemption budget and (with the ASSIGNED→
-    WORKER_FAILED health hook) reaps the claimed worker every few minutes.
-
-    Produced observed ~51 attempts/hour per holder in production.
-    """
-    request = _make_job_request_with_reservation(
-        reservation_entries=[_make_reservation_entry(_cpu_device())],
-    )
-    parent_job_id = _submit_job(state, "res-job", request)
-    holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
-
-    holder_tasks = _query_tasks_for_job(state, holder_job_id)
-    assert len(holder_tasks) == 1
-    holder_task = holder_tasks[0]
-
-    real_request = make_job_request("real-job")
-    (real_task,) = _submit_job_tasks(state, "real-job", real_request)
-
-    worker_id = _register_worker(state, "w1")
-    with state._db.transaction() as cur:
-        state.queue_assignments(
-            cur,
-            [
-                Assignment(task_id=holder_task.task_id, worker_id=worker_id),
-                Assignment(task_id=real_task.task_id, worker_id=worker_id),
-            ],
-        )
-
-    with state._db.read_snapshot() as snap:
-        running, _addresses = state.get_running_tasks_for_poll(snap)
-
-    task_ids = {entry.task_id for entry in running.get(worker_id, [])}
-    assert real_task.task_id in task_ids, "real task must still appear for polling"
-    assert holder_task.task_id not in task_ids, (
-        "reservation holder must be excluded — worker has no in-memory state "
-        "for virtual holders, so polling them produces bogus WORKER_FAILEDs"
-    )
 
 
 def test_holder_task_removed_from_worker_when_parent_succeeds(state):
@@ -1572,9 +1545,9 @@ def test_holder_task_removed_from_worker_when_parent_succeeds(state):
     wid_parent = _register_worker(state, "worker-parent")
 
     with state._db.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=holder_task.task_id, worker_id=wid_holder)])
+        ops.task.assign(cur, [Assignment(task_id=holder_task.task_id, worker_id=wid_holder)], health=state._health)
     with state._db.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=parent_task.task_id, worker_id=wid_parent)])
+        ops.task.assign(cur, [Assignment(task_id=parent_task.task_id, worker_id=wid_parent)], health=state._health)
 
     assert holder_task.task_id in _worker_running_tasks(state, wid_holder)
 
@@ -1582,18 +1555,23 @@ def test_holder_task_removed_from_worker_when_parent_succeeds(state):
     # → holder task killed → running_tasks entry discarded.
     parent_task = _query_task_with_attempts(state, parent_task.task_id)
     with state._db.transaction() as cur:
-        state.apply_task_updates(
+        apply_task_observations(
             cur,
-            HeartbeatApplyRequest(
-                worker_id=wid_parent,
-                updates=[
-                    TaskUpdate(
-                        task_id=parent_task.task_id,
-                        attempt_id=parent_task.current_attempt_id,
-                        new_state=job_pb2.TASK_STATE_SUCCEEDED,
-                    )
-                ],
-            ),
+            [
+                WorkerTaskUpdates(
+                    worker_id=wid_parent,
+                    updates=[
+                        TaskUpdate(
+                            task_id=parent_task.task_id,
+                            attempt_id=parent_task.current_attempt_id,
+                            new_state=job_pb2.TASK_STATE_SUCCEEDED,
+                        )
+                    ],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
         )
 
     holder_task = _query_task(state, holder_task.task_id)
@@ -1626,7 +1604,7 @@ def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already
 
     wid = _register_worker(state, "worker")
     with state._db.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=holder_task.task_id, worker_id=wid)])
+        ops.task.assign(cur, [Assignment(task_id=holder_task.task_id, worker_id=wid)], health=state._health)
 
     assert holder_task.task_id in _worker_running_tasks(state, wid)
 
@@ -1644,7 +1622,9 @@ def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already
     # skips them. Only the explicit _cancel_child_jobs call at the end of
     # _on_job_cancelled can clean up the holder.
     with state._db.transaction() as cur:
-        state.cancel_job(cur, parent_job_id, reason="manual cancel")
+        ops.job.cancel(
+            cur, job_id=parent_job_id, reason="manual cancel", endpoints=state._endpoints, health=state._health
+        )
 
     holder_task = _query_task(state, holder_task.task_id)
     assert holder_task is not None
@@ -1785,7 +1765,7 @@ def test_preference_pass_routes_holder_to_claimed_worker():
         jobs={holder_job_id: req},
     )
 
-    assignments = _preference_pass(context, has_reservation, claims)
+    assignments = preference_pass(context, has_reservation, claims)
 
     assert len(assignments) == 1
     assert assignments[0] == (

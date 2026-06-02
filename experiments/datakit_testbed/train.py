@@ -27,8 +27,8 @@ from dataclasses import dataclass
 
 from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.execution.step_spec import StepSpec
+from marin.execution.types import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import (
     TokenizeConfig,
     add_validation_sets_to_mixture,

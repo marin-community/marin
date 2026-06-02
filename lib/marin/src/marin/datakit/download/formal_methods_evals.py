@@ -37,9 +37,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import zstandard
-from rigging.filesystem import open_url
+from rigging.filesystem import atomic_rename, open_url
 from zephyr import Dataset, ZephyrContext
-from zephyr.writers import atomic_rename
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.ingestion_manifest import (
@@ -48,8 +47,8 @@ from marin.datakit.ingestion_manifest import (
     MaterializedOutputMetadata,
     write_ingestion_metadata_json,
 )
-from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.execution.step_spec import StepSpec
+from marin.execution.types import THIS_OUTPUT_PATH
 from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)

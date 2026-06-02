@@ -25,7 +25,7 @@ from zephyr.readers import (
     load_vortex,
     load_zip_members,
 )
-from zephyr.writers import atomic_rename, write_jsonl_file, write_parquet_file, write_vortex_file
+from zephyr.writers import write_jsonl_file, write_parquet_file, write_vortex_file
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,6 @@ __all__ = [
     "WorkerContext",
     "ZephyrContext",
     "ZephyrExecutionResult",
-    "atomic_rename",
     "col",
     "compute_plan",
     "counters",

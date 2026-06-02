@@ -25,8 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote
 
-from rigging.filesystem import open_url, url_to_fs
-from zephyr.writers import atomic_rename
+from rigging.filesystem import atomic_rename, open_url, url_to_fs
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.ingestion_manifest import (
@@ -40,7 +39,7 @@ from marin.datakit.ingestion_manifest import (
     UsagePolicy,
     write_ingestion_metadata_json,
 )
-from marin.execution.executor import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, versioned
+from marin.execution.types import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, versioned
 from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)

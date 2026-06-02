@@ -29,7 +29,8 @@ from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging
 from zephyr import Dataset, ZephyrContext
 from zephyr import counters as zephyr_counters
-from zephyr.writers import ThreadedBatchWriter, atomic_rename, batchify, ensure_parent_dir
+from rigging.filesystem import atomic_rename
+from zephyr.writers import ThreadedBatchWriter, batchify, ensure_parent_dir
 
 from levanter.data.dataset import AsyncDataset
 from levanter.utils.jax_utils import broadcast_one_to_all

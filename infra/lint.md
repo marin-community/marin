@@ -875,86 +875,63 @@ timeout = 60
 
 ## Test quality
 
-### `ml-internal-assertion` — Test asserts on internal state instead of observable behavior
+### `ml-slop-test` — "Slop" test: asserts on incidentals, not behavior
 
-**Why it's bad:** Prefer integration-style tests that validate
-externally-observable behavior. Asserting on imported constants or private
-fields fails on refactors that didn't change behavior.
+**Why it's bad:** The catch-all for low-value tests — they *look* like coverage
+but validate nothing real, or pin to incidental detail that breaks on a harmless
+edit while real regressions slip through. Pure maintenance burden: every reword,
+rename, or refactor forces a test edit that confirms no behavior. Assert on the
+externally-observable output or effect instead. If you can't name the production
+bug the test would catch, it's slop.
 
-**When allowed:** Where the internal state *is* the contract (e.g. a
-serializer's wire format). Otherwise prefer asserting on the output.
+A test is slop when it does any of these:
 
-**Bad example:**
-```python
-def test_runner():
-    runner = make_runner()
-    assert runner._cap == DEFAULT_STEP_CAP   # check the runnable bundle / step config doc instead.
-```
+- **Asserts on a log message's text** — `assert "retrying" in caplog.text`. A log
+  line isn't a contract; it gets reworded freely, and whether the code logged at
+  all is rarely the behavior under test.
+- **Asserts a token appears in a generated command / argv** — `assert "--gpus" in
+  cmd`. Tests how the command was assembled, not what it does: a flag rename,
+  reorder, or `--port=80` vs `--port 80` breaks it, and a wrong value beside the
+  right flag passes it.
+- **Asserts on exact human-readable copy** — a status string, formatted error,
+  help text. `assert render() == "Worker iris-1 ready in 12.3s"` breaks on any
+  copy tweak.
+- **Asserts almost nothing** — runs a path then only checks it didn't raise,
+  returned non-`None`, or that a mock was called. Coverage without a behavioral
+  claim. Includes mocking out the collaborators that do the work, then asserting
+  the SUT called the mocks the way you wired them.
+- **Is tautological / mirrors the implementation** — re-asserts a literal or
+  constant, or recomputes the same expression the code does so it passes by
+  construction.
+- **Checks what the type checker already guarantees** — `assert isinstance(x,
+  Foo)` on a function declared `-> Foo`, `assert hasattr(obj, "field")` on a
+  dataclass field, `assert callable(fn)`, `assert MyEnum.A.value == "a"`. pyrefly
+  proves these statically; a test of them only fails when the type annotation and
+  body already disagree, which the checker catches first.
 
-### `ml-heavy-mocking` — Test layered with mocks of internal collaborators
-
-**Why it's bad:** Mocking everything but the unit under test ends up
-asserting "the SUT calls the mocks the way I said it would" — tautological
-and brittle to harmless refactors.
-
-**When allowed:** Mocks at I/O boundaries (network, filesystem, external
-services). Internal collaborators: use the real thing or a minimal stub.
-
-**Bad example:**
-```python
-def test_dispatch(mock_db, mock_log, mock_rpc, mock_clock, mock_metrics):
-    # five mocks for a 20-line function. Find the real seam.
-    ...
-```
-
-### `ml-tautological-test` — Test that fails on implementation change but not on behavior change
-
-**Why it's bad:** Tests must fail if behavior is wrong, not just if
-implementation changes. Tautological tests train the team to ignore failures.
-
-**When allowed:** Never. If a test only fires on refactors, delete it or
-rewrite it against externally-observable behavior.
-
-**Bad example:**
-```python
-def test_sort_calls_sort():
-    with mock.patch("module.sorted") as m:
-        do_work([3, 1, 2])
-        m.assert_called_once()   # behavior: did the output come out sorted?
-```
-
-### `ml-duck-typed-double` — Hand-rolled test double that drifts from production
-
-**Why it's bad:** A "fake HTTP server that produces the code we told it to
-have" or a duck-typed `FakeClient` slowly diverges from the real
-implementation. The test passes; the production breaks.
-
-**When allowed:** Generated fakes that derive from the real interface
-(e.g. `protoc`-generated stubs) are fine.
+**When allowed:** When the asserted string or structure genuinely *is* the
+contract — machine-readable CLI output, a wire/serialization format, or a log
+line a downstream tool parses — and then assert on the *structured field*
+(`record.args`, the parsed argv element, the deserialized object), not the
+rendered text. A security-critical command flag that can't be exercised
+end-to-end may be asserted on the parsed argument, with a comment saying why.
 
 **Bad example:**
 ```python
-class FakeIrisClient:
-    def submit_task(self, spec, ...):
-        # mirrors the real client's normalization; will drift.
-        ...
-```
+def test_retry(caplog):
+    do_work()
+    assert "retrying after transient error" in caplog.text   # reword breaks it; retry behavior unchecked
 
-### `ml-brittle-string-match` — Test asserts on exact human-readable output
+def test_build_launch_command():
+    cmd = build_launch_command(cfg)
+    assert "--gpus" in cmd        # reordering / --gpus=all breaks this; value never checked
 
-**Why it's bad:** "I might consider removing some of the text matching
-tests or making them less specific, otherwise we'll need to update them
-with every tweak of the status." Exact-string asserts couple the test to
-copy.
+def test_process(mock_store):
+    process(rows, store=mock_store)
+    assert mock_store.write.called   # path ran, but "did it write the right rows?" is untested
 
-**When allowed:** Where the string IS the contract (CLI machine-readable
-output, log lines parsed by another tool). Use `assert ... in` or
-parse and assert structurally.
-
-**Bad example:**
-```python
-assert status_line() == "Worker iris-1 (us-central1-a) ready in 12.3s"
-# any tweak to copy breaks the test. Assert on the structured fields.
+def test_make_runner_returns_runner():
+    assert isinstance(make_runner(), Runner)   # make_runner is typed -> Runner; pyrefly already proves this
 ```
 
 ### `ml-time-sleep-in-test` — `time.sleep()` in a test body

@@ -26,7 +26,7 @@ from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.log_store_helpers import task_log_key
+from iris.cluster.log_keys import task_log_key
 from iris.cluster.providers.types import probe_outbound_ip
 from iris.cluster.runtime.docker import DockerContainerHandle
 from iris.cluster.runtime.env import build_common_iris_env
@@ -42,14 +42,8 @@ from iris.cluster.runtime.types import (
     MountSpec,
     RuntimeLogReader,
 )
-from iris.cluster.types import (
-    AttemptUid,
-    JobName,
-    is_task_finished,
-)
-from iris.cluster.types import (
-    TaskAttempt as TaskAttemptIdentity,
-)
+from iris.cluster.types import AttemptUid, JobName, is_task_finished
+from iris.cluster.types import TaskAttempt as TaskAttemptIdentity
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure

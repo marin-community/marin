@@ -13,17 +13,15 @@ from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
+from iris.cluster.controller import direct_provider, ops
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.direct_provider import RunTemplateCache, new_run_template_cache
+from iris.cluster.controller.ops.task import Assignment, apply_direct_provider_updates
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import task_attempts_table, tasks_table, workers_table
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.transitions import (
-    Assignment,
-    ControllerTransitions,
-    HeartbeatApplyRequest,
-    TaskUpdate,
-)
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.k8s.types import K8sResource
@@ -31,6 +29,9 @@ from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select
+
+from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 
 class _FakeLogClientFromService:
@@ -142,6 +143,7 @@ class _HarnessController:
         self.autoscaler = None
         self.provider: object = Mock()
         self.has_direct_provider = False
+        self._run_template_cache: RunTemplateCache = new_run_template_cache()
 
 
 @dataclass
@@ -154,7 +156,7 @@ class ServiceTestHarness:
     """
 
     service: ControllerServiceImpl
-    state: ControllerTransitions
+    state: ControllerTestState
     db: ControllerDB
     provider_type: str  # "gcp" or "k8s"
 
@@ -238,10 +240,16 @@ class ServiceTestHarness:
         """Run one K8s direct provider sync cycle."""
         assert self.k8s_provider is not None, "sync_k8s requires K8s harness"
         with self.db.transaction() as cur:
-            batch = self.state.drain_for_direct_provider(cur)
+            batch = direct_provider.drain_for_direct_provider(cur, cache=self.state._run_template_cache)
         result = self.k8s_provider.sync(batch)
         with self.db.transaction() as cur:
-            self.state.apply_direct_provider_updates(cur, result.updates)
+            apply_direct_provider_updates(
+                cur,
+                result.updates,
+                health=self.state._health,
+                endpoints=self.state._endpoints,
+                now=Timestamp.now(),
+            )
 
     # ── GCP-specific ────────────────────────────────────────────
 
@@ -267,7 +275,15 @@ class ServiceTestHarness:
         metadata.attributes["preemptible"].string_value = str(preemptible).lower()
         metadata.attributes["region"].string_value = region
         with self.db.transaction() as cur:
-            self.state.register_or_refresh_worker(cur, wid, f"{worker_id}:8080", metadata, Timestamp.now())
+            ops.worker.register(
+                cur,
+                worker_id=wid,
+                address=f"{worker_id}:8080",
+                metadata=metadata,
+                ts=Timestamp.now(),
+                health=self.state._health,
+                worker_attrs=self.state._worker_attrs,
+            )
         return wid
 
     # ── Private drivers ─────────────────────────────────────────
@@ -357,7 +373,9 @@ class ServiceTestHarness:
             if worker_row is None:
                 raise ValueError("No GCP workers registered -- call register_gcp_worker first")
             with self.db.transaction() as cur:
-                self.state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=worker_row.worker_id)])
+                ops.task.assign(
+                    cur, [Assignment(task_id=task_id, worker_id=worker_row.worker_id)], health=self.state._health
+                )
 
         worker_id, attempt_id = self._current_attempt_info(task_id)
         if worker_id is None:
@@ -374,33 +392,43 @@ class ServiceTestHarness:
             and task.state != job_pb2.TASK_STATE_RUNNING
         ):
             with self.db.transaction() as cur:
-                self.state.apply_task_updates(
+                apply_task_observations(
                     cur,
-                    HeartbeatApplyRequest(
+                    [
+                        WorkerTaskUpdates(
+                            worker_id=worker_id,
+                            updates=[
+                                TaskUpdate(
+                                    task_id=task_id,
+                                    attempt_id=attempt_id,
+                                    new_state=job_pb2.TASK_STATE_RUNNING,
+                                )
+                            ],
+                        )
+                    ],
+                    health=self.state._health,
+                    endpoints=self.state._endpoints,
+                    now=Timestamp.now(),
+                )
+
+        with self.db.transaction() as cur:
+            apply_task_observations(
+                cur,
+                [
+                    WorkerTaskUpdates(
                         worker_id=worker_id,
                         updates=[
                             TaskUpdate(
                                 task_id=task_id,
                                 attempt_id=attempt_id,
-                                new_state=job_pb2.TASK_STATE_RUNNING,
+                                new_state=new_state,
                             )
                         ],
-                    ),
-                )
-
-        with self.db.transaction() as cur:
-            self.state.apply_task_updates(
-                cur,
-                HeartbeatApplyRequest(
-                    worker_id=worker_id,
-                    updates=[
-                        TaskUpdate(
-                            task_id=task_id,
-                            attempt_id=attempt_id,
-                            new_state=new_state,
-                        )
-                    ],
-                ),
+                    )
+                ],
+                health=self.state._health,
+                endpoints=self.state._endpoints,
+                now=Timestamp.now(),
             )
 
 
@@ -416,7 +444,7 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
     health = WorkerHealthTracker()
     endpoints = EndpointsProjection(db)
     worker_attrs = WorkerAttrsProjection(db)
-    state = ControllerTransitions(db, health=health, endpoints=endpoints, worker_attrs=worker_attrs)
+    state = ControllerTestState(db, health=health, endpoints=endpoints, worker_attrs=worker_attrs)
 
     k8s = InMemoryK8sService()
     k8s.add_node_pool(
@@ -437,7 +465,6 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
     ctrl.provider = k8s_provider
 
     service = ControllerServiceImpl(
-        state,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "k8s_bundles")),
         log_client=fake_log_client_from_service(LogServiceImpl()),
@@ -464,13 +491,12 @@ def _make_gcp_harness(tmp_path) -> ServiceTestHarness:
     health = WorkerHealthTracker()
     endpoints = EndpointsProjection(db)
     worker_attrs = WorkerAttrsProjection(db)
-    state = ControllerTransitions(db, health=health, endpoints=endpoints, worker_attrs=worker_attrs)
+    state = ControllerTestState(db, health=health, endpoints=endpoints, worker_attrs=worker_attrs)
 
     ctrl = _HarnessController()
     ctrl.has_direct_provider = False
 
     service = ControllerServiceImpl(
-        state,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "gcp_bundles")),
         log_client=fake_log_client_from_service(LogServiceImpl()),
