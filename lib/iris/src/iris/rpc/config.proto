@@ -452,14 +452,13 @@ message KueueTopology {
 // Iris concepts (priority bands, coscheduling group_by) onto whatever
 // WorkloadPriorityClasses and Topology levels the cluster admin provisioned.
 message KueueConfig {
-  // LocalQueue name stamped as kueue.x-k8s.io/queue-name on coscheduled pods.
-  // Empty disables Kueue: coscheduled jobs then fail (there is no non-Kueue
-  // fallback). Iris reconciles this LocalQueue in its namespace at controller
-  // start (see K8sControllerManager.ensure_kueue_queues).
-  string local_queue = 1;
-  // ClusterQueue the LocalQueue binds to. Admin-provisioned (cluster-scoped,
-  // holds the quota); created by scripts/install_kueue_coreweave.sh, not by
-  // Iris. Required whenever local_queue is set.
+  // ClusterQueue the cluster's LocalQueue binds to. Admin-provisioned
+  // (cluster-scoped, holds the quota); created by
+  // scripts/install_kueue_coreweave.py, not by Iris. Setting this ENABLES Kueue
+  // gang admission: empty disables it (coscheduled jobs then fail — there is no
+  // non-Kueue fallback). The LocalQueue itself is owned by Iris, which creates
+  // it in its namespace at controller start (see ensure_kueue_queues) and names
+  // it {label_prefix}-lq — it is derived, not configured.
   string cluster_queue = 4;
   // PriorityBand -> WorkloadPriorityClass name. A band with no entry is left
   // unstamped so Kueue applies its default priority; Iris never invents a class
@@ -482,7 +481,7 @@ message KubernetesProviderConfig {
   bool host_network = 6;         // Run task pods with hostNetwork (for NCCL/IB)
   string cache_dir = 7;          // hostPath base for cache mounts (default: "/cache")
   string controller_address = 8; // Controller URL injected into task pods
-  KueueConfig kueue = 9;  // Kueue gang admission; empty kueue.local_queue disables it
+  KueueConfig kueue = 9;  // Kueue gang admission; empty kueue.cluster_queue disables it
 }
 
 // ============================================================================

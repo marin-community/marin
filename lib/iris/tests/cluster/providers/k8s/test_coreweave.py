@@ -683,11 +683,10 @@ def test_ensure_nodepools_keeps_one_multihost_slice_warm():
 
 
 def test_ensure_kueue_queues_reconciles_local_queue():
-    """A configured Kueue LocalQueue is created in the cluster namespace, bound to
-    the admin-provisioned ClusterQueue."""
-    provider, k8s = _make_provider(namespace="iris")
+    """A configured cluster_queue creates the derived LocalQueue ({label_prefix}-lq)
+    in the cluster namespace, bound to the admin-provisioned ClusterQueue."""
+    provider, k8s = _make_provider(namespace="iris", label_prefix="iris")
     cluster_config = _make_cluster_config()
-    cluster_config.kubernetes_provider.kueue.local_queue = "iris-lq"
     cluster_config.kubernetes_provider.kueue.cluster_queue = "iris-cq"
 
     provider.ensure_kueue_queues(cluster_config)
@@ -699,21 +698,25 @@ def test_ensure_kueue_queues_reconciles_local_queue():
     provider.shutdown()
 
 
-def test_ensure_kueue_queues_noop_without_local_queue():
-    """No LocalQueue configured -> nothing applied (Kueue not in use)."""
-    provider, k8s = _make_provider()
-    provider.ensure_kueue_queues(_make_cluster_config())
+def test_ensure_kueue_queues_local_queue_name_derives_from_label_prefix():
+    """The LocalQueue name is {label_prefix}-lq, not a fixed constant, so
+    co-located Iris clusters don't collide."""
+    provider, k8s = _make_provider(namespace="iris", label_prefix="iris-ci")
+    cluster_config = _make_cluster_config()
+    cluster_config.kubernetes_provider.kueue.cluster_queue = "iris-cq"
+
+    provider.ensure_kueue_queues(cluster_config)
+
+    assert k8s.get_json(K8sResource.LOCAL_QUEUES, "iris-ci-lq") is not None
     assert k8s.get_json(K8sResource.LOCAL_QUEUES, "iris-lq") is None
     provider.shutdown()
 
 
-def test_ensure_kueue_queues_requires_cluster_queue():
-    """local_queue without cluster_queue is a misconfiguration -> raises."""
-    provider, _ = _make_provider()
-    cluster_config = _make_cluster_config()
-    cluster_config.kubernetes_provider.kueue.local_queue = "iris-lq"
-    with pytest.raises(InfraError, match="cluster_queue is empty"):
-        provider.ensure_kueue_queues(cluster_config)
+def test_ensure_kueue_queues_noop_without_cluster_queue():
+    """No cluster_queue configured -> Kueue not in use -> nothing applied."""
+    provider, k8s = _make_provider(label_prefix="iris")
+    provider.ensure_kueue_queues(_make_cluster_config())
+    assert k8s.get_json(K8sResource.LOCAL_QUEUES, "iris-lq") is None
     provider.shutdown()
 
 

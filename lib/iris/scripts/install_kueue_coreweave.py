@@ -491,17 +491,12 @@ def _apply(
         run(["kubectl", *kflags, "apply", "-f", "-"], input=manifest, text=True, check=True)
 
     click.secho(
-        "==> Done. Point the Iris cluster config at BOTH the LocalQueue (Iris creates it) and the "
-        "admin ClusterQueue:",
+        "==> Done. Point the Iris cluster config at this admin ClusterQueue. Iris creates its own "
+        "LocalQueue ({label_prefix}-lq) in its namespace at controller start:",
         fg="green",
         bold=True,
     )
-    click.echo(
-        "  kubernetes_provider:\n"
-        "    kueue:\n"
-        "      local_queue: iris-lq            # Iris creates this LocalQueue\n"
-        f"      cluster_queue: {cluster_queue}     # binds to the admin ClusterQueue above"
-    )
+    click.echo("  kubernetes_provider:\n    kueue:\n" f"      cluster_queue: {cluster_queue}")
 
 
 if __name__ == "__main__":

@@ -565,13 +565,13 @@ def _build_pod_manifest(
 
     # Kueue gang admission for coscheduled jobs. Coscheduling requires Kueue:
     # there is no non-Kueue colocation fallback, so a coscheduled job dispatched
-    # to a cluster with no configured LocalQueue is a misconfiguration.
+    # to a cluster where Kueue is not configured is a misconfiguration.
     kueue_enabled = bool(run_req.coscheduling.group_by)
     if kueue_enabled and not config.local_queue:
         raise ValueError(
             f"Coscheduled task {run_req.task_id!r} (group_by={run_req.coscheduling.group_by!r}) "
-            "requires Kueue gang admission, but no LocalQueue is configured. Install Kueue "
-            "(lib/iris/scripts/install_kueue_coreweave.sh) and set kubernetes_provider.kueue.local_queue."
+            "requires Kueue gang admission, but Kueue is not configured. Install Kueue "
+            "(lib/iris/scripts/install_kueue_coreweave.py) and set kubernetes_provider.kueue.cluster_queue."
         )
     if kueue_enabled:
         labels[_KUEUE_POD_GROUP_NAME] = _pod_group_name(task_id, attempt_id)

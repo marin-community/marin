@@ -27,6 +27,7 @@ from rigging.timing import Duration
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
+from iris.cluster.providers.types import local_queue_name
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import parse_memory_string
 from iris.rpc import config_pb2, job_pb2
@@ -1181,6 +1182,9 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
         provider_kwargs: dict[str, object] = {}
         if topologies:
             provider_kwargs["kueue_topologies"] = topologies
+        # Kueue is enabled by a configured cluster_queue; the LocalQueue name Iris
+        # stamps and reconciles is derived from label_prefix, not configured.
+        local_queue = local_queue_name(label_prefix) if kp.kueue.cluster_queue else ""
         return K8sTaskProvider(
             kubectl=CloudK8sService(namespace=namespace, kubeconfig_path=kp.kubeconfig or None),
             namespace=namespace,
@@ -1191,7 +1195,7 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
             controller_address=kp.controller_address or None,
             managed_label=managed_label,
             task_env=dict(cluster_config.defaults.task_env),
-            local_queue=kp.kueue.local_queue or "",
+            local_queue=local_queue,
             kueue_priority_classes=priority_classes,
             **provider_kwargs,
         )

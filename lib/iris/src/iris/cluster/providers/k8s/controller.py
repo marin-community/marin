@@ -27,7 +27,7 @@ from iris.cluster.config_serde import config_to_dict
 from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource
-from iris.cluster.providers.types import InfraError, Labels
+from iris.cluster.providers.types import InfraError, Labels, local_queue_name
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -556,27 +556,23 @@ class K8sControllerProvider:
 
         The Kueue operator, ClusterQueue, ResourceFlavor and Topology CRs are
         cluster-global and admin-provisioned out of band (the CKS cluster is
-        shared across tenants); see scripts/install_kueue_coreweave.sh. Iris owns
+        shared across tenants); see scripts/install_kueue_coreweave.py. Iris owns
         only its own LocalQueue, binding its namespace to the admin ClusterQueue.
-        No-op when Kueue is not configured (local_queue unset).
+        The LocalQueue name is derived from label_prefix, not configured. No-op
+        when Kueue is not configured (cluster_queue unset).
         """
-        kueue = config.kubernetes_provider.kueue
-        if not kueue.local_queue:
+        cluster_queue = config.kubernetes_provider.kueue.cluster_queue
+        if not cluster_queue:
             return
-        if not kueue.cluster_queue:
-            raise InfraError(
-                "kubernetes_provider.kueue.local_queue is set but cluster_queue is empty; "
-                "the LocalQueue needs an admin-provisioned ClusterQueue to bind to "
-                "(see scripts/install_kueue_coreweave.sh)."
-            )
+        name = local_queue_name(self._label_prefix)
         manifest = {
             "apiVersion": "kueue.x-k8s.io/v1beta1",
             "kind": "LocalQueue",
-            "metadata": {"name": kueue.local_queue, "namespace": self._namespace},
-            "spec": {"clusterQueue": kueue.cluster_queue},
+            "metadata": {"name": name, "namespace": self._namespace},
+            "spec": {"clusterQueue": cluster_queue},
         }
         self._kubectl.apply_json(manifest)
-        logger.info("LocalQueue %s applied (clusterQueue=%s)", kueue.local_queue, kueue.cluster_queue)
+        logger.info("LocalQueue %s applied (clusterQueue=%s)", name, cluster_queue)
 
     # -- NodePool Management ---------------------------------------------------
 
