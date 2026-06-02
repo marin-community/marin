@@ -68,10 +68,23 @@ class WandbTracker(Tracker):
         self._suppress_logging = suppress_logging
         self._minimum_log_step = minimum_log_step
 
+    # The prepare hooks do the full wandb-side conversion (SummaryStats expansion,
+    # wandb.Histogram construction) so the background worker only uploads. They are
+    # idempotent, so re-running them on an already-prepared payload is a no-op.
+
+    def _prepare_log(self, metrics):
+        return _convert_metrics_to_wandb_loggable(metrics)
+
+    def _prepare_summary(self, metrics):
+        return _convert_value_to_loggable_rec(metrics)
+
+    def _prepare_hyperparameters(self, hparams):
+        return _convert_value_to_loggable_rec(hparams)
+
     def log_hyperparameters(self, hparams: dict[str, Any]):
         if self._suppress_logging:
             return
-        self.run.config.update(_convert_value_to_loggable_rec(hparams), allow_val_change=True)
+        self.run.config.update(self._prepare_hyperparameters(hparams), allow_val_change=True)
 
     def log(self, metrics: typing.Mapping[str, Any], *, step, commit=None):
         if step is None and not commit:
@@ -88,15 +101,7 @@ class WandbTracker(Tracker):
 
         step = int(step)
 
-        # wandb histograms are pretty limited: they log only the counts and the bin edges.
-        # Our summary stats have the same scalar fields Tensorboard understands. We log those as separate values.
-        to_log = {}
-        for k, v in metrics.items():
-            if isinstance(v, SummaryStats):
-                to_log.update(_convert_summary_stats_to_loggable(k, v))
-            else:
-                # otherwise, just log the value normally
-                to_log[k] = _convert_value_to_loggable_rec(v)
+        to_log = self._prepare_log(metrics)
 
         if self._suppress_logging:
             return
@@ -114,7 +119,7 @@ class WandbTracker(Tracker):
     def log_summary(self, metrics: typing.Mapping[str, Any]):
         if self._suppress_logging:
             return
-        self.run.summary.update(_convert_value_to_loggable_rec(metrics))
+        self.run.summary.update(self._prepare_summary(metrics))
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
         if self._suppress_logging:
@@ -204,6 +209,27 @@ def _set_nested(target: dict[str, Any], path: list[str], value: Any) -> None:
             cur[key] = next_val
         cur = next_val
     cur[path[-1]] = value
+
+
+def _convert_metrics_to_wandb_loggable(metrics: typing.Mapping[str, Any]) -> dict[str, Any]:
+    """Flatten metrics into a wandb-ready dict.
+
+    Expands every :class:`SummaryStats` value into its individual loggable keys
+    (computing ``mean``/``variance``/``rms`` and building ``wandb.Histogram`` as
+    needed) and passes every other value through
+    :func:`_convert_value_to_loggable_rec`.
+
+    Pure conversion: no wandb run state is touched. Safe to call on the producer
+    thread before handing off to a :class:`BackgroundTracker` worker, and
+    idempotent when called a second time on an already-flat dict.
+    """
+    to_log: dict[str, Any] = {}
+    for k, v in metrics.items():
+        if isinstance(v, SummaryStats):
+            to_log.update(_convert_summary_stats_to_loggable(k, v))
+        else:
+            to_log[k] = _convert_value_to_loggable_rec(v)
+    return to_log
 
 
 def _convert_value_to_loggable_rec(value: Any):
