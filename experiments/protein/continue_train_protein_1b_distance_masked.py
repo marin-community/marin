@@ -26,7 +26,8 @@ Usage::
 
 from levanter.data.text import LmDataConfig
 from levanter.models.llama import LlamaConfig
-from marin.execution.executor import executor_main, versioned
+from marin.execution.executor import executor_main
+from marin.execution.types import versioned
 
 from experiments.defaults import default_train
 from experiments.protein.protein_train_common import (

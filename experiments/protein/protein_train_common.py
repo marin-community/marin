@@ -29,7 +29,7 @@ from fray import ResourceConfig
 from levanter.data.text import DatasetComponent, LmDataConfig, TextLmDatasetFormat
 from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
-from marin.execution.executor import ExecutorStep, output_path_of, versioned
+from marin.execution.types import ExecutorStep, output_path_of, versioned
 from marin.export import convert_checkpoint_to_hf_step
 from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
 

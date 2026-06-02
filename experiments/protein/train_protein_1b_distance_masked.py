@@ -27,7 +27,8 @@ import dataclasses
 from fray import ResourceConfig
 from levanter.data.text import LmDataConfig
 from levanter.models.llama import LlamaConfig
-from marin.execution.executor import executor_main, versioned
+from marin.execution.executor import executor_main
+from marin.execution.types import versioned
 
 from experiments.defaults import default_train
 from experiments.protein.protein_distogram_eval import distogram_eval_benchmark

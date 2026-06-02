@@ -27,7 +27,8 @@ import dataclasses
 
 from levanter.data.text import LmDataConfig
 from levanter.models.llama import LlamaConfig
-from marin.execution.executor import executor_main, versioned
+from marin.execution.executor import executor_main
+from marin.execution.types import versioned
 from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
 
 from experiments.defaults import default_train

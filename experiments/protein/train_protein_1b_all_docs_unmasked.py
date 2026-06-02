@@ -36,11 +36,12 @@ import dataclasses
 from fray import ResourceConfig
 from levanter.data.text import BlockShuffleConfig, LmDataConfig, TextLmDatasetFormat
 from levanter.models.llama import LlamaConfig
+from marin.execution.executor import executor_main
+from marin.execution.types import versioned
+from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main, versioned
-from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
 
 # Architecture matches train_protein_1b.py exactly.
 protein_llama_1b = LlamaConfig(
@@ -155,7 +156,7 @@ protein_docs_data = LmDataConfig(
     shuffle=SHUFFLE,
 )
 
-# v5p-32 (32 chips, 4× v5p-8) using the same minimal config that
+# v5p-32 (32 chips, 4x v5p-8) using the same minimal config that
 # experiments.ferries.* run with successfully. Earlier we tried adding cpu/ram/
 # zone overrides; that broke JAX multi-host bootstrap with
 # "multihost_broadcast_sync requires jax distributed client to be initialized"
@@ -167,7 +168,7 @@ PROTEIN_RESOURCES_V5P_32 = ResourceConfig.with_tpu("v5p-32")
 #   * learning_rate:    3.5e-4 → 7e-4  (square-root scale; conservative —
 #     420m_deep just had a divergence event at 3.5e-4 batch 128, so we
 #     don't want to push linear-scaled 1.4e-3)
-#   * num_train_steps:  unchanged at 200K (4× the original total tokens of
+#   * num_train_steps:  unchanged at 200K (4x the original total tokens of
 #     ~52B → ~210B; long but matches the user's bumped horizon)
 train_config = SimpleTrainConfig(
     resources=PROTEIN_RESOURCES_V5P_32,
