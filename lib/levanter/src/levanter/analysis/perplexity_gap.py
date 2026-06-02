@@ -648,6 +648,7 @@ def _validate_source_token_spans(
     current_group_end: int | None = None
     current_group_start: int | None = None
     current_group_ids: list[int] = []
+    previous_group_ids: list[int] = []
     for index, (token_id, start, end) in enumerate(zip(token_ids, byte_starts, byte_ends, strict=True)):
         token_id = int(token_id)
         start = int(start)
@@ -683,6 +684,7 @@ def _validate_source_token_spans(
             _validate_decoded_span(
                 hf_tokenizer=hf_tokenizer,
                 token_ids=current_group_ids,
+                previous_token_ids=previous_group_ids,
                 source_bytes=source_bytes,
                 byte_start=current_group_start,
                 byte_end=current_group_end,
@@ -692,6 +694,7 @@ def _validate_source_token_spans(
                     "Tokenizer byte spans must advance without gaps or partial overlaps: "
                     f"previous group ended at {current_group_end}, next span starts at {start}."
                 )
+            previous_group_ids = current_group_ids
             current_group_start = start
             current_group_end = end
             current_group_ids = [token_id]
@@ -706,6 +709,7 @@ def _validate_source_token_spans(
     _validate_decoded_span(
         hf_tokenizer=hf_tokenizer,
         token_ids=current_group_ids,
+        previous_token_ids=previous_group_ids,
         source_bytes=source_bytes,
         byte_start=current_group_start,
         byte_end=current_group_end,
@@ -721,11 +725,11 @@ def _validate_decoded_span(
     *,
     hf_tokenizer: Any,
     token_ids: Sequence[int],
+    previous_token_ids: Sequence[int],
     source_bytes: bytes,
     byte_start: int,
     byte_end: int,
 ) -> None:
-    decoded = _decode_token_ids(hf_tokenizer, token_ids)
     try:
         expected = source_bytes[byte_start:byte_end].decode("utf-8")
     except UnicodeDecodeError as e:
@@ -733,11 +737,32 @@ def _validate_decoded_span(
             "Tokenizer offset mapping split a UTF-8 codepoint: "
             f"bytes [{byte_start}, {byte_end}) are not a valid source-text span."
         ) from e
-    if decoded != expected:
-        raise ValueError(
-            "Tokenizer offset mapping is not source-aligned: "
-            f"decoded token group for bytes [{byte_start}, {byte_end}) is {decoded!r}, expected {expected!r}."
-        )
+    decoded = _decode_token_ids(hf_tokenizer, token_ids)
+    if decoded == expected:
+        return
+    if previous_token_ids:
+        decoded_with_context = _decode_token_ids_with_context(hf_tokenizer, previous_token_ids, token_ids)
+        if decoded_with_context == expected:
+            return
+        decoded_detail = f"{decoded!r} without context and {decoded_with_context!r} with left context"
+    else:
+        decoded_detail = f"{decoded!r}"
+    raise ValueError(
+        "Tokenizer offset mapping is not source-aligned: "
+        f"decoded token group for bytes [{byte_start}, {byte_end}) is {decoded_detail}, expected {expected!r}."
+    )
+
+
+def _decode_token_ids_with_context(
+    hf_tokenizer: Any,
+    previous_token_ids: Sequence[int],
+    token_ids: Sequence[int],
+) -> str:
+    decoded_prefix = _decode_token_ids(hf_tokenizer, previous_token_ids)
+    decoded_with_span = _decode_token_ids(hf_tokenizer, [*previous_token_ids, *token_ids])
+    if decoded_with_span.startswith(decoded_prefix):
+        return decoded_with_span[len(decoded_prefix) :]
+    return decoded_with_span
 
 
 def _decode_token_ids(hf_tokenizer: Any, token_ids: Sequence[int]) -> str:

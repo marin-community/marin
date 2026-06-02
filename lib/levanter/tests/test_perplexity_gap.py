@@ -123,6 +123,23 @@ def test_tokenize_text_with_byte_spans_covers_utf8_bytes():
     assert spans[-1][1] == tokenized.num_bytes
 
 
+def test_tokenize_text_with_byte_spans_accepts_context_sensitive_decode():
+    hf_tokenizer = _FakeOffsetTokenizer(
+        input_ids=[1, 2],
+        offset_mapping=[(0, 1), (1, 7)],
+        decoded_prefixes={
+            (1,): "x",
+            (2,): "hello",
+            (1, 2): "x hello",
+        },
+    )
+
+    tokenized = tokenize_text_with_byte_spans(_FakeTokenizer(), hf_tokenizer, "x hello")
+
+    assert tokenized.byte_starts.tolist() == [0, 1]
+    assert tokenized.byte_ends.tolist() == [1, 7]
+
+
 def test_tokenize_text_with_byte_spans_rejects_shifted_offsets():
     hf_tokenizer = _FakeOffsetTokenizer(
         input_ids=[1, 2],

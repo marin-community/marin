@@ -104,7 +104,7 @@ def test_tagged_evaluator_accepts_grug_lm_examples():
 
 
 def test_tagged_evaluator_bpb_includes_zero_byte_token_loss():
-    EvalBatch = Axis("batch", 2)
+    EvalBatch = Axis("batch", max(2, len(jax.devices())))
     examples = [
         GrugLmExample(tokens=jnp.array([1, 1], dtype=jnp.int32), loss_weight=jnp.ones((2,), dtype=jnp.float32)),
         GrugLmExample(tokens=jnp.array([1, 1], dtype=jnp.int32), loss_weight=jnp.ones((2,), dtype=jnp.float32)),
@@ -295,7 +295,7 @@ def test_labeled_evaluator_aggregates_exclusive_loss_labels():
 
 
 def test_labeled_evaluator_bpb_includes_zero_byte_token_loss():
-    EvalBatch = Axis("batch", 2)
+    EvalBatch = Axis("batch", max(2, len(jax.devices())))
     examples = [
         LabeledLmExample(tokens=jnp.array([1, 1], dtype=jnp.int32), loss_labels=jnp.ones((2,), dtype=jnp.int32)),
         LabeledLmExample(tokens=jnp.array([1, 1], dtype=jnp.int32), loss_labels=jnp.ones((2,), dtype=jnp.int32)),
