@@ -44,6 +44,5 @@ kind:
 kueue:
   install: true                 # install + configure Kueue on the kind cluster
   version: v0.11.0
-  # ClusterQueue nominal quota (must cover replicas * per-task request).
-  cluster_queue_cpu: "12"
-  cluster_queue_memory: 8Gi
+  # ClusterQueue quota is non-binding (install_kueue.NON_BINDING_QUOTA); Kueue
+  # only gang-admits + places, so there is nothing to size here.

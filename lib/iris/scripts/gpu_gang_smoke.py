@@ -161,8 +161,6 @@ class JobSpec:
 class KueueSpec:
     install: bool
     version: str = "v0.11.0"
-    cluster_queue_cpu: str = "12"
-    cluster_queue_memory: str = "8Gi"
 
 
 @dataclass
@@ -214,8 +212,6 @@ def load_config(path: Path) -> SmokeConfig:
     kueue = KueueSpec(
         install=bool(kq.get("install", False)),
         version=kq.get("version", "v0.11.0"),
-        cluster_queue_cpu=str(kq.get("cluster_queue_cpu", "12")),
-        cluster_queue_memory=str(kq.get("cluster_queue_memory", "8Gi")),
     )
     return SmokeConfig(
         target=raw["target"],
@@ -423,9 +419,6 @@ class KindTarget:
                 chart_version=cfg.kueue.version.lstrip("v"),
                 with_queues=True,
                 cluster_queue="iris-cq",
-                cq_cpu=cfg.kueue.cluster_queue_cpu,
-                cq_memory=cfg.kueue.cluster_queue_memory,
-                cq_gpu="0",
                 apply=True,
             )
         self.kubectl.apply(f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {cfg.namespace}\n")
@@ -537,7 +530,11 @@ class CoreweaveTarget:
             sg = config_pb2.ScaleGroupConfig(
                 num_vms=1,
                 max_slices=cfg.coreweave.nodes,
-                buffer_slices=cfg.coreweave.nodes,
+                # buffer_slices=0 -> minNodes=0: the pool comes up empty (targetNodes=0)
+                # and the CKS cluster-autoscaler scales it 0..max_slices in response to
+                # the gang's Pending pods (matched to this pool by nodeSelector). This
+                # is the production scale-from-zero path; a warm floor would bypass it.
+                buffer_slices=0,
                 resources=config_pb2.ScaleGroupResources(
                     cpu_millicores=cfg.job.cpu_millicores,
                     memory_bytes=cfg.job.memory_bytes,
@@ -599,7 +596,8 @@ class CoreweaveTarget:
         controller.ensure_rbac()
         if cfg.coreweave.ensure_nodepools:
             logger.info(
-                "ensuring NodePool %r (target %d nodes) — CKS will provision %s",
+                "ensuring NodePool %r (minNodes=0, maxNodes=%d, %s) — CKS autoscaler "
+                "provisions on the gang's Pending pods",
                 controller._nodepool_name(cfg.coreweave.scale_group),
                 cfg.coreweave.nodes,
                 cfg.coreweave.instance_type,

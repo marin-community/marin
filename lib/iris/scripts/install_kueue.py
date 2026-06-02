@@ -126,8 +126,26 @@ RESOURCE_FLAVOR_NAME = "cw-ib"
 # the same label on its worker nodes.
 RESOURCE_FLAVOR_NODE_LABELS = {"backend.coreweave.cloud/flavor": "infiniband"}
 
-# Resources the ClusterQueue covers when --with-queues is set.
-COVERED_RESOURCES = ["cpu", "memory", "nvidia.com/gpu"]
+# Resources the ClusterQueue covers when --with-queues is set. A Kueue
+# ClusterQueue can only admit a workload if *every* resource the pods request is
+# covered here AND has a nominalQuota; an uncovered resource leaves the workload
+# stuck at QuotaReserved=False (pods SchedulingGated) forever. Iris IB-GPU pods
+# request cpu/memory/nvidia.com/gpu plus ephemeral-storage (from the disk request)
+# and rdma/ib (the InfiniBand devices), so all five must be covered.
+#
+# Iris does NOT use Kueue for capacity enforcement: gang admission + TAS gate on
+# real nodes, and the Iris autoscaler bounds capacity via scale-group max_slices.
+# Kueue is only the gang-admission + topology-placement mechanism here. So every
+# resource's nominalQuota is a sentinel large enough never to bind — Kueue never
+# rejects on quota, and the real capacity authority stays the scheduler/autoscaler.
+NON_BINDING_QUOTA = {
+    "cpu": "1000000000",  # cores
+    "memory": "1Pi",
+    "ephemeral-storage": "1Pi",
+    "nvidia.com/gpu": "1000000000",
+    "rdma/ib": "1000000000",
+}
+COVERED_RESOURCES = list(NON_BINDING_QUOTA)
 
 
 # --------------------------------------------------------------------------
@@ -228,8 +246,14 @@ def build_resource_flavor() -> dict:
     }
 
 
-def build_cluster_queue(name: str, cpu: str, memory: str, gpu: str) -> dict:
-    """Return the cluster-scoped, admin-owned ClusterQueue (the quota)."""
+def build_cluster_queue(name: str) -> dict:
+    """Return the cluster-scoped, admin-owned ClusterQueue.
+
+    Covers every resource Iris IB-GPU pods request (COVERED_RESOURCES) with a
+    non-binding nominalQuota (NON_BINDING_QUOTA). Kueue does gang admission +
+    topology placement here, not capacity enforcement, so the quota is set never
+    to bind; real capacity is gated by TAS (real nodes) and the Iris autoscaler.
+    """
     return {
         "apiVersion": "kueue.x-k8s.io/v1beta1",
         "kind": "ClusterQueue",
@@ -242,11 +266,7 @@ def build_cluster_queue(name: str, cpu: str, memory: str, gpu: str) -> dict:
                     "flavors": [
                         {
                             "name": RESOURCE_FLAVOR_NAME,
-                            "resources": [
-                                {"name": "cpu", "nominalQuota": cpu},
-                                {"name": "memory", "nominalQuota": memory},
-                                {"name": "nvidia.com/gpu", "nominalQuota": gpu},
-                            ],
+                            "resources": [{"name": r, "nominalQuota": NON_BINDING_QUOTA[r]} for r in COVERED_RESOURCES],
                         }
                     ],
                 }
@@ -374,9 +394,6 @@ def run_install(
     release: str = RELEASE_DEFAULT,
     with_queues: bool = False,
     cluster_queue: str = "iris-cq",
-    cq_cpu: str = "384",
-    cq_memory: str = "1536Gi",
-    cq_gpu: str = "24",
     apply: bool = False,
 ) -> None:
     """Install + configure Kueue for the given ``variant`` (coreweave | upstream).
@@ -389,9 +406,7 @@ def run_install(
 
     hflags = helm_flags(kubeconfig, context)
     kflags = kubectl_flags(kubeconfig, context)
-    queue_docs = (
-        [build_resource_flavor(), build_cluster_queue(cluster_queue, cq_cpu, cq_memory, cq_gpu)] if with_queues else []
-    )
+    queue_docs = [build_resource_flavor(), build_cluster_queue(cluster_queue)] if with_queues else []
 
     if variant == VARIANT_COREWEAVE:
         values = build_cks_values()
@@ -597,9 +612,6 @@ def _apply_upstream(
     help="Also create the cluster-scoped ResourceFlavor + ClusterQueue.",
 )
 @click.option("--cluster-queue", default="iris-cq", help="ClusterQueue name for --with-queues (default: iris-cq).")
-@click.option("--cq-cpu", default="384", help="ClusterQueue cpu nominal quota (default: 384).")
-@click.option("--cq-memory", default="1536Gi", help="ClusterQueue memory nominal quota (default: 1536Gi).")
-@click.option("--cq-gpu", default="24", help="ClusterQueue nvidia.com/gpu quota (default: 24).")
 @click.option("--apply/--no-apply", default=False, help="Actually mutate the cluster (default: dry-run only).")
 def main(
     variant: str,
@@ -609,9 +621,6 @@ def main(
     release: str,
     with_queues: bool,
     cluster_queue: str,
-    cq_cpu: str,
-    cq_memory: str,
-    cq_gpu: str,
     apply: bool,
 ) -> None:
     """Install + configure Kueue (coreweave or upstream) for Iris gang admission."""
@@ -623,9 +632,6 @@ def main(
         release=release,
         with_queues=with_queues,
         cluster_queue=cluster_queue,
-        cq_cpu=cq_cpu,
-        cq_memory=cq_memory,
-        cq_gpu=cq_gpu,
         apply=apply,
     )
 
