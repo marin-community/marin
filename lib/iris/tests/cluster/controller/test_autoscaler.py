@@ -28,7 +28,7 @@ from iris.cluster.providers.types import (
 from iris.cluster.types import WorkerStatus
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_proto import duration_to_proto
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Duration, Timestamp, TokenBucket
 
 from tests.cluster.providers.conftest import (
     FakeSliceHandle,
@@ -455,6 +455,30 @@ class TestAutoscalerExecution:
         autoscaler.execute(decisions, timestamp=Timestamp.from_ms(1000))
 
         assert group.slice_count() == 0
+
+    def test_global_create_rate_limit_defers_excess_launches(self):
+        """A saturated global create limiter defers launches beyond its capacity.
+
+        Each group's own scale-up bucket has headroom, so only the shared global
+        cap (1/min here) bounds the cycle: one launch proceeds, the rest defer.
+        """
+        create_limiter = TokenBucket(capacity=1, refill_period=Duration.from_minutes(1))
+        groups = {
+            f"group-{i}": ScalingGroup(
+                make_scale_group_config(name=f"group-{i}", buffer_slices=0, max_slices=5),
+                make_mock_platform(),
+                create_limiter=create_limiter,
+            )
+            for i in range(3)
+        }
+        autoscaler = make_autoscaler(groups)
+
+        decisions = [ScalingDecision(scale_group=name, action=ScalingAction.SCALE_UP, reason="test") for name in groups]
+        autoscaler.execute(decisions, timestamp=Timestamp.from_ms(1000))
+        autoscaler._wait_for_inflight()
+
+        assert sum(group.slice_count() for group in groups.values()) == 1
+        autoscaler.shutdown()
 
 
 class TestAutoscalerWorkerFailure:

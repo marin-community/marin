@@ -107,6 +107,14 @@ class AvailabilityState:
 
 DEFAULT_SCALE_UP_RATE_LIMIT = 16  # per minute
 DEFAULT_SCALE_DOWN_RATE_LIMIT = 32  # per minute
+
+# GCP's TPU Admin API permits 91 CreateNode requests/min/project. Cap autoscaler
+# launches below that so manual create-slice and controller VM provisioning,
+# which share the same quota, retain headroom. A single bucket is shared across
+# all scale groups; per-group buckets only bound one group, so this is the only
+# limiter that bounds the aggregate CreateNode rate.
+CREATE_NODE_QUOTA_PER_MINUTE = 91
+DEFAULT_CREATE_RATE_LIMIT_PER_MINUTE = 80
 DEFAULT_IDLE_THRESHOLD = Duration.from_minutes(10)
 DEFAULT_QUOTA_TIMEOUT = Duration.from_minutes(5)
 
@@ -311,6 +319,7 @@ class ScalingGroup:
         scale_up_rate_limit: int = DEFAULT_SCALE_UP_RATE_LIMIT,
         scale_down_rate_limit: int = DEFAULT_SCALE_DOWN_RATE_LIMIT,
         short_lived_threshold: Duration = DEFAULT_SHORT_LIVED_THRESHOLD,
+        create_limiter: TokenBucket | None = None,
         detector: BackoffDetector | None = None,
         db: ControllerDB | None = None,
     ):
@@ -350,6 +359,11 @@ class ScalingGroup:
 
         # Scale-down rate limiter, owned by the group (not health-modulated).
         self._scale_down_bucket = TokenBucket(capacity=scale_down_rate_limit, refill_period=Duration.from_minutes(1))
+
+        # Global slice-create limiter, shared across all groups by the autoscaler
+        # so the aggregate CreateNode rate stays within the cloud API quota. None
+        # disables the global cap (e.g. LOCAL mode, isolated unit tests).
+        self._create_limiter = create_limiter
 
         # Upsert scaling group row so it exists for future updates
         if self._db is not None:
@@ -986,8 +1000,19 @@ class ScalingGroup:
         return True
 
     def try_acquire_scale_up(self, timestamp: Timestamp | None = None) -> bool:
-        """Acquire a scale-up token from the detector's health-modulated bucket."""
-        return self._detector.try_acquire_scale_up(timestamp or Timestamp.now())
+        """Acquire a scale-up token from the detector's health-modulated bucket.
+
+        Also consumes a token from the shared global create limiter when one is
+        attached, so a single call answers both the per-group and global caps.
+        The global token is taken after the per-group one, so a saturated global
+        budget never burns a per-group token on a launch that won't happen.
+        """
+        timestamp = timestamp or Timestamp.now()
+        if not self._detector.try_acquire_scale_up(timestamp):
+            return False
+        if self._create_limiter is not None and not self._create_limiter.try_acquire(now=timestamp):
+            return False
+        return True
 
     def acquire_scale_down_token(self, timestamp: Timestamp | None = None) -> bool:
         """Try to acquire a scale-down rate limit token. Returns False if rate-limited."""

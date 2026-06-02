@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import logging
 
+from rigging.timing import Duration, TokenBucket
+
 from iris.cluster.config import (
     _scale_groups_to_config,
     _validate_autoscaler_config,
@@ -20,6 +22,7 @@ from iris.cluster.config import (
 )
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.scaling_group import (
+    DEFAULT_CREATE_RATE_LIMIT_PER_MINUTE,
     DEFAULT_SCALE_DOWN_RATE_LIMIT,
     DEFAULT_SCALE_UP_RATE_LIMIT,
     ScalingGroup,
@@ -67,6 +70,11 @@ def create_autoscaler(
 
     scale_down_delay = duration_from_proto(autoscaler_config.scale_down_delay)
 
+    # One global create limiter shared across every group bounds the aggregate
+    # CreateNode rate against the cloud API quota; per-group buckets only bound
+    # a single group.
+    create_limiter = TokenBucket(capacity=DEFAULT_CREATE_RATE_LIMIT_PER_MINUTE, refill_period=Duration.from_minutes(1))
+
     scaling_groups: dict[str, ScalingGroup] = {}
     for name, group_config in scale_groups.items():
         scaling_groups[name] = ScalingGroup(
@@ -76,6 +84,7 @@ def create_autoscaler(
             idle_threshold=scale_down_delay,
             scale_up_rate_limit=group_config.scale_up_rate_limit or DEFAULT_SCALE_UP_RATE_LIMIT,
             scale_down_rate_limit=group_config.scale_down_rate_limit or DEFAULT_SCALE_DOWN_RATE_LIMIT,
+            create_limiter=create_limiter,
             db=db,
         )
         resources = group_config.resources
