@@ -142,3 +142,15 @@ uv run iris --cluster=marin job run \
   --job-name grugmoe-native-jax-tpu-parity \
   -- bash -lc 'git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/tpu-inference.git /tmp/grugmoe-vllm-tpu-inference && git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/vllm.git /tmp/grugmoe-vllm-tpu-vllm && PYTHONPATH=/tmp/grugmoe-vllm-tpu-inference:/tmp/grugmoe-vllm-tpu-vllm uv run --with-requirements /tmp/grugmoe-vllm-tpu-inference/requirements.txt --with-requirements /tmp/grugmoe-vllm-tpu-vllm/requirements/common.txt --with "torch==2.10.0+cpu" --extra-index-url https://download.pytorch.org/whl/cpu python -m experiments.grug.moe.vllm_tpu_parity --tpu-inference-root /tmp/grugmoe-vllm-tpu-inference'
 ```
+
+Native-JAX validation result on 2026-06-02:
+
+- Job: `/romain/grugmoe-native-jax-tpu-parity`
+- State: `succeeded`
+- Exit: `0`
+- Final output:
+
+```text
+component: native GrugMoeMLP matches Levanter moe_mlp
+full: native GrugMoeModel hidden states match Levanter Transformer reference
+```

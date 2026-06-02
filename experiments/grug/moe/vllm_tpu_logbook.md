@@ -6,7 +6,8 @@ Issue: https://github.com/marin-community/marin/issues/6106
 
 - Marin: [`grugmoe-vllm-tpu-support`](https://github.com/marin-community/marin/tree/grugmoe-vllm-tpu-support) in `/home/romain/dev/marin-wt/grugmoe-vllm-tpu-support`
   - Current local base before this native-JAX evidence update: [`4a909352`](https://github.com/marin-community/marin/commit/4a909352b27a1eedebc3556bf35bc9712394486c)
-  - Final pushed branch head is recorded in issue #6106 after the evidence-doc commit is pushed.
+  - Native-JAX parity harness/docs commit used for TPU validation: [`9095972d`](https://github.com/marin-community/marin/commit/9095972d843652a22f925057a93498f04a6f3b1a)
+  - Final pushed branch head is recorded in issue #6106 after this evidence update is pushed.
 - vLLM: [`grugmoe-vllm-tpu-support`](https://github.com/marin-community/vllm/tree/grugmoe-vllm-tpu-support) in `/home/romain/dev/marin-wt/grugmoe-vllm-tpu-vllm`
   - Native-JAX replacement commit: [`d025e46d`](https://github.com/marin-community/vllm/commit/d025e46d3dfe0afc0f5bd1518c19ce337205db2d)
 - tpu-inference: [`grugmoe-vllm-tpu-support`](https://github.com/marin-community/tpu-inference/tree/grugmoe-vllm-tpu-support) in `/home/romain/dev/marin-wt/grugmoe-vllm-tpu-inference`
@@ -23,6 +24,7 @@ Issue: https://github.com/marin-community/marin/issues/6106
 - 2026-06-02: Updated tpu-inference `MODEL_IMPL_TYPE=auto` resolution so `GrugMoeForCausalLM` goes through `flax_nnx`, not vLLM.
 - 2026-06-02: Replaced the Marin parity harness so it imports native tpu-inference JAX GrugMoE, uses Levanter `moe_mlp` for component parity, and compares composed hidden states against a dense Levanter-parameter reference.
 - 2026-06-02: Preserved the correctness-first scope: tiny seeded configs, component parity, composed parity, and targeted `v6e-4` TPU validation.
+- 2026-06-02: Ran `/romain/grugmoe-native-jax-tpu-parity` on `v6e-4`; component and composed parity both passed and the job reached `succeeded`.
 
 ## Local Verification
 
@@ -91,7 +93,7 @@ full: native GrugMoeModel hidden states match Levanter Transformer reference
 
 ## TPU Verification
 
-Status: pending for the native-JAX replacement branch heads listed above.
+Status: passed for the native-JAX replacement branch heads listed above.
 
 Repro command:
 
@@ -110,6 +112,23 @@ uv run iris --cluster=marin job run \
   --disk 50GB \
   --job-name grugmoe-native-jax-tpu-parity \
   -- bash -lc 'git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/tpu-inference.git /tmp/grugmoe-vllm-tpu-inference && git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/vllm.git /tmp/grugmoe-vllm-tpu-vllm && PYTHONPATH=/tmp/grugmoe-vllm-tpu-inference:/tmp/grugmoe-vllm-tpu-vllm uv run --with-requirements /tmp/grugmoe-vllm-tpu-inference/requirements.txt --with-requirements /tmp/grugmoe-vllm-tpu-vllm/requirements/common.txt --with "torch==2.10.0+cpu" --extra-index-url https://download.pytorch.org/whl/cpu python -m experiments.grug.moe.vllm_tpu_parity --tpu-inference-root /tmp/grugmoe-vllm-tpu-inference'
+```
+
+Result:
+
+- Job: `/romain/grugmoe-native-jax-tpu-parity`
+- TPU: `v6e-4`
+- Region: `europe-west4`
+- State: `succeeded`
+- Exit: `0`
+- Failures/preemptions: `0`/`0`
+- Duration: `56.73 seconds`
+
+Final parity log lines:
+
+```text
+component: native GrugMoeMLP matches Levanter moe_mlp
+full: native GrugMoeModel hidden states match Levanter Transformer reference
 ```
 
 ## Scope
