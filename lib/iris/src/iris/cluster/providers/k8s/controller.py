@@ -302,6 +302,7 @@ class K8sControllerProvider:
         logger.info("ConfigMap iris-cluster-config applied")
 
         self.ensure_nodepools(config)
+        self.ensure_kueue_queues(config)
 
         s3_env = self.s3_env_vars() if self._s3_enabled else []
         deploy_manifest = _build_controller_deployment(
@@ -547,6 +548,35 @@ class K8sControllerProvider:
             self._kubectl.apply_json(manifest)
 
         logger.info("RBAC prerequisites applied (namespace=%s, clusterRole=%s)", self._namespace, cluster_role_name)
+
+    # -- Kueue ------------------------------------------------------------------
+
+    def ensure_kueue_queues(self, config: config_pb2.IrisClusterConfig) -> None:
+        """Reconcile the namespaced Kueue LocalQueue this cluster dispatches into.
+
+        The Kueue operator, ClusterQueue, ResourceFlavor and Topology CRs are
+        cluster-global and admin-provisioned out of band (the CKS cluster is
+        shared across tenants); see scripts/install_kueue_coreweave.sh. Iris owns
+        only its own LocalQueue, binding its namespace to the admin ClusterQueue.
+        No-op when Kueue is not configured (local_queue unset).
+        """
+        kueue = config.kubernetes_provider.kueue
+        if not kueue.local_queue:
+            return
+        if not kueue.cluster_queue:
+            raise InfraError(
+                "kubernetes_provider.kueue.local_queue is set but cluster_queue is empty; "
+                "the LocalQueue needs an admin-provisioned ClusterQueue to bind to "
+                "(see scripts/install_kueue_coreweave.sh)."
+            )
+        manifest = {
+            "apiVersion": "kueue.x-k8s.io/v1beta1",
+            "kind": "LocalQueue",
+            "metadata": {"name": kueue.local_queue, "namespace": self._namespace},
+            "spec": {"clusterQueue": kueue.cluster_queue},
+        }
+        self._kubectl.apply_json(manifest)
+        logger.info("LocalQueue %s applied (clusterQueue=%s)", kueue.local_queue, kueue.cluster_queue)
 
     # -- NodePool Management ---------------------------------------------------
 

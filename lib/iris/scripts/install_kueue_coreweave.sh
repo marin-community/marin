@@ -14,9 +14,11 @@
 #      Kueue gang-admits Iris's scheduling-gated pod groups, SCOPED to an
 #      explicit namespace allowlist — the CKS cluster is shared, so the pod
 #      webhook must not touch other tenants' namespaces.
-#   4. (optional, --with-queues) Creates a topology-aware ResourceFlavor plus a
-#      ClusterQueue and a per-namespace LocalQueue so the queue Iris references
-#      actually exists.
+#   4. (optional, --with-queues) Creates the cluster-scoped, admin-owned
+#      ResourceFlavor + ClusterQueue (the quota). The namespaced LocalQueue is
+#      NOT created here: Iris reconciles its own LocalQueue at controller start
+#      (K8sControllerManager.ensure_kueue_queues), binding it to this
+#      ClusterQueue via kubernetes_provider.kueue.cluster_queue.
 #
 # SAFE BY DEFAULT: prints the helm/kubectl plan and a server-side dry-run, then
 # stops. Pass --apply to mutate the cluster. This touches a SHARED CoreWeave
@@ -59,7 +61,7 @@ TENANT_NAMESPACES=()
 CQ_CPU="384"               # e.g. 3 x 128-core H100 nodes
 CQ_MEMORY="1536Gi"
 CQ_GPU="24"                # e.g. 3 x 8 H100
-LOCAL_QUEUE="iris-lq"      # LocalQueue name Iris stamps (kueue.x-k8s.io/queue-name)
+CLUSTER_QUEUE="iris-cq"    # ClusterQueue name Iris's LocalQueue binds to
 
 usage() {
   cat <<'EOF'
@@ -71,8 +73,8 @@ Usage: install_kueue_coreweave.sh [options]
                         default: iris). Pod gang admission is scoped to these.
   --chart-version VER   pin the cks-kueue chart version (default: latest)
   --release NAME        helm release name (default: kueue)
-  --with-queues         also create ResourceFlavor + ClusterQueue + LocalQueue
-  --local-queue NAME    LocalQueue name for --with-queues (default: iris-lq)
+  --with-queues         also create the cluster-scoped ResourceFlavor + ClusterQueue
+  --cluster-queue NAME  ClusterQueue name for --with-queues (default: iris-cq)
   --cq-cpu N            ClusterQueue cpu nominal quota   (default: 384)
   --cq-memory SIZE      ClusterQueue memory nominal quota (default: 1536Gi)
   --cq-gpu N            ClusterQueue nvidia.com/gpu quota (default: 24)
@@ -100,7 +102,7 @@ while [[ $# -gt 0 ]]; do
     --chart-version)  CHART_VERSION="$2"; shift 2 ;;
     --release)        RELEASE="$2"; shift 2 ;;
     --with-queues)    WITH_QUEUES=1; shift ;;
-    --local-queue)    LOCAL_QUEUE="$2"; shift 2 ;;
+    --cluster-queue)  CLUSTER_QUEUE="$2"; shift 2 ;;
     --cq-cpu)         CQ_CPU="$2"; shift 2 ;;
     --cq-memory)      CQ_MEMORY="$2"; shift 2 ;;
     --cq-gpu)         CQ_GPU="$2"; shift 2 ;;
@@ -216,8 +218,9 @@ sed 's/^/    /' "$VALUES_FILE"
 log "Pod gang admission scoped to namespaces: ${TENANT_NAMESPACES[*]}"
 
 # --------------------------------------------------------------------------
-# Optional tenant queue objects (defined before use so the dry-run branch can
-# print them too).
+# Cluster-scoped, admin-owned quota objects (defined before use so the dry-run
+# branch can print them too). The namespaced LocalQueue is intentionally NOT
+# here — Iris reconciles that at controller start.
 # --------------------------------------------------------------------------
 render_queues() {
   cat <<EOF
@@ -233,7 +236,7 @@ spec:
 apiVersion: kueue.x-k8s.io/v1beta1
 kind: ClusterQueue
 metadata:
-  name: iris-cq
+  name: ${CLUSTER_QUEUE}
 spec:
   namespaceSelector: {}
   resourceGroups:
@@ -248,19 +251,6 @@ spec:
             - name: nvidia.com/gpu
               nominalQuota: "${CQ_GPU}"
 EOF
-  local ns
-  for ns in "${TENANT_NAMESPACES[@]}"; do
-    cat <<EOF
----
-apiVersion: kueue.x-k8s.io/v1beta1
-kind: LocalQueue
-metadata:
-  name: ${LOCAL_QUEUE}
-  namespace: ${ns}
-spec:
-  clusterQueue: iris-cq
-EOF
-  done
 }
 
 # --------------------------------------------------------------------------
@@ -281,8 +271,8 @@ if [[ $APPLY -eq 0 ]]; then
   echo
   warn "This was a dry run. Re-run with --apply to install on the cluster."
   if [[ $WITH_QUEUES -eq 1 ]]; then
-    warn "--with-queues objects (ResourceFlavor/ClusterQueue/LocalQueue) are printed below but NOT applied."
-    render_queues  # defined below
+    warn "--with-queues objects (ResourceFlavor/ClusterQueue) are printed below but NOT applied."
+    render_queues
   fi
   exit 0
 fi
@@ -299,13 +289,15 @@ kubectl "${KCTL_FLAGS[@]}" get topologies.kueue.x-k8s.io 2>/dev/null || \
   warn "no Topology CRs found yet (the chart may still be reconciling)"
 
 if [[ $WITH_QUEUES -eq 1 ]]; then
-  log "Applying ResourceFlavor + ClusterQueue + LocalQueue ($LOCAL_QUEUE in: ${TENANT_NAMESPACES[*]})"
+  log "Applying ResourceFlavor + ClusterQueue ($CLUSTER_QUEUE)"
   render_queues | kubectl "${KCTL_FLAGS[@]}" apply -f -
 fi
 
-log "Done. Point the Iris cluster config at the LocalQueue:"
+log "Done. Point the Iris cluster config at the ClusterQueue; Iris creates the"
+log "LocalQueue in its namespace at controller start:"
 cat <<EOF
   kubernetes_provider:
     kueue:
-      local_queue: ${LOCAL_QUEUE}
+      local_queue: iris-lq            # Iris creates this LocalQueue
+      cluster_queue: ${CLUSTER_QUEUE}     # binds to the admin ClusterQueue above
 EOF

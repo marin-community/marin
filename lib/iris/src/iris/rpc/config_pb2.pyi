@@ -492,7 +492,7 @@ class KueueTopology(_message.Message):
     def __init__(self, node_label: _Optional[str] = ..., required: _Optional[bool] = ...) -> None: ...
 
 class KueueConfig(_message.Message):
-    __slots__ = ("local_queue", "priority_classes", "topologies")
+    __slots__ = ("local_queue", "cluster_queue", "priority_classes", "topologies")
     class PriorityClassesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -508,12 +508,14 @@ class KueueConfig(_message.Message):
         value: KueueTopology
         def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[KueueTopology, _Mapping]] = ...) -> None: ...
     LOCAL_QUEUE_FIELD_NUMBER: _ClassVar[int]
+    CLUSTER_QUEUE_FIELD_NUMBER: _ClassVar[int]
     PRIORITY_CLASSES_FIELD_NUMBER: _ClassVar[int]
     TOPOLOGIES_FIELD_NUMBER: _ClassVar[int]
     local_queue: str
+    cluster_queue: str
     priority_classes: _containers.ScalarMap[str, str]
     topologies: _containers.MessageMap[str, KueueTopology]
-    def __init__(self, local_queue: _Optional[str] = ..., priority_classes: _Optional[_Mapping[str, str]] = ..., topologies: _Optional[_Mapping[str, KueueTopology]] = ...) -> None: ...
+    def __init__(self, local_queue: _Optional[str] = ..., cluster_queue: _Optional[str] = ..., priority_classes: _Optional[_Mapping[str, str]] = ..., topologies: _Optional[_Mapping[str, KueueTopology]] = ...) -> None: ...
 
 class KubernetesProviderConfig(_message.Message):
     __slots__ = ("namespace", "kubeconfig", "default_image", "service_account", "host_network", "cache_dir", "controller_address", "kueue")

@@ -52,6 +52,9 @@ class K8sResource(Enum):
     # Workload after the pod-group-name, so Iris can address it directly to
     # release quota when it tears down a coscheduled gang generation.
     WORKLOADS = ("kueue.x-k8s.io", "v1beta1", True, "workloads", "Workload")
+    # Kueue: the namespaced LocalQueue Iris reconciles at controller start to
+    # bind its namespace to the admin-provisioned ClusterQueue.
+    LOCAL_QUEUES = ("kueue.x-k8s.io", "v1beta1", True, "localqueues", "LocalQueue")
 
     def __init__(self, api_group: str, api_version: str, is_namespaced: bool, plural: str, kind: str) -> None:
         self.api_group = api_group

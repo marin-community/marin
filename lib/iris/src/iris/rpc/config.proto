@@ -453,9 +453,14 @@ message KueueTopology {
 // WorkloadPriorityClasses and Topology levels the cluster admin provisioned.
 message KueueConfig {
   // LocalQueue name stamped as kueue.x-k8s.io/queue-name on coscheduled pods.
-  // Empty disables Kueue gang admission (pods fall back to soft podAffinity
-  // colocation — the status quo on clusters without Kueue).
+  // Empty disables Kueue: coscheduled jobs then fail (there is no non-Kueue
+  // fallback). Iris reconciles this LocalQueue in its namespace at controller
+  // start (see K8sControllerManager.ensure_kueue_queues).
   string local_queue = 1;
+  // ClusterQueue the LocalQueue binds to. Admin-provisioned (cluster-scoped,
+  // holds the quota); created by scripts/install_kueue_coreweave.sh, not by
+  // Iris. Required whenever local_queue is set.
+  string cluster_queue = 4;
   // PriorityBand -> WorkloadPriorityClass name. A band with no entry is left
   // unstamped so Kueue applies its default priority; Iris never invents a class
   // name, since a missing WorkloadPriorityClass makes Kueue reject the pod.
