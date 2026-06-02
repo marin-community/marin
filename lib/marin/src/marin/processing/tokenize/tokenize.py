@@ -21,7 +21,6 @@ import re
 import time
 from collections.abc import Sequence
 
-import draccus
 from datasets import load_dataset_builder
 from fray import ResourceConfig
 from levanter.data.text import (
@@ -32,7 +31,6 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
 )
 from levanter.tokenizers import TokenizerBackend
-from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext
 from zephyr.dataset import FileEntry
 from zephyr.readers import load_file
@@ -63,7 +61,6 @@ __all__ = [
     "TokenizeConfigBase",
     "bundle_files_by_size",
     "compute_target_group_bytes",
-    "main",
     "tokenize",
 ]
 
@@ -412,10 +409,3 @@ def tokenize(config: TokenizeConfigBase) -> None:
     if validation_files and not _split_already_done(config.cache_path, "validation"):
         validation_groups = _local_preprocess_paths(validation_files, config)
         _run_split(config=config, file_groups=validation_groups, split_name="validation")
-
-
-@draccus.wrap()
-def main(config: TokenizeConfig):
-
-    configure_logging(level=logging.INFO)
-    tokenize(config)

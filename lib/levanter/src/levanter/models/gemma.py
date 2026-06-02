@@ -868,6 +868,7 @@ class Gemma3Config(Gemma2Config):
         )
         return cfg
 
+    @classmethod
     def from_hf_config(cls, hf_config: HfConfig) -> "Gemma3Config":  # type: ignore[override]
         """Create a :class:`Gemma3Config` from a HuggingFace configuration."""
         if hf_config.hidden_activation is None:

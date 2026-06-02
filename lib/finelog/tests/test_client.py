@@ -20,7 +20,6 @@ from finelog.client import log_client as log_client_mod
 from finelog.errors import (
     InvalidNamespaceError,
     QueryResultTooLargeError,
-    SchemaConflictError,
     SchemaValidationError,
 )
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
@@ -326,11 +325,14 @@ def test_get_table_forwards_storage_policy(tracked_clients):
     """An explicit StoragePolicy on get_table is sent on the register_table request."""
     client = LogClient.connect("http://h:1")
     try:
-        client.get_table(
+        table = client.get_table(
             "iris.worker",
             WorkerStat,
             storage_policy=StoragePolicy(max_bytes=100, max_age_seconds=60),
         )
+        # Registration is deferred to the flush thread; force it with a write+flush.
+        table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=1)])
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
         policy = tracked_clients[0].registered_policies["iris.worker"]
         assert policy.max_bytes == 100
         assert policy.max_age_seconds == 60
@@ -343,7 +345,10 @@ def test_get_table_default_policy_is_empty(tracked_clients):
     """No policy argument sends an empty proto (all zeros = inherit defaults)."""
     client = LogClient.connect("http://h:1")
     try:
-        client.get_table("iris.worker", WorkerStat)
+        table = client.get_table("iris.worker", WorkerStat)
+        # Registration is deferred to the flush thread; force it with a write+flush.
+        table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=1)])
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
         policy = tracked_clients[0].registered_policies["iris.worker"]
         assert policy.max_bytes == 0
         assert policy.max_age_seconds == 0
@@ -384,29 +389,70 @@ def test_drop_table_unknown_is_no_op(tracked_clients, monkeypatch):
     client = LogClient.connect("http://h:1")
     try:
         client.get_table("iris.worker", WorkerStat)
-        original_drop = tracked_clients[0].drop_table
+        client.drop_table("iris.worker")  # first drop lazily constructs the stats client
 
         def fail_drop(request):
             raise ConnectError(Code.NOT_FOUND, "namespace not registered")
 
         tracked_clients[0].drop_table = fail_drop  # type: ignore[method-assign]
         client.drop_table("iris.unknown")  # must not raise
-        tracked_clients[0].drop_table = original_drop  # type: ignore[method-assign]
     finally:
         client.close()
 
 
-def test_get_table_propagates_schema_conflict(tracked_clients, monkeypatch):
+def test_get_table_registration_conflict_drops_batch(tracked_clients, monkeypatch):
+    """A non-retryable registration failure is handled as a flush failure.
+
+    Registration happens on the flush thread, so a schema conflict cannot
+    propagate to the caller of get_table. The offending batch is dropped (the
+    error is non-retryable) and the Table stays usable without crashing.
+    """
+
+    def conflict(self, request):
+        raise ConnectError(Code.FAILED_PRECONDITION, "type mismatch")
+
+    monkeypatch.setattr(_FakeStatsServiceClient, "register_table", conflict)
     client = LogClient.connect("http://h:1")
     try:
-        client.get_table("iris.metric", WorkerStat)
+        table = client.get_table("iris.worker", WorkerStat)
+        table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=1)])
+        # Non-retryable: the batch is dropped, the flush resolves, nothing raises.
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+        assert tracked_clients[0].writes == []
+    finally:
+        client.close()
 
-        def conflict(request):
-            raise ConnectError(Code.FAILED_PRECONDITION, "type mismatch")
 
-        tracked_clients[0].register_table = conflict  # type: ignore[method-assign]
-        with pytest.raises(SchemaConflictError):
-            client.get_table("iris.other", WorkerStat)
+def test_get_table_retries_transient_registration_failure(tracked_clients, monkeypatch):
+    """A retryable registration failure is retried on the flush thread.
+
+    The first register attempt raises UNAVAILABLE; the flush thread backs off
+    and retries, then the write lands once registration succeeds. ``get_table``
+    itself never blocks or raises.
+    """
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_INITIAL", 1e-9)
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_MAX", 1e-9)
+
+    calls = {"n": 0}
+    real_register = _FakeStatsServiceClient.register_table
+
+    def flaky_register(self, request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ConnectError(Code.UNAVAILABLE, "down")
+        return real_register(self, request)
+
+    monkeypatch.setattr(_FakeStatsServiceClient, "register_table", flaky_register)
+    client = LogClient.connect("http://h:1")
+    try:
+        table = client.get_table("iris.worker", WorkerStat)
+        table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=128)])
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+        # First attempt failed and re-resolved the endpoint; the retry registered
+        # and wrote against the freshly constructed client.
+        assert calls["n"] >= 2
+        landed = any(w.namespace == "iris.worker" for c in tracked_clients for w in c.writes)
+        assert landed
     finally:
         client.close()
 
@@ -419,11 +465,12 @@ def test_table_query_round_trips(tracked_clients):
         def handler(_sql: str) -> pa.Table:
             return pa.table({"worker_id": ["w-1", "w-2"], "mem_bytes": [10, 20]})
 
+        table.query("SELECT 1")  # lazily construct the stats client
         tracked_clients[0].query_handler = handler
         result = table.query('SELECT worker_id, mem_bytes FROM "iris.worker"')
         assert result.column_names == ["worker_id", "mem_bytes"]
         assert result.column("worker_id").to_pylist() == ["w-1", "w-2"]
-        assert tracked_clients[0].queries == ['SELECT worker_id, mem_bytes FROM "iris.worker"']
+        assert tracked_clients[0].queries[-1] == 'SELECT worker_id, mem_bytes FROM "iris.worker"'
     finally:
         client.close()
 
@@ -432,6 +479,7 @@ def test_table_query_raises_on_too_large(tracked_clients):
     client = LogClient.connect("http://h:1")
     try:
         table = client.get_table("iris.worker", WorkerStat)
+        table.query("SELECT 1")  # lazily construct the stats client
         tracked_clients[0].query_handler = lambda _sql: pa.table({"worker_id": ["w"] * 5})
         with pytest.raises(QueryResultTooLargeError):
             table.query('SELECT * FROM "iris.worker"', max_rows=2)
@@ -470,6 +518,7 @@ def test_table_query_translates_invalid_argument(tracked_clients):
     client = LogClient.connect("http://h:1")
     try:
         table = client.get_table("iris.worker", WorkerStat)
+        table.query("SELECT 1")  # lazily construct the stats client
         tracked_clients[0].errors.append(ConnectError(Code.INVALID_ARGUMENT, "syntax error"))
         with pytest.raises(SchemaValidationError):
             table.query("not valid sql")
