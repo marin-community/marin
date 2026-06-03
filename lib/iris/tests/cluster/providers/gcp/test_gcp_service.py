@@ -13,8 +13,11 @@ These tests cover:
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.service import (
@@ -22,7 +25,12 @@ from iris.cluster.providers.gcp.service import (
     TpuCreateRequest,
     VmCreateRequest,
 )
-from iris.cluster.providers.types import InfraError, QuotaExhaustedError, ResourceNotFoundError
+from iris.cluster.providers.types import (
+    InfraError,
+    InfraUnavailableError,
+    QuotaExhaustedError,
+    ResourceNotFoundError,
+)
 from iris.cluster.service_mode import ServiceMode
 from iris.rpc import config_pb2
 
@@ -405,3 +413,58 @@ def test_tpu_list_extracts_zone_from_wildcard() -> None:
     assert len(results) == 1
     assert results[0].name == "my-tpu"
     assert results[0].zone == "us-central2-b"
+
+
+# ========================================================================
+# Transient-error retry and propagation (HTTP read path)
+# ========================================================================
+
+
+def _gcp_error_response(code: int, *, status: str = "", message: str = "boom") -> httpx.Response:
+    return httpx.Response(code, json={"error": {"code": code, "status": status, "message": message}})
+
+
+def _mock_service(handler: Callable[[httpx.Request], httpx.Response]) -> CloudGcpService:
+    """Build a CloudGcpService whose HTTP client is driven by ``handler``.
+
+    The token is pre-seeded so ``_headers`` never triggers a real google.auth
+    credential refresh.
+    """
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    svc = CloudGcpService(project_id="test-project", http_client=client)
+    svc._token = "fake-token"
+    svc._expires_at = time.monotonic() + 3600
+    return svc
+
+
+def test_get_retrying_retries_transient_5xx_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("rigging.timing.time.sleep", lambda _: None)
+    calls = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return _gcp_error_response(503, message="Internal error. Please try again")
+        return httpx.Response(200, json={"ok": True})
+
+    svc = _mock_service(handler)
+    assert svc._get_retrying("https://compute.googleapis.com/x") == {"ok": True}
+    assert calls["n"] == 3
+
+
+def test_vm_list_propagates_sustained_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A sustained 503 on the project-wide list must surface, not look like 'no VMs'.
+
+    This is the controller-discovery path the canary ferry depends on; swallowing
+    it to [] is what turned a transient GCP 503 into a spurious "No controller VM".
+    """
+    monkeypatch.setattr("rigging.timing.time.sleep", lambda _: None)
+    svc = _mock_service(lambda _r: _gcp_error_response(503, message="Internal error. Please try again"))
+    with pytest.raises(InfraUnavailableError):
+        svc.vm_list(zones=[], labels={"iris-x-controller": "true"})
+
+
+def test_vm_list_swallows_non_transient_error() -> None:
+    """Non-transient errors keep the existing degrade-to-empty behavior for list callers."""
+    svc = _mock_service(lambda _r: _gcp_error_response(403, message="forbidden"))
+    assert svc.vm_list(zones=[], labels={"iris-x-controller": "true"}) == []
