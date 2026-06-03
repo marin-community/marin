@@ -20,7 +20,7 @@ Pre-build the caches (CPU, no fan-out)::
     export PATH="$HOME/google-cloud-sdk/bin:$HOME/.local/bin:$PATH"
     uv run iris --cluster=marin job run --user "$USERNAME" --no-wait \\
         --job-name prot-exp-demo-tokenize \\
-        --region us-east5 --cpu=4 --memory=16GB --extra=cpu \\
+        --region us-east5 --cpu=4 --memory=16GB --extra=cpu --enable-extra-resources \\
         -e HF_TOKEN "$HF_TOKEN" -e HUGGING_FACE_HUB_TOKEN "$HF_TOKEN" \\
         -e TOKENIZE yes \\
         -- python -m experiments.protein.exp_demo_sweep
@@ -109,9 +109,11 @@ SINGLE_HOST_TPUS: dict[str, TpuStats] = {
 
 HBM_FLOOR_GIB: int = 16
 
-# Hand-tuned (no estimation): examples/chip that fit a 16 GiB v5e chip. 8 keeps
-# v5p-8 accumulation-free (8 * (95 // 16) = 40 >= 128 / 4 = 32 per chip).
-PER_CHIP_MICROBATCH: int = 8
+# Hand-tuned (no estimation): examples/chip that fit a 16 GiB v5e chip for this
+# 1.47B / seq-8192 model, scaled by HBM per slice (see per_device_parallelism).
+# At 4: v6e-4 -> microbatch 32 (accum 4); v5p-8 -> microbatch 64 (accum 2).
+# v6e-4 OOM'd at 8 (microbatch 64), so this is the global step-down.
+PER_CHIP_MICROBATCH: int = 4
 
 
 def per_device_parallelism(tpu_type: str, global_batch: int, per_chip_microbatch: int) -> int:
