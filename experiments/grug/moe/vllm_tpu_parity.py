@@ -17,8 +17,9 @@ Run from the Marin worktree:
 The component check compares tpu-inference's native JAX GrugMoE MLP against
 Levanter's `moe_mlp` with the same selected experts and sigmoid combine
 weights. The full check copies a tiny seeded Levanter `Transformer` into the
-tpu-inference JAX model and compares hidden states against a dense reference
-using the same Levanter parameters and equations.
+tpu-inference JAX model and compares final hidden states, logits from
+`compute_logits`, and routed expert IDs against a dense reference using the
+same Levanter parameters and equations.
 """
 
 from __future__ import annotations
@@ -96,9 +97,7 @@ def _use_runtime_grug_mesh(*, for_init: bool):
     old_moe_mlp = levanter_grug_moe.moe_mlp
     grug_moe_model.get_abstract_mesh = lambda: grug_mesh
     grug_moe_model.reshard = lambda x, *args, **kwargs: x
-    grug_moe_model.shard_map = lambda fn, **kwargs: (
-        lambda s_ma: jnp.zeros((s_ma.shape[1],), dtype=s_ma.dtype)
-    )
+    grug_moe_model.shard_map = lambda fn, **kwargs: (lambda s_ma: jnp.zeros((s_ma.shape[1],), dtype=s_ma.dtype))
     levanter_grug_moe._reshard_for_init = lambda x, spec: x
     levanter_grug_moe._reshard_for_shard_map = lambda x, mesh, spec: x
     levanter_grug_moe._current_mesh = lambda: _EmptyMesh()
@@ -154,7 +153,7 @@ def _tiny_cfg() -> GrugModelConfig:
         shared_expert_intermediate_dim=10,
         num_experts=4,
         num_experts_per_token=2,
-        num_layers=2,
+        num_layers=4,
         num_heads=2,
         num_kv_heads=1,
         head_dim=4,
@@ -163,6 +162,11 @@ def _tiny_cfg() -> GrugModelConfig:
         initializer_std=0.02,
         moe_implementation="scatter",
     )
+
+
+def _layer_sliding_window(cfg: GrugModelConfig, layer_index: int) -> int:
+    short_window = cfg.sliding_window // 2
+    return cfg.sliding_window if layer_index % 4 == 3 else short_window
 
 
 def _hf_config(cfg: GrugModelConfig) -> SimpleNamespace:
@@ -313,7 +317,7 @@ def _jax_dense_mlp(mlp: Any, x: jax.Array) -> jax.Array:
     return out.reshape(bsz, seq_len, hidden_dim)
 
 
-def _jax_moe_mlp(mlp: Any, x: jax.Array) -> jax.Array:
+def _jax_moe_mlp(mlp: Any, x: jax.Array) -> tuple[jax.Array, jax.Array]:
     cfg = mlp.cfg
     bsz, seq_len, hidden_dim = x.shape
     x_flat = x.reshape(bsz * seq_len, hidden_dim)
@@ -331,31 +335,40 @@ def _jax_moe_mlp(mlp: Any, x: jax.Array) -> jax.Array:
         mlp.expert_mlp.w_down,
         activation=jax.nn.silu,
     )
-    return out.reshape(bsz, seq_len, hidden_dim)
+    return out.reshape(bsz, seq_len, hidden_dim), selected
 
 
-def _jax_full_forward(model: Transformer, token_ids: jax.Array) -> jax.Array:
+def _jax_full_forward(model: Transformer, token_ids: jax.Array) -> tuple[jax.Array, jax.Array]:
     cfg = model.config
     _bsz, seq_len = token_ids.shape
     positions = jnp.broadcast_to(jnp.arange(seq_len, dtype=jnp.int32)[None, :], token_ids.shape)
     hidden = model.token_embed[token_ids]
     hidden = _jax_gated_norm(model.embed_gated_norm, _jax_rms_norm(hidden, model.embed_norm.weight, cfg.layer_norm_eps))
 
-    short_window = cfg.sliding_window // 2
+    expert_ids_by_layer = []
     for i, block in enumerate(model.blocks):
-        layer_window = cfg.sliding_window if i % 4 == 3 else short_window
+        layer_window = _layer_sliding_window(cfg, i)
         attn_in = _jax_gated_norm(
             block.attn_gated_norm,
             _jax_rms_norm(hidden, block.rms_attn.weight, block.rms_attn.eps),
         )
         hidden = hidden + _jax_attention(block.attn, attn_in, positions, layer_window)
         mlp_in = _jax_gated_norm(block.mlp_gated_norm, _jax_rms_norm(hidden, block.rms_mlp.weight, block.rms_mlp.eps))
-        mlp_out = _jax_moe_mlp(block.mlp, mlp_in)
+        mlp_out, expert_ids = _jax_moe_mlp(block.mlp, mlp_in)
+        expert_ids_by_layer.append(expert_ids)
         if block.shared is not None:
             mlp_out = mlp_out + _jax_dense_mlp(block.shared, mlp_in)
         hidden = hidden + mlp_out
 
-    return _jax_gated_norm(model.final_gated_norm, _jax_rms_norm(hidden, model.final_norm.weight, model.final_norm.eps))
+    hidden = _jax_gated_norm(
+        model.final_gated_norm,
+        _jax_rms_norm(hidden, model.final_norm.weight, model.final_norm.eps),
+    )
+    return hidden, jnp.stack(expert_ids_by_layer, axis=0)
+
+
+def _jax_logits(model: Transformer, hidden: jax.Array) -> jax.Array:
+    return jnp.einsum("bsh,hv->bsv", hidden, model.output_proj)
 
 
 def check_moe_component(tpu_grugmoe) -> None:
@@ -432,6 +445,7 @@ def _copy_transformer(tpu_model: Any, lev_model: Transformer) -> None:
 def check_full_forward(tpu_grugmoe) -> None:
     attention_metadata_mod = importlib.import_module("tpu_inference.layers.common.attention_metadata")
     cfg = _tiny_cfg()
+    assert [_layer_sliding_window(cfg, i) for i in range(cfg.num_layers)] == [2, 2, 2, 4]
     key = jax.random.PRNGKey(7)
     with _use_runtime_grug_mesh(for_init=True):
         lev_model = Transformer.init(cfg, key=key)
@@ -440,14 +454,20 @@ def check_full_forward(tpu_grugmoe) -> None:
         tpu_model = tpu_grugmoe.GrugMoeForCausalLM(_vllm_config(cfg), jax.random.PRNGKey(0), _tpu_mesh())
     _copy_transformer(tpu_model, lev_model)
 
-    token_ids = jnp.array([[1, 5, 3, 7]], dtype=jnp.int32)
+    token_ids = jnp.array([[1, 5, 3, 7, 2, 9]], dtype=jnp.int32)
     positions = jnp.arange(token_ids.shape[1], dtype=jnp.int32)
     metadata = attention_metadata_mod.AttentionMetadata(input_positions=positions)
-    actual = tpu_model.model([None] * cfg.num_layers, token_ids[0], metadata)[1]
-    expected = jax.jit(_jax_full_forward)(lev_model, token_ids)[0]
+    _, actual_hidden, actual_expert_ids = tpu_model.model([None] * cfg.num_layers, token_ids[0], metadata)
+    expected_hidden, expected_expert_ids = jax.jit(_jax_full_forward)(lev_model, token_ids)
+    actual_logits = tpu_model.compute_logits(actual_hidden)
+    expected_logits = _jax_logits(lev_model, expected_hidden)[0]
 
-    np.testing.assert_allclose(_np(actual), _np(expected), rtol=5e-4, atol=5e-4)
-    print("full: native GrugMoeModel hidden states match Levanter Transformer reference")
+    if actual_expert_ids is None:
+        raise AssertionError("native GrugMoE model did not return routed expert IDs")
+    np.testing.assert_allclose(_np(actual_hidden), _np(expected_hidden[0]), rtol=5e-4, atol=5e-4)
+    np.testing.assert_allclose(_np(actual_logits), _np(expected_logits), rtol=5e-4, atol=5e-4)
+    np.testing.assert_array_equal(_np(actual_expert_ids), _np(expected_expert_ids))
+    print("full: native GrugMoeModel hidden states, logits, and routed expert IDs match Levanter reference")
 
 
 def main() -> None:
