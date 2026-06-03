@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 from finelog.rpc import logging_pb2
 from finelog.store.duckdb_store import DuckDBLogStore
+from finelog.store.log_namespace import _regex_literal_prefix
 
 KEY = "/job/test/0:0"
 
@@ -60,6 +62,39 @@ def test_regex_scope_query(store: DuckDBLogStore):
     result = store.get_logs("/job/test/.*", match_scope=logging_pb2.MATCH_SCOPE_REGEX)
     assert sorted(e.data for e in result.entries) == ["a", "b"]
     assert all(e.attempt_id == 0 for e in result.entries)
+
+
+@pytest.mark.parametrize(
+    ("pattern", "literal", "consumed"),
+    [
+        ("/job/test/", "/job/test/", 10),  # no metachars: whole string is literal
+        ("/job/test/.*", "/job/test/", 10),  # stops at the `.`
+        (r"/job/a\-b/0:.*", "/job/a-b/0:", 12),  # decode `\-`; consumed counts the backslash
+        (r"/job/9e\+20", "/job/9e+20", 11),  # re.escape'd literal key, no suffix
+        (r"/job/\d+", "/job/", 5),  # `\d` is a class, not a literal — stop before it
+        (r"a\\b.*", "a\\b", 4),  # `\\` decodes to a single backslash
+    ],
+)
+def test_regex_literal_prefix_decodes_escapes(pattern: str, literal: str, consumed: int):
+    """The literal-prefix extractor must decode ``re.escape``-style single-char
+    escapes so escaped-but-literal keys still yield a long, prunable prefix, and
+    must report how many source chars it consumed so the caller can slice the
+    remaining regex suffix."""
+    assert _regex_literal_prefix(pattern) == (literal, consumed)
+
+
+def test_regex_scope_query_with_escaped_literal(store: DuckDBLogStore):
+    """An old client (pre-explicit-MatchScope) tails a task by sending the
+    re.escape'd task key plus ``.*`` under REGEX scope, e.g.
+    ``/ryan/train\\-mg\\-tz\\-11/0:.*``. The escaped hyphens must not truncate
+    the prunable prefix, and the query must still pin to that one task."""
+    store.append("/job/train-mg-tz-11/0:0", [_entry("hit-11", epoch_ms=1)])
+    store.append("/job/train-mg-tz-12/0:0", [_entry("decoy-12", epoch_ms=2)])
+    store.append("/job/train-mg-tz-11-extra/0:0", [_entry("decoy-extra", epoch_ms=3)])
+
+    pattern = re.escape("/job/train-mg-tz-11/0") + ":.*"
+    result = store.get_logs(pattern, match_scope=logging_pb2.MATCH_SCOPE_REGEX)
+    assert [e.data for e in result.entries] == ["hit-11"]
 
 
 def test_prefix_scope_query(store: DuckDBLogStore):
