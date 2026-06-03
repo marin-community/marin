@@ -22,7 +22,9 @@ tpu-inference JAX model and compares final hidden states, logits from
 same Levanter parameters and equations. The artifact check saves a tiny
 Levanter checkpoint, exports it through `export_lm_to_hf`, loads the resulting
 canonical safetensors artifact into tpu-inference, and compares against the
-manual-copy native model.
+manual-copy native model. It runs both the default single-file artifact and a
+deliberately forced HuggingFace sharded artifact with
+`model.safetensors.index.json`.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import importlib
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -55,6 +58,8 @@ from experiments.grug.moe.model import GrugModelConfig, Transformer, canonical_g
 jax.config.update("jax_default_matmul_precision", "float32")
 
 _ARTIFACT_WEIGHTS_FILE = "model.safetensors"
+_ARTIFACT_WEIGHTS_INDEX_FILE = "model.safetensors.index.json"
+_FORCED_SHARD_SIZE_BYTES = 1024
 
 
 class _EmptyMesh:
@@ -171,6 +176,25 @@ def _tiny_cfg() -> GrugModelConfig:
         max_seq_len=8,
         sliding_window=4,
         initializer_std=0.02,
+        moe_implementation="scatter",
+    )
+
+
+def _large_smoke_cfg() -> GrugModelConfig:
+    return GrugModelConfig(
+        vocab_size=32768,
+        hidden_dim=640,
+        intermediate_dim=2048,
+        shared_expert_intermediate_dim=512,
+        num_experts=8,
+        num_experts_per_token=2,
+        num_layers=8,
+        num_heads=8,
+        num_kv_heads=2,
+        head_dim=80,
+        max_seq_len=16,
+        sliding_window=8,
+        initializer_std=0.0,
         moe_implementation="scatter",
     )
 
@@ -448,9 +472,18 @@ def _levanter_export_mesh() -> Mesh:
     )
 
 
-def export_saved_checkpoint_via_levanter(lev_model: Transformer, checkpoint_dir: Path, artifact_dir: Path) -> None:
+def export_saved_checkpoint_via_levanter(
+    lev_model: Transformer,
+    checkpoint_dir: Path,
+    artifact_dir: Path,
+    *,
+    max_shard_size: int | None = None,
+) -> None:
     trainable, _ = eqx.partition(lev_model, is_inexact_arrayish)
     save_checkpoint({"params": trainable}, 0, checkpoint_dir)
+    convert_config_kwargs = {}
+    if max_shard_size is not None:
+        convert_config_kwargs["max_shard_size"] = max_shard_size
     export_lm_to_hf.main(
         export_lm_to_hf.ConvertLmConfig(
             trainer=SimpleNamespace(
@@ -463,8 +496,49 @@ def export_saved_checkpoint_via_levanter(lev_model: Transformer, checkpoint_dir:
             model=lev_model.config,
             save_tokenizer=False,
             use_cpu=False,
+            **convert_config_kwargs,
         )
     )
+
+
+def _exported_tensor_names(artifact_dir: Path, *, expect_sharded: bool) -> frozenset[str]:
+    index_path = artifact_dir / _ARTIFACT_WEIGHTS_INDEX_FILE
+    weights_path = artifact_dir / _ARTIFACT_WEIGHTS_FILE
+    if not expect_sharded:
+        if index_path.exists():
+            raise AssertionError(f"single-file export unexpectedly wrote {index_path.name}")
+        return frozenset(load_file(str(weights_path)))
+
+    if not index_path.exists():
+        raise AssertionError(f"forced sharded export did not write {index_path.name}")
+    if weights_path.exists():
+        raise AssertionError(f"forced sharded export unexpectedly wrote {weights_path.name}")
+
+    with index_path.open() as f:
+        index = json.load(f)
+    weight_map = index.get("weight_map")
+    if not isinstance(weight_map, dict) or not weight_map:
+        raise AssertionError(f"{index_path.name} does not contain a non-empty weight_map")
+
+    shard_names = set(weight_map.values())
+    if len(shard_names) < 2:
+        raise AssertionError(f"forced sharded export wrote only {len(shard_names)} shard")
+
+    for shard_name in sorted(shard_names):
+        expected_in_shard = {name for name, shard in weight_map.items() if shard == shard_name}
+        actual_in_shard = set(load_file(str(artifact_dir / shard_name)))
+        if actual_in_shard != expected_in_shard:
+            raise AssertionError(
+                f"shard {shard_name} does not match the HF index: "
+                f"missing={sorted(expected_in_shard - actual_in_shard)} "
+                f"extra={sorted(actual_in_shard - expected_in_shard)}"
+            )
+
+    return frozenset(weight_map)
+
+
+def _directory_size_bytes(path: Path) -> int:
+    return sum(file.stat().st_size for file in path.rglob("*") if file.is_file())
 
 
 def _native_forward(
@@ -504,7 +578,11 @@ def check_full_forward(tpu_grugmoe) -> None:
     print("full: native GrugMoeModel hidden states, logits, and routed expert IDs match Levanter reference")
 
 
-def check_inference_artifact_roundtrip(tpu_grugmoe) -> None:
+def _check_inference_artifact_roundtrip(
+    tpu_grugmoe,
+    *,
+    expect_sharded: bool,
+) -> None:
     attention_metadata_mod = importlib.import_module("tpu_inference.layers.common.attention_metadata")
     cfg = _tiny_cfg()
     key = jax.random.PRNGKey(7)
@@ -515,9 +593,14 @@ def check_inference_artifact_roundtrip(tpu_grugmoe) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         artifact_dir = Path(tmp) / "grugmoe-inference"
         checkpoint_dir = Path(tmp) / "checkpoints"
-        export_saved_checkpoint_via_levanter(lev_model, checkpoint_dir, artifact_dir)
+        export_saved_checkpoint_via_levanter(
+            lev_model,
+            checkpoint_dir,
+            artifact_dir,
+            max_shard_size=_FORCED_SHARD_SIZE_BYTES if expect_sharded else None,
+        )
         expected_names = canonical_grugmoe_tensor_names(cfg)
-        exported_names = frozenset(load_file(str(artifact_dir / _ARTIFACT_WEIGHTS_FILE)))
+        exported_names = _exported_tensor_names(artifact_dir, expect_sharded=expect_sharded)
         if exported_names != expected_names:
             raise AssertionError(
                 "exported artifact tensors do not match the canonical schema: "
@@ -559,8 +642,68 @@ def check_inference_artifact_roundtrip(tpu_grugmoe) -> None:
     np.testing.assert_allclose(_np(loaded_hidden), _np(manual_hidden), rtol=5e-4, atol=5e-4)
     np.testing.assert_allclose(_np(loaded_logits), _np(manual_logits), rtol=5e-4, atol=5e-4)
     np.testing.assert_array_equal(_np(loaded_expert_ids), _np(manual_expert_ids))
+    artifact_layout = "sharded" if expect_sharded else "single-file"
     print(
-        "artifact: saved-checkpoint Levanter export matches manual-copy hidden states, " "logits, and routed expert IDs"
+        f"artifact-{artifact_layout}: saved-checkpoint Levanter export matches manual-copy hidden states, "
+        "logits, and routed expert IDs"
+    )
+
+
+def check_inference_artifact_roundtrip(tpu_grugmoe) -> None:
+    _check_inference_artifact_roundtrip(tpu_grugmoe, expect_sharded=False)
+    _check_inference_artifact_roundtrip(tpu_grugmoe, expect_sharded=True)
+
+
+def check_large_sharded_artifact_smoke(tpu_grugmoe) -> None:
+    cfg = _large_smoke_cfg()
+    key = jax.random.PRNGKey(11)
+    with _use_runtime_grug_mesh(for_init=True):
+        lev_model = Transformer.init(cfg, key=key)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        artifact_dir = Path(tmp) / "grugmoe-large-inference"
+        checkpoint_dir = Path(tmp) / "checkpoints"
+        export_saved_checkpoint_via_levanter(
+            lev_model,
+            checkpoint_dir,
+            artifact_dir,
+            max_shard_size=64 * 1024 * 1024,
+        )
+        expected_names = canonical_grugmoe_tensor_names(cfg)
+        exported_names = _exported_tensor_names(artifact_dir, expect_sharded=True)
+        if exported_names != expected_names:
+            raise AssertionError(
+                "large export tensors do not match the canonical schema: "
+                f"missing={sorted(expected_names - exported_names)} "
+                f"extra={sorted(exported_names - expected_names)}"
+            )
+
+        with _patch_tpu_single_rank(tpu_grugmoe), jax.set_mesh(_tpu_mesh()):
+            loaded_model = tpu_grugmoe.GrugMoeForCausalLM(
+                _vllm_config(cfg, artifact_dir),
+                jax.random.PRNGKey(12),
+                _tpu_mesh(),
+            )
+        report = loaded_model.load_weights(jax.random.PRNGKey(13))
+        if report.consumed != expected_names:
+            raise AssertionError(
+                "large artifact load report does not match exported tensors: "
+                f"missing={sorted(expected_names - report.consumed)} "
+                f"extra={sorted(report.consumed - expected_names)}"
+            )
+        if report.missing or report.unexpected:
+            raise AssertionError(
+                f"large artifact load report was not strict: missing={report.missing} unexpected={report.unexpected}"
+            )
+
+        artifact_size = _directory_size_bytes(artifact_dir)
+        if not (1_000_000_000 <= artifact_size <= 5_000_000_000):
+            raise AssertionError(f"large smoke artifact size {artifact_size} bytes is outside the 1-5GB target")
+        shard_count = len(list(artifact_dir.glob("model-*-of-*.safetensors")))
+
+    print(
+        "artifact-large-sharded: zero-weight Levanter export loaded in native tpu-inference "
+        f"({artifact_size} bytes, {shard_count} shards)"
     )
 
 
@@ -577,6 +720,11 @@ def main() -> None:
         action="store_true",
         help="Run only the MoE component parity check.",
     )
+    parser.add_argument(
+        "--large-smoke",
+        action="store_true",
+        help="Also run a 1-5GB zero-weight sharded export/load smoke.",
+    )
     args = parser.parse_args()
 
     tpu_grugmoe = _load_tpu_grugmoe(args.tpu_inference_root.resolve())
@@ -584,6 +732,8 @@ def main() -> None:
     if not args.component_only:
         check_full_forward(tpu_grugmoe)
         check_inference_artifact_roundtrip(tpu_grugmoe)
+        if args.large_smoke:
+            check_large_sharded_artifact_smoke(tpu_grugmoe)
 
 
 if __name__ == "__main__":

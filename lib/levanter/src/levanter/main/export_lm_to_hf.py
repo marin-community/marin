@@ -15,7 +15,7 @@ from haliax import Axis
 import levanter
 import levanter.utils.logging as logging_utils
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
-from levanter.compat.hf_checkpoints import RepoRef, load_tokenizer, HFCompatConfig
+from levanter.compat.hf_checkpoints import DEFAULT_MAX_SHARD_SIZE, RepoRef, load_tokenizer, HFCompatConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
@@ -31,6 +31,7 @@ class ConvertLmConfig:
     output_dir: str
     upload_to_hf: Optional[RepoRef] = None  # if specified, attempt to upload this checkpoint to the hf hub
     checkpoint_subpath: str = "model"
+    max_shard_size: int = DEFAULT_MAX_SHARD_SIZE
 
     model: LmConfig = LlamaConfig()
     save_tokenizer: bool = True  # if True, save the tokenizer to the output directory
@@ -98,6 +99,7 @@ def main(config: ConvertLmConfig):
             config.output_dir,
             upload_to_hf=config.upload_to_hf or False,
             save_tokenizer=config.save_tokenizer,
+            max_shard_size=config.max_shard_size,
         )
 
 
