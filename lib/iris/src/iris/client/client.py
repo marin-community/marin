@@ -795,6 +795,13 @@ class IrisClient:
 
         return list(self._cluster_client.list_jobs(query=query))
 
+    def list_workers(
+        self,
+        query: controller_pb2.Controller.WorkerQuery | None = None,
+    ) -> list[controller_pb2.Controller.WorkerHealthStatus]:
+        """List workers registered with the controller."""
+        return list(self._cluster_client.list_workers(query=query))
+
     def terminate_prefix(
         self,
         prefix: JobName,
