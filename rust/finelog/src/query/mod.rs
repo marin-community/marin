@@ -62,7 +62,7 @@ pub struct QueryResult {
 /// Relax every field in `schema` to `nullable = true` and re-stamp `batches`
 /// with the relaxed schema.
 ///
-/// DuckDB (the Python backend) returns ALL result columns as nullable, while
+/// DuckDB returns ALL result columns as nullable, while
 /// DataFusion propagates source non-nullability (e.g. the store-form `seq`
 /// column is non-nullable), so a result column would carry `nullable = false`
 /// and the decoded-Arrow result schema would diverge on the wire. Relaxing here

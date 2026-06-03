@@ -1,7 +1,6 @@
 //! Compaction tuning knobs + the pending-merge descriptor.
 //!
-//! Port of `CompactionConfig` / `CompactionJob` from `compactor.py`. Pure data:
-//! no arrow / parquet / object_store. The planner (`planner.rs`) reads these to
+//! Pure data: no arrow / parquet / object_store. The planner (`planner.rs`) reads these to
 //! decide *which* segments merge into *what* file; the executor (`executor.rs`)
 //! carries out the resulting `CompactionJob`.
 
@@ -24,9 +23,9 @@ pub struct CompactionConfig {
     /// Per-level fanout cap. Promotes a non-terminal level once its contiguous
     /// run reaches this many segments, even if the byte target isn't met.
     pub max_segments_per_level: usize,
-    /// Whole-namespace segment cap (eviction trigger; used in 4d/4e).
+    /// Whole-namespace segment cap (eviction trigger).
     pub max_segments_per_namespace: usize,
-    /// Whole-namespace byte cap (eviction trigger; used in 4d/4e).
+    /// Whole-namespace byte cap (eviction trigger).
     pub max_bytes_per_namespace: i64,
     /// Maintenance-loop cadence.
     pub check_interval: Duration,

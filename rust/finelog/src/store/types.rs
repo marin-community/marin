@@ -1,10 +1,8 @@
 //! Leaf vocabulary for the store layer.
 //!
-//! Port of `finelog/store/types.py` (the metadata-relevant parts) plus the
-//! segment-filename helpers from `compactor.py`. `SegmentRow` / `SegmentLocation`
-//! are declared now (segments stay empty in Phase 1), populated in Phase 2,
-//! and extended in Phase 4. `seg_filename`/`parse_seg_filename` are declared
-//! now for the Phase 2 flush + Phase 6 rebuild-from-disk catalog scan.
+//! Metadata types (`SegmentRow` / `SegmentLocation` / `LocalSegment`) plus the
+//! segment-filename helpers (`seg_filename` / `parse_seg_filename`) used by the
+//! flush path and the rebuild-from-disk catalog scan.
 
 use std::sync::OnceLock;
 
@@ -38,9 +36,6 @@ impl SegmentLocation {
 }
 
 /// One persisted row in the `segments` catalog table.
-///
-/// Declared in Phase 1; unused beyond `list_segments` (which returns empty)
-/// until Phase 2 starts inserting rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SegmentRow {
     pub namespace: String,
@@ -58,11 +53,11 @@ pub struct SegmentRow {
 
 /// An in-memory pointer to a segment file the namespace owns.
 ///
-/// Port of `LocalSegment` in `types.py`. The deque only ever holds `Local` or
-/// `Both` entries; eviction (Phase 4) flips to `Remote` and removes the entry.
-/// Phase 2 only ever creates `Local` segments at flush time. `min_key_value` /
-/// `max_key_value` are the Int64 key bounds when the namespace's key column is
-/// an Int64/timestamp column carrying parquet statistics.
+/// The deque only ever holds `Local` or `Both` entries; eviction flips to
+/// `Remote` and removes the entry. Segments are created `Local` at flush time.
+/// `min_key_value` / `max_key_value` are the Int64 key bounds when the
+/// namespace's key column is an Int64/timestamp column carrying parquet
+/// statistics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalSegment {
     pub path: String,
@@ -99,10 +94,8 @@ impl NamespaceStats {
     }
 }
 
-/// Aggregate in-RAM accounting across live namespaces for the diagnostics line
-/// (Phase 5g). Mirrors the `memory_summary()` return shape in
-/// `duckdb_store.py` — `namespaces` / `ram_bytes` / `chunks`. There is no
-/// pyarrow allocator pool in Rust, so the Python pool fields are absent.
+/// Aggregate in-RAM accounting across live namespaces for the diagnostics line:
+/// `namespaces` / `ram_bytes` / `chunks`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MemorySummary {
     pub namespaces: usize,
@@ -111,7 +104,7 @@ pub struct MemorySummary {
 }
 
 // ---------------------------------------------------------------------------
-// Segment filename grammar (declared now for P2/P6).
+// Segment filename grammar.
 // ---------------------------------------------------------------------------
 
 /// Filename for a segment at `level` whose smallest seq is `min_seq`.

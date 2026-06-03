@@ -1,8 +1,6 @@
 //! Stats-service error types and their Connect code mapping.
 //!
-//! Port of `finelog/errors.py` + the exact code mapping in
-//! `server/stats_service.py`. The mapping is load-bearing and pinned by the
-//! parity suite:
+//! The mapping is load-bearing:
 //!
 //! - `SchemaConflict` -> `failed_precondition` (NOT `already_exists`)
 //! - `SchemaValidation` / `InvalidNamespace` -> `invalid_argument`
@@ -26,7 +24,7 @@ pub enum StatsError {
     InvalidNamespace(String),
     /// Named namespace is not registered.
     NamespaceNotFound(String),
-    /// Query result exceeds the size cap. Declared for later phases.
+    /// Query result exceeds the size cap.
     QueryResultTooLarge(String),
     /// A durability await exceeded its budget (write not durable in time).
     DeadlineExceeded(String),

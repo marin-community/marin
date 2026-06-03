@@ -1,15 +1,11 @@
 //! object_store remote sync surface (LOCAL -> BOTH -> REMOTE).
 //!
-//! Port of the `fsspec`-backed remote operations in `log_namespace.py`
-//! (`_upload`, the `fs.find`/`fs.rm` calls in `_sync_step` /
-//! `_reconcile_remote_segments`) onto the `object_store` crate.
-//!
 //! `build_remote_store` dispatches on the configured `remote_log_dir`:
 //! `gs://bucket/prefix` -> `GoogleCloudStorageBuilder` (prod); any other
 //! non-empty value -> `LocalFileSystem` rooted at that directory (tests pass a
 //! plain tmp path). An empty `remote_log_dir` disables sync (returns `None`).
 //!
-//! The Python layout is `{remote_log_dir}/{namespace}/{basename}`; here the
+//! The on-disk layout is `{remote_log_dir}/{namespace}/{basename}`; the
 //! `RemoteStore` carries an optional bucket-relative `prefix` (the `gs://`
 //! path component) and every per-namespace op composes `{prefix}/{namespace}`.
 //! object_store 0.13 moved `put`/`get`/`head`/`delete` onto the `ObjectStoreExt`
@@ -37,8 +33,7 @@ pub struct RemoteStore {
 ///
 /// `gs://bucket/sub/dir` -> a GCS store on `bucket` with prefix `sub/dir`.
 /// Any other value -> a `LocalFileSystem` rooted at that (created) directory,
-/// with an empty prefix. The local branch mirrors fsspec's `LocalFileSystem`,
-/// which `put_file`s into `{remote_log_dir}/{namespace}/{basename}`.
+/// with an empty prefix, writing into `{remote_log_dir}/{namespace}/{basename}`.
 pub fn build_remote_store(remote_log_dir: &str) -> Result<Option<RemoteStore>, StatsError> {
     let dir = remote_log_dir.trim_end_matches('/');
     if dir.is_empty() {
@@ -59,8 +54,7 @@ pub fn build_remote_store(remote_log_dir: &str) -> Result<Option<RemoteStore>, S
         }));
     }
     // Local filesystem remote (tests). Root the store at the remote dir so
-    // object paths are `{namespace}/{basename}` — matching the on-disk layout
-    // fsspec's LocalFileSystem produces.
+    // object paths are `{namespace}/{basename}`.
     std::fs::create_dir_all(dir)
         .map_err(|e| StatsError::Internal(format!("create remote dir {dir}: {e}")))?;
     let store = LocalFileSystem::new_with_prefix(dir)
@@ -92,8 +86,8 @@ impl RemoteStore {
     }
 
     /// Upload `local_path` to `{namespace}/{basename}`. Returns `true` on
-    /// success; the next sync retries on failure (mirrors `_upload`). The byte
-    /// read + put run as async object_store calls (no spawn_blocking).
+    /// success; the next sync retries on failure. The byte read + put run as
+    /// async object_store calls (no spawn_blocking).
     pub async fn upload(&self, namespace: &str, local_path: &std::path::Path) -> bool {
         let Some(basename) = local_path.file_name().and_then(|n| n.to_str()) else {
             return false;
@@ -155,7 +149,7 @@ impl RemoteStore {
     }
 
     /// Delete `{namespace}/{basename}` from the remote store. Best-effort; logs
-    /// and swallows on error (matches the Python `fs.rm` warn-and-continue).
+    /// and swallows on error (warn-and-continue).
     pub async fn delete(&self, namespace: &str, basename: &str) {
         let remote = self.object_path(namespace, basename);
         if let Err(e) = self.store.delete(&remote).await {

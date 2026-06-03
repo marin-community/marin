@@ -1,16 +1,12 @@
 //! Apply a `CompactionJob`: produce the merged/bumped segment on disk and a
 //! `PlannedSwap` for the caller to commit.
 //!
-//! Port of `_run_job` / `_apply_level_bump` / `_apply_merge` from
-//! `log_namespace.py`, with the DuckDB COPY replaced by the native arrow k-way
-//! merge (`merge.rs`).
-//!
 //! The executor performs the heavy, lock-free work — parquet read, merge, write,
 //! and (for a multi-input merge) the staging-file rename to the distinctly-named
 //! output. It returns a [`PlannedSwap`] describing the deque/catalog mutation;
 //! the *commit* of that swap (deque splice + catalog `replace_segments` + the
 //! single-input bump rename + input unlink) is done by the caller under the
-//! query-visibility write lock (4d's `commit_swap`). This keeps the destructive
+//! query-visibility write lock (`commit_swap`). This keeps the destructive
 //! visibility-affecting step on the locked path while the CPU/IO runs free.
 //!
 //! Single-input job  => `apply_level_bump`: NO rewrite. The output file does not
@@ -141,8 +137,7 @@ fn apply_merge(
     // Read each input, project onto the namespace schema (additive null-fill),
     // then SORT it on the merge keys. L0 segments are written UNSORTED, so this
     // sort is what lets the k-way merge produce globally `(key, seq)`-ordered
-    // output (the DuckDB COPY's `ORDER BY (key, seq)` analog). One sorted batch
-    // per input keeps the merge a true N-way merge.
+    // output. One sorted batch per input keeps the merge a true N-way merge.
     let mut projected: Vec<RecordBatch> = Vec::new();
     for inp in &job.inputs {
         let batches = read_segment_batches(Path::new(&inp.path))?;
@@ -176,7 +171,7 @@ fn apply_merge(
     let size = std::fs::metadata(&merged_path)
         .map_err(|e| StatsError::Internal(format!("stat {}: {e}", merged_path.display())))?
         .len() as i64;
-    // row_count = sum of inputs (matches Python `_apply_merge`).
+    // row_count = sum of inputs.
     let row_count: i64 = job.inputs.iter().map(|s| s.row_count).sum();
     let (merged_min_key, merged_max_key) =
         aggregate_key_bounds(job.inputs.iter().map(|s| input_key_bounds(&s.path)));

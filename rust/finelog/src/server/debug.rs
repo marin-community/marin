@@ -1,15 +1,15 @@
 //! Flag-gated, NON-proto test-only admin surface (`--debug-admin`).
 //!
 //! The frozen RPC contract (LogService / StatsService) cannot force a
-//! flush/compact/sync/evict cycle nor read per-segment level+location, but every
-//! Phase-4 gating test does exactly that. This module exposes two plain axum
-//! routes — `POST /debug/maintain` and `GET /debug/segments` — that drive the
-//! SAME `Store::maintain_namespace` / `Store::list_segments` code the background
+//! flush/compact/sync/evict cycle nor read per-segment level+location, but tests
+//! need to do exactly that. This module exposes two plain axum routes —
+//! `POST /debug/maintain` and `GET /debug/segments` — that drive the SAME
+//! `Store::maintain_namespace` / `Store::list_segments` code the background
 //! maintenance task uses (not a parallel implementation). It is mounted only
 //! when `--debug-admin`/`FINELOG_DEBUG_ADMIN` is set and is OFF in production.
 //!
-//! Sanctioned by roadmap decision 9 (the test-forcing seam). Routes are mounted
-//! BEFORE the connect fallback so RPC POSTs still reach the connect service.
+//! Routes are mounted BEFORE the connect fallback so RPC POSTs still reach the
+//! connect service.
 
 use std::sync::Arc;
 

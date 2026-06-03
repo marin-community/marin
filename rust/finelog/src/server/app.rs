@@ -1,4 +1,4 @@
-//! axum app construction (Phase 5a).
+//! axum app construction.
 //!
 //! [`build_app`] registers BOTH services on ONE connect `Router` via the
 //! generated `register()` (REQUIRED so `ctx.spec()`/`ctx.path()` are populated
@@ -95,7 +95,7 @@ fn build_connect_service(
                 .max_request_body_size(MAX_MESSAGE_BYTES),
         )
         // SlowRpc registered FIRST -> outermost -> times the whole chain
-        // including the concurrency wait (matches the Python chain order).
+        // including the concurrency wait.
         .with_interceptor(SlowRpcInterceptor::new(config.slow_rpc_threshold_ms))
         .with_interceptor(ConcurrencyInterceptor::new(
             config.max_concurrent_fetch_logs,

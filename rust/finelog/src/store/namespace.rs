@@ -1,7 +1,6 @@
 //! Per-namespace durability engine.
 //!
-//! Port of `DiskLogNamespace`'s write/flush/durability machinery from
-//! `log_namespace.py`, reframed onto tokio primitives per roadmap §4 decision 1:
+//! Write/flush/durability machinery built on tokio primitives:
 //!
 //! - The per-namespace insertion lock (`std::sync::Mutex<NsInner>`) guards the
 //!   `RamBuffers` (seq counter + chunks + in-flight buffer) and the
@@ -42,14 +41,13 @@ use crate::store::segment::{
 };
 use crate::store::types::{LocalSegment, NamespaceStats, SegmentLocation, SegmentRow};
 
-/// Target sealed-buffer byte size before a flush is forced (`SEGMENT_TARGET_BYTES`).
+/// Target sealed-buffer byte size before a flush is forced.
 pub const SEGMENT_TARGET_BYTES: i64 = 100 * 1024 * 1024;
 
-/// Default flush-loop cadence (`DEFAULT_FLUSH_INTERVAL_SEC`).
+/// Default flush-loop cadence.
 pub const DEFAULT_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Default durability-await budget when the RPC carries no deadline
-/// (`DEFAULT_PERSIST_TIMEOUT_SEC`).
+/// Default durability-await budget when the RPC carries no deadline.
 pub const DEFAULT_PERSIST_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn now_ms() -> i64 {
@@ -79,23 +77,22 @@ pub struct Namespace {
     /// `None` => in-memory mode (every append immediately persisted, no parquet).
     data_dir: Option<PathBuf>,
     catalog: Arc<Catalog>,
-    /// Leveled-compaction tuning. Defaults match Python's `CompactionConfig`;
-    /// the maintenance task (4d) reads `check_interval`, the planner reads
-    /// `level_targets`/`max_segments_per_level`.
+    /// Leveled-compaction tuning. The maintenance task reads `check_interval`,
+    /// the planner reads `level_targets`/`max_segments_per_level`.
     compaction_config: CompactionConfig,
     inner: Mutex<NsInner>,
     /// Serializes the whole `flush_once` body (seal → write → catalog → commit →
-    /// publish), mirroring Python's per-namespace `_flush_lock`. Without it two
-    /// concurrent flushers race: the second `seal()` would overwrite the first's
+    /// publish). Without it two concurrent flushers race: the second `seal()`
+    /// would overwrite the first's
     /// in-flight `flushing` buffer, and `send_replace` could publish a newer
     /// high-water seq before the older segment is durable. Distinct from `inner`
     /// (the short insertion lock) so appends are never blocked by a flush write.
     flush_lock: Mutex<()>,
     /// Serializes the maintenance cycle (compaction drain + sync + evict)
-    /// against direct `maintain` callers. Port of Python's `_maint_lock`: the
-    /// flush path uses `flush_lock` instead so flushes and compactions stay
-    /// concurrent. A `tokio::sync::Mutex` because the maintenance body awaits
-    /// (sync_step is async object_store I/O).
+    /// against direct `maintain` callers. The flush path uses `flush_lock`
+    /// instead so flushes and compactions stay concurrent. A
+    /// `tokio::sync::Mutex` because the maintenance body awaits (sync_step is
+    /// async object_store I/O).
     maint_lock: tokio::sync::Mutex<()>,
     /// Process-wide query-visibility lock (one shared instance for the whole
     /// store). `commit_swap` / `evict_segment` take the WRITE side via
@@ -118,7 +115,7 @@ pub struct Namespace {
     /// missed the Notify wake. Set by `stop_and_join` / `request_stop`.
     stopped: AtomicBool,
     /// JoinHandles for the spawned per-namespace background tasks (flush +
-    /// maintenance). Retained so `Store::shutdown` (Phase 5f) can cooperatively
+    /// maintenance). Retained so `Store::shutdown` can cooperatively
     /// cancel (via the `stop` Notify) and JOIN them within a bounded timeout
     /// instead of busy-waiting. Pushed to by `spawn_flush_task` /
     /// `spawn_maintenance_task`; drained by [`shutdown`](Namespace::shutdown).
@@ -182,9 +179,8 @@ impl Namespace {
             }
         };
 
-        // The remote namespace prefix is `{remote_log_dir}/{name}` in Python;
-        // here the RemoteStore is rooted at the remote dir and composes the
-        // namespace internally, so we only need the dir to be configured.
+        // The RemoteStore is rooted at the remote dir and composes the
+        // namespace prefix internally, so we only need the dir to be configured.
         let remote = if data_dir.is_some() {
             build_remote_store(remote_log_dir)?
         } else {
@@ -263,7 +259,7 @@ impl Namespace {
     }
 
     /// Swap in a new retention policy (re-register). Picked up next eviction
-    /// tick. Port of `update_policy`.
+    /// tick.
     pub fn update_policy(&self, policy: StoragePolicy) {
         self.inner.lock().unwrap().storage_policy = policy;
     }
@@ -284,12 +280,11 @@ impl Namespace {
 
     /// Snapshot the SEALED local segment file paths under the insertion lock.
     ///
-    /// Port of `query_snapshot` (`log_namespace.py:1659`): queries see only
-    /// flushed data; the in-RAM buffer is NOT exposed. Snapshotting the paths
-    /// under the lock is the read side of the query-visibility seam — a future
-    /// Phase-4 compaction will take the write side before unlinking a file, so a
-    /// query that captured the pre-compaction paths keeps scanning the files it
-    /// snapshotted.
+    /// Queries see only flushed data; the in-RAM buffer is NOT exposed.
+    /// Snapshotting the paths under the lock is the read side of the
+    /// query-visibility seam — compaction takes the write side before unlinking
+    /// a file, so a query that captured the pre-compaction paths keeps scanning
+    /// the files it snapshotted.
     pub fn query_snapshot(&self) -> Vec<String> {
         let inner = self.inner.lock().unwrap();
         inner
@@ -328,9 +323,9 @@ impl Namespace {
     /// Append already-built log columns (`seq` excluded) and return the last seq.
     ///
     /// `columns` are the five non-seq log columns in registered order
-    /// (key/source/data/epoch_ms/level), prepared by the caller OUTSIDE the lock
-    /// (the prepared-outside-lock pattern from `append_log_batch`). `num_rows` is
-    /// their common length and `added_bytes` their raw buffer size.
+    /// (key/source/data/epoch_ms/level), prepared by the caller OUTSIDE the
+    /// lock. `num_rows` is their common length and `added_bytes` their raw
+    /// buffer size.
     pub fn append_log_batch(
         &self,
         columns: Vec<arrow::array::ArrayRef>,
@@ -408,10 +403,10 @@ impl Namespace {
 
     /// Aggregate row/byte/seq stats over sealed segments + the RAM buffer.
     ///
-    /// Port of `stats()` (`log_namespace.py:1725-1753`) with the exact seq-window
-    /// math: `min_seq = seg_min if seg_min else (next_seq - ram_rows if ram_rows
-    /// else 0)`; `max_seq = max(seg_max, next_seq - 1) if (seg_max or ram_rows)
-    /// else 0`. `seg_min`/`seg_max` only consider segments with `row_count > 0`.
+    /// The seq-window math: `min_seq = seg_min if seg_min else (next_seq -
+    /// ram_rows if ram_rows else 0)`; `max_seq = max(seg_max, next_seq - 1) if
+    /// (seg_max or ram_rows) else 0`. `seg_min`/`seg_max` only consider segments
+    /// with `row_count > 0`.
     pub fn stats(&self) -> NamespaceStats {
         let inner = self.inner.lock().unwrap();
         let ram_rows = inner.buffers.ram_rows();
@@ -464,7 +459,7 @@ impl Namespace {
     ///
     /// Test/close sync-point and the body the flush task runs. Returns `Ok(())`
     /// when there was nothing to flush. On parquet-write failure the in-flight
-    /// buffer is restored and `persisted_seq` is NOT advanced (mirrors `flush()`).
+    /// buffer is restored and `persisted_seq` is NOT advanced.
     pub fn flush_once(&self) -> Result<(), StatsError> {
         let Some(dir) = self.data_dir.clone() else {
             return Ok(());
@@ -558,9 +553,9 @@ impl Namespace {
 
     /// Run one planner-issued compaction job, returning `true` if a job ran.
     ///
-    /// Port of `_compaction_step`: snapshot the deque as `SegmentRow`s under the
-    /// insertion lock, `plan`, and if a job is due, execute it and commit the
-    /// swap. The caller (the maintenance task / debug `maintain`) drains by
+    /// Snapshot the deque as `SegmentRow`s under the insertion lock, `plan`, and
+    /// if a job is due, execute it and commit the swap. The caller (the
+    /// maintenance task / debug `maintain`) drains by
     /// looping while this returns `true`. No-op (returns `false`) in memory mode.
     pub fn compaction_step(&self) -> Result<bool, StatsError> {
         let Some(dir) = self.data_dir.clone() else {
@@ -583,9 +578,9 @@ impl Namespace {
 
     /// Synthesize and apply a single L0->L1 merge of ALL L0 segments.
     ///
-    /// Port of `_apply_force_compact_l0` / `force_compact_l0`: tests use this to
-    /// land L1 state without configuring tiny `level_targets`. Production never
-    /// calls it. No-op when there are no L0 segments (or in memory mode).
+    /// Tests use this to land L1 state without configuring tiny `level_targets`.
+    /// Production never calls it. No-op when there are no L0 segments (or in
+    /// memory mode).
     pub fn force_compact_l0(&self) -> Result<(), StatsError> {
         let Some(dir) = self.data_dir.clone() else {
             return Ok(());
@@ -641,9 +636,9 @@ impl Namespace {
 
     /// Splice the deque + catalog: replace `swap.removed` paths with `swap.added`.
     ///
-    /// Port of `_commit_swap`. Takes the process-wide query-visibility WRITE lock
-    /// (via `blocking_write`, so it is only safe from a `spawn_blocking` /
-    /// synchronous context — the maintenance task always calls it that way) so
+    /// Takes the process-wide query-visibility WRITE lock (via `blocking_write`,
+    /// so it is only safe from a `spawn_blocking` / synchronous context — the
+    /// maintenance task always calls it that way) so
     /// in-flight queries (which snapshot segment paths and open the parquet files
     /// lazily) have drained before any rename/unlink: renaming or unlinking a
     /// file under a stale snapshot path surfaces as "No files found". A level-bump
@@ -658,8 +653,8 @@ impl Namespace {
         let _write_guard = self.query_visibility.blocking_write();
         // 1) Level-bump rename happens before the deque mirrors the new path, so
         //    a drained reader never sees a half-renamed file. A failure here is
-        //    propagated BEFORE any deque/catalog mutation (matching Python's
-        //    `pre_swap`-before-splice), so the swap aborts with nothing changed.
+        //    propagated BEFORE any deque/catalog mutation, so the swap aborts
+        //    with nothing changed.
         if let Some((from, to)) = &swap.bump_rename {
             std::fs::rename(from, to).map_err(|e| {
                 StatsError::Internal(format!(
@@ -691,8 +686,7 @@ impl Namespace {
                 new_segments.push_back(swap.added.clone());
             }
             inner.local_segments = new_segments;
-            // Atomic catalog splice. Propagate on failure (matching Python's
-            // `_commit_swap`, which lets the error raise out of `_run_job`): the
+            // Atomic catalog splice. Propagate on failure: the
             // deque now points at paths that exist on disk (the renamed bump
             // target / the already-written merged output), so a propagated error
             // is a stats/boot-adoption metadata inconsistency that self-heals at
@@ -714,9 +708,9 @@ impl Namespace {
         Ok(())
     }
 
-    // ----- remote sync (4e) ---------------------------------------------
+    // ----- remote sync --------------------------------------------------
 
-    /// Two-phase remote sync. Port of `_sync_step`.
+    /// Two-phase remote sync.
     ///
     /// Phase 1: upload every L>=1 `LOCAL` catalog row (or adopt a row whose file
     /// is already remote — crash recovery), flipping it to `BOTH`. If any upload
@@ -772,10 +766,9 @@ impl Namespace {
         }
 
         // Re-snapshot the L>=1 catalog rows (phase 1 may have added basenames) and
-        // delete only genuine orphans. min_level=1 matches Python `_sync_step`
-        // exactly; it is equivalent to scanning all levels here because remote
-        // files are exclusively L>=1 (L0 is never uploaded), so an L0 basename
-        // can never appear in `remote_basenames`.
+        // delete only genuine orphans. min_level=1 is equivalent to scanning all
+        // levels here because remote files are exclusively L>=1 (L0 is never
+        // uploaded), so an L0 basename can never appear in `remote_basenames`.
         let catalog_basenames: std::collections::HashSet<String> = self
             .catalog
             .list_segments_min_level(&self.name, 1)?
@@ -790,8 +783,7 @@ impl Namespace {
     }
 
     /// Flip `path`'s location to `BOTH` after a successful upload, in both the
-    /// in-memory deque and the catalog under the insertion lock. Port of
-    /// `_mark_uploaded`.
+    /// in-memory deque and the catalog under the insertion lock.
     fn mark_uploaded(&self, path: &str) -> Result<(), StatsError> {
         let mut inner = self.inner.lock().unwrap();
         for s in inner.local_segments.iter_mut() {
@@ -805,10 +797,10 @@ impl Namespace {
         Ok(())
     }
 
-    // ----- eviction (4d local-only / 4e remote) -------------------------
+    // ----- eviction -----------------------------------------------------
 
     /// Evict the namespace's oldest L>=1 copied segments until under the
-    /// count/byte caps, then age-trim. Port of `_eviction_step`.
+    /// count/byte caps, then age-trim.
     ///
     /// Caps resolve from the per-namespace `StoragePolicy` first; unset fields
     /// fall back to the cluster-wide `CompactionConfig`. Size/count trim is
@@ -858,8 +850,7 @@ impl Namespace {
         Ok(())
     }
 
-    /// Drop `path` from the deque and unlink the local file. Port of
-    /// `evict_segment`.
+    /// Drop `path` from the deque and unlink the local file.
     ///
     /// A `BOTH` segment becomes `REMOTE` in the catalog (the bucket copy is the
     /// durable archive) and the local file is unlinked. A `LOCAL`-only segment
@@ -903,13 +894,13 @@ impl Namespace {
         removed_bytes
     }
 
-    // ----- maintenance orchestration (4d) -------------------------------
+    // ----- maintenance orchestration ------------------------------------
 
     /// Run one full maintenance cycle: `flush -> compact -> sync -> evict`,
     /// serialized against other maintenance callers via `maint_lock`.
     ///
-    /// Port of `compact()` (with an optional forced L0->L1, mirroring the debug
-    /// `force_compact_l0` flag). The blocking compaction (read/merge/write +
+    /// Supports an optional forced L0->L1 (the debug `force_compact_l0` flag).
+    /// The blocking compaction (read/merge/write +
     /// `commit_swap`, which takes `blocking_write`) runs under `spawn_blocking`;
     /// the async `sync_step` runs on the reactor; the blocking `eviction_step`
     /// (which takes `blocking_write` per evict) runs under `spawn_blocking`. No-op
@@ -927,10 +918,8 @@ impl Namespace {
         let ns = Arc::clone(self);
         tokio::task::spawn_blocking(move || -> Result<(), StatsError> {
             ns.flush_once()?;
-            // Match Python `compact()`: an optional forced L0->L1 merge, then the
-            // planner-drain loop ALWAYS runs (Python's `force_compact_l0()` is
-            // followed by `compact()`, whose `_compaction_step` loop runs
-            // unconditionally), so a forced compaction that leaves >= 32 L1
+            // An optional forced L0->L1 merge, then the planner-drain loop ALWAYS
+            // runs unconditionally, so a forced compaction that leaves >= 32 L1
             // segments still promotes L1->L2 in the same maintenance call.
             if force_compact_l0 {
                 ns.force_compact_l0()?;
@@ -971,7 +960,7 @@ impl Namespace {
         Ok(())
     }
 
-    /// Spawn the per-namespace maintenance task (replaces Python's `_maint_loop`).
+    /// Spawn the per-namespace maintenance task.
     /// No-op in memory mode. Called once by the store after construction.
     pub fn spawn_maintenance(self: &Arc<Self>) {
         if self.data_dir.is_none() {
@@ -981,7 +970,7 @@ impl Namespace {
         self.task_handles.lock().unwrap().push(handle);
     }
 
-    /// Aggregate in-RAM accounting for the diagnostics line (Phase 5g):
+    /// Aggregate in-RAM accounting for the diagnostics line:
     /// `(ram_bytes, chunk_count)` under the insertion lock.
     pub fn memory_summary(&self) -> (i64, usize) {
         let inner = self.inner.lock().unwrap();
@@ -1029,22 +1018,22 @@ impl Namespace {
         }
     }
 
-    /// Cooperatively shut the namespace down (Phase 5f).
+    /// Cooperatively shut the namespace down.
     ///
     /// Stops + JOINs the flush + maintenance tasks (bounded by `timeout`), then
     /// does a final `flush_once` (no RAM-only rows survive; durability is already
     /// preserved — an acked write was on a sealed segment) and, for a
     /// remote-configured namespace, a final bounded `sync_step` so the bucket
-    /// matches the catalog at shutdown (matching Python `close()`).
+    /// matches the catalog at shutdown.
     pub async fn shutdown(&self, timeout: Duration) {
         self.stop_and_join(timeout).await;
         // Final drain so no acked-but-still-RAM rows are lost (best-effort;
         // failures are already logged inside flush_once).
         let _ = self.flush_once();
-        // Final reconcile so the bucket matches the catalog at shutdown (matches
-        // Python `close()`'s flush-then-`_sync_step`). Best-effort + bounded by
-        // the same per-namespace `timeout`; if it doesn't finish, `boot_reconcile`
-        // re-syncs on the next start. No-op (early return) without a remote dir.
+        // Final reconcile so the bucket matches the catalog at shutdown.
+        // Best-effort + bounded by the same per-namespace `timeout`; if it
+        // doesn't finish, `boot_reconcile` re-syncs on the next start. No-op
+        // (early return) without a remote dir.
         if self.has_remote() {
             let _ = tokio::time::timeout(timeout, self.sync_step()).await;
         }
@@ -1069,7 +1058,7 @@ fn basename(path: &str) -> String {
 }
 
 /// Build the catalog `SegmentRow` mirroring `seg` (key bounds stringified at the
-/// catalog boundary, matching `_segment_to_row`).
+/// catalog boundary).
 fn segment_to_row(namespace: &str, seg: &LocalSegment) -> SegmentRow {
     SegmentRow {
         namespace: namespace.to_string(),
@@ -1088,7 +1077,7 @@ fn segment_to_row(namespace: &str, seg: &LocalSegment) -> SegmentRow {
 
 /// Adopt segments at boot, reconciling catalog rows against local files.
 ///
-/// Port of `DiskLogNamespace.__init__`'s two-pass reconcile:
+/// Two-pass reconcile:
 /// - **Pass 1** walks existing catalog rows. A catalog row with a local file
 ///   present enters the deque (a `REMOTE` row whose file reappeared collapses to
 ///   `BOTH`). A `LOCAL` row whose file vanished is dropped (data lost). A `BOTH`
@@ -1232,15 +1221,14 @@ fn spawn_flush_task(ns: Arc<Namespace>) -> tokio::task::JoinHandle<()> {
     })
 }
 
-/// Spawn the per-namespace maintenance task (replaces Python's `_maint_loop`).
+/// Spawn the per-namespace maintenance task.
 ///
 /// Every `check_interval` it runs one `run_maintenance` cycle (compaction drain,
 /// then sync, then evict). The cycle's heavy work is dispatched onto
 /// `spawn_blocking` inside `run_maintenance`, so the reactor is never stalled. On
 /// the stop notify the task exits immediately WITHOUT a final maintenance cycle;
-/// the final drain-to-disk on shutdown is `Namespace::close` (a final
-/// `flush_once`). A final sync/evict on shutdown is deferred to Phase 5's
-/// graceful-shutdown wiring (`Store::shutdown`).
+/// the final drain-to-disk and reconcile on shutdown are handled by
+/// [`Namespace::shutdown`].
 fn spawn_maintenance_task(ns: Arc<Namespace>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let interval = ns.compaction_config.check_interval;
@@ -1316,7 +1304,7 @@ mod tests {
         p
     }
 
-    /// Open a namespace with default Phase-4 wiring (a fresh shared
+    /// Open a namespace with default wiring (a fresh shared
     /// query-visibility lock, no remote, empty policy) for the unit tests.
     fn open_ns(
         name: &str,
@@ -1504,7 +1492,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    // --- 4d / 4e: maintenance + remote sync + eviction ------------------
+    // --- maintenance + remote sync + eviction ---------------------------
 
     fn remote_files(remote: &std::path::Path, namespace: &str) -> Vec<String> {
         let mut out: Vec<String> = std::fs::read_dir(remote.join(namespace))

@@ -1,10 +1,7 @@
 //! Pure leveled-compaction policy.
 //!
-//! Port of `Compactor.plan` + `_contiguous_runs` + `_run_bytes` +
-//! `_take_until_target` + `_build_job` + `compaction_sort_keys` +
-//! `aggregate_key_bounds` from `compactor.py`. No I/O — this module decides
-//! *which* segments to merge into *what* output level; the executor reads/writes
-//! the actual parquet (`executor.rs`).
+//! No I/O — this module decides *which* segments to merge into *what* output
+//! level; the executor reads/writes the actual parquet (`executor.rs`).
 //!
 //! Levels are time-ordered: every flush emits an L0 segment. A level is promoted
 //! L_n -> L_{n+1} when the longest contiguous run of L_n segments hits the byte
@@ -18,8 +15,7 @@ use crate::store::schema::{Schema, IMPLICIT_SEQ_COLUMN};
 use crate::store::types::SegmentRow;
 
 /// Sort keys for both compaction's merge order: `key_column` first (so range
-/// scans on it prune row groups), then the implicit `seq`. Mirrors
-/// `compaction_sort_keys`.
+/// scans on it prune row groups), then the implicit `seq`.
 pub fn compaction_sort_keys(schema: &Schema) -> Vec<String> {
     if !schema.key_column.is_empty() {
         vec![schema.key_column.clone(), IMPLICIT_SEQ_COLUMN.to_string()]
@@ -55,7 +51,7 @@ pub fn plan(config: &CompactionConfig, segments: &[SegmentRow]) -> Option<Compac
 }
 
 /// Group `segments` (sorted by `min_seq`) into adjacency runs. Adjacency means
-/// `prev.max_seq + 1 == next.min_seq`. Mirrors `_contiguous_runs`.
+/// `prev.max_seq + 1 == next.min_seq`.
 fn contiguous_runs<'a>(segments: &[&'a SegmentRow]) -> Vec<Vec<&'a SegmentRow>> {
     if segments.is_empty() {
         return Vec::new();
@@ -77,7 +73,7 @@ fn run_bytes(run: &[&SegmentRow]) -> i64 {
 }
 
 /// Take the shortest prefix of `run` whose byte sum hits `target`. Always
-/// returns at least one segment. Mirrors `_take_until_target`.
+/// returns at least one segment.
 fn take_until_target<'a>(run: &[&'a SegmentRow], target: i64) -> Vec<&'a SegmentRow> {
     let mut out: Vec<&SegmentRow> = Vec::new();
     let mut total: i64 = 0;
@@ -107,8 +103,7 @@ fn build_job(run: Vec<&SegmentRow>, output_level: i32) -> CompactionJob {
 /// Operates on the typed `i64` values (the in-memory `LocalSegment` bounds) so
 /// numeric keys keep native ordering — the catalog's TEXT round-trip would flip
 /// `"10" < "2"`. Inputs whose value is `None` (empty segment / no stats) are
-/// skipped; returns `(None, None)` if every input was skipped. Mirrors
-/// `aggregate_key_bounds`.
+/// skipped; returns `(None, None)` if every input was skipped.
 pub fn aggregate_key_bounds<I>(bounds: I) -> (Option<i64>, Option<i64>)
 where
     I: IntoIterator<Item = (Option<i64>, Option<i64>)>,
@@ -131,7 +126,7 @@ mod tests {
     use super::*;
     use crate::store::types::SegmentLocation;
 
-    /// Build a `SegmentRow` shaped like `_row` in `test_compactor.py`.
+    /// Build a `SegmentRow` for planner tests.
     fn row(level: i32, min_seq: i64, max_seq: i64, byte_size: i64) -> SegmentRow {
         SegmentRow {
             namespace: "ns".to_string(),
@@ -156,7 +151,7 @@ mod tests {
         }
     }
 
-    // --- the 6 planner cases from test_compactor.py ---------------------
+    // --- the 6 planner cases ---------------------
 
     #[test]
     fn plan_returns_none_when_under_target() {

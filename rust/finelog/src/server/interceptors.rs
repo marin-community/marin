@@ -1,25 +1,21 @@
-//! Connect/RPC interceptors for the finelog server (Phase 5b/5c).
+//! Connect/RPC interceptors for the finelog server.
 //!
-//! Two interceptors, ported from the Python ASGI shell:
+//! Two interceptors:
 //!
 //! - [`SlowRpcInterceptor`] — times `next.run` and emits a single
 //!   `tracing::warn!` when a call exceeds a per-method ms threshold (default
-//!   7000ms, `<= 0` disables for that method). Port of
-//!   `server/interceptors.py::SlowRpcInterceptor` + `rigging.log_setup.slow_log`.
+//!   7000ms, `<= 0` disables for that method).
 //!   Registered FIRST (outermost) so it times the WHOLE chain, including the
-//!   concurrency wait — matching Python, where the slow interceptor is appended
-//!   to the chain before the concurrency interceptor.
+//!   concurrency wait.
 //!
 //! - [`ConcurrencyInterceptor`] — two `tokio::sync::Semaphore`s (FetchLogs and
 //!   Query) keyed by the dispatched method name; acquires a permit BEFORE
 //!   `next.run` and holds it across the handler (bounding the parquet working
 //!   set). Re-checks the deadline AFTER acquiring (the post-acquire shed): if
 //!   the client deadline has elapsed while queued, short-circuit with
-//!   `deadline_exceeded` rather than run a doomed handler. Port of
-//!   `rigging/rpc.py::ConcurrencyLimitInterceptor` (`_deadline_expired`) wired
-//!   the way `asgi.py` wires it (`{FetchLogs: 4}` on the log chain, `{Query: 4}`
-//!   on the stats chain — here both live in one interceptor keyed by method).
-//!   Registered AFTER SlowRpc.
+//!   `deadline_exceeded` rather than run a doomed handler. The caps are
+//!   `{FetchLogs: 4}` and `{Query: 4}`, both living in one interceptor keyed by
+//!   method. Registered AFTER SlowRpc.
 //!
 //! Both read the dispatched method's short name from `ctx.spec().method()`. The
 //! spec is populated ONLY when the services are registered through the generated
@@ -37,15 +33,14 @@ use connectrpc::{
 };
 use tokio::sync::Semaphore;
 
-/// Default per-method slow-RPC threshold (`DEFAULT_SLOW_RPC_THRESHOLD_MS`).
+/// Default per-method slow-RPC threshold.
 /// Picked well above the durable-write floor (one bg flush cycle) so a normal
 /// WriteRows that waits for its L0 segment doesn't spam warnings.
 pub const DEFAULT_SLOW_RPC_THRESHOLD_MS: i64 = 7000;
 
 /// Per-method concurrency caps. Both FetchLogs and Query fan out into parquet
 /// scans across hundreds of MB; unbounded parallelism evicts the page cache and
-/// wedges the process. Matches `_MAX_CONCURRENT_FETCH_LOGS` /
-/// `_MAX_CONCURRENT_QUERY` in `asgi.py`.
+/// wedges the process.
 pub const MAX_CONCURRENT_FETCH_LOGS: usize = 4;
 pub const MAX_CONCURRENT_QUERY: usize = 4;
 
@@ -108,9 +103,8 @@ impl Interceptor for SlowRpcInterceptor {
         let resp = next.run(req).await;
         let elapsed_ms = started.elapsed().as_millis() as i64;
         if elapsed_ms >= threshold {
-            // Mirrors `slow_log`'s WARNING contract: "Slow RPC {method}: {ms}ms
-            // (threshold: {threshold}ms)". The text is a diagnostic aid, not a
-            // contract — no parity test asserts on it.
+            // The warning text is a diagnostic aid, not a contract — no test
+            // asserts on it.
             tracing::warn!(
                 method = %method,
                 elapsed_ms,
@@ -151,7 +145,7 @@ impl ConcurrencyInterceptor {
 
 /// True if the request's Connect deadline has already elapsed. `time_remaining`
 /// saturates at zero on expiry, so `Some(ZERO)` is the expired signal (`None`
-/// means no deadline was asserted). Port of `rigging/rpc.py::_deadline_expired`.
+/// means no deadline was asserted).
 fn deadline_expired(ctx: &RequestContext) -> bool {
     ctx.time_remaining().is_some_and(|d| d.is_zero())
 }
@@ -326,9 +320,8 @@ mod tests {
     ///
     /// Each terminal increments a counter on entry, records the peak, then waits
     /// on the shared `Notify`; the test releases all permits at once after
-    /// asserting the peak. This is the deterministic exact-cap proof the roadmap
-    /// requires (run_chain + parked terminal, no wall-clock sleep for the
-    /// assertion).
+    /// asserting the peak. This is a deterministic exact-cap proof (run_chain +
+    /// parked terminal, no wall-clock sleep for the assertion).
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrency_caps_in_flight() {
         let limit = 2usize;

@@ -1,15 +1,9 @@
 //! Schema dataclasses, Arrow bridge, and validation helpers.
 //!
-//! Port of `finelog/store/schema.py`. `Column` / `Schema` are the in-process
-//! representation of a registered table's column layout. They convert
-//! to/from the wire proto `Schema`, an `arrow::datatypes::Schema`, and a JSON
-//! sidecar form persisted in the catalog.
-//!
-//! Phase 1 ports: the type structs, the `ColumnType<->Arrow DataType` map,
-//! proto encode/decode (view in, owned out), JSON round-trip,
-//! `with_implicit_seq`, `resolve_key_column` (presence-only), and
-//! `merge_schemas`. `validate_and_align_batch` lands in Phase 2 in the same
-//! module.
+//! `Column` / `Schema` are the in-process representation of a registered
+//! table's column layout. They convert to/from the wire proto `Schema`, an
+//! `arrow::datatypes::Schema`, and a JSON sidecar form persisted in the
+//! catalog.
 
 use std::sync::Arc;
 
@@ -31,11 +25,10 @@ pub const IMPLICIT_KEY_COLUMN: &str = "timestamp_ms";
 /// transmitted on the wire and never declared by callers.
 pub const IMPLICIT_SEQ_COLUMN: &str = "seq";
 
-/// Max bytes per WriteRows request body (declared now; used in Phase 2).
+/// Max bytes per WriteRows request body.
 pub const MAX_WRITE_ROWS_BYTES: usize = 16 * 1024 * 1024;
 
-/// Max rows per RecordBatch. Must match Python's `MAX_WRITE_ROWS_ROWS`
-/// (`1_000_000`, NOT `1 << 20`) so both servers reject the same batches.
+/// Max rows per RecordBatch. Exactly `1_000_000` (NOT `1 << 20`).
 pub const MAX_WRITE_ROWS_ROWS: usize = 1_000_000;
 
 /// One column in a registered schema.
@@ -88,7 +81,7 @@ impl Schema {
 // ColumnType <-> Arrow DataType.
 // ---------------------------------------------------------------------------
 
-/// Map a `ColumnType` to its Arrow `DataType`. Mirrors `_ARROW_TYPE_FOR`.
+/// Map a `ColumnType` to its Arrow `DataType`.
 ///
 /// `COLUMN_TYPE_UNKNOWN` has no Arrow analogue and returns `None`.
 pub fn arrow_type_for(t: ColumnType) -> Option<DataType> {
@@ -281,10 +274,9 @@ pub fn with_implicit_seq(schema: Schema) -> Schema {
 
 /// Resolve the ordering key column name (presence-only), raising if invalid.
 ///
-/// Mirrors Python `resolve_key_column`: if `key_column` is set it must name an
-/// existing column; otherwise the schema must contain a `timestamp_ms` column.
-/// Deliberately does NOT enforce the proto comment's INT64/TIMESTAMP_MS type
-/// rule — Python only checks presence.
+/// If `key_column` is set it must name an existing column; otherwise the schema
+/// must contain a `timestamp_ms` column. Deliberately does NOT enforce the
+/// proto comment's INT64/TIMESTAMP_MS type rule — presence is the only check.
 pub fn resolve_key_column(schema: &Schema) -> Result<String, StatsError> {
     if !schema.key_column.is_empty() {
         if schema.column(&schema.key_column).is_none() {
@@ -309,7 +301,6 @@ pub fn resolve_key_column(schema: &Schema) -> Result<String, StatsError> {
 
 /// Return the effective schema for a re-register against `registered`.
 ///
-/// Mirrors Python `merge_schemas`:
 /// - identical / requested ⊆ registered -> `registered` unchanged.
 /// - requested adds nullable columns -> the union (registered then new).
 /// - any conflicting column (type or nullability change) -> `SchemaConflict`.
@@ -364,20 +355,19 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
 }
 
 // ---------------------------------------------------------------------------
-// Per-batch validation: Arrow IPC schema vs registered schema (Phase 2).
+// Per-batch validation: Arrow IPC schema vs registered schema.
 //
-// Port of `schema.py` `_arrow_to_column_type`, `_decode_dictionary_columns`,
-// `AlignedBatch`, and `validate_and_align_batch`. The append path consumes the
-// `AlignedBatch` (arrays + fields in registered column order, `seq` skipped),
-// stamps `seq`, and builds the final batch in one pass.
+// The append path consumes the `AlignedBatch` (arrays + fields in registered
+// column order, `seq` skipped), stamps `seq`, and builds the final batch in
+// one pass.
 // ---------------------------------------------------------------------------
 
 /// Map an Arrow `DataType` back to a `ColumnType`, decoding dictionary types to
 /// their value type and rejecting nested/union/map types.
 ///
-/// Mirrors `_arrow_to_column_type`: dictionary-encoded columns are accepted
-/// transparently (the *value* type is reported); list/large-list/struct/union/
-/// map and any other unsupported type are rejected.
+/// Dictionary-encoded columns are accepted transparently (the *value* type is
+/// reported); list/large-list/struct/union/map and any other unsupported type
+/// are rejected.
 pub fn arrow_to_column_type(dt: &DataType) -> Result<ColumnType, StatsError> {
     match dt {
         DataType::Dictionary(_, value) => arrow_to_column_type(value),
@@ -395,8 +385,7 @@ pub fn arrow_to_column_type(dt: &DataType) -> Result<ColumnType, StatsError> {
         DataType::Float64 => Ok(ColumnType::COLUMN_TYPE_FLOAT64),
         DataType::Boolean => Ok(ColumnType::COLUMN_TYPE_BOOL),
         // Only tz-naive ms timestamps map to TIMESTAMP_MS; a tz-aware column
-        // falls through to the unsupported-type error, matching Python (which
-        // accepts only `pa.timestamp("ms")` with no tz).
+        // falls through to the unsupported-type error.
         DataType::Timestamp(TimeUnit::Millisecond, None) => {
             Ok(ColumnType::COLUMN_TYPE_TIMESTAMP_MS)
         }
@@ -410,8 +399,8 @@ pub fn arrow_to_column_type(dt: &DataType) -> Result<ColumnType, StatsError> {
 /// Replace any dictionary-encoded columns of `batch` with their decoded value
 /// arrays, returning the decoded batch (unchanged if no dictionary columns).
 ///
-/// Mirrors `_decode_dictionary_columns`: dictionary encoding is a wire-only
-/// optimization; the on-disk parquet schema stores plain value types.
+/// Dictionary encoding is a wire-only optimization; the on-disk parquet schema
+/// stores plain value types.
 pub fn decode_dictionary_columns(batch: &RecordBatch) -> Result<RecordBatch, StatsError> {
     let schema = batch.schema();
     let mut changed = false;
@@ -465,9 +454,9 @@ fn array_buffer_size(arr: &ArrayRef) -> i64 {
 
 /// Validate an incoming `RecordBatch` against a registered schema.
 ///
-/// Port of `validate_and_align_batch` (`schema.py:386`). Returns the aligned
-/// arrays + fields in registered column order with the implicit `seq` column
-/// skipped; missing nullable columns are NULL-filled. Rejects: a batch column
+/// Returns the aligned arrays + fields in registered column order with the
+/// implicit `seq` column skipped; missing nullable columns are NULL-filled.
+/// Rejects: a batch column
 /// literally named `seq`, a duplicate column, an unknown column, a missing
 /// non-nullable column, a type mismatch (after dictionary decode), and any
 /// nested/union arrow type.
@@ -778,7 +767,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // validate_and_align_batch / arrow_to_column_type (Phase 2).
+    // validate_and_align_batch / arrow_to_column_type.
     // -----------------------------------------------------------------------
 
     use arrow::array::{

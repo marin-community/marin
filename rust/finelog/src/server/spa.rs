@@ -1,7 +1,7 @@
-//! Static Vue SPA serving (Phase 5d).
+//! Static Vue SPA serving.
 //!
-//! Port of the SPA routes in `asgi.py`. Resolves the dashboard `dist` directory
-//! at startup ([`vue_dist_dir`]), then mounts:
+//! Resolves the dashboard `dist` directory at startup ([`vue_dist_dir`]), then
+//! mounts:
 //!
 //! - `/static/*` via `tower_http::services::ServeDir` over `dist/static`,
 //! - `/favicon.ico` (when present),
@@ -35,13 +35,13 @@ const DOCKER_VUE_DIST_DIR: &str = "/app/dashboard/dist";
 
 /// The `<base href="/"` placeholder the Vue build emits. The rewrite replaces
 /// the FIRST occurrence so asset/router URLs resolve under a reverse-proxy
-/// sub-path. Matches `_BASE_HREF_PLACEHOLDER` in `asgi.py`.
+/// sub-path.
 const BASE_HREF_PLACEHOLDER: &[u8] = b"<base href=\"/\"";
 
-/// Placeholder served at `/` when no dashboard `dist` is present. Mirrors the
-/// Python `_NOT_BUILT_HTML` content. It is a human-facing diagnostic page, not a
-/// machine-parsed wire contract, so exact-byte parity is not required (the
-/// load-bearing wire contract is the base-href rewrite, which IS byte-checked).
+/// Placeholder served at `/` when no dashboard `dist` is present. It is a
+/// human-facing diagnostic page, not a machine-parsed wire contract, so
+/// exact-byte parity is not required (the load-bearing wire contract is the
+/// base-href rewrite, which IS byte-checked).
 pub const NOT_BUILT_HTML: &str = "<!doctype html><html><body>\
 <h1>Dashboard not built</h1>\
 <p>Run <code>npm run build</code> in <code>lib/finelog/dashboard</code>.</p>\
@@ -50,7 +50,6 @@ pub const NOT_BUILT_HTML: &str = "<!doctype html><html><body>\
 /// Rewrite the first `<base href="/"` to `<base href="{prefix}/"` so a SPA
 /// fronted by a reverse proxy at a sub-path resolves its asset/router URLs.
 ///
-/// Byte-exact port of `_index_html_with_base`:
 /// - empty prefix or `"/"` is a no-op (returns `raw` unchanged),
 /// - the prefix is normalized to a leading AND trailing slash,
 /// - only the FIRST placeholder occurrence is replaced.
@@ -151,15 +150,13 @@ async fn not_built() -> Response {
 /// `GET` but `fallback_service` non-GET methods to `connect`. An RPC POST to
 /// `/<pkg.Service>/<Method>` matches `/*rest` by PATH; without the method
 /// fallback axum would 405 it (the path matched, the GET-only method did not)
-/// instead of forwarding to the connect service. Mirrors Starlette, where the
-/// connect `Mount`s match the RPC path before the GET-only SPA catch-all.
+/// instead of forwarding to the connect service.
 ///
-/// One residual, intentional divergence: a *GET* to an RPC path serves the SPA
-/// index here (the catch-all matches it) where Starlette returns 405. Real
-/// connect clients only POST to RPC paths (which reach connect via the method
-/// fallback above), so this is not externally observable — it is the standard
-/// SPA semantics where any unknown GET serves index.html for client-side
-/// routing.
+/// A *GET* to an RPC path serves the SPA index here (the catch-all matches it).
+/// Real connect clients only POST to RPC paths (which reach connect via the
+/// method fallback above), so this is not externally observable — it is the
+/// standard SPA semantics where any unknown GET serves index.html for
+/// client-side routing.
 ///
 /// `connect` is the same `ConnectRpcService` used as the app's `.fallback_service`;
 /// it is `Clone`, so cloning it into the catch-all is cheap (Arc-shared state).
@@ -215,7 +212,6 @@ async fn serve_file(path: PathBuf) -> Response {
 mod tests {
     use super::*;
 
-    /// Byte-exact port of `test_asgi.py::test_index_html_base_href_rewrite`.
     #[test]
     fn base_href_rewrite() {
         let raw = br#"<html><head><base href="/" /></head></html>"#;

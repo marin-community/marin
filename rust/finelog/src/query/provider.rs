@@ -1,22 +1,20 @@
 //! Per-namespace DataFusion `TableProvider` over sealed parquet segments.
 //!
-//! Port of the query-visibility model in `duckdb_store.query` +
-//! `log_namespace.query_snapshot`: a namespace's queryable data is the snapshot
-//! of its **sealed** local segment files (NOT the in-RAM buffer). The durability
-//! contract (WriteRows/PushLogs ack only after L0 seal+persist) makes this
-//! complete for RPC clients without unioning the RAM buffer.
+//! A namespace's queryable data is the snapshot of its **sealed** local segment
+//! files (NOT the in-RAM buffer). The durability contract (WriteRows/PushLogs
+//! ack only after L0 seal+persist) makes this complete for RPC clients without
+//! unioning the RAM buffer.
 //!
 //! An empty segment list yields a typed-empty table carrying the registered
-//! arrow schema (incl. the implicit `seq` column) — the analog of DuckDB's
-//! `SELECT NULL::<type> ... WHERE FALSE` view.
+//! arrow schema (incl. the implicit `seq` column).
 //!
-//! ## Phase-4 read-visibility seam
+//! ## Read-visibility seam
 //!
 //! The provider holds a *snapshot* of segment paths captured under the
 //! namespace insertion lock before scanning (see `Namespace::query_snapshot`).
-//! Phase 4 compaction will take the query-visibility write side before unlinking
-//! a file, so a query that snapshotted the pre-compaction paths keeps scanning
-//! the files it captured; the snapshot here is the read side of that seam.
+//! Compaction takes the query-visibility write side before unlinking a file, so
+//! a query that snapshotted the pre-compaction paths keeps scanning the files it
+//! captured; the snapshot here is the read side of that seam.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -57,7 +55,7 @@ impl NamespaceProvider {
     /// `segment_paths` are absolute local filesystem paths
     /// (`{ns_dir}/seg_L*_*.parquet`). Each is registered individually (rather
     /// than listing a directory) so the scan sees exactly the snapshotted set —
-    /// no re-listing, and Phase-4 compaction can't slip a new file in.
+    /// no re-listing, and compaction can't slip a new file in.
     pub fn build(schema: SchemaRef, segment_paths: &[String]) -> DFResult<NamespaceProvider> {
         if segment_paths.is_empty() {
             let mem = MemTable::try_new(Arc::clone(&schema), vec![vec![]])?;

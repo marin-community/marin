@@ -1,9 +1,8 @@
 //! Arrow IPC wire path.
 //!
-//! `decode_one_record_batch` mirrors `_decode_single_record_batch`
-//! (`duckdb_store.py`): a `WriteRows` request carries exactly one RecordBatch in
-//! one IPC *stream*; zero or more-than-one batches are a contract violation.
-//! `encode_ipc` is the Query result encoder (placed here now; used by Phase 3).
+//! `decode_one_record_batch`: a `WriteRows` request carries exactly one
+//! RecordBatch in one IPC *stream*; zero or more-than-one batches are a contract
+//! violation. `encode_ipc` is the Query result encoder.
 
 use std::io::Cursor;
 
@@ -17,8 +16,8 @@ use crate::errors::StatsError;
 
 /// Decode an inbound WriteRows IPC stream into exactly one `RecordBatch`.
 ///
-/// Matches `_decode_single_record_batch`: a stream carrying zero or more than
-/// one batch is a `SchemaValidation` error (mapped to `invalid_argument`).
+/// A stream carrying zero or more than one batch is a `SchemaValidation` error
+/// (mapped to `invalid_argument`).
 pub fn decode_one_record_batch(buf: &[u8]) -> Result<RecordBatch, StatsError> {
     let reader = StreamReader::try_new(Cursor::new(buf), None).map_err(|e| {
         StatsError::SchemaValidation(format!("WriteRows: failed to open IPC stream: {e}"))
@@ -45,9 +44,8 @@ pub fn decode_one_record_batch(buf: &[u8]) -> Result<RecordBatch, StatsError> {
 
 /// Encode `batches` to an Arrow IPC stream (schema + batches + EOS).
 ///
-/// `finish()` (writing the EOS marker) is mandatory or pyarrow sees a truncated
-/// stream; an empty result still emits a valid schema + EOS. Used by Phase 3's
-/// Query handler.
+/// `finish()` (writing the EOS marker) is mandatory or readers see a truncated
+/// stream; an empty result still emits a valid schema + EOS.
 pub fn encode_ipc(schema: &SchemaRef, batches: &[RecordBatch]) -> Result<Vec<u8>, ArrowError> {
     let mut out: Vec<u8> = Vec::new();
     {

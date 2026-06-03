@@ -1,10 +1,8 @@
 //! Pure log-read logic for `LogService::fetch_logs`.
 //!
-//! Port of `log_namespace.py` (`get_logs` / `_scope_query` /
-//! `_add_common_filters` / `_shape_log_read_result`) + `finelog/types.py`
-//! (`parse_attempt_id` / `str_to_log_level`) + `_regex_literal_prefix`. No I/O:
-//! the predicate builders produce a SQL fragment the query engine runs over the
-//! sealed `log` segments, and the shaper turns result rows into `LogEntry`s.
+//! No I/O: the predicate builders produce a SQL fragment the query engine runs
+//! over the sealed `log` segments, and the shaper turns result rows into
+//! `LogEntry`s.
 //!
 //! Match-scope semantics (the load-bearing contract):
 //! - EXACT: `key = <literal source> AND seq > cursor`. The source is a literal;
@@ -20,8 +18,7 @@ use buffa::Enumeration;
 
 use crate::proto::finelog::logging::{LogLevel, MatchScope};
 
-/// Characters that mark the end of a regex's leading literal prefix. Mirrors
-/// `_REGEX_HINT_RE = re.compile(r"[.*+?\[\](){}^$|\\]")`.
+/// Characters that mark the end of a regex's leading literal prefix.
 const REGEX_METACHARS: &[char] = &[
     '.', '*', '+', '?', '[', ']', '(', ')', '{', '}', '^', '$', '|', '\\',
 ];
@@ -40,7 +37,7 @@ pub fn str_to_log_level(level_name: &str) -> LogLevel {
 }
 
 /// Best-effort attempt-id from a structured key: keys ending `...:<int>` carry
-/// the int (e.g. `/user/job/0:3` -> 3); else 0. Mirrors `parse_attempt_id`.
+/// the int (e.g. `/user/job/0:3` -> 3); else 0.
 pub fn parse_attempt_id(key: &str) -> i32 {
     let Some((_, suffix)) = key.rsplit_once(':') else {
         return 0;
@@ -52,7 +49,7 @@ pub fn parse_attempt_id(key: &str) -> i32 {
 }
 
 /// The leading literal prefix of a regex `pattern`: everything up to the first
-/// regex metacharacter. Mirrors `_regex_literal_prefix`.
+/// regex metacharacter.
 pub fn regex_literal_prefix(pattern: &str) -> &str {
     match pattern.find(|c| REGEX_METACHARS.contains(&c)) {
         Some(idx) => &pattern[..idx],
@@ -196,11 +193,10 @@ pub struct ShapedResult {
 
 /// Shape result `rows` into entries + cursor.
 ///
-/// Mirrors `_shape_log_read_result`: when `tail && max_lines > 0` the rows
-/// arrive in `seq DESC` order and are reversed to ascending; the cursor is
-/// `max(seq)` over the returned rows, or `default_cursor` (the request cursor)
-/// when empty. `attempt_id` is per-row from `key` for multi-key scopes, or from
-/// `exact_key` for EXACT.
+/// When `tail && max_lines > 0` the rows arrive in `seq DESC` order and are
+/// reversed to ascending; the cursor is `max(seq)` over the returned rows, or
+/// `default_cursor` (the request cursor) when empty. `attempt_id` is per-row
+/// from `key` for multi-key scopes, or from `exact_key` for EXACT.
 pub fn shape_log_read_result(
     mut rows: Vec<LogRow>,
     tail: bool,

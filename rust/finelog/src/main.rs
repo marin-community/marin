@@ -1,8 +1,7 @@
 //! `finelog-server` binary entry point.
 //!
-//! Parse the same CLI flags as the Python launcher, open the `Store`, and serve
-//! `/health` plus the StatsService metadata RPCs (Phase 1). The write/query RPC
-//! families land in later phases.
+//! Parse the CLI flags, open the `Store`, and serve `/health` plus the
+//! StatsService RPCs.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -28,8 +27,7 @@ struct Args {
     log_dir: Option<String>,
 
     /// Remote (e.g. gs://) directory for offloaded segments. Empty disables sync.
-    /// Env var matches the Python server + deploy (`FINELOG_REMOTE_DIR`, set by
-    /// bootstrap.py / the Dockerfile) so the Phase-6 cutover picks it up.
+    /// Read from `FINELOG_REMOTE_DIR`, set by the deploy environment.
     #[arg(long, env = "FINELOG_REMOTE_DIR", default_value = "")]
     remote_log_dir: String,
 
@@ -112,8 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Resolve when the first SIGTERM or SIGINT (Ctrl-C) arrives. Mirrors the
-/// Python launcher's `signal.signal(SIGTERM/SIGINT, _shutdown)`.
+/// Resolve when the first SIGTERM or SIGINT (Ctrl-C) arrives.
 async fn shutdown_signal() {
     use tokio::signal::unix::{signal, SignalKind};
 

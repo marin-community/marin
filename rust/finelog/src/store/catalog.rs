@@ -1,19 +1,13 @@
-//! Rust-owned catalog: single source of truth for namespace state.
+//! Catalog: single source of truth for namespace state.
 //!
-//! Port of the catalog STATE MODEL from `finelog/store/catalog.py`, backed by
-//! a `rusqlite` sidecar at `{data_dir}/_finelog_catalog.sqlite` (distinct from
-//! Python's `_finelog_registry.duckdb` — the two backends must never alias a
-//! file). `data_dir = None` selects an in-memory sqlite.
+//! Backed by a `rusqlite` sidecar at `{data_dir}/_finelog_catalog.sqlite`.
+//! `data_dir = None` selects an in-memory sqlite.
 //!
 //! Three coupled pieces of state under one mutex:
 //! - the live `RegisteredNamespace` registry (`live`) + registration order
 //!   (`registered_at`),
 //! - the `dropping` reservation set (fences concurrent register during a drop),
 //! - the sqlite connection (`namespaces`, `storage_policies`, `segments`).
-//!
-//! The `segments` table is created with the FINAL shape but stays EMPTY in
-//! Phase 1 (so `aggregate_namespace_stats`/`list_segments` return zeros and
-//! Phase 2 just inserts).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -27,10 +21,10 @@ use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_from_json, schema_to_json, Schema};
 use crate::store::types::{NamespaceStats, SegmentRow};
 
-/// Sidecar filename. Deliberately distinct from Python's DuckDB registry.
+/// Sidecar filename.
 pub const CATALOG_DB_FILENAME: &str = "_finelog_catalog.sqlite";
 
-/// A live namespace value (Phase 1: no engine, no bg loops).
+/// A live namespace value.
 #[derive(Debug, Clone)]
 pub struct RegisteredNamespace {
     pub name: String,
@@ -217,9 +211,8 @@ impl Catalog {
     /// Atomically register `name` or evolve the existing namespace.
     ///
     /// The whole decision-and-publish runs under a SINGLE lock so it cannot
-    /// interleave with `begin_drop`/`finish_drop` (mirrors Python's `RLock`
-    /// held across register). A prior version released the lock between the
-    /// drop-fence check and publish; because RPC handlers dispatch blocking
+    /// interleave with `begin_drop`/`finish_drop`. Releasing the lock between
+    /// the drop-fence check and publish is unsafe: because RPC handlers dispatch blocking
     /// `Store` calls onto a multi-threaded `spawn_blocking` pool sharing one
     /// `Arc<Store>`, a concurrent register+drop of the same name could resurrect
     /// a dropped namespace with no persisted row.
@@ -375,7 +368,7 @@ impl Catalog {
         Ok(())
     }
 
-    // ----- segments table (empty in Phase 1) ----------------------------
+    // ----- segments table -----------------------------------------------
 
     /// Segment rows for `name` ordered by `min_seq`. All levels.
     pub fn list_segments(&self, name: &str) -> Result<Vec<SegmentRow>, StatsError> {
@@ -384,8 +377,8 @@ impl Catalog {
 
     /// Segment rows for `name` with `level >= min_level`, ordered by `min_seq`.
     ///
-    /// Port of `catalog.list_segments(min_level=...)`. The sync/reconcile paths
-    /// pass `min_level = 1` (L0 is local-only and never offloaded).
+    /// The sync/reconcile paths pass `min_level = 1` (L0 is local-only and never
+    /// offloaded).
     pub fn list_segments_min_level(
         &self,
         name: &str,
@@ -411,7 +404,7 @@ impl Catalog {
     }
 
     /// Oldest evictable segment in `name` (`level >= 1 AND location = BOTH`,
-    /// smallest `min_seq`), or `None`. Port of `select_eviction_candidate`.
+    /// smallest `min_seq`), or `None`.
     pub fn select_eviction_candidate(&self, name: &str) -> Result<Option<SegmentRow>, StatsError> {
         use crate::store::types::SegmentLocation;
         let inner = self.inner.lock().unwrap();
@@ -433,10 +426,9 @@ impl Catalog {
     /// Oldest-by-`created_at_ms` evictable segment past `cutoff_ms`
     /// (`level >= 1 AND location = BOTH AND created_at_ms < cutoff`), or `None`.
     ///
-    /// Port of `select_aged_eviction_candidate`: ordering by `created_at_ms`
-    /// (not `min_seq`) matters because compaction outputs inherit their inputs'
-    /// `min_seq` but get a fresh `created_at_ms`, so a low-`min_seq` segment can
-    /// be the youngest.
+    /// Ordering by `created_at_ms` (not `min_seq`) matters because compaction
+    /// outputs inherit their inputs' `min_seq` but get a fresh `created_at_ms`,
+    /// so a low-`min_seq` segment can be the youngest.
     pub fn select_aged_eviction_candidate(
         &self,
         name: &str,
@@ -481,7 +473,7 @@ impl Catalog {
     /// Insert or replace the segments-table row for `(namespace, path)`.
     ///
     /// Called by the per-namespace flush task after the parquet file is renamed
-    /// into place (Phase 2) and by boot adoption / compaction (Phase 4/6).
+    /// into place and by boot adoption / compaction.
     pub fn upsert_segment(&self, row: &SegmentRow) -> Result<(), StatsError> {
         let inner = self.inner.lock().unwrap();
         upsert_segment_in(&inner.conn, row)
@@ -489,10 +481,9 @@ impl Catalog {
 
     /// Atomically swap `removed_paths` for `added` rows in one transaction.
     ///
-    /// Port of `catalog.replace_segments`: compaction collapses N inputs at level
-    /// n into one level-(n+1) output. The whole swap must be visible-or-not to
-    /// `list_segments` — never half — so the deletes + upserts run inside a
-    /// single sqlite transaction.
+    /// Compaction collapses N inputs at level n into one level-(n+1) output. The
+    /// whole swap must be visible-or-not to `list_segments` — never half — so the
+    /// deletes + upserts run inside a single sqlite transaction.
     pub fn replace_segments(
         &self,
         namespace: &str,
@@ -516,8 +507,6 @@ impl Catalog {
     }
 
     /// Update one segment's `location` (after upload completes / eviction).
-    /// Port of `catalog.set_location`. (Used by 4e; the column write is here now
-    /// so the swap/evict paths share one catalog surface.)
     pub fn set_location(
         &self,
         namespace: &str,
@@ -535,7 +524,7 @@ impl Catalog {
         Ok(())
     }
 
-    /// Drop one segment row. Idempotent. Port of `catalog.remove_segment`.
+    /// Drop one segment row. Idempotent.
     pub fn remove_segment(&self, namespace: &str, path: &str) -> Result<(), StatsError> {
         let inner = self.inner.lock().unwrap();
         inner
@@ -548,7 +537,7 @@ impl Catalog {
         Ok(())
     }
 
-    /// Single-namespace aggregate over the segments table. Zeros in Phase 1.
+    /// Single-namespace aggregate over the segments table.
     pub fn aggregate_namespace_stats(&self, name: &str) -> Result<NamespaceStats, StatsError> {
         let inner = self.inner.lock().unwrap();
         let stats = inner
@@ -558,14 +547,10 @@ impl Catalog {
                 SELECT
                     COALESCE(SUM(row_count), 0),
                     COALESCE(SUM(byte_size), 0),
-                    -- Seq window excludes empty segments, matching the engine
-                    -- stats() and Python's ns.stats() (row_count > 0 filter).
-                    -- NOTE: Python's *catalog* aggregate is unfiltered
-                    -- (MIN(min_seq)/MAX(max_seq)), but the RPC-visible
-                    -- NamespaceInfo is fed by ns.stats(), which IS filtered — so
-                    -- this CASE filter is what keeps cross-backend NamespaceInfo
-                    -- bit-identical on a dir with 0-row segments. Do NOT "align"
-                    -- this back to the unfiltered catalog.py form.
+                    -- Seq window excludes empty segments (row_count > 0 filter),
+                    -- matching the engine stats(). The RPC-visible NamespaceInfo
+                    -- is fed by that filtered stats(), so this CASE filter is what
+                    -- keeps NamespaceInfo correct on a dir with 0-row segments.
                     COALESCE(MIN(CASE WHEN row_count > 0 THEN min_seq END), 0),
                     COALESCE(MAX(CASE WHEN row_count > 0 THEN max_seq END), 0),
                     COUNT(*)

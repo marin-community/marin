@@ -1,16 +1,15 @@
 //! Native arrow k-way merge of N already-sorted segments by `(key_column, seq)`.
 //!
-//! Replaces the DuckDB `COPY ... ORDER BY` from `_apply_merge`. Each input batch
-//! is already internally sorted on the sort keys (every segment is written sorted
-//! by L0->L1 compaction, and L0 inputs to a force-compact are seq-monotonic), so
-//! we MERGE rather than re-sort: encode the sort-key columns of each batch into
-//! the comparable `arrow::row` byte form, keep a per-batch cursor, repeatedly pop
-//! the globally-min current row from a `BinaryHeap`, and gather all output columns
-//! via `arrow::compute::interleave` in 16384-row chunks (row-group aligned).
+//! Each input batch is already internally sorted on the sort keys (every segment
+//! is written sorted by L0->L1 compaction, and L0 inputs to a force-compact are
+//! seq-monotonic), so we MERGE rather than re-sort: encode the sort-key columns of
+//! each batch into the comparable `arrow::row` byte form, keep a per-batch cursor,
+//! repeatedly pop the globally-min current row from a `BinaryHeap`, and gather all
+//! output columns via `arrow::compute::interleave` in 16384-row chunks (row-group
+//! aligned).
 //!
 //! `seq` is the unique monotonic tiebreaker, so the merge is stable and
-//! order-independent regardless of input file order — matching the DuckDB
-//! `ORDER BY (key, seq)` compaction semantics.
+//! order-independent regardless of input file order.
 
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -27,12 +26,11 @@ use crate::store::segment::ROW_GROUP_SIZE;
 /// Project `batch` onto `target_schema`, additive-null-filling any target column
 /// absent from the batch.
 ///
-/// Replaces DuckDB's `read_parquet(union_by_name=true)` + `NULL::TYPE AS name`
-/// projection: a segment written before an additive schema evolution lacks the
-/// new (nullable) columns, so they are materialized as null arrays of the
-/// target type. Columns are reordered to match `target_schema`; an existing
-/// column whose type differs from the target is an error (non-additive change,
-/// which the register path already rejects).
+/// A segment written before an additive schema evolution lacks the new (nullable)
+/// columns, so they are materialized as null arrays of the target type. Columns
+/// are reordered to match `target_schema`; an existing column whose type differs
+/// from the target is an error (non-additive change, which the register path
+/// already rejects).
 pub fn project_to_schema(
     batch: &RecordBatch,
     target_schema: &SchemaRef,
@@ -61,11 +59,10 @@ pub fn project_to_schema(
     RecordBatch::try_new(Arc::clone(target_schema), columns)
 }
 
-/// The merge sort-key collation: ascending, NULLS LAST — matching DuckDB's
-/// `ORDER BY <key>, seq` default (ASC NULLS LAST). The pre-sort (`sort_batch_by`)
-/// and the merge (`kway_merge` via `RowConverter`) MUST share this so a key
-/// column with NULLs lands null-key rows at the END on both backends, giving
-/// byte-identical physical segment layout to the DuckDB compactor.
+/// The merge sort-key collation: ascending, NULLS LAST. The pre-sort
+/// (`sort_batch_by`) and the merge (`kway_merge` via `RowConverter`) MUST share
+/// this so a key column with NULLs lands null-key rows at the END in both paths,
+/// giving a consistent physical segment layout.
 const MERGE_SORT_OPTIONS: SortOptions = SortOptions {
     descending: false,
     nulls_first: false,
@@ -78,8 +75,8 @@ const MERGE_SORT_OPTIONS: SortOptions = SortOptions {
 /// inputs are not key-sorted; `kway_merge` requires each input to be internally
 /// sorted on the merge keys. The executor runs each projected input through this
 /// before merging, so the merge sees pre-sorted inputs and the global output is
-/// `(key, seq)`-ordered — matching the DuckDB `COPY ... ORDER BY (key, seq)`. A
-/// segment already sorted (L>=1 inputs) is unchanged by a stable sort.
+/// `(key, seq)`-ordered. A segment already sorted (L>=1 inputs) is unchanged by a
+/// stable sort.
 pub fn sort_batch_by(batch: &RecordBatch, sort_cols: &[usize]) -> Result<RecordBatch, ArrowError> {
     if batch.num_rows() <= 1 {
         return Ok(batch.clone());

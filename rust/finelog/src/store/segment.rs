@@ -1,14 +1,10 @@
 //! L0 parquet segment writer + footer recovery.
 //!
-//! Port of `_write_new_segment`'s parquet encode, `_read_segment_metadata` /
-//! `_key_bounds_from_parquet` (footer-only reads), and `_recover_next_seq` from
-//! `log_namespace.py`.
-//!
 //! CRITICAL: L0 is written **UNSORTED**. Rows already arrive seq-monotonic (seq
 //! is allocated under the insertion lock at append time); the explicit
-//! `ORDER BY (key, seq)` sort happens only at the L0->L1 compaction in Phase 4,
-//! so a single write's sort cost lands once in the bg compactor, not on every
-//! flush. `write_segment` therefore writes the batch verbatim.
+//! `ORDER BY (key, seq)` sort happens only at L0->L1 compaction, so a single
+//! write's sort cost lands once in the bg compactor, not on every flush.
+//! `write_segment` therefore writes the batch verbatim.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -23,18 +19,16 @@ use parquet::file::statistics::Statistics;
 use crate::errors::StatsError;
 use crate::store::types::{parse_seg_filename, seg_filename};
 
-/// Parquet row-group size (`_ROW_GROUP_SIZE` in Python).
+/// Parquet row-group size.
 pub const ROW_GROUP_SIZE: usize = 16_384;
 
 /// Parquet `WriterProperties` shared by every finelog segment writer — the L0
 /// flush (`write_segment`) and the compaction output (`write_merged_segment`).
 ///
-/// Matches the DuckDB reference `COPY ... (COMPRESSION 'zstd',
-/// COMPRESSION_LEVEL 1, WRITE_BLOOM_FILTER true)`: row-group 16384, zstd level 1
-/// (not the library default 3), and bloom filters enabled (so EXACT-key
-/// FetchLogs / equality predicates get row-group pruning). Centralizing the
-/// encoding contract keeps L0 and compacted segments byte-comparable to the
-/// Python backend's on-disk layout.
+/// Encoding contract: row-group 16384, zstd level 1 (not the library default 3),
+/// and bloom filters enabled (so EXACT-key FetchLogs / equality predicates get
+/// row-group pruning). Centralizing it keeps L0 and compacted segments using one
+/// consistent on-disk layout.
 pub fn segment_writer_properties() -> Result<WriterProperties, StatsError> {
     let zstd =
         ZstdLevel::try_new(1).map_err(|e| StatsError::Internal(format!("zstd level 1: {e}")))?;
@@ -119,8 +113,7 @@ pub fn write_segment_to_dir(
 /// min/max from row-group statistics.
 ///
 /// Returns `None` for an unparseable filename or footer-read failure (the caller
-/// treats that as an empty/discardable segment — mirrors `_EMPTY_SEGMENT_METADATA`
-/// behavior but as `None`).
+/// treats that as an empty/discardable segment).
 pub fn read_segment_footer(path: &Path, key_column: Option<&str>) -> Option<SegmentMetadata> {
     let name = path.file_name()?.to_str()?;
     let (level, min_seq) = parse_seg_filename(name)?;
@@ -217,8 +210,7 @@ pub fn discover_segments(dir: &Path) -> Vec<PathBuf> {
 
 /// Recover the next seq to allocate by scanning `dir`'s segment footers.
 ///
-/// Returns `max(max_seq over all segments) + 1`, or `1` when no segments exist
-/// (mirrors `_recover_next_seq`).
+/// Returns `max(max_seq over all segments) + 1`, or `1` when no segments exist.
 pub fn recover_next_seq(dir: &Path) -> i64 {
     let mut next_seq = 1_i64;
     for p in discover_segments(dir) {

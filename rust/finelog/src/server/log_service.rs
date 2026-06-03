@@ -1,7 +1,4 @@
-//! `finelog.logging.LogService` trait impl.
-//!
-//! Phase 1: both methods are unimplemented (PushLogs lands in Phase 2,
-//! FetchLogs in Phase 3).
+//! `LogService` trait impl: PushLogs and FetchLogs.
 
 use std::sync::Arc;
 
@@ -75,7 +72,7 @@ impl LogService for LogServiceImpl {
         ctx: RequestContext,
         request: OwnedPushLogsRequestView,
     ) -> ServiceResult<PushLogsResponse> {
-        // Empty entries -> empty response, no append (mirrors Python).
+        // Empty entries -> empty response, no append.
         if request.entries.is_empty() {
             return connectrpc::Response::ok(PushLogsResponse::default());
         }
@@ -227,8 +224,8 @@ fn shaped_entry_to_proto(e: ShapedEntry) -> LogEntry {
         }),
         // `level` is an OPEN enum: preserve the raw stored int verbatim
         // (`Known` if it matches a variant, `Unknown(raw)` otherwise) so an
-        // out-of-range level round-trips exactly like the Python server, which
-        // echoes the stored int rather than collapsing it to UNKNOWN.
+        // out-of-range level round-trips exactly rather than collapsing to
+        // UNKNOWN.
         level: Some(buffa::EnumValue::<LogLevel>::from(e.level)),
         ..entry
     };

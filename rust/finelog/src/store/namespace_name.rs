@@ -1,7 +1,6 @@
 //! Namespace-name validation + path containment.
 //!
-//! Port of `_NAMESPACE_NAME_RE` + `_validate_namespace_name` from
-//! `duckdb_store.py`. Names must match `^[a-z][a-z0-9_.-]{0,63}$` — restrictive
+//! Names must match `^[a-z][a-z0-9_.-]{0,63}$` — restrictive
 //! enough to be safe as both a directory name and a quoted SQL identifier. The
 //! on-disk subdir must resolve strictly inside `data_dir` (rejecting `..`,
 //! escapes, and the data dir itself). In-memory mode (`data_dir = None`) still
@@ -38,9 +37,9 @@ pub fn validate_namespace_name(
         return Ok(None);
     };
 
-    // Mirror Python's `(data_dir / name).resolve()` + `relative_to` containment
-    // check. We normalize lexically rather than canonicalizing the filesystem,
-    // because the namespace subdir may not exist yet (canonicalize would fail).
+    // Resolve the joined path and check containment. We normalize lexically
+    // rather than canonicalizing the filesystem, because the namespace subdir
+    // may not exist yet (canonicalize would fail).
     let base = normalize_lexically(data_dir);
     let target = normalize_lexically(&data_dir.join(name));
 

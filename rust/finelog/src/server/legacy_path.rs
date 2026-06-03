@@ -1,10 +1,9 @@
-//! Legacy `/iris.logging.LogService/*` path rewrite (Phase 5e).
+//! Legacy `/iris.logging.LogService/*` path rewrite.
 //!
-//! Pre-#5212 (b212f0015) the LogService proto package was `iris.logging`, so old
-//! worker images push to `/iris.logging.LogService/*`. The wire format is
-//! identical across packages (same field numbers), so we rewrite the request
-//! path to `/finelog.logging.LogService/*` BEFORE routing. Port of
-//! `asgi.py::_LegacyIrisLoggingPathMiddleware`.
+//! Older worker images push to `/iris.logging.LogService/*` (the LogService proto
+//! package was once `iris.logging`). The wire format is identical across packages
+//! (same field numbers), so we rewrite the request path to
+//! `/finelog.logging.LogService/*` BEFORE routing.
 //!
 //! This is a TRANSPORT-layer rewrite (an axum `middleware::from_fn` that mutates
 //! `req.uri()`), NOT a connect `Interceptor` — interceptors run after path
@@ -12,10 +11,7 @@
 //! been chosen. Applied as the outermost app layer so the rewritten path is what
 //! the router sees.
 //!
-//! VERIFICATION ITEM (do not silently drop): the CRON removal marker
-//! (2026-05-12) has passed, BUT this is still live — the iris dashboard alias and
-//! the worker push path depend on it. Port it; flag for removal only after
-//! confirming no worker image / dashboard alias still emits the legacy prefix.
+//! Still live: the iris dashboard alias and the worker push path depend on it.
 
 use axum::extract::Request;
 use axum::http::uri::{PathAndQuery, Uri};

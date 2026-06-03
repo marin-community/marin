@@ -1,8 +1,8 @@
 //! Per-namespace storage retention policy.
 //!
-//! Port of `finelog/store/policy.py`. Fields left `None` inherit the
-//! cluster-wide defaults. proto3 zero <-> `None` (inherit). The re-register
-//! "empty == keep existing" decision lives in the store layer, not here.
+//! Fields left `None` inherit the cluster-wide defaults. proto3 zero <-> `None`
+//! (inherit). The re-register "empty == keep existing" decision lives in the
+//! store layer, not here.
 
 use crate::proto::finelog::stats::{StoragePolicy as ProtoStoragePolicy, StoragePolicyView};
 

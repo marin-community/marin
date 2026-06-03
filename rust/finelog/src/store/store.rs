@@ -1,11 +1,10 @@
 //! Store orchestration: the seam the RPC handlers sit on.
 //!
-//! Port of the metadata-relevant `DuckDBLogStore` methods (no data path in
-//! Phase 1). On construct: open the catalog, create `data_dir`, rehydrate the
-//! live registry from `catalog.list_all()`, then ensure the privileged `log`
+//! On construct: open the catalog, create `data_dir`, rehydrate the live
+//! registry from `catalog.list_all()`, then ensure the privileged `log`
 //! namespace is registered (`with_implicit_seq(LOG_REGISTERED_SCHEMA)`).
 //!
-//! Critical behaviors matched from Python:
+//! Critical behaviors:
 //! - `register_table` returns the EFFECTIVE store-form schema (WITH `seq`); the
 //!   RPC handler strips `seq` for the wire.
 //! - re-register with an EMPTY policy KEEPS the existing policy.
@@ -43,8 +42,7 @@ pub const LOG_NAMESPACE_DIR: &str = "log";
 /// process-shutdown drain budget passed to [`Store::shutdown`] at SIGTERM.
 const NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Registered schema for the privileged `log` namespace (mirrors
-/// `LOG_REGISTERED_SCHEMA` in `log_namespace.py`). All non-nullable;
+/// Registered schema for the privileged `log` namespace. All non-nullable;
 /// `key_column = "key"`.
 fn log_registered_schema() -> Schema {
     Schema::new(
@@ -64,29 +62,28 @@ fn log_registered_schema() -> Schema {
 /// The catalog owns the persistent registry + segments table; the `engines`
 /// map owns one `Namespace` per live namespace (built at boot from the catalog
 /// and on `register_table`). The data path (WriteRows / PushLogs) routes through
-/// these engines; the metadata RPCs (Phase 1) stay on the catalog.
+/// these engines; the metadata RPCs stay on the catalog.
 pub struct Store {
     data_dir: Option<PathBuf>,
     remote_log_dir: String,
     catalog: Arc<Catalog>,
     engines: Mutex<HashMap<String, Arc<Namespace>>>,
-    /// Process-wide query-visibility lock (Python's `RWLock` analog). A query /
-    /// FetchLogs holds the READ side across the full DataFusion scan, because
-    /// `query_providers` snapshots segment PATHS and DataFusion opens those
-    /// parquet files LAZILY during `collect()`. Structural mutations that unlink
-    /// segment files — `drop_table`, compaction/eviction — take the WRITE side so
-    /// no scan is mid-flight over paths about to disappear.
+    /// Process-wide query-visibility lock. A query / FetchLogs holds the READ
+    /// side across the full DataFusion scan, because `query_providers` snapshots
+    /// segment PATHS and DataFusion opens those parquet files LAZILY during
+    /// `collect()`. Structural mutations that unlink segment files — `drop_table`,
+    /// compaction/eviction — take the WRITE side so no scan is mid-flight over
+    /// paths about to disappear.
     ///
     /// ONE shared instance for the whole process (queries are cross-namespace, so
     /// the drain must be global). Cloned into each `Namespace` so the per-ns
     /// maintenance task takes `.blocking_write()` inside its `spawn_blocking`.
     ///
     /// `tokio::sync::RwLock` is WRITE-preferring (a new reader waits behind a
-    /// pending writer), unlike Python's reader-preferring `RWLock`. Both uphold
-    /// the safety invariant (a writer never proceeds while any reader holds the
-    /// lock, so no scan opens a file mid-unlink); the only difference is fairness,
-    /// and write-preference is strictly safer here — it cannot starve
-    /// compaction/eviction under a steady query stream. Not externally observable.
+    /// pending writer). It upholds the safety invariant (a writer never proceeds
+    /// while any reader holds the lock, so no scan opens a file mid-unlink), and
+    /// write-preference is safer here — it cannot starve compaction/eviction under
+    /// a steady query stream.
     query_visibility: Arc<tokio::sync::RwLock<()>>,
 }
 
@@ -104,13 +101,12 @@ impl Store {
             })?;
         }
         let catalog = Arc::new(Catalog::open(data_dir.as_deref())?);
-        // Phase 6: rebuild-from-disk catalog adoption. On a fresh Rust boot over
-        // a log_dir a Python (or earlier Rust) server populated, the sqlite
-        // sidecar is empty, so the disk parquet layout + footers are the only
-        // record of the namespaces + segments. The sentinel-gated, idempotent
-        // scan persists the recovered `namespaces` + `segments` rows BEFORE
-        // `rehydrate_from_catalog` reads them back to build the engines. NEVER
-        // reads the DuckDB sidecar. No-op in in-memory mode + on the done
+        // Rebuild-from-disk catalog adoption. On a fresh boot over a log_dir an
+        // earlier server populated, the sqlite sidecar is empty, so the disk
+        // parquet layout + footers are the only record of the namespaces +
+        // segments. The sentinel-gated, idempotent scan persists the recovered
+        // `namespaces` + `segments` rows BEFORE `rehydrate_from_catalog` reads
+        // them back to build the engines. No-op in in-memory mode + on the done
         // sentinel (subsequent boots). REMOTE adoption is the engines'
         // `boot_reconcile` (run by `bootstrap_maintenance` before bind).
         crate::store::adopt::ensure_catalog_adopted(data_dir.as_deref(), &catalog)?;
@@ -214,8 +210,7 @@ impl Store {
         if spawn_maint {
             // Runtime register: run the boot remote reconcile SYNCHRONOUSLY (so a
             // re-register over a wiped catalog adopts the bucket's segments before
-            // the caller observes the namespace — matching Python's
-            // `DiskLogNamespace.__init__` reconcile), then start the maintenance
+            // the caller observes the namespace), then start the maintenance
             // task. `register_table` runs inside a `spawn_blocking` worker on the
             // multi-threaded runtime, so `Handle::block_on` of the async reconcile
             // is safe here (it never blocks a reactor thread). No-op without a
@@ -334,9 +329,8 @@ impl Store {
 
     /// Decode + validate + append a WriteRows batch, returning
     /// `(rows_written, last_seq)`. `last_seq` is the durability target the caller
-    /// awaits (`-1` for an empty batch). Mirrors `DuckDBLogStore.write_rows`:
-    /// the size/row caps and IPC decode happen before namespace resolution, then
-    /// validate/align runs OUTSIDE any lock.
+    /// awaits (`-1` for an empty batch). The size/row caps and IPC decode happen
+    /// before namespace resolution, then validate/align runs OUTSIDE any lock.
     pub fn write_rows(&self, name: &str, arrow_ipc: &[u8]) -> Result<(i64, i64), StatsError> {
         use crate::store::ipc::decode_one_record_batch;
         use crate::store::schema::{
@@ -394,8 +388,8 @@ impl Store {
 
     /// The process-wide query-visibility lock. Query/FetchLogs handlers hold the
     /// READ side across the full DataFusion scan; structural mutations that
-    /// unlink segments (`drop_table`, Phase-4 compaction/eviction) take the WRITE
-    /// side. See the field doc on [`Store`].
+    /// unlink segments (`drop_table`, compaction/eviction) take the WRITE side.
+    /// See the field doc on [`Store`].
     pub fn query_visibility(&self) -> &tokio::sync::RwLock<()> {
         &self.query_visibility
     }
@@ -403,11 +397,11 @@ impl Store {
     /// Snapshot every live namespace into a `RegisteredProvider` over its sealed
     /// segments — the registration set for a `Query`.
     ///
-    /// Mirrors `duckdb_store.query`: snapshot the live registry, then for each
-    /// namespace capture its arrow schema + sealed-segment paths (under the
-    /// engine's insertion lock). Visibility = sealed segments ONLY (the RAM
-    /// buffer is not exposed). Every live namespace is registered so
-    /// cross-namespace SQL and the reserved `log` namespace both resolve.
+    /// Snapshot the live registry, then for each namespace capture its arrow
+    /// schema + sealed-segment paths (under the engine's insertion lock).
+    /// Visibility = sealed segments ONLY (the RAM buffer is not exposed). Every
+    /// live namespace is registered so cross-namespace SQL and the reserved `log`
+    /// namespace both resolve.
     pub fn query_providers(&self) -> Result<Vec<RegisteredProvider>, StatsError> {
         let mut out = Vec::new();
         for ns in self.catalog.snapshot_live() {
@@ -438,8 +432,8 @@ impl Store {
 
     /// Return `(name, schema, stats, policy)` for every live namespace in
     /// registration order. Stats come from the per-namespace engine (sealed
-    /// segments + RAM buffer, the exact Python seq-window math), falling back to
-    /// the catalog aggregate if an engine is somehow absent.
+    /// segments + RAM buffer seq-window math), falling back to the catalog
+    /// aggregate if an engine is somehow absent.
     pub fn list_namespaces_with_stats(
         &self,
     ) -> Result<Vec<(String, Schema, NamespaceStats, StoragePolicy)>, StatsError> {
@@ -465,8 +459,8 @@ impl Store {
     ///
     /// This is the body the per-namespace background maintenance task runs on its
     /// tick, and the entry point the `--debug-admin` `POST /debug/maintain` drives
-    /// so the parity harness can force the pipeline deterministically. ALL stages
-    /// are real (compaction + object_store sync + eviction).
+    /// to force the pipeline deterministically. ALL stages are real (compaction +
+    /// object_store sync + eviction).
     ///
     /// The query-visibility WRITE lock is taken INSIDE the engine
     /// (`commit_swap` / `evict_segment` via `blocking_write`), drained against
@@ -549,9 +543,8 @@ impl Store {
     }
 
     /// Aggregate in-RAM accounting across live namespaces for the periodic
-    /// diagnostics line (Phase 5g). Port of `memory_summary()`: `namespaces` is
-    /// the live engine count, `ram_bytes`/`chunks` sum the per-namespace RAM
-    /// buffers. No pyarrow pool fields (Rust has no equivalent allocator pool).
+    /// diagnostics line. `namespaces` is the live engine count, `ram_bytes` /
+    /// `chunks` sum the per-namespace RAM buffers.
     pub fn memory_summary(&self) -> crate::store::types::MemorySummary {
         let engines: Vec<Arc<Namespace>> = self.engines.lock().unwrap().values().cloned().collect();
         let mut ram_bytes = 0i64;
@@ -568,10 +561,10 @@ impl Store {
         }
     }
 
-    /// Cooperatively shut down every namespace's background tasks (Phase 5f).
+    /// Cooperatively shut down every namespace's background tasks.
     ///
-    /// Mirrors Python's `service.close()` after the server loop returns. Each
-    /// engine's [`Namespace::shutdown`] latches its stop flag, wakes its flush +
+    /// Called after the server loop returns. Each engine's
+    /// [`Namespace::shutdown`] latches its stop flag, wakes its flush +
     /// maintenance tasks, JOINs them bounded by `per_namespace_timeout`, and does
     /// a final `flush_once`. Durability is preserved: an acked write was already
     /// on a sealed L0 segment before the ack, and the final flush drains any

@@ -1,8 +1,7 @@
 //! Boot-time remote reconcile: adopt unknown remote parquet + drop redundant.
 //!
-//! Port of `DiskLogNamespace._reconcile_remote_segments`. Runs once at namespace
-//! construction (before the maintenance task starts), when a remote dir is
-//! configured.
+//! Runs once at namespace construction (before the maintenance task starts),
+//! when a remote dir is configured.
 //!
 //! Two jobs:
 //! 1. **Adoption** (wiped-catalog recovery): the bucket is the only durable
@@ -32,9 +31,9 @@ fn now_ms() -> i64 {
 /// Reconcile the remote bucket for `namespace` against the catalog at boot.
 ///
 /// `local_dir` is the namespace's on-disk directory (adopted REMOTE rows point
-/// their `path` at `{local_dir}/{basename}`, matching the Python convention so a
-/// later download lands the file in place). `key_column` is the namespace's
-/// ordering key for footer key-bound recovery.
+/// their `path` at `{local_dir}/{basename}` so a later download lands the file
+/// in place). `key_column` is the namespace's ordering key for footer key-bound
+/// recovery.
 pub async fn reconcile_remote_segments(
     catalog: &Catalog,
     remote: &RemoteStore,
@@ -146,9 +145,8 @@ pub async fn reconcile_remote_segments(
             continue;
         }
         let local_path = local_dir.join(&f.basename);
-        // Record the footer's actual num_rows (matching Python `_reconcile_remote_
-        // segments`), not a seq-span recomputation, so an edge-case empty footer
-        // adopts row_count=0 rather than 1.
+        // Record the footer's actual num_rows, not a seq-span recomputation, so
+        // an edge-case empty footer adopts row_count=0 rather than 1.
         catalog.upsert_segment(&SegmentRow {
             namespace: namespace.to_string(),
             path: local_path.to_string_lossy().into_owned(),

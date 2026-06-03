@@ -1,8 +1,5 @@
 //! `finelog.stats.StatsService` trait impl.
 //!
-//! Phase 1: the 4 metadata RPCs (RegisterTable / GetTableSchema /
-//! ListNamespaces / DropTable) are real; WriteRows / Query stay unimplemented.
-//!
 //! Handlers return OWNED response messages (JSON-codec safety) and wrap the
 //! blocking rusqlite-backed `Store` calls in `spawn_blocking`. The store call
 //! result is decoded into proto messages back on the async side. The wire
@@ -55,10 +52,9 @@ where
     }
 }
 
-/// Map a DataFusion query error to the right Connect status, matching the
-/// Python server's split: a SQL parse / plan / schema / catalog / unsupported
-/// fault is a client error (the DuckDB parse/bind/catalog-exception slot ->
-/// `invalid_argument`); `ResourcesExhausted` -> `resource_exhausted`; anything
+/// Map a DataFusion query error to the right Connect status: a SQL parse /
+/// plan / schema / catalog / unsupported fault is a client error ->
+/// `invalid_argument`; `ResourcesExhausted` -> `resource_exhausted`; anything
 /// else (IO, execution-time, internal) is a server fault -> `internal`. Reading
 /// a server bug back as `invalid_argument` would wrongly blame the client.
 ///
@@ -133,8 +129,8 @@ impl StatsService for StatsServiceImpl {
             run_blocking(move || store.write_rows(&ns, &arrow_ipc)).await?;
 
         // The server does not auto-cancel on the client deadline; enforce the
-        // durability await ourselves, bounded by the remaining budget (default
-        // 30s, matching DEFAULT_PERSIST_TIMEOUT_SEC).
+        // durability await ourselves, bounded by the remaining budget (falling
+        // back to DEFAULT_PERSIST_TIMEOUT).
         let budget = ctx.time_remaining().unwrap_or(DEFAULT_PERSIST_TIMEOUT);
         self.store
             .await_persisted(&namespace, last_seq, budget)
@@ -153,8 +149,7 @@ impl StatsService for StatsServiceImpl {
         // Hold the query-visibility READ guard across the WHOLE scan. DataFusion
         // opens the snapshotted parquet files LAZILY during collect(), so the
         // guard must outlive run_query_over (not just query_providers) to keep a
-        // concurrent drop_table / Phase-4 compaction from unlinking a file
-        // mid-scan. This is the Python RWLock read side.
+        // concurrent drop_table / compaction from unlinking a file mid-scan.
         let _read_guard = self.store.query_visibility().read().await;
 
         // Snapshot every live namespace (schema + sealed-segment paths) under
@@ -175,9 +170,8 @@ impl StatsService for StatsServiceImpl {
         // still emits the correct typed schema (the typed-empty contract).
         let buf = encode_ipc(&result.schema, &result.batches)
             .map_err(|e| ConnectError::internal(format!("encode query result: {e}")))?;
-        // No server-side row cap (matches Python); the only result bound is the
-        // 64MB transport message limit -> resource_exhausted (the
-        // QueryResultTooLargeError analog).
+        // No server-side row cap; the only result bound is the 64MB transport
+        // message limit -> resource_exhausted.
         if buf.len() > MAX_MESSAGE_BYTES {
             return Err(ConnectError::resource_exhausted(format!(
                 "query result {} bytes exceeds {MAX_MESSAGE_BYTES} message limit",
@@ -202,8 +196,7 @@ impl StatsService for StatsServiceImpl {
             .to_string();
         // Structural mutation: take the query-visibility WRITE guard so no
         // in-flight query/FetchLogs scan is reading the segment files we are
-        // about to unlink (Python RWLock write side). New readers block until
-        // the drop completes.
+        // about to unlink. New readers block until the drop completes.
         let _write_guard = self.store.query_visibility().write().await;
         let store = Arc::clone(&self.store);
         run_blocking(move || store.drop_table(&namespace)).await?;

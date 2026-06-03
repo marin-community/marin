@@ -1,8 +1,7 @@
 //! In-RAM write state for a single namespace (LSM-style chunk list).
 //!
-//! Port of `RamBuffers` / `_SealedBuffer` / `_maintain_chunk_invariant` /
-//! `_stamp_seq_and_build` in `log_namespace.py`. Not thread-safe — the enclosing
-//! `DiskNamespace` serializes calls under its insertion lock.
+//! Not thread-safe — the enclosing `DiskNamespace` serializes calls under its
+//! insertion lock.
 //!
 //! The chunk list maintains the LSM invariant `chunks[i-1].rows > chunks[i].rows`
 //! by cascade-merging the tail after each append (`concat_batches` is cheap and
@@ -187,8 +186,8 @@ pub fn maintain_chunk_invariant(chunks: &mut Vec<RecordBatch>, arrow_schema: &Sc
 
 /// Build the seq-stamped `RecordBatch` from `aligned` in registered column order.
 ///
-/// Port of `_stamp_seq_and_build`: the `seq` column is `Int64 [first..first+n)`;
-/// other columns come from `aligned` in registered order. Any column declared by
+/// The `seq` column is `Int64 [first..first+n)`; other columns come from
+/// `aligned` in registered order. Any column declared by
 /// `arrow_schema` but absent from `aligned` (the benign additive-evolution race —
 /// the writer validated against schema v, an additive evolution landed before the
 /// namespace took its lock) is NULL-filled.

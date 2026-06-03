@@ -1,15 +1,11 @@
-//! Periodic pool/RSS diagnostics line (Phase 5g).
+//! Periodic pool/RSS diagnostics line.
 //!
-//! Port of `main.py::_emit_pool_diagnostics` / `_start_pool_diagnostics`. Every
-//! [`POOL_DIAGNOSTICS_INTERVAL`] a tokio task emits one `tracing::info!` line
-//! carrying the process RSS + VmSize (parsed from `/proc/self/status`) and the
-//! store memory summary (`namespaces` / `ram_bytes` / `chunks`).
+//! Every [`POOL_DIAGNOSTICS_INTERVAL`] a tokio task emits one `tracing::info!`
+//! line carrying the process RSS + VmSize (parsed from `/proc/self/status`) and
+//! the store memory summary (`namespaces` / `ram_bytes` / `chunks`).
 //!
-//! There is NO pyarrow allocator pool in Rust, so the Python `pool_bytes` /
-//! `pool_max` / `backend` fields are dropped — the line is a diagnostic aid, not
-//! a contract, so no parity test asserts on its text (per the AGENTS.md
-//! anti-slop rule). The task selects against a shutdown signal and exits when it
-//! fires.
+//! The line is a diagnostic aid, not a contract, so no test asserts on its
+//! text. The task selects against a shutdown signal and exits when it fires.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -19,12 +15,12 @@ use tokio::task::JoinHandle;
 
 use crate::store::Store;
 
-/// Diagnostics emit cadence (`_POOL_DIAGNOSTICS_INTERVAL_SEC`).
+/// Diagnostics emit cadence.
 pub const POOL_DIAGNOSTICS_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Read a `/proc/self/status` field value in KiB (Linux-only). Returns 0 when
-/// the field is missing or the file is unreadable (non-Linux), matching
-/// `_read_proc_self_status_kb`'s "0 == unknown" contract.
+/// the field is missing or the file is unreadable (non-Linux); 0 means
+/// "unknown".
 pub fn read_proc_self_status_kb(field: &str) -> u64 {
     match std::fs::read_to_string("/proc/self/status") {
         Ok(contents) => parse_proc_self_status_kb(&contents, field),

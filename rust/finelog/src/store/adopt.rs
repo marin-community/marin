@@ -1,14 +1,12 @@
-//! Rebuild-from-disk catalog adoption (Phase 6).
+//! Rebuild-from-disk catalog adoption.
 //!
-//! On a fresh Rust boot over a `log_dir` that a Python (or earlier Rust) server
-//! populated, there is no Rust-owned `_finelog_catalog.sqlite` sidecar — the
-//! catalog is empty, so the normal `rehydrate_from_catalog` path builds no
-//! engines and adoption never runs. This module reconstructs the catalog
-//! **purely by scanning the on-disk parquet layout + footers**, never reading
-//! the DuckDB sidecar.
+//! On a fresh boot over a `log_dir` that a prior server populated, there may be
+//! no `_finelog_catalog.sqlite` sidecar — the catalog is empty, so the normal
+//! `rehydrate_from_catalog` path builds no engines and adoption never runs.
+//! This module reconstructs the catalog **purely by scanning the on-disk
+//! parquet layout + footers**, never reading the sidecar.
 //!
-//! Layout adopted (per-namespace, the production layout long past migration
-//! 0003 / `layout_migration`):
+//! Layout adopted (per-namespace, the production layout):
 //!
 //! ```text
 //! {data_dir}/<namespace>/seg_L<level>_<minseq:019>.parquet
@@ -28,7 +26,7 @@
 //! boot. (Adoption runs before the reactor's request path, so the readiness
 //! mitigation is the sentinel, not reactor offload.)
 //!
-//! ## Remote adoption (6e)
+//! ## Remote adoption
 //!
 //! REMOTE (GCS) segment adoption — the wiped-local-PV-but-bucket-survives
 //! recovery — is performed by the per-namespace engine's `boot_reconcile`
@@ -39,32 +37,32 @@
 //!
 //! ## Schema-recovery lossiness (documented)
 //!
-//! The DuckDB sidecar stored `schema_json` per namespace; rebuild-from-disk can
-//! only recover the Arrow schema from a parquet footer. Three facts are NOT
+//! The sidecar stored `schema_json` per namespace; rebuild-from-disk can only
+//! recover the Arrow schema from a parquet footer. Three facts are NOT
 //! faithfully recoverable from parquet and are therefore lossy:
 //!
 //! 1. **`key_column`** — parquet carries no `key_column` metadata.
-//!    [`recover_schema_from_segments`] resolves it with the SAME
-//!    `resolve_key_column` default rule the Python side used: if the schema has
-//!    an implicit `timestamp_ms` column, the key is left empty (the default
-//!    resolves to `timestamp_ms`), matching a namespace registered with an
-//!    empty `key_column`. A non-default key_column that differs from what the
-//!    footer implies is unrecoverable from parquet alone. Two normalizations
-//!    follow from this and are intentional (both re-established exactly by
-//!    deploy's startup `RegisterTable`, so neither is observable past cutover):
-//!    a namespace registered with an *explicit* `key_column = "timestamp_ms"`
-//!    is recovered as the empty string (it resolves identically, but the wire
-//!    `key_column` differs until RegisterTable runs); and when there is no
-//!    `timestamp_ms` column the first non-seq column is taken as a best-effort
-//!    key, which can differ from a genuine non-default registered key (a
-//!    `warn!` is emitted in that branch so an operator can see which namespaces
-//!    depend on deploy-time key re-establishment).
+//!    [`recover_schema_from_segments`] resolves it with the `resolve_key_column`
+//!    default rule: if the schema has an implicit `timestamp_ms` column, the key
+//!    is left empty (the default resolves to `timestamp_ms`), matching a
+//!    namespace registered with an empty `key_column`. A non-default key_column
+//!    that differs from what the footer implies is unrecoverable from parquet
+//!    alone. Two normalizations follow from this and are intentional (both
+//!    re-established exactly by deploy's startup `RegisterTable`, so neither is
+//!    observable past cutover): a namespace registered with an *explicit*
+//!    `key_column = "timestamp_ms"` is recovered as the empty string (it
+//!    resolves identically, but the wire `key_column` differs until
+//!    RegisterTable runs); and when there is no `timestamp_ms` column the first
+//!    non-seq column is taken as a best-effort key, which can differ from a
+//!    genuine non-default registered key (a `warn!` is emitted in that branch so
+//!    an operator can see which namespaces depend on deploy-time key
+//!    re-establishment).
 //! 2. **StoragePolicy** — never written to parquet. Adopted namespaces start
-//!    with an EMPTY (inherit-all) policy, exactly like a catalog-less Python
-//!    boot (`get_policy` returns the default when no row exists).
-//! 3. **Column non-nullability of COMPACTED segments** — pyarrow L0 segments
-//!    preserve Arrow non-nullability in the footer (recovered faithfully), but
-//!    a DuckDB-compacted L>=1 segment's parquet marks every column nullable
+//!    with an EMPTY (inherit-all) policy, exactly like a catalog-less boot
+//!    (`get_policy` returns the default when no row exists).
+//! 3. **Column non-nullability of COMPACTED segments** — L0 segments preserve
+//!    Arrow non-nullability in the footer (recovered faithfully), but a
+//!    DuckDB-compacted L>=1 segment's parquet marks every column nullable
 //!    (DuckDB's COPY does not carry Arrow non-nullability). So a column that was
 //!    registered non-nullable but lives only in a compacted segment is adopted
 //!    as nullable. This is benign: a nullable-superset never changes queryable
@@ -94,8 +92,8 @@ use crate::store::schema::{
 use crate::store::segment::{discover_segments, read_segment_footer};
 use crate::store::types::{SegmentLocation, SegmentRow};
 
-/// Sentinel filename for the catalog-adoption state machine. Analogous to
-/// Python's `.layout-migration`, but for the disk->catalog rebuild.
+/// Sentinel filename for the catalog-adoption state machine (the disk->catalog
+/// rebuild).
 pub const SENTINEL_FILENAME: &str = ".finelog-rust-catalog";
 
 /// Sentinel schema version.
@@ -113,7 +111,7 @@ fn now_ms() -> i64 {
 }
 
 // ---------------------------------------------------------------------------
-// 6d. Sentinel state machine.
+// Sentinel state machine.
 // ---------------------------------------------------------------------------
 
 /// Adoption progress states. `in-progress` means a scan started (or crashed
@@ -138,8 +136,7 @@ pub struct AdoptionSentinel {
 /// Read the sentinel `state`, or `None` if missing/malformed.
 ///
 /// A malformed sentinel is treated as `None` (re-run adoption — the scan is
-/// idempotent, so a re-run is safe and rewrites the sentinel on completion),
-/// mirroring `layout_migration._read_sentinel_state`.
+/// idempotent, so a re-run is safe and rewrites the sentinel on completion).
 pub fn read_sentinel_state(data_dir: &Path) -> Option<AdoptionState> {
     let path = data_dir.join(SENTINEL_FILENAME);
     let raw = std::fs::read_to_string(&path).ok()?;
@@ -180,12 +177,11 @@ pub fn write_sentinel(
 }
 
 // ---------------------------------------------------------------------------
-// 6b. Directory scan -> in-memory catalog.
+// Directory scan -> in-memory catalog.
 // ---------------------------------------------------------------------------
 
 /// Recover the next seq to allocate from a set of adopted segment rows:
-/// `max(max_seq) + 1`, floored at `1` for an empty set. Mirrors
-/// `_recover_next_seq`.
+/// `max(max_seq) + 1`, floored at `1` for an empty set.
 pub fn recover_next_seq(segments: &[SegmentRow]) -> i64 {
     segments
         .iter()
@@ -199,18 +195,13 @@ pub fn recover_next_seq(segments: &[SegmentRow]) -> i64 {
 ///
 /// Each `seg_L*_*.parquet` file's footer gives `row_count` -> `max_seq`
 /// (`min_seq` comes from the FILENAME); `byte_size` is the on-disk file length;
-/// `created_at_ms` is the file mtime in ms (matching Python's
-/// `int(mtime*1000)` for catalog-less local files); `location = LOCAL`. Key
-/// bounds are the Int64 stats for the schema's resolved key column, stringified
-/// at the catalog boundary. Unparseable/corrupt files are warn-and-skipped
-/// (never a hard error). This diverges slightly from Python on a *corrupt*
-/// file: Python's `_read_segment_metadata` returns `_EMPTY_SEGMENT_METADATA` and
-/// the boot reconcile still appends a `row_count=0` phantom row, so Python's
-/// `segment_count` includes corrupt files while Rust's excludes them. This only
-/// bites on already-unreadable data (the rows are lost under either behavior)
-/// and never affects `next_seq` (re-derived from healthy footers at engine
-/// open) — a genuinely empty *readable* 0-row segment is adopted identically on
-/// both sides.
+/// `created_at_ms` is the file mtime in ms; `location = LOCAL`. Key bounds are
+/// the Int64 stats for the schema's resolved key column, stringified at the
+/// catalog boundary. A corrupt or unparseable file is warn-and-skipped rather
+/// than aborting the scan, so it is excluded from `segment_count`. This only
+/// bites on already-unreadable data (the rows are lost regardless) and never
+/// affects `next_seq` (re-derived from healthy footers at engine open) — a
+/// genuinely empty *readable* 0-row segment is adopted normally.
 pub fn adopt_namespace_from_disk(
     ns_dir: &Path,
     namespace: &str,
@@ -250,7 +241,7 @@ pub fn adopt_namespace_from_disk(
 }
 
 // ---------------------------------------------------------------------------
-// 6c. Schema recovery from the newest segment's parquet footer.
+// Schema recovery from the newest segment's parquet footer.
 // ---------------------------------------------------------------------------
 
 /// Reconstruct a namespace's store-form proto `Schema` from the parquet arrow
@@ -258,10 +249,10 @@ pub fn adopt_namespace_from_disk(
 ///
 /// The recovered columns are in on-disk order (the implicit `seq` column first,
 /// re-marked as implicit Int64, then the registered columns). `key_column` is
-/// recovered by the SAME default rule the Python side used: left EMPTY when the
-/// schema carries a `timestamp_ms` column (so the default resolves to it),
-/// matching a namespace registered with an empty key_column. See the module
-/// docstring for the lossy edge.
+/// recovered by the default rule: left EMPTY when the schema carries a
+/// `timestamp_ms` column (so the default resolves to it), matching a namespace
+/// registered with an empty key_column. See the module docstring for the lossy
+/// edge.
 ///
 /// Returns `None` when the directory has no readable segment (a namespace dir
 /// with no parquet contributes nothing — the caller skips it).
@@ -329,7 +320,7 @@ pub fn recover_schema_from_segments(ns_dir: &Path) -> Option<Schema> {
 }
 
 // ---------------------------------------------------------------------------
-// 6e. Remote (GCS) segment adoption.
+// Remote (GCS) segment adoption.
 // ---------------------------------------------------------------------------
 
 /// Adopt remote-only segments for one namespace as REMOTE catalog rows and prune
@@ -392,10 +383,10 @@ fn enumerate_namespace_dirs(data_dir: &Path) -> Result<Vec<(String, PathBuf)>, S
 }
 
 /// Assert `data_dir` is in the per-namespace `seg_L` layout; fail loudly on a
-/// flat (legacy `tmp_*`/`logs_*`) layout rather than porting the migration.
+/// flat (legacy `tmp_*`/`logs_*`) layout rather than migrating it.
 ///
-/// Production dirs are long past migration 0003 / `layout_migration`; a flat
-/// top-level parquet is an operational error, not something to silently migrate.
+/// A flat top-level parquet is an operational error, not something to silently
+/// migrate.
 fn assert_namespaced_layout(data_dir: &Path) -> Result<(), StatsError> {
     let entries = std::fs::read_dir(data_dir)
         .map_err(|e| StatsError::Internal(format!("read data_dir {}: {e}", data_dir.display())))?;
@@ -441,10 +432,9 @@ pub fn adopt_store_from_disk(data_dir: &Path, catalog: &Catalog) -> Result<(), S
             Some(s) => s,
             None => {
                 // No readable segment. A non-log namespace dir with no parquet
-                // contributes nothing (Python would have a catalog row but no
-                // segments; here the dir's existence alone is not enough to
-                // recover a schema, so we skip — the log ns is re-established by
-                // ensure_log_namespace_registered regardless).
+                // contributes nothing: the dir's existence alone is not enough
+                // to recover a schema, so we skip — the log ns is re-established
+                // by ensure_log_namespace_registered regardless.
                 if !is_log {
                     tracing::info!(
                         namespace,
