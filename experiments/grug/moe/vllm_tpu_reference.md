@@ -20,8 +20,12 @@ Issue: https://github.com/marin-community/marin/issues/6106
   - `GrugMoeForCausalLM` is no longer registered in vLLM's text-generation model registry.
   - Exact validation SHA: `d025e46d3dfe0afc0f5bd1518c19ce337205db2d`.
 - Marin parity harness:
-  - `experiments/grug/moe/vllm_tpu_parity.py` validates both the manual-copy correctness path and the canonical inference artifact roundtrip.
-  - Exact validation SHA: `c3442afe3ccfb6703623d6a679d7398f5789cd73`.
+  - `experiments/grug/moe/model.py` exposes `GrugModelConfig.to_hf_config` and `Transformer.to_state_dict` so `HFCheckpointConverter.save_pretrained` emits the canonical inference artifact.
+  - `experiments/grug/moe/vllm_tpu_parity.py` validates both the manual-copy correctness path and the saved-checkpoint Levanter export roundtrip.
+  - Exact validation SHA: `14577de9f460cb727f8b3a6ed2232051aed1359a`.
+- Marin export step:
+  - `lib/levanter/src/levanter/main/export_lm_to_hf.py` supports tokenizer-less save-only exports when the model config carries `vocab_size`.
+  - `lib/levanter/src/levanter/main/export_lm_to_hf.py` and `lib/marin/src/marin/export/levanter_checkpoint.py` support `checkpoint_subpath`; Grug training-state checkpoints export from `params`, while existing LM exports still default to `model`.
 
 ## Implementation Choice
 
@@ -30,7 +34,7 @@ The current implementation is correctness-first and native JAX inside tpu-infere
 - Use NNX parameters and tpu-inference `JaxModule`/pipeline patterns.
 - Keep dense, direct attention and MoE equations for tiny seeded parity.
 - Return the vLLM-facing `ForCausalLM` tuple shape so model-loader integration is wired.
-- Add a narrow canonical inference artifact boundary: `config.json` plus `model.safetensors`.
+- Add a narrow canonical inference artifact boundary: `config.json` plus `model.safetensors`, produced by the normal Levanter/HF export path.
 - Use stable HF/vLLM-style tensor names with checkpoint-oriented linear tensor layout; native JAX parameter orientation remains a loader detail.
 - Keep vLLM as a dependency/source checkout for shared config/import surfaces, not as the GrugMoE model owner.
 
@@ -45,7 +49,7 @@ This intentionally does not include:
 
 ## Canonical Artifact
 
-The GrugMoE inference artifact is a directory with two files:
+The GrugMoE inference artifact is a directory with two files emitted by `HFCheckpointConverter.save_pretrained`:
 
 - `config.json`: model hyperparameters plus common HF aliases such as `hidden_size`, `num_hidden_layers`, `num_attention_heads`, and `num_key_value_heads`.
 - `model.safetensors`: tensors named with a stable dotted schema.
@@ -62,7 +66,7 @@ Representative tensor names:
 - `model.norm.weight`
 - `lm_head.weight`
 
-Linear tensors in the artifact use checkpoint orientation: output features before input features. Expert tensors keep the semantic expert axis first and store gate/up/down separately rather than baking in the native JAX fused `w_gate_up` parameter. The native loader validates the artifact config, checks the full tensor-name set, raises on missing or unexpected tensors, and reports the consumed tensor names.
+Linear tensors in the artifact use checkpoint orientation: output features before input features. Expert tensors keep the semantic expert axis first and store gate/up/down separately rather than baking in the native JAX fused `w_gate_up` parameter. The native loader validates the artifact config, checks the full tensor-name set, raises on missing or unexpected tensors, and reports the consumed tensor names. The serving contract remains this canonical artifact, not the Levanter training checkpoint tree.
 
 ## Tiny Config
 
@@ -95,8 +99,8 @@ The Marin parity harness keeps Levanter as the correctness oracle:
 - Composed parity initializes a tiny seeded Levanter `Transformer`, copies its parameters into native tpu-inference `GrugMoeForCausalLM`, and compares final hidden states against a dense JAX reference using the same Levanter parameters/equations.
 - The composed check also calls native `GrugMoeForCausalLM.compute_logits` and compares those logits against the Levanter output projection applied to the reference hidden states.
 - The composed check records selected expert IDs from each native layer and compares them against the reference QB routing path.
-- The artifact roundtrip initializes a tiny seeded Levanter `Transformer`, exports the canonical artifact, loads it into a second native tpu-inference JAX model, and compares hidden states, `compute_logits` logits, and routed expert IDs against the manual-copy native model.
-- The artifact roundtrip asserts the loader consumed exactly the exported tensor set and reports no missing or unexpected tensors.
+- The artifact roundtrip initializes a tiny seeded Levanter `Transformer`, saves a checkpoint under `params`, exports it through `export_lm_to_hf` with `checkpoint_subpath="params"`, loads the resulting canonical artifact into a second native tpu-inference JAX model, and compares hidden states, `compute_logits` logits, and routed expert IDs against the manual-copy native model.
+- The artifact roundtrip asserts the exported safetensors key set matches the canonical schema, and the loader consumed exactly that tensor set with no missing or unexpected tensors.
 - The harness patches Levanter sharding helpers to a one-device runtime for local and single-slice TPU validation. A direct `Transformer.__call__` is not used as the composed oracle because the training sharding contract is stricter than this one-device inference harness.
 - The harness sets `jax_default_matmul_precision=float32` so local CPU and TPU validation use the same strict numeric path.
 
@@ -139,9 +143,25 @@ Marin parity harness:
 
 ```bash
 cd /home/romain/dev/marin-wt/grugmoe-vllm-tpu-support
-python -m py_compile experiments/grug/moe/vllm_tpu_parity.py
-uv run --with ruff ruff check experiments/grug/moe/vllm_tpu_parity.py
-./infra/pre-commit.py experiments/grug/moe/vllm_tpu_parity.py
+python -m py_compile \
+  experiments/grug/moe/model.py \
+  experiments/grug/moe/vllm_tpu_parity.py \
+  lib/levanter/src/levanter/compat/hf_checkpoints.py \
+  lib/levanter/src/levanter/main/export_lm_to_hf.py \
+  lib/marin/src/marin/export/levanter_checkpoint.py
+uv run --with ruff ruff check \
+  experiments/grug/moe/model.py \
+  experiments/grug/moe/vllm_tpu_parity.py \
+  lib/levanter/src/levanter/compat/hf_checkpoints.py \
+  lib/levanter/src/levanter/main/export_lm_to_hf.py \
+  lib/marin/src/marin/export/levanter_checkpoint.py
+./infra/pre-commit.py \
+  experiments/grug/moe/model.py \
+  experiments/grug/moe/vllm_tpu_parity.py \
+  lib/levanter/src/levanter/compat/hf_checkpoints.py \
+  lib/levanter/src/levanter/main/export_lm_to_hf.py \
+  lib/marin/src/marin/export/levanter_checkpoint.py
+uv run --with pytest --with pytest-xdist pytest lib/levanter/tests/test_export_to_hf.py -q
 JAX_PLATFORMS=cpu \
 PYTHONPATH=/home/romain/dev/marin-wt/grugmoe-vllm-tpu-inference:/home/romain/dev/marin-wt/grugmoe-vllm-tpu-vllm \
 uv run \
@@ -158,7 +178,7 @@ Expected parity output:
 ```text
 component: native GrugMoeMLP matches Levanter moe_mlp
 full: native GrugMoeModel hidden states, logits, and routed expert IDs match Levanter reference
-artifact: canonical safetensors load matches manual-copy hidden states, logits, and routed expert IDs
+artifact: saved-checkpoint Levanter export matches manual-copy hidden states, logits, and routed expert IDs
 ```
 
 ## TPU Command
@@ -178,20 +198,20 @@ uv run iris --cluster=marin job run \
   --cpu 2 \
   --memory 16GB \
   --disk 50GB \
-  --job-name grugmoe-inference-artifact-roundtrip \
-  -- bash -lc 'set -euxo pipefail; echo marin_sha=c3442afe3ccfb6703623d6a679d7398f5789cd73; git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/tpu-inference.git /tmp/grugmoe-vllm-tpu-inference; git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/vllm.git /tmp/grugmoe-vllm-tpu-vllm; echo tpu_inference_sha=$(git -C /tmp/grugmoe-vllm-tpu-inference rev-parse HEAD); echo vllm_sha=$(git -C /tmp/grugmoe-vllm-tpu-vllm rev-parse HEAD); PYTHONPATH=/tmp/grugmoe-vllm-tpu-inference:/tmp/grugmoe-vllm-tpu-vllm uv run --with-requirements /tmp/grugmoe-vllm-tpu-inference/requirements.txt --with-requirements /tmp/grugmoe-vllm-tpu-vllm/requirements/common.txt --with "torch==2.10.0+cpu" --extra-index-url https://download.pytorch.org/whl/cpu python -m experiments.grug.moe.vllm_tpu_parity --tpu-inference-root /tmp/grugmoe-vllm-tpu-inference'
+  --job-name grugmoe-export-path-roundtrip-v2 \
+  -- bash -lc 'set -euxo pipefail; echo marin_sha=14577de9f460cb727f8b3a6ed2232051aed1359a; git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/tpu-inference.git /tmp/grugmoe-vllm-tpu-inference; git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/vllm.git /tmp/grugmoe-vllm-tpu-vllm; echo tpu_inference_sha=$(git -C /tmp/grugmoe-vllm-tpu-inference rev-parse HEAD); echo vllm_sha=$(git -C /tmp/grugmoe-vllm-tpu-vllm rev-parse HEAD); export LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304; PYTHONPATH=/tmp/grugmoe-vllm-tpu-inference:/tmp/grugmoe-vllm-tpu-vllm uv run --with-requirements /tmp/grugmoe-vllm-tpu-inference/requirements.txt --with-requirements /tmp/grugmoe-vllm-tpu-vllm/requirements/common.txt --with "torch==2.10.0+cpu" --extra-index-url https://download.pytorch.org/whl/cpu python -m experiments.grug.moe.vllm_tpu_parity --tpu-inference-root /tmp/grugmoe-vllm-tpu-inference'
 ```
 
-Canonical inference artifact roundtrip validation result on 2026-06-03:
+Normal Levanter export path roundtrip validation result on 2026-06-03:
 
-- Job: `/romain/grugmoe-inference-artifact-roundtrip`
+- Job: `/romain/grugmoe-export-path-roundtrip-v2`
 - State: `succeeded`
 - Exit: `0`
 - TPU: `v6e-4`
 - Region: `europe-west4`
-- Duration: `1 minute and 6.63 seconds`
+- Duration: `1 minute and 10.79 seconds`
 - Remote SHAs:
-  - `marin_sha=c3442afe3ccfb6703623d6a679d7398f5789cd73`
+  - `marin_sha=14577de9f460cb727f8b3a6ed2232051aed1359a`
   - `tpu_inference_sha=e42d7339e2c84b29b4c302b22483678b3862ab4e`
   - `vllm_sha=d025e46d3dfe0afc0f5bd1518c19ce337205db2d`
 - Final output:
@@ -199,5 +219,5 @@ Canonical inference artifact roundtrip validation result on 2026-06-03:
 ```text
 component: native GrugMoeMLP matches Levanter moe_mlp
 full: native GrugMoeModel hidden states, logits, and routed expert IDs match Levanter reference
-artifact: canonical safetensors load matches manual-copy hidden states, logits, and routed expert IDs
+artifact: saved-checkpoint Levanter export matches manual-copy hidden states, logits, and routed expert IDs
 ```
