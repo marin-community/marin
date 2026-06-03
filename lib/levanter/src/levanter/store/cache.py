@@ -39,7 +39,7 @@ from levanter.utils.thread_utils import blocking_wait
 from ..data._preprocessor import BatchProcessor, BatchResult, dict_from_record_batch
 from ..data.sharded_datasource import ShardedDataSource
 from .jagged_array import JaggedArrayStore, _no_cache_read_context
-from .tree_store import TreeStore
+from .tree_store import TreeStore, heuristic_is_leaf
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -560,7 +560,12 @@ class _ShardedTreeCacheReader:
             field = "/".join(_render_path_elem(part) for part in path)
             return _ShardedJaggedArrayStore(self._cache, field)
 
-        return jtu.tree_map_with_path(field_store, self._cache._exemplar)
+        # Mirror the store's leaf structure: TreeStore.open builds its tree from
+        # the exemplar with heuristic_is_leaf, so a list-of-scalars field (e.g.
+        # input_ids) is a single jagged array keyed "input_ids". Without the same
+        # predicate, jtu descends into the list and yields "input_ids/0", which
+        # never matches the ledger's field_counts_by_shard keys.
+        return jtu.tree_map_with_path(field_store, self._cache._exemplar, is_leaf=heuristic_is_leaf)
 
     async def get_flat_field_batch(self, field: str, offsets: Sequence[int], length: int) -> Sequence[np.ndarray]:
         if len(offsets) == 0:

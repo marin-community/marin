@@ -199,6 +199,66 @@ def test_sharded_flat_field_offsets_read_shards_concurrently(monkeypatch):
     assert max_active_reads == len(shard_names)
 
 
+def test_sharded_jagged_array_tree_uses_store_leaf_heuristic(monkeypatch):
+    # Regression: a list-of-scalars field (e.g. tokenized ``input_ids``) is one
+    # jagged array keyed "data" in the store/ledger (heuristic_is_leaf). The reader
+    # must derive the same key. Before the fix, jagged_array_tree descended into the
+    # list and produced "data/0", which never matched field_counts_by_shard and
+    # raised "Sharded cache ledger missing data/0 count".
+    shard_names = ["shard_0", "shard_1"]
+    field_counts_by_shard = {"shard_0": {"data": 2}, "shard_1": {"data": 3}}
+    ledger = CacheLedger(
+        total_num_rows=2,
+        shard_rows={shard_name: 1 for shard_name in shard_names},
+        is_finished=True,
+        finished_shards=shard_names,
+        field_counts={"data": 5},
+        field_counts_by_shard=field_counts_by_shard,
+        layout=CACHE_LAYOUT_SHARDED,
+    )
+    # Exemplar field is a python list, as marin's tokenizer emits — NOT an np.array.
+    cache = TreeCache("/unused", {"data": [0]}, ledger)
+
+    class FakeRead:
+        def __init__(self, value: int):
+            self.value = value
+
+        def __await__(self):
+            async def read():
+                return np.array([self.value], dtype=np.int64)
+
+            return read().__await__()
+
+    class FakeOffsets:
+        def __init__(self, value: int):
+            self.value = value
+
+        def __getitem__(self, item):
+            return self
+
+        def read(self):
+            return FakeRead(self.value)
+
+    class FakeFieldStore:
+        def __init__(self, value: int):
+            self.offsets = FakeOffsets(value)
+
+    seen_fields = []
+
+    async def shard_field_store(shard_name: str, field: str):
+        seen_fields.append(field)
+        return FakeFieldStore(field_counts_by_shard[shard_name][field])
+
+    monkeypatch.setattr(cache, "_shard_field_store_async", shard_field_store)
+
+    tree = cache.jagged_array_tree()
+    assert set(tree.keys()) == {"data"}  # not a per-element list keyed "data/0"
+    offsets = tree["data"].offsets[0:3].read().result()
+
+    np.testing.assert_array_equal(offsets, np.array([2, 2, 5], dtype=np.int64))
+    assert seen_fields and all(field == "data" for field in seen_fields)
+
+
 @pytest.mark.asyncio
 async def test_sharded_flat_field_offsets_share_in_flight_build(monkeypatch):
     shard_names = ["shard_0", "shard_1", "shard_2"]
