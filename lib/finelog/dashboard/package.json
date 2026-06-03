@@ -12,7 +12,7 @@
     "@tailwindcss/postcss": "^4.3.0",
     "apache-arrow": "^17.0.0",
     "vue": "^3.5.35",
-    "vue-router": "^4.5.0"
+    "vue-router": "^5.1.0"
   },
   "devDependencies": {
     "@rsbuild/core": "^1.2.0",
