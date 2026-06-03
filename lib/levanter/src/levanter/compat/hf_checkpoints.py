@@ -404,8 +404,9 @@ def _to_state_dict_with_dtype(
             else:
                 logger.debug(f"Skipping dtype conversion for non-floating point array {k} with dtype {v.dtype}")
 
-    # deshard. We could be smarter here and use a process mesh or host offloading, but this is simpler for now
-    state_dict = jax.lax.with_sharding_constraint(state_dict, PartitionSpec())
+    # deshard. We could be smarter here and use a process mesh or host offloading, but this is simpler for now.
+    # Use reshard rather than with_sharding_constraint so explicit meshes can move partitioned arrays to replicated.
+    state_dict = jax.tree.map(lambda value: jax.sharding.reshard(value, PartitionSpec()), state_dict)
 
     return state_dict
 
@@ -597,7 +598,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
     def _infer_tokenizer(tokenizer, ref, trust_remote_code: bool = False) -> Any:
         if tokenizer is None:
             if ref is None:
-                raise ValueError("Must provide either tokenizer or reference_checkpoint")
+                return None
             tokenizer = ref
 
         if isinstance(tokenizer, (str, RepoRef)):
@@ -645,6 +646,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
     @cached_property
     def Vocab(self) -> Axis:
+        if self.tokenizer is None:
+            raise ValueError("Cannot infer vocabulary size without a tokenizer")
         return Axis("vocab", len(self.tokenizer))
 
     def config_from_hf_config(self, hf_config, overrides: Optional[dict] = None) -> LevConfig:
@@ -903,6 +906,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         """Determine whether reference code should be bundled with the checkpoint."""
         #  the way we determine this is if the config class is in the HF package or not
         if save_reference_code is None:
+            if self.reference_checkpoint is None:
+                return False
             return not self.HfConfigClass.__module__.startswith("transformers.")
 
         return save_reference_code

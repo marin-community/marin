@@ -9,12 +9,14 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 
 import dataclasses
 from dataclasses import dataclass
+from typing import Any
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
 from einops import rearrange
+from haliax import Axis
 from haliax.jax_utils import named_call
 from jax import random
 from jax.sharding import PartitionSpec as P
@@ -25,6 +27,7 @@ try:
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Float, Int, PRNGKeyArray
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -43,9 +46,12 @@ from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
+from transformers import PretrainedConfig as HfConfig
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
+GRUG_MOE_MODEL_TYPE = "grug_moe"
+GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -60,6 +66,17 @@ def _batch_spec() -> P:
 
 def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
+
+
+class GrugMoeHfConfig(HfConfig):
+    model_type = GRUG_MOE_MODEL_TYPE
+
+
+def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = None) -> Any:
+    for name in names:
+        if hasattr(config, name):
+            return getattr(config, name)
+    return default
 
 
 @dataclass(frozen=True)
@@ -109,6 +126,14 @@ class GrugModelConfig:
         resolve_moe_implementation(self.moe_implementation)
 
     @property
+    def Embed(self) -> Axis:
+        return Axis("embed", self.hidden_dim)
+
+    @property
+    def model_type(self) -> type["Transformer"]:
+        return Transformer
+
+    @property
     def inferred_head_dim(self) -> int:
         if self.head_dim is not None:
             return self.head_dim
@@ -117,6 +142,88 @@ class GrugModelConfig:
                 f"hidden_dim={self.hidden_dim} is not divisible by num_heads={self.num_heads}; set head_dim explicitly"
             )
         return self.hidden_dim // self.num_heads
+
+    def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> "Transformer":
+        cfg = self if Vocab.size == self.vocab_size else dataclasses.replace(self, vocab_size=Vocab.size)
+        return Transformer.init(cfg, key=key)
+
+    def hf_checkpoint_converter(
+        self,
+        ref_checkpoint: str | None = None,
+    ) -> HFCheckpointConverter["GrugModelConfig"]:  # type: ignore[type-var]
+        return HFCheckpointConverter(
+            self.__class__,
+            reference_checkpoint=ref_checkpoint,
+            HfConfigClass=GrugMoeHfConfig,
+            tokenizer=ref_checkpoint,
+        )
+
+    @classmethod
+    def from_hf_config(cls, hf_config: HfConfig) -> "GrugModelConfig":
+        rope = RotaryConfig(theta=float(_hf_config_attr(hf_config, ("rope_theta",), 10000.0)))
+        return cls(
+            vocab_size=int(_hf_config_attr(hf_config, ("vocab_size",))),
+            hidden_dim=int(_hf_config_attr(hf_config, ("hidden_dim", "hidden_size"), 2048)),
+            intermediate_dim=int(
+                _hf_config_attr(hf_config, ("intermediate_dim", "moe_intermediate_size", "intermediate_size"), 5632)
+            ),
+            shared_expert_intermediate_dim=int(
+                _hf_config_attr(
+                    hf_config,
+                    ("shared_expert_intermediate_dim", "shared_expert_intermediate_size"),
+                    5632,
+                )
+            ),
+            num_experts=int(_hf_config_attr(hf_config, ("num_experts", "num_local_experts"), 8)),
+            num_experts_per_token=int(_hf_config_attr(hf_config, ("num_experts_per_token", "num_experts_per_tok"), 2)),
+            num_layers=int(_hf_config_attr(hf_config, ("num_layers", "num_hidden_layers"), 24)),
+            num_heads=int(_hf_config_attr(hf_config, ("num_heads", "num_attention_heads"), 16)),
+            num_kv_heads=int(_hf_config_attr(hf_config, ("num_kv_heads", "num_key_value_heads"), 16)),
+            head_dim=_hf_config_attr(hf_config, ("head_dim", "attention_head_dim")),
+            max_seq_len=int(_hf_config_attr(hf_config, ("max_seq_len", "max_position_embeddings"), 4096)),
+            sliding_window=int(_hf_config_attr(hf_config, ("sliding_window",), 4096)),
+            layer_norm_eps=float(_hf_config_attr(hf_config, ("layer_norm_eps", "rms_norm_eps"), 1e-5)),
+            initializer_std=float(_hf_config_attr(hf_config, ("initializer_std", "initializer_range"), 0.02)),
+            qk_mult=float(_hf_config_attr(hf_config, ("qk_mult",), 1.0)),
+            rope=rope,
+        )
+
+    def to_hf_config(self, vocab_size: int, config_overrides: dict[str, Any] | None = None) -> GrugMoeHfConfig:
+        config = {
+            "architectures": [GRUG_MOE_ARCHITECTURE],
+            "vocab_size": vocab_size,
+            "hidden_dim": self.hidden_dim,
+            "hidden_size": self.hidden_dim,
+            "intermediate_dim": self.intermediate_dim,
+            "intermediate_size": self.intermediate_dim,
+            "moe_intermediate_size": self.intermediate_dim,
+            "shared_expert_intermediate_dim": self.shared_expert_intermediate_dim,
+            "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
+            "num_experts": self.num_experts,
+            "num_local_experts": self.num_experts,
+            "num_experts_per_token": self.num_experts_per_token,
+            "num_experts_per_tok": self.num_experts_per_token,
+            "num_layers": self.num_layers,
+            "num_hidden_layers": self.num_layers,
+            "num_heads": self.num_heads,
+            "num_attention_heads": self.num_heads,
+            "num_kv_heads": self.num_kv_heads,
+            "num_key_value_heads": self.num_kv_heads,
+            "head_dim": self.inferred_head_dim,
+            "max_seq_len": self.max_seq_len,
+            "max_position_embeddings": self.max_seq_len,
+            "sliding_window": self.sliding_window,
+            "layer_norm_eps": self.layer_norm_eps,
+            "rms_norm_eps": self.layer_norm_eps,
+            "initializer_std": self.initializer_std,
+            "initializer_range": self.initializer_std,
+            "qk_mult": self.qk_mult,
+            "rope_theta": self.rope.theta,
+            "tie_word_embeddings": False,
+        }
+        if config_overrides is not None:
+            config.update(config_overrides)
+        return GrugMoeHfConfig(**config)
 
 
 def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
@@ -475,7 +582,24 @@ class Transformer(eqx.Module):
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Transformer":
+    def init(
+        cfg_or_vocab: GrugModelConfig | Axis,
+        config: GrugModelConfig | None = None,
+        *,
+        key: PRNGKeyArray,
+    ) -> "Transformer":
+        if isinstance(cfg_or_vocab, Axis):
+            if config is None:
+                raise ValueError("config must be provided when initializing with a Vocab axis")
+            if cfg_or_vocab.size == config.vocab_size:
+                cfg = config
+            else:
+                cfg = dataclasses.replace(config, vocab_size=cfg_or_vocab.size)
+        else:
+            if config is not None:
+                raise ValueError("config must not be provided when initializing directly from GrugModelConfig")
+            cfg = cfg_or_vocab
+
         embed_key, out_key, embed_gn_key, final_gn_key, *block_keys = random.split(key, cfg.num_layers + 4)
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
@@ -492,6 +616,10 @@ class Transformer(eqx.Module):
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
         )
+
+    @property
+    def Vocab(self) -> Axis:
+        return Axis("vocab", self.config.vocab_size)
 
     @named_call
     def __call__(
@@ -536,6 +664,9 @@ class Transformer(eqx.Module):
         batch_spec = _batch_spec()
         hidden, _ = self(token_ids, mask=mask)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
+
+    def to_state_dict(self, prefix: str | None = None) -> dict[str, jax.Array]:
+        return grugmoe_inference_state_dict(self, prefix=prefix)
 
     def next_token_loss(
         self,
@@ -596,15 +727,124 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
     return mesh, P(("data", "expert"), None)
 
 
+def _with_state_dict_prefix(prefix: str | None, name: str) -> str:
+    return name if prefix is None else f"{prefix}.{name}"
+
+
+def _linear_inference_tensor(value: jax.Array) -> jax.Array:
+    return jnp.swapaxes(value, -1, -2)
+
+
+def canonical_grugmoe_tensor_names(cfg: GrugModelConfig) -> frozenset[str]:
+    names = {
+        "model.embed_tokens.weight",
+        "model.embed_norm.weight",
+        "model.embed_gated_norm.down_proj.weight",
+        "model.embed_gated_norm.up_proj.weight",
+        "model.norm.weight",
+        "model.final_gated_norm.down_proj.weight",
+        "model.final_gated_norm.up_proj.weight",
+        "lm_head.weight",
+    }
+    for layer_index in range(cfg.num_layers):
+        prefix = f"model.layers.{layer_index}"
+        names.update(
+            {
+                f"{prefix}.input_layernorm.weight",
+                f"{prefix}.attn_gated_norm.down_proj.weight",
+                f"{prefix}.attn_gated_norm.up_proj.weight",
+                f"{prefix}.self_attn.q_proj.weight",
+                f"{prefix}.self_attn.k_proj.weight",
+                f"{prefix}.self_attn.v_proj.weight",
+                f"{prefix}.self_attn.o_proj.weight",
+                f"{prefix}.self_attn.attn_gate.weight",
+                f"{prefix}.post_attention_layernorm.weight",
+                f"{prefix}.mlp_gated_norm.down_proj.weight",
+                f"{prefix}.mlp_gated_norm.up_proj.weight",
+                f"{prefix}.mlp.router.weight",
+                f"{prefix}.mlp.router.bias",
+                f"{prefix}.mlp.experts.gate_proj.weight",
+                f"{prefix}.mlp.experts.up_proj.weight",
+                f"{prefix}.mlp.experts.down_proj.weight",
+            }
+        )
+        if cfg.shared_expert_intermediate_dim > 0:
+            names.update(
+                {
+                    f"{prefix}.shared_expert.gate_proj.weight",
+                    f"{prefix}.shared_expert.up_proj.weight",
+                    f"{prefix}.shared_expert.down_proj.weight",
+                }
+            )
+    return frozenset(names)
+
+
+def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) -> dict[str, jax.Array]:
+    tensors: dict[str, jax.Array] = {
+        "model.embed_tokens.weight": model.token_embed,
+        "model.embed_norm.weight": model.embed_norm.weight,
+        "model.embed_gated_norm.down_proj.weight": _linear_inference_tensor(model.embed_gated_norm.w_down),
+        "model.embed_gated_norm.up_proj.weight": _linear_inference_tensor(model.embed_gated_norm.w_up),
+        "model.norm.weight": model.final_norm.weight,
+        "model.final_gated_norm.down_proj.weight": _linear_inference_tensor(model.final_gated_norm.w_down),
+        "model.final_gated_norm.up_proj.weight": _linear_inference_tensor(model.final_gated_norm.w_up),
+        "lm_head.weight": _linear_inference_tensor(model.output_proj),
+    }
+
+    for layer_index, block in enumerate(model.blocks):
+        layer_prefix = f"model.layers.{layer_index}"
+        gate, up = jnp.split(block.mlp.expert_mlp.w_gate_up, [model.config.intermediate_dim], axis=-1)
+        tensors.update(
+            {
+                f"{layer_prefix}.input_layernorm.weight": block.rms_attn.weight,
+                f"{layer_prefix}.attn_gated_norm.down_proj.weight": _linear_inference_tensor(
+                    block.attn_gated_norm.w_down
+                ),
+                f"{layer_prefix}.attn_gated_norm.up_proj.weight": _linear_inference_tensor(block.attn_gated_norm.w_up),
+                f"{layer_prefix}.self_attn.q_proj.weight": _linear_inference_tensor(block.attn.w_q),
+                f"{layer_prefix}.self_attn.k_proj.weight": _linear_inference_tensor(block.attn.w_k),
+                f"{layer_prefix}.self_attn.v_proj.weight": _linear_inference_tensor(block.attn.w_v),
+                f"{layer_prefix}.self_attn.o_proj.weight": _linear_inference_tensor(block.attn.w_o),
+                f"{layer_prefix}.self_attn.attn_gate.weight": _linear_inference_tensor(block.attn.attn_gate),
+                f"{layer_prefix}.post_attention_layernorm.weight": block.rms_mlp.weight,
+                f"{layer_prefix}.mlp_gated_norm.down_proj.weight": _linear_inference_tensor(block.mlp_gated_norm.w_down),
+                f"{layer_prefix}.mlp_gated_norm.up_proj.weight": _linear_inference_tensor(block.mlp_gated_norm.w_up),
+                f"{layer_prefix}.mlp.router.weight": _linear_inference_tensor(block.mlp.router),
+                f"{layer_prefix}.mlp.router.bias": block.mlp.router_bias,
+                f"{layer_prefix}.mlp.experts.gate_proj.weight": _linear_inference_tensor(gate),
+                f"{layer_prefix}.mlp.experts.up_proj.weight": _linear_inference_tensor(up),
+                f"{layer_prefix}.mlp.experts.down_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_down),
+            }
+        )
+        if block.shared is not None:
+            tensors.update(
+                {
+                    f"{layer_prefix}.shared_expert.gate_proj.weight": _linear_inference_tensor(block.shared.w_gate),
+                    f"{layer_prefix}.shared_expert.up_proj.weight": _linear_inference_tensor(block.shared.w_up),
+                    f"{layer_prefix}.shared_expert.down_proj.weight": _linear_inference_tensor(block.shared.w_down),
+                }
+            )
+
+    if set(tensors) != canonical_grugmoe_tensor_names(model.config):
+        raise ValueError("GrugMoE inference state dict tensor names do not match the canonical schema")
+
+    return {_with_state_dict_prefix(prefix, name): value for name, value in tensors.items()}
+
+
 __all__ = [
+    "GRUG_MOE_ARCHITECTURE",
+    "GRUG_MOE_MODEL_TYPE",
     "Block",
     "CausalSelfAttention",
     "DenseMLP",
     "GatedNorm",
     "GrugModelConfig",
+    "GrugMoeHfConfig",
     "MoEMLP",
     "MoeActivation",
     "RMSNorm",
     "Transformer",
+    "canonical_grugmoe_tensor_names",
     "debug_mesh_and_token_pspec",
+    "grugmoe_inference_state_dict",
 ]
