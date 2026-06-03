@@ -124,12 +124,13 @@ jobs:
 
       - name: Submit reservation-holder probe
         run: |
+          set -o pipefail
           PROBE_NAME="reservation-holder-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           .venv/bin/iris --config lib/iris/config/marin-dev.yaml \
             job run --no-wait \
             --job-name "${PROBE_NAME}" \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
-            --priority production \
+            --priority interactive \
             --reserve v5p-8 \
             -- bash -lc 'sleep 600' | tee /tmp/probe-submit.txt
           JOB_ID="$(tail -n 1 /tmp/probe-submit.txt)"
