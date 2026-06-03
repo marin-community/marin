@@ -10,12 +10,13 @@ Issue: https://github.com/marin-community/marin/issues/6106
   - Native-JAX strengthened parity harness commit used for the 2026-06-03 TPU validation: [`1394236f`](https://github.com/marin-community/marin/commit/1394236f0d1bfa71d931397872e522557b237c78)
   - Canonical inference artifact roundtrip harness commit used for the 2026-06-03 TPU validation: [`c3442afe`](https://github.com/marin-community/marin/commit/c3442afe3ccfb6703623d6a679d7398f5789cd73)
   - Normal Levanter export path roundtrip commit used for the 2026-06-03 TPU validation: [`14577de9`](https://github.com/marin-community/marin/commit/14577de9f460cb727f8b3a6ed2232051aed1359a)
-  - Final pushed branch head is recorded in issue #6106 after this evidence update is pushed.
+  - Sharded Levanter/HF export smoke commit used for the 2026-06-03 TPU validation: [`f895c61f`](https://github.com/marin-community/marin/commit/f895c61f8546b9847fdb31316e04d2c6d351aa83)
 - vLLM: [`grugmoe-vllm-tpu-support`](https://github.com/marin-community/vllm/tree/grugmoe-vllm-tpu-support) in `/home/romain/dev/marin-wt/grugmoe-vllm-tpu-vllm`
   - Native-JAX replacement commit: [`d025e46d`](https://github.com/marin-community/vllm/commit/d025e46d3dfe0afc0f5bd1518c19ce337205db2d)
 - tpu-inference: [`grugmoe-vllm-tpu-support`](https://github.com/marin-community/tpu-inference/tree/grugmoe-vllm-tpu-support) in `/home/romain/dev/marin-wt/grugmoe-vllm-tpu-inference`
   - Native-JAX implementation commit: [`4f83d210`](https://github.com/marin-community/tpu-inference/commit/4f83d2109ae650de7d7e4f521154fb0d5c1a23a1)
   - Canonical inference artifact loader commit: [`e42d7339`](https://github.com/marin-community/tpu-inference/commit/e42d7339e2c84b29b4c302b22483678b3862ab4e)
+  - Standard sharded HF safetensors loader commit: [`c0d472c`](https://github.com/marin-community/tpu-inference/commit/c0d472c6c1ab085156767375d534c3272fbfd120)
 
 ## Milestones
 
@@ -39,6 +40,11 @@ Issue: https://github.com/marin-community/marin/issues/6106
 - 2026-06-03: Added `checkpoint_subpath` to the Levanter/Marin conversion path so standard LM checkpoints still default to `model` while Grug training-state checkpoints can export from `params`.
 - 2026-06-03: Replaced the harness-owned safetensors writer with a saved-checkpoint roundtrip: save tiny GrugMoE `params`, export via `export_lm_to_hf`, load in native tpu-inference JAX, and compare fixed-prompt hidden states, `compute_logits` logits, and routed expert IDs against the manual-copy model.
 - 2026-06-03: Ran `/romain/grugmoe-export-path-roundtrip-v2` on `v6e-4`; component parity, strengthened full parity, and saved-checkpoint Levanter export roundtrip all passed and the job reached `succeeded`.
+- 2026-06-03: Added standard HF sharded safetensors support to the native tpu-inference GrugMoE loader: `model.safetensors.index.json` plus `model-*-of-*.safetensors`, while preserving the existing single-file `model.safetensors` path and canonical tensor names.
+- 2026-06-03: Added a Levanter/HF `max_shard_size` export knob through `export_lm_to_hf` and Marin `convert_checkpoint_to_hf_step`, defaulting to the previous Levanter/HF shard size.
+- 2026-06-03: Extended the parity harness to force a tiny 1024-byte sharded HF export and verify hidden states, `compute_logits` logits, and routed expert IDs against the manual-copy Levanter reference.
+- 2026-06-03: Added an opt-in capped-size large smoke that creates a zero-weight GrugMoE Levanter checkpoint, exports standard sharded safetensors, and verifies the native tpu-inference loader consumes the artifact.
+- 2026-06-03: Ran `/romain/grugmoe-sharded-export-large-smoke` on `v6e-4`; single-file export parity, forced tiny sharded export parity, and the 1.25GB sharded loader smoke all passed and the job reached `succeeded`.
 
 ## Local Verification
 
@@ -129,6 +135,84 @@ Additional 2026-06-03 focused results:
 - `uv run --with ruff ruff check ...`: `All checks passed!`
 - `uv run --with pytest --with pytest-xdist pytest lib/levanter/tests/test_export_to_hf.py -q`: `1 passed, 14 warnings in 18.19s`
 
+Additional 2026-06-03 sharded-export results:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-vllm-tpu-inference
+uv run python -m py_compile \
+  tpu_inference/models/jax/grugmoe.py \
+  tests/models/jax/test_grugmoe.py
+uv run --with ruff ruff check \
+  tpu_inference/models/jax/grugmoe.py \
+  tests/models/jax/test_grugmoe.py
+JAX_PLATFORMS=cpu \
+PYTHONPATH=/home/romain/dev/marin-wt/grugmoe-vllm-tpu-inference:/home/romain/dev/marin-wt/grugmoe-vllm-tpu-vllm \
+uv run --no-project \
+  --with-requirements requirements.txt \
+  --with-requirements /home/romain/dev/marin-wt/grugmoe-vllm-tpu-vllm/requirements/common.txt \
+  --with 'torch==2.10.0+cpu' \
+  --extra-index-url https://download.pytorch.org/whl/cpu \
+  python -m pytest tests/models/jax/test_grugmoe.py -q
+JAX_PLATFORMS=cpu \
+PYTHONPATH=/home/romain/dev/marin-wt/grugmoe-vllm-tpu-inference:/home/romain/dev/marin-wt/grugmoe-vllm-tpu-vllm \
+uv run --no-project \
+  --with-requirements requirements.txt \
+  --with-requirements /home/romain/dev/marin-wt/grugmoe-vllm-tpu-vllm/requirements/common.txt \
+  --with 'torch==2.10.0+cpu' \
+  --extra-index-url https://download.pytorch.org/whl/cpu \
+  python -m pytest \
+    tests/models/common/test_model_loader.py::TestGetModel::test_get_model_auto_resolves_to_flax_nnx_for_grug_moe \
+    -q
+```
+
+Results:
+
+- `ruff`: `All checks passed!`
+- `tests/models/jax/test_grugmoe.py`: `3 passed, 11 warnings in 3.89s`
+- `test_get_model_auto_resolves_to_flax_nnx_for_grug_moe`: `1 passed, 20 warnings in 21.65s`
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-vllm-tpu-support
+uv run python -m py_compile \
+  experiments/grug/moe/vllm_tpu_parity.py \
+  lib/levanter/src/levanter/main/export_lm_to_hf.py \
+  lib/marin/src/marin/export/levanter_checkpoint.py
+uv run --with ruff ruff check \
+  experiments/grug/moe/vllm_tpu_parity.py \
+  lib/levanter/src/levanter/main/export_lm_to_hf.py \
+  lib/marin/src/marin/export/levanter_checkpoint.py
+./infra/pre-commit.py \
+  experiments/grug/moe/vllm_tpu_parity.py \
+  lib/levanter/src/levanter/main/export_lm_to_hf.py \
+  lib/marin/src/marin/export/levanter_checkpoint.py
+uv run --with pytest --with pytest-xdist pytest lib/levanter/tests/test_export_to_hf.py -q
+JAX_PLATFORMS=cpu \
+PYTHONPATH=/home/romain/dev/marin-wt/grugmoe-vllm-tpu-inference:/home/romain/dev/marin-wt/grugmoe-vllm-tpu-vllm \
+uv run \
+  --with-requirements ../grugmoe-vllm-tpu-inference/requirements.txt \
+  --with-requirements ../grugmoe-vllm-tpu-vllm/requirements/common.txt \
+  --with 'torch==2.10.0+cpu' \
+  --extra-index-url https://download.pytorch.org/whl/cpu \
+  python -m experiments.grug.moe.vllm_tpu_parity \
+  --tpu-inference-root ../grugmoe-vllm-tpu-inference
+```
+
+Results:
+
+- `ruff`: `All checks passed!`
+- `./infra/pre-commit.py ...`: `OK`
+- `lib/levanter/tests/test_export_to_hf.py`: `1 passed, 14 warnings in 22.02s`
+- Local parity harness final output:
+
+```text
+component: native GrugMoeMLP matches Levanter moe_mlp
+full: native GrugMoeModel hidden states, logits, and routed expert IDs match Levanter reference
+artifact-single-file: saved-checkpoint Levanter export matches manual-copy hidden states, logits, and routed expert IDs
+artifact-sharded: saved-checkpoint Levanter export matches manual-copy hidden states, logits, and routed expert IDs
+```
+
+The forced tiny local sharded export used `max_shard_size=1024`, produced 50 shard files, totaled about 109.63KB, and intentionally did not emit a top-level `model.safetensors`.
+
 ## TPU Verification
 
 Status: passed for the normal Levanter export path roundtrip branch heads listed below.
@@ -186,6 +270,76 @@ artifact: saved-checkpoint Levanter export matches manual-copy hidden states, lo
 
 Note: `/romain/grugmoe-export-path-roundtrip` failed before validation because the packaged Iris workspace is not a Git checkout, so the initial `git rev-parse HEAD` assertion returned an empty string. The replacement `/romain/grugmoe-export-path-roundtrip-v2` job above removed only that pre-test assertion and is the authoritative TPU validation.
 
+## Sharded Export TPU Verification
+
+Status: passed for the sharded HF safetensors loader and Levanter export branch heads listed below.
+
+Exact validation SHAs:
+
+- Marin: `f895c61f8546b9847fdb31316e04d2c6d351aa83`
+- tpu-inference: `c0d472c6c1ab085156767375d534c3272fbfd120`
+- vLLM: `d025e46d3dfe0afc0f5bd1518c19ce337205db2d`
+
+Repro command:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-vllm-tpu-support
+uv run iris --cluster=marin job run \
+  --no-wait \
+  --enable-extra-resources \
+  --extra marin-core:tpu \
+  --tpu v6e-4 \
+  --region europe-west4 \
+  --priority interactive \
+  --timeout 3600 \
+  --cpu 8 \
+  --memory 64GB \
+  --disk 100GB \
+  --job-name grugmoe-sharded-export-large-smoke \
+  -- bash -lc 'set -euxo pipefail; echo marin_sha=f895c61f8546b9847fdb31316e04d2c6d351aa83; git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/tpu-inference.git /tmp/grugmoe-vllm-tpu-inference; git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/vllm.git /tmp/grugmoe-vllm-tpu-vllm; echo tpu_inference_sha=$(git -C /tmp/grugmoe-vllm-tpu-inference rev-parse HEAD); echo vllm_sha=$(git -C /tmp/grugmoe-vllm-tpu-vllm rev-parse HEAD); export LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304; PYTHONPATH=/tmp/grugmoe-vllm-tpu-inference:/tmp/grugmoe-vllm-tpu-vllm uv run --with-requirements /tmp/grugmoe-vllm-tpu-inference/requirements.txt --with-requirements /tmp/grugmoe-vllm-tpu-vllm/requirements/common.txt --with "torch==2.10.0+cpu" --extra-index-url https://download.pytorch.org/whl/cpu python -m experiments.grug.moe.vllm_tpu_parity --tpu-inference-root /tmp/grugmoe-vllm-tpu-inference --large-smoke'
+```
+
+Result:
+
+- Job: `/romain/grugmoe-sharded-export-large-smoke`
+- TPU: `v6e-4`
+- Region: `europe-west4`
+- State: `succeeded`
+- Exit: `0`
+- Failures/preemptions: `0`/`0`
+- Duration: `2 minutes and 29.62 seconds`
+
+Remote SHA log lines:
+
+```text
+marin_sha=f895c61f8546b9847fdb31316e04d2c6d351aa83
+tpu_inference_sha=c0d472c6c1ab085156767375d534c3272fbfd120
+vllm_sha=d025e46d3dfe0afc0f5bd1518c19ce337205db2d
+```
+
+Final validation log lines:
+
+```text
+component: native GrugMoeMLP matches Levanter moe_mlp
+full: native GrugMoeModel hidden states, logits, and routed expert IDs match Levanter reference
+artifact-single-file: saved-checkpoint Levanter export matches manual-copy hidden states, logits, and routed expert IDs
+Will save 50 shards with max size 4.1 KB
+artifact-sharded: saved-checkpoint Levanter export matches manual-copy hidden states, logits, and routed expert IDs
+Checkpoint size -/1250800896 ...
+Will save 27 shards with max size 83.89 MB
+Saved a sharded checkpoint with 27 shards, max size 83.89 MB
+Progress on:Checkpoint size 1.25GB/1.25GB ...
+artifact-large-sharded: zero-weight Levanter export loaded in native tpu-inference (1250833717 bytes, 27 shards)
+```
+
+Artifact evidence:
+
+- Tiny single-file and forced-sharded artifacts were written to TPU-local temporary directories under `/tmp/tmph9zr4mb4` and `/tmp/tmp8dwngmm8`.
+- The capped-size large smoke artifact was written to `/tmp/tmpa8u4tbxf/grugmoe-large-inference`.
+- The large smoke artifact was `1,250,833,717` bytes across 27 standard HF safetensors shards.
+- These paths were TPU-local temporary directories and are not persistent artifact locations.
+- No checkpoint or artifact was copied to local disk or the Hugging Face Hub.
+
 ## Scope
 
 In scope:
@@ -196,6 +350,9 @@ In scope:
 - Tiny deterministic composed parity using Levanter parameters/equations, including final hidden states, `compute_logits` logits, and routed expert IDs.
 - Tiny deterministic canonical inference artifact export/load roundtrip.
 - Tiny deterministic saved-checkpoint export through Levanter `export_lm_to_hf` and Marin-compatible `checkpoint_subpath="params"`.
+- Standard HF sharded safetensors loading in native tpu-inference: `model.safetensors.index.json` plus `model-*-of-*.safetensors`.
+- Tiny deterministic forced-shard Levanter/HF export roundtrip.
+- Capped-size 1.25GB zero-weight sharded Levanter/HF export smoke.
 - Strict artifact tensor accounting: all exported tensors consumed, no missing tensors, no unexpected tensors.
 - Targeted Iris `v6e-4` validation.
 
@@ -206,5 +363,5 @@ Out of scope:
 - vLLM PyTorch GrugMoE ownership.
 - Direct loading of Levanter's native training checkpoint tree as the serving contract.
 - Generation.
-- Real-model smoke tests.
+- Real-checkpoint smoke testing remains a gap: no concrete smallest real GrugMoE checkpoint/config path was discoverable from issue #6106, the repo docs, or quick Iris job queries; broad GCS bucket crawling/copying was intentionally avoided.
 - Production KV-cache decode.
