@@ -35,8 +35,8 @@ from levanter.grug.attention import (
 )
 from levanter.grug.grug_moe import (
     MoeActivation,
-    MoEExpertMlp,
     MoeImplementation,
+    moe_mlp,
     resolve_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
@@ -332,12 +332,14 @@ class MoEMLP(eqx.Module):
 
     router: jax.Array
     router_bias: jax.Array
-    expert_mlp: MoEExpertMlp
+    w_gate: jax.Array
+    w_up: jax.Array
+    w_down: jax.Array
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
-        k_router, k_expert_mlp = random.split(key, 2)
+        k_router, k_gate, k_up, k_down = random.split(key, 4)
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
@@ -345,20 +347,16 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e, i = cfg.hidden_dim, cfg.num_experts, cfg.intermediate_dim
-
+        # Split-w_gate-up layout (baked in): store w_gate / w_up as separate
+        # ``(e, d, i)`` tensors, concat on forward.
+        w_gate = reshard(_init_weight(k_gate, (e, d, i), cfg.initializer_std), P("expert", "data", "model"))
+        w_up = reshard(_init_weight(k_up, (e, d, i), cfg.initializer_std), P("expert", "data", "model"))
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
-            expert_mlp=MoEExpertMlp.init(
-                num_experts=e,
-                hidden_dim=d,
-                intermediate_dim=i,
-                initializer_std=cfg.initializer_std,
-                key=k_expert_mlp,
-                implementation=cfg.moe_implementation,
-                activation=ActivationFunctionEnum.silu,
-                capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
-            ),
+            w_gate=w_gate,
+            w_up=w_up,
+            w_down=reshard(_init_weight(k_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
             cfg=cfg,
         )
 
@@ -379,7 +377,11 @@ class MoEMLP(eqx.Module):
         selected_experts = selected_experts[:, :-1]
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights = jax.nn.sigmoid(unbiased_topk).astype(x.dtype)
+        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
+        # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
+        denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
+        combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
+        combine_weights = combine_weights_f.astype(x.dtype)
         router_stats = _routing_stats(
             selected_experts,
             router_probs,
@@ -410,11 +412,16 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
-        routed_flat = self.expert_mlp(
+        w_gate_up = reshard(jnp.concatenate([self.w_gate, self.w_up], axis=-1), P("expert", "data", "model"))
+        routed_flat = moe_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
+            w_gate_up,
+            self.w_down,
+            activation=ActivationFunctionEnum.silu,
             mesh=get_abstract_mesh(),
+            capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
         )
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
