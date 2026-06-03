@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from iris.dev_tpu import DevTpuState, DevTpuWorker, GcpNodeRef, parse_worker_host
+
+from scripts.iris.dev_tpu import DevTpuState, DevTpuWorker, GcpNodeRef, parse_worker_host
 
 
 def test_parse_worker_host_accepts_http_address():
