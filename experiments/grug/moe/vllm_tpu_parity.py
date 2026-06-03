@@ -27,7 +27,9 @@ from __future__ import annotations
 import argparse
 import contextlib
 import importlib
+import json
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar
@@ -39,11 +41,16 @@ import numpy as np
 from flax import nnx
 from jax.sharding import AxisType, Mesh
 from levanter.grug.grug_moe import moe_mlp
+from safetensors.numpy import save_file
 
 import experiments.grug.moe.model as grug_moe_model
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 
 jax.config.update("jax_default_matmul_precision", "float32")
+
+_ARTIFACT_CONFIG_FILE = "config.json"
+_ARTIFACT_WEIGHTS_FILE = "model.safetensors"
+_ARTIFACT_MODEL_TYPE = "grug_moe"
 
 
 class _EmptyMesh:
@@ -172,32 +179,51 @@ def _layer_sliding_window(cfg: GrugModelConfig, layer_index: int) -> int:
 def _hf_config(cfg: GrugModelConfig) -> SimpleNamespace:
     return SimpleNamespace(
         architectures=["GrugMoeForCausalLM"],
+        model_type=_ARTIFACT_MODEL_TYPE,
         vocab_size=cfg.vocab_size,
         hidden_dim=cfg.hidden_dim,
+        hidden_size=cfg.hidden_dim,
         intermediate_dim=cfg.intermediate_dim,
         shared_expert_intermediate_dim=cfg.shared_expert_intermediate_dim,
         num_experts=cfg.num_experts,
+        num_local_experts=cfg.num_experts,
         num_experts_per_token=cfg.num_experts_per_token,
+        num_experts_per_tok=cfg.num_experts_per_token,
         num_layers=cfg.num_layers,
+        num_hidden_layers=cfg.num_layers,
         num_heads=cfg.num_heads,
+        num_attention_heads=cfg.num_heads,
         num_kv_heads=cfg.num_kv_heads,
+        num_key_value_heads=cfg.num_kv_heads,
         head_dim=cfg.inferred_head_dim,
         max_seq_len=cfg.max_seq_len,
+        max_position_embeddings=cfg.max_seq_len,
         sliding_window=cfg.sliding_window,
         layer_norm_eps=cfg.layer_norm_eps,
+        rms_norm_eps=cfg.layer_norm_eps,
         initializer_std=cfg.initializer_std,
+        initializer_range=cfg.initializer_std,
         qk_mult=cfg.qk_mult,
         rope_theta=cfg.rope.theta,
         tie_word_embeddings=False,
     )
 
 
-def _vllm_config(cfg: GrugModelConfig) -> SimpleNamespace:
+def _config_json(cfg: GrugModelConfig) -> dict[str, Any]:
+    return vars(_hf_config(cfg)).copy()
+
+
+def _vllm_config(cfg: GrugModelConfig, model_path: Path | None = None) -> SimpleNamespace:
     model_config = SimpleNamespace(
         hf_config=_hf_config(cfg),
         dtype=jnp.float32,
+        model=str(model_path) if model_path is not None else "grugmoe-canonical-test",
     )
-    return SimpleNamespace(model_config=model_config)
+    return SimpleNamespace(
+        model_config=model_config,
+        load_config=SimpleNamespace(download_dir=None),
+        additional_config={},
+    )
 
 
 def _tpu_cfg(tpu_grugmoe, cfg: GrugModelConfig):
@@ -442,6 +468,78 @@ def _copy_transformer(tpu_model: Any, lev_model: Transformer) -> None:
             _copy_param(tpu_block.shared.w_down, lev_block.shared.w_down)
 
 
+def _linear_artifact_tensor(value: Any) -> np.ndarray:
+    return _np(jnp.swapaxes(value, -1, -2))
+
+
+def export_inference_artifact(lev_model: Transformer, artifact_dir: Path) -> frozenset[str]:
+    """Write a canonical GrugMoE inference artifact from a Levanter model."""
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    with (artifact_dir / _ARTIFACT_CONFIG_FILE).open("w") as f:
+        json.dump(_config_json(lev_model.config), f, indent=2, sort_keys=True)
+        f.write("\n")
+
+    tensors: dict[str, np.ndarray] = {
+        "model.embed_tokens.weight": _np(lev_model.token_embed),
+        "model.embed_norm.weight": _np(lev_model.embed_norm.weight),
+        "model.embed_gated_norm.down_proj.weight": _linear_artifact_tensor(lev_model.embed_gated_norm.w_down),
+        "model.embed_gated_norm.up_proj.weight": _linear_artifact_tensor(lev_model.embed_gated_norm.w_up),
+        "model.norm.weight": _np(lev_model.final_norm.weight),
+        "model.final_gated_norm.down_proj.weight": _linear_artifact_tensor(lev_model.final_gated_norm.w_down),
+        "model.final_gated_norm.up_proj.weight": _linear_artifact_tensor(lev_model.final_gated_norm.w_up),
+        "lm_head.weight": _linear_artifact_tensor(lev_model.output_proj),
+    }
+
+    for layer_index, block in enumerate(lev_model.blocks):
+        prefix = f"model.layers.{layer_index}"
+        gate, up = jnp.split(block.mlp.expert_mlp.w_gate_up, [lev_model.config.intermediate_dim], axis=-1)
+        tensors.update(
+            {
+                f"{prefix}.input_layernorm.weight": _np(block.rms_attn.weight),
+                f"{prefix}.attn_gated_norm.down_proj.weight": _linear_artifact_tensor(block.attn_gated_norm.w_down),
+                f"{prefix}.attn_gated_norm.up_proj.weight": _linear_artifact_tensor(block.attn_gated_norm.w_up),
+                f"{prefix}.self_attn.q_proj.weight": _linear_artifact_tensor(block.attn.w_q),
+                f"{prefix}.self_attn.k_proj.weight": _linear_artifact_tensor(block.attn.w_k),
+                f"{prefix}.self_attn.v_proj.weight": _linear_artifact_tensor(block.attn.w_v),
+                f"{prefix}.self_attn.o_proj.weight": _linear_artifact_tensor(block.attn.w_o),
+                f"{prefix}.self_attn.attn_gate.weight": _linear_artifact_tensor(block.attn.attn_gate),
+                f"{prefix}.post_attention_layernorm.weight": _np(block.rms_mlp.weight),
+                f"{prefix}.mlp_gated_norm.down_proj.weight": _linear_artifact_tensor(block.mlp_gated_norm.w_down),
+                f"{prefix}.mlp_gated_norm.up_proj.weight": _linear_artifact_tensor(block.mlp_gated_norm.w_up),
+                f"{prefix}.mlp.router.weight": _linear_artifact_tensor(block.mlp.router),
+                f"{prefix}.mlp.router.bias": _np(block.mlp.router_bias),
+                f"{prefix}.mlp.experts.gate_proj.weight": _linear_artifact_tensor(gate),
+                f"{prefix}.mlp.experts.up_proj.weight": _linear_artifact_tensor(up),
+                f"{prefix}.mlp.experts.down_proj.weight": _linear_artifact_tensor(block.mlp.expert_mlp.w_down),
+            }
+        )
+        if block.shared is not None:
+            tensors.update(
+                {
+                    f"{prefix}.shared_expert.gate_proj.weight": _linear_artifact_tensor(block.shared.w_gate),
+                    f"{prefix}.shared_expert.up_proj.weight": _linear_artifact_tensor(block.shared.w_up),
+                    f"{prefix}.shared_expert.down_proj.weight": _linear_artifact_tensor(block.shared.w_down),
+                }
+            )
+
+    save_file(tensors, str(artifact_dir / _ARTIFACT_WEIGHTS_FILE))
+    return frozenset(tensors)
+
+
+def _native_forward(
+    tpu_model: Any,
+    token_ids: jax.Array,
+    attention_metadata_mod: Any,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    positions = jnp.arange(token_ids.shape[1], dtype=jnp.int32)
+    metadata = attention_metadata_mod.AttentionMetadata(input_positions=positions)
+    _, hidden, expert_ids = tpu_model.model([None] * tpu_model.model.config.num_layers, token_ids[0], metadata)
+    logits = tpu_model.compute_logits(hidden)
+    if expert_ids is None:
+        raise AssertionError("native GrugMoE model did not return routed expert IDs")
+    return hidden, logits, expert_ids
+
+
 def check_full_forward(tpu_grugmoe) -> None:
     attention_metadata_mod = importlib.import_module("tpu_inference.layers.common.attention_metadata")
     cfg = _tiny_cfg()
@@ -455,19 +553,63 @@ def check_full_forward(tpu_grugmoe) -> None:
     _copy_transformer(tpu_model, lev_model)
 
     token_ids = jnp.array([[1, 5, 3, 7, 2, 9]], dtype=jnp.int32)
-    positions = jnp.arange(token_ids.shape[1], dtype=jnp.int32)
-    metadata = attention_metadata_mod.AttentionMetadata(input_positions=positions)
-    _, actual_hidden, actual_expert_ids = tpu_model.model([None] * cfg.num_layers, token_ids[0], metadata)
+    actual_hidden, actual_logits, actual_expert_ids = _native_forward(tpu_model, token_ids, attention_metadata_mod)
     expected_hidden, expected_expert_ids = jax.jit(_jax_full_forward)(lev_model, token_ids)
-    actual_logits = tpu_model.compute_logits(actual_hidden)
     expected_logits = _jax_logits(lev_model, expected_hidden)[0]
 
-    if actual_expert_ids is None:
-        raise AssertionError("native GrugMoE model did not return routed expert IDs")
     np.testing.assert_allclose(_np(actual_hidden), _np(expected_hidden[0]), rtol=5e-4, atol=5e-4)
     np.testing.assert_allclose(_np(actual_logits), _np(expected_logits), rtol=5e-4, atol=5e-4)
     np.testing.assert_array_equal(_np(actual_expert_ids), _np(expected_expert_ids))
     print("full: native GrugMoeModel hidden states, logits, and routed expert IDs match Levanter reference")
+
+
+def check_inference_artifact_roundtrip(tpu_grugmoe) -> None:
+    attention_metadata_mod = importlib.import_module("tpu_inference.layers.common.attention_metadata")
+    cfg = _tiny_cfg()
+    key = jax.random.PRNGKey(7)
+    with _use_runtime_grug_mesh(for_init=True):
+        lev_model = Transformer.init(cfg, key=key)
+
+    token_ids = jnp.array([[1, 5, 3, 7, 2, 9]], dtype=jnp.int32)
+    with tempfile.TemporaryDirectory() as tmp:
+        artifact_dir = Path(tmp) / "grugmoe-inference"
+        exported_names = export_inference_artifact(lev_model, artifact_dir)
+        with _patch_tpu_single_rank(tpu_grugmoe), jax.set_mesh(_tpu_mesh()):
+            manual_model = tpu_grugmoe.GrugMoeForCausalLM(_vllm_config(cfg), jax.random.PRNGKey(0), _tpu_mesh())
+            loaded_model = tpu_grugmoe.GrugMoeForCausalLM(
+                _vllm_config(cfg, artifact_dir),
+                jax.random.PRNGKey(1),
+                _tpu_mesh(),
+            )
+
+        _copy_transformer(manual_model, lev_model)
+        report = loaded_model.load_weights(jax.random.PRNGKey(2))
+        if report.consumed != exported_names:
+            raise AssertionError(
+                "artifact load report does not match exported tensors: "
+                f"missing={sorted(exported_names - report.consumed)} "
+                f"extra={sorted(report.consumed - exported_names)}"
+            )
+        if report.missing or report.unexpected:
+            raise AssertionError(
+                f"artifact load report was not strict: missing={report.missing} unexpected={report.unexpected}"
+            )
+
+        manual_hidden, manual_logits, manual_expert_ids = _native_forward(
+            manual_model,
+            token_ids,
+            attention_metadata_mod,
+        )
+        loaded_hidden, loaded_logits, loaded_expert_ids = _native_forward(
+            loaded_model,
+            token_ids,
+            attention_metadata_mod,
+        )
+
+    np.testing.assert_allclose(_np(loaded_hidden), _np(manual_hidden), rtol=5e-4, atol=5e-4)
+    np.testing.assert_allclose(_np(loaded_logits), _np(manual_logits), rtol=5e-4, atol=5e-4)
+    np.testing.assert_array_equal(_np(loaded_expert_ids), _np(manual_expert_ids))
+    print("artifact: canonical safetensors load matches manual-copy hidden states, logits, and routed expert IDs")
 
 
 def main() -> None:
@@ -489,6 +631,7 @@ def main() -> None:
     check_moe_component(tpu_grugmoe)
     if not args.component_only:
         check_full_forward(tpu_grugmoe)
+        check_inference_artifact_roundtrip(tpu_grugmoe)
 
 
 if __name__ == "__main__":
