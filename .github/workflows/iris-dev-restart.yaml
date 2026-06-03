@@ -1,9 +1,6 @@
 name: "Iris - Dev Restart"
 
 on:
-  schedule:
-    # Daily at 05:00 UTC — staggered before canary ferry (06:00 UTC)
-    - cron: "0 5 * * *"
   workflow_dispatch:
 
 permissions:
@@ -17,7 +14,7 @@ concurrency:
 jobs:
   restart:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
     steps:
@@ -34,6 +31,9 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: "lib/iris/pyproject.toml"
+
+      - name: Install dependencies
+        run: uv sync --all-packages --extra=cpu --no-default-groups
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -65,10 +65,126 @@ jobs:
             --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
             --ttl=2h
 
-      - name: Restart dev controller
+      - name: Build custom controller image
         run: |
-          uv run iris --config lib/iris/config/marin-dev.yaml \
-            cluster controller restart
+          IRIS_TREE_HASH=$(.venv/bin/python -c 'from iris.cli.build import get_git_sha; print(get_git_sha())')
+          IMAGE_TAG="pr-6141-dev-probe-${IRIS_TREE_HASH}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          CONTROLLER_IMAGE="ghcr.io/marin-community/iris-controller:${IMAGE_TAG}"
+          echo "IRIS_TREE_HASH=${IRIS_TREE_HASH}" >> "$GITHUB_ENV"
+          echo "CONTROLLER_IMAGE=${CONTROLLER_IMAGE}" >> "$GITHUB_ENV"
+          echo "Building ${CONTROLLER_IMAGE}"
+          docker buildx build --platform linux/amd64 \
+            --file lib/iris/Dockerfile \
+            --target controller \
+            --cache-from type=registry,ref=ghcr.io/marin-community/iris-cache:controller \
+            --cache-to type=registry,ref=ghcr.io/marin-community/iris-cache:controller,mode=max \
+            --output type=image,compression=zstd,compression-level=3,push=true \
+            --provenance=false \
+            --build-arg IRIS_GIT_HASH="${IRIS_TREE_HASH}" \
+            --tag "${CONTROLLER_IMAGE}" \
+            .
+
+      - name: Restart dev controller with custom image
+        run: |
+          .venv/bin/python <<'PY'
+          import os
+
+          from iris.cli.connect import rpc_client
+          from iris.cluster.config import IrisConfig, load_config
+          from iris.rpc import controller_pb2
+
+          image = os.environ["CONTROLLER_IMAGE"]
+          config = load_config("lib/iris/config/marin-dev.yaml")
+          config.controller.image = image
+          iris_config = IrisConfig(config)
+          bundle = iris_config.provider_bundle()
+
+          controller_address = iris_config.controller_address()
+          if not controller_address:
+              controller_address = bundle.controller.discover_controller(iris_config.proto.controller)
+
+          print(f"Checkpointing current marin-dev controller at {controller_address}")
+          with bundle.controller.tunnel(address=controller_address) as controller_url:
+              with rpc_client(controller_url, timeout_ms=300_000) as client:
+                  response = client.begin_checkpoint(
+                      controller_pb2.Controller.BeginCheckpointRequest(),
+                      timeout_ms=300_000,
+                  )
+          print(f"Checkpoint: {response.checkpoint_path} ({response.job_count} jobs, {response.worker_count} workers)")
+
+          print(f"Restarting marin-dev controller with {image}")
+          restarted = bundle.controller.restart_controller(iris_config.proto)
+          print(f"Controller restarted at {restarted}")
+          PY
+
+      - name: Verify dev controller hash
+        run: |
+          .venv/bin/iris --config lib/iris/config/marin-dev.yaml cluster status | tee /tmp/marin-dev-status.txt
+          grep "Git Hash: ${IRIS_TREE_HASH}" /tmp/marin-dev-status.txt
+
+      - name: Submit reservation-holder probe
+        run: |
+          PROBE_NAME="reservation-holder-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          .venv/bin/iris --config lib/iris/config/marin-dev.yaml \
+            job run --no-wait \
+            --job-name "${PROBE_NAME}" \
+            --memory=2G --disk=4G --cpu=1 --extra=cpu \
+            --priority production \
+            --reserve v5p-8 \
+            -- bash -lc 'sleep 600' | tee /tmp/probe-submit.txt
+          JOB_ID="$(tail -n 1 /tmp/probe-submit.txt)"
+          echo "JOB_ID=${JOB_ID}" >> "$GITHUB_ENV"
+          echo "Submitted ${JOB_ID}"
+
+      - name: Query and validate holder constraints
+        run: |
+          SQL=$(.venv/bin/python <<'PY'
+          import os
+
+          job_id = os.environ["JOB_ID"].replace("'", "''")
+          print(
+              "SELECT j.job_id, j.parent_job_id, j.is_reservation_holder, jc.constraints_json "
+              "FROM jobs j JOIN job_config jc ON jc.job_id = j.job_id "
+              f"WHERE j.job_id = '{job_id}' OR j.parent_job_id = '{job_id}' "
+              "ORDER BY j.is_reservation_holder, j.job_id"
+          )
+          PY
+          )
+          .venv/bin/iris --config lib/iris/config/marin-dev.yaml query --format json "$SQL" | tee /tmp/probe-query.json
+          .venv/bin/python <<'PY'
+          import json
+
+          rows = json.load(open("/tmp/probe-query.json"))
+          if len(rows) != 2:
+              raise SystemExit(f"expected parent + reservation holder rows, got {len(rows)}: {rows}")
+
+          def constraint_keys(row):
+              raw = row["constraints_json"] or "[]"
+              return [item["key"] for item in json.loads(raw)]
+
+          parent = next(row for row in rows if not row["is_reservation_holder"])
+          holder = next(row for row in rows if row["is_reservation_holder"])
+          parent_keys = constraint_keys(parent)
+          holder_keys = constraint_keys(holder)
+
+          print(f"parent={parent['job_id']} keys={parent_keys}")
+          print(f"holder={holder['job_id']} keys={holder_keys}")
+
+          if "preemptible" not in parent_keys:
+              raise SystemExit("parent job did not receive the executor preemptible constraint")
+          if "preemptible" in holder_keys:
+              raise SystemExit("reservation holder still leaked the parent preemptible constraint")
+          for required in ("device-type", "device-variant"):
+              if required not in holder_keys:
+                  raise SystemExit(f"reservation holder missing required {required} constraint")
+          PY
+
+      - name: Stop reservation-holder probe
+        if: always()
+        run: |
+          if [ -n "${JOB_ID:-}" ]; then
+            .venv/bin/iris --config lib/iris/config/marin-dev.yaml job stop "$JOB_ID" || true
+          fi
 
       - name: Remove OS Login SSH key
         if: always()
