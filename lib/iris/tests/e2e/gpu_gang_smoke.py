@@ -507,8 +507,13 @@ def run_smoke(cfg: config_pb2.IrisClusterConfig, args: SmokeArgs) -> bool:
 # CLI
 # ---------------------------------------------------------------------------
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
-@click.option("--config", "config_path", required=True, type=click.Path(path_type=Path),
-              help="Iris cluster config YAML (kind or coreweave)")
+@click.option(
+    "--config",
+    "config_path",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="Iris cluster config YAML (kind or coreweave)",
+)
 @click.option("--target", required=True, type=click.Choice(["kind", "coreweave"]))
 @click.option("--replicas", type=int, default=3, help="gang size (tasks)")
 @click.option("--gpu", default="", help="GPU request as VARIANT:COUNT (coreweave), e.g. H100:8")
@@ -518,8 +523,9 @@ def run_smoke(cfg: config_pb2.IrisClusterConfig, args: SmokeArgs) -> bool:
 @click.option("--timeout", type=int, default=1800, help="job completion timeout (seconds)")
 @click.option("--kind-cluster", default="iris-gpu-smoke")
 @click.option("--keep", is_flag=True, help="skip teardown")
-@click.option("--i-understand-the-cost", "i_understand_the_cost", is_flag=True,
-              help="required for --target coreweave (paid H100s)")
+@click.option(
+    "--i-understand-the-cost", "i_understand_the_cost", is_flag=True, help="required for --target coreweave (paid H100s)"
+)
 def main(
     config_path: Path,
     target: str,

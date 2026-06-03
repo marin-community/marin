@@ -2,7 +2,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Multi-host JAX workload for the gang smoke (scripts/gpu_gang_smoke.py).
+"""Multi-host JAX workload for the gang smoke (tests/e2e/gpu_gang_smoke.py).
 
 Submitted as a normal Iris job (one task per gang member) and run from the job
 bundle, so it can ``import jax`` (installed via the job's ``gpu``/``cpu`` extra)
