@@ -40,7 +40,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 
-from marin.execution.executor import ExecutorStep, InputName, this_output_path
+from marin.execution import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 
 logger = logging.getLogger(__name__)
