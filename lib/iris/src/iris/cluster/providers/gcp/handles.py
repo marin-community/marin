@@ -112,14 +112,26 @@ def _composite_slice_state(
     bootstrap sentinel, so it too becomes READY and is validated by the
     autoscaler's health probe, which reaps it if the workers are in fact dead.
 
-    Cloud states that mean "gone or doomed" — FAILED, DELETING, and UNKNOWN (no
-    longer describable) — are authoritative and override the bootstrap verdict,
-    so a torn-down or vanished node never lingers as READY on a stale sentinel.
+    A bootstrap that definitively FAILED is authoritative — even when the cloud
+    is no longer describable (UNKNOWN). A stockout/quota create failure leaves no
+    TPU resource to describe, so describe() reports UNKNOWN; without surfacing the
+    FAILED bootstrap verdict the autoscaler would wait out the full
+    unresolvable-timeout grace period (and keep re-describing the dead TPU) before
+    reaping a slice it already knows never came up.
+
+    Cloud states that mean "gone or doomed" — FAILED and DELETING — are likewise
+    authoritative. A bare UNKNOWN (cloud no longer describable, bootstrap still in
+    progress or a stale READY sentinel) is reported as UNKNOWN so a vanished node
+    never lingers as READY and the unresolvable-timeout path can reap it.
     """
-    if cloud_state in (CloudSliceState.FAILED, CloudSliceState.DELETING, CloudSliceState.UNKNOWN):
+    if cloud_state in (CloudSliceState.FAILED, CloudSliceState.DELETING):
         return cloud_state
+    # A definitive bootstrap failure wins over UNKNOWN: the slice never came up,
+    # so reap it now instead of waiting out the unresolvable timeout.
     if bootstrap_state == CloudSliceState.FAILED:
         return CloudSliceState.FAILED
+    if cloud_state == CloudSliceState.UNKNOWN:
+        return CloudSliceState.UNKNOWN
     if bootstrap_state == CloudSliceState.READY:
         return CloudSliceState.READY
     # Bootstrap still in progress: surface BOOTSTRAPPING once cloud is READY,
