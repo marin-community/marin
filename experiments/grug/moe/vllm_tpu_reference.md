@@ -22,8 +22,8 @@ Issue: https://github.com/marin-community/marin/issues/6106
   - Exact validation SHA: `d025e46d3dfe0afc0f5bd1518c19ce337205db2d`.
 - Marin parity harness:
   - `experiments/grug/moe/model.py` exposes `GrugModelConfig.to_hf_config` and `Transformer.to_state_dict` so `HFCheckpointConverter.save_pretrained` emits the canonical inference artifact.
-  - `experiments/grug/moe/vllm_tpu_parity.py` validates the manual-copy correctness path, the saved-checkpoint single-file Levanter export roundtrip, the forced tiny sharded Levanter export roundtrip, and an opt-in capped-size sharded loader smoke.
-  - Exact sharded-export validation SHA: `f895c61f8546b9847fdb31316e04d2c6d351aa83`.
+  - `experiments/grug/moe/vllm_tpu_parity.py` validates the manual-copy correctness path, the saved-checkpoint single-file Levanter export roundtrip, the forced tiny sharded Levanter export roundtrip, an opt-in capped-size sharded loader smoke, and a realistic seeded non-zero `GrugTrainState` checkpoint roundtrip.
+  - Exact realistic full-canary validation SHA: `e2a4a4bfb71ebeb56a09cc24c01cca18aa117678`.
 - Marin export step:
   - `lib/levanter/src/levanter/main/export_lm_to_hf.py` supports tokenizer-less save-only exports when the model config carries `vocab_size`.
   - `lib/levanter/src/levanter/main/export_lm_to_hf.py` and `lib/marin/src/marin/export/levanter_checkpoint.py` support `checkpoint_subpath`; Grug training-state checkpoints export from `params`, while existing LM exports still default to `model`.
@@ -47,7 +47,7 @@ This intentionally does not include:
 - Generation.
 - Production KV-cache decode behavior.
 - Performance tuning or fused TPU kernels.
-- Real-checkpoint smoke tests; no concrete smallest real checkpoint/config path was discoverable during the 2026-06-03 validation pass.
+- External trained-checkpoint smoke tests. The realistic validation milestone uses a seeded non-zero local `GrugTrainState` checkpoint with the full canary config.
 
 ## Canonical Artifact
 
@@ -93,6 +93,27 @@ window lengths can affect attention.
 
 The focused tpu-inference unit test uses an even smaller MoE-only shape to isolate the router-bias semantic.
 
+## Full Canary Config
+
+The realistic training-state roundtrip uses the full `GRUG_MOE_TRIAL_MODEL` config from the MoE launch path:
+
+- `vocab_size=128256`
+- `hidden_dim=1024`
+- `intermediate_dim=512`
+- `shared_expert_intermediate_dim=1024`
+- `num_experts=64`
+- `num_experts_per_token=4`
+- `num_layers=11`
+- `num_heads=8`
+- `num_kv_heads=2`
+- inferred `head_dim=128`
+- `max_seq_len=4096`
+- `sliding_window=4096`
+- `initializer_std=0.015625`
+- `qk_mult=1.3`
+
+This preserves the production-relevant structure required for validation: 64 experts, top-4 routing, a shared expert, GQA, and the short/long sliding-window layer pattern. The validation prompt is fixed to `[1, 42, 128, 2048, 17, 3072, 5, 63]`.
+
 ## Oracle Coverage
 
 The Marin parity harness keeps Levanter as the correctness oracle:
@@ -105,6 +126,8 @@ The Marin parity harness keeps Levanter as the correctness oracle:
 - The artifact roundtrip runs both the default single-file export and a forced tiny sharded export using `max_shard_size=1024`.
 - The artifact roundtrip asserts the exported safetensors key set matches the canonical schema, and the loader consumed exactly that tensor set with no missing or unexpected tensors.
 - The opt-in large smoke creates a zero-weight GrugMoE Levanter checkpoint, exports standard sharded safetensors, and verifies native tpu-inference can consume the 1.25GB artifact without changing tensor names.
+- The realistic roundtrip builds a seeded non-zero `GrugTrainState` via `initial_state`, saves the full training-state checkpoint, exports through `export_lm_to_hf` with `checkpoint_subpath="params"`, rejects single-file output, and requires `model.safetensors.index.json` plus shard files.
+- The realistic roundtrip compares the loaded native model against the Levanter/manual-copy reference for final hidden states, `compute_logits` logits, and routed expert IDs. It also reports artifact size, shard count, dtype policy, and strict missing/unexpected tensor accounting.
 - The harness patches Levanter sharding helpers to a one-device runtime for local and single-slice TPU validation. A direct `Transformer.__call__` is not used as the composed oracle because the training sharding contract is stricter than this one-device inference harness.
 - The harness sets `jax_default_matmul_precision=float32` so local CPU and TPU validation use the same strict numeric path.
 
@@ -184,6 +207,33 @@ component: native GrugMoeMLP matches Levanter moe_mlp
 full: native GrugMoeModel hidden states, logits, and routed expert IDs match Levanter reference
 artifact-single-file: saved-checkpoint Levanter export matches manual-copy hidden states, logits, and routed expert IDs
 artifact-sharded: saved-checkpoint Levanter export matches manual-copy hidden states, logits, and routed expert IDs
+```
+
+Scaled realistic local sanity check:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-vllm-tpu-support
+JAX_PLATFORMS=cpu \
+PYTHONPATH=/home/romain/dev/marin-wt/grugmoe-vllm-tpu-inference:/home/romain/dev/marin-wt/grugmoe-vllm-tpu-vllm \
+uv run \
+  --with-requirements ../grugmoe-vllm-tpu-inference/requirements.txt \
+  --with-requirements ../grugmoe-vllm-tpu-vllm/requirements/common.txt \
+  --with 'torch==2.10.0+cpu' \
+  --extra-index-url https://download.pytorch.org/whl/cpu \
+  python -m experiments.grug.moe.vllm_tpu_parity \
+  --tpu-inference-root ../grugmoe-vllm-tpu-inference \
+  --component-only \
+  --realistic-roundtrip \
+  --realistic-config scaled \
+  --realistic-max-shard-size 16777216
+```
+
+Expected scaled realistic output includes:
+
+```text
+realistic-roundtrip: manual-copy native reference matches Levanter hidden states, logits, and routed experts
+realistic-roundtrip: sharded training-state export loaded in native tpu-inference and matched Levanter/manual-copy hidden states, logits, and routed expert IDs
+realistic-roundtrip: ... shard_count=9 ... expected_tensors=84 consumed_tensors=84 missing=[] unexpected=[]
 ```
 
 ## TPU Command
@@ -266,4 +316,46 @@ full: native GrugMoeModel hidden states, logits, and routed expert IDs match Lev
 artifact-single-file: saved-checkpoint Levanter export matches manual-copy hidden states, logits, and routed expert IDs
 artifact-sharded: saved-checkpoint Levanter export matches manual-copy hidden states, logits, and routed expert IDs
 artifact-large-sharded: zero-weight Levanter export loaded in native tpu-inference (1250833717 bytes, 27 shards)
+```
+
+Full canary realistic training-state roundtrip:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-vllm-tpu-support
+uv run iris --cluster=marin job run \
+  --no-wait \
+  --enable-extra-resources \
+  --extra marin-core:tpu \
+  --tpu v6e-4 \
+  --region europe-west4 \
+  --priority interactive \
+  --timeout 7200 \
+  --cpu 16 \
+  --memory 128GB \
+  --disk 200GB \
+  --job-name grugmoe-canary-training-state-roundtrip \
+  -- bash -lc 'set -euxo pipefail; echo marin_sha=e2a4a4bfb71ebeb56a09cc24c01cca18aa117678; git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/tpu-inference.git /tmp/grugmoe-vllm-tpu-inference; git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/vllm.git /tmp/grugmoe-vllm-tpu-vllm; echo tpu_inference_sha=$(git -C /tmp/grugmoe-vllm-tpu-inference rev-parse HEAD); echo vllm_sha=$(git -C /tmp/grugmoe-vllm-tpu-vllm rev-parse HEAD); export LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304; PYTHONPATH=/tmp/grugmoe-vllm-tpu-inference:/tmp/grugmoe-vllm-tpu-vllm uv run --with-requirements /tmp/grugmoe-vllm-tpu-inference/requirements.txt --with-requirements /tmp/grugmoe-vllm-tpu-vllm/requirements/common.txt --with "torch==2.10.0+cpu" --extra-index-url https://download.pytorch.org/whl/cpu python -m experiments.grug.moe.vllm_tpu_parity --tpu-inference-root /tmp/grugmoe-vllm-tpu-inference --component-only --realistic-roundtrip --realistic-config canary --realistic-output-dir /tmp/grugmoe-canary-roundtrip --realistic-max-shard-size 268435456'
+```
+
+Full canary validation result on 2026-06-03:
+
+- Job: `/romain/grugmoe-canary-training-state-roundtrip`
+- State: `succeeded`
+- Exit: `0`
+- TPU: `v6e-4`
+- Region: `europe-west4`
+- Duration: `9 minutes and 6.46 seconds`
+- Remote SHAs:
+  - Marin branch head: `e2a4a4bfb71ebeb56a09cc24c01cca18aa117678`
+  - `tpu_inference_sha=c0d472c6c1ab085156767375d534c3272fbfd120`
+  - `vllm_sha=d025e46d3dfe0afc0f5bd1518c19ce337205db2d`
+- Training-state checkpoint: `/tmp/grugmoe-canary-roundtrip/checkpoints`, `5,762,369,168` bytes.
+- Sharded HF artifact: `/tmp/grugmoe-canary-roundtrip/grugmoe-inference`, `5,762,168,484` bytes, 26 shards.
+- Tensor accounting: `expected_tensors=217`, `consumed_tensors=217`, `missing=[]`, `unexpected=[]`.
+- Final output:
+
+```text
+realistic-roundtrip: manual-copy native reference matches Levanter hidden states, logits, and routed experts
+realistic-roundtrip: sharded training-state export loaded in native tpu-inference and matched Levanter/manual-copy hidden states, logits, and routed expert IDs
+realistic-roundtrip: checkpoint_dir=/tmp/grugmoe-canary-roundtrip/checkpoints checkpoint_bytes=5762369168 artifact_dir=/tmp/grugmoe-canary-roundtrip/grugmoe-inference artifact_bytes=5762168484 shard_count=26 max_shard_size=268435456 expected_tensors=217 consumed_tensors=217 missing=[] unexpected=[]
 ```
