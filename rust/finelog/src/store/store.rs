@@ -36,6 +36,13 @@ pub const LOG_NAMESPACE_NAME: &str = "log";
 /// Its on-disk subdirectory.
 pub const LOG_NAMESPACE_DIR: &str = "log";
 
+/// Bounded budget for stopping + joining a namespace's background tasks during a
+/// live lifecycle transition (re-register replacement, drop). Runs inside the
+/// RPC's `spawn_blocking` worker, so it must not block long: a task that misses
+/// this window is aborted rather than wedging the worker. Distinct from the
+/// process-shutdown drain budget passed to [`Store::shutdown`] at SIGTERM.
+const NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Registered schema for the privileged `log` namespace (mirrors
 /// `LOG_REGISTERED_SCHEMA` in `log_namespace.py`). All non-nullable;
 /// `key_column = "key"`.
@@ -180,6 +187,21 @@ impl Store {
         spawn_maint: bool,
     ) -> Result<(), StatsError> {
         let ns_dir = self.engine_dir(name);
+        // Re-register over a live engine (additive schema evolution): stop AND
+        // JOIN the prior engine's flush + maintenance tasks before opening the
+        // replacement over the same directory, so the old tasks can't flush /
+        // evict / upsert concurrently with the new engine adopting that dir.
+        // Disk-backed only — mem-store namespaces spawn no background tasks, so
+        // replacing the Arc is enough. This always runs under a runtime: a
+        // disk-backed re-register arrives via register_table's spawn_blocking
+        // worker; the boot rehydrate path has no prior, so block_on never fires.
+        if ns_dir.is_some() {
+            let prior = self.engines.lock().unwrap().get(name).cloned();
+            if let Some(prior) = prior {
+                tokio::runtime::Handle::current()
+                    .block_on(prior.shutdown(NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT));
+            }
+        }
         let engine = Namespace::open(
             name,
             stored_schema,
@@ -496,9 +518,20 @@ impl Store {
         let engine = self.engines.lock().unwrap().remove(name);
         let result = (|| {
             if let Some(engine) = engine {
-                // Signal the flush task to stop; we then delete the dir + rows.
-                // No await needed — the task observes the stop notify and exits.
-                engine.request_stop();
+                if self.data_dir.is_some() {
+                    // Disk-backed: stop AND JOIN the flush + maintenance tasks
+                    // before deleting the dir + catalog rows, so an in-flight
+                    // flush can't write parquet / upsert a row into the namespace
+                    // we are tearing down (orphaned file, resurrected row).
+                    // drop_table runs in a spawn_blocking worker, so block_on of
+                    // the async join is safe (never blocks a reactor thread).
+                    tokio::runtime::Handle::current()
+                        .block_on(engine.stop_and_join(NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT));
+                } else {
+                    // mem-store: no background tasks and no dir; a sync stop
+                    // signal suffices and needs no runtime.
+                    engine.request_stop();
+                }
             }
             self.catalog.delete(name)?;
             if let Some(dir) = &self.data_dir {

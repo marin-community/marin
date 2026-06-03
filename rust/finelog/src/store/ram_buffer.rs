@@ -65,6 +65,13 @@ impl RamBuffers {
         first
     }
 
+    /// Raise `next_seq` to at least `seq` (never lowers it). Used at cold boot
+    /// to seed the counter past segments adopted from the catalog — including
+    /// REMOTE-only rows that have no on-disk parquet to scan.
+    pub fn ensure_next_seq_at_least(&mut self, seq: i64) {
+        self.next_seq = self.next_seq.max(seq);
+    }
+
     /// Append `batch` (already seq-stamped) to the chunk list; the caller
     /// supplies `added_bytes` (so the hot path never walks the batch buffers).
     pub fn append_batch(&mut self, batch: RecordBatch, added_bytes: i64) {

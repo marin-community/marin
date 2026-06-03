@@ -115,7 +115,7 @@ pub struct Namespace {
     /// (off in `spawn_blocking`) when `stop` fires would otherwise re-subscribe
     /// after the wake and park forever, hanging the join. The latch closes that
     /// race: once set, the next loop iteration sees it and returns even if it
-    /// missed the Notify wake. Set by `request_stop` / `shutdown`.
+    /// missed the Notify wake. Set by `stop_and_join` / `request_stop`.
     stopped: AtomicBool,
     /// JoinHandles for the spawned per-namespace background tasks (flush +
     /// maintenance). Retained so `Store::shutdown` (Phase 5f) can cooperatively
@@ -164,7 +164,14 @@ impl Namespace {
                     StatsError::Internal(format!("create namespace dir {}: {e}", dir.display()))
                 })?;
                 let adopted = adopt_local_segments(dir, key_column.as_deref(), &catalog, name);
-                let next_seq = recover_next_seq(dir);
+                // Seed next_seq past every segment the catalog knows about, not
+                // just on-disk footers. A segment evicted to remote has its local
+                // parquet unlinked, so a footer-only scan under-counts and would
+                // reuse live seqs (silent overwrite). Union the footer scan with
+                // the full catalog (LOCAL, REMOTE, and BOTH rows).
+                let next_seq = recover_next_seq(dir).max(crate::store::adopt::recover_next_seq(
+                    &catalog.list_segments(name)?,
+                ));
                 let max_persisted = adopted
                     .iter()
                     .filter(|s| s.row_count > 0)
@@ -241,7 +248,18 @@ impl Namespace {
             dir,
             self.key_column.as_deref(),
         )
-        .await
+        .await?;
+        // Reconcile may have adopted REMOTE-only segments the catalog did not
+        // know at open() time (cold boot from a wiped catalog). Reseed next_seq
+        // past them so freshly allocated seqs never collide with offloaded data.
+        let target =
+            crate::store::adopt::recover_next_seq(&self.catalog.list_segments(&self.name)?);
+        self.inner
+            .lock()
+            .unwrap()
+            .buffers
+            .ensure_next_seq_at_least(target);
+        Ok(())
     }
 
     /// Swap in a new retention policy (re-register). Picked up next eviction
@@ -970,16 +988,12 @@ impl Namespace {
         (inner.buffers.ram_bytes(), inner.buffers.chunk_count())
     }
 
-    /// Cooperatively shut the namespace down (Phase 5f).
-    ///
-    /// Fires the `stop` Notify so the flush + maintenance tasks exit at their
-    /// next select, JOINs the spawned task handles bounded by `timeout` (a wedged
-    /// task that misses the window is aborted, so this can never hang), then does
-    /// a final `flush_once` (no RAM-only rows survive; durability is already
-    /// preserved — an acked write was on a sealed segment) and, for a
-    /// remote-configured namespace, a final bounded `sync_step` so the bucket
-    /// matches the catalog at shutdown (matching Python `close()`).
-    pub async fn shutdown(&self, timeout: Duration) {
+    /// Latch the stop flag, wake the flush + maintenance tasks, and JOIN them
+    /// bounded by `timeout` (a wedged task that misses the window is aborted, so
+    /// this can never hang). Does NOT flush — callers sequence durability
+    /// (`shutdown`) or pre-delete teardown (`drop_table` re-register replacement)
+    /// themselves. Safe to drive via `block_on` from a `spawn_blocking` worker.
+    pub async fn stop_and_join(&self, timeout: Duration) {
         // Latch the stop flag FIRST so a task that is mid-flush when the Notify
         // fires still sees the stop on its next loop iteration (the Notify alone
         // stores no permit for notify_waiters), then wake any parked waiters.
@@ -1013,6 +1027,17 @@ impl Namespace {
                 }
             }
         }
+    }
+
+    /// Cooperatively shut the namespace down (Phase 5f).
+    ///
+    /// Stops + JOINs the flush + maintenance tasks (bounded by `timeout`), then
+    /// does a final `flush_once` (no RAM-only rows survive; durability is already
+    /// preserved — an acked write was on a sealed segment) and, for a
+    /// remote-configured namespace, a final bounded `sync_step` so the bucket
+    /// matches the catalog at shutdown (matching Python `close()`).
+    pub async fn shutdown(&self, timeout: Duration) {
+        self.stop_and_join(timeout).await;
         // Final drain so no acked-but-still-RAM rows are lost (best-effort;
         // failures are already logged inside flush_once).
         let _ = self.flush_once();
@@ -1026,8 +1051,9 @@ impl Namespace {
     }
 
     /// Signal the flush + maintenance tasks to stop without awaiting them. Safe
-    /// to call from a synchronous (`spawn_blocking`) context — used by
-    /// `drop_table`, which then deletes the namespace's files and catalog rows.
+    /// to call from a synchronous context with no tokio runtime — used by
+    /// `drop_table` for mem-store namespaces, which spawn no background tasks (so
+    /// there is nothing to join) before deleting their catalog rows.
     pub fn request_stop(&self) {
         self.stopped.store(true, Ordering::SeqCst);
         self.stop.notify_waiters();
