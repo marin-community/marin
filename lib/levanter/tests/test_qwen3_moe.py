@@ -15,6 +15,7 @@ from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compati
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmExample
 from levanter.models.qwen3_moe import Qwen3MoeConfig, Qwen3MoeLMHeadModel
+from levanter.utils.jax_utils import local_cpu_mesh
 from test_utils import skip_if_no_torch, use_test_mesh
 
 
@@ -80,7 +81,7 @@ def test_qwen3_moe_state_dict_keys_match_hf_qwen_layout():
 
 def test_qwen3_moe_loads_torch_compatible_state_dict():
     config = Qwen3MoeConfig.from_hf_config(_tiny_hf_config())
-    with use_test_mesh():
+    with local_cpu_mesh():
         model = Qwen3MoeLMHeadModel.init(hax.Axis("vocab", 128), config, key=random.PRNGKey(0))
         state_dict = to_torch_compatible_state_dict(model)
 

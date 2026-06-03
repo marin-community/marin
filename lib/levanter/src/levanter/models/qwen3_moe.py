@@ -38,6 +38,13 @@ from transformers import Qwen3MoeConfig as HfQwen3MoeConfig  # noqa: E402
 _SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
 
 
+def _expert_state_dict_key(prefix: str | None, expert_index: int, projection_name: str) -> str:
+    key = f"{expert_index}.{projection_name}.weight"
+    if prefix is None:
+        return key
+    return f"{prefix}.{key}"
+
+
 @LmConfig.register_subclass("qwen3_moe")
 @dataclass(frozen=True)
 class Qwen3MoeConfig(LlamaConfig):
@@ -257,7 +264,7 @@ class Qwen3MoeExperts(ModuleWithStateDictSerialization):
         out = {}
         for i in range(self.gate_proj.Experts.size):
             for name, weight in projections.items():
-                out[f"{prefix}.{i}.{name}.weight"] = jnp.swapaxes(weight["experts", i].array, -1, -2)
+                out[_expert_state_dict_key(prefix, i, name)] = jnp.swapaxes(weight["experts", i].array, -1, -2)
         return out
 
     def from_state_dict(self, state_dict: StateDict, prefix: Optional[str] = None) -> "Qwen3MoeExperts":
@@ -266,7 +273,7 @@ class Qwen3MoeExperts(ModuleWithStateDictSerialization):
         for name in ("gate_proj", "up_proj", "down_proj"):
             weights = []
             for i in range(self.gate_proj.Experts.size):
-                key = f"{prefix}.{i}.{name}.weight"
+                key = _expert_state_dict_key(prefix, i, name)
                 weights.append(jnp.swapaxes(state_dict[key], -1, -2))
             values[name] = jnp.stack(weights, axis=expert_axis_index)
 
