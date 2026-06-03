@@ -30,11 +30,13 @@ which kind could surface):
    IPv6 and timed out. Exclusion is robust because the routable-ethernet NIC name
    varies per physical node.
 
-Known follow-up (not blocking): on the **failure** path, teardown deletes the
-NodePools out from under the gang pods, so Kueue never strips their
-`kueue.x-k8s.io/managed` finalizer and the namespace wedges in `Terminating`
-(cleared manually by patching finalizers). Teardown should delete the task pods /
-namespace before the NodePools. The success path finalizes cleanly.
+Resolved: on the **failure** path, teardown used to delete the NodePools out from
+under the gang pods, so Kueue never stripped their `kueue.x-k8s.io/managed`
+finalizer and the namespace wedged in `Terminating` (cleared manually by patching
+finalizers). `CoreweaveTarget.teardown` now strips that finalizer itself and deletes
+the namespace *before* the NodePools (`_delete_namespace`); `_ensure_namespace` also
+waits out a still-`Terminating` namespace so the async delete can't wedge the next
+run's setup. The success path still finalizes cleanly through Kueue.
 
 ## Goal
 

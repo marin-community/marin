@@ -136,6 +136,19 @@ class ControllerTarget:
         return ["kubectl", "--kubeconfig", self.kubeconfig, *args]
 
     def _ensure_namespace(self) -> None:
+        # Teardown deletes the namespace asynchronously; if a prior run's namespace
+        # is still Terminating, recreating it fails. Wait it out, then (re)create.
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            phase = _run(
+                self._kc("get", "namespace", self.namespace, "-o", "jsonpath={.status.phase}"),
+                check=False,
+                quiet=True,
+            ).strip()
+            if phase != "Terminating":
+                break
+            logger.info("namespace %s still Terminating; waiting for it to clear", self.namespace)
+            time.sleep(5)
         _run(self._kc("create", "namespace", self.namespace), check=False, quiet=True)
 
     def deploy_controller(self, *, skip_nodepools: bool, local_image: bool, node_selector: dict[str, str]) -> str:
@@ -348,6 +361,13 @@ class CoreweaveTarget(ControllerTarget):
             self.stop_controller()
         except Exception as e:
             logger.warning("stop_controller failed: %s", e)
+        # Delete the namespace (gang pods + Kueue Workloads) BEFORE the NodePools.
+        # Order matters: Kueue only strips its kueue.x-k8s.io/managed pod finalizer
+        # when it finalizes the Workload, and it won't do that once the H100 nodes
+        # vanish — so deleting the NodePools first leaves the pods (and the whole
+        # namespace) wedged in Terminating forever. Stripping the finalizer ourselves
+        # makes deletion unconditional regardless of node state.
+        self._delete_namespace()
         for sg in self.cfg.scale_groups:
             pool = self.controller._nodepool_name(sg)
             logger.info("deleting NodePool %s (async)", pool)
@@ -355,6 +375,33 @@ class CoreweaveTarget(ControllerTarget):
                 self._kc("delete", "nodepools.compute.coreweave.com", pool, "--ignore-not-found", "--wait=false"),
                 check=False,
             )
+
+    def _delete_namespace(self) -> None:
+        """Delete the dedicated namespace, clearing the Kueue pod finalizer first.
+
+        Kueue removes ``kueue.x-k8s.io/managed`` only when it finalizes the Workload;
+        on the failure path the gang pods are terminal but Kueue never gets there, so
+        the finalizer pins the pods and the namespace hangs in Terminating. Clearing
+        it ourselves lets pod (and namespace) deletion complete without Kueue.
+        """
+        out = _run(
+            self._kc("get", "pods", "-n", self.namespace, "-o", "jsonpath={.items[*].metadata.name}"),
+            check=False,
+            quiet=True,
+        )
+        pods = out.split()
+        for pod in pods:
+            _run(
+                self._kc(
+                    "patch", "pod", pod, "-n", self.namespace, "--type=merge", "-p", '{"metadata":{"finalizers":null}}'
+                ),
+                check=False,
+                quiet=True,
+            )
+        if pods:
+            logger.info("cleared Kueue finalizers on %d pod(s) in %s", len(pods), self.namespace)
+        _run(self._kc("delete", "namespace", self.namespace, "--ignore-not-found", "--wait=false"), check=False)
+        logger.info("namespace %s deletion requested (async)", self.namespace)
 
 
 # ---------------------------------------------------------------------------
