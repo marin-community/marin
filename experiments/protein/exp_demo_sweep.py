@@ -1,101 +1,46 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exp demo: does AA-sequence pretraining data help the structure-token task?
+"""Exp demo: does adding AA-sequence pretraining data help the structure-token task?
 
-Hypothesis
-----------
-Training on amino-acid *sequence* tokens (no structure statements, standard LM
-loss) in addition to the structure documents improves performance on the
-structure (distance-bin) task. The eval metric is the held-out
-``protein-docs-cd-val`` distance-bin loss.
+Two mixtures x 3 seeds (6 trials): ``m1`` = 100% structure docs (500M tokens);
+``m2`` = 50/50 structure docs + AA-sequence docs (1B tokens — additive, so
+structure-doc exposure stays at 500M in both arms). Metric: held-out cd-val
+distance-bin loss. Structure docs + cd-val use the distance-bin loss mask; the
+seq cell is unmasked (standard LM loss on the AA tokens).
 
-Two mixtures, 3 seeds each (6 runs):
+Region-agnostic (pass ``--region`` at submission; only ``SWEEP_ROOT`` is pinned).
+Token caches resolve per-region via ``marin_prefix()`` and build once under a
+lock (no Executor). Training fans out ``WORKERS`` TPU workers that claim trials
+via ``claim_and_run`` and resolve placeholders in the worker's own region.
 
-* ``m1`` — 100% structure docs (``eczech/marinfold-exp11-protein-docs``,
-  config ``low``, split ``train``), distance-bin-masked loss, **500M tokens**.
-* ``m2`` — 50/50 mix of the same structure docs and an *additional* 500M
-  tokens of AA-sequence-only docs (``eczech/marinfold-exp11-protein-docs-seq``,
-  config ``low``, split ``train``), **1B tokens total**.
-
-Design note — additive, not fixed-compute
-------------------------------------------
-``m2`` is 1B tokens (500M docs + 500M seq), NOT 500M total. This holds the
-structure-doc exposure fixed at 500M in *both* arms, so any change in cd-val
-loss is attributable to the added sequence data rather than to seeing less
-structure data. A fixed-compute reading (250M docs + 250M seq) would confound
-the two. Flip :data:`M2_TOTAL_TOKENS` to ``500_000_000`` for the fixed-compute
-variant.
-
-Loss masking
-------------
-The structure docs carry ``<distance> ... <d_value>`` statements; the loss is
-zeroed everywhere except the ``<d_value>`` bin (``distance_bin_only_loss_weight``,
-same as exp44). The sequence docs are ``<begin_sequence> <AA>...`` ONLY — they
-contain no ``<distance>`` token, so the distance mask would zero *all* of their
-loss. The seq component is therefore trained **unmasked** (standard next-token
-LM loss over the AA tokens); that is the whole point of the ablation. The
-cd-val eval component is distance-bin-masked (it measures the structure task).
-
-Packing is identical in all cases: ``pack=True`` with
-``block_cross_document_attention=True`` (no cross-document attention).
-
-Recipe (model / optimizer / schedule)
--------------------------------------
-Model is exp44's 1.47B config dims, swapped from ``LlamaConfig`` to
-``Qwen3Config`` (h=2048, dff=8192, heads=32, kv=8, layers=24). The global
-batch is lowered to 128 (from exp44's 256), so there is no nested gradient
-checkpointing and no gradient accumulation. Qwen3 seq_len 8192. WSD LR
-schedule (10% warmup + 20% linear decay, constant in between) with the peak LR
-solved from the ``lr * hidden / sqrt(batch)`` heuristic — at batch=128/h=2048
-this lands on the 3.5e-4 reference. β₂ via the noise-scale heuristic (0.98 at
-batch 128). 5 evals per run; rolling temp checkpoints every 8 min plus one
-permanent (final) checkpoint.
-
-Execution (mirrors exp44 / write-sweep / run-iris-job)
-------------------------------------------------------
-This script is a lightweight CPU driver that submits ONE Fray training job (a
-v5p-8 ``with_tpu`` worker) for the selected config(s); ``claim_and_run`` makes
-re-running a completed config a no-op. Caches are prebuilt: the docs and cd-val
-caches already exist (reused from exp11 / protein_train_common); the seq cache
-is built once by the ``TOKENIZE`` step below.
-
-Step 0 — build the seq cache once. The driver is a lightweight CPU coordinator:
-``executor_main`` dispatches the ``default_tokenize`` step to the cluster (it
-runs on its own ``cpu=4, ram=16g`` worker), so the driver itself needs only
-modest resources::
+Pre-build the caches (CPU, no fan-out)::
 
     set -a; source ~/marin.env; set +a
     export PATH="$HOME/google-cloud-sdk/bin:$HOME/.local/bin:$PATH"
     uv run iris --cluster=marin job run --user "$USERNAME" --no-wait \\
-        --job-name prot-exp-demo-tokenize-seq \\
-        --region us-east5 --cpu=1 --memory=1GB --extra=cpu \\
+        --job-name prot-exp-demo-tokenize \\
+        --region us-east5 --cpu=4 --memory=16GB --extra=cpu \\
         -e HF_TOKEN "$HF_TOKEN" -e HUGGING_FACE_HUB_TOKEN "$HF_TOKEN" \\
         -e TOKENIZE yes \\
         -- python -m experiments.protein.exp_demo_sweep
 
-Step 1 — launch the sweep, one CPU driver per config::
+Launch the sweep::
 
-    TIMESTAMP=$(date +%Y%m%d-%H%M)
-    for cfg in m1-s0 m1-s1 m1-s2 m2-s0 m2-s1 m2-s2; do
-        uv run iris --cluster=marin job run --user "$USERNAME" --no-wait \\
-            --job-name prot-exp-demo-${cfg}-${TIMESTAMP} \\
-            --region us-east5 --memory=1GB \\
-            -e HF_TOKEN "$HF_TOKEN" -e HUGGING_FACE_HUB_TOKEN "$HF_TOKEN" \\
-            -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_ENTITY "$WANDB_ENTITY" \\
-            -e WANDB_PROJECT "$WANDB_PROJECT" \\
-            -e RUNS ${cfg} \\
-            -- python -m experiments.protein.exp_demo_sweep
-    done
-
-Preview without submitting::
-
-    PREVIEW=yes uv run python -m experiments.protein.exp_demo_sweep
-    RUNS=m2 PREVIEW=yes uv run python -m experiments.protein.exp_demo_sweep
+    uv run iris --cluster=marin job run --user "$USERNAME" --no-wait \\
+        --job-name prot-exp-demo-sweep \\
+        --region us-east5 --memory=1GB \\
+        -e HF_TOKEN "$HF_TOKEN" -e HUGGING_FACE_HUB_TOKEN "$HF_TOKEN" \\
+        -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_ENTITY "$WANDB_ENTITY" \\
+        -e WANDB_PROJECT "$WANDB_PROJECT" \\
+        -- python -m experiments.protein.exp_demo_sweep
 
 Env vars: ``RUNS`` (CSV substring filter on config id, e.g. ``m1``, ``m2-s1``),
-``PREVIEW=yes`` (list targets, submit nothing), ``TOKENIZE=yes`` (build the seq
-cache and exit), ``TPU`` (override worker TPU; default v5p-8).
+``PREVIEW=yes`` (list targets, submit nothing), ``TOKENIZE=yes`` (build caches
+and exit), ``TPU`` (single-host slice; default v5p-8), ``WORKERS`` (fan-out
+count; default = number of selected configs). Preview::
+
+    RUNS=m2 PREVIEW=yes uv run python -m experiments.protein.exp_demo_sweep
 """
 
 import dataclasses
@@ -111,17 +56,19 @@ from levanter.callbacks.watch import WatchConfig
 from levanter.data.text import DatasetComponent, LmDataConfig, TextLmDatasetFormat, UrlDatasetSourceConfig
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
-from marin.execution.executor import executor_main
+from marin.execution.executor_step_status import STATUS_SUCCESS, StepAlreadyDone, step_lock
 from marin.execution.sweep import SweepTarget, claim_and_run
 from marin.execution.types import versioned
+from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.training.training import extras_for_resources, resolve_training_env
+from rigging.filesystem import marin_prefix
 
-from experiments.defaults import _run_training_on_worker, default_tokenize, prepare_lm_train
+from experiments.defaults import _run_training_on_worker, prepare_lm_train
 from experiments.llama import compute_num_parameters
 from experiments.protein.protein_train_common import (
+    HF_DATASET_BASE,
     PROTEIN_TOKENIZER,
     distance_bin_only_loss_weight,
-    protein_docs_val_tokenized,
 )
 from experiments.simple_train_config import SimpleTrainConfig
 
@@ -130,58 +77,133 @@ logger = logging.getLogger(__name__)
 
 # --- Identity ----------------------------------------------------------------
 
-# Bump to fork run names + sweep-root claim dir on a recipe change (never
-# deletes prior wandb/gcs data — a new VERSION writes to new paths).
+# Bump to fork run names + the (region-pinned) lock root on a recipe change.
 VERSION: str = "v1"
 
 RUN_NAME_PREFIX: str = "prot-exp-demo"
 SWEEP_ROOT: str = f"gs://marin-us-east5/sweeps/prot-exp-demo-seq-ablation/run-{VERSION}"
 WANDB_GROUP: str = "exp-demo-seq-ablation"
 
+# --- TPU sizing (size-tpu-batch skill, marin-agent-kb) -----------------------
+
+
+@dataclass(frozen=True)
+class TpuStats:
+    chips: int
+    hbm_gib: int
+    tflops: int
+
+
+# Single-host slices: (chips, HBM GiB, bf16 TFLOP/s) per chip. Extend as needed.
+SINGLE_HOST_TPUS: dict[str, TpuStats] = {
+    "v4-8": TpuStats(chips=4, hbm_gib=32, tflops=275),
+    "v5litepod-1": TpuStats(chips=1, hbm_gib=16, tflops=197),
+    "v5litepod-2": TpuStats(chips=2, hbm_gib=16, tflops=197),
+    "v5litepod-4": TpuStats(chips=4, hbm_gib=16, tflops=197),
+    "v5litepod-8": TpuStats(chips=8, hbm_gib=16, tflops=197),
+    "v5p-8": TpuStats(chips=4, hbm_gib=95, tflops=459),
+    "v6e-1": TpuStats(chips=1, hbm_gib=32, tflops=918),
+    "v6e-4": TpuStats(chips=4, hbm_gib=32, tflops=918),
+    "v6e-8": TpuStats(chips=8, hbm_gib=32, tflops=918),
+}
+
+HBM_FLOOR_GIB: int = 16
+
+# Hand-tuned (no estimation): examples/chip that fit a 16 GiB v5e chip. 8 keeps
+# v5p-8 accumulation-free (8 * (95 // 16) = 40 >= 128 / 4 = 32 per chip).
+PER_CHIP_MICROBATCH: int = 8
+
+
+def per_device_parallelism(tpu_type: str, global_batch: int, per_chip_microbatch: int) -> int:
+    """``-1`` (no accumulation) if the full per-chip load fits, else the largest
+    divisor of ``global_batch // chips`` within the HBM-scaled cap."""
+    stats = SINGLE_HOST_TPUS[tpu_type]
+    if global_batch % stats.chips:
+        raise ValueError(f"global batch {global_batch} not divisible by {stats.chips} chips ({tpu_type})")
+    cap = per_chip_microbatch * (stats.hbm_gib // HBM_FLOOR_GIB)
+    full = global_batch // stats.chips
+    if full <= cap:
+        return -1
+    return next(d for d in range(cap, 0, -1) if full % d == 0)
+
+
 # --- Data --------------------------------------------------------------------
 
-# Structure docs: cd-train tokens, quality bucket "low". Reuse exp11's existing
-# Levanter cache (built from eczech/marinfold-exp11-protein-docs@41b2ec7,
-# config=low, split=train); empty source URLs load it cache-only.
-DOCS_TRAIN_CACHE: str = "gs://marin-us-east5/tokenized/exp11-data-mix-41b2ec7-v1/low-train/"
+DOCS_HF_DATASET_ID: str = "eczech/marinfold-exp11-protein-docs"
+DOCS_HF_REVISION: str = "41b2ec71070cb9e8799311cd8f78877e747f6754"
 
-# AA-sequence-only docs: NEW data with no prebuilt cache. Built once by the
-# TOKENIZE step (default_tokenize -> SEQ_TRAIN_CACHE/train/) and then loaded
-# cache-only by the sweep, identical to the docs/cd-val caches.
 SEQ_HF_DATASET_ID: str = "eczech/marinfold-exp11-protein-docs-seq"
 SEQ_HF_REVISION: str = "1fe8de92e638e50aabf0ce05a83590654d7ceb09"
-SEQ_TRAIN_URL: str = f"hf://datasets/{SEQ_HF_DATASET_ID}@{SEQ_HF_REVISION}/low/train/"
-SEQ_TRAIN_CACHE: str = "gs://marin-us-east5/tokenized/exp-demo-protein-docs-seq-low-1fe8de9-v1"
 
-# Existing cd-val cache built by ``protein_train_common`` (the primary metric):
-# timodonnell/protein-docs, config contacts-and-distances-v1-5x, split val.
-CD_VAL_CACHE: str = protein_docs_val_tokenized.override_output_path
-
-# Component names — row keys in the mixture weights and the prefix of every
-# ``eval/<component>/loss`` series in W&B.
+# Mixture row keys / prefix of every ``eval/<component>/loss`` series in W&B.
 COMPONENT_DOCS: str = "protein-docs-low-train"
 COMPONENT_SEQ: str = "protein-docs-seq-low-train"
 COMPONENT_CD_VAL: str = "protein-docs-cd-val"
 
-# Tokenize step for the new seq data; pinned output path so re-running is a
-# no-op once the cache exists. Run via ``TOKENIZE=yes`` (a CPU iris job).
-seq_tokenized = dataclasses.replace(
-    default_tokenize(
-        name="exp-demo-protein-docs-seq-low",
-        dataset=SEQ_TRAIN_URL,
-        tokenizer=PROTEIN_TOKENIZER,
-        format=TextLmDatasetFormat(text_key="document"),
-    ),
-    override_output_path=SEQ_TRAIN_CACHE,
+DOC_FORMAT = TextLmDatasetFormat(text_key="document")
+
+
+@dataclass(frozen=True)
+class CacheSpec:
+    """Region-independent tokenize job; ``name`` is resolved to a region-local dir."""
+
+    name: str
+    source_url: str
+    is_validation: bool
+
+
+# Region-relative cache keys (resolved under ``marin_prefix()/tokenized/``);
+# revision tags so a dataset bump writes a fresh cache.
+DOCS_SPEC = CacheSpec(
+    name="protein/exp-demo/docs-low-41b2ec7",
+    source_url=f"hf://datasets/{DOCS_HF_DATASET_ID}@{DOCS_HF_REVISION}/low/train/",
+    is_validation=False,
 )
+SEQ_SPEC = CacheSpec(
+    name="protein/exp-demo/seq-low-1fe8de9",
+    source_url=f"hf://datasets/{SEQ_HF_DATASET_ID}@{SEQ_HF_REVISION}/low/train/",
+    is_validation=False,
+)
+CD_VAL_SPEC = CacheSpec(
+    name="protein/exp-demo/cd-val",
+    source_url=f"{HF_DATASET_BASE}/val/",
+    is_validation=True,
+)
+
+_ensured_caches: dict[str, str] = {}
+
+
+def ensure_cache(spec: CacheSpec) -> str:
+    """Region-local cache dir, built once under a lock if absent.
+
+    ``tokenize`` runs in-process (no Executor) and is idempotent. ``step_lock``
+    serializes same-region workers: the first builds and writes ``STATUS_SUCCESS``,
+    the rest wait then skip via ``StepAlreadyDone``.
+    """
+    cache_dir = f"{marin_prefix()}/tokenized/{spec.name}"
+    if cache_dir in _ensured_caches:
+        return cache_dir
+    try:
+        with step_lock(cache_dir, spec.name) as status:
+            tokenize(
+                TokenizeConfig(
+                    train_paths=[] if spec.is_validation else [spec.source_url],
+                    validation_paths=[spec.source_url] if spec.is_validation else [],
+                    cache_path=cache_dir,
+                    tokenizer=PROTEIN_TOKENIZER,
+                    format=DOC_FORMAT,
+                )
+            )
+            status.write_status(STATUS_SUCCESS)
+    except StepAlreadyDone:
+        pass  # a peer already built it in this region
+    _ensured_caches[cache_dir] = cache_dir
+    return cache_dir
+
 
 # --- Model -------------------------------------------------------------------
 
-# exp44's 1.47B config dims (h=2048, dff=8192, heads=32, kv=8, layers=24),
-# swapped from LlamaConfig to Qwen3Config. Llama3 rope to match the repo's
-# other qwen3.py configs. No nested gradient checkpointing and no gradient
-# accumulation: the global batch is lowered to 128 (from exp44's 256), so the
-# default checkpointing fits the v5p-8 HBM budget on its own.
+# exp44's 1.47B dims, LlamaConfig -> Qwen3Config with Llama3 rope.
 MODEL_CONFIG = Qwen3Config(
     max_seq_len=8192,
     hidden_dim=2048,
@@ -192,10 +214,8 @@ MODEL_CONFIG = Qwen3Config(
     rope=Llama3RotaryEmbeddingsConfig(),
 )
 
-# Vocab for the legacy 2840-vocab tokenizer pinned in PROTEIN_TOKENIZER.
-PROTEIN_VOCAB_SIZE: int = 2840
-
-HIDDEN_DIM: int = MODEL_CONFIG.hidden_dim  # 2048
+PROTEIN_VOCAB_SIZE: int = 2840  # legacy 2840-vocab tokenizer pinned in PROTEIN_TOKENIZER
+HIDDEN_DIM: int = MODEL_CONFIG.hidden_dim
 
 # --- Optimizer / schedule ----------------------------------------------------
 
@@ -204,50 +224,35 @@ SEQ_LEN: int = 8192
 WEIGHT_DECAY: float = 0.01
 WARMUP: float = 0.1
 
-# LR scaling — adapted from ``train_protein_1_5b_distance_masked.py``:
-#   reference: lr=3.5e-4 @ batch=128, hidden=2048
-#   solve: LR_CONSTANT = lr * hidden / sqrt(batch)
-#   apply: lr_here = LR_CONSTANT * sqrt(BATCH_SIZE) / HIDDEN_DIM
-# At BATCH_SIZE=128 / HIDDEN_DIM=2048 this resolves back to the 3.5e-4 reference.
+# Peak LR from the lr * hidden / sqrt(batch) heuristic; resolves to the 3.5e-4
+# reference at batch=128 / hidden=2048.
 LR_REF: float = 3.5e-4
 LR_REF_BATCH: int = 128
 LR_REF_HIDDEN: int = 2048
 LR_CONSTANT: float = LR_REF * LR_REF_HIDDEN / math.sqrt(LR_REF_BATCH)
 LEARNING_RATE: float = LR_CONSTANT * math.sqrt(BATCH_SIZE) / HIDDEN_DIM
 
-# Adam β₂ scaled per the noise-scale heuristic (0.98 at batch=128).
-BETA2: float = 0.98 ** (BATCH_SIZE / LR_REF_BATCH)
+BETA2: float = 0.98 ** (BATCH_SIZE / LR_REF_BATCH)  # noise-scale heuristic (0.98 @ batch 128)
 
-# WSD: linear warmup (WARMUP) -> constant -> linear decay over the trailing
-# LR_DECAY fraction. warmup/decay are fractions of each run's own
-# num_train_steps, so both mixtures fully decay at their own end.
+# WSD: warmup -> constant -> linear decay over the trailing LR_DECAY fraction.
 LR_SCHEDULE: str = "linear"
 LR_DECAY: float = 0.2
 
-# Data-ordering seed sweep: 3 seeds per mixture. Each seed sets BOTH the
-# trainer seed (model init / training key) and the data_seed (data permutation),
-# so the three runs are fully independent replicates.
+# Per replicate, the seed sets both trainer seed and data_seed.
 SEEDS: tuple[int, ...] = (1729, 1730, 1731)
 
 SHUFFLE: bool = True
 PERMUTATION_TYPE: str = "feistel"
 MIXTURE_BLOCK_SIZE: int = 2048
 
-# Evals per run.
 NUM_EVALS: int = 5
-
-# Eval on 8192 cd-val sequences: eval batch = per_device_eval_parallelism *
-# chips = 32 * 4 = 128, so 64 batches = 8192 sequences.
-EVAL_EXAMPLES: int = 8192
-
-# Rolling temp-checkpoint cadence; one permanent (final) checkpoint only
-# (steps_per_export=None) — the metric is the final/eval cd-val loss.
+EVAL_EXAMPLES: int = 8192  # cd-val sequences per eval; max_eval_batches solved per slice
 TEMP_CHECKPOINT_INTERVAL = timedelta(minutes=8)
 
 # --- Resources --------------------------------------------------------------
 
-# us-east5-a co-locates TPUs with the ``marin-us-east5`` checkpoint bucket.
-PROTEIN_ZONE: str = "us-east5-a"
+# Region-agnostic: no zone pinned (pass --region/--zone at submission);
+# checkpoints + caches resolve to the worker's region via marin_prefix().
 DEFAULT_TPU: str = "v5p-8"
 
 
@@ -256,29 +261,28 @@ def tpu() -> str:
 
 
 def resources() -> ResourceConfig:
-    return ResourceConfig.with_tpu(tpu(), zone=PROTEIN_ZONE)
+    name = tpu()
+    if name not in SINGLE_HOST_TPUS:
+        raise ValueError(f"unsupported TPU {name!r}; single-host options: {sorted(SINGLE_HOST_TPUS)}")
+    return ResourceConfig.with_tpu(name)
 
 
 # --- Mixtures ----------------------------------------------------------------
 
-# m2's total token budget. Additive design: 500M docs + 500M seq holds the
-# structure-doc exposure fixed at 500M (== m1) so the ablation isolates the
-# effect of the added seq data. Set to 500_000_000 for the fixed-compute
-# variant (250M docs + 250M seq).
+# Additive design: m2 = 500M docs + 500M seq holds docs exposure at 500M (== m1).
+# Set M2 to 500_000_000 for the fixed-compute variant (250M docs + 250M seq).
 M1_TOTAL_TOKENS: int = 500_000_000
 M2_TOTAL_TOKENS: int = 1_000_000_000
 
 
 @dataclass(frozen=True)
 class Mixture:
-    """One named train mixture over the (docs, seq) cells + its token budget."""
-
     id: str
-    weights: dict[str, float]  # over COMPONENT_DOCS / COMPONENT_SEQ
+    weights: dict[str, float]
     target_tokens: int
 
     def schedule(self) -> tuple[int, int]:
-        """``(num_train_steps, steps_per_eval)`` rounded so total = evals*spe."""
+        """``(num_train_steps, steps_per_eval)`` rounded so total = evals * spe."""
         tokens_per_step = BATCH_SIZE * SEQ_LEN
         spe = max(1, round(self.target_tokens / NUM_EVALS / tokens_per_step))
         return spe * NUM_EVALS, spe
@@ -295,7 +299,7 @@ MIXTURES: tuple[Mixture, ...] = (
 
 @dataclass(frozen=True)
 class Config:
-    """One trial: a (mixture, seed) pair."""
+    """One trial: a (mixture, seed) pair. Region-independent; carried in SweepTarget."""
 
     mixture: Mixture
     seed_index: int
@@ -306,7 +310,6 @@ class Config:
 
     @property
     def config_id(self) -> str:
-        """Short selector id, e.g. ``m1-s0``."""
         return f"{self.mixture.id}-s{self.seed_index}"
 
 
@@ -329,13 +332,12 @@ def fmt_count(n: int) -> str:
 
 
 def fmt_lr(lr: float) -> str:
-    """Format LR for run names, e.g. ``3.5e-4``."""
     mantissa, exponent = f"{lr:.1e}".split("e")
     return f"{mantissa}e{int(exponent)}"
 
 
 def trial_name(config: Config) -> str:
-    """Stable per-trial run id (also the per-target dir under ``SWEEP_ROOT``)."""
+    """Stable per-trial run id (also the per-target dir under SWEEP_ROOT)."""
     num_train_steps, _ = config.mixture.schedule()
     tokens_tag = fmt_count(BATCH_SIZE * SEQ_LEN * num_train_steps)
     return (
@@ -348,24 +350,19 @@ def trial_name(config: Config) -> str:
 
 
 def cache_only_component(cache_dir: str, *, masked: bool) -> DatasetComponent:
-    """Cache-only component: empty URL lists short-circuit Levanter's cache-build.
-
-    Loads ``<cache_dir>/{train,validation}/`` if present. ``pack=True`` with
-    cross-document attention blocked (set on LmDataConfig). Distance-bin-only
-    loss mask applied iff ``masked``; otherwise standard next-token LM loss.
-    """
-    fmt = TextLmDatasetFormat(text_key="document")
+    """Cache-only component (empty URLs load ``<cache_dir>/{train,validation}/``);
+    distance-bin loss mask applied iff ``masked``."""
     source = UrlDatasetSourceConfig(
         train_urls=[],
         validation_urls=[],
         cache_dir=cache_dir,
-        format=fmt,
+        format=DOC_FORMAT,
         tags=[],
     )
     return DatasetComponent(
         source=source,
         cache_dir=cache_dir,
-        format=fmt,
+        format=DOC_FORMAT,
         pack=True,
         tags=[],
         loss_weight_fn=distance_bin_only_loss_weight if masked else None,
@@ -373,23 +370,23 @@ def cache_only_component(cache_dir: str, *, masked: bool) -> DatasetComponent:
 
 
 def build_data_config(config: Config) -> LmDataConfig:
-    """LmDataConfig for one config's mixture.
+    """LmDataConfig for one mixture (resolved on the worker; caches ensured first).
 
-    Both train cells always appear in ``components``/``train_weights`` (zero for
-    unused cells). Structure docs + cd-val are distance-bin-masked; the seq cell
-    is unmasked (standard LM loss on the AA tokens). The cd-val component has
-    only a validation split (train weight 0) so it is eval-only.
+    Docs + cd-val are distance-bin-masked; seq is unmasked and present only when
+    the mixture uses it. cd-val is eval-only (train weight 0).
     """
     components: dict[str, DatasetComponent] = {
-        COMPONENT_DOCS: cache_only_component(DOCS_TRAIN_CACHE, masked=True),
-        COMPONENT_SEQ: cache_only_component(SEQ_TRAIN_CACHE, masked=False),
-        COMPONENT_CD_VAL: cache_only_component(CD_VAL_CACHE, masked=True),
+        COMPONENT_DOCS: cache_only_component(ensure_cache(DOCS_SPEC), masked=True),
+        COMPONENT_CD_VAL: cache_only_component(ensure_cache(CD_VAL_SPEC), masked=True),
     }
-    train_weights = {
+    train_weights: dict[str, float] = {
         COMPONENT_DOCS: float(config.mixture.weights.get(COMPONENT_DOCS, 0.0)),
-        COMPONENT_SEQ: float(config.mixture.weights.get(COMPONENT_SEQ, 0.0)),
         COMPONENT_CD_VAL: 0.0,
     }
+    if config.mixture.weights.get(COMPONENT_SEQ, 0.0) > 0.0:
+        components[COMPONENT_SEQ] = cache_only_component(ensure_cache(SEQ_SPEC), masked=False)
+        train_weights[COMPONENT_SEQ] = float(config.mixture.weights[COMPONENT_SEQ])
+
     return LmDataConfig(
         components=components,
         train_weights=train_weights,
@@ -402,22 +399,39 @@ def build_data_config(config: Config) -> LmDataConfig:
     )
 
 
-# --- Trial construction -----------------------------------------------------
+# --- Trial construction (worker side) ---------------------------------------
 
 
-def build_trial(config: Config) -> tuple[str, object]:
-    """Build one trial's ``(job_name, raw_config)`` for ``prepare_lm_train``."""
+@dataclass(frozen=True)
+class BatchPlan:
+    per_device_parallelism: int  # -1 == BATCH_SIZE // chips (no accumulation)
+    per_device_eval_parallelism: int
+    max_eval_batches: int
+    grad_accum_steps: int
+
+
+def plan_batch(res: ResourceConfig) -> BatchPlan:
+    """Size train/eval parallelism for the chosen single-host slice."""
+    stats = SINGLE_HOST_TPUS[res.device.variant]
+    chips = stats.chips
+    if chips != res.chip_count():
+        raise ValueError(f"chip mismatch: table {chips} != resources {res.chip_count()} ({res.device.variant})")
+    pdp = per_device_parallelism(res.device.variant, BATCH_SIZE, PER_CHIP_MICROBATCH)
+    eval_pdp = BATCH_SIZE // chips if pdp == -1 else pdp  # eval does not accumulate
+    max_eval_batches = max(1, EVAL_EXAMPLES // (eval_pdp * chips))
+    grad_accum = 1 if pdp == -1 else (BATCH_SIZE // chips) // pdp
+    return BatchPlan(
+        per_device_parallelism=pdp,
+        per_device_eval_parallelism=eval_pdp,
+        max_eval_batches=max_eval_batches,
+        grad_accum_steps=grad_accum,
+    )
+
+
+def build_trial(config: Config, res: ResourceConfig) -> tuple[str, object]:
+    """Build one trial's ``(job_name, raw_config)`` for ``_run_training_on_worker``."""
     num_train_steps, steps_per_eval = config.mixture.schedule()
-    res = resources()
-
-    chips = res.chip_count()
-    if BATCH_SIZE % chips != 0:
-        raise ValueError(f"batch_size ({BATCH_SIZE}) not divisible by chip_count ({chips})")
-    per_device_parallelism = BATCH_SIZE // chips
-    # Eval batch = per_device_eval_parallelism * chips; pick the cap so we
-    # evaluate EVAL_EXAMPLES sequences (8192 / 128 = 64 batches).
-    eval_batch = per_device_parallelism * chips
-    max_eval_batches = max(1, EVAL_EXAMPLES // eval_batch)
+    plan = plan_batch(res)
 
     train_config = SimpleTrainConfig(
         resources=res,
@@ -432,10 +446,10 @@ def build_trial(config: Config) -> tuple[str, object]:
         train_seq_len=SEQ_LEN,
         steps_per_eval=steps_per_eval,
         steps_per_export=None,  # one permanent (final) checkpoint
-        max_eval_batches=max_eval_batches,
+        max_eval_batches=plan.max_eval_batches,
         data_seed=config.seed,
-        per_device_parallelism=per_device_parallelism,
-        per_device_eval_parallelism=per_device_parallelism,
+        per_device_parallelism=plan.per_device_parallelism,
+        per_device_eval_parallelism=plan.per_device_eval_parallelism,
     )
     params = compute_num_parameters(MODEL_CONFIG, PROTEIN_VOCAB_SIZE)
     tokens = BATCH_SIZE * SEQ_LEN * num_train_steps
@@ -452,6 +466,8 @@ def build_trial(config: Config) -> tuple[str, object]:
         f"tokens={fmt_count(tokens)}",
         f"tokens_exact={tokens}",
         f"steps={num_train_steps}",
+        f"tpu={res.device.variant}",
+        f"grad_accum={plan.grad_accum_steps}",
     ]
     job_name, raw_config = prepare_lm_train(
         name=trial_name(config),
@@ -463,8 +479,7 @@ def build_trial(config: Config) -> tuple[str, object]:
         use_default_validation=False,
         wandb_group=WANDB_GROUP,
     )
-    # Temp checkpoint cadence = 8 min; set the trainer seed (model init /
-    # training key) per replicate; disable per-parameter watch tracking (HBM).
+    # Per-replicate trainer seed; 8-min temp checkpoints; no per-param watch (HBM).
     raw_config = dataclasses.replace(
         raw_config,
         trainer=dataclasses.replace(
@@ -500,15 +515,25 @@ def tokenize_only() -> bool:
     return os.environ.get("TOKENIZE", "").strip().lower() in {"yes", "true", "1"}
 
 
+def num_workers(num_configs: int) -> int:
+    """Fan-out count: ``WORKERS`` env, else one worker per selected config."""
+    raw = os.environ.get("WORKERS", "").strip()
+    return int(raw) if raw else num_configs
+
+
 def _format_weights(weights: dict[str, float]) -> str:
     return ", ".join(f"{k}={v:.3g}" for k, v in weights.items())
 
 
-def print_preview(configs: tuple[Config, ...]) -> None:
+def print_preview(configs: tuple[Config, ...], res: ResourceConfig) -> None:
     params = compute_num_parameters(MODEL_CONFIG, PROTEIN_VOCAB_SIZE)
+    plan = plan_batch(res)
+    pdp = BATCH_SIZE // res.chip_count() if plan.per_device_parallelism == -1 else plan.per_device_parallelism
     print(
         f"PREVIEW: exp-demo seq-ablation would run {len(configs)} target(s) "
-        f"(model={fmt_count(params)} params, lr={LEARNING_RATE:.4g}, beta2={BETA2:.4g}):",
+        f"(model={fmt_count(params)} params, lr={LEARNING_RATE:.4g}, beta2={BETA2:.4g}, "
+        f"tpu={res.device.variant} chips={res.chip_count()} per_device={pdp} "
+        f"grad_accum={plan.grad_accum_steps}):",
         flush=True,
     )
     for c in configs:
@@ -530,54 +555,60 @@ def print_preview(configs: tuple[Config, ...]) -> None:
 # --- Worker + launcher ------------------------------------------------------
 
 
-def worker_entrypoint(config_ids: tuple[str, ...]) -> None:
-    """One Fray worker: run the selected config(s) via ``claim_and_run``."""
-    targets = [
-        SweepTarget(target_id=trial_name(c), config=c.config_id) for c in ALL_CONFIGS if c.config_id in config_ids
-    ]
-    logger.info("Worker assigned %d/%d target(s): %s", len(targets), len(ALL_CONFIGS), [t.target_id for t in targets])
+def _run_one(target: SweepTarget, res: ResourceConfig) -> None:
+    """Resolve one trial under this worker's region and train inline."""
+    config: Config = target.config
+    name, raw_config = build_trial(config, res)
+    _run_training_on_worker(name=name, raw_config=raw_config, override_output_path=None, resources=res)
 
-    def run_one(target: SweepTarget) -> None:
-        config = CONFIG_BY_ID[target.config]
-        name, raw_config = build_trial(config)
-        _run_training_on_worker(name=name, raw_config=raw_config, override_output_path=None, resources=resources())
 
-    claim_and_run(SWEEP_ROOT, targets, run_one)
+def _sweep_worker_entrypoint(sweep_root: str, targets: list[SweepTarget], res: ResourceConfig) -> None:
+    """One TPU sweep worker: claim a target via the lock, train inline, repeat.
+
+    ``targets``/``res`` ride in the entrypoint args (shipped by value), so the
+    worker doesn't depend on its own env for the trial set or TPU type.
+    """
+    claim_and_run(sweep_root, targets, lambda t: _run_one(t, res))
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-    # TOKENIZE=yes: build the seq cache (CPU) and exit. Run once before the sweep.
     if tokenize_only():
-        logger.info("Building seq cache -> %s", SEQ_TRAIN_CACHE)
-        executor_main(steps=[seq_tokenized])
+        for spec in (DOCS_SPEC, SEQ_SPEC, CD_VAL_SPEC):
+            logger.info("Ensuring cache %s -> %s", spec.name, ensure_cache(spec))
         return
 
     configs = selected_configs()
     if not configs:
         raise ValueError(f"No configs matched RUNS={os.environ.get('RUNS', '')!r}")
 
+    res = resources()
+
     if preview():
-        print_preview(configs)
+        print_preview(configs, res)
         return
 
-    res = resources()
+    targets = [SweepTarget(target_id=trial_name(c), config=c) for c in configs]
+    workers = num_workers(len(configs))
     env = resolve_training_env(base_env=None, resources=res)
     extras = extras_for_resources(res)
-    logger.info("Submitting 1 Fray worker job; configs=%s", [c.config_id for c in configs])
+    logger.info("Submitting %d TPU worker(s) for %d config(s) on %s", workers, len(configs), res.device.variant)
 
     client = current_client()
-    request = JobRequest(
-        name=f"{RUN_NAME_PREFIX}-w0",
-        entrypoint=Entrypoint.from_callable(worker_entrypoint, args=[tuple(c.config_id for c in configs)]),
-        resources=res,
-        environment=create_environment(env_vars=env, extras=extras),
-    )
-    handle = client.submit(request)
-    logger.info("Submitted worker: %s", request.name)
-    handle.wait(raise_on_failure=True)
-    logger.info("Worker finished")
+    handles = []
+    for i in range(workers):
+        request = JobRequest(
+            name=f"{RUN_NAME_PREFIX}-w{i}",
+            entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint, args=[SWEEP_ROOT, targets, res]),
+            resources=res,
+            environment=create_environment(env_vars=env, extras=extras),
+        )
+        handles.append(client.submit(request))
+        logger.info("Submitted worker: %s", request.name)
+    for handle in handles:
+        handle.wait(raise_on_failure=True)
+    logger.info("All %d worker(s) finished", workers)
 
 
 if __name__ == "__main__":
