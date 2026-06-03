@@ -48,15 +48,30 @@ from fray import ResourceConfig
 from iris.cli.main import IRIS_CLUSTER_CONFIG_DIRS, create_client_token_provider, resolve_cluster_name
 from iris.client import IrisClient
 from iris.cluster.config import IrisConfig
+from iris.cluster.constraints import Constraint, preemptible_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.config_discovery import resolve_cluster_config
 from zephyr import Dataset, ZephyrContext
 
 from scripts.ops.storage.constants import MARIN_BUCKETS
 from scripts.ops.storage.distributed_scan import run_distributed
-from scripts.ops.storage.report import generate_report, load_parquet_db
+from scripts.ops.storage.report import (
+    DEFAULT_CHANGE_THRESHOLD_BYTES,
+    compute_changes,
+    find_latest_snapshot,
+    generate_report,
+    load_parquet_db,
+    read_snapshot,
+    render_changes_section,
+    snapshot_dir_summary,
+    snapshot_path,
+    write_snapshot,
+)
 
 DEFAULT_STAGING_DIR = "gs://marin-us-central2/tmp/storage-scan"
+# Stable location for week-over-week snapshots, independent of the (often
+# date-stamped or truncated) staging dir so history accumulates across runs.
+DEFAULT_HISTORY_DIR = "gs://marin-us-central2/storage-report-history"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -115,14 +130,34 @@ def _dedup_stage(input_glob: str, output_dir: str, num_shards: int, worker_cpu: 
     ctx.execute(pipeline)
 
 
-def _report_stage(deduped_dir: str, report_path: str) -> None:
-    """Iris-side entrypoint for stage 3: build the markdown report."""
+def _report_stage(deduped_dir: str, report_path: str, history_dir: str, today: str) -> None:
+    """Iris-side entrypoint for stage 3: build the markdown report.
+
+    Also archives a compact per-prefix snapshot to ``history_dir`` and, when a
+    prior snapshot exists, inserts a week-over-week changes section diffing
+    against it. ``today`` (YYYY-MM-DD) names this run's snapshot and excludes
+    it from the "most recent prior" lookup.
+    """
 
     conn = load_parquet_db(deduped_dir)
-    report = generate_report(conn)
+    current = snapshot_dir_summary(conn)
+
+    prior = find_latest_snapshot(history_dir, before_date=today)
+    if prior is None:
+        changes_section = render_changes_section([], previous_date=None, threshold_bytes=DEFAULT_CHANGE_THRESHOLD_BYTES)
+    else:
+        prev_path, prev_date = prior
+        changes = compute_changes(current, read_snapshot(prev_path), threshold_bytes=DEFAULT_CHANGE_THRESHOLD_BYTES)
+        changes_section = render_changes_section(
+            changes, previous_date=prev_date, threshold_bytes=DEFAULT_CHANGE_THRESHOLD_BYTES
+        )
+
+    report = generate_report(conn, changes_section=changes_section)
     with fsspec.open(report_path, "w") as f:
         f.write(report)
-    print(f"Report written to {report_path}", file=sys.stderr)
+
+    write_snapshot(current, snapshot_path(history_dir, today))
+    print(f"Report written to {report_path}; snapshot archived for {today}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -130,20 +165,18 @@ def _report_stage(deduped_dir: str, report_path: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _push_public_gist(content: str, description: str, filename: str) -> str:
-    """Create a public gist via ``gh`` and return the URL."""
+def _push_gist(content: str, description: str, filename: str, *, public: bool) -> str:
+    """Create a gist via ``gh`` and return the URL.
+
+    ``public=False`` creates a secret gist (still URL-accessible, but not
+    listed or indexed) — the right default for automated/internal runs.
+    """
+    cmd = ["gh", "gist", "create"]
+    if public:
+        cmd.append("--public")
+    cmd += ["--filename", filename, "--desc", description, "-"]  # "-" reads body from stdin
     result = subprocess.run(
-        [
-            "gh",
-            "gist",
-            "create",
-            "--public",
-            "--filename",
-            filename,
-            "--desc",
-            description,
-            "-",  # read body from stdin
-        ],
+        cmd,
         input=content,
         capture_output=True,
         text=True,
@@ -186,6 +219,7 @@ def _submit_callable(
     cpu: float,
     memory: str,
     disk: str,
+    constraints: list[Constraint] | None = None,
 ) -> None:
     """Submit a Python callable as an Iris job and stream logs until completion."""
     job = client.submit(
@@ -193,6 +227,7 @@ def _submit_callable(
         name=name,
         resources=ResourceSpec(cpu=cpu, memory=memory, disk=disk),
         environment=EnvironmentSpec(env_vars={}),
+        constraints=constraints,
     )
     print(f"Submitted {name}: {job.job_id}", file=sys.stderr)
     job.wait(stream_logs=True, timeout=float("inf"))
@@ -220,6 +255,27 @@ def _submit_callable(
 @click.option(
     "--skip-report", is_flag=True, help="Reuse an existing report.md at --staging-dir (skip Iris aggregation)."
 )
+@click.option(
+    "--history-dir",
+    default=DEFAULT_HISTORY_DIR,
+    show_default=True,
+    help="Stable GCS dir of dated snapshots for the week-over-week diff.",
+)
+@click.option(
+    "--gist",
+    "gist_visibility",
+    type=click.Choice(["public", "secret", "none"]),
+    default="public",
+    show_default=True,
+    help="Stage 4 publish: 'public'/'secret' gist via gh, or 'none' to skip "
+    "(e.g. when an outer digest owns publishing).",
+)
+@click.option(
+    "--run-id",
+    default=None,
+    help="Suffix for Iris job names so re-runs don't collide with prior jobs "
+    "of the same name (defaults to today's UTC date).",
+)
 def main(
     cluster: str,
     staging_dir: str,
@@ -228,30 +284,45 @@ def main(
     skip_scan: bool,
     skip_dedup: bool,
     skip_report: bool,
+    history_dir: str,
+    gist_visibility: str,
+    run_id: str | None,
 ) -> None:
     staging_dir = staging_dir.rstrip("/")
+    history_dir = history_dir.rstrip("/")
     deduped_dir = f"{staging_dir}/deduped"
     report_path = f"{staging_dir}/report.md"
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    run_id = run_id or today
 
     client, tunnel_cm = _open_iris_client(cluster)
     try:
         if not skip_scan:
             print("=== Stage 1: distributed scan on Iris ===", file=sys.stderr)
+            # Pin the scan coordinator to non-preemptible (on-demand) capacity so a
+            # spot reclaim can't kill it mid-scan and reset the staging dir. The
+            # coordinator only buffers ~2M objects (~1-1.5 GiB resident), so it fits
+            # the on-demand n2-highmem-2 pool (2 vCPU / 16 GiB) with room to spare.
+            # It is too large (cpu>1 or mem>4 GiB) to trip Iris's auto-non-preemptible
+            # executor heuristic, so we request the constraint explicitly. Workers stay
+            # preemptible: they are stateless and re-pull tasks, and the on-demand pool
+            # is far too small to host all of them.
             _submit_callable(
                 client,
-                name="storage-scan",
+                name=f"storage-scan-{run_id}",
                 fn=_scan_stage,
                 args=(staging_dir, workers),
-                cpu=2,
-                memory="30GB",
+                cpu=1,
+                memory="12GB",
                 disk="30GB",
+                constraints=[preemptible_constraint(False)],
             )
 
         if not skip_dedup:
             print("=== Stage 2: Zephyr dedup on Iris ===", file=sys.stderr)
             _submit_callable(
                 client,
-                name="storage-dedup",
+                name=f"storage-dedup-{run_id}",
                 fn=_dedup_stage,
                 args=(f"{staging_dir}/objects_*.parquet", deduped_dir, dedup_shards, 2, "8g"),
                 cpu=1,
@@ -263,23 +334,34 @@ def main(
             print("=== Stage 3: report aggregation on Iris ===", file=sys.stderr)
             _submit_callable(
                 client,
-                name="storage-report",
+                name=f"storage-report-{run_id}",
                 fn=_report_stage,
-                args=(deduped_dir, report_path),
+                args=(deduped_dir, report_path, history_dir, today),
                 cpu=4,
-                memory="16GB",
-                disk="30GB",
+                # The week-over-week snapshot adds a full-cardinality
+                # GROUP BY (bucket, dir_prefix) over ~20M dir_summary rows;
+                # DuckDB's soft memory limit doesn't hold for high-cardinality
+                # string aggregation, so give the (unconstrained, big-node)
+                # report stage real headroom.
+                memory="64GB",
+                # ~10 GB deduped download + DuckDB spill headroom.
+                disk="100GB",
             )
     finally:
         tunnel_cm.__exit__(None, None, None)
 
-    print(f"=== Stage 4: fetch {report_path} and push gist ===", file=sys.stderr)
+    if gist_visibility == "none":
+        print(f"=== Done. Report at {report_path} (gist skipped) ===", file=sys.stderr)
+        print(report_path)
+        return
+
+    print(f"=== Stage 4: fetch {report_path} and push {gist_visibility} gist ===", file=sys.stderr)
     with fsspec.open(report_path, "r") as f:
         content = f.read()
 
     ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     desc = f"Marin storage report — {ts}"
-    url = _push_public_gist(content, desc, "marin-storage-report.md")
+    url = _push_gist(content, desc, "marin-storage-report.md", public=gist_visibility == "public")
     print(url)
 
 
