@@ -7,8 +7,8 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from finelog.schema import InvalidNamespaceError, NamespaceNotFoundError
 from finelog.store.duckdb_store import DuckDBLogStore
-from finelog.store.schema import InvalidNamespaceError, NamespaceNotFoundError
 
 from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema
 

@@ -43,19 +43,10 @@ import duckdb
 import pyarrow as pa
 import pyarrow.ipc as paipc
 
+from finelog.policy import StoragePolicy
 from finelog.rpc import logging_pb2
-from finelog.store.catalog import Catalog
-from finelog.store.compactor import CompactionConfig
-from finelog.store.cursor import LogCursor
-from finelog.store.layout_migration import LOG_NAMESPACE_DIR
-from finelog.store.log_namespace import (
+from finelog.schema import (
     LOG_REGISTERED_SCHEMA,
-    DiskLogNamespace,
-    MemoryLogNamespace,
-)
-from finelog.store.policy import StoragePolicy
-from finelog.store.rwlock import RWLock
-from finelog.store.schema import (
     MAX_WRITE_ROWS_BYTES,
     MAX_WRITE_ROWS_ROWS,
     InvalidNamespaceError,
@@ -67,6 +58,15 @@ from finelog.store.schema import (
     validate_and_align_batch,
     with_implicit_seq,
 )
+from finelog.store.catalog import Catalog
+from finelog.store.compactor import CompactionConfig
+from finelog.store.cursor import LogCursor
+from finelog.store.layout_migration import LOG_NAMESPACE_DIR
+from finelog.store.log_namespace import (
+    DiskLogNamespace,
+    MemoryLogNamespace,
+)
+from finelog.store.rwlock import RWLock
 from finelog.store.sql_escape import quote_ident, quote_literal
 from finelog.store.types import LogNamespaceProtocol, NamespaceStats
 from finelog.types import LogReadResult

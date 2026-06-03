@@ -22,10 +22,9 @@ import pyarrow.ipc as paipc
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
+from finelog.policy import StoragePolicy
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
-from finelog.store import LogStore
-from finelog.store.policy import StoragePolicy
-from finelog.store.schema import (
+from finelog.schema import (
     InvalidNamespaceError,
     NamespaceNotFoundError,
     SchemaConflictError,
@@ -33,6 +32,7 @@ from finelog.store.schema import (
     schema_from_proto,
     schema_to_proto,
 )
+from finelog.store import LogStore
 
 from .service import DEFAULT_PERSIST_TIMEOUT_SEC, await_persisted
 

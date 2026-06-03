@@ -10,8 +10,8 @@ import duckdb
 import pyarrow as pa
 import pytest
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
+from finelog.schema import Column, Schema
 from finelog.store.duckdb_store import ConnectionPool, DuckDBLogStore, _QueryWatchdog
-from finelog.store.schema import Column, Schema
 from finelog.store.sql_escape import quote_ident, quote_literal
 
 from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema

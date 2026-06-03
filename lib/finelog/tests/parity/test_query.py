@@ -28,7 +28,7 @@ from finelog.rpc import logging_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 from finelog.rpc.logging_connect import LogServiceClientSync
 
-from tests.parity.conftest import Backend
+from tests.parity.conftest import Backend, _worker_arrow_schema, worker_schema
 
 pytestmark = pytest.mark.timeout(60)
 
@@ -51,27 +51,6 @@ def _ipc_bytes(batch: pa.RecordBatch) -> bytes:
 
 def _decode(resp: stats_pb2.QueryResponse) -> pa.Table:
     return paipc.open_stream(io.BytesIO(resp.arrow_ipc)).read_all()
-
-
-def _worker_schema() -> stats_pb2.Schema:
-    return stats_pb2.Schema(
-        columns=[
-            stats_pb2.Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
-            stats_pb2.Column(name="mem_bytes", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
-            stats_pb2.Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
-        ],
-        key_column="",
-    )
-
-
-def _worker_arrow_schema() -> pa.Schema:
-    return pa.schema(
-        [
-            pa.field("worker_id", pa.string(), nullable=False),
-            pa.field("mem_bytes", pa.int64(), nullable=False),
-            pa.field("timestamp_ms", pa.int64(), nullable=False),
-        ]
-    )
 
 
 def _worker_batch(worker_ids: list[str], mem_bytes: list[int], ts: list[int]) -> pa.RecordBatch:
@@ -100,7 +79,7 @@ def _query(client: StatsServiceClientSync, sql: str) -> pa.Table:
 
 def test_query_round_trip_via_write(finelog_url: str, server_backend: Backend) -> None:
     client = _stats_client(finelog_url)
-    _register(client, "iris.worker", _worker_schema())
+    _register(client, "iris.worker", worker_schema())
     _write(client, "iris.worker", _worker_batch(["w-1", "w-2"], [100, 200], [1, 2]))
 
     table = _query(client, 'SELECT worker_id, mem_bytes FROM "iris.worker" ORDER BY worker_id')
@@ -111,7 +90,7 @@ def test_query_round_trip_via_write(finelog_url: str, server_backend: Backend) -
 
 def test_query_empty_namespace_typed_empty(finelog_url: str, server_backend: Backend) -> None:
     client = _stats_client(finelog_url)
-    _register(client, "iris.worker", _worker_schema())
+    _register(client, "iris.worker", worker_schema())
     # No writes: a registered-but-empty namespace is a typed empty result, not
     # an error. The column set includes the implicit `seq`.
     table = _query(client, 'SELECT * FROM "iris.worker"')
@@ -121,7 +100,7 @@ def test_query_empty_namespace_typed_empty(finelog_url: str, server_backend: Bac
 
 def test_query_where_filter(finelog_url: str, server_backend: Backend) -> None:
     client = _stats_client(finelog_url)
-    _register(client, "iris.worker", _worker_schema())
+    _register(client, "iris.worker", worker_schema())
     _write(
         client,
         "iris.worker",
@@ -136,7 +115,7 @@ def test_query_where_filter(finelog_url: str, server_backend: Backend) -> None:
 
 def test_query_multi_namespace_join(finelog_url: str, server_backend: Backend) -> None:
     client = _stats_client(finelog_url)
-    _register(client, "iris.worker", _worker_schema())
+    _register(client, "iris.worker", worker_schema())
     _write(client, "iris.worker", _worker_batch(["w-1", "w-2"], [100, 200], [1, 2]))
 
     task_schema = stats_pb2.Schema(
@@ -184,7 +163,7 @@ def test_query_unknown_namespace_raises(finelog_url: str, server_backend: Backen
 
 def test_query_after_drop_raises(finelog_url: str, server_backend: Backend) -> None:
     client = _stats_client(finelog_url)
-    _register(client, "iris.worker", _worker_schema())
+    _register(client, "iris.worker", worker_schema())
     _write(client, "iris.worker", _worker_batch(["w-1"], [100], [1]))
     # Visible before the drop.
     assert _query(client, 'SELECT * FROM "iris.worker"').num_rows == 1

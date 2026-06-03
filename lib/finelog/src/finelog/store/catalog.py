@@ -47,15 +47,15 @@ from threading import RLock
 
 import duckdb
 
-from finelog.store.migrations import apply_migrations, transactional
-from finelog.store.policy import StoragePolicy
-from finelog.store.schema import (
+from finelog.policy import StoragePolicy
+from finelog.schema import (
     InvalidNamespaceError,
     NamespaceNotFoundError,
     Schema,
     schema_from_json,
     schema_to_json,
 )
+from finelog.store.migrations import apply_migrations, transactional
 from finelog.store.types import LogNamespaceProtocol, NamespaceStats, SegmentLocation, SegmentRow
 
 logger = logging.getLogger(__name__)

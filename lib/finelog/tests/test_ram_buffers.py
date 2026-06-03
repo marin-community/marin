@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import pyarrow as pa
+from finelog.schema import IMPLICIT_SEQ_COLUMN, schema_to_arrow, with_implicit_seq
 from finelog.store.log_namespace import RamBuffers, _SealedBuffer
-from finelog.store.schema import IMPLICIT_SEQ_COLUMN, schema_to_arrow, with_implicit_seq
 
 from tests.conftest import _worker_schema
 

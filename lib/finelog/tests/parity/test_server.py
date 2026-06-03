@@ -25,7 +25,6 @@ import io
 import signal
 import socket
 import subprocess
-import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -38,7 +37,7 @@ from finelog.rpc import logging_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 from finelog.rpc.logging_connect import LogServiceClientSync
 
-from tests.parity.conftest import Backend
+from tests.parity.conftest import Backend, _wait_for_health
 
 pytestmark = pytest.mark.timeout(60)
 
@@ -227,20 +226,6 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
-
-
-def _wait_for_health(base_url: str, proc: subprocess.Popen, timeout: float) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"server exited early with code {proc.returncode}")
-        try:
-            if httpx.get(f"{base_url}/health", timeout=1.0).status_code == 200:
-                return
-        except httpx.HTTPError:
-            pass
-        time.sleep(0.05)
-    raise TimeoutError(f"{base_url}/health did not come up within {timeout}s")
 
 
 def test_clean_shutdown_after_durable_write(server_backend: Backend, tmp_path: Path) -> None:

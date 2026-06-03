@@ -8,10 +8,10 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from finelog.policy import StoragePolicy
 from finelog.store.catalog import Catalog
 from finelog.store.compactor import CompactionConfig
 from finelog.store.duckdb_store import DuckDBLogStore
-from finelog.store.policy import StoragePolicy
 
 from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema
 

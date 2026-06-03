@@ -33,7 +33,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-from finelog.store.schema import IMPLICIT_SEQ_COLUMN, Schema, duckdb_type_for
+from finelog.schema import IMPLICIT_SEQ_COLUMN, Schema, duckdb_type_for
 from finelog.store.sql_escape import quote_ident, quote_literal
 from finelog.store.types import SegmentRow
 

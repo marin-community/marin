@@ -31,7 +31,6 @@ from __future__ import annotations
 import os
 import socket
 import subprocess
-import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -40,7 +39,7 @@ import pytest
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 
-from tests.parity.conftest import Backend
+from tests.parity.conftest import Backend, _wait_for_health
 
 pytestmark = pytest.mark.timeout(60)
 
@@ -56,22 +55,6 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
-
-
-def _wait_for_health(base_url: str, proc: subprocess.Popen, timeout: float) -> None:
-    deadline = time.monotonic() + timeout
-    last_err: Exception | None = None
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"server exited early with code {proc.returncode}")
-        try:
-            resp = httpx.get(f"{base_url}/health", timeout=1.0)
-            if resp.status_code == 200:
-                return
-        except httpx.HTTPError as exc:
-            last_err = exc
-        time.sleep(0.05)
-    raise TimeoutError(f"{base_url}/health did not come up within {timeout}s: {last_err}")
 
 
 def _make_dist(tmp_path: Path) -> Path:

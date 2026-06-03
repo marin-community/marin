@@ -24,7 +24,7 @@ from connectrpc.errors import ConnectError
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 
-from tests.parity.conftest import Backend
+from tests.parity.conftest import Backend, worker_schema
 
 # Spawning a server subprocess can exceed the global per-test timeout under
 # load, so give parity tests more room.
@@ -43,10 +43,6 @@ def _worker_columns() -> list[stats_pb2.Column]:
     ]
 
 
-def _worker_schema(key_column: str = "") -> stats_pb2.Schema:
-    return stats_pb2.Schema(columns=_worker_columns(), key_column=key_column)
-
-
 def _column_names(schema: stats_pb2.Schema) -> tuple[str, ...]:
     return tuple(c.name for c in schema.columns)
 
@@ -60,7 +56,7 @@ def _register(
 @pytest.mark.parametrize("name", ["iris.worker", "iris.worker.v2", "a", "a-b", "abc.def_ghi", "x" * 64])
 def test_register_accepts_valid_names(finelog_url: str, server_backend: Backend, name: str) -> None:
     client = _stats_client(finelog_url)
-    resp = _register(client, name, _worker_schema())
+    resp = _register(client, name, worker_schema())
     # Wire form strips the implicit ``seq`` column.
     assert _column_names(resp.effective_schema) == ("worker_id", "mem_bytes", "timestamp_ms")
     assert resp.effective_schema.key_column == ""
@@ -73,7 +69,7 @@ def test_register_accepts_valid_names(finelog_url: str, server_backend: Backend,
 def test_register_rejects_invalid_names(finelog_url: str, server_backend: Backend, name: str) -> None:
     client = _stats_client(finelog_url)
     with pytest.raises(ConnectError) as exc:
-        _register(client, name, _worker_schema())
+        _register(client, name, worker_schema())
     assert exc.value.code == Code.INVALID_ARGUMENT
 
 
@@ -104,7 +100,7 @@ def test_register_rejects_explicit_key_missing_from_columns(finelog_url: str, se
 
 def test_register_implicit_timestamp_ms_accepted(finelog_url: str, server_backend: Backend) -> None:
     client = _stats_client(finelog_url)
-    resp = _register(client, "iris.worker", _worker_schema())
+    resp = _register(client, "iris.worker", worker_schema())
     assert _column_names(resp.effective_schema) == ("worker_id", "mem_bytes", "timestamp_ms")
 
 
@@ -148,20 +144,20 @@ def test_register_idempotent_and_subset_return_full(finelog_url: str, server_bac
 
 def test_register_additive_nullable_extension_merges(finelog_url: str, server_backend: Backend) -> None:
     client = _stats_client(finelog_url)
-    _register(client, "iris.worker", _worker_schema())
+    _register(client, "iris.worker", worker_schema())
     extended = stats_pb2.Schema(
         columns=[*_worker_columns(), stats_pb2.Column(name="note", type=stats_pb2.COLUMN_TYPE_STRING, nullable=True)],
     )
     eff = _register(client, "iris.worker", extended)
     assert _column_names(eff.effective_schema) == ("worker_id", "mem_bytes", "timestamp_ms", "note")
     # A subsequent register of the base returns the merged schema.
-    again = _register(client, "iris.worker", _worker_schema())
+    again = _register(client, "iris.worker", worker_schema())
     assert _column_names(again.effective_schema) == ("worker_id", "mem_bytes", "timestamp_ms", "note")
 
 
 def test_register_type_change_rejects(finelog_url: str, server_backend: Backend) -> None:
     client = _stats_client(finelog_url)
-    _register(client, "iris.worker", _worker_schema())
+    _register(client, "iris.worker", worker_schema())
     bad = stats_pb2.Schema(
         columns=[
             stats_pb2.Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
@@ -176,7 +172,7 @@ def test_register_type_change_rejects(finelog_url: str, server_backend: Backend)
 
 def test_register_non_additive_new_non_nullable_rejects(finelog_url: str, server_backend: Backend) -> None:
     client = _stats_client(finelog_url)
-    _register(client, "iris.worker", _worker_schema())
+    _register(client, "iris.worker", worker_schema())
     bad = stats_pb2.Schema(
         columns=[
             *_worker_columns(),
@@ -191,15 +187,15 @@ def test_register_non_additive_new_non_nullable_rejects(finelog_url: str, server
 def test_register_key_column_hint_coerced_to_registered(finelog_url: str, server_backend: Backend) -> None:
     client = _stats_client(finelog_url)
     # base has key_column="" (implicit timestamp_ms).
-    _register(client, "iris.worker", _worker_schema())
+    _register(client, "iris.worker", worker_schema())
     # Re-register with a differing key_column hint succeeds and is coerced.
-    eff = _register(client, "iris.worker", _worker_schema(key_column="timestamp_ms"))
+    eff = _register(client, "iris.worker", worker_schema(key_column="timestamp_ms"))
     assert eff.effective_schema.key_column == ""
 
 
 def test_get_table_schema_round_trip_and_unknown(finelog_url: str, server_backend: Backend) -> None:
     client = _stats_client(finelog_url)
-    registered = _register(client, "iris.worker", _worker_schema())
+    registered = _register(client, "iris.worker", worker_schema())
     fetched = client.get_table_schema(stats_pb2.GetTableSchemaRequest(namespace="iris.worker"))
     assert _column_names(fetched.schema) == _column_names(registered.effective_schema)
     assert fetched.schema.key_column == registered.effective_schema.key_column
@@ -211,7 +207,7 @@ def test_get_table_schema_round_trip_and_unknown(finelog_url: str, server_backen
 
 def test_list_namespaces_includes_log_and_zero_stats(finelog_url: str, server_backend: Backend) -> None:
     client = _stats_client(finelog_url)
-    _register(client, "iris.worker", _worker_schema())
+    _register(client, "iris.worker", worker_schema())
     resp = client.list_namespaces(stats_pb2.ListNamespacesRequest())
     by_name = {info.namespace: info for info in resp.namespaces}
     assert "log" in by_name
@@ -228,7 +224,7 @@ def test_list_namespaces_includes_log_and_zero_stats(finelog_url: str, server_ba
 
 def test_drop_registered_empty_namespace(finelog_url: str, server_backend: Backend) -> None:
     client = _stats_client(finelog_url)
-    _register(client, "iris.worker", _worker_schema())
+    _register(client, "iris.worker", worker_schema())
     client.drop_table(stats_pb2.DropTableRequest(namespace="iris.worker"))
 
     # After drop, list no longer includes it and get-schema is NOT_FOUND.
@@ -239,7 +235,7 @@ def test_drop_registered_empty_namespace(finelog_url: str, server_backend: Backe
     assert exc.value.code == Code.NOT_FOUND
 
     # Re-registering the same name succeeds.
-    re = _register(client, "iris.worker", _worker_schema())
+    re = _register(client, "iris.worker", worker_schema())
     assert _column_names(re.effective_schema) == ("worker_id", "mem_bytes", "timestamp_ms")
 
 
@@ -277,7 +273,7 @@ def test_effective_policy_round_trips_and_empty_keeps_existing(finelog_url: str,
     resp = client.register_table(
         stats_pb2.RegisterTableRequest(
             namespace=ns,
-            schema=_worker_schema(),
+            schema=worker_schema(),
             storage_policy=stats_pb2.StoragePolicy(max_segments=5, max_bytes=1024),
         )
     )
@@ -289,7 +285,7 @@ def test_effective_policy_round_trips_and_empty_keeps_existing(finelog_url: str,
 
     # Re-register with an EMPTY policy -> existing policy preserved (an old
     # client must not be able to wipe a tighter policy a newer client set).
-    kept = client.register_table(stats_pb2.RegisterTableRequest(namespace=ns, schema=_worker_schema()))
+    kept = client.register_table(stats_pb2.RegisterTableRequest(namespace=ns, schema=worker_schema()))
     assert kept.effective_policy.max_segments == 5
     assert kept.effective_policy.max_bytes == 1024
 
@@ -298,7 +294,7 @@ def test_effective_policy_round_trips_and_empty_keeps_existing(finelog_url: str,
     replaced = client.register_table(
         stats_pb2.RegisterTableRequest(
             namespace=ns,
-            schema=_worker_schema(),
+            schema=worker_schema(),
             storage_policy=stats_pb2.StoragePolicy(max_age_seconds=99),
         )
     )

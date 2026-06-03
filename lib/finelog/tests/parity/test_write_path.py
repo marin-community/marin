@@ -32,7 +32,7 @@ from finelog.rpc import logging_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 from finelog.rpc.logging_connect import LogServiceClientSync
 
-from tests.parity.conftest import Backend, RestartableServer
+from tests.parity.conftest import Backend, RestartableServer, _worker_arrow_schema, worker_schema
 
 # Restart cases boot the backend twice; give parity tests extra room.
 pytestmark = pytest.mark.timeout(60)
@@ -59,27 +59,6 @@ def _ipc_bytes(batch: pa.RecordBatch) -> bytes:
     return sink.getvalue()
 
 
-def _worker_schema() -> stats_pb2.Schema:
-    return stats_pb2.Schema(
-        columns=[
-            stats_pb2.Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
-            stats_pb2.Column(name="mem_bytes", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
-            stats_pb2.Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
-        ],
-        key_column="",
-    )
-
-
-def _worker_arrow_schema() -> pa.Schema:
-    return pa.schema(
-        [
-            pa.field("worker_id", pa.string(), nullable=False),
-            pa.field("mem_bytes", pa.int64(), nullable=False),
-            pa.field("timestamp_ms", pa.int64(), nullable=False),
-        ]
-    )
-
-
 def _worker_batch(worker_ids: list[str], mem_bytes: list[int], ts: list[int]) -> pa.RecordBatch:
     return pa.RecordBatch.from_pydict(
         {"worker_id": worker_ids, "mem_bytes": mem_bytes, "timestamp_ms": ts},
@@ -88,7 +67,7 @@ def _worker_batch(worker_ids: list[str], mem_bytes: list[int], ts: list[int]) ->
 
 
 def _register_worker(client: StatsServiceClientSync, namespace: str, schema: stats_pb2.Schema | None = None) -> None:
-    client.register_table(stats_pb2.RegisterTableRequest(namespace=namespace, schema=schema or _worker_schema()))
+    client.register_table(stats_pb2.RegisterTableRequest(namespace=namespace, schema=schema or worker_schema()))
 
 
 def _write(client: StatsServiceClientSync, namespace: str, batch: pa.RecordBatch) -> int:

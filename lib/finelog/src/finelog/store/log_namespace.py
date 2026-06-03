@@ -39,8 +39,14 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from rigging.timing import ExponentialBackoff, RateLimiter
 
-from finelog.rpc import finelog_stats_pb2 as stats_pb2
+from finelog.policy import StoragePolicy
 from finelog.rpc import logging_pb2
+from finelog.schema import (
+    IMPLICIT_SEQ_COLUMN,
+    AlignedBatch,
+    Schema,
+    schema_to_arrow,
+)
 from finelog.store.catalog import Catalog
 from finelog.store.compactor import (
     CompactionConfig,
@@ -50,15 +56,7 @@ from finelog.store.compactor import (
     parse_seg_filename,
     seg_filename,
 )
-from finelog.store.policy import StoragePolicy
 from finelog.store.rwlock import RWLock
-from finelog.store.schema import (
-    IMPLICIT_SEQ_COLUMN,
-    AlignedBatch,
-    Column,
-    Schema,
-    schema_to_arrow,
-)
 from finelog.store.types import (
     LocalSegment,
     NamespaceStats,
@@ -68,21 +66,6 @@ from finelog.store.types import (
 from finelog.types import LogReadResult, parse_attempt_id, str_to_log_level
 
 logger = logging.getLogger(__name__)
-
-# The user-declared schema for the "log" namespace. The registry stamps
-# the implicit ``seq`` column on top.
-LOG_REGISTERED_SCHEMA = Schema(
-    columns=(
-        Column(name="key", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
-        Column(name="source", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
-        Column(name="data", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
-        Column(name="epoch_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
-        Column(name="level", type=stats_pb2.COLUMN_TYPE_INT32, nullable=False),
-    ),
-    # Per-source tail reads (``WHERE key = $key ORDER BY seq DESC``) dominate;
-    # sorting by ``key`` first colocates same-source rows for row-group pruning.
-    key_column="key",
-)
 
 _ROW_GROUP_SIZE = 16_384
 

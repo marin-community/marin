@@ -5,8 +5,7 @@ from __future__ import annotations
 
 import pytest
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
-from finelog.store.duckdb_store import DuckDBLogStore
-from finelog.store.schema import (
+from finelog.schema import (
     Column,
     InvalidNamespaceError,
     Schema,
@@ -14,6 +13,7 @@ from finelog.store.schema import (
     SchemaValidationError,
     with_implicit_seq,
 )
+from finelog.store.duckdb_store import DuckDBLogStore
 
 from tests.conftest import _worker_schema
 
@@ -188,7 +188,7 @@ def test_register_key_column_mismatch_uses_registered(store: DuckDBLogStore, cap
     base = _worker_schema()
     store.register_table("iris.worker", base)
     requested = Schema(columns=base.columns, key_column="timestamp_ms")
-    with caplog.at_level("WARNING", logger="finelog.store.schema"):
+    with caplog.at_level("WARNING", logger="finelog.schema"):
         effective = store.register_table("iris.worker", requested)
     assert effective.key_column == base.key_column
     assert any("key_column hint mismatch" in r.message for r in caplog.records)

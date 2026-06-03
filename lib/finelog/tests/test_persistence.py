@@ -9,8 +9,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
+from finelog.schema import Column, Schema, with_implicit_seq
 from finelog.store.duckdb_store import DuckDBLogStore
-from finelog.store.schema import Column, Schema, with_implicit_seq
 
 from tests.conftest import _ipc_bytes, _worker_schema
 

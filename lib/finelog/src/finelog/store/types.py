@@ -15,9 +15,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
+from finelog.policy import StoragePolicy
 from finelog.rpc import logging_pb2
-from finelog.store.policy import StoragePolicy
-from finelog.store.schema import AlignedBatch, Schema
+from finelog.schema import AlignedBatch, Schema
 from finelog.types import LogReadResult
 
 

@@ -24,34 +24,13 @@ import pytest
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 
-from tests.parity.conftest import Backend, maintain, segments
+from tests.parity.conftest import Backend, _worker_arrow_schema, maintain, segments, worker_schema
 
 pytestmark = pytest.mark.timeout(60)
 
 
 def _stats_client(url: str) -> StatsServiceClientSync:
     return StatsServiceClientSync(address=url)
-
-
-def _worker_schema() -> stats_pb2.Schema:
-    return stats_pb2.Schema(
-        columns=[
-            stats_pb2.Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
-            stats_pb2.Column(name="mem_bytes", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
-            stats_pb2.Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
-        ],
-        key_column="",
-    )
-
-
-def _worker_arrow_schema() -> pa.Schema:
-    return pa.schema(
-        [
-            pa.field("worker_id", pa.string(), nullable=False),
-            pa.field("mem_bytes", pa.int64(), nullable=False),
-            pa.field("timestamp_ms", pa.int64(), nullable=False),
-        ]
-    )
 
 
 def _ipc_bytes(batch: pa.RecordBatch) -> bytes:
@@ -79,7 +58,7 @@ def _query(client: StatsServiceClientSync, sql: str) -> pa.Table:
 def test_debug_maintain_promotes_l0(finelog_url: str, server_backend: Backend) -> None:
     client = _stats_client(finelog_url)
     _register = client.register_table
-    _register(stats_pb2.RegisterTableRequest(namespace="iris.worker", schema=_worker_schema()))
+    _register(stats_pb2.RegisterTableRequest(namespace="iris.worker", schema=worker_schema()))
 
     # Three single-row writes -> three L0 segments (each WriteRows seals one).
     _write_one(client, "iris.worker", "w-1", 100, 30)

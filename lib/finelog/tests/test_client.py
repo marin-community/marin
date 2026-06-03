@@ -24,7 +24,7 @@ from finelog.errors import (
 )
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
-from finelog.store.schema import Column, Schema, schema_to_proto
+from finelog.schema import Column, Schema, schema_to_proto
 
 
 class FakeLogClient:
