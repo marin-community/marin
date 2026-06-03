@@ -148,7 +148,12 @@ class CausalSelfAttention(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        use_pko: bool = False,
+    ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
@@ -156,9 +161,35 @@ class CausalSelfAttention(eqx.Module):
         q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
         k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+
+        # PKO (Partial Key Offset) + ``pko_first_bos_zero``: shift k.stationary
+        # forward by 1 position and zero at doc-starts BEFORE rms_norm.
+        if use_pko:
+            half = head_dim // 2
+            k_stationary = k[..., half:]
+            k_shifted = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
+            q_seg = mask.segment_ids[0]
+            if q_seg.ndim == 1:
+                is_doc_start_seq = jnp.concatenate([jnp.ones((1,), dtype=bool), q_seg[1:] != q_seg[:-1]])
+                is_doc_start = jnp.broadcast_to(is_doc_start_seq, k_shifted.shape[:2])
+            else:
+                is_doc_start = jnp.concatenate(
+                    [jnp.ones_like(q_seg[:, :1], dtype=bool), q_seg[:, 1:] != q_seg[:, :-1]],
+                    axis=1,
+                )
+            k_shifted = jnp.where(is_doc_start[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
+            k = jnp.concatenate([k[..., :half], k_shifted], axis=-1)
+
         q = rms_norm(q)
         k = rms_norm(k)
-        q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+        # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim.
+        # Second half is rope-free on every layer.
+        half = head_dim // 2
+        q_rot, k_rot = apply_rotary_embedding(
+            q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
+        )
+        q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
+        k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
