@@ -13,9 +13,14 @@ Issue: https://github.com/marin-community/marin/issues/6106
 - Native tpu-inference implementation: `tpu_inference/models/jax/grugmoe.py` in the tpu-inference branch.
   - `GrugMoeForCausalLM` follows the JAX/NNX model shape used by the existing tpu-inference model registry.
   - `tpu_inference/models/common/model_loader.py` resolves `GrugMoeForCausalLM` through the native `flax_nnx` path.
+  - Exact validation SHA: `4f83d2109ae650de7d7e4f521154fb0d5c1a23a1`.
 - vLLM branch:
   - The PyTorch-first `vllm/model_executor/models/grugmoe.py` prototype and its test are removed.
   - `GrugMoeForCausalLM` is no longer registered in vLLM's text-generation model registry.
+  - Exact validation SHA: `d025e46d3dfe0afc0f5bd1518c19ce337205db2d`.
+- Marin parity harness:
+  - `experiments/grug/moe/vllm_tpu_parity.py` validates the checkpointless path.
+  - Exact validation SHA: `1394236f0d1bfa71d931397872e522557b237c78`.
 
 ## Implementation Choice
 
@@ -30,6 +35,7 @@ This intentionally does not include:
 
 - vLLM PyTorch model code or fused vLLM MoE kernels.
 - Real checkpoint loading/export.
+- Generation.
 - Production KV-cache decode behavior.
 - Performance tuning or fused TPU kernels.
 - Real-model smoke tests.
@@ -43,12 +49,17 @@ The smallest useful composed test shape keeps every Grug feature active:
 - `shared_expert_intermediate_dim=10`
 - `num_experts=4`
 - `num_experts_per_token=2`
-- `num_layers=2`
+- `num_layers=4`
 - `num_heads=2`
 - `num_kv_heads=1`
 - `head_dim=4`
 - `max_seq_len=8`
 - `sliding_window=4`
+
+The 4-layer shape exercises both sliding-window branches in the Grug block loop:
+layers `0`, `1`, and `2` use the short window `2`, while layer `3` uses the
+long window `4`. The full harness uses a 6-token sequence so the different
+window lengths can affect attention.
 
 The focused tpu-inference unit test uses an even smaller MoE-only shape to isolate the router-bias semantic.
 
@@ -57,7 +68,9 @@ The focused tpu-inference unit test uses an even smaller MoE-only shape to isola
 The Marin parity harness keeps Levanter as the correctness oracle:
 
 - Component parity instantiates native `GrugMoeMLP`, sets deterministic router/expert weights, computes selected experts and unbiased sigmoid combine weights, and compares the output against Levanter `moe_mlp`.
-- Composed parity initializes a tiny seeded Levanter `Transformer`, copies its parameters into native tpu-inference `GrugMoeForCausalLM`, and compares hidden states against a dense JAX reference using the same Levanter parameters/equations.
+- Composed parity initializes a tiny seeded Levanter `Transformer`, copies its parameters into native tpu-inference `GrugMoeForCausalLM`, and compares final hidden states against a dense JAX reference using the same Levanter parameters/equations.
+- The composed check also calls native `GrugMoeForCausalLM.compute_logits` and compares those logits against the Levanter output projection applied to the reference hidden states.
+- The composed check records selected expert IDs from each native layer and compares them against the reference QB routing path.
 - The harness patches Levanter sharding helpers to a one-device runtime for local and single-slice TPU validation. A direct `Transformer.__call__` is not used as the composed oracle because the training sharding contract is stricter than this one-device inference harness.
 - The harness sets `jax_default_matmul_precision=float32` so local CPU and TPU validation use the same strict numeric path.
 
@@ -104,6 +117,7 @@ Marin parity harness:
 cd /home/romain/dev/marin-wt/grugmoe-vllm-tpu-support
 python -m py_compile experiments/grug/moe/vllm_tpu_parity.py
 uv run --with ruff ruff check experiments/grug/moe/vllm_tpu_parity.py
+./infra/pre-commit.py experiments/grug/moe/vllm_tpu_parity.py
 JAX_PLATFORMS=cpu \
 PYTHONPATH=/home/romain/dev/marin-wt/grugmoe-vllm-tpu-inference:/home/romain/dev/marin-wt/grugmoe-vllm-tpu-vllm \
 uv run \
@@ -119,7 +133,7 @@ Expected parity output:
 
 ```text
 component: native GrugMoeMLP matches Levanter moe_mlp
-full: native GrugMoeModel hidden states match Levanter Transformer reference
+full: native GrugMoeModel hidden states, logits, and routed expert IDs match Levanter reference
 ```
 
 ## TPU Command
@@ -139,18 +153,25 @@ uv run iris --cluster=marin job run \
   --cpu 2 \
   --memory 16GB \
   --disk 50GB \
-  --job-name grugmoe-native-jax-tpu-parity \
-  -- bash -lc 'git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/tpu-inference.git /tmp/grugmoe-vllm-tpu-inference && git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/vllm.git /tmp/grugmoe-vllm-tpu-vllm && PYTHONPATH=/tmp/grugmoe-vllm-tpu-inference:/tmp/grugmoe-vllm-tpu-vllm uv run --with-requirements /tmp/grugmoe-vllm-tpu-inference/requirements.txt --with-requirements /tmp/grugmoe-vllm-tpu-vllm/requirements/common.txt --with "torch==2.10.0+cpu" --extra-index-url https://download.pytorch.org/whl/cpu python -m experiments.grug.moe.vllm_tpu_parity --tpu-inference-root /tmp/grugmoe-vllm-tpu-inference'
+  --job-name grugmoe-native-jax-strengthened-parity-sha \
+  -- bash -lc 'set -euxo pipefail; echo marin_sha=1394236f0d1bfa71d931397872e522557b237c78; git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/tpu-inference.git /tmp/grugmoe-vllm-tpu-inference; git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/vllm.git /tmp/grugmoe-vllm-tpu-vllm; echo tpu_inference_sha=$(git -C /tmp/grugmoe-vllm-tpu-inference rev-parse HEAD); echo vllm_sha=$(git -C /tmp/grugmoe-vllm-tpu-vllm rev-parse HEAD); PYTHONPATH=/tmp/grugmoe-vllm-tpu-inference:/tmp/grugmoe-vllm-tpu-vllm uv run --with-requirements /tmp/grugmoe-vllm-tpu-inference/requirements.txt --with-requirements /tmp/grugmoe-vllm-tpu-vllm/requirements/common.txt --with "torch==2.10.0+cpu" --extra-index-url https://download.pytorch.org/whl/cpu python -m experiments.grug.moe.vllm_tpu_parity --tpu-inference-root /tmp/grugmoe-vllm-tpu-inference'
 ```
 
-Native-JAX validation result on 2026-06-02:
+Strengthened native-JAX validation result on 2026-06-03:
 
-- Job: `/romain/grugmoe-native-jax-tpu-parity`
+- Job: `/romain/grugmoe-native-jax-strengthened-parity-sha`
 - State: `succeeded`
 - Exit: `0`
+- TPU: `v6e-4`
+- Region: `europe-west4`
+- Duration: `31.75 seconds`
+- Remote SHAs:
+  - `marin_sha=1394236f0d1bfa71d931397872e522557b237c78`
+  - `tpu_inference_sha=4f83d2109ae650de7d7e4f521154fb0d5c1a23a1`
+  - `vllm_sha=d025e46d3dfe0afc0f5bd1518c19ce337205db2d`
 - Final output:
 
 ```text
 component: native GrugMoeMLP matches Levanter moe_mlp
-full: native GrugMoeModel hidden states match Levanter Transformer reference
+full: native GrugMoeModel hidden states, logits, and routed expert IDs match Levanter reference
 ```
