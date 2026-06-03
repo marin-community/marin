@@ -28,7 +28,7 @@ from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.defaults import default_validation_sets
-from experiments.grug.moe.heuristic import build_from_heuristic
+from experiments.grug.moe.heuristic_v1 import build_from_heuristic
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.pretraining_datasets import nemotron_mix
