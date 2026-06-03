@@ -225,7 +225,6 @@ def compute_ppo_loss_objective(
     *,
     clip_epsilon_low: float,
     clip_epsilon_high: float,
-    max_output_tokens: int,
     trainer_inference_importance_sampling_ratio: jax.Array | None = None,
     response_truncated_array: jax.Array | None = None,  # [batch]
 ):
@@ -256,14 +255,6 @@ def compute_ppo_loss_objective(
     return loss, metadata
 
 
-def compute_ppo_loss(
-    loss_objective: jax.Array,
-    loss_masks: jax.Array,
-) -> jax.Array:
-    """Compute PPO loss (per-example normalization)."""
-    return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1))
-
-
 def compute_dapo_loss(
     loss_objective: jax.Array,
     loss_masks: jax.Array,
@@ -273,15 +264,6 @@ def compute_dapo_loss(
     Divides by total tokens across all examples in the batch, not per-example.
     """
     return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks))
-
-
-def compute_grpo_loss(
-    loss_objective: jax.Array,
-    loss_masks: jax.Array,
-    max_output_tokens: int,
-) -> jax.Array:
-    """Compute GRPO loss (token-level loss)."""
-    return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / max_output_tokens)
 
 
 def importance_sampling_ratio(
@@ -384,7 +366,6 @@ def rloo_loss_with_importance_sampling(
         loss_masks=loss_masks_array,
         clip_epsilon_low=clip_epsilon_low,
         clip_epsilon_high=clip_epsilon_high,
-        max_output_tokens=batch.max_output_tokens,
         trainer_inference_importance_sampling_ratio=trainer_inference_importance_sampling_ratio,
         response_truncated_array=batch.truncated if do_overlong_filtering else None,
     )

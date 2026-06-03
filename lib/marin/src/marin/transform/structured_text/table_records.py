@@ -29,8 +29,7 @@ from marin.datakit.ingestion_manifest import (
     write_ingestion_metadata_json,
 )
 from marin.utils import fsspec_mkdirs, fsspec_url
-from rigging.filesystem import open_url, url_to_fs
-from zephyr.writers import atomic_rename
+from rigging.filesystem import atomic_rename, open_url, url_to_fs
 
 logger = logging.getLogger(__name__)
 

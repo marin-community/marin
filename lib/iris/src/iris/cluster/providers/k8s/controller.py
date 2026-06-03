@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 import fsspec.config
 from rigging.timing import Deadline
 
-from iris.cluster.config import config_to_dict
+from iris.cluster.config_serde import config_to_dict
 from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource

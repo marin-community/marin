@@ -61,8 +61,8 @@ from iris.rpc.auth import (
     SESSION_COOKIE,
     NullAuthInterceptor,
     TokenVerifier,
-    _verified_identity,
     extract_bearer_token,
+    identity_scope,
     resolve_auth,
 )
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -228,11 +228,8 @@ class _DashboardAuthInterceptor:
         if identity is None:
             return self._null.intercept_unary_sync(call_next, request, ctx)
 
-        reset_token = _verified_identity.set(identity)
-        try:
+        with identity_scope(identity):
             return call_next(request, ctx)
-        finally:
-            _verified_identity.reset(reset_token)
 
     async def intercept_unary(self, call_next, request, ctx):
         if ctx.method().name in _UNAUTHENTICATED_RPCS:
@@ -242,11 +239,8 @@ class _DashboardAuthInterceptor:
         if identity is None:
             return await self._null.intercept_unary(call_next, request, ctx)
 
-        reset_token = _verified_identity.set(identity)
-        try:
+        with identity_scope(identity):
             return await call_next(request, ctx)
-        finally:
-            _verified_identity.reset(reset_token)
 
 
 # DNS marker label that flags a Host as a per-endpoint subdomain. A request
