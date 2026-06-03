@@ -20,7 +20,6 @@ The run_once() flow splits into two phases:
 from __future__ import annotations
 
 import logging
-import threading
 import urllib.error
 import urllib.request
 from collections import deque
@@ -78,19 +77,6 @@ _HEALTH_PROBE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({
 # timeouts would blow past evaluation_interval (10 s default).
 _HEALTH_PROBE_MAX_WORKERS = 64
 
-# Cap concurrent slice-create requests across all scale groups. Each scale-up
-# decision spawns a thread that issues one cloud create POST. The per-group
-# rate limit is a token bucket (capacity 16) refilled per minute, so an idle
-# group can dump a full bucket in a single tick — and with no global cap, many
-# groups draining their buckets at once (or a controller restart re-requesting
-# all demand) fires hundreds of create POSTs in the same second. Production
-# logs show bursts of 100-160 creates/s, correlated with transient
-# "TPU operation failed: an internal error has occurred" failures and with
-# multiple creates racing the same zone-capacity snapshot. The create POST
-# returns immediately (bootstrap runs on a separate thread), so gating it
-# smooths bursts without serializing bootstrap or limiting sustained throughput.
-DEFAULT_MAX_CONCURRENT_SCALE_UPS = 8
-
 
 def _probe_worker_health(worker_url: str) -> bool:
     """Probe a worker's /health endpoint. ``worker_url`` is an ``http://host:port`` base URL.
@@ -129,7 +115,6 @@ class Autoscaler:
         base_worker_config: config_pb2.WorkerConfig | None = None,
         db: ControllerDB | None = None,
         unresolvable_timeout: Duration = DEFAULT_UNRESOLVABLE_TIMEOUT,
-        max_concurrent_scale_ups: int = DEFAULT_MAX_CONCURRENT_SCALE_UPS,
     ):
         """Create autoscaler with explicit parameters.
 
@@ -142,8 +127,6 @@ class Autoscaler:
                 and passed to platform.create_slice(). None disables bootstrap (test/local mode).
             db: Optional DB handle for write-through persistence of tracked workers.
             unresolvable_timeout: How long a slice can remain UNKNOWN before being treated as FAILED.
-            max_concurrent_scale_ups: Upper bound on in-flight slice-create requests across all
-                scale groups. Bounds how many create POSTs hit the cloud API at once.
         """
         self._groups = scale_groups
         self._platform = platform
@@ -171,11 +154,6 @@ class Autoscaler:
 
         # Thread management
         self._threads = threads if threads is not None else get_thread_container()
-
-        # Global ceiling on concurrent slice-create requests. Each scale-up runs
-        # on its own thread but must hold a token before issuing the cloud create
-        # POST, so a burst of decisions drains through the API at a bounded rate.
-        self._scale_up_semaphore = threading.BoundedSemaphore(max_concurrent_scale_ups)
 
     @classmethod
     def from_config(
@@ -396,35 +374,28 @@ class Autoscaler:
         group.begin_scale_up(timestamp=ts)
 
         def _scale_up_wrapper(stop_event):
-            self._do_scale_up(group, ts, stop_event, reason)
+            self._do_scale_up(group, ts, reason)
 
         self._threads.spawn(
             target=_scale_up_wrapper,
             name=f"scale-up-{group.name}",
         )
 
-    def _do_scale_up(self, group: ScalingGroup, ts: Timestamp, stop_event: threading.Event, reason: str = "") -> bool:
+    def _do_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> bool:
         """Execute the actual blocking scale-up work.
 
         This runs in a background thread and should not be called directly.
         Use _execute_scale_up instead. Bootstrap is handled internally by the
         platform when cluster_config is provided.
 
+        Concurrent create LROs are bounded inside the platform's create_slice
+        (a slot held from the create POST until the node leaves CREATING), not
+        here, so this issues its create unguarded.
+
         Returns:
             True if scale-up succeeded, False otherwise.
         """
         action = self._log_action("scale_up", group.name, reason=reason, status="pending")
-
-        # Hold a create token for the duration of the cloud create call so the
-        # number of in-flight create POSTs stays bounded even when many groups
-        # decide to scale up in the same tick. Poll on acquire so a shutdown
-        # (stop_event) doesn't leave this thread parked indefinitely.
-        while not self._scale_up_semaphore.acquire(timeout=1.0):
-            if stop_event.is_set():
-                group.cancel_scale_up()
-                action.status = "failed"
-                action.reason = "shutdown before create slot acquired"
-                return False
 
         slice_obj = None
 
@@ -452,8 +423,6 @@ class Autoscaler:
             action.reason = f"{reason} - error: {e}"
             group.record_create_failed(ts)
             return False
-        finally:
-            self._scale_up_semaphore.release()
 
     def _per_group_worker_config(self, group: ScalingGroup) -> config_pb2.WorkerConfig | None:
         """Build per-group WorkerConfig by merging base config with scale group overrides."""

@@ -10,6 +10,7 @@ tests that cannot be expressed through the protocol are in dedicated sections.
 
 from __future__ import annotations
 
+import threading
 import unittest.mock
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -1168,6 +1169,139 @@ def test_tpu_bootstrap_aborts_when_slice_enters_deleting():
                 ip_wait_timeout=5.0,
                 bootstrap_timeout=5.0,
             )
+
+
+def test_tpu_bootstrap_releases_create_slot_before_health_phase():
+    """The in-flight-create slot is freed at the end of phase 1 (node left
+    CREATING), not after the slower phase-2 health wait. This is what makes the
+    semaphore bound concurrent create LROs rather than total bootstrap time."""
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    handle = _make_tpu_slice_for_bootstrap(gcp_service)
+
+    settled: list[bool] = []
+
+    def probe(_worker_url):
+        # Phase 2 (health) must only run after the create slot was released.
+        assert settled, "create slot must be released before phase-2 health polling"
+        return True
+
+    with unittest.mock.patch("iris.cluster.providers.gcp.workers._probe_worker_health", side_effect=probe):
+        _run_tpu_bootstrap(
+            gcp_service,
+            "test-project",
+            handle,
+            poll_interval=0.01,
+            ip_wait_timeout=5.0,
+            bootstrap_timeout=5.0,
+            on_create_settled=lambda: settled.append(True),
+        )
+
+    assert settled == [True]  # released exactly once
+    assert handle._bootstrap_state == CloudSliceState.READY
+
+
+def test_tpu_bootstrap_releases_create_slot_on_failure():
+    """A create LRO that errors still frees the slot (released in the finally),
+    so a failed create never permanently leaks an in-flight slot."""
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    handle = _make_tpu_slice_for_bootstrap(gcp_service)
+    gcp_service.set_operation_status(
+        handle._create_operation,
+        OperationStatus(done=True, error_code=8, error_message="boom"),
+    )
+
+    settled: list[bool] = []
+    with unittest.mock.patch("iris.cluster.providers.gcp.workers._probe_worker_health", return_value=False):
+        with pytest.raises(QuotaExhaustedError):
+            _run_tpu_bootstrap(
+                gcp_service,
+                "test-project",
+                handle,
+                poll_interval=0.01,
+                ip_wait_timeout=5.0,
+                bootstrap_timeout=5.0,
+                on_create_settled=lambda: settled.append(True),
+            )
+
+    assert settled == [True]
+
+
+def test_create_slice_bounds_concurrent_inflight_creates(monkeypatch):
+    """No more than max_inflight_tpu_creates create LROs are in flight at once.
+
+    A slot is held from the create POST until the node leaves CREATING (the
+    bootstrap phase-1 settle), so concurrent provisioning slices — not the POST
+    rate — are what's bounded. Drive a controllable bootstrap and assert the
+    peak number of simultaneous in-flight creates never exceeds the cap.
+    """
+    cap = 2
+    num_slices = 6
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
+    platform = GcpWorkerProvider(
+        gcp_config,
+        label_prefix="iris",
+        worker_port=10001,
+        gcp_service=gcp_service,
+        max_inflight_tpu_creates=cap,
+    )
+
+    lock = threading.Lock()
+    state = {"current": 0, "peak": 0}
+    entered = threading.Semaphore(0)
+    proceed = threading.Event()
+
+    def fake_bootstrap(*_args, on_create_settled=None, **_kwargs):
+        # Holds the create slot for the duration, the same window the real
+        # phase-0/1 watch spans before releasing via on_create_settled.
+        with lock:
+            state["current"] += 1
+            state["peak"] = max(state["peak"], state["current"])
+        entered.release()
+        proceed.wait()
+        with lock:
+            state["current"] -= 1
+        if on_create_settled:
+            on_create_settled()
+
+    monkeypatch.setattr("iris.cluster.providers.gcp.workers._run_tpu_bootstrap", fake_bootstrap)
+
+    def make_slice(i: int):
+        cfg = config_pb2.SliceConfig(
+            name_prefix=f"iris-{i}",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5litepod-8",
+        )
+        cfg.gcp.zone = "us-central2-b"
+        cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
+        wc = config_pb2.WorkerConfig(
+            docker_image="test-image:latest",
+            port=10001,
+            controller_address="controller:10000",
+            cache_dir="/var/cache/iris",
+        )
+        platform.create_slice(cfg, worker_config=wc)
+
+    threads = [threading.Thread(target=make_slice, args=(i,), name=f"create-{i}") for i in range(num_slices)]
+    for t in threads:
+        t.start()
+
+    # Exactly `cap` creates become in-flight; the rest block on the slot inside
+    # create_slice until one settles.
+    for _ in range(cap):
+        assert entered.acquire(timeout=5)
+    assert not entered.acquire(timeout=0.2)
+    with lock:
+        assert state["peak"] == cap
+
+    # Release the batch; the remaining creates drain, still capped.
+    proceed.set()
+    for t in threads:
+        t.join(timeout=5)
+        assert not t.is_alive()
+
+    with lock:
+        assert state["peak"] == cap
 
 
 @pytest.mark.parametrize(

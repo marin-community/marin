@@ -63,6 +63,27 @@ from iris.rpc import config_pb2
 logger = logging.getLogger(__name__)
 
 
+def _make_one_shot_release(semaphore: threading.BoundedSemaphore) -> Callable[[], None]:
+    """Return a callable that releases ``semaphore`` exactly once.
+
+    The acquiring (scale-up) thread and the bootstrap thread can both race to
+    free the create slot; the guard keeps a BoundedSemaphore from raising on a
+    double release.
+    """
+    lock = threading.Lock()
+    released = False
+
+    def _release() -> None:
+        nonlocal released
+        with lock:
+            if released:
+                return
+            released = True
+        semaphore.release()
+
+    return _release
+
+
 def _spawn_bootstrap_thread(
     handle: GcpSliceHandle | GcpVmSliceHandle,
     bootstrap_fn: Callable[[], None],
@@ -87,6 +108,12 @@ def _spawn_bootstrap_thread(
 
     threading.Thread(target=_run, name=f"bootstrap-{handle.slice_id}", daemon=True).start()
 
+
+# Default ceiling on concurrent in-flight TPU slice-create LROs. A create stays
+# in flight from the CreateNode POST until the node leaves CREATING (bootstrap
+# phase 1), so this bounds how many create operations GCP provisions at once —
+# unlike a POST-only gate, which a fire-and-forget create barely constrains.
+DEFAULT_MAX_INFLIGHT_TPU_CREATES = 8
 
 DEFAULT_MACHINE_TYPE = "n2-standard-4"
 DEFAULT_BOOT_DISK_SIZE_GB = 50
@@ -251,6 +278,7 @@ class GcpWorkerProvider:
         worker_port: int,
         ssh_config: config_pb2.SshConfig | None = None,
         gcp_service: GcpService | None = None,
+        max_inflight_tpu_creates: int = DEFAULT_MAX_INFLIGHT_TPU_CREATES,
     ):
         self._project_id = gcp_config.project_id
         self._label_prefix = label_prefix
@@ -259,6 +287,12 @@ class GcpWorkerProvider:
         self._ssh_config = ssh_config
         self._zones = list(gcp_config.zones)
         self._gcp: GcpService = gcp_service or CloudGcpService(project_id=self._project_id)
+
+        # Bound concurrent in-flight create LROs: a token is held from the create
+        # POST until the node leaves CREATING (bootstrap phase 1), so the count
+        # tracks how many slices GCP is provisioning at once rather than the rate
+        # of POSTs (which return immediately).
+        self._inflight_create_slots = threading.BoundedSemaphore(max_inflight_tpu_creates)
 
     @property
     def gcp_service(self) -> GcpService:
@@ -439,11 +473,19 @@ class GcpWorkerProvider:
         )
 
         logger.info("Creating TPU slice: %s (type=%s, zone=%s)", slice_id, config.accelerator_variant, gcp.zone)
-        # Submit the create and return immediately. The create LRO is no longer
-        # waited on here: the bootstrap loop watches it for quota/stockout and
-        # otherwise lets worker health decide readiness, so a slow create-status
-        # response can never tear down a slice that has already booted workers.
-        tpu_info = self._gcp.tpu_create(request)
+        # Hold an in-flight-create slot from the POST until the node leaves
+        # CREATING (released by bootstrap phase 1), bounding concurrent create
+        # LROs. Submit the create and return immediately: the create LRO is no
+        # longer waited on here — the bootstrap loop watches it for quota/stockout
+        # and otherwise lets worker health decide readiness, so a slow
+        # create-status response can never tear down a slice that has booted.
+        self._inflight_create_slots.acquire()
+        release_slot = _make_one_shot_release(self._inflight_create_slots)
+        try:
+            tpu_info = self._gcp.tpu_create(request)
+        except Exception:
+            release_slot()
+            raise
 
         handle = GcpSliceHandle(
             _slice_id=slice_id,
@@ -464,8 +506,12 @@ class GcpWorkerProvider:
         if worker_config:
             _spawn_bootstrap_thread(
                 handle,
-                lambda: _run_tpu_bootstrap(self._gcp, self._project_id, handle),
+                lambda: _run_tpu_bootstrap(self._gcp, self._project_id, handle, on_create_settled=release_slot),
             )
+        else:
+            # No bootstrap thread will watch the LRO, so nothing else can free the
+            # slot — release it now.
+            release_slot()
 
         return handle
 
@@ -508,9 +554,15 @@ class GcpWorkerProvider:
             config.accelerator_variant,
             gcp.zone,
         )
+        # Hold an in-flight-create slot until the queued resource provisions and
+        # the node leaves CREATING (released by bootstrap phase 1), so reserved
+        # creates share the same concurrency ceiling as standard ones.
+        self._inflight_create_slots.acquire()
+        release_slot = _make_one_shot_release(self._inflight_create_slots)
         try:
             self._gcp.queued_resource_create(request)
         except InfraError:
+            release_slot()
             self._best_effort_delete_queued_resource(slice_id, gcp.zone)
             raise
 
@@ -533,8 +585,10 @@ class GcpWorkerProvider:
         if worker_config:
             _spawn_bootstrap_thread(
                 handle,
-                lambda: _run_tpu_bootstrap(self._gcp, self._project_id, handle),
+                lambda: _run_tpu_bootstrap(self._gcp, self._project_id, handle, on_create_settled=release_slot),
             )
+        else:
+            release_slot()
 
         return handle
 
@@ -834,6 +888,7 @@ def _run_tpu_bootstrap(
     ip_wait_timeout: float | None = None,
     bootstrap_timeout: float | None = None,
     queued_resource_poll_interval: float = 60.0,
+    on_create_settled: Callable[[], None] | None = None,
 ) -> None:
     """Monitor TPU startup-script bootstrap via health endpoint polling.
 
@@ -844,60 +899,72 @@ def _run_tpu_bootstrap(
     Phase 2: Poll worker health endpoints until all respond healthy; this is
         the canonical readiness signal.
     On timeout: query Cloud Logging for [iris-init] entries for diagnostics.
+
+    ``on_create_settled`` is invoked once the create LRO is no longer in flight
+    (the node has left CREATING at the end of phase 1, or bootstrap failed before
+    that). The caller uses it to release the in-flight-create slot so the slot
+    tracks the LRO lifetime rather than the slower health wait in phase 2.
     """
+    settle_create = on_create_settled or (lambda: None)
     try:
-        worker_count = get_tpu_topology(handle._accelerator_variant).vm_count
-    except ValueError as e:
-        raise InfraError(
-            f"Unknown TPU topology '{handle._accelerator_variant}' for slice {handle.slice_id}. "
-            "Cannot size bootstrap timeouts."
-        ) from e
+        try:
+            worker_count = get_tpu_topology(handle._accelerator_variant).vm_count
+        except ValueError as e:
+            raise InfraError(
+                f"Unknown TPU topology '{handle._accelerator_variant}' for slice {handle.slice_id}. "
+                "Cannot size bootstrap timeouts."
+            ) from e
 
-    effective_ip_wait_timeout = ip_wait_timeout
-    if effective_ip_wait_timeout is None:
-        effective_ip_wait_timeout = _default_tpu_ip_wait_timeout(worker_count)
+        effective_ip_wait_timeout = ip_wait_timeout
+        if effective_ip_wait_timeout is None:
+            effective_ip_wait_timeout = _default_tpu_ip_wait_timeout(worker_count)
 
-    effective_bootstrap_timeout = bootstrap_timeout
-    if effective_bootstrap_timeout is None:
-        effective_bootstrap_timeout = _default_tpu_bootstrap_timeout(worker_count)
+        effective_bootstrap_timeout = bootstrap_timeout
+        if effective_bootstrap_timeout is None:
+            effective_bootstrap_timeout = _default_tpu_bootstrap_timeout(worker_count)
 
-    logger.info(
-        "Using TPU bootstrap timeouts for %s: ip_wait_timeout=%ss bootstrap_timeout=%ss worker_count=%d",
-        handle.slice_id,
-        effective_ip_wait_timeout,
-        effective_bootstrap_timeout,
-        worker_count,
-    )
-
-    # Phase 0: If this is a queued resource (reserved TPU), wait for ACTIVE
-    # before polling the TPU VM state. The queued resource may sit in QUEUED
-    # or PROVISIONING for an extended period.
-    if handle.is_queued_resource:
-        _wait_for_queued_resource_activation(gcp_service, handle, queued_resource_poll_interval)
-
-    # Phase 1: wait for every worker to acquire an internal IP. The create LRO
-    # is watched only to fail fast on quota/stockout; its completion is not a
-    # readiness gate, so a slow create-status response cannot strand the slice.
-    ip_deadline = Deadline.from_now(Duration.from_seconds(effective_ip_wait_timeout))
-    ip_backoff = ExponentialBackoff(initial=1.0, maximum=30.0, factor=1.5)
-
-    while not ip_deadline.expired():
-        _raise_if_create_failed(gcp_service, handle)
-        cloud_status = handle._describe_cloud()
-        if cloud_status.state in (CloudSliceState.FAILED, CloudSliceState.DELETING):
-            raise InfraError(f"Slice {handle.slice_id} entered {cloud_status.state} during bootstrap")
-        if cloud_status.workers and all(w.internal_address for w in cloud_status.workers):
-            break
         logger.info(
-            "Slice %s waiting for worker IPs: %d/%d (cloud state=%s)",
+            "Using TPU bootstrap timeouts for %s: ip_wait_timeout=%ss bootstrap_timeout=%ss worker_count=%d",
             handle.slice_id,
-            sum(1 for w in cloud_status.workers if w.internal_address),
-            cloud_status.worker_count,
-            cloud_status.state,
+            effective_ip_wait_timeout,
+            effective_bootstrap_timeout,
+            worker_count,
         )
-        time.sleep(ip_backoff.next_interval())
-    else:
-        raise InfraError(f"Slice {handle.slice_id} did not acquire worker IPs within {effective_ip_wait_timeout}s")
+
+        # Phase 0: If this is a queued resource (reserved TPU), wait for ACTIVE
+        # before polling the TPU VM state. The queued resource may sit in QUEUED
+        # or PROVISIONING for an extended period.
+        if handle.is_queued_resource:
+            _wait_for_queued_resource_activation(gcp_service, handle, queued_resource_poll_interval)
+
+        # Phase 1: wait for every worker to acquire an internal IP. The create LRO
+        # is watched only to fail fast on quota/stockout; its completion is not a
+        # readiness gate, so a slow create-status response cannot strand the slice.
+        ip_deadline = Deadline.from_now(Duration.from_seconds(effective_ip_wait_timeout))
+        ip_backoff = ExponentialBackoff(initial=1.0, maximum=30.0, factor=1.5)
+
+        while not ip_deadline.expired():
+            _raise_if_create_failed(gcp_service, handle)
+            cloud_status = handle._describe_cloud()
+            if cloud_status.state in (CloudSliceState.FAILED, CloudSliceState.DELETING):
+                raise InfraError(f"Slice {handle.slice_id} entered {cloud_status.state} during bootstrap")
+            if cloud_status.workers and all(w.internal_address for w in cloud_status.workers):
+                break
+            logger.info(
+                "Slice %s waiting for worker IPs: %d/%d (cloud state=%s)",
+                handle.slice_id,
+                sum(1 for w in cloud_status.workers if w.internal_address),
+                cloud_status.worker_count,
+                cloud_status.state,
+            )
+            time.sleep(ip_backoff.next_interval())
+        else:
+            raise InfraError(f"Slice {handle.slice_id} did not acquire worker IPs within {effective_ip_wait_timeout}s")
+    finally:
+        # The create LRO is settled once the node leaves CREATING (end of phase
+        # 1) or bootstrap fails before that. Free the in-flight-create slot here
+        # so it tracks the LRO lifetime, not the phase-2 health wait below.
+        settle_create()
 
     workers = cloud_status.workers
     worker_urls = [(w.worker_id, w.worker_url) for w in workers]
