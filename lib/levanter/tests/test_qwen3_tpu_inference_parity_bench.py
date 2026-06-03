@@ -912,6 +912,17 @@ def test_main_rejects_vllm_greedy_multi_generation_cases():
 def test_main_accepts_vllm_sampled_multi_generation_cases(monkeypatch, tmp_path):
     started: list[str] = []
 
+    class Tokenizer:
+        def encode(self, text, *, add_special_tokens):
+            assert text == "Hello"
+            assert not add_special_tokens
+            return [1]
+
+        def decode(self, token_ids, *, skip_special_tokens):
+            assert token_ids == [1]
+            assert not skip_special_tokens
+            return "Hello"
+
     def start_backend(args, backend, *, output_dir, checkpoint, tokenizer_name, cases, prompts):
         del cases, prompts
         started.append(backend)
@@ -928,6 +939,7 @@ def test_main_accepts_vllm_sampled_multi_generation_cases(monkeypatch, tmp_path)
         assert [case.name for case in cases] == ["decode_b32_i1_o128_n4"]
         return [_case_result("decode_b32_i1_o128_n4", handle.name, 100.0)]
 
+    monkeypatch.setattr(bench, "load_tokenizer", lambda tokenizer_name: Tokenizer())
     monkeypatch.setattr(bench, "start_backend", start_backend)
     monkeypatch.setattr(bench, "run_cases_for_backend", run_cases_for_backend)
     monkeypatch.setattr(
@@ -960,6 +972,17 @@ def test_main_accepts_vllm_sampled_multi_generation_cases(monkeypatch, tmp_path)
 def test_main_accepts_stress_only_without_measure_rounds(monkeypatch, tmp_path):
     started: list[str] = []
 
+    class Tokenizer:
+        def encode(self, text, *, add_special_tokens):
+            assert text == "Hello"
+            assert not add_special_tokens
+            return [1]
+
+        def decode(self, token_ids, *, skip_special_tokens):
+            assert token_ids == [1]
+            assert not skip_special_tokens
+            return "Hello"
+
     def start_backend(args, backend, *, output_dir, checkpoint, tokenizer_name, cases, prompts):
         del args, output_dir, checkpoint, tokenizer_name, cases, prompts
         started.append(backend)
@@ -972,6 +995,7 @@ def test_main_accepts_stress_only_without_measure_rounds(monkeypatch, tmp_path):
         assert prompts["decode_b32_i1_o128_n4"][1] == 1
         return [_stress_result()]
 
+    monkeypatch.setattr(bench, "load_tokenizer", lambda tokenizer_name: Tokenizer())
     monkeypatch.setattr(bench, "start_backend", start_backend)
     monkeypatch.setattr(bench, "run_cases_for_backend", lambda **kwargs: pytest.fail("measure pass should be skipped"))
     monkeypatch.setattr(bench, "run_stress_cases_for_backend", run_stress_cases_for_backend)
