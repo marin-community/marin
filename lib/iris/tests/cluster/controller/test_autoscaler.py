@@ -10,6 +10,7 @@ Pure routing/packing logic is tested in test_demand_routing.py.
 Integration tests with real GcpWorkerProvider are in test_autoscaler_integration.py.
 """
 
+import threading
 import time
 
 import pytest
@@ -1009,6 +1010,68 @@ class TestAutoscalerAsyncScaleUp:
         assert elapsed < 0.1
 
         autoscaler._wait_for_inflight()
+
+    def test_concurrent_creates_bounded_by_cap(self):
+        """Never more than max_concurrent_scale_ups create POSTs run at once.
+
+        Regression guard for the create-burst that overwhelms the GCP TPU API:
+        when many groups drain their rate-limit buckets in the same tick, the
+        autoscaler spawns one thread per slice, but only ``cap`` may issue a
+        create at a time.
+        """
+        cap = 2
+        num_decisions = 6
+        config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=num_decisions)
+
+        lock = threading.Lock()
+        state = {"current": 0, "peak": 0, "count": 0}
+        entered = threading.Semaphore(0)
+        proceed = threading.Event()
+
+        def blocking_create(config, worker_config=None):
+            with lock:
+                state["current"] += 1
+                state["count"] += 1
+                created = state["count"]
+                state["peak"] = max(state["peak"], state["current"])
+            entered.release()
+            proceed.wait()
+            with lock:
+                state["current"] -= 1
+            return make_mock_slice_handle(f"slice-{created}")
+
+        platform = make_mock_platform()
+        platform.create_slice.side_effect = blocking_create
+
+        group = ScalingGroup(config, platform)
+        autoscaler = Autoscaler(
+            scale_groups={"test-group": group},
+            evaluation_interval=Duration.from_seconds(0.1),
+            platform=platform,
+            max_concurrent_scale_ups=cap,
+        )
+
+        decisions = [
+            ScalingDecision(scale_group="test-group", action=ScalingAction.SCALE_UP, reason=f"d{i}")
+            for i in range(num_decisions)
+        ]
+        autoscaler.execute(decisions, timestamp=Timestamp.now())
+
+        # Exactly `cap` threads reach create_slice; the rest block on the
+        # semaphore inside _do_scale_up.
+        for _ in range(cap):
+            assert entered.acquire(timeout=5)
+        # No (cap+1)th create starts while the first batch is still in flight.
+        assert not entered.acquire(timeout=0.2)
+        assert state["peak"] == cap
+
+        # Release the batch; remaining decisions drain, still capped.
+        proceed.set()
+        autoscaler._wait_for_inflight()
+
+        assert state["peak"] == cap
+        assert platform.create_slice.call_count == num_decisions
+        autoscaler.shutdown()
 
     def test_group_marked_requesting_during_scale_up(self):
         """Group shows REQUESTING immediately after execute(), cleared when done."""
