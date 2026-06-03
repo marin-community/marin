@@ -744,6 +744,61 @@ def test_summary_json_includes_machine_readable_parity_comparisons(tmp_path):
     assert comparisons["decode_b32_i1_o128_n1"]["meets_decode_ratio_target"] is False
 
 
+def _stress_result() -> bench.StressResult:
+    return bench.StressResult(
+        case_name="decode_b32_i1_o128_n4",
+        backend="levanter:auto",
+        concurrent_requests=8,
+        active_sequences=32,
+        n=4,
+        input_tokens_target=1,
+        output_tokens_target=128,
+        total_requests=10,
+        successful_requests=9,
+        failed_requests=1,
+        timeout_requests=1,
+        prompt_tokens=9,
+        completion_tokens=1152,
+        total_tokens=1161,
+        load_seconds=60.0,
+        wall_clock_seconds=62.0,
+        steady_decode_tokens_per_second=19.2,
+        wall_clock_decode_tokens_per_second=18.5806451613,
+        wall_clock_total_tokens_per_second=18.7258064516,
+        request_latency_ms_p50=1000.0,
+        request_latency_ms_p90=1200.0,
+        request_latency_ms_p99=1400.0,
+        request_latency_ms_max=1500.0,
+        hbm_used_bytes=1234,
+        compiled_shape_count=2,
+        max_request_queue_depth=3,
+        max_batch_queue_depth=1,
+        page_size=128,
+        max_pages=1024,
+        retry_errors=0,
+        error_counts={"timeout": 1},
+    )
+
+
+def test_write_outputs_includes_stress_artifacts(tmp_path):
+    bench.write_outputs(
+        tmp_path,
+        [_case_result("decode_b32_i1_o128_n4", "levanter:auto", 100.0)],
+        {"backend": "levanter"},
+        [_stress_result()],
+    )
+
+    summary = json.loads((tmp_path / "summary.json").read_text())
+    stress_summary = (tmp_path / "stress_summary.md").read_text()
+    manifest = json.loads((tmp_path / "artifacts.json").read_text())
+    artifact_paths = {artifact["path"] for artifact in manifest["artifacts"]}
+
+    assert summary["stress_results"][0]["successful_requests"] == 9
+    assert "steady decode tok/s" in stress_summary
+    assert "decode_b32_i1_o128_n4" in stress_summary
+    assert "stress_summary.md" in artifact_paths
+
+
 def test_write_outputs_records_artifact_manifest(tmp_path):
     hlo_dir = tmp_path / "levanter_hlo"
     hlo_dir.mkdir()
@@ -902,6 +957,48 @@ def test_main_accepts_vllm_sampled_multi_generation_cases(monkeypatch, tmp_path)
     assert "devices_skipped" in env["backend_envs"]["vllm-tpu"]
 
 
+def test_main_accepts_stress_only_without_measure_rounds(monkeypatch, tmp_path):
+    started: list[str] = []
+
+    def start_backend(args, backend, *, output_dir, checkpoint, tokenizer_name, cases, prompts):
+        del args, output_dir, checkpoint, tokenizer_name, cases, prompts
+        started.append(backend)
+        return bench.ServerHandle("levanter:auto", "http://127.0.0.1:8000/v1", "levanter", close=lambda: None)
+
+    def run_stress_cases_for_backend(*, args, handle, cases, prompts):
+        assert args.measure_rounds == 0
+        assert args.stress_max_requests == 2
+        assert [case.name for case in cases] == ["decode_b32_i1_o128_n4"]
+        assert prompts["decode_b32_i1_o128_n4"][1] == 1
+        return [_stress_result()]
+
+    monkeypatch.setattr(bench, "start_backend", start_backend)
+    monkeypatch.setattr(bench, "run_cases_for_backend", lambda **kwargs: pytest.fail("measure pass should be skipped"))
+    monkeypatch.setattr(bench, "run_stress_cases_for_backend", run_stress_cases_for_backend)
+
+    bench.main(
+        [
+            "--backend",
+            "levanter",
+            "--case",
+            "decode_b32_i1_o128_n4",
+            "--temperature",
+            "0.7",
+            "--measure-rounds",
+            "0",
+            "--stress-max-requests",
+            "2",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+
+    assert started == ["levanter"]
+    summary = json.loads((tmp_path / "summary.json").read_text())
+    assert summary["results"] == []
+    assert summary["stress_results"][0]["total_requests"] == 10
+
+
 def test_run_case_propagates_backend_static_metrics(monkeypatch):
     def send_completion(**kwargs):
         return {"usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}, "choices": []}, 0.1
@@ -928,6 +1025,62 @@ def test_run_case_propagates_backend_static_metrics(monkeypatch):
         return_logprobs=True,
     )
 
+    assert result.hbm_used_bytes == 1234
+    assert result.compiled_shape_count == 2
+
+
+def test_run_stress_case_aggregates_success_failures_and_service_metrics(monkeypatch):
+    calls = 0
+
+    def send_completion(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise requests.exceptions.Timeout("timed out")
+        return {"usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}, "choices": []}, 0.01
+
+    def metrics_snapshot():
+        return {"request_queue_depth": 4, "batch_queue_depth": 2, "page_size": 128, "max_pages": 1024}
+
+    monkeypatch.setattr(bench, "_send_completion", send_completion)
+
+    result = bench.run_stress_case(
+        handle=bench.ServerHandle(
+            name="levanter:auto",
+            base_url="http://127.0.0.1:8000/v1",
+            model_id="levanter",
+            close=lambda: None,
+            hbm_used_bytes=1234,
+            compiled_shape_count=2,
+            metrics_snapshot=metrics_snapshot,
+        ),
+        case=bench.BenchmarkCase("decode_b4_i1_o2_n2", active_sequences=4, input_tokens=1, output_tokens=2, n=2),
+        prompt="x",
+        prompt_tokens=1,
+        seed=0,
+        temperature=0.7,
+        top_p=1.0,
+        top_k=4096,
+        request_timeout=1.0,
+        return_logprobs=True,
+        duration_seconds=0.0,
+        concurrent_requests=2,
+        metrics_interval_seconds=0.001,
+        max_requests=3,
+    )
+
+    assert result.total_requests == 3
+    assert result.successful_requests == 2
+    assert result.failed_requests == 1
+    assert result.timeout_requests == 1
+    assert result.prompt_tokens == 2
+    assert result.completion_tokens == 4
+    assert result.error_counts == {"timeout": 1}
+    assert result.request_latency_ms_p50 == 10.0
+    assert result.max_request_queue_depth == 4
+    assert result.max_batch_queue_depth == 2
+    assert result.page_size == 128
+    assert result.max_pages == 1024
     assert result.hbm_used_bytes == 1234
     assert result.compiled_shape_count == 2
 

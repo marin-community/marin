@@ -114,15 +114,51 @@ class CaseResult:
 
 
 @dataclass(frozen=True, slots=True)
+class StressResult:
+    case_name: str
+    backend: str
+    concurrent_requests: int
+    active_sequences: int
+    n: int
+    input_tokens_target: int
+    output_tokens_target: int
+    total_requests: int
+    successful_requests: int
+    failed_requests: int
+    timeout_requests: int
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    load_seconds: float
+    wall_clock_seconds: float
+    steady_decode_tokens_per_second: float
+    wall_clock_decode_tokens_per_second: float
+    wall_clock_total_tokens_per_second: float
+    request_latency_ms_p50: float
+    request_latency_ms_p90: float
+    request_latency_ms_p99: float
+    request_latency_ms_max: float
+    hbm_used_bytes: int | None
+    compiled_shape_count: int | None
+    max_request_queue_depth: int | None
+    max_batch_queue_depth: int | None
+    page_size: int | None
+    max_pages: int | None
+    retry_errors: int
+    error_counts: dict[str, int]
+
+
+@dataclass(frozen=True, slots=True)
 class ServerHandle:
     name: str
     base_url: str
     model_id: str
-    close: Any
+    close: Callable[[], None]
     command: list[str] | None = None
     hbm_used_bytes: int | None = None
     compiled_shape_count: int | None = None
     supports_seed: bool = True
+    metrics_snapshot: Callable[[], dict[str, int | None]] | None = None
     diagnose_without_lm_head: (
         Callable[
             [BenchmarkCase, str, int, bool, int, float, float, float],
@@ -844,8 +880,6 @@ def _distribution_version(name: str) -> str | None:
 
 
 def _jax_device_snapshot() -> dict[str, Any]:
-    import jax
-
     try:
         devices = jax.devices()
         return {
@@ -1018,6 +1052,172 @@ def run_case(
         total_tokens_per_second=total_tokens / elapsed if elapsed > 0 else 0.0,
         hbm_used_bytes=handle.hbm_used_bytes,
         compiled_shape_count=handle.compiled_shape_count,
+    )
+
+
+def _completion_error_key(exc: BaseException) -> str:
+    if isinstance(exc, requests.exceptions.Timeout):
+        return "timeout"
+    return type(exc).__name__
+
+
+def _update_stress_metric_maxima(
+    maxima: dict[str, int],
+    metrics_snapshot: Callable[[], dict[str, int | None]] | None,
+) -> None:
+    if metrics_snapshot is None:
+        return
+    metrics = metrics_snapshot()
+    for key in ("request_queue_depth", "batch_queue_depth"):
+        value = metrics.get(key)
+        if value is not None:
+            maxima[key] = max(maxima.get(key, 0), int(value))
+
+
+def _stress_service_static_metric(
+    metrics_snapshot: Callable[[], dict[str, int | None]] | None,
+    key: str,
+) -> int | None:
+    if metrics_snapshot is None:
+        return None
+    return metrics_snapshot().get(key)
+
+
+def run_stress_case(
+    *,
+    handle: ServerHandle,
+    case: BenchmarkCase,
+    prompt: str,
+    prompt_tokens: int,
+    seed: int,
+    temperature: float,
+    top_p: float,
+    top_k: int | None,
+    request_timeout: float,
+    return_logprobs: bool,
+    duration_seconds: float,
+    concurrent_requests: int,
+    metrics_interval_seconds: float,
+    max_requests: int | None,
+) -> StressResult:
+    if duration_seconds <= 0.0 and max_requests is None:
+        raise ValueError("run_stress_case requires a positive duration_seconds or max_requests")
+    if concurrent_requests < 1:
+        raise ValueError("concurrent_requests must be positive")
+
+    start_event = threading.Event()
+    request_counter = 0
+    counter_lock = threading.Lock()
+    result_lock = threading.Lock()
+    latencies: list[float] = []
+    error_counts: dict[str, int] = {}
+    prompt_total = 0
+    completion_total = 0
+    success_count = 0
+    timeout_count = 0
+    failure_count = 0
+    metric_maxima: dict[str, int] = {}
+
+    start_time = time.perf_counter()
+    deadline = start_time + duration_seconds if duration_seconds > 0.0 else None
+
+    def claim_request() -> int | None:
+        nonlocal request_counter
+        now = time.perf_counter()
+        if deadline is not None and now >= deadline:
+            return None
+        with counter_lock:
+            if max_requests is not None and request_counter >= max_requests:
+                return None
+            request_index = request_counter
+            request_counter += 1
+            return request_index
+
+    def worker() -> None:
+        nonlocal prompt_total, completion_total, success_count, timeout_count, failure_count
+        start_event.wait()
+        while True:
+            request_index = claim_request()
+            if request_index is None:
+                return
+            request_seed = seed + request_index if handle.supports_seed else None
+            try:
+                payload, elapsed = _send_completion(
+                    base_url=handle.base_url,
+                    model_id=handle.model_id,
+                    prompt=prompt,
+                    max_tokens=case.output_tokens,
+                    n=case.n,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    seed=request_seed,
+                    timeout=request_timeout,
+                    return_logprobs=return_logprobs,
+                )
+                with result_lock:
+                    latencies.append(elapsed * 1000.0)
+                    prompt_total += _prompt_tokens(payload, prompt_tokens)
+                    completion_total += _completion_tokens(payload)
+                    success_count += 1
+                    _update_stress_metric_maxima(metric_maxima, handle.metrics_snapshot)
+            except Exception as exc:
+                key = _completion_error_key(exc)
+                with result_lock:
+                    failure_count += 1
+                    timeout_count += int(key == "timeout")
+                    error_counts[key] = error_counts.get(key, 0) + 1
+                    _update_stress_metric_maxima(metric_maxima, handle.metrics_snapshot)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrent_requests) as executor:
+        futures = [executor.submit(worker) for _ in range(concurrent_requests)]
+        start_time = time.perf_counter()
+        deadline = start_time + duration_seconds if duration_seconds > 0.0 else None
+        _update_stress_metric_maxima(metric_maxima, handle.metrics_snapshot)
+        start_event.set()
+        while any(not future.done() for future in futures):
+            _update_stress_metric_maxima(metric_maxima, handle.metrics_snapshot)
+            time.sleep(metrics_interval_seconds)
+        for future in futures:
+            future.result()
+        _update_stress_metric_maxima(metric_maxima, handle.metrics_snapshot)
+
+    wall_clock_seconds = time.perf_counter() - start_time
+    load_seconds = min(duration_seconds, wall_clock_seconds) if duration_seconds > 0.0 else wall_clock_seconds
+    total_requests = success_count + failure_count
+    total_tokens = prompt_total + completion_total
+    return StressResult(
+        case_name=case.name,
+        backend=handle.name,
+        concurrent_requests=concurrent_requests,
+        active_sequences=concurrent_requests * case.n,
+        n=case.n,
+        input_tokens_target=case.input_tokens,
+        output_tokens_target=case.output_tokens,
+        total_requests=total_requests,
+        successful_requests=success_count,
+        failed_requests=failure_count,
+        timeout_requests=timeout_count,
+        prompt_tokens=prompt_total,
+        completion_tokens=completion_total,
+        total_tokens=total_tokens,
+        load_seconds=load_seconds,
+        wall_clock_seconds=wall_clock_seconds,
+        steady_decode_tokens_per_second=completion_total / load_seconds if load_seconds > 0 else 0.0,
+        wall_clock_decode_tokens_per_second=completion_total / wall_clock_seconds if wall_clock_seconds > 0 else 0.0,
+        wall_clock_total_tokens_per_second=total_tokens / wall_clock_seconds if wall_clock_seconds > 0 else 0.0,
+        request_latency_ms_p50=statistics.median(latencies) if latencies else 0.0,
+        request_latency_ms_p90=_percentile(latencies, 0.90),
+        request_latency_ms_p99=_percentile(latencies, 0.99),
+        request_latency_ms_max=max(latencies) if latencies else 0.0,
+        hbm_used_bytes=handle.hbm_used_bytes,
+        compiled_shape_count=handle.compiled_shape_count,
+        max_request_queue_depth=metric_maxima.get("request_queue_depth"),
+        max_batch_queue_depth=metric_maxima.get("batch_queue_depth"),
+        page_size=_stress_service_static_metric(handle.metrics_snapshot, "page_size"),
+        max_pages=_stress_service_static_metric(handle.metrics_snapshot, "max_pages"),
+        retry_errors=0,
+        error_counts=error_counts,
     )
 
 
@@ -1404,6 +1604,15 @@ def start_levanter_server(
             top_k=None,
         )
 
+    def metrics_snapshot() -> dict[str, int | None]:
+        engine = server.inference_context.engine
+        return {
+            "request_queue_depth": server.inference_context.request_queue.qsize(),
+            "batch_queue_depth": server.inference_context.batch_queue.qsize(),
+            "page_size": engine.config.page_size if engine is not None else None,
+            "max_pages": engine.config.max_pages if engine is not None else None,
+        }
+
     logger.info("Started Levanter server at %s", base_url)
     return ServerHandle(
         f"levanter:{tpu_paged_attention_backend.value}",
@@ -1413,6 +1622,7 @@ def start_levanter_server(
         None,
         hbm_used_bytes=hbm_used_bytes,
         compiled_shape_count=LEVANTER_COMPILED_SHAPE_BUCKETS,
+        metrics_snapshot=metrics_snapshot,
         diagnose_without_lm_head=diagnose_without_lm_head,
         diagnose_with_lm_head_no_sampling=diagnose_with_lm_head_no_sampling,
     )
@@ -1558,6 +1768,7 @@ def write_artifact_manifest(output_dir: Path) -> dict[str, Any]:
     artifact_paths = [
         output_dir / "summary.json",
         output_dir / "summary.md",
+        output_dir / "stress_summary.md",
         output_dir / "env.json",
         output_dir / "prompt_corpus.json",
         output_dir / REFERENCE_LOGIT_ARTIFACT_JSON,
@@ -1631,14 +1842,21 @@ def parity_comparisons(results: list[CaseResult]) -> list[dict[str, Any]]:
     return comparisons
 
 
-def write_outputs(output_dir: Path, results: list[CaseResult], env: dict[str, Any]) -> None:
+def write_outputs(
+    output_dir: Path,
+    results: list[CaseResult],
+    env: dict[str, Any],
+    stress_results: list[StressResult] | None = None,
+) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     result_dicts = [dataclasses.asdict(result) for result in results]
+    stress_result_dicts = [dataclasses.asdict(result) for result in stress_results or []]
     comparisons = parity_comparisons(results)
     with open(output_dir / "summary.json", "w") as f:
         json.dump(
             {
                 "results": result_dicts,
+                "stress_results": stress_result_dicts,
                 "comparisons": comparisons,
                 "parity_decode_ratio_target": PARITY_DECODE_RATIO_TARGET,
             },
@@ -1702,8 +1920,73 @@ def write_outputs(output_dir: Path, results: list[CaseResult], env: dict[str, An
         f.write("| " + " | ".join("---" for _ in headers) + " |\n")
         for row in rows:
             f.write("| " + " | ".join(row) + " |\n")
+    if stress_results:
+        write_stress_summary(output_dir, stress_results)
     summarize_levanter_hlo(output_dir)
     write_artifact_manifest(output_dir)
+
+
+def write_stress_summary(output_dir: Path, stress_results: list[StressResult]) -> None:
+    headers = [
+        "case",
+        "backend",
+        "concurrent reqs",
+        "active seqs",
+        "n",
+        "requests",
+        "success",
+        "failed",
+        "timeouts",
+        "completion toks",
+        "steady decode tok/s",
+        "wall decode tok/s",
+        "wall total tok/s",
+        "load s",
+        "wall s",
+        "p50 ms",
+        "p90 ms",
+        "p99 ms",
+        "max ms",
+        "max request q",
+        "max batch q",
+        "max pages",
+        "hbm bytes",
+        "errors",
+    ]
+    rows = [
+        [
+            result.case_name,
+            result.backend,
+            str(result.concurrent_requests),
+            str(result.active_sequences),
+            str(result.n),
+            str(result.total_requests),
+            str(result.successful_requests),
+            str(result.failed_requests),
+            str(result.timeout_requests),
+            str(result.completion_tokens),
+            f"{result.steady_decode_tokens_per_second:.2f}",
+            f"{result.wall_clock_decode_tokens_per_second:.2f}",
+            f"{result.wall_clock_total_tokens_per_second:.2f}",
+            f"{result.load_seconds:.3f}",
+            f"{result.wall_clock_seconds:.3f}",
+            f"{result.request_latency_ms_p50:.1f}",
+            f"{result.request_latency_ms_p90:.1f}",
+            f"{result.request_latency_ms_p99:.1f}",
+            f"{result.request_latency_ms_max:.1f}",
+            _optional_int(result.max_request_queue_depth),
+            _optional_int(result.max_batch_queue_depth),
+            _optional_int(result.max_pages),
+            _optional_int(result.hbm_used_bytes),
+            json.dumps(result.error_counts, sort_keys=True),
+        ]
+        for result in stress_results
+    ]
+    with open(output_dir / "stress_summary.md", "w") as f:
+        f.write("| " + " | ".join(headers) + " |\n")
+        f.write("| " + " | ".join("---" for _ in headers) + " |\n")
+        for row in rows:
+            f.write("| " + " | ".join(row) + " |\n")
 
 
 def log_output_artifacts(output_dir: Path) -> None:
@@ -1712,6 +1995,9 @@ def log_output_artifacts(output_dir: Path) -> None:
     artifacts = output_dir / "artifacts.json"
     if summary.exists():
         logger.info("Benchmark summary.md:\n%s", summary.read_text())
+    stress_summary = output_dir / "stress_summary.md"
+    if stress_summary.exists():
+        logger.info("Benchmark stress_summary.md:\n%s", stress_summary.read_text())
     if env.exists():
         logger.info("Benchmark env.json:\n%s", env.read_text())
     hlo_summary = output_dir / "hlo_summary.md"
@@ -1930,6 +2216,61 @@ def run_cases_for_backend(
     return results
 
 
+def run_stress_cases_for_backend(
+    *,
+    args: argparse.Namespace,
+    handle: ServerHandle,
+    cases: list[BenchmarkCase],
+    prompts: dict[str, tuple[str, int]],
+) -> list[StressResult]:
+    stress_results: list[StressResult] = []
+    for case in cases:
+        prompt, prompt_tokens = prompts[case.name]
+        for i in range(args.warmup_rounds):
+            logger.info("Stress warmup %s %s round %d", handle.name, case.name, i)
+            run_case(
+                handle=handle,
+                case=case,
+                prompt=prompt,
+                prompt_tokens=prompt_tokens,
+                warmup=True,
+                seed=args.seed,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                request_timeout=args.request_timeout,
+                return_logprobs=args.return_logprobs,
+            )
+        concurrent_requests = args.stress_concurrent_requests or case.request_count
+        logger.info(
+            "Stress %s %s for %.1fs with %d concurrent HTTP requests (%d active sequences)",
+            handle.name,
+            case.name,
+            args.stress_duration_seconds,
+            concurrent_requests,
+            concurrent_requests * case.n,
+        )
+        result = run_stress_case(
+            handle=handle,
+            case=case,
+            prompt=prompt,
+            prompt_tokens=prompt_tokens,
+            seed=args.seed,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            top_k=args.top_k,
+            request_timeout=args.request_timeout,
+            return_logprobs=args.return_logprobs,
+            duration_seconds=args.stress_duration_seconds,
+            concurrent_requests=concurrent_requests,
+            metrics_interval_seconds=args.stress_metrics_interval_seconds,
+            max_requests=args.stress_max_requests,
+        )
+        logger.info("Benchmark stress result:\n%s", json.dumps(dataclasses.asdict(result), indent=2, sort_keys=True))
+        stress_results.append(result)
+    return stress_results
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default=DEFAULT_MODEL, help="HF model id used by vLLM and tokenizer.")
@@ -1950,6 +2291,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--measure-rounds", type=int, default=3)
+    parser.add_argument(
+        "--stress-duration-seconds",
+        type=float,
+        default=0.0,
+        help="Run a sustained request-loop stress pass per selected case after warmup. Disabled by default.",
+    )
+    parser.add_argument(
+        "--stress-concurrent-requests",
+        type=int,
+        default=None,
+        help="Concurrent HTTP requests for stress mode. Defaults to each case's request_count.",
+    )
+    parser.add_argument(
+        "--stress-metrics-interval-seconds",
+        type=float,
+        default=5.0,
+        help="Queue-depth sampling interval during stress mode.",
+    )
+    parser.add_argument(
+        "--stress-max-requests",
+        type=int,
+        default=None,
+        help="Optional total request cap for bounded smoke tests. Production stress runs should leave this unset.",
+    )
     parser.add_argument("--request-timeout", type=float, default=1800.0)
     parser.add_argument("--startup-timeout", type=float, default=3600.0)
     parser.add_argument("--max-model-len", type=int, default=4096)
@@ -2118,8 +2483,19 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(dataclasses.asdict(case), sort_keys=True))
         return 0
 
-    if args.warmup_rounds < 0 or args.measure_rounds < 1:
-        raise ValueError("--warmup-rounds must be >= 0 and --measure-rounds must be >= 1")
+    stress_enabled = args.stress_duration_seconds > 0.0 or args.stress_max_requests is not None
+    if args.warmup_rounds < 0 or args.measure_rounds < 0:
+        raise ValueError("--warmup-rounds and --measure-rounds must be >= 0")
+    if args.measure_rounds < 1 and not stress_enabled:
+        raise ValueError("--measure-rounds must be >= 1 unless stress mode is enabled")
+    if args.stress_duration_seconds < 0.0:
+        raise ValueError("--stress-duration-seconds must be non-negative")
+    if args.stress_concurrent_requests is not None and args.stress_concurrent_requests < 1:
+        raise ValueError("--stress-concurrent-requests must be positive when set")
+    if args.stress_metrics_interval_seconds <= 0.0:
+        raise ValueError("--stress-metrics-interval-seconds must be positive")
+    if args.stress_max_requests is not None and args.stress_max_requests < 1:
+        raise ValueError("--stress-max-requests must be positive when set")
     if args.temperature < 0.0:
         raise ValueError("--temperature must be non-negative")
     if not (0.0 < args.top_p <= 1.0):
@@ -2173,6 +2549,7 @@ def main(argv: list[str] | None = None) -> int:
     write_prompt_corpus(output_dir, cases, prompts, tokenizer)
 
     results: list[CaseResult] = []
+    stress_results: list[StressResult] = []
     backend_envs: dict[str, dict[str, Any]] = {}
     backend_commands: dict[str, list[str] | None] = {}
     env = {
@@ -2188,6 +2565,10 @@ def main(argv: list[str] | None = None) -> int:
         "libtpu_init_args": os.environ.get("LIBTPU_INIT_ARGS"),
         "warmup_rounds": args.warmup_rounds,
         "measure_rounds": args.measure_rounds,
+        "stress_duration_seconds": args.stress_duration_seconds,
+        "stress_concurrent_requests": args.stress_concurrent_requests,
+        "stress_metrics_interval_seconds": args.stress_metrics_interval_seconds,
+        "stress_max_requests": args.stress_max_requests,
         "temperature": args.temperature,
         "top_p": args.top_p,
         "top_k": args.top_k,
@@ -2219,28 +2600,38 @@ def main(argv: list[str] | None = None) -> int:
             if args.reference_logit_only:
                 backend_envs[handle.name] = _runtime_env_snapshot(include_jax_devices=backend == "levanter")
                 backend_commands[handle.name] = handle.command
-                write_outputs(output_dir, results, env)
+                write_outputs(output_dir, results, env, stress_results)
                 logger.info("Benchmark reference-logit-only final artifacts:")
                 log_output_artifacts(output_dir)
                 continue
-            results.extend(
-                run_cases_for_backend(
-                    args=args,
-                    handle=handle,
-                    cases=cases,
-                    prompts=prompts,
-                    output_dir=output_dir,
+            if args.measure_rounds > 0:
+                results.extend(
+                    run_cases_for_backend(
+                        args=args,
+                        handle=handle,
+                        cases=cases,
+                        prompts=prompts,
+                        output_dir=output_dir,
+                    )
                 )
-            )
+            if stress_enabled:
+                stress_results.extend(
+                    run_stress_cases_for_backend(
+                        args=args,
+                        handle=handle,
+                        cases=cases,
+                        prompts=prompts,
+                    )
+                )
             backend_envs[handle.name] = _runtime_env_snapshot(include_jax_devices=backend == "levanter")
             backend_commands[handle.name] = handle.command
-            write_outputs(output_dir, results, env)
+            write_outputs(output_dir, results, env, stress_results)
             logger.info("Benchmark partial outputs after %s backend:", handle.name)
             log_output_artifacts(output_dir)
         finally:
             handle.close()
 
-    write_outputs(output_dir, results, env)
+    write_outputs(output_dir, results, env, stress_results)
     log_output_artifacts(output_dir)
     logger.info("Wrote benchmark outputs to %s", output_dir)
     return 0
