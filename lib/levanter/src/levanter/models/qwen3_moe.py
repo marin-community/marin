@@ -5,7 +5,7 @@ import dataclasses
 import inspect
 from dataclasses import dataclass
 from functools import partial
-from typing import Callable, Dict, Optional, Type, Union
+from typing import Callable, Dict, Optional, Type
 
 import equinox as eqx
 import jax
@@ -73,7 +73,6 @@ class Qwen3MoeConfig(LlamaConfig):
     flash_attention_block_size: Optional[int] = None
 
     gradient_checkpointing: bool = True
-    scan_layers: bool = True
 
     use_bias: bool = False
     use_layer_norm_weight: bool = True
@@ -231,7 +230,7 @@ class Qwen3MoeExperts(ModuleWithStateDictSerialization):
         Experts: Axis,
         Embed: Axis,
         Mlp: Axis,
-        activation_fn: Union[ActivationFunctionEnum, Callable],
+        activation_fn: Callable,
         *,
         key,
         use_bias: bool = False,
@@ -240,8 +239,6 @@ class Qwen3MoeExperts(ModuleWithStateDictSerialization):
         gate_proj = hnn.MoELinear.init(Experts=Experts, Out=Mlp, In=Embed, key=k_gate, use_bias=use_bias)
         up_proj = hnn.MoELinear.init(Experts=Experts, Out=Mlp, In=Embed, key=k_up, use_bias=use_bias)
         down_proj = hnn.MoELinear.init(Experts=Experts, Out=Embed, In=Mlp, key=k_down, use_bias=use_bias)
-        if isinstance(activation_fn, ActivationFunctionEnum):
-            activation_fn = activation_fn.to_fn()
         return Qwen3MoeExperts(gate_proj, up_proj, down_proj, activation_fn)
 
     @named_call
@@ -293,7 +290,7 @@ class Qwen3MoeSparseMoeBlock(eqx.Module):
             Experts=config.Experts,
             Embed=config.Embed,
             Mlp=config.MoeMlp,
-            activation_fn=config.activation_function,
+            activation_fn=config.activation_function.to_fn(),
             key=k_experts,
             use_bias=False,
         )
@@ -449,7 +446,9 @@ class Qwen3MoeTransformer(eqx.Module):
 
     @staticmethod
     def init(config: Qwen3MoeConfig, *, key) -> "Qwen3MoeTransformer":
-        S = Stacked if config.scan_layers else BlockSeq
+        S = Stacked
+        if not config.scan_layers:
+            S = BlockSeq
         layers = S.init(config.Layers, Qwen3MoeDecoderLayer, gradient_checkpointing=config.gradient_checkpointing)(
             config,
             key=shaped_rng_split(key, config.num_layers),
@@ -458,7 +457,7 @@ class Qwen3MoeTransformer(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, attn_mask: Optional[NamedArray | AttentionMask], *, key, pos_ids: NamedArray | None = None
+        self, x: NamedArray, attn_mask: AttentionMask | None, *, key, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
         x = self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids)
@@ -491,7 +490,7 @@ class Qwen3MoeLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Qwen3Moe
     def __call__(
         self,
         input_ids: NamedArray,
-        attn_mask: Optional[Union[NamedArray, AttentionMask]] = None,
+        attn_mask: AttentionMask | None = None,
         pos_ids: NamedArray | None = None,
         *,
         key=None,
@@ -505,7 +504,7 @@ class Qwen3MoeLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Qwen3Moe
     def activations(
         self,
         input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        attn_mask: AttentionMask | None = None,
         *,
         key=None,
         pos_ids: NamedArray | None = None,

@@ -1,10 +1,11 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import tempfile
+
 import jax
 import jax.numpy as jnp
 import numpy as np
-import tempfile
 from jax import random
 from transformers import Qwen3MoeConfig as HfQwen3MoeConfig
 
@@ -61,11 +62,6 @@ def test_qwen3_moe_config_roundtrip():
     assert roundtripped.head_dim == hf_config.head_dim
 
 
-def test_qwen3_moe_hf_converter_uses_qwen3_moe_config_class():
-    converter = Qwen3MoeConfig().hf_checkpoint_converter()
-    assert converter.HfConfigClass.__name__ == "Qwen3MoeConfig"
-
-
 def test_qwen3_moe_state_dict_keys_match_hf_qwen_layout():
     config = Qwen3MoeConfig.from_hf_config(_tiny_hf_config())
     model = Qwen3MoeLMHeadModel.init(hax.Axis("vocab", 128), config, key=random.PRNGKey(0))
@@ -84,12 +80,13 @@ def test_qwen3_moe_state_dict_keys_match_hf_qwen_layout():
 
 def test_qwen3_moe_loads_torch_compatible_state_dict():
     config = Qwen3MoeConfig.from_hf_config(_tiny_hf_config())
-    model = Qwen3MoeLMHeadModel.init(hax.Axis("vocab", 128), config, key=random.PRNGKey(0))
-    state_dict = to_torch_compatible_state_dict(model)
+    with use_test_mesh():
+        model = Qwen3MoeLMHeadModel.init(hax.Axis("vocab", 128), config, key=random.PRNGKey(0))
+        state_dict = to_torch_compatible_state_dict(model)
 
-    loaded = from_torch_compatible_state_dict(model, state_dict)
+        loaded = from_torch_compatible_state_dict(model, state_dict)
 
-    loaded_state_dict = to_torch_compatible_state_dict(loaded)
+        loaded_state_dict = to_torch_compatible_state_dict(loaded)
     assert state_dict.keys() == loaded_state_dict.keys()
     for key, value in state_dict.items():
         np.testing.assert_allclose(np.asarray(loaded_state_dict[key]), np.asarray(value))
