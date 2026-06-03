@@ -33,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 DEFAULT_STAGING_DIR = "gs://marin-us-central2/tmp/storage-report"
 DEFAULT_HISTORY_DIR = "gs://marin-us-central2/storage-report-history"
-MAX_CHANGES_IN_MESSAGE = 10
+MAX_CHANGES_IN_MESSAGE = 5  # per section (increases / decreases); full detail is in the gist
 
 # Overview rows we lift from report.md for the Discord headline.
 _OVERVIEW_LABELS = ("Total Objects", "Total Size", "Est. Monthly Cost")
@@ -106,19 +106,22 @@ def _extract_overview(report_md: str) -> dict[str, str]:
     return out
 
 
-def _extract_changes(report_md: str) -> tuple[str | None, list[str]]:
-    """Return (since_date, rendered change lines) from the changes section.
+def _extract_changes(report_md: str) -> tuple[str | None, list[str], list[str]]:
+    """Return (since_date, increase_lines, decrease_lines) from the changes section.
 
-    ``since_date`` is None on a baseline run (no prior snapshot).
+    Rows are classified by the sign of the Δ Size cell. ``since_date`` is None
+    on a baseline run (no prior snapshot). Each list preserves the report's
+    in-table ordering (already sorted by magnitude).
     """
     section = re.search(r"## Week-over-Week Changes\n(.*?)(?:\n## |\Z)", report_md, re.S)
     if not section:
-        return None, []
+        return None, [], []
     body = section.group(1)
     since_match = re.search(r"since (\d{4}-\d{2}-\d{2})", body)
     since = since_match.group(1) if since_match else None
 
-    lines: list[str] = []
+    increases: list[str] = []
+    decreases: list[str] = []
     for line in body.splitlines():
         if not line.startswith("|") or "---" in line or "Δ Size" in line:
             continue
@@ -126,24 +129,44 @@ def _extract_changes(report_md: str) -> tuple[str | None, list[str]]:
         if len(cells) != 6:
             continue
         bucket, prefix, delta, _now, _was, status = cells
-        lines.append(f"`{bucket}/{prefix}` {delta} ({status})")
-    return since, lines
+        rendered = f"`{bucket}/{prefix}` {delta} ({status})"
+        (increases if delta.startswith("+") else decreases).append(rendered)
+    return since, increases, decreases
+
+
+def _change_block(title: str, lines: list[str]) -> str:
+    if not lines:
+        return f"**{title}:** _none above threshold_"
+    shown = lines[:MAX_CHANGES_IN_MESSAGE]
+    block = f"**{title}:**\n" + "\n".join(f"- {line}" for line in shown)
+    if len(lines) > MAX_CHANGES_IN_MESSAGE:
+        block += f"\n- _(+{len(lines) - MAX_CHANGES_IN_MESSAGE} more in the report)_"
+    return block
 
 
 def _compose_message(
-    *, date: str, overview: dict[str, str], since: str | None, changes: list[str], gist_url: str
+    *,
+    date: str,
+    overview: dict[str, str],
+    since: str | None,
+    increases: list[str],
+    decreases: list[str],
+    gist_url: str,
 ) -> str:
     headline = " · ".join(f"{v}" for v in overview.values()) if overview else "(totals unavailable)"
 
     if since is None:
         change_section = "_Baseline run — week-over-week diffs start next run._"
-    elif not changes:
+    elif not increases and not decreases:
         change_section = f"_No prefix changes above threshold since {since}._"
     else:
-        shown = changes[:MAX_CHANGES_IN_MESSAGE]
-        change_section = f"**Biggest changes since {since}:**\n" + "\n".join(f"- {c}" for c in shown)
-        if len(changes) > MAX_CHANGES_IN_MESSAGE:
-            change_section += f"\n- _(+{len(changes) - MAX_CHANGES_IN_MESSAGE} more in the report)_"
+        # Increases first — growth is the more alarming signal (cost climbing).
+        change_section = (
+            f"_Changes since {since}:_\n\n"
+            + _change_block("Biggest increases", increases)
+            + "\n\n"
+            + _change_block("Biggest decreases", decreases)
+        )
 
     return f"**Weekly storage report** (UTC {date})\n- totals: {headline}\n- report: {gist_url}\n\n{change_section}"
 
@@ -186,21 +209,28 @@ def main(
     report_md = _fetch_report(report_path, report_file)
 
     overview = _extract_overview(report_md)
-    since, changes = _extract_changes(report_md)
+    since, increases, decreases = _extract_changes(report_md)
 
     date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
     description = f"Marin storage report — {date}"
 
     if dry_run:
         message = _compose_message(
-            date=date, overview=overview, since=since, changes=changes, gist_url="<dry-run gist URL>"
+            date=date,
+            overview=overview,
+            since=since,
+            increases=increases,
+            decreases=decreases,
+            gist_url="<dry-run gist URL>",
         )
         logging.info("Dry run — would create secret gist %r and post to #%s.", description, channel)
         print(message)
         return
 
     gist_url = _create_secret_gist(report_file, description)
-    message = _compose_message(date=date, overview=overview, since=since, changes=changes, gist_url=gist_url)
+    message = _compose_message(
+        date=date, overview=overview, since=since, increases=increases, decreases=decreases, gist_url=gist_url
+    )
     _post_to_discord(channel, message)
     logging.info("Posted storage report for %s to #%s (%s).", date, channel, gist_url)
 

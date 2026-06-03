@@ -76,6 +76,31 @@ def test_render_changes_section_table_and_threshold_note():
     assert "new" in out
 
 
+def test_render_changes_section_splits_increases_and_decreases():
+    previous = [_row("b", "shrinker", 500 * GiB)]
+    current = [
+        _row("b", "grower", 400 * GiB),  # +400 -> increase
+        _row("b", "shrinker", 50 * GiB),  # -450 -> decrease
+    ]
+    changes = report.compute_changes(current, previous, threshold_bytes=100 * GiB)
+    out = report.render_changes_section(changes, previous_date="2026-06-02", threshold_bytes=100 * GiB)
+
+    inc_idx = out.index("### Increases")
+    dec_idx = out.index("### Decreases")
+    assert inc_idx < dec_idx  # increases shown first (more alarming)
+    # grower's row falls in the Increases block, shrinker's in the Decreases block.
+    assert inc_idx < out.index("grower") < dec_idx
+    assert out.index("shrinker") > dec_idx
+
+
+def test_render_changes_section_empty_side_label():
+    # Only an increase -> Decreases section reads "none".
+    changes = report.compute_changes([_row("b", "grower", 300 * GiB)], [], threshold_bytes=100 * GiB)
+    out = report.render_changes_section(changes, previous_date="2026-06-02", threshold_bytes=100 * GiB)
+    assert "### Increases" in out and "### Decreases" in out
+    assert "_None above threshold._" in out  # the empty decreases side
+
+
 def test_snapshot_roundtrip_and_find_latest(tmp_path):
     rows = [_row("b", "p/a", 5 * GiB), _row("b", "p/b", 9 * GiB)]
     history = str(tmp_path)

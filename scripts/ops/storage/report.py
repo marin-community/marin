@@ -726,22 +726,7 @@ def _fmt_delta(num_bytes: int) -> str:
     return f"{sign}{human_bytes(abs(num_bytes))}"
 
 
-def render_changes_section(
-    changes: list[dict],
-    *,
-    previous_date: str | None,
-    threshold_bytes: int,
-    limit: int = 30,
-) -> str:
-    """Markdown for the week-over-week section. ``previous_date=None`` = baseline."""
-    if previous_date is None:
-        return "## Week-over-Week Changes\n\n_No prior snapshot — baseline established for next run._\n"
-
-    threshold_human = human_bytes(threshold_bytes)
-    header = f"## Week-over-Week Changes\n\n_Prefixes whose size moved by ≥ {threshold_human} since {previous_date}._\n"
-    if not changes:
-        return header + "\n_No changes above threshold._\n"
-
+def _changes_table(changes: list[dict], *, limit: int) -> str:
     shown = changes[:limit]
     rows = [
         [
@@ -761,7 +746,38 @@ def render_changes_section(
     )
     if len(changes) > limit:
         table += f"\n_(+{len(changes) - limit} more above threshold)_\n"
-    return header + "\n" + table
+    return table
+
+
+def render_changes_section(
+    changes: list[dict],
+    *,
+    previous_date: str | None,
+    threshold_bytes: int,
+    limit: int = 30,
+) -> str:
+    """Markdown for the week-over-week section. ``previous_date=None`` = baseline.
+
+    Splits into Increases (growth — more alarming, shown first) and Decreases
+    (cleanup), each sorted by magnitude.
+    """
+    if previous_date is None:
+        return "## Week-over-Week Changes\n\n_No prior snapshot — baseline established for next run._\n"
+
+    threshold_human = human_bytes(threshold_bytes)
+    header = f"## Week-over-Week Changes\n\n_Prefixes whose size moved by ≥ {threshold_human} since {previous_date}._\n"
+    if not changes:
+        return header + "\n_No changes above threshold._\n"
+
+    increases = sorted((c for c in changes if c["delta_bytes"] > 0), key=lambda c: c["delta_bytes"], reverse=True)
+    decreases = sorted((c for c in changes if c["delta_bytes"] < 0), key=lambda c: c["delta_bytes"])
+
+    parts = [header]
+    parts.append("\n### Increases\n")
+    parts.append("\n" + (_changes_table(increases, limit=limit) if increases else "_None above threshold._\n"))
+    parts.append("\n### Decreases\n")
+    parts.append("\n" + (_changes_table(decreases, limit=limit) if decreases else "_None above threshold._\n"))
+    return "".join(parts)
 
 
 # ---------------------------------------------------------------------------
