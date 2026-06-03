@@ -107,11 +107,6 @@ class ContainerConfig:
             return None
         return self.resources.memory_bytes // (1024 * 1024)
 
-    def get_disk_bytes(self) -> int | None:
-        if not self.resources or not self.resources.disk_bytes:
-            return None
-        return self.resources.disk_bytes
-
 
 @dataclass
 class ContainerResult:

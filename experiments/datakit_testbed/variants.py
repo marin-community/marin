@@ -24,8 +24,9 @@ import draccus
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import Artifact
-from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main
+from marin.execution.executor import ExecutorMainConfig, executor_main
 from marin.execution.step_spec import StepSpec
+from marin.execution.types import ExecutorStep
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, compute_fuzzy_dups_attrs
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, compute_minhash_attrs

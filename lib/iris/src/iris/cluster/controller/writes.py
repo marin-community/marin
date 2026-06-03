@@ -5,45 +5,107 @@
 
 The :func:`writes_to` decorator records the table set on the function as
 ``fn.writes_to`` / ``fn.cascades_into`` and appends the function to
-:data:`REGISTERED_WRITE_FUNCTIONS`. The startup check in
-``projections/__init__.py`` walks that registry and the ``PROJECTIONS``
-list to verify no Projection-owned table is written outside its Projection.
+:data:`REGISTERED_WRITE_FUNCTIONS`. :func:`validate` cross-checks that
+registry against the ``PROJECTIONS`` list to verify no Projection-owned
+table is written outside its owning Projection. Controller startup calls
+:func:`validate`; tests call it after registering their fixtures.
 
-Areas covered (previously split across writes/<entity>.py):
+Areas covered:
   jobs           — jobs, job_config, meta sequence
   task_attempts  — task_attempts
   tasks          — tasks (insert, assign, state update)
   workers        — workers, worker_attributes
-  budgets        — users, user_budgets (previously db.py methods)
+  budgets        — users, user_budgets
 """
 
 import secrets
 from collections.abc import Callable
 
 from rigging.timing import Timestamp
-from sqlalchemy import Table, delete, func, insert, select, update
+from sqlalchemy import Table, bindparam, delete, func, insert, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
 from iris.cluster.controller.db import Tx
+from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.reads import ReservationClaim
 from iris.cluster.controller.schema import (
     USER_ROLE_DEFAULT,
     job_config_table,
     jobs_table,
     meta_table,
+    reservation_claims_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
     users_table,
     workers_table,
 )
-from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2
 
 REGISTERED_WRITE_FUNCTIONS: list[Callable] = []
+
+
+class ConfigurationError(RuntimeError):
+    """Raised by :func:`validate` when a ``@writes_to`` declaration violates
+    the Projection-owned-table invariant.
+
+    Signals a programming error: a write function declared
+    ``@writes_to(<projection-owned table>)`` from outside the owning
+    Projection class, or its ``cascades_into`` fans out into a
+    Projection-owned table without an explicit invalidation hook.
+    """
+
+
+def validate() -> None:
+    """Check that no Projection-owned table is mutated outside its owning Projection.
+
+    For projection-owned tables, all SQL mutations must flow through the
+    Projection so the in-memory dict can be updated atomically. A write
+    function that bypasses the Projection (or whose FK cascade silently
+    mutates the table) leaves the dict stale.
+
+    The exemption is by ``fn.__qualname__``: a method whose qualified
+    name starts with ``<OwningProjection>.`` is allowed to mutate the
+    table directly. Free functions that need to cascade into a
+    Projection-owned table must call the Projection's invalidation method
+    inline; they should then drop the Projection-owned table from their
+    ``cascades_into`` declaration so the linkage is documented at the
+    call site rather than buried in the decorator metadata.
+
+    Called from controller startup once both registries are populated.
+
+    Raises:
+        ConfigurationError: when a violation is detected.
+    """
+    owned: dict[Table, type] = {}
+    for projection in PROJECTIONS:
+        for table in projection.sources:
+            owned[table] = type(projection)
+
+    violations: list[str] = []
+    for fn in REGISTERED_WRITE_FUNCTIONS:
+        for table in (*fn.writes_to, *fn.cascades_into):
+            if table not in owned:
+                continue
+            if fn.__qualname__.startswith(owned[table].__name__ + "."):
+                continue
+            violations.append(
+                f"  - {fn.__qualname__} writes (or cascades) into {table.name!r} owned by {owned[table].__name__}"
+            )
+
+    if violations:
+        raise ConfigurationError(
+            "Projection-owned tables externally written:\n"
+            + "\n".join(violations)
+            + "\n\nFix: either move this write onto the Projection, or have "
+            "the write function call the Projection's invalidation method "
+            "(e.g. projection.invalidate_for_worker(tx, ...)) and document "
+            "the linkage at the call site."
+        )
 
 
 def writes_to(
@@ -281,35 +343,6 @@ def insert_attempt(
     raise RuntimeError(f"insert_attempt: exhausted attempt_uid retries for task {task_id} attempt {attempt_id}")
 
 
-@writes_to(task_attempts_table)
-def apply_attempt_update(
-    tx: Tx,
-    *,
-    task_id: JobName,
-    attempt_id: int,
-    state: int,
-    started_at_ms: int | None,
-    finished_at_ms: int | None,
-    exit_code: int | None,
-    error: str | None,
-) -> None:
-    """Apply a worker/direct-provider attempt update."""
-    tx.execute(
-        update(task_attempts_table)
-        .where(
-            task_attempts_table.c.task_id == task_id,
-            task_attempts_table.c.attempt_id == attempt_id,
-        )
-        .values(
-            state=state,
-            started_at_ms=func.coalesce(task_attempts_table.c.started_at_ms, started_at_ms),
-            finished_at_ms=func.coalesce(task_attempts_table.c.finished_at_ms, finished_at_ms),
-            exit_code=func.coalesce(exit_code, task_attempts_table.c.exit_code),
-            error=func.coalesce(error, task_attempts_table.c.error),
-        )
-    )
-
-
 # ---------------------------------------------------------------------------
 # Task writes (previously writes/tasks.py)
 # ---------------------------------------------------------------------------
@@ -431,43 +464,38 @@ def promote_to_direct_provider(
     )
 
 
-@writes_to(tasks_table)
-def apply_task_state_update(
-    tx: Tx,
-    *,
-    task_id: JobName,
-    state: int,
-    error: str | None,
-    exit_code: int | None,
-    started_at_ms: int | None,
-    finished_at_ms: int | None,
-    failure_count: int,
-    preemption_count: int,
-) -> None:
-    """Apply a computed task state update.
-
-    Active target states preserve ``current_worker_id`` /
-    ``current_worker_address``; non-active states clear them so the row
-    is consistent with terminal-transition writes.
-    """
-    values: dict = {
-        "state": state,
-        "error": func.coalesce(error, tasks_table.c.error),
-        "exit_code": func.coalesce(exit_code, tasks_table.c.exit_code),
-        "started_at_ms": func.coalesce(tasks_table.c.started_at_ms, started_at_ms),
-        "finished_at_ms": finished_at_ms,
-        "failure_count": failure_count,
-        "preemption_count": preemption_count,
-    }
-    if state not in ACTIVE_TASK_STATES:
-        values["current_worker_id"] = None
-        values["current_worker_address"] = None
-    tx.execute(update(tasks_table).where(tasks_table.c.task_id == task_id).values(**values))
-
-
 # ---------------------------------------------------------------------------
 # Worker writes (previously writes/workers.py)
 # ---------------------------------------------------------------------------
+
+
+def _build_workers_upsert():
+    """Build a cacheable ``INSERT ... ON CONFLICT(worker_id) DO UPDATE`` text statement.
+
+    SA's ``sqlite_insert(...).on_conflict_do_update(...)`` form bypasses the
+    compiled-statement cache (``_generate_cache_key`` returns None), so the
+    burst-register path was re-compiling the SQL once per row. A ``text()``
+    statement with typed bindparams gets the cache and preserves the
+    ``WorkerIdType`` TypeDecorator on ``worker_id``.
+    """
+    cols = list(workers_table.c)
+    col_names = [c.name for c in cols]
+    sql = (
+        f"INSERT INTO workers ({', '.join(col_names)}) "
+        f"VALUES ({', '.join(f':{n}' for n in col_names)}) "
+        f"ON CONFLICT(worker_id) DO UPDATE SET "
+        f"{', '.join(f'{n}=excluded.{n}' for n in col_names if n != 'worker_id')}"
+    )
+    return text(sql).bindparams(*(bindparam(c.name, type_=c.type) for c in cols))
+
+
+_WORKER_UPSERT = _build_workers_upsert()
+
+
+@writes_to(workers_table)
+def upsert_worker_row(tx: Tx, row: dict) -> None:
+    """Insert or refresh a row in ``workers`` keyed by ``worker_id``."""
+    tx.execute(_WORKER_UPSERT, row)
 
 
 @writes_to(workers_table, cascades_into=(task_attempts_table,))
@@ -533,3 +561,23 @@ def set_user_budget(tx: Tx, user_id: str, budget_limit: int, max_band: int, now:
         set_={"budget_limit": budget_limit, "max_band": max_band, "updated_at_ms": now},
     )
     tx.execute(stmt)
+
+
+# ---------------------------------------------------------------------------
+# Reservation claims
+# ---------------------------------------------------------------------------
+
+
+@writes_to(reservation_claims_table)
+def replace_reservation_claims(tx: Tx, claims: dict[WorkerId, ReservationClaim]) -> None:
+    """Replace all reservation claims atomically (DELETE + INSERT)."""
+    tx.execute(delete(reservation_claims_table))
+    if not claims:
+        return
+    tx.execute(
+        insert(reservation_claims_table),
+        [
+            {"worker_id": worker_id, "job_id": claim.job_id, "entry_idx": claim.entry_idx}
+            for worker_id, claim in claims.items()
+        ],
+    )

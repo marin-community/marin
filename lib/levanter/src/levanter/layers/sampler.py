@@ -116,8 +116,12 @@ class Sampler(eqx.Module):
 
         # Keep the smallest prefix whose cumulative mass reaches the threshold.
         # The cutoff-crossing token should remain eligible, but we should not
-        # include the next token when the threshold is met exactly.
-        keep_sorted = cumulative_probs < threshold
+        # include the next token when the threshold is met exactly. A small
+        # tolerance absorbs floating-point imprecision in softmax/cumsum (TPU
+        # softmax differs from the true probabilities by ~5e-5) so the cutoff
+        # doesn't shift by one token across devices.
+        threshold_tol = jnp.asarray(1e-4, dtype=cumulative_probs.dtype)
+        keep_sorted = cumulative_probs < threshold - threshold_tol
         keep_sorted = jnp.concatenate(
             [jnp.ones_like(keep_sorted[..., :1], dtype=bool), keep_sorted[..., :-1]],
             axis=-1,

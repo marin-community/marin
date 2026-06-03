@@ -42,13 +42,6 @@ def _target_sharding(array) -> jax.sharding.Sharding | None:
     return getattr(aval, "sharding", None)
 
 
-def _partition_spec(array) -> PartitionSpec | None:
-    sharding = _target_sharding(array)
-    if sharding is None:
-        return None
-    return getattr(sharding, "spec", None)
-
-
 def _batch_sharded_stack_target_pspec(array) -> PartitionSpec | None:
     if array is None or not hasattr(array, "shape") or array.ndim != 3:
         return None

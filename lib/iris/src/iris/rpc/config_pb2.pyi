@@ -340,28 +340,18 @@ class WorkerConfig(_message.Message):
     def __init__(self, docker_image: _Optional[str] = ..., host: _Optional[str] = ..., port: _Optional[int] = ..., port_range: _Optional[str] = ..., worker_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., cache_dir: _Optional[str] = ..., default_task_image: _Optional[str] = ..., task_env: _Optional[_Mapping[str, str]] = ..., runtime: _Optional[str] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., gpu_count: _Optional[int] = ..., capacity_type: _Optional[_Union[CapacityType, str]] = ..., worker_attributes: _Optional[_Mapping[str, str]] = ..., poll_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., slice_id: _Optional[str] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., storage_prefix: _Optional[str] = ..., auth_token: _Optional[str] = ...) -> None: ...
 
 class SshConfig(_message.Message):
-    __slots__ = ("user", "key_file", "port", "connect_timeout", "auth_mode", "os_login_user", "impersonate_service_account")
-    class AuthMode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-        __slots__ = ()
-        SSH_AUTH_MODE_METADATA: _ClassVar[SshConfig.AuthMode]
-        SSH_AUTH_MODE_OS_LOGIN: _ClassVar[SshConfig.AuthMode]
-    SSH_AUTH_MODE_METADATA: SshConfig.AuthMode
-    SSH_AUTH_MODE_OS_LOGIN: SshConfig.AuthMode
+    __slots__ = ("user", "key_file", "port", "connect_timeout", "impersonate_service_account")
     USER_FIELD_NUMBER: _ClassVar[int]
     KEY_FILE_FIELD_NUMBER: _ClassVar[int]
     PORT_FIELD_NUMBER: _ClassVar[int]
     CONNECT_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
-    AUTH_MODE_FIELD_NUMBER: _ClassVar[int]
-    OS_LOGIN_USER_FIELD_NUMBER: _ClassVar[int]
     IMPERSONATE_SERVICE_ACCOUNT_FIELD_NUMBER: _ClassVar[int]
     user: str
     key_file: str
     port: int
     connect_timeout: _time_pb2.Duration
-    auth_mode: SshConfig.AuthMode
-    os_login_user: str
     impersonate_service_account: str
-    def __init__(self, user: _Optional[str] = ..., key_file: _Optional[str] = ..., port: _Optional[int] = ..., connect_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., auth_mode: _Optional[_Union[SshConfig.AuthMode, str]] = ..., os_login_user: _Optional[str] = ..., impersonate_service_account: _Optional[str] = ...) -> None: ...
+    def __init__(self, user: _Optional[str] = ..., key_file: _Optional[str] = ..., port: _Optional[int] = ..., connect_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., impersonate_service_account: _Optional[str] = ...) -> None: ...
 
 class StorageConfig(_message.Message):
     __slots__ = ("local_state_dir", "remote_state_dir")

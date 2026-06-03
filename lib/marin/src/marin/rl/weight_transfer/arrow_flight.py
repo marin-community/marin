@@ -263,7 +263,6 @@ class ArrowFlightCoordinator:
             param_names=param_names,
         )
         logger.info(f"Updated server: weight_id={weight_id}, params={len(param_names)}, servers={len(server_locations)}")
-        return 123
 
     def fetch_server(self) -> ServerInfo:
         return self._server_info

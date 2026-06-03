@@ -38,7 +38,7 @@ from iris.cluster.client import (
     resolve_job_user,
 )
 from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
-from iris.cluster.log_store_helpers import build_log_source
+from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -53,7 +53,7 @@ from iris.cluster.types import (
 )
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
-from iris.rpc.proto_utils import job_state_friendly
+from iris.rpc.proto_display import job_state_friendly
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
@@ -487,7 +487,11 @@ class IrisClient:
         timeout_ms: int = 30000,
         token_provider: TokenProvider | None = None,
     ) -> "IrisClient":
-        """Create an IrisClient for RPC-based cluster execution.
+        """Create an IrisClient for an external client (CLI, laptop, notebook).
+
+        Finelog logs/stats are routed through the controller, the only ingress
+        an external client can reach. In-cluster callers should use
+        :meth:`in_cluster` instead.
 
         Args:
             controller_address: Controller URL (e.g., "http://localhost:8080")
@@ -502,6 +506,53 @@ class IrisClient:
         Returns:
             IrisClient wrapping RemoteClusterClient
         """
+        return cls._make(
+            controller_address,
+            workspace=workspace,
+            bundle_id=bundle_id,
+            timeout_ms=timeout_ms,
+            token_provider=token_provider,
+            use_controller_proxy=True,
+        )
+
+    @classmethod
+    def in_cluster(
+        cls,
+        controller_address: str,
+        *,
+        workspace: Path | None = None,
+        bundle_id: str | None = None,
+        timeout_ms: int = 30000,
+        token_provider: TokenProvider | None = None,
+    ) -> "IrisClient":
+        """Create an IrisClient for code running inside the cluster (in-task).
+
+        Same as :meth:`remote`, except finelog logs/stats are written straight
+        to the resolved finelog server instead of through the controller's
+        StatsServiceProxy — so high-frequency task-status pushes don't compete
+        for the controller's RPC thread pool. Only valid where the finelog
+        server's internal address is reachable (i.e. inside the cluster).
+        """
+        return cls._make(
+            controller_address,
+            workspace=workspace,
+            bundle_id=bundle_id,
+            timeout_ms=timeout_ms,
+            token_provider=token_provider,
+            use_controller_proxy=False,
+        )
+
+    @classmethod
+    def _make(
+        cls,
+        controller_address: str,
+        *,
+        workspace: Path | None,
+        bundle_id: str | None,
+        timeout_ms: int,
+        token_provider: TokenProvider | None,
+        use_controller_proxy: bool,
+    ) -> "IrisClient":
         interceptors = []
         if token_provider is not None:
             interceptors.append(AuthTokenInjector(token_provider))
@@ -512,6 +563,7 @@ class IrisClient:
             workspace=workspace,
             timeout_ms=timeout_ms,
             interceptors=interceptors,
+            use_controller_proxy=use_controller_proxy,
         )
         return cls(cluster)
 
@@ -779,17 +831,15 @@ class IrisClient:
         """
         return self._cluster_client.get_task_status(task_name)
 
-    def report_task_status_text(self, task_id: JobName, detail_md: str, summary_md: str) -> None:
-        """Push markdown status text to the controller for UI display.
-
-        Called from within a running task to report progress or state.
-
-        Args:
-            task_id: Full task ID of the currently-running task.
-            detail_md: Full markdown for the task detail page.
-            summary_md: Short summary (up to ~3 lines) for the task list table.
-        """
-        self._cluster_client.report_task_status_text(task_id, detail_md, summary_md)
+    def report_task_status_text(
+        self,
+        task_id: JobName,
+        attempt_id: int,
+        detail_md: str,
+        summary_md: str,
+    ) -> None:
+        """Push markdown status text for the running task to finelog (fire-and-forget)."""
+        self._cluster_client.report_task_status_text(task_id, attempt_id, detail_md, summary_md)
 
     def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.
@@ -1036,7 +1086,9 @@ def get_iris_ctx() -> IrisContext | None:
     client = None
     if job_info.controller_address:
         bundle_id = job_info.bundle_id
-        client = IrisClient.remote(
+        # In-task code runs inside the cluster and can reach the finelog server
+        # directly, so task-status pushes bypass the controller's StatsServiceProxy.
+        client = IrisClient.in_cluster(
             controller_address=job_info.controller_address,
             bundle_id=bundle_id,
         )

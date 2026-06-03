@@ -461,12 +461,6 @@ def _device_key(device_kind: Optional[str]) -> Optional[str]:
     return None
 
 
-def _dtype_name(dtype: Optional[jnp.dtype]) -> Optional[str]:
-    if dtype is None:
-        return None
-    return jnp.dtype(dtype).name
-
-
 def widest_dtype_name(
     *,
     dtype: Optional[jnp.dtype],

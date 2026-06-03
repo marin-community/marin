@@ -5,10 +5,8 @@ import json
 import os
 import pty
 import shlex
-import shutil
 import subprocess
 import sys
-from pathlib import Path
 
 GCP_CLEANUP_POLICY = [
     {
@@ -27,16 +25,6 @@ GCP_CLEANUP_POLICY = [
         },
     },
 ]
-
-
-def _rm(path):
-    path = Path(path)
-    if path.is_dir():
-        shutil.rmtree(path, ignore_errors=True)
-    elif path.is_file():
-        os.remove(path)
-    elif path.exists():
-        raise RuntimeError(f"Remove failed. Path ({path}) is neither a directory nor a file.")
 
 
 def _run(argv):

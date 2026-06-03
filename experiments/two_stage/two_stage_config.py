@@ -16,7 +16,7 @@ from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.execution.types import ExecutorStep, this_output_path
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 

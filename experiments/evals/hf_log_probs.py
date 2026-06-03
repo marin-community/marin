@@ -24,7 +24,7 @@ from fray.types import ResourceConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data.text import LMMixtureDatasetConfig
 from marin.evaluation.log_probs import EvalLmConfig, evaluate_lm_log_probs
-from marin.execution.executor import ExecutorStep, InputName, this_output_path
+from marin.execution.types import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 
 

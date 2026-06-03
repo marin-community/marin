@@ -10,14 +10,10 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from rigging.timing import Timestamp
-from sqlalchemy import select
 
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.schema import workers_table
-from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
 from iris.cluster.providers.types import SliceHandle
-from iris.rpc import config_pb2, vm_pb2
+from iris.rpc import vm_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -37,48 +33,6 @@ class SliceTerminationResult:
 
     sibling_worker_ids: list[str]
     termination_requests: list[SliceTerminationRequest]
-
-
-def restart_worker(
-    groups: dict[str, ScalingGroup],
-    db: ControllerDB | None,
-    worker_id: str,
-    build_worker_config: Callable[[ScalingGroup], config_pb2.WorkerConfig | None],
-) -> None:
-    """Restart a worker with a fresh bootstrap script using the latest image."""
-
-    if db is None:
-        raise ValueError("No DB configured — cannot look up worker")
-
-    with db.read_snapshot() as snapshot:
-        row = snapshot.execute(
-            select(workers_table.c.slice_id, workers_table.c.scale_group).where(
-                (workers_table.c.worker_id == worker_id) & (workers_table.c.slice_id != "")
-            )
-        ).first()
-    if row is None:
-        raise ValueError(f"Worker {worker_id} not found in workers table (or has no slice_id)")
-
-    group = groups.get(row.scale_group)
-    if group is None:
-        raise ValueError(f"Scale group {row.scale_group} not found for worker {worker_id}")
-
-    slice_handle = group.get_slice(row.slice_id)
-    if slice_handle is None:
-        raise ValueError(f"Slice {row.slice_id} not found in group {row.scale_group}")
-
-    workers = slice_handle.describe().workers
-    handle = next((worker for worker in workers if worker.worker_id == worker_id), None)
-    if handle is None:
-        raise ValueError(f"Worker {worker_id} not found in slice {row.slice_id}")
-
-    worker_config = build_worker_config(group)
-    if worker_config is None:
-        raise ValueError("No base worker config — cannot build bootstrap script")
-
-    worker_config.worker_id = worker_id
-    worker_config.slice_id = row.slice_id
-    handle.restart_worker(build_worker_bootstrap_script(worker_config))
 
 
 def terminate_slices_for_workers(

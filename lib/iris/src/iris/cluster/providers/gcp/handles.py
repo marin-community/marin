@@ -16,17 +16,12 @@ import re
 import threading
 from dataclasses import dataclass
 
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Timestamp
 
 from iris.cluster.providers._worker_base import RemoteExecWorkerBase
 from iris.cluster.providers.gcp.service import GcpService
-from iris.cluster.providers.gcp.ssh import ssh_impersonate_service_account, ssh_key_file, uses_os_login
-from iris.cluster.providers.remote_exec import (
-    DirectSshRemoteExec,
-    GceRemoteExec,
-    GcloudRemoteExec,
-    resolve_current_os_login_user,
-)
+from iris.cluster.providers.gcp.ssh import ssh_impersonate_service_account
+from iris.cluster.providers.remote_exec import GceRemoteExec, GcloudRemoteExec
 from iris.cluster.providers.types import (
     CloudSliceState,
     CloudWorkerState,
@@ -35,9 +30,8 @@ from iris.cluster.providers.types import (
     SliceStatus,
     WorkerStatus,
 )
-from iris.cluster.types import get_tpu_topology
+from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import config_pb2
-from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
 
@@ -76,23 +70,6 @@ _QR_STATE_MAP: dict[str, CloudSliceState] = {
 _GCE_NAME_MAX_LEN = 63
 _GCE_NAME_RE = re.compile(r"[^a-z0-9-]+")
 _GCE_NAME_EDGE_RE = re.compile(r"^-+|-+$")
-_GCE_VM_SLICE_SSH_USER = "iris"
-
-
-def _os_login_user(
-    ssh_config: config_pb2.SshConfig | None,
-) -> str:
-    if ssh_config and ssh_config.os_login_user:
-        return ssh_config.os_login_user
-    if ssh_config and ssh_config.user and ssh_config.user != "root":
-        return ssh_config.user
-    return resolve_current_os_login_user(impersonate_service_account=ssh_impersonate_service_account(ssh_config))
-
-
-def _vm_slice_metadata_user(ssh_config: config_pb2.SshConfig | None) -> str:
-    if ssh_config and ssh_config.user and ssh_config.user != "root":
-        return ssh_config.user
-    return _GCE_VM_SLICE_SSH_USER
 
 
 def _build_gce_resource_name(name_prefix: str, suffix: str) -> str:
@@ -126,14 +103,42 @@ def _composite_slice_state(
     cloud_state: CloudSliceState,
     bootstrap_state: CloudSliceState | None,
 ) -> CloudSliceState:
-    """Compose cloud lifecycle with bootstrap lifecycle into effective slice state."""
-    if cloud_state != CloudSliceState.READY:
+    """Compose cloud lifecycle with bootstrap lifecycle into effective slice state.
+
+    Worker health is canonical for liveness: once bootstrap is READY the slice
+    is READY even if the GCP-reported cloud state still lags at CREATING — a TPU
+    can boot and serve long before its create operation flips to READY. A slice
+    rediscovered on controller restart (no bootstrap monitoring) carries a READY
+    bootstrap sentinel, so it too becomes READY and is validated by the
+    autoscaler's health probe, which reaps it if the workers are in fact dead.
+
+    A bootstrap that definitively FAILED is authoritative — even when the cloud
+    is no longer describable (UNKNOWN). A stockout/quota create failure leaves no
+    TPU resource to describe, so describe() reports UNKNOWN; without surfacing the
+    FAILED bootstrap verdict the autoscaler would wait out the full
+    unresolvable-timeout grace period (and keep re-describing the dead TPU) before
+    reaping a slice it already knows never came up.
+
+    Cloud states that mean "gone or doomed" — FAILED and DELETING — are likewise
+    authoritative. A bare UNKNOWN (cloud no longer describable, bootstrap still in
+    progress or a stale READY sentinel) is reported as UNKNOWN so a vanished node
+    never lingers as READY and the unresolvable-timeout path can reap it.
+    """
+    if cloud_state in (CloudSliceState.FAILED, CloudSliceState.DELETING):
         return cloud_state
-    if bootstrap_state is None:
-        return CloudSliceState.BOOTSTRAPPING
+    # A definitive bootstrap failure wins over UNKNOWN: the slice never came up,
+    # so reap it now instead of waiting out the unresolvable timeout.
     if bootstrap_state == CloudSliceState.FAILED:
         return CloudSliceState.FAILED
-    return CloudSliceState.READY
+    if cloud_state == CloudSliceState.UNKNOWN:
+        return CloudSliceState.UNKNOWN
+    if bootstrap_state == CloudSliceState.READY:
+        return CloudSliceState.READY
+    # Bootstrap still in progress: surface BOOTSTRAPPING once cloud is READY,
+    # otherwise reflect the raw cloud state (CREATING/REPAIRING).
+    if cloud_state == CloudSliceState.READY:
+        return CloudSliceState.BOOTSTRAPPING
+    return cloud_state
 
 
 # ============================================================================
@@ -248,6 +253,7 @@ class GcpSliceHandle:
         _service_account: str | None = None,
         _bootstrapping: bool = False,
         _is_queued_resource: bool = False,
+        _create_operation: str = "",
     ):
         self._slice_id = _slice_id
         self._zone = _zone
@@ -262,6 +268,7 @@ class GcpSliceHandle:
         self._ssh_config = _ssh_config
         self._service_account = _service_account
         self.is_queued_resource: bool = _is_queued_resource
+        self._create_operation = _create_operation
         self._bootstrap_state: CloudSliceState | None = None if _bootstrapping else CloudSliceState.READY
         self._bootstrap_lock = threading.Lock()
 
@@ -340,35 +347,14 @@ class GcpSliceHandle:
                     i,
                 )
 
-            if uses_os_login(self._ssh_config):
-                direct_host = external_ip or internal_ip
-                remote_exec = DirectSshRemoteExec(
-                    host=direct_host,
-                    user=_os_login_user(self._ssh_config),
-                    key_file=ssh_key_file(
-                        self._ssh_config,
-                        ssh_impersonate_service_account(self._ssh_config),
-                    ),
-                    connect_timeout=(
-                        duration_from_proto(self._ssh_config.connect_timeout)
-                        if self._ssh_config and self._ssh_config.HasField("connect_timeout")
-                        else Duration.from_seconds(30)
-                    ),
-                )
-            else:
-                remote_exec = GcloudRemoteExec(
-                    project_id=self._project_id,
-                    _zone=self._zone,
-                    vm_id=self._slice_id,
-                    worker_index=i,
-                    ssh_user=_vm_slice_metadata_user(self._ssh_config),
-                    ssh_key_file=ssh_key_file(
-                        self._ssh_config,
-                        ssh_impersonate_service_account(self._ssh_config),
-                    ),
-                    impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
-                    _address=internal_ip,
-                )
+            remote_exec = GcloudRemoteExec(
+                project_id=self._project_id,
+                _zone=self._zone,
+                vm_id=self._slice_id,
+                worker_index=i,
+                impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
+                _address=internal_ip,
+            )
             workers.append(
                 GcpWorkerHandle(
                     _vm_id=f"{self._slice_id}-worker-{i}",
@@ -490,11 +476,6 @@ class GcpVmSliceHandle:
             project_id=self._project_id,
             zone=self._zone,
             vm_name=self._vm_name,
-            ssh_user=None if uses_os_login(self._ssh_config) else _vm_slice_metadata_user(self._ssh_config),
-            ssh_key_file=ssh_key_file(
-                self._ssh_config,
-                ssh_impersonate_service_account(self._ssh_config),
-            ),
             impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
         )
         worker = GcpStandaloneWorkerHandle(

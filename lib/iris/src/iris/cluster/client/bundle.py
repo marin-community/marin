@@ -3,11 +3,9 @@
 
 """Workspace bundle creation for job submission."""
 
-import atexit
 import logging
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import zipfile
@@ -129,31 +127,6 @@ def create_workspace_zip(
         )
 
     return buf
-
-
-def create_workspace_dir(
-    workspace: str | Path,
-    *,
-    exclude: re.Pattern[str] | None = None,
-) -> str:
-    """Copy workspace files into a temporary directory for upload.
-
-    The Iris client zips and uploads the directory. The temp directory is
-    cleaned up at process exit via atexit.
-    """
-    workspace = Path(workspace)
-    files = collect_workspace_files(workspace, exclude=exclude)
-
-    tmp_dir = tempfile.mkdtemp(prefix="workspace_")
-    atexit.register(lambda d=tmp_dir: shutil.rmtree(d, ignore_errors=True))
-
-    for file in files:
-        rel = file.relative_to(workspace)
-        dest = Path(tmp_dir) / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(file, dest)
-
-    return tmp_dir
 
 
 def _get_git_non_ignored_files(

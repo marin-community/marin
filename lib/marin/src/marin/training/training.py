@@ -4,11 +4,12 @@
 import dataclasses
 import importlib
 import logging
+import math
 import os
 import urllib.parse
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import TypeVar
+from typing import TypeVar, cast
 
 import draccus
 from fray import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
@@ -69,6 +70,10 @@ class TrainDpoOnPodConfig:
     spending time (and money) building it during training. Override to True if
     you explicitly want cache construction.
     """
+    auto_num_epochs: float | None = None
+    """When set, resolve num_train_steps from the concrete DPO train cache at launch time."""
+    auto_validation_runs: int | None = None
+    """When set, schedule this many validation passes including the initial and final evaluations."""
 
 
 TrainConfigT = TypeVar("TrainConfigT")
@@ -192,7 +197,142 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
         return pod_config
 
     config = bake_output_path(pod_config.train_config, pod_config.output_path)
+
+    from levanter.adaptor import NoAdaptorConfig
+    from levanter.main.train_dpo import TrainDpoConfig
+    from levanter.main.train_lm import TrainLmConfig
+
+    # Adapter LM/DPO exports PEFT by default; merged HF export is explicit.
+    if isinstance(config, (TrainDpoConfig, TrainLmConfig)) and not isinstance(config.adapter, NoAdaptorConfig):
+        peft_save_path = config.peft_save_path
+        if peft_save_path is None and config.hf_save_steps is not None:
+            peft_save_path = config.hf_save_path
+        config = replace(config, hf_save_path=None, peft_save_path=peft_save_path)
+
     return replace(pod_config, train_config=config)
+
+
+def _num_validation_sequences(total_sequences: int, fraction: float) -> int:
+    if total_sequences <= 1:
+        return 0
+    if fraction <= 0:
+        return 0
+    num_val = int(total_sequences * fraction)
+    if num_val <= 0:
+        num_val = 1
+    if num_val >= total_sequences:
+        num_val = total_sequences - 1
+    return num_val
+
+
+def _dpo_training_components(config: object) -> dict[str, object]:
+    weights = config.train_weights
+    if weights is None:
+        return dict(config.components)
+    if isinstance(weights, dict):
+        return {name: comp for name, comp in config.components.items() if weights.get(name, 0) > 0}
+
+    has_weight = set()
+    for _, stage_weights in weights:
+        for name, weight in stage_weights.items():
+            if weight > 0:
+                has_weight.add(name)
+    return {name: comp for name, comp in config.components.items() if name in has_weight}
+
+
+def _dpo_training_dataset_size(config: object) -> int:
+    from marin.processing.tokenize import read_tokenized_cache_stats
+
+    training_components = _dpo_training_components(config.data)
+    if len(training_components) != 1:
+        raise ValueError(
+            "DPO auto step resolution only supports single-component configs. "
+            f"Found {len(training_components)} training components: {list(training_components.keys())}"
+        )
+
+    name, component = next(iter(training_components.items()))
+    cache_dir = getattr(component, "cache_dir", None)
+    if not isinstance(cache_dir, str):
+        raise ValueError(
+            f"DPO auto step resolution requires a concrete cache_dir string for component {name}, got {cache_dir!r}."
+        )
+
+    try:
+        stats = read_tokenized_cache_stats(cache_dir, "train")
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"{exc}. Run tokenization first, or set num_train_steps explicitly.") from exc
+
+    total_examples = stats.total_elements
+
+    if config.validation_split_fraction is not None:
+        total_examples -= _num_validation_sequences(total_examples, config.validation_split_fraction)
+
+    if total_examples <= 0:
+        raise ValueError(f"DPO train set is empty after validation split for cache_dir={cache_dir}.")
+
+    return total_examples
+
+
+def _num_train_steps_for_examples(batch_size: object, total_examples: int) -> int:
+    from levanter.schedule import BatchSchedule
+
+    if total_examples <= 0:
+        raise ValueError(f"total_examples must be positive, got {total_examples}")
+
+    schedule = BatchSchedule(batch_size)
+    return schedule.find_step_containing_offset(total_examples - 1) + 1
+
+
+def _scheduled_dpo_eval_steps(num_train_steps: int, total_validation_runs: int) -> list[int]:
+    if total_validation_runs < 2:
+        raise ValueError(f"total_validation_runs must be at least 2, got {total_validation_runs}")
+    if num_train_steps <= 0:
+        raise ValueError(f"num_train_steps must be positive, got {num_train_steps}")
+
+    interval = max(1, math.ceil(num_train_steps / (total_validation_runs - 1)))
+    return [step for step in range(interval, num_train_steps - 1, interval)]
+
+
+def _maybe_auto_resolve_dpo_schedule(config: TrainDpoOnPodConfig) -> TrainDpoOnPodConfig:
+    if config.auto_num_epochs is None and config.auto_validation_runs is None:
+        return config
+
+    train_config = config.train_config
+    trainer = train_config.trainer
+
+    if config.auto_num_epochs is not None:
+        dataset_size = _dpo_training_dataset_size(train_config)
+        logger.info("Resolved DPO train set size from tokenizer stats: %d examples", dataset_size)
+        target_examples = math.ceil(config.auto_num_epochs * dataset_size)
+        num_train_steps = _num_train_steps_for_examples(trainer.train_batch_size, target_examples)
+        logger.info(
+            "Resolved DPO steps from %.3g epoch(s): %d target examples at batch schedule %s -> %d steps",
+            config.auto_num_epochs,
+            target_examples,
+            trainer.train_batch_size,
+            num_train_steps,
+        )
+        trainer = replace(trainer, num_train_steps=num_train_steps)
+        train_config = replace(train_config, trainer=trainer)
+
+    if config.auto_validation_runs is not None:
+        eval_steps = _scheduled_dpo_eval_steps(train_config.trainer.num_train_steps, config.auto_validation_runs)
+        logger.info(
+            "Resolved DPO validation schedule: initial eval, interior steps %s, and final eval",
+            eval_steps,
+        )
+        train_config = replace(
+            train_config,
+            run_initial_eval=True,
+            scheduled_eval_steps=eval_steps,
+        )
+
+    return replace(
+        config,
+        train_config=train_config,
+        auto_num_epochs=None,
+        auto_validation_runs=None,
+    )
 
 
 def _maybe_override_auto_build_caches(config: TrainConfigT, auto_build: bool) -> TrainConfigT:
@@ -317,6 +457,9 @@ def _prepare_training_run(
     if config.output_path is not None:
         logger.info(f"Using output path: {config.output_path}")
         config = _update_config_to_use_out_path(config)
+
+    if isinstance(config, TrainDpoOnPodConfig):
+        config = cast(TrainOnPodConfigT, _maybe_auto_resolve_dpo_schedule(config))
 
     env = resolve_training_env(config.env_vars, config.resources)
 

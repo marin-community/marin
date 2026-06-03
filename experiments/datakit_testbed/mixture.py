@@ -6,7 +6,7 @@ import json
 import logging
 from dataclasses import dataclass
 
-from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
+from marin.execution.types import ExecutorStep, InputName, output_path_of, this_output_path
 from marin.processing.tokenize.data_configs import TokenizerStep
 from rigging.filesystem import open_url
 

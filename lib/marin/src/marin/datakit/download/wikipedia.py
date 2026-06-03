@@ -16,9 +16,9 @@ import tarfile
 from collections.abc import Iterable
 
 import requests
-from rigging.filesystem import open_url
+from rigging.filesystem import atomic_rename, open_url
 from tqdm_loggable.auto import tqdm
-from zephyr import Dataset, ZephyrContext, atomic_rename, load_jsonl
+from zephyr import Dataset, ZephyrContext, load_jsonl
 
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_size

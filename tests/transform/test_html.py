@@ -5,6 +5,7 @@
 
 from bs4 import BeautifulSoup
 from marin.schemas.web.convert import ResiliparseConfig
+from marin.transform.ar5iv.transform_ar5iv import Ar5ivExtractionConfig, process_ar5iv_dump
 from marin.transform.ar5iv.transform_ar5iv import clean_html as ar5iv_clean_html
 from marin.transform.ar5iv.transform_ar5iv import process_record as ar5iv_process_record
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
@@ -245,8 +246,6 @@ def test_ar5iv_pipeline_integration(tmp_path, write_jsonl_gz, read_all_jsonl_gz)
             {"filename": "paper2", "content": SAMPLE_AR5IV_HTML},
         ],
     )
-
-    from marin.transform.ar5iv.transform_ar5iv import Ar5ivExtractionConfig, process_ar5iv_dump
 
     config = Ar5ivExtractionConfig(
         input_path=str(input_dir),

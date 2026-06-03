@@ -72,9 +72,7 @@ class SpillWriter:
     """Writes items to an opaque chunked row-format spill file.
 
     Use ``write`` to stream items; the writer accumulates a byte budget and
-    emits chunks when the budget is exceeded. Use ``write_chunk`` to commit
-    a batch of items as its own chunk immediately (no accumulation) — useful
-    when the caller wants each logical batch to round-trip as one chunk.
+    emits chunks when the budget is exceeded.
 
     Writes are offloaded to a :class:`ThreadedBatchWriter` so one write can be
     in-flight while the caller produces the next batch. Backpressure, error
@@ -109,13 +107,6 @@ class SpillWriter:
         merged = self._accumulator.add(table)
         if merged is not None:
             self._threaded.submit(merged)
-
-    def write_chunk(self, items: Iterable[Any]) -> None:
-        """Commit items as their own chunk immediately (no accumulation)."""
-        table = _items_to_table(items)
-        if len(table) == 0:
-            return
-        self._threaded.submit(table)
 
     def close(self) -> None:
         """Flush remaining buffered items and wait for the background writer."""

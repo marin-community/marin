@@ -5,6 +5,7 @@
 
 
 import itertools
+import sys
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -156,7 +157,6 @@ def test_compute_parquet_splits_row_ranges_are_readable(tmp_path):
 
 def test_load_parquet_no_dataset_api(tmp_path, monkeypatch):
     """Verify that load_parquet does NOT import pyarrow.dataset."""
-    import sys
 
     path = str(tmp_path / "data.parquet")
     _write_test_parquet(path, RECORDS)

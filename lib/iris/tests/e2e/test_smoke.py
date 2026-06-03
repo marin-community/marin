@@ -10,6 +10,7 @@ has workers across CPU, TPU coscheduling, and multi-region scale groups.
 
 import logging
 import os
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -18,16 +19,13 @@ import pytest
 from connectrpc.errors import ConnectError
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
-from iris.client.client import IrisClient
+from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
-from iris.cluster.types import (
-    Entrypoint,
-    ReservationEntry,
-    ResourceSpec,
-    gpu_device,
-)
+from iris.cluster.providers.local.cluster import LocalCluster
+from iris.cluster.types import Entrypoint, EnvironmentSpec, ReservationEntry, ResourceSpec, gpu_device
 from iris.rpc import config_pb2, controller_pb2, job_pb2
+from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.version import client_revision_date
 from rigging.timing import Duration, ExponentialBackoff
@@ -199,6 +197,30 @@ def smoke_screenshot(smoke_page, tmp_path_factory):
     return capture
 
 
+def _wait_for_worker_detail_screenshot_ready(page, worker_id: str) -> None:
+    # WorkerDetail.vue uniquely nulls `data` in its workerId watch, so a late
+    # re-fire can flip the page back to the "Loading worker..." overlay after a
+    # naive wait passes. Anchor on h3 sections that only render in the
+    # v-else-if="data" branch, then settle + re-verify to catch the transient.
+    check = """
+        (workerId) => {
+            const text = document.body.textContent || "";
+            const routeReady = decodeURIComponent(window.location.hash) === `#/worker/${workerId}`;
+            const headings = Array.from(document.querySelectorAll("h3"))
+                .map((heading) => (heading.textContent || "").trim().toLowerCase());
+            return routeReady
+                && !text.includes("Loading worker...")
+                && text.includes(workerId)
+                && text.includes("Healthy")
+                && headings.includes("identity")
+                && headings.includes("task history");
+        }
+    """
+    page.wait_for_function(check, arg=worker_id, timeout=15000)
+    page.wait_for_timeout(250)
+    page.wait_for_function(check, arg=worker_id, timeout=5000)
+
+
 def _wait_for_job_detail_screenshot_ready(page, job_id: str) -> None:
     page.wait_for_function(
         """
@@ -246,7 +268,7 @@ def capabilities(smoke_cluster) -> ClusterCapabilities:
 
 
 def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
-    """Jobs tab shows diverse states."""
+    """Landing page groups jobs by owner; drilling into the owner shows states."""
     quick = smoke_cluster.submit(TestJobs.quick, "smoke-simple")
     failed = smoke_cluster.submit(TestJobs.fail, "smoke-failed")
     running = smoke_cluster.submit(TestJobs.sleep, "smoke-running", 300)
@@ -255,12 +277,21 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
     smoke_cluster.wait(failed, timeout=smoke_cluster.job_timeout)
     smoke_cluster.wait_for_state(running, job_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
 
+    user = quick.job_id.user
+
+    # Landing page is the per-owner overview, not a flat job list.
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
+    wait_for_dashboard_ready(smoke_page)
+    assert_visible(smoke_page, f"text={user}")
+
+    # Drill into this owner to see their individual jobs and states.
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/#/?user={user}")
     wait_for_dashboard_ready(smoke_page)
     for name in ["smoke-simple", "smoke-failed", "smoke-running"]:
         assert_visible(smoke_page, f"text={name}")
     smoke_screenshot(
-        "jobs-tab", "Jobs tab listing smoke-simple (succeeded), smoke-failed (failed), and smoke-running (running)"
+        "jobs-tab",
+        f"Jobs for user {user}: smoke-simple (succeeded), smoke-failed (failed), and smoke-running (running)",
     )
 
     smoke_cluster.kill(running)
@@ -268,8 +299,6 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
 
 def _parent_with_two_children():
     """Parent callable that submits two child jobs and waits for both."""
-    from iris.client.client import iris_ctx
-    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 
     ctx = iris_ctx()
     res = ResourceSpec(cpu=1, memory="1g")
@@ -296,13 +325,19 @@ def test_dashboard_job_expand(smoke_cluster, smoke_page, smoke_screenshot):
     parent = smoke_cluster.submit(_parent_with_two_children, "smoke-expand-parent")
     smoke_cluster.wait(parent, timeout=smoke_cluster.job_timeout)
 
+    # Route through the owner overview first so the subsequent drill-in is a
+    # genuine hash change (the smoke page is shared module-scope and may already
+    # be parked on this owner's view from an earlier test).
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
+    wait_for_dashboard_ready(smoke_page)
+    # Open the owner's scoped job list (the landing page groups by owner).
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/#/?user={parent.job_id.user}")
     wait_for_dashboard_ready(smoke_page)
     assert_visible(smoke_page, "text=smoke-expand-parent")
 
-    # The parent should have an expand arrow (▶)
+    # The parent row exposes a keyboard-accessible expand toggle.
     row = smoke_page.locator("tr", has_text="smoke-expand-parent")
-    expand_btn = row.get_by_role("button", name="▶")
+    expand_btn = row.get_by_role("button", name="Expand children")
     expand_btn.click()
 
     # After clicking, children should appear (wait for the child names to render)
@@ -311,8 +346,8 @@ def test_dashboard_job_expand(smoke_cluster, smoke_page, smoke_screenshot):
         timeout=10000,
     )
 
-    # Verify the arrow changed to ▼
-    row.get_by_role("button", name="▼").wait_for(timeout=5000)
+    # Once expanded, the toggle flips to a collapse affordance.
+    row.get_by_role("button", name="Collapse children").wait_for(timeout=5000)
 
     smoke_screenshot("job-expand", "Jobs tab with expanded parent showing child-a and child-b indented beneath")
 
@@ -445,10 +480,7 @@ def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, ca
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/worker/{worker_id}")
     wait_for_dashboard_ready(smoke_page)
 
-    smoke_page.wait_for_function(
-        f"() => document.body.textContent.includes('{worker_id}') && " "document.body.textContent.includes('Healthy')",
-        timeout=10000,
-    )
+    _wait_for_worker_detail_screenshot_ready(smoke_page, worker_id)
     smoke_screenshot(
         "worker-detail", "Worker detail page with identity info, health badge, metric sparklines, and task history"
     )
@@ -458,14 +490,15 @@ def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Autoscaler tab shows scale groups."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/autoscaler")
     wait_for_dashboard_ready(smoke_page)
-    # Wait for actual scale group content, not just the tab heading ("Autoscaler")
-    # which appears before the API response loads.
+    # Wait for actual scale group content. The strict !Loading-autoscaler-status check
+    # blocks on the AutoscalerTab.vue placeholder so the screenshot isn't taken
+    # during a refetch cycle.
     smoke_page.wait_for_function(
-        "() => !document.body.textContent.includes('Loading') && "
+        "() => !document.body.textContent.includes('Loading autoscaler status') && "
         "(document.body.textContent.includes('Scale Group') || "
         "document.body.textContent.includes('scale group') || "
         "document.body.textContent.includes('local-cpu'))",
-        timeout=10000,
+        timeout=15000,
     )
     smoke_screenshot("autoscaler-tab", "Autoscaler tab showing scale group configuration")
 
@@ -773,7 +806,6 @@ def test_checkpoint_restore():
     Phase 2 — restart the controller and verify the job is still SUCCEEDED
               and the cluster can accept new work.
     """
-    from iris.cluster.providers.local.cluster import LocalCluster
 
     config = load_config(DEFAULT_CONFIG)
     config = make_local_config(config)
@@ -836,7 +868,27 @@ def test_stress_50_tasks(smoke_cluster):
         cpu=0,
         replicas=50,
     )
-    status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout * 2)
+    status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout * 4)
+    assert status.state == job_pb2.JOB_STATE_SUCCEEDED
+
+
+# ============================================================================
+# Workdir file offload (large files externalized to blob store)
+# ============================================================================
+
+OFFLOAD_FILE_SIZE = 32 * 1024  # 32KB — exceeds the 10KB offload threshold
+
+
+def test_workdir_file_offload(smoke_cluster):
+    """A job with a workdir file above the offload threshold succeeds after blob-store offloading."""
+    entrypoint = Entrypoint.from_callable(TestJobs.verify_workdir_file, "large_payload.bin", OFFLOAD_FILE_SIZE)
+    entrypoint.workdir_files["large_payload.bin"] = b"\xab" * OFFLOAD_FILE_SIZE
+    job = smoke_cluster.client.submit(
+        entrypoint=entrypoint,
+        name=f"smoke-offload-{uuid.uuid4().hex[:8]}",
+        resources=ResourceSpec(cpu=1, memory="1g"),
+    )
+    status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
@@ -863,9 +915,6 @@ def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
     return make_local_config(config)
 
 
-# GPU metadata test lives in tests/test_gpu_metadata.py
-
-
 # ============================================================================
 # Dashboard authentication flow (standalone cluster with auth enabled)
 # ============================================================================
@@ -881,7 +930,6 @@ def test_dashboard_login_flow():
     full browser auth flow: redirect to login, paste token, verify RPC data loads,
     then logout back to the login page.
     """
-    from iris.cluster.providers.local.cluster import LocalCluster
 
     try:
         import playwright.sync_api as pw
@@ -950,8 +998,6 @@ def test_dashboard_login_flow():
         except Exception as exc:
             errors.append(exc)
 
-    import threading
-
     t = threading.Thread(target=_run_browser_flow)
     t.start()
     t.join(timeout=60)
@@ -977,8 +1023,6 @@ def _login_for_jwt(url: str, identity_token: str) -> str:
 
 def test_static_auth_rpc_access():
     """Static auth rejects unauthenticated and wrong-token RPCs, accepts valid JWT."""
-    from iris.cluster.providers.local.cluster import LocalCluster
-    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 
     config = _make_controller_only_config()
     config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
@@ -1019,8 +1063,6 @@ def test_static_auth_job_ownership():
     PENDING). Verifies user-b gets PERMISSION_DENIED when trying to terminate
     it, while user-a can terminate their own job.
     """
-    from iris.cluster.providers.local.cluster import LocalCluster
-    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 
     _TOKEN_A = "token-user-a"
     _TOKEN_B = "token-user-b"

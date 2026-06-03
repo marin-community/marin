@@ -46,8 +46,6 @@ from zephyr.execution import (
     ShardTask,
     StageRunner,
     TaskResult,
-    _format_bytes,
-    _format_count,
     _shared_data_path,
     _stage_throughput,
     _worker_ctx_var,
@@ -236,18 +234,14 @@ def _periodic_status_logger(
         throughput = _stage_throughput(ctx._counters, stage_name, elapsed)
         if throughput is None:
             continue
-        items, bytes_processed, item_rate, byte_rate = throughput
         logger.info(
-            "[%s] [%s] [%s] shard %d/%d; items=%s (%s/s), bytes_processed=%s (%s/s)",
+            "[%s] [%s] [%s] shard %d/%d; %s",
             execution_id,
             stage_name,
             threading.current_thread().name,
             shard_idx,
             total_shards,
-            _format_count(items),
-            _format_count(item_rate),
-            _format_bytes(bytes_processed),
-            _format_bytes(byte_rate),
+            throughput,
         )
 
 
