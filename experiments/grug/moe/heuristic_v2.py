@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from levanter.utils.flop_utils import lm_flops_per_token
 
 from experiments.grug.moe.model import GrugModelConfig
-from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig
 
 SEQ_LEN: int = 4096
 MIN_BATCH_SIZE: int = 32
@@ -163,6 +163,33 @@ class MoeAdamHHeuristic:
             beta2=beta2,
             epsilon=epsilon,
             max_grad_norm=self.max_grad_norm,
+            lr_schedule=self.lr_schedule,
+            decay=self.decay,
+        )
+
+    def build_muonh_config(
+        self, batch_size: int, tokens: float, hidden_dim: int, seq_len: int = SEQ_LEN
+    ) -> GrugMoeMuonHConfig:
+        """Return a ``GrugMoeMuonHConfig`` with May Recipe 1pct-noclip defaults.
+
+        Same LR / beta / epsilon scaling as ``build_optimizer_config``, wrapped
+        in the MuonH optimizer config used by the May Recipe (3 LR groups —
+        muonh / adamh / adam) with ``warmup=0.01`` and ``max_grad_norm=None``.
+        """
+        tokens_per_batch = batch_size * seq_len
+        lr = self._compute_learning_rate(tokens_per_batch, tokens, hidden_dim)
+        adam_lr = self._compute_adam_lr(tokens_per_batch, tokens, hidden_dim)
+        epsilon = self._compute_epsilon(tokens_per_batch, tokens)
+        beta2 = self._compute_beta2(tokens_per_batch)
+        return GrugMoeMuonHConfig(
+            learning_rate=lr,
+            adam_lr=adam_lr,
+            min_lr_ratio=self.min_lr_ratio,
+            warmup=0.01,  # 1pct-noclip schedule
+            beta1=self.beta1,
+            beta2=beta2,
+            epsilon=epsilon,
+            max_grad_norm=None,  # no clipping
             lr_schedule=self.lr_schedule,
             decay=self.decay,
         )
