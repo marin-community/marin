@@ -465,19 +465,20 @@ def test_vm_list_recovers_after_transient_blip(monkeypatch: pytest.MonkeyPatch) 
     assert calls["n"] == 2  # one retried failure, then success
 
 
-def test_vm_list_propagates_sustained_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A sustained 503 on the project-wide list must surface, not look like 'no VMs'.
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        (503, InfraUnavailableError),  # transient: retried, then surfaces after exhaustion
+        (403, InfraError),  # non-transient: surfaces immediately
+    ],
+)
+def test_vm_list_propagates_api_errors(monkeypatch: pytest.MonkeyPatch, code: int, expected: type[InfraError]) -> None:
+    """vm_list never degrades an API error to []: a swallowed error reads as 'no VMs',
 
-    This is the controller-discovery path the canary ferry depends on; swallowing
-    it to [] is what turned a transient GCP 503 into a spurious "No controller VM".
+    which on the controller-discovery path the canary ferry depends on becomes a
+    spurious "No controller VM found".
     """
     monkeypatch.setattr("rigging.timing.time.sleep", lambda _: None)
-    svc = _mock_service(lambda _r: _gcp_error_response(503, message="Internal error. Please try again"))
-    with pytest.raises(InfraUnavailableError):
+    svc = _mock_service(lambda _r: _gcp_error_response(code, message="boom"))
+    with pytest.raises(expected):
         svc.vm_list(zones=[], labels={"iris-x-controller": "true"})
-
-
-def test_vm_list_swallows_non_transient_error() -> None:
-    """Non-transient errors keep the existing degrade-to-empty behavior for list callers."""
-    svc = _mock_service(lambda _r: _gcp_error_response(403, message="forbidden"))
-    assert svc.vm_list(zones=[], labels={"iris-x-controller": "true"}) == []

@@ -664,13 +664,7 @@ class CloudGcpService:
         zone_list = zones if zones else ["-"]
 
         for zone in zone_list:
-            try:
-                items = self._paginate(f"{_TPU_BASE}/{self._tpu_parent(zone)}/nodes", "nodes")
-            except InfraUnavailableError:
-                raise  # sustained outage must surface; reconcile reclaims live slices on an empty list
-            except InfraError:
-                logger.warning("Failed to list TPUs in zone %s", zone, exc_info=True)
-                continue
+            items = self._paginate(f"{_TPU_BASE}/{self._tpu_parent(zone)}/nodes", "nodes")
             for tpu_data in items:
                 if labels and not _labels_match(tpu_data.get("labels", {}), labels):
                     continue
@@ -895,30 +889,17 @@ class CloudGcpService:
             params: dict[str, str] = {}
             if filter_str:
                 params["filter"] = filter_str
-            try:
-                for page in self._paginate_raw(url, params):
-                    for scope in page.get("items", {}).values():
-                        for vm_data in scope.get("instances", []):
-                            results.append(_parse_vm_info(vm_data))
-            except InfraUnavailableError:
-                raise  # sustained outage must surface, not read as "no controller" to discovery
-            except InfraError:
-                logger.warning("Failed to list instances", exc_info=True)
-                return []
+            for page in self._paginate_raw(url, params):
+                for scope in page.get("items", {}).values():
+                    for vm_data in scope.get("instances", []):
+                        results.append(_parse_vm_info(vm_data))
             return results
 
         for zone in zones:
             params = {}
             if filter_str:
                 params["filter"] = filter_str
-            try:
-                items = self._paginate(self._instance_url(zone), "items", params)
-            except InfraUnavailableError:
-                raise  # don't drop a sustained outage to an empty per-zone result
-            except InfraError:
-                logger.warning("Failed to list instances in zone %s", zone, exc_info=True)
-                continue
-            for vm_data in items:
+            for vm_data in self._paginate(self._instance_url(zone), "items", params):
                 results.append(_parse_vm_info(vm_data, fallback_zone=zone))
 
         return results
