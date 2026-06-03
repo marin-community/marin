@@ -72,20 +72,23 @@ class GrugModelConfig:
     """
 
     vocab_size: int
-    hidden_dim: int = 2048
-    intermediate_dim: int = 5632
-    shared_expert_intermediate_dim: int = 5632
+    # Default sizing mirrors the May Recipe heuristic at d=512 (6 layers,
+    # 4 heads x head_dim=128 with 1 KV head for GQA 4:1, intermediate=256,
+    # shared_expert_intermediate=hidden_dim).
+    hidden_dim: int = 512
+    intermediate_dim: int = 256
+    shared_expert_intermediate_dim: int = 512
     num_experts: int = 256
     num_experts_per_token: int = 4
-    num_layers: int = 24
-    num_heads: int = 16
-    num_kv_heads: int = 4  # GQA 4:1 by default
+    num_layers: int = 6
+    num_heads: int = 4
+    num_kv_heads: int = 1  # GQA 4:1 by default
     head_dim: int | None = None
     max_seq_len: int = 4096
     sliding_window: int = 2048
     layer_norm_eps: float = 1e-5
-    initializer_std: float = 0.02
-    qk_mult: float = 1.0
+    initializer_std: float = 0.02209708691207961  # = 0.5 / sqrt(512)
+    qk_mult: float = 1.3
     router_z_loss_coef: float = 0.0
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
