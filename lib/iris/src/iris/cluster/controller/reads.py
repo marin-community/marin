@@ -75,7 +75,12 @@ class PendingDispatchRow:
     # Coscheduling + priority drive Kueue gang admission on the direct path.
     has_coscheduling: bool
     coscheduling_group_by: str  # "" when not coscheduled
-    priority_band: int  # job_pb2.PriorityBand
+    # Effective band from tasks.priority_band (normalized to INTERACTIVE at
+    # submit, overwritten with any over-budget demotion at assign time) — NOT
+    # the immutable requested band in job_config. The Kueue WorkloadPriorityClass
+    # must mirror the band Iris actually enforces, and tasks.priority_band is
+    # never UNSPECIFIED(0), so the provider's plain .get() resolves correctly.
+    priority_band: int  # job_pb2.PriorityBand, effective
 
 
 @dataclass(frozen=True, slots=True)
@@ -1214,7 +1219,9 @@ PENDING_DISPATCH_COLS = (
     job_config_table.c.timeout_ms,
     job_config_table.c.has_coscheduling,
     job_config_table.c.coscheduling_group_by,
-    job_config_table.c.priority_band,
+    # Effective band (tasks), not the immutable requested band (job_config):
+    # see PendingDispatchRow.priority_band.
+    tasks_table.c.priority_band,
 )
 
 

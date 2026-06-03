@@ -1,4 +1,4 @@
-# Controller-based gang smoke on a local `kind` cluster (scripts/gpu_gang_smoke.py).
+# Controller-based gang smoke on a local `kind` cluster (tests/e2e/gpu_gang_smoke.py).
 #
 # Unlike the old standalone smoke (which drove K8sTaskProvider directly), this
 # stands up a real in-cluster Iris controller and submits a NORMAL coscheduled

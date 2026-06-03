@@ -10,6 +10,7 @@ from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.providers.k8s.tasks import (
     _INFRASTRUCTURE_FAILURE_REASONS,
     _KUEUE_POD_GROUP_NAME,
+    _KUEUE_POD_GROUP_POD_INDEX,
     _KUEUE_POD_GROUP_TOTAL,
     _KUEUE_PREFERRED_TOPOLOGY,
     _KUEUE_PRIORITY_CLASS,
@@ -877,7 +878,7 @@ def test_build_pdb_manifest_selector_and_cleanup_labels():
 # ---------------------------------------------------------------------------
 
 
-def _cosched_req(task_id: str, attempt_id: int = 0, num_tasks: int = 64, group_by: str = "tpu-name", priority=None):
+def _cosched_req(task_id: str, attempt_id: int = 0, num_tasks: int = 64, group_by: str = "leafgroup", priority=None):
     if priority is None:
         priority = job_pb2.PRIORITY_BAND_UNSPECIFIED
     return make_run_req(
@@ -901,6 +902,15 @@ def test_kueue_labels_for_coscheduled_pod():
     assert annotations[_KUEUE_POD_GROUP_TOTAL] == "64"
 
 
+def test_kueue_pod_group_pod_index_from_task_ordinal():
+    """Each gang pod carries kueue.x-k8s.io/pod-group-pod-index = its task ordinal so Kueue
+    TAS can rank-assign the podset; distinct siblings get distinct indices."""
+    m0 = _build_pod_manifest(_cosched_req("/run/task/0", attempt_id=0), pod_config(local_queue="iris-lq"))
+    m3 = _build_pod_manifest(_cosched_req("/run/task/3", attempt_id=0), pod_config(local_queue="iris-lq"))
+    assert m0["metadata"]["labels"][_KUEUE_POD_GROUP_POD_INDEX] == "0"
+    assert m3["metadata"]["labels"][_KUEUE_POD_GROUP_POD_INDEX] == "3"
+
+
 def test_kueue_priority_class_not_stamped_without_config():
     """With no configured priority-class mapping, pods carry no WorkloadPriorityClass label
     (the cluster's Kueue default applies)."""
@@ -919,35 +929,29 @@ def test_kueue_priority_class_stamped_from_config():
     assert manifest["metadata"]["labels"][_KUEUE_PRIORITY_CLASS] == "iris-batch"
 
 
-def test_kueue_required_topology_for_tpu():
-    """group_by=tpu-name -> required (hard) NVLink-domain topology."""
-    manifest = _build_pod_manifest(_cosched_req("/job/task/0", group_by="tpu-name"), pod_config(local_queue="iris-lq"))
+def test_kueue_required_topology_for_nvlink_domain():
+    """group_by=nvlink.domain -> required (hard) NVLink-domain topology."""
+    manifest = _build_pod_manifest(
+        _cosched_req("/job/task/0", group_by="nvlink.domain"), pod_config(local_queue="iris-lq")
+    )
     annotations = manifest["metadata"]["annotations"]
     assert annotations[_KUEUE_REQUIRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
     assert _KUEUE_PREFERRED_TOPOLOGY not in annotations
 
 
-def test_kueue_required_topology_for_nvlink():
-    """group_by=nvlink -> required (hard) NVLink-domain topology."""
-    manifest = _build_pod_manifest(_cosched_req("/job/task/0", group_by="nvlink"), pod_config(local_queue="iris-lq"))
-    assert manifest["metadata"]["annotations"][_KUEUE_REQUIRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
-
-
-def test_kueue_preferred_topology_for_pool():
-    """group_by=pool -> preferred (soft) leafgroup topology."""
-    manifest = _build_pod_manifest(_cosched_req("/job/task/0", group_by="pool"), pod_config(local_queue="iris-lq"))
+def test_kueue_preferred_topology_for_leafgroup():
+    """group_by=leafgroup -> preferred (soft) leafgroup topology."""
+    manifest = _build_pod_manifest(_cosched_req("/job/task/0", group_by="leafgroup"), pod_config(local_queue="iris-lq"))
     annotations = manifest["metadata"]["annotations"]
     assert annotations[_KUEUE_PREFERRED_TOPOLOGY] == "backend.coreweave.cloud/leafgroup"
     assert _KUEUE_REQUIRED_TOPOLOGY not in annotations
 
 
-def test_kueue_unknown_group_by_still_gangs_without_topology():
-    """An unmapped group_by still gangs via total-count but carries no topology annotation."""
-    manifest = _build_pod_manifest(_cosched_req("/job/task/0", group_by="rack"), pod_config(local_queue="iris-lq"))
-    annotations = manifest["metadata"]["annotations"]
-    assert annotations[_KUEUE_POD_GROUP_TOTAL] == "64"
-    assert _KUEUE_REQUIRED_TOPOLOGY not in annotations
-    assert _KUEUE_PREFERRED_TOPOLOGY not in annotations
+def test_kueue_unmapped_group_by_raises():
+    """An unmapped group_by is a misconfiguration: fail fast rather than gang without a
+    topology annotation. group_by must name a topology level the cluster provisioned."""
+    with pytest.raises(ValueError, match="no topology mapping"):
+        _build_pod_manifest(_cosched_req("/job/task/0", group_by="rack"), pod_config(local_queue="iris-lq"))
 
 
 def test_kueue_siblings_share_pod_group_name():
@@ -974,7 +978,7 @@ def test_pod_group_name_is_valid_label_value():
 def test_coscheduled_without_local_queue_raises():
     """A coscheduled job dispatched to a cluster with no LocalQueue is a
     misconfiguration: Kueue gang admission is required, with no fallback."""
-    req = _cosched_req("/job/task/0", num_tasks=4, group_by="pool")
+    req = _cosched_req("/job/task/0", num_tasks=4, group_by="leafgroup")
     with pytest.raises(ValueError, match="requires Kueue gang admission"):
         _build_pod_manifest(req, pod_config(local_queue=""))
 
@@ -997,7 +1001,7 @@ def test_non_coscheduled_keeps_active_deadline_seconds():
 
 def test_kueue_gang_uses_topology_not_affinity():
     """A Kueue-gated gang carries podset topology and never a podAffinity block."""
-    req = _cosched_req("/job/task/0", num_tasks=8, group_by="pool")
+    req = _cosched_req("/job/task/0", num_tasks=8, group_by="leafgroup")
     manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
     assert "affinity" not in manifest["spec"]
     assert _KUEUE_PREFERRED_TOPOLOGY in manifest["metadata"]["annotations"]
@@ -1013,8 +1017,8 @@ def test_non_coscheduled_pod_has_no_kueue_labels():
 def test_kueue_topologies_override_config():
     """A configured topologies mapping overrides the CoreWeave defaults for a group_by."""
     manifest = _build_pod_manifest(
-        _cosched_req("/job/task/0", group_by="pool"),
-        pod_config(local_queue="iris-lq", kueue_topologies={"pool": ("rack.example.com/pod", True)}),
+        _cosched_req("/job/task/0", group_by="leafgroup"),
+        pod_config(local_queue="iris-lq", kueue_topologies={"leafgroup": ("rack.example.com/pod", True)}),
     )
     annotations = manifest["metadata"]["annotations"]
     assert annotations[_KUEUE_REQUIRED_TOPOLOGY] == "rack.example.com/pod"

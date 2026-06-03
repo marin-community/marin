@@ -26,7 +26,7 @@ from rigging.timing import Duration
 
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.worker_provider import WorkerProvider
-from iris.cluster.providers.k8s.tasks import K8sTaskProvider
+from iris.cluster.providers.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, K8sTaskProvider
 from iris.cluster.providers.types import local_queue_name
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import parse_memory_string
@@ -1175,13 +1175,18 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
         namespace = kp.namespace or "iris"
         label_prefix = cluster_config.platform.label_prefix
         managed_label = f"iris-{label_prefix}-managed" if label_prefix else ""
-        priority_classes = {
-            _KUEUE_PRIORITY_BANDS[band_name]: wpc for band_name, wpc in kp.kueue.priority_classes.items()
-        }
+        priority_classes: dict[int, str] = {}
+        for band_name, wpc in kp.kueue.priority_classes.items():
+            band = _KUEUE_PRIORITY_BANDS.get(band_name)
+            if band is None:
+                raise ValueError(
+                    f"Unknown Kueue priority band {band_name!r} in kueue.priority_classes; "
+                    f"valid bands: {sorted(_KUEUE_PRIORITY_BANDS)}"
+                )
+            priority_classes[band] = wpc
+        # Empty topologies falls back to the CoreWeave-convention defaults (the
+        # provider would otherwise be handed an empty map, suppressing them).
         topologies = {group_by: (topo.node_label, topo.required) for group_by, topo in kp.kueue.topologies.items()}
-        provider_kwargs: dict[str, object] = {}
-        if topologies:
-            provider_kwargs["kueue_topologies"] = topologies
         # Kueue is enabled by a configured cluster_queue; the LocalQueue name Iris
         # stamps and reconciles is derived from label_prefix, not configured.
         local_queue = local_queue_name(label_prefix) if kp.kueue.cluster_queue else ""
@@ -1197,7 +1202,7 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
             task_env=dict(cluster_config.defaults.task_env),
             local_queue=local_queue,
             kueue_priority_classes=priority_classes,
-            **provider_kwargs,
+            kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
         )
     if which == "worker_provider":
         from iris.cluster.controller.worker_provider import RpcWorkerStubFactory

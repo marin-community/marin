@@ -41,6 +41,7 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.log_keys import task_log_key
 from iris.cluster.providers.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
+from iris.cluster.providers.k8s.coreweave_topology import CW_LABEL_LEAFGROUP, CW_LABEL_NVLINK_DOMAIN
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
@@ -115,21 +116,28 @@ _KUEUE_QUEUE_NAME = "kueue.x-k8s.io/queue-name"
 _KUEUE_PRIORITY_CLASS = "kueue.x-k8s.io/priority-class"
 _KUEUE_REQUIRED_TOPOLOGY = "kueue.x-k8s.io/podset-required-topology"
 _KUEUE_PREFERRED_TOPOLOGY = "kueue.x-k8s.io/podset-preferred-topology"
+# Per-pod ordinal within the gang. Kueue's TAS plain-pod-group path uses it to
+# assign each pod a topology domain rank; basic gang admission does not need it,
+# but stamping it is harmless and required once a podset-topology annotation is
+# present. Sourced from the task ordinal (JobName.task_index).
+_KUEUE_POD_GROUP_POD_INDEX = "kueue.x-k8s.io/pod-group-pod-index"
 
 # CoreWeave-convention fallback for KueueConfig.topologies: group_by -> (node
 # label, required?). Used only when the cluster config leaves topologies unset.
-# The node labels are levels in CoreWeave's documented Kueue Topology CRs (see
-# scripts/install_kueue.py): pool is a soft (preferred) multi-node IB
-# colocation on a leafgroup; nvlink/tpu-name are hard (required) single NVLink
-# domains (GB200 only — H100 has no nvlink.domain label). A cluster whose
-# Topology uses different levels overrides this via
+# group_by names the ACTUAL topology level the gang runs against (a convention,
+# not a portable abstraction — CoreWeave names leak by design). The keys are the
+# levels in CoreWeave's Kueue Topology CRs (see scripts/install_kueue.py):
+#   leafgroup     soft (preferred): multi-node IB colocation on one leaf group
+#                 (H100 InfiniBand deployments).
+#   nvlink.domain hard (required): one GB200 NVLink domain (H100 has no
+#                 nvlink.domain label, so this only binds on GB200 capacity).
+# A cluster whose Topology uses different levels overrides this via
 # kubernetes_provider.kueue.topologies. Priority classes have NO default: Iris
 # never invents WorkloadPriorityClass names (a missing one is rejected by
 # Kueue), so a band is stamped only when the config maps it explicitly.
 _CW_DEFAULT_TOPOLOGIES: dict[str, tuple[str, bool]] = {
-    "pool": ("backend.coreweave.cloud/leafgroup", False),
-    "nvlink": ("ds.coreweave.com/nvlink.domain", True),
-    "tpu-name": ("ds.coreweave.com/nvlink.domain", True),
+    "leafgroup": (CW_LABEL_LEAFGROUP, False),
+    "nvlink.domain": (CW_LABEL_NVLINK_DOMAIN, True),
 }
 
 
@@ -201,14 +209,13 @@ def _sanitize_label_value(value: str) -> str:
 
 
 def _job_id_from_task(task_id: JobName) -> str:
-    """Extract job path from task wire ID.
+    """Job path of a task, sanitized for use as a k8s label value.
 
-    Task IDs are of the form '/job-name/task-N'. The job_id is the parent
-    path without the task suffix, sanitized for use as a k8s label value.
+    Shares the parent-path extraction with :func:`_job_path` (which returns the
+    raw path for hashing); here we sanitize it. ``_sanitize_label_value`` falls
+    back to "unknown" on an empty result.
     """
-    wire = task_id.to_wire()
-    parent = wire.rsplit("/", 1)[0] if "/" in wire else wire
-    return _sanitize_label_value(parent) if parent else "unknown"
+    return _sanitize_label_value(_job_path(task_id))
 
 
 def _pod_name(task_id: JobName, attempt_id: int) -> str:
@@ -574,20 +581,34 @@ def _build_pod_manifest(
             "(lib/iris/scripts/install_kueue.py) and set kubernetes_provider.kueue.cluster_queue."
         )
     if kueue_enabled:
+        group_by = run_req.coscheduling.group_by
+        # group_by must name a topology level this cluster provisioned. An
+        # unmapped value is a misconfiguration: it would gang atomically but
+        # land unconstrained, which is exactly the silent-placement bug the
+        # topology annotation exists to prevent. Fail fast before stamping.
+        topo = config.kueue_topologies.get(group_by)
+        if topo is None:
+            raise ValueError(
+                f"Coscheduled task {run_req.task_id!r} has group_by={group_by!r}, which has no "
+                f"topology mapping on this cluster (known: {sorted(config.kueue_topologies)}). "
+                "group_by must name a topology level the cluster provisioned; configure "
+                "kubernetes_provider.kueue.topologies or use a known level."
+            )
         labels[_KUEUE_POD_GROUP_NAME] = _pod_group_name(task_id, attempt_id)
         labels[_KUEUE_QUEUE_NAME] = config.local_queue
+        # Per-pod ordinal within the gang (0..total-1) for Kueue TAS rank assignment.
+        labels[_KUEUE_POD_GROUP_POD_INDEX] = str(task_id.task_index)
         # Stamp the WorkloadPriorityClass only when the cluster maps this band:
         # an unmapped band gets Kueue's default priority, never an invented name.
         wpc = config.kueue_priority_classes.get(run_req.priority)
         if wpc:
             labels[_KUEUE_PRIORITY_CLASS] = wpc
-        annotations: dict[str, str] = {_KUEUE_POD_GROUP_TOTAL: str(run_req.num_tasks)}
-        topo = config.kueue_topologies.get(run_req.coscheduling.group_by)
-        if topo is not None:
-            node_label, required = topo
-            anno_key = _KUEUE_REQUIRED_TOPOLOGY if required else _KUEUE_PREFERRED_TOPOLOGY
-            annotations[anno_key] = node_label
-        metadata["annotations"] = annotations
+        node_label, required = topo
+        anno_key = _KUEUE_REQUIRED_TOPOLOGY if required else _KUEUE_PREFERRED_TOPOLOGY
+        metadata["annotations"] = {
+            _KUEUE_POD_GROUP_TOTAL: str(run_req.num_tasks),
+            anno_key: node_label,
+        }
 
     spec: dict = {
         "restartPolicy": "Never",

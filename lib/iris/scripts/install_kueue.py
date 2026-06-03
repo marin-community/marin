@@ -19,7 +19,7 @@ Two variants share one code path (``--variant``):
     (``oci://registry.k8s.io/kueue/charts/kueue``), used for kind / generic
     clusters. CRDs ship in the chart, TAS is enabled via ``controllerManager``
     feature gates, and the Topology CRs are applied with kubectl after install.
-    The smoke harness (scripts/gpu_gang_smoke.py) drives this variant on kind.
+    The smoke harness (tests/e2e/gpu_gang_smoke.py) drives this variant on kind.
 
 Both variants:
   1. Install the operator into ``kueue-system`` (``helm upgrade --install``).
@@ -61,12 +61,19 @@ Why this exists / what the CoreWeave docs leave out:
 
 import os
 import subprocess
-import sys
 import tempfile
 import time
 
 import click
 import yaml
+from iris.cluster.providers.k8s.coreweave_topology import (
+    CW_FLAVOR_INFINIBAND,
+    CW_LABEL_FABRIC,
+    CW_LABEL_FLAVOR,
+    CW_LABEL_LEAFGROUP,
+    CW_LABEL_NVLINK_DOMAIN,
+    CW_LABEL_SUPERPOD,
+)
 
 # Right after a fresh install Kueue's internal cert manager has not yet populated
 # the webhook caBundle, so admission/conversion webhook calls fail transiently
@@ -93,22 +100,26 @@ UPSTREAM_DEFAULT_VERSION = "0.11.0"
 RELEASE_DEFAULT = "kueue"
 OPERATOR_NS = "kueue-system"
 
-# Topology CRs. Iris's preferred "pool" topology rides on
-# backend.coreweave.cloud/leafgroup and the required "nvlink"/"tpu-name" topology
-# on ds.coreweave.com/nvlink.domain — both are levels here, so TAS can satisfy the
-# podset-topology annotations Iris stamps.
+# Standard k8s per-node label, the finest topology level.
+_K8S_HOSTNAME_LABEL = "kubernetes.io/hostname"
+
+# Topology CRs. Iris's preferred "leafgroup" topology rides on
+# backend.coreweave.cloud/leafgroup and the required "nvlink.domain" topology on
+# ds.coreweave.com/nvlink.domain — both are levels here, so TAS can satisfy the
+# podset-topology annotations Iris stamps. Label keys come from coreweave_topology
+# so the provider, this script, and the kind smoke share one source.
 INFINIBAND_LEVELS = [
-    "backend.coreweave.cloud/fabric",
-    "backend.coreweave.cloud/superpod",
-    "backend.coreweave.cloud/leafgroup",
-    "kubernetes.io/hostname",
+    CW_LABEL_FABRIC,
+    CW_LABEL_SUPERPOD,
+    CW_LABEL_LEAFGROUP,
+    _K8S_HOSTNAME_LABEL,
 ]
 MULTINODE_NVLINK_IB_LEVELS = [
-    "backend.coreweave.cloud/fabric",
-    "backend.coreweave.cloud/superpod",
-    "backend.coreweave.cloud/leafgroup",
-    "ds.coreweave.com/nvlink.domain",
-    "kubernetes.io/hostname",
+    CW_LABEL_FABRIC,
+    CW_LABEL_SUPERPOD,
+    CW_LABEL_LEAFGROUP,
+    CW_LABEL_NVLINK_DOMAIN,
+    _K8S_HOSTNAME_LABEL,
 ]
 INFINIBAND_TOPOLOGY_NAME = "infiniband"
 MULTINODE_TOPOLOGY_NAME = "multinode-nvlink-ib"
@@ -124,7 +135,7 @@ RESOURCE_FLAVOR_NAME = "cw-ib"
 # backend.coreweave.cloud/flavor=infiniband on every IB-fabric node, which is
 # exactly the capacity this flavor represents. On kind the smoke harness stamps
 # the same label on its worker nodes.
-RESOURCE_FLAVOR_NODE_LABELS = {"backend.coreweave.cloud/flavor": "infiniband"}
+RESOURCE_FLAVOR_NODE_LABELS = {CW_LABEL_FLAVOR: CW_FLAVOR_INFINIBAND}
 
 # Resources the ClusterQueue covers when --with-queues is set. A Kueue
 # ClusterQueue can only admit a workload if *every* resource the pods request is
@@ -230,8 +241,14 @@ def build_topology_cr(name: str, levels: list[str], api_version: str) -> dict:
     }
 
 
-def build_resource_flavor() -> dict:
-    """Return the cluster-scoped ResourceFlavor tied to the IB Topology."""
+def build_resource_flavor(topology_name: str = INFINIBAND_TOPOLOGY_NAME) -> dict:
+    """Return the cluster-scoped ResourceFlavor tied to the named Kueue Topology.
+
+    Defaults to the InfiniBand topology (fabric/superpod/leafgroup) — the only
+    levels real H100 IB nodes carry. Pass ``multinode-nvlink-ib`` to also expose
+    the nvlink.domain level (the kind smoke does this to mock a GB200 layout and
+    exercise the hard/required nvlink.domain placement).
+    """
     return {
         "apiVersion": "kueue.x-k8s.io/v1beta1",
         "kind": "ResourceFlavor",
@@ -240,8 +257,8 @@ def build_resource_flavor() -> dict:
             # nodeLabels select the nodes this flavor represents (the IB fabric).
             # Required by Kueue whenever topologyName is set.
             "nodeLabels": RESOURCE_FLAVOR_NODE_LABELS,
-            # Tie the flavor to the IB Topology so podset-topology annotations resolve.
-            "topologyName": INFINIBAND_TOPOLOGY_NAME,
+            # Tie the flavor to the Topology so podset-topology annotations resolve.
+            "topologyName": topology_name,
         },
     }
 
@@ -394,19 +411,21 @@ def run_install(
     release: str = RELEASE_DEFAULT,
     with_queues: bool = False,
     cluster_queue: str = "iris-cq",
+    flavor_topology: str = INFINIBAND_TOPOLOGY_NAME,
     apply: bool = False,
 ) -> None:
     """Install + configure Kueue for the given ``variant`` (coreweave | upstream).
 
     Idempotent. Prints the plan and returns without mutating the cluster unless
-    ``apply`` is set.
+    ``apply`` is set. ``flavor_topology`` selects the Topology the ResourceFlavor
+    binds (default InfiniBand; the kind smoke passes multinode-nvlink-ib).
     """
     if variant not in (VARIANT_COREWEAVE, VARIANT_UPSTREAM):
         raise ValueError(f"unknown variant {variant!r} (expected {VARIANT_COREWEAVE!r} or {VARIANT_UPSTREAM!r})")
 
     hflags = helm_flags(kubeconfig, context)
     kflags = kubectl_flags(kubeconfig, context)
-    queue_docs = [build_resource_flavor(), build_cluster_queue(cluster_queue)] if with_queues else []
+    queue_docs = [build_resource_flavor(flavor_topology), build_cluster_queue(cluster_queue)] if with_queues else []
 
     if variant == VARIANT_COREWEAVE:
         values = build_cks_values()
@@ -417,11 +436,20 @@ def run_install(
         chart = UPSTREAM_CHART
         version = chart_version or UPSTREAM_DEFAULT_VERSION
 
+    version_args = ["--version", version] if version else []
+
+    # Always assemble + print the plan (chart, values, queue manifests). The only
+    # branch is the final apply: print and stop unless --apply.
     click.secho(f"==> Variant: {variant} (chart={chart}, version={version or 'latest'})", fg="blue", bold=True)
     click.secho("==> Rendered helm values:", fg="blue", bold=True)
     click.echo(yaml.safe_dump(values, default_flow_style=False, sort_keys=False))
+    if with_queues:
+        click.secho(f"==> ResourceFlavor + ClusterQueue ({cluster_queue}):", fg="blue", bold=True)
+        click.echo(yaml.safe_dump_all(queue_docs, default_flow_style=False, sort_keys=False))
 
-    version_args = ["--version", version] if version else []
+    if not apply:
+        click.secho("\nwarn: dry run — nothing applied. Re-run with --apply to install.", fg="yellow", err=True)
+        return
 
     if variant == VARIANT_COREWEAVE:
         # helm repo add/update only touches local helm config (no cluster mutation).
@@ -429,14 +457,7 @@ def run_install(
         run(["helm", "repo", "add", CW_REPO_NAME, CW_REPO_URL], check=True, stdout=subprocess.DEVNULL)
         run(["helm", "repo", "update", CW_REPO_NAME], check=True, stdout=subprocess.DEVNULL)
 
-    if not apply:
-        _dry_run(values, chart, release, hflags, version_args, queue_docs, with_queues)
-        return
-
-    if variant == VARIANT_COREWEAVE:
-        _apply_coreweave(values, chart, release, hflags, kflags, version_args)
-    else:
-        _apply_upstream(values, chart, release, hflags, kflags, version_args)
+    _apply(values, chart, release, hflags, kflags, version_args)
 
     if with_queues:
         click.secho(f"==> Applying ResourceFlavor + ClusterQueue ({cluster_queue})", fg="blue", bold=True)
@@ -449,53 +470,6 @@ def run_install(
         bold=True,
     )
     click.echo("  kubernetes_provider:\n    kueue:\n" f"      cluster_queue: {cluster_queue}")
-
-
-def _dry_run(
-    values: dict,
-    chart: str,
-    release: str,
-    hflags: list[str],
-    version_args: list[str],
-    queue_docs: list[dict],
-    with_queues: bool,
-) -> None:
-    """Client-side validation only — never mutates the cluster.
-
-    NB: a server-side ``helm upgrade --dry-run=server`` would spuriously ERROR on
-    a FIRST install of the cks-kueue chart (it templates its CRDs, so helm maps
-    every manifest against live discovery before applying, and the Topology CRD
-    does not yet exist). We therefore validate client-side via ``helm template``.
-    """
-    values_file = write_values_file(values)
-    click.secho("==> DRY RUN — client-side validating via `helm template` (no changes)", fg="blue", bold=True)
-    result = run(
-        [
-            "helm",
-            "template",
-            release,
-            chart,
-            "--namespace",
-            OPERATOR_NS,
-            "--values",
-            values_file,
-            *version_args,
-            *hflags,
-        ],
-        stdout=subprocess.DEVNULL,
-    )
-    if result.returncode != 0:
-        click.secho("error: `helm template` failed to render the chart with these values.", fg="red", err=True)
-        sys.exit(result.returncode)
-    click.secho("    helm template rendered cleanly.", fg="green")
-    click.secho(
-        "\nwarn: This was a dry run (client-side `helm template` only). Re-run with --apply to install.",
-        fg="yellow",
-        err=True,
-    )
-    if with_queues:
-        click.secho("warn: --with-queues objects printed below but NOT applied.", fg="yellow", err=True)
-        click.echo(yaml.safe_dump_all(queue_docs, default_flow_style=False, sort_keys=False))
 
 
 def _helm_upgrade(chart: str, release: str, values_file: str, hflags: list[str], version_args: list[str]) -> None:
@@ -535,60 +509,57 @@ def _wait_controller(kflags: list[str]) -> None:
     )
 
 
-def _apply_coreweave(
+def _apply(
     values: dict, chart: str, release: str, hflags: list[str], kflags: list[str], version_args: list[str]
 ) -> None:
-    """Two-phase helm install for the cks-kueue chart (it templates its CRDs).
+    """Install/upgrade Kueue, then ensure the Topology CRs exist.
 
-    On a fresh cluster you cannot create the Topology CRD and a Topology CR in the
-    same `helm install` (helm maps every manifest against live discovery first, and
-    the CRD does not exist yet). So if the Topology CRD is absent, do a BOOTSTRAP
-    pass with NO topologies (CRDs get created cleanly), wait for the CRD to be
-    Established, then the FULL pass with topologies. Re-runs on an already-installed
-    cluster are a single idempotent pass.
+    One flow for both charts; the only difference is data (whether the values
+    carry a ``topologies`` key), not control flow:
+
+      * cks-kueue (coreweave) TEMPLATES its CRDs and renders the Topology CRs from
+        the ``topologies:`` value. On a fresh cluster you cannot create the
+        Topology CRD and a Topology CR in one ``helm install`` (helm maps every
+        manifest against live discovery first, and the CRD does not exist yet), so
+        when ``topologies`` is in the values and the CRD is absent, do a BOOTSTRAP
+        pass with no topologies (CRDs get created cleanly), wait for the CRD to be
+        Established, then the full pass.
+      * the upstream OCI chart ships its CRDs in ``crds/`` and carries no
+        ``topologies`` value, so it installs in one pass; the Topology CRs are
+        applied with kubectl afterwards (reading the served apiVersion off the
+        installed CRD).
+
+    Re-runs on an already-installed cluster collapse to a single idempotent pass.
     """
+    chart_templates_topologies = "topologies" in values
     full_file = write_values_file(values)
-    if not crd_exists(TOPOLOGY_CRD, kflags):
+
+    if chart_templates_topologies and not crd_exists(TOPOLOGY_CRD, kflags):
         bootstrap = {k: v for k, v in values.items() if k != "topologies"}
-        bootstrap_file = write_values_file(bootstrap)
         click.secho(
             f"==> Topology CRD absent — BOOTSTRAP pass to create CRDs (release '{release}', no topologies)",
             fg="blue",
             bold=True,
         )
-        _helm_upgrade(chart, release, bootstrap_file, hflags, version_args)
+        _helm_upgrade(chart, release, write_values_file(bootstrap), hflags, version_args)
         click.secho(f"==> Waiting for {TOPOLOGY_CRD} to be Established", fg="blue", bold=True)
         run(
             ["kubectl", *kflags, "wait", "--for=condition=Established", f"crd/{TOPOLOGY_CRD}", "--timeout=120s"],
             check=True,
         )
 
-    click.secho(f"==> FULL pass: installing/upgrading {chart} as '{release}' in {OPERATOR_NS}", fg="blue", bold=True)
+    click.secho(f"==> Installing/upgrading {chart} as '{release}' in {OPERATOR_NS}", fg="blue", bold=True)
     _helm_upgrade(chart, release, full_file, hflags, version_args)
     _wait_controller(kflags)
 
+    # Charts that don't template the Topology CRs (upstream) get them via kubectl.
+    if not chart_templates_topologies:
+        api_version = topology_api_version(kflags)
+        click.secho(f"==> Applying Topology CRs ({api_version})", fg="blue", bold=True)
+        topology_docs = [build_topology_cr(name, levels, api_version) for name, levels in TOPOLOGIES.items()]
+        kubectl_apply_docs(topology_docs, kflags)
+
     click.secho("==> Topologies on the cluster:", fg="blue", bold=True)
-    kubectl_get_topologies(kflags)
-
-
-def _apply_upstream(
-    values: dict, chart: str, release: str, hflags: list[str], kflags: list[str], version_args: list[str]
-) -> None:
-    """Single-pass helm install for the upstream OCI chart, then apply Topology CRs.
-
-    The upstream chart ships its CRDs in ``crds/`` (helm installs them before
-    templates), so no bootstrap is needed. After the operator is up we apply the
-    Topology CRs with kubectl, reading the served apiVersion off the installed CRD.
-    """
-    values_file = write_values_file(values)
-    click.secho(f"==> Installing/upgrading {chart} as '{release}' in {OPERATOR_NS}", fg="blue", bold=True)
-    _helm_upgrade(chart, release, values_file, hflags, version_args)
-    _wait_controller(kflags)
-
-    api_version = topology_api_version(kflags)
-    click.secho(f"==> Applying Topology CRs ({api_version})", fg="blue", bold=True)
-    topology_docs = [build_topology_cr(name, levels, api_version) for name, levels in TOPOLOGIES.items()]
-    kubectl_apply_docs(topology_docs, kflags)
     kubectl_get_topologies(kflags)
 
 
@@ -612,6 +583,12 @@ def _apply_upstream(
     help="Also create the cluster-scoped ResourceFlavor + ClusterQueue.",
 )
 @click.option("--cluster-queue", default="iris-cq", help="ClusterQueue name for --with-queues (default: iris-cq).")
+@click.option(
+    "--flavor-topology",
+    type=click.Choice([INFINIBAND_TOPOLOGY_NAME, MULTINODE_TOPOLOGY_NAME]),
+    default=INFINIBAND_TOPOLOGY_NAME,
+    help="Topology the cw-ib ResourceFlavor binds (default: infiniband; multinode-nvlink-ib exposes nvlink.domain).",
+)
 @click.option("--apply/--no-apply", default=False, help="Actually mutate the cluster (default: dry-run only).")
 def main(
     variant: str,
@@ -621,6 +598,7 @@ def main(
     release: str,
     with_queues: bool,
     cluster_queue: str,
+    flavor_topology: str,
     apply: bool,
 ) -> None:
     """Install + configure Kueue (coreweave or upstream) for Iris gang admission."""
@@ -632,6 +610,7 @@ def main(
         release=release,
         with_queues=with_queues,
         cluster_queue=cluster_queue,
+        flavor_topology=flavor_topology,
         apply=apply,
     )
 

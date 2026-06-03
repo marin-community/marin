@@ -1,4 +1,4 @@
-# Controller-based gang smoke on the real CoreWeave CKS cluster (scripts/gpu_gang_smoke.py
+# Controller-based gang smoke on the real CoreWeave CKS cluster (tests/e2e/gpu_gang_smoke.py
 # --target coreweave). Stands up an Iris controller from THIS branch in a DEDICATED
 # namespace (iris-gang-smoke, NOT the shared iris-ci) so it never touches production,
 # provisions a 3-node H100 pool, and runs one 3x8 = 24-GPU coscheduled gang through

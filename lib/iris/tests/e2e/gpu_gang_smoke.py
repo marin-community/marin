@@ -10,7 +10,7 @@ bare provider test, this drives the *normal job path*: a live controller (the
 Kueue, delivers the workspace bundle, runs ``uv sync --extra``, and the workload uses
 ``iris.runtime.initialize_jax`` (controller endpoint registry) to join one JAX mesh.
 
-The workload (``scripts/gang_jax_smoke_workload.py``) trains a small causal transformer
+The workload (``tests/e2e/gang_jax_smoke_workload.py``) trains a small causal transformer
 data-parallel across the whole gang; its gradient all-reduce is the inter-host
 NCCL/IB exercise.
 
@@ -20,9 +20,12 @@ Two targets, one code path:
                     software path (controller boot, Kueue gang admission, bundle +
                     ``uv sync``, registry ``initialize_jax``, the model on CPU). The
                     controller image is built from this branch and ``kind load``ed; the
-                    CoreWeave-only NodePool step is skipped.
+                    CoreWeave-only NodePool step is skipped. kind nodes are mock-labeled
+                    to mirror a CoreWeave IB fabric (and a GB200 NVLink domain), so it
+                    exercises BOTH the soft ``leafgroup`` and the hard ``nvlink.domain``
+                    topology placements.
   * ``coreweave`` — real H100 gang on CKS. Builds+pushes the controller image, provisions
-                    a dedicated NodePool, runs the gang on 24 H100s. Costs money; gated
+                    a dedicated NodePool, runs the gang on H100s. Costs money; gated
                     behind ``--i-understand-the-cost`` and a teardown-enabled check.
 
 The task image is branch-agnostic (gang code lives in the controller), so it stays the
@@ -30,53 +33,91 @@ public ``iris-task:latest``; only the controller image is built from this branch
 
 Usage:
     cd lib/iris
-    uv run --group dev python scripts/gpu_gang_smoke.py \
+    uv run --group dev python tests/e2e/gpu_gang_smoke.py \
         --config config/kind-controller-gpu-smoke.yaml --target kind
-    uv run --group dev python scripts/gpu_gang_smoke.py \
+    uv run --group dev python tests/e2e/gpu_gang_smoke.py \
         --config config/coreweave-controller-gpu-smoke.yaml --target coreweave \
         --i-understand-the-cost
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import logging
 import socket
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
-import install_kueue
+import click
 from iris.client import IrisClient
 from iris.cluster.config import load_config
 from iris.cluster.providers.k8s.controller import K8sControllerProvider, _build_controller_deployment
+from iris.cluster.providers.k8s.coreweave_topology import (
+    CW_FLAVOR_INFINIBAND,
+    CW_LABEL_FABRIC,
+    CW_LABEL_FLAVOR,
+    CW_LABEL_LEAFGROUP,
+    CW_LABEL_NVLINK_DOMAIN,
+    CW_LABEL_SUPERPOD,
+)
 from iris.cluster.providers.k8s.service import CloudK8sService
 from iris.cluster.providers.types import Labels
 from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
 from iris.rpc import config_pb2, job_pb2
 
+# install_kueue is a sibling ops script under lib/iris/scripts/ (not part of the
+# iris package), so add that dir to the path before importing it.
+_SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+import install_kueue  # noqa: E402  (resolved via _SCRIPTS_DIR inserted above)
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("gpu_gang_smoke")
 
 # Path (within the job bundle / repo root) of the multi-host JAX workload module.
-_WORKLOAD = "lib/iris/scripts/gang_jax_smoke_workload.py"
-# Coscheduling group_by → (by provider default) the leafgroup preferred-topology.
-_GROUP_BY = "pool"
+_WORKLOAD = "lib/iris/tests/e2e/gang_jax_smoke_workload.py"
+# Soft (preferred) topology: multi-node IB colocation on one leafgroup. The
+# default group_by for both targets; maps to backend.coreweave.cloud/leafgroup.
+_GROUP_BY = "leafgroup"
+# Hard (required) topology: one GB200 NVLink domain. Exercised on kind only,
+# where the nodes are mock-labeled with an nvlink.domain (H100 IB has none).
+_NVLINK_GROUP_BY = "nvlink.domain"
 # CoreWeave topology/flavor labels stamped on kind workers so the cw-ib ResourceFlavor
-# selects them (flavor=infiniband) and TAS can place the podset in one leafgroup.
+# selects them (flavor=infiniband) and TAS can place the podset. kind mocks a single
+# IB fabric AND a single NVLink domain, so both leafgroup (soft) and nvlink.domain
+# (hard) placements resolve against the multinode-nvlink-ib Topology.
 _KIND_NODE_LABELS = {
-    "backend.coreweave.cloud/flavor": "infiniband",
-    "backend.coreweave.cloud/fabric": "fabric-0",
-    "backend.coreweave.cloud/superpod": "superpod-0",
-    "backend.coreweave.cloud/leafgroup": "leafgroup-0",
+    CW_LABEL_FLAVOR: CW_FLAVOR_INFINIBAND,
+    CW_LABEL_FABRIC: "fabric-0",
+    CW_LABEL_SUPERPOD: "superpod-0",
+    CW_LABEL_LEAFGROUP: "leafgroup-0",
+    CW_LABEL_NVLINK_DOMAIN: "nvlink-domain-0",
 }
 
 
+@dataclass(frozen=True)
+class SmokeArgs:
+    """Resolved smoke options, shared across the controller targets."""
+
+    target: str
+    replicas: int
+    gpu: str
+    steps: int
+    per_device_batch: int
+    job_name: str
+    timeout: int
+    kind_cluster: str
+    keep: bool
+    i_understand_the_cost: bool
+
+
 def repo_root() -> Path:
-    # lib/iris/scripts/gpu_gang_smoke.py -> repo root.
-    return Path(__file__).resolve().parents[3]
+    # lib/iris/tests/e2e/gpu_gang_smoke.py -> repo root.
+    return Path(__file__).resolve().parents[4]
 
 
 def _run(cmd: list[str], *, check: bool = True, quiet: bool = False, cwd: str | None = None) -> str:
@@ -108,7 +149,7 @@ def _wait_port(host: str, port: int, *, timeout: float) -> None:
 class ControllerTarget:
     """Shared controller bring-up/teardown over the K8s direct provider."""
 
-    def __init__(self, cfg: config_pb2.IrisClusterConfig, args: argparse.Namespace) -> None:
+    def __init__(self, cfg: config_pb2.IrisClusterConfig, args: SmokeArgs) -> None:
         self.cfg = cfg
         self.args = args
         self.namespace = cfg.kubernetes_provider.namespace
@@ -254,13 +295,17 @@ class KindTarget(ControllerTarget):
             cwd=str(repo_root()),
         )
         _run(["kind", "load", "docker-image", cfg.controller.image, "--name", name])
-        # Kueue operator + cluster-scoped ClusterQueue/ResourceFlavor/Topology.
+        # Kueue operator + cluster-scoped ClusterQueue/ResourceFlavor/Topology. The
+        # flavor binds multinode-nvlink-ib (the superset Topology that includes the
+        # nvlink.domain level) so the kind-mocked NVLink domain resolves and the gang
+        # can exercise BOTH the soft leafgroup and hard nvlink.domain placements.
         install_kueue.run_install(
             variant=install_kueue.VARIANT_UPSTREAM,
             kubeconfig=self.kubeconfig,
             chart_version="0.11.0",
             with_queues=True,
             cluster_queue=cfg.kubernetes_provider.kueue.cluster_queue,
+            flavor_topology=install_kueue.MULTINODE_TOPOLOGY_NAME,
             apply=True,
         )
 
@@ -407,7 +452,7 @@ class CoreweaveTarget(ControllerTarget):
 # ---------------------------------------------------------------------------
 # Job submission
 # ---------------------------------------------------------------------------
-def submit_gang(controller_url: str, target: ControllerTarget, args: argparse.Namespace) -> bool:
+def submit_gang(controller_url: str, target: ControllerTarget, args: SmokeArgs, *, group_by: str, job_name: str) -> bool:
     resources, extras = target.job_resources()
     env = EnvironmentSpec(
         extras=extras,
@@ -416,65 +461,40 @@ def submit_gang(controller_url: str, target: ControllerTarget, args: argparse.Na
     client = IrisClient.remote(controller_url, workspace=repo_root(), timeout_ms=300_000)
     logger.info(
         "submitting gang %r: %d replicas, %s, group_by=%s, extras=%s",
-        args.job_name,
+        job_name,
         args.replicas,
         f"{args.gpu}" if args.gpu else "cpu-only",
-        _GROUP_BY,
+        group_by,
         extras,
     )
     job = client.submit(
         entrypoint=Entrypoint.from_command("python", _WORKLOAD),
-        name=args.job_name,
+        name=job_name,
         resources=resources,
         environment=env,
         replicas=args.replicas,
-        coscheduling=CoschedulingConfig(group_by=_GROUP_BY),
+        coscheduling=CoschedulingConfig(group_by=group_by),
     )
     status = job.wait(timeout=args.timeout, poll_interval=10.0, stream_logs=True, raise_on_failure=False)
     state = job_pb2.JobState.Name(status.state)
-    logger.info("job %s finished in state %s", args.job_name, state)
+    logger.info("job %s finished in state %s", job_name, state)
     return status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-def main(argv: list[str]) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", required=True, type=Path, help="Iris cluster config YAML (kind or coreweave)")
-    ap.add_argument("--target", required=True, choices=["kind", "coreweave"])
-    ap.add_argument("--replicas", type=int, default=3, help="gang size (tasks)")
-    ap.add_argument("--gpu", default="", help="GPU request as VARIANT:COUNT (coreweave), e.g. H100:8")
-    ap.add_argument("--steps", type=int, default=20, help="training steps")
-    ap.add_argument("--per-device-batch", type=int, default=8)
-    ap.add_argument("--job-name", default="gpu-gang-smoke")
-    ap.add_argument("--timeout", type=int, default=1800, help="job completion timeout (seconds)")
-    ap.add_argument("--kind-cluster", default="iris-gpu-smoke")
-    ap.add_argument("--keep", action="store_true", help="skip teardown")
-    ap.add_argument("--i-understand-the-cost", action="store_true", help="required for --target coreweave (paid H100s)")
-    args = ap.parse_args(argv)
-
-    cfg = load_config(args.config)
-
-    if args.target == "coreweave":
-        if not args.i_understand_the_cost:
-            logger.error("target=coreweave provisions paid H100s; pass --i-understand-the-cost")
-            return 2
-        if args.keep:
-            # Cleanup must be guaranteed so we never strand billing H100s.
-            logger.error("--keep is not allowed for target=coreweave: teardown must run to deprovision H100s")
-            return 2
-        if not args.gpu:
-            args.gpu = "H100:8"
-
+def run_smoke(cfg: config_pb2.IrisClusterConfig, args: SmokeArgs) -> bool:
     target = KindTarget(cfg, args) if args.target == "kind" else CoreweaveTarget(cfg, args)
-
-    ok = False
     try:
         target.setup()
         target.deploy()
         url = target.open_tunnel()
-        ok = submit_gang(url, target, args)
+        ok = submit_gang(url, target, args, group_by=_GROUP_BY, job_name=args.job_name)
+        # kind mock-labels its nodes with an nvlink.domain, so it can additionally
+        # exercise the hard/required nvlink.domain placement. Real H100 IB has no
+        # nvlink.domain label, so this second gang is kind-only.
+        if ok and args.target == "kind":
+            logger.info("kind mirrors a GB200 NVLink layout; exercising hard nvlink.domain topology")
+            ok = submit_gang(url, target, args, group_by=_NVLINK_GROUP_BY, job_name=f"{args.job_name}-nvlink")
+        return ok
     finally:
         if args.keep:
             logger.info("--keep set: leaving cluster up")
@@ -482,9 +502,65 @@ def main(argv: list[str]) -> int:
         else:
             target.teardown()
 
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+@click.option("--config", "config_path", required=True, type=click.Path(path_type=Path),
+              help="Iris cluster config YAML (kind or coreweave)")
+@click.option("--target", required=True, type=click.Choice(["kind", "coreweave"]))
+@click.option("--replicas", type=int, default=3, help="gang size (tasks)")
+@click.option("--gpu", default="", help="GPU request as VARIANT:COUNT (coreweave), e.g. H100:8")
+@click.option("--steps", type=int, default=20, help="training steps")
+@click.option("--per-device-batch", type=int, default=8)
+@click.option("--job-name", default="gpu-gang-smoke")
+@click.option("--timeout", type=int, default=1800, help="job completion timeout (seconds)")
+@click.option("--kind-cluster", default="iris-gpu-smoke")
+@click.option("--keep", is_flag=True, help="skip teardown")
+@click.option("--i-understand-the-cost", "i_understand_the_cost", is_flag=True,
+              help="required for --target coreweave (paid H100s)")
+def main(
+    config_path: Path,
+    target: str,
+    replicas: int,
+    gpu: str,
+    steps: int,
+    per_device_batch: int,
+    job_name: str,
+    timeout: int,
+    kind_cluster: str,
+    keep: bool,
+    i_understand_the_cost: bool,
+) -> None:
+    if target == "coreweave":
+        if not i_understand_the_cost:
+            logger.error("target=coreweave provisions paid H100s; pass --i-understand-the-cost")
+            raise SystemExit(2)
+        if keep:
+            # Cleanup must be guaranteed so we never strand billing H100s.
+            logger.error("--keep is not allowed for target=coreweave: teardown must run to deprovision H100s")
+            raise SystemExit(2)
+        if not gpu:
+            gpu = "H100:8"
+
+    args = SmokeArgs(
+        target=target,
+        replicas=replicas,
+        gpu=gpu,
+        steps=steps,
+        per_device_batch=per_device_batch,
+        job_name=job_name,
+        timeout=timeout,
+        kind_cluster=kind_cluster,
+        keep=keep,
+        i_understand_the_cost=i_understand_the_cost,
+    )
+    cfg = load_config(config_path)
+    ok = run_smoke(cfg, args)
     logger.info("RESULT: %s", "PASS" if ok else "FAIL")
-    return 0 if ok else 1
+    raise SystemExit(0 if ok else 1)
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    main()

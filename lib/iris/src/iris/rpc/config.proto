@@ -453,13 +453,13 @@ message KueueTopology {
 // WorkloadPriorityClasses and Topology levels the cluster admin provisioned.
 message KueueConfig {
   // ClusterQueue the cluster's LocalQueue binds to. Admin-provisioned
-  // (cluster-scoped, holds the quota); created by
-  // scripts/install_kueue_coreweave.py, not by Iris. Setting this ENABLES Kueue
-  // gang admission: empty disables it (coscheduled jobs then fail — there is no
-  // non-Kueue fallback). The LocalQueue itself is owned by Iris, which creates
-  // it in its namespace at controller start (see ensure_kueue_queues) and names
-  // it {label_prefix}-lq — it is derived, not configured.
-  string cluster_queue = 4;
+  // (cluster-scoped, holds the quota); created by scripts/install_kueue.py
+  // (--with-queues), not by Iris. Setting this ENABLES Kueue gang admission:
+  // empty disables it (coscheduled jobs then fail — there is no non-Kueue
+  // fallback). The LocalQueue itself is owned by Iris, which creates it in its
+  // namespace at controller start (see ensure_kueue_queues) and names it
+  // {label_prefix}-lq — it is derived, not configured.
+  string cluster_queue = 1;
   // PriorityBand -> WorkloadPriorityClass name. A band with no entry is left
   // unstamped so Kueue applies its default priority; Iris never invents a class
   // name, since a missing WorkloadPriorityClass makes Kueue reject the pod.

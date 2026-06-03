@@ -503,6 +503,20 @@ def test_drain_promotes_coscheduled_gang_atomically(state):
     assert all(s == job_pb2.TASK_STATE_ASSIGNED for s in _states(state, task_ids))
 
 
+def test_drain_unprioritized_gang_defaults_to_interactive(state):
+    """A coscheduled gang submitted without an explicit priority drains at the EFFECTIVE
+    INTERACTIVE band. UNSPECIFIED is normalized to INTERACTIVE at submit and persisted in
+    tasks.priority_band (the column the dispatch query reads), so the Kueue path can stamp a
+    real WorkloadPriorityClass instead of dropping to Kueue's cluster default."""
+    _submit_cosched(state, "gang-default-prio", replicas=3)  # band defaults to UNSPECIFIED
+
+    with state._db.transaction() as cur:
+        batch = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+
+    assert len(batch.tasks_to_run) == 3
+    assert {r.priority for r in batch.tasks_to_run} == {job_pb2.PRIORITY_BAND_INTERACTIVE}
+
+
 def test_drain_oversized_gang_promoted_whole_despite_cap(state):
     """A gang larger than the per-cycle cap is still promoted whole (the cap only bounds
     API-server pressure; a partial gang would deadlock Kueue)."""
