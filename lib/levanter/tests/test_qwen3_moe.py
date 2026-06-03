@@ -79,6 +79,7 @@ def test_qwen3_moe_state_dict_keys_match_hf_qwen_layout():
     assert state_dict["lm_head.weight"].shape == (128, 32)
 
 
+@skip_if_no_torch
 def test_qwen3_moe_loads_torch_compatible_state_dict():
     config = Qwen3MoeConfig.from_hf_config(_tiny_hf_config())
     with local_cpu_mesh():
