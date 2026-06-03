@@ -24,7 +24,7 @@ import fsspec.config
 from rigging.timing import Deadline
 
 from iris.cluster.config_serde import config_to_dict
-from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
+from iris.cluster.providers.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.providers.types import InfraError, Labels, local_queue_name
@@ -144,10 +144,13 @@ def _build_controller_deployment(
             "spec": {
                 "serviceAccountName": "iris-controller",
                 "nodeSelector": node_selector,
-                # Tolerate the standard NVIDIA GPU taint so the controller
-                # can schedule onto GPU-only clusters (no CPU NodePool).
-                # Harmless on untainted nodes.
-                "tolerations": [NVIDIA_GPU_TOLERATION],
+                # Tolerate the NVIDIA GPU taint (so the controller can run on
+                # GPU-only clusters with no CPU NodePool) and CoreWeave's
+                # interruptable-capacity taint: freshly provisioned nodes carry
+                # qos.coreweave.cloud/interruptable:NoExecute, which would
+                # otherwise leave the controller Pending forever. Task pods
+                # already tolerate both (see tasks.py). Harmless on untainted nodes.
+                "tolerations": [NVIDIA_GPU_TOLERATION, COREWEAVE_INTERRUPTABLE_TOLERATION],
                 "containers": [
                     {
                         "name": "iris-controller",

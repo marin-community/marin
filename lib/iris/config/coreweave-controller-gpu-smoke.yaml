@@ -1,0 +1,107 @@
+# Controller-based gang smoke on the real CoreWeave CKS cluster (scripts/gpu_gang_smoke.py
+# --target coreweave). Stands up an Iris controller from THIS branch in a DEDICATED
+# namespace (iris-gang-smoke, NOT the shared iris-ci) so it never touches production,
+# provisions a 3-node H100 pool, and runs one 3x8 = 24-GPU coscheduled gang through
+# Kueue gang admission. Costs money; gated behind --i-understand-the-cost and the
+# teardown-enabled check (the smoke refuses --keep on coreweave).
+#
+# The Kueue operator + cluster-scoped iris-cq ClusterQueue/ResourceFlavor/Topology are
+# admin-provisioned on the shared cluster (scripts/install_kueue.py --variant coreweave).
+# The controller creates only its own LocalQueue + NodePools (one CPU node for itself,
+# the H100 pool for the gang).
+
+platform:
+  label_prefix: iris-gang
+  coreweave:
+    region: US-WEST-04A
+    namespace: iris-gang-smoke
+    kubeconfig_path: ~/.kube/coreweave-iris
+    object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+
+storage:
+  # Throwaway controller state in the pod's local-state volume — the smoke tears
+  # down on exit, so durable S3 state is pointless. An S3 backend also needs an R2
+  # token with ListBucket on the (initially empty) state prefix, or the controller's
+  # checkpoint-restore fs.exists() gets a 403 on the missing key and crash-loops.
+  # file:// sidesteps that; gang admission (what's under test) is unaffected by the
+  # state backend. (coreweave-ci uses S3 only because its prefix is already populated.)
+  remote_state_dir: file:///var/cache/iris/controller/state
+
+kubernetes_provider:
+  namespace: iris-gang-smoke
+  default_image: ghcr.io/marin-community/iris-task:latest  # branch-agnostic; gang code is in the controller
+  host_network: true                                        # NCCL/IB + flat-network endpoints
+  cache_dir: /mnt/local/iris-cache
+  controller_address: http://iris-gang-controller-svc.iris-gang-smoke.svc.cluster.local:10000
+  kueue:
+    cluster_queue: iris-cq   # admin-provisioned; empty topologies => CoreWeave-default pool->leafgroup
+
+defaults:
+  task_env:
+    # NCCL bootstrap/OOB socket: EXCLUDE IB/IPoIB (ibp*, ibs*) and virtual interfaces so
+    # NCCL falls back to the node's routable ethernet. Auto-detect otherwise grabs ibs0's
+    # link-local IPv6 (fe80::...%ibs0), which can't connect cross-host (connection
+    # timeouts). We can't pin an exact NIC name — it's per-node (ci=enp157s0np0,
+    # usw09b=enp44s0np0, rno2a=eth0). The IB data NICs (ibp0-7) are still used for the
+    # collective itself ("Using network IB"); only the out-of-band channel uses ethernet.
+    # NCCL_DEBUG (scoped to INIT,NET,ENV) logs the interface selection for diagnosis.
+    NCCL_SOCKET_IFNAME: "^ibs,ibp,lo,docker,veth,cilium,lxc"
+    NCCL_DEBUG: INFO
+    NCCL_DEBUG_SUBSYS: INIT,NET,ENV
+  worker:
+    docker_image: ghcr.io/marin-community/iris-worker:latest
+    port: 10001
+    runtime: kubernetes
+    default_task_image: ghcr.io/marin-community/iris-task:latest
+
+controller:
+  image: ghcr.io/marin-community/iris-controller:gang-smoke   # built+pushed from this branch
+  coreweave:
+    port: 10000
+    service_name: iris-gang-controller-svc
+    # The controller runs on a small CPU node, NOT an H100 — the controller
+    # Deployment tolerates the NVIDIA GPU taint, so without a CPU pool it would
+    # otherwise consume a whole $$$ H100. Mirrors coreweave-ci's cpu-erapids.
+    scale_group: cpu-erapids
+
+scale_groups:
+  cpu-erapids:
+    # One always-on CPU node for the controller pod (buffer=max=1). ensure_nodepools
+    # provisions it up front; _set_target_nodes leaves it alone (GPU pools only).
+    num_vms: 1
+    resources:
+      cpu: 64
+      ram: 256GB
+      disk: 1TB
+      device_type: cpu
+      capacity_type: on-demand
+    buffer_slices: 1
+    max_slices: 1
+    priority: 50
+    slice_template:
+      num_vms: 1
+      coreweave:
+        region: US-WEST-04A
+        instance_type: cd-gp-i64-erapids
+
+  h100-8x:
+    num_vms: 1
+    resources:
+      cpu: 128
+      ram: 2048GB
+      disk: 1TB
+      device_type: gpu
+      device_variant: H100
+      device_count: 8
+      capacity_type: on-demand
+    # Fixed pool: min=max=replicas; the smoke sets targetNodes up front (Kueue TAS
+    # can't scale from zero — see project_kueue_tas_scale_from_zero).
+    buffer_slices: 3
+    max_slices: 3
+    priority: 100
+    slice_template:
+      num_vms: 1
+      coreweave:
+        region: US-WEST-04A
+        instance_type: gd-8xh100ib-i128
+        infiniband: true
