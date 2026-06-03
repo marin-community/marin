@@ -30,6 +30,7 @@ class ConvertLmConfig:
     checkpoint_path: str
     output_dir: str
     upload_to_hf: Optional[RepoRef] = None  # if specified, attempt to upload this checkpoint to the hf hub
+    checkpoint_subpath: str = "model"
 
     model: LmConfig = LlamaConfig()
     save_tokenizer: bool = True  # if True, save the tokenizer to the output directory
@@ -42,14 +43,21 @@ class ConvertLmConfig:
 
 def main(config: ConvertLmConfig):
     logging_utils.init_logging("logs", "export")
+    if not isinstance(config.model, HFCompatConfig) and not hasattr(config.model, "hf_checkpoint_converter"):
+        raise TypeError("model must provide hf_checkpoint_converter()")
+    converter = config.model.hf_checkpoint_converter()
     tokenizer_spec = config.tokenizer
     if tokenizer_spec is None:
-        assert isinstance(config.model, HFCompatConfig)
-        tokenizer = config.model.hf_checkpoint_converter().tokenizer
+        tokenizer = converter.tokenizer
     else:
         tokenizer = load_tokenizer(tokenizer_spec)
 
-    vocab_size = config.override_vocab_size or len(tokenizer)
+    if tokenizer is None:
+        vocab_size = config.override_vocab_size or getattr(config.model, "vocab_size", None)
+        if vocab_size is None:
+            raise ValueError("override_vocab_size is required when exporting without a tokenizer")
+    else:
+        vocab_size = config.override_vocab_size or len(tokenizer)
     Vocab = Axis("vocab", vocab_size)
 
     key = jax.random.PRNGKey(0)
@@ -68,7 +76,7 @@ def main(config: ConvertLmConfig):
         # TODO: don't load the entire checkpoint into CPU memory when we only need our share of the model
         checkpoint_path = latest_checkpoint_path(config.checkpoint_path)
         logger.info(f"Loading checkpoint from {checkpoint_path}...")
-        trainable = load_checkpoint(trainable, checkpoint_path, subpath="model")
+        trainable = load_checkpoint(trainable, checkpoint_path, subpath=config.checkpoint_subpath)
 
         assert trainable is not None
         model = eqx.combine(trainable, non_trainable)
@@ -76,9 +84,12 @@ def main(config: ConvertLmConfig):
         if config.override_vocab_size:
             model = model.resize_vocab(config.override_vocab_size)
 
-        converter = model.config.hf_checkpoint_converter()
         if config.tokenizer:
             converter = converter.replaced(tokenizer=tokenizer)
+        if config.config_overrides:
+            converter = converter.with_config_overrides(config.config_overrides)
+        if config.save_tokenizer and tokenizer is None:
+            raise ValueError("save_tokenizer=True requires a tokenizer")
 
         logger.info(f"Converting {config.checkpoint_path}...")
 
