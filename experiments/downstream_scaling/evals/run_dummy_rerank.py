@@ -6,11 +6,11 @@
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import sys
 
 from fray.cluster import ResourceConfig
 from marin.execution.executor import InputName, executor_main, output_path_of
+from rigging.filesystem import marin_region
 
 from experiments.downstream_scaling.evals.algorithms.rerank import (
     RerankCompletionAlgorithm,
@@ -68,8 +68,8 @@ def make_algorithm(tpu_types: list[str], region: str) -> RerankCompletionAlgorit
             execution=RerankExecutionConfig(
                 num_workers=NUM_WORKERS,
                 chunk_size=CHUNK_SIZE,
-                worker_resources=dataclasses.replace(ResourceConfig.with_tpu(tpu_types), regions=[region]),
-                scorer_actor_resources=dataclasses.replace(ResourceConfig.with_tpu(tpu_types), regions=[region]),
+                worker_resources=ResourceConfig.with_tpu(tpu_types, regions=[region]),
+                scorer_actor_resources=ResourceConfig.with_tpu(tpu_types, regions=[region]),
             ),
         )
     )
@@ -89,11 +89,15 @@ def build_steps(tpu_types: list[str], region: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--tpu-types", nargs="+", default=list(TPU_TYPES))
-    parser.add_argument("--region", type=str, required=True)
+    parser.add_argument("--region", type=str, default=None)
     args, remaining_args = parser.parse_known_args()
     sys.argv = [sys.argv[0], *remaining_args]
 
+    region = args.region or marin_region()
+    if region is None:
+        parser.error("--region not given and not inferable from the environment")
+
     executor_main(
-        steps=build_steps(args.tpu_types, args.region),
+        steps=build_steps(args.tpu_types, region),
         description="Tiny rerank downstream-scaling eval on the dummy task.",
     )
