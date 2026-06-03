@@ -136,10 +136,10 @@ def test_gpu_fa4_thd_registered_backend_jits_with_cutlass_boundary(monkeypatch):
     )
     monkeypatch.setattr(fa4_thd.jax, "default_backend", lambda: "gpu")
 
-    q = jnp.ones((1, 4, 2, 8), dtype=jnp.float32)
-    k = jnp.ones((1, 4, 1, 8), dtype=jnp.float32)
-    v = jnp.ones((1, 4, 1, 8), dtype=jnp.float32)
-    segment_ids = jnp.array([[0, 0, 1, 1]], dtype=jnp.int32)
+    q = jnp.ones((2, 4, 2, 8), dtype=jnp.float32)
+    k = jnp.ones((2, 4, 1, 8), dtype=jnp.float32)
+    v = jnp.ones((2, 4, 1, 8), dtype=jnp.float32)
+    segment_ids = jnp.array([[0, 0, 1, 1], [2, 2, 3, 3]], dtype=jnp.int32)
     mask = AttentionMask.causal().with_segment_ids(segment_ids, max_segments=2)
 
     out = jax.jit(lambda q_arg: attention(q_arg, k, v, mask, implementation="gpu_fa4_thd"))(q)
