@@ -1,0 +1,126 @@
+//! `finelog-server` binary entry point.
+//!
+//! Parse the same CLI flags as the Python launcher, open the `Store`, and serve
+//! `/health` plus the StatsService metadata RPCs (Phase 1). The write/query RPC
+//! families land in later phases.
+
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use clap::Parser;
+use finelog::server::build_app;
+use finelog::server::diagnostics::spawn_pool_diagnostics;
+use finelog::store::Store;
+use tokio::sync::Notify;
+
+#[derive(Parser, Debug)]
+#[command(name = "finelog-server")]
+struct Args {
+    /// Port to bind.
+    #[arg(long, env = "FINELOG_PORT", default_value_t = 8080)]
+    port: u16,
+
+    /// Local directory for parquet segments + catalog.
+    #[arg(long, env = "FINELOG_LOG_DIR")]
+    log_dir: Option<String>,
+
+    /// Remote (e.g. gs://) directory for offloaded segments. Empty disables sync.
+    /// Env var matches the Python server + deploy (`FINELOG_REMOTE_DIR`, set by
+    /// bootstrap.py / the Dockerfile) so the Phase-6 cutover picks it up.
+    #[arg(long, env = "FINELOG_REMOTE_DIR", default_value = "")]
+    remote_log_dir: String,
+
+    /// Log level for the server's own tracing output.
+    #[arg(long, env = "FINELOG_LOG_LEVEL", default_value = "info")]
+    log_level: String,
+
+    /// Mount the NON-proto test-only `/debug/*` admin routes (maintain/segments).
+    /// Off the frozen contract; used only by the parity harness. Never set in
+    /// production.
+    #[arg(long, env = "FINELOG_DEBUG_ADMIN", default_value_t = false)]
+    debug_admin: bool,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| args.log_level.clone().into()),
+        )
+        .init();
+
+    let store = Arc::new(
+        Store::new(
+            args.log_dir.clone().map(PathBuf::from),
+            args.remote_log_dir.clone(),
+        )
+        .map_err(|e| format!("failed to open store: {e}"))?,
+    );
+    // Boot remote reconcile (adopt unknown remote parquet, redundancy-drop
+    // covered segments) then start each namespace's maintenance task. Done before
+    // binding so a wiped-catalog reboot has its REMOTE rows visible to the first
+    // request.
+    store
+        .bootstrap_maintenance()
+        .await
+        .map_err(|e| format!("failed to bootstrap maintenance: {e}"))?;
+    let app = build_app(Arc::clone(&store), args.debug_admin);
+
+    // Periodic pool/RSS diagnostics task; cancelled on shutdown via a latched
+    // stop flag (set before the Notify, so a notify that races the task's emit
+    // cannot be lost) plus the Notify for a prompt wakeup.
+    let diag_stop = Arc::new(AtomicBool::new(false));
+    let diag_shutdown = Arc::new(Notify::new());
+    let diag = spawn_pool_diagnostics(
+        Arc::clone(&store),
+        Arc::clone(&diag_stop),
+        Arc::clone(&diag_shutdown),
+    );
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
+    tracing::info!(%addr, log_dir = ?args.log_dir, "finelog-server listening");
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    // Graceful shutdown: stop accepting and drain in-flight requests on the
+    // first SIGTERM/SIGINT, then shut the store's background tasks down.
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    tracing::info!("finelog-server draining background tasks");
+
+    // Stop the diagnostics task, then cooperatively cancel + join the
+    // per-namespace flush/maintenance tasks. The per-namespace join is bounded;
+    // an OUTER timeout here guarantees the process still exits promptly even if
+    // a namespace shutdown is somehow slow (defense in depth; durability is
+    // already preserved because writes ack only after L0 persist).
+    diag_stop.store(true, Ordering::SeqCst);
+    diag_shutdown.notify_waiters();
+    // Bound the diagnostics join too: even with the latch the task does no
+    // durable work, so it must never delay the store drain.
+    let _ = tokio::time::timeout(Duration::from_secs(2), diag).await;
+    let _ = tokio::time::timeout(
+        Duration::from_secs(10),
+        store.shutdown(Duration::from_secs(5)),
+    )
+    .await;
+    tracing::info!("finelog-server stopped");
+    Ok(())
+}
+
+/// Resolve when the first SIGTERM or SIGINT (Ctrl-C) arrives. Mirrors the
+/// Python launcher's `signal.signal(SIGTERM/SIGINT, _shutdown)`.
+async fn shutdown_signal() {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut sigterm = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+    let mut sigint = signal(SignalKind::interrupt()).expect("install SIGINT handler");
+    tokio::select! {
+        _ = sigterm.recv() => tracing::info!("received SIGTERM; shutting down"),
+        _ = sigint.recv() => tracing::info!("received SIGINT; shutting down"),
+    }
+}

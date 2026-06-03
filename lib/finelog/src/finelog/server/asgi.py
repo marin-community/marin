@@ -16,7 +16,7 @@ from rigging.rpc import ConcurrencyLimitInterceptor
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.requests import Request
-from starlette.responses import FileResponse, PlainTextResponse, Response
+from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -105,6 +105,81 @@ class _LegacyIrisLoggingPathMiddleware:
         await self._app(scope, receive, send)
 
 
+def _debug_admin_routes(service: LogServiceImpl) -> list[Route]:
+    """Non-proto test-only admin routes mirroring the Rust ``--debug-admin``.
+
+    The frozen RPC contract can neither force a flush/compact/sync/evict cycle
+    nor read per-segment level+location, but every Phase-4 gating test does
+    exactly that. These two routes drive the SAME store methods
+    (``flush``/``force_compact_l0``/``compact`` + ``catalog.list_segments``)
+    the parity harness needs, so the identical test body runs on both backends.
+    Mounted only when ``debug_admin`` is set; OFF in production.
+    """
+    store = service.log_store
+
+    async def _maintain(request: Request) -> Response:
+        body = await request.json()
+        namespace = body["namespace"]
+        force_compact_l0 = bool(body.get("force_compact_l0", False))
+        try:
+            ns = store.catalog[namespace]
+        except KeyError:
+            # Unknown namespace -> 400, matching the Rust debug surface (which
+            # maps NamespaceNotFound to BAD_REQUEST) so the two backends agree on
+            # this error path. Without this, the bare KeyError surfaces as a 500.
+            return PlainTextResponse(f"unknown namespace {namespace!r}", status_code=400)
+        # flush -> compact (forced L0->L1 or planner-drained) -> sync+evict.
+        # `compact()` itself runs sync_step + eviction_step; `flush()` first so a
+        # just-written batch is eligible this same cycle (mirrors the Rust body).
+        ns.flush()
+        if force_compact_l0:
+            ns.force_compact_l0()
+        ns.compact()
+        return PlainTextResponse("ok")
+
+    def _segments(request: Request) -> Response:
+        namespace = request.query_params["namespace"]
+        rows = store.catalog.list_segments(namespace)
+        payload = [
+            {
+                "path": Path(r.path).name,
+                "level": r.level,
+                "min_seq": r.min_seq,
+                "max_seq": r.max_seq,
+                "row_count": r.row_count,
+                "byte_size": r.byte_size,
+                "location": r.location.value,
+                "created_at_ms": r.created_at_ms,
+            }
+            for r in rows
+        ]
+        return JSONResponse(payload)
+
+    async def _backdate(request: Request) -> Response:
+        # Set a segment's created_at_ms (matched by basename) so age-eviction
+        # parity tests run without a wall-clock sleep. Test-only; mirrors the
+        # Rust /debug/backdate. Updates the catalog row directly because the
+        # store API has no birth-time setter.
+        body = await request.json()
+        namespace = body["namespace"]
+        path_basename = body["path"]
+        created_at_ms = int(body["created_at_ms"])
+        for row in store.catalog.list_segments(namespace):
+            if Path(row.path).name == path_basename:
+                with store.catalog._lock:
+                    store.catalog._conn.execute(
+                        "UPDATE segments SET created_at_ms = ? WHERE namespace = ? AND path = ?",
+                        [created_at_ms, namespace, row.path],
+                    )
+        return PlainTextResponse("ok")
+
+    return [
+        Route("/debug/maintain", _maintain, methods=["POST"]),
+        Route("/debug/segments", _segments, methods=["GET"]),
+        Route("/debug/backdate", _backdate, methods=["POST"]),
+    ]
+
+
 def build_log_server_asgi(
     service: LogServiceImpl,
     *,
@@ -113,6 +188,7 @@ def build_log_server_asgi(
     max_concurrent_query: int = _MAX_CONCURRENT_QUERY,
     slow_rpc_threshold_ms: int = DEFAULT_SLOW_RPC_THRESHOLD_MS,
     stats_service: StatsServiceImpl | None = None,
+    debug_admin: bool = False,
 ) -> Starlette:
     """Build the ASGI app that serves LogService and (optionally) StatsService.
 
@@ -120,6 +196,10 @@ def build_log_server_asgi(
     RPCs; a ``SlowRpcInterceptor`` emits one WARNING per call that exceeds
     ``slow_rpc_threshold_ms``. Both are appended to the service chain so
     caller-supplied ``interceptors`` see the raw call first.
+
+    When ``debug_admin`` is set, the non-proto ``/debug/*`` test-only routes are
+    mounted before the SPA catch-all so the parity harness can force maintenance
+    and read structured per-segment state.
     """
     log_chain: list[Interceptor] = list(interceptors)
     log_chain.append(SlowRpcInterceptor(default_threshold_ms=slow_rpc_threshold_ms))
@@ -143,6 +223,11 @@ def build_log_server_asgi(
             service=stats_service, interceptors=tuple(stats_chain), compressions=_DEFAULT_COMPRESSIONS
         )
         routes.append(Mount(stats_asgi_app.path, app=stats_asgi_app))
+
+    # Test-only admin routes BEFORE the SPA catch-all so /debug/* is not
+    # swallowed by the Vue Router fallback.
+    if debug_admin:
+        routes.extend(_debug_admin_routes(service))
 
     # SPA shell at "/" and any unknown path so Vue Router can take over
     # client-side. Static assets under dist/static/* are content-hashed.

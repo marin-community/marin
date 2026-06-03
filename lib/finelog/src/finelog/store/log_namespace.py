@@ -1919,6 +1919,20 @@ class MemoryLogNamespace:
     def all_segments_unlocked(self) -> list[LocalSegment]:
         return []
 
+    def flush(self) -> None:
+        # In-memory namespaces hold everything in RAM; there is nothing to
+        # drain to a segment. Accepted for protocol uniformity (the debug-admin
+        # maintenance path calls it) and ignored.
+        pass
+
+    def compact(self) -> None:
+        # No segments to compact in memory mode.
+        pass
+
+    def force_compact_l0(self) -> None:
+        # No L0 segments in memory mode.
+        pass
+
     def update_schema(self, new_schema: Schema) -> None:
         _assert_additive_schema_evolution(self.schema, new_schema)
         new_arrow = schema_to_arrow(new_schema)
