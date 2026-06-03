@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import dataclasses
+import gc
 import importlib
 import json
 import sys
@@ -42,6 +44,7 @@ from typing import Any, ClassVar
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import jmp
 import levanter.grug.grug_moe as levanter_grug_moe
 import levanter.main.export_lm_to_hf as export_lm_to_hf
 import numpy as np
@@ -53,13 +56,19 @@ from levanter.utils.jax_utils import is_inexact_arrayish
 from safetensors.numpy import load_file
 
 import experiments.grug.moe.model as grug_moe_model
+from experiments.grug.moe.heuristic import DEFAULT_TARGET_STEPS, build_from_heuristic
 from experiments.grug.moe.model import GrugModelConfig, Transformer, canonical_grugmoe_tensor_names
+from experiments.grug.moe.train import initial_state
 
 jax.config.update("jax_default_matmul_precision", "float32")
 
 _ARTIFACT_WEIGHTS_FILE = "model.safetensors"
 _ARTIFACT_WEIGHTS_INDEX_FILE = "model.safetensors.index.json"
 _FORCED_SHARD_SIZE_BYTES = 1024
+_REALISTIC_MAX_SHARD_SIZE_BYTES = 256 * 1024 * 1024
+_TRAINING_MP_POLICY = "params=float32,compute=bfloat16,output=bfloat16"
+_CANARY_BUDGET = 1e18
+_CANARY_HIDDEN_DIM = 1024
 
 
 class _EmptyMesh:
@@ -197,6 +206,57 @@ def _large_smoke_cfg() -> GrugModelConfig:
         initializer_std=0.0,
         moe_implementation="scatter",
     )
+
+
+def _scaled_realistic_cfg() -> GrugModelConfig:
+    return GrugModelConfig(
+        vocab_size=4096,
+        hidden_dim=256,
+        intermediate_dim=128,
+        shared_expert_intermediate_dim=256,
+        num_experts=64,
+        num_experts_per_token=4,
+        num_layers=4,
+        num_heads=4,
+        num_kv_heads=1,
+        head_dim=64,
+        max_seq_len=256,
+        sliding_window=128,
+        initializer_std=0.5 / 16,
+        qk_mult=1.3,
+        moe_implementation="scatter",
+    )
+
+
+def _canary_cfg_optimizer_steps() -> tuple[GrugModelConfig, Any, int]:
+    # Import launch lazily so simple module import/py_compile does not construct
+    # the full executor step and data mixture unless the canary validation runs.
+    from experiments.grug.moe.launch import GRUG_MOE_TRIAL_MODEL
+
+    cfg, optimizer_config, _batch_size, steps = build_from_heuristic(
+        budget=_CANARY_BUDGET,
+        hidden_dim=_CANARY_HIDDEN_DIM,
+        target_steps=DEFAULT_TARGET_STEPS,
+    )
+    if cfg != GRUG_MOE_TRIAL_MODEL:
+        raise AssertionError("heuristic-derived canary config does not match GRUG_MOE_TRIAL_MODEL")
+    return cfg, optimizer_config, steps
+
+
+def _assert_production_relevant_structure(cfg: GrugModelConfig) -> None:
+    if cfg.num_experts != 64:
+        raise AssertionError(f"realistic config must keep 64 experts, got {cfg.num_experts}")
+    if cfg.num_experts_per_token != 4:
+        raise AssertionError(f"realistic config must keep top-4 routing, got {cfg.num_experts_per_token}")
+    if cfg.shared_expert_intermediate_dim <= 0:
+        raise AssertionError("realistic config must keep the shared expert")
+    if cfg.num_heads <= cfg.num_kv_heads or cfg.num_heads % cfg.num_kv_heads != 0:
+        raise AssertionError(
+            f"realistic config must keep GQA, got num_heads={cfg.num_heads} num_kv_heads={cfg.num_kv_heads}"
+        )
+    windows = {_layer_sliding_window(cfg, i) for i in range(cfg.num_layers)}
+    if windows != {cfg.sliding_window // 2, cfg.sliding_window}:
+        raise AssertionError(f"realistic config must exercise short and long windows, got {sorted(windows)}")
 
 
 def _layer_sliding_window(cfg: GrugModelConfig, layer_index: int) -> int:
@@ -501,6 +561,30 @@ def export_saved_checkpoint_via_levanter(
     )
 
 
+def export_training_state_checkpoint_via_levanter(
+    cfg: GrugModelConfig,
+    checkpoint_dir: Path,
+    artifact_dir: Path,
+    *,
+    max_shard_size: int,
+) -> None:
+    export_lm_to_hf.main(
+        export_lm_to_hf.ConvertLmConfig(
+            trainer=SimpleNamespace(
+                device_mesh=jax.set_mesh(_levanter_export_mesh()),
+                parameter_axis_mapping={},
+            ),
+            checkpoint_path=str(checkpoint_dir),
+            output_dir=str(artifact_dir),
+            checkpoint_subpath="params",
+            model=cfg,
+            save_tokenizer=False,
+            use_cpu=False,
+            max_shard_size=max_shard_size,
+        )
+    )
+
+
 def _exported_tensor_names(artifact_dir: Path, *, expect_sharded: bool) -> frozenset[str]:
     index_path = artifact_dir / _ARTIFACT_WEIGHTS_INDEX_FILE
     weights_path = artifact_dir / _ARTIFACT_WEIGHTS_FILE
@@ -539,6 +623,65 @@ def _exported_tensor_names(artifact_dir: Path, *, expect_sharded: bool) -> froze
 
 def _directory_size_bytes(path: Path) -> int:
     return sum(file.stat().st_size for file in path.rglob("*") if file.is_file())
+
+
+def _shard_count(artifact_dir: Path) -> int:
+    return len(list(artifact_dir.glob("model-*-of-*.safetensors")))
+
+
+def _realistic_prompt_ids(cfg: GrugModelConfig) -> jax.Array:
+    prompt = np.array([1, 42, 128, 2048, 17, 3072, 5, 63], dtype=np.int32)
+    return jnp.asarray((prompt % cfg.vocab_size)[None, :])
+
+
+def _realistic_cfg_optimizer_steps(config_name: str) -> tuple[GrugModelConfig, Any, int, str]:
+    canary_cfg, optimizer_config, steps = _canary_cfg_optimizer_steps()
+    if config_name == "canary":
+        return canary_cfg, optimizer_config, steps, "GRUG_MOE_TRIAL_MODEL"
+    if config_name == "scaled":
+        return _scaled_realistic_cfg(), optimizer_config, steps, "scaled production-structured fallback"
+    raise ValueError(f"unknown realistic config {config_name!r}")
+
+
+def _save_seeded_training_state_checkpoint(
+    cfg: GrugModelConfig,
+    checkpoint_dir: Path,
+    *,
+    optimizer_config: Any,
+    num_train_steps: int,
+    seed: int,
+) -> Transformer:
+    optimizer = optimizer_config.build(num_train_steps)
+    mp = jmp.get_policy(_TRAINING_MP_POLICY)
+    with _use_runtime_grug_mesh(for_init=True):
+        state = initial_state(
+            cfg,
+            optimizer=optimizer,
+            mp=mp,
+            key=jax.random.PRNGKey(seed),
+            ema_beta=None,
+        )
+
+    nonzero_probe = jnp.asarray(
+        [
+            state.params.token_embed[0, 0],
+            state.params.output_proj[0, 0],
+            state.params.blocks[0].mlp.expert_mlp.w_gate_up[0, 0, 0],
+        ]
+    )
+    if not bool(np.any(np.asarray(jax.device_get(nonzero_probe)) != 0.0)):
+        raise AssertionError("seeded training-state checkpoint probe was all zeros")
+
+    save_checkpoint(state, 0, checkpoint_dir)
+    lev_model = state.params
+    del state
+    gc.collect()
+    return lev_model
+
+
+def _clear_jax_memory() -> None:
+    gc.collect()
+    jax.clear_caches()
 
 
 def _native_forward(
@@ -707,6 +850,125 @@ def check_large_sharded_artifact_smoke(tpu_grugmoe) -> None:
     )
 
 
+def check_realistic_training_state_roundtrip(
+    tpu_grugmoe,
+    *,
+    config_name: str,
+    output_dir: Path | None,
+    max_shard_size: int,
+) -> None:
+    attention_metadata_mod = importlib.import_module("tpu_inference.layers.common.attention_metadata")
+    cfg, optimizer_config, num_train_steps, config_source = _realistic_cfg_optimizer_steps(config_name)
+    _assert_production_relevant_structure(cfg)
+    token_ids = _realistic_prompt_ids(cfg)
+    expected_names = canonical_grugmoe_tensor_names(cfg)
+
+    root = output_dir or Path(tempfile.mkdtemp(prefix="grugmoe-realistic-roundtrip-"))
+    checkpoint_dir = root / "checkpoints"
+    artifact_dir = root / "grugmoe-inference"
+    if checkpoint_dir.exists() or artifact_dir.exists():
+        raise FileExistsError(f"realistic roundtrip output path must be empty: {root}")
+    root.mkdir(parents=True, exist_ok=True)
+
+    print(f"realistic-roundtrip: output_dir={root}")
+    print(f"realistic-roundtrip: config_source={config_source}")
+    print(f"realistic-roundtrip: config={json.dumps(dataclasses.asdict(cfg), sort_keys=True, default=str)}")
+    print(f"realistic-roundtrip: dtype_policy={_TRAINING_MP_POLICY}; native_forward_dtype=float32")
+    print(f"realistic-roundtrip: prompt_ids={np.asarray(token_ids).tolist()[0]}")
+
+    lev_model = _save_seeded_training_state_checkpoint(
+        cfg,
+        checkpoint_dir,
+        optimizer_config=optimizer_config,
+        num_train_steps=num_train_steps,
+        seed=23,
+    )
+    checkpoint_size = _directory_size_bytes(checkpoint_dir)
+
+    expected_hidden, expected_expert_ids = jax.jit(_jax_full_forward)(lev_model, token_ids)
+    expected_logits = _jax_logits(lev_model, expected_hidden)[0]
+    expected_hidden_np = _np(expected_hidden[0])
+    expected_logits_np = _np(expected_logits)
+    expected_expert_ids_np = _np(expected_expert_ids)
+
+    with _patch_tpu_single_rank(tpu_grugmoe), jax.set_mesh(_tpu_mesh()):
+        manual_model = tpu_grugmoe.GrugMoeForCausalLM(
+            _vllm_config(cfg),
+            jax.random.PRNGKey(24),
+            _tpu_mesh(),
+        )
+    _copy_transformer(manual_model, lev_model)
+    manual_hidden, manual_logits, manual_expert_ids = _native_forward(
+        manual_model,
+        token_ids,
+        attention_metadata_mod,
+    )
+    np.testing.assert_allclose(_np(manual_hidden), expected_hidden_np, rtol=5e-4, atol=5e-4)
+    np.testing.assert_allclose(_np(manual_logits), expected_logits_np, rtol=5e-4, atol=5e-4)
+    np.testing.assert_array_equal(_np(manual_expert_ids), expected_expert_ids_np)
+    print("realistic-roundtrip: manual-copy native reference matches Levanter hidden states, logits, and routed experts")
+
+    del manual_model
+    del lev_model
+    _clear_jax_memory()
+
+    export_training_state_checkpoint_via_levanter(
+        cfg,
+        checkpoint_dir,
+        artifact_dir,
+        max_shard_size=max_shard_size,
+    )
+    exported_names = _exported_tensor_names(artifact_dir, expect_sharded=True)
+    if exported_names != expected_names:
+        raise AssertionError(
+            "realistic export tensors do not match the canonical schema: "
+            f"missing={sorted(expected_names - exported_names)} "
+            f"extra={sorted(exported_names - expected_names)}"
+        )
+
+    with _patch_tpu_single_rank(tpu_grugmoe), jax.set_mesh(_tpu_mesh()):
+        loaded_model = tpu_grugmoe.GrugMoeForCausalLM(
+            _vllm_config(cfg, artifact_dir),
+            jax.random.PRNGKey(25),
+            _tpu_mesh(),
+        )
+    report = loaded_model.load_weights(jax.random.PRNGKey(26))
+    if report.consumed != expected_names:
+        raise AssertionError(
+            "realistic artifact load report does not match exported tensors: "
+            f"missing={sorted(expected_names - report.consumed)} "
+            f"extra={sorted(report.consumed - expected_names)}"
+        )
+    if report.missing or report.unexpected:
+        raise AssertionError(
+            f"realistic artifact load report was not strict: missing={report.missing} unexpected={report.unexpected}"
+        )
+
+    loaded_hidden, loaded_logits, loaded_expert_ids = _native_forward(
+        loaded_model,
+        token_ids,
+        attention_metadata_mod,
+    )
+    np.testing.assert_allclose(_np(loaded_hidden), expected_hidden_np, rtol=5e-4, atol=5e-4)
+    np.testing.assert_allclose(_np(loaded_logits), expected_logits_np, rtol=5e-4, atol=5e-4)
+    np.testing.assert_array_equal(_np(loaded_expert_ids), expected_expert_ids_np)
+
+    artifact_size = _directory_size_bytes(artifact_dir)
+    shard_count = _shard_count(artifact_dir)
+    print(
+        "realistic-roundtrip: sharded training-state export loaded in native tpu-inference and matched "
+        "Levanter/manual-copy hidden states, logits, and routed expert IDs"
+    )
+    print(
+        "realistic-roundtrip: "
+        f"checkpoint_dir={checkpoint_dir} checkpoint_bytes={checkpoint_size} "
+        f"artifact_dir={artifact_dir} artifact_bytes={artifact_size} "
+        f"shard_count={shard_count} max_shard_size={max_shard_size} "
+        f"expected_tensors={len(expected_names)} consumed_tensors={len(report.consumed)} "
+        f"missing={sorted(report.missing)} unexpected={sorted(report.unexpected)}"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -725,6 +987,32 @@ def main() -> None:
         action="store_true",
         help="Also run a 1-5GB zero-weight sharded export/load smoke.",
     )
+    parser.add_argument(
+        "--realistic-roundtrip",
+        action="store_true",
+        help="Run the seeded non-zero GrugTrainState checkpoint -> sharded HF -> native tpu-inference parity check.",
+    )
+    parser.add_argument(
+        "--realistic-config",
+        choices=("canary", "scaled"),
+        default="canary",
+        help=(
+            "Use the full GRUG_MOE_TRIAL_MODEL canary config, or a smaller config "
+            "that preserves its MoE/GQA structure."
+        ),
+    )
+    parser.add_argument(
+        "--realistic-output-dir",
+        type=Path,
+        default=None,
+        help="Directory to leave the realistic checkpoint and HF artifact in. Defaults to a new /tmp directory.",
+    )
+    parser.add_argument(
+        "--realistic-max-shard-size",
+        type=int,
+        default=_REALISTIC_MAX_SHARD_SIZE_BYTES,
+        help="Forced max safetensors shard size for the realistic HF export.",
+    )
     args = parser.parse_args()
 
     tpu_grugmoe = _load_tpu_grugmoe(args.tpu_inference_root.resolve())
@@ -734,6 +1022,13 @@ def main() -> None:
         check_inference_artifact_roundtrip(tpu_grugmoe)
         if args.large_smoke:
             check_large_sharded_artifact_smoke(tpu_grugmoe)
+    if args.realistic_roundtrip:
+        check_realistic_training_state_roundtrip(
+            tpu_grugmoe,
+            config_name=args.realistic_config,
+            output_dir=args.realistic_output_dir,
+            max_shard_size=args.realistic_max_shard_size,
+        )
 
 
 if __name__ == "__main__":
