@@ -2090,8 +2090,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--levanter-streaming-greedy-lm-head",
-        action="store_true",
-        help="Use block-streaming LM-head argmax/logprob computation for greedy Levanter decode requests.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Use block-streaming LM-head argmax/logprob computation for greedy Levanter decode requests. "
+            "Pass --no-levanter-streaming-greedy-lm-head to benchmark the legacy materialized-logits path."
+        ),
     )
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args(argv)

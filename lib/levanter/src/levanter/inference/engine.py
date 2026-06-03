@@ -104,7 +104,7 @@ class InferenceEngineConfig:
     tpu_paged_attention: TpuPagedAttentionConfig = field(default_factory=TpuPagedAttentionConfig)
     """Paged attention backend used by inference decode and prefill calls."""
 
-    use_streaming_greedy_lm_head: bool = False
+    use_streaming_greedy_lm_head: bool = True
     """Use a block-streaming LM-head argmax/logprob path for greedy decode requests."""
 
     max_top_k: int | None = None
