@@ -253,7 +253,7 @@ def resolve_node_ref(host: str, project: str, *, alternate_hosts: Iterable[str] 
 
 
 def _resolve_node_ref_by_ip(host: str, project: str) -> GcpNodeRef | None:
-    tpu_match = gcp.find_tpu_by_ip(host, project, zone="-")
+    tpu_match = gcp.find_tpu_by_ip(host, project)
     if tpu_match:
         name, zone, worker_id = tpu_match
         return GcpNodeRef(kind="tpu", name=name, zone=zone, project=project, tpu_worker_id=worker_id)

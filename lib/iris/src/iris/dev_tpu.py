@@ -13,7 +13,7 @@ from iris.rpc import job_pb2
 
 
 class TpuNameLookup(Protocol):
-    def __call__(self, name: str, project: str, *, zone: str = "-") -> tuple[str, str] | None: ...
+    def __call__(self, name: str, project: str, *, zone: str | None = None) -> tuple[str, str] | None: ...
 
 
 @dataclass(frozen=True)
@@ -120,7 +120,7 @@ def resolve_node_ref_from_worker_metadata(
     if metadata.tpu_name:
         zone = metadata.gce_zone
         if not zone and find_tpu_by_name is not None:
-            tpu_match = find_tpu_by_name(metadata.tpu_name, project, zone="-")
+            tpu_match = find_tpu_by_name(metadata.tpu_name, project)
             if tpu_match:
                 _name, zone = tpu_match
         if zone:
