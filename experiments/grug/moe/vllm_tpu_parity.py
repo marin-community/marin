@@ -24,7 +24,9 @@ Levanter checkpoint, exports it through `export_lm_to_hf`, loads the resulting
 canonical safetensors artifact into tpu-inference, and compares against the
 manual-copy native model. It runs both the default single-file artifact and a
 deliberately forced HuggingFace sharded artifact with
-`model.safetensors.index.json`.
+`model.safetensors.index.json`. The realistic GrugTrainState path also checks
+small deterministic full-forward greedy generation from the loaded sharded
+artifact, without using production KV-cache decode.
 """
 
 from __future__ import annotations
@@ -66,6 +68,7 @@ _ARTIFACT_WEIGHTS_FILE = "model.safetensors"
 _ARTIFACT_WEIGHTS_INDEX_FILE = "model.safetensors.index.json"
 _FORCED_SHARD_SIZE_BYTES = 1024
 _REALISTIC_MAX_SHARD_SIZE_BYTES = 256 * 1024 * 1024
+_REALISTIC_GENERATION_TOKENS = 3
 _TRAINING_MP_POLICY = "params=float32,compute=bfloat16,output=bfloat16"
 _CANARY_BUDGET = 1e18
 _CANARY_HIDDEN_DIM = 1024
@@ -450,6 +453,82 @@ def _jax_full_forward(model: Transformer, token_ids: jax.Array) -> tuple[jax.Arr
 
 def _jax_logits(model: Transformer, hidden: jax.Array) -> jax.Array:
     return jnp.einsum("bsh,hv->bsv", hidden, model.output_proj)
+
+
+def _jax_last_logits(model: Transformer, token_ids: jax.Array) -> jax.Array:
+    hidden, _ = _jax_full_forward(model, token_ids)
+    return _jax_logits(model, hidden)[0, -1]
+
+
+def _append_token(token_ids: jax.Array, token_id: int) -> jax.Array:
+    next_token = jnp.asarray([[token_id]], dtype=token_ids.dtype)
+    return jnp.concatenate([token_ids, next_token], axis=1)
+
+
+def _levanter_greedy_generation_reference(
+    lev_model: Transformer,
+    prompt_ids: jax.Array,
+    generation_tokens: int,
+) -> tuple[np.ndarray, np.ndarray, jax.Array]:
+    token_ids = prompt_ids
+    generated_ids = []
+    next_token_logits = []
+    last_logits = jax.jit(_jax_last_logits)
+    for _ in range(generation_tokens):
+        step_logits = last_logits(lev_model, token_ids)
+        token_id = int(np.asarray(jnp.argmax(step_logits, axis=-1)))
+        generated_ids.append(token_id)
+        next_token_logits.append(_np(step_logits))
+        token_ids = _append_token(token_ids, token_id)
+
+    return (
+        np.asarray(generated_ids, dtype=np.int32),
+        np.stack(next_token_logits, axis=0),
+        token_ids,
+    )
+
+
+def _native_greedy_generation(
+    tpu_model: Any,
+    prompt_ids: jax.Array,
+    attention_metadata_mod: Any,
+    generation_tokens: int,
+) -> tuple[np.ndarray, np.ndarray, jax.Array]:
+    token_ids = prompt_ids
+    generated_ids = []
+    next_token_logits = []
+    for _ in range(generation_tokens):
+        _, logits, _ = _native_forward(tpu_model, token_ids, attention_metadata_mod)
+        step_logits = logits[-1]
+        token_id = int(np.asarray(jnp.argmax(step_logits, axis=-1)))
+        generated_ids.append(token_id)
+        next_token_logits.append(_np(step_logits))
+        token_ids = _append_token(token_ids, token_id)
+
+    return (
+        np.asarray(generated_ids, dtype=np.int32),
+        np.stack(next_token_logits, axis=0),
+        token_ids,
+    )
+
+
+def _assert_generation_matches_reference(
+    *,
+    name: str,
+    actual_generated_ids: np.ndarray,
+    actual_logits: np.ndarray,
+    actual_token_ids: jax.Array,
+    expected_generated_ids: np.ndarray,
+    expected_logits: np.ndarray,
+    expected_token_ids: jax.Array,
+) -> None:
+    np.testing.assert_array_equal(actual_generated_ids, expected_generated_ids)
+    np.testing.assert_allclose(actual_logits, expected_logits, rtol=5e-4, atol=5e-4)
+    np.testing.assert_array_equal(_np(actual_token_ids), _np(expected_token_ids))
+    print(
+        f"realistic-generation: {name} full-forward greedy generation matched "
+        f"Levanter reference for token IDs and logits across {len(expected_generated_ids)} steps"
+    )
 
 
 def check_moe_component(tpu_grugmoe) -> None:
@@ -856,11 +935,19 @@ def check_realistic_training_state_roundtrip(
     config_name: str,
     output_dir: Path | None,
     max_shard_size: int,
+    generation_tokens: int,
 ) -> None:
     attention_metadata_mod = importlib.import_module("tpu_inference.layers.common.attention_metadata")
     cfg, optimizer_config, num_train_steps, config_source = _realistic_cfg_optimizer_steps(config_name)
     _assert_production_relevant_structure(cfg)
     token_ids = _realistic_prompt_ids(cfg)
+    if generation_tokens <= 0:
+        raise ValueError(f"generation_tokens must be positive, got {generation_tokens}")
+    if token_ids.shape[1] + generation_tokens > cfg.max_seq_len:
+        raise ValueError(
+            "fixed prompt plus generation tokens must fit in the configured context: "
+            f"prompt={token_ids.shape[1]} generation_tokens={generation_tokens} max_seq_len={cfg.max_seq_len}"
+        )
     expected_names = canonical_grugmoe_tensor_names(cfg)
 
     root = output_dir or Path(tempfile.mkdtemp(prefix="grugmoe-realistic-roundtrip-"))
@@ -875,6 +962,7 @@ def check_realistic_training_state_roundtrip(
     print(f"realistic-roundtrip: config={json.dumps(dataclasses.asdict(cfg), sort_keys=True, default=str)}")
     print(f"realistic-roundtrip: dtype_policy={_TRAINING_MP_POLICY}; native_forward_dtype=float32")
     print(f"realistic-roundtrip: prompt_ids={np.asarray(token_ids).tolist()[0]}")
+    print(f"realistic-generation: greedy_new_tokens={generation_tokens}; sampling=false; kv_cache=false")
 
     lev_model = _save_seeded_training_state_checkpoint(
         cfg,
@@ -907,6 +995,33 @@ def check_realistic_training_state_roundtrip(
     np.testing.assert_allclose(_np(manual_logits), expected_logits_np, rtol=5e-4, atol=5e-4)
     np.testing.assert_array_equal(_np(manual_expert_ids), expected_expert_ids_np)
     print("realistic-roundtrip: manual-copy native reference matches Levanter hidden states, logits, and routed experts")
+
+    (
+        expected_generated_ids,
+        expected_generation_logits,
+        expected_generation_token_ids,
+    ) = _levanter_greedy_generation_reference(lev_model, token_ids, generation_tokens)
+    manual_generated_ids, manual_generation_logits, manual_generation_token_ids = _native_greedy_generation(
+        manual_model,
+        token_ids,
+        attention_metadata_mod,
+        generation_tokens,
+    )
+    _assert_generation_matches_reference(
+        name="manual-copy native reference",
+        actual_generated_ids=manual_generated_ids,
+        actual_logits=manual_generation_logits,
+        actual_token_ids=manual_generation_token_ids,
+        expected_generated_ids=expected_generated_ids,
+        expected_logits=expected_generation_logits,
+        expected_token_ids=expected_generation_token_ids,
+    )
+    print(
+        "realistic-generation: "
+        f"prompt_ids={np.asarray(token_ids).tolist()[0]} "
+        f"generated_ids={expected_generated_ids.tolist()} "
+        f"final_token_ids={_np(expected_generation_token_ids).tolist()[0]}"
+    )
 
     del manual_model
     del lev_model
@@ -953,6 +1068,22 @@ def check_realistic_training_state_roundtrip(
     np.testing.assert_allclose(_np(loaded_logits), expected_logits_np, rtol=5e-4, atol=5e-4)
     np.testing.assert_array_equal(_np(loaded_expert_ids), expected_expert_ids_np)
 
+    loaded_generated_ids, loaded_generation_logits, loaded_generation_token_ids = _native_greedy_generation(
+        loaded_model,
+        token_ids,
+        attention_metadata_mod,
+        generation_tokens,
+    )
+    _assert_generation_matches_reference(
+        name="loaded native artifact",
+        actual_generated_ids=loaded_generated_ids,
+        actual_logits=loaded_generation_logits,
+        actual_token_ids=loaded_generation_token_ids,
+        expected_generated_ids=expected_generated_ids,
+        expected_logits=expected_generation_logits,
+        expected_token_ids=expected_generation_token_ids,
+    )
+
     artifact_size = _directory_size_bytes(artifact_dir)
     shard_count = _shard_count(artifact_dir)
     print(
@@ -965,7 +1096,8 @@ def check_realistic_training_state_roundtrip(
         f"artifact_dir={artifact_dir} artifact_bytes={artifact_size} "
         f"shard_count={shard_count} max_shard_size={max_shard_size} "
         f"expected_tensors={len(expected_names)} consumed_tensors={len(report.consumed)} "
-        f"missing={sorted(report.missing)} unexpected={sorted(report.unexpected)}"
+        f"missing={sorted(report.missing)} unexpected={sorted(report.unexpected)} "
+        f"generation_tokens={generation_tokens} generated_ids={expected_generated_ids.tolist()}"
     )
 
 
@@ -1013,6 +1145,12 @@ def main() -> None:
         default=_REALISTIC_MAX_SHARD_SIZE_BYTES,
         help="Forced max safetensors shard size for the realistic HF export.",
     )
+    parser.add_argument(
+        "--realistic-generation-tokens",
+        type=int,
+        default=_REALISTIC_GENERATION_TOKENS,
+        help="Number of deterministic greedy full-forward tokens to generate in the realistic roundtrip.",
+    )
     args = parser.parse_args()
 
     tpu_grugmoe = _load_tpu_grugmoe(args.tpu_inference_root.resolve())
@@ -1028,6 +1166,7 @@ def main() -> None:
             config_name=args.realistic_config,
             output_dir=args.realistic_output_dir,
             max_shard_size=args.realistic_max_shard_size,
+            generation_tokens=args.realistic_generation_tokens,
         )
 
 
