@@ -46,6 +46,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
+_ROUTING_RENORM_SUM = 2.5
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -74,8 +75,8 @@ class GrugModelConfig:
     hidden_dim: int = 2048
     intermediate_dim: int = 5632
     shared_expert_intermediate_dim: int = 5632
-    num_experts: int = 8
-    num_experts_per_token: int = 2
+    num_experts: int = 256
+    num_experts_per_token: int = 4
     num_layers: int = 24
     num_heads: int = 16
     num_kv_heads: int = 16
@@ -85,7 +86,7 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.0
-    router_z_loss_coef: float = 0.001
+    router_z_loss_coef: float = 0.0
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
