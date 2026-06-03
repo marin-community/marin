@@ -226,7 +226,7 @@ def submit(
             )
             merged = merge_constraints(
                 constraints_from_resources(entry.resources),
-                [Constraint.from_proto(c) for c in entry.constraints or request.constraints],
+                [Constraint.from_proto(c) for c in entry.constraints],
             )
             for constraint in merged:
                 holder_request.constraints.append(constraint.to_proto())
