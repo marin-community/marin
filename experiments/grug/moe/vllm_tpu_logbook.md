@@ -8,11 +8,13 @@ Issue: https://github.com/marin-community/marin/issues/6106
   - Current local base before this native-JAX evidence update: [`4a909352`](https://github.com/marin-community/marin/commit/4a909352b27a1eedebc3556bf35bc9712394486c)
   - Native-JAX parity harness/docs commit used for TPU validation: [`9095972d`](https://github.com/marin-community/marin/commit/9095972d843652a22f925057a93498f04a6f3b1a)
   - Native-JAX strengthened parity harness commit used for the 2026-06-03 TPU validation: [`1394236f`](https://github.com/marin-community/marin/commit/1394236f0d1bfa71d931397872e522557b237c78)
+  - Canonical inference artifact roundtrip harness commit used for the 2026-06-03 TPU validation: [`c3442afe`](https://github.com/marin-community/marin/commit/c3442afe3ccfb6703623d6a679d7398f5789cd73)
   - Final pushed branch head is recorded in issue #6106 after this evidence update is pushed.
 - vLLM: [`grugmoe-vllm-tpu-support`](https://github.com/marin-community/vllm/tree/grugmoe-vllm-tpu-support) in `/home/romain/dev/marin-wt/grugmoe-vllm-tpu-vllm`
   - Native-JAX replacement commit: [`d025e46d`](https://github.com/marin-community/vllm/commit/d025e46d3dfe0afc0f5bd1518c19ce337205db2d)
 - tpu-inference: [`grugmoe-vllm-tpu-support`](https://github.com/marin-community/tpu-inference/tree/grugmoe-vllm-tpu-support) in `/home/romain/dev/marin-wt/grugmoe-vllm-tpu-inference`
   - Native-JAX implementation commit: [`4f83d210`](https://github.com/marin-community/tpu-inference/commit/4f83d2109ae650de7d7e4f521154fb0d5c1a23a1)
+  - Canonical inference artifact loader commit: [`e42d7339`](https://github.com/marin-community/tpu-inference/commit/e42d7339e2c84b29b4c302b22483678b3862ab4e)
 
 ## Milestones
 
@@ -28,12 +30,16 @@ Issue: https://github.com/marin-community/marin/issues/6106
 - 2026-06-02: Ran `/romain/grugmoe-native-jax-tpu-parity` on `v6e-4`; component and composed parity both passed and the job reached `succeeded`.
 - 2026-06-03: Strengthened the checkpointless native JAX harness to use a 4-layer tiny config with sliding-window branches `[2, 2, 2, 4]`, still manually copy Levanter parameters into the native tpu-inference model, and compare final hidden states, `compute_logits` logits, and routed expert IDs.
 - 2026-06-03: Ran `/romain/grugmoe-native-jax-strengthened-parity-sha` on `v6e-4`; component parity and strengthened full parity both passed and the job reached `succeeded`.
+- 2026-06-03: Added a small canonical GrugMoE inference artifact boundary: `config.json` plus `model.safetensors` with stable HF/vLLM-style tensor names and checkpoint-oriented linear tensor layout.
+- 2026-06-03: Added native tpu-inference JAX loading for that artifact without treating Levanter's training checkpoint tree as the serving contract.
+- 2026-06-03: Extended the Marin parity harness with a seeded export/load roundtrip: initialize tiny Levanter GrugMoE, export the canonical artifact, load it into a second native JAX model, compare against the manual-copy native model for hidden states, `compute_logits` logits, and routed expert IDs, and assert that all exported tensors were consumed with no missing or unexpected tensors.
+- 2026-06-03: Ran `/romain/grugmoe-inference-artifact-roundtrip` on `v6e-4`; component parity, strengthened full parity, and canonical artifact roundtrip all passed and the job reached `succeeded`.
 
 ## Local Verification
 
 Commands used for local verification. The vLLM removal check first passed on
 2026-06-02; the focused pytest and Marin parity harness were re-run after the
-strengthened harness update on 2026-06-03.
+canonical artifact roundtrip update on 2026-06-03.
 
 ```bash
 cd /home/romain/dev/marin-wt/grugmoe-vllm-tpu-vllm
@@ -53,12 +59,10 @@ uv run --no-project python -m py_compile \
 cd /home/romain/dev/marin-wt/grugmoe-vllm-tpu-inference
 python -m py_compile \
   tpu_inference/models/jax/grugmoe.py \
-  tests/models/jax/test_grugmoe.py \
-  tests/models/common/test_model_loader.py
+  tests/models/jax/test_grugmoe.py
 uv run --no-project --with ruff ruff check \
   tpu_inference/models/jax/grugmoe.py \
-  tests/models/jax/test_grugmoe.py \
-  tests/models/common/test_model_loader.py
+  tests/models/jax/test_grugmoe.py
 JAX_PLATFORMS=cpu \
 PYTHONPATH=/home/romain/dev/marin-wt/grugmoe-vllm-tpu-inference:/home/romain/dev/marin-wt/grugmoe-vllm-tpu-vllm \
 uv run --no-project \
@@ -72,7 +76,7 @@ uv run --no-project \
     -q
 ```
 
-Result on 2026-06-03: focused pytest `2 passed, 25 warnings in 6.71s`.
+Result on 2026-06-03: focused pytest `2 passed, 25 warnings in 6.67s`.
 
 ```bash
 cd /home/romain/dev/marin-wt/grugmoe-vllm-tpu-support
@@ -95,20 +99,22 @@ Final parity output:
 ```text
 component: native GrugMoeMLP matches Levanter moe_mlp
 full: native GrugMoeModel hidden states, logits, and routed expert IDs match Levanter reference
+artifact: canonical safetensors load matches manual-copy hidden states, logits, and routed expert IDs
 ```
 
 Additional 2026-06-03 focused results:
 
 - `./infra/pre-commit.py experiments/grug/moe/vllm_tpu_parity.py`: `OK`
+- `uv run --with ruff ruff check experiments/grug/moe/vllm_tpu_parity.py`: `All checks passed!`
 
 ## TPU Verification
 
-Status: passed for the strengthened native-JAX branch heads listed below.
+Status: passed for the canonical inference artifact roundtrip branch heads listed below.
 
 Exact validation SHAs:
 
-- Marin: `1394236f0d1bfa71d931397872e522557b237c78`
-- tpu-inference: `4f83d2109ae650de7d7e4f521154fb0d5c1a23a1`
+- Marin: `c3442afe3ccfb6703623d6a679d7398f5789cd73`
+- tpu-inference: `e42d7339e2c84b29b4c302b22483678b3862ab4e`
 - vLLM: `d025e46d3dfe0afc0f5bd1518c19ce337205db2d`
 
 Repro command:
@@ -126,25 +132,25 @@ uv run iris --cluster=marin job run \
   --cpu 2 \
   --memory 16GB \
   --disk 50GB \
-  --job-name grugmoe-native-jax-strengthened-parity-sha \
-  -- bash -lc 'set -euxo pipefail; echo marin_sha=1394236f0d1bfa71d931397872e522557b237c78; git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/tpu-inference.git /tmp/grugmoe-vllm-tpu-inference; git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/vllm.git /tmp/grugmoe-vllm-tpu-vllm; echo tpu_inference_sha=$(git -C /tmp/grugmoe-vllm-tpu-inference rev-parse HEAD); echo vllm_sha=$(git -C /tmp/grugmoe-vllm-tpu-vllm rev-parse HEAD); PYTHONPATH=/tmp/grugmoe-vllm-tpu-inference:/tmp/grugmoe-vllm-tpu-vllm uv run --with-requirements /tmp/grugmoe-vllm-tpu-inference/requirements.txt --with-requirements /tmp/grugmoe-vllm-tpu-vllm/requirements/common.txt --with "torch==2.10.0+cpu" --extra-index-url https://download.pytorch.org/whl/cpu python -m experiments.grug.moe.vllm_tpu_parity --tpu-inference-root /tmp/grugmoe-vllm-tpu-inference'
+  --job-name grugmoe-inference-artifact-roundtrip \
+  -- bash -lc 'set -euxo pipefail; echo marin_sha=c3442afe3ccfb6703623d6a679d7398f5789cd73; git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/tpu-inference.git /tmp/grugmoe-vllm-tpu-inference; git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/vllm.git /tmp/grugmoe-vllm-tpu-vllm; echo tpu_inference_sha=$(git -C /tmp/grugmoe-vllm-tpu-inference rev-parse HEAD); echo vllm_sha=$(git -C /tmp/grugmoe-vllm-tpu-vllm rev-parse HEAD); PYTHONPATH=/tmp/grugmoe-vllm-tpu-inference:/tmp/grugmoe-vllm-tpu-vllm uv run --with-requirements /tmp/grugmoe-vllm-tpu-inference/requirements.txt --with-requirements /tmp/grugmoe-vllm-tpu-vllm/requirements/common.txt --with "torch==2.10.0+cpu" --extra-index-url https://download.pytorch.org/whl/cpu python -m experiments.grug.moe.vllm_tpu_parity --tpu-inference-root /tmp/grugmoe-vllm-tpu-inference'
 ```
 
 Result:
 
-- Job: `/romain/grugmoe-native-jax-strengthened-parity-sha`
+- Job: `/romain/grugmoe-inference-artifact-roundtrip`
 - TPU: `v6e-4`
 - Region: `europe-west4`
 - State: `succeeded`
 - Exit: `0`
 - Failures/preemptions: `0`/`0`
-- Duration: `31.75 seconds`
+- Duration: `1 minute and 6.63 seconds`
 
 Remote SHA log lines:
 
 ```text
-marin_sha=1394236f0d1bfa71d931397872e522557b237c78
-tpu_inference_sha=4f83d2109ae650de7d7e4f521154fb0d5c1a23a1
+marin_sha=c3442afe3ccfb6703623d6a679d7398f5789cd73
+tpu_inference_sha=e42d7339e2c84b29b4c302b22483678b3862ab4e
 vllm_sha=d025e46d3dfe0afc0f5bd1518c19ce337205db2d
 ```
 
@@ -153,6 +159,7 @@ Final parity log lines:
 ```text
 component: native GrugMoeMLP matches Levanter moe_mlp
 full: native GrugMoeModel hidden states, logits, and routed expert IDs match Levanter reference
+artifact: canonical safetensors load matches manual-copy hidden states, logits, and routed expert IDs
 ```
 
 ## Scope
@@ -163,6 +170,8 @@ In scope:
 - QB routing: biased top-k selection and unbiased sigmoid combine weights.
 - Tiny deterministic component parity against Levanter `moe_mlp`.
 - Tiny deterministic composed parity using Levanter parameters/equations, including final hidden states, `compute_logits` logits, and routed expert IDs.
+- Tiny deterministic canonical inference artifact export/load roundtrip.
+- Strict artifact tensor accounting: all exported tensors consumed, no missing tensors, no unexpected tensors.
 - Targeted Iris `v6e-4` validation.
 
 Out of scope:
@@ -170,7 +179,7 @@ Out of scope:
 - Performance tuning.
 - Fused TPU kernels.
 - vLLM PyTorch GrugMoE ownership.
-- Checkpoint export/loading.
+- Direct loading of Levanter's native training checkpoint tree as the serving contract.
 - Generation.
 - Real-model smoke tests.
 - Production KV-cache decode.
