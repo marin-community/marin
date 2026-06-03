@@ -12,6 +12,7 @@ Issue: https://github.com/marin-community/marin/issues/6106
   - Normal Levanter export path roundtrip commit used for the 2026-06-03 TPU validation: [`14577de9`](https://github.com/marin-community/marin/commit/14577de9f460cb727f8b3a6ed2232051aed1359a)
   - Sharded Levanter/HF export smoke commit used for the 2026-06-03 TPU validation: [`f895c61f`](https://github.com/marin-community/marin/commit/f895c61f8546b9847fdb31316e04d2c6d351aa83)
   - Realistic full-canary training-state roundtrip commit used for the 2026-06-03 TPU validation: [`e2a4a4bf`](https://github.com/marin-community/marin/commit/e2a4a4bfb71ebeb56a09cc24c01cca18aa117678)
+  - Deterministic full-forward generation parity commit used for the 2026-06-03 TPU validation: [`923ff3f2`](https://github.com/marin-community/marin/commit/923ff3f2b96b1938444de4ab05f9b4c984f0dc43)
 - vLLM: [`grugmoe-vllm-tpu-support`](https://github.com/marin-community/vllm/tree/grugmoe-vllm-tpu-support) in `/home/romain/dev/marin-wt/grugmoe-vllm-tpu-vllm`
   - Native-JAX replacement commit: [`d025e46d`](https://github.com/marin-community/vllm/commit/d025e46d3dfe0afc0f5bd1518c19ce337205db2d)
 - tpu-inference: [`grugmoe-vllm-tpu-support`](https://github.com/marin-community/tpu-inference/tree/grugmoe-vllm-tpu-support) in `/home/romain/dev/marin-wt/grugmoe-vllm-tpu-inference`
@@ -49,6 +50,9 @@ Issue: https://github.com/marin-community/marin/issues/6106
 - 2026-06-03: Added a realistic roundtrip mode that builds a seeded non-zero `GrugTrainState` with `initial_state`, saves the full training-state checkpoint, exports through `export_lm_to_hf` with `checkpoint_subpath="params"`, requires standard sharded HF safetensors, and compares loaded native tpu-inference hidden states, logits, and routed expert IDs against the Levanter/manual-copy reference.
 - 2026-06-03: Ran a scaled local realistic sanity check preserving the production structure: 64 experts, top-4 routing, shared expert, GQA, and short/long sliding-window layer pattern.
 - 2026-06-03: Ran `/romain/grugmoe-canary-training-state-roundtrip` on `v6e-4` with the full `GRUG_MOE_TRIAL_MODEL` canary config; the real training-state checkpoint export produced 26 standard HF safetensors shards, native tpu-inference consumed all 217 canonical tensors with no missing/unexpected tensors, and hidden states, logits, and routed expert IDs matched the Levanter/manual-copy reference.
+- 2026-06-03: Added deterministic greedy generation parity to the realistic roundtrip: no sampling, three full-forward generated tokens, Levanter/manual-copy reference comparison at each step, and loaded native tpu-inference artifact comparison at each step.
+- 2026-06-03: Re-ran the scaled local realistic sanity check with generation; the sharded loaded artifact generated `[858, 3205, 1165]` and matched Levanter logits across all three steps.
+- 2026-06-03: Ran `/romain/grugmoe-canary-generation-parity` on `v6e-4`; the full canary loaded sharded artifact generated `[57524, 45040, 67859]`, matched Levanter generation logits across all three full-forward steps, preserved hidden-state/logit/expert-routing parity, and consumed all 217 canonical tensors with no missing/unexpected tensors.
 
 ## Local Verification
 
@@ -236,7 +240,8 @@ uv run \
   --component-only \
   --realistic-roundtrip \
   --realistic-config scaled \
-  --realistic-max-shard-size 16777216
+  --realistic-max-shard-size 16777216 \
+  --realistic-generation-tokens 3
 ```
 
 Results:
@@ -246,16 +251,21 @@ Results:
 - `./infra/pre-commit.py experiments/grug/moe/vllm_tpu_parity.py`: `OK`
 - Scaled config: `vocab_size=4096`, `hidden_dim=256`, `intermediate_dim=128`, `shared_expert_intermediate_dim=256`, `num_experts=64`, `num_experts_per_token=4`, `num_layers=4`, `num_heads=4`, `num_kv_heads=1`, `head_dim=64`, `max_seq_len=256`, `sliding_window=128`, `qk_mult=1.3`.
 - Dtype policy: `params=float32,compute=bfloat16,output=bfloat16`; native parity forward used `float32`.
-- Output root: `/tmp/grugmoe-realistic-roundtrip-cqddxwya`
-- Training-state checkpoint: `/tmp/grugmoe-realistic-roundtrip-cqddxwya/checkpoints`, `117,812,277` bytes.
-- Sharded HF artifact: `/tmp/grugmoe-realistic-roundtrip-cqddxwya/grugmoe-inference`, `117,747,718` bytes, 9 shards, `max_shard_size=16,777,216`, no top-level `model.safetensors`.
+- Output root: `/tmp/grugmoe-realistic-roundtrip-anye_xyy`
+- Training-state checkpoint: `/tmp/grugmoe-realistic-roundtrip-anye_xyy/checkpoints`, `117,807,669` bytes.
+- Sharded HF artifact: `/tmp/grugmoe-realistic-roundtrip-anye_xyy/grugmoe-inference`, `117,747,718` bytes, 9 shards, `max_shard_size=16,777,216`, no top-level `model.safetensors`.
 - Tensor accounting: `expected_tensors=84`, `consumed_tensors=84`, `missing=[]`, `unexpected=[]`.
+- Greedy full-forward generation: `3` new tokens, no sampling, no KV cache; generated IDs `[858, 3205, 1165]`.
 - Final output:
 
 ```text
 component: native GrugMoeMLP matches Levanter moe_mlp
 realistic-roundtrip: manual-copy native reference matches Levanter hidden states, logits, and routed experts
+realistic-generation: manual-copy native reference full-forward greedy generation matched Levanter reference for token IDs and logits across 3 steps
+realistic-generation: prompt_ids=[1, 42, 128, 2048, 17, 3072, 5, 63] generated_ids=[858, 3205, 1165] final_token_ids=[1, 42, 128, 2048, 17, 3072, 5, 63, 858, 3205, 1165]
+realistic-generation: loaded native artifact full-forward greedy generation matched Levanter reference for token IDs and logits across 3 steps
 realistic-roundtrip: sharded training-state export loaded in native tpu-inference and matched Levanter/manual-copy hidden states, logits, and routed expert IDs
+realistic-roundtrip: checkpoint_dir=/tmp/grugmoe-realistic-roundtrip-anye_xyy/checkpoints checkpoint_bytes=117807669 artifact_dir=/tmp/grugmoe-realistic-roundtrip-anye_xyy/grugmoe-inference artifact_bytes=117747718 shard_count=9 max_shard_size=16777216 expected_tensors=84 consumed_tensors=84 missing=[] unexpected=[] generation_tokens=3 generated_ids=[858, 3205, 1165]
 ```
 
 ## TPU Verification
@@ -461,6 +471,64 @@ realistic-roundtrip: checkpoint_dir=/tmp/grugmoe-canary-roundtrip/checkpoints ch
 
 Artifact persistence: the checkpoint and HF artifact were left in TPU-local `/tmp` for the duration of the job. They were not copied to local disk, GCS, or the Hugging Face Hub.
 
+Additional 2026-06-03 full-canary deterministic generation parity:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-vllm-tpu-support
+uv run iris --cluster=marin job run \
+  --no-wait \
+  --enable-extra-resources \
+  --extra marin-core:tpu \
+  --tpu v6e-4 \
+  --region europe-west4 \
+  --priority interactive \
+  --timeout 7200 \
+  --cpu 16 \
+  --memory 128GB \
+  --disk 200GB \
+  --job-name grugmoe-canary-generation-parity \
+  -- bash -lc 'set -euxo pipefail; echo marin_sha=923ff3f2b96b1938444de4ab05f9b4c984f0dc43; git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/tpu-inference.git /tmp/grugmoe-vllm-tpu-inference; git clone --depth 1 --branch grugmoe-vllm-tpu-support https://github.com/marin-community/vllm.git /tmp/grugmoe-vllm-tpu-vllm; echo tpu_inference_sha=$(git -C /tmp/grugmoe-vllm-tpu-inference rev-parse HEAD); echo vllm_sha=$(git -C /tmp/grugmoe-vllm-tpu-vllm rev-parse HEAD); export LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304; PYTHONPATH=/tmp/grugmoe-vllm-tpu-inference:/tmp/grugmoe-vllm-tpu-vllm uv run --with-requirements /tmp/grugmoe-vllm-tpu-inference/requirements.txt --with-requirements /tmp/grugmoe-vllm-tpu-vllm/requirements/common.txt --with "torch==2.10.0+cpu" --extra-index-url https://download.pytorch.org/whl/cpu python -m experiments.grug.moe.vllm_tpu_parity --tpu-inference-root /tmp/grugmoe-vllm-tpu-inference --component-only --realistic-roundtrip --realistic-config canary --realistic-output-dir /tmp/grugmoe-canary-generation-parity --realistic-max-shard-size 268435456 --realistic-generation-tokens 3'
+```
+
+Result:
+
+- Job: `/romain/grugmoe-canary-generation-parity`
+- TPU: `v6e-4`
+- Region: `europe-west4`
+- State: `succeeded`
+- Exit: `0`
+- Failures/preemptions: `0`/`0`
+- Duration: `11 minutes and 8.96 seconds`
+- Remote SHAs:
+  - Marin branch head: `923ff3f2b96b1938444de4ab05f9b4c984f0dc43`
+  - `tpu_inference_sha=c0d472c6c1ab085156767375d534c3272fbfd120`
+  - `vllm_sha=d025e46d3dfe0afc0f5bd1518c19ce337205db2d`
+- Config source: `GRUG_MOE_TRIAL_MODEL`.
+- Dtype policy: `params=float32,compute=bfloat16,output=bfloat16`; native parity forward used `float32`.
+- Fixed prompt IDs: `[1, 42, 128, 2048, 17, 3072, 5, 63]`.
+- Greedy full-forward generation: `3` new tokens, no sampling, no KV cache; generated IDs `[57524, 45040, 67859]`.
+- Training-state checkpoint: `/tmp/grugmoe-canary-generation-parity/checkpoints`, `5,762,306,365` bytes.
+- HF artifact: `/tmp/grugmoe-canary-generation-parity/grugmoe-inference`, `5,762,168,484` bytes.
+- HF artifact layout: `model.safetensors.index.json` plus 26 shard files; single-file `model.safetensors` remains rejected by the harness for the realistic milestone.
+- Requested `max_shard_size`: `268,435,456` bytes.
+- Actual max shard logged by Levanter: `525.34 MB`, because the embedding/lm-head tensors are individually larger than the requested shard size and HF sharding keeps individual tensors intact.
+- Tensor accounting: `expected_tensors=217`, `consumed_tensors=217`, `missing=[]`, `unexpected=[]`.
+
+Final validation log lines:
+
+```text
+component: native GrugMoeMLP matches Levanter moe_mlp
+realistic-roundtrip: manual-copy native reference matches Levanter hidden states, logits, and routed experts
+realistic-generation: manual-copy native reference full-forward greedy generation matched Levanter reference for token IDs and logits across 3 steps
+realistic-generation: prompt_ids=[1, 42, 128, 2048, 17, 3072, 5, 63] generated_ids=[57524, 45040, 67859] final_token_ids=[1, 42, 128, 2048, 17, 3072, 5, 63, 57524, 45040, 67859]
+Will save 26 shards with max size 525.34 MB
+Saved a sharded checkpoint with 26 shards, max size 525.34 MB
+Progress on:Checkpoint size 5.76GB/5.76GB ...
+realistic-generation: loaded native artifact full-forward greedy generation matched Levanter reference for token IDs and logits across 3 steps
+realistic-roundtrip: sharded training-state export loaded in native tpu-inference and matched Levanter/manual-copy hidden states, logits, and routed expert IDs
+realistic-roundtrip: checkpoint_dir=/tmp/grugmoe-canary-generation-parity/checkpoints checkpoint_bytes=5762306365 artifact_dir=/tmp/grugmoe-canary-generation-parity/grugmoe-inference artifact_bytes=5762168484 shard_count=26 max_shard_size=268435456 expected_tensors=217 consumed_tensors=217 missing=[] unexpected=[] generation_tokens=3 generated_ids=[57524, 45040, 67859]
+```
+
 ## Scope
 
 In scope:
@@ -475,6 +543,7 @@ In scope:
 - Tiny deterministic forced-shard Levanter/HF export roundtrip.
 - Capped-size 1.25GB zero-weight sharded Levanter/HF export smoke.
 - Full `GRUG_MOE_TRIAL_MODEL` local seeded non-zero training-state checkpoint roundtrip.
+- Deterministic full-forward greedy generation parity for the loaded native tpu-inference artifact path.
 - Strict artifact tensor accounting: all exported tensors consumed, no missing tensors, no unexpected tensors.
 - Targeted Iris `v6e-4` validation.
 
@@ -484,6 +553,5 @@ Out of scope:
 - Fused TPU kernels.
 - vLLM PyTorch GrugMoE ownership.
 - Direct loading of Levanter's native training checkpoint tree as the serving contract.
-- Generation.
+- Production generation serving and KV-cache decode.
 - External trained-checkpoint smoke testing remains out of scope for this validation; the completed milestone uses a seeded non-zero local `GrugTrainState` checkpoint with the full canary config.
-- Production KV-cache decode.
