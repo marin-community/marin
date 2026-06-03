@@ -21,6 +21,7 @@ xfail/skip to green — no test-body changes required.
 from __future__ import annotations
 
 import io
+import os
 import socket
 import subprocess
 import sys
@@ -44,8 +45,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 
 def _rust_binary() -> Path | None:
     """Locate a built ``finelog-server`` binary, or None if unavailable."""
-    import os
-
     override = os.environ.get("FINELOG_RUST_BIN")
     if override:
         p = Path(override)

@@ -109,8 +109,8 @@ def _debug_admin_routes(service: LogServiceImpl) -> list[Route]:
     """Non-proto test-only admin routes mirroring the Rust ``--debug-admin``.
 
     The frozen RPC contract can neither force a flush/compact/sync/evict cycle
-    nor read per-segment level+location, but every Phase-4 gating test does
-    exactly that. These two routes drive the SAME store methods
+    nor read per-segment level+location, but the maintenance/eviction parity
+    tests need exactly that. These two routes drive the SAME store methods
     (``flush``/``force_compact_l0``/``compact`` + ``catalog.list_segments``)
     the parity harness needs, so the identical test body runs on both backends.
     Mounted only when ``debug_admin`` is set; OFF in production.
