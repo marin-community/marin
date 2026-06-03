@@ -82,7 +82,7 @@ class GrugModelConfig:
     num_kv_heads: int = 4  # GQA 4:1 by default
     head_dim: int | None = None
     max_seq_len: int = 4096
-    sliding_window: int = 4096
+    sliding_window: int = 2048
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.0
@@ -548,7 +548,7 @@ class Transformer(eqx.Module):
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
+        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
         num_blocks = len(self.blocks)
