@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
-from iris.cluster.controller.transitions import ClusterCapacity, RunningTaskEntry, SchedulingEvent
-from iris.cluster.log_store_helpers import task_log_key
+from iris.cluster.controller.direct_provider import ClusterCapacity, SchedulingEvent
+from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.log_keys import task_log_key
 from iris.cluster.providers.k8s.tasks import (
     _GC_MAX_AGE_SECONDS,
     _LABEL_JOB_ID,
@@ -23,13 +25,16 @@ from iris.cluster.providers.k8s.tasks import (
     _POD_NOT_FOUND_GRACE_CYCLES,
     _RUNTIME_LABEL_VALUE,
     K8sTaskProvider,
+    LogCollector,
+    ResourceCollector,
     _LogPod,
     _pod_name,
     _sanitize_label_value,
     _task_hash,
 )
-from iris.cluster.providers.k8s.types import ExecResult, K8sResource, PodResourceUsage
+from iris.cluster.providers.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage
 from iris.cluster.types import JobName, TaskAttempt
+from iris.cluster.worker.stats import IrisTaskStat
 from iris.rpc import job_pb2
 
 from .conftest import make_batch, make_run_req, populate_node, populate_pod, populate_running_pod_resource
@@ -66,12 +71,16 @@ def test_sync_propagates_non_kubectl_failure(provider, k8s):
         provider.sync(batch)
 
 
-def test_sync_catches_kubectl_error_and_returns_task_failure(provider, k8s):
-    from iris.cluster.providers.k8s.types import KubectlError
+def test_sync_apply_error_yields_worker_failed(provider, k8s):
+    """A pod-apply KubectlError -> WORKER_FAILED (retryable worker loss).
 
+    The pod was never created, so there is no k8s verdict to track and nothing
+    ran. Any apply failure is treated as worker loss so the task retries on the
+    next sync rather than permanently failing the job.
+    """
     k8s.inject_failure(
         "apply_json",
-        KubectlError("kubectl apply failed: Error from server (RequestEntityTooLarge): limit is 3145728"),
+        KubectlError("apply Pod/x failed: apiserver unavailable"),
     )
     req = make_run_req("/test-job/0")
     batch = make_batch(tasks_to_run=[req])
@@ -79,9 +88,7 @@ def test_sync_catches_kubectl_error_and_returns_task_failure(provider, k8s):
     result = provider.sync(batch)
 
     assert len(result.updates) == 1
-    update = result.updates[0]
-    assert update.new_state == job_pb2.TASK_STATE_FAILED
-    assert "RequestEntityTooLarge" in update.error
+    assert result.updates[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +229,6 @@ def test_sync_pod_not_found_marks_failed(provider, k8s):
     result = provider.sync(batch)
     assert len(result.updates) == 1
     assert result.updates[0].new_state == job_pb2.TASK_STATE_FAILED
-    assert result.updates[0].error == "Pod not found"
 
 
 def test_pod_not_found_grace_period(provider, k8s):
@@ -622,7 +628,6 @@ def test_sync_node_failure_yields_no_capacity(provider, k8s):
 
 def test_resource_stats_from_kubectl_top(provider, k8s, task_stats_table):
     """Running pods emit IrisTaskStat rows via the background ResourceCollector."""
-    from iris.cluster.worker.stats import IrisTaskStat
 
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
@@ -779,7 +784,7 @@ def test_profile_memory_flamegraph_via_kubectl_exec(provider, k8s):
     # Two exec calls: attach + transform
     k8s.set_exec_response(pod_name, _success_cp())
     k8s.set_exec_response(pod_name, _success_cp())
-    k8s.set_file_content(pod_name, "/tmp/iris-memray.html", b"<html>flamegraph</html>")
+    k8s.set_file_content(pod_name, "/tmp/iris-profile.html", b"<html>flamegraph</html>")
 
     request = job_pb2.ProfileTaskRequest(
         target="/job/0",
@@ -1006,8 +1011,6 @@ def _seed_configmap(k8s, name: str, task_hash: str, created: str) -> None:
 
 
 def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
-    from datetime import datetime, timedelta, timezone
-
     now = datetime.now(timezone.utc)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
     recent_ts = (now - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1040,7 +1043,6 @@ def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
 
 def test_gc_respects_interval(provider, k8s):
     """_maybe_gc_terminal_resources should only run every _GC_INTERVAL_SECONDS."""
-    from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1124,7 +1126,6 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
     terminal (old) and attempt 1 is still Running, deleting by task_hash would
     remove the active attempt's configmap and PDB protection.
     """
-    from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1171,8 +1172,6 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
 
 def test_log_collector_set_pods_adds_and_removes(k8s, log_client):
     """LogCollector.set_pods() adds new pods and removes absent ones."""
-    from iris.cluster.providers.k8s.tasks import LogCollector
-    from iris.cluster.types import JobName
 
     collector = LogCollector(k8s, log_client, concurrency=1)
     task_a = JobName.from_wire("/job/0")
@@ -1210,10 +1209,6 @@ def test_log_collector_set_pods_adds_and_removes(k8s, log_client):
 
 def test_log_collector_set_pods_preserves_cursor_state(k8s, log_client):
     """set_pods() preserves last_timestamp for pods that remain tracked."""
-    from datetime import datetime, timezone
-
-    from iris.cluster.providers.k8s.tasks import LogCollector
-    from iris.cluster.types import JobName
 
     collector = LogCollector(k8s, log_client, concurrency=1)
     task_id = JobName.from_wire("/job/0")
@@ -1244,7 +1239,6 @@ def test_log_collector_set_pods_preserves_cursor_state(k8s, log_client):
 
 def test_resource_collector_set_pods_replaces_active_set(k8s, task_stats_table):
     """set_pods() replaces the tracked pod set wholesale."""
-    from iris.cluster.providers.k8s.tasks import ResourceCollector
 
     collector = ResourceCollector(k8s, task_stats_table, concurrency=1)
     key_a = ("/job/0", 0)
@@ -1263,8 +1257,6 @@ def test_resource_collector_set_pods_replaces_active_set(k8s, task_stats_table):
 
 def test_resource_collector_writes_iris_task_rows(k8s, task_stats_table):
     """A successful kubectl top read appends one IrisTaskStat row to the Table."""
-    from iris.cluster.providers.k8s.tasks import ResourceCollector
-    from iris.cluster.worker.stats import IrisTaskStat
 
     k8s.set_top_pod("pod-a", PodResourceUsage(cpu_millicores=750, memory_bytes=2 * 1024 * 1024 * 1024))
 

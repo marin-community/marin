@@ -75,6 +75,7 @@ export interface TaskAttempt {
   startedAt?: ProtoTimestamp
   finishedAt?: ProtoTimestamp
   isWorkerFailure?: boolean
+  attemptUid?: string
 }
 
 export interface TaskStatus {
@@ -97,8 +98,6 @@ export interface TaskStatus {
   pendingReason?: string
   canBeScheduled?: boolean
   containerId?: string
-  statusTextDetailMd?: string
-  statusTextSummaryMd?: string
 }
 
 // -- Jobs --
@@ -124,6 +123,7 @@ export interface JobStatus {
   completedCount?: number
   pendingReason?: string
   hasChildren?: boolean
+  parentJobId?: string
 }
 
 export interface JobQuery {
@@ -135,6 +135,8 @@ export interface JobQuery {
   sortDirection?: string
   offset?: number
   limit?: number
+  // Anchored prefix match against the full wire job_id (e.g. "/alice/").
+  jobIdPrefix?: string
 }
 
 // -- Controller RPC Responses --

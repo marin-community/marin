@@ -22,14 +22,15 @@ from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.config import create_autoscaler, load_config, make_provider
+from iris.cluster.config import load_config, make_provider
 from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
 from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler_factory import create_autoscaler
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.endpoints import resolve_endpoint_uri
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
 from iris.cluster.providers.factory import create_provider_bundle
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.rpc import config_pb2
@@ -40,8 +41,6 @@ logger = logging.getLogger(__name__)
 LOCAL_STATE_DIR_DEFAULT = Path("/var/cache/iris/controller")
 DRY_RUN_STATE_DIR_ROOT = Path("/tmp/dry-run")
 HOURLY_CHECKPOINT_SECONDS = 3600.0
-
-LOG_SERVER_ENDPOINT_NAME = "/system/log-server"
 
 
 def _resolve_cluster_endpoints(cluster_config: config_pb2.IrisClusterConfig) -> dict[str, str]:
@@ -164,6 +163,7 @@ def run_controller_serve(
     elif not isinstance(provider, K8sTaskProvider):
         bundle = create_provider_bundle(
             platform_config=cluster_config.platform,
+            worker_port=cluster_config.defaults.worker.port,
             cluster_config=cluster_config,
             ssh_config=cluster_config.defaults.ssh,
         )
@@ -214,9 +214,6 @@ def run_controller_serve(
     if cluster_config and cluster_config.user_budgets:
         reconcile_user_budget_tiers(db, cluster_config.user_budgets, Timestamp.now())
 
-    reconcile_rpc_enabled = os.environ.get("IRIS_RECONCILE_RPC_ENABLED", "").lower() in ("1", "true", "yes")
-    logger.info("Reconcile RPC wire: %s", "enabled" if reconcile_rpc_enabled else "disabled (legacy)")
-
     config = ControllerConfig(
         host=host,
         port=port,
@@ -229,7 +226,6 @@ def run_controller_serve(
         dry_run=dry_run,
         log_service_address=log_service_address,
         endpoints=endpoints,
-        reconcile_rpc_enabled=reconcile_rpc_enabled,
     )
 
     controller = Controller(

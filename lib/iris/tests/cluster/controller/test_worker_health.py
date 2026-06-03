@@ -17,6 +17,7 @@ from iris.cluster.controller.reads import healthy_active_workers_with_attributes
 from iris.cluster.controller.schema import workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import WorkerId
+from rigging.timing import Timestamp
 from sqlalchemy import insert, select
 
 
@@ -115,7 +116,6 @@ def test_seeds_liveness_from_persisted_workers(tmp_path: Path) -> None:
     The seeding logic is now a free function on Controller; this test
     exercises it directly via WorkerHealthTracker.heartbeat.
     """
-    from rigging.timing import Timestamp
 
     db = ControllerDB(db_dir=tmp_path)
     try:

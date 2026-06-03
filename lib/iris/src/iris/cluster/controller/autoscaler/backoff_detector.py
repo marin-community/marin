@@ -44,8 +44,12 @@ DEFAULT_DECAY_PER_FAILURE = 0.7
 # bottoms out so the group keeps producing non-failure samples.
 DEFAULT_PROBE_FLOOR_PER_MINUTE = 0.5
 
-# Slices younger than this at termination count as failures.
-DEFAULT_SHORT_LIVED_THRESHOLD = Duration.from_minutes(5)
+# Slices younger than this at termination count as failures. Sized so that a
+# slice has time to boot, advance, and checkpoint before it is treated as a
+# normal preemption: GCP routinely returns spot capacity that lives 10-25 min
+# before reclaim (see issue #5976), and a 5-min threshold mostly catches only
+# boot-time failures and lets the longer churn pass through unnoticed.
+DEFAULT_SHORT_LIVED_THRESHOLD = Duration.from_minutes(15)
 
 # How long a quota-exhausted error blocks scale-up before we attempt again.
 DEFAULT_QUOTA_BLOCK_DURATION = Duration.from_minutes(5)

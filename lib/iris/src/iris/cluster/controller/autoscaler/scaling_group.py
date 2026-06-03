@@ -35,6 +35,7 @@ from iris.cluster.constraints import (
     is_cpu_device_type_constraint,
 )
 from iris.cluster.controller.autoscaler.backoff_detector import (
+    DEFAULT_SHORT_LIVED_THRESHOLD,
     BackoffDetector,
     GroupHealth,
     SliceFate,
@@ -43,11 +44,7 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import scaling_groups_table, slices_table
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import Labels, QuotaExhaustedError, SliceHandle
-from iris.cluster.types import (
-    WorkerStatusMap,
-    get_gpu_count,
-    get_tpu_count,
-)
+from iris.cluster.types import WorkerStatusMap, get_gpu_count, get_tpu_count
 from iris.rpc import config_pb2, job_pb2, time_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 
@@ -131,15 +128,23 @@ class SliceState:
     quiet_since: Timestamp | None = None
     lifecycle: SliceLifecycleState = SliceLifecycleState.BOOTING
     worker_ids: list[str] = field(default_factory=list)
-    # worker_id -> reachable host:port endpoint. Populated at READY transition
+    # worker_id -> reachable http://host:port URL. Populated at READY transition
     # from the slice handle's worker info. Empty after a controller restart for
     # already-READY slices — the health probe lazy-fetches via
     # handle.describe() in that case. Memory-only.
-    worker_addresses: dict[str, str] = field(default_factory=dict)
+    worker_urls: dict[str, str] = field(default_factory=dict)
     # worker_id -> consecutive /health probe failures since the last
     # success. Reset on a healthy response; once any worker crosses
     # PING_FAILURE_THRESHOLD the slice is terminated. Memory-only.
     ping_failures: dict[str, int] = field(default_factory=dict)
+    # Consecutive health-probe passes where the slice's cloud allocation
+    # reported zero workers (so there was nothing to /health-probe). Reset the
+    # moment any worker becomes probeable; once it crosses PING_FAILURE_THRESHOLD
+    # the slice is terminated. This catches a slice whose backing allocation
+    # vanished while it had no cached worker URLs (e.g. preempted after a
+    # controller restart), which the per-worker counters never observe.
+    # Memory-only.
+    no_worker_probes: int = 0
     error_message: str = ""
 
 
@@ -313,6 +318,7 @@ class ScalingGroup:
         quota_timeout: Duration = DEFAULT_QUOTA_TIMEOUT,
         scale_up_rate_limit: int = DEFAULT_SCALE_UP_RATE_LIMIT,
         scale_down_rate_limit: int = DEFAULT_SCALE_DOWN_RATE_LIMIT,
+        short_lived_threshold: Duration = DEFAULT_SHORT_LIVED_THRESHOLD,
         detector: BackoffDetector | None = None,
         db: ControllerDB | None = None,
     ):
@@ -345,6 +351,7 @@ class ScalingGroup:
                 group_name=config.name,
                 scale_up_bucket=scale_up_bucket,
                 base_scale_up_per_minute=scale_up_rate_limit,
+                short_lived_threshold=short_lived_threshold,
                 quota_block_duration=quota_timeout,
             )
         )
@@ -555,13 +562,13 @@ class ScalingGroup:
         self,
         slice_id: str,
         worker_ids: list[str],
-        worker_addresses: dict[str, str] | None = None,
+        worker_urls: dict[str, str] | None = None,
         timestamp: Timestamp | None = None,
     ) -> None:
         """Mark a slice READY with its worker IDs. ``quiet_since`` is left None so the next
         autoscaler tick decides idle/active afresh.
 
-        ``worker_addresses`` (worker_id -> host:port endpoint) seeds the slice
+        ``worker_urls`` (worker_id -> http://host:port URL) seeds the slice
         health probe so it doesn't need to call ``handle.describe()`` on the
         first tick. Optional: tests that don't exercise the probe path can omit
         it, and the probe will lazy-fetch from the handle.
@@ -572,7 +579,7 @@ class ScalingGroup:
             if state is not None:
                 state.lifecycle = SliceLifecycleState.READY
                 state.worker_ids = worker_ids
-                state.worker_addresses = dict(worker_addresses or {})
+                state.worker_urls = dict(worker_urls or {})
                 state.ping_failures = {}
                 state.quiet_since = None
         if state is not None:
@@ -743,24 +750,24 @@ class ScalingGroup:
     def ready_slice_probe_targets(self) -> list[tuple[str, SliceHandle, dict[str, str]]]:
         """Snapshot READY slices for the health probe.
 
-        Returns ``(slice_id, handle, worker_addresses_copy)`` tuples. Addresses
-        may be empty (e.g. on a controller restart for a checkpointed READY
-        slice) — callers should lazy-fetch via ``handle.describe()`` and
-        publish back via :meth:`set_worker_addresses`.
+        Returns ``(slice_id, handle, worker_urls)`` tuples, where ``worker_urls``
+        is a copy. URLs may be empty (e.g. on a controller restart for a
+        checkpointed READY slice) — callers should lazy-fetch via
+        ``handle.describe()`` and publish back via :meth:`set_worker_urls`.
         """
         with self._slices_lock:
             return [
-                (slice_id, state.handle, dict(state.worker_addresses))
+                (slice_id, state.handle, dict(state.worker_urls))
                 for slice_id, state in self._slices.items()
                 if state.lifecycle == SliceLifecycleState.READY
             ]
 
-    def set_worker_addresses(self, slice_id: str, worker_addresses: dict[str, str]) -> None:
-        """Publish freshly-resolved addresses (typically from handle.describe()) back to state."""
+    def set_worker_urls(self, slice_id: str, worker_urls: dict[str, str]) -> None:
+        """Publish freshly-resolved worker URLs (typically from handle.describe()) back to state."""
         with self._slices_lock:
             state = self._slices.get(slice_id)
             if state is not None:
-                state.worker_addresses = dict(worker_addresses)
+                state.worker_urls = dict(worker_urls)
 
     def record_health_probe_result(self, slice_id: str, worker_id: str, healthy: bool) -> int:
         """Update the per-worker ping_failures counter and return the new count.
@@ -773,11 +780,30 @@ class ScalingGroup:
             state = self._slices.get(slice_id)
             if state is None:
                 return 0
+            # Reaching here means the slice had a probeable worker, so it is not
+            # a zero-worker zombie regardless of the probe outcome.
+            state.no_worker_probes = 0
             if healthy:
                 state.ping_failures.pop(worker_id, None)
                 return 0
             state.ping_failures[worker_id] = state.ping_failures.get(worker_id, 0) + 1
             return state.ping_failures[worker_id]
+
+    def record_slice_no_workers(self, slice_id: str) -> int:
+        """Increment and return the consecutive count of probes that found no workers.
+
+        A READY slice whose cloud allocation reports zero workers cannot be
+        /health-probed at all, so the per-worker ping counters never see it.
+        Tracking the streak lets the runtime tear the slice down after
+        PING_FAILURE_THRESHOLD sustained observations -- mirroring the
+        per-worker zombie path -- while tolerating a single transient describe().
+        """
+        with self._slices_lock:
+            state = self._slices.get(slice_id)
+            if state is None:
+                return 0
+            state.no_worker_probes += 1
+            return state.no_worker_probes
 
     def get_slice(self, slice_id: str) -> SliceHandle | None:
         """Get a specific slice handle by ID."""
@@ -963,7 +989,10 @@ class ScalingGroup:
 
         Requires at least one known worker to be idle. If no workers are known at all
         (none in worker_status_map), returns False -- the slice may still be booting.
-        Zombie slices where workers have disappeared are handled by worker heartbeat timeouts.
+        Zombie slices whose workers disappeared are reaped elsewhere: a dead worker
+        process trips the heartbeat timeout (if a worker row exists) or the per-worker
+        /health probe, and a slice whose backing allocation vanished entirely (no worker
+        rows, nothing to probe) trips the no-worker counter in Autoscaler.probe_health.
         """
         has_known_worker = False
         for worker_id in self._get_slice_worker_ids(state):

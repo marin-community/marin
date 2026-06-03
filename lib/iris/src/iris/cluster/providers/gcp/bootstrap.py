@@ -18,6 +18,7 @@ from collections.abc import Callable
 import yaml
 from google.protobuf.json_format import MessageToDict
 
+from iris.cluster.config_serde import config_to_dict
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -119,6 +120,54 @@ set -e
 
 echo "[iris-init] Starting Iris worker bootstrap"
 
+echo "[iris-init] Phase: tpu_ready_gate"
+
+# Gate the whole bootstrap -- and thus controller registration -- on the TPU
+# node reaching READY, before any Docker install/pull work. A host can boot and
+# run this script while sibling hosts in the same slice are still provisioning;
+# registering early would let the controller schedule a task before the slice is
+# up. The node's aggregate state flips to READY only once every host is healthy,
+# so it is the cleanest in-VM signal that the whole slice is Active.
+#
+# The gate applies only to TPU slices (accelerator-type metadata present); CPU
+# and standalone GCE VMs have no such attribute and skip it. It is fail-open: if
+# gcloud is unavailable, the describe never succeeds, or the node never reaches
+# READY within the window, bootstrap proceeds anyway and the autoscaler's slice
+# health probe owns give-up -- exactly as it does for the /health wait below.
+IRIS_META="http://metadata.google.internal/computeMetadata/v1/instance"
+IRIS_ACCEL_TYPE=$(curl -sf -H "Metadata-Flavor: Google" "$IRIS_META/attributes/accelerator-type" || true)
+if [ -n "$IRIS_ACCEL_TYPE" ]; then
+    export PATH="$PATH:/snap/bin:/opt/google-cloud-sdk/bin"
+    IRIS_TPU_NODE=$(curl -sf -H "Metadata-Flavor: Google" "$IRIS_META/attributes/instance-id" || true)
+    IRIS_TPU_ZONE=$(curl -sf -H "Metadata-Flavor: Google" "$IRIS_META/zone" | sed 's#.*/##')
+    if command -v gcloud &> /dev/null && [ -n "$IRIS_TPU_NODE" ]; then
+        echo "[iris-init] Gating bootstrap on TPU node $IRIS_TPU_NODE (zone=$IRIS_TPU_ZONE) reaching READY"
+        # Reserved/queued multi-host slices can take a long time to fully
+        # provision; wait up to an hour before failing open. SECONDS is a bash
+        # builtin reset to 0 here, so the deadline accounts for gcloud latency.
+        SECONDS=0
+        IRIS_TPU_GATE_TIMEOUT=3600
+        IRIS_TPU_GATE_INTERVAL=15
+        IRIS_TPU_GATE_ATTEMPT=0
+        while [ "$SECONDS" -lt "$IRIS_TPU_GATE_TIMEOUT" ]; do
+            IRIS_TPU_GATE_ATTEMPT=$((IRIS_TPU_GATE_ATTEMPT + 1))
+            IRIS_TPU_STATE=$(gcloud compute tpus tpu-vm describe "$IRIS_TPU_NODE" \
+                --zone="$IRIS_TPU_ZONE" --format='value(state)' 2>/dev/null || true)
+            if [ "$IRIS_TPU_STATE" = "READY" ]; then
+                echo "[iris-init] TPU node READY after ${SECONDS}s (${IRIS_TPU_GATE_ATTEMPT} check(s)); proceeding"
+                break
+            fi
+            echo "[iris-init] TPU node state=${IRIS_TPU_STATE:-<describe-failed>}; waited ${SECONDS}s"
+            sleep "$IRIS_TPU_GATE_INTERVAL"
+        done
+        if [ "$IRIS_TPU_STATE" != "READY" ]; then
+            echo "[iris-init] WARNING: TPU node not READY after ${IRIS_TPU_GATE_TIMEOUT}s; proceeding (fail-open)"
+        fi
+    else
+        echo "[iris-init] gcloud or node name unavailable; skipping TPU ready gate"
+    fi
+fi
+
 echo "[iris-init] Phase: prerequisites"
 
 # Install Docker if missing
@@ -134,6 +183,16 @@ fi
 
 # Ensure docker daemon is running
 sudo systemctl start docker || true
+
+# gcloud ships as a snap on tpu-ubuntu2204-base; snapd mounts snaps
+# asynchronously during boot. Wait for seeding to finish here so `gcloud`
+# is on PATH for Artifact Registry auth below. Placed right after the
+# Docker daemon start so seeding overlaps with it and usually returns
+# immediately.
+if command -v snap &> /dev/null; then
+    timeout 300 snap wait system seed.loaded || echo "[iris-init] Warning: snap seed wait timed out"
+fi
+export PATH="$PATH:/snap/bin"
 
 # Tune network stack for high-connection workloads (#3066).
 # Expands ephemeral port range, allows reuse of TIME_WAIT sockets,
@@ -306,6 +365,14 @@ else
     exit 1
 fi
 
+# gcloud ships as a snap on the base image; snapd mounts snaps asynchronously
+# during boot. Wait for seeding to finish so `gcloud` is on PATH for Artifact
+# Registry auth below.
+if command -v snap &> /dev/null; then
+    timeout 300 snap wait system seed.loaded || echo "[iris-controller] Warning: snap seed wait timed out"
+fi
+export PATH="$PATH:/snap/bin"
+
 # Tune network stack for high-connection workloads (#3066).
 sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
 sudo sysctl -w net.ipv4.tcp_tw_reuse=1
@@ -474,9 +541,6 @@ def build_controller_bootstrap_script_from_config(
         fresh: When True, pass ``--fresh`` to the controller serve command so
             it starts with an empty local database and skips checkpoint restore.
     """
-    # circular import: config → factory → gcp.workers → bootstrap → config
-    from iris.cluster.config import config_to_dict
-
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)
     port = config.controller.gcp.port or config.controller.manual.port or 10000
     image = config.controller.image

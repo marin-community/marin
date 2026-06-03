@@ -12,16 +12,17 @@ from pathlib import Path
 import pytest
 import yaml
 from iris.cluster.config import (
-    config_to_dict,
     connect_cluster,
-    create_autoscaler,
     get_ssh_config,
     load_config,
     make_local_config,
     validate_config,
 )
+from iris.cluster.config_serde import config_to_dict
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller.autoscaler_factory import create_autoscaler
 from iris.cluster.providers.factory import create_provider_bundle
+from iris.cluster.providers.gcp.service import KNOWN_GCP_ZONES
 from iris.rpc import config_pb2, controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import duration_to_proto
@@ -59,6 +60,7 @@ scale_groups:
     max_slices: 10
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
         zone: us-central1-a
 """
@@ -170,6 +172,7 @@ scale_groups:
     max_slices: 10
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
         zone: us-central1-a
   tpu_group_b:
@@ -186,6 +189,7 @@ scale_groups:
     max_slices: 4
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
         zone: us-central1-a
 """
@@ -301,6 +305,7 @@ scale_groups:
     max_slices: 10
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
         zone: us-central1-a
 """
@@ -343,6 +348,7 @@ scale_groups:
     max_slices: 2
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
         zone: us-central1-a
 """
@@ -352,6 +358,7 @@ scale_groups:
         config = load_config(config_path)
         bundle = create_provider_bundle(
             platform_config=config.platform,
+            worker_port=config.defaults.worker.port,
             ssh_config=config.defaults.ssh,
         )
         autoscaler = create_autoscaler(
@@ -399,6 +406,7 @@ scale_groups:
         config = load_config(config_path)
         bundle = create_provider_bundle(
             platform_config=config.platform,
+            worker_port=config.defaults.worker.port,
             ssh_config=config.defaults.ssh,
         )
         autoscaler = create_autoscaler(
@@ -439,6 +447,7 @@ scale_groups:
     max_slices: 2
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
         zone: us-central1-a
 """
@@ -457,6 +466,7 @@ scale_groups:
         # Should be able to create autoscaler from round-tripped config
         bundle = create_provider_bundle(
             platform_config=loaded_config.platform,
+            worker_port=loaded_config.defaults.worker.port,
             ssh_config=loaded_config.defaults.ssh,
         )
         autoscaler = create_autoscaler(
@@ -479,8 +489,6 @@ class TestSshConfigMerging:
         ssh_config_proto = config_pb2.SshConfig(
             user="ubuntu",
             key_file="~/.ssh/cluster_key",
-            auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
-            os_login_user="ubuntu_oslogin",
             impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
         )
         ssh_config_proto.connect_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(60)))
@@ -493,8 +501,6 @@ class TestSshConfigMerging:
         assert ssh_config.user == "ubuntu"
         assert ssh_config.key_file == "~/.ssh/cluster_key"
         assert ssh_config.port == 22  # DEFAULT_SSH_PORT
-        assert ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
-        assert ssh_config.os_login_user == "ubuntu_oslogin"
         assert ssh_config.impersonate_service_account == "iris-controller@test-project.iam.gserviceaccount.com"
         assert ssh_config.connect_timeout.milliseconds == 60_000
 
@@ -503,8 +509,6 @@ class TestSshConfigMerging:
         config = config_pb2.IrisClusterConfig()
         config.defaults.ssh.user = "ubuntu"
         config.defaults.ssh.key_file = "~/.ssh/cluster_key"
-        config.defaults.ssh.auth_mode = config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
-        config.defaults.ssh.os_login_user = "ubuntu_oslogin"
 
         manual_config = config_pb2.ScaleGroupConfig(
             name="manual_group",
@@ -520,35 +524,6 @@ class TestSshConfigMerging:
         assert ssh_config.user == "admin"
         assert ssh_config.key_file == "~/.ssh/group_key"
         assert ssh_config.port == 22
-        assert ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
-        assert ssh_config.os_login_user == "ubuntu_oslogin"
-
-    def test_partial_per_group_overrides_merge_with_defaults(self):
-        """Per-group overrides merge with cluster defaults for unset fields."""
-
-        config = config_pb2.IrisClusterConfig()
-        config.defaults.ssh.user = "ubuntu"
-        config.defaults.ssh.key_file = "~/.ssh/cluster_key"
-        config.defaults.ssh.auth_mode = config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
-        config.defaults.ssh.os_login_user = "ubuntu_oslogin"
-        config.defaults.ssh.connect_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(30)))
-
-        manual_config = config_pb2.ScaleGroupConfig(
-            name="manual_group",
-        )
-        manual_config.slice_template.manual.hosts.append("10.0.0.1")
-        manual_config.slice_template.manual.ssh_user = "admin"  # Override user only
-
-        config.scale_groups["manual_group"].CopyFrom(manual_config)
-
-        ssh_config = get_ssh_config(config, group_name="manual_group")
-
-        assert ssh_config.user == "admin"  # Overridden
-        assert ssh_config.key_file == "~/.ssh/cluster_key"  # From default
-        assert ssh_config.port == 22  # From default
-        assert ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
-        assert ssh_config.os_login_user == "ubuntu_oslogin"
-        assert ssh_config.connect_timeout.milliseconds == 30_000  # From default
 
     def test_uses_defaults_when_cluster_ssh_config_empty(self):
         """get_ssh_config uses built-in defaults when cluster config empty."""
@@ -560,16 +535,13 @@ class TestSshConfigMerging:
         assert ssh_config.user == "root"
         assert ssh_config.key_file == ""
         assert ssh_config.port == 22
-        assert ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_METADATA
-        assert ssh_config.os_login_user == ""
         assert ssh_config.impersonate_service_account == ""
         assert ssh_config.connect_timeout.milliseconds == 30_000
 
-    def test_validate_config_requires_gcp_service_accounts_for_os_login(self):
+    def test_validate_config_requires_gcp_service_accounts(self):
         config = config_pb2.IrisClusterConfig()
         config.platform.gcp.project_id = "test-project"
         config.controller.gcp.zone = "us-central1-a"
-        config.defaults.ssh.auth_mode = config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
         config.defaults.worker.docker_image = "ghcr.io/marin-community/iris-worker:latest"
 
         group = config.scale_groups["tpu"]
@@ -590,7 +562,6 @@ class TestLocalConfigTransformation:
 
     def test_make_local_config_transforms_gcp_to_local(self, tmp_path: Path):
         """make_local_config transforms GCP config to local mode."""
-        from iris.cluster.config import make_local_config
 
         config_content = """\
 platform:
@@ -611,6 +582,7 @@ defaults:
 
 controller:
   gcp:
+    service_account: iris-controller@test-project.iam.gserviceaccount.com
     machine_type: n2-standard-4
     port: 10000
 
@@ -629,6 +601,7 @@ scale_groups:
     max_slices: 10
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         zone: us-central1-a
         runtime_version: tpu-ubuntu2204-base
 """
@@ -654,7 +627,6 @@ scale_groups:
 
     def test_make_local_config_preserves_scale_group_details(self, tmp_path: Path):
         """make_local_config preserves accelerator type and other scale group settings."""
-        from iris.cluster.config import make_local_config
 
         config_content = """\
 platform:
@@ -667,6 +639,7 @@ defaults:
 
 controller:
   gcp:
+    service_account: iris-controller@test-project.iam.gserviceaccount.com
     port: 10000
 
 scale_groups:
@@ -684,6 +657,7 @@ scale_groups:
     priority: 50
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         zone: us-central1-a
         runtime_version: cos-stable
   tpu_group:
@@ -701,6 +675,7 @@ scale_groups:
     priority: 100
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         zone: us-central1-a
         runtime_version: tpu-ubuntu2204-base
 """
@@ -726,15 +701,13 @@ scale_groups:
 
     def test_example_configs_load_and_transform(self):
         """Example configs in config/ directory load and transform to local correctly."""
-        from iris.cluster.config import make_local_config
 
         iris_root = Path(__file__).parent.parent.parent.parent
         example_configs = [
             iris_root / "config" / "marin.yaml",
             iris_root / "config" / "marin-dev.yaml",
             iris_root / "config" / "coreweave.yaml",
-            iris_root / "config" / "coreweave-rno2a.yaml",
-            iris_root / "config" / "coreweave-usw09b.yaml",
+            iris_root / "config" / "coreweave-ci.yaml",
             iris_root / "config" / "test.yaml",
         ]
 
@@ -757,7 +730,6 @@ scale_groups:
 
     def test_example_config_zones_in_known_gcp_zones(self):
         """All GCP zones used in example configs must be in KNOWN_GCP_ZONES."""
-        from iris.cluster.providers.gcp.service import KNOWN_GCP_ZONES
 
         iris_root = Path(__file__).parent.parent.parent.parent
         for config_path in [iris_root / "config" / "marin.yaml", iris_root / "config" / "marin-dev.yaml"]:
@@ -903,6 +875,7 @@ class TestConfigValidation:
         )
         sg.slice_template.gcp.zone = "zone-a"
         sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
+        sg.slice_template.gcp.service_account = "iris-worker@test-project.iam.gserviceaccount.com"
         config.scale_groups["tpu"].CopyFrom(sg)
 
         validate_config(config)  # Should not raise
@@ -962,6 +935,7 @@ class TestConfigValidation:
         sg.slice_template.gcp.zone = "us-central1-a"
         sg.slice_template.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
         sg.slice_template.gcp.machine_type = "n2-standard-4"
+        sg.slice_template.gcp.service_account = "iris-worker@test-project.iam.gserviceaccount.com"
         config.scale_groups["cpu-vm"].CopyFrom(sg)
 
         validate_config(config)
@@ -984,6 +958,7 @@ def _gcp_scale_group(
     )
     sg.slice_template.gcp.zone = zone
     sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
+    sg.slice_template.gcp.service_account = "iris-worker@test-project.iam.gserviceaccount.com"
     sg.slice_template.capacity_type = capacity_type
     return sg
 
@@ -1062,6 +1037,7 @@ scale_groups:
     max_slices: 4
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
 """
         p = tmp_path / "config.yaml"
@@ -1104,6 +1080,7 @@ scale_groups:
       capacity_type: preemptible
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
 """
         p = tmp_path / "config.yaml"
@@ -1136,6 +1113,7 @@ scale_groups:
     buffer_slices: 1
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         zone: us-west4-a
         runtime_version: v2-alpha-tpuv5-lite
 """
@@ -1169,6 +1147,7 @@ scale_groups:
       capacity_type: preemptible
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
 """
         p = tmp_path / "config.yaml"
@@ -1198,6 +1177,7 @@ scale_groups:
       capacity_type: preemptible
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
 """
         p = tmp_path / "config.yaml"
@@ -1229,6 +1209,7 @@ scale_groups:
       capacity_type: on-demand
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         zone: us-central1-a
         runtime_version: cos-stable
   expanded_tpu:
@@ -1244,6 +1225,7 @@ scale_groups:
       capacity_type: preemptible
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
 """
         p = tmp_path / "config.yaml"
@@ -1274,6 +1256,7 @@ scale_groups:
       capacity_type: preemptible
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
 """
         p = tmp_path / "config.yaml"
@@ -1301,6 +1284,7 @@ scale_groups:
       capacity_type: preemptible
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
 """
         p = tmp_path / "config.yaml"
@@ -1329,6 +1313,7 @@ scale_groups:
       capacity_type: preemptible
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         zone: europe-west4-b
         runtime_version: v2-alpha-tpuv5-lite
 """
@@ -1385,6 +1370,7 @@ scale_groups:
       capacity_type: preemptible
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         zone: us-west4-a
         runtime_version: v2-alpha-tpuv5-lite
   tpu_group:
@@ -1400,6 +1386,7 @@ scale_groups:
       capacity_type: preemptible
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
 """
         p = tmp_path / "config.yaml"
@@ -1478,6 +1465,7 @@ v6e-pool:
     resources: { cpu: 180, ram: 720GB, disk: 100GB, capacity_type: preemptible }
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv6e
     sizes:
       4:  { max_slices: 100 }
@@ -1500,6 +1488,7 @@ v4-pool:
     resources: { cpu: 240, ram: 400GB, disk: 100GB, capacity_type: preemptible }
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: tpu-ubuntu2204-base
     sizes:
       8: { max_slices: 10 }"""
@@ -1516,6 +1505,7 @@ bad-pool:
     resources: { cpu: 8, ram: 16GB, disk: 50GB }
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha
     sizes:
       8: { max_slices: 10 }"""
@@ -1532,6 +1522,7 @@ bad-size:
     resources: { cpu: 208, ram: 448GB, disk: 100GB }
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5
     sizes:
       7: { max_slices: 10 }"""
@@ -1548,6 +1539,7 @@ empty:
     resources: { cpu: 112, ram: 192GB, disk: 100GB }
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
     sizes: {}"""
         p = tmp_path / "config.yaml"
@@ -1563,6 +1555,7 @@ dupes:
     resources: { cpu: 112, ram: 192GB, disk: 100GB }
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
     sizes:
       4: { max_slices: 10 }"""
@@ -1590,6 +1583,7 @@ tpu_pools:
     resources: { cpu: 208, ram: 448GB, disk: 100GB, capacity_type: preemptible }
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5
     sizes:
       8: { max_slices: 10 }
@@ -1600,6 +1594,7 @@ scale_groups:
     resources: { cpu: 2, ram: 16GB, disk: 100GB, device_type: cpu, capacity_type: on-demand }
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         zone: us-central1-a
         mode: GCP_SLICE_MODE_VM
         machine_type: e2-highmem-2
@@ -1630,6 +1625,7 @@ tpu_pools:
     resources: { cpu: 112, ram: 192GB, disk: 100GB, capacity_type: preemptible }
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
     sizes:
       4: { max_slices: 100 }
@@ -1641,6 +1637,7 @@ tpu_pools:
     resources: { cpu: 112, ram: 192GB, disk: 100GB, capacity_type: reserved }
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
     sizes:
       128: { buffer_slices: 1, max_slices: 4 }
@@ -1676,6 +1673,7 @@ tpu_pools:
     resources: { cpu: 208, ram: 448GB, disk: 100GB }
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5
     sizes:
       8: { max_slices: 10 }
@@ -1686,6 +1684,7 @@ scale_groups:
     resources: { cpu: 208, ram: 448GB, disk: 100GB, device_type: tpu, device_variant: v5p-8, device_count: 4 }
     slice_template:
       gcp:
+        service_account: iris-worker@test-project.iam.gserviceaccount.com
         zone: us-central1-a
         runtime_version: v2-alpha-tpuv5
 """

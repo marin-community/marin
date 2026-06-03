@@ -8,6 +8,7 @@ Workers with a DockerRuntime. They validate behavior that only manifests inside
 real containers (cgroup OOM kills, JAX coordinator env vars).
 """
 
+import os
 import uuid
 from pathlib import Path
 
@@ -118,8 +119,6 @@ def test_jax_coordinator_address_format(tpu_sim_cluster):
     """
 
     def validate_jax_env_format():
-        import os
-
         addr = os.environ.get("JAX_COORDINATOR_ADDRESS", "")
         proc_id = os.environ.get("JAX_PROCESS_ID", "")
         num_procs = os.environ.get("JAX_NUM_PROCESSES", "")

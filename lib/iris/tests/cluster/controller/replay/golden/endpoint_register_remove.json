@@ -54,10 +54,6 @@
   ],
   "meta": [
     {
-      "key": "last_submission_ms",
-      "value": 1704067200000
-    },
-    {
       "key": "task_priority_insertion",
       "value": 1
     }
@@ -68,6 +64,7 @@
   "task_attempts": [
     {
       "attempt_id": 0,
+      "attempt_uid": "<masked-0>",
       "created_at_ms": 1704067200000,
       "error": null,
       "exit_code": null,

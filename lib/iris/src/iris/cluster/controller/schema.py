@@ -393,6 +393,7 @@ task_attempts_table = Table(
     Column("finished_at_ms", TimestampMsType),
     Column("exit_code", Integer),
     Column("error", String),
+    Column("attempt_uid", String, nullable=False),
     PrimaryKeyConstraint("task_id", "attempt_id"),
     Index("idx_task_attempts_worker_task", "worker_id", "task_id", "attempt_id"),
     Index(
@@ -400,6 +401,7 @@ task_attempts_table = Table(
         "worker_id",
         sqlite_where=text("worker_id IS NOT NULL AND finished_at_ms IS NULL"),
     ),
+    Index("idx_task_attempts_uid", "attempt_uid", unique=True),
 )
 
 

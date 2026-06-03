@@ -15,9 +15,11 @@ import time
 import pytest
 from iris.cluster.constraints import DeviceType, WellKnownAttribute
 from iris.cluster.controller.autoscaler import DEFAULT_UNRESOLVABLE_TIMEOUT, Autoscaler
+from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
 from iris.cluster.controller.autoscaler.routing import route_demand
-from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
+from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
+from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
 from iris.cluster.providers.types import (
     CloudSliceState,
     QuotaExhaustedError,
@@ -122,8 +124,6 @@ class TestAutoscalerScaleUp:
         detector-level hard block — ``can_scale_up`` only flips false on quota.
         The detector instead throttles the per-group bucket's refill rate.
         """
-        from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         platform = make_mock_platform()
         group = ScalingGroup(scale_group_config, platform)
@@ -712,7 +712,6 @@ class TestAutoscalerQuotaHandling:
 
     def test_quota_exceeded_sets_group_unavailable(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """QuotaExhaustedError sets group to QUOTA_EXCEEDED state."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         platform = make_mock_platform()
         platform.create_slice.side_effect = QuotaExhaustedError("Quota exceeded")
@@ -758,7 +757,6 @@ class TestAutoscalerQuotaHandling:
 
     def test_quota_state_expires_after_timeout(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """QUOTA_EXCEEDED state expires after timeout."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         platform = make_mock_platform()
         platform.create_slice.side_effect = QuotaExhaustedError("Quota exceeded")
@@ -778,8 +776,6 @@ class TestAutoscalerQuotaHandling:
     def test_generic_error_triggers_backoff_not_quota(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Non-quota errors push the churn detector, not the quota gate. Once enough
         failures accumulate, availability flips to BACKOFF (HOSTILE)."""
-        from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         platform = make_mock_platform()
         platform.create_slice.side_effect = RuntimeError("TPU unavailable")
@@ -899,7 +895,6 @@ class TestScalingGroupRequestingState:
 
     def test_begin_scale_up_sets_requesting_state(self):
         """begin_scale_up() causes availability() to return REQUESTING."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
         platform = make_mock_platform()
@@ -913,7 +908,6 @@ class TestScalingGroupRequestingState:
 
     def test_complete_scale_up_clears_requesting_state(self):
         """complete_scale_up() removes REQUESTING state."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
         platform = make_mock_platform()
@@ -932,7 +926,6 @@ class TestScalingGroupRequestingState:
 
     def test_cancel_scale_up_clears_requesting_state(self):
         """cancel_scale_up() removes REQUESTING state."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
         platform = make_mock_platform()
@@ -1019,7 +1012,6 @@ class TestAutoscalerAsyncScaleUp:
 
     def test_group_marked_requesting_during_scale_up(self):
         """Group shows REQUESTING immediately after execute(), cleared when done."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config = make_scale_group_config(name="test-group", buffer_slices=0, max_slices=5)
         platform = make_mock_platform()
@@ -1593,8 +1585,8 @@ class TestAutoscalerHealthProbe:
         group.reconcile()
         _mark_discovered_ready(group, [handle])
         autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
-        # Seed worker_addresses since reconcile() bypasses the refresh() path.
-        group.set_worker_addresses(handle.slice_id, autoscaler._worker_endpoints(handle.describe().workers))
+        # Seed worker URLs since reconcile() bypasses the refresh() path.
+        group.set_worker_urls(handle.slice_id, autoscaler._worker_urls(handle.describe().workers))
         return autoscaler, group, handle
 
     def test_healthy_probes_keep_slice_alive(
@@ -1607,7 +1599,7 @@ class TestAutoscalerHealthProbe:
         autoscaler, group, _ = self._setup_ready_group(scale_group_config, base_worker_config)
         monkeypatch.setattr(
             "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
-            lambda endpoint: True,
+            lambda url: True,
         )
 
         for _ in range(20):
@@ -1623,12 +1615,11 @@ class TestAutoscalerHealthProbe:
         monkeypatch: pytest.MonkeyPatch,
     ):
         """PING_FAILURE_THRESHOLD consecutive failures trip slice termination."""
-        from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
 
         autoscaler, group, _ = self._setup_ready_group(scale_group_config, base_worker_config)
         monkeypatch.setattr(
             "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
-            lambda endpoint: False,
+            lambda url: False,
         )
 
         # One probe per tick — need PING_FAILURE_THRESHOLD ticks to trip.
@@ -1647,7 +1638,6 @@ class TestAutoscalerHealthProbe:
         monkeypatch: pytest.MonkeyPatch,
     ):
         """A single healthy response zeros the per-worker counter so transient flaps don't kill slices."""
-        from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
 
         autoscaler, group, _ = self._setup_ready_group(scale_group_config, base_worker_config)
 
@@ -1655,7 +1645,7 @@ class TestAutoscalerHealthProbe:
         # consecutive failures even after many ticks.
         toggle = {"healthy": False}
 
-        def _probe(endpoint: str) -> bool:
+        def _probe(url: str) -> bool:
             toggle["healthy"] = not toggle["healthy"]
             return toggle["healthy"]
 
@@ -1673,27 +1663,140 @@ class TestAutoscalerHealthProbe:
         base_worker_config: config_pb2.WorkerConfig,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        """Slices restored without cached addresses get them via handle.describe()."""
+        """Slices restored without cached URLs get them via handle.describe()."""
         handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[handle])
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
         _mark_discovered_ready(group, [handle])
-        # Deliberately do NOT call set_worker_addresses — simulate post-restart.
+        # Deliberately do NOT call set_worker_urls — simulate post-restart.
         autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
 
-        seen_endpoints: list[str] = []
+        seen_urls: list[str] = []
 
-        def _probe(endpoint: str) -> bool:
-            seen_endpoints.append(endpoint)
+        def _probe(url: str) -> bool:
+            seen_urls.append(url)
             return True
 
         monkeypatch.setattr("iris.cluster.controller.autoscaler.runtime._probe_worker_health", _probe)
 
         autoscaler.probe_health(Timestamp.from_ms(1_000))
 
-        expected = list(autoscaler._worker_endpoints(handle.describe().workers).values())
-        assert sorted(seen_endpoints) == sorted(expected), "probe should hit each worker's described endpoint"
+        expected = list(autoscaler._worker_urls(handle.describe().workers).values())
+        assert sorted(seen_urls) == sorted(expected), "probe should hit each worker's described URL"
+        autoscaler.shutdown()
+
+    def test_vanished_allocation_terminates_after_threshold(
+        self,
+        scale_group_config: config_pb2.ScaleGroupConfig,
+        base_worker_config: config_pb2.WorkerConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A READY slice whose cloud allocation reports zero workers is reaped.
+
+        Reproduces the preempted-after-restart case: no cached worker URLs, and
+        describe() resolves zero workers (tpu_describe returned None), so there
+        is nothing to /health-probe and no heartbeat row to expire. The per-slice
+        no-worker counter must trip teardown after PING_FAILURE_THRESHOLD ticks.
+        """
+        handle = make_mock_slice_handle("slice-001", all_ready=True)
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        _mark_discovered_ready(group, [handle])
+        # No cached URLs (simulate post-restart) and the backing allocation is gone.
+        autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
+        handle._status = SliceStatus(state=CloudSliceState.UNKNOWN, worker_count=0, workers=[])
+
+        # describe() should never even be probed — there are no workers.
+        monkeypatch.setattr(
+            "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
+            lambda url: pytest.fail("a worker-less slice must not be probed"),
+        )
+
+        for _ in range(PING_FAILURE_THRESHOLD - 1):
+            autoscaler.probe_health(Timestamp.from_ms(1_000))
+        assert group.ready_slice_count() == 1, "should not terminate before the threshold"
+
+        autoscaler.probe_health(Timestamp.from_ms(2_000))
+        assert group.ready_slice_count() == 0, "threshold-th empty observation should terminate"
+        autoscaler.shutdown()
+
+    def test_no_worker_counter_resets_when_workers_return(
+        self,
+        scale_group_config: config_pb2.ScaleGroupConfig,
+        base_worker_config: config_pb2.WorkerConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A transient empty describe() does not accumulate toward teardown.
+
+        If workers reappear before the threshold, the no-worker streak resets so
+        a single cloud blip can't eventually reap a healthy slice.
+        """
+        handle = make_mock_slice_handle("slice-001", all_ready=True)
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        _mark_discovered_ready(group, [handle])
+        autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
+        ready_status = handle._status
+        monkeypatch.setattr(
+            "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
+            lambda url: True,
+        )
+
+        # Alternate "allocation gone" and "workers healthy" so the empty streak
+        # never reaches the threshold.
+        for i in range(PING_FAILURE_THRESHOLD * 3):
+            handle._status = (
+                SliceStatus(state=CloudSliceState.UNKNOWN, worker_count=0, workers=[]) if i % 2 == 0 else ready_status
+            )
+            # Clear cached URLs each tick so probe_health re-describes.
+            group.set_worker_urls(handle.slice_id, {})
+            autoscaler.probe_health(Timestamp.from_ms(1_000))
+
+        assert group.ready_slice_count() == 1
+        autoscaler.shutdown()
+
+    def test_mid_boot_partial_describe_does_not_terminate(
+        self,
+        scale_group_config: config_pb2.ScaleGroupConfig,
+        base_worker_config: config_pb2.WorkerConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A slice with some workers still publishing IPs is retried, not reaped.
+
+        A partial describe() (worker handle present but no address yet) is the
+        normal mid-boot state and must not count toward the no-worker threshold.
+        """
+        handle = make_mock_slice_handle(
+            "slice-001",
+            vm_states=[vm_pb2.VM_STATE_READY, vm_pb2.VM_STATE_READY],
+        )
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        _mark_discovered_ready(group, [handle])
+        autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
+
+        # One worker has no address yet -> _worker_urls drops it -> partial set.
+        described = handle.describe()
+        partial = make_mock_worker_handle("slice-001-vm-0", "", vm_pb2.VM_STATE_READY)
+        handle._status = SliceStatus(
+            state=CloudSliceState.READY,
+            worker_count=2,
+            workers=[partial, described.workers[1]],
+        )
+        monkeypatch.setattr(
+            "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
+            lambda url: True,
+        )
+
+        for _ in range(PING_FAILURE_THRESHOLD + 1):
+            group.set_worker_urls(handle.slice_id, {})
+            autoscaler.probe_health(Timestamp.from_ms(1_000))
+
+        assert group.ready_slice_count() == 1, "a mid-boot partial slice must not be reaped"
         autoscaler.shutdown()
 
     def test_per_worker_counter_isolates_one_dead_worker(
@@ -1703,7 +1806,6 @@ class TestAutoscalerHealthProbe:
         monkeypatch: pytest.MonkeyPatch,
     ):
         """One dead worker in a multi-VM slice trips the slice, even when the rest stay healthy."""
-        from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
 
         handle = make_mock_slice_handle(
             "slice-001",
@@ -1714,14 +1816,14 @@ class TestAutoscalerHealthProbe:
         group.reconcile()
         _mark_discovered_ready(group, [handle])
         autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
-        endpoints = autoscaler._worker_endpoints(handle.describe().workers)
-        group.set_worker_addresses(handle.slice_id, endpoints)
+        worker_urls = autoscaler._worker_urls(handle.describe().workers)
+        group.set_worker_urls(handle.slice_id, worker_urls)
 
         dead_worker = handle.describe().workers[1]
-        dead_endpoint = endpoints[dead_worker.worker_id]
+        dead_url = worker_urls[dead_worker.worker_id]
         monkeypatch.setattr(
             "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
-            lambda endpoint: endpoint != dead_endpoint,
+            lambda url: url != dead_url,
         )
 
         for _ in range(PING_FAILURE_THRESHOLD):
@@ -1737,16 +1839,15 @@ class TestAutoscalerHealthProbe:
         monkeypatch: pytest.MonkeyPatch,
     ):
         """A transient handle.describe() exception is logged and skipped, not fatal."""
-        from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
 
         handle = make_mock_slice_handle("slice-001", all_ready=True)
         platform = make_mock_platform(slices_to_discover=[handle])
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
         _mark_discovered_ready(group, [handle])
-        # No cached addresses; describe() will be called.
+        # No cached URLs; describe() will be called.
         autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
-        good_addresses = autoscaler._worker_endpoints(handle.describe().workers)
+        good_urls = autoscaler._worker_urls(handle.describe().workers)
 
         raising = {"on": True}
         original_describe = handle.describe
@@ -1759,7 +1860,7 @@ class TestAutoscalerHealthProbe:
         monkeypatch.setattr(handle, "describe", _maybe_raise)
         monkeypatch.setattr(
             "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
-            lambda endpoint: True,
+            lambda url: True,
         )
 
         # PING_FAILURE_THRESHOLD ticks while describe() raises must not terminate.
@@ -1769,24 +1870,30 @@ class TestAutoscalerHealthProbe:
         assert group.get_slice("slice-001") is not None
         assert group.get_slice("slice-001").describe  # sanity: handle still callable next tick
 
-        # Once describe() recovers, the probe resolves addresses and caches them.
+        # Once describe() recovers, the probe resolves URLs and caches them.
         raising["on"] = False
         autoscaler.probe_health(Timestamp.from_ms(2_000))
         cached = group.ready_slice_probe_targets()[0][2]
-        assert cached == good_addresses
+        assert cached == good_urls
         autoscaler.shutdown()
 
-    def test_endpoint_prefers_handle_port_over_cluster_default(
+    def test_worker_urls_pass_through_each_handle(
         self,
         base_worker_config: config_pb2.WorkerConfig,
     ):
-        """Workers that auto-assign ports (LOCAL) probe their own port; others
-        fall back to the cluster-configured worker port."""
+        """_worker_urls maps each worker to its handle's worker_url verbatim.
+
+        Both a config-port worker (GCP/manual) and an auto-assigned-port worker
+        (LOCAL) yield a well-formed http://host:port URL with no double port.
+        """
         autoscaler = make_autoscaler({}, base_worker_config=base_worker_config)
         gcp_style = make_mock_worker_handle("w-gcp", "10.0.0.1", vm_pb2.VM_STATE_READY)
         local_style = FakeWorkerHandle(_vm_id="w-local", _internal_address="127.0.0.1", _port=54321)
 
-        endpoints = autoscaler._worker_endpoints([gcp_style, local_style])
+        worker_urls = autoscaler._worker_urls([gcp_style, local_style])
 
-        assert endpoints == {"w-gcp": "10.0.0.1:10001", "w-local": "127.0.0.1:54321"}
+        assert worker_urls == {
+            "w-gcp": "http://10.0.0.1:10001",
+            "w-local": "http://127.0.0.1:54321",
+        }
         autoscaler.shutdown()
