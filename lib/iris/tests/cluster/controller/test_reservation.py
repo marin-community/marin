@@ -21,6 +21,7 @@ from iris.cluster.constraints import (
     device_variant_constraint,
     get_device_type,
     get_device_variant,
+    preemptible_constraint,
 )
 from iris.cluster.controller import ops, writes
 from iris.cluster.controller.codec import constraints_from_json
@@ -1694,6 +1695,37 @@ def test_holder_task_gets_device_constraints_from_tpu_entry(state):
         WellKnownAttribute.DEVICE_VARIANT in constraint_keys
     ), f"holder job missing device-variant constraint; got keys: {constraint_keys}"
     assert "region" in constraint_keys, "holder job should still have the explicit region constraint"
+
+
+@pytest.mark.parametrize(
+    ("entry_preemptible", "expected_holder_values"),
+    [
+        (None, []),
+        (True, ["true"]),
+    ],
+)
+def test_holder_task_uses_entry_preemptible_constraints_not_parent(
+    state,
+    entry_preemptible,
+    expected_holder_values,
+):
+    entry_constraints = []
+    if entry_preemptible is not None:
+        entry_constraints.append(preemptible_constraint(entry_preemptible).to_proto())
+
+    entry = _make_reservation_entry(device=_tpu_device("v5p-8", count=4), constraints=entry_constraints)
+    request = _make_job_request_with_reservation(reservation_entries=[entry])
+    request.constraints.append(preemptible_constraint(False).to_proto())
+
+    parent_job_id = _submit_job(state, "res-job", request)
+    holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
+
+    holder_job = _query_job(state, holder_job_id)
+    assert holder_job is not None
+    constraints = constraints_from_json(holder_job.constraints_json)
+    preemptible_constraints = [c for c in constraints if c.key == WellKnownAttribute.PREEMPTIBLE]
+
+    assert [c.values[0].value for c in preemptible_constraints] == expected_holder_values
 
 
 def test_holder_task_not_scheduled_on_wrong_device_type(state):
