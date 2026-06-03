@@ -105,6 +105,30 @@ def test_query_unknown_namespace_in_sql_raises(store: DuckDBLogStore):
         store.query('SELECT * FROM "nope.unknown"')
 
 
+def test_query_caps_to_newest_segments_within_byte_budget(store: DuckDBLogStore, monkeypatch):
+    """A stats Query sees only the newest segments within
+    ``_MAX_PARQUET_BYTES_PER_READ`` — the same recency cap the FetchLogs path
+    applies. This bounds how many parquet footers the per-query
+    ``read_parquet(union_by_name=true)`` view must open on a large namespace.
+    """
+    store.register_table("iris.worker", _worker_schema())
+    # Three independently sealed segments (force_compact_l0 only merges L0,
+    # so each write+seal yields its own L1 segment).
+    for i in range(3):
+        store.write_rows("iris.worker", _ipc_bytes(_worker_batch([f"w-{i}"], [i], [i])))
+        _seal(store, "iris.worker")
+
+    # Default (large) budget: the query sees every segment.
+    full = store.query('SELECT worker_id FROM "iris.worker" ORDER BY worker_id')
+    assert full.column("worker_id").to_pylist() == ["w-0", "w-1", "w-2"]
+
+    # A 1-byte budget keeps only the newest segment (the cap always keeps at
+    # least the newest one, then stops once the next would exceed the budget).
+    monkeypatch.setattr("finelog.store.log_namespace._MAX_PARQUET_BYTES_PER_READ", 1)
+    capped = store.query('SELECT worker_id FROM "iris.worker"')
+    assert capped.column("worker_id").to_pylist() == ["w-2"]
+
+
 def test_compaction_commit_waits_for_active_readers(store: DuckDBLogStore):
     """Commit (rename + catalog swap + unlink) must drain readers first.
 
