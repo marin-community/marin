@@ -95,6 +95,7 @@ def _find_tpu_by_ip_in_nodes(
     for node in tpu_nodes:
         network_endpoints = node.get("networkEndpoints", [])
         for worker_index, endpoint in enumerate(network_endpoints):
+            # Iris worker RPC addresses can surface either TPU-internal IPs or NATed external IPs.
             external_ip = (endpoint.get("accessConfig") or {}).get("externalIp")
             if endpoint.get("ipAddress") == target_ip or external_ip == target_ip:
                 simple_name, node_zone = _parse_tpu_node_name(node["name"], fallback_zone)
