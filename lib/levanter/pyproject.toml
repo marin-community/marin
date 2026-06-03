@@ -92,6 +92,11 @@ gpu = [
   # forcing an exact patch version.
   "triton>=3.6.0,<3.7; sys_platform == 'linux'",
 ]
+deepep = [
+  # DeepEP itself remains an external source checkout addressed by DEEPEP_SRC_ROOT.
+  # The Levanter wheel ships the JAX FFI shim sources; CUDA toolchain dependencies
+  # come from the host GPU environment.
+]
 tpu = ["jax==0.9.2", "jaxlib==0.9.2", "libtpu==0.0.39"]
 torch_test = [
   "torch>=2.7.0",
