@@ -437,19 +437,32 @@ def _mock_service(handler: Callable[[httpx.Request], httpx.Response]) -> CloudGc
     return svc
 
 
-def test_get_retrying_retries_transient_5xx_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_vm_list_recovers_after_transient_blip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ferry discovery path: a one-off 503 is retried, then returns the controller VM.
+
+    Drives the full public path (classify -> retry -> paginate -> parse) so the
+    returned VM distinguishes genuine recovery from a swallow-to-[].
+    """
     monkeypatch.setattr("rigging.timing.time.sleep", lambda _: None)
     calls = {"n": 0}
+    vm = {
+        "name": "iris-controller",
+        "status": "RUNNING",
+        "zone": "https://www.googleapis.com/compute/v1/projects/p/zones/us-central1-a",
+        "networkInterfaces": [{"networkIP": "10.0.0.5"}],
+        "labels": {"iris-x-controller": "true"},
+    }
 
     def handler(_request: httpx.Request) -> httpx.Response:
         calls["n"] += 1
-        if calls["n"] < 3:
+        if calls["n"] == 1:
             return _gcp_error_response(503, message="Internal error. Please try again")
-        return httpx.Response(200, json={"ok": True})
+        return httpx.Response(200, json={"items": {"zones/us-central1-a": {"instances": [vm]}}})
 
     svc = _mock_service(handler)
-    assert svc._get_retrying("https://compute.googleapis.com/x") == {"ok": True}
-    assert calls["n"] == 3
+    result = svc.vm_list(zones=[], labels={"iris-x-controller": "true"})
+    assert [v.name for v in result] == ["iris-controller"]
+    assert calls["n"] == 2  # one retried failure, then success
 
 
 def test_vm_list_propagates_sustained_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
