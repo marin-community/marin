@@ -492,10 +492,11 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        use_pko: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = _batch_reshard(x + self.attn(attn_in, mask))
-        mlp_in = _batch_reshard(self.mlp_gated_norm(self.rms_mlp(x)))
+        x = x + self.attn(attn_in, mask, use_pko=use_pko)
+        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
@@ -548,12 +549,16 @@ class Transformer(eqx.Module):
 
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
-        long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+        long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
+        num_blocks = len(self.blocks)
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
-            layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
+            is_last = i == num_blocks - 1
+            is_long = i % 4 == 3 or is_last
+            layer_mask = long_mask if is_long else short_mask
+            use_pko = is_long
+            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask, use_pko)
             moe_router_stats.append(router_stats)
 
         router_metrics = {
