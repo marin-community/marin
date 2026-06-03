@@ -1186,6 +1186,10 @@ def test_tpu_bootstrap_aborts_when_slice_enters_deleting():
         (CloudSliceState.UNKNOWN, CloudSliceState.READY, CloudSliceState.UNKNOWN),
         # Bootstrap failure surfaces as FAILED.
         (CloudSliceState.CREATING, CloudSliceState.FAILED, CloudSliceState.FAILED),
+        # A definitive bootstrap failure wins over an UNKNOWN cloud state: a
+        # stockout/quota create failure leaves no TPU to describe (UNKNOWN), but
+        # the slice must be reaped now, not after the unresolvable timeout.
+        (CloudSliceState.UNKNOWN, CloudSliceState.FAILED, CloudSliceState.FAILED),
     ],
 )
 def test_composite_slice_state(cloud_state, bootstrap_state, expected):

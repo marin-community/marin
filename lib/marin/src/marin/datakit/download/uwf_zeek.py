@@ -32,8 +32,7 @@ from typing import Any
 from urllib.parse import urljoin
 
 import requests
-from rigging.filesystem import open_url
-from zephyr.writers import atomic_rename
+from rigging.filesystem import atomic_rename, open_url
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.execution.step_spec import StepSpec

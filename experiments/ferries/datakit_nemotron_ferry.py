@@ -100,7 +100,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         worker_resources=ResourceConfig(cpu=2, ram="16g", disk="5g"),
         max_workers=512,
         override_output_path=f"{base}/normalize",
-    )
+    )  # ~1,380 output shards
 
     minhash = StepSpec(
         name="datakit-nemotron-smoke/minhash",
@@ -108,11 +108,12 @@ def build_steps(run_id: str) -> list[StepSpec]:
         fn=lambda output_path: compute_minhash_attrs(
             source=Artifact.from_path(normalized, NormalizedData),
             output_path=output_path,
-            worker_resources=ResourceConfig(cpu=5, ram="16g", disk="5g"),
-            max_workers=512,
+            worker_resources=ResourceConfig(cpu=3.5, ram="12g", disk="5g"),
+            max_workers=460,
+            map_workers_per_actor=3,
         ),
         override_output_path=f"{base}/minhash",
-    )
+    )  # ~1,380 output shards
 
     deduped = StepSpec(
         name="datakit-nemotron-smoke/fuzzy_dups",
@@ -121,12 +122,13 @@ def build_steps(run_id: str) -> list[StepSpec]:
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[Artifact.from_path(minhash, MinHashAttrData)],
             output_path=output_path,
-            max_parallelism=512,
+            max_parallelism=690,
             cc_max_iterations=3,
-            worker_resources=ResourceConfig(cpu=1, ram="16g", disk="5g"),
+            worker_resources=ResourceConfig(cpu=2.5, ram="20g", disk="5g"),
+            map_workers_per_actor=2,
         ),
         override_output_path=f"{base}/fuzzy_dups",
-    )
+    )  # ~1,380 output shards
 
     consolidated = StepSpec(
         name="datakit-nemotron-smoke/consolidate",
@@ -146,11 +148,12 @@ def build_steps(run_id: str) -> list[StepSpec]:
                     keep_if_missing=True,
                 ),
             ],
-            worker_resources=ResourceConfig(cpu=1, ram="16g", disk="5g"),
-            max_workers=512,
+            worker_resources=ResourceConfig(cpu=8.5, ram="16g", disk="5g"),
+            max_workers=173,
+            map_workers_per_actor=8,
         ),
         override_output_path=f"{base}/consolidate",
-    )
+    )  # ~1,380 output shards
 
     tokenized = StepSpec(
         name="datakit-nemotron-smoke/tokenize",
@@ -162,12 +165,13 @@ def build_steps(run_id: str) -> list[StepSpec]:
                 validation_paths=[],
                 cache_path=output_path,
                 tokenizer="gpt2",
-                max_workers=512,
-                worker_resources=ResourceConfig(ram="16g", disk="5g"),
+                max_workers=460,
+                worker_resources=ResourceConfig(cpu=3.5, ram="15g", disk="5g"),
+                map_workers_per_actor=3,
             )
         ),
         override_output_path=f"{base}/tokens",
-    )
+    )  # ~1,380 output shards
 
     return [download, normalized, minhash, deduped, consolidated, tokenized]
 

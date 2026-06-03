@@ -1066,7 +1066,7 @@ class TestPrepareSliceConfigGpuCount:
     def test_coreweave_yaml_gpu_count_flows_through(self):
         """Loading coreweave.yaml and running prepare_slice_config produces correct gpu_count."""
 
-        yaml_path = Path(__file__).parents[3] / "config" / "coreweave.yaml"
+        yaml_path = Path(__file__).parents[3] / "config" / "coreweave-ci.yaml"
         config = load_config(yaml_path)
 
         h100_sg = config.scale_groups["h100-8x"]

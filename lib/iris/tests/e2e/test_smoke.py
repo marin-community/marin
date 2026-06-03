@@ -268,7 +268,7 @@ def capabilities(smoke_cluster) -> ClusterCapabilities:
 
 
 def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
-    """Jobs tab shows diverse states."""
+    """Landing page groups jobs by owner; drilling into the owner shows states."""
     quick = smoke_cluster.submit(TestJobs.quick, "smoke-simple")
     failed = smoke_cluster.submit(TestJobs.fail, "smoke-failed")
     running = smoke_cluster.submit(TestJobs.sleep, "smoke-running", 300)
@@ -277,12 +277,21 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
     smoke_cluster.wait(failed, timeout=smoke_cluster.job_timeout)
     smoke_cluster.wait_for_state(running, job_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
 
+    user = quick.job_id.user
+
+    # Landing page is the per-owner overview, not a flat job list.
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
+    wait_for_dashboard_ready(smoke_page)
+    assert_visible(smoke_page, f"text={user}")
+
+    # Drill into this owner to see their individual jobs and states.
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/#/?user={user}")
     wait_for_dashboard_ready(smoke_page)
     for name in ["smoke-simple", "smoke-failed", "smoke-running"]:
         assert_visible(smoke_page, f"text={name}")
     smoke_screenshot(
-        "jobs-tab", "Jobs tab listing smoke-simple (succeeded), smoke-failed (failed), and smoke-running (running)"
+        "jobs-tab",
+        f"Jobs for user {user}: smoke-simple (succeeded), smoke-failed (failed), and smoke-running (running)",
     )
 
     smoke_cluster.kill(running)
@@ -316,13 +325,19 @@ def test_dashboard_job_expand(smoke_cluster, smoke_page, smoke_screenshot):
     parent = smoke_cluster.submit(_parent_with_two_children, "smoke-expand-parent")
     smoke_cluster.wait(parent, timeout=smoke_cluster.job_timeout)
 
+    # Route through the owner overview first so the subsequent drill-in is a
+    # genuine hash change (the smoke page is shared module-scope and may already
+    # be parked on this owner's view from an earlier test).
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
+    wait_for_dashboard_ready(smoke_page)
+    # Open the owner's scoped job list (the landing page groups by owner).
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/#/?user={parent.job_id.user}")
     wait_for_dashboard_ready(smoke_page)
     assert_visible(smoke_page, "text=smoke-expand-parent")
 
-    # The parent should have an expand arrow (▶)
+    # The parent row exposes a keyboard-accessible expand toggle.
     row = smoke_page.locator("tr", has_text="smoke-expand-parent")
-    expand_btn = row.get_by_role("button", name="▶")
+    expand_btn = row.get_by_role("button", name="Expand children")
     expand_btn.click()
 
     # After clicking, children should appear (wait for the child names to render)
@@ -331,8 +346,8 @@ def test_dashboard_job_expand(smoke_cluster, smoke_page, smoke_screenshot):
         timeout=10000,
     )
 
-    # Verify the arrow changed to ▼
-    row.get_by_role("button", name="▼").wait_for(timeout=5000)
+    # Once expanded, the toggle flips to a collapse affordance.
+    row.get_by_role("button", name="Collapse children").wait_for(timeout=5000)
 
     smoke_screenshot("job-expand", "Jobs tab with expanded parent showing child-a and child-b indented beneath")
 
@@ -898,9 +913,6 @@ def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
     sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
     sg.slice_template.local.SetInParent()
     return make_local_config(config)
-
-
-# GPU metadata test lives in tests/test_gpu_metadata.py
 
 
 # ============================================================================

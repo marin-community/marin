@@ -43,6 +43,10 @@ import google.auth
 
 logger = logging.getLogger(__name__)
 
+# Logical registry name for the finelog log/stats server. Clients resolve this
+# via the controller's endpoint registry to the concrete finelog address.
+LOG_SERVER_ENDPOINT_NAME = "/system/log-server"
+
 SchemeResolver = Callable[[str, dict[str, str]], str]
 
 _REGISTRY: dict[str, SchemeResolver] = {}
