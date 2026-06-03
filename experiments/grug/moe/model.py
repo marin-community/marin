@@ -79,7 +79,7 @@ class GrugModelConfig:
     num_experts_per_token: int = 4
     num_layers: int = 24
     num_heads: int = 16
-    num_kv_heads: int = 16
+    num_kv_heads: int = 4  # GQA 4:1 by default
     head_dim: int | None = None
     max_seq_len: int = 4096
     sliding_window: int = 4096
