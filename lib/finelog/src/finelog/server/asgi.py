@@ -12,6 +12,7 @@ from pathlib import Path
 from connectrpc.compression.gzip import GzipCompression
 from connectrpc.compression.zstd import ZstdCompression
 from connectrpc.interceptor import Interceptor
+from rigging.rpc import ConcurrencyLimitInterceptor
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.requests import Request
@@ -24,7 +25,6 @@ from finelog.rpc.finelog_stats_connect import StatsServiceASGIApplication
 from finelog.rpc.logging_connect import LogServiceASGIApplication
 from finelog.server.interceptors import (
     DEFAULT_SLOW_RPC_THRESHOLD_MS,
-    ConcurrencyLimitInterceptor,
     SlowRpcInterceptor,
 )
 from finelog.server.service import LogServiceImpl

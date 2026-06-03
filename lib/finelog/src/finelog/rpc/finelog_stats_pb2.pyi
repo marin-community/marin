@@ -44,19 +44,33 @@ class Schema(_message.Message):
     key_column: str
     def __init__(self, columns: _Optional[_Iterable[_Union[Column, _Mapping]]] = ..., key_column: _Optional[str] = ...) -> None: ...
 
+class StoragePolicy(_message.Message):
+    __slots__ = ("max_segments", "max_bytes", "max_age_seconds")
+    MAX_SEGMENTS_FIELD_NUMBER: _ClassVar[int]
+    MAX_BYTES_FIELD_NUMBER: _ClassVar[int]
+    MAX_AGE_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    max_segments: int
+    max_bytes: int
+    max_age_seconds: int
+    def __init__(self, max_segments: _Optional[int] = ..., max_bytes: _Optional[int] = ..., max_age_seconds: _Optional[int] = ...) -> None: ...
+
 class RegisterTableRequest(_message.Message):
-    __slots__ = ("namespace", "schema")
+    __slots__ = ("namespace", "schema", "storage_policy")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_FIELD_NUMBER: _ClassVar[int]
+    STORAGE_POLICY_FIELD_NUMBER: _ClassVar[int]
     namespace: str
     schema: Schema
-    def __init__(self, namespace: _Optional[str] = ..., schema: _Optional[_Union[Schema, _Mapping]] = ...) -> None: ...
+    storage_policy: StoragePolicy
+    def __init__(self, namespace: _Optional[str] = ..., schema: _Optional[_Union[Schema, _Mapping]] = ..., storage_policy: _Optional[_Union[StoragePolicy, _Mapping]] = ...) -> None: ...
 
 class RegisterTableResponse(_message.Message):
-    __slots__ = ("effective_schema",)
+    __slots__ = ("effective_schema", "effective_policy")
     EFFECTIVE_SCHEMA_FIELD_NUMBER: _ClassVar[int]
+    EFFECTIVE_POLICY_FIELD_NUMBER: _ClassVar[int]
     effective_schema: Schema
-    def __init__(self, effective_schema: _Optional[_Union[Schema, _Mapping]] = ...) -> None: ...
+    effective_policy: StoragePolicy
+    def __init__(self, effective_schema: _Optional[_Union[Schema, _Mapping]] = ..., effective_policy: _Optional[_Union[StoragePolicy, _Mapping]] = ...) -> None: ...
 
 class WriteRowsRequest(_message.Message):
     __slots__ = ("namespace", "arrow_ipc")
@@ -97,7 +111,7 @@ class DropTableResponse(_message.Message):
     def __init__(self) -> None: ...
 
 class NamespaceInfo(_message.Message):
-    __slots__ = ("namespace", "schema", "row_count", "byte_size", "min_seq", "max_seq", "segment_count")
+    __slots__ = ("namespace", "schema", "row_count", "byte_size", "min_seq", "max_seq", "segment_count", "storage_policy")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_FIELD_NUMBER: _ClassVar[int]
     ROW_COUNT_FIELD_NUMBER: _ClassVar[int]
@@ -105,6 +119,7 @@ class NamespaceInfo(_message.Message):
     MIN_SEQ_FIELD_NUMBER: _ClassVar[int]
     MAX_SEQ_FIELD_NUMBER: _ClassVar[int]
     SEGMENT_COUNT_FIELD_NUMBER: _ClassVar[int]
+    STORAGE_POLICY_FIELD_NUMBER: _ClassVar[int]
     namespace: str
     schema: Schema
     row_count: int
@@ -112,7 +127,8 @@ class NamespaceInfo(_message.Message):
     min_seq: int
     max_seq: int
     segment_count: int
-    def __init__(self, namespace: _Optional[str] = ..., schema: _Optional[_Union[Schema, _Mapping]] = ..., row_count: _Optional[int] = ..., byte_size: _Optional[int] = ..., min_seq: _Optional[int] = ..., max_seq: _Optional[int] = ..., segment_count: _Optional[int] = ...) -> None: ...
+    storage_policy: StoragePolicy
+    def __init__(self, namespace: _Optional[str] = ..., schema: _Optional[_Union[Schema, _Mapping]] = ..., row_count: _Optional[int] = ..., byte_size: _Optional[int] = ..., min_seq: _Optional[int] = ..., max_seq: _Optional[int] = ..., segment_count: _Optional[int] = ..., storage_policy: _Optional[_Union[StoragePolicy, _Mapping]] = ...) -> None: ...
 
 class ListNamespacesRequest(_message.Message):
     __slots__ = ()

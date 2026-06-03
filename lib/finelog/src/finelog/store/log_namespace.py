@@ -50,6 +50,7 @@ from finelog.store.compactor import (
     parse_seg_filename,
     seg_filename,
 )
+from finelog.store.policy import StoragePolicy
 from finelog.store.rwlock import RWLock
 from finelog.store.schema import (
     IMPLICIT_SEQ_COLUMN,
@@ -465,6 +466,7 @@ class DiskLogNamespace:
         read_pool: _ReadPoolProtocol,
         catalog: Catalog,
         merge_semaphore: threading.Semaphore,
+        storage_policy: StoragePolicy = StoragePolicy(),
     ) -> None:
         self.name = name
         self.schema = schema
@@ -477,6 +479,9 @@ class DiskLogNamespace:
 
         self._segment_target_bytes = segment_target_bytes
         self._compactor = Compactor(compaction_config)
+        # Per-namespace retention overrides; ``None`` fields fall back to
+        # the cluster-wide CompactionConfig caps inside _eviction_step.
+        self._storage_policy = storage_policy
 
         # Per-namespace insertion mutex. Guards ``_buffers`` (seq counter,
         # ram chunks, flushing buffer) and ``_local_segments``. Writes to
@@ -852,6 +857,10 @@ class DiskLogNamespace:
         _assert_additive_schema_evolution(self.schema, new_schema)
         self.schema = new_schema
         self._arrow_schema = schema_to_arrow(new_schema)
+
+    def update_policy(self, new_policy: StoragePolicy) -> None:
+        """Swap in a new retention policy. Picked up on the next eviction tick."""
+        self._storage_policy = new_policy
 
     def _flush_loop(self) -> None:
         """Drain in-RAM chunks to L0 on a timer or explicit wake.
@@ -1588,25 +1597,33 @@ class DiskLogNamespace:
     def _eviction_step(self) -> None:
         """Evict the namespace's oldest L>=1 copied segments until under caps.
 
-        Runs at the tail of every compaction tick. Per-namespace caps live
-        on ``CompactionConfig`` (``max_segments_per_namespace``,
-        ``max_bytes_per_namespace``); FIFO-by-min_seq picks the oldest
-        eligible segment.
+        Runs at the tail of every compaction tick. Caps are resolved from
+        the per-namespace :class:`StoragePolicy` first; unset fields fall
+        back to the cluster-wide ``CompactionConfig`` values. Size /
+        count caps trim oldest-first by ``min_seq``; the policy's
+        ``max_age_seconds`` (when set) additionally drops any eligible
+        segment whose ``created_at_ms`` is older than ``now - max_age``.
         """
         config = self._compactor.config
+        policy = self._storage_policy
+        max_segments = policy.max_segments if policy.max_segments is not None else config.max_segments_per_namespace
+        max_bytes = policy.max_bytes if policy.max_bytes is not None else config.max_bytes_per_namespace
+        max_age_ms = policy.max_age_seconds * 1000 if policy.max_age_seconds is not None else None
+
+        # Size + count trim: FIFO-by-min_seq through select_eviction_candidate.
         while True:
             with self._insertion_lock:
                 seg_count = len(self._local_segments)
                 byte_total = sum(s.size_bytes for s in self._local_segments)
-            if seg_count <= config.max_segments_per_namespace and byte_total <= config.max_bytes_per_namespace:
-                return
+            if seg_count <= max_segments and byte_total <= max_bytes:
+                break
             with self._insertion_lock:
                 row = self._catalog.select_eviction_candidate(self.name)
             if row is None:
                 # Over the cap but nothing eligible (everything still L0,
                 # or terminal segments not yet copied). Bail and let the
                 # next tick try again.
-                return
+                break
             self.evict_segment(row.path)
             logger.info(
                 "Evicted L%d segment %s (bytes=%d, remaining=%d segments)",
@@ -1614,6 +1631,29 @@ class DiskLogNamespace:
                 Path(row.path).name,
                 row.byte_size,
                 seg_count - 1,
+            )
+
+        # Age trim: independent of size; only L>=1 BOTH segments are
+        # eligible. Order by created_at_ms (not min_seq) because
+        # compaction outputs inherit their inputs' min_seq but get a
+        # fresh created_at_ms — so the lowest-min_seq segment can be
+        # the youngest, and a min_seq scan would short-circuit on it
+        # and miss strictly-older siblings at higher min_seq.
+        if max_age_ms is None:
+            return
+        cutoff_ms = int(time.time() * 1000) - max_age_ms
+        while True:
+            with self._insertion_lock:
+                row = self._catalog.select_aged_eviction_candidate(self.name, cutoff_ms)
+            if row is None:
+                return
+            self.evict_segment(row.path)
+            logger.info(
+                "Aged out L%d segment %s (created_at_ms=%d, cutoff_ms=%d)",
+                row.level,
+                Path(row.path).name,
+                row.created_at_ms,
+                cutoff_ms,
             )
 
     def query_snapshot(self) -> list[LocalSegment]:
@@ -1886,6 +1926,11 @@ class MemoryLogNamespace:
             self._table = _project_to_schema(self._table, new_arrow)
             self.schema = new_schema
             self._arrow_schema = new_arrow
+
+    def update_policy(self, new_policy: StoragePolicy) -> None:
+        # In-memory namespaces don't evict; policy is accepted for
+        # protocol uniformity and ignored.
+        pass
 
     def evict_segment(self, path: str) -> int:
         return 0

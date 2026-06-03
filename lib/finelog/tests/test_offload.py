@@ -7,8 +7,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from finelog.store.catalog import CATALOG_DB_FILENAME
+from finelog.store.compactor import CompactionConfig
 from finelog.store.duckdb_store import DuckDBLogStore
 from finelog.store.log_namespace import DiskLogNamespace
+from finelog.store.types import SegmentLocation
 
 from tests.conftest import _ipc_bytes, _worker_batch, _worker_schema
 
@@ -97,7 +100,6 @@ def test_close_drains_pending_uploads(tmp_path: Path) -> None:
 
 def test_sync_does_not_delete_remote_after_eviction(tmp_path: Path) -> None:
     """Eviction makes the bucket the durable archive; sync must not delete it."""
-    from finelog.store.compactor import CompactionConfig
 
     remote = tmp_path / "remote"
     remote.mkdir()
@@ -136,7 +138,6 @@ def test_orphan_delete_runs_only_after_replacement_uploaded(tmp_path: Path) -> N
     input row drops at commit, the replacement is inserted at ``LOCAL``,
     and the bucket cleanup of the (now-orphan) input file happens only
     after phase 1 has uploaded the replacement in the same sync tick."""
-    from finelog.store.compactor import CompactionConfig
 
     remote = tmp_path / "remote"
     remote.mkdir()
@@ -171,8 +172,6 @@ def test_orphan_delete_runs_only_after_replacement_uploaded(tmp_path: Path) -> N
 def test_wiped_catalog_recovers_from_remote(tmp_path: Path) -> None:
     """If the catalog DB is wiped while remote survives, the next boot
     must adopt remote files as ``REMOTE`` rows (not delete them as orphans)."""
-    from finelog.store.catalog import CATALOG_DB_FILENAME
-    from finelog.store.types import SegmentLocation
 
     remote = tmp_path / "remote"
     remote.mkdir()
@@ -224,8 +223,6 @@ def test_reconcile_drops_stale_compaction_inputs_at_boot(tmp_path: Path) -> None
     The reconcile pass at boot must detect coverage by a higher-level
     segment and drop both the GCS file and any catalog row.
     """
-    from finelog.store.catalog import CATALOG_DB_FILENAME
-    from finelog.store.compactor import CompactionConfig
 
     remote = tmp_path / "remote"
     remote.mkdir()
@@ -279,8 +276,6 @@ def test_reconcile_drops_stale_compaction_inputs_at_boot(tmp_path: Path) -> None
 def test_reconcile_preserves_uncovered_lower_level(tmp_path: Path) -> None:
     """An L_n segment NOT covered by any higher-level segment must be
     adopted — only redundant inputs are dropped."""
-    from finelog.store.catalog import CATALOG_DB_FILENAME
-    from finelog.store.types import SegmentLocation
 
     remote = tmp_path / "remote"
     remote.mkdir()
