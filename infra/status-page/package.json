@@ -17,7 +17,7 @@
   "dependencies": {
     "@google-cloud/compute": "^4.9.0",
     "@hono/node-server": "^2.0.4",
-    "@tanstack/react-query": "^5.100.14",
+    "@tanstack/react-query": "^5.101.0",
     "hono": "^4.12.23",
     "jotai": "^2.20.0",
     "react": "^18.3.1",
@@ -39,9 +39,9 @@
     "globals": "^17.6.0",
     "postcss": "^8.5.15",
     "tailwindcss": "^4.0.0",
-    "tsx": "^4.22.3",
+    "tsx": "^4.22.4",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.60.0",
+    "typescript-eslint": "^8.60.1",
     "vite": "^6.0.3"
   }
 }
