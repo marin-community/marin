@@ -195,19 +195,10 @@ def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
         yield {k: item[k] for k in columns if k in item}
 
 
-def _load_file_batch_gen(stream: Iterator, *, include_file_paths: bool = False, file_path_column: str) -> Iterator:
+def _load_file_gen(stream: Iterator, loader: Callable, *, include_file_paths: bool, file_path_column: str) -> Iterator:
     for spec in stream:
         try:
-            yield from load_file_batch(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
-        except Exception as e:
-            e.add_note(f"While loading from {spec}")
-            raise
-
-
-def _load_file_gen(stream: Iterator, *, include_file_paths: bool = False, file_path_column: str) -> Iterator:
-    for spec in stream:
-        try:
-            yield from load_file(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
+            yield from loader(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
         except Exception as e:
             e.add_note(f"While loading from {spec}")
             raise
@@ -227,14 +218,13 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
     def pipeline(stream: Iterator, *, shard_idx: int = 0, total_shards: int = 1) -> Iterator:
         for op in operations:
             if isinstance(op, LoadFileOp):
-                if op.batch_mode:
-                    stream = _load_file_batch_gen(
-                        stream, include_file_paths=op.include_file_paths, file_path_column=op.file_path_column
-                    )
-                else:
-                    stream = _load_file_gen(
-                        stream, include_file_paths=op.include_file_paths, file_path_column=op.file_path_column
-                    )
+                loader = load_file_batch if op.batch_mode else load_file
+                stream = _load_file_gen(
+                    stream,
+                    loader,
+                    include_file_paths=op.include_file_paths,
+                    file_path_column=op.file_path_column,
+                )
             elif isinstance(op, MapOp):
                 stream = _map_gen(stream, op.fn)
             elif isinstance(op, FilterOp):

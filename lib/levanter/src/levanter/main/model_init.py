@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 from dataclasses import dataclass
 from typing import cast
 
@@ -12,6 +13,8 @@ from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.jax_utils import use_cpu_device
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -34,9 +37,8 @@ def prepare_model_init_context(
 
         converter = model.hf_checkpoint_converter()
         if hasattr(tokenizer, "vocab") and tokenizer.vocab != converter.tokenizer.vocab:
-            converter = converter.replaced(tokenizer=tokenizer)
-        else:
-            converter = converter.replaced(tokenizer=tokenizer)
+            logger.warning("The tokenizers appear to be different. You may want to check this.")
+        converter = converter.replaced(tokenizer=tokenizer)
 
         if isinstance(initialize_from_hf, str):
             converter = converter.replaced(reference_checkpoint=initialize_from_hf)

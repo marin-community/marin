@@ -504,14 +504,8 @@ class CloudGcpService:
 
     def _paginate(self, url: str, items_key: str, params: dict[str, str] | None = None) -> list[dict]:
         results: list[dict] = []
-        p = dict(params or {})
-        while True:
-            data = self._get_retrying(url, p)
-            results.extend(data.get(items_key, []))
-            token = data.get("nextPageToken")
-            if not token:
-                break
-            p["pageToken"] = token
+        for page in self._paginate_raw(url, params):
+            results.extend(page.get(items_key, []))
         return results
 
     def _paginate_raw(self, url: str, params: dict[str, str] | None = None) -> list[dict]:

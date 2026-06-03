@@ -281,7 +281,7 @@ def test_stage_table_record_source_end_to_end_wtq(tmp_path):
     )
 
     with patch(
-        "marin.transform.structured_text.table_records._load_hf_iterable",
+        "marin.transform.structured_text.table_records.load_hf_split_iterable",
         return_value=iter(fixtures),
     ):
         result = stage_table_record_source(cfg)
@@ -324,7 +324,7 @@ def test_stage_table_record_source_end_to_end_gittables(tmp_path):
     )
 
     with patch(
-        "marin.transform.structured_text.table_records._load_hf_iterable",
+        "marin.transform.structured_text.table_records.load_hf_split_iterable",
         return_value=iter(fixtures),
     ):
         result = stage_table_record_source(cfg)
@@ -371,6 +371,34 @@ def test_stage_table_record_source_loads_downloaded_parquet_split(tmp_path):
     assert records[0]["id"] == "wtq:test:validation:00000000"
 
 
+def test_stage_table_record_source_restricts_subset_parquet_scan_to_requested_subset(tmp_path):
+    input_dir = tmp_path / "raw"
+    output_dir = tmp_path / "staged"
+    wanted_dir = input_dir / "wanted"
+    sibling_dir = input_dir / "sibling"
+    wanted_dir.mkdir(parents=True)
+    sibling_dir.mkdir()
+    Dataset.from_list([_wtq_fixture()]).to_parquet(wanted_dir / "validation-00000-of-00001.parquet")
+    sibling = _wtq_fixture()
+    sibling["question"] = "Sibling subset row that should not be loaded"
+    Dataset.from_list([sibling]).to_parquet(sibling_dir / "validation-00000-of-00001.parquet")
+
+    cfg = TableRecordStagingConfig(
+        input_path=str(input_dir),
+        output_path=str(output_dir),
+        source_label="wtq:test",
+        serializer_name="wikitablequestions",
+        split="validation",
+        subset="wanted",
+    )
+    result = stage_table_record_source(cfg)
+
+    assert result["record_count"] == 1
+    records = _read_staged_records(output_dir)
+    assert "Which building is taller?" in records[0]["text"]
+    assert "Sibling subset row that should not be loaded" not in records[0]["text"]
+
+
 def test_stage_table_record_source_respects_byte_cap(tmp_path):
     # Use many copies; the cap should stop ingestion before all are written.
     fixtures = [_wtq_fixture() for _ in range(500)]
@@ -383,7 +411,7 @@ def test_stage_table_record_source_respects_byte_cap(tmp_path):
     )
 
     with patch(
-        "marin.transform.structured_text.table_records._load_hf_iterable",
+        "marin.transform.structured_text.table_records.load_hf_split_iterable",
         return_value=iter(fixtures),
     ):
         result = stage_table_record_source(cfg)

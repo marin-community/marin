@@ -475,19 +475,6 @@ def get_job_detail(tx: Tx, job_id: JobName):
     ).first()
 
 
-def get_job_config(tx: Tx, job_id: JobName) -> dict | None:
-    """Return the ``job_config`` row as ``{column_name: value}``, or None."""
-    row = (
-        tx.execute(
-            select(job_config_table).where(job_config_table.c.job_id == bindparam("job_id")),
-            {"job_id": job_id},
-        )
-        .mappings()
-        .first()
-    )
-    return dict(row) if row is not None else None
-
-
 def bulk_get_job_configs(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, dict]:
     """Return ``{job_id: config_dict}`` for all ``job_ids`` that have a config row.
 

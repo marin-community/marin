@@ -6,9 +6,7 @@
 from __future__ import annotations
 
 import json
-import os
 import posixpath
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import cache
@@ -16,13 +14,13 @@ from importlib import resources
 from typing import Any
 
 import yaml
-from datasets import load_dataset
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
     MaterializedOutputMetadata,
     write_ingestion_metadata_json,
 )
-from marin.utils import fsspec_mkdirs, fsspec_url
+from marin.transform.hf_parquet_splits import load_hf_split_iterable
+from marin.utils import fsspec_mkdirs
 from rigging.filesystem import atomic_rename, open_url, url_to_fs
 
 
@@ -105,45 +103,6 @@ class LmEvalRawStagingConfig:
     content_fingerprint: str = ""
 
 
-def _parquet_file_matches_split(path: str, split: str) -> bool:
-    filename = os.path.basename(path)
-    if not filename.endswith(".parquet"):
-        return False
-    return filename == f"{split}.parquet" or filename.startswith(f"{split}-")
-
-
-def _find_split_parquet_files(input_path: str, split: str, subset: str | None) -> list[str]:
-    fs, root = url_to_fs(input_path)
-    roots: list[str] = []
-    if subset and subset != "default":
-        subset_root = posixpath.join(root, subset)
-        if fs.exists(subset_root):
-            roots.append(subset_root)
-    if not roots:
-        roots.append(root)
-
-    matches: list[str] = []
-    for candidate_root in roots:
-        if fs.isfile(candidate_root):
-            candidates = [candidate_root]
-            selected = [path for path in candidates if path.endswith(".parquet")]
-        else:
-            candidates = list(fs.find(candidate_root, withdirs=False))
-            selected = [path for path in candidates if _parquet_file_matches_split(path, split)]
-        matches.extend(selected)
-
-    if not matches:
-        raise FileNotFoundError(f"No parquet files found for split {split!r} under {input_path}")
-
-    return [fsspec_url(fs, path) for path in sorted(set(matches))]
-
-
-def _load_hf_iterable(input_path: str, split: str, subset: str | None) -> Iterable[dict[str, Any]]:
-    data_files = _find_split_parquet_files(input_path, split, subset)
-    dataset = load_dataset("parquet", data_files={split: data_files}, split=split, streaming=True)
-    return dataset
-
-
 def _mmlu_subject(example: dict[str, Any]) -> str:
     return str(example.get("subject") or "").strip()
 
@@ -183,7 +142,7 @@ def _build_mmlu_fewshot_index(
     if num_fewshot <= 0:
         return by_subject
 
-    for example in _load_hf_iterable(input_path, split, subset):
+    for example in load_hf_split_iterable(input_path, split, subset):
         subject = _mmlu_subject(example)
         if not subject:
             continue
@@ -297,7 +256,7 @@ def stage_lm_eval_source(cfg: LmEvalRawStagingConfig) -> dict[str, int | str]:
     record_count = 0
     with atomic_rename(out_file) as temp_path:
         with open_url(temp_path, "wt", encoding="utf-8", compression=compression) as outfile:
-            for index, example in enumerate(_load_hf_iterable(cfg.input_path, cfg.split, cfg.subset)):
+            for index, example in enumerate(load_hf_split_iterable(cfg.input_path, cfg.split, cfg.subset)):
                 if cfg.renderer_name is LmEvalRawRenderer.MMLU:
                     text = _render_mmlu_example(
                         example,
