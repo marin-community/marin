@@ -173,7 +173,7 @@ def _triton_ragged_contracting_dim_dot_kernel(
         dtype = jnp.result_type(a, b)
         return acc + pl.dot(a.astype(dtype).T, b.astype(dtype))
 
-    num_k_blocks = jnp.maximum(pl.cdiv(jnp.int32(hi - lo), block_k), 1)
+    num_k_blocks = jnp.maximum(pl.cdiv(jnp.int32(hi - lo), jnp.int32(block_k)), jnp.int32(1))
     acc = jnp.zeros((block_m, out_ref.shape[1]), dtype=jnp.float32)
     acc = jax.lax.fori_loop(0, num_k_blocks - 1, body, acc)
     acc = body(num_k_blocks - 1, acc, mask_k=True)

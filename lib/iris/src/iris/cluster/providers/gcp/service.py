@@ -17,11 +17,12 @@ import google.auth.credentials
 import google.auth.transport.requests
 import httpx
 from google.cloud import tpu_v2alpha1
-from rigging.timing import ExponentialBackoff, Timestamp
+from rigging.timing import ExponentialBackoff, Timestamp, retry_with_backoff
 
 from iris.cluster.providers.gcp.local import LocalSliceHandle
 from iris.cluster.providers.types import (
     InfraError,
+    InfraUnavailableError,
     QuotaExhaustedError,
     ResourceNotFoundError,
 )
@@ -78,6 +79,11 @@ _LOGGING_BASE = "https://logging.googleapis.com/v2"
 _REFRESH_MARGIN = 300  # seconds before expiry to refresh token
 _DEFAULT_TIMEOUT = 120  # seconds
 _OPERATION_TIMEOUT = 600  # seconds to wait for an operation to complete
+
+# GCP occasionally returns 503 "Internal error. Please try again" (and other 5xx)
+# on otherwise-valid reads; these are explicitly retryable. Bounded so a sustained
+# outage still surfaces as InfraUnavailableError rather than hanging forever.
+_TRANSIENT_GET_ATTEMPTS = 5
 
 # google.rpc.Code value for RESOURCE_EXHAUSTED. Used to classify LRO failures
 # where the initial HTTP response was 200 but the async operation ended with a
@@ -476,15 +482,31 @@ class CloudGcpService:
             raise ResourceNotFoundError(message)
         if code == 429 or status in ("RESOURCE_EXHAUSTED", "QUOTA_EXCEEDED"):
             raise QuotaExhaustedError(message)
+        if code >= 500:
+            raise InfraUnavailableError(f"GCP API error {code}: {message}")
         raise InfraError(f"GCP API error {code}: {message}")
+
+    def _get_retrying(self, url: str, params: dict[str, str] | None = None) -> dict:
+        """GET + classify, retrying only transient (5xx) GCP errors with backoff."""
+
+        def fetch() -> dict:
+            resp = self._client.get(url, headers=self._headers(), params=params)
+            self._classify_response(resp)
+            return resp.json()
+
+        return retry_with_backoff(
+            fetch,
+            retryable=lambda e: isinstance(e, InfraUnavailableError),
+            max_attempts=_TRANSIENT_GET_ATTEMPTS,
+            backoff=ExponentialBackoff(initial=1.0, maximum=15.0, factor=2.0),
+            operation=f"GET {url}",
+        )
 
     def _paginate(self, url: str, items_key: str, params: dict[str, str] | None = None) -> list[dict]:
         results: list[dict] = []
         p = dict(params or {})
         while True:
-            resp = self._client.get(url, headers=self._headers(), params=p)
-            self._classify_response(resp)
-            data = resp.json()
+            data = self._get_retrying(url, p)
             results.extend(data.get(items_key, []))
             token = data.get("nextPageToken")
             if not token:
@@ -496,9 +518,7 @@ class CloudGcpService:
         pages: list[dict] = []
         p = dict(params or {})
         while True:
-            resp = self._client.get(url, headers=self._headers(), params=p)
-            self._classify_response(resp)
-            data = resp.json()
+            data = self._get_retrying(url, p)
             pages.append(data)
             token = data.get("nextPageToken")
             if not token:
@@ -644,11 +664,7 @@ class CloudGcpService:
         zone_list = zones if zones else ["-"]
 
         for zone in zone_list:
-            try:
-                items = self._paginate(f"{_TPU_BASE}/{self._tpu_parent(zone)}/nodes", "nodes")
-            except InfraError:
-                logger.warning("Failed to list TPUs in zone %s", zone, exc_info=True)
-                continue
+            items = self._paginate(f"{_TPU_BASE}/{self._tpu_parent(zone)}/nodes", "nodes")
             for tpu_data in items:
                 if labels and not _labels_match(tpu_data.get("labels", {}), labels):
                     continue
@@ -873,26 +889,17 @@ class CloudGcpService:
             params: dict[str, str] = {}
             if filter_str:
                 params["filter"] = filter_str
-            try:
-                for page in self._paginate_raw(url, params):
-                    for scope in page.get("items", {}).values():
-                        for vm_data in scope.get("instances", []):
-                            results.append(_parse_vm_info(vm_data))
-            except InfraError:
-                logger.warning("Failed to list instances", exc_info=True)
-                return []
+            for page in self._paginate_raw(url, params):
+                for scope in page.get("items", {}).values():
+                    for vm_data in scope.get("instances", []):
+                        results.append(_parse_vm_info(vm_data))
             return results
 
         for zone in zones:
             params = {}
             if filter_str:
                 params["filter"] = filter_str
-            try:
-                items = self._paginate(self._instance_url(zone), "items", params)
-            except InfraError:
-                logger.warning("Failed to list instances in zone %s", zone, exc_info=True)
-                continue
-            for vm_data in items:
+            for vm_data in self._paginate(self._instance_url(zone), "items", params):
                 results.append(_parse_vm_info(vm_data, fallback_zone=zone))
 
         return results
