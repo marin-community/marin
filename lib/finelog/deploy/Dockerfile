@@ -1,5 +1,9 @@
 # finelog server image — structured-log store + push/fetch RPC server.
 #
+# The server is the Rust `finelog-server` binary (rust/finelog): it serves the
+# Connect/gRPC RPCs and the dashboard SPA on a single port. Python is no longer
+# in the runtime image.
+#
 # Build context must be the marin repo root:
 #   docker build -f lib/finelog/deploy/Dockerfile -t finelog:dev .
 #
@@ -8,8 +12,8 @@
 
 # ── Stage: dashboard ─────────────────────────────────────────────────
 # Build the Vue SPA. Output is consumed by the runtime stage at
-# /app/dashboard/dist; the finelog ASGI app serves it on the same port as
-# the RPCs (see lib/finelog/src/finelog/server/asgi.py).
+# /app/dashboard/dist; the Rust server resolves and serves it from there (see
+# `DOCKER_VUE_DIST_DIR` in rust/finelog/src/server/spa.rs).
 FROM node:22-slim AS dashboard
 
 WORKDIR /build/dashboard
@@ -22,11 +26,29 @@ COPY lib/finelog/dashboard/ ./
 RUN npm run build
 
 
-# ── Stage: base ──────────────────────────────────────────────────────
-FROM python:3.11-slim AS base
+# ── Stage: rustbuild ─────────────────────────────────────────────────
+# Compile the release `finelog-server` binary. The whole `rust/` workspace is
+# copied so the workspace (`members = ["dupekit", "finelog"]`) resolves; only
+# `finelog` is built. `connectrpc-build` fetches a vendored protoc from the
+# crate registry at build time, so no system protoc is needed.
+FROM rust:1-bookworm AS rustbuild
+
+WORKDIR /build/rust
+COPY rust/ ./
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/rust/target \
+    cargo build --release -p finelog --bin finelog-server \
+    && cp target/release/finelog-server /finelog-server
+
+
+# ── Stage: runtime ───────────────────────────────────────────────────
+# `debian:bookworm-slim` matches the glibc the `rust:1-bookworm` build stage
+# links against. curl/ca-certificates aid debugging; gdb supports in-prod
+# profiling (the k8s pod adds SYS_PTRACE).
+FROM debian:bookworm-slim AS runtime
 
 LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
-LABEL org.opencontainers.image.description="finelog log server image"
+LABEL org.opencontainers.image.description="finelog log server image (Rust)"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
@@ -34,67 +56,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gdb \
     && rm -rf /var/lib/apt/lists/*
 
-# uv (matches the version pinned by lib/iris/Dockerfile)
-COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
-
-
-# ── Stage: deps ──────────────────────────────────────────────────────
-# Install Python dependencies. Mirrors the iris Dockerfile pattern: copy
-# pyproject metadata first so source edits don't bust the dep cache.
-FROM base AS deps
-
 WORKDIR /app
-ENV PATH="/app/.venv/bin:$PATH"
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
 
-# rigging is a workspace-local dep not on PyPI.
-COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
-COPY lib/finelog/pyproject.toml ./lib/finelog/pyproject.toml
-
-RUN --mount=type=cache,target=/root/.cache/uv \
-    printf '[tool.uv.workspace]\nmembers = ["lib/finelog", "lib/rigging"]\n\n[tool.uv.sources]\nmarin-rigging = { workspace = true }\n' > pyproject.toml \
-    && uv sync --package marin-finelog --extra server --no-install-project
-
-# Full source, then install the project itself. `lib/finelog/config/` is
-# force-included by hatchling's wheel build (see lib/finelog/pyproject.toml);
-# copy it before the project install so non-editable wheel builds succeed.
-COPY lib/rigging/src/ ./lib/rigging/src/
-COPY lib/finelog/src/ ./lib/finelog/src/
-COPY lib/finelog/config/ ./lib/finelog/config/
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --package marin-finelog --extra server
-
-
-# ── Stage: runtime ───────────────────────────────────────────────────
-FROM deps AS runtime
-
-# Pre-built dashboard SPA. Served by the asgi app at "/" and "/static/*".
+# The server binary + the pre-built dashboard SPA. The Rust server reads the
+# SPA from /app/dashboard/dist (see spa.rs); the binary is on PATH.
+COPY --from=rustbuild /finelog-server /usr/local/bin/finelog-server
 COPY --from=dashboard /build/dashboard/dist ./dashboard/dist
 
-# Local segment cache. Declared as a volume so k8s/Docker mount a PV here.
-# Only the cache dir needs to be writable by the finelog user; /app and
-# /app/.venv stay root-owned but are world-readable, so the recursive chown
-# (which walks tens of thousands of venv files and re-layers every inode)
-# is unnecessary.
+# Local segment cache / durable store. Declared as a volume so k8s/Docker mount
+# a PV here. The recursive venv chown the Python image needed is gone; only the
+# cache dir must be writable by the finelog user.
 RUN groupadd --system --gid 1000 finelog \
     && useradd --system --uid 1000 --gid finelog --home-dir /app --no-create-home finelog \
-    && mkdir -p /var/cache/finelog
+    && mkdir -p /var/cache/finelog \
+    && chown finelog:finelog /var/cache/finelog
 
 VOLUME ["/var/cache/finelog"]
 
-# Tell mimalloc (used by both pyarrow and DuckDB) to return freed pages to the
-# kernel after 10 minutes of disuse instead of holding them indefinitely. This
-# bounds the RSS that retained arenas can pin without churning page faults on
-# short-term reuse. PURGE_DELAY is the v2 spelling, DECOMMIT_DELAY the v1.
-ENV MIMALLOC_PURGE_DELAY=600000
-ENV MIMALLOC_DECOMMIT_DELAY=600000
+# The k8s manifest sets FINELOG_PORT + FINELOG_REMOTE_DIR but NOT
+# FINELOG_LOG_DIR; the Python launcher defaulted port=10001 and
+# log-dir=/var/cache/finelog in its CLI. The Rust clap CLI defaults port 8080
+# and has NO log-dir default — an unset log-dir runs the store in-memory and
+# would silently lose all data. Pin the durable path + port here so the image
+# matches the prior deployment regardless of binary defaults.
+ENV FINELOG_PORT=10001
+ENV FINELOG_LOG_DIR=/var/cache/finelog
 
 USER finelog
 
 EXPOSE 10001
 
-# All server flags read from FINELOG_* envvars (see finelog/server/main.py).
-# Defaults: FINELOG_PORT=10001, FINELOG_LOG_DIR=/var/cache/finelog,
-# FINELOG_REMOTE_DIR="" (no offload). Override per deployment via env.
-CMD ["python", "-m", "finelog.server.main"]
+# All server flags read from FINELOG_* envvars (see rust/finelog/src/main.rs).
+# Defaults set above; FINELOG_REMOTE_DIR="" (no offload) unless overridden.
+CMD ["finelog-server"]
