@@ -53,9 +53,32 @@ class PlacementGroup:
     def bundle_resources(self, index: int) -> dict:
         return self.bundles[index] if 0 <= index < len(self.bundles) else {}
 
+    @property
+    def bundle_specs(self) -> list[dict]:
+        """Ray-compat alias used by e.g. SkyRL's get_ray_pg_ready_with_timeout."""
+        return self.bundles
+
 
 def placement_group(bundles: list[dict], strategy: str = "PACK", **_ignored: Any) -> PlacementGroup:
     return PlacementGroup(bundles, strategy=strategy)
+
+
+def placement_group_table(pg: PlacementGroup) -> dict:
+    """Ray-compat ``placement_group_table`` (best-effort).
+
+    Real Ray returns per-bundle node/resource placement. We have no bundle->node
+    reservation (bundles are scheduled independently), so every bundle reports a
+    single synthetic node id. Callers that only need bundle count + a stable
+    node mapping (e.g. SkyRL's ``_probe_bundle_placement``) work; callers that
+    depend on real cross-node bundle ordering do not (documented limitation).
+    """
+    n = len(pg.bundles)
+    return {
+        "bundles": dict(enumerate(pg.bundles)),
+        "bundles_to_node_id": {i: "fakeray-node-0" for i in range(n)},
+        "strategy": pg.strategy,
+        "state": "CREATED",
+    }
 
 
 def remove_placement_group(pg: PlacementGroup) -> None:

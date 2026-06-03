@@ -3,11 +3,17 @@
 
 """``ray.util`` shim namespace (placement groups, scheduling strategies)."""
 
-from fakeray._placement import PlacementGroup, placement_group, remove_placement_group
+from fakeray._placement import (
+    PlacementGroup,
+    placement_group,
+    placement_group_table,
+    remove_placement_group,
+)
 
 __all__ = [
     "PlacementGroup",
     "placement_group",
+    "placement_group_table",
     "remove_placement_group",
 ]
 

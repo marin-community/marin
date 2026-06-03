@@ -110,11 +110,18 @@ def _future_to_ref(fray_future: Any) -> ObjectRef:
 
 
 class ActorHandle:
-    """Handle to a live actor. ``handle.method.remote(*a)`` -> ObjectRef."""
+    """Handle to a live actor. ``handle.method.remote(*a)`` -> ObjectRef.
 
-    def __init__(self, fray_handle: Any, name: str):
+    Holds the backing Fray actor *group* (created with count=1) so the actor can
+    be torn down via ``ray.kill`` — the per-actor handle itself has no terminate
+    method, and on the Iris backend ``getattr(handle, "shutdown")`` would
+    resolve to a *remote method call* (NotFound), not teardown.
+    """
+
+    def __init__(self, fray_handle: Any, name: str, group: Any = None):
         self._fray_handle = fray_handle
         self._name = name
+        self._group = group
 
     def __getattr__(self, method: str) -> ActorMethodStub:
         if method.startswith("_"):
@@ -139,15 +146,19 @@ class ActorClass:
         name = self._opts.get("name") or f"{self._cls.__name__}-{uuid.uuid4().hex[:8]}"
         resources = _resources_from_options(self._opts)
         client = current_client()
-        fray_handle = client.create_actor(
+        # Create a 1-actor group (not create_actor) so we retain the group, which
+        # is the only object exposing teardown (.shutdown) for ray.kill.
+        group = client.create_actor_group(
             self._cls,
             *args,
             name=name,
+            count=1,
             resources=resources,
             actor_config=ActorConfig(max_concurrency=self._opts.get("max_concurrency", 1)),
             **kwargs,
         )
-        handle = ActorHandle(fray_handle, name)
+        fray_handle = group.wait_ready(count=1)[0]
+        handle = ActorHandle(fray_handle, name, group=group)
         _actor_registry[name] = handle
         return handle
 
@@ -161,9 +172,13 @@ def get_actor(name: str) -> ActorHandle:
 
 
 def kill(handle: ActorHandle) -> None:
-    """Terminate an actor (best-effort)."""
-    fray_handle = getattr(handle, "_fray_handle", None)
-    stop = getattr(fray_handle, "shutdown", None) or getattr(fray_handle, "terminate", None)
-    if stop is not None:
-        stop()
-    _actor_registry.pop(getattr(handle, "_name", ""), None)
+    """Terminate an actor (best-effort) via its backing Fray actor group.
+
+    NB: must go through the group's ``shutdown`` — NOT ``getattr(handle,
+    "shutdown")``, which on the Iris backend resolves to a remote *method call*
+    (``Method 'shutdown' not found``) rather than teardown.
+    """
+    group = handle._group
+    if group is not None and hasattr(group, "shutdown"):
+        group.shutdown()
+    _actor_registry.pop(handle._name, None)

@@ -92,6 +92,21 @@ def test_placement_group_and_scheduling_strategy():
     assert ray.get(h.go.remote()) == 1
 
 
+def test_kill_actor():
+    # ray.kill must tear down via the actor's backing group, not by resolving a
+    # remote "shutdown" method on the handle (which the Iris backend rejects).
+    @ray.remote
+    class A:
+        def ping(self):
+            return "pong"
+
+    h = A.options(name="killme").remote()
+    assert ray.get(h.ping.remote()) == "pong"
+    ray.kill(h)
+    with pytest.raises(ValueError):
+        ray.get_actor("killme")  # gone from the registry
+
+
 def test_actor_method_exception_propagates():
     @ray.remote
     class Boom:

@@ -24,6 +24,7 @@ Two ways to put this in front of an ``import ray``:
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from typing import Any
 
@@ -47,6 +48,7 @@ __all__ = [
     "exceptions",
     "get",
     "get_actor",
+    "get_gpu_ids",
     "init",
     "install",
     "is_initialized",
@@ -209,6 +211,19 @@ def kill(actor: ActorHandle) -> None:
 def cancel(ref: ObjectRef) -> None:
     """Best-effort task cancel (Ray-compat). No-op once dispatched."""
     logger.debug("fakeray.cancel(%s): best-effort no-op", getattr(ref, "id", ref))
+
+
+def get_gpu_ids() -> list:
+    """Ray-compat ``ray.get_gpu_ids()`` — GPU ids assigned to this worker.
+
+    Reads ``CUDA_VISIBLE_DEVICES`` if Iris set it for a GPU task; otherwise
+    returns ``[]`` (CPU). Callers that index ``[0]`` unconditionally (e.g.
+    SkyRL's InfoActor) only run under GPU placement, where this is populated.
+    """
+    cuda = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    if not cuda:
+        return []
+    return [int(x) if x.isdigit() else x for x in cuda.split(",") if x]
 
 
 def install() -> None:
