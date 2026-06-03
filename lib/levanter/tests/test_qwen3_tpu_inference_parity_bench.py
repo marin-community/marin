@@ -93,6 +93,14 @@ def test_parse_args_defaults_to_two_warmup_rounds():
     assert args.warmup_rounds == 2
 
 
+def test_parse_args_defaults_to_streaming_greedy_lm_head_with_opt_out():
+    default_args = bench.parse_args(["--backend", "levanter"])
+    opt_out_args = bench.parse_args(["--backend", "levanter", "--no-levanter-streaming-greedy-lm-head"])
+
+    assert default_args.levanter_streaming_greedy_lm_head
+    assert not opt_out_args.levanter_streaming_greedy_lm_head
+
+
 def test_start_backend_passes_levanter_tpu_paged_attention_config(monkeypatch, tmp_path):
     captured: dict = {}
 

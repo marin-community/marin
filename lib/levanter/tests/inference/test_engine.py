@@ -51,7 +51,7 @@ class DummyModel(eqx.Module):
     def decode_hidden(self, input_ids, kv_cache, batch_info, pos_ids, *, tpu_paged_attention=None):
         del batch_info, pos_ids, tpu_paged_attention
         Pos = input_ids.resolve_axis("position")
-        return hax.zeros((Pos, self.Embed), dtype=jnp.float32), kv_cache
+        return hax.ones((Pos, self.Embed), dtype=jnp.float32), kv_cache
 
     def lm_head_logits(self, hidden):
         Pos = hidden.resolve_axis("position")
@@ -59,7 +59,7 @@ class DummyModel(eqx.Module):
         return logits.broadcast_axis(Pos)
 
     def get_lm_head(self):
-        return hax.zeros((self.Vocab, self.Embed), dtype=jnp.float32)
+        return hax.nn.one_hot(self.eos, self.Vocab, dtype=jnp.float32).broadcast_axis(self.Embed)
 
 
 def _build_service(vocab_size=10):
@@ -311,7 +311,7 @@ def test_generate_streaming_greedy_lm_head_emits_argmax_tokens_after_prefill():
 
     assert result.total_generated == 3
     assert result.logprobs is None
-    assert result.tokens == [[3, 0, 0]]
+    assert result.tokens == [[3, 3, 3]]
 
 
 def test_streaming_greedy_lm_head_returns_logprobs_without_materialized_logits():
