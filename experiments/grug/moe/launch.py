@@ -28,7 +28,7 @@ from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.defaults import default_validation_sets
-from experiments.grug.moe.heuristic_v2 import MoeAdamHHeuristic
+from experiments.grug.moe.heuristic_v2 import MoeMuonHHeuristic
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.pretraining_datasets import nemotron_mix
@@ -137,7 +137,7 @@ _BATCH_SIZE: int = 32
 _NUM_STEPS: int = 10_980
 _SEQ_LEN: int = 4096
 
-_heuristic = MoeAdamHHeuristic()
+_heuristic = MoeMuonHHeuristic()
 _baseline_model = _heuristic.build_model_config(_HIDDEN_DIM, seq_len=_SEQ_LEN)
 _tokens = float(_NUM_STEPS * _BATCH_SIZE * _SEQ_LEN)
 _baseline_optimizer = _heuristic.build_muonh_config(_BATCH_SIZE, _tokens, _HIDDEN_DIM, seq_len=_SEQ_LEN)
