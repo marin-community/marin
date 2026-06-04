@@ -17,10 +17,14 @@ from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.log_keys import task_log_key
 from iris.cluster.providers.k8s.tasks import (
     _GC_MAX_AGE_SECONDS,
+    _KUEUE_POD_GROUP_NAME,
+    _KUEUE_POD_GROUP_TOTAL,
+    _LABEL_ATTEMPT_ID,
     _LABEL_JOB_ID,
     _LABEL_MANAGED,
     _LABEL_RUNTIME,
     _LABEL_TASK_HASH,
+    _LABEL_TASK_ID,
     _MANAGED_POD_LABELS,
     _POD_NOT_FOUND_GRACE_CYCLES,
     _RUNTIME_LABEL_VALUE,
@@ -106,7 +110,7 @@ def test_sync_deletes_pods_not_in_desired_set(provider, k8s):
         "Running",
         labels={
             _LABEL_TASK_HASH: _task_hash(task_id),
-            "iris.attempt_id": "0",
+            _LABEL_ATTEMPT_ID: "0",
             _LABEL_JOB_ID: _sanitize_label_value("/test-job"),
         },
     )
@@ -129,7 +133,7 @@ def test_sync_keeps_pods_in_desired_running_set(provider, k8s):
         "Running",
         labels={
             _LABEL_TASK_HASH: _task_hash(task_id.to_wire()),
-            "iris.attempt_id": "0",
+            _LABEL_ATTEMPT_ID: "0",
         },
     )
     batch = make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=0)])
@@ -149,7 +153,7 @@ def test_sync_deletes_pod_for_stale_attempt(provider, k8s):
         "Running",
         labels={
             _LABEL_TASK_HASH: _task_hash(task_id.to_wire()),
-            "iris.attempt_id": "0",
+            _LABEL_ATTEMPT_ID: "0",
         },
     )
     # Desired = attempt 1 (task was preempted and re-promoted).
@@ -229,6 +233,21 @@ def test_sync_pod_not_found_marks_failed(provider, k8s):
     result = provider.sync(batch)
     assert len(result.updates) == 1
     assert result.updates[0].new_state == job_pb2.TASK_STATE_FAILED
+
+
+def test_sync_coscheduled_pod_not_found_is_worker_failed(provider, k8s):
+    """A vanished pod for a coscheduled task is billed as WORKER_FAILED (gang preemption),
+    not FAILED — Kueue deletes every pod in a preempted group, leaving only the absence."""
+    task_id = JobName.from_wire("/gang/task/0")
+    entry = RunningTaskEntry(task_id=task_id, attempt_id=0, coscheduled=True)
+    batch = make_batch(running_tasks=[entry])
+
+    for _ in range(_POD_NOT_FOUND_GRACE_CYCLES - 1):
+        result = provider.sync(batch)
+        assert result.updates[0].new_state == job_pb2.TASK_STATE_RUNNING
+
+    result = provider.sync(batch)
+    assert result.updates[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
 
 
 def test_pod_not_found_grace_period(provider, k8s):
@@ -433,8 +452,8 @@ def test_fetch_scheduling_events_returns_events(provider, k8s):
         pod_name,
         "Pending",
         labels={
-            "iris.task_id": "test-job.0",
-            "iris.attempt_id": "1",
+            _LABEL_TASK_ID: "test-job.0",
+            _LABEL_ATTEMPT_ID: "1",
         },
     )
 
@@ -502,8 +521,8 @@ def test_get_cluster_status_basic(k8s):
         "iris-task-0",
         "Running",
         labels={
-            "iris.task_id": "job-0",
-            "iris.attempt_id": "0",
+            _LABEL_TASK_ID: "job-0",
+            _LABEL_ATTEMPT_ID: "0",
         },
     )
     pod = k8s.get_json(K8sResource.PODS, "iris-task-0")
@@ -948,7 +967,7 @@ def test_stray_delete_defers_pdb_cleanup_to_gc(provider, k8s):
         k8s,
         "iris-coord-pod",
         "Running",
-        labels={_LABEL_TASK_HASH: task_hash, "iris.attempt_id": "0"},
+        labels={_LABEL_TASK_HASH: task_hash, _LABEL_ATTEMPT_ID: "0"},
     )
     pdb = {
         "kind": "PodDisruptionBudget",
@@ -1094,7 +1113,7 @@ def test_gc_retains_pending_hash_when_pod_still_in_snapshot(provider, k8s):
     labels = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE, _LABEL_TASK_HASH: task_hash}
 
     # Seed the pod and its configmap.
-    populate_pod(k8s, "iris-kill-me-0-0", "Running", labels={_LABEL_TASK_HASH: task_hash, "iris.attempt_id": "0"})
+    populate_pod(k8s, "iris-kill-me-0-0", "Running", labels={_LABEL_TASK_HASH: task_hash, _LABEL_ATTEMPT_ID: "0"})
     cm = {"kind": "ConfigMap", "metadata": {"name": "iris-kill-me-0-0-wf", "labels": labels}}
     k8s.seed_resource(K8sResource.CONFIGMAPS, "iris-kill-me-0-0-wf", cm)
 
@@ -1274,3 +1293,79 @@ def test_resource_collector_writes_iris_task_rows(k8s, task_stats_table):
     assert row.worker_id == "pod-a"
     assert row.cpu_millicores == 750
     assert row.memory_mb == 2048
+
+
+# ---------------------------------------------------------------------------
+# Kueue gang admission: sync() applies one pod-group per gang generation
+# ---------------------------------------------------------------------------
+
+
+def test_coscheduled_gang_pods_share_pod_group_name(kueue_provider, k8s):
+    """sync() applies one Kueue pod-group-name across all sibling pods of a gang,
+    each annotated with the full pod-group-total-count."""
+    reqs = [
+        make_run_req(f"/gang/task/{i}", attempt_id=0, num_tasks=4, coscheduling_group_by="leafgroup") for i in range(4)
+    ]
+    kueue_provider.sync(make_batch(tasks_to_run=reqs))
+
+    pods = k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS)
+    assert len(pods) == 4
+    group_names = {p["metadata"]["labels"][_KUEUE_POD_GROUP_NAME] for p in pods}
+    assert len(group_names) == 1, "all siblings must share one pod-group-name"
+    for p in pods:
+        assert p["metadata"]["annotations"][_KUEUE_POD_GROUP_TOTAL] == "4"
+
+
+def test_coscheduled_sibling_failure_bumps_pod_group_generation(kueue_provider, k8s):
+    """A full-gang requeue (new attempt) yields a fresh pod-group-name so Kueue
+    forms a new Workload and re-admits the gang atomically."""
+    gen0 = [
+        make_run_req(f"/run/task/{i}", attempt_id=0, num_tasks=2, coscheduling_group_by="leafgroup") for i in range(2)
+    ]
+    kueue_provider.sync(make_batch(tasks_to_run=gen0))
+    gen0_names = {
+        p["metadata"]["labels"][_KUEUE_POD_GROUP_NAME]
+        for p in k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS)
+    }
+    assert len(gen0_names) == 1
+
+    # Requeue: every sibling moves to the next attempt in lockstep.
+    gen1 = [
+        make_run_req(f"/run/task/{i}", attempt_id=1, num_tasks=2, coscheduling_group_by="leafgroup") for i in range(2)
+    ]
+    kueue_provider.sync(make_batch(tasks_to_run=gen1))
+    gen1_names = {
+        p["metadata"]["labels"][_KUEUE_POD_GROUP_NAME]
+        for p in k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS)
+        if p["metadata"]["labels"][_LABEL_ATTEMPT_ID] == "1"
+    }
+    assert len(gen1_names) == 1
+    assert gen0_names.isdisjoint(gen1_names), "new generation must use a fresh pod-group-name"
+
+
+def test_gang_teardown_deletes_kueue_workload(kueue_provider, k8s):
+    """Tearing down a coscheduled gang deletes its Kueue Workload, releasing the
+    reserved quota.
+
+    Kueue parks a coscheduled Workload in WaitingForReplacementPods when its
+    pods are deleted (it expects replacement pods per the plain-pod-group
+    contract), holding the quota until the Workload itself is removed. Without
+    deleting it, a gang requeue — which bumps to a fresh pod-group generation —
+    would deadlock behind the old generation's still-reserved quota.
+    """
+    reqs = [
+        make_run_req(f"/gang/task/{i}", attempt_id=0, num_tasks=3, coscheduling_group_by="leafgroup") for i in range(3)
+    ]
+    kueue_provider.sync(make_batch(tasks_to_run=reqs))
+
+    pods = k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS)
+    group_name = pods[0]["metadata"]["labels"][_KUEUE_POD_GROUP_NAME]
+    # Kueue names the Workload exactly after the pod-group-name; seed it as the
+    # controller would observe it on a live cluster once Kueue admits the gang.
+    k8s.seed_resource(K8sResource.WORKLOADS, group_name, {"kind": "Workload", "metadata": {"name": group_name}})
+
+    # Empty desired set: the whole gang is now stray and gets torn down.
+    kueue_provider.sync(make_batch())
+
+    assert k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS) == []
+    assert k8s.get_json(K8sResource.WORKLOADS, group_name) is None, "stray-pod teardown must release the Kueue Workload"

@@ -24,10 +24,10 @@ import fsspec.config
 from rigging.timing import Deadline
 
 from iris.cluster.config_serde import config_to_dict
-from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
+from iris.cluster.providers.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource
-from iris.cluster.providers.types import InfraError, Labels
+from iris.cluster.providers.types import InfraError, Labels, local_queue_name
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -144,10 +144,13 @@ def _build_controller_deployment(
             "spec": {
                 "serviceAccountName": "iris-controller",
                 "nodeSelector": node_selector,
-                # Tolerate the standard NVIDIA GPU taint so the controller
-                # can schedule onto GPU-only clusters (no CPU NodePool).
-                # Harmless on untainted nodes.
-                "tolerations": [NVIDIA_GPU_TOLERATION],
+                # Tolerate the NVIDIA GPU taint (so the controller can run on
+                # GPU-only clusters with no CPU NodePool) and CoreWeave's
+                # interruptable-capacity taint: freshly provisioned nodes carry
+                # qos.coreweave.cloud/interruptable:NoExecute, which would
+                # otherwise leave the controller Pending forever. Task pods
+                # already tolerate both (see tasks.py). Harmless on untainted nodes.
+                "tolerations": [NVIDIA_GPU_TOLERATION, COREWEAVE_INTERRUPTABLE_TOLERATION],
                 "containers": [
                     {
                         "name": "iris-controller",
@@ -302,6 +305,7 @@ class K8sControllerProvider:
         logger.info("ConfigMap iris-cluster-config applied")
 
         self.ensure_nodepools(config)
+        self.ensure_kueue_queues(config)
 
         s3_env = self.s3_env_vars() if self._s3_enabled else []
         deploy_manifest = _build_controller_deployment(
@@ -518,6 +522,14 @@ class K8sControllerProvider:
                     "resources": ["poddisruptionbudgets"],
                     "verbs": ["get", "list", "create", "update", "patch", "delete"],
                 },
+                {
+                    # Kueue gang admission: Iris deletes the per-pod-group
+                    # Workload to release a torn-down gang's reserved quota
+                    # (Kueue parks it in WaitingForReplacementPods otherwise).
+                    "apiGroups": ["kueue.x-k8s.io"],
+                    "resources": ["workloads"],
+                    "verbs": ["get", "list", "watch", "delete"],
+                },
             ],
         }
 
@@ -539,6 +551,31 @@ class K8sControllerProvider:
             self._kubectl.apply_json(manifest)
 
         logger.info("RBAC prerequisites applied (namespace=%s, clusterRole=%s)", self._namespace, cluster_role_name)
+
+    # -- Kueue ------------------------------------------------------------------
+
+    def ensure_kueue_queues(self, config: config_pb2.IrisClusterConfig) -> None:
+        """Reconcile the namespaced Kueue LocalQueue this cluster dispatches into.
+
+        The Kueue operator, ClusterQueue, ResourceFlavor and Topology CRs are
+        cluster-global and admin-provisioned out of band (the CKS cluster is
+        shared across tenants); see scripts/install_kueue.py. Iris owns
+        only its own LocalQueue, binding its namespace to the admin ClusterQueue.
+        The LocalQueue name is derived from label_prefix, not configured. No-op
+        when Kueue is not configured (cluster_queue unset).
+        """
+        cluster_queue = config.kubernetes_provider.kueue.cluster_queue
+        if not cluster_queue:
+            return
+        name = local_queue_name(self._label_prefix)
+        manifest = {
+            "apiVersion": "kueue.x-k8s.io/v1beta1",
+            "kind": "LocalQueue",
+            "metadata": {"name": name, "namespace": self._namespace},
+            "spec": {"clusterQueue": cluster_queue},
+        }
+        self._kubectl.apply_json(manifest)
+        logger.info("LocalQueue %s applied (clusterQueue=%s)", name, cluster_queue)
 
     # -- NodePool Management ---------------------------------------------------
 

@@ -449,8 +449,9 @@ def resolve_multinode_defaults(
 
     For TPUs with vm_count > 1, infers replicas from the topology and enables
     coscheduling by ``tpu-name`` so that all tasks land on workers in the same
-    TPU slice. For GPUs with replicas > 1, enables coscheduling by ``pool`` so
-    that all replicas are scheduled together.
+    TPU slice. For GPUs with replicas > 1, enables coscheduling by ``leafgroup``
+    (the H100 InfiniBand multi-node colocation level) so all replicas are
+    scheduled together.
 
     Args:
         tpu: TPU type string (e.g. ``"v6e-32"``), or ``None``.
@@ -464,7 +465,7 @@ def resolve_multinode_defaults(
     """
     if not tpu:
         if gpu and replicas is not None and replicas > 1:
-            return replicas, CoschedulingConfig(group_by="pool")
+            return replicas, CoschedulingConfig(group_by="leafgroup")
         return replicas or 1, None
 
     try:

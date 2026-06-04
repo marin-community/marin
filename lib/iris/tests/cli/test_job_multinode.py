@@ -8,7 +8,7 @@ from iris.cli.job import resolve_multinode_defaults
 @pytest.mark.parametrize(
     "tpu,gpu,replicas,expected_replicas,expected_cosched",
     [
-        (None, "H100x8", 2, 2, "pool"),
+        (None, "H100x8", 2, 2, "leafgroup"),
         (None, "H100x8", 1, 1, None),
         (None, "H100x8", None, 1, None),
         (None, None, 2, 2, None),
