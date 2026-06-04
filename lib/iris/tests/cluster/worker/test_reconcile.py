@@ -597,6 +597,31 @@ def test_stop_intent_via_composite_kills_labelless_attempt(worker):
     assert attempt.should_stop is True
 
 
+def test_stop_intent_stamps_uid_on_labelless_adopted_attempt(worker):
+    """A stop intent stamps the controller UID onto a label-less adopted attempt.
+
+    Regression: the stop path resolved the attempt by composite but never
+    stamped the UID, so the attempt's observation went out keyed by an empty
+    UID and the controller dropped it (``filter_observations_to_plan``). A
+    controller-terminated attempt the worker only ever saw via stop intents
+    then never finalized — the stop intent re-fired every reconcile tick.
+    """
+    task_id = _task_id("rollover-stop-stamp")
+    attempt = _adopt_labelless(worker, task_id, attempt_id=0)
+    assert attempt.attempt_uid == ""
+
+    response = _reconcile(worker, [_stop_desired("uid-rollover-stop-stamp", task_id=task_id, attempt_id=0)])
+
+    # UID stamped → every later observation is keyed by it, not an empty UID.
+    assert attempt.attempt_uid == "uid-rollover-stop-stamp"
+    # This tick's observation already carries the real UID, so the controller
+    # keeps it (it is in the plan) and can finalize the attempt.
+    obs = _observations_by_uid(response)
+    assert "uid-rollover-stop-stamp" in obs
+    assert obs["uid-rollover-stop-stamp"].task_id == task_id
+    assert obs["uid-rollover-stop-stamp"].attempt_id == 0
+
+
 def test_labelless_attempt_observation_carries_composite(worker):
     """Observations from a label-less adopted attempt carry the composite key."""
     task_id = _task_id("rollover-obs")

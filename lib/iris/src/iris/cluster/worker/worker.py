@@ -661,10 +661,29 @@ class Worker:
 
         This is the routing order the controller itself uses. The composite
         fallback covers label-less adopted attempts created by a pre-UID-label
-        worker — they enter the local task list with an empty UID and are
-        stamped by the first reconcile tick that composite-matches them.
+        worker — they enter the local task list with an empty UID. On a
+        composite match the controller UID is stamped onto the attempt so every
+        later observation it emits is keyed by that UID. Without the stamp those
+        observations carry an empty UID and the controller drops them
+        (``filter_observations_to_plan``); an attempt the worker only ever sees
+        via stop intents — a controller-terminated attempt — would then never
+        finalize and the stop intent would re-fire every reconcile tick.
+
+        Mutates the resolved attempt, so callers must hold ``self._lock``.
         """
-        return self.task_by_uid(uid) or self.task_by_attempt(task_id, attempt_id)
+        task = self.task_by_uid(uid)
+        if task is not None:
+            return task
+        task = self.task_by_attempt(task_id, attempt_id)
+        if task is not None and uid and not task.attempt_uid:
+            logger.info(
+                "Reconcile: stamping attempt_uid %s onto attempt %s/%d (composite match)",
+                uid,
+                task_id,
+                attempt_id,
+            )
+            task.attempt_uid = uid
+        return task
 
     def submit_task(self, request: job_pb2.RunTaskRequest) -> str:
         """Submit a new task for execution.
@@ -962,17 +981,7 @@ class Worker:
         so the observation loop reports MISSING.
         """
         with self._lock:
-            task = self.task_by_uid(attempt_uid)
-            if task is None:
-                task = self.task_by_attempt(task_id, attempt_id)
-                if task is not None and attempt_uid and not task.attempt_uid:
-                    logger.info(
-                        "Reconcile: stamping attempt_uid %s onto attempt %s/%d (composite match)",
-                        attempt_uid,
-                        task_id,
-                        attempt_id,
-                    )
-                    task.attempt_uid = attempt_uid
+            task = self.resolve_attempt(attempt_uid, task_id, attempt_id)
 
         if task is not None:
             return
