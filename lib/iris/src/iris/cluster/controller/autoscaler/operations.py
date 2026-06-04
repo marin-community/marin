@@ -3,8 +3,6 @@
 
 """Operational helpers for autoscaler worker and slice actions."""
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass

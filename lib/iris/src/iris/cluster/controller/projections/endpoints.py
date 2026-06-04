@@ -13,8 +13,6 @@ lock after COMMIT; a ROLLBACK suppresses them so the dicts stay in sync with
 disk.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass

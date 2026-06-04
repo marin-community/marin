@@ -217,7 +217,7 @@ class TestAutoscalerWaterfallEndToEnd:
         )
         demand = [
             DemandEntry(
-                task_ids=[f"task-{i}"],
+                task_ids=(f"task-{i}",),
                 coschedule_group_id=None,
                 normalized=normalized,
                 constraints=[],
@@ -520,7 +520,10 @@ def test_marin_style_lifecycle():
             _mark_all_slices_ready(g)
 
     def routed(group_name):
-        return len(autoscaler._last_scale_plan.routing_decision.routed_entries.get(group_name, []))
+        routed_entries = autoscaler._last_routing_decision_proto.routed_entries
+        if group_name not in routed_entries:
+            return 0
+        return len(routed_entries[group_name].entries)
 
     def assert_no_load_on_last():
         assert routed("tpu-16vm") == 0, "tpu-16vm should never receive load"

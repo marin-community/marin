@@ -3,7 +3,7 @@
 
 """Cross-aggregate rules for coscheduled task peers."""
 
-from collections.abc import Iterable
+from collections.abc import Sequence
 
 from iris.cluster.controller.reconcile.overlay import Overlay
 from iris.cluster.controller.reconcile.task import mark_task_terminating
@@ -33,7 +33,7 @@ def find_coscheduled_siblings(
 
 def terminate_coscheduled_siblings(
     state: Overlay,
-    siblings: Iterable[ActiveTaskRow],
+    siblings: Sequence[ActiveTaskRow],
     failed_task_id: JobName,
     now_ms: int,
 ) -> None:
@@ -62,7 +62,7 @@ def terminate_coscheduled_siblings(
 
 def requeue_coscheduled_siblings(
     state: Overlay,
-    siblings: Iterable[ActiveTaskRow],
+    siblings: Sequence[ActiveTaskRow],
     failed_task_id: JobName,
     now_ms: int,
 ) -> None:

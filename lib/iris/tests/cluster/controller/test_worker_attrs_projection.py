@@ -59,13 +59,13 @@ def test_all_returns_copy(state):
     assert state._worker_attrs.get(worker_id) == {"zone": AttributeValue("us-east1-b")}
 
 
-def test_remove_drops_cache_entry_after_commit(state):
+def test_invalidate_drops_cache_entry_after_commit(state):
     worker_id = _insert_worker(state, "w-remove")
     _insert_worker_attribute(state, worker_id, "region", "us-east1")
     assert state._worker_attrs.get(worker_id) != {}
 
     with state._db.transaction() as cur:
-        state._worker_attrs.remove(cur, worker_id)
+        state._worker_attrs.invalidate_for_worker(cur, worker_id)
         # Hook fires post-commit; mid-tx the dict still has the entry.
         assert state._worker_attrs.get(worker_id) != {}
 

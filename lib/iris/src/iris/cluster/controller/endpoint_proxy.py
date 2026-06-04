@@ -100,7 +100,7 @@ _HOP_BY_HOP: frozenset[str] = frozenset(
 # redirect (or content-negotiation hint) does not navigate the browser out of
 # the proxy. Other URL-bearing headers (Refresh, Link, ...) are uncommon for
 # the dashboards we proxy and are left alone for now.
-_LOCATION_HEADERS: tuple[str, ...] = ("location", "content-location")
+_LOCATION_HEADERS: frozenset[str] = frozenset({"location", "content-location"})
 
 # Bound the connection pool explicitly so httpx default drift cannot silently
 # change resource usage on the controller.

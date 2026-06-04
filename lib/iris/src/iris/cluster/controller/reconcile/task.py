@@ -11,7 +11,6 @@ observability, not state, so they do not flow through ``ControllerEffects``.
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
 
 from rigging.timing import Timestamp
 
@@ -23,6 +22,7 @@ from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     EXECUTING_TASK_STATES,
     ActiveTaskRow,
+    TaskDetailRow,
     task_is_finished,
 )
 from iris.cluster.types import (
@@ -43,14 +43,11 @@ logger = logging.getLogger(__name__)
 
 
 class TerminalKind(StrEnum):
-    """Variant tag for :class:`TerminalDecision`.
+    """Which terminal transition a :class:`TerminalDecision` requests.
 
-    Each kind drives a different per-task terminal transition inside
-    :meth:`ReconcileState.finalize_tasks`:
-
-    - ``PREEMPT``: mark the task PREEMPTED (or retry to PENDING if budget remains).
-    - ``TIMEOUT``: mark the task FAILED with no retry; cascade siblings.
-    - ``UNSCHEDULABLE``: mark the task UNSCHEDULABLE and recompute job state.
+    - ``PREEMPT``: the task should be preempted (retried if budget remains).
+    - ``TIMEOUT``: the task should fail without retry.
+    - ``UNSCHEDULABLE``: the task can never be placed.
     """
 
     PREEMPT = "preempt"
@@ -95,7 +92,7 @@ class TransitionOutcome:
 # ─── Snapshot lookups ───
 
 
-def task_is_finished_row(task: Any) -> bool:
+def task_is_finished_row(task: TaskDetailRow) -> bool:
     return task_is_finished(
         task.state,
         task.failure_count,
@@ -422,7 +419,7 @@ def apply_one_transition(
     # row where state contradicts finished_at_ms/error.
     if overlay_attempt_state is not None and overlay_attempt_state in TERMINAL_TASK_STATES:
         overlay_finished_at = state.attempt_finished_at(update.task_id, update.attempt_id)
-        if overlay_finished_at is None and int(update.new_state) in TERMINAL_TASK_STATES:
+        if overlay_finished_at is None and update.new_state in TERMINAL_TASK_STATES:
             state.merge_attempt(
                 AttemptRowDelta(
                     task_id=update.task_id,
@@ -435,7 +432,7 @@ def apply_one_transition(
             update.task_id,
             update.attempt_id,
             overlay_attempt_state,
-            int(update.new_state),
+            update.new_state,
         )
         return None
     attempt_worker_id = attempt.worker_id
@@ -469,7 +466,7 @@ def apply_one_transition(
         job_pb2.TASK_STATE_SUCCEEDED,
     ):
         terminal_ms = now_ms
-        task_state = int(update.new_state)
+        task_state = update.new_state
         if update.new_state == job_pb2.TASK_STATE_SUCCEEDED and task_exit is None:
             task_exit = 0
         if update.new_state == job_pb2.TASK_STATE_UNSCHEDULABLE and task_error is None:
@@ -514,7 +511,7 @@ def apply_one_transition(
     # An attempt is terminal whenever the update itself is terminal, even
     # if the TASK rolls back to PENDING for a retry. terminal_ms above
     # tracks the task's finished_at_ms; the attempt needs its own stamp.
-    attempt_finished_at = Timestamp.from_ms(now_ms) if int(update.new_state) in TERMINAL_TASK_STATES else None
+    attempt_finished_at = Timestamp.from_ms(now_ms) if update.new_state in TERMINAL_TASK_STATES else None
     started_at = Timestamp.from_ms(started_ms) if started_ms is not None else None
     task_finished_at = Timestamp.from_ms(terminal_ms) if terminal_ms is not None else None
 
@@ -522,7 +519,7 @@ def apply_one_transition(
         AttemptRowDelta(
             task_id=update.task_id,
             attempt_id=update.attempt_id,
-            state=int(update.new_state),
+            state=update.new_state,
             started_at=started_at,
             finished_at=attempt_finished_at,
             exit_code=task_exit,
@@ -547,7 +544,7 @@ def apply_one_transition(
         state.emit_endpoint_deletion(update.task_id)
 
     jc = state.job_config(task.job_id)
-    has_cosched = bool(jc is not None and jc.has_coscheduling and int(update.new_state) in FAILURE_TASK_STATES)
+    has_cosched = bool(jc is not None and jc.has_coscheduling and update.new_state in FAILURE_TASK_STATES)
 
     return TransitionOutcome(
         task_id=update.task_id,

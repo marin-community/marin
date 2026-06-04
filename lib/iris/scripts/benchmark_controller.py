@@ -66,7 +66,7 @@ if not hasattr(_Tx, "fetchall"):
     _Tx.fetchone = lambda self, stmt, params=None: self.execute(stmt, params).first()
 from iris.cluster.controller import ops
 from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.ops.worker import apply_reconcile_observations as apply_reconcile
+from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
 from iris.cluster.controller.reads import SchedulableWorker, healthy_active_workers_with_attributes  # noqa: F401
 from iris.cluster.controller.reconcile.worker import (
@@ -74,7 +74,7 @@ from iris.cluster.controller.reconcile.worker import (
     ReconcileResult,
     ReconcileRow,
     WorkerReconcilePlan,
-    reconcile_workers,
+    build_reconcile_plans,
 )
 from iris.cluster.controller.scheduler import Scheduler
 from iris.cluster.controller.scheduling_policy import (
@@ -510,8 +510,7 @@ def _build_reconcile_inputs(
 ) -> tuple[dict[WorkerId, WorkerReconcilePlan], list[ReconcileResult]]:
     """Per active worker: a plan listing its attempts as desired plus a result
     reporting each RUNNING. Drives the production reconcile-observation verb
-    (``ops.worker.apply_reconcile_observations``) instead of the retired
-    heartbeat path.
+    (``ops.worker.apply_reconcile``) instead of the retired heartbeat path.
     """
     health = WorkerHealthTracker()
     _seed_health(db, health)
@@ -1184,7 +1183,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
         min_time_s=1.0,
     )
 
-    # ---- queue_assignments WRITE path ----
+    # ---- assign WRITE path ----
     write_db = clone_db(db)
     write_txns = ControllerTestState(write_db)
     try:
@@ -1243,10 +1242,10 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
             def _do_queue():
                 with write_db.transaction() as cur:
-                    ops.task.queue_assignments(cur, sample_assignments, health=write_txns._health)
+                    ops.task.assign(cur, sample_assignments, health=write_txns._health)
 
             bench(
-                f"Scheduling: queue_assignments (n={len(sample_assignments)} tasks, WRITE)",
+                f"Scheduling: assign (n={len(sample_assignments)} tasks, WRITE)",
                 _do_queue,
                 reset=_reset,
             )
@@ -1672,7 +1671,7 @@ def _run_apply_under_contention(
     endpoint_threads: int = 0,
     duration_s: float = 6.0,
 ) -> None:
-    """Run apply_reconcile_observations on a victim thread while configurable
+    """Run apply_reconcile on a victim thread while configurable
     write storms hammer the same DB. Reports p50/p95/p99/max of the victim.
     """
     _active_states_contend = list(ACTIVE_TASK_STATES)
@@ -1696,7 +1695,7 @@ def _run_apply_under_contention(
             while not stop.is_set():
                 t0 = time.perf_counter()
                 with write_db.transaction() as cur:
-                    ops.worker.apply_reconcile_observations(
+                    ops.worker.apply_reconcile(
                         cur,
                         plans_by_worker,
                         results,
@@ -1734,7 +1733,7 @@ def _run_apply_under_contention(
                 base = f"bench-contend-{uuid.uuid4().hex[:8]}"
                 for i in range(register_burst):
                     with write_db.transaction() as cur:
-                        ops.worker.register_or_refresh(
+                        ops.worker.register(
                             cur,
                             worker_id=WorkerId(f"{base}-{i}"),
                             address=f"tcp://{base}-{i}:1234",
@@ -1782,7 +1781,7 @@ def _run_apply_under_contention(
 
 
 def benchmark_apply_contention(db: ControllerDB) -> None:
-    """Reproduce the production tail when apply_reconcile_observations contends
+    """Reproduce the production tail when apply_reconcile contends
     with provider-sync failure storms and other write RPCs.
     """
     plans_by_worker, results = _build_reconcile_inputs(db)
@@ -2153,7 +2152,7 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
 #
 #     1. ``_snapshot_reconcile_inputs`` (DB read + per-job RunTaskRequest
 #        template build).
-#     2. ``reconcile_workers(inputs)`` (pure-compute: copies the spec proto
+#     2. ``build_reconcile_plans(inputs)`` (pure-compute: copies the spec proto
 #        into a ``DesiredAttempt`` for every ASSIGNED row).
 #     3. ``WorkerProvider.reconcile_workers(plans, addresses)`` (async fanout
 #        over Connect RPC to a single in-process fake worker that echoes
@@ -2256,7 +2255,7 @@ def _build_synthetic_reconcile_state(
             for i in range(chunk_start, min(chunk_start + chunk, num_workers)):
                 wid = WorkerId(f"w-{i:05d}")
                 worker_ids.append(wid)
-                ops.worker.register_or_refresh(
+                ops.worker.register(
                     cur,
                     worker_id=wid,
                     address=worker_address,
@@ -2286,7 +2285,7 @@ def _build_synthetic_reconcile_state(
             for i, tid in enumerate(slice_tasks)
         ]
         with db.transaction() as cur:
-            ops.task.queue_assignments(cur, assignments, health=txns._health)
+            ops.task.assign(cur, assignments, health=txns._health)
 
     return SyntheticReconcileState(
         db=db, txns=txns, health=health, job_id=job_id, worker_ids=worker_ids, task_ids=task_ids, address=worker_address
@@ -2494,7 +2493,7 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: WorkerProvider
     t0 = time.perf_counter()
     inputs, addresses = _snapshot_reconcile_inputs(state)
     t1 = time.perf_counter()
-    plans = reconcile_workers(inputs)
+    plans = build_reconcile_plans(inputs)
     t2 = time.perf_counter()
     results = provider.reconcile_workers(plans, addresses)
     t3 = time.perf_counter()
@@ -2550,15 +2549,15 @@ def _measure_full_tick(
 
 
 def _measure_compute_only(state: SyntheticReconcileState, *, n_iters: int) -> tuple[list[float], int]:
-    """Time just ``reconcile_workers`` (pure compute) — no RPC, no DB transaction."""
+    """Time just ``build_reconcile_plans`` (pure compute) — no RPC, no DB transaction."""
     inputs, _addresses = _snapshot_reconcile_inputs(state)
-    plans = reconcile_workers(inputs)  # warmup
+    plans = build_reconcile_plans(inputs)  # warmup
     total_bytes = _serialized_bytes(plans)
 
     times: list[float] = []
     for _ in range(n_iters):
         t0 = time.perf_counter()
-        _plans = reconcile_workers(inputs)
+        _plans = build_reconcile_plans(inputs)
         times.append((time.perf_counter() - t0) * 1000)
     return times, total_bytes
 
@@ -2621,7 +2620,7 @@ def _run_reconcile_scenario(
                     f"  ReconcileRequest payload:    total={_human_bytes(total_bytes)}  "
                     f"avg/worker={_human_bytes(int(per_worker_avg))}"
                 )
-                print("  " + _summarize_reconcile("compute (reconcile_workers)", compute_ms))
+                print("  " + _summarize_reconcile("compute (build_reconcile_plans)", compute_ms))
 
                 dispatch, steady = _measure_full_tick(state, provider, n_iters=n_iters)
                 print("  -- dispatch tick (all ASSIGNED, full spec on the wire) --")

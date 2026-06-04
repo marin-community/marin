@@ -942,7 +942,7 @@ def make_demand_entries(
             constraint_list.append(zone_constraint(z))
     return [
         DemandEntry(
-            task_ids=[f"{task_prefix}-{i}"],
+            task_ids=(f"{task_prefix}-{i}",),
             coschedule_group_id=None,
             normalized=normalized,
             constraints=constraint_list,
@@ -979,7 +979,7 @@ def make_big_demand_entries(
     if coschedule_group_id:
         return [
             DemandEntry(
-                task_ids=[f"{task_prefix}-{i}" for i in range(count)],
+                task_ids=tuple(f"{task_prefix}-{i}" for i in range(count)),
                 coschedule_group_id=coschedule_group_id,
                 normalized=normalized,
                 constraints=[],
@@ -988,7 +988,7 @@ def make_big_demand_entries(
         ]
     return [
         DemandEntry(
-            task_ids=[f"{task_prefix}-{i}"],
+            task_ids=(f"{task_prefix}-{i}",),
             coschedule_group_id=None,
             normalized=normalized,
             constraints=[],

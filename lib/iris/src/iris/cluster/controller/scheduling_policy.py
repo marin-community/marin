@@ -13,6 +13,7 @@ over an in-memory ``SchedulingContext``.
 import logging
 import sys
 from collections import defaultdict
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -339,7 +340,7 @@ def compute_demand_entries(
             if remaining_ids:
                 demand_entries.append(
                     DemandEntry(
-                        task_ids=remaining_ids,
+                        task_ids=tuple(remaining_ids),
                         coschedule_group_id=job_id.to_wire(),
                         normalized=normalized,
                         constraints=job_constraints,
@@ -354,7 +355,7 @@ def compute_demand_entries(
                 continue
             demand_entries.append(
                 DemandEntry(
-                    task_ids=[task.task_id.to_wire()],
+                    task_ids=(task.task_id.to_wire(),),
                     coschedule_group_id=None,
                     normalized=normalized,
                     constraints=job_constraints,
@@ -956,7 +957,7 @@ def _reserved_job_ids(queries: ControllerDB) -> set[JobName]:
     return {row.job_id for row in rows}
 
 
-def _find_reservation_ancestor(reserved_jobs: set[JobName], job_id: JobName) -> JobName | None:
+def _find_reservation_ancestor(reserved_jobs: AbstractSet[JobName], job_id: JobName) -> JobName | None:
     """Walk up the job hierarchy to find the nearest ancestor with a reservation.
 
     Pure Python walk against the pre-fetched ``reserved_jobs`` set. The old
@@ -1170,7 +1171,7 @@ def apply_scheduling_gates(
             if task.has_reservation:
                 has_reservation.add(task.job_id)
                 has_direct_reservation.add(task.job_id)
-            elif _find_reservation_ancestor(set(ctx.reserved_job_ids), task.job_id) is not None:
+            elif _find_reservation_ancestor(ctx.reserved_job_ids, task.job_id) is not None:
                 has_reservation.add(task.job_id)
     if trace:
         logger.info(
