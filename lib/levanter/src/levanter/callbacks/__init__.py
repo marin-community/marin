@@ -29,6 +29,7 @@ from levanter.data import DataLoader
 from levanter.metrics import LossFunctionWithMetrics, unwrap_metrics
 from levanter.metrics import fold as fold_metric
 from levanter.tracker.wandb import WandbConfig
+from levanter.utils.fsspec_utils import mkdirs
 from levanter.utils.jax_utils import barrier_sync
 from levanter.utils.logging import save_xla_dumps_to_wandb
 
@@ -166,11 +167,8 @@ def profile_ctx(
     _create_perfetto_link = create_perfetto_link and jax.process_index() == 0
     logger.info("Starting profiler.")
 
-    # Ensure destination exists
-    try:
-        os.makedirs(path, exist_ok=True)
-    except Exception:
-        pass
+    # Ensure destination exists (handles both local and remote filesystems)
+    mkdirs(path)
 
     if device_profile:
         jax.profiler.start_trace(

@@ -164,40 +164,6 @@ def test_sync_deletes_pod_for_stale_attempt(provider, k8s):
     assert k8s.get_json(K8sResource.PODS, old_pod) is None
 
 
-def test_delete_pods_uses_task_hash_label(provider, k8s):
-    """_delete_pods_by_task_id must filter by _LABEL_TASK_HASH, not sanitized task_id."""
-    task_id = "/test-job/0"
-    task_hash = _task_hash(task_id)
-
-    populate_pod(k8s, "iris-test-pod", "Running", labels={_LABEL_TASK_HASH: task_hash})
-    populate_pod(k8s, "iris-other-pod", "Running", labels={_LABEL_TASK_HASH: "wrong-hash"})
-
-    provider._delete_pods_by_task_id(task_id)
-
-    assert k8s.get_json(K8sResource.PODS, "iris-test-pod") is None
-    assert k8s.get_json(K8sResource.PODS, "iris-other-pod") is not None
-
-
-def test_delete_pods_does_not_delete_colliding_task(provider, k8s):
-    """Two task IDs with the same sanitized label must not share hash-based pod deletion."""
-    base = "a" * 63
-    task_id_a = base + "X"
-    task_id_b = base + "Y"
-    assert _sanitize_label_value(task_id_a) == _sanitize_label_value(task_id_b)
-
-    hash_a = _task_hash(task_id_a)
-    hash_b = _task_hash(task_id_b)
-    assert hash_a != hash_b, "distinct task IDs must use distinct hash labels for deletion"
-
-    populate_pod(k8s, "pod-a", "Running", labels={_LABEL_TASK_HASH: hash_a})
-    populate_pod(k8s, "pod-b", "Running", labels={_LABEL_TASK_HASH: hash_b})
-
-    provider._delete_pods_by_task_id(task_id_a)
-
-    assert k8s.get_json(K8sResource.PODS, "pod-a") is None
-    assert k8s.get_json(K8sResource.PODS, "pod-b") is not None
-
-
 # ---------------------------------------------------------------------------
 # sync(): running_tasks polling
 # ---------------------------------------------------------------------------
@@ -908,29 +874,6 @@ def test_no_configmap_when_no_workdir_files(provider, k8s):
     assert len(configmaps) == 0
     assert len(pods) == 1
     assert pods[0]["kind"] == "Pod"
-
-
-def test_configmap_cleaned_up_on_delete(provider, k8s):
-    """_delete_pods_by_task_id also deletes associated ConfigMaps."""
-    task_id = "/my-job/task-0"
-    task_hash = _task_hash(task_id)
-    labels = {
-        _LABEL_MANAGED: "true",
-        _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
-        _LABEL_TASK_HASH: task_hash,
-    }
-
-    populate_pod(k8s, "iris-pod-1", "Running", labels={_LABEL_TASK_HASH: task_hash})
-    cm = {
-        "kind": "ConfigMap",
-        "metadata": {"name": "iris-pod-1-wf", "labels": labels},
-    }
-    k8s.seed_resource(K8sResource.CONFIGMAPS, "iris-pod-1-wf", cm)
-
-    provider._delete_pods_by_task_id(task_id)
-
-    assert k8s.get_json(K8sResource.PODS, "iris-pod-1") is None
-    assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-pod-1-wf") is None
 
 
 # ---------------------------------------------------------------------------

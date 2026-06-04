@@ -1656,38 +1656,6 @@ class K8sTaskProvider:
                 len(old_task_hashes - safe_hashes),
             )
 
-    def _delete_pods_by_task_id(self, task_id: str) -> None:
-        """Delete all pods, configmaps, and PDBs for a given task_id (any attempt).
-
-        Uses the SHA-256 task hash label for collision-resistant pod lookup,
-        avoiding false matches that _sanitize_label_value's lossy truncation
-        could cause when distinct task IDs share the same sanitized prefix.
-        """
-        task_hash = _task_hash(task_id)
-        managed_labels = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE, _LABEL_TASK_HASH: task_hash}
-        pods = self.kubectl.list_json(K8sResource.PODS, labels=managed_labels)
-        for pod in pods:
-            pod_name = pod.get("metadata", {}).get("name", "")
-            if pod_name:
-                self.kubectl.delete(K8sResource.PODS, pod_name)
-                logger.info("Deleted pod %s for task %s", pod_name, task_id)
-
-        # Clean up associated ConfigMaps (workdir files).
-        configmaps = self.kubectl.list_json(K8sResource.CONFIGMAPS, labels=managed_labels)
-        for cm in configmaps:
-            cm_name = cm.get("metadata", {}).get("name", "")
-            if cm_name:
-                self.kubectl.delete(K8sResource.CONFIGMAPS, cm_name)
-                logger.info("Deleted configmap %s for task %s", cm_name, task_id)
-
-        # Clean up associated PDBs (coordinator tasks).
-        pdbs = self.kubectl.list_json(K8sResource.PDBS, labels=managed_labels)
-        for pdb in pdbs:
-            pdb_name = pdb.get("metadata", {}).get("name", "")
-            if pdb_name:
-                self.kubectl.delete(K8sResource.PDBS, pdb_name)
-                logger.info("Deleted PDB %s for task %s", pdb_name, task_id)
-
     def _poll_pods(self, running: list[RunningTaskEntry], cached_pods: list[dict]) -> list[TaskUpdate]:
         """Poll pod phases for all running tasks.
 
