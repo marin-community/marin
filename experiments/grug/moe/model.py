@@ -33,6 +33,8 @@ from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
 from levanter.tracker.histogram import Histogram
 from levanter.utils.activation import ActivationFunctionEnum
 
+from experiments.grug.moe.gla import GatedLinearAttention
+
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
 
@@ -76,6 +78,12 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    # Gated Linear Attention (arXiv 2312.06635): when True, the sliding-window
+    # ("short") layers are replaced by GLA; the periodic full-attention layers
+    # (every 4th + last) are kept as softmax attention.
+    use_gla: bool = False
+    gla_chunk_size: int = 64
+    gla_expand_v: float = 1.0
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -448,24 +456,37 @@ class MoEMLP(eqx.Module):
 class Block(eqx.Module):
     rms_attn: RMSNorm
     attn_gated_norm: GatedNorm
-    attn: CausalSelfAttention
+    attn: CausalSelfAttention | GatedLinearAttention
     rms_mlp: RMSNorm
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, is_gla_layer: bool = False) -> "Block":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
             shared = DenseMLP.init(
                 cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
             )
+        if is_gla_layer:
+            attn: CausalSelfAttention | GatedLinearAttention = GatedLinearAttention.init(
+                cfg.hidden_dim,
+                cfg.num_heads,
+                cfg.num_kv_heads,
+                cfg.inferred_head_dim,
+                cfg.initializer_std,
+                cfg.gla_chunk_size,
+                cfg.gla_expand_v,
+                key=attn_key,
+            )
+        else:
+            attn = CausalSelfAttention.init(cfg, key=attn_key)
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
-            attn=CausalSelfAttention.init(cfg, key=attn_key),
+            attn=attn,
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
@@ -506,7 +527,14 @@ class Transformer(eqx.Module):
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
-        blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+
+        # GLA replaces the sliding-window ("short") layers; keep softmax attention on the
+        # periodic full-attention layers (every 4th + last), matching the mask logic in __call__.
+        def _is_gla_layer(i: int) -> bool:
+            is_long = i % 4 == 3 or i == cfg.num_layers - 1
+            return cfg.use_gla and not is_long
+
+        blocks = tuple(Block.init(cfg, key=block_keys[i], is_gla_layer=_is_gla_layer(i)) for i in range(cfg.num_layers))
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
