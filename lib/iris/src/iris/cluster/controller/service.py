@@ -48,6 +48,7 @@ from iris.cluster.controller.codec import (
     worker_metadata_to_proto,
 )
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.direct_provider import RunTemplateCache
 from iris.cluster.controller.projections.endpoints import (
     AddEndpointOutcome,
     EndpointQuery,
@@ -804,6 +805,9 @@ class ControllerProtocol(Protocol):
     def has_direct_provider(self) -> bool: ...
 
     @property
+    def run_template_cache(self) -> RunTemplateCache: ...
+
+    @property
     def provider_scheduling_events(self) -> list: ...
 
     @property
@@ -1194,7 +1198,7 @@ class ControllerServiceImpl:
                 job_id=job_id,
                 request=request,
                 ts=Timestamp.now(),
-                run_template_cache=self._controller._run_template_cache,
+                run_template_cache=self._controller.run_template_cache,
             )
         self._controller.wake()
 
@@ -1682,6 +1686,23 @@ class ControllerServiceImpl:
                 for e in endpoints
             ]
         )
+
+    @property
+    def has_direct_provider(self) -> bool:
+        """Whether the controller runs a direct (Kubernetes) provider."""
+        return self._controller.has_direct_provider
+
+    def resolve_endpoint(self, name: str) -> str | None:
+        """Resolve a service endpoint name to its address, or None if unknown.
+
+        Task-registered endpoints live in the SQL-backed projection; system
+        endpoints (``/system/...``) live in the in-memory map. Same fallback
+        order as the ListEndpoints system-endpoint branch.
+        """
+        row = self._endpoints.resolve(name)
+        if row is not None:
+            return row.address
+        return self._system_endpoints.get(name)
 
     def _list_system_endpoints(self, prefix: str, *, exact: bool) -> controller_pb2.Controller.ListEndpointsResponse:
         """Resolve system endpoints from the in-memory map."""

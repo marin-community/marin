@@ -1508,6 +1508,11 @@ class Controller:
         return isinstance(self._provider, K8sTaskProvider)
 
     @property
+    def run_template_cache(self) -> RunTemplateCache:
+        """Per-job RunTaskRequest template cache, shared with the dispatch path."""
+        return self._run_template_cache
+
+    @property
     def provider_scheduling_events(self) -> list[SchedulingEvent]:
         return self._provider_scheduling_events
 

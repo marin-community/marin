@@ -136,7 +136,7 @@ class MockController:
         self.autoscaler = None
         self.provider = Mock()
         self.has_direct_provider = False
-        self._run_template_cache: RunTemplateCache = RunTemplateCache(256)
+        self.run_template_cache: RunTemplateCache = RunTemplateCache(256)
 
 
 @pytest.fixture
