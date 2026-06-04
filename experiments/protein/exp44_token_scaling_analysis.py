@@ -21,7 +21,9 @@ Two figures are produced (300-dpi PNG + PDF):
 
 * ``token_scaling_heatmap`` — the mixture x budget table heatmap of cd-val loss,
   with per-budget ranks and two aggregation columns (mean loss across budgets,
-  mean rank across budgets).
+  mean rank across budgets). A subtly-marked reference column reuses exp11's
+  stage-2 (~21.5B-token) scale-sweep cd-val so the reduced-budget rankings can
+  be read against the full-budget target.
 * ``t1_seed_spread`` — the ``t1`` (0.5B) seed sweep: cd-val loss per mixture
   across data-ordering seeds, with the across-seed spread contextualized against
   the across-mixture spread. Partial — uses whatever seed runs exist.
@@ -66,6 +68,16 @@ TAG = "exp44"
 # ``prot-exp44-ts-1_5b-<budget>-<tokens>-[s<i>-]<mixture>-lr...-v1-<hash>``.
 RUN_NAME_RE = re.compile(r"^prot-exp44-ts-1_5b-(?P<budget>t\d)-[0-9.]+[MB]-(?:(?P<seed>s\d)-)?(?P<mixture>m\d+)-lr")
 
+# Reference: exp11's stage-2 (~21.5B-token) 1.5B scale sweep — the full-budget
+# run the exp44 reduced budgets are trying to recover. Same model/tokenizer/eval
+# (2048 cd-val sequences), so the cd-val loss is directly comparable. exp11 ran
+# extra mixtures; we keep only the six (m10-m15) shared with exp44.
+REF_GROUP = "exp11-data-mix"
+REF_TAG = "scale"
+REF_NAME_RE = re.compile(r"^prot-exp11-dm-scale-1_5b-.*-v6-[0-9a-f]+$")
+REF_MIX_RE = re.compile(r"-(?P<mixture>m1[0-5])-")
+REF_BUDGET = "stage2"
+
 # Mixture display labels (match the exp44 sweep docstring / exp11 issue table).
 MIXTURE_NAMES: dict[str, str] = {
     "m10": "m10 (H)",
@@ -77,9 +89,10 @@ MIXTURE_NAMES: dict[str, str] = {
 }
 MIXTURE_ORDER: tuple[str, ...] = ("m10", "m11", "m12", "m13", "m14", "m15")
 
-# Token budgets, in plot order, with nominal labels for axes.
-BUDGET_ORDER: tuple[str, ...] = ("t1", "t2", "t3")
-BUDGET_NOMINAL: dict[str, str] = {"t1": "0.5B", "t2": "1B", "t3": "2B"}
+# Token budgets in plot order: the three exp44-swept budgets plus the exp11
+# stage-2 reference column on the right.
+DISPLAY_BUDGETS: tuple[str, ...] = ("t1", "t2", "t3", REF_BUDGET)
+BUDGET_NOMINAL: dict[str, str] = {"t1": "0.5B", "t2": "1B", "t3": "2B", REF_BUDGET: "21.5B"}
 
 # Data-ordering seeds (exp44 ``DATA_SEEDS``); index 0 is the default (no seed
 # token in the run name). Used only to label the seed figure.
@@ -166,6 +179,7 @@ def _run_row(run) -> dict | None:
 
     row: dict[str, object] = {
         "run_name": run.display_name,
+        "source": "exp44",
         "budget": budget,
         "budget_nominal": BUDGET_NOMINAL.get(budget, budget),
         "mixture_id": mixture,
@@ -190,16 +204,75 @@ def _run_row(run) -> dict | None:
     return row
 
 
+def _ref_run_row(run) -> dict | None:
+    """Flatten one exp11 stage-2 reference run into a summary row (or None).
+
+    Mirrors :func:`_run_row` but for the exp11 scale sweep: ``source="exp11"``,
+    ``budget="stage2"``, default seed. Only the six mixtures shared with exp44
+    are kept; exp11's extra mixtures and its offline-eval runs are dropped.
+    """
+    if not REF_NAME_RE.match(run.display_name) or "eval" in run.display_name:
+        return None
+    match = REF_MIX_RE.search(run.display_name)
+    if not match:
+        return None
+    mixture = match.group("mixture")
+
+    cfg = dict(run.config)
+    summary = dict(run.summary) if run.summary is not None else {}
+    tags = list(run.tags or [])
+    num_train_steps = _get_nested(cfg, "trainer.num_train_steps")
+    batch = _get_nested(cfg, "trainer.train_batch_size")
+    seq_len = cfg.get("train_seq_len")
+    tokens_exact = _parse_int_tag(tags, "tokens_exact=")
+    if tokens_exact is None and None not in (batch, seq_len, num_train_steps):
+        tokens_exact = int(batch) * int(seq_len) * int(num_train_steps)
+    step = summary.get("_step")
+
+    row: dict[str, object] = {
+        "run_name": run.display_name,
+        "source": "exp11",
+        "budget": REF_BUDGET,
+        "budget_nominal": BUDGET_NOMINAL[REF_BUDGET],
+        "mixture_id": mixture,
+        "mixture_name": MIXTURE_NAMES.get(mixture, mixture),
+        "seed_tag": "s0",
+        "seed_index": 0,
+        "data_seed": cfg.get("data_seed"),
+        "state": run.state,
+        "step": int(step) if step is not None else None,
+        "num_train_steps": int(num_train_steps) if num_train_steps else None,
+        "pct_complete": round(100.0 * (int(step) + 1) / int(num_train_steps), 1)
+        if step is not None and num_train_steps
+        else None,
+        "tokens_exact": tokens_exact,
+        "params_exact": _parse_int_tag(tags, "params_exact="),
+        "total_gflops": summary.get(TOTAL_GFLOPS_KEY),
+        "cdval_loss": summary.get(CDVAL_METRIC),
+        "train_loss": summary.get(TRAIN_METRIC),
+    }
+    for key in summary:
+        if EVAL_LOSS_RE.match(key) and key != CDVAL_METRIC:
+            row[_short_metric_label(key)] = summary[key]
+    return row
+
+
 def fetch_summary() -> pd.DataFrame:
-    """Pull every exp44 run's final summary into one row-per-run DataFrame."""
+    """Pull every exp44 run plus the exp11 stage-2 reference into one frame."""
     api = wandb.Api()
     runs = list(api.runs(f"{ENTITY}/{PROJECT}", filters={"group": GROUP, "tags": TAG}))
     logger.info("Fetched %d runs from %s/%s group=%s", len(runs), ENTITY, PROJECT, GROUP)
     rows = [r for r in (_run_row(run) for run in runs) if r is not None]
     if not rows:
         raise RuntimeError(f"No exp44 runs matched in {ENTITY}/{PROJECT} group={GROUP}")
+
+    ref_runs = list(api.runs(f"{ENTITY}/{PROJECT}", filters={"group": REF_GROUP, "tags": REF_TAG}))
+    ref_rows = [r for r in (_ref_run_row(run) for run in ref_runs) if r is not None]
+    logger.info("Fetched %d exp11 stage-2 reference runs (m10-m15)", len(ref_rows))
+    rows += ref_rows
+
     df = pd.DataFrame(rows)
-    budget_rank = {b: i for i, b in enumerate(BUDGET_ORDER)}
+    budget_rank = {b: i for i, b in enumerate(DISPLAY_BUDGETS)}
     mixture_rank = {m: i for i, m in enumerate(MIXTURE_ORDER)}
     df["_b"] = df["budget"].map(lambda b: budget_rank.get(b, 99))
     df["_m"] = df["mixture_id"].map(lambda m: mixture_rank.get(m, 99))
@@ -242,39 +315,51 @@ def render_token_scaling_heatmap(df: pd.DataFrame, out_dir: Path) -> None:
     (its WSD decay hasn't finished), so any incomplete cell is left blank
     ("—") rather than plotted.
 
-    Rows are sorted by mean cd-val loss across budgets (best mixture on top).
-    Each budget cell is annotated ``loss`` over ``#rank`` (rank within that
-    budget, 1 = lowest loss); the two right-hand columns aggregate across
-    budgets. Color is a monotone per-column z-score (darker = higher loss =
-    worse) so the table reads at a glance while the annotations carry the raw
-    values.
+    Columns are the three exp44 budgets (t1/t2/t3), then the exp11 stage-2
+    (~21.5B) reference column the reduced budgets are trying to recover, then
+    two aggregation columns. The stage-2 column is rendered subtly (italic,
+    greyed header, dashed border + footnote) to mark it as reused exp11 data.
+    Rows are sorted by mean cd-val loss across all budgets (best on top). The
+    aggregation columns average over every displayed budget, the stage-2
+    reference included. Each cell is annotated ``value`` over ``#rank`` (rank
+    down the column, 1 = best). Color is a monotone per-column z-score (darker =
+    higher loss = worse).
     """
     base = df[(df["seed_index"] == 0) & (df["state"] == "finished")]
-    missing = int(((df["seed_index"] == 0) & (df["state"] != "finished")).sum())
+    missing = int(((df["seed_index"] == 0) & (df["state"] != "finished") & (df["source"] == "exp44")).sum())
     if missing:
-        logger.warning("Heatmap: %d default-seed run(s) not finished; leaving those cells blank", missing)
+        logger.warning("Heatmap: %d default-seed exp44 run(s) not finished; leaving those cells blank", missing)
     loss = base.pivot(index="mixture_id", columns="budget", values="cdval_loss")
-    loss = loss.reindex(index=MIXTURE_ORDER, columns=BUDGET_ORDER)
+    loss = loss.reindex(index=MIXTURE_ORDER, columns=DISPLAY_BUDGETS)
 
-    # Rank mixtures within each budget (1 = best); aggregate across budgets.
-    # Ranks are row-order-independent, so compute before sorting rows.
+    # Rank mixtures within each budget (1 = best). Aggregations average over all
+    # displayed budgets, including the stage-2 (21.5B) reference. Ranks are
+    # row-order-independent, so compute before sorting rows.
     ranks = loss.rank(axis=0, method="min")
     mean_loss = loss.mean(axis=1)
     mean_rank = ranks.mean(axis=1)
 
-    # Sort rows by mean loss (ascending) so the best mixture sits at the top.
+    # Sort rows by mean loss across all budgets (best mixture on top).
     row_order = list(mean_loss.sort_values().index)
     loss = loss.reindex(row_order)
     ranks = ranks.reindex(row_order)
     mean_loss = mean_loss.reindex(row_order)
     mean_rank = mean_rank.reindex(row_order)
 
-    n_budgets = len(BUDGET_ORDER)
     display = loss.copy()
     display["mean_loss"] = mean_loss
     display["mean_rank"] = mean_rank
-    cols = [*BUDGET_ORDER, "mean_loss", "mean_rank"]
+    cols = [*DISPLAY_BUDGETS, "mean_loss", "mean_rank"]
     display = display[cols]
+    ref_j = cols.index(REF_BUDGET)
+    agg_j = len(DISPLAY_BUDGETS)  # first aggregation column index
+
+    # Rank the aggregation columns too (1 = best) so every column annotates a
+    # consistent ``#rank``. mean_loss-rank matches the row order by construction.
+    agg_ranks = {
+        "mean_loss": mean_loss.rank(method="min").astype(int),
+        "mean_rank": mean_rank.rank(method="min").astype(int),
+    }
 
     z = _zscore_columns(display)
     nrows, ncols = display.shape
@@ -283,11 +368,15 @@ def render_token_scaling_heatmap(df: pd.DataFrame, out_dir: Path) -> None:
     # darkest = highest loss (worst). vmin/vmax bound the z range symmetrically.
     im = ax.imshow(z.to_numpy(dtype=float), cmap="Blues", aspect="auto", vmin=-2.0, vmax=2.0)
 
-    col_labels = [f"{b}\n({BUDGET_NOMINAL[b]} tok)" for b in BUDGET_ORDER] + ["mean\nloss", "mean\nrank"]
+    col_labels = [f"{b}\n({BUDGET_NOMINAL[b]} tok)" for b in DISPLAY_BUDGETS] + ["mean\nloss", "mean\nrank"]
+    col_labels[ref_j] = f"stage-2\n({BUDGET_NOMINAL[REF_BUDGET]} tok)"
     ax.set_xticks(range(ncols))
     ax.set_xticklabels(col_labels)
     ax.set_yticks(range(nrows))
     ax.set_yticklabels([MIXTURE_NAMES[m] for m in row_order])
+    # Subtle exp11 cue: grey + italic header on the reference column.
+    ax.get_xticklabels()[ref_j].set_color("#666666")
+    ax.get_xticklabels()[ref_j].set_fontstyle("italic")
 
     for i in range(nrows):
         for j, col in enumerate(cols):
@@ -295,19 +384,28 @@ def render_token_scaling_heatmap(df: pd.DataFrame, out_dir: Path) -> None:
             zv = z.iat[i, j]
             # White text only on the dark (high-z) end of the monotone ramp.
             color = "white" if zv > 1.0 else "black"
+            style = "italic" if j == ref_j else "normal"  # reference cells italic
             if pd.isna(val):
                 ax.text(j, i, "—", ha="center", va="center", color="black", fontsize=9)
-            elif col in BUDGET_ORDER:
+            elif col in DISPLAY_BUDGETS:
                 rank = ranks.iat[i, j]
                 text = f"{val:.4f}\n#{int(rank)}"
-                ax.text(j, i, text, ha="center", va="center", color=color, fontsize=8.5)
+                ax.text(j, i, text, ha="center", va="center", color=color, fontsize=8.5, fontstyle=style)
             elif col == "mean_rank":
-                ax.text(j, i, f"{val:.2f}", ha="center", va="center", color=color, fontsize=9)
+                text = f"{val:.2f}\n#{agg_ranks['mean_rank'].iloc[i]}"
+                ax.text(j, i, text, ha="center", va="center", color=color, fontsize=9)
             else:
-                ax.text(j, i, f"{val:.4f}", ha="center", va="center", color=color, fontsize=9)
+                text = f"{val:.4f}\n#{agg_ranks['mean_loss'].iloc[i]}"
+                ax.text(j, i, text, ha="center", va="center", color=color, fontsize=9)
 
-    # Visual divider between the per-budget block and the aggregation columns.
-    ax.axvline(n_budgets - 0.5, color="black", linewidth=2.0)
+    # Divider before the aggregation columns; subtle dashed box around the exp11
+    # reference column to set it apart from the exp44 budgets.
+    ax.axvline(agg_j - 0.5, color="black", linewidth=2.0)
+    ax.add_patch(
+        plt.Rectangle(
+            (ref_j - 0.5, -0.5), 1.0, nrows, fill=False, edgecolor="#666666", linewidth=1.3, linestyle=(0, (4, 3))
+        )
+    )
 
     cbar = fig.colorbar(im, ax=ax, shrink=0.85)
     cbar.set_label("per-column z-score  (darker = higher loss = worse)")
@@ -318,11 +416,21 @@ def render_token_scaling_heatmap(df: pd.DataFrame, out_dir: Path) -> None:
     ax.tick_params(which="minor", length=0)
 
     tokens = base.set_index("budget")["tokens_exact"].to_dict()
-    steps = base.set_index("budget")["num_train_steps"].to_dict()
-    shape = "  ".join(f"{b}={tokens.get(b, float('nan')) / 1e9:.3f}B tok / {steps.get(b)} steps" for b in BUDGET_ORDER)
+    shape = "  ".join(f"{b}={tokens.get(b, float('nan')) / 1e9:.3f}B tok" for b in DISPLAY_BUDGETS)
     ax.set_title(
         f"{TITLE_PREFIX}\ncd-val loss by mixture x token budget (default seed, finished runs)\n{shape}",
         fontsize=10,
+    )
+    fig.text(
+        0.5,
+        -0.02,
+        "stage-2 (21.5B) column reused from the exp11 1.5B scale sweep (run_scale_sweep v6); "
+        "aggregation columns average all four budgets, the stage-2 reference included.",
+        ha="center",
+        va="top",
+        fontsize=7.5,
+        color="#666666",
+        fontstyle="italic",
     )
     fig.tight_layout()
     _save(fig, out_dir, "token_scaling_heatmap")
@@ -476,7 +584,7 @@ def _save(fig, out_dir: Path, stem: str) -> None:
 
 def _log_tables(df: pd.DataFrame) -> None:
     base = df[df["seed_index"] == 0]
-    wide = base.pivot(index="mixture_name", columns="budget", values="cdval_loss").reindex(columns=BUDGET_ORDER)
+    wide = base.pivot(index="mixture_name", columns="budget", values="cdval_loss").reindex(columns=DISPLAY_BUDGETS)
     logger.info("cd-val loss (default seed) by mixture x budget:\n%s", wide.to_string(float_format=lambda v: f"{v:.4f}"))
     states = df.groupby("state").size().to_dict()
     logger.info("run states: %s", states)
