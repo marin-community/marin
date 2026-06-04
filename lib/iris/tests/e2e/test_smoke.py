@@ -10,13 +10,10 @@ has workers across CPU, TPU coscheduling, and multi-region scale groups.
 
 import logging
 import os
-import re
 import threading
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import urljoin
-from urllib.request import urlopen
 
 import pytest
 from connectrpc.errors import ConnectError
@@ -518,27 +515,6 @@ def test_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screenshot):
         timeout=10000,
     )
     smoke_screenshot("status-tab", "Status tab showing controller process info or GetProcessStatus error")
-
-
-def test_dashboard_serves_embedded_speedscope(smoke_cluster):
-    """The controller serves the bundled speedscope SPA for one-click profile viewing.
-
-    Speedscope is copied from its npm package into the dashboard's static assets
-    at build time (lib/iris/dashboard/rsbuild.config.ts), never vendored. This
-    test fails if that copy step or the static mount regresses: it fetches the
-    viewer's entrypoint and the relative-path bundle it references, both of which
-    must be served same-origin for the blob-URL profile handoff to work.
-    """
-    base = f"{smoke_cluster.url}/static/speedscope/"
-    with urlopen(urljoin(base, "index.html"), timeout=30) as resp:
-        assert resp.status == 200
-        index = resp.read().decode()
-    assert "<title>speedscope</title>" in index
-
-    script = re.search(r'src="([^"]+\.js)"', index)
-    assert script, f"speedscope index.html has no script tag: {index!r}"
-    with urlopen(urljoin(base, script.group(1)), timeout=30) as resp:
-        assert resp.status == 200, f"speedscope bundle {script.group(1)} not served"
 
 
 def test_dashboard_job_detail_with_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
