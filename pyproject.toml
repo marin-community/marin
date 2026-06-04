@@ -37,9 +37,6 @@ fork-strategy = "fewest"
 # only affects dupekit and the already-pinned `omegaconf>=2.4.0.dev4`
 # below.
 prerelease = "allow"
-find-links = [
-    "https://github.com/marin-community/kitoken/releases/expanded_assets/kitoken-0.10.2-a3012f4",
-]
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
     "aiofiles>=24.1.0",
