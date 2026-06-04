@@ -29,21 +29,27 @@ fixed. Variants are selected *only* when the ``SEEDS`` env var opts in, so with
 ``SEEDS`` unset the original 18 are returned for any ``RUNS`` needle.
 
 Structure mirrors ``exp29_arch_sweep`` / ``exp11_data_mix_sweep``: this script
-runs as a lightweight CPU driver that submits ONE Fray training job (a v5p-8
+runs as a lightweight CPU driver that submits ONE Fray training job (a TPU
 worker via ``ResourceConfig.with_tpu``) for the selected config(s);
 ``claim_and_run`` makes re-running a completed config a no-op. The tokenized
 caches were built once by ``exp11_data_mix_sweep`` (hardcoded paths below), so
 there is no tokenize step here.
 
+The training config is slice-agnostic: the global batch is fixed and the only
+slice-dependent knobs — ``per_device_parallelism`` (hence gradient accumulation)
+and ``max_eval_batches`` — are derived per TPU from ``TPU_STATS`` so the cd-val
+eval set stays identical across slices. Supported slices: v5p-8, v6e-4, v6e-8,
+v6e-16 (see ``TPU_STATS``).
+
 Env vars: ``RUNS`` (CSV substring filter on config id), ``SEEDS`` (CSV of seed
 indices into ``DATA_SEEDS``; 0=default 1729, unset=default only — variants are
 never selected without it), ``PREVIEW=yes`` (list targets, submit nothing),
-``TPU`` (override worker TPU; default v5p-8).
+``TPU`` (override worker TPU; default v6e-4).
 
 Submission — one iris CPU driver per config, ``RUNS=<config>`` (hold <=12 at
 once; shortest budget ``t1`` first). The driver is a CPU job
 (``--region us-east5 --memory=1GB``, no ``--tpu``); the script then submits the
-Fray ``with_tpu("v5p-8")`` worker that does the training. This is the exact
+Fray ``with_tpu(...)`` worker that does the training. This is the exact
 form used to launch the sweep::
 
     set -a; source ~/marin.env; set +a            # USERNAME, HF_TOKEN, WANDB_*
@@ -167,19 +173,20 @@ HELDOUT_COMPONENTS: tuple[str, ...] = (COMPONENT_H_VAL, COMPONENT_H_TEST, COMPON
 # IID held-out sequences carved per active train cell; ~4096 ≈ 33.5M tokens.
 IID_EVAL_SEQS_PER_TRAIN: int = 4096
 
-# Per-component eval batch cap. With grad_accum_steps=2 the eval batch is the
-# microbatch (per_device_eval_parallelism=per_device_parallelism=32, x4 chips
-# on v5p-8 = 128), so this evaluates 16 * 128 = 2048 sequences (~16.8M tokens),
-# identical to exp11's run_scale_sweep cd-val eval.
-MAX_EVAL_BATCHES: int = 16
+# cd-val eval size in sequences, held constant across TPU slices so the metric
+# stays comparable: exp11's run_scale_sweep evaluated 16 * 128 = 2048 sequences
+# (~16.8M tokens). ``build_trial`` derives ``max_eval_batches`` per slice as
+# ``EVAL_SEQUENCES // eval_microbatch``; eval reuses the train microbatch, so its
+# per-chip load never exceeds training's and the same 2048 sequences are scored.
+EVAL_SEQUENCES: int = 2048
 
 # --- Model -------------------------------------------------------------------
 
 # gradient_checkpointing="nested" — multi-level scan saves only sqrt(num_layers)
-# ≈ 5 carries instead of 24. Combined with grad_accum_steps=2 to fit the
-# post-May-2026 v5p-8 HBM budget. Identical to exp11's scale model.
+# ≈ 5 carries instead of 24. Combined with per-slice gradient accumulation
+# (derived from per_device_parallelism; see TPU_STATS) to fit the HBM budget.
+# Identical to exp11's scale model.
 MODEL_CONFIG = dataclasses.replace(protein_llama_1_5b, gradient_checkpointing="nested")
-GRAD_ACCUM_STEPS: int = 2
 
 # Vocab for the legacy 2840-vocab tokenizer pinned in PROTEIN_TOKENIZER.
 PROTEIN_VOCAB_SIZE: int = 2840
@@ -244,15 +251,55 @@ TEMP_CHECKPOINT_INTERVAL = timedelta(minutes=3)
 
 # us-east5-a co-locates TPUs with the ``marin-us-east5`` checkpoint bucket.
 PROTEIN_ZONE: str = "us-east5-a"
-DEFAULT_TPU: str = "v5p-8"
+DEFAULT_TPU: str = "v6e-4"
+
+
+@dataclass(frozen=True)
+class TpuStats:
+    chips: int  # accelerator chips in the slice (== jax.device_count())
+    hbm_gib: int  # HBM per chip
+
+
+# Supported slices only. ``chips`` per fray TPU topology (N for v6e, N/2 for
+# v5p); HBM/chip from docs/tpu-clusters.md. Keeps the config slice-agnostic by
+# deriving per_device_parallelism from this table (see size-tpu-train-config).
+TPU_STATS: dict[str, TpuStats] = {
+    "v5p-8": TpuStats(chips=4, hbm_gib=95),
+    "v6e-4": TpuStats(chips=4, hbm_gib=32),
+    "v6e-8": TpuStats(chips=8, hbm_gib=32),
+    "v6e-16": TpuStats(chips=16, hbm_gib=32),
+}
+
+# Per-chip microbatch that fits the 16 GiB HBM floor for the 1.5B model. Tuned
+# so v5p-8 reproduces the validated setup (per_device_parallelism=32,
+# gradient_accumulation=2 at batch 256); richer-HBM chips get a static multiple.
+PER_CHIP_MICROBATCH: int = 8
+HBM_FLOOR_GIB: int = 16
 
 
 def tpu() -> str:
-    return os.environ.get("TPU") or DEFAULT_TPU
+    name = os.environ.get("TPU") or DEFAULT_TPU
+    if name not in TPU_STATS:
+        raise ValueError(f"unsupported TPU {name!r}; supported: {sorted(TPU_STATS)}")
+    return name
 
 
 def resources() -> ResourceConfig:
     return ResourceConfig.with_tpu(tpu(), zone=PROTEIN_ZONE)
+
+
+def per_device_parallelism(tpu_name: str) -> int:
+    """Per-chip microbatch (<= the HBM-derived cap) that divides the per-chip
+    batch load; ``-1`` means the whole per-chip batch fits in one step (no
+    gradient accumulation). See ``size-tpu-train-config``."""
+    stats = TPU_STATS[tpu_name]
+    if BATCH_SIZE % stats.chips != 0:
+        raise ValueError(f"batch_size ({BATCH_SIZE}) not divisible by {stats.chips} chips ({tpu_name})")
+    cap = PER_CHIP_MICROBATCH * (stats.hbm_gib // HBM_FLOOR_GIB)
+    full = BATCH_SIZE // stats.chips
+    if full <= cap:
+        return -1
+    return next(d for d in range(cap, 0, -1) if full % d == 0)
 
 
 # --- Mixtures ----------------------------------------------------------------
@@ -540,15 +587,21 @@ def build_trial(config: Config) -> tuple[str, object]:
     num_train_steps, steps_per_eval = config.budget.schedule()
     res = resources()
 
-    # grad_accum_steps=2 splits each step into 2 microbatches to halve
-    # activation HBM at compile (dodges the v5p-8 CompileTimeHbmOom on 1.5B).
-    microbatch = BATCH_SIZE // GRAD_ACCUM_STEPS
+    # Slice-agnostic sizing: fix the global batch, derive per-chip parallelism
+    # (hence gradient accumulation) from the slice's HBM. ``-1`` => whole
+    # per-chip batch in one step. See size-tpu-train-config / TPU_STATS.
     chips = res.chip_count()
-    if BATCH_SIZE % GRAD_ACCUM_STEPS != 0:
-        raise ValueError(f"batch_size ({BATCH_SIZE}) not divisible by grad_accum_steps ({GRAD_ACCUM_STEPS})")
-    if microbatch % chips != 0:
-        raise ValueError(f"microbatch ({microbatch}) not divisible by chip_count ({chips})")
-    per_device_parallelism = microbatch // chips
+    if TPU_STATS[tpu()].chips != chips:
+        raise ValueError(f"TPU_STATS chips ({TPU_STATS[tpu()].chips}) != resource chip_count ({chips}) for {tpu()}")
+    pdp = per_device_parallelism(tpu())
+
+    # Eval reuses the train microbatch (per_device_eval_parallelism defaults to
+    # per_device_parallelism), so per-chip eval load never exceeds training.
+    # Hold the cd-val set at EVAL_SEQUENCES by scaling max_eval_batches per slice.
+    eval_microbatch = BATCH_SIZE if pdp < 0 else pdp * chips
+    if EVAL_SEQUENCES % eval_microbatch != 0:
+        raise ValueError(f"EVAL_SEQUENCES ({EVAL_SEQUENCES}) not divisible by eval microbatch ({eval_microbatch})")
+    max_eval_batches = EVAL_SEQUENCES // eval_microbatch
 
     train_config = SimpleTrainConfig(
         resources=res,
@@ -563,9 +616,9 @@ def build_trial(config: Config) -> tuple[str, object]:
         train_seq_len=SEQ_LEN,
         steps_per_eval=steps_per_eval,
         steps_per_export=None,
-        max_eval_batches=MAX_EVAL_BATCHES,
+        max_eval_batches=max_eval_batches,
         data_seed=config.data_seed,
-        per_device_parallelism=per_device_parallelism,
+        per_device_parallelism=pdp,
     )
     params = compute_num_parameters(MODEL_CONFIG, PROTEIN_VOCAB_SIZE)
     tokens = BATCH_SIZE * SEQ_LEN * num_train_steps
