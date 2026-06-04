@@ -217,7 +217,7 @@ class TestAutoscalerWaterfallEndToEnd:
         )
         demand = [
             DemandEntry(
-                task_ids=[f"task-{i}"],
+                task_ids=(f"task-{i}",),
                 coschedule_group_id=None,
                 normalized=normalized,
                 constraints=[],

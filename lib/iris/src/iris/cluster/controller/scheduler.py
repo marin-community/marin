@@ -175,7 +175,7 @@ class RejectionReason:
                 return f"Unknown rejection: {self.kind}"
 
 
-@dataclass
+@dataclass(frozen=True)
 class JobRequirements:
     """What a job needs from a worker. Scheduler's input type.
 

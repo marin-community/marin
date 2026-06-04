@@ -2105,7 +2105,7 @@ def test_compute_demand_entries_counts_coscheduled_job_once(state):
     assert len(demand) == 1
     assert demand[0].normalized.device_type == DeviceType.TPU
     assert demand[0].normalized.device_variants == frozenset({"v5litepod-16"})
-    assert demand[0].task_ids == ["/test-user/j1/0", "/test-user/j1/1", "/test-user/j1/2", "/test-user/j1/3"]
+    assert demand[0].task_ids == ("/test-user/j1/0", "/test-user/j1/1", "/test-user/j1/2", "/test-user/j1/3")
     assert demand[0].coschedule_group_id == "/test-user/j1"
 
 
@@ -2172,7 +2172,7 @@ def test_compute_demand_entries_mixed_coscheduled_and_regular(state):
     regular = [entry for entry in demand if entry.coschedule_group_id is None]
     assert len(coscheduled) == 1
     assert len(regular) == 2
-    assert coscheduled[0].task_ids == ["/test-user/j1/0", "/test-user/j1/1", "/test-user/j1/2", "/test-user/j1/3"]
+    assert coscheduled[0].task_ids == ("/test-user/j1/0", "/test-user/j1/1", "/test-user/j1/2", "/test-user/j1/3")
     for entry in regular:
         assert entry.normalized.device_type == DeviceType.TPU
         assert entry.normalized.device_variants == frozenset({"v5litepod-16"})
@@ -2228,9 +2228,9 @@ def test_compute_demand_entries_separates_by_preemptible_constraint(state):
 
     by_preemptible = {d.normalized.preemptible: d for d in demand}
     assert by_preemptible[True].normalized.device_type == DeviceType.TPU
-    assert by_preemptible[True].task_ids == ["/test-user/j1/0"]
+    assert by_preemptible[True].task_ids == ("/test-user/j1/0",)
     assert by_preemptible[False].normalized.device_type == DeviceType.TPU
-    assert by_preemptible[False].task_ids == ["/test-user/j2/0"]
+    assert by_preemptible[False].task_ids == ("/test-user/j2/0",)
 
 
 def test_compute_demand_entries_no_preemptible_constraint_gives_none(state):

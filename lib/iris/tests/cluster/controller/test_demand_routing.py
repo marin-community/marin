@@ -995,7 +995,7 @@ class TestRoutingBinPacking:
         )
         return [
             DemandEntry(
-                task_ids=[f"task-{i}"],
+                task_ids=(f"task-{i}",),
                 coschedule_group_id=None,
                 normalized=normalized,
                 constraints=[],
@@ -1079,14 +1079,14 @@ class TestRoutingBinPacking:
         )
         entries = [
             DemandEntry(
-                task_ids=["t0", "t1"],
+                task_ids=("t0", "t1"),
                 coschedule_group_id="job-1",
                 normalized=normalized,
                 constraints=[],
                 resources=resources,
             ),
             DemandEntry(
-                task_ids=["t2", "t3"],
+                task_ids=("t2", "t3"),
                 coschedule_group_id="job-2",
                 normalized=normalized,
                 constraints=[],
@@ -1122,7 +1122,7 @@ class TestRoutingBinPacking:
         entries = [
             # 1 coscheduled entry (needs 1 slice = 2 VMs)
             DemandEntry(
-                task_ids=["t0", "t1"],
+                task_ids=("t0", "t1"),
                 coschedule_group_id="job-1",
                 normalized=normalized,
                 constraints=[],
@@ -1131,7 +1131,7 @@ class TestRoutingBinPacking:
             # 3 packable entries (all fit in 1 VM -> ceil(1/2) = 1 slice)
             *[
                 DemandEntry(
-                    task_ids=[f"t-pack-{i}"],
+                    task_ids=(f"t-pack-{i}",),
                     coschedule_group_id=None,
                     normalized=normalized,
                     constraints=[],
@@ -1177,7 +1177,7 @@ class TestRoutingBinPacking:
         )
         entries = [
             DemandEntry(
-                task_ids=[f"task-{i}"],
+                task_ids=(f"task-{i}",),
                 coschedule_group_id=None,
                 normalized=normalized,
                 constraints=[],

@@ -205,19 +205,19 @@ class TaskWithAttempts:
     preemption_count: int
     max_retries_failure: int
     max_retries_preemption: int
-    submitted_at_ms: object
+    submitted_at_ms: Timestamp
     priority_band: int
     error: str | None
     exit_code: int | None
-    started_at_ms: object | None
-    finished_at_ms: object | None
+    started_at_ms: Timestamp | None
+    finished_at_ms: Timestamp | None
     current_worker_id: WorkerId | None
     current_worker_address: str | None
     container_id: str | None
-    attempts: tuple
+    attempts: tuple[Any, ...]
 
     @classmethod
-    def from_row(cls, row, attempts: tuple) -> "TaskWithAttempts":
+    def from_row(cls, row, attempts: tuple[Any, ...]) -> "TaskWithAttempts":
         """Build from an SA Row (matching TASK_DETAIL_COLS) plus attempt rows."""
         return cls(
             task_id=row.task_id,

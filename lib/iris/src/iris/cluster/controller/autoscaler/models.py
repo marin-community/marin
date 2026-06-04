@@ -29,7 +29,7 @@ class ScalingDecision:
 class DemandEntry:
     """A demand entry specifying resource requirements and constraints."""
 
-    task_ids: list[str]
+    task_ids: tuple[str, ...]
     coschedule_group_id: str | None
     normalized: PlacementRequirements
     constraints: list[Constraint]
