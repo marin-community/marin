@@ -133,7 +133,6 @@ def restore_autoscaler_state(
         restore_result = restore_scaling_group(
             group_snapshot=group_snapshot,
             cloud_handles=cloud_by_group.get(group_snapshot.name, []),
-            label_prefix=group.label_prefix,
         )
         group.restore_from_snapshot(
             slices=restore_result.slices,

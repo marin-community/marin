@@ -238,9 +238,6 @@ def _apply_worker_failures_chunk(
     Per-chunk shape: one closed snapshot, one :class:`Overlay`, then
     ``writes.remove_worker`` after ``commit_effects``.
     """
-    if not failures:
-        return
-
     worker_ids = [wid for wid, _, _ in failures]
     # Seeding by worker closes every active task on the failed workers (plus
     # their jobs' peer/descendant graph), so the batch derives its per-worker

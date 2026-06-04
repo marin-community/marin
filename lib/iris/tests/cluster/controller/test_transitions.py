@@ -53,9 +53,8 @@ from iris.cluster.controller.scheduler import (
 )
 from iris.cluster.controller.scheduling_policy import compute_demand_entries
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table, workers_table
-from iris.cluster.controller.task_state import attempt_is_terminal
 from iris.cluster.log_keys import task_log_key
-from iris.cluster.types import JobName, TaskAttempt, UserBudgetDefaults, WorkerId
+from iris.cluster.types import TERMINAL_TASK_STATES, JobName, TaskAttempt, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, select, text
@@ -348,7 +347,7 @@ def test_cancel_job_rolls_attempt_state_without_finalizing(harness):
     for t in tasks:
         att = _query_attempt(harness.state, t.task_id, attempt_ids[t.task_id])
         assert att is not None
-        assert not attempt_is_terminal(att.state)
+        assert att.state not in TERMINAL_TASK_STATES
         assert att.finished_at_ms is None
 
     with harness.state._db.transaction() as cur:
@@ -363,7 +362,7 @@ def test_cancel_job_rolls_attempt_state_without_finalizing(harness):
     for t in tasks:
         att = _query_attempt(harness.state, t.task_id, attempt_ids[t.task_id])
         assert att is not None
-        assert attempt_is_terminal(att.state), f"orphan attempt left active for task {t.task_id} (state={att.state})"
+        assert att.state in TERMINAL_TASK_STATES, f"orphan attempt left active for task {t.task_id} (state={att.state})"
         # Producer-side cancel does not stamp finished_at_ms — the
         # reconcile-observation path owns that write so the scheduler keeps
         # capacity held.
@@ -396,7 +395,7 @@ def test_heartbeat_finalizes_stranded_attempt_after_producer_terminal(harness):
     pre = _query_attempt(harness.state, task.task_id, attempt_id)
     assert pre is not None
     assert pre.worker_id is not None
-    assert attempt_is_terminal(pre.state)
+    assert pre.state in TERMINAL_TASK_STATES
     assert pre.finished_at_ms is None
     pre_task_state = _query_task(harness.state, task.task_id).state
 
@@ -2009,7 +2008,7 @@ def test_stale_attempt_for_non_terminal_is_dropped(state):
             .where(task_attempts_table.c.task_id == task.task_id)
             .order_by(task_attempts_table.c.attempt_id.asc())
         ).all()
-    assert not attempt_is_terminal(attempts[0].state)
+    assert attempts[0].state not in TERMINAL_TASK_STATES
 
     with state._db.transaction() as cur:
         apply_task_observations(

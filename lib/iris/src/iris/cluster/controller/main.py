@@ -23,7 +23,7 @@ from rigging.log_setup import configure_logging
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.config import load_config, make_provider
-from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
+from iris.cluster.controller.auth import create_controller_auth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler_factory import create_autoscaler
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
@@ -203,7 +203,7 @@ def run_controller_serve(
 
     logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)
 
-    auth = create_controller_auth(cluster_config.auth, db=db) if cluster_config else ControllerAuth()
+    auth = create_controller_auth(cluster_config.auth, db=db)
     if auth.worker_token and base_worker_config is not None:
         base_worker_config.auth_token = auth.worker_token
 
@@ -211,7 +211,7 @@ def run_controller_serve(
     # Runs after migrations have cleared user_budgets (see migration 0037).
     # Unlisted users are left without a row and fall through to
     # UserBudgetDefaults when the scheduler and launch-job guard look them up.
-    if cluster_config and cluster_config.user_budgets:
+    if cluster_config.user_budgets:
         reconcile_user_budget_tiers(db, cluster_config.user_budgets, Timestamp.now())
 
     config = ControllerConfig(

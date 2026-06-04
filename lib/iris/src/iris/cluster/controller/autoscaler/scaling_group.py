@@ -818,10 +818,6 @@ class ScalingGroup:
         self._current_demand = demand
         self._peak_demand = max(self._peak_demand, demand)
 
-    def can_fit_resources(self, resources: job_pb2.ResourceSpecProto) -> bool:
-        """Check whether a demand entry's resources fit within one VM."""
-        return self.check_resource_fit(resources) is None
-
     def check_resource_fit(self, resources: job_pb2.ResourceSpecProto) -> str | None:
         """Check whether a demand entry's resources fit within one VM.
 
@@ -871,7 +867,7 @@ class ScalingGroup:
 
     def _slice_has_active_workers(self, state: SliceState, worker_status_map: WorkerStatusMap) -> bool:
         """Check if any worker in a slice has running tasks."""
-        for worker_id in self._get_slice_worker_ids(state):
+        for worker_id in state.worker_ids:
             status = worker_status_map.get(worker_id)
             if status is not None and not status.is_idle:
                 return True
@@ -995,7 +991,7 @@ class ScalingGroup:
         rows, nothing to probe) trips the no-worker counter in Autoscaler.probe_health.
         """
         has_known_worker = False
-        for worker_id in self._get_slice_worker_ids(state):
+        for worker_id in state.worker_ids:
             status = worker_status_map.get(worker_id)
             if status is None:
                 continue
@@ -1180,16 +1176,12 @@ class ScalingGroup:
             GroupAvailability.REQUESTING,
         }
 
-    def _get_slice_worker_ids(self, state: SliceState) -> list[str]:
-        """Get worker IDs for a slice."""
-        return state.worker_ids
-
     def find_slice_for_worker(self, worker_id: str) -> str | None:
         """Find slice_id containing a worker with the given ID."""
         with self._slices_lock:
             snapshot = list(self._slices.items())
         for slice_id, state in snapshot:
-            if worker_id in self._get_slice_worker_ids(state):
+            if worker_id in state.worker_ids:
                 return slice_id
         return None
 
@@ -1199,7 +1191,7 @@ class ScalingGroup:
             state = self._slices.get(slice_id)
         if state is None:
             return []
-        return list(self._get_slice_worker_ids(state))
+        return list(state.worker_ids)
 
     def terminate_all(self) -> None:
         """Terminate all slices in this scale group.
@@ -1320,7 +1312,6 @@ class ScalingGroupRestoreResult:
 def restore_scaling_group(
     group_snapshot: GroupSnapshot,
     cloud_handles: list[SliceHandle],
-    label_prefix: str,
 ) -> ScalingGroupRestoreResult:
     """Reconcile checkpointed group slices against pre-fetched cloud handles."""
     cloud_by_id: dict[str, SliceHandle] = {h.slice_id: h for h in cloud_handles}

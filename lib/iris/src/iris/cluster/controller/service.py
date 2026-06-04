@@ -1393,11 +1393,6 @@ class ControllerServiceImpl:
         state_ids = _resolve_state_filter(query.state_filter)
         if state_ids is None:
             return controller_pb2.Controller.ListJobsResponse(jobs=[], total_count=0, has_more=False)
-        if query.scope == controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN and not query.parent_job_id:
-            raise ConnectError(
-                Code.INVALID_ARGUMENT,
-                "query.parent_job_id is required for JOB_QUERY_SCOPE_CHILDREN",
-            )
 
         with self._db.read_snapshot() as q:
             page, total_count = _query_jobs(q, query, state_ids)

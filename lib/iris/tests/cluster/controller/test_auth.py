@@ -15,7 +15,7 @@ from iris.cluster.controller.auth import (
     _get_or_create_signing_key,
     create_api_key,
     list_api_keys,
-    lookup_api_key_by_hash,
+    lookup_api_key_by_id,
     revoke_api_key,
     revoke_login_keys_for_user,
 )
@@ -276,7 +276,7 @@ def test_write_connection_can_access_auth_tables(db: ControllerDB):
     create_api_key(db, key_id="k1", key_hash="hash1", key_prefix="pfx", user_id="test-user", name="test", now=now)
 
     with db.transaction() as q:
-        rows = q.execute(text(f"SELECT key_id FROM {db.api_keys_table}")).all()
+        rows = q.execute(text("SELECT key_id FROM auth.api_keys")).all()
         assert len(rows) == 1
         assert rows[0].key_id == "k1"
 
@@ -304,9 +304,10 @@ def test_api_key_create_lookup_revoke(db: ControllerDB):
         db, key_id="k1", key_hash=hash_token("secret1"), key_prefix="sec", user_id="alice", name="my-key", now=now
     )
 
-    found = lookup_api_key_by_hash(db, hash_token("secret1"))
+    found = lookup_api_key_by_id(db, "k1")
     assert found is not None
     assert found.key_id == "k1"
+    assert found.key_hash == hash_token("secret1")
 
     keys = list_api_keys(db, user_id="alice")
     assert len(keys) == 1

@@ -21,7 +21,6 @@ class GroupSliceCounts:
     requesting: int
     pending: int
     total: int
-    capacity_slices: int
 
     @classmethod
     def from_group(cls, group: ScalingGroup) -> GroupSliceCounts:
@@ -35,7 +34,6 @@ class GroupSliceCounts:
             requesting=requesting,
             pending=pending,
             total=total,
-            capacity_slices=ready + pending,
         )
 
 

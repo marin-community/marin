@@ -75,12 +75,6 @@ def create_api_key(
     )
 
 
-def lookup_api_key_by_hash(db: ControllerDB, key_hash: str):
-    """Find an API key by its SHA-256 hash. Returns SA Row or None."""
-    with db.auth_read_snapshot() as tx:
-        return tx.execute(select(auth_api_keys_table).where(auth_api_keys_table.c.key_hash == key_hash).limit(1)).first()
-
-
 def touch_api_key(db: ControllerDB, key_id: str, now: Timestamp) -> None:
     """Update last_used_at timestamp."""
     with db.transaction() as tx:

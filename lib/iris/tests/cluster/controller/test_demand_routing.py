@@ -3,8 +3,8 @@
 
 """Tests for demand routing and bin packing.
 
-These tests exercise pure scheduling/routing logic. They call route_demand(),
-and first_fit_decreasing() directly -- no platform or provider is needed.
+These tests exercise pure scheduling/routing logic. They call route_demand()
+directly -- no platform or provider is needed.
 """
 
 import pytest
@@ -18,10 +18,9 @@ from iris.cluster.constraints import (
     zone_constraint,
 )
 from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.autoscaler.models import AdditiveReq, DemandEntry
+from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.routing import (
     RoutingBudget,
-    first_fit_decreasing,
     route_demand,
 )
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
@@ -43,53 +42,6 @@ from tests.cluster.providers.conftest import (
     make_mock_platform,
     make_mock_slice_handle,
 )
-
-# ---------------------------------------------------------------------------
-# first_fit_decreasing
-# ---------------------------------------------------------------------------
-
-
-class TestFirstFitDecreasing:
-    """Unit tests for the FFD bin packing helper."""
-
-    def test_basic_packing(self):
-        """4 requests of (50, 50) each into bins of (100, 100) -> 2 VMs."""
-        reqs = [AdditiveReq(cpu_millicores=50, memory_bytes=50, disk_bytes=0) for _ in range(4)]
-        vm_cap = AdditiveReq(cpu_millicores=100, memory_bytes=100, disk_bytes=0)
-        assert first_fit_decreasing(reqs, vm_cap) == 2
-
-    def test_empty_reqs_returns_zero(self):
-        vm_cap = AdditiveReq(cpu_millicores=100, memory_bytes=100, disk_bytes=0)
-        assert first_fit_decreasing([], vm_cap) == 0
-
-    def test_single_item_per_bin(self):
-        """3 items that each fill a bin entirely -> 3 VMs."""
-        reqs = [AdditiveReq(cpu_millicores=100, memory_bytes=100, disk_bytes=0) for _ in range(3)]
-        vm_cap = AdditiveReq(cpu_millicores=100, memory_bytes=100, disk_bytes=0)
-        assert first_fit_decreasing(reqs, vm_cap) == 3
-
-    def test_heterogeneous_sizes(self):
-        """Mix of large and small items packs efficiently."""
-        reqs = [
-            AdditiveReq(cpu_millicores=70, memory_bytes=70, disk_bytes=0),
-            AdditiveReq(cpu_millicores=30, memory_bytes=30, disk_bytes=0),
-            AdditiveReq(cpu_millicores=30, memory_bytes=30, disk_bytes=0),
-            AdditiveReq(cpu_millicores=70, memory_bytes=70, disk_bytes=0),
-        ]
-        vm_cap = AdditiveReq(cpu_millicores=100, memory_bytes=100, disk_bytes=0)
-        # FFD sorts descending: [70,70,30,30]. 70+30 fits in 1 bin -> 2 VMs
-        assert first_fit_decreasing(reqs, vm_cap) == 2
-
-    def test_disk_dimension(self):
-        """Disk is respected as a packing dimension."""
-        reqs = [
-            AdditiveReq(cpu_millicores=10, memory_bytes=10, disk_bytes=60),
-            AdditiveReq(cpu_millicores=10, memory_bytes=10, disk_bytes=60),
-        ]
-        vm_cap = AdditiveReq(cpu_millicores=100, memory_bytes=100, disk_bytes=100)
-        # 60+60 > 100 disk, so these need 2 VMs
-        assert first_fit_decreasing(reqs, vm_cap) == 2
-
 
 # ---------------------------------------------------------------------------
 # group_required_slices via route_demand

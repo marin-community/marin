@@ -216,11 +216,6 @@ class BackoffDetector:
             return None
         return deadline.as_timestamp()
 
-    def status_label(self, now: Timestamp) -> str:
-        """``"<label> health=<score>"`` (e.g. ``"churning health=0.34"``) for dashboards/logs."""
-        h = self.health(now)
-        return f"{self.health_label(now).value} health={h:.2f}"
-
     # -----------------------------------------------------------------------
     # Internals (caller holds _lock)
     # -----------------------------------------------------------------------

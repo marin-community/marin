@@ -24,7 +24,6 @@ class ScalingDecision:
 
     scale_group: str
     action: ScalingAction
-    slice_id: str | None = None
     reason: str = ""
 
 

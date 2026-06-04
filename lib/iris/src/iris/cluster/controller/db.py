@@ -125,9 +125,7 @@ class Tx:
     rejected — use ``sqlalchemy.text()`` if you need to pass literal SQL.
 
     Post-commit hooks registered via :meth:`register` fire after ``COMMIT``,
-    while the write lock is still held (see ``write_transaction``). The
-    :attr:`on_commit` attribute is an alias for :meth:`register`; both names
-    are first-class and used at different call sites.
+    while the write lock is still held (see ``write_transaction``).
     """
 
     def __init__(self, conn: Connection):
@@ -155,10 +153,6 @@ class Tx:
         ``read_snapshot`` never fires hooks.
         """
         self._hooks.append(hook)
-
-    # Both names are first-class; ``on_commit`` is used by projection write
-    # helpers, ``register`` by inline call sites in writes/*.py.
-    on_commit = register
 
     def _fire_hooks(self) -> None:
         for hook in self._hooks:
@@ -325,10 +319,10 @@ class ControllerDB:
     def transaction(self) -> Iterator[Tx]:
         """Open an IMMEDIATE write transaction and yield a ``Tx``.
 
-        On successful commit, any hooks registered via ``Tx.register`` or
-        ``Tx.on_commit`` fire while the write lock is still held — keeping
-        in-memory caches in sync with the DB without exposing a torn
-        snapshot to concurrent readers.
+        On successful commit, any hooks registered via ``Tx.register``
+        fire while the write lock is still held — keeping in-memory caches
+        in sync with the DB without exposing a torn snapshot to concurrent
+        readers.
         """
         with write_transaction(self._sa_write_engine, self._lock) as tx:
             yield tx
@@ -510,14 +504,6 @@ class ControllerDB:
             raw_conn.commit()
             raw_conn.execute("PRAGMA synchronous=NORMAL")
             raw_conn.execute("PRAGMA journal_mode=WAL").fetchall()
-
-    @property
-    def api_keys_table(self) -> str:
-        return "auth.api_keys"
-
-    @property
-    def secrets_table(self) -> str:
-        return "auth.controller_secrets"
 
     def backup_to(self, destination: Path) -> None:
         """Create a hot backup to ``destination`` using SQLite backup API.

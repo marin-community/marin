@@ -64,7 +64,7 @@ class WorkerAttrsProjection:
     """Process-local write-through cache over the ``worker_attributes`` table.
 
     Reads serve the latest committed snapshot from an in-memory dict guarded
-    by a ``threading.Lock``. Writes register an ``on_commit`` hook that
+    by a ``threading.Lock``. Writes register a post-commit hook that
     updates the dict atomically with the surrounding SQL commit; the hook
     fires under the DB write lock so concurrent readers cannot observe
     torn state.
@@ -139,21 +139,10 @@ class WorkerAttrsProjection:
 
         cur.register(apply)
 
-    def remove(self, cur: PostCommitRegistrar, worker_id: WorkerId) -> None:
-        """Schedule a dict pop for ``worker_id`` after commit."""
-
-        def apply() -> None:
-            with self._lock:
-                self._cache.pop(worker_id, None)
-
-        cur.register(apply)
-
     def invalidate_for_worker(self, tx: PostCommitRegistrar, worker_id: WorkerId) -> None:
         """Drop ``worker_id`` from the cache after commit (FK-cascade hook).
 
-        Semantically distinct from :meth:`remove`: ``remove`` is used by the
-        explicit worker-removal path, while ``invalidate_for_worker`` is the
-        hook for callers that delete from ``workers`` and rely on the
+        Used by callers that delete from ``workers`` and rely on the
         ``ON DELETE CASCADE`` to clear ``worker_attributes``.
         """
 
