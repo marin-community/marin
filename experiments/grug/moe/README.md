@@ -91,6 +91,35 @@ Using `N*(C)` from the isoflop sweep, we inverted to find the optimal compute
 budget for each hidden dim, then ran each at its predicted optimal budget. These
 are the baseline runs that ablation experiments compare against.
 
+### May Recipe (drop-1e18 fit, issue #6074) — current baseline
+
+Reference runs on **v4-32 us-central2 with EP=2**, MuonH optimizer
+(`muonh_lr` from `heuristic_v2.MoeMuonHHeuristic.build_muonh_config`), 1pct-noclip
+schedule, no permanent step-interval checkpoints.
+
+| Budget   | Dim    | Layers | bs  | Steps    | Tokens  | Paloma macro | v4-32 tok/s | Runtime | Run |
+|----------|--------|--------|-----|----------|---------|--------------|-------------|---------|-----|
+| 3.82e17  | d512   | 6      | 32  | 10,980   | 1.44e9  | **3.5438**   | 530,704     | 1.0h    | [marin-big-run-moe_may_compute_opt_d512](https://wandb.ai/marin-community/marin_moe/runs/marin-big-run-moe_may_compute_opt_d512) |
+| 2.81e18  | d768   | 8      | 64  | 16,875   | 4.42e9  | **3.2330**   | 357,696     | 4.0h    | [marin-big-run-moe_may_compute_opt_d768](https://wandb.ai/marin-community/marin_moe/runs/marin-big-run-moe_may_compute_opt_d768) |
+| 1.16e19  | d1024  | 11     | 128 | 16,080   | 8.43e9  | **3.0297**   | 255,040     | 11.5h   | [marin-big-run-moe_may_compute_opt_d1024](https://wandb.ai/marin-community/marin_moe/runs/marin-big-run-moe_may_compute_opt_d1024) |
+| 3.46e19  | d1280  | 13     | 256 | 14,325   | 1.50e10 | **2.8963**   | 192,300     | 23.5h   | [marin-big-run-moe_may_compute_opt_d1280](https://wandb.ai/marin-community/marin_moe/runs/marin-big-run-moe_may_compute_opt_d1280) |
+
+Fitted scaling law on these 4 cells (`L_inf=1.6` pinned):
+
+```
+loss(C) = 1.6 + 88.90 · C^-0.0941
+```
+
+Same exponent α as the v16 README curve, ~2.12× equal-TPS compute-equivalent
+speedup vs v16 baseline at every budget.
+
+### v16 baseline (historical reference)
+
+Older AdamH MoE sweep (`group=isoflop-moe-v16` in `marin-community/dial_moe`).
+Kept here because the v16 scaling law (`loss = 1.6 + 95.18 · C^-0.0941`) is the
+reference curve in `experiments/grug/moe/agent.md` for gate-1 / gate-2 effective
+speedup calculations.
+
 | Budget   | Dim      | Layers | Paloma macro | Tokens  | v5p-8 avg tok/s | v5p-8 runtime | Run |
 |----------|----------|--------|-------------|---------|-----------------|---------------|-----|
 | 2.19e17  | d512     | 6      | **3.8104**  | 8.37e8  | 405,630         | 0.6h          | [moe-v16-compute-opt-d512-2.19e+17](https://wandb.ai/marin-community/dial_moe/runs/moe-v16-compute-opt-d512-2.19e+17) |
