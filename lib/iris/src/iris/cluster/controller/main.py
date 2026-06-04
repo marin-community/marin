@@ -78,13 +78,10 @@ def _build_worker_config(
     storage_prefix: str,
     auth_token: str,
 ) -> config_pb2.WorkerConfig:
-    """Assemble the final per-worker config the autoscaler hands to create_slice().
+    """Build the worker config once instead of mutating a shared proto across bootstrap.
 
-    Builds once and returns rather than mutating a shared proto across the
-    bootstrap: copies the worker defaults, then sets the controller address,
-    platform, artifact storage prefix, and (if present) the worker auth token.
-    ``controller_address`` is pre-resolved by the caller (which only runs
-    controller discovery when the default is empty).
+    ``controller_address`` is pre-resolved by the caller (discovery runs only when the
+    configured default is empty).
     """
     worker_config = config_pb2.WorkerConfig()
     worker_config.CopyFrom(worker_defaults)

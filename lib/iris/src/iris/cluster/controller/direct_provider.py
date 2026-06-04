@@ -108,7 +108,7 @@ def _build_run_request_fields(
     entrypoint_json: str,
     environment_json: str,
     bundle_id: str,
-    resources: "job_pb2.ResourceSpecProto",
+    resources: job_pb2.ResourceSpecProto,
     ports_json: list,
     constraints_json: str | None,
     task_image: str,

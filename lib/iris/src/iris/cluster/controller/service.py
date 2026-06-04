@@ -2097,7 +2097,8 @@ class ControllerServiceImpl:
 
         now = Timestamp.now()
         with self._db.transaction() as _tx:
-            role = ops.user.ensure_user_and_role(_tx, username, now)
+            writes.ensure_user(_tx, username, now)
+            role = reads.get_user_role(_tx, username)
 
         # Revoke old login keys and propagate to in-memory revocation set
         revoked_ids = revoke_login_keys_for_user(self._db, username, now)
@@ -2138,7 +2139,8 @@ class ControllerServiceImpl:
 
         now = Timestamp.now()
         with self._db.transaction() as _tx:
-            role = ops.user.ensure_user_and_role(_tx, target_user, now)
+            writes.ensure_user(_tx, target_user, now)
+            role = reads.get_user_role(_tx, target_user)
 
         key_id = f"iris_k_{secrets.token_urlsafe(8)}"
         ttl = request.ttl_ms // 1000 if request.ttl_ms > 0 else DEFAULT_JWT_TTL_SECONDS

@@ -46,8 +46,7 @@ def request_has_reservation(request: controller_pb2.Controller.LaunchJobRequest)
 def _extract_resource_cols(resources: job_pb2.ResourceSpecProto | None) -> tuple[int, int, int, str | None]:
     """Return ``(cpu_millicores, memory_bytes, disk_bytes, device_json)`` columns.
 
-    Mirrors the job_config resource column layout; a missing resource spec maps to
-    zeros and a NULL device json.
+    Missing resources map to zeros and a NULL device json.
     """
     if resources is None:
         return 0, 0, 0, None
@@ -73,8 +72,7 @@ def _materialize_tasks(
     """Insert ``num_tasks`` PENDING task rows for ``job_id`` on one priority base.
 
     Reserves a contiguous ``priority_insertion`` block so all of a job's tasks sort
-    together, then bulk-inserts the rows. Used by both the primary and the
-    reservation-holder submit paths.
+    together, then bulk-inserts the rows.
     """
     insertion_base = writes.reserve_priority_insertion_base(cur)
     rows = [

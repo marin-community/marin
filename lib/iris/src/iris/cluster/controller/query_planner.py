@@ -20,10 +20,5 @@ _RARE_STATE_PROBABILITY = literal_column("0.005")
 
 
 def hint_rare_state(predicate: ColumnElement[bool]) -> ColumnElement[bool]:
-    """Wrap a `state IN (<rare states>)` predicate in SQLite's `likelihood()` hint.
-
-    Used by scheduling-loop queries (per-tick budget spend, per-minute timeout
-    enforcement) so the planner drives off the active-state index instead of
-    full-scanning the tasks table.
-    """
+    """Wrap a rare-state predicate in SQLite's ``likelihood()`` hint (see module note)."""
     return func.likelihood(predicate, _RARE_STATE_PROBABILITY)
