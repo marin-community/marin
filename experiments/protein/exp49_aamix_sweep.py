@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exp demo: does adding AA-sequence pretraining data help the structure-token task?
+"""Exp 49 (AA mixture sweep): does adding AA-sequence pretraining data help the structure-token task?
 
 Two mixtures x 3 seeds (6 trials): ``m1`` = 100% structure docs (500M tokens);
 ``m2`` = 50/50 structure docs + AA-sequence docs (1B tokens — additive, so
@@ -19,28 +19,28 @@ Pre-build the caches (CPU, no fan-out)::
     set -a; source ~/marin.env; set +a
     export PATH="$HOME/google-cloud-sdk/bin:$HOME/.local/bin:$PATH"
     uv run iris --cluster=marin job run --user "$USERNAME" --no-wait \\
-        --job-name prot-exp-demo-tokenize \\
+        --job-name prot-exp49-tokenize \\
         --region us-east5 --cpu=4 --memory=16GB --extra=cpu --enable-extra-resources \\
         -e HF_TOKEN "$HF_TOKEN" -e HUGGING_FACE_HUB_TOKEN "$HF_TOKEN" \\
         -e TOKENIZE yes \\
-        -- python -m experiments.protein.exp_demo_sweep
+        -- python -m experiments.protein.exp49_aamix_sweep
 
 Launch the sweep::
 
     uv run iris --cluster=marin job run --user "$USERNAME" --no-wait \\
-        --job-name prot-exp-demo-sweep \\
+        --job-name prot-exp49-sweep \\
         --region us-east5 --memory=1GB \\
         -e HF_TOKEN "$HF_TOKEN" -e HUGGING_FACE_HUB_TOKEN "$HF_TOKEN" \\
         -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_ENTITY "$WANDB_ENTITY" \\
         -e WANDB_PROJECT "$WANDB_PROJECT" \\
-        -- python -m experiments.protein.exp_demo_sweep
+        -- python -m experiments.protein.exp49_aamix_sweep
 
 Env vars: ``RUNS`` (CSV substring filter on config id, e.g. ``m1``, ``m2-s1``),
 ``PREVIEW=yes`` (list targets, submit nothing), ``TOKENIZE=yes`` (build caches
 and exit), ``TPU`` (single-host slice; default v5p-8), ``WORKERS`` (fan-out
 count; default = number of selected configs). Preview::
 
-    RUNS=m2 PREVIEW=yes uv run python -m experiments.protein.exp_demo_sweep
+    RUNS=m2 PREVIEW=yes uv run python -m experiments.protein.exp49_aamix_sweep
 """
 
 import dataclasses
@@ -77,14 +77,22 @@ logger = logging.getLogger(__name__)
 
 # --- Identity ----------------------------------------------------------------
 
-# Bump to fork run names + the (region-pinned) lock root on a recipe change.
-VERSION: str = "v1"
+# Two independent version knobs. Bump SWEEP_VERSION to fork run names + the
+# (region-pinned) sweep lock root for a fresh run on the SAME caches. Bump
+# TOKENIZE_VERSION only when the tokenization recipe changes: it forks the cache
+# dirs (forcing a re-tokenize) and is otherwise decoupled from the sweep, so a
+# v2/v3 sweep can reuse the v1 caches.
+SWEEP_VERSION: str = "v1"
+TOKENIZE_VERSION: str = "v1"
 
-RUN_NAME_PREFIX: str = "prot-exp-demo"
-SWEEP_ROOT: str = f"gs://marin-us-east5/sweeps/prot-exp-demo-seq-ablation/run-{VERSION}"
-WANDB_GROUP: str = "exp-demo-seq-ablation"
+RUN_NAME_PREFIX: str = "prot-exp49"
+SWEEP_ROOT: str = f"gs://marin-us-east5/sweeps/prot-exp49-aamix/run-{SWEEP_VERSION}"
+WANDB_GROUP: str = "exp49-aamix"
 
-# --- TPU sizing (size-tpu-batch skill, marin-agent-kb) -----------------------
+# Cache namespace; the per-TOKENIZE_VERSION dir under it is the decoupling point.
+CACHE_NAMESPACE: str = "protein/exp49"
+
+# --- TPU sizing (size-tpu-train-config skill, marin-agent-kb) ----------------
 
 
 @dataclass(frozen=True)
@@ -147,27 +155,29 @@ DOC_FORMAT = TextLmDatasetFormat(text_key="document")
 
 @dataclass(frozen=True)
 class CacheSpec:
-    """Region-independent tokenize job; ``name`` is resolved to a region-local dir."""
+    """Region-independent tokenize job; the leaf ``name`` resolves to a
+    region-local, TOKENIZE_VERSION-scoped dir (see ``ensure_cache``)."""
 
     name: str
     source_url: str
     is_validation: bool
 
 
-# Region-relative cache keys (resolved under ``marin_prefix()/tokenized/``);
-# revision tags so a dataset bump writes a fresh cache.
+# Cache leaf keys (resolved under
+# ``marin_prefix()/tokenized/<CACHE_NAMESPACE>/<TOKENIZE_VERSION>/``); the
+# revision tag in each leaf means a dataset bump also writes a fresh cache.
 DOCS_SPEC = CacheSpec(
-    name="protein/exp-demo/docs-low-41b2ec7",
+    name="docs-low-41b2ec7",
     source_url=f"hf://datasets/{DOCS_HF_DATASET_ID}@{DOCS_HF_REVISION}/low/train/",
     is_validation=False,
 )
 SEQ_SPEC = CacheSpec(
-    name="protein/exp-demo/seq-low-1fe8de9",
+    name="seq-low-1fe8de9",
     source_url=f"hf://datasets/{SEQ_HF_DATASET_ID}@{SEQ_HF_REVISION}/low/train/",
     is_validation=False,
 )
 CD_VAL_SPEC = CacheSpec(
-    name="protein/exp-demo/cd-val",
+    name="cd-val",
     source_url=f"{HF_DATASET_BASE}/val/",
     is_validation=True,
 )
@@ -182,7 +192,7 @@ def ensure_cache(spec: CacheSpec) -> str:
     serializes same-region workers: the first builds and writes ``STATUS_SUCCESS``,
     the rest wait then skip via ``StepAlreadyDone``.
     """
-    cache_dir = f"{marin_prefix()}/tokenized/{spec.name}"
+    cache_dir = f"{marin_prefix()}/tokenized/{CACHE_NAMESPACE}/{TOKENIZE_VERSION}/{spec.name}"
     if cache_dir in _ensured_caches:
         return cache_dir
     try:
@@ -345,7 +355,7 @@ def trial_name(config: Config) -> str:
     tokens_tag = fmt_count(BATCH_SIZE * SEQ_LEN * num_train_steps)
     return (
         f"{RUN_NAME_PREFIX}-1_5b-{config.mixture.id}-{tokens_tag}-"
-        f"s{config.seed_index}-lr{fmt_lr(LEARNING_RATE)}-{VERSION}"
+        f"s{config.seed_index}-lr{fmt_lr(LEARNING_RATE)}-{SWEEP_VERSION}"
     )
 
 
@@ -458,11 +468,13 @@ def build_trial(config: Config, res: ResourceConfig) -> tuple[str, object]:
     tokens = BATCH_SIZE * SEQ_LEN * num_train_steps
     tags = [
         "protein",
-        "exp-demo",
-        "seq-ablation",
+        "exp49",
+        "aamix",
         "1_5b",
         "qwen3",
         config.mixture.id,
+        f"sweep={SWEEP_VERSION}",
+        f"tok={TOKENIZE_VERSION}",
         f"seed={config.seed}",
         f"params={fmt_count(params)}",
         f"params_exact={params}",
@@ -533,7 +545,7 @@ def print_preview(configs: tuple[Config, ...], res: ResourceConfig) -> None:
     plan = plan_batch(res)
     pdp = BATCH_SIZE // res.chip_count() if plan.per_device_parallelism == -1 else plan.per_device_parallelism
     print(
-        f"PREVIEW: exp-demo seq-ablation would run {len(configs)} target(s) "
+        f"PREVIEW: exp49 aamix would run {len(configs)} target(s) "
         f"(model={fmt_count(params)} params, lr={LEARNING_RATE:.4g}, beta2={BETA2:.4g}, "
         f"tpu={res.device.variant} chips={res.chip_count()} per_device={pdp} "
         f"grad_accum={plan.grad_accum_steps}):",
