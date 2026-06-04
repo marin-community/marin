@@ -16410,3 +16410,326 @@ Next agent actions:
 4. If trying Europe/west4 again after OOM, increase host RAM only if worker
    capacity supports it, or reduce memory pressure further; do not repeat the
    same v5litepod-16 96g launch for `3e20`/`1e21`.
+
+## CODEX 2026-06-04T19:22Z - cooldown cleanup and 3e20 safe east5 launch
+
+Objective context: continue to finish the `1e21`/`1e22` 80% prefixes plus
+`2e20` and `3e20` p33m67 cooldown20 without repeating cross-region reads.
+
+Current verified state:
+
+- `2e20` cooldown20 native final is complete even though the directory does not
+  have a top-level `metadata.json`:
+  `assert_checkpoint_complete_for_model_type("gs://marin-us-east5/checkpoints/delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-56470", model_type="qwen3", num_layers=21)`
+  passed. The redundant r13 recovery root/child are killed:
+  `/ahmed/aa-true-p33m67-cd20-a010-d2e20-v5p8-z5a-r13-1780543092` and child.
+- `1e21` prefix child is still running on the central2 v4-32 reservation and
+  writing central2 temp checkpoints. Latest observed temp save remains under
+  `gs://marin-us-central2/tmp/ttl=14d/checkpoints-temp/.../delphi-1e21-prefixes-qwen3-v4c-r11-reserved32-ram256/`.
+  Final marker
+  `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e21-prefixes-qwen3-v4c-r11-reserved32-ram256/checkpoints/step-17645/metadata.json`
+  is still absent.
+- `1e22` prefix child is still running on the central2 v4-32 reservation and
+  writing central2 temp checkpoints. Latest observed temp save:
+  `gs://marin-us-central2/tmp/ttl=14d/checkpoints-temp/marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e22-prefixes-qwen3-v4c-r10-reserved32-ram256/checkpoints/step-30134`.
+  Final marker
+  `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e22-prefixes-qwen3-v4c-r10-reserved32-ram256/checkpoints/step-30588/metadata.json`
+  is still absent.
+
+`3e20` cooldown20 launch actions:
+
+- Updated `experiments/midtrain_specs/true_midtrain/nemotron_math_only/configs/checkpoint_candidates.yaml`
+  row `delphi-3e20-cooldown20` from the old step-30000 fallback to the exact
+  Qwen3-validated 80% prefix:
+  `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-3e20-prefixes-qwen3-v4c-r7-reserved32/checkpoints/step-28408`,
+  `suggested_step_delta: 0`, `materialized_checkpoint: true`, `review_status: approved`.
+- The `p33m67` data section is all `gs://marin-us-east5/...`, so the cooldown
+  run was launched in east5, not central2. The model checkpoint was staged once
+  from central2 into the east5 output namespace before the TPU child was
+  submitted.
+- Submitted coordinator:
+  `/ahmedah/aa-true-p33m67-cd20-a010-d3e20-v5p16-z5a-r1-1780599550`.
+  Child:
+  `/ahmedah/aa-true-p33m67-cd20-a010-d3e20-v5p16-z5a-r1-1780599550/midtrain-delphi-true-3e20-p33m67-cooldown20-a010`.
+- One-time stage completed and matches source size:
+  `30535500329` bytes copied to
+  `gs://marin-us-east5/checkpoints/delphi-true-3e20-p33m67-cooldown20-a010/checkpoints/step-28408`.
+  Staged `metadata.json` and `manifest.ocdbt` are present, and
+  `assert_checkpoint_complete_for_model_type(..., model_type="qwen3", num_layers=23)`
+  passed on the east5 staged path.
+- Manifest sanity:
+  `preflight_failures: []`, `preflight_warnings: []`, `tpu_type: v5p-16`,
+  `num_train_steps: 35510`, `cooldown_stage_record.cross_region_copy: true`,
+  `cooldown_stage_record.bytes_copied: 30535500329`, budget `40` GB, reason
+  `"user-approved one-time 3e20 cooldown20 checkpoint staging to east5 to avoid cross-region TPU reads"`.
+- Rendered train config has no `gs://marin-us-central2` URI. Checkpointer paths,
+  HF path, temp path, and all data cache/source URLs are `gs://marin-us-east5`.
+  This means the TPU child should load from the staged east5 checkpoint under
+  its own `checkpointer.base_path`, not from the central2 source.
+- Current child state at this entry: pending on v5p-16 east5-a. Autoscaler shows
+  `tpu_v5p-preemptible_16-us-east5-a` demand with scale-up in progress.
+
+Next monitor actions:
+
+1. Watch the `3e20` child until it allocates, then confirm logs show resume from
+   step `28408` or otherwise load the staged east5 checkpoint, with no central2
+   URI in runtime logs.
+2. Keep `1e21`/`1e22` central2 prefix jobs in place. Validate final checkpoints
+   with `assert_checkpoint_complete_for_model_type(..., model_type="qwen3")`
+   before wiring them into cooldown candidate rows.
+3. Do not clean the `3e20` staged checkpoint unless the coordinator/child fails
+   and the failure analysis says the namespace is partial or invalid.
+
+## CODEX 2026-06-04T20:26Z - prefix preemptions and capacity hold
+
+Monitoring refresh after the 19:22Z handoff:
+
+- `2e20` cooldown20 final remains complete. Re-ran
+  `assert_checkpoint_complete_for_model_type("gs://marin-us-east5/checkpoints/delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-56470", model_type="qwen3", num_layers=21)`
+  and it passed.
+- `1e21` final marker is still absent at
+  `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e21-prefixes-qwen3-v4c-r11-reserved32-ram256/checkpoints/step-17645/metadata.json`.
+  Latest temp checkpoint listing still shows central2 `step-16781`. The child
+  remains controller-state `running`, but all 4 tasks were preempted back to
+  `pending`; summary says task 0 was preempted by
+  `/larry/iris-run-job-20260604-201443/grug-train-moe_may_compute_opt_d768_ep1_16kctx_yarn_from15k/0`
+  and siblings bounced for coscheduled re-scheduling. `failure_count=0`.
+- `1e22` final marker is still absent at
+  `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e22-prefixes-qwen3-v4c-r10-reserved32-ram256/checkpoints/step-30588/metadata.json`.
+  Latest temp checkpoint listing is central2 `step-30154`. The child remains
+  controller-state `running`, but all 4 tasks were preempted back to `pending`;
+  summary says task 0 was preempted by
+  `/larry/iris-run-job-20260604-201443/grug-train-moe_may_compute_opt_d768_ep1_16kctx_theta40k_from15k/0`
+  and siblings bounced for coscheduled re-scheduling. `failure_count=0`.
+- `3e20` cooldown child is still `pending` on `tpu_v5p-preemptible_16-us-east5-a`
+  after safe east5 staging; no runtime worker logs yet.
+- Capacity snapshot at 20:25Z does not justify a move. `tpu_v5p-preemptible_16-us-east5-a`
+  remains ready 0 / demand 4; `tpu_v5p-preemptible_8-us-east5-a` has ready 19
+  but demand 42; `tpu_v4-reserved_32-us-central2-b` shows ready 4 / demand 2
+  after the preemptions. The staged `1e22` alternatives in europe-west4,
+  us-west4, and central2 v4-64 are still pending and unallocated.
+
+Next actions: give the central2 prefix jobs a short recovery window, then
+recheck whether either reallocated. Do not stop or relaunch them while they are
+nonterminal with `failure_count=0`. For `3e20`, keep waiting on east5 unless a
+new plan stages both model and data caches into a different region first.
+
+## CODEX 2026-06-04T21:18Z - prefix HBM relaunches with pdev16
+
+Continuation from the 20:26Z handoff plus the compacted-state recovery:
+
+- `2e20` cooldown20 remains complete and Qwen3-validated at
+  `gs://marin-us-east5/checkpoints/delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-56470`
+  with `num_layers=21`.
+- The old central2 prefix roots that had been preempted behind band-1 jobs were
+  stopped earlier in this recovery window:
+  `/ahmed/delphi-1e21-prefixes-qwen3-v4c-r11-reserved32-ram256-parent` and
+  `/ahmed/delphi-1e22-prefixes-qwen3-v4c-r13-reserved32-ram128-parent`.
+- A production-priority relaunch attempt as `ahmedah` was rejected before
+  launching any job (`ahmedah` is capped at interactive priority). The first
+  interactive relaunch used the default 1 GB CPU coordinator memory and both
+  roots failed with exit 137 host OOM before child creation.
+- Relaunching the coordinators with `--memory 16GB` fixed the coordinator OOM
+  and submitted central2-only child jobs, but the no-`per_device_parallelism`
+  children failed at TPU compile:
+  - `1e21`
+    `/ahmedah/delphi-1e21-prefixes-qwen3-v4c-r13-i32-m16-from16781-parent-1780606906/checkpoints-delphi-prefix-1e21-step17645-stop17646_12582791-c46d671c`
+    failed with `CompileTimeHbmOom`: used `37.62G` of `30.75G` HBM, exceeded by
+    `6.88G`; largest tensors had batch dimension `32`.
+  - `1e22`
+    `/ahmedah/delphi-1e22-prefixes-qwen3-v4c-r15-i32-m16-from30154-parent-1780606906/checkpoints-delphi-prefix-1e22-step30588-stop30589_ed1d00ab-0470801e`
+    failed with `RESOURCE_EXHAUSTED`: allocation `74490839040` bytes would
+    exceed `34359738368`; failing shape was
+    `bf16[37,64,4096,3840]`.
+- Both failed children loaded only central2 paths before failing. The `1e22`
+  runtime logs explicitly discovered/loaded
+  `gs://marin-us-central2/tmp/ttl=14d/checkpoints-temp/.../step-30154`; no
+  east5 path appeared in the prefix runtime logs.
+
+Recovery launched:
+
+- `1e21` pdev16 parent:
+  `/ahmedah/delphi-1e21-prefixes-qwen3-v4c-r14-i32-m16-pdp16-from16781-parent-1780607634`
+  with source
+  `gs://marin-us-central2/tmp/ttl=14d/checkpoints-temp/marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e21-prefixes-qwen3-v4c-r11-reserved32-ram256/checkpoints/step-16781`,
+  output root
+  `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e21-prefixes-qwen3-v4c-r11-reserved32-ram256`,
+  `--tpu v4-32 --ram 256g --no-preemptible --region us-central2 --per-device-parallelism 16`.
+- `1e22` pdev16 parent:
+  `/ahmedah/delphi-1e22-prefixes-qwen3-v4c-r16-i32-m16-pdp16-from30154-parent-1780607747`
+  with source
+  `gs://marin-us-central2/tmp/ttl=14d/checkpoints-temp/marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e22-prefixes-qwen3-v4c-r10-reserved32-ram256/checkpoints/step-30154`,
+  output root
+  `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e22-prefixes-qwen3-v4c-r10-reserved32-ram256`,
+  `--tpu v4-32 --ram 128g --no-preemptible --region us-central2 --per-device-parallelism 16`.
+- Dry-runs for both pdev16 command lines passed before launch and printed
+  central2-only source, mirror, temporary, and destination paths.
+- Current status at this entry: both pdev16 parents are controller-state
+  `JOB_STATE_RUNNING`, but neither had spawned a TPU child yet. Logs show the
+  CPU root package setup completed and the user command started; likely still
+  in source/config validation before `executor_main` child submission.
+
+`3e20` cooldown20 status:
+
+- Still pending on east5 v5p-16:
+  `/ahmedah/aa-true-p33m67-cd20-a010-d3e20-v5p16-z5a-r1-1780599550/midtrain-delphi-true-3e20-p33m67-cooldown20-a010`.
+- Pending reason currently points at waiting for
+  `tpu_v5p-preemptible_16-us-east5-a`; no worker logs yet.
+- Final marker is absent at
+  `gs://marin-us-east5/checkpoints/delphi-true-3e20-p33m67-cooldown20-a010/checkpoints/step-35510/metadata.json`.
+
+Capacity snapshot:
+
+- `tpu_v4-reserved_32-us-central2-b`: ready `4`, demand `1` after the failed
+  no-pdev jobs released workers.
+- `tpu_v5p-preemptible_16-us-east5-a`: ready `0`, demand `4`.
+- `tpu_v5p-preemptible_8-us-east5-a`: ready `18`, demand `41`; not a safe
+  topology move for the staged v5p-16 `3e20` plan without a new tested config.
+
+Next actions:
+
+1. Watch the pdev16 prefix parents until they spawn child TPU jobs.
+2. Confirm the child plans/logs print `per-device parallelism: 16`, central2
+   source/temp/output paths, and no east5 paths.
+3. If a pdev16 child allocates, monitor for first train progress or a new HBM
+   failure. Do not blindly retry if pdev16 also fails.
+4. Keep `3e20` pending on the staged east5 plan unless a fully staged,
+   topology-compatible alternative is proven.
+
+## CODEX 2026-06-04T21:35Z - 1e21 temp advanced then preempted
+
+Monitoring refresh after the pdev16 relaunch:
+
+- `1e21` pdev16 child allocated and trained past the previous temp checkpoint.
+  It saved central2 temp `step-16805` under
+  `gs://marin-us-central2/tmp/ttl=14d/checkpoints-temp/marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e21-prefixes-qwen3-v4c-r11-reserved32-ram256/checkpoints/step-16805`
+  and deleted older temp steps `16781` and `16791`. The final marker is still
+  absent at
+  `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e21-prefixes-qwen3-v4c-r11-reserved32-ram256/checkpoints/step-17645/metadata.json`.
+- After saving `step-16805`, the `1e21` child moved back to `pending` with
+  `preemption_count=1`, `failure_count=0`, and all 4 tasks pending. Do not
+  resubmit while this nonterminal child may still reallocate. If resubmission
+  becomes necessary, use `step-16805` as the source temp checkpoint, not the
+  deleted `step-16781`.
+- `1e22` pdev16 child remains pending on
+  `tpu_v4-reserved_32-us-central2-b`; final marker still absent at
+  `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e22-prefixes-qwen3-v4c-r10-reserved32-ram256/checkpoints/step-30588/metadata.json`.
+- `3e20` cooldown child remains pending. The pending reason changed from
+  direct east5 v5p-16 wait to `tier_blocked: 1 matching group(s) blocked by
+  quota-pool tier monotonicity`; final marker still absent at
+  `gs://marin-us-east5/checkpoints/delphi-true-3e20-p33m67-cooldown20-a010/checkpoints/step-35510/metadata.json`.
+- Relevant capacity snapshot at 21:35Z:
+  `tpu_v4-reserved_32-us-central2-b` ready `4`, requesting `2`, demand `2`;
+  `tpu_v4-reserved_64-us-central2-b` ready `0`, requesting `1`, demand `1`;
+  `tpu_v5p-preemptible_16-us-east5-a` ready `0`, requesting `4`, demand `0`;
+  `tpu_v5p-preemptible_8-us-east5-a` ready `19`, requesting `34`, booting `5`,
+  demand `0`, but availability is degraded/backoff. No topology-compatible,
+  staged move is justified.
+
+Next actions: keep waiting on scheduler recovery for `1e21`, `1e22`, and
+`3e20`. Recheck final markers first, then job states/logs. If `1e21` does not
+reallocate and a relaunch becomes necessary, dry-run and launch from central2
+temp `step-16805` with `--per-device-parallelism 16`.
+
+## HANDOFF 2026-06-04T21:53Z - active midtrain job IDs
+
+User requested a fresh handoff node with active job IDs. Current state after the
+latest marker/status sweep:
+
+- `2e20 cooldown20`: complete and Qwen3-validated at
+  `gs://marin-us-east5/checkpoints/delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-56470`
+  with `num_layers=21`.
+- `1e21 prefix`: final marker is still absent at
+  `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e21-prefixes-qwen3-v4c-r11-reserved32-ram256/checkpoints/step-17645/metadata.json`.
+  Latest durable temp checkpoint is central2 `step-16805`; older temp steps
+  `16781` and `16791` were deleted after newer saves. Active parent:
+  `/ahmedah/delphi-1e21-prefixes-qwen3-v4c-r14-i32-m16-pdp16-from16781-parent-1780607634`.
+  Active child:
+  `/ahmedah/delphi-1e21-prefixes-qwen3-v4c-r14-i32-m16-pdp16-from16781-parent-1780607634/checkpoints-delphi-prefix-1e21-step17645-stop17646_12582791-ccadc320`.
+  Status: controller state `JOB_STATE_RUNNING`, but all 4 tasks are pending
+  after one preemption; `failure_count=0`, `preemption_count=1`.
+- `1e22 prefix`: final marker is still absent at
+  `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e22-prefixes-qwen3-v4c-r10-reserved32-ram256/checkpoints/step-30588/metadata.json`.
+  Active parent:
+  `/ahmedah/delphi-1e22-prefixes-qwen3-v4c-r16-i32-m16-pdp16-from30154-parent-1780607747`.
+  Active child:
+  `/ahmedah/delphi-1e22-prefixes-qwen3-v4c-r16-i32-m16-pdp16-from30154-parent-1780607747/checkpoints-delphi-prefix-1e22-step30588-stop30589_ed1d00ab-e103c430`.
+  Status: child `JOB_STATE_PENDING`, 4 tasks pending on
+  `tpu_v4-reserved_32-us-central2-b`; `failure_count=0`,
+  `preemption_count=0`.
+- `3e20 cooldown20`: final marker is still absent at
+  `gs://marin-us-east5/checkpoints/delphi-true-3e20-p33m67-cooldown20-a010/checkpoints/step-35510/metadata.json`.
+  Active parent:
+  `/ahmedah/aa-true-p33m67-cd20-a010-d3e20-v5p16-z5a-r1-1780599550`.
+  Active child:
+  `/ahmedah/aa-true-p33m67-cd20-a010-d3e20-v5p16-z5a-r1-1780599550/midtrain-delphi-true-3e20-p33m67-cooldown20-a010`.
+  Status: child `JOB_STATE_PENDING`, 2 tasks pending on
+  `tpu_v5p-preemptible_16-us-east5-a`; `failure_count=0`,
+  `preemption_count=0`.
+
+Critical next-agent notes:
+
+1. Do not repeat cross-region mistakes. `1e21`/`1e22` prefix jobs are central2
+   and should load central2 temp checkpoints. `3e20` cooldown is east5 and its
+   source checkpoint was staged once into east5 before launch.
+2. Recheck final markers first. If present, run
+   `assert_checkpoint_complete_for_model_type(..., model_type="qwen3")` before
+   declaring completion: `1e21` uses `num_layers=26`, `1e22` uses
+   `num_layers=37`, `3e20` uses `num_layers=23`.
+3. Do not stop or relaunch nonterminal children while `failure_count=0` unless
+   capacity analysis says the scheduler state is stuck. If `1e21` must be
+   relaunched, dry-run and launch from central2 temp `step-16805` with
+   `--per-device-parallelism 16`; do not use deleted temp `step-16781`.
+4. No local monitoring sleep/session is intentionally left running from this
+   handoff.
+
+## CODEX 2026-06-04T22:00Z - capacity-bound checkpoint handoff before commit
+
+Fresh status snapshot before running `make fix` and committing the logbook/state
+updates:
+
+- Final markers are still absent for:
+  - `1e21` canonical prefix:
+    `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e21-prefixes-qwen3-v4c-r11-reserved32-ram256/checkpoints/step-17645/metadata.json`
+  - `1e22` canonical prefix:
+    `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e22-prefixes-qwen3-v4c-r10-reserved32-ram256/checkpoints/step-30588/metadata.json`
+  - `3e20` cooldown20:
+    `gs://marin-us-east5/checkpoints/delphi-true-3e20-p33m67-cooldown20-a010/checkpoints/step-35510/metadata.json`
+- `1e21` active canonical parent remains
+  `/ahmedah/delphi-1e21-prefixes-qwen3-v4c-r14-i32-m16-pdp16-from16781-parent-1780607634`.
+  Active child remains
+  `/ahmedah/delphi-1e21-prefixes-qwen3-v4c-r14-i32-m16-pdp16-from16781-parent-1780607634/checkpoints-delphi-prefix-1e21-step17645-stop17646_12582791-ccadc320`.
+  The child is controller-state `JOB_STATE_RUNNING`, but all 4 tasks are
+  pending after one preemption; `failure_count=0`, `preemption_count=1`.
+  Latest durable temp checkpoint remains central2 `step-16805`.
+- `1e22` active canonical parent remains
+  `/ahmedah/delphi-1e22-prefixes-qwen3-v4c-r16-i32-m16-pdp16-from30154-parent-1780607747`.
+  Active child remains
+  `/ahmedah/delphi-1e22-prefixes-qwen3-v4c-r16-i32-m16-pdp16-from30154-parent-1780607747/checkpoints-delphi-prefix-1e22-step30588-stop30589_ed1d00ab-e103c430`.
+  The child is `JOB_STATE_PENDING` on `tpu_v4-reserved_32-us-central2-b`;
+  `failure_count=0`, `preemption_count=0`. Latest temp checkpoint remains
+  central2 `step-30154`.
+- `3e20` cooldown20 active parent remains
+  `/ahmedah/aa-true-p33m67-cd20-a010-d3e20-v5p16-z5a-r1-1780599550`.
+  Active child remains
+  `/ahmedah/aa-true-p33m67-cd20-a010-d3e20-v5p16-z5a-r1-1780599550/midtrain-delphi-true-3e20-p33m67-cooldown20-a010`.
+  The child is `JOB_STATE_PENDING` on east5 v5p-16/tier scheduling;
+  `failure_count=0`, `preemption_count=0`.
+- Relevant capacity at 22:00Z:
+  `tpu_v4-reserved_32-us-central2-b` ready `4`, requesting `2`, demand `2`;
+  `tpu_v4-reserved_64-us-central2-b` ready `0`, booting `1`, demand `1`;
+  `tpu_v5p-preemptible_16-us-east5-a` ready `0`, requesting `4`, demand `0`;
+  `tpu_v5p-preemptible_8-us-east5-a` ready `25`, requesting `29`, demand `0`,
+  but health is degraded/backoff. No topology-compatible, staged move is
+  justified.
+- The old `/ahmed` central2 v4-64 `1e22` alternative is still pending and
+  explains the v4-64 demand. It is central2-only, but it writes to a different
+  output root and uses `per-device parallelism: 1` from source step `30000`, so
+  do not treat it as the canonical `r10`/pdev16 completion path.
+- A local interrupted `sleep 570` monitor wait was killed before this entry; no
+  local sleep/session is intentionally left running.
+
+Next action after commit: resume the babysit cadence. Recheck final markers
+first, then active job states and relevant capacity groups. Do not stop or
+relaunch the nonterminal children while `failure_count=0` unless a fresh
+capacity analysis proves the scheduler state is stuck.

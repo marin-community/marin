@@ -357,16 +357,17 @@ checkpoint_candidates:
     target_step: 28408
     target_progress_percent: 80.0000
     target_cooldown_steps: 7102
-    suggested_step: 30000
-    suggested_step_delta: 1592
-    suggested_relation_to_target: after_target
-    suggested_progress_percent: 84.4832
+    suggested_step: 28408
+    suggested_step_delta: 0
+    suggested_relation_to_target: exact_target
+    suggested_progress_percent: 80.0000
     suggested_phase: decay
     suggested_required_artifacts_ok: true
-    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+20-d2304-L23-B128-adamh_scaling_v6/checkpoints/step-30000"
-    checkpoint_at_or_before: {step: 20000, delta: -8408, phase: stable, progress_percent: 56.3222}
-    checkpoint_at_or_after: {step: 30000, delta: 1592, phase: decay, progress_percent: 84.4832}
-    review_status: needs_human_review
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-3e20-prefixes-qwen3-v4c-r7-reserved32/checkpoints/step-28408"
+    checkpoint_at_or_before: {step: 28408, delta: 0, phase: decay, progress_percent: 80.0000}
+    checkpoint_at_or_after: {step: 28408, delta: 0, phase: decay, progress_percent: 80.0000}
+    materialized_checkpoint: true
+    review_status: approved
   - candidate_id: delphi-3e20-cooldown10
     base: 3e20
     cooldown_ratio: 0.10
