@@ -10,13 +10,29 @@ controller SQLite database goes through this module.
 import functools
 import json
 from collections.abc import Iterable
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Protocol
 
 from google.protobuf import json_format
 
 from iris.cluster.constraints import Constraint, get_device_variant
 from iris.cluster.types import get_gpu_count, get_tpu_count
 from iris.rpc import controller_pb2, job_pb2
+
+
+class WorkerAttributeRow(Protocol):
+    """Structural shape of a ``worker_attributes`` SA row.
+
+    ``value_type`` is a plain string column ('str'/'int'/'float') with no
+    TypeDecorator, so the three-way decode dispatch is done by hand against the
+    matching ``*_value`` column.
+    """
+
+    key: str
+    value_type: str
+    str_value: str | None
+    int_value: int | None
+    float_value: float | None
+
 
 # Shared kwargs for MessageToDict so every call site is consistent.
 _TO_DICT_OPTS = dict(preserving_proto_field_name=True, use_integers_for_enums=True)
@@ -207,25 +223,44 @@ def worker_metadata_to_proto(worker, attributes: dict) -> job_pb2.WorkerMetadata
     if worker.md_device_json and worker.md_device_json != "{}":
         md.device.CopyFrom(proto_from_json(worker.md_device_json, job_pb2.DeviceConfig))
     for key, value in attributes.items():
-        av = job_pb2.AttributeValue()
-        if isinstance(value, str):
-            av.string_value = value
-        elif isinstance(value, int):
-            av.int_value = value
-        elif isinstance(value, float):
-            av.float_value = value
-        md.attributes[key].CopyFrom(av)
+        md.attributes[key].CopyFrom(python_value_to_attribute_value(value))
     return md
 
 
-def decode_attribute_value(row: Any) -> tuple[str, str | int | float]:
-    """Decode a worker_attributes row into a (key, value) pair."""
+def python_value_to_attribute_value(value: str | int | float) -> job_pb2.AttributeValue:
+    """Wrap a Python attribute value in its ``AttributeValue`` proto oneof.
+
+    Unlike :meth:`constraints.AttributeValue.to_proto`, this does not normalize
+    string values — it stores them verbatim, matching the worker_attributes
+    round-trip.
+    """
+    av = job_pb2.AttributeValue()
+    if isinstance(value, str):
+        av.string_value = value
+    elif isinstance(value, int):
+        av.int_value = value
+    elif isinstance(value, float):
+        av.float_value = value
+    return av
+
+
+def attribute_value_from_row(row: WorkerAttributeRow) -> str | int | float:
+    """Decode the typed value from a ``worker_attributes`` row.
+
+    Single source of truth for the str/int/float dispatch shared by
+    :func:`decode_attribute_value` and the worker-attrs projection. A NULL
+    ``str_value`` decodes to the empty string (the write path never stores one).
+    """
     vtype = str(row.value_type)
-    key = str(row.key)
     if vtype == "str":
-        return key, str(row.str_value)
-    elif vtype == "int":
-        return key, int(row.int_value)
-    elif vtype == "float":
-        return key, float(row.float_value)
+        return str(row.str_value or "")
+    if vtype == "int":
+        return int(row.int_value)
+    if vtype == "float":
+        return float(row.float_value)
     raise ValueError(f"Unknown attribute value_type: {vtype!r}")
+
+
+def decode_attribute_value(row: WorkerAttributeRow) -> tuple[str, str | int | float]:
+    """Decode a worker_attributes row into a (key, value) pair."""
+    return str(row.key), attribute_value_from_row(row)
