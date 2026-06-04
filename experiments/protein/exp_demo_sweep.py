@@ -271,8 +271,9 @@ def resources() -> ResourceConfig:
 
 # --- Mixtures ----------------------------------------------------------------
 
-# Additive design: m2 = 500M docs + 500M seq holds docs exposure at 500M (== m1).
-# Set M2 to 500_000_000 for the fixed-compute variant (250M docs + 250M seq).
+# Additive design: m2 = 500M docs + 500M seq holds docs exposure at 500M (== m1),
+# so the cd-val structure loss isolates the added seq data. m2 is 2x m1's tokens
+# by construction (a fixed-compute split would confound it against the eval).
 M1_TOTAL_TOKENS: int = 500_000_000
 M2_TOTAL_TOKENS: int = 1_000_000_000
 
