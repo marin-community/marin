@@ -35,8 +35,8 @@ from levanter.grug.attention import (
 )
 from levanter.grug.grug_moe import (
     MoeActivation,
+    MoEExpertMlp,
     MoeImplementation,
-    moe_mlp,
     resolve_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
@@ -370,31 +370,33 @@ class MoEMLP(eqx.Module):
 
     router: jax.Array
     router_bias: jax.Array
-    w_gate: jax.Array
-    w_up: jax.Array
-    w_down: jax.Array
+    expert_mlp: MoEExpertMlp
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
-        k_router, k_gate, k_up, k_down = random.split(key, 4)
+        k_router, k_expert = random.split(key, 2)
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
         if cfg.num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
-        d, e, i = cfg.hidden_dim, cfg.num_experts, cfg.intermediate_dim
-        # Split-w_gate-up layout (baked in): store w_gate / w_up as separate
-        # ``(e, d, i)`` tensors, concat on forward.
-        w_gate = reshard(_init_weight(k_gate, (e, d, i), cfg.initializer_std), P("expert", "data", "model"))
-        w_up = reshard(_init_weight(k_up, (e, d, i), cfg.initializer_std), P("expert", "data", "model"))
+        d, e = cfg.hidden_dim, cfg.num_experts
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
-            w_gate=w_gate,
-            w_up=w_up,
-            w_down=reshard(_init_weight(k_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
+            expert_mlp=MoEExpertMlp.init(
+                num_experts=cfg.num_experts,
+                hidden_dim=cfg.hidden_dim,
+                intermediate_dim=cfg.intermediate_dim,
+                initializer_std=cfg.initializer_std,
+                key=k_expert,
+                implementation=cfg.moe_implementation,
+                activation=ActivationFunctionEnum.silu,
+                capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+                split_w_gate_up=True,  # store w_gate / w_up separately so MuonH NS sees each half as its own leaf
+            ),
             cfg=cfg,
         )
 
@@ -450,16 +452,11 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
-        w_gate_up = reshard(jnp.concatenate([self.w_gate, self.w_up], axis=-1), P("expert", "data", "model"))
-        routed_flat, dropped_assignments = moe_mlp(
+        routed_flat, dropped_assignments = self.expert_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
-            w_gate_up,
-            self.w_down,
-            activation=ActivationFunctionEnum.silu,
             mesh=get_abstract_mesh(),
-            capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
             report_capacity_overflow=True,
         )
         router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
