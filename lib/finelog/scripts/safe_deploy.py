@@ -124,7 +124,14 @@ def cli() -> None:
     default=True,
     help="Build and push cfg.image before resolving its digest. Default: build.",
 )
-def rollout_cmd(name: str, auto_rollback: bool, force: bool, build: bool) -> None:
+@click.option(
+    "--fast",
+    is_flag=True,
+    default=False,
+    help="Build with the Rust `fast` profile (no LTO, parallel codegen) for a much "
+    "quicker build. For dev/test clusters; the production `release` profile is the default.",
+)
+def rollout_cmd(name: str, auto_rollback: bool, force: bool, build: bool, fast: bool) -> None:
     """Roll forward to the digest pinned from cfg.image; capture the previous digest."""
     cfg = load_finelog_config(name)
     _require_gcp(cfg)
@@ -132,8 +139,9 @@ def rollout_cmd(name: str, auto_rollback: bool, force: bool, build: bool) -> Non
     click.echo(f"== rollout: {cfg.name} ==")
 
     if build:
-        click.echo(f"building & pushing {cfg.image}...")
-        build_finelog_image(image=cfg.image)
+        cargo_profile = "fast" if fast else "release"
+        click.echo(f"building & pushing {cfg.image} (cargo profile: {cargo_profile})...")
+        build_finelog_image(image=cfg.image, cargo_profile=cargo_profile)
 
     old_digest = _running_repo_digest(cfg)
     if old_digest is None:

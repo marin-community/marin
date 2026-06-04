@@ -33,12 +33,28 @@ RUN npm run build
 # crate registry at build time, so no system protoc is needed.
 FROM rust:1-bookworm AS rustbuild
 
+# Cargo profile to build. Defaults to the fat-LTO `release` profile for
+# production images. Dev/test deploys pass `--build-arg CARGO_PROFILE=fast`
+# (no LTO, parallel codegen) for a far faster final link; see `[profile.fast]`
+# in rust/Cargo.toml. The profile name is also the target/<profile>/ subdir
+# (true for `release` and any custom profile), so the cp below resolves it.
+ARG CARGO_PROFILE=release
+
+# mold: a fast, multi-threaded linker. The cargo build runs under `mold -run`,
+# which redirects the default linker to mold without touching RUSTFLAGS — so the
+# cargo build fingerprint is unchanged and the cached dependency rlibs stay valid
+# (no cache-busting full rebuild). Speeds the final binary link on both profiles;
+# the win is largest with `fast` (no LTO), where linking dominates. Installed
+# before the source COPY so the apt layer caches across source edits.
+RUN apt-get update && apt-get install -y --no-install-recommends mold \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /build/rust
 COPY rust/ ./
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/rust/target \
-    cargo build --release -p finelog --bin finelog-server \
-    && cp target/release/finelog-server /finelog-server
+    mold -run cargo build --profile ${CARGO_PROFILE} -p finelog --bin finelog-server \
+    && cp target/${CARGO_PROFILE}/finelog-server /finelog-server
 
 
 # ── Stage: runtime ───────────────────────────────────────────────────
