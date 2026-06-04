@@ -294,6 +294,24 @@ def test_round_trip_post_body(proxy: ProxyHandle) -> None:
     assert proxy.upstream.received_bodies[-1] == payload
 
 
+def test_bodyless_get_forwards_no_chunked_body(proxy: ProxyHandle) -> None:
+    """A bodyless GET must reach the upstream with no request body.
+
+    Forwarding ``content=request.stream()`` for a bodyless GET made httpx frame
+    an empty *chunked* body (``Transfer-Encoding: chunked``), which some
+    upstreams answer by closing the connection — poisoning a reused keepalive
+    connection so the next request fails mid-stream. The proxy must forward no
+    body for a request that has none.
+    """
+    with httpx.Client() as client:
+        resp = client.get(f"{proxy.base_url}/proxy/{ENDPOINT_URL_NAME}/echo")
+    assert resp.status_code == 200
+    assert resp.json()["body_len"] == 0
+    upstream_headers = proxy.upstream.received_headers[-1]
+    assert "transfer-encoding" not in upstream_headers
+    assert upstream_headers.get("content-length", "0") == "0"
+
+
 def test_streams_large_response(proxy: ProxyHandle) -> None:
     # Stream-read; assert we can pull bytes incrementally and that the total
     # equals the upstream's 9 MiB without tripping any internal cap.
