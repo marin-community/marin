@@ -678,6 +678,35 @@ def test_ensure_nodepools_keeps_one_multihost_slice_warm():
 
 
 # ============================================================================
+# Tests: ensure_kueue_queues
+# ============================================================================
+
+
+def test_ensure_kueue_queues_reconciles_local_queue():
+    """A configured cluster_queue creates the derived LocalQueue ({label_prefix}-lq)
+    in the cluster namespace, bound to the admin-provisioned ClusterQueue."""
+    provider, k8s = _make_provider(namespace="iris", label_prefix="iris")
+    cluster_config = _make_cluster_config()
+    cluster_config.kubernetes_provider.kueue.cluster_queue = "iris-cq"
+
+    provider.ensure_kueue_queues(cluster_config)
+
+    lq = k8s.get_json(K8sResource.LOCAL_QUEUES, "iris-lq")
+    assert lq is not None
+    assert lq["metadata"]["namespace"] == "iris"
+    assert lq["spec"]["clusterQueue"] == "iris-cq"
+    provider.shutdown()
+
+
+def test_ensure_kueue_queues_noop_without_cluster_queue():
+    """No cluster_queue configured -> Kueue not in use -> nothing applied."""
+    provider, k8s = _make_provider(label_prefix="iris")
+    provider.ensure_kueue_queues(_make_cluster_config())
+    assert k8s.get_json(K8sResource.LOCAL_QUEUES, "iris-lq") is None
+    provider.shutdown()
+
+
+# ============================================================================
 # Helpers
 # ============================================================================
 

@@ -946,6 +946,17 @@ class ControllerServiceImpl:
         if not request.name:
             raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
 
+        # Coscheduling requires a non-empty group_by: it names the topology level
+        # the gang is scheduled onto. An empty group_by is permanently
+        # unschedulable on the worker path and silently admits without gang on the
+        # K8s direct path, so reject it here rather than let it fail differently
+        # (and silently) downstream.
+        if request.HasField("coscheduling") and not request.coscheduling.group_by:
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                "coscheduling requires a non-empty group_by (the topology level to gang on)",
+            )
+
         job_id = JobName.from_wire(request.name)
 
         # Reject root RPC submissions from stale clients. Direct in-process

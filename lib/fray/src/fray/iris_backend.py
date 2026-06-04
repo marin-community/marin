@@ -75,7 +75,9 @@ def resolve_coscheduling(device: DeviceConfig, replicas: int) -> CoschedulingCon
             return None
         return CoschedulingConfig(group_by="tpu-name")
     if isinstance(device, GpuConfig):
-        return CoschedulingConfig(group_by="pool")
+        # leafgroup = the H100 InfiniBand multi-node colocation topology level
+        # (the level the K8s provider maps for GPU gangs; "pool" no longer maps).
+        return CoschedulingConfig(group_by="leafgroup")
     return None
 
 
