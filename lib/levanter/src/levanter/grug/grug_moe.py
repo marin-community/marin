@@ -59,13 +59,31 @@ from levanter.utils.activation import ActivationFunctionEnum
 
 
 class MoEExpertMlp(eqx.Module):
-    """Expert MLP weights plus backend-specific W13 layout for routed MoE calls."""
+    """Expert MLP weights plus backend-specific W13 layout for routed MoE calls.
 
-    w_gate_up: jax.Array
+    Storage layout for the gate/up projections is selectable at init time via
+    ``split_w_gate_up``. When ``False`` (default) the two ``(e, d, i)`` matrices
+    are concatenated to a single ``w_gate_up: (e, d, 2i)`` tensor at init time;
+    forward passes feed that fused tensor directly to ``moe_mlp``. When
+    ``True`` they are kept as separate ``w_gate`` and ``w_up`` leaves and
+    concatenated on every forward call.
+
+    Split storage is opt-in because most callers benefit from the fused layout
+    (one tensor, one shard, one ``jnp.concatenate`` saved per step). Callers
+    that need per-half treatment from a downstream optimizer (e.g. Muon /
+    MuonH's Newton-Schulz, which orthogonalises one leaf at a time) set
+    ``split_w_gate_up=True`` so each half lands as its own pytree leaf and is
+    orthogonalised independently.
+    """
+
+    w_gate_up: jax.Array | None
+    w_gate: jax.Array | None
+    w_up: jax.Array | None
     w_down: jax.Array
     implementation: MoeImplementation = eqx.field(static=True)
     activation: MoeActivation = eqx.field(static=True)
     capacity_factor: float = eqx.field(static=True)
+    split_w_gate_up: bool = eqx.field(static=True)
 
     @staticmethod
     def init(
@@ -79,22 +97,39 @@ class MoEExpertMlp(eqx.Module):
         activation: MoeActivation = ActivationFunctionEnum.silu,
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
+        split_w_gate_up: bool = False,
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
         k_gate, k_up, k_down = jax.random.split(key, 3)
         w_gate = _init_weight(k_gate, (num_experts, hidden_dim, intermediate_dim), initializer_std)
         w_up = _init_weight(k_up, (num_experts, hidden_dim, intermediate_dim), initializer_std)
-        w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)
+        w_down = _reshard_for_init(
+            _init_weight(k_down, (num_experts, intermediate_dim, hidden_dim), initializer_std),
+            pspecs.w_down,
+        )
 
+        if split_w_gate_up:
+            return MoEExpertMlp(
+                w_gate_up=None,
+                w_gate=_reshard_for_init(w_gate, pspecs.w_gate_up),
+                w_up=_reshard_for_init(w_up, pspecs.w_gate_up),
+                w_down=w_down,
+                implementation=resolved_implementation,
+                activation=activation,
+                capacity_factor=capacity_factor,
+                split_w_gate_up=True,
+            )
+
+        w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)
         return MoEExpertMlp(
             w_gate_up=_reshard_for_init(w_gate_up, pspecs.w_gate_up),
-            w_down=_reshard_for_init(
-                _init_weight(k_down, (num_experts, intermediate_dim, hidden_dim), initializer_std),
-                pspecs.w_down,
-            ),
+            w_gate=None,
+            w_up=None,
+            w_down=w_down,
             implementation=resolved_implementation,
             activation=activation,
             capacity_factor=capacity_factor,
+            split_w_gate_up=False,
         )
 
     @named_call
@@ -107,11 +142,15 @@ class MoEExpertMlp(eqx.Module):
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
     ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
+        if self.split_w_gate_up:
+            w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
+        else:
+            w_gate_up = self.w_gate_up
         return moe_mlp(
             x,
             selected_experts,
             combine_weights,
-            self.w_gate_up,
+            w_gate_up,
             self.w_down,
             activation=self.activation,
             implementation=self.implementation,
