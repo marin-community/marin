@@ -23,7 +23,7 @@ from iris.cluster.providers.gcp.handles import (
     _build_gce_resource_name,
     _composite_slice_state,
 )
-from iris.cluster.providers.gcp.service import OperationStatus, VmCreateRequest
+from iris.cluster.providers.gcp.service import OperationStatus, TpuCreateRequest, VmCreateRequest
 from iris.cluster.providers.gcp.workers import (
     GcpWorkerProvider,
     _run_tpu_bootstrap,
@@ -39,6 +39,7 @@ from iris.cluster.providers.types import (
     QuotaExhaustedError,
 )
 from iris.cluster.service_mode import ServiceMode
+from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import config_pb2
 from rigging.timing import Timestamp
 
@@ -578,6 +579,46 @@ def test_gcp_list_slices_skips_deleting_tpus():
     slices = platform.list_slices(zones=["us-central2-b"])
     slice_ids = {s.slice_id for s in slices}
     assert handle.slice_id not in slice_ids
+
+
+def test_describe_resolves_topology_from_live_tpu_when_handle_variant_empty():
+    """describe() sizes a slice from the live TPU's accelerator_type, not the handle's variant.
+
+    Queued-resource (reserved TPU) handles adopted during boot recovery carry an empty
+    accelerator_variant — the QR API reports no topology — and that handle is never refreshed
+    once the backing TPU VM provisions. describe() must still resolve the worker count from
+    the live tpu_info rather than raising on the stale empty variant.
+    """
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    slice_id = "iris-tpu-v4-reserved-32-us-central2-b"
+    zone = "us-central2-b"
+    gcp_service.tpu_create(
+        TpuCreateRequest(
+            name=slice_id,
+            zone=zone,
+            accelerator_type="v4-32",
+            runtime_version="tpu-ubuntu2204-base",
+            capacity_type=config_pb2.CAPACITY_TYPE_RESERVED,
+            labels={Labels("iris").iris_managed: "true"},
+        )
+    )
+
+    handle = GcpSliceHandle(
+        _slice_id=slice_id,
+        _zone=zone,
+        _project_id="test-project",
+        _labels={Labels("iris").iris_managed: "true"},
+        _created_at=Timestamp.from_ms(0),
+        _label_prefix="iris",
+        _worker_port=10001,
+        _accelerator_variant="",  # adopted queued-resource handle has no variant
+        _gcp_service=gcp_service,
+        _is_queued_resource=True,
+    )
+
+    status = handle.describe()
+    assert status.worker_count == get_tpu_topology("v4-32").vm_count
+    assert len(status.workers) == status.worker_count
 
 
 def test_gcp_create_slice_resolves_ghcr_image_in_worker_config():
