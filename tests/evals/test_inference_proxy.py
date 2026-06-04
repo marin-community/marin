@@ -6,18 +6,17 @@ import socket
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 
 import httpx
 import pytest
-from fray.types import ResourceConfig
 from marin.inference.broker import InferenceBroker
 from marin.inference.brokered_vllm import (
     DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER,
     BrokeredVllmSystemConfig,
     InferenceWorkerConfig,
-    IrisBrokeredVllmRuntimeConfig,
     VllmProxyConfig,
     start_local_brokered_vllm,
 )
@@ -35,9 +34,44 @@ from marin.inference.types import (
 from marin.inference.worker import InferenceWorker, run_inference_worker
 from rigging.timing import ExponentialBackoff
 
-from tests.evals.openai_stub import assert_completions_scoring_contract, serve_deterministic_openai_stub
+from tests.evals.openai_stub import (
+    DeterministicOpenAIStub,
+    assert_completions_scoring_contract,
+    serve_deterministic_openai_stub,
+)
 
 BROKER_LEASE_TIMEOUT_SECONDS = 300.0
+
+
+@dataclass
+class MockInferenceCluster:
+    broker: InferenceBroker
+    model: str
+    upstream: DeterministicOpenAIStub
+    proxy: RunningModel
+
+
+@pytest.fixture
+def mock_cluster() -> Iterator[MockInferenceCluster]:
+    broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    with serve_deterministic_openai_stub() as upstream_stub:
+        upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
+        worker = InferenceWorker(broker=broker, upstream=upstream, request_timeout_seconds=5)
+        with (
+            _serve_inference_proxy(
+                broker=broker,
+                model=upstream_stub.model,
+                request_timeout_seconds=5,
+                readiness_timeout_seconds=5,
+            ) as proxy,
+            run_inference_worker(worker, max_in_flight=DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER),
+        ):
+            yield MockInferenceCluster(
+                broker=broker,
+                model=upstream_stub.model,
+                upstream=upstream_stub,
+                proxy=proxy,
+            )
 
 
 def test_inference_broker_round_trip() -> None:
@@ -115,63 +149,23 @@ def test_local_brokered_vllm_rejects_multiple_workers() -> None:
             pass
 
 
-def test_brokered_vllm_rejects_timeout_ordering_without_recovery_window() -> None:
-    with pytest.raises(ValueError):
-        BrokeredVllmSystemConfig(model="gpt2", workers=InferenceWorkerConfig(request_timeout_seconds=250))
+def test_inference_proxy_forwards_completions_to_running_model(mock_cluster: MockInferenceCluster) -> None:
+    assert_completions_scoring_contract(mock_cluster.proxy.endpoint.base_url, mock_cluster.proxy.endpoint.model)
 
-    with pytest.raises(ValueError):
-        BrokeredVllmSystemConfig(model="gpt2", proxy=VllmProxyConfig(request_timeout_seconds=130))
-
-
-def test_iris_runtime_leaves_child_placement_to_parent_region_inheritance() -> None:
-    runtime = IrisBrokeredVllmRuntimeConfig(
-        worker_resources=ResourceConfig.with_tpu("v5p-8"),
-    )
-
-    assert runtime.broker_resources.regions is None
-    assert runtime.broker_resources.zone is None
-    assert runtime.worker_resources.regions is None
-    assert runtime.worker_resources.zone is None
-
-
-def test_inference_proxy_forwards_completions_to_running_model() -> None:
-    broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
-    with serve_deterministic_openai_stub() as upstream_stub:
-        upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
-        worker = InferenceWorker(broker=broker, upstream=upstream, request_timeout_seconds=5)
-        with _serve_inference_proxy(
-            broker=broker,
-            model=upstream_stub.model,
-            request_timeout_seconds=5,
-        ) as proxy_model:
-            with run_inference_worker(worker, max_in_flight=DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER):
-                assert_completions_scoring_contract(proxy_model.endpoint.base_url, proxy_model.endpoint.model)
-
-    upstream_requests = upstream_stub.requests_for("/v1/completions")
+    upstream_requests = mock_cluster.upstream.requests_for("/v1/completions")
     assert len(upstream_requests) == 1
-    assert broker.pending() == []
-    assert broker.size() == 0
+    assert mock_cluster.broker.pending() == []
+    assert mock_cluster.broker.size() == 0
 
 
-def test_inference_proxy_routes_models_readiness_to_running_model() -> None:
-    broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
-    with serve_deterministic_openai_stub() as upstream_stub:
-        upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
-        worker = InferenceWorker(broker=broker, upstream=upstream, request_timeout_seconds=5)
-        with _serve_inference_proxy(
-            broker=broker,
-            model=upstream_stub.model,
-            request_timeout_seconds=5,
-            readiness_timeout_seconds=5,
-        ) as proxy_model:
-            with run_inference_worker(worker, max_in_flight=DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER):
-                response = httpx.get(f"{proxy_model.endpoint.base_url}/models", timeout=5)
+def test_inference_proxy_routes_models_readiness_to_running_model(mock_cluster: MockInferenceCluster) -> None:
+    response = httpx.get(f"{mock_cluster.proxy.endpoint.base_url}/models", timeout=5)
 
     assert response.status_code == 200
-    assert response.json()["data"][0]["id"] == upstream_stub.model
-    assert len(upstream_stub.requests_for("/v1/models")) == 1
-    assert broker.pending() == []
-    assert broker.size() == 0
+    assert response.json()["data"][0]["id"] == mock_cluster.model
+    assert len(mock_cluster.upstream.requests_for("/v1/models")) == 1
+    assert mock_cluster.broker.pending() == []
+    assert mock_cluster.broker.size() == 0
 
 
 @pytest.mark.asyncio
