@@ -29,6 +29,8 @@ JOINT_PREDICTIONS_PATH = OUT_DIR / "trajectory_joint_prefix_predictions.csv"
 JOINT_MODELS_PATH = OUT_DIR / "trajectory_joint_prefix_models.csv"
 ENDPOINTS_PATH = OUT_DIR / "endpoints.csv"
 EXTRAPOLATION_TARGETS_PATH = OUT_DIR / "extrapolation_targets.csv"
+FORM_COMPARISON_PATH = OUT_DIR / "endpoint_form_comparison_summary.csv"
+CV_BY_DISTANCE_PATH = OUT_DIR / "endpoint_cv_by_distance.csv"
 DEFAULT_OUTPUT_PATH = OUT_DIR / "delphi_midtraining_interactive.html"
 
 SMALL_LADDER_SCALES = ("3e18", "9e18", "2e19", "3e19", "9e19", "2e20", "3e20")
@@ -319,6 +321,17 @@ def payload(points_path: Path, predictions_path: Path) -> dict[str, Any]:
                     )
                 scaling_fits.append(row)
 
+    form_comparison = (
+        records_for_json(pd.read_csv(FORM_COMPARISON_PATH, dtype={"target_scale": str}))
+        if FORM_COMPARISON_PATH.exists()
+        else []
+    )
+    cv_by_distance = (
+        records_for_json(pd.read_csv(CV_BY_DISTANCE_PATH, dtype={"train_max_scale": str, "test_scale": str}))
+        if CV_BY_DISTANCE_PATH.exists()
+        else []
+    )
+
     return {
         "points": records_for_json(points),
         "predictions": records_for_json(predictions),
@@ -327,6 +340,8 @@ def payload(points_path: Path, predictions_path: Path) -> dict[str, Any]:
         "endpoints": records_for_json(endpoints),
         "heldoutTargets": records_for_json(targets),
         "scalingFits": [{key: finite_or_none(value) for key, value in row.items()} for row in scaling_fits],
+        "formComparison": form_comparison,
+        "cvByDistance": cv_by_distance,
         "scaleOrder": list(SCALE_ORDER),
         "smallLadderScales": list(SMALL_LADDER_SCALES),
         "heldOutScales": list(HELD_OUT_SCALES),
@@ -634,6 +649,23 @@ HTML_TEMPLATE = r"""<!doctype html>
           <div id="scalingFitTable"></div>
         </div>
       </div>
+    </section>
+
+    <section>
+      <h2>Endpoint Form Comparison &amp; Trustworthy Horizon</h2>
+      <p class="note">
+        Why does the single power law miss 1e22 by 10-20%? Each candidate form is fit on the
+        small ladder (3e18-3e20) and scored on the observed 1e21/1e22 cells. A negative signed
+        error means the form is over-pessimistic (predicts a higher loss than observed). The
+        pooled <em>N &times; D<sub>math</sub></em> form separates the model-size and math-token
+        axes that a single FLOPs axis conflates and wins at 1e22 — but its residual is still
+        mix-ordered, because the loss <em>accelerates</em> at 1e22 (the local log-log slope
+        steepens, most for math-heavy mixes) and that bend is not identifiable from the small
+        ladder alone. A Chinchilla floor bends the curve the wrong way and does worst.
+      </p>
+      <div id="formComparisonTable"></div>
+      <p class="note" id="horizonNote"></p>
+      <div id="horizonTable"></div>
     </section>
 
     <section>
@@ -1667,6 +1699,51 @@ HTML_TEMPLATE = r"""<!doctype html>
       document.getElementById("jointScaleTable").innerHTML = tableHtml(byScale, scaleColumns);
     }
 
+    function renderFormComparison() {
+      const comparison = DATA.formComparison || [];
+      const cv = DATA.cvByDistance || [];
+      const pct = (value) => (value == null ? "" : Number(value).toFixed(2) + "%");
+      const signedPct = (value) =>
+        value == null ? "" : (Number(value) >= 0 ? "+" : "") + Number(value).toFixed(2) + "%";
+      const intFmt = (value) => (value == null ? "" : String(Math.round(Number(value))));
+      const compColumns = [
+        {key: "form", label: "form"},
+        {key: "target_scale", label: "target"},
+        {key: "n", label: "n", format: intFmt},
+        {key: "mean_abs_pct_error", label: "mean abs %", format: pct},
+        {key: "max_abs_pct_error", label: "max abs %", format: pct},
+        {key: "signed_mean_pct_error", label: "signed mean %", format: signedPct},
+      ];
+      document.getElementById("formComparisonTable").innerHTML = tableHtml(comparison, compColumns);
+      const cvSorted = [...cv].sort((a, b) =>
+        a.form === b.form
+          ? a.extrapolation_multiple - b.extrapolation_multiple
+          : String(a.form).localeCompare(String(b.form)),
+      );
+      const cvColumns = [
+        {key: "form", label: "form"},
+        {key: "train_max_scale", label: "train max"},
+        {key: "test_scale", label: "test"},
+        {key: "extrapolation_multiple", label: "x multiple", format: (value) => Number(value).toFixed(1) + "x"},
+        {key: "mean_abs_pct_error", label: "mean abs %", format: pct},
+        {key: "max_abs_pct_error", label: "max abs %", format: pct},
+      ];
+      document.getElementById("horizonTable").innerHTML = tableHtml(cvSorted, cvColumns);
+      const baseline = cv.filter((row) => row.form === "per_recipe_power");
+      const safe = baseline.filter((row) => row.mean_abs_pct_error <= 2.0).map((row) => row.extrapolation_multiple);
+      const far = baseline.filter((row) => row.mean_abs_pct_error > 2.0).map((row) => row.mean_abs_pct_error);
+      const note = document.getElementById("horizonNote");
+      if (note && safe.length) {
+        const safeMax = Math.max(...safe);
+        const farMax = far.length ? Math.max(...far) : 10;
+        note.innerHTML =
+          `Rolling-origin CV (fit up to a cutoff, predict the next scale): the single power law `
+          + `stays within ~2% mean error out to ~${safeMax.toFixed(0)}x the training-max compute `
+          + `(through 1e21), then jumps to ~${farMax.toFixed(0)}% at 10x (1e22). No form fit on the `
+          + `small ladder reliably closes that gap, so treat predictions beyond ~3x as directional.`;
+      }
+    }
+
     function renderAll() {
       renderTrajectory();
       renderHeatmap();
@@ -1680,6 +1757,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 
     renderControls();
     renderAll();
+    renderFormComparison();
   </script>
 </body>
 </html>

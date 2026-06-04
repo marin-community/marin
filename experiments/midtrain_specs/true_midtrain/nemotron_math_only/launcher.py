@@ -75,7 +75,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tpu", required=True, help="TPU type for the training child, e.g. v6e-4.")
     parser.add_argument("--attempt", type=int, default=1)
     parser.add_argument("--output-region", default=DEFAULT_OUTPUT_REGION)
+    parser.add_argument("--zone", default=None, help="Optional TPU child zone constraint, e.g. us-east5-a.")
     parser.add_argument("--ram", default=DEFAULT_CONTAINER_RAM)
+    parser.add_argument(
+        "--temp-save-interval",
+        default="10m",
+        help="Temporary checkpoint save interval passed to Levanter, e.g. 5m.",
+    )
     parser.add_argument(
         "--allow-cross-region-stage",
         action="store_true",
@@ -120,7 +126,9 @@ def main() -> int:
         tpu_type=args.tpu,
         attempt=args.attempt,
         output_region=args.output_region,
+        zone=args.zone,
         ram=args.ram,
+        temp_save_interval=args.temp_save_interval,
         child_preemptible=args.child_preemptible,
         eval_target_points=args.eval_target_points,
     )
@@ -260,7 +268,9 @@ def build_spec(
     tpu_type: str,
     attempt: int,
     output_region: str,
+    zone: str | None,
     ram: str,
+    temp_save_interval: str,
     child_preemptible: bool,
     eval_target_points: int | None = None,
 ) -> MidtrainSpec:
@@ -289,6 +299,7 @@ def build_spec(
             batch_size=base.batch_size,
             ram=ram,
             regions=(output_region,),
+            zone=zone,
             preemptible=child_preemptible,
         ),
         mode=mode,
@@ -299,6 +310,7 @@ def build_spec(
         data_section_provenance=LEGACY_PROVENANCE[mix],
         banned_substrings=frozenset(DELPHI_BANNED_SUBSTRINGS),
         expected_min_step=int(candidate["suggested_step"]),
+        temp_save_interval=temp_save_interval,
         extra_tags=(
             "cooldown_midtraining",
             "true_midtraining",
@@ -346,7 +358,10 @@ def print_plan(resolved: Any, candidate: dict[str, Any]) -> None:
     print(f"  output_path: {spec.run.output_path}")
     print(f"  base: {spec.base.flops_key}")
     print(f"  tpu: {spec.compute.tpu_type}")
+    if spec.compute.zone is not None:
+        print(f"  zone: {spec.compute.zone}")
     print(f"  mix: {spec.extra_tags[3]}")
+    print(f"  temp_save_interval: {spec.temp_save_interval}")
     print(f"  target_step: {candidate['target_step']}")
     print(f"  resume_step: {candidate['suggested_step']}")
     print(f"  checkpoint_delta: {candidate['suggested_step_delta']} ({candidate['suggested_relation_to_target']})")

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from marin.midtraining.launch import build_launch_request
+from marin.midtraining.launch import _tpu_type_request, build_launch_request
 from marin.midtraining.modes import (
     CheckpointSourceKind,
     CooldownMode,
@@ -98,6 +98,17 @@ def test_compute_preemptible_reaches_launch_request():
     resolved = _resolve(spec)
     request = build_launch_request(resolved)
     assert request.resources_kwargs["preemptible"] is False
+
+
+def test_compute_zone_reaches_launch_request():
+    spec = make_cpt_spec(extra_compute_kwargs={"zone": "us-east5-a"})
+    resolved = _resolve(spec)
+    request = build_launch_request(resolved)
+    assert request.resources_kwargs["zone"] == "us-east5-a"
+
+
+def test_comma_separated_tpu_type_renders_flexible_request():
+    assert _tpu_type_request("v6e-4, v5litepod-4") == ["v6e-4", "v5litepod-4"]
 
 
 def test_data_manifest_region_must_match_run_region():

@@ -71,3 +71,11 @@ def test_temp_checkpoint_path_includes_run_id():
     temp = rendered["trainer"]["checkpointer"]["temporary_base_path"]
     assert resolved.spec.run.run_id in temp
     assert "ttl=14d" in temp
+
+
+def test_temp_save_interval_renders_from_spec():
+    import dataclasses
+
+    resolved = _resolve(dataclasses.replace(make_cooldown_spec(), temp_save_interval="5m"))
+    rendered = render_train_lm_config(resolved)
+    assert rendered["trainer"]["checkpointer"]["save_interval"] == "5m"

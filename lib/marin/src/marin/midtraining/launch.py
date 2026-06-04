@@ -214,8 +214,9 @@ def submit_launch(request: LaunchRequest, *, client: object | None = None) -> La
     from fray import Entrypoint, JobRequest, ResourceConfig, create_environment, current_client
 
     resources = ResourceConfig.with_tpu(
-        request.resources_kwargs["tpu_type"],
+        _tpu_type_request(str(request.resources_kwargs["tpu_type"])),
         regions=request.resources_kwargs.get("regions") or None,
+        zone=request.resources_kwargs.get("zone") or None,
         ram=request.resources_kwargs["ram"],
         preemptible=bool(request.resources_kwargs["preemptible"]),
     )
@@ -236,6 +237,15 @@ def submit_launch(request: LaunchRequest, *, client: object | None = None) -> La
 
 def _default_job_name(run: RunIdentity) -> str:
     return f"midtrain-{run.run_id}"[:96]
+
+
+def _tpu_type_request(tpu_type: str) -> str | list[str]:
+    tpu_types = [part.strip() for part in tpu_type.split(",") if part.strip()]
+    if not tpu_types:
+        raise ValueError(f"tpu_type must contain at least one TPU type; got {tpu_type!r}")
+    if len(tpu_types) == 1:
+        return tpu_types[0]
+    return tpu_types
 
 
 def _launch_env(run: RunIdentity, extra_env: dict[str, str] | None) -> dict[str, str]:
@@ -260,6 +270,7 @@ def _resources_kwargs(compute: ComputeProfile, run: RunIdentity) -> dict[str, ob
     return {
         "tpu_type": compute.tpu_type,
         "regions": list(regions),
+        "zone": compute.zone,
         "ram": compute.ram,
         "preemptible": compute.preemptible,
     }

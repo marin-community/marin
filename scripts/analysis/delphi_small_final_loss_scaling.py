@@ -26,6 +26,7 @@ import json
 import logging
 import math
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -35,7 +36,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import wandb
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, least_squares
 
 logger = logging.getLogger("delphi_small_final_loss_scaling")
 
@@ -85,6 +86,42 @@ METRICS = {
 COMPLETION_TOLERANCE = 5
 MIN_POINTS_FOR_LOG_LINEAR = 3
 MIN_POINTS_FOR_FLOOR_POWER = 5
+
+# Per-scale model size and pretrain-token budget, read from the canonical Delphi model
+# registry (experiments/delphi_models.py HF repo names, e.g.
+# "delphi-3e18-447Mparams-1.2Btokens"). Midtraining spends K=0.20 of the pretrain token
+# budget (midtraining_mixes.MIDTRAIN_BUDGET_FRACTION); the math tokens a recipe sees in
+# midtraining are mathfrac * K * pretrain_tokens. These two axes (model size N and math
+# data D_math) co-move along the single `scale_flops` ladder, so a 1-D power law in FLOPs
+# cannot separate them -- the multi-axis fits below do.
+SCALE_PARAMS_B = {
+    "3e18": 0.447,
+    "9e18": 0.550,
+    "2e19": 0.837,
+    "3e19": 0.998,
+    "9e19": 1.4,
+    "2e20": 1.9,
+    "3e20": 2.5,
+    "1e21": 3.4,
+    "1e22": 9.7,
+}
+SCALE_PRETRAIN_TOKENS_B = {
+    "3e18": 1.2,
+    "9e18": 2.9,
+    "2e19": 3.6,
+    "3e19": 5.0,
+    "9e19": 10.6,
+    "2e20": 14.8,
+    "3e20": 18.6,
+    "1e21": 46.3,
+    "1e22": 160.0,
+}
+MIDTRAIN_BUDGET_FRACTION = 0.20
+MATH_FRACTION = {"p67m33": 0.33, "p50m50": 0.50, "p33m67": 0.67}
+
+# Forms compared head-to-head on held-out 1e21/1e22 and in rolling-origin CV. The first is
+# the canonical per-recipe single power law; the rest are the new candidates.
+FORM_BASELINE = "per_recipe_power"
 
 TARGET_COLUMNS = [
     "run_id",
@@ -679,12 +716,350 @@ def predict_heldout_targets(fits: pd.DataFrame, targets: pd.DataFrame) -> pd.Dat
     return pd.DataFrame(rows).sort_values(["metric_label", "fit_kind", "target_scale_flops", "mix", "lr"])
 
 
+# --------------------------------------------------------------------------------------
+# Multi-axis / curvature scaling forms.
+#
+# The per-recipe single power law extrapolates 1e21 well (~1%) but is systematically
+# over-pessimistic at 1e22 (~10%, worst for math-heavy mixes) because the loss-vs-compute
+# curve *accelerates* at the top of the ladder -- the local log-log slope steepens from
+# ~-0.10 to -0.12/-0.14/-0.15 for p67m33/p50m50/p33m67. A Chinchilla floor bends the curve
+# the wrong way (it flattens), so it cannot fix this. The forms below either separate the
+# model-size (N) and math-token (D_math) axes that the 1-D FLOPs ladder conflates, or allow
+# the slope itself to change with compute.
+# --------------------------------------------------------------------------------------
+
+MIN_CV_TRAIN_SCALES = 3
+
+
+def _truthy(series: pd.Series) -> pd.Series:
+    if series.dtype == bool:
+        return series
+    return series.astype(str).str.lower().isin({"true", "1", "1.0"})
+
+
+def attach_scaling_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Add model-size, math-token, compute, and LR features used by the multi-axis fits.
+
+    Compute is in units of 1e18 FLOPs; ``log_*`` columns are natural logs. ``recipe_key``
+    is a mix/LR identifier that is stable across the endpoints and held-out target frames
+    (which store ``lr`` as ``"33"`` and ``"0.33"`` respectively).
+    """
+    out = df.copy()
+    lr_num = pd.to_numeric(out["lr"], errors="coerce")
+    out["lr_factor_num"] = np.where(lr_num > 1.0, lr_num / 100.0, lr_num)
+    out["recipe_key"] = out["mix"] + "-" + (out["lr_factor_num"] * 100).round().astype(int).astype(str)
+    out["math_frac"] = out["mix"].map(MATH_FRACTION).astype(float)
+    params_b = out["scale"].map(SCALE_PARAMS_B).astype(float)
+    midtrain_b = out["scale"].map(SCALE_PRETRAIN_TOKENS_B).astype(float) * MIDTRAIN_BUDGET_FRACTION
+    out["dmath_b"] = midtrain_b * out["math_frac"]
+    out["c"] = out["scale_flops"].astype(float) / 1e18
+    out["log_c"] = np.log(out["c"])
+    out["log_n"] = np.log(params_b)
+    out["log_dmath"] = np.log(out["dmath_b"])
+    return out
+
+
+@dataclass(frozen=True)
+class EndpointForm:
+    """A candidate endpoint scaling form.
+
+    ``fit`` consumes the training rows (with :func:`attach_scaling_features` columns) and
+    returns opaque fitted state; ``predict`` maps that state plus a frame of rows to a
+    predicted-loss array aligned to the frame's row order. Per-recipe forms fit one model
+    per ``recipe_key``; pooled forms fit once across all cells and rely on the N / D_math /
+    LR features (and per-recipe intercepts) to separate cells.
+    """
+
+    name: str
+    fit: Callable[[pd.DataFrame], Any]
+    predict: Callable[[Any, pd.DataFrame], np.ndarray]
+    label: str
+
+
+def _fit_per_recipe_power(train: pd.DataFrame) -> dict[str, np.ndarray]:
+    return {
+        rk: np.polyfit(g["log_c"].to_numpy(), np.log(g["value"].to_numpy()), 1)
+        for rk, g in train.groupby("recipe_key")
+        if len(g) >= MIN_POINTS_FOR_LOG_LINEAR
+    }
+
+
+def _predict_per_recipe_power(state: dict[str, np.ndarray], df: pd.DataFrame) -> np.ndarray:
+    slope = df["recipe_key"].map(lambda rk: state[rk][0] if rk in state else np.nan).to_numpy()
+    intercept = df["recipe_key"].map(lambda rk: state[rk][1] if rk in state else np.nan).to_numpy()
+    return np.exp(intercept + slope * df["log_c"].to_numpy())
+
+
+def _fit_per_recipe_floor(train: pd.DataFrame) -> dict[str, tuple[float, float, float]]:
+    out: dict[str, tuple[float, float, float]] = {}
+    for rk, g in train.groupby("recipe_key"):
+        fit = fit_floor_power(g["c"].to_numpy(dtype=float), g["value"].to_numpy(dtype=float))
+        if fit is not None:
+            out[rk] = (fit["floor"], fit["amplitude"], fit["exponent"])
+    return out
+
+
+def _predict_per_recipe_floor(state: dict[str, tuple[float, float, float]], df: pd.DataFrame) -> np.ndarray:
+    def one(rk: str, c: float) -> float:
+        params = state.get(rk)
+        return params[0] + params[1] * c ** (-params[2]) if params is not None else float("nan")
+
+    return np.array([one(rk, c) for rk, c in zip(df["recipe_key"], df["c"], strict=True)])
+
+
+def _fit_pooled_curvature(train: pd.DataFrame) -> dict[str, Any]:
+    recipes = sorted(train["recipe_key"].unique())
+    idx = {rk: i for i, rk in enumerate(recipes)}
+    n_recipes = len(recipes)
+    design = np.zeros((len(train), n_recipes + 2))
+    rows = train["recipe_key"].map(idx).to_numpy()
+    design[np.arange(len(train)), rows] = 1.0
+    design[:, n_recipes] = train["log_c"].to_numpy()
+    design[:, n_recipes + 1] = train["log_c"].to_numpy() ** 2
+    beta, *_ = np.linalg.lstsq(design, np.log(train["value"].to_numpy()), rcond=None)
+    return {"idx": idx, "beta": beta, "n_recipes": n_recipes}
+
+
+def _predict_pooled_curvature(state: dict[str, Any], df: pd.DataFrame) -> np.ndarray:
+    beta = state["beta"]
+    idx = state["idx"]
+    n_recipes = state["n_recipes"]
+    intercept = df["recipe_key"].map(lambda rk: beta[idx[rk]] if rk in idx else np.nan).to_numpy()
+    log_c = df["log_c"].to_numpy()
+    return np.exp(intercept + beta[n_recipes] * log_c + beta[n_recipes + 1] * log_c**2)
+
+
+def _design_mechanistic(df: pd.DataFrame) -> np.ndarray:
+    # Linear (multiplicative power law) in model size and math tokens, plus a small LR offset.
+    # A (log D_math)^2 curvature term was tested and dropped: it overfits the small ladder
+    # (which is straight in log-log) and worsens the 1e22 extrapolation, because the
+    # acceleration only appears *at* 1e22 and is not identifiable from below.
+    return np.column_stack(
+        [
+            np.ones(len(df)),
+            df["log_n"].to_numpy(),
+            df["log_dmath"].to_numpy(),
+            df["lr_factor_num"].to_numpy(),
+        ]
+    )
+
+
+def _fit_pooled_mechanistic(train: pd.DataFrame) -> np.ndarray:
+    beta, *_ = np.linalg.lstsq(_design_mechanistic(train), np.log(train["value"].to_numpy()), rcond=None)
+    return beta
+
+
+def _predict_pooled_mechanistic(beta: np.ndarray, df: pd.DataFrame) -> np.ndarray:
+    return np.exp(_design_mechanistic(df) @ beta)
+
+
+def _fit_pooled_broken_power(train: pd.DataFrame) -> dict[str, Any] | None:
+    """Smoothly-broken power law in compute with per-recipe amplitude, shared bend.
+
+    ``log L = logA[recipe] - a*z - db * delta * log(1 + exp((z - logC0)/delta))`` where
+    ``z = log C``. Low-C slope is ``-a``; high-C slope is ``-(a+db)``, so ``db > 0`` is the
+    acceleration. The bend (``a, db, logC0, delta``) is shared across recipes for stability.
+    """
+    recipes = sorted(train["recipe_key"].unique())
+    idx = {rk: i for i, rk in enumerate(recipes)}
+    n_recipes = len(recipes)
+    z = train["log_c"].to_numpy()
+    y = np.log(train["value"].to_numpy())
+    rows = train["recipe_key"].map(idx).to_numpy()
+
+    def residual(params: np.ndarray) -> np.ndarray:
+        log_a = params[:n_recipes]
+        a, db, log_c0, delta = params[n_recipes:]
+        bend = delta * np.logaddexp(0.0, (z - log_c0) / delta)
+        return (log_a[rows] - a * z - db * bend) - y
+
+    p0 = np.concatenate([np.full(n_recipes, float(np.mean(y))), [0.1, 0.05, float(np.median(z)), 1.0]])
+    lower = np.concatenate([np.full(n_recipes, -10.0), [0.0, 0.0, 0.0, 0.05]])
+    upper = np.concatenate([np.full(n_recipes, 10.0), [1.0, 1.0, float(np.log(2e4)), 5.0]])
+    try:
+        result = least_squares(residual, p0, bounds=(lower, upper), loss="huber", f_scale=0.05, max_nfev=20_000)
+    except (RuntimeError, ValueError, FloatingPointError):
+        return None
+    return {"idx": idx, "n_recipes": n_recipes, "params": result.x}
+
+
+def _predict_pooled_broken_power(state: dict[str, Any] | None, df: pd.DataFrame) -> np.ndarray:
+    if state is None:
+        return np.full(len(df), np.nan)
+    idx = state["idx"]
+    n_recipes = state["n_recipes"]
+    params = state["params"]
+    log_a = params[:n_recipes]
+    a, db, log_c0, delta = params[n_recipes:]
+    z = df["log_c"].to_numpy()
+    bend = delta * np.logaddexp(0.0, (z - log_c0) / delta)
+    recipe_idx = df["recipe_key"].map(lambda rk: idx.get(rk, -1)).to_numpy()
+    valid = recipe_idx >= 0
+    pred = np.full(len(df), np.nan)
+    safe = np.clip(recipe_idx, 0, n_recipes - 1)
+    pred[valid] = (log_a[safe] - a * z - db * bend)[valid]
+    return np.exp(pred)
+
+
+ENDPOINT_FORMS: list[EndpointForm] = [
+    EndpointForm(
+        "per_recipe_power", _fit_per_recipe_power, _predict_per_recipe_power, "per-recipe single power law (baseline)"
+    ),
+    EndpointForm(
+        "per_recipe_floor", _fit_per_recipe_floor, _predict_per_recipe_floor, "per-recipe Chinchilla floor + power"
+    ),
+    EndpointForm(
+        "pooled_curvature", _fit_pooled_curvature, _predict_pooled_curvature, "pooled log-quadratic in compute"
+    ),
+    EndpointForm(
+        "pooled_broken_power",
+        _fit_pooled_broken_power,
+        _predict_pooled_broken_power,
+        "pooled broken power law in compute (BNSL-style)",
+    ),
+    EndpointForm(
+        "pooled_mechanistic",
+        _fit_pooled_mechanistic,
+        _predict_pooled_mechanistic,
+        "pooled N x D_math + LR (separates model-size and math-token axes)",
+    ),
+]
+
+
+def math_scaling_points(endpoints: pd.DataFrame, targets: pd.DataFrame) -> pd.DataFrame:
+    """Complete `math_val_loss` rows (small ladder + held-out), with scaling features.
+
+    Held-out cells that are only `best_prefix` forecasts (not observed endpoints) are
+    dropped so they never enter training or scoring.
+    """
+    cols = ["scale", "scale_flops", "mix", "lr", "value"]
+    small = endpoints[_truthy(endpoints["complete"]) & endpoints["metric_label"].eq("math_val_loss")][cols].copy()
+    small["is_heldout"] = False
+    if targets.empty:
+        held = pd.DataFrame(columns=[*cols, "is_heldout"])
+    else:
+        held = targets[_truthy(targets["complete"]) & targets["metric_label"].eq("math_val_loss")][cols].copy()
+        held["is_heldout"] = True
+    points = pd.concat([small, held], ignore_index=True)
+    points = points[points["value"] > 0]
+    return attach_scaling_features(points)
+
+
+def compare_forms_heldout(points: pd.DataFrame, forms: list[EndpointForm]) -> pd.DataFrame:
+    """Fit each form on the small ladder and score it on the held-out 1e21/1e22 cells."""
+    train = points[~points["is_heldout"]]
+    held = points[points["is_heldout"]]
+    rows: list[dict[str, Any]] = []
+    if train.empty or held.empty:
+        return pd.DataFrame(rows)
+    for form in forms:
+        state = form.fit(train)
+        predicted = form.predict(state, held)
+        for (_, row), pred in zip(held.iterrows(), predicted, strict=True):
+            if not np.isfinite(pred):
+                continue
+            observed = float(row["value"])
+            rows.append(
+                {
+                    "form": form.name,
+                    "form_label": form.label,
+                    "target_scale": row["scale"],
+                    "mix": row["mix"],
+                    "lr": row["lr"],
+                    "observed": observed,
+                    "predicted": float(pred),
+                    "signed_pct_error": 100.0 * (observed - pred) / observed,
+                    "abs_pct_error": abs(100.0 * (observed - pred) / observed),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def summarize_form_comparison(comparison: pd.DataFrame) -> pd.DataFrame:
+    if comparison.empty:
+        return comparison
+    grouped = (
+        comparison.groupby(["form", "form_label", "target_scale"], observed=True)
+        .agg(
+            n=("abs_pct_error", "size"),
+            mean_abs_pct_error=("abs_pct_error", "mean"),
+            max_abs_pct_error=("abs_pct_error", "max"),
+            signed_mean_pct_error=("signed_pct_error", "mean"),
+        )
+        .reset_index()
+    )
+    return grouped.sort_values(["target_scale", "mean_abs_pct_error"])
+
+
+def rolling_origin_cv(points: pd.DataFrame, forms: list[EndpointForm]) -> pd.DataFrame:
+    """Fit on every scale up to a cutoff and predict the next scale up, for each form.
+
+    Produces an error-vs-extrapolation-distance curve that states how far each form can be
+    trusted: the trustworthy horizon is the largest ``extrapolation_multiple`` whose mean
+    error stays acceptable.
+    """
+    order = [s for s in ALL_SCALE_ORDER if (points["scale"] == s).any()]
+    flops = {s: float(points.loc[points["scale"] == s, "scale_flops"].iloc[0]) for s in order}
+    rows: list[dict[str, Any]] = []
+    for k in range(MIN_CV_TRAIN_SCALES - 1, len(order) - 1):
+        train_scales = order[: k + 1]
+        test_scale = order[k + 1]
+        train = points[points["scale"].isin(train_scales)]
+        test = points[points["scale"] == test_scale]
+        if test.empty:
+            continue
+        train_max_flops = max(flops[s] for s in train_scales)
+        for form in forms:
+            state = form.fit(train)
+            predicted = form.predict(state, test)
+            observed = test["value"].to_numpy()
+            abs_pct = np.abs(100.0 * (observed - predicted) / observed)
+            abs_pct = abs_pct[np.isfinite(abs_pct)]
+            if abs_pct.size == 0:
+                continue
+            rows.append(
+                {
+                    "form": form.name,
+                    "train_max_scale": train_scales[-1],
+                    "test_scale": test_scale,
+                    "extrapolation_multiple": flops[test_scale] / train_max_flops,
+                    "n": int(abs_pct.size),
+                    "mean_abs_pct_error": float(np.mean(abs_pct)),
+                    "max_abs_pct_error": float(np.max(abs_pct)),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def full_ladder_grid() -> pd.DataFrame:
+    """Features for every (scale, mix, lr) cell across the full ladder, for curve overlays."""
+    rows = [
+        {"scale": scale, "scale_flops": ALL_SCALE_FLOPS[scale], "mix": mix, "lr": lr}
+        for scale in ALL_SCALE_ORDER
+        for mix in MIX_ORDER
+        for lr in LR_ORDER
+    ]
+    return attach_scaling_features(pd.DataFrame(rows))
+
+
+def select_best_form(comparison_summary: pd.DataFrame, target_scale: str = "1e22") -> str | None:
+    """Form with the lowest mean abs % error at ``target_scale`` (the hardest extrapolation)."""
+    if comparison_summary.empty:
+        return None
+    at_target = comparison_summary[comparison_summary["target_scale"].eq(target_scale)]
+    if at_target.empty:
+        return None
+    return str(at_target.sort_values("mean_abs_pct_error").iloc[0]["form"])
+
+
 def plot_endpoint_scaling(
     endpoints: pd.DataFrame,
     fits: pd.DataFrame,
     targets: pd.DataFrame,
     metric_label: str,
     output_name: str,
+    overlay: pd.DataFrame | None = None,
+    overlay_label: str | None = None,
 ) -> None:
     metric_df = endpoints[endpoints["metric_label"].eq(metric_label)].copy()
     if metric_df.empty:
@@ -745,6 +1120,23 @@ def plot_endpoint_scaling(
                 ),
             )
         )
+    if overlay is not None and not overlay.empty:
+        overlay = overlay.sort_values("scale_flops")
+        legend_shown = False
+        for (mix, lr), grp in overlay.groupby(["mix", "lr"]):
+            fig.add_trace(
+                go.Scatter(
+                    x=grp["scale_flops"],
+                    y=grp["predicted"],
+                    mode="lines",
+                    line={"dash": "dash", "width": 1.5},
+                    name=overlay_label or "best form",
+                    legendgroup="overlay",
+                    showlegend=not legend_shown,
+                    hovertemplate=(f"{mix}-lr{lr} {overlay_label or 'best form'}<br>loss=%{{y:.5f}}<extra></extra>"),
+                )
+            )
+            legend_shown = True
     fig.add_vline(
         x=max(SCALE_FLOPS.values()),
         line_dash="dot",
@@ -761,6 +1153,8 @@ def write_summary(
     fits: pd.DataFrame,
     targets: pd.DataFrame,
     predictions: pd.DataFrame,
+    comparison_summary: pd.DataFrame,
+    cv: pd.DataFrame,
 ) -> None:
     lines: list[str] = [
         "# Small Delphi Final-Loss Scaling First Pass",
@@ -856,6 +1250,60 @@ def write_summary(
                 f"{row['pct_error']:.2f}% | {row['train_max_scale']} |"
             )
 
+    if not comparison_summary.empty:
+        lines.extend(
+            [
+                "",
+                "## Math Validation Form Comparison On Held-Out",
+                "",
+                "Each form is fit on the small ladder (`3e18`-`3e20`) and scored on the observed "
+                "`1e21`/`1e22` cells (the one `best_prefix` 1e22 forecast cell is excluded). Lower "
+                "mean abs % error is better; signed mean % < 0 means the form is over-pessimistic "
+                "(predicts a higher loss than observed).",
+                "",
+                "| form | target | n | mean abs % | max abs % | signed mean % |",
+                "|---|---|---:|---:|---:|---:|",
+            ]
+        )
+        for _, row in comparison_summary.iterrows():
+            lines.append(
+                f"| {row['form']} | {row['target_scale']} | {int(row['n'])} | "
+                f"{row['mean_abs_pct_error']:.2f}% | {row['max_abs_pct_error']:.2f}% | "
+                f"{row['signed_mean_pct_error']:+.2f}% |"
+            )
+
+    if not cv.empty:
+        baseline_horizon = cv[cv["form"].eq(FORM_BASELINE)].sort_values("extrapolation_multiple")
+        lines.extend(
+            [
+                "",
+                "## Trustworthy Extrapolation Horizon",
+                "",
+                "Rolling-origin CV: fit on every scale up to a cutoff, predict the next scale up. "
+                "`extrapolation_multiple` is the FLOPs jump from the training max to the test scale.",
+                "",
+                "| form | train max | test | x multiple | mean abs % | max abs % |",
+                "|---|---|---|---:|---:|---:|",
+            ]
+        )
+        for _, row in cv.sort_values(["form", "extrapolation_multiple"]).iterrows():
+            lines.append(
+                f"| {row['form']} | {row['train_max_scale']} | {row['test_scale']} | "
+                f"{row['extrapolation_multiple']:.1f}x | {row['mean_abs_pct_error']:.2f}% | "
+                f"{row['max_abs_pct_error']:.2f}% |"
+            )
+        if not baseline_horizon.empty:
+            within_1pct = baseline_horizon[baseline_horizon["mean_abs_pct_error"] <= 2.0]
+            safe_mult = within_1pct["extrapolation_multiple"].max() if not within_1pct.empty else float("nan")
+            lines.extend(
+                [
+                    "",
+                    f"Baseline (`{FORM_BASELINE}`) stays within ~2% mean error out to about "
+                    f"{safe_mult:.0f}x the training-max compute, then degrades. Read predictions "
+                    "beyond that multiple as directional, not precise.",
+                ]
+            )
+
     lines.extend(
         [
             "",
@@ -866,6 +1314,9 @@ def write_summary(
             "- `extrapolation_targets.csv`: observed `1e21`/`1e22` held-out target endpoints.",
             "- `extrapolation_predictions.csv`: predictions and errors from small-ladder fits evaluated "
             "on held-out targets.",
+            "- `endpoint_form_comparison.csv` / `endpoint_form_comparison_summary.csv`: per-cell and "
+            "aggregated held-out errors for every candidate form.",
+            "- `endpoint_cv_by_distance.csv`: rolling-origin CV error vs extrapolation distance per form.",
             "- `endpoint_math_val_loss.html`: scatter + log-linear fit overlay for the held-out math validation loss.",
             "- `endpoint_eval_loss.html`: same for aggregate eval/loss.",
             "- `endpoint_paloma_macro_loss.html`: same for Paloma macro retention.",
@@ -898,10 +1349,34 @@ def main() -> None:
     predictions = predict_heldout_targets(fits, targets)
     predictions.to_csv(OUT_DIR / "extrapolation_predictions.csv", index=False)
 
-    plot_endpoint_scaling(endpoints, fits, targets, "math_val_loss", "endpoint_math_val_loss.html")
+    # Multi-axis / curvature forms: head-to-head on held-out + rolling-origin CV (math only).
+    points = math_scaling_points(endpoints, targets)
+    comparison = compare_forms_heldout(points, ENDPOINT_FORMS)
+    comparison.to_csv(OUT_DIR / "endpoint_form_comparison.csv", index=False)
+    comparison_summary = summarize_form_comparison(comparison)
+    comparison_summary.to_csv(OUT_DIR / "endpoint_form_comparison_summary.csv", index=False)
+    cv = rolling_origin_cv(points, ENDPOINT_FORMS)
+    cv.to_csv(OUT_DIR / "endpoint_cv_by_distance.csv", index=False)
+
+    overlay: pd.DataFrame | None = None
+    overlay_label: str | None = None
+    best_form_name = select_best_form(comparison_summary)
+    if best_form_name is not None:
+        best_form = next(form for form in ENDPOINT_FORMS if form.name == best_form_name)
+        train_points = points[~points["is_heldout"]]
+        state = best_form.fit(train_points)
+        grid = full_ladder_grid()
+        grid["predicted"] = best_form.predict(state, grid)
+        overlay = grid.dropna(subset=["predicted"])
+        overlay_label = f"{best_form.name} fit"
+        logger.info("Best held-out form at 1e22: %s", best_form_name)
+
+    plot_endpoint_scaling(
+        endpoints, fits, targets, "math_val_loss", "endpoint_math_val_loss.html", overlay, overlay_label
+    )
     plot_endpoint_scaling(endpoints, fits, targets, "eval_loss", "endpoint_eval_loss.html")
     plot_endpoint_scaling(endpoints, fits, targets, "paloma_macro_loss", "endpoint_paloma_macro_loss.html")
-    write_summary(endpoints, fits, targets, predictions)
+    write_summary(endpoints, fits, targets, predictions, comparison_summary, cv)
 
     complete_cells = endpoints[["scale", "mix", "lr", "complete"]].drop_duplicates()
     complete_cells["scale"] = pd.Categorical(complete_cells["scale"], categories=SCALE_ORDER, ordered=True)

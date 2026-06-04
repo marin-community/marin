@@ -1,0 +1,23 @@
+{
+  "id": "delphi-2e20-prefixes-qwen3-from40k",
+  "name": "delphi-2e20-prefixes-qwen3-from40k",
+  "state": "finished",
+  "created": "2026-05-30T23:07:41Z",
+  "url": "https://wandb.ai/marin-community/marin/runs/delphi-2e20-prefixes-qwen3-from40k",
+  "tags": [
+    "B=64",
+    "FLOPs=1.8e+20",
+    "N=1.9e+09",
+    "base:2e20",
+    "delphi_prefix_checkpoint",
+    "extra_target_steps:none",
+    "optimizer=completed-adamh",
+    "preserve_original_lr_schedule",
+    "source_step:40000",
+    "steps=56477",
+    "target_step:45113",
+    "tokens=1.5e+10"
+  ],
+  "entity": "marin-community",
+  "project": "marin"
+}

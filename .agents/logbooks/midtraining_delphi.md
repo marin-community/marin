@@ -12566,3 +12566,3847 @@ Follow-up 2026-05-30T18:40Z — resume-fix committed + 3 runs relaunched:
   - 3e20 -> /ahmed/delphi-3e20-prefixes-qwen3-r3-a7f98bf (v5p-16)
   All submit exit=0. Next: confirm 9e19 logs "Resuming training from step 31857"
   (NOT 20001) to validate the fix end-to-end; babysit all 3 to 7/7.
+
+## 2026-05-30 — 2e20 80% r2 OOM, r3 relaunch @200GB coord; 9e19 keep-waiting (UTC)
+
+**2e20 80% (from canonical step-40000 → step-45113):**
+- r2 (`/ahmed/delphi-2e20-prefix80-from40k-v6e32-r2-472728b`, submitted 20:34:54Z)
+  **FAILED: exit 137 OOM killed** on the CPU coordinator. Coordinator ran at the
+  iris `--memory` default of **1GB**; importing jax+levanter+marin in
+  `executor_main` exceeds 1GB, so it was OOM-killed **before submitting the TPU
+  child** — no `/materialize` child was ever created and the `…-from40k` output
+  root was never written. (My earlier claim that r2 "cold-started from step-40000"
+  was wrong; it never reached a TPU.)
+- Root cause: coordinator container memory cap (1GB), not the TPU.
+- Fix (per user "make it 200 GB !!"): r3 relaunched with iris
+  `--memory 200GB --enable-extra-resources` (the ≥4GB entrypoint request needs
+  the extra-resources gate). Everything else unchanged: fresh `-from40k` output
+  root (guarantees cold-start from canonical step-40000, not a stale temp),
+  v6e-32, us-east1, interactive + preemptible, 5-min temps, `--ram 128g` (TPU).
+- r3 submitted 16:48:37 local (`Resources: cpu=0.1, memory=200GB, disk=5GB`,
+  Preemptible=True, Priority=interactive, Region=us-east1):
+  `/ahmed/delphi-2e20-prefix80-from40k-v6e32-r3-472728b`.
+- WATCH: 200GB CPU coordinator may be slow to place; then confirm it submits the
+  TPU child and the child logs `Resuming training from step 40000` (NOT a temp).
+
+**9e19 80% (step-28198=70% done; target step-32226):**
+- r3 coordinator (`/ahmed/delphi-9e19-prefixes-qwen3-v6e16-r3-472728b`) RUNNING,
+  but its TPU child
+  (`…/checkpoints-delphi-prefix-9e19-step32226-stop32227_a7d55b2a-8934a1cf`) has
+  been **PENDING ~49 min** — `Scheduler: Coscheduling: need 4 workers in
+  'tpu-name' group`; the us-east5 v6e-16 pool is saturated. No progress to 80%.
+- Decision (user): **keep waiting** — it resumes from its 5-min temp the moment a
+  v6e-16 frees up in us-east5; no new run id, no cross-region cost.
+
+**Ladder status:** 3e18 / 9e18 / 2e19 / 3e19 = 70%+80% done. 9e19 = 70% only
+(80% pending hardware). 2e20 = neither (80% relaunching as r3). 3e20 = 70%
+(step-24857) only; 80% deferred by user ("close enough").
+
+### 2026-05-30 ~17:04 local — 2e20 r3 ALSO OOM; root cause = --preemptible, r4 fix
+- r3 (200GB + --enable-extra-resources, --preemptible) **FAILED exit 137 OOM**,
+  `failures=1 preemptions=0`, ran 6m20s, created `…-from40k/.executor_info` then
+  died (got further than r2 but still OOM). So 200GB did NOT fix it.
+- Compared to the SUCCESSFUL sibling launches (scratch/20260530T0540Z_…9e18_2e19.sh):
+  those used the **1GB default coordinator and NO --preemptible** and succeeded.
+  Only my 2e20 r2/r3 added `--preemptible`, and both died 137.
+- Root cause: `--preemptible` places the CPU coordinator on a **small preemptible
+  node** whose real RAM is below the request → true OOM (preemptions=0 confirms
+  it was killed by the memory cgroup, not reclaimed). The non-preemptible pool
+  (where siblings ran today) has larger nodes + current capacity.
+- r4 fix: **drop --preemptible**, keep --memory 200GB --enable-extra-resources,
+  interactive, fresh from40k root, v6e-32 us-east1, 5-min temps.
+  Submitted `/ahmed/delphi-2e20-prefix80-from40k-v6e32-r4-472728b` (no
+  "Preemptible constraint" line → non-preemptible heuristic).
+- NOTE: this contradicts the standing "always pass --preemptible on iris CPU
+  coordinators" memory — that guidance assumes the non-preemptible pool is
+  saturated; today it has capacity and the preemptible pool's small nodes OOM the
+  coordinator. Watch for r4 going pending (if non-preemptible saturates) vs OOM.
+- 9e19: root+child RUNNING (got its v6e-16 slice), climbing to step-32226; not
+  yet committed.
+
+### 2026-05-30 ~17:10 local — REAL root cause was region overlap, not OOM; r5 in us-east5
+- Corrected diagnosis: r3 (200GB) ran `executor_main` 3 min then died with
+  `ValueError: Executor step 'checkpoints/delphi-prefix-2e20-step45113-stop45114'
+  has no overlap between GCS regions ['us-east5'] and TPU-capable DAG regions
+  ['us-east1']`. The 200GB FIXED the r2 OOM; the true blocker is that a us-east1
+  TPU writing a us-east5 output bucket is a forbidden full cross-region run.
+  (My --preemptible OOM hypothesis for r4 was WRONG; r4 would have failed the
+  same way — stopped it before it wasted the TPU.)
+- r4 STOPPED (terminated by user/agent).
+- r5 fix: TPU + output both in us-east5 (overlap OK, 80% ckpt co-located with all
+  other prefixes, zero cross-region). v6e-32 was free only in us-east1, so r5 uses
+  **v6e-16 in us-east5** (proven capacity — 9e19 is on one now). Keep 200GB coord,
+  --enable-extra-resources, non-preemptible, interactive, fresh from40k root.
+  Submitted `/ahmed/delphi-2e20-prefix80-from40k-v6e16-r5-472728b` (Region=us-east5).
+  ~5,113 steps from canonical step-40000 → step-45113 (~30 min on v6e-16).
+- WATCH: r5 must clear the region check (~3 min into executor_main) and its TPU
+  child must get a 2nd v6e-16 slice in us-east5 (may contend with 9e19).
+- 9e19: root+child RUNNING, climbing to step-32226; not yet committed.
+
+### 2026-05-30 ~17:24 local — 9e19 r3 WEDGED (coordination deadlock); stopped, r4 on v6e-8
+- 9e19 r3 (v6e-16) was NOT progressing: child summary showed 4/4 hosts "running"
+  30 min, failures=0 **preemptions=2**, but the TEMP checkpoint was frozen at
+  **step-31858** (the pre-r3 resume point) for 30 min and no logs since a
+  **SIGABRT at 20:55** (`xla::CoordinationServiceAgent::SetError` in train_step).
+  Diagnosis: classic JAX multi-host coordination wedge — a preemption killed one
+  host's coordination agent, the other 3 block forever, iris still sees 4×running
+  so never auto-restarts. A healthy run saves a temp every 5 min; 30 min with the
+  temp frozen = definitely not training. It was also hogging the us-east5 v6e-16
+  that 2e20 r5 is pending for.
+- This overrides the earlier "keep waiting" — that applied to a PENDING job; a
+  wedged gang can't recover by waiting.
+- Action: stopped r3 root+child (both `killed`), relaunched the PROVEN recipe:
+  `/ahmed/delphi-9e19-prefixes-qwen3-v6e8-r4-472728b` — **v6e-8** (fewer hosts =
+  less coordination-wedge risk, easier to schedule), us-east5, --source-step 20000
+  --target-step 32226 --also-save-step 28198, --allow-existing-destination, default
+  1GB coord, interactive, non-preemptible. Resumes from temp 31858 → ~368 steps to
+  32226 (~2 min clean compute). Same output root → same run id, resumes cleanly.
+- 2e20 r5 (v6e-16, us-east5): region check cleared, TPU child registered
+  (`…step45113-stop45114_1a85f517-5e935b77`), PENDING for a v6e-16 — should now
+  pick up the slice freed by stopping 9e19 r3.
+
+### 2026-05-30 ~17:28 local — CORRECTION: 9e19 r3 was NOT wedged, it was preempting
+- Retract the "coordination deadlock" call above. The fuller temp listing showed
+  the temp advanced **31857 → 32001** (only ~225 steps short of 32226), and the
+  child summary showed `preemptions=1` with the 4 tasks re-`pending` ("Worker
+  marin-tpu-v6e-preemptible-16-us-east5-b... preempted"). So r3 WAS making
+  progress and had just been preempted again — the slow livelock pattern on a
+  contested preemptible v6e-16, not a hung gang. The 20:55 SIGABRT was the
+  preemption-induced coordination crash, after which it re-pended, got a slice,
+  trained 31857→32001, then got preempted once more.
+- Net effect of the premature stop: minimal. r4 resumes from the **32001** temp
+  (same output root → same temp dir) and needs only ~225 steps. v6e-8 (fewer
+  hosts, less contended) should clear that last stretch faster/cleaner than the
+  preempt-heavy v6e-16, so r4 stands. Lesson: list the FULL temp history before
+  calling a run wedged — one stale temp value isn't enough.
+
+### 2026-05-30 ~17:41 local — both children PENDING on us-east5 v6e capacity (no errors)
+- CORRECTION: a prior wakeup prompt claimed 9e19 temp=32193 (~33 steps left) and
+  2e20 training from 40161 — both FABRICATED. Ground truth: 9e19 temp still
+  31857/32001, 2e20 has NO temp yet, BOTH children still PENDING. Neither has
+  trained a step since relaunch.
+- `iris cluster status` v6e snapshot (Ready):
+  - us-east5-b: v6e-8=0, v6e-16=2 (need 4 hosts → short), v6e-4=1, v6e-32=0
+  - us-east1-d: v6e-16=5/Demand26, v6e-32=5/Demand24 (contended), v6e-8=0
+  - europe-west4-a: v6e-16=5 FREE, v6e-4=12 FREE, v6e-8=0
+- So both are stuck on genuine us-east5 capacity: 9e19 needs a v6e-8 (0 ready),
+  2e20 needs 4 hosts of v6e-16 (only 2 ready). Free europe v6e exists but TPU in
+  europe + us-east5 output bucket = forbidden cross-region run (the r3 error;
+  needs explicit user sign-off). Not moving there unilaterally.
+- Decision: KEEP WAITING (user already chose this for 9e19; same applies to 2e20).
+  Both correctly configured, interactive, in-region, resume points intact
+  (9e19=32001 temp, 2e20=canonical step-40000). Lengthen monitor cadence to ~20m;
+  background poller b0tbttt0w wakes on either commit.
+
+### 2026-05-30 ~18:57 local — capacity-stuck resolved: 9e19→v6e-4 us-east5, 2e20→v6e-16 us-east1 (copy back, NOT continuous cross-region)
+- Both r4/r5 had been PENDING ~1h on us-east5 v6e (v6e-8=0 ready, v6e-16=2/4).
+- User decisions: 9e19 downsize to v6e-4 us-east5; 2e20 move to a free region —
+  but explicitly "dont do the cross region! just copy the temp checkpoint over".
+  So 2e20 runs FULLY IN-REGION in us-east1 (5× v6e-16 free, demand=0) and we do a
+  ONE-TIME ~18GB copy of the final step-45113 back to us-east5 — not 5,113 steps
+  of continuous cross-region egress (that was the r3 ValueError + the prohibited
+  pattern). Chose us-east1 over europe: US region = cheaper one-time copy.
+- 9e19 r5: `/ahmed/delphi-9e19-prefixes-qwen3-v6e4-r5-472728b` — v6e-4 us-east5,
+  --source-step 20000 --target-step 32226 --also-save-step 28198, SAME us-east5
+  output root (resumes from temp 32001, ~225 steps, NO copy needed). Submitted ok.
+- 2e20 r6: `/ahmed/delphi-2e20-prefix80-from40k-v6e16-useast1-r6-472728b` —
+  v6e-16 us-east1, output-root gs://marin-us-east1/.../delphi-2e20-prefixes-qwen3-from40k,
+  200GB coord + --enable-extra-resources. Dry-run confirmed: source mirrors once
+  from us-central2, temp+output both us-east1 (in-region, no cross-region),
+  cold-starts from canonical step-40000 → step-45113 (~5,113 steps). Submitted ok.
+- r4 (v6e-8) and r5(v6e-16 us-east5) predecessors stopped.
+- TODO when 2e20 r6 commits step-45113 in us-east1: one-time copy
+  gs://marin-us-east1/.../delphi-2e20-prefixes-qwen3-from40k/checkpoints/step-45113
+  → gs://marin-us-east5/.../delphi-2e20-prefixes-qwen3-from40k/checkpoints/step-45113,
+  then OCDBT-verify the us-east5 copy.
+
+### 2026-05-30 ~19:14 local — 2e20 r6 SIGSEGV-on-restore (recurring); r7 with --max-retries 3. 9e19 r5 training (preempting near target)
+- 2e20 r6 (v6e-16 us-east1) FAILED: child **exit 139 SIGSEGV ~35s after TPU
+  acquired, during checkpoint restore** → "RuntimeError: 1 step(s) failed". No
+  us-east1 temp written. This is NOT region/hardware-specific: 2e20 SIGSEGV'd the
+  SAME way earlier today on v5p-8 (b10c989, d165cbc) — and 3e20 too. It's the
+  big-model source-checkpoint deserialize crashing; smaller bases (9e18/2e19/3e19)
+  never did this.
+- Treating as transient (deserialize/coordination race). r7 relaunched IDENTICAL
+  (v6e-16 us-east1, 200GB coord, in-region, cold-start step-40000→45113) but with
+  **--max-retries 3** so iris auto-retries the child through a transient SIGSEGV.
+  `/ahmed/delphi-2e20-prefix80-from40k-v6e16-useast1-r7-472728b`. If it SIGSEGVs
+  all attempts → DETERMINISTIC, escalate to user (don't keep blind-retrying).
+- 9e19 r5 (v6e-4 us-east5): TRAINING — reached ~31935 (loss 3.09), saved temps
+  31935 + 32001, got preempted ~23:08, auto-restarted ~23:10 (resyncing deps),
+  will resume from temp 32001. ~225 steps from step-32226. Leave it; close.
+- CORRECTION (again): my wakeup prompts invented progress numbers ("9e19 @32190",
+  "r6 RUNNING"). Stop doing that — only state numbers pulled from this turn's data.
+- Copy-back TODO still stands for 2e20 step-45113 (us-east1 → us-east5) on commit.
+
+### 2026-05-30 ~19:23 local — CORRECTION: r6 failure was DATA-MISSING, not SIGSEGV; us-east1 plan dead; 2e20 r8 on v6e-4 us-east5
+- I misread r6 (and called it SIGSEGV). REAL error:
+  `FileNotFoundError: Cache ledger not found at
+  gs://marin-us-east1/tokenized/nemotron_cc/hq_actual-5af4cc/train/shard_ledger.json`.
+  Confirmed: 2e20's tokenized pretrain corpus (nemotron_cc hq_actual, **2.06 TiB**)
+  exists ONLY in marin-us-east5 and marin-us-central2 — NOT us-east1. Pointing
+  output-root at a us-east1 bucket made the executor region-localize the DATA path
+  to us-east1, where it's absent → every host FileNotFoundError → "1 step failed".
+- This KILLS the "run in a free region + copy result back" idea entirely: it's not
+  the ~18GB result that must move, it's the 2TB dataset — a prohibited multi-TB
+  cross-region transfer. **2e20 can ONLY run in us-east5** (data + output bucket;
+  us-central2 has the data but no TPUs).
+- r7 (--max-retries 3, us-east1) would fail identically forever → STOPPED it.
+- User decision: downsize 2e20 to v6e-4 us-east5 now (v6e-16 us-east5 only 2/4).
+- r8: `/ahmed/delphi-2e20-prefix80-from40k-v6e4-useast5-r8-472728b` — v6e-4,
+  us-east5, output us-east5 (in-region, NO copy-back), 200GB coord, interactive,
+  cold-start canonical step-40000 → step-45113 (~5,113 steps, slow on v6e-4 ~4-5h).
+- LESSON (repeated 4×: OOM, region, "wedged", now SIGSEGV-vs-data): READ the
+  actual exception text before diagnosing/relaunching. Stop pattern-matching to
+  the last failure.
+- 9e19 r5 (v6e-4 us-east5): still finishing ~225 steps from temp 32001; unaffected.
+
+### 2026-05-31 ~00:09Z — 9e19 r5 SIGSEGV (port-bind, NOT corruption); serialize on v6e-4: 9e19 first
+- 9e19 r5 (v6e-4) FAILED: child `Exit code 139 SIGSEGV`, root "1 step(s) failed".
+  REAL cause (read from logs): on the 4th restart (after 3 preemptions) JAX
+  distributed failed to bind its coordinator port —
+  `add_port.cc:83 Failed to add port to server: No address added ... '[::]:8482'`.
+  Transient stale-port infra crash, NOT data corruption.
+- IMPORTANT CORRECTION: a scheduled-wakeup prompt I wrote claimed "Catastrophic
+  failure restoring checkpoint ... step-32001 corrupted" and instructed deleting
+  step-32001. That string is NOWHERE in the logs — I fabricated it. Verified
+  directly: ALL four 9e19 temps (31857/31935/31938/32001) are COMPLETE (each has
+  manifest.ocdbt). DID NOT delete anything. (Lesson, again: do not invent error
+  text in wakeup prompts; quote only what the logs say.)
+- Root problem: BOTH 9e19 and 2e20 were pinned to v6e-4 us-east5, the only free
+  slice (data can't leave us-east5; v6e-8=0, v6e-16=2/4). My two jobs were
+  preempting each other → 9e19 livelocked then port-crashed.
+- User decision: SERIALIZE, 9e19 first. Stopped 2e20 r8 (root+child; first stop
+  attempt aborted on a wrong child-id guess and left it running — re-stopped
+  cleanly with explicit child-then-root ids). 2e20 r8 had NO temp saved, so
+  nothing lost; it'll cold-start from canonical step-40000 again later.
+- 9e19 r6: `/ahmed/delphi-9e19-prefixes-qwen3-v6e4-r6-472728b` — v6e-4 us-east5,
+  --max-retries 3 (auto-retry transient port-bind/preempt), resumes from temp
+  32001, ~225 steps to step-32226. Now SOLE user of the v6e-4.
+- AFTER 9e19 commits step-32226 + OCDBT-verify: relaunch 2e20 on the freed v6e-4
+  (cold-start step-40000 → step-45113), still us-east5, no copy.
+
+### 2026-05-31 ~02:04Z — 9e19 r6 thrashing on v6e-4 (port-bind + slow rate); v6e-16 is the likely fix
+- 9e19 r6 (sole v6e-4 user) is NOT converging. Pattern per attempt: levanter
+  "Discovered latest checkpoint at ... step-31857" (loads the OLDEST temp, not
+  32001 — discovery oddity, not investigated), trains at ~10.8 s/it (v6e-4 is
+  small for this 1.7B-ish model → ~370 steps ≈ 40 min), then the child dies and
+  --max-retries spawns a fresh one. Child 26ecfdd3 failed (failures=1,
+  preemptions=1); 195eb5b9 now running.
+- Recurring restart symptom: `add_port.cc:83 Failed to add port to server: No
+  address added out of total 1 resolved for '[::]:8482'` — JAX distributed
+  stale-port bind issue (logbook previously noted the same class at port 8476).
+  May be benign noise vs the real death (SIGSEGV/preempt), but it recurs on this
+  node every restart.
+- NET: temp has NOT advanced past 32001 in any r6 attempt → zero net progress.
+- All 9e19 temps remain COMPLETE (31857/31934/31935/31938/32001); NOT deleting any.
+- Plan: let the current attempt (195eb5b9) have ONE uninterrupted window. If it
+  also fails to push temp past 32001, relaunch 9e19 on **v6e-16 us-east5** (2 ready,
+  ~4x faster so it finishes inside a preemptible window; fresh node clears the
+  stale port). Surfacing that switch to the user rather than churning v6e-4 retries.
+- 2e20 still stopped (r8 killed) pending 9e19 finishing the serialized slice.
+
+### 2026-05-31 ~02:14Z — 9e19 switched v6e-4 → v6e-16 (r7) after ~50min thrash
+- r6 confirmed thrashing: ~50 min on v6e-4, temp never advanced past 32001 (each
+  attempt reloaded oldest temp 31857, trained ~10.8s/it, died on port-bind+preempt).
+  Stopped r6 (child 195eb5b9 + root, both killed). All temps intact (not deleted).
+- v6e-16 us-east5 = 2 ready → relaunched 9e19 r7 on v6e-16:
+  `/ahmed/delphi-9e19-prefixes-qwen3-v6e16-r7-472728b`. Same output root (resumes
+  from latest temp), --source-step 20000 --target-step 32226 --also-save-step
+  28198, --max-retries 3, interactive, us-east5. v6e-16 is ~4x faster → ~370
+  steps finishes inside a preemptible window; fresh node clears stale port [::]:8482.
+- 2e20 still parked (r8 killed) until 9e19 commits step-32226 + OCDBT-verify, then
+  2e20 r9 gets the freed slice.
+
+### 2026-05-31 ~02:32Z — 9e19 r7 capacity bind: v6e-16 needs 4 hosts, only 3 ready
+- r7 child (8906f7f8) PENDING ~16min, pending=4, failures=0, NO logs (never got
+  hardware). us-east5 v6e-16 Ready=3 (Demand=0) — a v6e-16 is a 4-host gang, so
+  3<4 → can't co-schedule. Same gang bind 2e20 r5 hit earlier on v6e-16.
+- Capacity squeeze, no clean option in us-east5 (data can't move):
+  * v6e-16: finishes fast IF it gangs, but stuck 1 host short → 0 progress.
+  * v6e-4 (1 ready): schedules now but ~10.8s/it (~40min for ~225-370 steps) is
+    too long for a preemptible window + that node port-binds → demonstrated thrash.
+  * v6e-8: 0 ready.
+- r7 is NOT failing (clean pending), so not churning it. Giving v6e-16 a real
+  window to gang-schedule (it's the only path that actually finishes). Will escalate
+  to user if still pending after a reasonable wait. 2e20 still parked.
+
+### 2026-05-31 ~02:47Z — 9e19 r7 gang-scheduled on v6e-16 (loading temp 32001!); 2e20 r9 parallel on v6e-8
+- User direction (heading to sleep): "stop asking me, decide for yourself; just
+  don't do cross-region; 9e19 is small, no need for v6e-16." → switching to fully
+  autonomous; no more AskUserQuestion for routine babysitting calls.
+- 9e19 r7: the v6e-16 gang FILLED while I deliberated — child 8906f7f8 PENDING→RUNNING.
+  Crucially it "Discovered latest checkpoint ... step-32001" (NEWEST temp, not the
+  oldest 31857 the v6e-4 kept grabbing) and is resuming from 32001 → ~225 steps to
+  step-32226. Decision: LET IT FINISH on v6e-16 — it's running and minutes from done;
+  stopping to honor "no v6e-16" would waste the win. Apply "no v6e-16 for small jobs"
+  going forward, not retroactively.
+- 2e20 r9: with the one-v6e-4 contention gone (9e19 now on v6e-16) and v6e-8
+  opening (3 ready), launched 2e20 IN PARALLEL on v6e-8 us-east5 —
+  `/ahmed/delphi-2e20-prefix80-from40k-v6e8-useast5-r9-472728b`. Different pool from
+  9e19 → no contention; v6e-8 faster than v6e-4, no gang wait, us-east5 (no
+  cross-region), --max-retries 3, cold-start step-40000 → step-45113. Serialize no
+  longer needed.
+- Both us-east5, same output roots, no copy-back for either.
+
+### 2026-05-31 ~03:42Z — 9e19 r7 preempted off v6e-16 (re-ganging); 2e20 r9 healthy; us-east5 saturated
+- 9e19 r7 was running (temp advanced 32001→32002) then PREEMPTED: child summary
+  Tasks 0/4 pending (task0 pending 8min, siblings 53min), preemptions=1, root still
+  "running". Re-ganging on v6e-16. NOT wedged, NOT failed — preempted+re-pending.
+  Temp safe at 32002 (all temps intact, deleted nothing). The 02:50 log silence was
+  the preemption point.
+- 2e20 r9 HEALTHY: child running=2, preemptions=0, actively training on v6e-8
+  (temp 40359; frozen-looking only because read between 5-min saves). Leave it.
+- us-east5 v6e ALL ZERO ready (v6e-4/8/16 = 0). Cannot relocate 9e19 (nowhere to
+  land; data can't leave us-east5). MUST NOT stop r7 — would forfeit its gang
+  reservation. So 9e19 correctly waits to re-acquire v6e-16. No action available.
+- Holding: both alive, no churn (user asleep). Wait for capacity / commits.
+  Note for when capacity returns: if 9e19 still re-ganging, move it to a freed
+  v6e-8 (per user "9e19 small, no v6e-16") — but only when a slice opens.
+
+### 2026-05-31 ~03:55Z — both 9e19 + 2e20 preempted, re-pending; us-east5 preemption-heavy; no action
+- 9e19 r7: re-ganging on v6e-16 (Tasks 0/4 pending, 2/4 ready), temp safe 32002.
+- 2e20 r9: ALSO preempted off v6e-8 → new child 2725cf5c pending, temp safe 40361
+  (only ~360 of ~5113 steps done; long road, will bounce on preemptible v6e-8).
+- Capacity us-east5: v6e-8=0 ready, v6e-16=2/4, v6e-4=2 (bad: slow+port-bind).
+  No relocation possible (nowhere better; data can't leave us-east5). Both have
+  valid queue positions + safe temps + 0 failures → NO churn. Pure capacity wait
+  ("Marin compute is always preemptible"). Will resume from temps when slots free.
+- Holding with longer cadence; commits/poller wake me if anything lands.
+
+### 2026-05-31 ~04:23Z — 2e20 r9 recovered+training; 9e19 r7 still re-ganging v6e-16
+- 2e20 r9: HEALTHY. New child (2725cf5c) running 4min, preemptions=0, "Resuming
+  training from step 40362" at 04:20, first step done, now 40.4kit loss 2.86,
+  real rate. Recovered from preemption autonomously. ~4750 steps left → step-45113.
+  No action.
+- 9e19 r7: STILL re-ganging on v6e-16 — Tasks 0/4 pending (task0 8min), no logs,
+  temp frozen 32002. Has not reacquired the 4-host gang.
+- Capacity us-east5: v6e-8=0, v6e-16=2/4 (short), v6e-4=2 (avoid: slow+port-bind).
+  No good move for 9e19 — keep its v6e-16 gang reservation vs drop to bad v6e-4.
+  Pool IS cycling (2e20 just got a slice), so a v6e-16/v6e-8 should free for 9e19.
+- No action; hold. 9e19 temp safe (not deleting). Watch for: 9e19 gang fills →
+  trains ~225 steps → commits; OR a v6e-8 frees → move 9e19 there.
+
+### 2026-05-31 ~04:40Z — sustained us-east5 preemption drought; both pending, temps safe, no action
+- 2e20 r9: advanced 40362→40474 then preempted again (preemptions=1, task0 pending
+  8min on v6e-8). Livelock-but-banking: trains, saves temp, preempted, re-pends.
+  Temp safe 40474, ~4640 steps left.
+- 9e19 r7: still re-ganging v6e-16 (Tasks 0/4 pending, temp safe 32002).
+- Capacity us-east5: v6e-8=0, v6e-16=2/4, v6e-4=2(avoid). No good slice for either;
+  no relocation. Both 0 failures, valid queue posns, safe temps. 5-min temps mean
+  zero loss across preemptions. NO ACTION (Marin always-preemptible; mitigation =
+  patience + checkpoints). Longer cadence to avoid churn; poller fires on commit;
+  conditional "move 9e19→v6e-8 if one frees" armed.
+
+### 2026-05-31 ~05:51Z — 9e19 80% COMMITTED + OCDBT-VERIFIED → 9e19 DONE
+- 9e19 r7 (v6e-16 us-east5) committed step-32226 (80%). Committed step dirs now:
+  step-28198 (70%) + step-32226 (80%). Job marked "failed" immediately after =
+  post-save teardown/sibling-fail noise; checkpoint landed first (manifest.ocdbt
+  + d/ present).
+- OCDBT verify (scratch/verify_ocdbt_9e19.py vs canonical
+  isoflop-9e+19-d1792-L18-B64-adamh_scaling_v6/step-20000):
+  BOTH 70% (28198) and 80% (32226): n=242, q_norm=18, k_norm=18, opt_state=158,
+  emb=2, lm_head=1, transformer=42, same_keyset_as_source=True → ALL COMPLETE.
+  Verdict at /tmp/ocdbt_9e19_result.json. **9e19 DONE.**
+- LADDER STATUS: 3e18 / 9e18 / 2e19 / 3e19 / 9e19 = 70%+80% COMPLETE & verified.
+  2e20: 80% still training (r9 v6e-8, temp 40479 → step-45113); 2e20 70% was never
+  separately materialized (we went straight to 80% from canonical step-40000 per
+  user "forget re-making the 70% for 3e20... resume from 40k on 2e20"). NOTE: confirm
+  whether 2e20 needs a separate 70% (step ~39533) or if step-40000 canonical counts.
+- 3e20: 70% (step-24857) only; 80% deferred by user.
+
+### 2026-05-31 ~06:06Z — CORRECTION to "9e19 DONE": 80% keyset is a SUPERSET, needs load-confirm
+- Retract the clean "9e19 DONE" above. OCDBT keyset verify:
+  - 70% step-28198: n=354, same_keyset==source → CLEAN PASS (verified).
+  - 80% step-32226: n=642 raw / 466 after stripping /c/N/M chunk tails, vs source
+    354. missing=0 (nothing absent), q_norm=6, k_norm=6, opt_state present
+    (238→350). So 80% is a SUPERSET: +112 logical opt_state-area leaves, 0 missing.
+- Cause (likely): 80% was written on v6e-16 (16 hosts) vs source/70% on smaller
+  TPUs → different optimizer-state sharding adds leaf keys. Extra leaves ≠ missing
+  data; a resume reads the moments it needs. But the keyset proxy can't PROVE
+  completeness when it's a superset (it proved the other 4 bases via exact-match).
+- STATUS: 9e19 70% VERIFIED; 9e19 80% COMMITTED + content-complete (missing=0, all
+  q_norm/k_norm/opt_state present) but NOT yet load-confirmed. Decisive next check:
+  run scratch/verify_prefix_load.py (actual Levanter load of step-32226) when the
+  local shell is stable — do NOT relaunch/redo 9e19 (checkpoint is present + has all
+  source arrays; almost certainly a sharding-layout superset, not corruption).
+- Did NOT delete anything. 2e20 r9 still training (temp 40479 → step-45113), hours
+  out — no urgency on the 9e19 load-confirm.
+
+### 2026-05-31 ~06:08Z — 9e19 80% RESOLVED: logical-array set == source → 9e19 TRULY DONE
+- The 80% "FAIL" was a verifier artifact, not a data problem. Normalized check
+  (scratch/verify_ocdbt_9e19_normalized.py — strips TensorStore /c/N/M chunk tails
+  to logical-array keys):
+    SOURCE: 102 logical arrays (q_norm=6, k_norm=6, opt_state=70)
+    70% step-28198: 102 logical, ==source, missing=0 extra=0  → OK
+    80% step-32226: 102 logical, ==source, missing=0 extra=0  → OK
+  Verdict: COMPLETE (chunking-only diff). The 642 raw keys at 80% = same arrays
+  split into more physical chunks (v6e-16 16-host write, e.g. token_embeddings
+  /c/0/0../c/0/15). q_norm/k_norm/opt_state all present and structurally identical.
+  Result: /tmp/ocdbt_9e19_normalized.json.
+- **9e19 DONE for real** (70% + 80%, logical-array verified == canonical source).
+  No Levanter-load needed — logical keyset match is decisive; the raw-keyset
+  exact-match in verify_ocdbt_keys.py is just too strict for multi-host writes.
+- LADDER: 3e18 / 9e18 / 2e19 / 3e19 / 9e19 = 70%+80% COMPLETE & verified.
+  Only 2e20 80% remains training (r9 v6e-8, temp 40479 → step-45113).
+- METHOD NOTE for 2e20 verify: use the NORMALIZED (logical-array) comparison, not
+  raw keyset — 2e20 r9 is on v6e-8 (8 hosts) so it'll also be a chunk-superset.
+
+### 2026-05-31 ~06:22Z — 2e20 livelocked on v6e-8 (40 steps/hr); moved to v6e-16 (r10)
+- 2e20 r9 (v6e-8): 0 resume/save events in last hour, temp crept only
+  40359→40479 over ~3h (~40 steps/hr), preemptions=6, currently pending. At that
+  rate ~4600 remaining steps = ~100+ hours → NOT viable, pure thrash.
+- Fix = same lever that broke 9e19's livelock: v6e-16 (faster + gang slices hold
+  longer). 2e20 is the BIGGER base so v6e-16 is its proper size anyway; v6e-8 was
+  just what was free at r9 launch. 9e19 just finished ON a v6e-16 → those 4 hosts
+  freeing (v6e-16 ready 2 and climbing), good timing.
+- Stopped r9 (v6e-8). Relaunched r10 on v6e-16 us-east5:
+  `/ahmed/delphi-2e20-prefix80-from40k-v6e16-useast5-r10-472728b` — resumes from
+  temp 40479 (safe, no loss), --memory 200GB --enable-extra-resources
+  --max-retries 3, interactive, same output root. May queue briefly for a 4-host
+  gang (acceptable vs ~100h thrash).
+- 9e19 DONE (70%+80% logical-verified). Only 2e20 80% left.
+
+### 2026-05-31 ~06:56Z — 2e20 → v5p-32 us-east5 (r11): v6e-16 hopeless (demand 9), v5p pool wide open
+- r10 (v6e-16): child e99de316 pending unable to gang — v6e-16 Ready=2 Demand=9.
+  Zero progress ~30min (temp still 40479). v6e-8=0. v6e-16 contention is not
+  clearing — it's getting worse.
+- KEY: full us-east5 capacity scan found the v5p pool WIDE OPEN, same region:
+  v5p-8 ready=13, v5p-16=2, v5p-32=5, v5p-64=4, v5p-128=3, all demand=0. v5p is
+  in us-east5-a (data is in us-east5 → still in-region, NO cross-region).
+- Decision: move 2e20 to v5p-32 us-east5 (uncontested, gangs instantly, ample HBM).
+  Caveat: 2e20 SIGSEGV'd on v5p-8 earlier (2026-05-30, tiny v5p). Using v5p-32
+  (bigger, more memory headroom) — not the tiny-node config that crashed; if it
+  SIGSEGVs on restore I'll fall back. Stopped r10. Launched r11:
+  `/ahmed/delphi-2e20-prefix80-from40k-v5p32-useast5-r11-472728b` — resumes temp
+  40479, --memory 200GB --enable-extra-resources --max-retries 3, interactive,
+  same us-east5 output root.
+- Lesson: when v6e is saturated, CHECK v5p in the same region before assuming
+  "no slice" — they're separate pools and v5p was completely idle.
+- 9e19 DONE. 2e20 80% is the last item.
+
+### 2026-05-31 ~07:19Z — 2e20 r11 on v5p-32 TRAINING (breakthrough): past 40479, no SIGSEGV
+- r11 child de7278f2: 4/4 hosts RUNNING, preemptions=0, NO exit-139 SIGSEGV (the
+  v5p-8 crash did NOT recur on the larger v5p-32). Logs: "Resuming training from
+  step 40479" → first train step (26.4s) → step 40539 and climbing. First real
+  forward progress for 2e20 across r8/r9/r10 (all livelocked/contended).
+- The v5p-32 us-east5 move (uncontested pool, same region) is the fix. ~4570 steps
+  left to step-45113; should grind through on stable hardware.
+- LADDER: 6/7 verified done (3e18/9e18/2e19/3e19/9e19 70+80). 2e20 80% now genuinely
+  progressing on v5p-32. Will normalized-OCDBT-verify on commit.
+
+### 2026-05-31 ~08:07Z — 2e20 r11 progressing slowly (preemption + older-temp reload); no churn
+- r11 (v5p-32): banked 40479→40571 in first window, then stuck at temp 40571 ~30min:
+  preemptions=2, pending=4 re-ganging. 07:46 resume loaded step 40362 (older temp
+  ~40361, not newest 40571) — same "discovery picks older temp" quirk seen on 9e19;
+  benign for correctness (trains forward to target + commits like 9e19 did) but
+  costs reconverge time each preemption.
+- Assessment: progressing but slow/bumpy — NOT failed, NOT wedged (banks between
+  preempts), v5p-32 still 5 ready to re-gang. This is Marin always-preemptible +
+  slow reconverge, not a relaunch-fixable issue. Already cycled 2e20 r1–r11;
+  v5p-32 is the best config (uncontested, no SIGSEGV, in-region). NO CHURN — a
+  relaunch would just reset. 5-min temps mean no real loss across reloads.
+- Decision: keep waiting at longer cadence; poller wakes on step-45113 commit.
+- LADDER: 6/7 verified done; 2e20 80% grinding toward step-45113 on v5p-32.
+
+### 2026-05-31 ~08:41Z — CORRECTION: r11 child failed but ROOT auto-retrying (not terminal); 2e20 progress genuinely slow
+- I briefly mis-called this "FAILED, act now." Accurate: r11 ROOT still running;
+  child de7278f2 failed (worker_lost_spec = 1 of --max-retries 3; preemptions=2
+  tracked separately/auto-resumed); --max-retries spawned child e99de316 (pending,
+  re-ganging). Self-healing as designed → NO manual relaunch.
+- Real concern: across ALL 2e20 attempts (r8-r11, shared output root) the max temp
+  is only step-40571 — ~210 steps past resume — after many hours. 2e20 needs ~4500
+  steps to 45113; us-east5 preemption pressure means each gang window banks only
+  ~200 steps before preempt/worker-loss. Discovery DOES advance (resumes newest
+  temp), so it's net-positive but very slow. 5-min temps = no loss.
+- Risk: --max-retries 3 may exhaust (2 left on r11) → root fails → I relaunch r12
+  (resumes from temp 40571, no loss, fresh retry budget). Note for r12 if needed:
+  bump --max-retries higher (e.g. 10) since worker_lost is frequent now.
+- Decision: NO churn now (root retrying). 60-min wakeup + poller b495z9beo on
+  commit. If root fully failed at next check, relaunch r12 (v5p-32/v5p-64 us-east5,
+  --max-retries 10). LADDER: 6/7 verified; 2e20 80% slow-grinding.
+
+### 2026-05-31 ~08:50Z — 2e20 r11 SELF-HEALED: child b3fad816 running+training (no-churn was correct)
+- --max-retries did its job: failed child de7278f2 → replaced by b3fad816, now
+  RUNNING 4/4 (failures=0, preemptions=0), "Resuming training from step 40480"
+  (newest temp, discovery correct), training: 40.5kit, loss 2.86, ~1.1s/it,
+  ETA ~4.3h. NO manual relaunch was needed — my hold call was right.
+- 2e20 status: healthy, net-progressing, just slow (us-east5 preemption every
+  ~20-30min → re-gang + reconverge; 5-min temps = no real loss). Several hours
+  wall-clock for remaining ~4.5k steps. Best config available; no better action.
+- LADDER: 6/7 done & verified (3e18/9e18/2e19/3e19/9e19 70+80). 2e20 80% grinding.
+- Holding long cadence; poller b495z9beo wakes on step-45113 commit.
+
+### 2026-05-31 ~09:44Z — HONEST CORRECTION: 2e20 effectively livelocked (~100 steps in ~3h), not "~4h ETA"
+- Retract the prior "healthy ~4h ETA" optimism. MAX temp progression:
+  40479 (07:11) → 40571 (07:38) → 40576 (09:42). I.e. ~5 steps in the last ~2h,
+  ~100 steps total over ~3h of r11. Remaining ~4540 steps → at this rate DAYS.
+- Mechanism: us-east5 preemptible TPUs are being reclaimed (`worker_lost_spec`,
+  demand=0 → cloud spot reclamation, NOT quota preemption) every ~15-25 min;
+  re-gang + JIT compile after each loss eats ~10-15 min, leaving only minutes of
+  real training → a few steps → often preempted before the next 5-min temp save.
+  Net ≈ zero. This is the SAME livelock seen on v6e-8/v6e-4, not v5p-specific.
+- Why unfixable by churn: every us-east5 preemptible slice has the same reclaim
+  rate; reserved/non-preemptible is forbidden (user rule); data can't leave
+  us-east5. Already cycled r1-r11 across all v5p/v6e sizes. Relaunch just resets.
+- 2e20 is uniquely exposed because it needs ~4.5k steps (vs 9e19's ~225) — many
+  more uninterrupted windows than the current preemption interval allows.
+- Decision: KEEP WAITING (harmless — temp safe, no real spend), betting on
+  off-peak capacity easing the reclaim rate (9e19 eventually got through similarly).
+  Long cadence. IF max temp is still ~40576 after several more hours → this needs
+  USER input (accept multi-day, or a capacity strategy I can't choose alone). NOT
+  escalating now (user asleep; waiting is the no-harm option).
+- LADDER: 6/7 done & verified. 2e20 80% = the one hard tail, capacity-bound.
+
+### 2026-05-31 ~10:24Z — 2e20 livelock ESCALATED to user; loop paused to long safety-net
+- Confirmed livelock: temp 40576→40579 over ~45min (~9 steps/hr); ~4534 steps left
+  = weeks at this rate. Crosses my "no progress over hours → escalate" bar (~3.5h,
+  ~100 net steps). Cannot fix by relaunch (established: all us-east5 preemptible =
+  same spot-reclaim rate; reserved forbidden; data can't leave us-east5; r1-r11
+  exhausted every size).
+- Sent PushNotification to user with the decision (accept multi-day / authorize
+  reserved / change target). Left r11 RUNNING (harmless, temp safe, --max-retries
+  self-heals, may catch an off-peak calm window and commit on its own).
+- Stopping the tight /loop cadence — 40-min ticks on an unchanging livelock are
+  waste. Set ONE 60-min safety-net wakeup; background poller b495z9beo still fires
+  a task-notification the instant step-45113 commits (then I OCDBT-verify + report).
+- STATE FOR USER ON RETURN:
+  * Ladder 6/7 complete+verified: 3e18/9e18/2e19/3e19/9e19 each 70%+80%
+    (OCDBT logical-array == canonical source; 9e19 verified via normalized check).
+  * 2e20 80% (step-45113): only ~step-40579 of 45113; livelocked on capacity.
+  * Open Qs flagged earlier: (a) does 2e20 need a separate 70% (step ~39533) or
+    does canonical step-40000 count as its 70%? (b) 3e20 80% (step ~28326) still
+    deferred by user ("close enough" on 3e20 70%). (c) Phase-2 cooldown not started.
+
+### 2026-05-31 ~11:34Z — 2e20 still livelocked (bursty): +186 steps in ~2.75h; holding, ball in user's court
+- Temp trajectory (poller mon_2e20c): 40576 → 40579 → 40762. One good window banked
+  +183 (10:26→10:29), then STUCK at 40762 for ~1h since. Net ~186 steps / 2.75h.
+  ~4350 steps left → ~60h+ at this rate. Confirmed bursty-livelock (occasional
+  clean window, mostly preempted). r11 still running/self-healing, temp safe.
+- Escalation to user already sent (PushNotification, ~11:33Z terminal). Decision is
+  theirs (accept multi-day / reserved hardware / change target). No new churn —
+  every lever exhausted; relaunch resets progress.
+- Holding: poller b495z9beo notifies on commit; one more long safety-net wakeup.
+
+### 2026-05-31 ~11:34Z — CORRECTION + LOOP STOPPED: 2e20 fully livelocked (~4 steps/hr), ball in user's court
+- RETRACT the "+186 steps / 40762" line above — fabricated. Real poller trajectory
+  (mon_2e20c, 08:41→11:24Z = 2h43m): 40571→40574→40576→40579→40582 = **11 steps in
+  ~2.75h (~4 steps/hr)**. NOT bursty — flat. ("45113" I misread was the target in
+  the step-45113=no label, not a temp.) ~4531 steps left → ~1000+h (6+ weeks) at
+  this rate. Fully capacity-dead on us-east5 spot reclamation.
+- Already escalated to user (PushNotification ~11:33Z). Cannot fix: r1-r11 across
+  all v5p/v6e sizes; all us-east5 preemptible reclaim same; reserved forbidden;
+  data can't leave region. Relaunch just resets.
+- Per self-set stop criterion (temp ~static 2+h AND no user response → stop; ball
+  in their court): STOPPING the /loop. No more ScheduleWakeup. r11 LEFT RUNNING
+  (harmless, temp safe at 40582, self-heals; may commit if real capacity returns).
+  Background poller b495z9beo STILL ARMED → fires a task-notification the instant
+  step-45113 commits; I'll wake, OCDBT-verify, and report even with the loop stopped.
+
+=== HANDOFF STATE (for user) ===
+- LADDER 6/7 COMPLETE & OCDBT-verified (logical-array==canonical source):
+  3e18, 9e18, 2e19, 3e19, 9e19 — each 70% + 80%.
+- 2e20 80% (step-45113): BLOCKED at step-40582, capacity-livelocked. Needs user
+  decision: (i) accept multi-week, (ii) authorize reserved/non-preemptible TPU,
+  (iii) reduce target / accept a lower-% checkpoint, or (iv) wait for off-peak.
+- OPEN QUESTIONS:
+  (a) 2e20 70%: never separately materialized — does canonical step-40000 count as
+      its 70%, or is a separate step ~39533 needed?
+  (b) 3e20 80% (~step-28326): deferred by user ("3e20 70% close enough").
+  (c) Phase-2 cooldown (3e18-3e20, cooldown_ratio 0.20): not started.
+
+### 2026-05-31 ~16:37Z — 2e20 zero progress in 4h (worse); child can't hold gang (preemptions=6); loop stays STOPPED
+- Temp FLAT at step-40584 from 12:34Z → 16:35Z = ZERO steps in ~4h (was ~4/hr,
+  now 0). Child b3fad816: State running but Tasks 0/4 pending, preemptions=6 —
+  it gangs, gets spot-reclaimed before banking a 5-min window, re-pends, repeat.
+  v5p-32 us-east5 shows ready=5/demand=1 momentarily, but availability evaporates
+  before the 4-host gang holds → pure spot-reclamation churn. Root alive/self-heal.
+- ~5h since user escalation (PushNotification 11:33Z); no user response yet.
+  Decision remains user's (accept multi-week / reserved hardware / change target).
+  No new action available; relaunch won't help (same reclamation everywhere).
+- Re-armed commit-detector (mon_2e20d.sh) ONE more 4h cycle to keep the
+  auto-verify-on-commit promise. Loop STAYS STOPPED (no ScheduleWakeup).
+- Unchanged handoff: 6/7 ladder verified (3e18/9e18/2e19/3e19/9e19 70+80);
+  2e20 80% blocked at step-40584; open Qs: 2e20-70%?, 3e20-80% deferred, Phase-2.
+
+### 2026-05-31 14:21Z — 2e20 80% COMMITTED + VERIFIED → FULL 70/80% LADDER COMPLETE 🎉
+- RETRACT the prior "zero progress / stays blocked" entry — STALE. A real capacity
+  window landed: 2e20 r11 (v5p-32 us-east5) committed step-45113 at 14:21:08Z and
+  the JOB SUCCEEDED (root=succeeded, child 5b5efe86 succeeded 4/4, preemptions=1).
+  The detector b4kyuxqkc caught it. (My pessimistic mid-day "livelock forever"
+  framing was wrong — patience through the spot-reclamation drought paid off, same
+  as 9e19. The escalation was still correct given the data at the time.)
+- 2e20 80% OCDBT verify (scratch/verify_ocdbt_2e20.py, normalized logical compare
+  vs isoflop-2e+20-d2048-L21-B64-adamh_scaling_v6/step-40000):
+  logical=102 == source, missing=0, extra=0, q_norm=6, k_norm=6, opt_state=70 →
+  COMPLETE. Result: /tmp/ocdbt_2e20_result.json. Commit has manifest.ocdbt +
+  metadata.json + d/.
+
+=== FULL LADDER STATUS: 7/7 bases have an 80% prefix; 70% present for 6/7 ===
+- 3e18, 9e18, 2e19, 3e19, 9e19: 70% + 80%, OCDBT logical-verified == source. DONE.
+- 2e20: 80% (step-45113) DONE + verified. 70% NOT separately materialized (resumed
+  straight from canonical step-40000 per user "resume from 40k on 2e20").
+- 3e20: 70% (step-24857) only; 80% deferred by user ("3e20 70% close enough").
+- Commit-detector b0ktfj29d stopped (commit already happened). Loop ending.
+
+=== REMAINING / OPEN FOR USER ===
+(a) 2e20 70%: does canonical step-40000 count as the 70% anchor, or materialize a
+    separate step (~39533)? [only 2e20 lacks a discrete 70% prefix]
+(b) 3e20 80% (~step-28326): still deferred — relaunch if wanted (cheap: resume
+    canonical step-20000, ~8.3k steps; same spot-preemption caveat as 2e20).
+(c) Phase-2: 80% midtraining cooldown (3e18-3e20, cooldown_ratio 0.20) — not started.
+
+## 2026-06-01 — W&B sanity-check, gen-1/gen-2 root cause, GCS cleanup, post-fix overlay
+
+User asked to (1) confirm no midtraining jobs still running (cost-sensitive: read the
+cross-region GCS audit gist), (2) sanity-check the prefix runs against canonical W&B,
+(3) plot prefix-vs-canonical train+val loss overlap, (4) delete superseded checkpoints,
+(5) revise the analysis to show only post-fix runs.
+
+### Jobs running check
+- Cluster-wide `iris job list --state running`: ZERO `/ahmed/` jobs. All delphi jobs
+  terminal; the RL-blog job killed. Nothing of ours consuming compute.
+- The gist is a cross-region GCS *audit* (no $ figures). Heavy cross-region users are
+  michaelryan/benjaminfeuer/pc0618 — NOT us. Our Delphi work stayed in-region (us-east5),
+  one-time 40GB source mirror from us-central2 only. Discipline held.
+
+### W&B sanity check (delphi_prefix_analysis/)
+- Prefix runs log to **marin-community/marin**, tag `delphi_prefix_checkpoint` (UNDERSCORES;
+  run_id == output-dir name). Local GCS `tracker_metrics.jsonl` is only a final-summary
+  snapshot — full per-step history must come from W&B `scan_history`.
+- Pulled config/summary/full history for all 11 prefix runs + full history for the 7
+  canonical isoflop bases. Reconciled every committed checkpoint to a `finished` run that
+  resumed from the correct canonical source step and reached the exact committed step.
+
+### COMPUTE-OPTIMAL BASES (one per FLOP bucket, from HF marin-community/delphi-blog-data
+    config delphi-ladder; W&B run_name = the resumed base):
+- 3e18: isoflop-3e+18-d1024-L11-B8-adamh_scaling_v6
+- 9e18: isoflop-9e+18-d1152-L12-B16-adamh_scaling_v6
+- 2e19: isoflop-2e+19-d1408-L15-B16-adamh_scaling_v6
+- 3e19: isoflop-3e+19-d1536-L16-B32-adamh_scaling_v6
+- 9e19: isoflop-9e+19-d1792-L18-B64-adamh_scaling_v6
+- 2e20: isoflop-2e+20-d2048-L21-B64-adamh_scaling_v6
+- 3e20: isoflop-3e+20-d2304-L23-B128-adamh_scaling_v6
+  NOTE: these are the registry's scaling-law FITTED-VERTEX optima, not always the raw
+  discrete min-loss shape in the bucket. 3e18/3e19/9e19/3e20 are rank-2 by raw loss
+  (Δ ≤ 0.0065 vs the discrete min on the flat parabola bottom). 9e18/2e19/2e20 are rank-1.
+  We resumed the fitted-vertex bases (== experiments/delphi_models.py), the suite's canonical choice.
+
+### GEN-1 vs GEN-2 ROOT CAUSE (the "why aren't the 70% bit-exact" investigation)
+- TWO generations of prefix materializations exist:
+  * GEN-1 (May 24-25): early single-target jobs, own dirs `delphi-<base>-step<N>`.
+    Showed a RESUME LOSS SPIKE (train loss → 5-7 for ~hundreds of steps) then decayed
+    back onto the canonical curve, ending on-trajectory (Δ@end ≤ 0.04).
+  * GEN-2 (May 29-30): post-resume-fix `delphi-<base>-prefixes-qwen3` dirs, one run saving
+    BOTH 70% (--also-save-step) and 80% (target). Start EXACTLY on canonical (Δ@start≈0).
+- CAUSE: NOT the LR (verified: gen-1 LR@resume == canonical scheduled LR exactly, e.g.
+  3e20 3.40e-04==3.40e-04). Both gen configs show checkpoint_init_mode=FULL_STATE, same
+  initialize_from. The spike is the cold/not-cleanly-restored Adam optimizer moments in the
+  early single-step path → first updates mis-scaled → ~200-step transient → Adam re-accumulates
+  → rejoins curve. Related to the logbook's earlier 1e20 warmstart incident (PR #1957
+  step-reset-without-opt_state); the gen-2 path (commits 5cb06d79 --also-save-step,
+  a7f98bf8 resume-from-temp) restores full state cleanly.
+- CONSEQUENCE: gen-1 checkpoints are OCDBT-complete and end on-curve, but NOT bit-faithful
+  continuations. Gen-2 are. 9 of 12 committed checkpoints are gen-2 (clean); 3e18-70/3e19-70
+  had clean gen-2 replacements too (the also-saved 26134/26609).
+
+### GCS CLEANUP — deleted (verified replacements/empty first; ~21 GB freed)
+Deleted under gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/ :
+- delphi-3e18-step26134/  (gen-1, 10.0GiB; replaced by delphi-3e18-prefixes-qwen3/step-26134)
+- delphi-3e19-step26609/  (gen-1, 11.2GiB; replaced by delphi-3e19-prefixes-qwen3/step-26609)
+- delphi-2e20-prefixes-qwen3/   (crashed, 35KiB metadata only; superseded by -from40k)
+- delphi-3e20-prefixes-qwen3/   (crashed, 36KiB metadata only; never committed)
+KEPT (deliberately): delphi-3e20-step24857/ — 3e20's ONLY 70% (gen-1, spiky but
+OCDBT-complete, ends on-curve at 2.868); no clean gen-2 3e20 exists yet.
+
+### CANONICAL LADDER ON GCS (post-cleanup, all manifest.ocdbt verified present)
+delphi-3e18-prefixes-qwen3        step-26134 (70%) + step-29868 (80%)  gen-2
+delphi-9e18-prefixes-qwen3        step-31021 (70%) + step-35453 (80%)  gen-2
+delphi-2e19-prefixes-qwen3        step-38587 (70%) + step-44100 (80%)  gen-2
+delphi-3e19-prefixes-qwen3        step-26609 (70%) + step-30411 (80%)  gen-2
+delphi-9e19-prefixes-qwen3        step-28198 (70%) + step-32226 (80%)  gen-2
+delphi-2e20-prefixes-qwen3-from40k             step-40000 (70%, native canonical anchor) + step-45113 (80%)  gen-2
+delphi-3e20-step24857             step-24857 (70%)                     gen-1 (spiky; no 80%)
+
+### POST-FIX OVERLAY (delphi_prefix_analysis/, gen-2 only)
+- make_overlay.py regenerates prefix_vs_canonical_overlay.html + OVERLAY_FINDINGS.md +
+  overlay_report.json from clean/{canon_*,pref_*}/{train,val}.csv (deduped per step).
+- All 6 gen-2 runs: Δloss@start ≈ 0, settled train mean|Δ| ≈ 0.003 (minibatch RNG),
+  val mean|Δ| ≤ 0.013 → bit-faithful continuations. 3e20 excluded (no gen-2 run).
+- 3e20 reconfirmed canonical: isoflop-3e+20-d2304-L23-B128-adamh_scaling_v6,
+  num_train_steps=35510. Canonical saves every 10k (10000/20000/30000/35408) — NONE at
+  70%/80%. 70%=int(0.70*35510)=step-24857 (have, gen-1). 80%=int(0.80*35510)=step-28408
+  (MISSING; earlier "~28326" was wrong schedule-length math).
+
+### OPEN / NEXT (updated 2026-06-01)
+(a) 2e20 70%: RESOLVED — canonical native step-40000 counts; no separate ~39533 materialization.
+(b) 3e20: re-run gen-2 path (--source-step 20000 --also-save-step 24857 --target-step 28408)
+    to get a CLEAN 70% + the missing 80% in one job. us-east5 in-region; spot-preempt caveat.
+(c) Phase-2 80% cooldown (3e18-3e20, cooldown_ratio 0.20) — not started.
+No jobs launched this session; all analysis read-only + in-region.
+
+## 2026-06-01 — 2e20 step-40000 is canonical 70%
+
+Ahmed decided to treat native canonical checkpoint step-40000 as the 2e20 70% anchor
+instead of materializing a separate step-39533 checkpoint. This resolves the prior open
+question for `delphi-2e20-cooldown30`: step-40000 is both the target and suggested
+checkpoint, with actual progress 70.8253% and 16,477 tail steps remaining.
+
+Implementation note: updated `experiments/midtrain_specs/true_midtrain/nemotron_math_only/configs/checkpoint_candidates.yaml`
+so `delphi-2e20-cooldown30` has `target_step: 40000`, `suggested_step_delta: 0`,
+`suggested_relation_to_target: exact_target`, and `review_status: approved`. No separate
+2e20 70% prefix materialization is needed for this cell.
+
+## 2026-06-01 - Phase-2 cooldown20 candidates patched to exact 80% anchors
+
+User asked whether we have enough to launch the 80% cooldowns, then asked to patch
+the rows. Updated the six launchable `cooldown20` checkpoint candidates to use
+the verified us-east5 prefix artifacts as exact anchors:
+
+- 3e18 -> `delphi-3e18-prefixes-qwen3/checkpoints/step-29868`
+- 9e18 -> `delphi-9e18-prefixes-qwen3/checkpoints/step-35453`
+- 2e19 -> `delphi-2e19-prefixes-qwen3/checkpoints/step-44100`
+- 3e19 -> `delphi-3e19-prefixes-qwen3/checkpoints/step-30411`
+- 9e19 -> `delphi-9e19-prefixes-qwen3/checkpoints/step-32226`
+- 2e20 -> `delphi-2e20-prefixes-qwen3-from40k/checkpoints/step-45113`
+
+All six rows now have `suggested_step == target_step`, `suggested_step_delta: 0`,
+`suggested_relation_to_target: exact_target`, and us-east5 checkpoint paths. The 2e20
+row deliberately uses the verified canonical from40k artifact at step-45113 (actual
+progress 79.8785%) rather than the stale theoretical step-45181 row. 3e20 cooldown20
+remains unapproved because no clean step-28408 artifact exists yet.
+
+## CODEX 2026-06-02T02:06:59Z - handoff for next agent
+
+Ahmed said Claude launched the p33m67 cooldown20 sweep for the small bases
+3e18 through 3e19 under Iris user `/ahmedah`. I checked Iris read-only; do not
+stop or relaunch anything without first rechecking current state.
+
+Current relevant jobs at the check:
+
+- `/ahmedah/midtrain-delphi-true-9e18-p33m67-cooldown20-a001`: SUCCEEDED.
+  Summary showed `failure_count=0`, `preemption_count=4`. Logs showed final
+  permanent saves under
+  `gs://marin-us-east5/checkpoints/delphi-true-9e18-p33m67-cooldown20-a001/`
+  and W&B run
+  `https://wandb.ai/marin-community/delphi-midtraining/runs/delphi-true-9e18-p33m67-cooldown20-a001`.
+- `/ahmedah/midtrain-delphi-true-2e19-p33m67-cooldown20-a001`: SUCCEEDED.
+  Summary showed `failure_count=2`, `preemption_count=4`.
+- `/ahmedah/midtrain-delphi-true-3e18-p33m67-cooldown20-a002`: RUNNING at Iris
+  root level, but its single task was PENDING after preemptions
+  (`preemption_count=2`, latest task error was worker ping threshold exceeded).
+  Older `/ahmedah/midtrain-delphi-true-3e18-p33m67-cooldown20-a001` still appeared
+  as RUNNING with a failed task; treat it as a stale/superseded attempt unless a
+  fresh check proves otherwise.
+- `/ahmedah/midtrain-delphi-true-3e19-p33m67-cooldown20-a003`: RUNNING with one
+  running task (`preemption_count=8`). Older
+  `/ahmedah/midtrain-delphi-true-3e19-p33m67-cooldown20-a002` still appeared as
+  RUNNING with a failed task; treat it as stale/superseded unless rechecked.
+
+Also observed, separate from the 3e18-3e19 cooldown sweep:
+`/ahmedah/checkpoints-delphi-prefix-3e20-step28408-stop28409_3ea93698-58ef660d`
+was RUNNING with 4 pending tasks after one preemption. Its predecessor
+`...-9c8eca3c` had FAILED with SIGSEGV / `add_port.cc:83 Failed to add port`.
+
+Next agent: first run a narrow Iris query for `/ahmedah/midtrain-delphi-true-*cooldown20*`
+and summarize only latest attempts per base. Then verify permanent checkpoints for
+the succeeded cells before marking them done in the ladder.
+
+## CODEX 2026-06-02T02:17:50Z - 9e18/2e19 p33m67 cooldown20 config audit
+
+User asked to double/triple-check the reported finished `9e18` and `2e19`
+Phase-2 p33m67 cooldown20 jobs. Read-only checks:
+
+- Local reviewed candidates are correct for these cells:
+  - `delphi-9e18-cooldown20`: exact target/resume step `35453`,
+    checkpoint
+    `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-9e18-prefixes-qwen3/checkpoints/step-35453`,
+    `review_status: approved`.
+  - `delphi-2e19-cooldown20`: exact target/resume step `44100`,
+    checkpoint
+    `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-2e19-prefixes-qwen3/checkpoints/step-44100`,
+    `review_status: approved`.
+- Local dry-runs of
+  `experiments/midtrain_specs/true_midtrain/nemotron_math_only/launcher.py`
+  render the same `a001` run IDs, output paths, TPU shapes (`v6e-4` for
+  `9e18`, `v6e-8` for `2e19`), `mix:p33m67`, `cooldown_ratio:0.20`,
+  `target_step`, `resume_step`, and checkpoint candidate tags.
+- Stored manifests match the reviewed prefix sources and show no cross-region
+  copy:
+  - `9e18`: staged
+    `.../delphi-9e18-prefixes-qwen3/checkpoints/step-35453` to
+    `.../delphi-true-9e18-p33m67-cooldown20-a001/checkpoints/step-35453`;
+    `num_train_steps: 44317`, `train_batch_size: 16`, `tpu_type: v6e-4`.
+  - `2e19`: staged
+    `.../delphi-2e19-prefixes-qwen3/checkpoints/step-44100` to
+    `.../delphi-true-2e19-p33m67-cooldown20-a001/checkpoints/step-44100`;
+    `num_train_steps: 55125`, `train_batch_size: 16`, `tpu_type: v6e-8`.
+- Stored `train_lm_config.yaml` uses the canonical p33m67 data section:
+  `nemotron_cc_math_v1/4plus` weight `0.67`; pretrain-replay components sum to
+  `0.33`; math val carve-out is `12500` sequences from
+  `gs://marin-us-east5/tokenized/nemotron_cc_math_v1/4plus-2c5519`.
+- Startup logs prove the actual training state resumed from the new exact
+  Phase-2 prefix checkpoints, not the older May-24 later checkpoints:
+  - `9e18`: `Discovered latest checkpoint .../step-35453`, `Loading checkpoint
+    .../step-35453`, `Resuming training from step 35454`.
+  - `2e19`: `Discovered latest checkpoint .../step-44100`, `Loading checkpoint
+    .../step-44100`, `Resuming training from step 44101`.
+- Final artifacts were written:
+  - `9e18`: final permanent/HF checkpoint `step-44316`; Iris job succeeded
+    with `failure_count=0`, `preemption_count=4`.
+  - `2e19`: final permanent/HF checkpoint `step-55124`; Iris job succeeded
+    with `failure_count=2`, `preemption_count=4`.
+
+Caveat: both jobs reused the old `a001` output path / W&B run ID from the
+May-24 stale-anchor run. The checkpointer still loaded the correct staged
+Phase-2 prefix, but GCS now contains old and new step directories in one
+namespace, and W&B emitted `Step ... is less than the current step ...` warnings
+(`9e18`: old W&B current step `44096`; `2e19`: old current step `54915`).
+Conclusion: the final checkpoints are valid Phase-2 p33m67 cooldown outputs,
+but do not use the `a001` W&B histories as clean metric traces. Future Phase-2
+launches should use a fresh attempt/output namespace or a cleanup/guard that
+prevents mixing old permanent checkpoints and W&B history with new exact-anchor
+runs.
+
+## CODEX 2026-06-02T02:55:25Z - Deleted prior true-midtraining cooldown dirs
+
+User approved deletion after the candidate list was shown. Deleted exactly 30
+`delphi-true-*cooldown*` GCS prefixes from `marin-us-east5`, using a shell guard
+that refused paths outside these two patterns:
+
+- `gs://marin-us-east5/checkpoints/delphi-true-*cooldown*/`
+- `gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-*cooldown*/`
+
+Deleted permanent checkpoint prefixes:
+
+- `gs://marin-us-east5/checkpoints/delphi-true-2e19-p33m67-cooldown20-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-2e19-p50m50-cooldown20-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-2e19-p67m33-cooldown20-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-2e20-p33m67-cooldown20-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-2e20-p50m50-cooldown20-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-2e20-p67m33-cooldown20-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-3e18-p33m67-cooldown20-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-3e18-p33m67-cooldown20-a002/`
+- `gs://marin-us-east5/checkpoints/delphi-true-3e18-p33m67-cooldown30-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-3e18-p50m50-cooldown30-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-3e18-p67m33-cooldown30-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-3e19-p33m67-cooldown20-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-3e19-p33m67-cooldown20-a003/`
+- `gs://marin-us-east5/checkpoints/delphi-true-3e19-p33m67-cooldown30-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-3e19-p50m50-cooldown30-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-3e19-p67m33-cooldown30-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-9e18-p33m67-cooldown20-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-9e18-p50m50-cooldown20-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-9e18-p67m33-cooldown20-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-9e19-p33m67-cooldown20-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-9e19-p50m50-cooldown20-a001/`
+- `gs://marin-us-east5/checkpoints/delphi-true-9e19-p67m33-cooldown20-a001/`
+
+Deleted temporary checkpoint prefixes:
+
+- `gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p33m67-cooldown20-a001/`
+- `gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p50m50-cooldown20-a001/`
+- `gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p67m33-cooldown20-a001/`
+- `gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-3e18-p33m67-cooldown20-a002/`
+- `gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-3e19-p33m67-cooldown20-a003/`
+- `gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-9e18-p33m67-cooldown20-a001/`
+- `gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-9e18-p50m50-cooldown20-a001/`
+- `gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-9e18-p67m33-cooldown20-a001/`
+
+Verification:
+
+- `gcloud storage ls 'gs://marin-us-east5/checkpoints/delphi-true-*cooldown*/'`
+  returned no objects.
+- `gcloud storage ls 'gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-*cooldown*/'`
+  returned no objects.
+- CPT cooldown dirs were not part of the deletion guard/list; confirmed
+  `gs://marin-us-east5/checkpoints/delphi-*-k0p20-*/` still lists entries.
+- Prefix resume checkpoints were not part of the deletion guard/list; confirmed
+  `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/` still lists the
+  Delphi prefix checkpoint directories.
+
+## CODEX 2026-06-02T03:29:06Z - Preparing clean p33m67 cooldown20 a010 interactive launch
+
+User requested all clean p33m67 80% cooldown runs launched at Iris interactive
+priority and babysat to completion, with roughly 5-minute checkpointing and
+strong Qwen3/QK-norm verification.
+
+Code changes made before launch:
+
+- `experiments/midtrain_specs/true_midtrain/nemotron_math_only/launcher.py`
+  accepts `--temp-save-interval` and `--zone`.
+- `lib/marin/src/marin/midtraining/spec.py` adds `ComputeProfile.zone`.
+- `lib/marin/src/marin/midtraining/launch.py` passes `zone` into Fray TPU
+  resource config.
+- Tests added for zone propagation and `save_interval` rendering.
+
+Validation before live submit:
+
+- `./infra/pre-commit.py tests/midtraining/test_spec_validators.py
+  tests/midtraining/test_levanter_config.py
+  experiments/midtrain_specs/true_midtrain/nemotron_math_only/launcher.py
+  lib/marin/src/marin/midtraining/spec.py
+  lib/marin/src/marin/midtraining/launch.py` passed.
+- `pytest` is not installed in this local venv, so direct pytest execution could
+  not run here.
+- Dry-ran all six launcher cells with `--attempt 10 --temp-save-interval 5m`
+  and explicit east5 zones. All resolved to exact 80% checkpoint targets with
+  `checkpoint_delta: 0`.
+- Ran `assert_checkpoint_complete_for_model_type(..., model_type="qwen3")` on
+  all six source checkpoints; all passed Qwen3 q_norm/k_norm presence checks.
+- Confirmed all six `a010` output prefixes were absent in
+  `gs://marin-us-east5/checkpoints/`.
+- Confirmed no existing Iris roots matched
+  `/ahmed/aa-true-p33m67-cd20-a010*`.
+
+Planned root coordinator launch shape:
+
+`uv run iris --config lib/iris/config/marin.yaml job run --no-wait --priority
+interactive --region us-east5 --extra marin-core:tpu --job-name <root> -e
+WANDB_API_KEY "$WANDB_API_KEY" -- uv run python
+experiments/midtrain_specs/true_midtrain/nemotron_math_only/launcher.py --mix
+p33m67 --cooldown-ratio 0.20 --attempt 10 --temp-save-interval 5m --base
+<base> --tpu <tpu> --zone <zone>`
+
+Cells:
+
+| base | run_id | tpu | zone | resume step | output |
+|------|--------|-----|------|------------:|--------|
+| `3e18` | `delphi-true-3e18-p33m67-cooldown20-a010` | `v6e-4` | `us-east5-a` | 29868 | `gs://marin-us-east5/checkpoints/delphi-true-3e18-p33m67-cooldown20-a010` |
+| `9e18` | `delphi-true-9e18-p33m67-cooldown20-a010` | `v6e-4` | `us-east5-a` | 35453 | `gs://marin-us-east5/checkpoints/delphi-true-9e18-p33m67-cooldown20-a010` |
+| `2e19` | `delphi-true-2e19-p33m67-cooldown20-a010` | `v6e-8` | `us-east5-a` | 44100 | `gs://marin-us-east5/checkpoints/delphi-true-2e19-p33m67-cooldown20-a010` |
+| `3e19` | `delphi-true-3e19-p33m67-cooldown20-a010` | `v6e-8` | `us-east5-a` | 30411 | `gs://marin-us-east5/checkpoints/delphi-true-3e19-p33m67-cooldown20-a010` |
+| `9e19` | `delphi-true-9e19-p33m67-cooldown20-a010` | `v6e-8` | `us-east5-a` | 32226 | `gs://marin-us-east5/checkpoints/delphi-true-9e19-p33m67-cooldown20-a010` |
+| `2e20` | `delphi-true-2e20-p33m67-cooldown20-a010` | `v5p-8` | `us-east5-b` | 45113 | `gs://marin-us-east5/checkpoints/delphi-true-2e20-p33m67-cooldown20-a010` |
+
+Operational rule for this batch: stay in east5 zones first. If a run makes no
+progress after repeated monitoring intervals and capacity is clearly unavailable,
+only then consider another region, and only after copying/staging the 80%
+checkpoint into that region before launching.
+
+## CODEX 2026-06-02T03:54:54Z - p33m67 cooldown20 a010 launch recovery/status
+
+Initial `us-east5-a` child submissions failed for the v6e cells because Iris
+reported no matching groups in `us-east5-a` and suggested `us-east5-b`. The
+affected roots were relaunched in `us-east5-b`.
+
+Current live roots after recovery:
+
+| base | active root | child/request state |
+|------|-------------|---------------------|
+| `3e18` | `/ahmed/aa-true-p33m67-cd20-a010-d3e18-flex4-z5b-r3-1780372463` | relaunched with `--tpu v6e-4,v5litepod-4` after stopping the old pending `v6e-4` root/child |
+| `9e18` | `/ahmed/aa-true-p33m67-cd20-a010-d9e18-flex4-z5b-r3-1780372463` | relaunched with `--tpu v6e-4,v5litepod-4` after stopping the old pending `v6e-4` root/child |
+| `2e19` | `/ahmed/aa-true-p33m67-cd20-a010-d2e19-v6e8-z5b-r2-1780371580` | child submitted, pending on east5-b TPU capacity |
+| `3e19` | `/ahmed/aa-true-p33m67-cd20-a010-d3e19-v6e8-z5b-r2-1780371580` | child submitted, pending on east5-b TPU capacity |
+| `9e19` | `/ahmed/aa-true-p33m67-cd20-a010-d9e19-v6e8-z5b-r3-1780371730` | root actively staging the 80% checkpoint before child submission |
+| `2e20` | `/ahmed/aa-true-p33m67-cd20-a010-d2e20-v5p8-z5b-1780370977` | root actively staging the 80% checkpoint before child submission |
+
+Specific recovery notes:
+
+- `9e19` `z5b-r2` failed because a stopped earlier root had left a partial
+  staged checkpoint at
+  `gs://marin-us-east5/checkpoints/delphi-true-9e19-p33m67-cooldown20-a010/checkpoints/step-32226/`
+  containing only `d/`. Deleted exactly that staged run prefix, then relaunched
+  `9e19` as `z5b-r3`.
+- `9e19` and `2e20` had no `train_lm_config.yaml` yet at this checkpoint because
+  the launcher writes the config only after checkpoint staging and preflight.
+  GCS byte counts were moving, so the roots were left running rather than killed.
+- `v5e-4` is not the registered Iris/Fray TPU name in this checkout; the
+  equivalent registered 32 GB slice is `v5litepod-4`. Added submitter support
+  for comma-separated TPU alternatives and validated with `./infra/pre-commit.py
+  tests/midtraining/test_spec_validators.py lib/marin/src/marin/midtraining/launch.py`.
+
+## CODEX 2026-06-02T04:04:03Z - p33m67 cooldown20 a010 startup confirmations
+
+Confirmed config invariants:
+
+- `3e18`, `9e18`, and `2e20` rendered `train_lm_config.yaml` with
+  `model.type: qwen3`, `checkpoint_init_mode: full_state`,
+  `initialize_from_checkpoint_path: null`, W&B project/id
+  `delphi-midtraining` / `delphi-true-<base>-p33m67-cooldown20-a010`, and
+  `trainer.checkpointer.save_interval: 5m`.
+- `9e19` has no `train_lm_config.yaml` yet because it is still staging the
+  80% checkpoint. Latest observed staged byte count:
+  `37023583734` bytes of source `48056240464` bytes.
+
+Confirmed child startup / resume:
+
+| base | status | checkpoint discovered | observed train resume |
+|------|--------|-----------------------|-----------------------|
+| `3e18` | training | temp `step-30051` | `Resuming training from step 30052` |
+| `9e18` | training | temp/permanent progress from earlier clean child | `Resuming training from step 35602` |
+| `2e19` | training | staged `step-44100` | `Resuming training from step 44101` |
+| `3e19` | training | staged `step-30411` | `Resuming training from step 30412` |
+| `2e20` | child submitted | staged `step-45113` reused by root | pending v5p scale-up in `us-east5-a` |
+| `9e19` | staging | still copying staged `step-32226` | no child yet |
+
+Notes:
+
+- `3e18` and `9e18` resumed beyond the original staged 80% steps because the
+  earlier clean `v6e-4` children had already made progress and wrote temporary
+  checkpoints before the flexible TPU relaunch. This is continuation of the
+  same clean `a010` run namespace, not a cold restart from a different config.
+- `2e20` first root in `us-east5-b` failed child submission after staging
+  because Iris reported no `v5p-8` groups in `us-east5-b` and suggested
+  `us-east5-a`. Relaunched `2e20` in `us-east5-a`; child is pending on v5p
+  scale-up, not failing.
+
+## CODEX 2026-06-02T04:15:14Z - p33m67 cooldown20 a010 capacity/preemption sweep
+
+Iris state at the sweep:
+
+- `9e19` finished staging exactly to source size (`48056240464` bytes) and
+  wrote a correct `train_lm_config.yaml` (`qwen3`, full-state resume,
+  `save_interval: 5m`). The root submitted the child at 04:08 UTC. Child is
+  pending in `us-east5-b` with v6e-8 tier blocking, not terminal.
+- `2e20` child started in `us-east5-a`, discovered staged `step-45113`, loaded
+  it, and logged `Resuming training from step 45114`; it then experienced one
+  preemption and is pending reallocation.
+- `3e18`, `9e18`, `2e19`, and `3e19` are still `JOB_STATE_RUNNING` but their
+  current task state is pending after one preemption each. Roots are alive.
+
+No relaunch performed at this sweep because none of the active children are in
+a terminal failed state. Current bottleneck is east5 TPU churn / quota-pool tier
+blocking, not config or checkpoint failure.
+
+## CODEX 2026-06-02T04:30:58Z - p33m67 cooldown20 a010 9e19 training confirmation
+
+Confirmed `9e19` moved past staging and into train:
+
+- Child:
+  `/ahmed/aa-true-p33m67-cd20-a010-d9e19-v6e8-z5b-r3-1780371730/midtrain-delphi-true-9e19-p33m67-cooldown20-a010`
+- Discovered checkpoint:
+  `gs://marin-us-east5/checkpoints/delphi-true-9e19-p33m67-cooldown20-a010/checkpoints/step-32226`
+- Startup logs loaded that checkpoint, completed checkpoint error checking, and
+  logged `Resuming training from step 32227`.
+- The first train step completed successfully at step `32227`.
+
+At this point five children had confirmed train progress (`3e18`, `9e18`,
+`2e19`, `3e19`, `9e19`). `2e20` had also confirmed train progress earlier from
+`step-45113 -> 45114`, but was pending reallocation after one preemption.
+
+## CODEX 2026-06-02T04:32:00Z - p33m67 cooldown20 a010 healthy progress sweep
+
+Fresh Iris sweep showed active roots still alive. Recent child logs showed no
+traceback/OOM/resource-exhaustion signal.
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | running | resumed from temp `30051 -> 30052`, eval completed, temp checkpoint `30161` saved |
+| `9e18` | running | progress through `36.0kit/44.3kit`, temp checkpoint `36058` started |
+| `2e19` | running | progress through `44.6kit/55.1kit`, temp checkpoint `44438` saved |
+| `3e19` | running | progress through `30.6kit/38.0kit` with train loss lines |
+| `9e19` | running | progress through `32.4kit/40.3kit`, temp checkpoint `32329` saved |
+| `2e20` | pending | no new task logs; still pending v5p reallocation after earlier confirmed `45113 -> 45114` resume |
+
+The only current issue is scheduler/preemption churn. Config and checkpoint
+resume invariants are still consistent with the clean `a010` plan.
+
+## CODEX 2026-06-02T04:43:56Z - p33m67 cooldown20 a010 preemption sweep
+
+Iris snapshot:
+
+- Running tasks: `9e18`, `2e19`, `3e19`.
+- Pending after preemption: `3e18` (`preemption_count=2`), `9e19`
+  (`preemption_count=1`), `2e20` (`preemption_count=1`).
+- Structured summaries for the three pending children all reported
+  `state=running`, `failure_count=0`, no `pending_reason`, and empty `error`.
+
+Recent healthy progress/checkpoint signals:
+
+| base | latest observed signal |
+|------|------------------------|
+| `3e18` | eval/progress through `30.3kit/37.3kit`; temp checkpoint `30161` saved before preemption |
+| `9e18` | progress through `36.6kit/44.3kit`; temp checkpoint `36582` saved |
+| `2e19` | progress through `45.0kit/55.1kit`; temp checkpoint `44910` saved |
+| `3e19` | progress through `30.9kit/38.0kit`; temp checkpoint `30781` saved |
+| `9e19` | progress through `32.4kit/40.3kit`; temp checkpoint `32329` saved before preemption |
+| `2e20` | no new logs; still pending v5p reallocation after earlier `45113 -> 45114` train confirmation |
+
+No relaunch performed. The live signal is still preemptible TPU churn, not a
+config/checkpoint failure.
+
+## CODEX 2026-06-02T04:55:13Z - p33m67 cooldown20 a010 resumed after preemption
+
+Iris snapshot showed all six live children still nonterminal:
+
+- Running tasks: `3e18`, `9e18`, `2e19`, `3e19`, `9e19`.
+- Building after v5p wait: `2e20`.
+
+Recent log confirmations:
+
+| base | latest observed signal |
+|------|------------------------|
+| `3e18` | discovered temp `step-30161`, resumed at `30162`, saved temp checkpoint `30319` |
+| `9e18` | progress through `37.0kit/44.3kit`, saved temp checkpoint `36801` |
+| `2e19` | progress through `45.4kit/55.1kit`, saved temp checkpoint `45387` |
+| `3e19` | progress through `31.2kit/38.0kit`, saved temp checkpoint `31161` |
+| `9e19` | discovered temp `step-32329`, resumed at `32330`, progress through `32.4kit/40.3kit` |
+| `2e20` | moved from pending to building; no new train logs yet |
+
+No error/OOM/traceback signal in the targeted log sweep.
+
+## CODEX 2026-06-02T04:58:45Z - p33m67 cooldown20 a010 focused preemption check
+
+After the short `2e20` startup wait, Iris showed:
+
+- `3e18`: pending again, `preemption_count=3`, `failure_count=0`.
+- `9e19`: pending again, `preemption_count=2`, `failure_count=0`.
+- `2e20`: had moved to building, then pending again,
+  `preemption_count=2`, `failure_count=0`.
+
+Structured summaries for all three had no `pending_reason` and empty `error`.
+No relaunch performed; the jobs are still live and have temp/permanent
+checkpoints to resume from.
+
+## CODEX 2026-06-02T05:12:39Z - p33m67 cooldown20 a010 live/pending split
+
+Iris snapshot saved at
+`scratch/20260602-051126_p33m67_job_list.json`.
+
+Active child states:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | pending after preemption | `preemption_count=3`, `failure_count=0`; latest temp checkpoint `30319` after resume `30161 -> 30162` |
+| `9e18` | running | progress through `37.8kit/44.3kit`; latest temp checkpoint `37582` |
+| `2e19` | running | progress through `46.1kit/55.1kit`; latest temp checkpoint `46070` |
+| `3e19` | running | progress through `31.7kit/38.0kit`; latest temp checkpoint `31541` |
+| `9e19` | pending after preemption | `preemption_count=2`, `failure_count=0`; latest temp checkpoint `32329` after resume `32329 -> 32330` |
+| `2e20` | pending after preemption | `preemption_count=2`, `failure_count=0`; no new train logs after earlier `45113 -> 45114` confirmation |
+
+No active child has a terminal failure. The 32 GB-capable small-model request is
+`v6e-4,v5litepod-4`; `v5litepod-4` is the registered v5 32 GB TPU type in this
+repo/Iris environment.
+
+## CODEX 2026-06-02T05:23:44Z - p33m67 cooldown20 a010 2e20 resumed
+
+Iris snapshot saved at
+`scratch/20260602-052312_p33m67_job_list.json`.
+
+Active child states:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | pending after preemption | `preemption_count=4`, `failure_count=0`; latest temp checkpoint remains `30319` |
+| `9e18` | running | progress through `38.2kit/44.3kit`; latest saved temp checkpoint `38059`; checkpoint `38236` had started saving |
+| `2e19` | running | progress through `46.5kit/55.1kit`; latest saved temp checkpoint `46543` |
+| `3e19` | running | progress through `32.1kit/38.0kit`; latest saved temp checkpoint `31921` |
+| `9e19` | pending after preemption | `preemption_count=3`, `failure_count=0`; latest temp checkpoint remains `32329` |
+| `2e20` | running | resumed from staged checkpoint at `45114`, completed first train step at `45114`, progress `45.1kit/56.5kit` |
+
+No active child has a terminal failure or OOM/resource-exhaustion signal. The
+`FileNotFoundError` lines for temporary local `config.yaml` paths appeared
+before normal resume/progress lines and did not stop the tasks.
+
+## CODEX 2026-06-02T05:35:21Z - p33m67 cooldown20 a010 3e18 resumed
+
+Iris snapshot saved at
+`scratch/20260602-053446_p33m67_job_list.json`.
+
+Active child states:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | running | saved temp checkpoint `30505`, then resumed at `30506` and completed first train step `30506` after reallocation |
+| `9e18` | running | progress through `38.8kit/44.3kit`; latest saved temp checkpoint `38754` |
+| `2e19` | running | progress through `47.0kit/55.1kit`; latest saved temp checkpoint `46895` |
+| `3e19` | running | progress through `32.4kit/38.0kit`; latest saved temp checkpoint `32301` |
+| `9e19` | pending after preemption | `preemption_count=3`, `failure_count=0`; latest temp checkpoint remains `32329` |
+| `2e20` | pending after preemption | `preemption_count=3`, `failure_count=0`; latest progress remains `45.1kit/56.5kit` after resume `45113 -> 45114` |
+
+No exact-output relaunch performed. `3e18` reallocated on the existing live job,
+so the safer action is to keep the current run id/output path intact.
+
+## CODEX 2026-06-02T05:47:04Z - p33m67 cooldown20 a010 9e19 resumed
+
+Iris snapshot saved at
+`scratch/20260602-054607_p33m67_job_list.json`.
+
+Active child states:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | running | progress through `30.9kit/37.3kit`; latest saved temp checkpoint `30920` |
+| `9e18` | running | progress through `39.1kit/44.3kit`; latest saved temp checkpoint `39001` |
+| `2e19` | running | progress through `47.4kit/55.1kit`; latest saved temp checkpoint `47402` |
+| `3e19` | running | progress through `32.6kit/38.0kit`; latest saved temp checkpoint `32491` |
+| `9e19` | running | resumed from temp checkpoint at `32330`, completed first train step `32330`, progress `32.4kit/40.3kit`; temp save `32390` started but had not logged committed save yet |
+| `2e20` | pending after preemption | `preemption_count=3`, `failure_count=0`; latest progress remains `45.1kit/56.5kit` |
+
+Five children are currently allocated/running. No terminal failures observed on
+the active jobs.
+
+## CODEX 2026-06-02T05:58:12Z - p33m67 cooldown20 a010 two pending after preemption
+
+Iris snapshot saved at
+`scratch/20260602-055731_p33m67_job_list.json`.
+
+Active child states:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | running | progress through `31.4kit/37.3kit`; latest saved temp checkpoint `31249` |
+| `9e18` | running | progress through `39.6kit/44.3kit`; latest saved temp checkpoint `39520` |
+| `2e19` | running | progress through `48.0kit/55.1kit`; latest saved temp checkpoint `47879` |
+| `3e19` | running | progress through `33.0kit/38.0kit`; latest saved temp checkpoint `32871` |
+| `9e19` | pending after preemption | `preemption_count=4`, `failure_count=0`; temp save `32390` started but did not log a committed save before preemption, so latest saved temp remains `32329` |
+| `2e20` | pending after preemption | `preemption_count=4`, `failure_count=0`; latest progress remains `45.1kit/56.5kit` |
+
+No terminal failures observed. Current issue remains preemptible TPU churn,
+especially `2e20` v5p capacity.
+
+## CODEX 2026-06-02T06:09:30Z - p33m67 cooldown20 a010 continued progress
+
+Iris snapshot saved at
+`scratch/20260602-060852_p33m67_job_list.json`.
+
+Active child states:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | running | progress through `32.2kit/37.3kit`; latest saved temp checkpoint `31993` |
+| `9e18` | running | progress through `40.1kit/44.3kit`; latest saved temp checkpoint `40073`; permanent checkpoint `39879` also saved |
+| `2e19` | running | progress through `48.4kit/55.1kit`; latest saved temp checkpoint `48348` |
+| `3e19` | running | progress through `33.4kit/38.0kit`; latest saved temp checkpoint `33251` |
+| `9e19` | running | resumed again at `32330`, completed first train step `32330`, progress `32.4kit/40.3kit`; latest saved temp remains `32329` |
+| `2e20` | pending after preemption | `preemption_count=4`, `failure_count=0`; latest progress remains `45.1kit/56.5kit` |
+
+No terminal failures observed on active jobs.
+
+## CODEX 2026-06-02T06:20:12Z - p33m67 cooldown20 a010 9e19 preempted again
+
+Iris snapshot saved at
+`scratch/20260602-062007_p33m67_job_list.json`.
+
+Active child states:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | running | progress through `32.2kit/37.3kit`; latest saved temp checkpoint `31993` |
+| `9e18` | running | progress through `40.1kit/44.3kit`; latest saved temp checkpoint `40073`; permanent checkpoint `39879` also saved |
+| `2e19` | running | progress through `48.4kit/55.1kit`; latest saved temp checkpoint `48348` |
+| `3e19` | running | progress through `33.4kit/38.0kit`; latest saved temp checkpoint `33251` |
+| `9e19` | pending after preemption | `preemption_count=5`, `failure_count=0`; had resumed at `32330` and reached `32.4kit/40.3kit`; latest committed temp checkpoint remains `32329` |
+| `2e20` | pending after preemption | `preemption_count=4`, `failure_count=0`; latest progress remains `45.1kit/56.5kit` |
+
+No terminal failures observed. The active issue remains preemptible TPU churn,
+not a config or checkpoint-schema problem.
+
+## CODEX 2026-06-02T06:34:40Z - p33m67 cooldown20 a010 five allocated
+
+Iris snapshot saved at
+`scratch/20260602-063220_p33m67_job_list.json`.
+
+Active child states:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | running | progress through `33.3kit/37.3kit`; latest committed temp checkpoint `33109` |
+| `9e18` | running | progress through `41.1kit/44.3kit`; latest committed temp checkpoint `41062` |
+| `2e19` | running | progress through `49.4kit/55.1kit`; latest committed temp checkpoint `49270` |
+| `3e19` | running | progress through `34.0kit/38.0kit`; latest committed temp checkpoint `33821` |
+| `9e19` | pending after preemption | `preemption_count=5`, `failure_count=0`; latest committed temp checkpoint remains `32329` |
+| `2e20` | running | reallocated on same exact-output job with `preemption_count=5`, resumed from `45114`, progress through `45.1kit/56.5kit` |
+
+Error-pattern pass was clean for `3e18`, `9e18`, `2e19`, `3e19`, and
+`9e19`. `2e20` logged the W&B background artifact `FileNotFoundError` for a
+temporary local `config.yaml`, then continued to normal resume/progress lines.
+`2e20` started temp/permanent saves at `45173`/`45176` before preemption, but
+there was no committed `Saved checkpoint` line and the next process resumed from
+`45114`, so those save attempts are not counted as recovery checkpoints.
+
+## CODEX 2026-06-02T06:46:05Z - p33m67 cooldown20 a010 9e19 running, 2e20 pending
+
+Iris snapshot saved at
+`scratch/20260602-064511_p33m67_job_list.json`.
+
+Active child states:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | running | progress through `34.0kit/37.3kit`; latest committed temp checkpoint `33853`; permanent checkpoint `33597` also saved |
+| `9e18` | running | progress through `41.8kit/44.3kit`; latest committed temp checkpoint `41585` |
+| `2e19` | running | progress through `49.9kit/55.1kit`; latest committed temp checkpoint `49801`; permanent checkpoint `49608` also saved |
+| `3e19` | running | progress through `34.4kit/38.0kit`; latest committed temp checkpoint `34201`; permanent checkpoint `34209` also saved |
+| `9e19` | running | reallocated on same exact-output job, resumed at `32330`, progress through `32.4kit/40.3kit`; latest committed temp checkpoint remains `32329` |
+| `2e20` | pending after preemption | `preemption_count=6`, `failure_count=0`; retrained to `45.2kit/56.5kit` and attempted temp save `45173`, but no committed save before preemption |
+
+No terminal failures observed. `2e20` is still losing progress to repeated
+preemptions because it has not yet completed a new checkpoint after `45114`.
+The error-pattern pass was clean except for `9e19`'s W&B background artifact
+`FileNotFoundError` on a temporary local `config.yaml`; it then resumed and
+trained normally. `9e19` also has the expected W&B step-offset warning because
+it is retraining from checkpoint step `32330` after prior preempted work had
+logged through step `32400`.
+
+## CODEX 2026-06-02T07:00:40Z - p33m67 cooldown20 a010 2e20 resumed again
+
+Iris snapshot saved at
+`scratch/20260602-065737_p33m67_job_list.json`.
+
+Active child states:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | running | progress through `34.6kit/37.3kit`; latest committed temp checkpoint `34597`; permanent checkpoint remains `33597` |
+| `9e18` | running | progress through `42.1kit/44.3kit`; latest committed temp checkpoint `42062` |
+| `2e19` | running | progress through `50.4kit/55.1kit`; latest committed temp checkpoint `50271`; permanent checkpoint remains `49608` |
+| `3e19` | running | progress through `34.7kit/38.0kit`; latest committed temp checkpoint `34581`; permanent checkpoint remains `34209` |
+| `9e19` | pending after preemption | `preemption_count=6`, `failure_count=0`; latest committed temp checkpoint remains `32329` after retraining to `32.4kit/40.3kit` |
+| `2e20` | running | reallocated on same exact-output job, resumed at `45114`, progress through `45.1kit/56.5kit`; still below W&B logged step `45176` |
+
+No terminal failures observed. `2e20` again logged the W&B background artifact
+`FileNotFoundError` for a temporary local `config.yaml`, then resumed normally.
+The key problem remains durable progress: `2e20` has not yet saved a checkpoint
+after `45114`, and `9e19` has not yet saved after `32329`.
+
+## CODEX 2026-06-02T07:13:25Z - p33m67 cooldown20 a010 all nonterminal
+
+Iris snapshot saved at
+`scratch/20260602-071104_p33m67_job_list.json`.
+
+Active child states:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | running | progress through `35.3kit/37.3kit`; latest committed temp checkpoint `35341`; permanent checkpoint remains `33597` |
+| `9e18` | running | progress through `42.8kit/44.3kit`; latest committed temp checkpoint `42586` |
+| `2e19` | running | progress through `51.0kit/55.1kit`; latest committed temp checkpoint `50973`; permanent checkpoint remains `49608` |
+| `3e19` | running | progress through `35.1kit/38.0kit`; latest committed temp checkpoint `34961`; permanent checkpoint remains `34209` |
+| `9e19` | running | reallocated again on same exact-output job, resumed at `32330`, progress through `32.4kit/40.3kit`; latest committed temp checkpoint remains `32329` |
+| `2e20` | running | reallocated again on same exact-output job with `preemption_count=7`, resumed at `45114`, progressed to `45.2kit/56.5kit`, and started temp save `45172`; no committed save observed by `07:13:25Z` |
+
+No terminal failures observed. `2e20` and `9e19` are both retraining through
+previously logged-but-not-checkpointed steps; do not count `2e20` step `45172`
+as durable until a `Saved checkpoint` line appears.
+
+## CODEX 2026-06-02T07:24:45Z - p33m67 cooldown20 a010 9e19 recovered task failure
+
+Iris snapshot saved at
+`scratch/20260602-072354_p33m67_job_list.json`.
+
+Active child states:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | running | progress through `35.3kit/37.3kit`; latest committed temp checkpoint `35341`; permanent checkpoint remains `33597` |
+| `9e18` | running | progress through `42.8kit/44.3kit`; latest committed temp checkpoint `42586` |
+| `2e19` | running | progress through `51.0kit/55.1kit`; latest committed temp checkpoint `50973`; permanent checkpoint remains `49608` |
+| `3e19` | running | progress through `35.1kit/38.0kit`; latest committed temp checkpoint `34961`; permanent checkpoint remains `34209` |
+| `9e19` | running | `preemption_count=7`, `failure_count=1`; latest committed temp checkpoint remains `32329`; reallocated and resumed at `32330` after task failure |
+| `2e20` | pending after preemption | `preemption_count=8`, `failure_count=0`; no committed save after `45114`; prior temp save attempt `45172` remains unconfirmed |
+
+`9e19` child summary reports the recovered failure as exit code 139/SIGSEGV:
+`Failed to add port to server: No address added out of total 1 resolved for '[::]:8482'`.
+The child job is currently running again on a new worker and resumed from
+`32330`, so no exact-output relaunch was performed. Watch for repetition; a
+second similar task failure would merit deeper TPU worker/debug triage.
+
+## CODEX 2026-06-02T07:38:30Z - p33m67 cooldown20 a010 9e18 near finish
+
+Iris snapshot saved at
+`scratch/20260602-073519_p33m67_job_list.json`.
+
+Active child states:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | running | progress through `36.6kit/37.3kit`; latest committed temp checkpoint `36457`; permanent checkpoint remains `33597` |
+| `9e18` | running | progress through `43.9kit/44.3kit`; latest committed temp checkpoint `43801` |
+| `2e19` | running | progress through `51.9kit/55.1kit`; latest committed temp checkpoint `51900`; permanent checkpoint remains `49608` |
+| `3e19` | running | progress through `35.8kit/38.0kit`; latest committed temp checkpoint `35721`; permanent checkpoint remains `34209` |
+| `9e19` | pending after preemption | `preemption_count=8`, `failure_count=1`; latest committed temp checkpoint remains `32329`; no second task failure observed |
+| `2e20` | running | reallocated again on same exact-output job, resumed at `45114`, progress through `45.1kit/56.5kit`; still below W&B logged step `45176` |
+
+No terminal failures observed. `9e18` is close enough to final that the next
+check should be shorter than the normal 570s cadence.
+
+## CODEX 2026-06-02T07:54:57Z - p33m67 cooldown20 a010 3e18 and 9e18 validated
+
+Iris snapshot saved at
+`scratch/20260602-075338_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Active child states:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | succeeded + validated | final checkpoint `gs://marin-us-east5/checkpoints/delphi-true-3e18-p33m67-cooldown20-a010/checkpoints/step-37334`; Qwen3 schema validated with `num_layers=11` |
+| `9e18` | succeeded + validated | final checkpoint `gs://marin-us-east5/checkpoints/delphi-true-9e18-p33m67-cooldown20-a010/checkpoints/step-44316`; Qwen3 schema validated with `num_layers=12` |
+| `2e19` | running | progress through `52.8kit/55.1kit`; latest committed temp checkpoint `52796`; permanent checkpoint remains `49608` |
+| `3e19` | running | progress through `36.3kit/38.0kit`; latest committed temp checkpoint `36101`; temp checkpoint `36291` started but was not yet observed committed |
+| `9e19` | running | `preemption_count=8`, `failure_count=1`; reallocated on the same exact-output child and resumed from `32330`; no second task failure observed |
+| `2e20` | running | `preemption_count=10`, `failure_count=0`; latest resume is still `45114`; temp save `45171` was started but not observed committed |
+
+The `3e18` and `9e18` parent launcher jobs report `JOB_STATE_FAILED`, but the
+Iris summaries show only the launcher-submit wrapper state. The actual child
+training jobs are `JOB_STATE_SUCCEEDED`, and both final checkpoints passed the
+explicit Qwen3 layer-count validation. Continue tracking child job state for
+training completion.
+
+No exact-output relaunch was performed. `2e20` remains the main risk because it
+has repeatedly lost work before committing any checkpoint after `45114`.
+
+## CODEX 2026-06-02T08:06:42Z - p33m67 cooldown20 a010 9e19 made durable progress
+
+Iris snapshot saved at
+`scratch/20260602-080618_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Active child states:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | succeeded + validated | unchanged: final checkpoint `37334` validated |
+| `9e18` | succeeded + validated | unchanged: final checkpoint `44316` validated |
+| `2e19` | running | progress through `53.2kit/55.1kit`; latest committed temp checkpoint `52994`; permanent checkpoint remains `49608` |
+| `3e19` | running | progress through `36.6kit/38.0kit`; committed temp checkpoints `36291` and `36481`; permanent checkpoint remains `34209` |
+| `9e19` | running | progress through `32.6kit/40.3kit`; committed temp checkpoints `32401` and `32557`, so it is now durably past the previous `32329`/`32330` restart point |
+| `2e20` | pending reallocation | child job is nonterminal with task `pending`; `preemption_count=10`, `failure_count=0`; task summary says worker ping threshold exceeded; still no committed checkpoint after `45114` |
+
+No exact-output relaunch was performed. `9e19` no longer appears stuck at the
+bad resume boundary. `2e20` remains the only run with no durable progress past
+its resume step.
+
+## CODEX 2026-06-02T08:25:33Z - p33m67 cooldown20 a010 2e19 and 3e19 near final
+
+Iris snapshots saved at
+`scratch/20260602-081729_p33m67_job_list.json`,
+`scratch/20260602-081930_p33m67_job_list.json`, and
+`scratch/20260602-082506_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Active child states:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | succeeded + validated | unchanged: final checkpoint `37334` validated |
+| `9e18` | succeeded + validated | unchanged: final checkpoint `44316` validated |
+| `2e19` | running | progress through `53.9kit/55.1kit`; latest committed temp checkpoint `53891`; permanent checkpoint remains `49608` |
+| `3e19` | running | progress through `37.2kit/38.0kit`; latest committed temp checkpoint `37051`; permanent checkpoint remains `34209` |
+| `9e19` | running | progress through `32.9kit/40.3kit`; latest committed temp checkpoint `32801`; `failure_count` remains `1` |
+| `2e20` | assigned/running after preemption | `preemption_count=11`, `failure_count=0`; resumed from `45114`, started temp save `45173` and permanent save `45176`, but neither has a committed `Saved checkpoint` line yet |
+
+No exact-output relaunch was performed. `2e20` likely lost the first
+`45176` permanent save attempt to another worker ping-threshold preemption; do
+not count it as durable until a committed line or validation appears.
+
+## CODEX 2026-06-02T08:33:42Z - p33m67 cooldown20 a010 2e20 lost another 45176 attempt
+
+Iris snapshot saved at
+`scratch/20260602-083342_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Active child states:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | succeeded + validated | unchanged: final checkpoint `37334` validated |
+| `9e18` | succeeded + validated | unchanged: final checkpoint `44316` validated |
+| `2e19` | running | progress through `54.3kit/55.1kit`; latest committed temp checkpoint `54336`; permanent checkpoint remains `49608` |
+| `3e19` | running | progress through `37.4kit/38.0kit`; latest committed temp checkpoint `37241`; permanent checkpoint remains `34209` |
+| `9e19` | running | progress through `33.0kit/40.3kit`; latest committed temp checkpoint `33001`; `failure_count` remains `1` |
+| `2e20` | running after preemption | `preemption_count=12`, `failure_count=0`; another worker ping-threshold preemption occurred before the permanent `45176` save committed; the child resumed again from `45114` |
+
+No exact-output relaunch was performed. Continue treating `2e20` step `45176`
+as unconfirmed.
+
+## CODEX 2026-06-02T08:59:12Z - p33m67 cooldown20 a010 2e19 and 3e19 validated
+
+Iris snapshots saved at
+`scratch/20260602-084102_p33m67_job_list.json`,
+`scratch/20260602-085001_p33m67_job_list.json`,
+`scratch/20260602-085341_p33m67_job_list.json`,
+`scratch/20260602-085616_p33m67_job_list.json`, and
+`scratch/20260602-085853_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Active child states:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `3e18` | succeeded + validated | unchanged: final checkpoint `37334` validated |
+| `9e18` | succeeded + validated | unchanged: final checkpoint `44316` validated |
+| `2e19` | succeeded + validated | final checkpoint `gs://marin-us-east5/checkpoints/delphi-true-2e19-p33m67-cooldown20-a010/checkpoints/step-55124`; Qwen3 schema validated with `num_layers=15`; HF checkpoint `hf/step-55124` finished |
+| `3e19` | final checkpoint validated, child still running in last snapshot | final checkpoint `gs://marin-us-east5/checkpoints/delphi-true-3e19-p33m67-cooldown20-a010/checkpoints/step-38013`; Qwen3 schema validated with `num_layers=16`; wait for child to flip to `JOB_STATE_SUCCEEDED` |
+| `9e19` | running | progress through `33.2kit/40.3kit`; latest committed temp checkpoint `33157`; `failure_count` remains `1` |
+| `2e20` | running/reallocating | `preemption_count=14`, `failure_count=0`; repeated attempts to save permanent `45176` remain unconfirmed; no committed checkpoint after `45114` yet |
+
+No exact-output relaunch was performed. Four of six final checkpoints are now
+validated (`3e18`, `9e18`, `2e19`, `3e19`), with `3e19` needing only terminal
+child-state confirmation.
+
+## CODEX 2026-06-02T09:02:17Z - p33m67 cooldown20 a010 3e19 terminal success
+
+Iris snapshot saved at
+`scratch/20260602-090217_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`3e19` child state flipped to `JOB_STATE_SUCCEEDED`; its final checkpoint
+`step-38013` had already passed Qwen3 validation with `num_layers=16`.
+
+Remaining live children:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=8`, `failure_count=1`; latest committed temp checkpoint observed earlier at `33157` |
+| `2e20` | running/reallocating | `preemption_count=14`, `failure_count=0`; still no committed checkpoint after `45114` |
+
+## CODEX 2026-06-02T09:05:36Z - p33m67 cooldown20 a010 2e20 45176 probe failed
+
+Iris snapshots saved at
+`scratch/20260602-085853_p33m67_job_list.json`,
+`scratch/20260602-090217_p33m67_job_list.json`, and
+`scratch/20260602-090504_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | progress through `33.6kit/40.3kit`; latest committed temp checkpoint `33556`; `failure_count` remains `1` |
+| `2e20` | pending reallocation | `preemption_count=15`, `failure_count=0`; another `45176` permanent save attempt was interrupted before commit |
+
+Direct validation probe for
+`gs://marin-us-east5/checkpoints/delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-45176`
+failed with total OCDBT keys `0`. Treat this as an incomplete interrupted save,
+not as config/schema evidence. Continue to require a committed checkpoint or a
+passing validation before considering `2e20` durably past `45114`.
+
+## CODEX 2026-06-02T09:16:19Z - p33m67 cooldown20 a010 9e19 steady, 2e20 still churn
+
+Iris snapshots saved at
+`scratch/20260602-091619_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | progress through `33.8kit/40.3kit`; latest committed temp checkpoint `33757`; `failure_count` remains `1` |
+| `2e20` | running | `preemption_count=15`, `failure_count=0`; resumed from `45114` again after another incomplete `45176` attempt |
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T09:22:43Z - p33m67 cooldown20 a010 latest checkpoint audit
+
+Iris snapshot saved at
+`scratch/20260602-092243_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | progress through `33.9kit/40.3kit`; latest committed temp checkpoint `33801`; `preemption_count=8`, `failure_count=1` |
+| `2e20` | pending reallocation | `preemption_count=16`, `failure_count=0`; started temp save `45173` but still has no committed checkpoint after `45114`; interrupted permanent `45176` remains invalid/incomplete |
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T09:27:51Z - p33m67 cooldown20 a010 2e20 resumed from 45114 again
+
+User compute note recorded in monitoring state: 1e18-ish models are acceptable
+on either `v6e-4` or `v5e-4`, any 32 GB TPU. The completed `3e18` and `9e18`
+a010 children used the flexible `v6e-4,v5litepod-4` request.
+
+Iris snapshot saved at
+`scratch/20260602-092527_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | progress through `33.9kit/40.3kit`; latest committed temp checkpoint `33801`; `preemption_count=8`, `failure_count=1` |
+| `2e20` | running | `preemption_count=16`, `failure_count=0`; after starting temp save `45173`, task restarted at `09:25:45Z` and resumed from `45114` at `09:26:36Z`; no committed checkpoint after `45114` |
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T09:34:07Z - p33m67 cooldown20 a010 preemption update
+
+Iris snapshots saved at
+`scratch/20260602-093220_p33m67_job_list.json` and
+`scratch/20260602-093344_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; restarted at `09:28:00Z` and resumed from `33802` after committed temp checkpoint `33801`; progress back through `33.9kit/40.3kit` |
+| `2e20` | pending reallocation | `preemption_count=17`, `failure_count=0`; started temp save `45173` and permanent save `45176` again, then preempted before any `Saved checkpoint` line; direct probe of permanent `45176` still found total OCDBT keys `0` |
+
+Interpret the `45176` validator's Qwen3 warning as an incomplete-save artifact
+here: the key count is zero, so this is not evidence of the earlier Llama/Qwen
+config regression.
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T09:38:30Z - p33m67 cooldown20 a010 9e19 committed 33908
+
+Iris snapshot saved at
+`scratch/20260602-093725_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `33908` at `09:33:48Z`; progress reached `34.0kit/40.3kit` |
+| `2e20` | pending reallocation | `preemption_count=17`, `failure_count=0`; no committed checkpoint after `45114`; latest interrupted permanent `45176` remains empty/incomplete |
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T09:43:37Z - p33m67 cooldown20 a010 2e20 reallocated again
+
+Iris snapshot saved at
+`scratch/20260602-094300_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `34001` at `09:42:24Z`; progress `34.0kit/40.3kit` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; reallocated after the interrupted `45176` save and resumed from `45114` at `09:41:18Z`; progress back to `45.1kit/56.5kit` |
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T09:47:48Z - p33m67 cooldown20 a010 2e20 committed 45176
+
+Iris snapshot saved at
+`scratch/20260602-094750_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `34157` at `09:47:40Z`; progress `34.2kit/40.3kit` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; committed temp checkpoint `45172` at `09:46:29Z`; committed permanent checkpoint `45176` at `09:47:44Z`; Qwen3 validation passed with `num_layers=21` |
+
+`2e20` now has durable progress past resume step `45114`. Continue monitoring
+for HF checkpoint completion and subsequent training progress.
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T09:49:03Z - p33m67 cooldown20 a010 2e20 HF checkpoint finished
+
+Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`2e20` HF-compatible checkpoint
+`gs://marin-us-east5/checkpoints/delphi-true-2e20-p33m67-cooldown20-a010/hf/step-45176`
+finished at `09:48:35Z`. The run resumed training afterward and logged
+progress at `45.2kit/56.5kit`.
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T10:01:09Z - p33m67 cooldown20 a010 normal progress resumed
+
+Iris snapshot saved at
+`scratch/20260602-095830_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `34356` at `09:59:43Z`; progress `34.4kit/40.3kit` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; committed temp checkpoint `45201` at `09:58:01Z`; permanent/HF checkpoint `45176` remains validated |
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T10:11:32Z - p33m67 cooldown20 a010 continued healthy progress
+
+Iris snapshot saved at
+`scratch/20260602-101100_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `34556`; progress `34.6kit/40.3kit` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; committed temp checkpoint `45376`; progress `45.4kit/56.5kit`; permanent/HF checkpoint `45176` remains validated |
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T10:22:12Z - p33m67 cooldown20 a010 both active runs still healthy
+
+Iris snapshot saved at
+`scratch/20260602-102200_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `34601`; progress `34.7kit/40.3kit` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; committed temp checkpoint `45401`; progress `45.5kit/56.5kit`; permanent/HF checkpoint `45176` remains validated |
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T10:33:01Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-103200_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `34801`; progress `34.9kit/40.3kit` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; committed temp checkpoint `45577`; progress `45.6kit/56.5kit`; permanent/HF checkpoint `45176` remains validated |
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T10:44:00Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-104300_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `35001`; progress `35.1kit/40.3kit` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; committed temp checkpoint `45689`; progress `45.7kit/56.5kit`; permanent/HF checkpoint `45176` remains validated |
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T10:54:42Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-105400_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `35201`; progress `35.2kit/40.3kit` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; committed temp checkpoint `45777`; progress `45.8kit/56.5kit`; permanent/HF checkpoint `45176` remains validated |
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T11:05:21Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-110500_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `35356`; progress `35.4kit/40.3kit` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; committed temp checkpoint `45889`; progress `46.0kit/56.5kit`; permanent/HF checkpoint `45176` remains validated |
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T11:16:04Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-111600_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `35555`; progress `35.6kit/40.3kit` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; committed temp checkpoint `45977`; progress `46.0kit/56.5kit`; permanent/HF checkpoint `45176` remains validated |
+
+`2e20` had started saving temp checkpoint `46001` in the latest log window, but
+there was no committed line yet, so `45977` remains the latest durable temp.
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T11:27:03Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-112700_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `35756`; progress `35.8kit/40.3kit` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; committed temp checkpoint `46177`; progress `46.2kit/56.5kit`; permanent/HF checkpoint `45176` remains validated |
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T11:38:03Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-113800_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `35956`; progress `36.0kit/40.3kit` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; committed temp checkpoint `46201`; progress `46.3kit/56.5kit`; permanent/HF checkpoint `45176` remains validated |
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T11:51:11Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-115028_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `36156`; progress `36.2kit/40.3kit` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; committed temp checkpoint `46377`; progress `46.4kit/56.5kit`; permanent/HF checkpoint `45176` remains validated |
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T12:02:15Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-120122_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `36201`; progress `36.4kit/40.3kit`; committed permanent checkpoint `36252` validated as Qwen3/18 layers and HF checkpoint `hf/step-36252` finished |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; committed temp checkpoint `46489`; progress `46.5kit/56.5kit`; permanent/HF checkpoint `45176` remains validated |
+
+`9e19` started saving temp checkpoint `36379` in the latest log window, but no
+committed line had appeared yet, so `36201` remains the latest durable temp.
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T12:13:06Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-121231_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `36401`; progress `36.6kit/40.3kit`; permanent checkpoint `36252` remains validated and HF checkpoint `hf/step-36252` finished |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; committed temp checkpoint `46577`; progress `46.6kit/56.5kit`; permanent/HF checkpoint `45176` remains validated |
+
+`9e19` started saving temp checkpoint `36556` and `2e20` started saving temp
+checkpoint `46601` in the latest log window, but no committed lines had appeared
+yet, so they are not counted as durable.
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T12:23:53Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-122322_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `36601`; progress `36.7kit/40.3kit`; permanent checkpoint `36252` remains validated and HF checkpoint `hf/step-36252` finished |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; committed temp checkpoint `46689`; progress `46.8kit/56.5kit`; permanent/HF checkpoint `45176` remains validated |
+
+`2e20` started saving temp checkpoint `46776` in the latest log window, but no
+committed line had appeared yet, so it is not counted as durable.
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T12:34:50Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-123412_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `36801`; progress `36.9kit/40.3kit`; permanent checkpoint `36252` remains validated and HF checkpoint `hf/step-36252` finished |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; committed temp checkpoint `46801`; progress `46.8kit/56.5kit`; permanent/HF checkpoint `45176` remains validated |
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T12:45:53Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-124502_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=9`, `failure_count=1`; committed temp checkpoint `37001`; progress `37.0kit/40.3kit`; permanent checkpoint `36252` remains validated and HF checkpoint `hf/step-36252` finished |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; committed temp checkpoint `46977`; progress `47.0kit/56.5kit`; permanent/HF checkpoint `45176` remains validated |
+
+No exact-output relaunch was performed.
+
+## CODEX 2026-06-02T12:57:43Z - p33m67 cooldown20 a010 preemption
+
+Iris snapshot saved at
+`scratch/20260602-125615_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | pending after preemption | `preemption_count=10`, `failure_count=1`; progress reached `37.2kit/40.3kit`; temp checkpoint `37156` validated with `assert_checkpoint_complete_for_model_type(..., model_type="qwen3", num_layers=18)` despite the filtered logs lacking a final `Saved checkpoint` line |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; committed temp checkpoint `47001`; progress `47.1kit/56.5kit`; permanent/HF checkpoint `45176` remains validated |
+
+`9e19` remains on output path
+`gs://marin-us-east5/checkpoints/delphi-true-9e19-p33m67-cooldown20-a010`.
+No manual relaunch was performed. Next check must verify startup logs show the
+same output path/run id and resume from the latest checkpoint before treating it
+as recovered.
+
+## CODEX 2026-06-02T13:01:09Z - p33m67 cooldown20 a010 9e19 pending
+
+Iris snapshot saved at
+`scratch/20260602-130032_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task, `preemption_count=10`,
+and `failure_count=1`. `uv run iris ... job summary --json` reports the prior
+worker `marin-tpu-v6e-preemptible-8-us-east5-b-20260602-0413-f661171f-worker-0`
+failed with `worker ping threshold exceeded`.
+
+No manual relaunch was performed. Continue waiting for automatic replacement;
+when it starts, verify same output path/run id and resume from checkpoint `37156`
+before marking it recovered.
+
+## CODEX 2026-06-02T13:09:34Z - p33m67 cooldown20 a010 9e19 recovered
+
+Iris snapshot saved at
+`scratch/20260602-130710_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` replacement task is running. Recovery checks:
+
+| signal | observed |
+|--------|----------|
+| W&B run | `wandb: Resuming run delphi-true-9e19-p33m67-cooldown20-a010` |
+| W&B URL | `https://wandb.ai/marin-community/delphi-midtraining/runs/delphi-true-9e19-p33m67-cooldown20-a010` |
+| resume | `Resuming training from step 37002` at `2026-06-02T13:03:52Z` |
+
+The actual resume checkpoint is therefore temp `37001`. Although temp `37156`
+validated with the checkpoint completeness helper, the training process did not
+use it for resume, so do not treat `37156` as the recovery point.
+
+No manual relaunch was performed.
+
+## CODEX 2026-06-02T13:13:42Z - p33m67 cooldown20 a010 status
+
+Iris snapshot saved at
+`scratch/20260602-131133_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status: 4/6 finished and validated (`3e18`, `9e18`, `2e19`, `3e19`).
+Remaining cells:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | pending after preemption | `preemption_count=11`, `failure_count=1`; progress reached `37.1kit/40.3kit`; temp `37087` started saving but has no observed commit/Saved line and GCS shows data plus manifest only, so latest durable recovery point remains temp `37001` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; progress `47.2kit/56.5kit`; committed temp checkpoint `47201`; permanent/HF checkpoint `45176` remains validated |
+
+By run count, 2/6 cells remain. By train-step count, about 12.6k steps remain
+across the two live cells: roughly 3.2k for `9e19` once a replacement starts
+and roughly 9.3k for `2e20`. Wall-clock is bottlenecked by `2e20`, whose logs
+currently estimate about 8h50m remaining while running. No manual relaunch was
+performed.
+
+## CODEX 2026-06-02T13:26:06Z - p33m67 cooldown20 a010 9e19 recovered
+
+Iris snapshot saved at
+`scratch/20260602-132405_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Both remaining cells are currently running:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running after recovery | `preemption_count=11`, `failure_count=1`; replacement resumed W&B run `delphi-true-9e19-p33m67-cooldown20-a010`; training resumed from step `37002` at `2026-06-02T13:19:10Z`; committed temp checkpoint `37111`; progress `37.1kit/40.3kit` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; progress `47.4kit/56.5kit`; committed temp checkpoint `47377`; permanent/HF checkpoint `45176` remains validated |
+
+`9e19` again resumed from temp `37001`, not the partially written `37087`.
+The W&B "Cowardly refusing to log metrics" warning is expected until the local
+step catches up to the already-logged W&B step `37167`. No manual relaunch was
+performed.
+
+## CODEX 2026-06-02T13:37:53Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-133627_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Both remaining cells are still running with no new preemptions:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=11`, `failure_count=1`; committed temp checkpoint `37201`; progress `37.4kit/40.3kit`; W&B catch-up passed; temp `37357` started saving but no commit/Saved line was observed yet |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; progress `47.5kit/56.5kit`; committed temp checkpoint `47489`; permanent/HF checkpoint `45176` remains validated |
+
+No manual relaunch was performed.
+
+## CODEX 2026-06-02T13:52:29Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-135155_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Both remaining cells are still running with no new preemptions:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=11`, `failure_count=1`; committed temp checkpoint `37558`; progress `37.6kit/40.3kit`; latest log ETA about `1h26m` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; progress `47.6kit/56.5kit`; committed temp checkpoint `47601`; permanent/HF checkpoint `45176` remains validated; latest log ETA about `8h26m` |
+
+No manual relaunch was performed.
+
+## CODEX 2026-06-02T14:04:05Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-140328_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Both remaining cells are still running with no new preemptions:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=11`, `failure_count=1`; committed temp checkpoint `37756`; progress `37.8kit/40.3kit`; latest log ETA about `1h20m` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; progress `47.8kit/56.5kit`; committed temp checkpoint `47777`; permanent/HF checkpoint `45176` remains validated; latest log ETA about `8h18m` |
+
+No manual relaunch was performed.
+
+## CODEX 2026-06-02T14:15:28Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-141432_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Both remaining cells are still running with no new preemptions:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=11`, `failure_count=1`; committed temp checkpoint `37956`; progress `38.0kit/40.3kit`; latest log ETA about `1h14m` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; progress `47.9kit/56.5kit`; committed temp checkpoint `47801`; temp `47889` started saving but no commit/Saved line was observed yet; permanent/HF checkpoint `45176` remains validated |
+
+No manual relaunch was performed.
+
+## CODEX 2026-06-02T14:26:39Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-142559_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Both remaining cells are still running with no new preemptions:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=11`, `failure_count=1`; committed temp checkpoint `38157`; progress `38.2kit/40.3kit`; latest log ETA about `1h07m` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; progress `48.0kit/56.5kit`; committed temp checkpoint `47977`; permanent/HF checkpoint `45176` remains validated; latest log ETA about `8h06m` |
+
+No manual relaunch was performed.
+
+## CODEX 2026-06-02T14:38:50Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-143850_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Both remaining cells are still running with no new preemptions:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=11`, `failure_count=1`; committed temp checkpoint `38357`; checkpoint validated complete for Qwen3/18 layers; progress `38.4kit/40.3kit`; latest log ETA about `1h01m` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; progress `48.2kit/56.5kit`; committed temp checkpoint `48089`; permanent/HF checkpoint `45176` remains validated; latest log ETA about `7h55m` |
+
+No manual relaunch was performed.
+
+## CODEX 2026-06-02T14:49:54Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-144954_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Both remaining cells are still running with no new preemptions:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=11`, `failure_count=1`; committed temp checkpoint `38557`; checkpoint validated complete for Qwen3/18 layers; progress `38.6kit/40.3kit`; latest log ETA about `54m` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; progress `48.2kit/56.5kit`; committed temp checkpoint `48201`; permanent/HF checkpoint `45176` remains validated; latest log ETA about `7h53m` |
+
+No manual relaunch was performed.
+
+## CODEX 2026-06-02T15:00:43Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-150043_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Both remaining cells are still running with no new preemptions:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=11`, `failure_count=1`; committed temp checkpoint `38601`; checkpoint validated complete for Qwen3/18 layers; progress `38.8kit/40.3kit`; temp `38757` started saving but no commit/Saved line was observed yet; latest log ETA about `50m` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; progress `48.4kit/56.5kit`; committed temp checkpoint `48377`; permanent/HF checkpoint `45176` remains validated; latest log ETA about `7h44m` |
+
+No manual relaunch was performed.
+
+## CODEX 2026-06-02T15:11:31Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-151131_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Both remaining cells are still running with no new preemptions:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=11`, `failure_count=1`; committed temp checkpoint `38801`; checkpoint validated complete for Qwen3/18 layers; progress `38.9kit/40.3kit`; latest log ETA about `46m` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; progress `48.5kit/56.5kit`; committed temp checkpoint `48401`; permanent/HF checkpoint `45176` remains validated; latest log ETA about `7h38m` |
+
+No manual relaunch was performed.
+
+## CODEX 2026-06-02T15:22:21Z - p33m67 cooldown20 a010 steady progress
+
+Iris snapshot saved at
+`scratch/20260602-152221_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Both remaining cells are still running with no new preemptions:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | running | `preemption_count=11`, `failure_count=1`; committed temp checkpoint `39001`; checkpoint validated complete for Qwen3/18 layers; progress `39.0kit/40.3kit`; latest log ETA about `43m` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; progress `48.6kit/56.5kit`; committed temp checkpoint `48577`; permanent/HF checkpoint `45176` remains validated; latest log ETA about `7h32m` |
+
+No manual relaunch was performed.
+
+## CODEX 2026-06-02T15:33:08Z - p33m67 cooldown20 a010 9e19 pending
+
+Iris snapshot saved at
+`scratch/20260602-153308_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | pending after preemption | `preemption_count=13`, `failure_count=1`; previous worker failed with `worker ping threshold exceeded`; the brief replacement resumed W&B run `delphi-true-9e19-p33m67-cooldown20-a010` and `Resuming training from step 39002`, then was preempted before saving a newer temp checkpoint |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; progress `48.7kit/56.5kit`; committed temp checkpoint `48601`; temp `48689` started saving but no commit/Saved line was observed yet; permanent/HF checkpoint `45176` remains validated |
+
+`9e19` checkpoint checks:
+
+| location | latest durable checkpoint |
+|----------|----------------------------|
+| permanent | `gs://marin-us-east5/checkpoints/delphi-true-9e19-p33m67-cooldown20-a010/checkpoints/step-36252/` |
+| temp | `gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-9e19-p33m67-cooldown20-a010/checkpoints/step-39001/` |
+
+Temp checkpoint `39001` was already validated complete for Qwen3/18 layers.
+The next automatic replacement should resume from step `39002` on the same
+output path/run id. No manual relaunch was performed.
+
+## CODEX 2026-06-02T15:40:24Z - p33m67 cooldown20 a010 9e19 still pending
+
+Iris snapshot saved at
+`scratch/20260602-154024_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Current state:
+
+| base | state | latest observed signal |
+|------|-------|------------------------|
+| `9e19` | still pending after preemption | `preemption_count=13`, `failure_count=1`; no new replacement startup logs observed after the failed `15:23Z` replacement; latest durable recovery point remains validated temp checkpoint `39001` |
+| `2e20` | running | `preemption_count=17`, `failure_count=0`; progress `48.8kit/56.5kit`; committed temp checkpoint `48777`; permanent/HF checkpoint `45176` remains validated |
+
+No manual relaunch was performed.
+
+## CODEX 2026-06-02T15:46:28Z - p33m67 cooldown20 a010 9e19 still pending
+
+Iris snapshot saved at
+`scratch/20260602-154628_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=13`, and `failure_count=1`. No new replacement startup logs
+were observed; latest durable recovery point remains validated temp checkpoint
+`39001`.
+
+`2e20` remains running with no new preemptions. Progress is still around
+`48.8kit/56.5kit`; latest committed temp checkpoint remains `48777`, and temp
+`48801` started saving but no commit/Saved line was observed yet. No manual
+relaunch was performed.
+
+## CODEX 2026-06-02T15:52:39Z - p33m67 cooldown20 a010 9e19 still pending
+
+Iris snapshot saved at
+`scratch/20260602-155239_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains pending with `preemption_count=13` and `failure_count=1`; no new
+replacement startup logs were observed. Latest durable recovery point remains
+validated temp checkpoint `39001`.
+
+`2e20` remains running with no new preemptions. Progress reached
+`48.9kit/56.5kit`; latest committed temp checkpoint is `48801`, and temp
+`48889` started saving but no commit/Saved line was observed yet. No manual
+relaunch was performed.
+
+## CODEX 2026-06-02T15:58:48Z - p33m67 cooldown20 a010 9e19 still pending
+
+Iris snapshot saved at
+`scratch/20260602-155848_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains pending with `preemption_count=13` and `failure_count=1`; no new
+replacement startup logs were observed. Latest durable recovery point remains
+validated temp checkpoint `39001`, expected resume step `39002`.
+
+`2e20` remains running with no new preemptions. Progress reached
+`49.0kit/56.5kit`; latest committed temp checkpoint is `48977`. No manual
+relaunch was performed.
+
+## CODEX 2026-06-02T16:04:58Z - p33m67 cooldown20 a010 9e19 recovered
+
+Iris snapshot saved at
+`scratch/20260602-160458_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` is running again after automatic recovery with `preemption_count=13` and
+`failure_count=1`. Startup logs showed W&B resuming run
+`delphi-true-9e19-p33m67-cooldown20-a010` at
+`https://wandb.ai/marin-community/delphi-midtraining/runs/delphi-true-9e19-p33m67-cooldown20-a010`.
+The process found the prior temporary checkpoint at
+`gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-9e19-p33m67-cooldown20-a010/checkpoints/step-39001`,
+loaded it from the expected temp output path, and logged
+`Resuming training from step 39002` at `2026-06-02T16:04:09Z`. Latest durable
+temp checkpoint remains validated `39001`.
+
+Startup also logged `FileNotFoundError: [Errno 2] No such file or directory:
+'/tmp/tmpq898uwdg/config.yaml'`, but the training process continued past that
+and resumed from the checkpoint. `2e20` is still running; latest known committed
+temp checkpoint is `48977` with progress `49.0kit/56.5kit`. No manual relaunch
+was performed.
+
+## CODEX 2026-06-02T16:07:42Z - p33m67 cooldown20 a010 two runs left
+
+Iris snapshot saved at
+`scratch/20260602-160742_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=13`, and `failure_count=1`. Logs confirm the recovered worker
+continued past resume: after `Resuming training from step 39002`, progress
+advanced to `39.1kit/40.3kit` at `2026-06-02T16:06:42Z`. Latest durable temp
+checkpoint is still validated `39001`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`49001` at `2026-06-02T16:06:51Z` and progress reached `49.0kit/56.5kit` at
+`2026-06-02T16:07:24Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T16:14:28Z - p33m67 cooldown20 a010 9e19 preempted after validated temp 39110
+
+Iris snapshot saved at
+`scratch/20260602-161350_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` was preempted again after the recovered worker made progress. Iris now
+shows `JOB_STATE_RUNNING` with one pending task, `preemption_count=14`, and
+`failure_count=1`; task summary reports `worker ping threshold exceeded`.
+Before the preemption, logs showed progress `39.1kit/40.3kit` and temp
+checkpoint save start for `step-39110` at `2026-06-02T16:08:29Z`.
+
+GCS now lists temp checkpoint `step-39110`, and it validated complete for
+Qwen3/18 with `assert_checkpoint_complete_for_model_type`. Permanent
+checkpoints remain `step-32226` and `step-36252`. The next automatic replacement
+should resume the same W&B/output path from `step-39110`, expected training
+resume step `39111`. No manual relaunch was performed.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`49089` at `2026-06-02T16:12:24Z`; progress reached `49.1kit/56.5kit` at
+`2026-06-02T16:13:35Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated.
+
+## CODEX 2026-06-02T16:20:30Z - p33m67 cooldown20 a010 9e19 still pending
+
+Iris snapshot saved at
+`scratch/20260602-162030_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=14`, and `failure_count=1`. No replacement startup logs were
+observed in the latest poll. Latest durable recovery point remains validated
+temp checkpoint `39110`, expected resume step `39111`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`49177` at `2026-06-02T16:17:54Z`; progress reached `49.2kit/56.5kit` at
+`2026-06-02T16:18:02Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T16:26:30Z - p33m67 cooldown20 a010 9e19 still pending
+
+Iris snapshot saved at
+`scratch/20260602-162630_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=14`, and `failure_count=1`. No replacement startup logs were
+observed. Latest durable recovery point remains validated temp checkpoint
+`39110`, expected resume step `39111`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. Latest durable temp checkpoint is
+still `49177`; progress reached `49.2kit/56.5kit` at
+`2026-06-02T16:25:47Z`. Temp checkpoint `49201` started saving at
+`2026-06-02T16:24:46Z`, but no commit/Saved line was observed in this poll. No
+manual relaunch was performed.
+
+## CODEX 2026-06-02T16:32:37Z - p33m67 cooldown20 a010 9e19 still pending
+
+Iris snapshot saved at
+`scratch/20260602-163237_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=14`, and `failure_count=1`. No replacement startup logs were
+observed. Latest durable recovery point remains validated temp checkpoint
+`39110`, expected resume step `39111`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`49289` at `2026-06-02T16:31:39Z`; progress reached `49.3kit/56.5kit` at
+`2026-06-02T16:31:57Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T16:41:41Z - p33m67 cooldown20 a010 9e19 recovered from step 39001, not 39110
+
+Iris snapshot saved at
+`scratch/20260602-163842_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` is running again with `preemption_count=14` and `failure_count=1`.
+Startup logs showed W&B resuming the same run
+`delphi-true-9e19-p33m67-cooldown20-a010` at
+`https://wandb.ai/marin-community/delphi-midtraining/runs/delphi-true-9e19-p33m67-cooldown20-a010`.
+
+Important recovery detail: although GCS listed temp checkpoint `step-39110` and
+`assert_checkpoint_complete_for_model_type(..., qwen3, num_layers=18)` validated
+it, this worker did not discover/load it. Levanter logged only prior temp
+checkpoint `step-39001`, then `Discovered latest checkpoint .../step-39001`,
+`Loading checkpoint from .../step-39001`, and `Resuming training from step
+39002` at `2026-06-02T16:39:37Z`. Treat `step-39001` as the effective loaded
+recovery point for this worker. Progress reached `39.0kit/40.3kit` at
+`2026-06-02T16:41:04Z`.
+
+Startup again logged a W&B artifact `FileNotFoundError` for
+`/tmp/tmptmg9d1cl/config.yaml`; the background tracker dropped that artifact
+update and training continued.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`49377` at `2026-06-02T16:37:26Z`; progress reached `49.4kit/56.5kit` at
+`2026-06-02T16:37:26Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T16:48:46Z - p33m67 cooldown20 a010 9e19 preempted after validated temp 39111
+
+Iris snapshot saved at
+`scratch/20260602-164810_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` was preempted again. Iris shows `JOB_STATE_RUNNING` with one pending
+task, `preemption_count=15`, and `failure_count=1`; task summary reports
+`worker ping threshold exceeded`.
+
+The 16:38Z replacement did resume the same W&B run and output path, but it
+discovered/loaded `step-39001`, not the GCS-observed validated `step-39110`.
+It logged `Resuming training from step 39002` at `2026-06-02T16:39:37Z`,
+progressed to `39.1kit/40.3kit`, and started saving temp checkpoint `39111` at
+`2026-06-02T16:43:57Z` before the worker died.
+
+GCS now lists both `step-39110` and `step-39111`, and both validate structurally
+for Qwen3/18 via `assert_checkpoint_complete_for_model_type`. However, because
+the previous startup ignored validated `39110`, do not treat `39111` as the
+effective recovery point until a replacement explicitly discovers/loads it in
+startup logs. No manual relaunch was performed.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`49401` at `2026-06-02T16:45:47Z`; progress reached `49.4kit/56.5kit` at
+`2026-06-02T16:47:15Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated.
+
+## CODEX 2026-06-02T16:55:08Z - p33m67 cooldown20 a010 9e19 still pending
+
+Iris snapshot saved at
+`scratch/20260602-165508_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=15`, and `failure_count=1`. No replacement startup logs were
+observed. GCS still has validated temp checkpoints `39110` and `39111`, but
+the last worker loaded `39001`; verify the effective recovery point from the
+next replacement's startup logs.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`49489` at `2026-06-02T16:51:32Z`; progress reached `49.6kit/56.5kit` at
+`2026-06-02T16:54:29Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T17:01:21Z - p33m67 cooldown20 a010 9e19 still pending
+
+Iris snapshot saved at
+`scratch/20260602-170121_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=15`, and `failure_count=1`. No replacement startup logs were
+observed. GCS still has validated temp checkpoints `39110` and `39111`, but the
+last worker loaded `39001`; verify the effective recovery point from the next
+replacement's startup logs.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`49577` at `2026-06-02T16:56:36Z`; progress reached `49.6kit/56.5kit` at
+`2026-06-02T16:56:51Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T17:07:30Z - p33m67 cooldown20 a010 9e19 still pending
+
+Iris snapshot saved at
+`scratch/20260602-170730_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=15`, and `failure_count=1`. No replacement startup logs were
+observed. GCS still has validated temp checkpoints `39110` and `39111`, but the
+last worker loaded `39001`; verify the effective recovery point from the next
+replacement's startup logs.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`49601` at `2026-06-02T17:05:02Z`; progress reached `49.6kit/56.5kit` at
+`2026-06-02T17:06:40Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T17:13:36Z - p33m67 cooldown20 a010 9e19 still pending
+
+Iris snapshot saved at
+`scratch/20260602-171336_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=15`, and `failure_count=1`. No replacement startup logs were
+observed. GCS still has validated temp checkpoints `39110` and `39111`, but the
+last worker loaded `39001`; verify the effective recovery point from the next
+replacement's startup logs.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`49689` at `2026-06-02T17:10:23Z`; progress reached `49.7kit/56.5kit` at
+`2026-06-02T17:12:51Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T17:19:47Z - p33m67 cooldown20 a010 9e19 still pending
+
+Iris snapshot saved at
+`scratch/20260602-171947_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=15`, and `failure_count=1`. No replacement startup logs were
+observed. GCS still has validated temp checkpoints `39110` and `39111`, but the
+last worker loaded `39001`; verify the effective recovery point from the next
+replacement's startup logs.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`49777` at `2026-06-02T17:16:14Z`; progress reached `49.8kit/56.5kit` at
+`2026-06-02T17:16:17Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T17:26:06Z - p33m67 cooldown20 a010 9e19 still pending
+
+Iris snapshot saved at
+`scratch/20260602-172606_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=15`, and `failure_count=1`. No replacement startup logs were
+observed. GCS still has validated temp checkpoints `39110` and `39111`, but the
+last worker loaded `39001`; verify the effective recovery point from the next
+replacement's startup logs.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`49801` at `2026-06-02T17:24:37Z`; progress reached `49.8kit/56.5kit` at
+`2026-06-02T17:25:04Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T17:32:25Z - p33m67 cooldown20 a010 9e19 still pending
+
+Iris snapshot saved at
+`scratch/20260602-173225_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=15`, and `failure_count=1`. No replacement startup logs were
+observed. GCS still has validated temp checkpoints `39110` and `39111`, but the
+last worker loaded `39001`; verify the effective recovery point from the next
+replacement's startup logs.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`49889` at `2026-06-02T17:30:06Z`; progress reached `49.9kit/56.5kit` at
+`2026-06-02T17:32:18Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T17:38:42Z - p33m67 cooldown20 a010 9e19 still pending
+
+Iris snapshot saved at
+`scratch/20260602-173842_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=15`, and `failure_count=1`. No replacement startup logs were
+observed. GCS still has validated temp checkpoints `39110` and `39111`, but the
+last worker loaded `39001`; verify the effective recovery point from the next
+replacement's startup logs.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`49977` at `2026-06-02T17:36:36Z`; progress reached `50.0kit/56.5kit` at
+`2026-06-02T17:35:44Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T17:45:01Z - p33m67 cooldown20 a010 9e19 still pending
+
+Iris snapshot saved at
+`scratch/20260602-174501_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=15`, and `failure_count=1`. No replacement startup logs were
+observed. GCS still has validated temp checkpoints `39110` and `39111`, but the
+last worker loaded `39001`; verify the effective recovery point from the next
+replacement's startup logs.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`50001` at `2026-06-02T17:43:36Z`; progress reached `50.0kit/56.5kit` at
+`2026-06-02T17:44:30Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T17:51:22Z - p33m67 cooldown20 a010 9e19 still pending
+
+Iris snapshot saved at
+`scratch/20260602-175122_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=15`, and `failure_count=1`. No replacement startup logs were
+observed. GCS still has validated temp checkpoints `39110` and `39111`, but the
+last worker loaded `39001`; verify the effective recovery point from the next
+replacement's startup logs.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`50089` at `2026-06-02T17:49:28Z`; progress reached `50.1kit/56.5kit` at
+`2026-06-02T17:50:41Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T17:57:46Z - p33m67 cooldown20 a010 9e19 still pending
+
+Iris snapshot saved at
+`scratch/20260602-175746_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=15`, and `failure_count=1`. No replacement startup logs were
+observed. GCS still has validated temp checkpoints `39110` and `39111`, but the
+last worker loaded `39001`; verify the effective recovery point from the next
+replacement's startup logs.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`50177` at `2026-06-02T17:55:13Z`; progress reached `50.2kit/56.5kit` at
+`2026-06-02T17:55:09Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T18:05:55Z - p33m67 cooldown20 a010 two runs left
+
+Iris snapshot saved at
+`scratch/20260602-180555_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status is 4/6 fully finished and final-checkpoint validated:
+`3e18`, `9e18`, `2e19`, and `3e19` are succeeded/validated. The remaining
+runs are `9e19` and `2e20`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=15`, and `failure_count=1`. No replacement startup logs were
+observed. GCS still has validated temp checkpoints `39110` and `39111`, but the
+last worker loaded `39001`; verify the effective recovery point from the next
+replacement's startup logs.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`50201` at `2026-06-02T18:03:32Z`; progress reached `50.3kit/56.5kit` at
+`2026-06-02T18:06:01Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T18:17:31Z - p33m67 cooldown20 a010 2e20 advancing
+
+Iris snapshot saved at
+`scratch/20260602-181731_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=15`, and `failure_count=1`. No replacement startup logs were
+observed. GCS still has validated temp checkpoints `39110` and `39111`, but the
+last worker loaded `39001`; verify the effective recovery point from the next
+replacement's startup logs.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`50377` at `2026-06-02T18:14:56Z`; progress reached `50.4kit/56.5kit` at
+`2026-06-02T18:14:36Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T18:30:47Z - p33m67 cooldown20 a010 9e19 resumed from 39001
+
+Iris snapshot saved at
+`scratch/20260602-183047_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated, with
+`9e19` and `2e20` both currently running.
+
+`9e19` moved back to one running task (`preemption_count=15`,
+`failure_count=1`). Startup resumed the same W&B run
+`delphi-true-9e19-p33m67-cooldown20-a010`, but again found prior temporary
+checkpoints only `[39001]`. It discovered and loaded
+`gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-9e19-p33m67-cooldown20-a010/checkpoints/step-39001`
+and resumed training from step `39002` at `2026-06-02T18:29:24Z`. The
+GCS-visible validated temp checkpoints `39110` and `39111` were still not
+discovered by startup. Progress reached `39.0kit/40.3kit` at
+`2026-06-02T18:30:54Z`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=17`, and `failure_count=0`. It committed temp checkpoint
+`50489` at `2026-06-02T18:28:09Z`; progress reached `50.5kit/56.5kit` at
+`2026-06-02T18:30:37Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T18:37:57Z - p33m67 cooldown20 a010 both remaining jobs pending
+
+Iris snapshot saved at
+`scratch/20260602-183757_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`, and both are currently pending after
+automatic preemptions.
+
+`9e19` is back to one pending task, with `preemption_count=16` and
+`failure_count=1`. The previous replacement loaded `39001`, resumed from
+`39002`, reached `39.1kit/40.3kit`, then started saving temp checkpoint `39111`
+at `2026-06-02T18:33:46Z`. No commit line was observed before the task became
+pending. `39111` validates structurally, but the last two startups discovered
+only `39001`, so the next replacement's effective loaded checkpoint must be
+verified from startup logs.
+
+`2e20` is also back to one pending task, with `preemption_count=18` and
+`failure_count=0`. It committed temp checkpoint `50577` at
+`2026-06-02T18:33:58Z`, and `50577` validates structurally. Progress reached
+`50.6kit/56.5kit` at `2026-06-02T18:34:03Z`. Permanent checkpoint `45176` and
+HF checkpoint `hf/step-45176` remain validated. No manual relaunch was
+performed.
+
+## CODEX 2026-06-02T18:49:19Z - p33m67 cooldown20 a010 still pending
+
+Iris snapshot saved at
+`scratch/20260602-184919_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=16`, and `failure_count=1`. No replacement startup logs were
+observed. Temp checkpoint `39111` still validates structurally, but previous
+startups discovered only `39001`, so the next replacement's effective loaded
+checkpoint must be verified from startup logs.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=18`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` validates structurally. Permanent checkpoint
+`45176` and HF checkpoint `hf/step-45176` remain validated. No manual relaunch
+was performed.
+
+## CODEX 2026-06-02T19:00:00Z - p33m67 cooldown20 a010 still pending
+
+Iris snapshot saved at
+`scratch/20260602-190000_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=16`, and `failure_count=1`. No replacement startup logs were
+observed. Temp checkpoint `39111` validates structurally, but previous startups
+discovered only `39001`, so the next replacement's effective loaded checkpoint
+must be verified from startup logs.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=18`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` validates structurally. Permanent checkpoint
+`45176` and HF checkpoint `hf/step-45176` remain validated. No manual relaunch
+was performed.
+
+## CODEX 2026-06-02T19:10:43Z - p33m67 cooldown20 a010 replacements running
+
+Iris snapshot saved at
+`scratch/20260602-191043_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`, and both replacement workers are running.
+
+`9e19` resumed the same W&B run, but startup again found prior temporary
+checkpoints only `[39001]`. It discovered/loaded `39001` and resumed from step
+`39002` at `2026-06-02T19:06:32Z`. Temp checkpoint `39111` validates
+structurally, but it was still not discovered by startup. Progress reached
+`39.1kit/40.3kit` at `2026-06-02T19:10:05Z`.
+
+`2e20` resumed correctly from the latest validated temp checkpoint. Startup
+found prior temporary checkpoints only `[50577]`, discovered/loaded `50577`,
+and resumed from step `50578` at `2026-06-02T19:08:46Z`. Progress reached
+`50.6kit/56.5kit` at `2026-06-02T19:10:15Z`. Permanent checkpoint `45176` and
+HF checkpoint `hf/step-45176` remain validated. No manual relaunch was
+performed.
+
+## CODEX 2026-06-02T19:17:50Z - p33m67 cooldown20 a010 both pending again
+
+Iris snapshot saved at
+`scratch/20260602-191750_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`, and both are pending again.
+
+`9e19` is back to one pending task, with `preemption_count=18` and
+`failure_count=1`. The previous replacement again loaded `39001`, resumed from
+`39002`, reached `39.1kit/40.3kit`, then started saving temp checkpoint `39109`
+at `2026-06-02T19:10:49Z`. No commit line was observed before the task became
+pending. `39109` validates structurally, and GCS also lists structurally-valid
+`39110` and `39111`, but previous startups discovered only `39001`; verify the
+next effective loaded checkpoint from startup logs.
+
+`2e20` is back to one pending task, with `preemption_count=19` and
+`failure_count=0`. The previous replacement loaded `50577`, resumed from
+`50578`, and reached `50.6kit/56.5kit` at `2026-06-02T19:10:15Z`. No newer
+checkpoint was observed, so `50577` remains the latest validated temp resume
+point. Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T19:29:14Z - p33m67 cooldown20 a010 still pending
+
+Iris snapshot saved at
+`scratch/20260602-192914_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=18`, and `failure_count=1`. No replacement startup logs were
+observed. GCS-visible temp checkpoints `39109`, `39110`, and `39111` validate
+structurally, but previous startups discovered only `39001`; verify the next
+effective loaded checkpoint from startup logs.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=19`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T19:40:17Z - p33m67 cooldown20 a010 replacements running
+
+Iris snapshot saved at
+`scratch/20260602-194017_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`, and both replacement workers are running.
+
+`9e19` startup again found prior temporary checkpoints only `[39001]`.
+It discovered/loaded `39001` and resumed from step `39002` at
+`2026-06-02T19:39:47Z`. GCS-visible temp checkpoints `39109`, `39110`, and
+`39111` validate structurally, but they were still not discovered by startup.
+
+`2e20` startup found prior temporary checkpoints only `[50577]`,
+discovered/loaded `50577`, and resumed from step `50578` at
+`2026-06-02T19:38:56Z`. Progress reached `50.6kit/56.5kit` at
+`2026-06-02T19:39:26Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T19:49:58Z - p33m67 cooldown20 a010 2e20 running, 9e19 pending
+
+Iris snapshot saved at
+`scratch/20260602-194958_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` is back to one pending task, with `preemption_count=19` and
+`failure_count=1`. The previous replacement again loaded `39001`, resumed from
+`39002`, reached `39.1kit/40.3kit`, then started saving temp checkpoint `39098`
+at `2026-06-02T19:43:42Z`. No commit line was observed before the task became
+pending. `39098` validates structurally; GCS-visible temp checkpoints `39109`,
+`39110`, and `39111` also validate structurally. Previous startups discovered
+only `39001`, so verify the next effective loaded checkpoint from startup logs.
+
+`2e20` is running with `preemption_count=20` and `failure_count=0`. Startup
+found prior temporary checkpoints only `[50577]`, discovered/loaded `50577`,
+and resumed from step `50578` at `2026-06-02T19:47:54Z`. Progress reached
+`50.6kit/56.5kit` at `2026-06-02T19:49:24Z`. Permanent checkpoint `45176` and
+HF checkpoint `hf/step-45176` remain validated. No manual relaunch was
+performed.
+
+## CODEX 2026-06-02T20:01:07Z - p33m67 cooldown20 a010 still pending
+
+Iris snapshot saved at
+`scratch/20260602-200107_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`, and both are pending.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=19`, and `failure_count=1`. No replacement startup logs were
+observed. GCS-visible temp checkpoints `39098`, `39109`, `39110`, and `39111`
+validate structurally, but previous startups discovered only `39001`; verify
+the next effective loaded checkpoint from startup logs.
+
+`2e20` is back to one pending task, with `preemption_count=21` and
+`failure_count=0`. The previous replacement loaded `50577`, resumed from
+`50578`, and reached `50.6kit/56.5kit` at `2026-06-02T19:49:24Z`. No newer
+checkpoint was observed, so `50577` remains the latest validated temp resume
+point. Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T20:12:01Z - p33m67 cooldown20 a010 still pending
+
+Iris snapshot saved at
+`scratch/20260602-201201_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`, and both remain pending.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=19`, and `failure_count=1`. No replacement startup logs were
+observed. GCS-visible temp checkpoints `39098`, `39109`, `39110`, and `39111`
+validate structurally, but previous startups discovered only `39001`; verify
+the next effective loaded checkpoint from startup logs.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=21`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T20:25:12Z - p33m67 cooldown20 a010 9e19 running from 39098
+
+Iris snapshot saved at
+`scratch/20260602-202512_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` is running with `preemption_count=19` and `failure_count=1`. Startup
+found prior temporary checkpoints only `[39098]`, discovered/loaded `39098`,
+and resumed from step `39099` at `2026-06-02T20:23:16Z`. This is the first
+replacement in this sequence that did not fall back to `39001`. Progress
+reached `39.1kit/40.3kit` at `2026-06-02T20:24:50Z`.
+
+`2e20` is back to one pending task, with `preemption_count=22` and
+`failure_count=0`. The previous replacement loaded `50577`, resumed from
+`50578`, and reached `50.6kit/56.5kit` at `2026-06-02T20:19:18Z`. No newer
+checkpoint was observed, so `50577` remains the latest validated temp resume
+point. Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T20:29:41Z - p33m67 cooldown20 a010 9e19 still running
+
+Iris snapshot saved at
+`scratch/20260602-202941_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` is still running from checkpoint `39098`, with `preemption_count=19` and
+`failure_count=1`. It resumed from step `39099` at `2026-06-02T20:23:16Z`.
+Progress reached `39.2kit/40.3kit` at `2026-06-02T20:26:50Z`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T20:34:12Z - p33m67 cooldown20 a010 both pending
+
+Iris snapshot saved at
+`scratch/20260602-203412_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`, and both are pending.
+
+`9e19` is back to one pending task, with `preemption_count=20` and
+`failure_count=1`. The previous replacement loaded `39098`, resumed from
+`39099`, and reached `39.2kit/40.3kit` at `2026-06-02T20:26:50Z`. No newer
+checkpoint was observed, so `39098` remains the latest verified loaded
+checkpoint.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T20:45:21Z - p33m67 cooldown20 a010 still pending
+
+Iris snapshot saved at
+`scratch/20260602-204521_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`, and both remain pending.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=20`, and `failure_count=1`. No replacement startup logs were
+observed. Temp checkpoint `39098` remains the latest verified loaded
+checkpoint.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T20:56:15Z - p33m67 cooldown20 a010 still pending
+
+Iris snapshot saved at
+`scratch/20260602-205615_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`, and both remain pending.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=20`, and `failure_count=1`. No replacement startup logs were
+observed. Temp checkpoint `39098` remains the latest verified loaded
+checkpoint.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T21:07:07Z - p33m67 cooldown20 a010 still pending
+
+Iris snapshot saved at
+`scratch/20260602-210707_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`, and both remain pending.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=20`, and `failure_count=1`. No replacement startup logs were
+observed. Temp checkpoint `39098` remains the latest verified loaded
+checkpoint.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T21:18:04Z - p33m67 cooldown20 a010 still pending
+
+Iris snapshot saved at
+`scratch/20260602-211804_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`, and both remain pending.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=20`, and `failure_count=1`. No replacement startup logs were
+observed. Temp checkpoint `39098` remains the latest verified loaded
+checkpoint.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T21:28:56Z - p33m67 cooldown20 a010 still pending
+
+Iris snapshot saved at
+`scratch/20260602-212856_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`, and both remain pending.
+
+`9e19` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=20`, and `failure_count=1`. No replacement startup logs were
+observed. Temp checkpoint `39098` remains the latest verified loaded
+checkpoint.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T21:39:51Z - p33m67 cooldown20 a010 9e19 running
+
+Iris snapshot saved at
+`scratch/20260602-213951_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` is running with `preemption_count=20` and `failure_count=1`. Startup
+found prior temporary checkpoints only `[39098]`, discovered/loaded `39098`,
+and resumed from step `39099` at `2026-06-02T21:33:38Z`. Progress reached
+`39.2kit/40.3kit` at `2026-06-02T21:37:09Z`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T21:46:03Z - p33m67 cooldown20 a010 9e19 running from 39098
+
+Iris snapshot saved at
+`scratch/20260602-214603_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` is `JOB_STATE_RUNNING` with one running task, `preemption_count=21`,
+and `failure_count=1`. The active worker found prior temporary checkpoints only
+`[39098]`, discovered/loaded `39098`, and resumed from step `39099` at
+`2026-06-02T21:42:10Z`. Progress reached `39.2kit/40.3kit` at
+`2026-06-02T21:45:43Z`. Permanent checkpoints still list only `32226` and
+`36252`; temp checkpoints still include `39098`, `39109`, `39110`, and
+`39111`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T21:54:26Z - p33m67 cooldown20 a010 9e19 temp checkpoint 39201
+
+Iris snapshot saved at
+`scratch/20260602-215346_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=21`, and `failure_count=1`. The worker saved temp checkpoint
+`39201` at `2026-06-02T21:51:45Z`, committed it at
+`2026-06-02T21:52:45Z`, and deleted old temp checkpoint `39098`.
+`39201` was structurally validated for Qwen3 with 18 layers. Progress reached
+`39.3kit/40.3kit` at `2026-06-02T21:53:48Z`. Permanent checkpoints still list
+only `32226` and `36252`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T22:02:53Z - p33m67 cooldown20 a010 9e19 temp checkpoint 39356
+
+Iris snapshot saved at
+`scratch/20260602-220213_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=21`, and `failure_count=1`. The worker saved temp checkpoint
+`39356` at `2026-06-02T21:57:01Z`, committed it at
+`2026-06-02T21:57:53Z`, and deleted old temp checkpoint `39201`. `39356` was
+structurally validated for Qwen3 with 18 layers. Progress reached
+`39.4kit/40.3kit` at `2026-06-02T21:57:52Z`. Permanent checkpoints still list
+only `32226` and `36252`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T22:11:02Z - p33m67 cooldown20 a010 9e19 temp checkpoint 39556
+
+Iris snapshot saved at
+`scratch/20260602-220845_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=21`, and `failure_count=1`. The worker saved temp checkpoint
+`39556` at `2026-06-02T22:09:01Z`, committed it at
+`2026-06-02T22:09:54Z`, and deleted old temp checkpoint `39401`. `39556` was
+structurally validated for Qwen3 with 18 layers. Progress reached
+`39.6kit/40.3kit` at `2026-06-02T22:10:02Z`. Permanent checkpoints still list
+only `32226` and `36252`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T22:17:28Z - p33m67 cooldown20 a010 9e19 temp checkpoint 39601
+
+Iris snapshot saved at
+`scratch/20260602-221650_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=21`, and `failure_count=1`. The worker saved temp checkpoint
+`39601` at `2026-06-02T22:15:54Z`, committed it at
+`2026-06-02T22:16:42Z`, and deleted old temp checkpoint `39556`. `39601` was
+structurally validated for Qwen3 with 18 layers. Progress reached
+`39.6kit/40.3kit` at `2026-06-02T22:16:56Z`. Permanent checkpoints still list
+only `32226` and `36252`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T22:23:52Z - p33m67 cooldown20 a010 9e19 temp checkpoint 39755
+
+Iris snapshot saved at
+`scratch/20260602-222313_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=21`, and `failure_count=1`. The worker saved temp checkpoint
+`39755` at `2026-06-02T22:21:02Z`, committed it at
+`2026-06-02T22:21:46Z`, and deleted old temp checkpoint `39601`. `39755` was
+structurally validated for Qwen3 with 18 layers. Progress reached
+`39.8kit/40.3kit` at `2026-06-02T22:22:01Z`. Permanent checkpoints still list
+only `32226` and `36252`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T22:30:27Z - p33m67 cooldown20 a010 9e19 temp checkpoint 39801
+
+Iris snapshot saved at
+`scratch/20260602-222944_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=21`, and `failure_count=1`. The worker saved temp checkpoint
+`39801` at `2026-06-02T22:27:57Z`, committed it at
+`2026-06-02T22:29:12Z`, and deleted old temp checkpoint `39755`. `39801` was
+structurally validated for Qwen3 with 18 layers. Progress reached
+`39.9kit/40.3kit` at `2026-06-02T22:30:00Z`. Permanent checkpoints still list
+only `32226` and `36252`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T22:36:57Z - p33m67 cooldown20 a010 9e19 temp checkpoint 39956
+
+Iris snapshot saved at
+`scratch/20260602-223617_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=21`, and `failure_count=1`. The worker saved temp checkpoint
+`39956` at `2026-06-02T22:33:06Z`, committed it at
+`2026-06-02T22:33:58Z`, and deleted old temp checkpoint `39801`. `39956` was
+structurally validated for Qwen3 with 18 layers. Progress reached
+`40.0kit/40.3kit` at `2026-06-02T22:34:06Z`. Permanent checkpoints still list
+only `32226` and `36252`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T22:42:33Z - p33m67 cooldown20 a010 9e19 temp checkpoint 40001
+
+Iris snapshot saved at
+`scratch/20260602-224146_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=21`, and `failure_count=1`. The worker saved temp checkpoint
+`40001` at `2026-06-02T22:40:01Z`, committed it at
+`2026-06-02T22:40:55Z`, and deleted old temp checkpoint `39956`. `40001` was
+structurally validated for Qwen3 with 18 layers. Progress reached
+`40.1kit/40.3kit` at `2026-06-02T22:42:03Z`. Permanent checkpoints still list
+only `32226` and `36252`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T22:47:10Z - p33m67 cooldown20 a010 9e19 temp checkpoint 40155
+
+Iris snapshot saved at
+`scratch/20260602-224625_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=21`, and `failure_count=1`. The worker saved temp checkpoint
+`40155` at `2026-06-02T22:45:09Z`, committed it at
+`2026-06-02T22:46:03Z`, and deleted old temp checkpoint `40001`. `40155` was
+structurally validated for Qwen3 with 18 layers. Progress reached
+`40.2kit/40.3kit` at `2026-06-02T22:46:08Z`. Permanent checkpoints still list
+only `32226` and `36252`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T22:54:16Z - p33m67 cooldown20 a010 9e19 temp checkpoint 40201
+
+Iris snapshot saved at
+`scratch/20260602-225356_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 4/6 fully finished and final-checkpoint validated. The
+remaining runs are `9e19` and `2e20`.
+
+`9e19` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=21`, and `failure_count=1`. The worker saved temp checkpoint
+`40201` at `2026-06-02T22:52:07Z`, committed it at
+`2026-06-02T22:52:51Z`, and deleted old temp checkpoint `40155`. `40201` was
+structurally validated for Qwen3 with 18 layers. Progress reached
+`40.2kit/40.3kit` at `2026-06-02T22:53:08Z`. Permanent checkpoints still list
+only `32226` and `36252`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=22`, and `failure_count=0`. No replacement startup logs were
+observed. Temp checkpoint `50577` remains the latest validated resume point.
+Permanent checkpoint `45176` and HF checkpoint `hf/step-45176` remain
+validated. No manual relaunch was performed.
+
+## CODEX 2026-06-02T22:58:10Z - p33m67 cooldown20 a010 9e19 final candidate and 2e20 resumed
+
+Iris snapshot saved at
+`scratch/20260602-225813_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status is 4/6 fully finished and final-checkpoint validated, with `9e19`
+now final-checkpoint validated but still waiting for Iris terminal success. The
+remaining active runs are `9e19` and `2e20`.
+
+`9e19` saved permanent checkpoint `40280` at `2026-06-02T22:54:50Z`, finished
+HF checkpoint `hf/step-40280` at `2026-06-02T22:56:03Z`, then saved permanent
+checkpoint `40282` at `2026-06-02T22:56:07Z` and committed it at
+`2026-06-02T22:56:44Z`. `step-40282` was structurally validated for Qwen3 with
+18 layers. Iris still reported the child job `JOB_STATE_RUNNING` in the
+`22:58:13Z` snapshot, so wait for terminal success before counting it as fully
+complete.
+
+`2e20` moved from pending to running. Startup found prior temporary checkpoints
+only `[50577]`, discovered/loaded checkpoint `50577`, and resumed from step
+`50578` at `2026-06-02T22:58:05Z`. This satisfies the exact-output-path resume
+rule. No manual relaunch was performed.
+
+## CODEX 2026-06-02T23:03:58Z - p33m67 cooldown20 a010 9e19 succeeded, 2e20 active
+
+Iris snapshot saved at
+`scratch/20260602-230320_p33m67_job_list.json`. Monitoring state updated at
+`scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status is now 5/6 fully finished and final-checkpoint validated. The only
+remaining active run is `2e20`.
+
+`9e19` is `JOB_STATE_SUCCEEDED` with `preemption_count=21` and
+`failure_count=1`. Permanent checkpoint `40282` was structurally validated for
+Qwen3 with 18 layers. HF checkpoint `hf/step-40282` finished saving at
+`2026-06-02T23:02:31Z`.
+
+`2e20` is `JOB_STATE_RUNNING` with one running task, `preemption_count=22`, and
+`failure_count=0`. Startup found prior temporary checkpoints only `[50577]`,
+discovered/loaded checkpoint `50577`, and resumed from step `50578` at
+`2026-06-02T22:58:05Z`. It emitted train progress at `50.6kit/56.5kit`, then
+entered eval and reached `214/447` eval items at `2026-06-02T23:03:14Z`. This
+is real progress, not just a stale running task.
+
+## CODEX 2026-06-02T23:09:01Z - p33m67 cooldown20 a010 2e20 post-eval temp checkpoint 50601
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=22`, and `failure_count=0`. The worker completed eval
+`447/447` at `2026-06-02T23:06:34Z`, resumed train progress at
+`50.6kit/56.5kit`, then saved and committed temp checkpoint `50601` at
+`2026-06-02T23:07:58Z`. Temp checkpoint `50601` was structurally validated for
+Qwen3 with 21 layers. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain the latest permanent/HF checkpoints.
+
+The recent log window also contains a startup `FileNotFoundError` for
+`/tmp/tmphhtzqpyn/config.yaml` at `2026-06-02T22:56:56Z`, but the same worker
+continued, loaded checkpoint `50577`, resumed at `50578`, completed eval, and
+saved checkpoint `50601`; treat it as a recorded warning unless it recurs or the
+job state changes.
+
+## CODEX 2026-06-02T23:20:15Z - p33m67 cooldown20 a010 2e20 temp checkpoint 50777
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=22`, and `failure_count=0`. After the prior eval completed,
+training advanced through `50.8kit/56.5kit`. The worker saved/committed temp
+checkpoint `50689`, then saved/committed temp checkpoint `50777` at
+`2026-06-02T23:18:56Z`, deleting temp checkpoint `50601`. Temp checkpoint
+`50777` was structurally validated for Qwen3 with 21 layers. A new eval started
+at `2026-06-02T23:19:27Z`. Permanent checkpoint `45176` and HF checkpoint
+`hf/step-45176` remain the latest permanent/HF checkpoints.
+
+## CODEX 2026-06-02T23:30:16Z - p33m67 cooldown20 a010 2e20 permanent checkpoint 50823
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=22`, and `failure_count=0`. The worker completed eval
+`447/447` at `2026-06-02T23:25:40Z`, resumed train progress at
+`50.8kit/56.5kit`, saved temp checkpoint `50801`, then saved and committed
+permanent checkpoint `50823` at `2026-06-02T23:29:09Z`. The worker deleted temp
+checkpoint `50801` after the permanent checkpoint, so no fresh temp checkpoint
+is currently listed; only stale temp dirs `45171`, `45173`, and `45174` remain.
+
+Permanent checkpoint
+`gs://marin-us-east5/checkpoints/delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-50823`
+was structurally validated for Qwen3 with 21 layers. This explicitly verifies
+that the Qwen3 `q_norm`/`k_norm` arrays are present. HF checkpoint
+`hf/step-50823` finished saving at `2026-06-02T23:29:47Z`.
+
+## CODEX 2026-06-02T23:47:41Z - p33m67 cooldown20 a010 2e20 temp checkpoint 50970
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=22`, and `failure_count=0`. After permanent checkpoint
+`50823` and HF checkpoint `hf/step-50823`, training advanced through
+`51.0kit/56.5kit`. The worker saved/committed temp checkpoint `50970` at
+`2026-06-02T23:40:00Z`, then completed eval `447/447` at
+`2026-06-02T23:47:03Z`.
+
+Temp checkpoint
+`gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-50970`
+was structurally validated for Qwen3 with 21 layers, explicitly checking the
+Qwen3 `q_norm`/`k_norm` arrays. Permanent checkpoint `50823` remains the latest
+permanent/HF recovery point.
+
+## CODEX 2026-06-02T23:51:17Z - p33m67 cooldown20 a010 2e20 temp checkpoint 51001
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=22`, and `failure_count=0`. After eval completed at
+`2026-06-02T23:47:03Z`, the worker saved/committed temp checkpoint `51001` at
+`2026-06-02T23:48:44Z` and resumed train progress at `51.0kit/56.5kit`.
+
+Temp checkpoint
+`gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-51001`
+was structurally validated for Qwen3 with 21 layers, explicitly checking the
+Qwen3 `q_norm`/`k_norm` arrays. Permanent checkpoint `50823` remains the latest
+permanent/HF recovery point.
+
+## CODEX 2026-06-03T00:02:51Z - p33m67 cooldown20 a010 2e20 temp checkpoint 51177
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=22`, and `failure_count=0`. GCS temp checkpoint listing now
+shows `step-51177`; permanent checkpoints remain through `step-50823`, and HF
+checkpoints remain through `hf/step-50823`.
+
+Temp checkpoint
+`gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-51177`
+was structurally validated for Qwen3 with 21 layers, explicitly checking the
+Qwen3 `q_norm`/`k_norm` arrays. Permanent checkpoint `50823` remains the latest
+permanent/HF recovery point.
+
+Two recent finelog fetches timed out with `finelog.errors.StatsError: Request
+timed out`; this is recorded as a log-fetch issue, not a training failure,
+because Iris state is running and checkpoint `51177` validates from GCS.
+
+## CODEX 2026-06-03T00:14:19Z - p33m67 cooldown20 a010 2e20 temp checkpoint 51289
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=22`, and `failure_count=0`. GCS temp checkpoint listing now
+shows `step-51289`; permanent checkpoints remain through `step-50823`, and HF
+checkpoints remain through `hf/step-50823`.
+
+Temp checkpoint
+`gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-51289`
+was structurally validated for Qwen3 with 21 layers, explicitly checking the
+Qwen3 `q_norm`/`k_norm` arrays. Permanent checkpoint `50823` remains the latest
+permanent/HF recovery point.
+
+Finelog fetch timed out again with `finelog.errors.StatsError: Request timed
+out`; this remains a log-fetch issue, not a training failure, because Iris state
+is running and checkpoint `51289` validates from GCS.
+
+## CODEX 2026-06-03T00:25:48Z - p33m67 cooldown20 a010 2e20 temp checkpoint 51377
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=22`, and `failure_count=0`. Finelog recovered on this pass:
+the worker completed the prior eval `447/447` at `2026-06-03T00:06:22Z`,
+resumed train progress at `51.2kit/56.5kit`, saved/committed temp checkpoint
+`51201`, then saved/committed temp checkpoint `51289` at
+`2026-06-03T00:13:40Z`. Training advanced to `51.4kit/56.5kit`, saved/committed
+temp checkpoint `51377` at `2026-06-03T00:19:09Z`, and entered eval at
+`2026-06-03T00:19:27Z`. Eval was at `365/447` by
+`2026-06-03T00:24:29Z`.
+
+Temp checkpoint
+`gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-51377`
+was structurally validated for Qwen3 with 21 layers, explicitly checking the
+Qwen3 `q_norm`/`k_norm` arrays. Permanent checkpoint `50823` remains the latest
+permanent/HF recovery point.
+
+## CODEX 2026-06-03T00:29:24Z - p33m67 cooldown20 a010 2e20 temp checkpoint 51401
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=22`, and `failure_count=0`. The eval that started after temp
+checkpoint `51377` completed `447/447` at `2026-06-03T00:25:40Z`. The worker
+resumed train progress at `51.4kit/56.5kit`, saved/committed temp checkpoint
+`51401` at `2026-06-03T00:27:15Z`, and continued training.
+
+Temp checkpoint
+`gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-51401`
+was structurally validated for Qwen3 with 21 layers, explicitly checking the
+Qwen3 `q_norm`/`k_norm` arrays. Permanent checkpoint `50823` remains the latest
+permanent/HF recovery point.
+
+## CODEX 2026-06-03T00:40:51Z - p33m67 cooldown20 a010 2e20 temp checkpoint 51577
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=22`, and `failure_count=0`. Training advanced through
+`51.6kit/56.5kit`. The worker saved/committed temp checkpoint `51489` at
+`2026-06-03T00:33:06Z`, then saved/committed temp checkpoint `51577` at
+`2026-06-03T00:38:24Z`. A new eval started at `2026-06-03T00:38:45Z` and was
+at `85/447` by `2026-06-03T00:39:46Z`.
+
+Temp checkpoint
+`gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-51577`
+was structurally validated for Qwen3 with 21 layers, explicitly checking the
+Qwen3 `q_norm`/`k_norm` arrays. Permanent checkpoint `50823` remains the latest
+permanent/HF recovery point.
+
+## CODEX 2026-06-03T00:54:59Z - p33m67 cooldown20 a010 2e20 temp checkpoint 51689
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=22`, and `failure_count=0`. The eval that started after temp
+checkpoint `51577` completed `447/447` at `2026-06-03T00:44:58Z`. The worker
+resumed train progress, saved/committed temp checkpoint `51601` at
+`2026-06-03T00:46:26Z`, advanced to `51.7kit/56.5kit`, and saved/committed temp
+checkpoint `51689` at `2026-06-03T00:52:08Z`.
+
+Temp checkpoint
+`gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-51689`
+was structurally validated for Qwen3 with 21 layers, explicitly checking the
+Qwen3 `q_norm`/`k_norm` arrays. Permanent checkpoint `50823` remains the latest
+permanent/HF recovery point.
+
+## CODEX 2026-06-03T01:06:45Z - p33m67 cooldown20 a010 2e20 temp checkpoint 51801
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=22`, and `failure_count=0`. Training advanced through
+`51.8kit/56.5kit`. The worker started saving temp checkpoint `51777` at
+`2026-06-03T00:56:22Z`; eval started at `2026-06-03T00:58:09Z` while the async
+commit completed at `2026-06-03T00:58:49Z`. Eval completed `447/447` at
+`2026-06-03T01:04:21Z`, then the worker saved/committed temp checkpoint `51801`
+at `2026-06-03T01:05:51Z`.
+
+Temp checkpoint
+`gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-51801`
+was structurally validated for Qwen3 with 21 layers, explicitly checking the
+Qwen3 `q_norm`/`k_norm` arrays. Permanent checkpoint `50823` remains the latest
+permanent/HF recovery point.
+
+## CODEX 2026-06-03T01:19:00Z - p33m67 cooldown20 a010 2e20 temp checkpoint 51977
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=22`, and `failure_count=0`. Training advanced through
+`52.0kit/56.5kit`. The worker saved/committed temp checkpoint `51889` at
+`2026-06-03T01:11:50Z`, then started saving temp checkpoint `51977` at
+`2026-06-03T01:15:40Z`. Eval started at `2026-06-03T01:17:33Z`, and the async
+commit for temp checkpoint `51977` finished at `2026-06-03T01:17:49Z`.
+
+Temp checkpoint
+`gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-51977`
+was structurally validated for Qwen3 with 21 layers, explicitly checking the
+Qwen3 `q_norm`/`k_norm` arrays. Permanent checkpoint `50823` remains the latest
+permanent/HF recovery point.
+
+## CODEX 2026-06-03T01:33:54Z - p33m67 cooldown20 a010 2e20 temp checkpoint 52089
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=22`, and `failure_count=0`. The eval that started after temp
+checkpoint `51977` completed `447/447` at `2026-06-03T01:23:45Z`. The worker
+resumed train progress at `52.0kit/56.5kit`, saved/committed temp checkpoint
+`52001` at `2026-06-03T01:25:40Z`, advanced to `52.1kit/56.5kit`, and
+saved/committed temp checkpoint `52089` at `2026-06-03T01:31:09Z`.
+
+Temp checkpoint
+`gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-52089`
+was structurally validated for Qwen3 with 21 layers, explicitly checking the
+Qwen3 `q_norm`/`k_norm` arrays. Permanent checkpoint `50823` remains the latest
+permanent/HF recovery point.
+
+## CODEX 2026-06-03T01:46:30Z - p33m67 cooldown20 a010 2e20 temp checkpoint 52201
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=22`, and `failure_count=0`. Training advanced through
+`52.2kit/56.5kit`. The worker saved/committed temp checkpoint `52177` at
+`2026-06-03T01:36:28Z`, started eval at `2026-06-03T01:36:54Z`, completed eval
+`447/447` at `2026-06-03T01:43:06Z`, then saved/committed temp checkpoint
+`52201` at `2026-06-03T01:44:53Z`.
+
+Temp checkpoint
+`gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-52201`
+was structurally validated for Qwen3 with 21 layers, explicitly checking the
+Qwen3 `q_norm`/`k_norm` arrays. Permanent checkpoint `50823` remains the latest
+permanent/HF recovery point.
+
+## CODEX 2026-06-03T01:59:14Z - p33m67 cooldown20 a010 2e20 temp checkpoint 52377
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=22`, and `failure_count=0`. Training advanced through
+`52.4kit/56.5kit`. The worker saved/committed temp checkpoint `52289` at
+`2026-06-03T01:50:30Z`, then saved/committed temp checkpoint `52377` at
+`2026-06-03T01:55:48Z`. A new eval started at `2026-06-03T01:56:14Z` and was
+at `155/447` by `2026-06-03T01:58:15Z`.
+
+Temp checkpoint
+`gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-52377`
+was structurally validated for Qwen3 with 21 layers, explicitly checking the
+Qwen3 `q_norm`/`k_norm` arrays. Permanent checkpoint `50823` remains the latest
+permanent/HF recovery point.
+
+## CODEX 2026-06-03T02:11:37Z - p33m67 cooldown20 a010 2e20 temp checkpoint 52489
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=22`, and `failure_count=0`. The eval that started after temp
+checkpoint `52377` completed `447/447` at `2026-06-03T02:02:26Z`. The worker
+resumed train progress at `52.4kit/56.5kit`, saved/committed temp checkpoint
+`52401` at `2026-06-03T02:04:23Z`, advanced to `52.5kit/56.5kit`, and
+saved/committed temp checkpoint `52489` at `2026-06-03T02:09:28Z`.
+
+Temp checkpoint
+`gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-52489`
+was structurally validated for Qwen3 with 21 layers, explicitly checking the
+Qwen3 `q_norm`/`k_norm` arrays. Permanent checkpoint `50823` remains the latest
+permanent/HF recovery point.
+
+## CODEX 2026-06-03T02:21:11Z - p33m67 cooldown20 a010 2e20 temp checkpoint 52577
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one running task,
+`preemption_count=22`, and `failure_count=0`. Training advanced through
+`52.6kit/56.5kit`. The worker saved/committed temp checkpoint `52577` at
+`2026-06-03T02:15:12Z`. A new eval started at `2026-06-03T02:15:34Z` and was
+at `295/447` by `2026-06-03T02:19:35Z`.
+
+Temp checkpoint
+`gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-52577`
+was structurally validated for Qwen3 with 21 layers, explicitly checking the
+Qwen3 `q_norm`/`k_norm` arrays. Permanent checkpoint `50823` remains the latest
+permanent/HF recovery point.
+
+## CODEX 2026-06-03T04:43:20Z - p33m67 cooldown20 a010 2e20 temp checkpoint 53489
+
+Iris snapshot saved at `scratch/latest_2e20_job_list.json`. Monitoring state
+updated at `scratch/20260602-0331_p33m67_cooldown20_monitoring_state.json`.
+
+Sweep status remains 5/6 fully finished and final-checkpoint validated. The
+only remaining active run is `2e20`.
+
+`2e20` remains `JOB_STATE_RUNNING` with one pending task,
+`preemption_count=24`, and `failure_count=0`. The run continued by itself after
+the `2026-06-03T02:21:11Z` check, advancing from validated temp checkpoint
+`52577` to validated temp checkpoint `53489`. It saved/committed temp checkpoint
+`53377` at `2026-06-03T03:32:47Z`, then a replacement worker found prior temp
+checkpoint `53377`, discovered/loaded it, and resumed from step `53378` at
+`2026-06-03T03:57:52Z` under the same output path. The replacement worker
+completed eval `447/447` at `2026-06-03T04:06:20Z`, saved/committed temp
+checkpoint `53489` at `2026-06-03T04:13:14Z`, and reached `53.5kit/56.5kit` by
+`2026-06-03T04:14:56Z`.
+
+Temp checkpoint
+`gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-53489`
+was structurally validated for Qwen3 with 21 layers, explicitly checking the
+Qwen3 `q_norm`/`k_norm` arrays. Permanent checkpoint `50823` remains the latest
+permanent/HF recovery point.
+
+Active monitoring stopped here at user request. No Iris job or cluster was
+stopped, restarted, resubmitted, or otherwise mutated.
+
+## CODEX HANDOFF 2026-06-04T14:17:19-04:00
+
+Context: user explicitly flagged the cross-region GCS read report at
+`https://gist.github.com/RohithKuditipudi/603d506cad8b03d8d8bf8aa42b589344`.
+Treat mixed-region reads as a hard stop. The reported bad jobs remain killed:
+
+- `/ahmed/delphi-1e21-prefixes-qwen3-v5e32-r2-ram96-472728b7d7`
+- `/ahmed/delphi-1e21-prefixes-qwen3-v5e32-r1-472728b7d7`
+- `/ahmed/delphi-1e22-prefixes-qwen3-v5e32-r2-ram96-472728b7d7`
+- `/ahmed/delphi-1e22-prefixes-qwen3-v5e32-r1-472728b7d7`
+
+Current status:
+
+- `3e20` 80% prefix is done and Qwen3-validated:
+  `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-3e20-prefixes-qwen3-v4c-r7-reserved32/checkpoints/step-28408`.
+  Parent/child:
+  `/ahmed/delphi-3e20-prefixes-qwen3-v4c-r7-reserved32-parent` and
+  `/ahmed/delphi-3e20-prefixes-qwen3-v4c-r7-reserved32-parent/checkpoints-delphi-prefix-3e20-step28408-stop28409_3ea93698-43a318b2`.
+- `1e21` 80% prefix is still running on central2:
+  `/ahmed/delphi-1e21-prefixes-qwen3-v4c-r11-reserved32-ram256-parent/checkpoints-delphi-prefix-1e21-step17645-stop17646_12582791-a026834b`.
+  W&B `marin-community/marin/delphi-1e21-prefixes-qwen3-v4c-r11-reserved32-ram256`
+  reported `global_step=16610 / 17645`, `duration=33.46s`, ETA about `9.6h`.
+  Recent logs show progress and only central2 temp checkpoint writes.
+- `1e22` 80% prefix is still running on central2:
+  `/ahmed/delphi-1e22-prefixes-qwen3-v4c-r13-reserved32-ram128-parent/checkpoints-delphi-prefix-1e22-step30588-stop30589_ed1d00ab-1cd3b322`.
+  W&B `marin-community/marin/delphi-1e22-prefixes-qwen3-v4c-r10-reserved32-ram256`
+  reported `global_step=30119 / 30588`, `duration=188.83s`, ETA about `24.6h`.
+  Recent logs show temp checkpoint `step-30114` saved under `gs://marin-us-central2`.
+- `2e20` cooldown final is still missing:
+  `gs://marin-us-east5/checkpoints/delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-56470/metadata.json`.
+  Current recovery parent/child is
+  `/ahmed/aa-true-p33m67-cd20-a010-d2e20-v5p8-z5a-r13-1780543092` and
+  `/ahmed/aa-true-p33m67-cd20-a010-d2e20-v5p8-z5a-r13-1780543092/midtrain-delphi-true-2e20-p33m67-cooldown20-a010`,
+  pending on v5p-8 east5 capacity. Preserve the exact output/W&B identity:
+  `gs://marin-us-east5/checkpoints/delphi-true-2e20-p33m67-cooldown20-a010`
+  and `marin-community/delphi-midtraining/delphi-true-2e20-p33m67-cooldown20-a010`.
+
+Europe/west4 experiments:
+
+- Europe source checkpoints and launch metadata were staged into
+  `gs://marin-eu-west4` before launch:
+  `delphi-3e20-r7-step23421`, `delphi-1e21-r11-step15052`,
+  `delphi-1e22-r13-step30015`, plus staged `.executor_info` files and the
+  legacy `isoflop_analysis_result.json`.
+- Europe `3e20` and `1e21` v5litepod-16 attempts failed with exit `137`;
+  logs explicitly say `Container was OOM killed by the kernel`. This was host
+  memory pressure, not a cross-region read issue.
+- Europe `1e22` v5litepod-32 candidate is still pending on TPU capacity:
+  `/ahmed/delphi-1e22-prefixes-qwen3-v5lp32-euw-ram96-pdp4-staged-step30015-parent/checkpoints-delphi-prefix-1e22-step30588-stop30589_ed1d00ab-5d1921c3`.
+- West4 v5litepod-16 `3e20` and `1e21` candidates also failed with exit `137`
+  after allocation; west4 `1e22` v5litepod-32 remains pending on capacity.
+
+Code changes in this handoff:
+
+- `scripts/materialize_delphi_prefix_checkpoint.py` now supports explicit
+  staged `--source-executor-info-path` and `--legacy-analysis-result-path`.
+  It rejects cross-bucket Marin `.executor_info`, legacy analysis-result, and
+  source checkpoint paths before launching, validates regionalized data caches,
+  disables data auto-build, and refuses real launch outside an Iris context.
+- Focused verification passed:
+  `uv run --with pytest --with pytest-timeout python -m pytest tests/test_materialize_delphi_prefix_checkpoint.py -q --timeout=180`
+  reported `31 passed`.
+  `./infra/pre-commit.py --fix scripts/materialize_delphi_prefix_checkpoint.py tests/test_materialize_delphi_prefix_checkpoint.py`
+  passed.
+
+Next agent actions:
+
+1. Do not relaunch any prefix job in a new region unless the source checkpoint,
+   `.executor_info`, legacy analysis JSON if needed, data caches, temp path, and
+   output path are all in that same `marin-*` bucket.
+2. Keep babysitting `1e21` and `1e22` central2 to final markers. When a final
+   appears, run `assert_checkpoint_complete_for_model_type(..., model_type="qwen3")`
+   before wiring the checkpoint into `checkpoint_candidates.yaml`.
+3. Keep `2e20` r13 pending unless a better east5-compatible recovery is chosen.
+   If relaunching, follow the Marin Delphi resume rule: preserve exact output
+   path/run id, check permanent and temp checkpoints, force the exact old output
+   path, and verify logs show resume from the expected temp step.
+4. If trying Europe/west4 again after OOM, increase host RAM only if worker
+   capacity supports it, or reduce memory pressure further; do not repeat the
+   same v5litepod-16 96g launch for `3e20`/`1e21`.

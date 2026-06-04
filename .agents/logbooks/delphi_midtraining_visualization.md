@@ -5,6 +5,78 @@ thread. Use it instead of searching the very large
 `.agents/logbooks/midtraining_delphi.md` unless you need older training-run
 details.
 
+## 2026-05-30T20:15Z — endpoint extrapolation: why 1e22 misses, and the multi-axis fix
+
+Motivated by Ahmed/Kaiyue's thread on the 12-20% `1e22` `math_val_loss` miss. Added
+candidate endpoint scaling forms + a head-to-head held-out comparison + rolling-origin CV
+to `scripts/analysis/delphi_small_final_loss_scaling.py`, and surfaced the results in the
+interactive report.
+
+### What the data says (read-only diagnosis, then confirmed in-pipeline)
+
+- The miss is a genuine **acceleration**, not noise or a missing floor. The per-recipe
+  log-log exponent is ~-0.10 across the ladder, then steepens at the top: `1e21->1e22`
+  local slope is **-0.120 / -0.136 / -0.149** for `p67m33 / p50m50 / p33m67`. The curve
+  bends *down* (improves faster) at high compute, monotonically worse with math fraction.
+- A **Chinchilla floor bends the wrong way** (flattens) -> it is the *worst* form at 1e22
+  (15.8%), matching Ahmed's "chinchilla 18% > log-log 15%".
+- Held-out comparison (fit `3e18-3e20`, score observed `1e21`/`1e22`, the one `best_prefix`
+  1e22 cell excluded):
+
+  | form | 1e21 mean abs % | 1e22 mean abs % | 1e22 signed % |
+  |---|---:|---:|---:|
+  | `per_recipe_power` (baseline) | 1.06 | 10.70 | -10.70 |
+  | `pooled_mechanistic` (N x D_math + LR) | 1.11 | **8.97** | -8.97 |
+  | `pooled_broken_power` (BNSL-style) | 1.37 | 10.77 | -10.77 |
+  | `pooled_curvature` (log-quadratic in C) | 2.15 | 14.83 | -14.83 |
+  | `per_recipe_floor` (Chinchilla) | 2.32 | 15.76 | -15.76 |
+
+- **Key finding:** no form fit on the small ladder reliably closes the 1e22 gap, because the
+  acceleration only appears *at* 1e22 and is not identifiable from below. The mechanistic
+  `N x D_math` form wins (8.97%, near-unbiased at 1e21) by separating model-size and
+  math-token axes that the 1-D FLOPs ladder conflates, but its residual is still
+  mix-ordered. Curvature/break terms fit on the (straight) small ladder *overfit and hurt*.
+- **Trustworthy horizon (rolling-origin CV):** single power law stays within ~2% mean error
+  out to ~3x the training-max compute (through `1e21`), then jumps to ~10% at 10x (`1e22`).
+  Treat >~3x extrapolations as directional.
+- **Kaiyue's "predict the improvement"** (`baseline - final`) was tested read-only and is
+  *worse* (1e22 = 17%): the step-0 baseline is inconsistent (small ladder = false-midtrain
+  fresh warmup; `1e21/1e22` = true-midtrain resumed mid-cooldown) and differencing amplifies
+  error. It needs real 0%-math control runs to be viable (none exist).
+- **LR is second-order:** all LRs over-shoot together; the bias is mix-ordered, not
+  LR-ordered. Not the cause of the 1e22 miss.
+
+### Files changed
+
+- `scripts/analysis/delphi_small_final_loss_scaling.py`: `SCALE_PARAMS_B`,
+  `SCALE_PRETRAIN_TOKENS_B`, `MATH_FRACTION`; forms (`attach_scaling_features`,
+  `EndpointForm`, per-recipe power/floor, `pooled_curvature`, `pooled_broken_power`,
+  `pooled_mechanistic`); `compare_forms_heldout`, `summarize_form_comparison`,
+  `rolling_origin_cv`, `select_best_form`, `full_ladder_grid`; new summary sections; best
+  form overlaid on `endpoint_math_val_loss.html`.
+- `scripts/analysis/build_delphi_midtraining_interactive_report.py`: new
+  "Endpoint Form Comparison & Trustworthy Horizon" section (payload keys `formComparison`,
+  `cvByDistance`; `renderFormComparison`).
+
+### New outputs
+
+`endpoint_form_comparison.csv`, `endpoint_form_comparison_summary.csv`,
+`endpoint_cv_by_distance.csv`, plus the new summary.md sections.
+
+### Out of scope (follow-up that would actually buy 1e22 predictability)
+
+New runs to *identify* the acceleration: iso-N midtraining-token (D_math) sweep; 0%-math
+control runs at >=3 scales (incl 1e21/1e22) to make the improvement decomposition viable; a
+finer LR sweep at 1e21. Modeling-only on the existing ladder tops out at ~9%.
+
+### Rebuild
+
+```bash
+uv run python scripts/analysis/delphi_small_final_loss_scaling.py --use-cache
+uv run python scripts/analysis/build_delphi_midtraining_interactive_report.py \
+  --output midtrain_analysis_outputs/small_final_loss_scaling/delphi_midtraining_interactive.html
+```
+
 ## 2026-05-23T01:15Z — current state and next-agent instructions
 
 ### User Goal

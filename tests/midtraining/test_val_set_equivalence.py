@@ -37,11 +37,18 @@ from experiments.midtrain_specs.true_midtrain.nemotron_math_only.launcher import
 )
 
 REFERENCE_DIR = Path(__file__).resolve().parents[2] / "experiments" / "midtrain_specs" / "data_sections"
-COOLDOWN30_TPUS = {
-    "3e18": "v6e-4",
-    "3e19": "v6e-8",
-    "3e20": "v5p-8",
-}
+TRUE_COOLDOWN_TEST_CELLS = (
+    (0.30, "3e18", "v6e-4"),
+    (0.30, "3e19", "v6e-8"),
+    (0.30, "2e20", "v5p-8"),
+    (0.30, "3e20", "v5p-8"),
+    (0.20, "3e18", "v6e-4"),
+    (0.20, "9e18", "v6e-4"),
+    (0.20, "2e19", "v6e-4"),
+    (0.20, "3e19", "v6e-8"),
+    (0.20, "9e19", "v6e-8"),
+    (0.20, "2e20", "v5p-8"),
+)
 
 VAL_DETERMINING_KEYS = (
     "components",  # includes math cache_dir and split=validation
@@ -115,16 +122,18 @@ def test_small_base_rendered_data_section_bit_identical_to_reference(base_key: s
 
 
 @pytest.mark.parametrize("mix", DELPHI_MIDTRAIN_MIXES)
-@pytest.mark.parametrize("base_key", ["3e18", "3e19", "3e20"])
-def test_true_cooldown_rendered_data_section_bit_identical_to_reference(base_key: str, mix: str):
+@pytest.mark.parametrize(("cooldown_ratio", "base_key", "tpu_type"), TRUE_COOLDOWN_TEST_CELLS)
+def test_true_cooldown_rendered_data_section_bit_identical_to_reference(
+    cooldown_ratio: float, base_key: str, mix: str, tpu_type: str
+):
     """The reviewed true-cooldown launch path must use the same math val split as CPT."""
-    candidate = reviewed_candidate(base_key, 0.30)
-    cell = planned_cell(mix, base_key, 0.30, candidate["candidate_id"])
+    candidate = reviewed_candidate(base_key, cooldown_ratio)
+    cell = planned_cell(mix, base_key, cooldown_ratio, candidate["candidate_id"])
     spec = build_cooldown_spec(
         candidate=candidate,
         cell=cell,
         mix=mix,
-        tpu_type=COOLDOWN30_TPUS[base_key],
+        tpu_type=tpu_type,
         attempt=1,
         output_region="us-east5",
         ram="256g",

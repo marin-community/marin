@@ -1,10 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
 from levanter.checkpoint import CheckpointerConfig
+from levanter.data.text import DatasetComponent, LMMixtureDatasetConfig, UrlDatasetSourceConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.adamh import AdamHConfig
@@ -23,15 +25,18 @@ from scripts.materialize_delphi_prefix_checkpoint import (
     build_materialization_plan,
     decode_train_config_from_executor_info,
     levanter_stop_step_for_checkpoint_step,
+    load_source_train_config,
     print_plan,
     regionalize_readonly_marin_uris,
+    require_iris_context_for_launch,
     run_materialization_train,
     validate_checkpoint_io,
 )
 
 
-def source_train_config(num_train_steps: int = 37_001) -> TrainLmConfig:
+def source_train_config(num_train_steps: int = 37_001, data: LMMixtureDatasetConfig | None = None) -> TrainLmConfig:
     return TrainLmConfig(
+        data=data,
         trainer=TrainerConfig(
             num_train_steps=num_train_steps,
             checkpointer=CheckpointerConfig(),
@@ -55,6 +60,14 @@ def request(
     source_step: int = 20_000,
     target_step: int = 25_900,
     output_root: str = "gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-step25900",
+    source_checkpoint_path: str | None = None,
+    source_executor_info_path: str | None = None,
+    legacy_analysis_result_path: str | None = None,
+    mirror_source_checkpoint: bool = True,
+    source_mirror_budget_gb: float = SOURCE_CHECKPOINT_MIRROR_BUDGET_GB,
+    per_device_parallelism: int | None = None,
+    temporary_save_interval: timedelta | None = None,
+    preemptible: bool = True,
 ) -> MaterializeRequest:
     return MaterializeRequest(
         base="3e18",
@@ -63,6 +76,14 @@ def request(
         output_root=output_root,
         tpu="v5p-8",
         ram="128g",
+        preemptible=preemptible,
+        source_checkpoint_path=source_checkpoint_path,
+        source_executor_info_path=source_executor_info_path,
+        legacy_analysis_result_path=legacy_analysis_result_path,
+        mirror_source_checkpoint=mirror_source_checkpoint,
+        source_mirror_budget_gb=source_mirror_budget_gb,
+        per_device_parallelism=per_device_parallelism,
+        temporary_save_interval=temporary_save_interval or timedelta(minutes=5),
         regions=("us-east5",),
     )
 
@@ -130,6 +151,13 @@ def test_decode_delphi_executor_info_defaults_untyped_model_to_qwen3():
     assert train_config.model.attention_config().qk_norm is not None
 
 
+def test_load_source_train_config_rejects_cross_bucket_executor_info_without_copy():
+    model = get_delphi_model("3e18")
+
+    with pytest.raises(ValueError, match="source executor info"):
+        load_source_train_config(model, request())
+
+
 def test_rejects_output_under_original_delphi_root():
     model = get_delphi_model("3e18")
     with pytest.raises(ValueError, match="original Delphi root"):
@@ -185,6 +213,7 @@ def test_stop_target_is_separate_from_lr_schedule_length():
     checkpointer = trainer.checkpointer
     assert checkpointer.base_path == f"{req.output_root}/checkpoints"
     assert checkpointer.append_run_id_to_base_path is False
+    assert checkpointer.save_interval == timedelta(minutes=5)
     assert checkpointer.keep == []
     assert checkpointer.metadata["target_step"] == req.target_step
     assert checkpointer.metadata["source_checkpoint_path"].startswith("mirror://")
@@ -195,6 +224,7 @@ def test_stop_target_is_separate_from_lr_schedule_length():
     assert step.resources is None
     assert step.fn.resources == step.config.train_on_pod.resources
     assert step.fn.resources.device.variant == "v5p-8"
+    assert step.fn.resources.preemptible is True
     assert step.fn.pip_dependency_groups == [TPU_PIP_DEPENDENCY_GROUP]
     assert step.config.train_on_pod.resources.regions == ("us-east5",)
 
@@ -203,6 +233,69 @@ def test_stop_target_is_separate_from_lr_schedule_length():
     assert "delphi_prefix_checkpoint" in tracker.tags
     assert f"target_step:{req.target_step}" in tracker.tags
     assert tracker.replicate_path == req.output_root
+
+
+def test_source_checkpoint_path_can_load_directly_without_mirror():
+    model = get_delphi_model("3e18")
+    local_source = "gs://marin-us-east5/checkpoints/delphi-prefix-sources/isoflop-3e18/checkpoints/step-20000"
+    req = request(
+        source_checkpoint_path=local_source,
+        mirror_source_checkpoint=False,
+        per_device_parallelism=2,
+    )
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-east5/scratch"}),
+    ):
+        plan = build_materialization_plan(req, model, source_train_config())
+
+    trainer = plan.train_config.trainer
+    assert plan.source_checkpoint_path == local_source
+    assert trainer.initialize_from == local_source
+    assert not isinstance(trainer.initialize_from, MirroredValue)
+    assert trainer.per_device_parallelism == 2
+    assert trainer.checkpointer.metadata["source_checkpoint_path"] == local_source
+    assert trainer.checkpointer.metadata["source_checkpoint_load_mode"] == "direct"
+
+
+def test_temporary_save_interval_is_configurable():
+    model = get_delphi_model("3e18")
+    req = request(temporary_save_interval=timedelta(minutes=30))
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-east5/scratch"}),
+    ):
+        plan = build_materialization_plan(req, model, source_train_config())
+
+    assert plan.train_config.trainer.checkpointer.save_interval == timedelta(minutes=30)
+
+
+def test_tpu_preemptible_flag_can_target_reserved_workers():
+    model = get_delphi_model("3e18")
+    req = request(preemptible=False)
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-east5/scratch"}),
+    ):
+        plan = build_materialization_plan(req, model, source_train_config())
+
+    step = build_executor_step(plan)
+
+    assert step.fn.resources.preemptible is False
+    assert step.config.train_on_pod.resources.preemptible is False
+
+
+def test_source_mirror_budget_is_configurable():
+    model = get_delphi_model("3e18")
+    req = request(source_mirror_budget_gb=150.0)
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-east5/scratch"}),
+    ):
+        plan = build_materialization_plan(req, model, source_train_config())
+
+    assert isinstance(plan.train_config.trainer.initialize_from, MirroredValue)
+    assert plan.train_config.trainer.initialize_from.budget_gb == 150.0
 
 
 def test_regionalizes_tensorstore_data_paths_without_mirror_scheme():
@@ -217,6 +310,31 @@ def test_regionalizes_tensorstore_data_paths_without_mirror_scheme():
     assert rendered["cache_dir"] == "gs://marin-us-east5/tokenized/nemotron_cc/hq_actual-5af4cc/train"
     assert not rendered["cache_dir"].startswith("mirror://")
     assert rendered["external"] == "gs://not-marin-bucket/path"
+
+
+def test_materialized_config_disables_data_cache_auto_build():
+    model = get_delphi_model("3e18")
+    data = LMMixtureDatasetConfig(
+        components={
+            "mix": DatasetComponent(
+                cache_dir="gs://marin-us-central2/tokenized/mix",
+                source=UrlDatasetSourceConfig(train_urls=["gs://marin-us-central2/raw/mix/train.jsonl"]),
+            ),
+        },
+        train_weights={"mix": 1.0},
+    )
+
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-central2/scratch"}),
+    ):
+        plan = build_materialization_plan(
+            request(output_root="gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-3e18-step25900"),
+            model,
+            source_train_config(data=data),
+        )
+
+    assert plan.train_config.data.auto_build_caches is False
 
 
 def test_dry_run_plan_prints_operator_safety_summary(capsys):
@@ -239,6 +357,52 @@ def test_dry_run_plan_prints_operator_safety_summary(capsys):
     assert "source mirror budget:     40 GB" in out
     assert "regions:                  us-east5" in out
     assert "original Delphi root will not be modified" in out
+
+
+def test_dry_run_plan_prints_direct_source_load(capsys):
+    model = get_delphi_model("3e18")
+    req = request(
+        source_checkpoint_path="gs://marin-us-east5/checkpoints/delphi-prefix-sources/isoflop-3e18/checkpoints/step-20000",
+        mirror_source_checkpoint=False,
+        per_device_parallelism=1,
+    )
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-east5/scratch"}),
+    ):
+        plan = build_materialization_plan(req, model, source_train_config())
+
+    print_plan(plan)
+    out = capsys.readouterr().out
+
+    assert "source mirror:            disabled; direct load" in out
+    assert "per-device parallelism:   1" in out
+
+
+def test_dry_run_plan_prints_staged_metadata_paths(capsys):
+    model = get_delphi_model("3e18")
+    executor_info_path = "gs://marin-us-east5/checkpoints/delphi-prefix-sources/isoflop-3e18/.executor_info"
+    analysis_result_path = (
+        "gs://marin-us-east5/checkpoints/delphi-prefix-sources/isoflop-3e18/isoflop_analysis_result.json"
+    )
+    req = request(
+        source_checkpoint_path="gs://marin-us-east5/checkpoints/delphi-prefix-sources/isoflop-3e18/checkpoints/step-20000",
+        source_executor_info_path=executor_info_path,
+        legacy_analysis_result_path=analysis_result_path,
+        mirror_source_checkpoint=False,
+    )
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-east5/scratch"}),
+    ):
+        plan = build_materialization_plan(req, model, source_train_config())
+
+    print_plan(plan)
+    out = capsys.readouterr().out
+
+    assert f"source executor info:     {executor_info_path}" in out
+    assert f"legacy analysis result:   {analysis_result_path}" in out
+    assert "original Delphi root:     not read directly; source executor info is staged" in out
 
 
 # ---------------------------------------------------------------------------
@@ -415,7 +579,16 @@ def test_validate_checkpoint_io_checks_source_qwen3_schema():
         patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
         patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-east5/scratch"}),
     ):
-        plan = build_materialization_plan(request(), model, source_train_config())
+        plan = build_materialization_plan(
+            request(
+                source_checkpoint_path=(
+                    "gs://marin-us-east5/checkpoints/delphi-prefix-sources/isoflop-3e18/checkpoints/step-20000"
+                ),
+                mirror_source_checkpoint=False,
+            ),
+            model,
+            source_train_config(),
+        )
 
     with (
         patch("scripts.materialize_delphi_prefix_checkpoint.missing_checkpoint_artifacts", return_value=[]),
@@ -438,7 +611,16 @@ def test_validate_checkpoint_io_rejects_source_missing_qk_norm():
         patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
         patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-east5/scratch"}),
     ):
-        plan = build_materialization_plan(request(), model, source_train_config())
+        plan = build_materialization_plan(
+            request(
+                source_checkpoint_path=(
+                    "gs://marin-us-east5/checkpoints/delphi-prefix-sources/isoflop-3e18/checkpoints/step-20000"
+                ),
+                mirror_source_checkpoint=False,
+            ),
+            model,
+            source_train_config(),
+        )
 
     with (
         patch("scripts.materialize_delphi_prefix_checkpoint.missing_checkpoint_artifacts", return_value=[]),
@@ -449,6 +631,49 @@ def test_validate_checkpoint_io_rejects_source_missing_qk_norm():
         ),
     ):
         with pytest.raises(ValueError, match="missing Qwen3 QK-norm arrays"):
+            validate_checkpoint_io(plan)
+
+
+def test_validate_checkpoint_io_rejects_cross_bucket_source_checkpoint_without_copy():
+    model = get_delphi_model("3e18")
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-east5/scratch"}),
+    ):
+        plan = build_materialization_plan(request(), model, source_train_config())
+
+    with pytest.raises(ValueError, match="Copy the checkpoint into the output bucket first"):
+        validate_checkpoint_io(plan)
+
+
+def test_validate_checkpoint_io_rejects_missing_regionalized_data_cache():
+    model = get_delphi_model("3e18")
+    data = LMMixtureDatasetConfig(
+        components={
+            "mix": DatasetComponent(
+                cache_dir="gs://marin-us-central2/tokenized/mix",
+                source=UrlDatasetSourceConfig(train_urls=["gs://marin-us-central2/raw/mix/train.jsonl"]),
+            ),
+        },
+        train_weights={"mix": 1.0},
+    )
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-central2/scratch"}),
+    ):
+        plan = build_materialization_plan(
+            request(output_root="gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-3e18-step25900"),
+            model,
+            source_train_config(data=data),
+        )
+
+    with (
+        patch("scripts.materialize_delphi_prefix_checkpoint.missing_checkpoint_artifacts", return_value=[]),
+        patch("scripts.materialize_delphi_prefix_checkpoint.read_metadata_step", return_value=20_000),
+        patch("scripts.materialize_delphi_prefix_checkpoint.path_exists_or_has_children", return_value=False),
+        patch("scripts.materialize_delphi_prefix_checkpoint.assert_checkpoint_complete_for_model_type"),
+    ):
+        with pytest.raises(FileNotFoundError, match="missing regionalized data caches"):
             validate_checkpoint_io(plan)
 
 
@@ -496,3 +721,14 @@ def test_run_materialization_train_propagates_destination_schema_failure():
     ):
         with pytest.raises(ValueError, match="missing Qwen3 QK-norm arrays"):
             run_materialization_train(step.config)
+
+
+def test_require_iris_context_for_launch_rejects_local_execution():
+    with patch("scripts.materialize_delphi_prefix_checkpoint.get_iris_ctx", return_value=None):
+        with pytest.raises(RuntimeError, match="Direct local execution makes Fray fall back to LocalClient"):
+            require_iris_context_for_launch()
+
+
+def test_require_iris_context_for_launch_allows_iris_context():
+    with patch("scripts.materialize_delphi_prefix_checkpoint.get_iris_ctx", return_value=object()):
+        require_iris_context_for_launch()

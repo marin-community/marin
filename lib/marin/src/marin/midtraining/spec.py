@@ -72,6 +72,7 @@ class ComputeProfile:
     ram: str = "128g"
     per_device_parallelism: int = -1
     regions: tuple[str, ...] = ()
+    zone: str | None = None
     preemptible: bool = True
     max_retries_failure: int = 3
     max_task_failures: int = 100
@@ -92,6 +93,8 @@ class ComputeProfile:
         for region in self.regions:
             if not region:
                 raise ValueError(f"ComputeProfile.regions must not contain empty strings, got {self.regions!r}")
+        if self.zone is not None and not self.zone:
+            raise ValueError("ComputeProfile.zone must be non-empty when set")
 
 
 # ---------------------------------------------------------------------------
