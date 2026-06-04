@@ -1300,6 +1300,27 @@ def levanter_trainer_config(tensor_parallel_size: int, mp_policy: str = "f32") -
     )
 
 
+def _with_rpa_overrides(
+    model_config: Qwen3Config,
+    *,
+    rpa_num_kv_pages_per_block: int | None,
+    rpa_num_queries_per_block: int | None,
+    rpa_vmem_limit_bytes: int | None,
+) -> Qwen3Config:
+    rpa_overrides = {
+        key: value
+        for key, value in {
+            "rpa_num_kv_pages_per_block": rpa_num_kv_pages_per_block,
+            "rpa_num_queries_per_block": rpa_num_queries_per_block,
+            "rpa_vmem_limit_bytes": rpa_vmem_limit_bytes,
+        }.items()
+        if value is not None
+    }
+    if not rpa_overrides:
+        return model_config
+    return dataclasses.replace(model_config, **rpa_overrides)
+
+
 def run_levanter_without_lm_head_case(
     *,
     trainer: TrainerConfig,
@@ -1467,7 +1488,7 @@ def start_levanter_server(
             trust_remote_code=True,
         )
         model_config = converter.config_from_hf_checkpoint(ref=checkpoint)
-        model_config = dataclasses.replace(
+        model_config = _with_rpa_overrides(
             model_config,
             rpa_num_kv_pages_per_block=rpa_num_kv_pages_per_block,
             rpa_num_queries_per_block=rpa_num_queries_per_block,
