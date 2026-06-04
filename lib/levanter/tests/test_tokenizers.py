@@ -11,6 +11,7 @@ which requires HF authentication (tests skip if auth is missing).
 import dataclasses
 import json
 import os
+import pathlib
 import re
 import shutil
 from unittest.mock import patch
