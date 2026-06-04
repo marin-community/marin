@@ -115,6 +115,67 @@ class InferenceBatch(list):
         return sum(len(req.prompt_tokens) + req.max_tokens for req in self)
 
 
+def _request_fits_batch(
+    batch: InferenceBatch,
+    request: InferenceRequest,
+    *,
+    max_seqs: int,
+    max_tokens_per_batch: int,
+) -> bool:
+    return (
+        batch.num_seqs() + request.n_generations <= max_seqs
+        and batch.total_tokens() + len(request.prompt_tokens) + request.max_tokens <= max_tokens_per_batch
+    )
+
+
+def _merge_ready_batches(
+    first_batch: InferenceBatch,
+    ready_batches: list[InferenceBatch],
+    *,
+    max_seqs: int,
+    max_tokens_per_batch: int,
+) -> tuple[InferenceBatch, list[InferenceBatch]]:
+    """Merge already-queued inference batches while preserving request order."""
+
+    merged = InferenceBatch(first_batch)
+    leftovers: list[InferenceBatch] = []
+
+    for ready_batch in ready_batches:
+        leftover = InferenceBatch()
+        for request in ready_batch:
+            if not leftover and _request_fits_batch(
+                merged,
+                request,
+                max_seqs=max_seqs,
+                max_tokens_per_batch=max_tokens_per_batch,
+            ):
+                merged.append(request)
+                continue
+            leftover.append(request)
+        if leftover:
+            leftovers.append(leftover)
+
+    return merged, leftovers
+
+
+def _drain_ready_batches(batch_queue: queue.Queue) -> list[InferenceBatch]:
+    """Return batches already waiting behind the next executable batch."""
+
+    batches = []
+    while True:
+        try:
+            batches.append(batch_queue.get_nowait())
+        except queue.Empty:
+            return batches
+
+
+def _max_tokens_per_batch(engine: InferenceEngine) -> int:
+    max_pages = engine.config.max_pages
+    if max_pages is None:
+        raise RuntimeError("Inference engine max_pages must be resolved before serving requests.")
+    return engine.config.page_size * max_pages
+
+
 # A callback which replaces the current model.
 WeightSource = collections.abc.Callable[[LmHeadModel], LmHeadModel]
 
@@ -258,7 +319,7 @@ class InferenceContext:
 
             batch = InferenceBatch()
             max_tokens_per_seq = self.engine.config.max_seq_len
-            max_tokens_per_batch = self.engine.config.page_size * self.engine.config.max_pages  # type: ignore
+            max_tokens_per_batch = _max_tokens_per_batch(self.engine)
             logger.info(f"Max tokens per seq: {max_tokens_per_seq}, per batch: {max_tokens_per_batch}")
 
             for r in requests:
@@ -304,6 +365,23 @@ class InferenceContext:
         while not self.shutdown_event.is_set():
             try:
                 batch = self.batch_queue.get(timeout=1)
+                ready_batches = _drain_ready_batches(self.batch_queue)
+                if ready_batches:
+                    batch, leftovers = _merge_ready_batches(
+                        batch,
+                        ready_batches,
+                        max_seqs=self.engine.config.max_seqs,
+                        max_tokens_per_batch=_max_tokens_per_batch(self.engine),
+                    )
+                    for leftover in leftovers:
+                        self.batch_queue.put(leftover)
+                    logger.debug(
+                        "Merged %d ready inference batches into %d requests (%d seqs); requeued %d overflow batches",
+                        len(ready_batches) + 1,
+                        len(batch),
+                        batch.num_seqs(),
+                        len(leftovers),
+                    )
                 with (
                     self.model_lock,
                     hax.partitioning.set_mesh(self.config.trainer.device_mesh),

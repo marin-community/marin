@@ -190,6 +190,19 @@ def test_levanter_trainer_config_uses_model_axis_for_tensor_parallelism():
     assert trainer.parameter_axis_mapping["vocab"] == "model"
 
 
+def test_default_rpa_overrides_leave_qwen3_config_untouched():
+    config = bench.Qwen3Config()
+
+    updated = bench._with_rpa_overrides(
+        config,
+        rpa_num_kv_pages_per_block=None,
+        rpa_num_queries_per_block=None,
+        rpa_vmem_limit_bytes=None,
+    )
+
+    assert updated is config
+
+
 def test_write_levanter_kernel_artifacts_uses_trainer_mesh_and_compute_mapping(tmp_path):
     events: list[str] = []
 

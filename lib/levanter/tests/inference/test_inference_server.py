@@ -27,15 +27,76 @@ try:
         score_token_sequence_logprobs,
     )
     from levanter.inference.openai import (
+        InferenceBatch,
+        InferenceRequest,
         InferenceResponse,
         InferenceServer,
         InferenceServerConfig,
+        _merge_ready_batches,
     )
 
 except ImportError:
     pytest.skip("Serving imports not installed, use --extra=serve", allow_module_level=True)
 
 logger = logging.getLogger(__name__)
+
+
+def _inference_request(
+    request_id: str,
+    *,
+    n_generations: int = 4,
+    prompt_tokens: int = 1,
+    max_tokens: int = 128,
+) -> InferenceRequest:
+    return InferenceRequest(
+        request_id=request_id,
+        prompt_tokens=list(range(prompt_tokens)),
+        max_tokens=max_tokens,
+        temperature=0.7,
+        top_p=1.0,
+        top_k=4096,
+        stop_tokens=None,
+        seed=0,
+        future=None,
+        n_generations=n_generations,
+    )
+
+
+def test_merge_ready_batches_coalesces_pending_work_up_to_sequence_limit():
+    first_batch = InferenceBatch([_inference_request("req_0")])
+    ready_batches = [
+        InferenceBatch([_inference_request("req_1"), _inference_request("req_2")]),
+        InferenceBatch([_inference_request("req_3")]),
+    ]
+
+    merged, leftovers = _merge_ready_batches(
+        first_batch,
+        ready_batches,
+        max_seqs=16,
+        max_tokens_per_batch=4096,
+    )
+
+    assert [request.request_id for request in merged] == ["req_0", "req_1", "req_2", "req_3"]
+    assert merged.num_seqs() == 16
+    assert leftovers == []
+
+
+def test_merge_ready_batches_preserves_overflow_order():
+    first_batch = InferenceBatch([_inference_request("req_0", n_generations=8)])
+    ready_batches = [
+        InferenceBatch([_inference_request("req_1", n_generations=8), _inference_request("req_2")]),
+        InferenceBatch([_inference_request("req_3")]),
+    ]
+
+    merged, leftovers = _merge_ready_batches(
+        first_batch,
+        ready_batches,
+        max_seqs=16,
+        max_tokens_per_batch=4096,
+    )
+
+    assert [request.request_id for request in merged] == ["req_0", "req_1"]
+    assert [[request.request_id for request in leftover] for leftover in leftovers] == [["req_2"], ["req_3"]]
 
 
 @pytest.fixture(scope="module")
