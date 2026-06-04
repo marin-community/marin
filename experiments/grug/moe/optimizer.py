@@ -37,28 +37,18 @@ class GrugMoeAdamHConfig(OptimizerConfig):
 
         def optimizer(learning_rate, adam_lr, expert_lr):
             def adamh_transform():
-                components = []
-                if self.max_grad_norm:
-                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate))
-                return optax.chain(*components)
+                return optax.chain(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate))
 
             def adamh_expert_transform():
-                components = []
-                if self.max_grad_norm:
-                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, expert_lr))
-                return optax.chain(*components)
+                return optax.chain(scale_by_adamh(self.beta1, self.beta2, self.epsilon, expert_lr))
 
             def adam_transform():
-                components = []
-                if self.max_grad_norm:
-                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
-                components.append(optax.scale(-adam_lr))
-                return optax.chain(*components)
+                return optax.chain(
+                    optax.scale_by_adam(self.beta1, self.beta2, self.epsilon),
+                    optax.scale(-adam_lr),
+                )
 
-            return optax.multi_transform(
+            grouped = optax.multi_transform(
                 {
                     "adamh": adamh_transform(),
                     "adamh_expert": adamh_expert_transform(),
@@ -66,6 +56,9 @@ class GrugMoeAdamHConfig(OptimizerConfig):
                 },
                 self.create_mask,
             )
+            if self.max_grad_norm is None:
+                return grouped
+            return optax.chain(optax.clip_by_global_norm(self.max_grad_norm), grouped)
 
         return optax.inject_hyperparams(optimizer)(
             learning_rate=learning_rate_schedule,
