@@ -249,8 +249,6 @@ TEMP_CHECKPOINT_INTERVAL = timedelta(minutes=3)
 
 # --- Resources --------------------------------------------------------------
 
-# us-east5-a co-locates TPUs with the ``marin-us-east5`` checkpoint bucket.
-PROTEIN_ZONE: str = "us-east5-a"
 DEFAULT_TPU: str = "v6e-4"
 
 
@@ -258,16 +256,20 @@ DEFAULT_TPU: str = "v6e-4"
 class TpuStats:
     chips: int  # accelerator chips in the slice (== jax.device_count())
     hbm_gib: int  # HBM per chip
+    zone: str  # us-east5 zone hosting the slice (same region as the marin-us-east5 bucket)
 
 
 # Supported slices only. ``chips`` per fray TPU topology (N for v6e, N/2 for
-# v5p); HBM/chip from docs/tpu-clusters.md. Keeps the config slice-agnostic by
-# deriving per_device_parallelism from this table (see size-tpu-train-config).
+# v5p); HBM/chip from docs/tpu-clusters.md; ``zone`` is the us-east5 zone hosting
+# the slice (v5p in -a, v6e in -b — both same region as the regional
+# ``marin-us-east5`` checkpoint bucket, so no cross-region traffic). Keeps the
+# config slice-agnostic by deriving per_device_parallelism (see
+# size-tpu-train-config).
 TPU_STATS: dict[str, TpuStats] = {
-    "v5p-8": TpuStats(chips=4, hbm_gib=95),
-    "v6e-4": TpuStats(chips=4, hbm_gib=32),
-    "v6e-8": TpuStats(chips=8, hbm_gib=32),
-    "v6e-16": TpuStats(chips=16, hbm_gib=32),
+    "v5p-8": TpuStats(chips=4, hbm_gib=95, zone="us-east5-a"),
+    "v6e-4": TpuStats(chips=4, hbm_gib=32, zone="us-east5-b"),
+    "v6e-8": TpuStats(chips=8, hbm_gib=32, zone="us-east5-b"),
+    "v6e-16": TpuStats(chips=16, hbm_gib=32, zone="us-east5-b"),
 }
 
 # Per-chip microbatch that fits the 16 GiB HBM floor for the 1.5B model. Tuned
@@ -285,7 +287,7 @@ def tpu() -> str:
 
 
 def resources() -> ResourceConfig:
-    return ResourceConfig.with_tpu(tpu(), zone=PROTEIN_ZONE)
+    return ResourceConfig.with_tpu(tpu(), zone=TPU_STATS[tpu()].zone)
 
 
 def per_device_parallelism(tpu_name: str) -> int:
