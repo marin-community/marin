@@ -1,2 +1,5 @@
 # Local W&B + plot cache for exp11_data_mix_analysis.py.
 exp11_data_mix_results/
+
+# Local W&B + plot cache for exp44_token_scaling_analysis.py.
+exp44_token_scaling_results/
