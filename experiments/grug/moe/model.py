@@ -198,6 +198,10 @@ class CausalSelfAttention(eqx.Module):
         k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
+        # Half-RoPE's slice+concat on the head_dim axis can leave the explicit-mesh
+        # propagator with ``model`` annotated on ``head_dim`` rather than
+        # ``num_q_heads``; force the canonical TP layout so it matches ``aligned_v``.
+        attn_out = reshard(attn_out, P(("data", "expert"), None, "model", None))
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
