@@ -129,9 +129,9 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
 _SEQ_LEN: int = 4096
 _COMPUTE_OPT_CELLS: tuple[tuple[int, int, int], ...] = (
     (512, 32, 10_980),
-    (768, 64, 16_875),
-    (1024, 128, 16_080),
-    (1280, 256, 14_325),
+    # (768, 64, 16_875),
+    # (1024, 128, 16_080),
+    # (1280, 256, 14_325),
 )
 
 _heuristic = MoeMuonHHeuristic()
