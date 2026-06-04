@@ -94,7 +94,10 @@ def wall_attention_chunk(
         p_q = jax.lax.dynamic_slice_in_dim(cum_p, r0, c, axis=1)  # [B,C,H,Dk]
         p_b = p_q[:, -1]  # [B,H,Dk] block reference (last row)
         q_prime = qb * jnp.exp(p_q - p_b[:, None])  # exponent in [0, block-decay]
-        k_prime = k * jnp.exp(p_b[:, None] - cum_p)  # exponent <= 0; far keys -> 0
+        # Valid keys (j <= block end) have exponent <= 0; future keys (j > block end) are causally
+        # masked but their exponent is large-positive and would overflow exp() to +inf (then NaN in
+        # the einsum) over long sequences. Clamp to <= 0: exact for valid keys, harmless for masked.
+        k_prime = k * jnp.exp(jnp.minimum(p_b[:, None] - cum_p, 0.0))
         scores = einsum("bchd,bshd->bhcs", q_prime, k_prime) * scale  # [B,H,C,S]
 
         i_idx = r0 + jnp.arange(c)  # [C]
