@@ -10,7 +10,8 @@
 //! `Router`:
 //!
 //! ```text
-//! [legacy-path middleware]  (outermost transport layer; rewrites the URI)
+//! [strip-forwarded-prefix middleware]  (outermost; normalizes the URI path)
+//! [legacy-path middleware]             (transport layer; rewrites the URI)
 //!   /health
 //!   /debug/*            (only with --debug-admin)
 //!   /static, /favicon.ico, /, /{*rest}   (SPA, before the fallback)
@@ -33,7 +34,7 @@ use crate::server::interceptors::{
     ConcurrencyInterceptor, SlowRpcInterceptor, DEFAULT_SLOW_RPC_THRESHOLD_MS,
     MAX_CONCURRENT_FETCH_LOGS, MAX_CONCURRENT_QUERY,
 };
-use crate::server::{debug, legacy_path, spa};
+use crate::server::{debug, forwarded_prefix, legacy_path, spa};
 use crate::store::Store;
 
 use super::log_service::LogServiceImpl;
@@ -123,9 +124,16 @@ pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
     app = spa::spa_routes(app, spa::vue_dist_dir(), connect_service.clone());
 
     app.fallback_service(connect_service)
-        // Outermost transport layer: rewrite legacy /iris.logging.LogService/*
-        // onto /finelog.logging.LogService/* before routing.
+        // Transport layer: rewrite legacy /iris.logging.LogService/* onto
+        // /finelog.logging.LogService/* before routing.
         .layer(axum::middleware::from_fn(
             legacy_path::rewrite_legacy_logging_path,
+        ))
+        // Outermost transport layer: strip X-Forwarded-Prefix from the path so
+        // a dashboard fronted by a sub-path proxy routes correctly whether or
+        // not that proxy strips the prefix itself. Runs before the legacy
+        // rewrite so a prefixed legacy path is normalized first.
+        .layer(axum::middleware::from_fn(
+            forwarded_prefix::strip_forwarded_prefix,
         ))
 }

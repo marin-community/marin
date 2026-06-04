@@ -4,14 +4,15 @@
 //! `ctx.spec()`/`ctx.path()` are populated for the interceptors), wraps it in a
 //! `ConnectRpcService` with raised 64 MB limits + zstd/gzip + the SlowRpc /
 //! Concurrency interceptors, mounts `/health`, the SPA, and (optionally) the
-//! `--debug-admin` routes, layers the legacy-path transport rewrite, and sets
-//! the connect service as the fallback. The connect service stays the FALLBACK
+//! `--debug-admin` routes, layers the legacy-path and forwarded-prefix transport
+//! rewrites, and sets the connect service as the fallback. The connect service stays the FALLBACK
 //! so RPC POSTs reach it while `/health`, `/debug/*`, `/static`, and the SPA
 //! GET routes take precedence.
 
 pub mod app;
 pub mod debug;
 pub mod diagnostics;
+pub mod forwarded_prefix;
 pub mod interceptors;
 pub mod legacy_path;
 pub mod log_service;

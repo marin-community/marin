@@ -5,8 +5,11 @@
 //!
 //! - `/static/*` via `tower_http::services::ServeDir` over `dist/static`,
 //! - `/favicon.ico` (when present),
-//! - `/` and `/{*rest}` -> the SPA index handler, which reads `dist/index.html`
-//!   at request time and applies [`index_html_with_base`] (the byte-exact
+//! - `/` and `/{*rest}` -> the SPA index handler. It serves a built static
+//!   asset when the (forwarded-prefix-stripped) path names one — covering a
+//!   sub-path proxy that forwards the prefix unstripped, where the asset
+//!   request matches this catch-all rather than `/static` — and otherwise reads
+//!   `dist/index.html` and applies [`index_html_with_base`] (the byte-exact
 //!   base-href rewrite keyed off `X-Forwarded-Prefix`).
 //!
 //! When `dist` is absent (CI has no built dashboard) the `/` route serves the
@@ -15,11 +18,11 @@
 //! connect service — only unmatched GETs fall through to the SPA index.
 
 use std::convert::Infallible;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use axum::body::Body;
 use axum::extract::Request;
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, get_service};
 use axum::Router;
@@ -114,11 +117,62 @@ fn repo_root_from_manifest() -> Option<PathBuf> {
     manifest.parent()?.parent().map(PathBuf::from)
 }
 
-/// SPA index handler: read `dist/index.html` at request time and apply the
-/// base-href rewrite keyed off `X-Forwarded-Prefix`. `dist` is captured per
-/// route (no axum State) so the SPA sub-router stays `Router<()>` and merges
-/// cleanly with the rest of the app.
-async fn spa_index(dist: PathBuf, headers: HeaderMap) -> Response {
+/// Content-type for the static assets the Vue build emits, keyed off the file
+/// extension. Unknown extensions fall back to `application/octet-stream`.
+fn content_type_for(path: &str) -> &'static str {
+    match path.rsplit('.').next() {
+        Some("js") | Some("mjs") => "text/javascript",
+        Some("css") => "text/css",
+        Some("html") => "text/html",
+        Some("json") | Some("map") => "application/json",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("ttf") => "font/ttf",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("ico") => "image/x-icon",
+        Some("txt") => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Read the file named by a root-relative request `path` (e.g.
+/// `/static/js/index.abc.js`) from under `dist`, refusing any path that would
+/// escape `dist`. Returns the bytes and a content-type, or `None` when the path
+/// is unsafe or names no existing file.
+async fn read_dist_file(dist: &Path, path: &str) -> Option<(Vec<u8>, &'static str)> {
+    let rel = path.trim_start_matches('/');
+    if rel.is_empty()
+        || rel
+            .split('/')
+            .any(|seg| seg.is_empty() || seg == "." || seg == "..")
+    {
+        return None;
+    }
+    let bytes = tokio::fs::read(dist.join(rel)).await.ok()?;
+    Some((bytes, content_type_for(rel)))
+}
+
+/// SPA index handler: serve a built static asset when the request path names
+/// one, otherwise read `dist/index.html` and apply the base-href rewrite keyed
+/// off `X-Forwarded-Prefix`.
+///
+/// The `/static` `ServeDir` route handles asset requests that arrive at the
+/// root. When finelog is fronted by a sub-path proxy that forwards the prefix
+/// unstripped, the asset request instead matches this catch-all by path; the
+/// forwarded-prefix middleware has already stripped the prefix from the URI, so
+/// `path` here is the root-relative `/static/...`, which we serve directly.
+///
+/// `dist` is captured per route (no axum State) so the SPA sub-router stays
+/// `Router<()>` and merges cleanly with the rest of the app.
+async fn spa_index(dist: PathBuf, uri: Uri, headers: HeaderMap) -> Response {
+    let path = uri.path();
+    if path.starts_with("/static/") || path == "/favicon.ico" {
+        if let Some((bytes, content_type)) = read_dist_file(&dist, path).await {
+            return ([(header::CONTENT_TYPE, content_type)], bytes).into_response();
+        }
+    }
+
     let prefix = headers
         .get("x-forwarded-prefix")
         .and_then(|v| v.to_str().ok())
@@ -186,13 +240,13 @@ where
     let dist_rest = dist;
     app.route(
         "/",
-        get(move |headers: HeaderMap| spa_index(dist_root.clone(), headers))
+        get(move |uri: Uri, headers: HeaderMap| spa_index(dist_root.clone(), uri, headers))
             .fallback_service(connect.clone()),
     )
     // axum 0.7 catch-all syntax is `/*rest` (the `/{*rest}` form is axum 0.8).
     .route(
         "/*rest",
-        get(move |headers: HeaderMap| spa_index(dist_rest.clone(), headers))
+        get(move |uri: Uri, headers: HeaderMap| spa_index(dist_rest.clone(), uri, headers))
             .fallback_service(connect),
     )
 }
@@ -243,5 +297,56 @@ mod tests {
         assert!(NOT_BUILT_HTML.starts_with("<!doctype html>"));
         assert!(NOT_BUILT_HTML.contains("Dashboard not built"));
         assert!(NOT_BUILT_HTML.contains("lib/finelog/dashboard"));
+    }
+
+    #[test]
+    fn content_type_by_extension() {
+        assert_eq!(
+            content_type_for("static/js/index.abc.js"),
+            "text/javascript"
+        );
+        assert_eq!(content_type_for("static/css/index.abc.css"), "text/css");
+        assert_eq!(content_type_for("static/font/x.woff2"), "font/woff2");
+        assert_eq!(content_type_for("favicon.ico"), "image/x-icon");
+        assert_eq!(content_type_for("noext"), "application/octet-stream");
+    }
+
+    fn tempdir() -> PathBuf {
+        let mut p = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        p.push(format!("finelog_spa_test_{nanos}"));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[tokio::test]
+    async fn read_dist_file_serves_asset_and_rejects_traversal() {
+        let dist = tempdir();
+        let dist = dist.as_path();
+        let asset = dist.join("static/js/index.abc.js");
+        std::fs::create_dir_all(asset.parent().unwrap()).unwrap();
+        std::fs::write(&asset, b"console.log(1)").unwrap();
+        // Also plant a file outside the would-be reach of a traversal.
+        std::fs::write(dist.join("secret"), b"nope").unwrap();
+
+        let (bytes, ct) = read_dist_file(dist, "/static/js/index.abc.js")
+            .await
+            .unwrap();
+        assert_eq!(bytes, b"console.log(1)");
+        assert_eq!(ct, "text/javascript");
+
+        // Traversal and degenerate segments are refused before any fs read.
+        assert!(read_dist_file(dist, "/static/../secret").await.is_none());
+        assert!(read_dist_file(dist, "/static//js/x.js").await.is_none());
+        assert!(read_dist_file(dist, "/").await.is_none());
+        // A path that escapes to a real outside file is still refused.
+        assert!(read_dist_file(dist, "/../secret").await.is_none());
+        // Missing file -> None (falls through to index.html at the call site).
+        assert!(read_dist_file(dist, "/static/js/missing.js")
+            .await
+            .is_none());
     }
 }
