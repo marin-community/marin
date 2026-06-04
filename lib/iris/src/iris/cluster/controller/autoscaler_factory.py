@@ -12,9 +12,9 @@ through ``controller.db`` -> ``controller.projections``).
 import logging
 
 from iris.cluster.config import (
-    _scale_groups_to_config,
-    _validate_autoscaler_config,
-    _validate_scale_group_resources,
+    scale_groups_to_config,
+    validate_autoscaler_config,
+    validate_scale_group_resources,
 )
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.scaling_group import (
@@ -55,8 +55,8 @@ def create_autoscaler(
     Raises:
         ValueError: If autoscaler_config has invalid timing values
     """
-    _validate_autoscaler_config(autoscaler_config, context="create_autoscaler")
-    _validate_scale_group_resources(_scale_groups_to_config(scale_groups))
+    validate_autoscaler_config(autoscaler_config, context="create_autoscaler")
+    validate_scale_group_resources(scale_groups_to_config(scale_groups))
 
     scale_down_delay = duration_from_proto(autoscaler_config.scale_down_delay)
 

@@ -168,6 +168,15 @@ class BackoffDetector:
     # Queries
     # -----------------------------------------------------------------------
 
+    @property
+    def decay(self) -> float:
+        """Per-failure multiplicative decay factor applied to the health score.
+
+        Immutable after construction. Exposed so callers can invert the AIMD
+        decay (``health = decay**n``) to approximate a consecutive-failure count.
+        """
+        return self._decay
+
     def health(self, now: Timestamp) -> float:
         """Health score in ``[probe_floor, 1.0]`` after applying recovery up to ``now``."""
         with self._lock:

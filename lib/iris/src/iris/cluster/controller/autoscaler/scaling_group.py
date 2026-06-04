@@ -521,7 +521,7 @@ class ScalingGroup:
         Inverts the AIMD decay: ``health = decay^n`` → ``n = log(health) / log(decay)``.
         """
         score = self._detector.health(now)
-        decay = self._detector._decay
+        decay = self._detector.decay
         if score >= 1.0 or decay >= 1.0 or decay <= 0:
             return 0
         return max(1, round(math.log(score) / math.log(decay)))
@@ -684,7 +684,7 @@ class ScalingGroup:
         """
         handle = self.detach_slice(slice_id, timestamp=timestamp)
         if handle is not None:
-            self._terminate_slice_handle(handle, context="cleaning up anyway")
+            self.terminate_slice_handle(handle, context="cleaning up anyway")
 
     def detach_slice(self, slice_id: str, timestamp: Timestamp | None = None) -> SliceHandle | None:
         """Remove a slice from tracking and persistence without terminating it."""
@@ -698,7 +698,7 @@ class ScalingGroup:
         self._db_update_group()
         return state.handle
 
-    def _terminate_slice_handle(self, handle: SliceHandle, *, context: str) -> None:
+    def terminate_slice_handle(self, handle: SliceHandle, *, context: str) -> None:
         try:
             handle.terminate()
         except QuotaExhaustedError as e:
@@ -852,16 +852,11 @@ class ScalingGroup:
         scaledown is then ``now - quiet_since >= idle_threshold``.
         """
         with self._slices_lock:
-            snapshot = list(self._slices.items())
-
-        with self._slices_lock:
-            for slice_id, state in snapshot:
-                if slice_id not in self._slices:
-                    continue
+            for state in self._slices.values():
                 if self._slice_has_active_workers(state, worker_status_map):
-                    self._slices[slice_id].quiet_since = None
-                elif self._slices[slice_id].quiet_since is None:
-                    self._slices[slice_id].quiet_since = timestamp
+                    state.quiet_since = None
+                elif state.quiet_since is None:
+                    state.quiet_since = timestamp
 
     def _slice_has_active_workers(self, state: SliceState, worker_status_map: WorkerStatusMap) -> bool:
         """Check if any worker in a slice has running tasks."""
