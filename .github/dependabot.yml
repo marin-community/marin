@@ -1,8 +1,11 @@
-# Dependabot version updates.
+# Dependabot configuration.
 # https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
 #
-# All version bumps (major, minor, patch) are grouped into a single PR per
-# ecosystem per directory to cut review noise.
+# Proactive version updates are disabled (open-pull-requests-limit: 0). We only
+# want Dependabot to open PRs for security advisories. Security-update PRs are
+# grouped into a single PR per ecosystem per directory to cut review noise.
+# (Security updates are enabled in repo settings and are unaffected by the
+# open-pull-requests-limit: 0 setting.)
 
 version: 2
 updates:
@@ -12,12 +15,12 @@ updates:
       - "/rust/dupekit"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 0
     groups:
-      uv-all:
-        update-types:
-          - "major"
-          - "minor"
-          - "patch"
+      uv-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: "npm"
     directories:
@@ -28,9 +31,9 @@ updates:
       - "/lib/finelog/dashboard"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 0
     groups:
-      npm-all:
-        update-types:
-          - "major"
-          - "minor"
-          - "patch"
+      npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
