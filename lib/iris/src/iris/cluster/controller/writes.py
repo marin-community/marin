@@ -19,10 +19,10 @@ Areas covered:
 """
 
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from rigging.timing import Timestamp
-from sqlalchemy import Table, bindparam, delete, func, insert, select, text, update
+from sqlalchemy import Table, bindparam, case, delete, func, insert, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
@@ -278,6 +278,27 @@ def insert_job_config(
 def delete_job(tx: Tx, job_id: JobName) -> None:
     """Delete a job row. ``ON DELETE CASCADE`` handles tasks, attempts, endpoints."""
     tx.execute(delete(jobs_table).where(jobs_table.c.job_id == job_id))
+
+
+@writes_to(jobs_table)
+def mark_jobs_running(tx: Tx, job_ids: Iterable[JobName], now_ms: int) -> None:
+    """Promote each PENDING job in ``job_ids`` to RUNNING, stamping ``started_at_ms``.
+
+    Non-PENDING jobs keep their state; ``started_at_ms`` is set only if NULL
+    (first-assignment wins). Per-job statement to mirror the prior assign path.
+    """
+    for job_id in job_ids:
+        tx.execute(
+            update(jobs_table)
+            .where(jobs_table.c.job_id == job_id)
+            .values(
+                state=case(
+                    (jobs_table.c.state == job_pb2.JOB_STATE_PENDING, job_pb2.JOB_STATE_RUNNING),
+                    else_=jobs_table.c.state,
+                ),
+                started_at_ms=func.coalesce(jobs_table.c.started_at_ms, now_ms),
+            )
+        )
 
 
 @writes_to(meta_table)

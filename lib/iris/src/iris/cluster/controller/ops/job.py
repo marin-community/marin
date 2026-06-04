@@ -43,6 +43,59 @@ def request_has_reservation(request: controller_pb2.Controller.LaunchJobRequest)
     return request.HasField("reservation") and bool(request.reservation.entries)
 
 
+def _extract_resource_cols(resources: job_pb2.ResourceSpecProto | None) -> tuple[int, int, int, str | None]:
+    """Return ``(cpu_millicores, memory_bytes, disk_bytes, device_json)`` columns.
+
+    Mirrors the job_config resource column layout; a missing resource spec maps to
+    zeros and a NULL device json.
+    """
+    if resources is None:
+        return 0, 0, 0, None
+    return (
+        int(resources.cpu_millicores),
+        int(resources.memory_bytes),
+        int(resources.disk_bytes),
+        proto_to_json(resources.device),
+    )
+
+
+def _materialize_tasks(
+    cur: Tx,
+    *,
+    job_id: JobName,
+    num_tasks: int,
+    submitted_at_ms: int,
+    max_retries_failure: int,
+    max_retries_preemption: int,
+    priority_root_submitted_ms: int,
+    priority_band: int,
+) -> None:
+    """Insert ``num_tasks`` PENDING task rows for ``job_id`` on one priority base.
+
+    Reserves a contiguous ``priority_insertion`` block so all of a job's tasks sort
+    together, then bulk-inserts the rows. Used by both the primary and the
+    reservation-holder submit paths.
+    """
+    insertion_base = writes.reserve_priority_insertion_base(cur)
+    rows = [
+        writes.task_row(
+            task_id=job_id.task(idx),
+            job_id=job_id,
+            task_index=idx,
+            state=job_pb2.TASK_STATE_PENDING,
+            submitted_at_ms=submitted_at_ms,
+            max_retries_failure=max_retries_failure,
+            max_retries_preemption=max_retries_preemption,
+            priority_neg_depth=-job_id.depth,
+            priority_root_submitted_ms=priority_root_submitted_ms,
+            priority_insertion=insertion_base + idx,
+            priority_band=priority_band,
+        )
+        for idx in range(num_tasks)
+    ]
+    writes.bulk_insert_tasks(cur, rows)
+
+
 def submit(
     cur: Tx,
     *,
@@ -115,10 +168,7 @@ def submit(
     has_reservation = request_has_reservation(request)
 
     res = request.resources if request.HasField("resources") else None
-    res_cpu = int(res.cpu_millicores) if res else 0
-    res_mem = int(res.memory_bytes) if res else 0
-    res_disk = int(res.disk_bytes) if res else 0
-    res_device = proto_to_json(res.device) if res else None
+    res_cpu, res_mem, res_disk, res_device = _extract_resource_cols(res)
     constraints_json = constraints_to_json(request.constraints)
     has_cosched = 1 if request.HasField("coscheduling") else 0
     cosched_group = request.coscheduling.group_by if has_cosched else ""
@@ -193,27 +243,17 @@ def submit(
         )
 
     if validation_error is None:
-        insertion_base = writes.reserve_priority_insertion_base(cur)
-        replica_rows: list[dict] = []
-        for idx in range(replicas):
-            task_id = job_id.task(idx)
-            replica_rows.append(
-                writes.task_row(
-                    task_id=task_id,
-                    job_id=job_id,
-                    task_index=idx,
-                    state=job_pb2.TASK_STATE_PENDING,
-                    submitted_at_ms=effective_submission_ms,
-                    max_retries_failure=int(request.max_retries_failure),
-                    max_retries_preemption=int(request.max_retries_preemption),
-                    priority_neg_depth=-job_id.depth,
-                    priority_root_submitted_ms=root_submitted_ms,
-                    priority_insertion=insertion_base + idx,
-                    priority_band=band_sort_key,
-                )
-            )
-        writes.bulk_insert_tasks(cur, replica_rows)
-        if request.HasField("reservation") and request.reservation.entries:
+        _materialize_tasks(
+            cur,
+            job_id=job_id,
+            num_tasks=replicas,
+            submitted_at_ms=effective_submission_ms,
+            max_retries_failure=int(request.max_retries_failure),
+            max_retries_preemption=int(request.max_retries_preemption),
+            priority_root_submitted_ms=root_submitted_ms,
+            priority_band=band_sort_key,
+        )
+        if request_has_reservation(request):
             holder_id = job_id.child(RESERVATION_HOLDER_JOB_NAME)
             entry = request.reservation.entries[0]
             holder_request = controller_pb2.Controller.LaunchJobRequest(
@@ -231,10 +271,7 @@ def submit(
             for constraint in merged:
                 holder_request.constraints.append(constraint.to_proto())
             holder_res = holder_request.resources if holder_request.HasField("resources") else None
-            holder_res_cpu = int(holder_res.cpu_millicores) if holder_res else 0
-            holder_res_mem = int(holder_res.memory_bytes) if holder_res else 0
-            holder_res_disk = int(holder_res.disk_bytes) if holder_res else 0
-            holder_res_device = proto_to_json(holder_res.device) if holder_res else None
+            holder_res_cpu, holder_res_mem, holder_res_disk, holder_res_device = _extract_resource_cols(holder_res)
             holder_constraints_json = constraints_to_json(holder_request.constraints)
             holder_name_lower = holder_request.name.lower()
             writes.insert_job(
@@ -284,26 +321,23 @@ def submit(
                 existing_job_policy=0,
                 priority_band=0,
                 task_image="",
+                # Holder jobs carry no submit argv, reservation, or replacement
+                # policy; pass these explicitly so the asymmetry with the primary
+                # path is visible rather than relying on insert_job_config defaults.
+                submit_argv_json=[],
+                reservation_json=None,
+                fail_if_exists=False,
             )
-            holder_base = writes.reserve_priority_insertion_base(cur)
-            holder_rows: list[dict] = []
-            for idx in range(len(request.reservation.entries)):
-                holder_rows.append(
-                    writes.task_row(
-                        task_id=holder_id.task(idx),
-                        job_id=holder_id,
-                        task_index=idx,
-                        state=job_pb2.TASK_STATE_PENDING,
-                        submitted_at_ms=effective_submission_ms,
-                        max_retries_failure=0,
-                        max_retries_preemption=DEFAULT_MAX_RETRIES_PREEMPTION,
-                        priority_neg_depth=-holder_id.depth,
-                        priority_root_submitted_ms=root_submitted_ms,
-                        priority_insertion=holder_base + idx,
-                        priority_band=band_sort_key,
-                    )
-                )
-            writes.bulk_insert_tasks(cur, holder_rows)
+            _materialize_tasks(
+                cur,
+                job_id=holder_id,
+                num_tasks=len(request.reservation.entries),
+                submitted_at_ms=effective_submission_ms,
+                max_retries_failure=0,
+                max_retries_preemption=DEFAULT_MAX_RETRIES_PREEMPTION,
+                priority_root_submitted_ms=root_submitted_ms,
+                priority_band=band_sort_key,
+            )
 
     cur.register(
         lambda: log_event(
