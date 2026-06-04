@@ -40,6 +40,48 @@ z-loss only). The architecture choices are hardcoded in
 - **Expert parallelism**: `ragged_all_to_all` or ring-based via
   `levanter.grug.grug_moe.moe_mlp` (default: ring). Default capacity factor 1.0.
 
+## May Recipe Updates
+
+Diff vs the v16 baseline architecture above (all changes are baked into
+`model.py` and `optimizer.py`; the `GrugModelConfig` knobs to toggle them
+were intentionally dropped so the recipe is the recipe):
+
+- **Half-RoPE on every layer**: rotary embeddings applied only to the first
+  half of Q/K per head (`q[..., :head_dim/2]`, `k[..., :head_dim/2]`); the
+  second half is rope-free on every layer. v16 applied RoPE to the full
+  head dimension.
+- **PKO (Partial Key Offset)** on every-4th + last layer: shift the
+  rope-free second half of K forward by 1 position, then zero at doc-start
+  boundaries (using `segment_ids`), then rms-norm — `pko_first_bos_zero`
+  ordering. v16 had no PKO.
+- **Sliding-window pattern**: every-4th + last layer use `sliding_window=None`
+  (full causal up to `max_seq_len`); other layers use
+  `cfg.sliding_window` (default 2048). v16 used `cfg.sliding_window` on
+  long layers and halved it on short layers, with no last-layer special case.
+- **Split `w_gate` / `w_up`** in MoEMLP: stored as separate `(e, d, i)`
+  tensors and concatenated on the forward pass. v16 stored them fused.
+- **Routing renormalization**: sigmoid combine weights are renormalized to
+  sum to 2.5 across the K selected experts (`_ROUTING_RENORM_SUM = 2.5`).
+  v16 did not renormalize.
+- **MuonH optimizer** (`GrugMoeMuonHConfig`, registered as
+  `grug_moe_muonh_v1`): Newton-Schulz orthogonalization + Frobenius
+  hyperball scale-invariant updates on the weight-matrix + GatedNorm group.
+  v16 used `GrugMoeAdamHConfig` (AdamH) on the same group.
+- **256 experts** at k=4 (vs v16's 64 experts at k=4): bigger expert pool,
+  same active path (4 routed + shared per token).
+- **Router z-loss disabled**: `router_z_loss_coef = 0.0` (v16: 0.001).
+- **Final-logit z-loss disabled**: `GrugTrainerConfig.z_loss_weight = 0.0`
+  (v16: 1e-4) — `logsumexp_weight` resolves to `None` so the fused
+  cross-entropy never applies the logit-stabilization term.
+- **No gradient clipping**: `max_grad_norm = None` on the MuonH config
+  (v16 used `max_grad_norm = 1.0`).
+- **Warmup 1%** of training (v16 used 10%).
+- **LR refit** in `heuristic_v2.py` (`MoeMuonHHeuristic`): refit on the
+  MuonH-on-May-Recipe LR sweep (17 cells, R²=0.996, issue #5951):
+  `muonh_lr = 18.31 · tokens^-0.395 · dim^-0.150 · sqrt(B)`
+  (equivalently `adam_lr = 0.06602 · tokens^-0.395 · dim^-0.150 · sqrt(tpb)`).
+  v16 used `adam_lr = 1.63 · tokens^-0.2813 · dim^-0.3678 · sqrt(B)`.
+
 ## Scaling heuristic
 
 The [`MoeAdamHHeuristic`](./heuristic.py) in `heuristic.py` turns a compute
