@@ -6,7 +6,7 @@
  * and thread dumps render in a new window.
  */
 import { ref } from 'vue'
-import { openInSpeedscope } from '@/utils/speedscope'
+import { openSpeedscopeWindow } from '@/utils/speedscope'
 
 type RpcCall = (method: string, body?: Record<string, unknown>) => Promise<{ profileData?: string; error?: string }>
 
@@ -54,8 +54,6 @@ function downloadBytes(bytes: Uint8Array, label: string, ext: string) {
 function handleProfileResult(raw: string, profilerType: ProfilerType, label: string) {
   if (profilerType === 'threads') {
     showThreadDump(raw, label)
-  } else if (profilerType === 'cpu') {
-    openInSpeedscope(base64ToBytes(raw), label)
   } else {
     downloadBytes(base64ToBytes(raw), label, 'bin')
   }
@@ -74,6 +72,9 @@ export function useProfileAction(rpcCall: RpcCall, target: string | (() => strin
   async function profile(profilerType: ProfilerType) {
     const currentTarget = resolveTarget()
     profiling.value = true
+    // Open the viewer synchronously within the click gesture; CPU profiling
+    // takes ~10s, after which a fresh window.open would be blocked as a popup.
+    const pending = profilerType === 'cpu' ? openSpeedscopeWindow() : null
     try {
       const body = {
         target: currentTarget,
@@ -82,13 +83,21 @@ export function useProfileAction(rpcCall: RpcCall, target: string | (() => strin
       }
       const resp = await rpcCall('ProfileTask', body)
       if (resp.error) {
+        pending?.cancel()
         alert(`${profilerType.toUpperCase()} profile failed: ${resp.error}`)
         return
       }
-      if (resp.profileData) {
+      if (!resp.profileData) {
+        pending?.cancel()
+        return
+      }
+      if (pending) {
+        pending.show(base64ToBytes(resp.profileData), currentTarget)
+      } else {
         handleProfileResult(resp.profileData, profilerType, currentTarget)
       }
     } catch (e) {
+      pending?.cancel()
       alert(`${profilerType.toUpperCase()} profile failed: ${e instanceof Error ? e.message : e}`)
     } finally {
       profiling.value = false

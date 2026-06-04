@@ -11,7 +11,7 @@ import { useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { decodeArrowIpc } from '@/utils/arrow'
 import { formatBytes } from '@/utils/formatting'
-import { openInSpeedscope } from '@/utils/speedscope'
+import { openSpeedscopeWindow } from '@/utils/speedscope'
 
 interface Props {
   source: string
@@ -82,6 +82,9 @@ function defaultLabel(source: string): string {
 async function openProfile(row: ProfileHistoryRow) {
   if (busy.value || !row.captured_at) return
   busy.value = true
+  // Open the viewer synchronously within the click gesture so it isn't blocked
+  // as a popup after the fetch; non-speedscope rows download instead.
+  const pending = (row.format ?? '').toLowerCase() === 'speedscope' ? openSpeedscopeWindow() : null
   try {
     const sql = `SELECT profile_data, type, format FROM "iris.profile" WHERE source = '${escape(props.source)}' AND captured_at = '${escape(row.captured_at)}' LIMIT 1`
     const resp = await fetch('/proxy/system.log-server/finelog.stats.StatsService/Query', {
@@ -91,14 +94,20 @@ async function openProfile(row: ProfileHistoryRow) {
     })
     if (!resp.ok) throw new Error(`Query: ${resp.status} ${resp.statusText}`)
     const payload = await resp.json() as QueryResponse
-    if (!payload.arrowIpc) return
+    if (!payload.arrowIpc) {
+      pending?.cancel()
+      return
+    }
     interface FetchRow { profile_data?: Uint8Array; type?: string; format?: string }
     const fetched = decodeArrowIpc(payload.arrowIpc).rows as FetchRow[]
-    if (!fetched.length || !fetched[0].profile_data) return
+    if (!fetched.length || !fetched[0].profile_data) {
+      pending?.cancel()
+      return
+    }
     const bytes = fetched[0].profile_data
     const label = props.downloadLabel || defaultLabel(props.source)
-    if ((fetched[0].format ?? '').toLowerCase() === 'speedscope') {
-      openInSpeedscope(bytes, label)
+    if (pending) {
+      pending.show(bytes, label)
       return
     }
     const ext = profileExtension(fetched[0].format)
@@ -111,6 +120,7 @@ async function openProfile(row: ProfileHistoryRow) {
     a.click()
     URL.revokeObjectURL(url)
   } catch (e) {
+    pending?.cancel()
     alert(`Failed to open profile: ${e instanceof Error ? e.message : e}`)
   } finally {
     busy.value = false
