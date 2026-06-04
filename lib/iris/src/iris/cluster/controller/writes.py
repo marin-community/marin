@@ -284,8 +284,7 @@ def delete_job(tx: Tx, job_id: JobName) -> None:
 def mark_jobs_running(tx: Tx, job_ids: Iterable[JobName], now_ms: int) -> None:
     """Promote each PENDING job in ``job_ids`` to RUNNING, stamping ``started_at_ms``.
 
-    Non-PENDING jobs keep their state; ``started_at_ms`` is set only if NULL
-    (first-assignment wins). Per-job statement to mirror the prior assign path.
+    Non-PENDING jobs keep their state; ``started_at_ms`` is set only if still NULL (first assignment wins).
     """
     for job_id in job_ids:
         tx.execute(

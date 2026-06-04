@@ -28,8 +28,11 @@ from sqlalchemy import (
     String,
     Table,
     UniqueConstraint,
+    func,
+    literal_column,
     text,
 )
+from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.types import TypeDecorator
 
 from iris.cluster.types import JobName, WorkerId
@@ -380,6 +383,19 @@ tasks_table = Table(
     ),
     Index("idx_tasks_job_state_counts", "job_id", "state", "failure_count", "preemption_count"),
 )
+
+
+# The planner mis-estimates `tasks.state IN (<active states>)` as ~14% of rows
+# (sqlite_stat1 only knows the index's average rows-per-value), so it full-scans
+# instead of driving off the small active set via idx_tasks_state. Wrap such
+# predicates to force the state-driven plan; likelihood()'s probability must be a
+# literal, not a bound parameter.
+_RARE_STATE_PROBABILITY = literal_column("0.005")
+
+
+def hint_rare_state(predicate: ColumnElement[bool]) -> ColumnElement[bool]:
+    """Hint SQLite that ``predicate`` matches few rows, so it drives off idx_tasks_state."""
+    return func.likelihood(predicate, _RARE_STATE_PROBABILITY)
 
 
 task_attempts_table = Table(

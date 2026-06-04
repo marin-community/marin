@@ -56,10 +56,8 @@ def routing_decision_to_proto(
 ) -> vm_pb2.RoutingDecision:
     """Convert an internal routing decision into the status proto.
 
-    ``group_to_launch`` is the per-group launch count from the scale plan, which
-    reflects capacity and rate-limit clamping and so may differ from
-    ``decision.group_to_launch`` (the raw demand-derived count). It is the single
-    source of truth for the proto's launch fields.
+    The ``group_to_launch`` argument is the capacity/rate-clamped launch count and
+    overrides ``decision.group_to_launch`` (the raw demand-derived count) in the proto.
     """
 
     routed_entries = {

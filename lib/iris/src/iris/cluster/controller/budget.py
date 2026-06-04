@@ -15,8 +15,7 @@ from sqlalchemy import bindparam, func, select
 from iris.cluster.controller import writes
 from iris.cluster.controller.codec import device_counts_from_json
 from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.query_planner import hint_rare_state
-from iris.cluster.controller.schema import job_config_table, tasks_table
+from iris.cluster.controller.schema import hint_rare_state, job_config_table, tasks_table
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.types import UserBudgetDefaults
 from iris.rpc import config_pb2, job_pb2

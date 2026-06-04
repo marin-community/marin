@@ -20,12 +20,7 @@ from iris.rpc import controller_pb2, job_pb2
 
 
 class WorkerAttributeRow(Protocol):
-    """Structural shape of a ``worker_attributes`` SA row.
-
-    ``value_type`` is a plain string column ('str'/'int'/'float') with no
-    TypeDecorator, so the three-way decode dispatch is done by hand against the
-    matching ``*_value`` column.
-    """
+    """Structural shape of a ``worker_attributes`` SA row read by the value decoders."""
 
     key: str
     value_type: str
@@ -251,9 +246,7 @@ def python_value_to_attribute_value(value: str | int | float) -> job_pb2.Attribu
 def attribute_value_from_row(row: WorkerAttributeRow) -> str | int | float:
     """Decode the typed value from a ``worker_attributes`` row.
 
-    Single source of truth for the str/int/float dispatch shared by
-    :func:`decode_attribute_value` and the worker-attrs projection. A NULL
-    ``str_value`` decodes to the empty string (the write path never stores one).
+    A NULL ``str_value`` decodes to the empty string (the write path never stores one).
     """
     vtype = str(row.value_type)
     if vtype == "str":

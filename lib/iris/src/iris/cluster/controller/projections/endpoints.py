@@ -291,14 +291,7 @@ class EndpointsProjection:
         return ids
 
     def remove_by_job_ids(self, cur: db.Tx, job_ids: Sequence[JobName]) -> list[str]:
-        """Remove all endpoints owned by any of ``job_ids``. Used by cancel_job and prune.
-
-        The in-memory scan derives each row's owning job from ``row.task_id`` and the
-        DB ``DELETE`` matches the persisted ``endpoints.job_id`` column. Both agree
-        because ``job_id`` is the wire form of the task's owning job, written at
-        ``add()`` time — so the membership test and the SQL predicate select the same
-        rows.
-        """
+        """Remove all endpoints owned by any of ``job_ids``. Returns the removed endpoint_ids."""
         if not job_ids:
             return []
         job_id_set = set(job_ids)
@@ -308,6 +301,8 @@ class EndpointsProjection:
                 owning_job, _ = row.task_id.require_task()
                 if owning_job in job_id_set:
                     to_remove.append(row.endpoint_id)
+        # The scan keys on the task's owning job; the DELETE keys on the persisted
+        # endpoints.job_id (the same value, written at add() time), so both select the same rows.
         cur.execute(
             delete(endpoints_table).where(endpoints_table.c.job_id.in_(bindparam("job_ids", expanding=True))),
             {"job_ids": list(job_ids)},

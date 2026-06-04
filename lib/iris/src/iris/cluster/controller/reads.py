@@ -424,10 +424,7 @@ def get_job_state(tx: Tx, job_id: JobName) -> int | None:
 
 
 def find_prunable_job(tx: Tx, terminal_states: Iterable[int], before_ts: Timestamp) -> JobName | None:
-    """Return one terminal job finished before ``before_ts``, or None.
-
-    Used by the incremental pruner, which deletes one job per transaction.
-    """
+    """Return one terminal job finished before ``before_ts``, or None."""
     row = tx.execute(
         select(jobs_table.c.job_id)
         .where(
@@ -1078,12 +1075,10 @@ def get_worker_detail(tx: Tx, worker_id: WorkerId):
 
 
 def _healthy_active_worker_ids(health: WorkerLivenessSource) -> set[WorkerId]:
-    """Worker ids the in-memory tracker reports as both healthy and active.
+    """Healthy+active worker ids from the in-memory tracker.
 
-    The roster fetchers below post-filter the full ``workers`` table against this
-    set rather than pushing an ``IN (...)`` into SQL: almost every persisted
-    worker is healthy, so the dict-lookup filter beats the IN expansion's SA Core
-    overhead.
+    Callers post-filter the ``workers`` table in Python against this set rather than
+    pushing a SQL ``IN`` — cheaper, since almost every persisted worker is healthy.
     """
     return {wid for wid, ent in health.all().items() if ent.healthy and ent.active}
 

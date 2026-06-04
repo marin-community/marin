@@ -69,10 +69,9 @@ def _materialize_tasks(
     priority_root_submitted_ms: int,
     priority_band: int,
 ) -> None:
-    """Insert ``num_tasks`` PENDING task rows for ``job_id`` on one priority base.
+    """Insert ``num_tasks`` PENDING task rows for ``job_id``.
 
-    Reserves a contiguous ``priority_insertion`` block so all of a job's tasks sort
-    together, then bulk-inserts the rows.
+    Reserves a contiguous ``priority_insertion`` block so the job's tasks sort together.
     """
     insertion_base = writes.reserve_priority_insertion_base(cur)
     rows = [

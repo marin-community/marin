@@ -51,12 +51,7 @@ def create_api_key(
     now: Timestamp,
     expires_at: Timestamp | None = None,
 ) -> None:
-    """Insert a new API key row.
-
-    ``key_hash`` is the stored SHA-256 token hash for static/hash-backed keys, or
-    ``None`` for JWT-backed keys (which are validated via the signed JWT itself,
-    never by a hash lookup).
-    """
+    """Insert a new API key row. ``key_hash`` is ``None`` for JWT-backed keys, which carry no stored hash."""
     with db.transaction() as tx:
         tx.execute(
             insert(auth_api_keys_table).values(
@@ -117,11 +112,7 @@ def list_api_keys(db: ControllerDB, user_id: str | None = None) -> list:
 
 
 def revoke_login_keys_for_user(db: ControllerDB, user_id: str, now: Timestamp) -> list[str]:
-    """Revoke all active login keys for a user. Returns list of revoked key_ids.
-
-    Single atomic ``UPDATE ... RETURNING`` so the revoke and the returned key_ids
-    come from the same statement — no read-then-write TOCTOU window.
-    """
+    """Revoke all active login keys for a user. Returns the revoked key_ids."""
     with db.transaction() as tx:
         rows = tx.execute(
             update(auth_api_keys_table)

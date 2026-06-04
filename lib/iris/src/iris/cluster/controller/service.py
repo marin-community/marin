@@ -102,12 +102,7 @@ logger = logging.getLogger(__name__)
 
 
 def attempt_is_worker_failure(state: int) -> bool:
-    """Whether an attempt's terminal state reflects a worker-side failure.
-
-    Used when building attempt-history RPC payloads so the dashboard can
-    distinguish infrastructure failures (worker death, preemption) from
-    application failures.
-    """
+    """Whether a terminal state (worker-failed or preempted) is a worker-side failure, not an application failure."""
     return state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED)
 
 
@@ -1703,12 +1698,7 @@ class ControllerServiceImpl:
         return self._controller.has_direct_provider
 
     def resolve_endpoint(self, name: str) -> str | None:
-        """Resolve a service endpoint name to its address, or None if unknown.
-
-        Task-registered endpoints live in the SQL-backed projection; system
-        endpoints (``/system/...``) live in the in-memory map. Same fallback
-        order as the ListEndpoints system-endpoint branch.
-        """
+        """Resolve an endpoint name to its address, or None. Task endpoints take priority over ``/system/`` endpoints."""
         row = self._endpoints.resolve(name)
         if row is not None:
             return row.address
