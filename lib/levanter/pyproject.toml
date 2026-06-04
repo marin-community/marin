@@ -43,7 +43,6 @@ dependencies = [
     "einops",
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
-    "kitoken>=0.10.2",
     "transformers>=4.57.1,<5.0",
     "chex>=0.1.86",
     "optax>=0.1.9,<0.2.7",
@@ -123,10 +122,6 @@ kernels = [
     "tokamax",
 ]
 
-kitoken = [
-    "kitoken>=0.10.2",
-]
-
 gcp = [
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
@@ -175,9 +170,6 @@ dev = [
 
 
 [tool.uv]
-find-links = [
-  "https://github.com/marin-community/kitoken/releases/expanded_assets/kitoken-0.10.2-a3012f4",
-]
 conflicts = [
   [
     { extra = "gpu" },
