@@ -2377,12 +2377,14 @@ def _is_synthetic_demand(state: ControllerTestState, demand_entry: DemandEntry) 
     return False
 
 
-def test_demand_reservation_all_tasks_generate_demand(state):
-    """2 H100 reservation + 2 H100 tasks = 4 total demand (no budget dedup).
+def test_demand_reservation_gates_real_tasks_until_claimed(state):
+    """Until the reservation is claimed, only the holder tasks generate demand.
 
-    All tasks generate demand through a unified path. Holder tasks and real
-    tasks are independent demand sources — preemption during scheduling
-    (not demand) handles the dedup.
+    The holder tasks provision the reserved capacity; the real tasks are gated
+    (mirroring ``apply_scheduling_gates``) so the autoscaler never provisions
+    generic capacity the scheduler will refuse to let them occupy. The claimed
+    case — real tasks resume generating demand — is covered by
+    test_reservation.test_demand_gates_real_task_until_reservation_claimed.
     """
     req = _make_reservation_make_job_request(
         task_device=_h100_device(),
@@ -2391,16 +2393,16 @@ def test_demand_reservation_all_tasks_generate_demand(state):
     )
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)
+    demand = compute_demand_entries(state._db)  # reservation unclaimed
     synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
     real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
     assert len(synthetic_demand) == 2
-    assert len(real_demand) == 2
+    assert real_demand == []
 
 
 def test_demand_reservation_excess_tasks(state):
-    """2 H100 reservation + 5 H100 tasks = 2 synthetic + 5 real task demand."""
+    """2 H100 reservation + 5 H100 tasks: 2 holder demand; real tasks gated until claimed."""
     req = _make_reservation_make_job_request(
         task_device=_h100_device(),
         reservation_devices=[_h100_device(), _h100_device()],
@@ -2413,7 +2415,7 @@ def test_demand_reservation_excess_tasks(state):
     real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
     assert len(synthetic_demand) == 2
-    assert len(real_demand) == 5
+    assert real_demand == []
 
 
 def test_demand_reservation_holder_uses_entry_resources(state):
@@ -2437,7 +2439,7 @@ def test_demand_reservation_holder_uses_entry_resources(state):
     real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
     assert len(synthetic_demand) == 2
-    assert len(real_demand) == 2
+    assert real_demand == []  # real tasks gated until the reservation is claimed
     # Holder demand uses entry's H100 device, not parent's A100
     for d in synthetic_demand:
         assert d.normalized.device_variants == frozenset({"h100"})
@@ -2474,8 +2476,9 @@ def test_demand_reservation_mixed_jobs(state):
     # 3 synthetic holder tasks from h100-job's reservation
     assert len(synthetic_demand) == 3
 
-    # h100-job: 3 real tasks + a100-job: 2 tasks = 5 real demand
-    assert len(real_demand) == 5
+    # h100-job's real tasks are gated (reservation unclaimed); only a100-job
+    # (no reservation) emits real demand.
+    assert len(real_demand) == 2
     a100_demand = [d for d in real_demand if d.normalized.device_variants == frozenset({"a100"})]
     assert len(a100_demand) == 2
 
@@ -2532,8 +2535,9 @@ def test_demand_reservation_independent_per_job(state):
 
     # Job A's 2 synthetic holder tasks
     assert len(synthetic_demand) == 2
-    # Job A's 2 real tasks + Job B's 2 tasks = 4 real demand
-    assert len(real_demand) == 4
+    # Job A's real tasks are gated (reservation unclaimed); only Job B (no
+    # reservation) emits real demand.
+    assert len(real_demand) == 2
 
 
 # =============================================================================
@@ -3175,15 +3179,17 @@ def test_demand_holders_absorbed_by_dry_run(state):
 
     Unlike the old design where holders always generated demand, they now
     participate in the dry-run like normal tasks and are absorbed when matching
-    workers have available capacity.
+    workers have available capacity. The job's real tasks are gated until the
+    reservation is claimed, so only holder tasks contribute demand here.
     """
     scheduler = Scheduler()
 
     # Register a large GPU worker with capacity for 1 task
     register_worker(state, "w1", "10.0.0.1:8080", _gpu_make_worker_metadata(cpu=2, memory_gb=4))
 
-    # Submit a job with reservation (2 entries) and 2 tasks.
-    # Worker can fit 1 task — so 1 task absorbed, 3 remain as demand.
+    # Submit a job with reservation (2 entries) and 2 tasks. The reservation is
+    # unclaimed, so the 2 real tasks are gated and only the 2 holder tasks are
+    # live demand. The worker absorbs 1 holder; the other remains as demand.
     req = _make_reservation_make_job_request(
         task_device=_h100_device(),
         reservation_devices=[_h100_device(), _h100_device()],
@@ -3193,8 +3199,8 @@ def test_demand_holders_absorbed_by_dry_run(state):
 
     workers = healthy_active_workers(state)
     demand = compute_demand_entries(state._db, scheduler, workers)
-    # Worker fits 1 task (holder or real). 3 remaining generate demand.
-    assert len(demand) == 3
+    assert len(demand) == 1
+    assert _is_synthetic_demand(state, demand[0])  # the remaining unabsorbed holder
 
 
 def test_demand_absorbs_capacity_before_emitting(state):
