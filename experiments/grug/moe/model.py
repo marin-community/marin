@@ -168,15 +168,21 @@ class CausalSelfAttention(eqx.Module):
             half = head_dim // 2
             k_stationary = k[..., half:]
             k_shifted = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
-            q_seg = mask.segment_ids[0]
-            if q_seg.ndim == 1:
-                is_doc_start_seq = jnp.concatenate([jnp.ones((1,), dtype=bool), q_seg[1:] != q_seg[:-1]])
+            segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+            if segment_ids is None:
+                # No segment info (raw-mask or unsegmented eval path): only position 0 is a doc start.
+                is_doc_start_seq = jnp.zeros((seq_len,), dtype=bool).at[0].set(True)
                 is_doc_start = jnp.broadcast_to(is_doc_start_seq, k_shifted.shape[:2])
             else:
-                is_doc_start = jnp.concatenate(
-                    [jnp.ones_like(q_seg[:, :1], dtype=bool), q_seg[:, 1:] != q_seg[:, :-1]],
-                    axis=1,
-                )
+                q_seg = segment_ids[0]
+                if q_seg.ndim == 1:
+                    is_doc_start_seq = jnp.concatenate([jnp.ones((1,), dtype=bool), q_seg[1:] != q_seg[:-1]])
+                    is_doc_start = jnp.broadcast_to(is_doc_start_seq, k_shifted.shape[:2])
+                else:
+                    is_doc_start = jnp.concatenate(
+                        [jnp.ones_like(q_seg[:, :1], dtype=bool), q_seg[:, 1:] != q_seg[:, :-1]],
+                        axis=1,
+                    )
             k_shifted = jnp.where(is_doc_start[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
             k = jnp.concatenate([k[..., :half], k_shifted], axis=-1)
 
