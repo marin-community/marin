@@ -42,6 +42,7 @@ Consider a simple model with two parameters, attention and mlp. That might look 
    ```
  which just grounds out into a call to [equinox.combine][]
 """
+
 import dataclasses
 import functools
 import json
@@ -49,7 +50,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Literal, Optional, Tuple, TypeVar, Union
+from typing import Callable, Dict, List, Literal, Optional, Tuple, TypeVar, Union, cast
 
 import equinox as eqx
 import jax
@@ -131,19 +132,11 @@ class LoraConfig:
       controlled by :attr:`zero_init_b`.
     """
     exclude_modules: Optional[List[str]] = None
-    """modules to exclude from LoRA. Defaults to ["lm_head"] to avoid breaking get_lm_head().weight access."""
+    """modules to exclude from LoRA. Defaults to [], so all matched linear modules are eligible."""
     # TODO: bias
-    # TODO(IMPORTANT): lm_head is excluded by default because every model's get_lm_head() does
-    # `self.lm_head.weight`, which breaks when lm_head is a LoraLinear (no .weight attribute).
-    # The proper fix is to update get_lm_head() in ALL model classes (llama, qwen, gemma, mixtral,
-    # olmo, olmo3, apertus, mistral) to handle LoraLinear, e.g.:
-    #     if isinstance(self.lm_head, LoraLinear): return self.lm_head.wrapped.weight
-    # This would allow LoRA on lm_head, which some research suggests is beneficial
-    # (Thinking Machines 2025: "apply LoRA to all weight matrices").
-    # See also: resize_vocab() has the same .weight assumption.
 
     def matches_target(self, key_path):
-        excludes = self.exclude_modules if self.exclude_modules is not None else ["lm_head"]
+        excludes = self.exclude_modules if self.exclude_modules is not None else []
         if any(key_path.endswith(exc) for exc in excludes):
             return False
         if isinstance(self.target_modules, str):
@@ -247,7 +240,6 @@ class LoraLinear(ModuleWithStateDictSerialization):
             k1, k2 = jax.random.split(key)
             return self.lora(x, key=k2) + self.wrapped(x, key=k1)
         else:
-
             return self.lora(x) + self.wrapped(x)
 
     def merge(self):
@@ -283,6 +275,46 @@ class LoraLinear(ModuleWithStateDictSerialization):
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
         return {"wrapped": None, "lora": None}
+
+
+LinearOrLoraT = TypeVar("LinearOrLoraT", hnn.Linear, LoraLinear)
+
+
+def lora_or_linear_weight(linear: Union[hnn.Linear, LoraLinear]) -> hax.NamedArray:
+    """Return the base weight for a plain or LoRA-wrapped linear layer."""
+    if isinstance(linear, LoraLinear):
+        return linear.wrapped.weight
+    return linear.weight
+
+
+def lora_or_linear_bias(linear: Union[hnn.Linear, LoraLinear]) -> Optional[hax.NamedArray]:
+    """Return the base bias for a plain or LoRA-wrapped linear layer."""
+    if isinstance(linear, LoraLinear):
+        return linear.wrapped.bias
+    return linear.bias
+
+
+def resize_lora_or_linear_output(
+    linear: LinearOrLoraT,
+    old_axis: Axis,
+    new_axis: Axis,
+    *,
+    key=None,
+) -> LinearOrLoraT:
+    """Resize a plain or LoRA-wrapped linear layer along its output axis."""
+    if isinstance(linear, LoraLinear):
+        k_wrapped, k_lora = (None, None) if key is None else jax.random.split(key, 2)
+        new_wrapped_weight = hax.tree_util.resize_axis(linear.wrapped.weight, old_axis, new_axis.size, key=k_wrapped)
+        new_wrapped = dataclasses.replace(linear.wrapped, Out=new_axis, weight=new_wrapped_weight)
+
+        new_lora_b_weight = hax.tree_util.resize_axis(linear.lora.lora_B.weight, old_axis, new_axis.size, key=k_lora)
+        new_lora_b = dataclasses.replace(linear.lora.lora_B, Out=new_axis, weight=new_lora_b_weight)
+        new_lora = dataclasses.replace(linear.lora, lora_B=new_lora_b)
+
+        return cast(LinearOrLoraT, dataclasses.replace(linear, wrapped=new_wrapped, lora=new_lora))
+
+    new_weight = hax.tree_util.resize_axis(linear.weight, old_axis, new_axis.size, key=key)
+    return cast(LinearOrLoraT, dataclasses.replace(linear, Out=new_axis, weight=new_weight))
 
 
 def _is_lora_compatible_module(module):
@@ -444,6 +476,7 @@ COMMON_LORA_TARGET_MODULE_ORDER = (
     "gate_proj",
     "up_proj",
     "down_proj",
+    "lm_head",
 )
 LORA_TARGET_MODULE_RE = re.compile(r"\.([^.]+)\.lora_[AB]\.weight$")
 

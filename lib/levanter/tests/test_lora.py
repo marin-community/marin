@@ -10,6 +10,7 @@ import haliax.nn as hnn
 import jax
 import numpy as np
 import optax
+import pytest
 from chex import assert_trees_all_close
 from haliax.quantization import DefaultDotGeneralOp, DotGeneralOp
 from safetensors import safe_open
@@ -29,14 +30,151 @@ from levanter.adaptor.lora import (
     save_merged_hf_model,
     save_peft_pretrained,
 )
+from levanter.models.apertus import ApertusConfig, ApertusLMHeadModel
+from levanter.models.gemma import (
+    Gemma2Config,
+    Gemma2LMHeadModel,
+    Gemma3Config,
+    Gemma3LMHeadModel,
+    GemmaConfig,
+    GemmaLMHeadModel,
+)
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
+from levanter.models.mistral import MistralConfig, MistralLMHeadModel
+from levanter.models.mixtral import MixtralConfig, MixtralLMHeadModel
+from levanter.models.olmo import Olmo2Config, Olmo2LMHeadModel
+from levanter.models.olmo3 import Olmo3Config, Olmo3LMHeadModel
+from levanter.models.qwen import QwenConfig, QwenLMHeadModel
 from levanter.trainer_state import TrainerState
 from levanter.utils.tree_utils import inference_mode
 
 In = hax.Axis("In", 10)
 Mid = hax.Axis("Mid", 20)
 Out = hax.Axis("Out", 5)
+
+
+def _tiny_llama_config(config_cls):
+    return config_cls(
+        max_seq_len=16,
+        hidden_dim=16,
+        intermediate_dim=32,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=2,
+        gradient_checkpointing=False,
+        scan_layers=False,
+        tie_word_embeddings=False,
+    )
+
+
+def _tiny_gemma_config(config_cls):
+    return config_cls(
+        max_seq_len=16,
+        hidden_dim=16,
+        intermediate_dim=32,
+        num_layers=1,
+        num_heads=4,
+        head_dim=4,
+        num_kv_heads=2,
+        gradient_checkpointing=False,
+        scan_layers=False,
+        tie_word_embeddings=False,
+    )
+
+
+def _tiny_mixtral_config():
+    return MixtralConfig(
+        max_seq_len=16,
+        hidden_dim=16,
+        intermediate_dim=32,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=2,
+        gradient_checkpointing=False,
+        scan_layers=False,
+        tie_word_embeddings=False,
+        n_routed_experts=2,
+        num_experts_per_tok=1,
+    )
+
+
+LM_HEAD_MODEL_CASES = [
+    pytest.param(LlamaLMHeadModel, _tiny_llama_config(LlamaConfig), id="llama"),
+    pytest.param(QwenLMHeadModel, _tiny_llama_config(QwenConfig), id="qwen"),
+    pytest.param(GemmaLMHeadModel, _tiny_gemma_config(GemmaConfig), id="gemma"),
+    pytest.param(Gemma2LMHeadModel, _tiny_gemma_config(Gemma2Config), id="gemma2"),
+    pytest.param(Gemma3LMHeadModel, _tiny_gemma_config(Gemma3Config), id="gemma3"),
+    pytest.param(MixtralLMHeadModel, _tiny_mixtral_config(), id="mixtral"),
+    pytest.param(Olmo2LMHeadModel, _tiny_llama_config(Olmo2Config), id="olmo2"),
+    pytest.param(Olmo3LMHeadModel, _tiny_llama_config(Olmo3Config), id="olmo3"),
+    pytest.param(ApertusLMHeadModel, _tiny_llama_config(ApertusConfig), id="apertus"),
+    pytest.param(MistralLMHeadModel, _tiny_llama_config(MistralConfig), id="mistral"),
+]
+
+
+@pytest.mark.parametrize("model_cls, config", LM_HEAD_MODEL_CASES)
+@pytest.mark.parametrize("loraize_lm_head", [False, True])
+def test_lora_lm_head_getter_and_resize(model_cls, config, loraize_lm_head):
+    vocab = hax.Axis("vocab", 32)
+    model = model_cls.init(vocab, config=config, key=jax.random.PRNGKey(0))
+    assert model.lm_head is not None
+
+    if loraize_lm_head:
+        model = loraize(
+            model,
+            LoraConfig(r=4, target_modules=["lm_head"], a_init_mode="random"),
+            key=jax.random.PRNGKey(1),
+        )
+        assert isinstance(model.lm_head, LoraLinear)
+        assert model.get_lm_head() is model.lm_head.wrapped.weight
+    else:
+        assert isinstance(model.lm_head, hnn.Linear)
+        assert model.get_lm_head() is model.lm_head.weight
+
+    resized = model.resize_vocab(40, key=jax.random.PRNGKey(2))
+    assert resized.Vocab == hax.Axis("vocab", 40)
+    assert resized.Vocab in resized.get_lm_head().axes
+
+    x = hax.random.normal(jax.random.PRNGKey(3), (resized.Embed,))
+    y = resized.lm_head(x, key=jax.random.PRNGKey(4))
+    assert resized.Vocab in y.axes
+
+    if loraize_lm_head:
+        assert isinstance(resized.lm_head, LoraLinear)
+        assert resized.lm_head.wrapped.Out == resized.Vocab
+        assert resized.lm_head.lora.lora_B.Out == resized.Vocab
+        assert resized.get_lm_head() is resized.lm_head.wrapped.weight
+    else:
+        assert isinstance(resized.lm_head, hnn.Linear)
+        assert resized.lm_head.Out == resized.Vocab
+        assert resized.get_lm_head() is resized.lm_head.weight
+
+
+def test_lora_lm_head_is_included_by_default_and_merges():
+    config = LlamaConfig(
+        max_seq_len=16,
+        hidden_dim=16,
+        intermediate_dim=32,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=2,
+        gradient_checkpointing=False,
+        scan_layers=False,
+    )
+    vocab = hax.Axis("vocab", 32)
+    model = LlamaLMHeadModel.init(vocab, config=config, key=jax.random.PRNGKey(0))
+
+    loraized = loraize(model, LoraConfig(r=4, a_init_mode="random"), key=jax.random.PRNGKey(1))
+    assert isinstance(loraized.lm_head, LoraLinear)
+
+    merged = merge_lora_modules(loraized)
+    input_ids = hax.random.randint(jax.random.PRNGKey(2), config.max_Pos.resize(4), 0, vocab.size)
+    attn_mask = AttentionMask.causal()
+
+    loraized_out = loraized(input_ids, attn_mask=attn_mask, key=jax.random.PRNGKey(3))
+    merged_out = merged(input_ids, attn_mask=attn_mask, key=jax.random.PRNGKey(3))
+    assert_trees_all_close(loraized_out, merged_out, rtol=1e-4, atol=1e-4)
 
 
 def test_loraize_simple():
@@ -270,7 +408,7 @@ def test_lora_merged_load_in_hf_llama():
     lora_config = LoraConfig(
         r=8,
         alpha=8,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj", "lm_head"],
         a_init_mode="random",
     )
 
@@ -330,12 +468,14 @@ def test_lora_peft_export_uses_hf_llama_keys_and_target_modules(tmp_path):
         "gate_proj",
         "up_proj",
         "down_proj",
+        "lm_head",
     ]
 
     with safe_open(tmp_path / "adapter_model.safetensors", framework="numpy") as tensors:
         keys = list(tensors.keys())
 
     assert "base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight" in keys
+    assert "base_model.model.lm_head.lora_A.weight" in keys
     assert all("base_model.model.transformer." not in key for key in keys)
 
 
