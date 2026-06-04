@@ -84,6 +84,8 @@ class GrugModelConfig:
     use_gla: bool = False
     gla_chunk_size: int = 64
     gla_expand_v: float = 1.0
+    gla_use_short_conv: bool = False
+    gla_conv_size: int = 4
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -479,6 +481,8 @@ class Block(eqx.Module):
                 cfg.initializer_std,
                 cfg.gla_chunk_size,
                 cfg.gla_expand_v,
+                cfg.gla_use_short_conv,
+                cfg.gla_conv_size,
                 key=attn_key,
             )
         else:

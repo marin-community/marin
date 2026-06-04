@@ -51,6 +51,7 @@ _COMBINED_K: int = 5
 _COMBINED_SHARED_INT_DIM_RATIO: int = 2  # shared_int_dim = hidden_dim // RATIO
 
 _EXPAND_V: float = float(os.environ.get("GLA_EXPAND_V", "1.0"))
+_USE_SHORT_CONV: bool = os.environ.get("GLA_USE_SHORT_CONV", "0") == "1"
 _RUN_TAG: str = os.environ.get("GLA_RUN_TAG", "v1")
 
 
@@ -68,6 +69,7 @@ def _build_launch() -> tuple[str, GrugMoeDirectLaunchConfig]:
         use_gla=True,
         gla_chunk_size=_GLA_CHUNK_SIZE,
         gla_expand_v=_EXPAND_V,
+        gla_use_short_conv=_USE_SHORT_CONV,
     )
 
     optimizer = GrugMoeMuonHConfig(
@@ -84,7 +86,8 @@ def _build_launch() -> tuple[str, GrugMoeDirectLaunchConfig]:
     )
 
     ev_tag = f"ev{_EXPAND_V:g}".replace(".", "p")
-    suffix = f"gla-{ev_tag}-{_RUN_TAG}"
+    conv_tag = "-sconv" if _USE_SHORT_CONV else ""
+    suffix = f"gla-{ev_tag}{conv_tag}-{_RUN_TAG}"
     run_id = _resolve_run_id(f"gla-d{_HIDDEN_DIM}-{_BUDGET:.2e}-{suffix}".replace("+", ""))
     name = f"grug/gla-d{_HIDDEN_DIM}-{suffix}"
 
@@ -101,7 +104,7 @@ def _build_launch() -> tuple[str, GrugMoeDirectLaunchConfig]:
         tracker=WandbConfig(
             entity="marin-community",
             project="marin_moe",
-            tags=["moe", "muonh", "may_recipe", "gla", ev_tag, f"d{_HIDDEN_DIM}"],
+            tags=["moe", "muonh", "may_recipe", "gla", ev_tag, *(["short_conv"] if _USE_SHORT_CONV else [])],
             group="gla-d512-combined",
             name=None,
         ),

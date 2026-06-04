@@ -45,6 +45,28 @@ def _batch_spec() -> P:
     return P(("data", "expert"))
 
 
+def _causal_depthwise_conv_silu(x: Array, weight: Array, seg: Array | None, conv_size: int) -> Array:
+    """Segment-aware causal depthwise conv (kernel ``conv_size``) followed by SiLU.
+
+    ``x`` is [B, S, C] fp32, ``weight`` is [conv_size, C] (per-channel taps; index
+    ``conv_size-1`` is the current-token tap). Equivalent to a left-padded causal
+    depthwise conv1d, but contributions from tokens in a different document
+    (``seg`` mismatch) are zeroed so the conv never mixes across a boundary
+    (matches the document-boundary resets in the GLA recurrence). ``seg`` is [B, S]
+    integer ids or None (no masking).
+    """
+    k = conv_size
+    s_len = x.shape[1]
+    out = weight[k - 1] * x  # current token (offset 0) is always in its own segment
+    for off in range(1, k):
+        x_sh = jnp.pad(x, ((0, 0), (off, 0), (0, 0)))[:, :s_len, :]  # x[t-off], left zero-pad
+        if seg is not None:
+            seg_sh = jnp.pad(seg, ((0, 0), (off, 0)), constant_values=-1)[:, :s_len]
+            x_sh = x_sh * (seg_sh == seg)[..., None].astype(x.dtype)
+        out = out + weight[k - 1 - off] * x_sh
+    return jax.nn.silu(out)
+
+
 def gla_recurrent(q: Array, k: Array, v: Array, log_alpha: Array, seg: Array | None = None) -> Array:
     """Reference GLA step recurrence (slow; for tests). All inputs [B, S, H, *], fp32.
 
@@ -182,11 +204,16 @@ class GatedLinearAttention(eqx.Module):
     w_r: Float[Array, "D Nq_Dv"]
     w_o: Float[Array, "Nq_Dv D"]
     head_norm_weight: Float[Array, "Nq Dvh"]
+    conv_q: Array | None
+    conv_k: Array | None
+    conv_v: Array | None
     num_heads: int = eqx.field(static=True)
     num_kv_heads: int = eqx.field(static=True)
     head_dim: int = eqx.field(static=True)
     v_head_dim: int = eqx.field(static=True)
     chunk_size: int = eqx.field(static=True)
+    use_short_conv: bool = eqx.field(static=True)
+    conv_size: int = eqx.field(static=True)
     tau: float = eqx.field(static=True)
     eps: float = eqx.field(static=True)
 
@@ -199,6 +226,8 @@ class GatedLinearAttention(eqx.Module):
         initializer_std: float,
         chunk_size: int = 64,
         expand_v: float = 1.0,
+        use_short_conv: bool = False,
+        conv_size: int = 4,
         *,
         key: PRNGKeyArray,
         eps: float = 1e-5,
@@ -212,6 +241,13 @@ class GatedLinearAttention(eqx.Module):
         qv_dim = num_heads * v_head_dim
         kv_v_dim = num_kv_heads * v_head_dim
         kq, kk, kv, ka1, ka2, kr, ko = random.split(key, 7)
+
+        def _conv_init(c: int) -> Array:
+            # Near-identity init: only the current-token tap is 1 so the conv starts as
+            # a SiLU passthrough (minimal perturbation vs the no-conv arm). Replicated.
+            w = jnp.zeros((conv_size, c)).at[conv_size - 1].set(1.0)
+            return reshard(w, P(None, None))
+
         return GatedLinearAttention(
             w_q=reshard(_init_weight(kq, (d, q_dim), initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(kk, (d, kv_dim), initializer_std), P("data", "model")),
@@ -222,11 +258,16 @@ class GatedLinearAttention(eqx.Module):
             w_r=reshard(_init_weight(kr, (d, qv_dim), initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(ko, (qv_dim, d), initializer_std), P("model", "data")),
             head_norm_weight=reshard(jnp.ones((num_heads, v_head_dim)), P(None, None)),
+            conv_q=_conv_init(q_dim) if use_short_conv else None,
+            conv_k=_conv_init(kv_dim) if use_short_conv else None,
+            conv_v=_conv_init(kv_v_dim) if use_short_conv else None,
             num_heads=num_heads,
             num_kv_heads=num_kv_heads,
             head_dim=head_dim,
             v_head_dim=v_head_dim,
             chunk_size=chunk_size,
+            use_short_conv=use_short_conv,
+            conv_size=conv_size,
             tau=float(_TAU),
             eps=eps,
         )
@@ -243,9 +284,23 @@ class GatedLinearAttention(eqx.Module):
         hd, hdv = self.head_dim, self.v_head_dim
         b, s, _ = x.shape
 
-        q = einsum("bsd,dk->bsk", x, self.w_q).reshape(b, s, n, hd).astype(jnp.float32)
-        k = einsum("bsd,dk->bsk", x, self.w_k).reshape(b, s, m, hd).astype(jnp.float32)
-        v = einsum("bsd,dv->bsv", x, self.w_v).reshape(b, s, m, hdv).astype(jnp.float32)
+        q = einsum("bsd,dk->bsk", x, self.w_q)  # [B,S,n*hd]
+        k = einsum("bsd,dk->bsk", x, self.w_k)  # [B,S,m*hd]
+        v = einsum("bsd,dv->bsv", x, self.w_v)  # [B,S,m*hdv]
+
+        # Optional segment-aware causal short conv (+SiLU) on q/k/v before the head split
+        # (GatedDeltaNet-style local token mixing). Done batch-sharded (feature replicated)
+        # so the conv weights, the seg mask, and the activations share a consistent sharding.
+        if self.use_short_conv:
+            flat_spec = P(("data", "expert"), None, None)
+            seg_c = reshard(seg, P(("data", "expert"), None)) if seg is not None else None
+            q = _causal_depthwise_conv_silu(reshard(q, flat_spec), self.conv_q, seg_c, self.conv_size)
+            k = _causal_depthwise_conv_silu(reshard(k, flat_spec), self.conv_k, seg_c, self.conv_size)
+            v = _causal_depthwise_conv_silu(reshard(v, flat_spec), self.conv_v, seg_c, self.conv_size)
+
+        q = q.reshape(b, s, n, hd).astype(jnp.float32)
+        k = k.reshape(b, s, m, hd).astype(jnp.float32)
+        v = v.reshape(b, s, m, hdv).astype(jnp.float32)
 
         # QK RMSNorm over the head dim (deliberate addition over vanilla FLA GLA, which uses
         # identity q,k; matches the Grug softmax attention that RMS-norms q,k, and stabilizes
