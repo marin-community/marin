@@ -13,13 +13,6 @@ from typing import cast
 import httpx
 import pytest
 from marin.inference.broker import InferenceBroker
-from marin.inference.brokered_vllm import (
-    DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER,
-    BrokeredVllmSystemConfig,
-    InferenceWorkerConfig,
-    VllmProxyConfig,
-    start_local_brokered_vllm,
-)
 from marin.inference.proxy import InferenceProxy, serve_inference_proxy
 from marin.inference.types import (
     InferenceRequest,
@@ -30,6 +23,13 @@ from marin.inference.types import (
     RunningModel,
     pack_json_payload,
     unpack_json_payload,
+)
+from marin.inference.vllm import (
+    DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER,
+    BrokeredVllmSystemConfig,
+    InferenceWorkerConfig,
+    VllmProxyConfig,
+    start_local_brokered_vllm,
 )
 from marin.inference.worker import InferenceWorker, run_inference_worker
 from rigging.timing import ExponentialBackoff

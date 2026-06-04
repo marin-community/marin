@@ -33,15 +33,14 @@ from iris.cluster.constraints import preemptible_constraint, region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
 from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, priority_band_value
-from marin.inference.brokered_vllm import (
+from marin.inference.types import RunningModel
+from marin.inference.vllm import (
     DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER,
     BrokeredVllmSystemConfig,
     InferenceWorkerConfig,
-    IrisBrokeredVllmRuntimeConfig,
     start_iris_brokered_vllm,
     start_local_brokered_vllm,
 )
-from marin.inference.types import RunningModel
 from rigging.log_setup import configure_logging
 
 # These match the repo's existing TPU generation-eval recipe in
@@ -157,26 +156,24 @@ def run_local_humaneval(inference_config: BrokeredVllmSystemConfig, eval_config:
 def run_iris_humaneval(
     inference_config: BrokeredVllmSystemConfig,
     eval_config: HumanEvalRunConfig,
-    runtime_config: IrisBrokeredVllmRuntimeConfig,
 ) -> None:
-    with start_iris_brokered_vllm(inference_config, runtime_config) as running_model:
+    with start_iris_brokered_vllm(inference_config) as running_model:
         run_humaneval(running_model, eval_config)
 
 
 def submit_iris_humaneval(
     inference_config: BrokeredVllmSystemConfig,
     eval_config: HumanEvalRunConfig,
-    runtime_config: IrisBrokeredVllmRuntimeConfig,
     *,
     job_name: str,
     iris_config_path: str,
     parent_ram: str,
     region: str | None,
-    priority_band: job_pb2.PriorityBand,
+    priority: int,
 ) -> None:
     def _run_parent() -> None:
         configure_logging()
-        run_iris_humaneval(inference_config, eval_config, runtime_config)
+        run_iris_humaneval(inference_config, eval_config)
 
     iris_config = IrisConfig.load(iris_config_path)
     controller = iris_config.provider_bundle().controller
@@ -192,7 +189,7 @@ def submit_iris_humaneval(
                 resources=ResourceSpec(cpu=0.5, memory=parent_ram, disk="16g"),
                 environment=EnvironmentSpec(env_vars={"HF_ALLOW_CODE_EVAL": "1"}),
                 constraints=constraints,
-                priority_band=priority_band,
+                priority_band=priority,
             )
             print(f"Submitted Iris parent job {job.job_id}", flush=True)
             job.wait(timeout=float("inf"))
@@ -312,21 +309,21 @@ def main(
         run_local_humaneval(inference_config, eval_config)
         return
 
-    priority_band = priority_band_value(priority) if priority else job_pb2.PRIORITY_BAND_UNSPECIFIED
-    runtime_config = IrisBrokeredVllmRuntimeConfig(
+    iris_priority = priority_band_value(priority) if priority else job_pb2.PRIORITY_BAND_UNSPECIFIED
+    inference_config = replace(
+        inference_config,
         worker_resources=ResourceConfig.with_tpu(tpu_type, ram=worker_ram),
         worker_env_vars=VLLM_WORKER_ENV_VARS,
-        priority_band=priority_band,
+        priority=iris_priority,
     )
     submit_iris_humaneval(
         inference_config,
         eval_config,
-        runtime_config,
         job_name=job_name,
         iris_config_path="lib/iris/config/marin.yaml",
         parent_ram=parent_ram,
         region=region,
-        priority_band=priority_band,
+        priority=iris_priority,
     )
 
 

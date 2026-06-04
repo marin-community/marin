@@ -16,7 +16,6 @@ from fray import current_client
 from fray.client import JobHandle
 from fray.types import ActorConfig, Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.cluster.client.job_info import get_job_info
-from iris.rpc import job_pb2
 from rigging.log_setup import configure_logging
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
@@ -92,15 +91,8 @@ class BrokeredVllmSystemConfig:
     server: VllmServerConfig = field(default_factory=VllmServerConfig)
     proxy: VllmProxyConfig = field(default_factory=VllmProxyConfig)
     workers: InferenceWorkerConfig = field(default_factory=InferenceWorkerConfig)
-
-    def __post_init__(self) -> None:
-        _validate_timeout_ordering(self)
-
-
-@dataclass(frozen=True)
-class IrisBrokeredVllmRuntimeConfig:
-    # Model- and eval-specific TPU resources for each vLLM worker.
-    worker_resources: ResourceConfig
+    # Required when running worker jobs through Iris; ignored by local mode.
+    worker_resources: ResourceConfig | None = None
     # Broker is CPU-only; TPU work happens in worker jobs.
     broker_resources: ResourceConfig = field(
         default_factory=lambda: ResourceConfig.with_cpu(cpu=2, ram="8g", disk="20g")
@@ -112,7 +104,10 @@ class IrisBrokeredVllmRuntimeConfig:
     # Actor startup waits on Iris endpoint registration.
     broker_ready_timeout_seconds: float = 900.0
     # Applied to broker actor and TPU worker child jobs.
-    priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED
+    priority: int = 0
+
+    def __post_init__(self) -> None:
+        _validate_timeout_ordering(self)
 
 
 @contextlib.contextmanager
@@ -139,11 +134,11 @@ def start_local_brokered_vllm(config: BrokeredVllmSystemConfig) -> Iterator[Runn
 
 
 @contextlib.contextmanager
-def start_iris_brokered_vllm(
-    config: BrokeredVllmSystemConfig,
-    runtime: IrisBrokeredVllmRuntimeConfig,
-) -> Iterator[RunningModel]:
+def start_iris_brokered_vllm(config: BrokeredVllmSystemConfig) -> Iterator[RunningModel]:
     """Start Iris child broker/workers and expose a local proxy in the parent job."""
+
+    if config.worker_resources is None:
+        raise ValueError("worker_resources must be set for Iris brokered vLLM mode.")
 
     client = current_client()
     job_info = get_job_info()
@@ -157,27 +152,27 @@ def start_iris_brokered_vllm(
         name=broker_name,
         count=1,
         request_lease_timeout_seconds=config.request_lease_timeout_seconds,
-        resources=runtime.broker_resources,
-        actor_config=ActorConfig(max_task_retries=0, priority=runtime.priority_band),
+        resources=config.broker_resources,
+        actor_config=ActorConfig(max_task_retries=0, priority=config.priority),
     )
     worker_jobs: list[JobHandle] = []
     try:
         logger.info("Waiting for broker actor name=%s", broker_name)
-        broker_handle = broker_group.wait_ready(count=1, timeout=runtime.broker_ready_timeout_seconds)[0]
+        broker_handle = broker_group.wait_ready(count=1, timeout=config.broker_ready_timeout_seconds)[0]
         request_provider = cast(InferenceRequestProvider, broker_handle)
         response_provider = cast(InferenceResponseProvider, broker_handle)
         worker_environment = create_environment(
-            extras=runtime.worker_environment_extras,
-            env_vars=dict(runtime.worker_env_vars),
+            extras=config.worker_environment_extras,
+            env_vars=dict(config.worker_env_vars),
         )
         for worker_index in range(config.workers.count):
             job = client.submit(
                 JobRequest(
                     name=f"{worker_prefix}-{worker_index}",
                     entrypoint=Entrypoint.from_callable(_run_iris_inference_worker, args=(config, request_provider)),
-                    resources=runtime.worker_resources,
+                    resources=config.worker_resources,
                     environment=worker_environment,
-                    priority=runtime.priority_band,
+                    priority=config.priority,
                 )
             )
             worker_jobs.append(job)
