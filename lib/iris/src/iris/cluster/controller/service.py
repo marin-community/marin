@@ -2080,7 +2080,7 @@ class ControllerServiceImpl:
         create_api_key(
             self._db,
             key_id=key_id,
-            key_hash=f"jwt:{key_id}",
+            key_hash=None,
             key_prefix="jwt",
             user_id=username,
             name=f"login-{now.epoch_ms()}",
@@ -2121,7 +2121,7 @@ class ControllerServiceImpl:
         create_api_key(
             self._db,
             key_id=key_id,
-            key_hash=f"jwt:{key_id}",
+            key_hash=None,
             key_prefix="jwt",
             user_id=target_user,
             name=request.name or f"key-{now.epoch_ms()}",

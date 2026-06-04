@@ -323,7 +323,7 @@ def test_jwt_create_and_verify(db: ControllerDB):
     signing_key = _get_or_create_signing_key(db)
     mgr = JwtTokenManager(signing_key, db=db)
 
-    create_api_key(db, key_id="k-bob", key_hash="jwt:k-bob", key_prefix="jwt", user_id="bob", name="test", now=now)
+    create_api_key(db, key_id="k-bob", key_hash=None, key_prefix="jwt", user_id="bob", name="test", now=now)
 
     token = mgr.create_token("bob", "user", "k-bob")
     identity = mgr.verify(token)
@@ -340,7 +340,7 @@ def test_revoke_login_keys(db: ControllerDB):
         create_api_key(
             db,
             key_id=f"k-login-{i}",
-            key_hash=f"jwt:k-login-{i}",
+            key_hash=None,
             key_prefix="jwt",
             user_id="carol",
             name=f"login-{i}",

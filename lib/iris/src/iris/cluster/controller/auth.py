@@ -44,14 +44,19 @@ DEFAULT_JWT_TTL_SECONDS = 86400 * 30  # 30 days
 def create_api_key(
     db: ControllerDB,
     key_id: str,
-    key_hash: str,
+    key_hash: str | None,
     key_prefix: str,
     user_id: str,
     name: str,
     now: Timestamp,
     expires_at: Timestamp | None = None,
 ) -> None:
-    """Insert a new API key row."""
+    """Insert a new API key row.
+
+    ``key_hash`` is the stored SHA-256 token hash for static/hash-backed keys, or
+    ``None`` for JWT-backed keys (which are validated via the signed JWT itself,
+    never by a hash lookup).
+    """
     with db.transaction() as tx:
         tx.execute(
             insert(auth_api_keys_table).values(
@@ -425,7 +430,7 @@ def _create_worker_jwt(db: ControllerDB, jwt_mgr: JwtTokenManager, now: Timestam
     create_api_key(
         db,
         key_id=key_id,
-        key_hash=f"jwt:{key_id}",
+        key_hash=None,
         key_prefix="jwt",
         user_id=WORKER_USER,
         name="worker-token",

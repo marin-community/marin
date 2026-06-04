@@ -531,7 +531,9 @@ auth_api_keys_table = Table(
     "api_keys",
     auth_metadata,
     Column("key_id", String, primary_key=True),
-    Column("key_hash", String, nullable=False, unique=True),
+    # NULL for JWT-backed keys (validated via signed JWT, not a stored hash);
+    # the SHA-256 token hash for static/hash-backed keys.
+    Column("key_hash", String, nullable=True, unique=True),
     Column("key_prefix", String, nullable=False),
     Column("user_id", String, nullable=False),
     Column("name", String, nullable=False),
