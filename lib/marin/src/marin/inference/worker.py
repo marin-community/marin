@@ -28,7 +28,8 @@ from marin.inference.types import (
 
 logger = logging.getLogger(__name__)
 
-_UPSTREAM_TEXT_PREVIEW_CHARS = 1000
+# Keep brokered error payloads bounded when upstream returns arbitrary text.
+ERROR_BODY_LIMIT_BYTES = 1000
 
 
 class InferenceWorker:
@@ -169,7 +170,7 @@ def _response_from_upstream(request: InferenceRequest, response: httpx.Response)
             request,
             response.status_code,
             "upstream endpoint returned a non-JSON response",
-            body=response.text[:_UPSTREAM_TEXT_PREVIEW_CHARS],
+            body=response.content[:ERROR_BODY_LIMIT_BYTES].decode(errors="replace"),
         )
     if not isinstance(payload, dict):
         return _inference_error_response(
