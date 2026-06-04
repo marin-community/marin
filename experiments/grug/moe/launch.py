@@ -145,7 +145,7 @@ for _dim, _bs, _steps in _COMPUTE_OPT_CELLS:
     _model = _heuristic.build_model_config(_dim, seq_len=_SEQ_LEN)
     _tokens = float(_steps * _bs * _SEQ_LEN)
     _optimizer = _heuristic.build_muonh_config(_bs, _tokens, _dim, seq_len=_SEQ_LEN)
-    _run_id = f"moe_may_compute_opt_d{_dim}_ep1"
+    _run_id = f"moe_may_compute_opt_d{_dim}_demo"
     compute_opt_steps.append(
         ExecutorStep(
             name=f"grug/{_run_id}",
