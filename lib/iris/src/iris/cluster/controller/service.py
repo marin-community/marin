@@ -67,7 +67,7 @@ from iris.cluster.controller.schema import (
     worker_attributes_table,
     workers_table,
 )
-from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, attempt_is_worker_failure, task_row_can_be_scheduled
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
@@ -99,6 +99,16 @@ from iris.rpc.proto_display import job_state_friendly, priority_band_name, task_
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
+
+
+def attempt_is_worker_failure(state: int) -> bool:
+    """Whether an attempt's terminal state reflects a worker-side failure.
+
+    Used when building attempt-history RPC payloads so the dashboard can
+    distinguish infrastructure failures (worker death, preemption) from
+    application failures.
+    """
+    return state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED)
 
 
 @dataclass(frozen=True)
@@ -2087,9 +2097,7 @@ class ControllerServiceImpl:
 
         now = Timestamp.now()
         with self._db.transaction() as _tx:
-            writes.ensure_user(_tx, username, now)
-        with self._db.read_snapshot() as _snap:
-            role = reads.get_user_role(_snap, username)
+            role = ops.user.ensure_user_and_role(_tx, username, now)
 
         # Revoke old login keys and propagate to in-memory revocation set
         revoked_ids = revoke_login_keys_for_user(self._db, username, now)
@@ -2130,9 +2138,7 @@ class ControllerServiceImpl:
 
         now = Timestamp.now()
         with self._db.transaction() as _tx:
-            writes.ensure_user(_tx, target_user, now)
-        with self._db.read_snapshot() as _snap:
-            role = reads.get_user_role(_snap, target_user)
+            role = ops.user.ensure_user_and_role(_tx, target_user, now)
 
         key_id = f"iris_k_{secrets.token_urlsafe(8)}"
         ttl = request.ttl_ms // 1000 if request.ttl_ms > 0 else DEFAULT_JWT_TTL_SECONDS

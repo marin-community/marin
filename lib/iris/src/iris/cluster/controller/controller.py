@@ -57,6 +57,7 @@ from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.pruner import prune_old_data
+from iris.cluster.controller.query_planner import hint_rare_state
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
@@ -93,7 +94,6 @@ from iris.cluster.controller.schema import (
     workers_table,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.task_state import hint_rare_state
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
@@ -403,6 +403,7 @@ class Controller:
         self._autoscaler_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
         self._ping_thread: ManagedThread | None = None
+        self._checkpoint_thread: ManagedThread | None = None
 
         self._autoscaler: Autoscaler | None = autoscaler
 
@@ -627,6 +628,9 @@ class Controller:
         if self._autoscaler_thread:
             self._autoscaler_thread.stop()
             self._autoscaler_thread.join(timeout=join_timeout)
+        if self._checkpoint_thread:
+            self._checkpoint_thread.stop()
+            self._checkpoint_thread.join(timeout=join_timeout)
 
         if self._autoscaler:
             self._autoscaler.shutdown()
