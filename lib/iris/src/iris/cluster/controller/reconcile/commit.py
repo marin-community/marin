@@ -41,8 +41,8 @@ def _flush_tasks(cur: Tx, deltas: list[TaskRowDelta]) -> None:
     """Bulk-flush task deltas.
 
     Split by terminal vs active state: terminal rows additionally null out
-    ``current_worker_id`` / ``current_worker_address`` (matching the legacy
-    ``TaskMutation.apply``). ``container_id`` is applied in a small secondary
+    ``current_worker_id`` / ``current_worker_address`` so a finished task no
+    longer points at a worker. ``container_id`` is applied in a small secondary
     executemany over only the rows that carry one, so the main statement shape
     stays uniform across rows.
     """

@@ -301,7 +301,7 @@ def cli():
     "--checkpoint-interval",
     default=None,
     type=float,
-    help="Periodic checkpoint interval in seconds (default: no periodic checkpointing)",
+    help="Periodic checkpoint interval in seconds (default: 3600s (hourly))",
 )
 @click.option(
     "--dry-run",

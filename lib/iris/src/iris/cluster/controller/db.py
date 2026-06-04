@@ -71,19 +71,8 @@ def _make_engine(
     max_overflow: int,
     auth_db_path: Path | None = None,
 ) -> Engine:
-    """Build a SA engine for ``db_path``.
-
-    Read-only engines pin ``PRAGMA query_only = ON`` at connect time so
-    accidental writes raise without a per-snapshot pragma round-trip.
-    Write engines use ``pool_size=1, max_overflow=0`` (serialised by an
-    external ``RLock``); read engines use ``pool_size=2, max_overflow=2``.
-    A small read pool measurably reduces tail latency under concurrent reads:
-    SQLite WAL allows many readers but each one contends on the WAL-index
-    header lock to establish its snapshot, so capping in-flight readers and
-    queueing the rest at the SA pool (FIFO, cheap) beats spinning inside SQLite.
-    Both use ``isolation_level="AUTOCOMMIT"`` so callers emit explicit
-    ``BEGIN`` / ``COMMIT`` / ``ROLLBACK``.
-    """
+    """Build a SA engine for ``db_path`` (see the module docstring for the
+    write/read pool split and pragma rationale)."""
     auth_path_str = str(auth_db_path) if auth_db_path is not None else None
     engine = create_engine(
         f"sqlite:///{db_path}",

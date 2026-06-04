@@ -32,16 +32,16 @@ from iris.cluster.types import JobName, WorkerId
 
 @dataclass
 class TaskRowDelta:
-    """Merged write to one ``tasks`` row. See ``Overlay.merge_task`` for the
-    per-field merge directions; the flush in ``commit_effects`` issues the same
-    coalesce expressions the legacy ``TaskMutation.apply`` did."""
+    """Merged write to one ``tasks`` row. ``Overlay.merge_task`` accumulates
+    these fields; the per-field merge directions (first-wins vs last-wins) are
+    realized by the coalesce expressions in ``commit._flush_tasks``."""
 
     task_id: JobName
     state: int
     error: str | None = None
     exit_code: int | None = None
-    started_at: Timestamp | None = None  # first-wins (coalesce(col, ...))
-    finished_at: Timestamp | None = None  # last-wins, may be None to clear
+    started_at: Timestamp | None = None
+    finished_at: Timestamp | None = None
     failure_count: int | None = None
     preemption_count: int | None = None
     container_id: str | None = None
@@ -54,8 +54,8 @@ class AttemptRowDelta:
     task_id: JobName
     attempt_id: int
     state: int | None = None
-    started_at: Timestamp | None = None  # first-wins (coalesce(col, ...))
-    finished_at: Timestamp | None = None  # first-wins (coalesce(col, ...))
+    started_at: Timestamp | None = None
+    finished_at: Timestamp | None = None
     exit_code: int | None = None
     error: str | None = None
 
@@ -71,8 +71,8 @@ class JobRowDelta:
 
     job_id: JobName
     state: int
-    started_at: Timestamp | None = None  # first-wins
-    finished_at: Timestamp | None = None  # recompute: last-wins; kill: first-wins
+    started_at: Timestamp | None = None
+    finished_at: Timestamp | None = None
     error: str | None = None
     is_cascade_kill: bool = False
     allow_overwrite_worker_failed: bool = False

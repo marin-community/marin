@@ -143,6 +143,9 @@ def run_request_template(
     )
     for filename, data in reads.get_workdir_files(snap, job_id).items():
         template.entrypoint.workdir_files[filename] = data
+    # cache.put interns: it returns the already-cached instance for this key if
+    # one exists, otherwise the template we just built. Callers must use the
+    # returned value, not ``template``, to share a single canonical instance.
     return cache.put(wire, template)
 
 

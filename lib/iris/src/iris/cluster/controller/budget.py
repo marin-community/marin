@@ -31,10 +31,6 @@ class UserTask(Generic[T]):
     task: T
 
 
-# Task states that count as "active" for budget spend (re-exported from db for local use)
-_ACTIVE_TASK_STATES = tuple(ACTIVE_TASK_STATES)
-
-
 def resource_value(cpu_millicores: int, memory_bytes: int, accelerator_count: int) -> int:
     """Compute a scalar resource value for budget tracking.
 
@@ -76,7 +72,7 @@ def compute_user_spend(tx: Tx) -> dict[str, int]:
 
     Returns ``{user_id: total_resource_value}`` for users with active tasks.
     """
-    rows = tx.execute(_USER_SPEND_QUERY, {"states": list(_ACTIVE_TASK_STATES)}).all()
+    rows = tx.execute(_USER_SPEND_QUERY, {"states": list(ACTIVE_TASK_STATES)}).all()
 
     spend: dict[str, int] = defaultdict(int)
     for row in rows:

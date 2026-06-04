@@ -43,14 +43,11 @@ logger = logging.getLogger(__name__)
 
 
 class TerminalKind(StrEnum):
-    """Variant tag for :class:`TerminalDecision`.
+    """Which terminal transition a :class:`TerminalDecision` requests.
 
-    Each kind drives a different per-task terminal transition inside
-    :meth:`ReconcileState.finalize_tasks`:
-
-    - ``PREEMPT``: mark the task PREEMPTED (or retry to PENDING if budget remains).
-    - ``TIMEOUT``: mark the task FAILED with no retry; cascade siblings.
-    - ``UNSCHEDULABLE``: mark the task UNSCHEDULABLE and recompute job state.
+    - ``PREEMPT``: the task should be preempted (retried if budget remains).
+    - ``TIMEOUT``: the task should fail without retry.
+    - ``UNSCHEDULABLE``: the task can never be placed.
     """
 
     PREEMPT = "preempt"
