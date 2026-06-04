@@ -1,10 +1,12 @@
 /**
  * Composable for profiling a single target (process or task) via the ProfileTask RPC.
  *
- * Encapsulates profile-type construction, the RPC call, and result handling
- * (file download for CPU/memory, new-window display for thread dumps).
+ * Encapsulates profile-type construction, the RPC call, and result handling:
+ * CPU profiles open in the bundled speedscope viewer, memory profiles download,
+ * and thread dumps render in a new window.
  */
 import { ref } from 'vue'
+import { openInSpeedscope } from '@/utils/speedscope'
 
 type RpcCall = (method: string, body?: Record<string, unknown>) => Promise<{ profileData?: string; error?: string }>
 
@@ -26,29 +28,36 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes
 }
 
+function showThreadDump(raw: string, label: string) {
+  const decoded = atob(raw)
+  const w = window.open('', '_blank')
+  if (!w) return
+  const escaped = decoded.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  w.document.open()
+  w.document.write(
+    `<html><head><title>Thread Dump \u2013 ${label}</title></head><body><pre>${escaped}</pre></body></html>`,
+  )
+  w.document.close()
+}
+
+function downloadBytes(bytes: Uint8Array, label: string, ext: string) {
+  const blob = new Blob([bytes], { type: 'application/octet-stream' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  const ts = new Date().toISOString().replace(/[T]/g, '_').replace(/:/g, '-').replace(/\.\d+Z$/, '')
+  a.download = `${ts}_profile-${label.replace(/\//g, '_')}.${ext}`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 function handleProfileResult(raw: string, profilerType: ProfilerType, label: string) {
   if (profilerType === 'threads') {
-    const decoded = atob(raw)
-    const w = window.open('', '_blank')
-    if (w) {
-      const escaped = decoded.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      w.document.open()
-      w.document.write(
-        `<html><head><title>Thread Dump \u2013 ${label}</title></head><body><pre>${escaped}</pre></body></html>`,
-      )
-      w.document.close()
-    }
+    showThreadDump(raw, label)
+  } else if (profilerType === 'cpu') {
+    openInSpeedscope(base64ToBytes(raw), label)
   } else {
-    const bytes = base64ToBytes(raw)
-    const blob = new Blob([bytes], { type: 'application/octet-stream' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    const ts = new Date().toISOString().replace(/[T]/g, '_').replace(/:/g, '-').replace(/\.\d+Z$/, '')
-    const ext = profilerType === 'memory' ? 'bin' : 'out'
-    a.download = `${ts}_profile-${label.replace(/\//g, '_')}.${ext}`
-    a.click()
-    URL.revokeObjectURL(url)
+    downloadBytes(base64ToBytes(raw), label, 'bin')
   }
 }
 

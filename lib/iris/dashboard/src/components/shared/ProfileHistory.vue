@@ -3,13 +3,15 @@
  * Profile history panel sourced from the iris.profile finelog namespace.
  *
  * Lists the last 50 captures for `source` (a task wire ID, /system/worker/<id>,
- * or /system/controller). Click a row to download the captured bytes.
+ * or /system/controller). Clicking a row opens speedscope captures in the
+ * bundled viewer and downloads every other format.
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { decodeArrowIpc } from '@/utils/arrow'
 import { formatBytes } from '@/utils/formatting'
+import { openInSpeedscope } from '@/utils/speedscope'
 
 interface Props {
   source: string
@@ -58,7 +60,7 @@ const rows = computed<ProfileHistoryRow[]>(() => {
   return decodeArrowIpc(ipc).rows as ProfileHistoryRow[]
 })
 
-const downloading = ref(false)
+const busy = ref(false)
 
 function profileExtension(format: string | undefined): string {
   switch ((format ?? '').toLowerCase()) {
@@ -77,9 +79,9 @@ function defaultLabel(source: string): string {
   return source.replace(/^\//, '').replace(/\//g, '_')
 }
 
-async function downloadProfile(row: ProfileHistoryRow) {
-  if (downloading.value || !row.captured_at) return
-  downloading.value = true
+async function openProfile(row: ProfileHistoryRow) {
+  if (busy.value || !row.captured_at) return
+  busy.value = true
   try {
     const sql = `SELECT profile_data, type, format FROM "iris.profile" WHERE source = '${escape(props.source)}' AND captured_at = '${escape(row.captured_at)}' LIMIT 1`
     const resp = await fetch('/proxy/system.log-server/finelog.stats.StatsService/Query', {
@@ -94,9 +96,13 @@ async function downloadProfile(row: ProfileHistoryRow) {
     const fetched = decodeArrowIpc(payload.arrowIpc).rows as FetchRow[]
     if (!fetched.length || !fetched[0].profile_data) return
     const bytes = fetched[0].profile_data
+    const label = props.downloadLabel || defaultLabel(props.source)
+    if ((fetched[0].format ?? '').toLowerCase() === 'speedscope') {
+      openInSpeedscope(bytes, label)
+      return
+    }
     const ext = profileExtension(fetched[0].format)
     const ts = row.captured_at.replace(/[T]/g, '_').replace(/:/g, '-').replace(/\.\d+/, '')
-    const label = props.downloadLabel || defaultLabel(props.source)
     const blob = new Blob([bytes], { type: 'application/octet-stream' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -105,9 +111,9 @@ async function downloadProfile(row: ProfileHistoryRow) {
     a.click()
     URL.revokeObjectURL(url)
   } catch (e) {
-    alert(`Download failed: ${e instanceof Error ? e.message : e}`)
+    alert(`Failed to open profile: ${e instanceof Error ? e.message : e}`)
   } finally {
-    downloading.value = false
+    busy.value = false
   }
 }
 
@@ -134,7 +140,7 @@ defineExpose({ refresh })
             v-for="row in rows"
             :key="row.captured_at ?? ''"
             class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors cursor-pointer"
-            @click="downloadProfile(row)"
+            @click="openProfile(row)"
           >
             <td class="px-3 py-2 text-[13px] font-mono">{{ row.captured_at ?? '-' }}</td>
             <td class="px-3 py-2 text-[13px] font-mono">{{ row.type ?? '-' }}</td>
