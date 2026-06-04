@@ -6,8 +6,9 @@
 import asyncio
 import logging
 import threading
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 from rigging.timing import Duration
 
@@ -22,6 +23,29 @@ from iris.rpc.worker_connect import WorkerServiceClient
 logger = logging.getLogger(__name__)
 
 DEFAULT_WORKER_RPC_TIMEOUT = Duration.from_seconds(10.0)
+
+_T = TypeVar("_T")
+_R = TypeVar("_R")
+
+
+def _fan_out(
+    items: Sequence[_T],
+    parallelism: int,
+    run_one: Callable[[asyncio.Semaphore, _T], Awaitable[_R]],
+) -> list[_R]:
+    """Run ``run_one`` over every item concurrently, capped at ``parallelism``.
+
+    Each coroutine receives the shared semaphore and is responsible for
+    acquiring it; ``gather`` preserves input order in the returned list.
+    """
+    if not items:
+        return []
+
+    async def _run() -> list[_R]:
+        sem = asyncio.Semaphore(parallelism)
+        return await asyncio.gather(*(run_one(sem, item) for item in items))
+
+    return asyncio.run(_run())
 
 
 @dataclass(frozen=True)
@@ -137,10 +161,9 @@ class WorkerProvider:
 
     def ping_workers(self, workers: list[tuple[WorkerId, str | None]]) -> list[PingResult]:
         """Send Ping RPCs to all workers concurrently. Returns per-worker results."""
-        if not workers:
-            return []
 
-        async def _one(sem: asyncio.Semaphore, wid: WorkerId, addr: str | None) -> PingResult:
+        async def _one(sem: asyncio.Semaphore, target: tuple[WorkerId, str | None]) -> PingResult:
+            wid, addr = target
             async with sem:
                 if not addr:
                     return PingResult(worker_id=wid, worker_address=addr, error=f"Worker {wid} has no address")
@@ -165,11 +188,7 @@ class WorkerProvider:
                 except Exception as e:
                     return PingResult(worker_id=wid, worker_address=addr, error=str(e))
 
-        async def _run() -> list[PingResult]:
-            sem = asyncio.Semaphore(self.parallelism)
-            return await asyncio.gather(*(_one(sem, wid, addr) for wid, addr in workers))
-
-        return asyncio.run(_run())
+        return _fan_out(workers, self.parallelism, _one)
 
     async def _reconcile_one(
         self,
@@ -199,14 +218,11 @@ class WorkerProvider:
         addresses: dict[WorkerId, str],
     ) -> list[ReconcileResult]:
         """Fan out the Reconcile RPC across all workers concurrently, capped at self.parallelism."""
-        if not plans:
-            return []
 
-        async def _run() -> list[ReconcileResult]:
-            sem = asyncio.Semaphore(self.parallelism)
-            return await asyncio.gather(*(self._reconcile_one(sem, p, addresses[p.worker_id]) for p in plans))
+        async def _one(sem: asyncio.Semaphore, plan: WorkerReconcilePlan) -> ReconcileResult:
+            return await self._reconcile_one(sem, plan, addresses[plan.worker_id])
 
-        return asyncio.run(_run())
+        return _fan_out(plans, self.parallelism, _one)
 
     def close(self) -> None:
         self.stub_factory.close()
