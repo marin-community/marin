@@ -753,6 +753,7 @@ name = "marin-infra-probes"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "marin-finelog" },
     { name = "marin-iris" },
     { name = "marin-rigging" },
@@ -765,6 +766,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8.0" },
     { name = "marin-finelog", specifier = ">=0.99.dev0" },
     { name = "marin-iris", specifier = ">=0.99.dev0" },
     { name = "marin-rigging", specifier = ">=0.99.dev0" },

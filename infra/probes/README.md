@@ -27,39 +27,27 @@ uv run python -m infra_probes --iris-endpoint http://<controller>:10000
 ## Deploy
 
 Single COS VM `infra-probes` (us-central1-b), one container, `restart=always`.
+`deploy/deploy.py` is a click CLI; run it with `uv run` from `infra/probes/`.
 
 ```bash
-infra/probes/deploy/deploy.sh build    # build + push :sha and :latest
-infra/probes/deploy/deploy.sh apply    # roll the VM to :latest
-infra/probes/deploy/deploy.sh status   # VM state + recent logs
+cd infra/probes
+uv run deploy/deploy.py build    # build + push :sha and :latest
+uv run deploy/deploy.py apply    # roll the VM to :latest
+uv run deploy/deploy.py status   # VM state + recent logs
 ```
+
+Project, region, zone, VM name, and repo default to the prod values and can be
+overridden per-command (`--project`, `--zone`, …) or via `MARIN_PROBES_*` env vars.
 
 ### One-time VM creation
 
+`create` provisions the service account (image pull, Cloud Logging, GCS
+roll-ups), its IAM bindings, and the COS VM in one shot:
+
 ```bash
-PROJECT=hai-gcp-models; ZONE=us-central1-b; SA=infra-probes@${PROJECT}.iam.gserviceaccount.com
-
-gcloud iam service-accounts create infra-probes --project=${PROJECT}
-
-# SA needs: pull image, ship stdout to Cloud Logging, write GCS roll-ups.
-gcloud artifacts repositories add-iam-policy-binding marin --project=${PROJECT} --location=us-central1 \
-  --member="serviceAccount:${SA}" --role=roles/artifactregistry.reader
-gcloud projects add-iam-policy-binding ${PROJECT} \
-  --member="serviceAccount:${SA}" --role=roles/logging.logWriter --condition=None
-gcloud storage buckets add-iam-policy-binding gs://marin-us-central1 \
-  --member="serviceAccount:${SA}" --role=roles/storage.objectCreator
-
-gcloud compute instances create-with-container infra-probes \
-  --project=${PROJECT} --zone=${ZONE} --machine-type=e2-small \
-  --service-account=${SA} --scopes=cloud-platform \
-  --container-image=us-central1-docker.pkg.dev/${PROJECT}/marin/infra-probes:latest \
-  --container-restart-policy=always \
-  --container-arg="--iris-endpoint=http://iris-controller-marin.c.hai-gcp-models.internal:10000" \
-  --container-mount-host-path=mount-path=/var/lib/probes,host-path=/var/lib/probes,mode=rw \
-  --metadata=startup-script='#!/bin/bash
-mkdir -p /var/lib/probes && chown 1000:1000 /var/lib/probes' \
-  --tags=infra-probes
+uv run deploy/deploy.py create    # --iris-endpoint / --machine-type to override
 ```
 
-The host mount persists the JSONL across container restarts; the startup-script
-makes `/var/lib/probes` writable by the uid-1000 container.
+The VM gets a `/var/lib/probes` host mount that persists the JSONL across
+container restarts, plus a startup-script that makes it writable by the uid-1000
+container.

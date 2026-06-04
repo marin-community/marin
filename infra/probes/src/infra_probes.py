@@ -7,7 +7,6 @@ fixed cadence, results logged to stdout (picked up by Cloud Logging on COS).
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import logging
 import tempfile
@@ -18,6 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+import click
 from finelog.client.log_client import FlushResult, LogClient
 from finelog.rpc import logging_pb2
 from iris.cluster.client.remote_client import RemoteClusterClient
@@ -242,19 +242,18 @@ def build_sinks(finelog: LogClient) -> list[ProbeSink]:
     return sinks
 
 
-def main(argv: list[str] | None = None) -> None:
-    p = argparse.ArgumentParser(prog="probes")
-    p.add_argument("--iris-endpoint", required=True, help="controller RPC, e.g. http://10.128.0.3:10000")
-    p.add_argument(
-        "--zone",
-        action="append",
-        help=f"GCP zone for iris-job-submit; repeat for multiple (default: {', '.join(DEFAULT_ZONES)})",
-    )
-    args = p.parse_args(argv)
-    # append default would accumulate onto args.zone, so fall back here instead.
-    zones = args.zone or list(DEFAULT_ZONES)
+@click.command()
+@click.option("--iris-endpoint", required=True, help="controller RPC, e.g. http://10.128.0.3:10000")
+@click.option(
+    "--zone",
+    "zones",
+    multiple=True,
+    help=f"GCP zone for iris-job-submit; repeat for multiple (default: {', '.join(DEFAULT_ZONES)})",
+)
+def main(iris_endpoint: str, zones: tuple[str, ...]) -> None:
+    zones = zones or DEFAULT_ZONES
 
-    iris = RemoteClusterClient(controller_address=args.iris_endpoint, workspace=make_canary_workspace())
+    iris = RemoteClusterClient(controller_address=iris_endpoint, workspace=make_canary_workspace())
     finelog = LogClient.connect(
         LOG_SERVER_ENDPOINT_NAME,
         resolver=lambda name: resolve_finelog_address(iris, name),
