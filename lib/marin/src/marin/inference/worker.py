@@ -14,17 +14,17 @@ from typing import Any
 import httpx
 from rigging.timing import ExponentialBackoff
 
-from marin.inference.inference_broker import (
+from marin.inference.types import (
     InferenceRequest,
     InferenceRequestProvider,
     InferenceResponse,
     LeasedInferenceRequest,
     LeasedInferenceResponse,
+    RunningModel,
     format_request_ids,
     pack_json_payload,
     unpack_json_payload,
 )
-from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 

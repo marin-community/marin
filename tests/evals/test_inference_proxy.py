@@ -12,6 +12,7 @@ from typing import cast
 import httpx
 import pytest
 from fray.types import ResourceConfig
+from marin.inference.broker import InferenceBroker
 from marin.inference.brokered_vllm import (
     DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER,
     BrokeredVllmSystemConfig,
@@ -20,18 +21,18 @@ from marin.inference.brokered_vllm import (
     VllmProxyConfig,
     start_local_brokered_vllm,
 )
-from marin.inference.in_memory_inference_broker import InMemoryInferenceBroker
-from marin.inference.inference_broker import (
+from marin.inference.proxy import InferenceProxy, serve_inference_proxy
+from marin.inference.types import (
     InferenceRequest,
     InferenceResponse,
     LeasedInferenceRequest,
     LeasedInferenceResponse,
+    OpenAIEndpoint,
+    RunningModel,
     pack_json_payload,
     unpack_json_payload,
 )
-from marin.inference.inference_proxy import InferenceProxy, serve_inference_proxy
-from marin.inference.inference_worker import InferenceWorker, run_inference_worker
-from marin.inference.types import OpenAIEndpoint, RunningModel
+from marin.inference.worker import InferenceWorker, run_inference_worker
 from rigging.timing import ExponentialBackoff
 
 from tests.evals.openai_stub import assert_completions_scoring_contract, serve_deterministic_openai_stub
@@ -39,8 +40,8 @@ from tests.evals.openai_stub import assert_completions_scoring_contract, serve_d
 BROKER_LEASE_TIMEOUT_SECONDS = 300.0
 
 
-def test_in_memory_inference_broker_round_trip() -> None:
-    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+def test_inference_broker_round_trip() -> None:
+    broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     request = InferenceRequest(request_id="req-1", method="POST", path="/v1/completions", payload=b"request")
 
     broker.submit_request(request)
@@ -61,9 +62,9 @@ def test_in_memory_inference_broker_round_trip() -> None:
     assert broker.size() == 0
 
 
-def test_in_memory_inference_broker_requeues_unanswered_request_after_lease_timeout() -> None:
+def test_inference_broker_requeues_unanswered_request_after_lease_timeout() -> None:
     now = [0.0]
-    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=10, clock=lambda: now[0])
+    broker = InferenceBroker(request_lease_timeout_seconds=10, clock=lambda: now[0])
     request = InferenceRequest(request_id="req-1", method="POST", path="/v1/completions", payload=b"request")
 
     broker.submit_request(request)
@@ -79,9 +80,9 @@ def test_in_memory_inference_broker_requeues_unanswered_request_after_lease_time
     assert leased_b[0].lease_id != leased_a[0].lease_id
 
 
-def test_in_memory_inference_broker_drops_response_for_expired_lease_after_requeue() -> None:
+def test_inference_broker_drops_response_for_expired_lease_after_requeue() -> None:
     now = [0.0]
-    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=10, clock=lambda: now[0])
+    broker = InferenceBroker(request_lease_timeout_seconds=10, clock=lambda: now[0])
     request = InferenceRequest(request_id="req-1", method="POST", path="/v1/completions", payload=b"request")
 
     broker.submit_request(request)
@@ -134,7 +135,7 @@ def test_iris_runtime_leaves_child_placement_to_parent_region_inheritance() -> N
 
 
 def test_inference_proxy_forwards_completions_to_running_model() -> None:
-    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     with serve_deterministic_openai_stub() as upstream_stub:
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
         worker = InferenceWorker(broker=broker, upstream=upstream, request_timeout_seconds=5)
@@ -153,7 +154,7 @@ def test_inference_proxy_forwards_completions_to_running_model() -> None:
 
 
 def test_inference_proxy_routes_models_readiness_to_running_model() -> None:
-    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     with serve_deterministic_openai_stub() as upstream_stub:
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
         worker = InferenceWorker(broker=broker, upstream=upstream, request_timeout_seconds=5)
@@ -175,7 +176,7 @@ def test_inference_proxy_routes_models_readiness_to_running_model() -> None:
 
 @pytest.mark.asyncio
 async def test_inference_worker_refills_slots_while_slow_request_is_in_flight() -> None:
-    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     for request_id, prompt in [("slow", "slow"), ("fast-a", "fast a"), ("fast-b", "fast b")]:
         broker.submit_request(_completion_inference_request(request_id=request_id, prompt=prompt))
 
@@ -203,7 +204,7 @@ async def test_inference_worker_refills_slots_while_slow_request_is_in_flight() 
 
 @pytest.mark.asyncio
 async def test_inference_worker_returns_504_for_upstream_timeout() -> None:
-    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     broker.submit_request(_completion_inference_request(request_id="slow", prompt="slow"))
 
     release_slow = threading.Event()
@@ -231,7 +232,7 @@ async def test_inference_worker_returns_504_for_upstream_timeout() -> None:
 
 @pytest.mark.asyncio
 async def test_inference_worker_returns_502_for_upstream_connection_failure() -> None:
-    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     broker.submit_request(_completion_inference_request(request_id="connect-failure", prompt="connect failure"))
     upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=f"http://127.0.0.1:{_closed_port()}/v1", model="gpt2"))
     worker = InferenceWorker(
@@ -253,7 +254,7 @@ async def test_inference_worker_returns_502_for_upstream_connection_failure() ->
 
 @pytest.mark.asyncio
 async def test_inference_worker_preserves_status_for_non_json_upstream_response() -> None:
-    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     broker.submit_request(_completion_inference_request(request_id="non-json", prompt="non json"))
     with _serve_text_upstream(status_code=503, body="temporarily unavailable") as upstream:
         worker = InferenceWorker(
@@ -277,7 +278,7 @@ async def test_inference_worker_preserves_status_for_non_json_upstream_response(
 
 @pytest.mark.asyncio
 async def test_inference_proxy_matches_out_of_order_responses_to_inflight_requests() -> None:
-    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     with _serve_inference_proxy(
         broker=broker,
         model="gpt2",
@@ -324,7 +325,7 @@ async def test_inference_proxy_matches_out_of_order_responses_to_inflight_reques
 
 @pytest.mark.asyncio
 async def test_inference_proxy_rejects_when_pending_queue_is_full() -> None:
-    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     with _serve_inference_proxy(
         broker=broker,
         model="gpt2",
@@ -364,7 +365,7 @@ async def test_inference_proxy_rejects_when_pending_queue_is_full() -> None:
 
 @pytest.mark.asyncio
 async def test_inference_proxy_times_out_inflight_request() -> None:
-    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     with _serve_inference_proxy(
         broker=broker,
         model="gpt2",
@@ -380,7 +381,7 @@ async def test_inference_proxy_times_out_inflight_request() -> None:
 
 @pytest.mark.asyncio
 async def test_inference_proxy_drops_stale_responses() -> None:
-    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     request = InferenceRequest(request_id="stale", method="POST", path="/v1/completions", payload=b"request")
     broker.submit_request(request)
     [leased_request] = broker.fetch_requests(max_items=1)
@@ -411,11 +412,11 @@ async def test_inference_proxy_drops_stale_responses() -> None:
     assert proxy.stats.dropped_responses == 1
 
 
-async def _fetch_until_two_requests(broker: InMemoryInferenceBroker) -> list[LeasedInferenceRequest]:
+async def _fetch_until_two_requests(broker: InferenceBroker) -> list[LeasedInferenceRequest]:
     return await _fetch_until_requests(broker, count=2)
 
 
-async def _fetch_until_requests(broker: InMemoryInferenceBroker, *, count: int) -> list[LeasedInferenceRequest]:
+async def _fetch_until_requests(broker: InferenceBroker, *, count: int) -> list[LeasedInferenceRequest]:
     requests: list[LeasedInferenceRequest] = []
     deadline = asyncio.get_running_loop().time() + 5
     while len(requests) < count and asyncio.get_running_loop().time() < deadline:
@@ -426,7 +427,7 @@ async def _fetch_until_requests(broker: InMemoryInferenceBroker, *, count: int) 
     return requests
 
 
-async def _fetch_until_responses(broker: InMemoryInferenceBroker, *, count: int) -> list[InferenceResponse]:
+async def _fetch_until_responses(broker: InferenceBroker, *, count: int) -> list[InferenceResponse]:
     responses: list[InferenceResponse] = []
     deadline = asyncio.get_running_loop().time() + 5
     while len(responses) < count and asyncio.get_running_loop().time() < deadline:
@@ -462,7 +463,7 @@ def _completion_inference_request(*, request_id: str, prompt: str) -> InferenceR
 @contextmanager
 def _serve_inference_proxy(
     *,
-    broker: InMemoryInferenceBroker,
+    broker: InferenceBroker,
     model: str,
     request_timeout_seconds: float,
     max_pending_requests: int | None = None,

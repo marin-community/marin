@@ -20,15 +20,14 @@ from iris.rpc import job_pb2
 from rigging.log_setup import configure_logging
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.inference.in_memory_inference_broker import InMemoryInferenceBroker
-from marin.inference.inference_broker import InferenceRequestProvider, InferenceResponseProvider
-from marin.inference.inference_proxy import serve_inference_proxy
-from marin.inference.inference_worker import (
+from marin.inference.broker import InferenceBroker
+from marin.inference.proxy import serve_inference_proxy
+from marin.inference.types import InferenceRequestProvider, InferenceResponseProvider, OpenAIEndpoint, RunningModel
+from marin.inference.vllm_server import VllmEnvironment
+from marin.inference.worker import (
     InferenceWorker,
     run_inference_worker,
 )
-from marin.inference.types import OpenAIEndpoint, RunningModel
-from marin.inference.vllm_server import VllmEnvironment
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +122,7 @@ def start_local_brokered_vllm(config: BrokeredVllmSystemConfig) -> Iterator[Runn
     if config.workers.count != 1:
         raise ValueError("Local brokered vLLM mode supports exactly one worker; use Iris mode for multiple workers.")
 
-    broker = InMemoryInferenceBroker(request_lease_timeout_seconds=config.request_lease_timeout_seconds)
+    broker = InferenceBroker(request_lease_timeout_seconds=config.request_lease_timeout_seconds)
     with start_local_vllm_server(config) as upstream:
         worker = InferenceWorker(
             broker=broker,
@@ -154,7 +153,7 @@ def start_iris_brokered_vllm(
     broker_name = f"vllm-broker-{run_id}"
     worker_prefix = f"vllm-worker-{run_id}"
     broker_group = client.create_actor_group(
-        InMemoryInferenceBroker,
+        InferenceBroker,
         name=broker_name,
         count=1,
         request_lease_timeout_seconds=config.request_lease_timeout_seconds,

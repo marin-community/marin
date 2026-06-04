@@ -22,15 +22,16 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from marin.inference.inference_broker import (
+from marin.inference.types import (
     InferenceRequest,
     InferenceResponse,
     InferenceResponseProvider,
+    OpenAIEndpoint,
+    RunningModel,
     format_request_ids,
     pack_json_payload,
     unpack_json_payload,
 )
-from marin.inference.types import OpenAIEndpoint, RunningModel
 
 logger = logging.getLogger(__name__)
 

@@ -12,7 +12,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
-from marin.inference.inference_broker import (
+from marin.inference.types import (
     InferenceRequest,
     InferenceResponse,
     LeasedInferenceRequest,
@@ -33,7 +33,7 @@ class Lease(Generic[T]):
     timeout: float
 
 
-class MemoryQueue(Generic[T]):
+class LeaseQueue(Generic[T]):
     """In-memory leased FIFO queue."""
 
     def __init__(self, *, clock: Callable[[], float] = time.time) -> None:
@@ -72,8 +72,8 @@ class MemoryQueue(Generic[T]):
             self._queue.insert(0, lease.item)
 
 
-class InMemoryInferenceBroker:
-    """Thread-safe in-memory broker implementation."""
+class InferenceBroker:
+    """Thread-safe leased request/response broker."""
 
     def __init__(
         self,
@@ -82,10 +82,10 @@ class InMemoryInferenceBroker:
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._lock = threading.Lock()
-        # Request leases make fetched-but-unanswered work visible again if the
-        # local worker dies while holding it.
+        # Request leases make fetched-but-unanswered work visible again if a
+        # worker dies while holding it.
         self._request_lease_timeout_seconds = request_lease_timeout_seconds
-        self._requests: MemoryQueue[InferenceRequest] = MemoryQueue(clock=clock)
+        self._requests: LeaseQueue[InferenceRequest] = LeaseQueue(clock=clock)
         self._responses: deque[InferenceResponse] = deque()
         self._request_leases: dict[str, Lease[InferenceRequest]] = {}
         # Insertion-ordered set of request ids for diagnostics.
@@ -123,7 +123,7 @@ class InMemoryInferenceBroker:
                 self._pending.pop(response.request_id, None)
         if dropped_ids:
             logger.warning(
-                "InMemoryInferenceBroker dropped responses for inactive request leases count=%d request_ids=%s",
+                "InferenceBroker dropped responses for inactive request leases count=%d request_ids=%s",
                 len(dropped_ids),
                 format_request_ids(dropped_ids),
             )
