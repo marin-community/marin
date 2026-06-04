@@ -23,6 +23,7 @@ Auth model:
   route is a safe failure.
 """
 
+import functools
 import logging
 import os
 from urllib.parse import urlparse
@@ -692,26 +693,26 @@ class ProxyControllerDashboard:
             Route("/worker/{worker_id:path}", self._dashboard),
             Route(
                 "/bundles/{bundle_id:str}.zip",
-                lambda req: self._proxy_get(
-                    req, param="bundle_id", upstream="/bundles/{}.zip", media_type="application/zip"
+                functools.partial(
+                    self._proxy_get, param="bundle_id", upstream="/bundles/{}.zip", media_type="application/zip"
                 ),
             ),
             Route(
                 "/blobs/{blob_id:str}",
-                lambda req: self._proxy_get(
-                    req, param="blob_id", upstream="/blobs/{}", media_type="application/octet-stream"
+                functools.partial(
+                    self._proxy_get, param="blob_id", upstream="/blobs/{}", media_type="application/octet-stream"
                 ),
             ),
             Route("/health", self._health),
             Route("/auth/{path:path}", self._proxy_auth),
             Route(
                 "/iris.cluster.ControllerService/{method}",
-                lambda req: self._proxy_rpc_post(req, service="iris.cluster.ControllerService"),
+                functools.partial(self._proxy_rpc_post, service="iris.cluster.ControllerService"),
                 methods=["POST"],
             ),
             Route(
                 "/finelog.logging.LogService/{method}",
-                lambda req: self._proxy_rpc_post(req, service="finelog.logging.LogService"),
+                functools.partial(self._proxy_rpc_post, service="finelog.logging.LogService"),
                 methods=["POST"],
             ),
             static_files_mount(),
