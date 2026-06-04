@@ -44,6 +44,34 @@ def test_rl_decode_matrix_cases_are_decode_heavy():
     assert any(case.n > 1 for case in cases)
 
 
+def test_dense_expansion_matrix_covers_required_workload_shapes():
+    cases = bench.matrix_cases(bench.DENSE_EXPANSION_MATRIX)
+    by_name = {case.name: case for case in cases}
+
+    assert set(by_name) == {
+        "decode_b32_i1_o128_n1",
+        "decode_b32_i1_o512_n1",
+        "decode_b32_i1_o2048_n1",
+        "decode_b32_i1_o128_n4",
+        "decode_b32_i1_o512_n4",
+        "decode_b32_i1_o2048_n4",
+        "mixed_b32_i512_o512_n1",
+        "mixed_b32_i512_o512_n4",
+        "prefill_b8_i2048_o128_n1",
+        "prefill_b8_i2048_o128_n4",
+        "pressure_b128_i1_o128_n1",
+        "pressure_b128_i1_o128_n4",
+        "churn_b64_i128_o512_n1",
+        "churn_b64_i128_o512_n4",
+    }
+    assert {case.output_tokens for case in cases if case.name.startswith("decode_")} == {128, 512, 2048}
+    assert {case.n for case in cases} == {1, 4}
+    assert all(case.input_tokens + case.output_tokens <= 4096 for case in cases)
+    assert any(case.input_tokens > case.output_tokens for case in cases)
+    assert any(case.input_tokens == case.output_tokens for case in cases)
+    assert any(case.active_sequences == 128 for case in cases)
+
+
 def test_matrix_rejects_unknown_name():
     with pytest.raises(ValueError, match="Unknown matrix"):
         bench.matrix_cases("prefill")
