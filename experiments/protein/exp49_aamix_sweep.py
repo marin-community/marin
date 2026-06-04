@@ -82,7 +82,7 @@ logger = logging.getLogger(__name__)
 # TOKENIZE_VERSION only when the tokenization recipe changes: it forks the cache
 # dirs (forcing a re-tokenize) and is otherwise decoupled from the sweep, so a
 # v2/v3 sweep can reuse the v1 caches.
-SWEEP_VERSION: str = "v1"
+SWEEP_VERSION: str = "v2"
 TOKENIZE_VERSION: str = "v1"
 
 RUN_NAME_PREFIX: str = "prot-exp49"
