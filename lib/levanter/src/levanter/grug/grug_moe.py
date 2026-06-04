@@ -46,7 +46,7 @@ from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
-from levanter.grug._moe.mesh import (
+from levanter.grug.sharding import (
     _batch_spec_from_x,
     _current_mesh,
     _mesh_axis_size,

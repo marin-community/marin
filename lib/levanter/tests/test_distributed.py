@@ -31,11 +31,13 @@ def test_square_brace_expand():
 
 @patch("jax.distributed.initialize")
 @patch("levanter.distributed.initialize_iris_jax")
+@patch("levanter.distributed.configure_megascale_from_iris")
 @patch("levanter.distributed.get_job_info")
 @patch("levanter.distributed.DistributedConfig._is_distributed", return_value=False)
 def test_distributed_config_initializes_via_iris_when_iris_job_present(
     mock_is_distributed,
     mock_get_job_info,
+    mock_configure_megascale_from_iris,
     mock_initialize_iris_jax,
     mock_jax_initialize,
 ):
@@ -45,5 +47,6 @@ def test_distributed_config_initializes_via_iris_when_iris_job_present(
 
     DistributedConfig().initialize()
 
+    mock_configure_megascale_from_iris.assert_called_once_with()
     mock_initialize_iris_jax.assert_called_once_with()
     mock_jax_initialize.assert_not_called()

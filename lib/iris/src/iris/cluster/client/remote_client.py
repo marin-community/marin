@@ -21,6 +21,7 @@ from iris.cluster.client.bundle import BundleCreator
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
+from iris.cluster.runtime.env import with_slice_topology_env
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
 from iris.cluster.worker.stats import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
 from iris.rpc import controller_pb2, job_pb2
@@ -31,6 +32,7 @@ from iris.time_proto import duration_to_proto
 from iris.version import client_revision_date
 
 logger = logging.getLogger(__name__)
+
 
 # How long to tolerate controller unavailability before giving up on monitoring.
 # The job itself keeps running server-side; this only affects the client's ability
@@ -145,7 +147,7 @@ class RemoteClusterClient:
 
         if environment is None:
             environment = EnvironmentSpec().to_proto()
-        env_config = environment
+        env_config = with_slice_topology_env(environment, resources, replicas)
 
         runtime_ep = build_runtime_entrypoint(entrypoint, env_config)
 

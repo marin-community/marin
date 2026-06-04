@@ -21,6 +21,7 @@ from levanter.grug._moe.ep_common import (
     _sort_activations,
     _unpermute_from_global_expert,
 )
+from levanter.grug.sharding import _batch_axes
 
 
 def _moe_mlp_ep_ragged_a2a_local(
@@ -118,5 +119,5 @@ def _moe_mlp_ep_ragged_a2a_local(
             topk=topk,
         ).astype(x_local.dtype)
         dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - jnp.sum(sender_group_sizes, dtype=jnp.int32)
-        dropped_total = jax.lax.psum(dropped_local, ("data", "expert"))
+        dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     return out_local, dropped_total
