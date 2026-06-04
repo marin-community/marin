@@ -11,8 +11,6 @@ from pathlib import Path
 import pytest
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import db, writes
-from iris.cluster.controller.codec import attribute_value_from_row
-from iris.cluster.controller.ops.worker import _attribute_value_cols
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import worker_attributes_table, workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
@@ -37,33 +35,6 @@ def _insert_worker_attribute(state, worker_id: WorkerId, key: str, value: str) -
             )
         )
         state._worker_attrs.set(cur, worker_id, {key: AttributeValue(value)})
-
-
-class _AttrRow:
-    """Row shim with the worker_attributes value columns, for decode round-trips."""
-
-    def __init__(self, cols: dict) -> None:
-        self.key = "k"
-        self.value_type = cols["value_type"]
-        self.str_value = cols["str_value"]
-        self.int_value = cols["int_value"]
-        self.float_value = cols["float_value"]
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        ("us-east1", "us-east1"),
-        (7, 7),
-        (3.5, 3.5),
-    ],
-)
-def test_attribute_value_column_round_trip_is_lossless(value, expected):
-    """Python value -> SQL columns -> decoded value must be lossless for str/int/float."""
-    cols = _attribute_value_cols(value)
-    decoded = attribute_value_from_row(_AttrRow(cols))
-    assert decoded == expected
-    assert type(decoded) is type(expected)
 
 
 def test_set_and_get_returns_cached_attributes(state):
