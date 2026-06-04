@@ -49,8 +49,8 @@ from typing import Any
 
 from marin.execution.step_spec import StepSpec
 from pydantic import BaseModel
-from rigging.filesystem import url_to_fs
-from zephyr import atomic_rename, counters
+from rigging.filesystem import atomic_rename, url_to_fs
+from zephyr import counters
 
 logger = logging.getLogger(__name__)
 

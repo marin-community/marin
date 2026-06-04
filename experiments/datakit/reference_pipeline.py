@@ -1,10 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end reference DAG: every Datakit source → (cluster x quality) store.
+"""End-to-end reference DAG: Datakit sources → (cluster x quality) store.
 
 This wires the existing per-stage building blocks into a single
-StepRunner-walkable graph. Per source (every entry from
+StepRunner-walkable graph. The source set is a parameter
+(:func:`select_sources` / ``--sources``), and all resource / K / fan-out
+sizing lives in a :class:`PipelineScale` (``--scale full|smoke``), so the
+*same* DAG runs at full-fleet scale or as a quick e2e smoke on a few small
+sources without forking the pipeline. Per source (default: every entry from
 :func:`marin.datakit.sources.all_sources` — no carve-outs):
 
     normalize → tokenize
@@ -26,9 +30,10 @@ training is wrapped as StepSpecs.
 CLI flags map to those parameters:
 
   ``--domain-centroids``    Optional. Directory containing K-means output:
-                            ``centroids_<K_TRAIN>.npy`` plus
-                            ``lookup_<K_TRAIN>_to_<k>.npy`` for every K view
-                            (the layout produced by
+                            ``centroids_<k_train>.npy`` plus
+                            ``lookup_<k_train>_to_<k>.npy`` for every K view
+                            (``k_train`` / views come from ``scale.cluster``;
+                            the layout produced by
                             :mod:`experiments.datakit.cluster.domain.v0.exp_full_clusters`).
                             If omitted, the CLI lets
                             :func:`reference_datakit_steps` build the
@@ -57,18 +62,29 @@ corpus is read once to build the decontam bloom, after which workers read
 the bloom in-region -- the cross-region cost is one bloom build, not
 per-shard.
 
-Submit on iris::
+Submit on iris (full)::
 
     uv run iris --cluster=marin job run --region <region> --extra=cpu \\
         --priority production --cpu 2 --memory 8GB \\
         -- python -m experiments.datakit.reference_pipeline \\
             --domain-centroids gs://.../cluster/train_centroids_<hash> \\
             --quality-model gs://.../quality/model.bin
+
+Smoke (a few small sources, K=64, inline-trained centroids)::
+
+    uv run iris --cluster=marin job run --region europe-west4 --extra=cpu \\
+        --priority interactive --cpu 2 --memory 8GB \\
+        -- python -m experiments.datakit.reference_pipeline \\
+            --scale smoke --sources cp/peps,cp/foodista,nsf_awards \\
+            --quality-model gs://.../quality/model.bin
+
+or via the curated wrapper :mod:`experiments.datakit.reference_pipeline_smoke`,
+which pins the source list and ``SMOKE_SCALE`` for you.
 """
 
 import argparse
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from fray import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
@@ -129,82 +145,160 @@ from experiments.datakit.store.datakit_store import (
 logger = logging.getLogger(__name__)
 
 
-# Clustering knobs. Must match the centroids file passed in.
-K_TRAIN = 5000
-K_VIEWS: tuple[int, ...] = (40, 1000)
-CLUSTER_VIEW = 40  # the K-view the store partitions on (cluster=<C>/quality=<Q>/)
-EMBED_BATCH_SIZE = 4096
-ASSIGN_BATCH_SIZE = 4096
-
-# Tokenize: canonical Marin tokenizer.
+# Tokenize: canonical Marin tokenizer. Not scale-sensitive.
 TOKENIZER = "marin-community/marin-tokenizer"
 TOKENIZER_BACKEND = TokenizerBackend.HF
-TOKENIZE_WORKER_RESOURCES = ResourceConfig(ram="10g", disk="5g")
-TOKENIZE_MAX_WORKERS = 1024
-
-# Embed / assign resource shapes mirror exp_full_clusters defaults
-# (region is unpinned -- iris's --region flag drives scheduling).
-EMBED_WORKER_RESOURCES = ResourceConfig(cpu=8, ram="64g")
-ASSIGN_WORKER_RESOURCES = ResourceConfig(cpu=4, ram="32g")
-COORDINATOR_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="4g")
-EMBED_MAX_WORKERS_PER_SOURCE = 512
-ASSIGN_MAX_WORKERS_PER_SOURCE = 512
-
-# Inline domain training (used when the caller does not pre-stage centroids).
-# ~100 sources x 100k = ~10M-row centroid sample, matching exp_full_clusters.
-N_PER_SOURCE_FOR_SAMPLE = 100_000
-SAMPLE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="4g")
-SAMPLE_MAX_WORKERS = 256
-# FAISS K=5000 on 10M x 192 wants every core it can get.
-TRAIN_CENTROIDS_RESOURCES = ResourceConfig.with_cpu(cpu=32, ram="64g")
-
-# Minhash / dedup mirror all_sources_fuzzy defaults.
-MINHASH_WORKER_RESOURCES = ResourceConfig(cpu=5, ram="32g", disk="5g")
-DEDUP_MAX_PARALLELISM = 4096
-DEDUP_WORKER_RESOURCES = ResourceConfig(cpu=3, ram="32g", disk="5g")
-DEDUP_COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="3.5g", preemptible=False)
-
-# Decontam shares all knobs with all_sources_decon (imported above).
-DECONTAM_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g")
-
-# Store.
-STORE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="32g")
-STORE_MAX_WORKERS = 2048 + 1024
 SPLIT = "train"
 
 
-def default_sources() -> dict[str, StepSpec]:
-    """Default Datakit source set: every ``all_sources()`` entry, mapped to its normalize StepSpec."""
-    sources = {name: src.normalized for name, src in all_sources().items()}
-    logger.info("default_sources: %d sources", len(sources))
+@dataclass(frozen=True)
+class ClusterConfig:
+    """Spherical-K-means knobs for the domain-clustering stage.
+
+    ``cluster_view`` is the K the store partitions on (``cluster=<C>/quality=<Q>/``)
+    and must be ``k_train`` or one of ``k_views`` -- the assign stage only
+    materializes a ``cluster_<K>`` column for those. ``k_train`` must not exceed
+    the centroid-training sample size, so shrink it for small inline runs.
+    """
+
+    k_train: int = 5000
+    k_views: tuple[int, ...] = (40, 1000)
+    cluster_view: int = 40
+
+    def __post_init__(self) -> None:
+        if self.cluster_view not in (self.k_train, *self.k_views):
+            raise ValueError(
+                f"cluster_view={self.cluster_view} must be k_train ({self.k_train}) or one of k_views ({self.k_views})"
+            )
+
+
+@dataclass(frozen=True)
+class PipelineScale:
+    """All scale-sensitive knobs for :func:`reference_datakit_steps`.
+
+    ``DEFAULT_SCALE`` reproduces the production full-fleet sizing; ``SMOKE_SCALE``
+    shrinks K, sample size, worker resources, and fan-out so the same DAG runs
+    end-to-end on a handful of small sources. Resource/worker fields are
+    deliberately excluded from every step's ``hash_attrs`` (they are execution
+    policy, not content), so a smoke run shares the per-source embed / tokenize /
+    decontam / minhash / quality caches with a full run -- only the K-dependent
+    steps (sample / train / assign / store / dedup) get distinct output paths.
+    """
+
+    cluster: ClusterConfig = field(default_factory=ClusterConfig)
+    embed_batch_size: int = 4096
+    assign_batch_size: int = 4096
+
+    # Inline domain training (when the caller does not pre-stage centroids).
+    # ~100 sources x 100k = ~10M-row centroid sample, matching exp_full_clusters.
+    n_per_source_for_sample: int = 100_000
+    sample_worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=2, ram="4g"))
+    sample_max_workers: int = 256
+    # FAISS K=5000 on 10M x 192 wants every core it can get.
+    train_centroids_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_cpu(cpu=32, ram="64g"))
+
+    # Embed / assign mirror exp_full_clusters defaults (region unpinned).
+    embed_worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=8, ram="64g"))
+    assign_worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=4, ram="32g"))
+    coordinator_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_cpu(cpu=2, ram="4g"))
+    embed_max_workers_per_source: int = 512
+    assign_max_workers_per_source: int = 512
+
+    # Tokenize.
+    tokenize_worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
+    tokenize_max_workers: int = 1024
+
+    # Minhash / dedup mirror all_sources_fuzzy defaults.
+    minhash_worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=5, ram="32g", disk="5g"))
+    dedup_max_parallelism: int = 4096
+    dedup_worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=3, ram="32g", disk="5g"))
+    dedup_coordinator_resources: ResourceConfig = field(
+        default_factory=lambda: ResourceConfig(cpu=1, ram="3.5g", preemptible=False)
+    )
+
+    # Decontam shares all knobs with all_sources_decon (imported above).
+    decontam_worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=2, ram="16g"))
+
+    # Store.
+    store_worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=2, ram="32g"))
+    store_max_workers: int = 2048 + 1024
+
+
+DEFAULT_SCALE = PipelineScale()
+"""Production full-fleet sizing (every ``all_sources()`` entry, K=5000)."""
+
+SMOKE_SCALE = PipelineScale(
+    cluster=ClusterConfig(k_train=64, k_views=(8, 16), cluster_view=8),
+    n_per_source_for_sample=20_000,
+    sample_max_workers=16,
+    # K=64 on a few-thousand-row sample is seconds on a handful of cores.
+    train_centroids_resources=ResourceConfig.with_cpu(cpu=4, ram="8g"),
+    embed_worker_resources=ResourceConfig(cpu=8, ram="16g"),
+    assign_worker_resources=ResourceConfig(cpu=2, ram="8g"),
+    embed_max_workers_per_source=32,
+    assign_max_workers_per_source=32,
+    tokenize_max_workers=32,
+    minhash_worker_resources=ResourceConfig(cpu=2, ram="8g", disk="5g"),
+    dedup_max_parallelism=64,
+    dedup_worker_resources=ResourceConfig(cpu=2, ram="8g", disk="5g"),
+    decontam_worker_resources=ResourceConfig(cpu=2, ram="8g"),
+    store_worker_resources=ResourceConfig(cpu=2, ram="8g"),
+    store_max_workers=64,
+)
+"""Small-data sizing: a few sources, K=64, modest workers -- a true e2e smoke."""
+
+
+def select_sources(names: list[str] | None = None) -> dict[str, StepSpec]:
+    """Map source names to their normalize StepSpec; ``None`` selects every source.
+
+    Raises ``KeyError`` (listing the unknown names) if any requested name isn't
+    in :func:`marin.datakit.sources.all_sources`.
+    """
+    registry = all_sources()
+    if names is None:
+        selected = registry
+    else:
+        unknown = [n for n in names if n not in registry]
+        if unknown:
+            raise KeyError(f"unknown sources {unknown}; known: {sorted(registry)}")
+        selected = {n: registry[n] for n in names}
+    sources = {name: src.normalized for name, src in selected.items()}
+    logger.info("select_sources: %d sources (%s)", len(sources), "all" if names is None else ", ".join(names))
     return sources
 
 
-def _build_embed_step(name: str, normalize_step: StepSpec) -> StepSpec:
+def default_sources() -> dict[str, StepSpec]:
+    """Every ``all_sources()`` entry, mapped to its normalize StepSpec."""
+    return select_sources(None)
+
+
+def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale) -> StepSpec:
     return StepSpec(
         name=f"datakit/embed/{name}",
         deps=[normalize_step],
         hash_attrs={
             "luxical_repo": LUXICAL_REPO,
             "luxical_weights": LUXICAL_WEIGHTS_FILE,
-            "batch_size": EMBED_BATCH_SIZE,
+            "batch_size": scale.embed_batch_size,
             "v": 1,
         },
         fn=remote(
             lambda output_path, np=normalize_step.output_path: embed_source(
                 output_path=output_path,
                 normalized=Artifact.from_path(np, NormalizedData),
-                batch_size=EMBED_BATCH_SIZE,
-                worker_resources=EMBED_WORKER_RESOURCES,
-                max_workers=EMBED_MAX_WORKERS_PER_SOURCE,
+                batch_size=scale.embed_batch_size,
+                worker_resources=scale.embed_worker_resources,
+                max_workers=scale.embed_max_workers_per_source,
             ),
-            resources=COORDINATOR_RESOURCES,
+            resources=scale.coordinator_resources,
             pip_dependency_groups=["datakit"],
         ),
     )
 
 
-def build_per_source_embed_steps(sources: dict[str, StepSpec]) -> dict[str, StepSpec]:
+def build_per_source_embed_steps(
+    sources: dict[str, StepSpec], scale: PipelineScale = DEFAULT_SCALE
+) -> dict[str, StepSpec]:
     """Build the Luxical embed StepSpec for each source.
 
     ``sources`` maps source name → normalize StepSpec; the embed step is built
@@ -212,45 +306,46 @@ def build_per_source_embed_steps(sources: dict[str, StepSpec]) -> dict[str, Step
     the domain training subgraph (via :func:`build_train_centroids_step`) can
     share the same embeds across both wirings.
     """
-    return {name: _build_embed_step(name, step) for name, step in sources.items()}
+    return {name: _build_embed_step(name, step, scale) for name, step in sources.items()}
 
 
-def build_train_centroids_step(embed_steps: dict[str, StepSpec]) -> StepSpec:
+def build_train_centroids_step(embed_steps: dict[str, StepSpec], scale: PipelineScale = DEFAULT_SCALE) -> StepSpec:
     """Build the K-means training StepSpec for the domain centroids.
 
-    The returned step's ``output_path`` contains ``centroids_<K_TRAIN>.npy``
-    plus ``lookup_<K_TRAIN>_to_<k>.npy`` for each ``k`` in ``K_VIEWS`` -- the
-    same layout :func:`reference_datakit_steps` consumes via its
+    The returned step's ``output_path`` contains ``centroids_<k_train>.npy``
+    plus ``lookup_<k_train>_to_<k>.npy`` for each ``k`` in ``scale.cluster.k_views``
+    -- the same layout :func:`reference_datakit_steps` consumes via its
     ``domain_centroids`` parameter when given a centroids path.
     """
+    cluster = scale.cluster
     sample_step = StepSpec(
         name="datakit/cluster/sample_centroids",
         deps=list(embed_steps.values()),
-        hash_attrs={"n_per_source": N_PER_SOURCE_FOR_SAMPLE, "format": "parquet", "v": 1},
+        hash_attrs={"n_per_source": scale.n_per_source_for_sample, "format": "parquet", "v": 1},
         fn=remote(
             lambda output_path, es={n: s.output_path for n, s in embed_steps.items()}: sample_centroid_inputs(
                 output_path=output_path,
                 embeddings={n: Artifact.from_path(p, EmbeddingAttrData) for n, p in es.items()},
-                n_per_source=N_PER_SOURCE_FOR_SAMPLE,
-                worker_resources=SAMPLE_WORKER_RESOURCES,
-                max_workers=SAMPLE_MAX_WORKERS,
+                n_per_source=scale.n_per_source_for_sample,
+                worker_resources=scale.sample_worker_resources,
+                max_workers=scale.sample_max_workers,
             ),
-            resources=COORDINATOR_RESOURCES,
+            resources=scale.coordinator_resources,
             pip_dependency_groups=["datakit"],
         ),
     )
     return StepSpec(
         name="datakit/cluster/train_centroids",
         deps=[sample_step],
-        hash_attrs={"k_train": K_TRAIN, "k_views": list(K_VIEWS), "v": 1},
+        hash_attrs={"k_train": cluster.k_train, "k_views": list(cluster.k_views), "v": 1},
         fn=remote(
             lambda output_path, sp=sample_step.output_path: train_centroids(
                 output_path=output_path,
                 sample_path=sp,
-                k_train=K_TRAIN,
-                k_views=K_VIEWS,
+                k_train=cluster.k_train,
+                k_views=cluster.k_views,
             ),
-            resources=TRAIN_CENTROIDS_RESOURCES,
+            resources=scale.train_centroids_resources,
             pip_dependency_groups=["datakit"],
         ),
     )
@@ -258,20 +353,21 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec]) -> StepSpec:
 
 def _resolve_centroids(
     domain_centroids: str | StepSpec,
+    cluster: ClusterConfig,
 ) -> tuple[str, dict[int, str], list[StepSpec], object]:
     """Return ``(centroids_uri, lookup_uris, extra_deps, hash_value)`` for assign."""
     if isinstance(domain_centroids, StepSpec):
         base = domain_centroids.output_path
         return (
-            f"{base}/centroids_{K_TRAIN}.npy",
-            {k: f"{base}/lookup_{K_TRAIN}_to_{k}.npy" for k in K_VIEWS},
+            f"{base}/centroids_{cluster.k_train}.npy",
+            {k: f"{base}/lookup_{cluster.k_train}_to_{k}.npy" for k in cluster.k_views},
             [domain_centroids],
             base,  # already includes a content hash; safe in hash_attrs
         )
     base = domain_centroids.rstrip("/")
     return (
-        f"{base}/centroids_{K_TRAIN}.npy",
-        {k: f"{base}/lookup_{K_TRAIN}_to_{k}.npy" for k in K_VIEWS},
+        f"{base}/centroids_{cluster.k_train}.npy",
+        {k: f"{base}/lookup_{cluster.k_train}_to_{k}.npy" for k in cluster.k_views},
         [],
         domain_centroids,
     )
@@ -314,6 +410,7 @@ def reference_datakit_steps(
     domain_centroids: str | StepSpec | None = None,
     quality_model: str | StepSpec | None = None,
     store_shards_per_task: int = 1,
+    scale: PipelineScale = DEFAULT_SCALE,
 ) -> DatakitSteps:
     """Build the reference Datakit DAG over the given normalize steps.
 
@@ -327,22 +424,29 @@ def reference_datakit_steps(
             :class:`marin.datakit.normalize.NormalizedData` artifact;
             misuse fails loudly the first time a downstream step tries
             ``Artifact.from_path(step, NormalizedData)``.
-        domain_centroids: A GCS directory holding ``centroids_<K_TRAIN>.npy``
-            and ``lookup_<K_TRAIN>_to_<k>.npy`` for each ``k`` in
-            ``K_VIEWS``; a StepSpec whose ``output_path`` will contain that
-            layout once it runs (see :func:`build_train_centroids_step`);
-            or ``None`` to train inline from the per-source embeds.
+        domain_centroids: A GCS directory holding ``centroids_<k_train>.npy``
+            and ``lookup_<k_train>_to_<k>.npy`` for each ``k`` in
+            ``scale.cluster.k_views``; a StepSpec whose ``output_path`` will
+            contain that layout once it runs (see
+            :func:`build_train_centroids_step`); or ``None`` to train inline
+            from the per-source embeds. When training inline, ``scale.cluster.k_train``
+            must not exceed the centroid sample size -- use a smaller K
+            (e.g. ``SMOKE_SCALE``) on small source sets.
         quality_model: A GCS path to a trained fasttext quality ``.bin``,
             or a StepSpec producing a ``FastTextModel`` artifact. ``None``
             is reserved for a future inline-training mode and currently
             raises :class:`NotImplementedError`.
         store_shards_per_task: Tuning knob for the final store step.
+        scale: Resource / K / fan-out sizing. ``DEFAULT_SCALE`` is the
+            production full-fleet shape; ``SMOKE_SCALE`` runs the same DAG
+            end-to-end on a few small sources.
     """
-    embed_steps = build_per_source_embed_steps(sources)
+    cluster = scale.cluster
+    embed_steps = build_per_source_embed_steps(sources, scale)
     if domain_centroids is None:
-        domain_centroids = build_train_centroids_step(embed_steps)
+        domain_centroids = build_train_centroids_step(embed_steps, scale)
 
-    centroids_uri, lookup_uris, centroids_deps, centroids_hash = _resolve_centroids(domain_centroids)
+    centroids_uri, lookup_uris, centroids_deps, centroids_hash = _resolve_centroids(domain_centroids, cluster)
     quality_model_step = _resolve_quality_model(quality_model)
 
     # One combined decontam bloom (no merge step); every per-source decon
@@ -368,8 +472,8 @@ def reference_datakit_steps(
             train_normalize=normalize_step,
             tokenizer=TOKENIZER,
             tokenizer_backend=TOKENIZER_BACKEND,
-            max_workers=TOKENIZE_MAX_WORKERS,
-            worker_resources=TOKENIZE_WORKER_RESOURCES,
+            max_workers=scale.tokenize_max_workers,
+            worker_resources=scale.tokenize_worker_resources,
         )
 
         # Domain assign: consumes the embed + the (given or trained) centroids.
@@ -380,9 +484,9 @@ def reference_datakit_steps(
             deps=[embed, *centroids_deps],
             hash_attrs={
                 "centroids_dir": centroids_hash,
-                "k_train": K_TRAIN,
-                "k_views": list(K_VIEWS),
-                "batch_size": ASSIGN_BATCH_SIZE,
+                "k_train": cluster.k_train,
+                "k_views": list(cluster.k_views),
+                "batch_size": scale.assign_batch_size,
                 "v": 1,
             },
             fn=remote(
@@ -391,11 +495,11 @@ def reference_datakit_steps(
                     embedding=Artifact.from_path(ep, EmbeddingAttrData),
                     centroids_uri=centroids_uri,
                     lookup_uris=lookup_uris,
-                    window_size=ASSIGN_BATCH_SIZE,
-                    worker_resources=ASSIGN_WORKER_RESOURCES,
-                    max_workers=ASSIGN_MAX_WORKERS_PER_SOURCE,
+                    window_size=scale.assign_batch_size,
+                    worker_resources=scale.assign_worker_resources,
+                    max_workers=scale.assign_max_workers_per_source,
                 ),
-                resources=COORDINATOR_RESOURCES,
+                resources=scale.coordinator_resources,
                 pip_dependency_groups=["datakit"],
             ),
         )
@@ -404,7 +508,7 @@ def reference_datakit_steps(
             name=f"datakit/quality/{name}",
             normalized=normalize_step,
             model_step=quality_model_step,
-            max_workers=ASSIGN_MAX_WORKERS_PER_SOURCE,
+            max_workers=scale.assign_max_workers_per_source,
         )
 
         decontam = decon_step(
@@ -415,7 +519,7 @@ def reference_datakit_steps(
             overlap_threshold=OVERLAP_THRESHOLD,
             estimated_doc_count=ESTIMATED_DOC_COUNT,
             false_positive_rate=FALSE_POSITIVE_RATE,
-            worker_resources=DECONTAM_WORKER_RESOURCES,
+            worker_resources=scale.decontam_worker_resources,
         )
 
         minhash = StepSpec(
@@ -424,7 +528,7 @@ def reference_datakit_steps(
             fn=lambda op, n=normalize_step: compute_minhash_attrs(
                 source=Artifact.from_path(n, NormalizedData),
                 output_path=op,
-                worker_resources=MINHASH_WORKER_RESOURCES,
+                worker_resources=scale.minhash_worker_resources,
             ),
         )
         minhash_steps.append(minhash)
@@ -445,10 +549,10 @@ def reference_datakit_steps(
         fn=lambda op: compute_fuzzy_dups_attrs(
             inputs=[Artifact.from_path(s, MinHashAttrData) for s in minhash_steps],
             output_path=op,
-            max_parallelism=DEDUP_MAX_PARALLELISM,
+            max_parallelism=scale.dedup_max_parallelism,
             cc_resume=True,
-            worker_resources=DEDUP_WORKER_RESOURCES,
-            coordinator_resources=DEDUP_COORDINATOR_RESOURCES,
+            worker_resources=scale.dedup_worker_resources,
+            coordinator_resources=scale.dedup_coordinator_resources,
         ),
     )
 
@@ -461,10 +565,10 @@ def reference_datakit_steps(
             quality={n: Artifact.from_path(s["quality"], LlmQualityOutput) for n, s in per_source.items()},
             dedup=Artifact.from_path(dedup, FuzzyDupsAttrData),
             output_path=output_path,
-            cluster_view=CLUSTER_VIEW,
+            cluster_view=cluster.cluster_view,
             split=SPLIT,
-            worker_resources=STORE_WORKER_RESOURCES,
-            max_workers=STORE_MAX_WORKERS,
+            worker_resources=scale.store_worker_resources,
+            max_workers=scale.store_max_workers,
             shards_per_task=store_shards_per_task,
         )
 
@@ -506,6 +610,22 @@ def main() -> None:
         help="GCS path to the trained fasttext quality model.bin from cluster/quality/v0",
     )
     parser.add_argument(
+        "--sources",
+        default=None,
+        help=(
+            "Comma-separated source names (keys of marin.datakit.sources.all_sources) to run. Omit to run every source."
+        ),
+    )
+    parser.add_argument(
+        "--scale",
+        choices=("full", "smoke"),
+        default="full",
+        help=(
+            "full: production sizing over all sources (K=5000). smoke: small resources + K=64 "
+            "for a quick e2e run -- pair with --sources and a few small sources."
+        ),
+    )
+    parser.add_argument(
         "--max-concurrent",
         type=int,
         default=None,
@@ -528,11 +648,15 @@ def main() -> None:
 
     configure_logging(logging.INFO)
 
+    names = [s.strip() for s in args.sources.split(",") if s.strip()] if args.sources else None
+    scale = SMOKE_SCALE if args.scale == "smoke" else DEFAULT_SCALE
+
     result = reference_datakit_steps(
-        default_sources(),
+        select_sources(names),
         domain_centroids=args.domain_centroids,
         quality_model=args.quality_model,
         store_shards_per_task=args.store_shards_per_task,
+        scale=scale,
     )
     StepRunner().run(result.all_steps, max_concurrent=args.max_concurrent)
 
