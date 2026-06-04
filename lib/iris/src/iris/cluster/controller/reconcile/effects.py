@@ -19,8 +19,6 @@ I/O sink that drains a :class:`ControllerEffects` to SQL lives in
 :mod:`iris.cluster.controller.reconcile.commit` (``commit_effects``).
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 
 from rigging.timing import Timestamp

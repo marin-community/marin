@@ -9,8 +9,6 @@ stats (per-slice idle tracking, backoff, cooldowns) and provides scaling policy
 helpers.
 """
 
-from __future__ import annotations
-
 import logging
 import math
 import threading

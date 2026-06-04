@@ -3,8 +3,6 @@
 
 """Snapshot loader: produces TransitionSnapshot instances for the kernel."""
 
-from __future__ import annotations
-
 from collections.abc import Iterable
 
 from rigging.timing import Timestamp

@@ -8,8 +8,6 @@ controller_secrets table. Verification is a pure crypto check plus an
 in-memory revocation set — no per-RPC database hit.
 """
 
-from __future__ import annotations
-
 import dataclasses
 import logging
 import secrets

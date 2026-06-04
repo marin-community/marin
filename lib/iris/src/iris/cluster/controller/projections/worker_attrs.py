@@ -15,8 +15,6 @@ cache that ``healthy_active_workers_with_attributes`` reads on the scheduler hot
 path.
 """
 
-from __future__ import annotations
-
 import logging
 import threading
 from collections.abc import Callable

@@ -3,8 +3,6 @@
 
 """Pure demand routing and capacity estimation for the autoscaler."""
 
-from __future__ import annotations
-
 import difflib
 import math
 import re

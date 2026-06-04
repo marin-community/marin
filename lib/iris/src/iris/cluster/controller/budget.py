@@ -3,8 +3,6 @@
 
 """Budget tracking: resource value function and per-user spend."""
 
-from __future__ import annotations
-
 import logging
 from collections import defaultdict
 from collections.abc import Iterable

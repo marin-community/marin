@@ -26,8 +26,6 @@ whether the termination counts as a failure. State is in-memory; on
 controller restart ``health`` resets to ``1.0``.
 """
 
-from __future__ import annotations
-
 import threading
 from enum import StrEnum
 

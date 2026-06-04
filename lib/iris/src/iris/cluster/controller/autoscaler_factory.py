@@ -9,8 +9,6 @@ without dragging autoscaler imports back into config (which would cycle
 through ``controller.db`` -> ``controller.projections``).
 """
 
-from __future__ import annotations
-
 import logging
 
 from iris.cluster.config import (

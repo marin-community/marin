@@ -17,8 +17,6 @@ The run_once() flow splits into two phases:
 - update(): CPU phase — evaluate demand and execute scale-up decisions
 """
 
-from __future__ import annotations
-
 import logging
 import urllib.error
 import urllib.request
@@ -161,7 +159,7 @@ class Autoscaler:
         threads: ThreadContainer | None = None,
         base_worker_config: config_pb2.WorkerConfig | None = None,
         db: ControllerDB | None = None,
-    ) -> Autoscaler:
+    ) -> "Autoscaler":
         """Create autoscaler from proto config.
 
         Args:
@@ -214,7 +212,7 @@ class Autoscaler:
         # Step 3: Shutdown platform (cleanup remaining threads)
         self._platform.shutdown()
 
-    def __enter__(self) -> Autoscaler:
+    def __enter__(self) -> "Autoscaler":
         return self
 
     def __exit__(self, *exc) -> None:

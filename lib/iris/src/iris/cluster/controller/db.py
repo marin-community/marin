@@ -27,8 +27,6 @@ SQL-committed-but-cache-not-yet-updated window because the lock is held
 until every hook has run.
 """
 
-from __future__ import annotations
-
 import importlib.util
 import logging
 import sqlite3

@@ -15,8 +15,6 @@ lines are deferred to ``cur``'s post-commit hooks so a rolled-back transaction
 leaves no observable trace.
 """
 
-from __future__ import annotations
-
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, func
 from sqlalchemy import literal as sa_literal
