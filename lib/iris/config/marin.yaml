@@ -9,6 +9,8 @@ platform:
     project_id: hai-gcp-models
 
 defaults:
+  ssh:
+    impersonate_service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
   autoscaler:
     evaluation_interval:
       milliseconds: 10000
