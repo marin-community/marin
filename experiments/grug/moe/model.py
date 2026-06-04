@@ -87,6 +87,7 @@ class GrugModelConfig:
     gla_expand_v: float = 1.0
     gla_use_short_conv: bool = False
     gla_conv_size: int = 4
+    gla_use_xsa: bool = False
     use_wall_attention: bool = False
     wall_chunk_size: int = 64
     wall_use_scalar_gate: bool = False
@@ -509,6 +510,7 @@ class Block(eqx.Module):
                 cfg.gla_expand_v,
                 cfg.gla_use_short_conv,
                 cfg.gla_conv_size,
+                cfg.gla_use_xsa,
                 key=attn_key,
             )
         else:

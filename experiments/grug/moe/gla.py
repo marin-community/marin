@@ -204,6 +204,8 @@ class GatedLinearAttention(eqx.Module):
     w_r: Float[Array, "D Nq_Dv"]
     w_o: Float[Array, "Nq_Dv D"]
     head_norm_weight: Float[Array, "Nq Dvh"]
+    q_norm_weight: Float[Array, "Nq Dk"]
+    k_norm_weight: Float[Array, "Nkv Dk"]
     conv_q: Array | None
     conv_k: Array | None
     conv_v: Array | None
@@ -214,6 +216,7 @@ class GatedLinearAttention(eqx.Module):
     chunk_size: int = eqx.field(static=True)
     use_short_conv: bool = eqx.field(static=True)
     conv_size: int = eqx.field(static=True)
+    use_xsa: bool = eqx.field(static=True)
     tau: float = eqx.field(static=True)
     eps: float = eqx.field(static=True)
 
@@ -228,6 +231,7 @@ class GatedLinearAttention(eqx.Module):
         expand_v: float = 1.0,
         use_short_conv: bool = False,
         conv_size: int = 4,
+        use_xsa: bool = False,
         *,
         key: PRNGKeyArray,
         eps: float = 1e-5,
@@ -258,6 +262,8 @@ class GatedLinearAttention(eqx.Module):
             w_r=reshard(_init_weight(kr, (d, qv_dim), initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(ko, (qv_dim, d), initializer_std), P("model", "data")),
             head_norm_weight=reshard(jnp.ones((num_heads, v_head_dim)), P(None, None)),
+            q_norm_weight=reshard(jnp.ones((num_heads, head_dim)), P(None, None)),
+            k_norm_weight=reshard(jnp.ones((num_kv_heads, head_dim)), P(None, None)),
             conv_q=_conv_init(q_dim) if use_short_conv else None,
             conv_k=_conv_init(kv_dim) if use_short_conv else None,
             conv_v=_conv_init(kv_v_dim) if use_short_conv else None,
@@ -268,6 +274,7 @@ class GatedLinearAttention(eqx.Module):
             chunk_size=chunk_size,
             use_short_conv=use_short_conv,
             conv_size=conv_size,
+            use_xsa=use_xsa,
             tau=float(_TAU),
             eps=eps,
         )
@@ -302,11 +309,11 @@ class GatedLinearAttention(eqx.Module):
         k = k.reshape(b, s, m, hd).astype(jnp.float32)
         v = v.reshape(b, s, m, hdv).astype(jnp.float32)
 
-        # QK RMSNorm over the head dim (deliberate addition over vanilla FLA GLA, which uses
-        # identity q,k; matches the Grug softmax attention that RMS-norms q,k, and stabilizes
-        # the q.k^T magnitudes feeding the linear-attention state).
-        q = _rmsnorm_last(q)
-        k = _rmsnorm_last(k)
+        # Parametric headwise QK RMSNorm over the head dim (learnable per-head/per-channel scale;
+        # deliberate addition over vanilla FLA GLA, which uses identity q,k). Stabilizes the q.k^T
+        # magnitudes feeding the linear-attention state.
+        q = _rmsnorm_last(q) * self.q_norm_weight
+        k = _rmsnorm_last(k) * self.k_norm_weight
 
         # Data-dependent forget gate (low-rank), per KV head: alpha = sigmoid(z)^(1/tau);
         # log alpha = -softplus(-z)/tau <= 0.
@@ -332,6 +339,14 @@ class GatedLinearAttention(eqx.Module):
         if seg is not None:
             seg = reshard(seg, P(("data", "expert"), None))
         o = gla_chunk(q, k, v, log_alpha, self.chunk_size, seg)  # [B,S,H,Dvh] fp32
+
+        # Exclusive Self-Attention (XSA): subtract the component of each head's output parallel
+        # to that token's own value v_i: z_i = o_i - (o_i . v_i / ||v_i||^2) v_i, per head.
+        # Matches CausalSelfAttention's XSA (applied to the raw attention output, pre-gate).
+        if self.use_xsa:
+            dot = jnp.sum(o * v, axis=-1, keepdims=True)
+            v_norm_sq = jnp.sum(v * v, axis=-1, keepdims=True)
+            o = o - (dot / (v_norm_sq + 1e-6)) * v
 
         # Per-head RMSNorm on the head output, then concat.
         var = jnp.mean(jnp.square(o), axis=-1, keepdims=True)
