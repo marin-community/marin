@@ -11,6 +11,7 @@ live on a separate ``auth_metadata`` because they are stored in the attached
 import json
 import threading
 from collections import OrderedDict
+from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from rigging.timing import Timestamp
@@ -501,6 +502,19 @@ reservation_claims_table = Table(
     Column("job_id", String, nullable=False),
     Column("entry_idx", Integer, nullable=False),
 )
+
+
+@dataclass(frozen=True)
+class ReservationClaim:
+    """A claim binding a worker to a specific reservation entry.
+
+    The controller assigns unclaimed workers to unsatisfied reservation entries
+    each scheduling cycle. Once every entry for a job is claimed, the
+    reservation gate opens and the job's tasks can be scheduled.
+    """
+
+    job_id: str
+    entry_idx: int
 
 
 user_budgets_table = Table(

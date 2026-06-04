@@ -29,9 +29,9 @@ from sqlalchemy.exc import IntegrityError
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.reads import ReservationClaim
 from iris.cluster.controller.schema import (
     USER_ROLE_DEFAULT,
+    ReservationClaim,
     job_config_table,
     jobs_table,
     meta_table,

@@ -57,7 +57,6 @@ from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.pruner import prune_old_data
-from iris.cluster.controller.reads import ReservationClaim
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
@@ -87,6 +86,7 @@ from iris.cluster.controller.scheduling_policy import (
     run_preemption_pass,
 )
 from iris.cluster.controller.schema import (
+    ReservationClaim,
     job_config_table,
     task_attempts_table,
     tasks_table,

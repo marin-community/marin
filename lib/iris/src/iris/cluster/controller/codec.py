@@ -37,6 +37,10 @@ class WorkerAttributeRow(Protocol):
 # Shared kwargs for MessageToDict so every call site is consistent.
 _TO_DICT_OPTS = dict(preserving_proto_field_name=True, use_integers_for_enums=True)
 
+# Maxsize for the JSON->proto decode caches. Sized to comfortably hold the
+# distinct JSON column values in flight across a scheduling cycle.
+_CODEC_CACHE_SIZE = 8192
+
 
 # ---------------------------------------------------------------------------
 # Generic helpers
@@ -48,7 +52,7 @@ def proto_to_json(msg) -> str:
     return json.dumps(json_format.MessageToDict(msg, **_TO_DICT_OPTS))
 
 
-@functools.lru_cache(maxsize=8192)
+@functools.lru_cache(maxsize=_CODEC_CACHE_SIZE)
 def proto_from_json(json_str: str, proto_cls):
     """Deserialize a JSON string into a new protobuf message of *proto_cls*."""
     return json_format.ParseDict(json.loads(json_str), proto_cls())
@@ -73,7 +77,7 @@ def constraints_to_json(constraints: Iterable[job_pb2.Constraint]) -> str | None
     return json.dumps(items) if items else None
 
 
-@functools.lru_cache(maxsize=8192)
+@functools.lru_cache(maxsize=_CODEC_CACHE_SIZE)
 def constraints_from_json(constraints_json: str | None) -> list[Constraint]:
     """Deserialize a JSON array of constraints to native Constraint objects.
 
@@ -117,7 +121,7 @@ class DeviceCounts(NamedTuple):
     tpu: int
 
 
-@functools.lru_cache(maxsize=8192)
+@functools.lru_cache(maxsize=_CODEC_CACHE_SIZE)
 def device_counts_from_json(device_json: str | None) -> DeviceCounts:
     """Cached parse of `job_config.res_device_json` into device counts.
 
@@ -131,7 +135,7 @@ def device_counts_from_json(device_json: str | None) -> DeviceCounts:
     return DeviceCounts(gpu=get_gpu_count(device), tpu=get_tpu_count(device))
 
 
-@functools.lru_cache(maxsize=8192)
+@functools.lru_cache(maxsize=_CODEC_CACHE_SIZE)
 def device_variant_from_json(device_json: str | None) -> str | None:
     """Cached parse of ``job_config.res_device_json`` into a device variant string.
 
