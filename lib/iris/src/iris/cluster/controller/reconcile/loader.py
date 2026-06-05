@@ -3,8 +3,6 @@
 
 """Snapshot loader: produces TransitionSnapshot instances for the kernel."""
 
-from __future__ import annotations
-
 from collections.abc import Iterable
 
 from rigging.timing import Timestamp
@@ -150,7 +148,8 @@ def _bulk_load_job_state_basis(
     return result
 
 
-def _load_all_tasks_for_jobs(cur: Tx, job_ids: Iterable[JobName]):
+def _load_all_tasks_for_jobs(cur: Tx, job_ids: Iterable[JobName]) -> dict[JobName, tuple[TaskHistogramRow, ...]]:
+    """Load every task row for ``job_ids``, grouped by job and sorted by task index."""
     ids = list(job_ids)
     if not ids:
         return {}

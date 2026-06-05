@@ -3,8 +3,6 @@
 
 """Pure demand routing and capacity estimation for the autoscaler."""
 
-from __future__ import annotations
-
 import difflib
 import math
 import re
@@ -66,35 +64,6 @@ class VmBin:
         self.disk_remaining -= req.disk_bytes
 
 
-def first_fit_decreasing(reqs: list[AdditiveReq], vm_capacity: AdditiveReq) -> int:
-    """Pack requests into VMs using first-fit decreasing, returning VMs needed."""
-
-    if not reqs:
-        return 0
-    reqs_sorted = sorted(
-        reqs,
-        key=lambda r: (r.disk_bytes, r.memory_bytes, r.cpu_millicores),
-        reverse=True,
-    )
-    used: list[VmBin] = []
-    for req in reqs_sorted:
-        placed = False
-        for bin_state in used:
-            if bin_state.can_fit(req):
-                bin_state.place(req)
-                placed = True
-                break
-        if not placed:
-            bin_state = VmBin(
-                cpu_remaining=vm_capacity.cpu_millicores,
-                memory_remaining=vm_capacity.memory_bytes,
-                disk_remaining=vm_capacity.disk_bytes,
-            )
-            bin_state.place(req)
-            used.append(bin_state)
-    return len(used)
-
-
 def _effective_vm_capacity(group: ScalingGroup) -> AdditiveReq | None:
     """Per-VM capacity for bin packing, with 0-means-unlimited semantics."""
 
@@ -139,7 +108,7 @@ class RoutingBudget:
             return False
         if entry.invalid_reason:
             return False
-        if not self.group.can_fit_resources(entry.resources):
+        if self.group.check_resource_fit(entry.resources) is not None:
             return False
 
         if entry.coschedule_group_id:

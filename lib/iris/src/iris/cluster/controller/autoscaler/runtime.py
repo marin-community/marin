@@ -17,8 +17,6 @@ The run_once() flow splits into two phases:
 - update(): CPU phase — evaluate demand and execute scale-up decisions
 """
 
-from __future__ import annotations
-
 import logging
 import urllib.error
 import urllib.request
@@ -37,7 +35,7 @@ from iris.cluster.controller.autoscaler.models import (
 from iris.cluster.controller.autoscaler.operations import (
     terminate_slices_for_workers as terminate_slices_for_workers_operation,
 )
-from iris.cluster.controller.autoscaler.planning import ScalePlan, build_scale_plan
+from iris.cluster.controller.autoscaler.planning import build_scale_plan
 from iris.cluster.controller.autoscaler.recovery import (
     load_autoscaler_checkpoint,
     restore_autoscaler_state,
@@ -141,14 +139,11 @@ class Autoscaler:
         # Bounded log of recent autoscaler actions for dashboard/debugging
         self._action_log: deque[vm_pb2.AutoscalerAction] = deque(maxlen=100)
 
-        # Most recent routing decision (for status API)
-        self._last_scale_plan: ScalePlan | None = None
         self._last_evaluation: Timestamp = Timestamp.from_ms(0)
 
-        # Derived views of _last_scale_plan, built lazily and invalidated by
-        # evaluate(). Dashboard polls (GetJobStatus, ListJobs) hit these on
-        # every pending job; building them per request was the bottleneck
-        # described in #4844.
+        # Most recent routing decision, materialized as status protos. Dashboard
+        # polls (GetJobStatus, ListJobs) hit these on every pending job; building
+        # them per request was the bottleneck described in #4844.
         self._last_routing_decision_proto: vm_pb2.RoutingDecision | None = None
         self._last_pending_hints: dict[str, PendingHint] | None = None
 
@@ -164,7 +159,7 @@ class Autoscaler:
         threads: ThreadContainer | None = None,
         base_worker_config: config_pb2.WorkerConfig | None = None,
         db: ControllerDB | None = None,
-    ) -> Autoscaler:
+    ) -> "Autoscaler":
         """Create autoscaler from proto config.
 
         Args:
@@ -217,7 +212,7 @@ class Autoscaler:
         # Step 3: Shutdown platform (cleanup remaining threads)
         self._platform.shutdown()
 
-    def __enter__(self) -> Autoscaler:
+    def __enter__(self) -> "Autoscaler":
         return self
 
     def __exit__(self, *exc) -> None:
@@ -287,7 +282,6 @@ class Autoscaler:
 
         routing_decision = route_demand(list(self._groups.values()), demand_entries, ts)
         scale_plan = build_scale_plan(self._groups, routing_decision, ts)
-        self._last_scale_plan = scale_plan
         # Build cached views eagerly here so dashboard/service RPCs never pay
         # the conversion cost on the hot path (#4844).
         self._last_routing_decision_proto = routing_decision_to_proto(

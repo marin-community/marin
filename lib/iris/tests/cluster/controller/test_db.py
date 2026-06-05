@@ -264,14 +264,14 @@ def test_transaction_rollback_on_exception(db: ControllerDB) -> None:
     assert len(rows) == 0
 
 
-def test_on_commit_hook_fires(db: ControllerDB) -> None:
-    """on_commit alias fires post-commit hooks just like register."""
+def test_register_hook_fires(db: ControllerDB) -> None:
+    """register fires post-commit hooks after the surrounding commit."""
     _create_simple_table(db)
     calls: list[int] = []
 
     with db.transaction() as cur:
         cur.execute(text("INSERT INTO kv (key, value) VALUES (:k, :v)"), {"k": "a", "v": "1"})
-        cur.on_commit(lambda: calls.append(1))
+        cur.register(lambda: calls.append(1))
 
     assert calls == [1]
 

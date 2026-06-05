@@ -473,13 +473,13 @@ watch(() => props.taskId, async () => {
         </div>
       </div>
 
-      <ProfileHistory :source="taskId" class="mb-6" />
-
       <!-- Task logs -->
       <div id="task-logs-section" class="mb-6">
         <h3 class="text-sm font-semibold text-text mb-3">Logs</h3>
         <LogViewer ref="logViewerRef" :task-id="taskId" :attempts="task.attempts" :current-attempt-id="task.currentAttemptId" />
       </div>
+
+      <ProfileHistory :source="taskId" class="mb-6" />
     </template>
   </PageShell>
 </template>

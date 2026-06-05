@@ -7,7 +7,6 @@ import asyncio
 import atexit
 import enum
 import logging
-import sys
 import tempfile
 import threading
 import time
@@ -114,9 +113,6 @@ from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenPro
 
 logger = logging.getLogger(__name__)
 
-# Sentinel for dry-run scheduling with per-worker limits disabled.
-_UNLIMITED = sys.maxsize
-
 # Sync Connect RPC handlers are dispatched via ``asyncio.to_thread``, which
 # uses the running loop's default executor. asyncio's default executor sizes
 # at ``min(32, os.cpu_count() + 4)`` — only 8 threads on a 4-vCPU controller
@@ -187,17 +183,11 @@ class ControllerConfig:
     against every healthy worker. The Reconcile RPC is the sole channel that
     dispatches new ASSIGNED rows and observes worker-side state changes."""
 
-    max_dispatch_parallelism: int = 32
-    """Maximum number of concurrent RPC dispatch operations."""
-
     max_tasks_per_job_per_cycle: int = 4
     """Maximum tasks from a single non-coscheduled job to consider per scheduling
     cycle. Bounds CPU time in the scheduler when many tasks are pending, preventing
     GIL starvation of the heartbeat thread. Coscheduled jobs are exempt (they need
     all tasks for atomic assignment). Set to 0 for unlimited."""
-
-    autoscaler_enabled: bool = False
-    worker_access_address: str = ""
 
     checkpoint_interval: Duration | None = None
     """If set, take a periodic best-effort snapshot this often.

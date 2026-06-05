@@ -111,12 +111,12 @@ const totalBytes = computed(() => {
       <RpcStatsPanel />
     </div>
 
-    <ProfileHistory source="/system/controller" />
-
     <!-- Process logs -->
     <div>
       <h3 class="text-sm font-semibold text-text mb-3">Controller Logs</h3>
       <LogViewer source="controller" />
     </div>
+
+    <ProfileHistory source="/system/controller" class="mt-6" />
   </div>
 </template>

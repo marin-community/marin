@@ -171,7 +171,7 @@ class WorkerProvider:
 
         return asyncio.run(_run())
 
-    async def _reconcile_one_via_reconcile(
+    async def _reconcile_one(
         self,
         sem: asyncio.Semaphore,
         plan: WorkerReconcilePlan,
@@ -204,9 +204,7 @@ class WorkerProvider:
 
         async def _run() -> list[ReconcileResult]:
             sem = asyncio.Semaphore(self.parallelism)
-            return await asyncio.gather(
-                *(self._reconcile_one_via_reconcile(sem, p, addresses[p.worker_id]) for p in plans)
-            )
+            return await asyncio.gather(*(self._reconcile_one(sem, p, addresses[p.worker_id]) for p in plans))
 
         return asyncio.run(_run())
 

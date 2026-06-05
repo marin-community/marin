@@ -463,8 +463,6 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
         </div>
       </div>
 
-      <ProfileHistory :source="`/system/worker/${workerId}`" class="mb-6" />
-
       <!-- Bootstrap logs (raw text) -->
       <div v-if="data.bootstrapLogs" class="mb-6">
         <h3 class="text-sm font-semibold text-text mb-3">Bootstrap Logs</h3>
@@ -473,6 +471,8 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
           style="max-height: 40vh"
         >{{ data.bootstrapLogs }}</pre>
       </div>
+
+      <ProfileHistory :source="`/system/worker/${workerId}`" class="mb-6" />
     </template>
   </PageShell>
 </template>

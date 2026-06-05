@@ -9,8 +9,6 @@ without dragging autoscaler imports back into config (which would cycle
 through ``controller.db`` -> ``controller.projections``).
 """
 
-from __future__ import annotations
-
 import logging
 
 from iris.cluster.config import (
@@ -26,7 +24,6 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
 from iris.time_proto import duration_from_proto
 
@@ -39,7 +36,6 @@ def create_autoscaler(
     scale_groups: dict[str, config_pb2.ScaleGroupConfig],
     label_prefix: str,
     base_worker_config: config_pb2.WorkerConfig | None = None,
-    threads: ThreadContainer | None = None,
     db: ControllerDB | None = None,
 ) -> Autoscaler:
     """Create autoscaler from WorkerInfraProvider and explicit config.
@@ -51,7 +47,6 @@ def create_autoscaler(
         label_prefix: Prefix for labels on managed resources
         base_worker_config: Base worker configuration passed through to platform.create_slice().
             None disables bootstrap (test/local mode).
-        threads: Thread container for background threads. Uses global default if not provided.
         db: Optional DB handle for write-through persistence.
 
     Returns:
@@ -60,8 +55,6 @@ def create_autoscaler(
     Raises:
         ValueError: If autoscaler_config has invalid timing values
     """
-    threads = threads or get_thread_container()
-
     _validate_autoscaler_config(autoscaler_config, context="create_autoscaler")
     _validate_scale_group_resources(_scale_groups_to_config(scale_groups))
 

@@ -20,6 +20,7 @@ import InfoRow from '@/components/shared/InfoRow.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
+import ProfileHistory from '@/components/shared/ProfileHistory.vue'
 import { useMediaQuery } from '@/composables/useMediaQuery'
 
 // Tailwind's `sm` breakpoint is 640px. Cards on mobile, table on desktop.
@@ -1357,6 +1358,9 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         </h3>
         <LogViewer :task-id="jobId" />
       </div>
+
+      <!-- Profile history (last 10 captures across this job's tasks; self-hides when empty) -->
+      <ProfileHistory :source="jobId" class="mb-6" />
     </template>
 
   </PageShell>

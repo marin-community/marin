@@ -47,9 +47,9 @@ task assignments until existing tasks complete their build phase.
 DEFAULT_MAX_ASSIGNMENTS_PER_WORKER = 1
 """Default limit for task assignments per worker per scheduling cycle.
 
-Set to 1 for normal scheduling (round-robin distribution). The dry-run in
-compute_demand_entries sets this to sys.maxsize so that a big worker with
-spare CPU can absorb multiple tasks, preventing false demand signals.
+Set to 1 for normal scheduling (round-robin distribution). Dry-run demand
+estimation raises this to an effectively unlimited value so a big worker
+with spare CPU can absorb multiple tasks, preventing false demand signals.
 """
 
 
@@ -66,7 +66,7 @@ class WorkerSnapshot:
     The ``committed_*`` fields hold the resources reserved by unfinished
     worker-bound attempts at cycle start; they are *not* persisted on the
     workers table — the controller fetches them per cycle from
-    ``reads.scheduler.resource_usage_by_worker``.
+    ``reads.resource_usage_by_worker``.
     """
 
     worker_id: WorkerId
@@ -175,7 +175,7 @@ class RejectionReason:
                 return f"Unknown rejection: {self.kind}"
 
 
-@dataclass
+@dataclass(frozen=True)
 class JobRequirements:
     """What a job needs from a worker. Scheduler's input type.
 

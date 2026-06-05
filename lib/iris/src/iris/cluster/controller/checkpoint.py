@@ -21,8 +21,6 @@ Autoscaler/scaling-group reconciliation lives in autoscaler.py and
 scaling_group.py respectively.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import shutil
