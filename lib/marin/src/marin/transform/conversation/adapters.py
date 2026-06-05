@@ -91,7 +91,12 @@ class TransformAdapter:
     def transform_conversation_to_openai_format(
         self,
         row: dict[str, Any],
-    ) -> list[OpenAIChatMessage]:
+    ) -> list[OpenAIChatMessage] | None:
+        """Convert a raw dataset *row* into OpenAI-format messages.
+
+        Returns ``None`` for rows that should be dropped (missing data or a
+        shape the adapter intentionally does not process); callers skip those.
+        """
         if self.dataset_format == InputDatasetFormat.INSTRUCTION_RESPONSE:
             messages = []
             instruction = row[self.instruction_column]
@@ -145,8 +150,9 @@ class TransformAdapter:
                 # We do not process rows that have more than one messages.
                 # This occurs in Dolphin-R1 reasoning, where instructions are
                 # sometimes part of the 'system' prompt instead of 'user' prompt.
-                # We handle misaligned data gracefully rather than crash.
-                return []
+                # Return None (not []) so the caller drops the row instead of
+                # emitting an empty conversation.
+                return None
             else:
                 instruction_content = instruction[0][self.content_key]
                 messages.append(OpenAIChatMessage(role="user", content=instruction_content))

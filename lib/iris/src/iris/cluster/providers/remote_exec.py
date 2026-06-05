@@ -255,6 +255,7 @@ class DirectSshRemoteExec:
         return cmd
 
     def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
+        # +5s buffer over the requested timeout so SSH's own ConnectTimeout fires first.
         return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout.to_seconds() + 5)
 
     def run_streaming(self, command: str) -> subprocess.Popen:
