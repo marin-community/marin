@@ -673,7 +673,7 @@ def _generate_borrow_subtraction(
     slice_: PplCircuitCoverageV2Slice, row_index: int, rng: random.Random, seed: int
 ) -> dict[str, object]:
     while True:
-        left = rng.randint(1000, 999999)
+        left = rng.randint(1001, 999999)
         right = rng.randint(1000, left - 1)
         borrow_positions = _subtraction_borrow_positions(left, right)
         if borrow_positions:

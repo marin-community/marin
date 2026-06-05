@@ -7,6 +7,7 @@ import unicodedata
 from experiments.evals.ppl_circuit_coverage_v2 import (
     PPL_CIRCUIT_COVERAGE_V2_SLICES,
     PplCircuitCoverageV2Family,
+    _generate_borrow_subtraction,
     iter_ppl_circuit_coverage_v2_plain_text_documents,
     iter_ppl_circuit_coverage_v2_records,
     ppl_circuit_coverage_v2_raw_validation_sets,
@@ -187,6 +188,28 @@ def test_selected_new_basic_functionality_targets_match_metadata():
         else:
             expected_stack.append(operation.split(" ", maxsplit=1)[1])
     assert stack["target"] == f"{expected_stack!r}\n"
+
+
+def test_borrow_subtraction_generator_handles_minimum_left_boundary():
+    class BoundaryRng:
+        def __init__(self) -> None:
+            self.values = [1001, 1000, 1010, 1009]
+
+        def randint(self, lower: int, upper: int) -> int:
+            if lower > upper:
+                raise ValueError(f"empty range for randrange() ({lower}, {upper + 1}, 0)")
+            value = self.values.pop(0)
+            assert lower <= value <= upper
+            return value
+
+    slice_ = next(slice_ for slice_ in PPL_CIRCUIT_COVERAGE_V2_SLICES if slice_.task_name == "borrow_subtraction")
+
+    row = _generate_borrow_subtraction(slice_, row_index=0, rng=BoundaryRng(), seed=6203)
+
+    assert row["metadata"]["left"] == 1010
+    assert row["metadata"]["right"] == 1009
+    assert row["metadata"]["borrow_positions"]
+    assert row["target"] == "1\n"
 
 
 def test_string_transform_targets_match_metadata():
