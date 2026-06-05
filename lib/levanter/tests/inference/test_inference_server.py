@@ -125,6 +125,25 @@ def test_merge_ready_batches_respects_prefill_prompt_budget():
     assert [[request.request_id for request in leftover] for leftover in leftovers] == [["req_2"], ["req_3"]]
 
 
+def test_merge_ready_batches_defers_later_batches_after_prompt_budget_overflow():
+    first_batch = InferenceBatch([_inference_request("req_0", n_generations=1, prompt_tokens=256, max_tokens=1)])
+    ready_batches = [
+        InferenceBatch([_inference_request("req_1", n_generations=1, prompt_tokens=800, max_tokens=1)]),
+        InferenceBatch([_inference_request("req_2", n_generations=1, prompt_tokens=128, max_tokens=1)]),
+    ]
+
+    merged, leftovers = _merge_ready_batches(
+        first_batch,
+        ready_batches,
+        max_seqs=16,
+        max_prompt_tokens_per_batch=1024,
+        max_tokens_per_batch=4096,
+    )
+
+    assert [request.request_id for request in merged] == ["req_0"]
+    assert [[request.request_id for request in leftover] for leftover in leftovers] == [["req_1"], ["req_2"]]
+
+
 @pytest.fixture(scope="module")
 def trainer_config():
     return TrainerConfig()

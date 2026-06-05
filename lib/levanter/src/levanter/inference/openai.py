@@ -147,6 +147,9 @@ def _merge_ready_batches(
     leftovers: list[InferenceBatch] = []
 
     for ready_batch in ready_batches:
+        if leftovers:
+            leftovers.append(InferenceBatch(ready_batch))
+            continue
         leftover = InferenceBatch()
         for request in ready_batch:
             if not leftover and _request_fits_batch(
