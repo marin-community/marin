@@ -58,6 +58,8 @@ class VLLMEngineConfig:
     gpu_memory_utilization: float
     seed: int = 0
     """Engine-level vLLM seed. TPU vLLM does not support per-request sampling seeds."""
+    max_num_batched_tokens: int = 1024
+    """Bound TPU vLLM prefill compile shape unless a caller explicitly opts into a larger batch."""
     canonical_model_name: str | None = None
     mode: InferenceMode = InferenceMode.SYNC
     load_format: str = "auto"
@@ -256,6 +258,7 @@ class vLLMInferenceContext(BaseInferenceContext):
             enforce_eager=engine_config.enforce_eager,
             kv_cache_metrics=engine_config.kv_cache_metrics,
             seed=engine_config.seed,
+            max_num_batched_tokens=engine_config.max_num_batched_tokens,
         )
 
     def tokenize_prompt(self, prompt: str, choice: Choice | None = None, system_prompt: str | None = None) -> np.ndarray:

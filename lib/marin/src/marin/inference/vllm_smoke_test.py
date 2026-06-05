@@ -22,6 +22,7 @@ def run_one_query(
     prompt: str,
     load_format: str | None,
     max_model_len: int | None,
+    max_num_batched_tokens: int | None,
     port: int | None,
     use_completions: bool,
 ) -> str:
@@ -32,6 +33,8 @@ def run_one_query(
         engine_kwargs["load_format"] = load_format
     if max_model_len is not None:
         engine_kwargs["max_model_len"] = max_model_len
+    if max_num_batched_tokens is not None:
+        engine_kwargs["max_num_batched_tokens"] = max_num_batched_tokens
 
     if is_object_store:
         model = ModelConfig(name="smoke-test-model", path=model_name_or_path, engine_kwargs=engine_kwargs)
@@ -114,6 +117,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Max model sequence length to configure vLLM with (default: 8192).",
     )
     parser.add_argument(
+        "--max-num-batched-tokens",
+        type=int,
+        default=None,
+        help="Override vLLM's max batched tokens. Defaults to the native vLLM TPU-safe setting.",
+    )
+    parser.add_argument(
         "--repeat",
         type=int,
         default=1,
@@ -166,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
                 prompt=args.prompt,
                 load_format=args.load_format,
                 max_model_len=args.max_model_len,
+                max_num_batched_tokens=args.max_num_batched_tokens,
                 port=args.port,
                 use_completions=args.use_completions,
             )
@@ -188,6 +198,7 @@ def main(argv: list[str] | None = None) -> int:
                     prompt=args.prompt,
                     load_format=args.load_format,
                     max_model_len=args.max_model_len,
+                    max_num_batched_tokens=args.max_num_batched_tokens,
                     port=args.port,
                     use_completions=args.use_completions,
                 )
@@ -205,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
         entrypoint=Entrypoint.from_callable(_run),
         resources=resources,
         environment=create_environment(
-            extras=["eval", "tpu", "vllm"],
+            extras=["eval", "vllm"],
             pip_packages=(),
             env_vars=env_vars or None,
         ),

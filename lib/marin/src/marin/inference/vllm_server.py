@@ -19,6 +19,7 @@ from rigging.filesystem import marin_prefix
 from marin.evaluation.evaluators.evaluator import ModelConfig
 
 logger = logging.getLogger(__name__)
+DEFAULT_TPU_MAX_NUM_BATCHED_TOKENS = 1024
 _REMOVED_VLLM_MODE_MESSAGE = (
     "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
     "Unset MARIN_VLLM_MODE or set it to 'native'."
@@ -76,6 +77,7 @@ class VllmServerHandle:
 def resolve_model_name_or_path(model: ModelConfig) -> tuple[str, ModelConfig]:
     """Resolve the `model` argument to pass to vLLM."""
     model = _maybe_enable_streaming(model)
+    model = _maybe_apply_tpu_engine_defaults(model)
     model_name_or_path = model.path if model.path is not None else model.name
     return model_name_or_path, model
 
@@ -134,6 +136,21 @@ def _maybe_enable_streaming(model: ModelConfig) -> ModelConfig:
     # `runai_streamer_sharded` only works for checkpoints that are already sharded
     # into `model-rank-*-part-*.safetensors`.
     engine_kwargs["load_format"] = "runai_streamer"
+    return dataclasses.replace(model, engine_kwargs=engine_kwargs)
+
+
+def _target_device_is_tpu() -> bool:
+    return os.environ.get("VLLM_TARGET_DEVICE", "tpu").strip().lower() == "tpu"
+
+
+def _maybe_apply_tpu_engine_defaults(model: ModelConfig) -> ModelConfig:
+    if not _target_device_is_tpu():
+        return model
+    if "max_num_batched_tokens" in model.engine_kwargs:
+        return model
+
+    engine_kwargs = dict(model.engine_kwargs)
+    engine_kwargs["max_num_batched_tokens"] = DEFAULT_TPU_MAX_NUM_BATCHED_TOKENS
     return dataclasses.replace(model, engine_kwargs=engine_kwargs)
 
 
@@ -313,6 +330,7 @@ _VLLM_ENV_DEFAULTS: tuple[tuple[str, str], ...] = (
     # architectures. flax_nnx currently fails without an auto mesh context, so
     # default to the vllm implementation unless the user overrides it.
     ("MODEL_IMPL_TYPE", "vllm"),
+    ("VLLM_TARGET_DEVICE", "tpu"),
     ("TPU_MIN_LOG_LEVEL", "3"),
     ("TPU_STDERR_LOG_LEVEL", "3"),
     ("JAX_ENABLE_COMPILATION_CACHE", "1"),

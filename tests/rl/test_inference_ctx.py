@@ -593,6 +593,7 @@ def test_vllm_sync_engine_receives_kv_cache_metrics_flag(monkeypatch):
 
     assert calls["kv_cache_metrics"] is True
     assert calls["seed"] == 0
+    assert calls["max_num_batched_tokens"] == 1024
 
 
 def test_vllm_sync_engine_receives_engine_seed(monkeypatch):
@@ -610,6 +611,7 @@ def test_vllm_sync_engine_receives_engine_seed(monkeypatch):
     vLLMInferenceContext._get_llm_engine(config)
 
     assert calls["seed"] == 1234
+    assert calls["max_num_batched_tokens"] == 1024
 
 
 def test_vllm_async_engine_receives_kv_cache_metrics_flag(monkeypatch):
@@ -632,6 +634,7 @@ def test_vllm_async_engine_receives_kv_cache_metrics_flag(monkeypatch):
 
     assert calls["kv_cache_metrics"] is True
     assert calls["seed"] == 0
+    assert calls["max_num_batched_tokens"] == 1024
 
 
 def test_vllm_async_engine_receives_engine_seed(monkeypatch):
@@ -649,6 +652,7 @@ def test_vllm_async_engine_receives_engine_seed(monkeypatch):
     vLLMInferenceContext._get_llm_engine(config)
 
     assert calls["seed"] == 1234
+    assert calls["max_num_batched_tokens"] == 1024
 
 
 def test_worker_extension_uses_public_sync_weights():

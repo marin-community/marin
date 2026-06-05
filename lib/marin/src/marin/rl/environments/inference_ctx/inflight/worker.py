@@ -187,6 +187,7 @@ class SyncVLLMWrapper:
         enforce_eager: bool = True,
         kv_cache_metrics: bool = False,
         seed: int = 0,
+        max_num_batched_tokens: int = 1024,
     ):
         if AsyncEngineArgs is None:
             raise RuntimeError("vLLM async engine is not available. Please install vLLM v1 with: pip install vllm")
@@ -205,6 +206,7 @@ class SyncVLLMWrapper:
             "enforce_eager": enforce_eager,
             "kv_cache_metrics": kv_cache_metrics,
             "seed": seed,
+            "max_num_batched_tokens": max_num_batched_tokens,
         }
         engine_args = AsyncEngineArgs(**engine_kwargs)
 

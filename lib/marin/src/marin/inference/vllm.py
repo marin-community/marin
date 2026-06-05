@@ -97,8 +97,8 @@ class BrokeredVllmSystemConfig:
     broker_resources: ResourceConfig = field(
         default_factory=lambda: ResourceConfig.with_cpu(cpu=2, ram="8g", disk="20g")
     )
-    # Worker jobs need the TPU/vLLM extras; the CPU parent only needs the base Marin environment.
-    worker_environment_extras: tuple[str, ...] = ("tpu", "vllm")
+    # The vllm extra is the TPU-targeted runtime; it conflicts with the general tpu extra.
+    worker_environment_extras: tuple[str, ...] = ("vllm",)
     # TPU/vLLM-specific env vars stay explicit at the entrypoint.
     worker_env_vars: Mapping[str, str] = field(default_factory=dict)
     # Actor startup waits on Iris endpoint registration.
