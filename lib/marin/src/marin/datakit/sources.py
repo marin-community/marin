@@ -38,6 +38,9 @@ from marin.datakit.download.nemotron_v2 import nemotron_v2_normalize_steps
 from marin.datakit.download.nsf_awards import nsf_awards_normalize_steps
 from marin.datakit.download.numinamath_tir import numinamath_tir_normalize_steps
 from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_normalize_steps
+from marin.datakit.download.penfever_minimax_m27_traces import (
+    penfever_minimax_m27_traces_normalize_steps,
+)
 from marin.datakit.download.starcoder2_extras import starcoder2_extras_normalize_steps
 from marin.datakit.download.superior_reasoning import superior_reasoning_normalize_steps
 from marin.datakit.download.svgfind import svgfind_creativecommons_normalize_steps
@@ -326,6 +329,29 @@ def all_sources() -> dict[str, DatakitSource]:
         },
     )
 
+    # penfever MiniMax-M2.7 @ 131k agentic traces: 12 sibling cohorts (one per
+    # source task-set), tracking issue marin-community/marin#6191. Token counts
+    # are rough estimates at ~40k Llama-3 tokens per trace (between SWE-rebench-
+    # openhands' ~112k tokens/row and gpt-oss-rollouts' lower per-row density);
+    # refine once a tokenized count is available.
+    penfever_minimax_m27_traces = _rows_flat(
+        penfever_minimax_m27_traces_normalize_steps,
+        {
+            "penfever-traces/minimax-m27-131k/nemotron-code-oracle-filtered": 0.43,
+            "penfever-traces/minimax-m27-131k/llm-verifier-freelancer": 0.30,
+            "penfever-traces/minimax-m27-131k/inferredbugs-sandboxes-verifier": 0.28,
+            "penfever-traces/minimax-m27-131k/code-contests-noblock": 0.24,
+            "penfever-traces/minimax-m27-131k/exp_rpt_e2egit-large": 0.20,
+            "penfever-traces/minimax-m27-131k/exp_rpt_methods2test-large-v3": 0.18,
+            "penfever-traces/minimax-m27-131k/exp_rpt_nemotron-junit": 0.16,
+            "penfever-traces/minimax-m27-131k/nl2bash-tasks-cleaned-oracle": 0.06,
+            "penfever-traces/minimax-m27-131k/exp_rpt_stack-junit-v6": 0.03,
+            "penfever-traces/minimax-m27-131k/exp_rpt_curriculum-easy": 0.02,
+            "penfever-traces/minimax-m27-131k/exp_rpt_e2egit-v2": 0.02,
+            "penfever-traces/minimax-m27-131k/exp_rpt_pymethods2test-v3": 0.02,
+        },
+    )
+
     # locuslab Safety Pretraining: moral_education, safeweb, and refuseweb
     # (fineweb_annotated is a score-annotated copy of FineWeb itself and is
     # excluded to avoid double-counting that corpus). Token counts measured
@@ -358,6 +384,7 @@ def all_sources() -> dict[str, DatakitSource]:
         *nemotron_sft,
         *nemotron_specialized,
         *nemotron_specialized_v1_1,
+        *penfever_minimax_m27_traces,
         *safety_pretraining,
     )
 
