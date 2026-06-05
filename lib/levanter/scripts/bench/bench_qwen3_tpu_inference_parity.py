@@ -56,6 +56,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "Qwen/Qwen3-8B"
 DEFAULT_MATRIX = "rl_decode_qwen3_8b_v1"
+DENSE_EXPANSION_MATRIX = "dense_qwen3_8b_v2"
 DEFAULT_WARMUP_ROUNDS = 2
 LEVANTER_COMPILED_SHAPE_BUCKETS = 2
 PARITY_DECODE_RATIO_TARGET = 0.85
@@ -216,18 +217,38 @@ class ReferenceLogitCheckResult:
 
 
 def matrix_cases(name: str) -> list[BenchmarkCase]:
-    if name != DEFAULT_MATRIX:
-        raise ValueError(f"Unknown matrix {name!r}. Supported: {DEFAULT_MATRIX}")
-    return [
-        BenchmarkCase("decode_b8_i1_o128_n1", active_sequences=8, input_tokens=1, output_tokens=128, n=1),
-        BenchmarkCase("decode_b8_i1_o512_n1", active_sequences=8, input_tokens=1, output_tokens=512, n=1),
-        BenchmarkCase("decode_b32_i1_o128_n1", active_sequences=32, input_tokens=1, output_tokens=128, n=1),
-        BenchmarkCase("decode_b32_i1_o512_n1", active_sequences=32, input_tokens=1, output_tokens=512, n=1),
-        BenchmarkCase("decode_b128_i1_o128_n1", active_sequences=128, input_tokens=1, output_tokens=128, n=1),
-        BenchmarkCase("decode_b128_i1_o512_n1", active_sequences=128, input_tokens=1, output_tokens=512, n=1),
-        BenchmarkCase("decode_b32_i1_o128_n4", active_sequences=32, input_tokens=1, output_tokens=128, n=4),
-        BenchmarkCase("decode_b32_i1_o512_n4", active_sequences=32, input_tokens=1, output_tokens=512, n=4),
-    ]
+    if name == DEFAULT_MATRIX:
+        return [
+            BenchmarkCase("decode_b8_i1_o128_n1", active_sequences=8, input_tokens=1, output_tokens=128, n=1),
+            BenchmarkCase("decode_b8_i1_o512_n1", active_sequences=8, input_tokens=1, output_tokens=512, n=1),
+            BenchmarkCase("decode_b32_i1_o128_n1", active_sequences=32, input_tokens=1, output_tokens=128, n=1),
+            BenchmarkCase("decode_b32_i1_o512_n1", active_sequences=32, input_tokens=1, output_tokens=512, n=1),
+            BenchmarkCase("decode_b128_i1_o128_n1", active_sequences=128, input_tokens=1, output_tokens=128, n=1),
+            BenchmarkCase("decode_b128_i1_o512_n1", active_sequences=128, input_tokens=1, output_tokens=512, n=1),
+            BenchmarkCase("decode_b32_i1_o128_n4", active_sequences=32, input_tokens=1, output_tokens=128, n=4),
+            BenchmarkCase("decode_b32_i1_o512_n4", active_sequences=32, input_tokens=1, output_tokens=512, n=4),
+        ]
+    if name == DENSE_EXPANSION_MATRIX:
+        return [
+            BenchmarkCase("decode_b32_i1_o128_n1", active_sequences=32, input_tokens=1, output_tokens=128, n=1),
+            BenchmarkCase("decode_b32_i1_o512_n1", active_sequences=32, input_tokens=1, output_tokens=512, n=1),
+            BenchmarkCase("decode_b32_i1_o2048_n1", active_sequences=32, input_tokens=1, output_tokens=2048, n=1),
+            BenchmarkCase("decode_b32_i1_o128_n4", active_sequences=32, input_tokens=1, output_tokens=128, n=4),
+            BenchmarkCase("decode_b32_i1_o512_n4", active_sequences=32, input_tokens=1, output_tokens=512, n=4),
+            BenchmarkCase("decode_b32_i1_o2048_n4", active_sequences=32, input_tokens=1, output_tokens=2048, n=4),
+            BenchmarkCase("mixed_b32_i128_o512_n1", active_sequences=32, input_tokens=128, output_tokens=512, n=1),
+            BenchmarkCase("mixed_b32_i512_o128_n1", active_sequences=32, input_tokens=512, output_tokens=128, n=1),
+            BenchmarkCase("mixed_b32_i512_o512_n1", active_sequences=32, input_tokens=512, output_tokens=512, n=1),
+            BenchmarkCase("mixed_b32_i512_o512_n4", active_sequences=32, input_tokens=512, output_tokens=512, n=4),
+            BenchmarkCase("mixed_b8_i512_o512_n1", active_sequences=8, input_tokens=512, output_tokens=512, n=1),
+            BenchmarkCase("prefill_b8_i2048_o128_n1", active_sequences=8, input_tokens=2048, output_tokens=128, n=1),
+            BenchmarkCase("prefill_b8_i2048_o128_n4", active_sequences=8, input_tokens=2048, output_tokens=128, n=4),
+            BenchmarkCase("pressure_b128_i1_o128_n1", active_sequences=128, input_tokens=1, output_tokens=128, n=1),
+            BenchmarkCase("pressure_b128_i1_o128_n4", active_sequences=128, input_tokens=1, output_tokens=128, n=4),
+            BenchmarkCase("churn_b64_i128_o512_n1", active_sequences=64, input_tokens=128, output_tokens=512, n=1),
+            BenchmarkCase("churn_b64_i128_o512_n4", active_sequences=64, input_tokens=128, output_tokens=512, n=4),
+        ]
+    raise ValueError(f"Unknown matrix {name!r}. Supported: {DEFAULT_MATRIX}, {DENSE_EXPANSION_MATRIX}")
 
 
 def find_open_port() -> int:

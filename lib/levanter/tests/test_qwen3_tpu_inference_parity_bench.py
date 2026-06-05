@@ -44,6 +44,49 @@ def test_rl_decode_matrix_cases_are_decode_heavy():
     assert any(case.n > 1 for case in cases)
 
 
+def test_dense_expansion_matrix_covers_required_workload_shapes():
+    cases = bench.matrix_cases(bench.DENSE_EXPANSION_MATRIX)
+
+    decode_cases = [case for case in cases if case.input_tokens == 1 and case.active_sequences == 32]
+    mixed_cases = [case for case in cases if case.input_tokens in {128, 512} and case.active_sequences in {8, 32}]
+    prefill_cases = [case for case in cases if case.input_tokens == 2048]
+    pressure_cases = [case for case in cases if case.active_sequences == 128]
+    churn_cases = [case for case in cases if case.active_sequences == 64]
+
+    assert {(case.output_tokens, case.n) for case in decode_cases} == {
+        (128, 1),
+        (512, 1),
+        (2048, 1),
+        (128, 4),
+        (512, 4),
+        (2048, 4),
+    }
+    assert {(case.active_sequences, case.input_tokens, case.output_tokens, case.n) for case in mixed_cases} == {
+        (32, 128, 512, 1),
+        (32, 512, 128, 1),
+        (32, 512, 512, 1),
+        (32, 512, 512, 4),
+        (8, 512, 512, 1),
+    }
+    assert {(case.active_sequences, case.output_tokens, case.n) for case in prefill_cases} == {
+        (8, 128, 1),
+        (8, 128, 4),
+    }
+    assert {(case.input_tokens, case.output_tokens, case.n) for case in pressure_cases} == {
+        (1, 128, 1),
+        (1, 128, 4),
+    }
+    assert {(case.input_tokens, case.output_tokens, case.n) for case in churn_cases} == {
+        (128, 512, 1),
+        (128, 512, 4),
+    }
+    assert {case.n for case in cases} == {1, 4}
+    assert all(case.input_tokens + case.output_tokens <= 4096 for case in cases)
+    assert any(case.input_tokens > case.output_tokens for case in cases)
+    assert any(case.input_tokens == case.output_tokens for case in cases)
+    assert any(case.active_sequences == 128 for case in cases)
+
+
 def test_matrix_rejects_unknown_name():
     with pytest.raises(ValueError, match="Unknown matrix"):
         bench.matrix_cases("prefill")
