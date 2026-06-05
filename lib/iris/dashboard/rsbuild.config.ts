@@ -27,6 +27,7 @@ export default defineConfig({
       '/iris.cluster.ControllerService': 'http://localhost:8080',
       '/finelog.logging.LogService': 'http://localhost:8080',
       '/iris.cluster.WorkerService': 'http://localhost:8081',
+      '/proxy': 'http://localhost:8080',
       '/bundles': 'http://localhost:8080',
       '/blobs': 'http://localhost:8080',
       '/health': 'http://localhost:8080',
