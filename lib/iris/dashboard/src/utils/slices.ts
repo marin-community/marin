@@ -8,12 +8,12 @@
  *
  * Two facts drive the logic here:
  *  - A booting slice has *no VMs yet* — its workers haven't registered. State
- *    must come from the authoritative `SliceInfo.state` field, falling back to
- *    "booting" (never "unknown") when an older controller omits it.
+ *    therefore comes from the authoritative `SliceInfo.state` field, not from
+ *    the VM list (which would render a booting slice as "unknown").
  *  - A co-scheduled job spans every host of a slice, so the raw scheduler
  *    buckets list the same job once per host. We dedupe to one entry per job.
  */
-import type { SliceInfo, VmInfo } from '@/types/rpc'
+import type { SliceInfo } from '@/types/rpc'
 import { timestampMs } from '@/utils/formatting'
 
 export type SliceLifecycle = 'requesting' | 'booting' | 'initializing' | 'ready' | 'failed'
@@ -56,33 +56,16 @@ const LIFECYCLE_VALUES: ReadonlySet<string> = new Set([
   'failed',
 ])
 
-function vmLifecycle(vm: VmInfo): SliceLifecycle {
-  const s = (vm.state ?? '').replace(/^VM_STATE_/, '').toLowerCase()
-  if (s === 'ready') return 'ready'
-  if (s === 'failed' || s === 'preempted' || s === 'unhealthy') return 'failed'
-  if (s === 'initializing') return 'initializing'
-  return 'booting' // booting / requesting / unspecified
-}
-
 /**
- * Resolve a slice's authoritative lifecycle state.
+ * Resolve a slice's lifecycle state from the authoritative `SliceInfo.state`.
  *
- * Prefers `SliceInfo.state`. When absent (controller predates the field), infers
- * from the VM list — and crucially treats a slice with no VMs as *booting*, not
- * unknown, because a slice's workers only appear after it provisions.
+ * The controller serves both this dashboard and the status RPC, so `state` is
+ * always one of the known lifecycle values. The default only guards against an
+ * unexpected wire value, and resolves to "booting" rather than "unknown".
  */
 export function sliceLifecycle(slice: SliceInfo): SliceLifecycle {
-  const declared = (slice.state ?? '').toLowerCase()
-  if (LIFECYCLE_VALUES.has(declared)) return declared as SliceLifecycle
-
-  if (slice.errorMessage) return 'failed'
-  const vms = slice.vms ?? []
-  if (vms.length === 0) return 'booting'
-  const states = vms.map(vmLifecycle)
-  if (states.some((x) => x === 'failed')) return 'failed'
-  if (states.every((x) => x === 'ready')) return 'ready'
-  if (states.some((x) => x === 'initializing')) return 'initializing'
-  return 'booting'
+  const state = (slice.state ?? '').toLowerCase()
+  return LIFECYCLE_VALUES.has(state) ? (state as SliceLifecycle) : 'booting'
 }
 
 /**

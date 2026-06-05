@@ -303,9 +303,8 @@ export interface SliceInfo {
   /**
    * Authoritative slice lifecycle state from the autoscaler:
    * "requesting" | "booting" | "initializing" | "ready" | "failed".
-   * Empty when served by a controller that predates this field — render via
-   * sliceLifecycle() in the autoscaler tab, which falls back to inferring the
-   * state from `vms` (a slice with no VMs is booting, never "unknown").
+   * Render this directly (via sliceLifecycle()); do NOT infer state from `vms`,
+   * which is empty until a slice's workers register — a booting slice has none.
    */
   state?: string
 }
