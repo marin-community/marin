@@ -11,7 +11,6 @@ requires-python = ">=3.11"
 dependencies = [
     # workspaces
     "marin-iris",
-    "marin-finelog",
     "marin-fray",
     "marin-haliax",
     "marin-levanter",
@@ -20,12 +19,18 @@ dependencies = [
     "marin-zephyr",
     # top level deps. try to keep these small.
     "watchdog",
-    # `>= 0.1.0.dev0` opts uv into pre-releases for this one package so the
-    # daily nightly published by .github/workflows/dupekit-release-wheels.yaml
-    # (`X.Y.Z.dev<YYYYMMDDhhmm>`) is picked up by `uv lock` automatically.
-    # Cut a stable tag (`dupekit-v<X.Y.Z>`) when promoting; uv prefers the
+    # `>= X.Y.Z.dev0` opts uv into pre-releases for these native (maturin)
+    # packages so the daily nightly wheels (`X.Y.Z.dev<YYYYMMDDhhmm>`) are
+    # picked up by `uv lock` automatically. Cut a stable tag
+    # (`dupekit-v<X.Y.Z>` / `finelog-v<X.Y.Z>`) when promoting; uv prefers the
     # higher version, so a stable supersedes any earlier dev of the same Z.
+    # Published by .github/workflows/dupekit-release-wheels.yaml.
     "marin-dupekit >= 0.1.0.dev0",
+    # Published by .github/workflows/finelog-release-wheels.yaml. marin-finelog
+    # carries a native in-process server ext (finelog._native), so it ships as
+    # a pre-built platform wheel rather than a pure-Python workspace member.
+    # `scripts/rust_mode.py dev` swaps in an editable source for local hacking.
+    "marin-finelog >= 0.2.0.dev0",
 ]
 
 [tool.uv]
@@ -99,9 +104,11 @@ conflicts = [
 ]
 
 [tool.uv.workspace]
+# marin-finelog is intentionally NOT a member: it is a native (maturin) package
+# consumed as a pre-built platform wheel (see [project] dependencies and the
+# RUST-DEV SOURCES block below), mirroring marin-dupekit.
 members = [
     "lib/iris",
-    "lib/finelog",
     "lib/fray",
     "lib/haliax",
     "lib/levanter",
@@ -112,7 +119,6 @@ members = [
 
 [tool.uv.sources]
 marin-iris = { workspace = true }
-marin-finelog = { workspace = true }
 marin-fray = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }

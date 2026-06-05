@@ -1,5 +1,5 @@
 [workspace]
-members = ["dupekit", "finelog"]
+members = ["dupekit", "finelog", "finelog/pyext"]
 resolver = "2"
 
 [profile.release]

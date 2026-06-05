@@ -7,7 +7,6 @@ and the admin API RPCs that expose them."""
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller import ops
 from iris.cluster.controller.auth import ControllerAuth
@@ -27,7 +26,6 @@ from iris.rpc.auth import VerifiedIdentity, _verified_identity
 from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_name, priority_band_value
 from rigging.timing import Timestamp
 
-from tests.cluster.conftest import fake_log_client_from_service
 from tests.cluster.controller.conftest import (
     MockController,
     make_controller_state,
@@ -282,7 +280,7 @@ def test_compute_user_spend_null_resources_proto(state):
 
 
 @pytest.fixture
-def service(state, tmp_path) -> ControllerServiceImpl:
+def service(state, tmp_path, log_client) -> ControllerServiceImpl:
     """ControllerServiceImpl wired with static-provider auth so that
     priority-band authorization triggers (see launch_job band check)."""
     from iris.cluster.controller.projections.endpoints import EndpointsProjection
@@ -292,7 +290,7 @@ def service(state, tmp_path) -> ControllerServiceImpl:
     return ControllerServiceImpl(
         controller=MockController(),
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_client=fake_log_client_from_service(LogServiceImpl()),
+        log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
         endpoints=EndpointsProjection(state._db),
