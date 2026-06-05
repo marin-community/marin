@@ -12,6 +12,7 @@
 
 pub mod optimizer;
 pub mod provider;
+pub mod sidecar;
 pub mod trigram_prune;
 pub mod udf;
 

@@ -130,11 +130,20 @@ impl TableProvider for NamespaceProvider {
                 if needles.is_empty() {
                     return Ok(plan);
                 }
+                // Key ranges (incl. the analyzer's synthesized prefix bounds) scope
+                // which segments' sidecars the prune reads — cheap expr inspection,
+                // done here before the blocking work.
+                let key_ranges = crate::query::trigram_prune::string_column_ranges(filters);
                 // Substring query: the sidecar + footer reads are blocking, so run
                 // the prune off the async worker.
                 let segment_paths = self.segment_paths.clone();
                 tokio::task::spawn_blocking(move || {
-                    crate::query::trigram_prune::apply_with_needles(plan, &segment_paths, &needles)
+                    crate::query::trigram_prune::apply_with_needles(
+                        plan,
+                        &segment_paths,
+                        &needles,
+                        &key_ranges,
+                    )
                 })
                 .await
                 .map_err(|e| {
@@ -369,7 +378,7 @@ mod tests {
         let (path, _) = write_segment_to_dir(dir, 1, 1, &batch).unwrap();
         // Build the sidecar the way the compactor would.
         assert!(
-            crate::store::trigram::write_sidecar(&path, &[batch], "data").unwrap(),
+            crate::store::trigram::write_sidecar(&path, &[batch], "data", Some("key")).unwrap(),
             "sidecar should be written for a data column"
         );
         path.to_string_lossy().into_owned()

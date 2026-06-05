@@ -28,15 +28,29 @@ use std::sync::Arc;
 
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfig, FileScanConfigBuilder};
 use datafusion::datasource::source::DataSourceExec;
-use datafusion::logical_expr::{Expr, Like};
+use datafusion::logical_expr::{BinaryExpr, Expr, Like, Operator};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
 use datafusion_datasource_parquet::ParquetAccessPlan;
 
+use crate::query::sidecar::SidecarManager;
 use crate::store::segment::segment_row_group_count;
-use crate::store::trigram::{
-    needle_trigrams, sidecar_path, TrigramIndex, INDEXED_COLUMN, MIN_TRIGRAM_LEN,
-};
+use crate::store::trigram::{needle_trigrams, sidecar_path, INDEXED_COLUMN, MIN_TRIGRAM_LEN};
+
+/// An inclusive key range constraining a single column, distilled from a query's
+/// top-level conjuncts. Used to scope which segments' sidecars are read: a
+/// segment whose key band can't overlap this range is pruned by the parquet key
+/// statistics anyway, so its blooms are never loaded.
+///
+/// Bounds are conservatively widened to *inclusive* (a strict `<` is treated as
+/// `<=`): widening can only keep a borderline segment in scope, never wrongly
+/// drop one — and skipping is a pure I/O optimization, so the safe direction is
+/// to over-include.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct StringRange {
+    pub lo: Option<Vec<u8>>,
+    pub hi: Option<Vec<u8>>,
+}
 
 /// Prunable substring needles from every top-level `contains(INDEXED_COLUMN, …)`
 /// or `INDEXED_COLUMN LIKE '%…%'` conjunct, filtered to those long enough to
@@ -54,21 +68,113 @@ pub fn indexed_column_needles(filters: &[Expr]) -> Vec<String> {
 }
 
 /// Inject access plans for already-extracted `needles`. Does the blocking
-/// sidecar + footer reads, so the provider runs it under `spawn_blocking`.
+/// sidecar + footer reads (routed through the [`SidecarManager`] cache), so the
+/// provider runs it under `spawn_blocking`. `key_ranges` (from
+/// [`string_column_ranges`]) scopes which segments are consulted by key band.
 /// Returns `plan` unchanged when `needles` is empty or nothing prunes.
 pub fn apply_with_needles(
     plan: Arc<dyn ExecutionPlan>,
     segment_paths: &[String],
     needles: &[String],
+    key_ranges: &HashMap<String, StringRange>,
 ) -> Arc<dyn ExecutionPlan> {
     if needles.is_empty() {
         return plan;
     }
-    let access_plans = build_access_plans(segment_paths, needles);
+    let access_plans = build_access_plans(segment_paths, needles, key_ranges);
     if access_plans.is_empty() {
         return plan;
     }
     rewrite_file_groups(plan, &access_plans)
+}
+
+/// Inclusive per-column key ranges implied by a query's top-level conjuncts.
+///
+/// Walks `filters` (descending through top-level `AND`s) for `column <cmp>
+/// <utf8 literal>` comparisons — including the `key >= P AND key < succ(P)`
+/// bounds the [`crate::query::optimizer::PrefixRangeRewrite`] synthesizes from a
+/// `prefix`/`LIKE`/anchored-regex predicate — and folds them into one inclusive
+/// `[lo, hi]` per column (lo = greatest lower bound, hi = least upper bound).
+/// Pure expr inspection, no I/O.
+pub fn string_column_ranges(filters: &[Expr]) -> HashMap<String, StringRange> {
+    let mut out: HashMap<String, StringRange> = HashMap::new();
+    for f in filters {
+        collect_ranges(f, &mut out);
+    }
+    out
+}
+
+/// Accumulate `column <cmp> literal` bounds from `expr`, descending through
+/// top-level conjunctions so a single `AND`-chained predicate contributes each
+/// of its comparisons.
+fn collect_ranges(expr: &Expr, out: &mut HashMap<String, StringRange>) {
+    match expr {
+        Expr::BinaryExpr(be) if be.op == Operator::And => {
+            collect_ranges(&be.left, out);
+            collect_ranges(&be.right, out);
+        }
+        Expr::BinaryExpr(be) => {
+            if let Some((column, op, value)) = col_literal_comparison(be) {
+                apply_bound(out.entry(column).or_default(), op, value);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Normalize a `column <cmp> utf8-literal` (or the mirrored `literal <cmp>
+/// column`) comparison to `(column, op, literal_bytes)` with `op` oriented as
+/// `column <op> literal`. `None` for anything else.
+fn col_literal_comparison(be: &BinaryExpr) -> Option<(String, Operator, Vec<u8>)> {
+    if let Expr::Column(c) = be.left.as_ref() {
+        if let Some(v) = utf8_literal(&be.right) {
+            return Some((c.name.clone(), be.op, v.into_bytes()));
+        }
+    }
+    if let Expr::Column(c) = be.right.as_ref() {
+        if let Some(v) = utf8_literal(&be.left) {
+            return Some((c.name.clone(), flip_comparison(be.op)?, v.into_bytes()));
+        }
+    }
+    None
+}
+
+/// Mirror a comparison operator for `literal <op> column` ⇒ `column <flipped>
+/// literal`. `None` for non-orderings (so they don't constrain the range).
+fn flip_comparison(op: Operator) -> Option<Operator> {
+    match op {
+        Operator::Lt => Some(Operator::Gt),
+        Operator::LtEq => Some(Operator::GtEq),
+        Operator::Gt => Some(Operator::Lt),
+        Operator::GtEq => Some(Operator::LtEq),
+        Operator::Eq => Some(Operator::Eq),
+        _ => None,
+    }
+}
+
+/// Fold one `column <op> value` bound into `range`, tightening to the
+/// intersection (greatest lower / least upper). Strictness is dropped — the
+/// bounds stay inclusive (see [`StringRange`]).
+fn apply_bound(range: &mut StringRange, op: Operator, value: Vec<u8>) {
+    let tighten_lo = |lo: &mut Option<Vec<u8>>, v: Vec<u8>| {
+        if lo.as_deref().is_none_or(|cur| v.as_slice() > cur) {
+            *lo = Some(v);
+        }
+    };
+    let tighten_hi = |hi: &mut Option<Vec<u8>>, v: Vec<u8>| {
+        if hi.as_deref().is_none_or(|cur| v.as_slice() < cur) {
+            *hi = Some(v);
+        }
+    };
+    match op {
+        Operator::Eq => {
+            tighten_lo(&mut range.lo, value.clone());
+            tighten_hi(&mut range.hi, value);
+        }
+        Operator::Gt | Operator::GtEq => tighten_lo(&mut range.lo, value),
+        Operator::Lt | Operator::LtEq => tighten_hi(&mut range.hi, value),
+        _ => {}
+    }
 }
 
 /// Substring needles from every top-level conjunct that constrains `column` to
@@ -159,11 +265,17 @@ fn utf8_literal(expr: &Expr) -> Option<String> {
 ///
 /// A segment contributes an entry only when its sidecar loads, aligns with the
 /// parquet's row-group count, and the needles actually prune at least one row
-/// group. Everything else (missing/stale/corrupt sidecar, short needle, nothing
-/// pruned) is skipped — the file then scans unpruned, which is correct.
+/// group. Everything else (missing/stale/corrupt sidecar, short needle, key band
+/// out of scope, nothing pruned) is skipped — the file then scans unpruned,
+/// which is correct.
+///
+/// Sidecar reads go through the process-global [`SidecarManager`], so a repeated
+/// query (the dashboard's poll loop) reuses parsed blooms instead of re-reading
+/// them, and the resident bytes stay within the cache budget.
 fn build_access_plans(
     segment_paths: &[String],
     needles: &[String],
+    key_ranges: &HashMap<String, StringRange>,
 ) -> HashMap<String, ParquetAccessPlan> {
     // Decompose each needle into trigrams ONCE, not once per segment — a single
     // query commonly spans dozens of segments. Needles arrive pre-filtered to
@@ -174,25 +286,53 @@ fn build_access_plans(
         return HashMap::new();
     }
 
+    let manager = SidecarManager::global();
     let mut out = HashMap::new();
     let mut total_row_groups = 0usize;
     let mut skipped_row_groups = 0usize;
+    let mut scoped_out = 0usize;
     for path in segment_paths {
         let p = Path::new(path);
         let Some(basename) = p.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        let Ok(bytes) = std::fs::read(sidecar_path(p)) else {
-            // No sidecar: expected for L0 / unindexed-namespace segments. The
-            // file just scans unpruned — correct, never a false negative.
-            tracing::debug!(segment = basename, "no trigram sidecar; scanning unpruned");
+        let sidecar = sidecar_path(p);
+        let Some(header) = manager.get_header(&sidecar) else {
+            // No / invalid sidecar: expected for L0 / unindexed-namespace
+            // segments. The file just scans unpruned — correct, never a false
+            // negative.
+            tracing::debug!(
+                segment = basename,
+                "no usable trigram sidecar; scanning unpruned"
+            );
             continue;
         };
-        let Some(index) = TrigramIndex::from_bytes(&bytes) else {
+        // Key-band scoping: when the query constrains the segment's key column
+        // and this segment's band provably can't overlap it, the parquet key
+        // statistics will already prune every row group, so skip the bloom read.
+        if !header.key_column.is_empty() {
+            if let Some(range) = key_ranges.get(&header.key_column) {
+                if !header.key_band_overlaps(range.lo.as_deref(), range.hi.as_deref()) {
+                    scoped_out += 1;
+                    continue;
+                }
+            }
+        }
+        // Guard against a stale sidecar BEFORE loading its blooms (a row-group
+        // mismatch would otherwise hard-error the opener).
+        let Some(rg_count) = segment_row_group_count(p) else {
+            continue;
+        };
+        if rg_count as u32 != header.rg_count {
             tracing::warn!(
                 segment = basename,
-                "corrupt trigram sidecar; scanning unpruned"
+                sidecar_row_groups = header.rg_count,
+                parquet_row_groups = rg_count,
+                "stale trigram sidecar (row-group count mismatch); scanning unpruned"
             );
+            continue;
+        }
+        let Some(index) = manager.get_column(&sidecar, &header, INDEXED_COLUMN) else {
             continue;
         };
         // A row group survives only if it survives EVERY needle's trigram test.
@@ -201,20 +341,6 @@ fn build_access_plans(
             for (k, m) in keep.iter_mut().zip(index.keep_mask_for(trigrams)) {
                 *k &= m;
             }
-        }
-        // Only attach when the sidecar aligns with the real parquet (a stale
-        // sidecar would otherwise hard-error the query in the opener).
-        let Some(rg_count) = segment_row_group_count(p) else {
-            continue;
-        };
-        if rg_count != keep.len() {
-            tracing::warn!(
-                segment = basename,
-                sidecar_row_groups = keep.len(),
-                parquet_row_groups = rg_count,
-                "stale trigram sidecar (row-group count mismatch); scanning unpruned"
-            );
-            continue;
         }
         if keep.iter().all(|&k| k) {
             continue;
@@ -231,10 +357,11 @@ fn build_access_plans(
         skipped_row_groups += skipped;
         out.insert(basename.to_string(), access);
     }
-    if !out.is_empty() {
+    if !out.is_empty() || scoped_out > 0 {
         tracing::debug!(
             needles = needle_trigrams.len(),
             segments_pruned = out.len(),
+            segments_scoped_out = scoped_out,
             row_groups_skipped = skipped_row_groups,
             row_groups_total = total_row_groups,
             "trigram prune"
@@ -386,5 +513,126 @@ mod tests {
             like_expr("data", "%xy%", false, false), // 2 bytes: no trigram
         ];
         assert!(indexed_column_needles(&filters).is_empty());
+    }
+
+    #[test]
+    fn string_column_ranges_folds_conjunct_bounds() {
+        // `key >= 'a' AND key < 'b'` is the analyzer's synthesized prefix range
+        // shape; the contains() conjunct contributes no range.
+        let filters = vec![
+            col("key").gt_eq(lit("a")),
+            col("key").lt(lit("b")),
+            contains_expr("data", "needle here"),
+        ];
+        let r = string_column_ranges(&filters);
+        let band = r.get("key").expect("key range extracted");
+        assert_eq!(band.lo.as_deref(), Some(b"a".as_slice()));
+        assert_eq!(band.hi.as_deref(), Some(b"b".as_slice()));
+        assert!(!r.contains_key("data"));
+
+        // A single AND-chained predicate is descended into.
+        let anded = col("key").gt_eq(lit("a")).and(col("key").lt(lit("b")));
+        let r2 = string_column_ranges(std::slice::from_ref(&anded));
+        assert_eq!(r2.get("key").unwrap().lo.as_deref(), Some(b"a".as_slice()));
+        assert_eq!(r2.get("key").unwrap().hi.as_deref(), Some(b"b".as_slice()));
+
+        // `key = 'x'` pins both ends; the mirrored `'m' <= key` orients correctly.
+        let eq = string_column_ranges(&[col("key").eq(lit("x"))]);
+        assert_eq!(eq.get("key").unwrap().lo.as_deref(), Some(b"x".as_slice()));
+        assert_eq!(eq.get("key").unwrap().hi.as_deref(), Some(b"x".as_slice()));
+        let mirrored = string_column_ranges(&[lit("m").lt_eq(col("key"))]);
+        assert_eq!(
+            mirrored.get("key").unwrap().lo.as_deref(),
+            Some(b"m".as_slice())
+        );
+        assert!(mirrored.get("key").unwrap().hi.is_none());
+    }
+
+    /// Write a real 2-row-group log segment (all rows under `key`, the needle in
+    /// row group 1 only) plus its trigram sidecar; return the segment path.
+    fn write_scoping_segment(dir: &std::path::Path, key: &str, needle: &str) -> String {
+        use crate::store::segment::{write_segment_to_dir, ROW_GROUP_SIZE};
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+        use arrow::record_batch::RecordBatch;
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("key", DataType::Utf8, false),
+            Field::new("data", DataType::Utf8, false),
+        ]));
+        let mut data: Vec<String> = (0..ROW_GROUP_SIZE)
+            .map(|_| "idle heartbeat ok".to_string())
+            .collect();
+        data.push(needle.to_string()); // row group 1
+        let n = data.len() as i64;
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from_iter_values(1..=n)),
+                Arc::new(StringArray::from(vec![key; data.len()])),
+                Arc::new(StringArray::from(data)),
+            ],
+        )
+        .unwrap();
+        let (path, _) = write_segment_to_dir(dir, 1, 1, &batch).unwrap();
+        crate::store::trigram::write_sidecar(
+            &path,
+            std::slice::from_ref(&batch),
+            "data",
+            Some("key"),
+        )
+        .unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn key_band_scopes_out_of_band_segments() {
+        let dir = std::env::temp_dir().join(format!(
+            "finelog_prune_scope_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = write_scoping_segment(
+            &dir,
+            "/system/controller",
+            "Bootstrap completed for TPU here",
+        );
+        let paths = vec![path];
+        let needles = vec!["Bootstrap completed for TPU".to_string()];
+
+        // No key constraint: the needle prunes row group 0, so a plan is produced.
+        let unscoped = build_access_plans(&paths, &needles, &HashMap::new());
+        assert_eq!(
+            unscoped.len(),
+            1,
+            "needle alone must prune the empty row group"
+        );
+
+        // In-band key range: still pruned.
+        let inband = HashMap::from([(
+            "key".to_string(),
+            StringRange {
+                lo: Some(b"/system/".to_vec()),
+                hi: Some(b"/system/z".to_vec()),
+            },
+        )]);
+        assert_eq!(build_access_plans(&paths, &needles, &inband).len(), 1);
+
+        // Out-of-band key range: the segment is scoped out before its blooms load,
+        // so no access plan is emitted (the key statistics prune it at scan time).
+        let out_of_band = HashMap::from([(
+            "key".to_string(),
+            StringRange {
+                lo: Some(b"/zzz".to_vec()),
+                hi: Some(b"/zzz9".to_vec()),
+            },
+        )]);
+        assert!(build_access_plans(&paths, &needles, &out_of_band).is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

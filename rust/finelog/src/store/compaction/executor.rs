@@ -185,6 +185,7 @@ fn apply_merge(
         &merged_path,
         &merged,
         crate::store::trigram::INDEXED_COLUMN,
+        key_column,
     ) {
         tracing::warn!(path = %merged_path.display(), error = %e, "trigram sidecar write failed");
     }
@@ -434,7 +435,7 @@ mod tests {
 
     #[test]
     fn merge_writes_trigram_sidecar_for_data_column() {
-        use crate::store::trigram::{sidecar_path, TrigramIndex};
+        use crate::store::trigram::{read_column_from_bytes, sidecar_path};
         let dir = tempdir("tgm_sidecar");
         // Log-form schema with a `data` column (the indexed column).
         let log: SchemaRef = Arc::new(ArrowSchema::new(vec![
@@ -475,7 +476,7 @@ mod tests {
         let out = PathBuf::from(&swap.added.path);
         let sc = sidecar_path(&out);
         assert!(sc.exists(), "merge output must have a trigram sidecar");
-        let index = TrigramIndex::from_bytes(&std::fs::read(&sc).unwrap()).unwrap();
+        let index = read_column_from_bytes(&std::fs::read(&sc).unwrap(), "data").unwrap();
         assert_eq!(index.len(), 1, "one row group");
         assert_eq!(
             index.keep_mask("Bootstrap completed for TPU").unwrap(),

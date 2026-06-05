@@ -101,7 +101,7 @@ async fn main() {
         total_parquet_bytes += std::fs::metadata(seg).map(|m| m.len()).unwrap_or(0);
         if !sc.exists() {
             let batches = read_all_batches(seg);
-            write_sidecar(seg, &batches, INDEXED_COLUMN).expect("write sidecar");
+            write_sidecar(seg, &batches, INDEXED_COLUMN, None).expect("write sidecar");
             built += 1;
         }
         if let Ok(m) = std::fs::metadata(&sc) {

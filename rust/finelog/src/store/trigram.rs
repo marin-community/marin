@@ -16,14 +16,38 @@
 //! that truly contains the needle is never skipped. Needles shorter than 3 bytes
 //! have no trigrams and fall back to a full scan.
 //!
+//! ## File layout (v1)
+//!
+//! The sidecar is **directory-first and multi-column**, so a reader can map the
+//! cheap header (a few hundred bytes) without paging in the per-row-group blooms,
+//! and load only the column(s) a query needs:
+//!
+//! ```text
+//! magic "FLTG" | version u8 | flags u8 | header_len u32 | rg_count u32
+//! key_column   : u16 len + bytes        (the segment's ordering-key column)
+//! key_min      : opt(u32 len + bytes)   (segment key band, UTF-8 bytes; absent
+//! key_max      : opt(u32 len + bytes)    for non-string keys)
+//! col_count u16
+//!   per column: name u16 len + bytes | payload_offset u64 | payload_len u64
+//! -- header_len marks the end of the directory; payloads follow --
+//! per column @ payload_offset:
+//!   per row group: k u8 | m_words u32 | words (m_words × u64)
+//! ```
+//!
+//! `header_len` lets the [`crate::query::sidecar::SidecarManager`] read the
+//! header with a single bounded `pread`, check the key band, and only then read a
+//! column's payload slice. `key_min`/`key_max` carry the segment's key range so a
+//! `key`-constrained `contains` query can skip out-of-band segments without
+//! touching their blooms at all. New columns or header fields bump `version`;
+//! readers treat any unrecognized version as absent (scan unpruned).
+//!
 //! ## Why a sidecar (not the parquet footer)
 //!
 //! The footer is read in full on every file open. A per-row-group structure
 //! embedded there would tax every query — including the hot `key = … ORDER BY
 //! seq DESC LIMIT n` tail that never calls `contains()`. The sidecar is loaded
 //! lazily, only for substring queries. It is a pure, optional, derivable function
-//! of the column: a missing or stale sidecar is never *wrong*, only unpruned. See
-//! `.agents/projects/2026-06-05_finelog_trigram_index.md`.
+//! of the column: a missing or stale sidecar is never *wrong*, only unpruned.
 //!
 //! ## Row-group alignment
 //!
@@ -49,7 +73,8 @@ pub const MIN_TRIGRAM_LEN: usize = 3;
 
 /// The single string column indexed for substring (`contains`) pruning in v1.
 /// `key` is already range-prunable, so it is not indexed; revisit if a
-/// `contains(key, …)` workload appears.
+/// `contains(key, …)` workload appears. The format itself is multi-column, so
+/// adding a second indexed column is an additive change.
 pub const INDEXED_COLUMN: &str = "data";
 
 /// Target Bloom false-positive rate per row group. A false positive only keeps a
@@ -96,6 +121,11 @@ impl RowGroupBloom {
         }
     }
 
+    /// Heap bytes backing this filter's bit storage (for cache budgeting).
+    fn heap_bytes(&self) -> usize {
+        self.words.len() * std::mem::size_of::<u64>()
+    }
+
     /// The `k` bit indices probed for `trigram` (double hashing: `h1 + i*h2`),
     /// written into `out` (length `k`) to avoid an allocation per probe.
     #[inline]
@@ -140,8 +170,18 @@ fn splitmix64(x: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// A segment's trigram index: the indexed column name plus one Bloom filter per
-/// parquet row group, in row-group order.
+/// Per-row-group keep mask for already-tokenized `trigrams`: `keep[i]` is `true`
+/// unless row group `i`'s Bloom proves it lacks at least one trigram.
+fn keep_mask_over(groups: &[RowGroupBloom], trigrams: &[[u8; 3]]) -> Vec<bool> {
+    groups
+        .iter()
+        .map(|bloom| trigrams.iter().all(|&t| bloom.contains(t)))
+        .collect()
+}
+
+/// A built trigram index for one column: its name plus one Bloom filter per
+/// parquet row group, in row-group order. The write-side representation produced
+/// by [`TrigramIndex::build`] and handed to [`serialize_sidecar`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrigramIndex {
     column: String,
@@ -160,28 +200,6 @@ impl TrigramIndex {
 
     pub fn column(&self) -> &str {
         &self.column
-    }
-
-    /// Per-row-group keep mask for `needle`: `keep[i]` is `true` unless row group
-    /// `i`'s Bloom proves it cannot contain the needle.
-    ///
-    /// Returns `None` for a needle with no trigrams (`< MIN_TRIGRAM_LEN`), meaning
-    /// "cannot prune — scan all". A kept group may still not match (Bloom false
-    /// positive or trigrams present in different rows); the caller re-checks
-    /// `contains()` exactly. A truly-matching group is never dropped.
-    pub fn keep_mask(&self, needle: &str) -> Option<Vec<bool>> {
-        Some(self.keep_mask_for(&needle_trigrams(needle)?))
-    }
-
-    /// Per-row-group keep mask for a needle's already-tokenized `trigrams` (see
-    /// [`needle_trigrams`]): `keep[i]` is `true` unless row group `i`'s Bloom
-    /// proves it lacks at least one trigram. Splitting tokenization from masking
-    /// lets a caller decompose the needle once and reuse it across many segments.
-    pub fn keep_mask_for(&self, trigrams: &[[u8; 3]]) -> Vec<bool> {
-        self.groups
-            .iter()
-            .map(|bloom| trigrams.iter().all(|&t| bloom.contains(t)))
-            .collect()
     }
 
     /// Build an index over `column` across `batches` in row order, chunking at
@@ -226,52 +244,269 @@ impl TrigramIndex {
             groups,
         })
     }
+}
 
-    /// Serialize to the on-disk sidecar byte format.
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::new();
-        out.extend_from_slice(TGM_MAGIC);
-        out.push(TGM_VERSION);
-        let name = self.column.as_bytes();
-        out.push(name.len() as u8);
-        out.extend_from_slice(name);
-        out.extend_from_slice(&(self.groups.len() as u32).to_le_bytes());
-        for g in &self.groups {
-            out.push(g.k);
-            out.extend_from_slice(&(g.words.len() as u32).to_le_bytes());
-            for w in &g.words {
-                out.extend_from_slice(&w.to_le_bytes());
-            }
-        }
-        out
+/// One column directory entry in a parsed [`SidecarHeader`]: where that column's
+/// per-row-group bloom payload lives in the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnDir {
+    pub name: String,
+    /// Absolute byte offset of the column's payload within the sidecar file.
+    pub offset: u64,
+    /// Byte length of the column's payload.
+    pub len: u64,
+}
+
+/// The parsed sidecar header: everything before the per-column bloom payloads.
+///
+/// Cheap to read (a bounded prefix of the file) and self-describing — it carries
+/// the indexed columns' offsets and the segment's key band, so a caller can scope
+/// and slice without paging in any blooms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidecarHeader {
+    /// Parquet row groups covered (shared by every column).
+    pub rg_count: u32,
+    /// The segment's ordering-key column name (empty if the namespace is keyless).
+    pub key_column: String,
+    /// Segment key band as raw UTF-8 bytes, present only for string key columns.
+    /// `None` ⇒ unknown (non-string key, or missing column) ⇒ no key scoping.
+    pub key_min: Option<Vec<u8>>,
+    pub key_max: Option<Vec<u8>>,
+    columns: Vec<ColumnDir>,
+}
+
+impl SidecarHeader {
+    /// Directory entry for `name`, or `None` if the column is not indexed.
+    pub fn column(&self, name: &str) -> Option<&ColumnDir> {
+        self.columns.iter().find(|c| c.name == name)
     }
 
-    /// Parse a sidecar produced by [`TrigramIndex::to_bytes`]. Returns `None` on
-    /// any malformed input (bad magic/version/truncation) — a corrupt sidecar is
-    /// treated as absent, i.e. unpruned.
-    pub fn from_bytes(bytes: &[u8]) -> Option<TrigramIndex> {
-        let mut r = ByteReader::new(bytes);
-        if r.take(4)? != TGM_MAGIC {
-            return None;
-        }
-        if r.u8()? != TGM_VERSION {
-            return None;
-        }
-        let name_len = r.u8()? as usize;
-        let column = String::from_utf8(r.take(name_len)?.to_vec()).ok()?;
-        let rg_count = r.u32()? as usize;
-        let mut groups = Vec::with_capacity(rg_count);
-        for _ in 0..rg_count {
-            let k = r.u8()?;
-            let words_len = r.u32()? as usize;
-            let mut words = Vec::with_capacity(words_len);
-            for _ in 0..words_len {
-                words.push(r.u64()?);
+    /// Whether the segment's key band can satisfy the inclusive query range
+    /// `[lo, hi]`. Returns `false` only on a **provable** non-overlap — meaning
+    /// the segment is out of band and its blooms need not be read. Unknown bounds
+    /// or an open range return `true` (must load).
+    ///
+    /// The caller passes conservatively-widened *inclusive* bounds (a strict `<`
+    /// upper is treated as `<=`), so a borderline segment is loaded rather than
+    /// wrongly skipped — and skipping is only ever an I/O optimization anyway,
+    /// since an out-of-band segment is independently pruned by the parquet key
+    /// statistics at scan time.
+    pub fn key_band_overlaps(&self, lo: Option<&[u8]>, hi: Option<&[u8]>) -> bool {
+        let (Some(kmin), Some(kmax)) = (self.key_min.as_deref(), self.key_max.as_deref()) else {
+            return true;
+        };
+        if let Some(hi) = hi {
+            if hi < kmin {
+                return false;
             }
-            groups.push(RowGroupBloom { words, k });
         }
-        Some(TrigramIndex { column, groups })
+        if let Some(lo) = lo {
+            if lo > kmax {
+                return false;
+            }
+        }
+        true
     }
+}
+
+/// One column's parsed per-row-group blooms — the read-side counterpart of a
+/// [`TrigramIndex`], shared via `Arc` and cached by the
+/// [`crate::query::sidecar::SidecarManager`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnIndex {
+    groups: Vec<RowGroupBloom>,
+}
+
+impl ColumnIndex {
+    /// Number of indexed row groups.
+    pub fn len(&self) -> usize {
+        self.groups.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.groups.is_empty()
+    }
+
+    /// Per-row-group keep mask for `needle`: `keep[i]` is `true` unless row group
+    /// `i`'s Bloom proves it cannot contain the needle. `None` for a needle with
+    /// no trigrams (`< MIN_TRIGRAM_LEN`), meaning "cannot prune — scan all".
+    pub fn keep_mask(&self, needle: &str) -> Option<Vec<bool>> {
+        Some(self.keep_mask_for(&needle_trigrams(needle)?))
+    }
+
+    /// Per-row-group keep mask for a needle's already-tokenized `trigrams` (see
+    /// [`needle_trigrams`]). Splitting tokenization from masking lets a caller
+    /// decompose the needle once and reuse it across many segments.
+    pub fn keep_mask_for(&self, trigrams: &[[u8; 3]]) -> Vec<bool> {
+        keep_mask_over(&self.groups, trigrams)
+    }
+
+    /// Heap bytes backing the blooms — what the sidecar cache charges to its
+    /// byte budget for this entry.
+    pub fn heap_bytes(&self) -> usize {
+        self.groups
+            .iter()
+            .map(RowGroupBloom::heap_bytes)
+            .sum::<usize>()
+            + self.groups.len() * std::mem::size_of::<RowGroupBloom>()
+    }
+}
+
+/// Serialize a segment's trigram index to the on-disk sidecar byte format.
+///
+/// `rg_count` is the shared parquet row-group count; `key_min`/`key_max` are the
+/// segment's key band as raw bytes (string keys only); `columns` are the per-
+/// column blooms (one entry today, `INDEXED_COLUMN`).
+pub fn serialize_sidecar(
+    rg_count: u32,
+    key_column: &str,
+    key_min: Option<&[u8]>,
+    key_max: Option<&[u8]>,
+    columns: &[TrigramIndex],
+) -> Vec<u8> {
+    let payloads: Vec<Vec<u8>> = columns
+        .iter()
+        .map(|c| serialize_column(&c.groups))
+        .collect();
+
+    // Directory size is fully determined by the column names and the optional
+    // key band, so we can compute payload offsets before writing a byte.
+    let mut header_len = 4 + 1 + 1 + 4 + 4; // magic + version + flags + header_len + rg_count
+    header_len += 2 + key_column.len(); // key_column (u16 len + bytes)
+    header_len += opt_bytes_len(key_min);
+    header_len += opt_bytes_len(key_max);
+    header_len += 2; // col_count u16
+    for c in columns {
+        header_len += 2 + c.column.len() + 8 + 8; // name + offset + len
+    }
+
+    let mut offset = header_len as u64;
+    let mut offsets = Vec::with_capacity(columns.len());
+    for p in &payloads {
+        offsets.push(offset);
+        offset += p.len() as u64;
+    }
+
+    let mut out = Vec::with_capacity(offset as usize);
+    out.extend_from_slice(TGM_MAGIC);
+    out.push(TGM_VERSION);
+    out.push(0); // flags (reserved)
+    out.extend_from_slice(&(header_len as u32).to_le_bytes());
+    out.extend_from_slice(&rg_count.to_le_bytes());
+    put_varbytes_u16(&mut out, key_column.as_bytes());
+    put_opt_bytes_u32(&mut out, key_min);
+    put_opt_bytes_u32(&mut out, key_max);
+    out.extend_from_slice(&(columns.len() as u16).to_le_bytes());
+    for (c, (off, p)) in columns.iter().zip(offsets.iter().zip(&payloads)) {
+        put_varbytes_u16(&mut out, c.column.as_bytes());
+        out.extend_from_slice(&off.to_le_bytes());
+        out.extend_from_slice(&(p.len() as u64).to_le_bytes());
+    }
+    debug_assert_eq!(out.len(), header_len, "header_len must match bytes written");
+    for p in &payloads {
+        out.extend_from_slice(p);
+    }
+    out
+}
+
+/// Serialize one column's per-row-group blooms (the payload body).
+fn serialize_column(groups: &[RowGroupBloom]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for g in groups {
+        out.push(g.k);
+        out.extend_from_slice(&(g.words.len() as u32).to_le_bytes());
+        for w in &g.words {
+            out.extend_from_slice(&w.to_le_bytes());
+        }
+    }
+    out
+}
+
+/// The declared header length of a sidecar prefix (bytes `[0, header_len)` hold
+/// the directory), or `None` if the magic/version don't match. Lets a reader
+/// decide whether a bounded prefix read already covered the whole header.
+pub fn peek_header_len(bytes: &[u8]) -> Option<usize> {
+    let mut r = ByteReader::new(bytes);
+    if r.take(4)? != TGM_MAGIC {
+        return None;
+    }
+    if r.u8()? != TGM_VERSION {
+        return None;
+    }
+    let _flags = r.u8()?;
+    Some(r.u32()? as usize)
+}
+
+/// Parse the sidecar header from a buffer holding at least its first
+/// `header_len` bytes. Returns `None` on bad magic/version or truncation — a
+/// corrupt sidecar is treated as absent (scan unpruned).
+pub fn parse_header(bytes: &[u8]) -> Option<SidecarHeader> {
+    let mut r = ByteReader::new(bytes);
+    if r.take(4)? != TGM_MAGIC {
+        return None;
+    }
+    if r.u8()? != TGM_VERSION {
+        return None;
+    }
+    let _flags = r.u8()?;
+    let header_len = r.u32()? as usize;
+    if bytes.len() < header_len {
+        return None;
+    }
+    let rg_count = r.u32()?;
+    let key_column = r.string_u16()?;
+    let key_min = r.opt_bytes_u32()?;
+    let key_max = r.opt_bytes_u32()?;
+    let col_count = r.u16()? as usize;
+    let mut columns = Vec::with_capacity(col_count);
+    for _ in 0..col_count {
+        let name = r.string_u16()?;
+        let offset = r.u64()?;
+        let len = r.u64()?;
+        columns.push(ColumnDir { name, offset, len });
+    }
+    Some(SidecarHeader {
+        rg_count,
+        key_column,
+        key_min,
+        key_max,
+        columns,
+    })
+}
+
+/// Parse one column's payload (`rg_count` per-row-group blooms) from its slice.
+/// Returns `None` on truncation or a row-group-count mismatch.
+pub fn parse_column(bytes: &[u8], rg_count: u32) -> Option<ColumnIndex> {
+    let mut r = ByteReader::new(bytes);
+    let mut groups = Vec::with_capacity(rg_count as usize);
+    for _ in 0..rg_count {
+        let k = r.u8()?;
+        let words_len = r.u32()? as usize;
+        // Guard against a corrupt length forcing a huge allocation before the
+        // bounds check in `take` would fire word-by-word.
+        if words_len.checked_mul(8)? > r.remaining() {
+            return None;
+        }
+        let mut words = Vec::with_capacity(words_len);
+        for _ in 0..words_len {
+            words.push(r.u64()?);
+        }
+        groups.push(RowGroupBloom { words, k });
+    }
+    Some(ColumnIndex { groups })
+}
+
+/// Read a single column's index from a full in-memory sidecar buffer (header +
+/// payloads). Convenience over [`parse_header`] + [`parse_column`] for callers
+/// that already hold the whole file; the [`crate::query::sidecar::SidecarManager`]
+/// uses positioned slice reads instead. `None` if the column is absent or the
+/// buffer is malformed/truncated.
+pub fn read_column_from_bytes(bytes: &[u8], column: &str) -> Option<ColumnIndex> {
+    let header = parse_header(bytes)?;
+    let dir = header.column(column)?;
+    let start = dir.offset as usize;
+    let end = start.checked_add(dir.len as usize)?;
+    parse_column(bytes.get(start..end)?, header.rg_count)
 }
 
 /// The sidecar path for a parquet segment: `<segment>.tgm`.
@@ -281,33 +516,79 @@ pub fn sidecar_path(parquet_path: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// Build the trigram index over `column` across `batches` and write it as the
-/// sidecar for `parquet_path`. Returns `Ok(true)` when a non-empty sidecar was
-/// written, `Ok(false)` when there was nothing to index (no such string column,
-/// or zero row groups).
+/// Build the trigram index over `data_column` across `batches` and write it as
+/// the sidecar for `parquet_path`. `key_column` (when string-typed in `batches`)
+/// supplies the segment's key band, stored in the header for query-time scoping.
+///
+/// Returns `Ok(true)` when a non-empty sidecar was written, `Ok(false)` when
+/// there was nothing to index (no such string column, or zero row groups).
 ///
 /// The index is optional — a write failure is non-fatal to the caller (the
 /// segment just scans unpruned), so callers log rather than propagate.
 pub fn write_sidecar(
     parquet_path: &Path,
     batches: &[RecordBatch],
-    column: &str,
+    data_column: &str,
+    key_column: Option<&str>,
 ) -> std::io::Result<bool> {
-    let Some(index) = TrigramIndex::build(batches, column) else {
+    let Some(index) = TrigramIndex::build(batches, data_column) else {
         return Ok(false);
     };
     if index.is_empty() {
         return Ok(false);
     }
-    std::fs::write(sidecar_path(parquet_path), index.to_bytes())?;
+    let (key_min, key_max) = key_column
+        .map(|kc| string_key_bounds(batches, kc))
+        .unwrap_or((None, None));
+    let bytes = serialize_sidecar(
+        index.len() as u32,
+        key_column.unwrap_or(""),
+        key_min.as_deref(),
+        key_max.as_deref(),
+        std::slice::from_ref(&index),
+    );
+    std::fs::write(sidecar_path(parquet_path), bytes)?;
     Ok(true)
+}
+
+/// The min/max of `key_column` across `batches` as raw UTF-8 bytes, or
+/// `(None, None)` if the column is absent or is not a string column. Byte order
+/// matches both the parquet string statistics and the lexicographic order used by
+/// the query-time key-range bounds, so the comparison in
+/// [`SidecarHeader::key_band_overlaps`] is sound.
+fn string_key_bounds(
+    batches: &[RecordBatch],
+    key_column: &str,
+) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+    let mut lo: Option<Vec<u8>> = None;
+    let mut hi: Option<Vec<u8>> = None;
+    for batch in batches {
+        let Ok(idx) = batch.schema().index_of(key_column) else {
+            return (None, None);
+        };
+        let Some(values) = StringColumn::new(batch.column(idx).as_ref()) else {
+            return (None, None);
+        };
+        for row in 0..batch.num_rows() {
+            if let Some(v) = values.value(row) {
+                let vb = v.as_bytes();
+                if lo.as_deref().is_none_or(|x| vb < x) {
+                    lo = Some(vb.to_vec());
+                }
+                if hi.as_deref().is_none_or(|x| vb > x) {
+                    hi = Some(vb.to_vec());
+                }
+            }
+        }
+    }
+    (lo, hi)
 }
 
 /// The distinct byte 3-grams of `needle`, or `None` when it is shorter than
 /// [`MIN_TRIGRAM_LEN`] (no trigrams ⇒ cannot prune, scan all).
 ///
 /// Decompose the needle once per query with this, then feed the result to
-/// [`TrigramIndex::keep_mask_for`] for each segment — re-tokenizing per segment
+/// [`ColumnIndex::keep_mask_for`] for each segment — re-tokenizing per segment
 /// is wasted work when a query spans many of them.
 pub fn needle_trigrams(needle: &str) -> Option<Vec<[u8; 3]>> {
     if needle.len() < MIN_TRIGRAM_LEN {
@@ -398,6 +679,30 @@ impl<'a> StringColumn<'a> {
     }
 }
 
+/// Append `bytes` framed by a `u16` little-endian length prefix.
+fn put_varbytes_u16(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
+    out.extend_from_slice(bytes);
+}
+
+/// Append an optional byte string: a `u8` present flag, then (if present) a
+/// `u32` length prefix and the bytes.
+fn put_opt_bytes_u32(out: &mut Vec<u8>, bytes: Option<&[u8]>) {
+    match bytes {
+        Some(b) => {
+            out.push(1);
+            out.extend_from_slice(&(b.len() as u32).to_le_bytes());
+            out.extend_from_slice(b);
+        }
+        None => out.push(0),
+    }
+}
+
+/// Serialized size of an optional byte string written by [`put_opt_bytes_u32`].
+fn opt_bytes_len(bytes: Option<&[u8]>) -> usize {
+    1 + bytes.map_or(0, |b| 4 + b.len())
+}
+
 /// Minimal little-endian byte reader for sidecar parsing.
 struct ByteReader<'a> {
     bytes: &'a [u8],
@@ -407,6 +712,10 @@ struct ByteReader<'a> {
 impl<'a> ByteReader<'a> {
     fn new(bytes: &'a [u8]) -> ByteReader<'a> {
         ByteReader { bytes, pos: 0 }
+    }
+
+    fn remaining(&self) -> usize {
+        self.bytes.len().saturating_sub(self.pos)
     }
 
     fn take(&mut self, n: usize) -> Option<&'a [u8]> {
@@ -420,12 +729,35 @@ impl<'a> ByteReader<'a> {
         Some(self.take(1)?[0])
     }
 
+    fn u16(&mut self) -> Option<u16> {
+        Some(u16::from_le_bytes(self.take(2)?.try_into().ok()?))
+    }
+
     fn u32(&mut self) -> Option<u32> {
         Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?))
     }
 
     fn u64(&mut self) -> Option<u64> {
         Some(u64::from_le_bytes(self.take(8)?.try_into().ok()?))
+    }
+
+    /// A `u16`-length-framed UTF-8 string.
+    fn string_u16(&mut self) -> Option<String> {
+        let n = self.u16()? as usize;
+        String::from_utf8(self.take(n)?.to_vec()).ok()
+    }
+
+    /// An optional `u32`-length-framed byte string (`u8` present flag first).
+    /// `Some(None)` = absent, `Some(Some(_))` = present, `None` = corrupt.
+    fn opt_bytes_u32(&mut self) -> Option<Option<Vec<u8>>> {
+        match self.u8()? {
+            0 => Some(None),
+            1 => {
+                let n = self.u32()? as usize;
+                Some(Some(self.take(n)?.to_vec()))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -438,6 +770,28 @@ mod tests {
 
     use super::*;
 
+    /// A `seq`/`key`/`data` log batch with a string `key` so the sidecar carries
+    /// a key band. `keys` and `values` must be the same length.
+    fn log_batch(keys: Vec<&str>, values: Vec<Option<&str>>) -> RecordBatch {
+        let n = values.len() as i64;
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("key", DataType::Utf8, false),
+            Field::new("data", DataType::Utf8, true),
+        ]));
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from_iter_values(1..=n)),
+                Arc::new(StringArray::from(keys)),
+                Arc::new(StringArray::from(values)),
+            ],
+        )
+        .unwrap()
+    }
+
+    /// A `seq`/`data` batch (no key column) for tests that don't exercise the
+    /// key band.
     fn data_batch(values: Vec<Option<&str>>) -> RecordBatch {
         let n = values.len() as i64;
         let schema = Arc::new(ArrowSchema::new(vec![
@@ -452,6 +806,18 @@ mod tests {
             ],
         )
         .unwrap()
+    }
+
+    /// Serialize a single `data`-column index the way `write_sidecar` would, with
+    /// the given key band, and return the bytes.
+    fn serialize_data(idx: &TrigramIndex, key_min: Option<&str>, key_max: Option<&str>) -> Vec<u8> {
+        serialize_sidecar(
+            idx.len() as u32,
+            "key",
+            key_min.map(str::as_bytes),
+            key_max.map(str::as_bytes),
+            std::slice::from_ref(idx),
+        )
     }
 
     #[test]
@@ -499,13 +865,17 @@ mod tests {
         let idx = TrigramIndex::build(&[b0, b1], "data").unwrap();
         assert_eq!(idx.len(), 2, "two row groups (16384 + 100 rows)");
 
-        let mask = idx.keep_mask("Bootstrap completed for TPU").unwrap();
+        // Round-trip through the on-disk format to a read-side ColumnIndex.
+        let bytes = serialize_data(&idx, None, None);
+        let col = read_column_from_bytes(&bytes, "data").unwrap();
+
+        let mask = col.keep_mask("Bootstrap completed for TPU").unwrap();
         assert_eq!(mask.len(), 2);
         assert!(mask[0], "row group with the needle must be kept");
         assert!(!mask[1], "row group without the needle is pruned");
 
         // Sub-trigram needle cannot prune.
-        assert!(idx.keep_mask("ab").is_none());
+        assert!(col.keep_mask("ab").is_none());
     }
 
     #[test]
@@ -521,22 +891,110 @@ mod tests {
     fn serde_round_trips() {
         let vals: Vec<Option<&str>> = vec![Some("alpha beta gamma"), None, Some("delta epsilon")];
         let idx = TrigramIndex::build(&[data_batch(vals)], "data").unwrap();
-        let bytes = idx.to_bytes();
-        let back = TrigramIndex::from_bytes(&bytes).unwrap();
-        assert_eq!(idx, back);
-        assert_eq!(back.column(), "data");
+        let bytes = serialize_data(&idx, Some("/a/b"), Some("/a/c"));
+
+        let header = parse_header(&bytes).unwrap();
+        assert_eq!(header.rg_count, 1);
+        assert_eq!(header.key_column, "key");
+        assert_eq!(header.key_min.as_deref(), Some(b"/a/b".as_slice()));
+        assert_eq!(header.key_max.as_deref(), Some(b"/a/c".as_slice()));
+
+        let col = read_column_from_bytes(&bytes, "data").unwrap();
+        assert_eq!(col.len(), 1);
         // A real needle present in the data keeps the (single) row group.
-        assert_eq!(back.keep_mask("beta gamma").unwrap(), vec![true]);
+        assert_eq!(col.keep_mask("beta gamma").unwrap(), vec![true]);
+        // An unindexed column is absent from the directory.
+        assert!(read_column_from_bytes(&bytes, "nope").is_none());
     }
 
     #[test]
-    fn from_bytes_rejects_garbage() {
-        assert!(TrigramIndex::from_bytes(b"nope").is_none());
-        assert!(TrigramIndex::from_bytes(&[]).is_none());
-        // Right magic, truncated body.
+    fn write_sidecar_records_string_key_band() {
+        // The key band is the min/max of the `key` column, regardless of row order.
+        let batch = log_batch(
+            vec!["/m/z", "/m/a", "/m/q"],
+            vec![
+                Some("one two three"),
+                Some("four five six"),
+                Some("seven eight"),
+            ],
+        );
+        let idx = TrigramIndex::build(std::slice::from_ref(&batch), "data").unwrap();
+        let (lo, hi) = string_key_bounds(std::slice::from_ref(&batch), "key");
+        assert_eq!(lo.as_deref(), Some(b"/m/a".as_slice()));
+        assert_eq!(hi.as_deref(), Some(b"/m/z".as_slice()));
+        let bytes = serialize_data(
+            &idx,
+            lo.as_deref().map(|_| "/m/a"),
+            hi.as_deref().map(|_| "/m/z"),
+        );
+        let header = parse_header(&bytes).unwrap();
+        // Out-of-band query ranges are provably non-overlapping; in-band overlaps.
+        assert!(!header.key_band_overlaps(Some(b"/n/a"), Some(b"/n/z")));
+        assert!(!header.key_band_overlaps(Some(b"/a"), Some(b"/m/")));
+        assert!(header.key_band_overlaps(Some(b"/m/a"), Some(b"/m/a")));
+        assert!(header.key_band_overlaps(Some(b"/m/b"), None));
+    }
+
+    #[test]
+    fn non_string_key_has_no_band() {
+        // An Int64 key yields no string band -> no scoping, always "overlaps".
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("key", DataType::Int64, false),
+            Field::new("data", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from_iter_values(1..=2)),
+                Arc::new(Int64Array::from(vec![10_i64, 20])),
+                Arc::new(StringArray::from(vec!["alpha line", "beta line"])),
+            ],
+        )
+        .unwrap();
+        let (lo, hi) = string_key_bounds(std::slice::from_ref(&batch), "key");
+        assert!(lo.is_none() && hi.is_none());
+        let idx = TrigramIndex::build(std::slice::from_ref(&batch), "data").unwrap();
+        let bytes = serialize_sidecar(
+            idx.len() as u32,
+            "key",
+            None,
+            None,
+            std::slice::from_ref(&idx),
+        );
+        let header = parse_header(&bytes).unwrap();
+        assert!(header.key_min.is_none() && header.key_max.is_none());
+        assert!(header.key_band_overlaps(Some(b"anything"), Some(b"zzz")));
+    }
+
+    #[test]
+    fn header_len_lets_a_short_prefix_be_detected() {
+        let idx =
+            TrigramIndex::build(&[data_batch(vec![Some("alpha beta gamma")])], "data").unwrap();
+        let bytes = serialize_data(&idx, Some("/k"), Some("/k"));
+        let hlen = peek_header_len(&bytes).unwrap();
+        assert!(hlen < bytes.len(), "payload follows the header");
+        // The header parses from exactly its prefix...
+        assert!(parse_header(&bytes[..hlen]).is_some());
+        // ...but not from a prefix shorter than header_len.
+        assert!(parse_header(&bytes[..hlen - 1]).is_none());
+    }
+
+    #[test]
+    fn parse_rejects_garbage() {
+        assert!(peek_header_len(b"nope").is_none());
+        assert!(parse_header(b"nope").is_none());
+        assert!(parse_header(&[]).is_none());
+        // Right magic/version, truncated body.
         let mut b = TGM_MAGIC.to_vec();
         b.push(TGM_VERSION);
-        assert!(TrigramIndex::from_bytes(&b).is_none());
+        assert!(parse_header(&b).is_none());
+        // A wrong version is rejected (forward-compat: unknown versions = absent).
+        let idx = TrigramIndex::build(&[data_batch(vec![Some("alpha beta")])], "data").unwrap();
+        let mut bytes = serialize_data(&idx, None, None);
+        bytes[4] = TGM_VERSION + 1;
+        assert!(peek_header_len(&bytes).is_none());
+        assert!(parse_header(&bytes).is_none());
     }
 
     #[test]
