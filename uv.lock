@@ -591,6 +591,25 @@ wheels = [
 ]
 
 [[package]]
+name = "arrow-tokenize"
+version = "1.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyarrow" },
+    { name = "tokenizers" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a4/96/ca4f1330b21b95a8fff920696da07b590fa72b0be397b8002a8b9b13b822/arrow_tokenize-1.0.2-cp311-cp311-macosx_10_12_x86_64.whl", hash = "sha256:aa6b7efe4388f7fdb2556db924461ae4edd1f99a6f94c330fcc19d6a3c830dcc", size = 2198261, upload-time = "2025-11-25T04:51:18.895Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/7b/6699ece10b4c2074205b5bbebe4a722ad636b56435df91e682b2beae80c6/arrow_tokenize-1.0.2-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:43568bd98b0f92e4a4daa581cb1ac58a0786784afb5c6367893faf2a8a03aeca", size = 2112455, upload-time = "2025-11-25T04:51:20.384Z" },
+    { url = "https://files.pythonhosted.org/packages/87/67/be91604034be11bdb8831d67224158662f3033d31b87341509e5297a6bd9/arrow_tokenize-1.0.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:2d67a45c989210bb68b80831863d99ef552ff10902c2406d724dd8381a4dc259", size = 2289798, upload-time = "2025-11-25T04:51:21.799Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/c2/8515be39c07175434b226f2899b3d2312448ef1f5ac09fa45139b5003aed/arrow_tokenize-1.0.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:af1a4c694fdbae42a7dcfdd77e00495cebd56f317d48c1dd81d5725228acb0a4", size = 2377700, upload-time = "2025-11-25T04:51:22.935Z" },
+    { url = "https://files.pythonhosted.org/packages/be/4a/a37f725a596078dc23505642f2f52fd391bfe73ff3377916529a0acea2aa/arrow_tokenize-1.0.2-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:99786811223c788c6e76c828503aa93fdafa18986eba20068ef4b3636794c903", size = 2195218, upload-time = "2025-11-25T04:51:24.434Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/7e/bed226fd8ba41561eeb670d8179e85e85802b3073bbcd6f49270b57905c0/arrow_tokenize-1.0.2-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:852c1bf7598d8627a56fd95ccad90790778633b7b655804db14b90607fcf9fe5", size = 2110117, upload-time = "2025-11-25T04:51:25.816Z" },
+    { url = "https://files.pythonhosted.org/packages/45/d8/76dbda5f38cd2aa02737bbb29a44a5aa3103e571b42c19e3f49c653d8e72/arrow_tokenize-1.0.2-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:75189a37c9439300a253156af1cf23316873a89129fabda768dc0adfbed81b7b", size = 2289797, upload-time = "2025-11-25T04:51:27.224Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/41/c62edde9bdd43cdaa2574033d916c128fd0b6cfc927692c44ded31a515cc/arrow_tokenize-1.0.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6106213a724c628a48f169e6bdd43af4d3e69463b7234b968ca14636d8b56054", size = 2376603, upload-time = "2025-11-25T04:51:28.399Z" },
+]
+
+[[package]]
 name = "astor"
 version = "0.8.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2020,6 +2039,27 @@ wheels = [
 ]
 
 [[package]]
+name = "faiss-cpu"
+version = "1.13.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "packaging" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/c9/671f66f6b31ec48e5825d36435f0cb91189fa8bb6b50724029dbff4ca83c/faiss_cpu-1.13.2-cp310-abi3-macosx_14_0_arm64.whl", hash = "sha256:a9064eb34f8f64438dd5b95c8f03a780b1a3f0b99c46eeacb1f0b5d15fc02dc1", size = 3452776, upload-time = "2025-12-24T10:27:01.419Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/4a/97150aa1582fb9c2bca95bd8fc37f27d3b470acec6f0a6833844b21e4b40/faiss_cpu-1.13.2-cp310-abi3-macosx_14_0_x86_64.whl", hash = "sha256:c8d097884521e1ecaea6467aeebbf1aa56ee4a36350b48b2ca6b39366565c317", size = 7896434, upload-time = "2025-12-24T10:27:03.592Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/d0/0940575f059591ca31b63a881058adb16a387020af1709dcb7669460115c/faiss_cpu-1.13.2-cp310-abi3-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:0ee330a284042c2480f2e90450a10378fd95655d62220159b1408f59ee83ebf1", size = 11485825, upload-time = "2025-12-24T10:27:05.681Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/e1/a5acac02aa593809f0123539afe7b4aff61d1db149e7093239888c9053e1/faiss_cpu-1.13.2-cp310-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ab88ee287c25a119213153d033f7dd64c3ccec466ace267395872f554b648cd7", size = 23845772, upload-time = "2025-12-24T10:27:08.194Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/7b/49dcaf354834ec457e85ca769d50bc9b5f3003fab7c94a9dcf08cf742793/faiss_cpu-1.13.2-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:85511129b34f890d19c98b82a0cd5ffb27d89d1cec2ee41d2621ee9f9ef8cf3f", size = 13477567, upload-time = "2025-12-24T10:27:10.822Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/6b/12bb4037921c38bb2c0b4cfc213ca7e04bbbebbfea89b0b5746248ce446e/faiss_cpu-1.13.2-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:8b32eb4065bac352b52a9f5ae07223567fab0a976c7d05017c01c45a1c24264f", size = 25102239, upload-time = "2025-12-24T10:27:13.476Z" },
+    { url = "https://files.pythonhosted.org/packages/14/6d/40439a05e4e60a0e889aa68b08ec70f5c8e32901f75f2be25c593a2e050e/faiss_cpu-1.13.2-cp311-cp311-win_amd64.whl", hash = "sha256:7c5944d7807d58fe7244b6aba06be710ee7ed99343365ed92699349efe979f51", size = 18879906, upload-time = "2025-12-24T10:27:19.041Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/f9/b97eadbdd9e00f945d1566c7101382344f504596bfb19219465b0fc61e6e/faiss_cpu-1.13.2-cp311-cp311-win_arm64.whl", hash = "sha256:19508a1badfb36e456c1c8664eeb948349f604db5c7545f277a0126b4a84b080", size = 8548280, upload-time = "2025-12-24T10:27:22.114Z" },
+    { url = "https://files.pythonhosted.org/packages/87/ff/35ed875423200c17bdd594ce921abfc1812ddd21e09355290b9a94e170ab/faiss_cpu-1.13.2-cp312-cp312-win_amd64.whl", hash = "sha256:b82c01d30430dd7b1fa442001b9099735d1a82f6bb72033acdc9206d5ac66a64", size = 18890300, upload-time = "2025-12-24T10:27:24.194Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/3a/bbdf5deaf6feb34b46b469c0a0acd40216c3d3c6ecf5aeb71d56b8a650e3/faiss_cpu-1.13.2-cp312-cp312-win_arm64.whl", hash = "sha256:2c4f696ae76e7c97cbc12311db83aaf1e7f4f7be06a3ffea7e5b0e8ec1fd805b", size = 8553157, upload-time = "2025-12-24T10:27:26.38Z" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.136.3"
 source = { registry = "https://pypi.org/simple" }
@@ -2156,6 +2196,40 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/20/b5/23b216d9d985a956623b6bd12d4086b60f0059b27799f23016af04a74ea1/fastjsonschema-2.21.2.tar.gz", hash = "sha256:b1eb43748041c880796cd077f1a07c3d94e93ae84bba5ed36800a33554ae05de", size = 374130, upload-time = "2025-08-14T18:49:36.666Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/a8/20d0723294217e47de6d9e2e40fd4a9d2f7c4b6ef974babd482a59743694/fastjsonschema-2.21.2-py3-none-any.whl", hash = "sha256:1c797122d0a86c5cace2e54bf4e819c36223b552017172f32c5c024a6b77e463", size = 24024, upload-time = "2025-08-14T18:49:34.776Z" },
+]
+
+[[package]]
+name = "fasttext-wheel"
+version = "0.9.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pybind11" },
+    { name = "setuptools" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c8/51/022e84b23ec435248a39f727dae94240321ebe2fdc104800de80410e1550/fasttext-wheel-0.9.2.tar.gz", hash = "sha256:056e088318ef0e0cc690c4cb18637320eaa3cdb986b62d67bb50d6a7a82e4051", size = 71384, upload-time = "2023-05-05T12:02:55.501Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/87/ff2a0cdcd422a951a3c000a809c2f77462085dde0192f10405377f5454e3/fasttext_wheel-0.9.2-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:a32cc0bee31985c5a15ae2ec4f7d777c84e84294d70969d7382961305b0851cf", size = 307771, upload-time = "2022-10-25T08:51:47.354Z" },
+    { url = "https://files.pythonhosted.org/packages/02/8a/625195477d08abc9d1674ee99c818f565c4a49849db75078c1e319a189db/fasttext_wheel-0.9.2-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:aefd4dbecf4c243628a513c3f9f9008a4c94d63f4194cfde6d11975710f04b7c", size = 330705, upload-time = "2022-10-25T08:33:31.472Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/24/8a85a2d6c80b303762f2bd296f7a3bbc1027ce6731a3d6f0bc28665c8065/fasttext_wheel-0.9.2-cp311-cp311-manylinux2014_aarch64.whl", hash = "sha256:ef5be5e24ad4aab61eb42c30e1a7909464b20958907c23dfe4037ef247755254", size = 2882873, upload-time = "2022-11-02T13:00:35.222Z" },
+    { url = "https://files.pythonhosted.org/packages/05/75/105f62d1d24e0bae7c53893c1bbe3cf6eed71c6aa33961105058647e2409/fasttext_wheel-0.9.2-cp311-cp311-manylinux2014_armv7l.whl", hash = "sha256:2dcbe5cb3ebad68667772ff2457d1d5ced69e9caa19fe35e53fe1b0c68db69f6", size = 2661872, upload-time = "2022-11-02T13:00:54.818Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/86/2b43814c0f0722e3800ffb0ab873f7d17d9ec107d0b7b477583e6e8ac769/fasttext_wheel-0.9.2-cp311-cp311-manylinux2014_ppc64.whl", hash = "sha256:b1e6c4aee8dfc5629aba54c0c044eb0c699b3f82ee5f0f1a8edf69c84ffaa1bd", size = 2931234, upload-time = "2022-11-02T13:01:55.116Z" },
+    { url = "https://files.pythonhosted.org/packages/31/c4/74783db26f0067ce9508678b18e033b0d0575e389a7a93431aae0338afcd/fasttext_wheel-0.9.2-cp311-cp311-manylinux2014_ppc64le.whl", hash = "sha256:ad1a3e10354cb71cb2e182ce4cb7fa61fd2396fe4e28d52002b8f6a749138e4d", size = 2809784, upload-time = "2022-11-02T13:00:41.575Z" },
+    { url = "https://files.pythonhosted.org/packages/5d/bf/a9053e329d43a8daac6afe21f4e856b9f2dabfd69e2a8359c23e3c2e345b/fasttext_wheel-0.9.2-cp311-cp311-manylinux2014_s390x.whl", hash = "sha256:c7b94290bc5bf1a8f2cf6ca2e84364bca3588525625907323d3a77bc96365915", size = 2849750, upload-time = "2022-11-02T13:00:38.967Z" },
+    { url = "https://files.pythonhosted.org/packages/64/4d/39e0520fbbde6861467948dfd188aefca614c671e5801ca86b95059f9b1d/fasttext_wheel-0.9.2-cp311-cp311-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:9e09cff3f2002cdef5f046a0969a0bf886d5386c2eb1c15874d90f9a95edb8d0", size = 4351369, upload-time = "2022-10-25T07:09:18.669Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/13/94644fa56b36d5638e2c689f4506e2685a13c78765d03ae22294711460d4/fasttext_wheel-0.9.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:1ec13d485e0202e729b3bcb7283dda9c499581f691fa8e835e237ee5cf69a2b5", size = 4430756, upload-time = "2022-10-25T07:10:01.452Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/e3/401187b0dbb79c9e878f74aa70921478817ef3a154d2edd2b41c5ab4d476/fasttext_wheel-0.9.2-cp311-cp311-win32.whl", hash = "sha256:39d3201a8e6dabf59c0d8f9a7064d12bb996bca38f5f15e5a678e12fcbd39a35", size = 202482, upload-time = "2022-10-25T07:12:43.423Z" },
+    { url = "https://files.pythonhosted.org/packages/96/58/2d1c2557cefa8d30c7e7ed182cac53cc811b4dcf265ffa64fb8e8a6287c5/fasttext_wheel-0.9.2-cp311-cp311-win_amd64.whl", hash = "sha256:1afb40118fb1b39e159bbdded14834a6a95415c0be957553647b9d70c7cc45ff", size = 232405, upload-time = "2022-10-25T07:10:33.006Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/80/382fc6db2a7d80f343ff26f7506f1214dcc1ac1c9fcca1d1c61faee80be7/fasttext_wheel-0.9.2-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:cc650bd6984ea15207ab09e56f20c2fd09fe90822f4663896185cedb79825d6d", size = 310613, upload-time = "2024-02-17T03:51:36.767Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/91/9dc1baf7d53fcf980406656d568a609cdec5afa94765fd4e32850f74e8d6/fasttext_wheel-0.9.2-cp312-cp312-manylinux2014_aarch64.whl", hash = "sha256:1d673dc21be911134142642e5cf3a92537f565156ede0871f3a769108f446163", size = 2944693, upload-time = "2024-02-17T03:44:39.036Z" },
+    { url = "https://files.pythonhosted.org/packages/f3/6f/fb366b9cb5531e5df51cf67e2693d7bf9b1f4ace859e0e70d62b73c818d3/fasttext_wheel-0.9.2-cp312-cp312-manylinux2014_armv7l.whl", hash = "sha256:a0bbeaf364fdae4269648391ce44f3c4d5774ec7bea614b65b7c51254f1697fd", size = 2700507, upload-time = "2024-02-17T03:44:57.588Z" },
+    { url = "https://files.pythonhosted.org/packages/21/54/637ccc9b6f064e31151e16d7bc597696deff85998a0a6b0cec970aeb22f4/fasttext_wheel-0.9.2-cp312-cp312-manylinux2014_ppc64.whl", hash = "sha256:6ab035ecdf8debd35bf513613abaca714876b799fede8ab32c3841417178c543", size = 2986372, upload-time = "2024-02-17T03:45:02.299Z" },
+    { url = "https://files.pythonhosted.org/packages/09/c3/a9b5519a2d4eee79994a19ae8d4a093fff064802f62fde2402470c160502/fasttext_wheel-0.9.2-cp312-cp312-manylinux2014_ppc64le.whl", hash = "sha256:0a30b779f3f77eca0d31bb11c074fadbc5ab9e6e4c7cdb3135780a61d63eb3fb", size = 2866335, upload-time = "2024-02-17T03:45:52.846Z" },
+    { url = "https://files.pythonhosted.org/packages/89/09/f2832c3f4d8d38dcc072c9d15632125ccd61e62243e4d0ef99eaf545bf26/fasttext_wheel-0.9.2-cp312-cp312-manylinux2014_s390x.whl", hash = "sha256:ca27b054837168dd34b202ef59c903fd713d2307c9d27814ff67bc2d6beeadd2", size = 2903536, upload-time = "2024-02-17T03:44:46.054Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/0a/4f841f20618e9dcd3420b161d26df77042837a7346aa09ed8eda002ab676/fasttext_wheel-0.9.2-cp312-cp312-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:e73457b66edd1fb893092c1717102e7e7d184a9413735801a4c39d0299846940", size = 4469299, upload-time = "2024-02-17T03:45:15.162Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/40/ed638abf8ac6fd0d1e7c47d07d37621e86f46522bbad0bec6e4f6d85a39d/fasttext_wheel-0.9.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5758d911a4e4539c75e93d58d9feee2c6de96a5addc4f4d7d76ed4e8953a4f35", size = 4565768, upload-time = "2024-02-17T03:45:13.807Z" },
+    { url = "https://files.pythonhosted.org/packages/94/98/1c655e814d470ee5ae978b21739ad8a1a598a14b9929b1e966a8fdfe5ce6/fasttext_wheel-0.9.2-cp312-cp312-win32.whl", hash = "sha256:79bfa9b168c115e3b4eab1f7694a80ca6a9ea96ee5e2e4d737e07f5b61812ae8", size = 204177, upload-time = "2024-02-17T03:44:43.724Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/e1/5c1880859a122a57793d13685af6451bcb67be90bf74549bcf042c2ade6b/fasttext_wheel-0.9.2-cp312-cp312-win_amd64.whl", hash = "sha256:8a0cc9e92377d27835a71862c68782e70c9bbd2a666a1a51b2c8261fc9892470", size = 234667, upload-time = "2024-02-17T03:43:13.228Z" },
 ]
 
 [[package]]
@@ -4416,6 +4490,15 @@ wheels = [
 ]
 
 [[package]]
+name = "langdetect"
+version = "1.0.9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0e/72/a3add0e4eec4eb9e2569554f7c70f4a3c27712f40e3284d483e88094cc0e/langdetect-1.0.9.tar.gz", hash = "sha256:cbc1fef89f8d062739774bd51eda3da3274006b3661d199c2655f6b3f6d605a0", size = 981474, upload-time = "2021-05-07T07:54:13.562Z" }
+
+[[package]]
 name = "lark"
 version = "1.2.2"
 source = { registry = "https://pypi.org/simple" }
@@ -4787,6 +4870,11 @@ api = [
     { name = "tiktoken" },
     { name = "tqdm" },
 ]
+ifeval = [
+    { name = "immutabledict" },
+    { name = "langdetect" },
+    { name = "nltk" },
+]
 math = [
     { name = "antlr4-python3-runtime" },
     { name = "math-verify", extra = ["antlr4-11-0"] },
@@ -4819,6 +4907,29 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/3a/05/a1dae3dffd1116099471c643b8924f5aa6524411dc6c63fdae648c4f1aca/loguru-0.7.3.tar.gz", hash = "sha256:19480589e77d47b8d85b2c827ad95d49bf31b0dcde16593892eb51dd18706eb6", size = 63559, upload-time = "2024-12-06T11:20:56.608Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0c/29/0348de65b8cc732daa3e33e67806420b2ae89bdce2b04af740289c5c6c8c/loguru-0.7.3-py3-none-any.whl", hash = "sha256:31a33c10c8e1e10422bfd431aeb5d351c7cf7fa671e3c4df004162264b28220c", size = 61595, upload-time = "2024-12-06T11:20:54.538Z" },
+]
+
+[[package]]
+name = "luxical"
+version = "1.1.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "arrow-tokenize" },
+    { name = "fsspec" },
+    { name = "numba", version = "0.62.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-5-marin-vllm' or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
+    { name = "numba", version = "0.63.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-14-marin-levanter-gpu' or extra == 'extra-5-marin-cpu' or extra == 'extra-5-marin-gpu' or extra != 'extra-5-marin-vllm'" },
+    { name = "s3fs" },
+    { name = "scipy" },
+    { name = "torch", version = "2.10.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-5-marin-cpu') or (platform_machine == 'arm64' and sys_platform == 'darwin' and extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (platform_machine == 'arm64' and sys_platform == 'darwin' and extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (platform_machine != 'arm64' and extra == 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-gpu') or (platform_machine != 'arm64' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (platform_machine != 'arm64' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (platform_machine != 'arm64' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (platform_machine != 'arm64' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (platform_machine != 'arm64' and extra == 'extra-5-marin-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform != 'darwin' and extra == 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-gpu') or (sys_platform != 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform != 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'darwin' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and extra == 'extra-5-marin-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform == 'darwin' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu' and extra != 'extra-5-marin-vllm') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-tpu' and extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
+    { name = "torch", version = "2.10.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu') or (extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-5-marin-gpu') or (extra == 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
+    { name = "torch", version = "2.10.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'arm64' and extra == 'extra-5-marin-cpu') or (platform_machine != 'arm64' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and extra == 'extra-5-marin-cpu') or (sys_platform != 'darwin' and extra == 'extra-5-marin-tpu') or (sys_platform != 'darwin' and extra == 'extra-5-marin-vllm') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-gpu') or (sys_platform == 'linux' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'linux' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'linux' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform != 'linux' and extra != 'extra-14-marin-levanter-tpu' and extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform != 'linux' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-tpu' and extra != 'extra-5-marin-vllm') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu') or (extra == 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-5-marin-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-tpu' and extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-tpu' and extra != 'extra-5-marin-vllm') or (extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-gpu' and extra != 'extra-5-marin-tpu' and extra != 'extra-5-marin-vllm')" },
+    { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-5-marin-gpu') or (sys_platform != 'linux' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'linux' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-5-marin-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
+    { name = "tqdm" },
+    { name = "uniplot" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3e/40/642b335611c7f215c3ffa9eb6c758b62de8f0b397f65762ae6db695c0d90/luxical-1.1.2-py3-none-any.whl", hash = "sha256:80daf9aafbb7b306e08846d6718462d162eb4fcb4b5a43cf7c7487ae7e77c0ed", size = 35395, upload-time = "2025-11-25T04:51:36.059Z" },
 ]
 
 [[package]]
@@ -4893,6 +5004,7 @@ dependencies = [
     { name = "deepdiff" },
     { name = "draccus" },
     { name = "fasteners" },
+    { name = "fasttext-wheel" },
     { name = "flask" },
     { name = "fsspec" },
     { name = "gcsfs" },
@@ -4937,11 +5049,18 @@ cpu = [
     { name = "torchvision", version = "0.25.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-vllm') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (platform_machine != 'arm64' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (platform_machine != 'arm64' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-vllm') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform != 'darwin' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform != 'darwin' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "torchvision", version = "0.25.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-vllm') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-vllm') or (sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform == 'linux' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (sys_platform == 'linux' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (sys_platform == 'linux' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform == 'linux' and extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform == 'linux' and extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform == 'linux' and extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform == 'linux' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform == 'linux' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-vllm') or (sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform == 'win32' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (sys_platform == 'win32' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (sys_platform == 'win32' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform == 'win32' and extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform == 'win32' and extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform == 'win32' and extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform == 'win32' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform == 'win32' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
 ]
+datakit = [
+    { name = "faiss-cpu" },
+    { name = "huggingface-hub" },
+    { name = "luxical" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+]
 dedup = [
     { name = "marin-dupekit" },
 ]
 eval = [
-    { name = "lm-eval", extra = ["api", "math"] },
+    { name = "lm-eval", extra = ["api", "ifeval", "math"] },
 ]
 evalchemy = [
     { name = "antlr4-python3-runtime" },
@@ -5079,7 +5198,9 @@ requires-dist = [
     { name = "datasets", specifier = "<5.0.0" },
     { name = "deepdiff", specifier = ">=8.6.2" },
     { name = "draccus", specifier = ">=0.11.5" },
+    { name = "faiss-cpu", marker = "extra == 'datakit'" },
     { name = "fasteners", specifier = ">=0.19" },
+    { name = "fasttext-wheel", specifier = ">=0.9.2" },
     { name = "fire", marker = "extra == 'evalchemy'" },
     { name = "flask", specifier = ">=3.1.3" },
     { name = "fsspec", specifier = ">=2025.3.0" },
@@ -5089,6 +5210,7 @@ requires-dist = [
     { name = "google-cloud-storage-transfer" },
     { name = "google-vizier", extras = ["jax"], marker = "extra == 'vizier'" },
     { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=354692d9c0eab497b05f266aa0dff30e2a238d2e" },
+    { name = "huggingface-hub", marker = "extra == 'datakit'" },
     { name = "jax", specifier = ">=0.9.2,<0.11" },
     { name = "jax", marker = "extra == 'cpu'", specifier = "==0.9.2" },
     { name = "jax", marker = "extra == 'tpu'", specifier = "==0.9.2" },
@@ -5100,7 +5222,8 @@ requires-dist = [
     { name = "jaxopt", specifier = ">=0.8.3" },
     { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.39" },
     { name = "lm-eval", extras = ["math"], marker = "extra == 'evalchemy'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
-    { name = "lm-eval", extras = ["math", "api"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
+    { name = "lm-eval", extras = ["math", "api", "ifeval"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
+    { name = "luxical", marker = "extra == 'datakit'" },
     { name = "lxml", extras = ["html-clean"] },
     { name = "lxml-html-clean", specifier = ">=0.4.4" },
     { name = "marin-dupekit", marker = "extra == 'dedup'" },
@@ -5126,6 +5249,8 @@ requires-dist = [
     { name = "requests", specifier = ">=2.33.0" },
     { name = "resiliparse", specifier = ">=0.17.2", index = "https://marin-community.github.io/chatnoir-resiliparse/simple" },
     { name = "s3fs", specifier = ">=2024" },
+    { name = "scikit-learn", marker = "extra == 'datakit'" },
+    { name = "scipy", marker = "extra == 'datakit'" },
     { name = "sqlalchemy", marker = "extra == 'evalchemy'" },
     { name = "sympy", marker = "extra == 'evalchemy'", specifier = ">=1.12.1,<1.14" },
     { name = "sympy", marker = "extra == 'math'" },
@@ -5155,7 +5280,7 @@ requires-dist = [
     { name = "wandb", specifier = ">0.24.0" },
     { name = "warcio" },
 ]
-provides-extras = ["gpu", "tpu", "cpu", "rl", "eval", "evalchemy", "vizier", "vllm", "harbor", "dedup", "math"]
+provides-extras = ["gpu", "tpu", "cpu", "rl", "eval", "evalchemy", "vizier", "vllm", "harbor", "dedup", "datakit", "math"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -9471,6 +9596,15 @@ wheels = [
 ]
 
 [[package]]
+name = "readchar"
+version = "4.2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ed/49/a10341024c45bed95d13197ec9ef0f4e2fd10b5ca6e7f8d7684d18082398/readchar-4.2.2.tar.gz", hash = "sha256:e3b270fe16fc90c50ac79107700330a133dd4c63d22939f5b03b4f24564d5dd8", size = 9762, upload-time = "2026-04-06T19:45:54.226Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3d/ca/36133653e00939922dd1416f4c56177361289172a30563fcb9552c9ccde4/readchar-4.2.2-py3-none-any.whl", hash = "sha256:92daf7e42c52b0787e6c75d01ecfb9a94f4ceff3764958b570c1dddedd47b200", size = 9401, upload-time = "2026-04-06T19:45:52.993Z" },
+]
+
+[[package]]
 name = "realtime"
 version = "2.27.2"
 source = { registry = "https://pypi.org/simple" }
@@ -11808,6 +11942,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/91/7a/146a99696aee0609e3712f2b44c6274566bc368dfe8375191278045186b8/uc-micro-py-1.0.3.tar.gz", hash = "sha256:d321b92cff673ec58027c04015fcaa8bb1e005478643ff4a500882eaab88c48a", size = 6043, upload-time = "2024-02-09T16:52:01.654Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/37/87/1f677586e8ac487e29672e4b17455758fce261de06a0d086167bb760361a/uc_micro_py-1.0.3-py3-none-any.whl", hash = "sha256:db1dffff340817673d7b466ec86114a9dc0e9d4d9b5ba229d9d60e5c12600cd5", size = 6229, upload-time = "2024-02-09T16:52:00.371Z" },
+]
+
+[[package]]
+name = "uniplot"
+version = "0.21.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "readchar" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/55/66/198a3921ad6fd3c5e4de1e8d6ef4d9781d6c992e36f14bb5325717c0c8df/uniplot-0.21.5.tar.gz", hash = "sha256:24adc3c44b6719f3acd28cc8cac4afa621a0ff63f6dce3f8c8615c27923edb18", size = 35593, upload-time = "2026-01-04T12:40:29.333Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/99/e7/b3cd93b172b4e24f132af7e235623f68e704fd09b828822461eca0e98066/uniplot-0.21.5-py3-none-any.whl", hash = "sha256:7ba1bcef43376991fa1936c85186b08ce46065a63068ce0735df491c76e001f1", size = 37346, upload-time = "2026-01-04T12:40:28.269Z" },
 ]
 
 [[package]]

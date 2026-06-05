@@ -40,7 +40,7 @@ from typing import Any
 
 from fray import ResourceConfig
 from pydantic import BaseModel
-from zephyr import Dataset, ZephyrContext, counters, write_parquet_file
+from zephyr import Dataset, ZephyrContext, counters, write_parquet_file, zephyr_worker_ctx
 
 from marin.execution.artifact import Artifact
 from marin.execution.step_spec import StepSpec
@@ -182,15 +182,29 @@ def _emit_bucket_records(entries: list[dict[str, Any]]) -> Iterator[dict]:
                     yield {"bucket": str(b), "id": cc_id, "file_idx": entry["file_idx"]}
 
 
-def _make_per_shard_writer(output_path: str, entries: list[dict[str, Any]], counter_prefix: str):
+# Key under which ``entries`` is staged via ``ZephyrContext.put`` for the
+# stage1 reducer. Holding the list in the closure would serialize it into
+# every ``pull_task`` RPC pickle (one per dispatched reduce task) — at
+# ~100k entries this OOMs the coord under the high-fan-out dispatch that
+# kicks in when ``max_parallelism`` is large. Pulling it from shared data
+# instead means each worker fetches and caches the list once.
+_SHARED_ENTRIES_KEY = "fuzzy_dups_entries"
+
+
+def _make_per_shard_writer(output_path: str, counter_prefix: str):
     """Return a group_by reducer that writes per-shard cluster-annotation parquet files.
 
     Skips singletons entirely. For every non-singleton cluster member, writes
     ``{id, attributes: {dup_cluster_id, is_cluster_canonical}}``. Rows are
     already sorted by ``id`` thanks to the upstream ``group_by(sort_by=id)``.
+
+    The ``entries`` list is loaded via ``zephyr_worker_ctx().get_shared`` so it
+    is shipped to workers once (via Zephyr shared-data) rather than captured
+    in this closure and re-pickled per ``pull_task`` RPC.
     """
 
     def aggregate(file_idx: int, records: Iterator[dict]) -> dict:
+        entries = zephyr_worker_ctx().get_shared(_SHARED_ENTRIES_KEY)
         entry = entries[file_idx]
         out_path = f"{output_path}/outputs/{entry['source_tag']}/{entry['basename']}"
 
@@ -313,7 +327,8 @@ def compute_fuzzy_dups_attrs(
         # TODO (rav): log the number of changed nodes?
         logger.warning("Connected components did not converge")
 
-    aggregator = _make_per_shard_writer(output_path, entries, counter_prefix="dedup/fuzzy/document")
+    ctx.put(_SHARED_ENTRIES_KEY, entries)
+    aggregator = _make_per_shard_writer(output_path, counter_prefix="dedup/fuzzy/document")
 
     # CC's Hash-to-Min guarantees component_id == min(id_norm) across a cluster,
     # so `component_id == id_norm` cheaply identifies the natural canonical.

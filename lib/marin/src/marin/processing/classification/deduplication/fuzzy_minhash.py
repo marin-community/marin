@@ -40,12 +40,20 @@ class MinHashParams(BaseModel):
 
     Two ``MinHashAttrData`` artifacts can only be combined in
     :func:`compute_fuzzy_dups_attrs` if their params are equal.
+
+    ``text_cap_chars`` (added v2) caps each document's character length
+    before shingling/MinHash. Documents with O(10M+) shingles produce
+    saturated MinHash signatures that band-collide with arbitrary other
+    documents, creating large CC false-positive clusters. Capping bounds
+    signature density so a single mega-doc cannot link unrelated
+    documents into one cluster. ``None`` preserves pre-v2 behavior.
     """
 
     num_perms: int
     num_bands: int
     ngram_size: int
     seed: int
+    text_cap_chars: int | None = None
 
 
 class MinHashAttrData(BaseModel):
@@ -65,7 +73,7 @@ class MinHashAttrData(BaseModel):
         counters: Aggregated zephyr counters.
     """
 
-    version: str = "v1"
+    version: str = "v2"
     params: MinHashParams
     source_main_dir: str
     attr_dir: str
@@ -79,6 +87,34 @@ def _attr_records(batch: pa.RecordBatch, params: MinHashParams) -> list[dict]:
     bucket. Documents whose signature column is null (empty/whitespace text
     after cleaning) are dropped and counted via ``minhash/empty_signatures``.
     """
+    if params.text_cap_chars is not None:
+        # Truncate the text column to cap shingle count per doc. Mega-docs
+        # otherwise produce saturated MinHash signatures that LSH-collide
+        # with arbitrary content; see CROSS_SOURCE_REPORT.md § Root cause.
+        #
+        # TODO(rav): measure impact -- compare CC-size distribution and
+        # cross-source false-positive rate (mega-doc-seeded blobs) against
+        # the v1 (uncapped) run, and sweep the cap to find the
+        # recall/precision knee. See `minhash/text_truncated` counter for
+        # the per-job cap rate.
+        cap = params.text_cap_chars
+        n_truncated = 0
+        truncated: list[str] = []
+        for t in batch["text"]:
+            text = t.as_py() or ""
+            if len(text) > cap:
+                truncated.append(text[:cap])
+                n_truncated += 1
+            else:
+                truncated.append(text)
+        if n_truncated:
+            counters.increment("minhash/text_truncated", n_truncated)
+        batch = batch.set_column(
+            batch.schema.get_field_index("text"),
+            "text",
+            pa.array(truncated, type=pa.string()),
+        )
+
     pipeline = [
         dupekit.Transformation.CleanText(input_col="text", output_col="clean_text"),
         dupekit.Transformation.MinHash(
@@ -120,6 +156,7 @@ def compute_minhash_attrs(
     num_perms: int = 286,
     num_bands: int = 26,
     ngram_size: int = 5,
+    text_cap_chars: int | None = 500_000,
     seed: int = 42,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
@@ -141,6 +178,11 @@ def compute_minhash_attrs(
         ngram_size: Character n-gram size for shingling. Applied to text
             after dupekit's CleanText (lowercase, strip punctuation,
             collapse whitespace).
+        text_cap_chars: If set, truncate each document to this many chars
+            before MinHash so mega-docs cannot saturate the signature
+            space and cause LSH false-positive blobs. Default 500,000
+            chars (~100K shingles at ngram=5). Pass ``None`` to disable
+            (pre-v2 behavior).
         seed: MinHash seed.
         worker_resources: Per-worker resource request. Sized similarly to the
             old ``dedup_fuzzy_document``: dupekit's Rust MinHash pipeline uses
@@ -154,7 +196,13 @@ def compute_minhash_attrs(
     if num_perms % num_bands != 0:
         raise ValueError(f"num_perms ({num_perms}) must be divisible by num_bands ({num_bands})")
 
-    params = MinHashParams(num_perms=num_perms, num_bands=num_bands, ngram_size=ngram_size, seed=seed)
+    params = MinHashParams(
+        num_perms=num_perms,
+        num_bands=num_bands,
+        ngram_size=ngram_size,
+        seed=seed,
+        text_cap_chars=text_cap_chars,
+    )
     attr_dir = os.path.join(output_path, "outputs")
 
     source_shards = sorted(fsspec_glob(f"{source.main_output_dir.rstrip('/')}/*.parquet"))
@@ -207,6 +255,7 @@ def compute_minhash_attrs_step(
     num_perms: int = 286,
     num_bands: int = 26,
     ngram_size: int = 5,
+    text_cap_chars: int | None = 500_000,
     seed: int = 42,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
@@ -222,6 +271,7 @@ def compute_minhash_attrs_step(
             num_perms=num_perms,
             num_bands=num_bands,
             ngram_size=ngram_size,
+            text_cap_chars=text_cap_chars,
             seed=seed,
             worker_resources=worker_resources,
             max_workers=max_workers,
@@ -230,6 +280,7 @@ def compute_minhash_attrs_step(
             "num_perms": num_perms,
             "num_bands": num_bands,
             "ngram_size": ngram_size,
+            "text_cap_chars": text_cap_chars,
             "seed": seed,
         },
         override_output_path=override_output_path,
