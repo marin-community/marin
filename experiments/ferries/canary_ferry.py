@@ -13,6 +13,10 @@ to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
     CANARY_GPU_TYPE      gpu-only accelerator type, e.g. H100, GH200, B200
     CANARY_GPU_COUNT     gpu-only accelerator count per replica
     CANARY_GPU_REPLICAS  gpu-only replica count
+    CANARY_MODEL_DIM     gpu-only model hidden dimension
+    CANARY_NUM_LAYERS    gpu-only model layer count
+    CANARY_EXPERT_PARALLEL gpu-only expert mesh axis size
+    CANARY_OPTIMIZER_TOKENS gpu-only token budget for optimizer scaling
     CANARY_PROFILER_ENABLED true | false
     CANARY_PROFILER_NUM_STEPS profiler duration in steps
     CANARY_PROFILER_START_STEP profiler start step
@@ -38,6 +42,7 @@ from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize.data_configs import lm_data_config
 
 from experiments.defaults import default_tokenize
+from experiments.grug.moe.heuristic_v2 import MoeMuonHHeuristic
 from experiments.grug.moe.launch import (
     GRUG_MOE_TRIAL_MODEL,
     NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
@@ -62,6 +67,8 @@ CANARY_TRAINER = GrugTrainerConfig(
     log_every=1,
 )
 
+CANARY_GPU_HEURISTIC = MoeMuonHHeuristic()
+
 
 def _env_int(key: str, default: int) -> int:
     raw = os.environ.get(key, "")
@@ -85,6 +92,10 @@ def _build_step_from_env() -> ExecutorStep:
     if accelerator == "tpu":
         batch_size = _env_int("CANARY_BATCH_SIZE", 512)
         target_tokens = _env_int("CANARY_TARGET_TOKENS", 1_000_000_000)
+        model = GRUG_MOE_TRIAL_MODEL
+        optimizer = CANARY_OPTIMIZER
+        trainer = CANARY_TRAINER
+        expert_parallel = 1
         name = "canary-ferry-moe"
         data = NEMOTRON_MIX_WITH_DEFAULT_VALIDATION
         resources = ResourceConfig.with_tpu("v5p-8")
@@ -98,11 +109,19 @@ def _build_step_from_env() -> ExecutorStep:
         wandb_group = "canary-ferry-moe"
         wandb_tags = ["canary", "ferry", "grug", "moe"]
     else:
-        batch_size = _env_int("CANARY_BATCH_SIZE", 32)
-        target_tokens = _env_int("CANARY_TARGET_TOKENS", batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len * 50)
+        batch_size = _env_int("CANARY_BATCH_SIZE", 8)
+        model_dim = _env_int("CANARY_MODEL_DIM", 2560)
+        num_layers = _env_int("CANARY_NUM_LAYERS", 20)
+        model = dataclasses.replace(
+            CANARY_GPU_HEURISTIC.build_model_config(model_dim),
+            num_layers=num_layers,
+        )
+        trainer = dataclasses.replace(CANARY_TRAINER, z_loss_weight=0.0)
+        target_tokens = _env_int("CANARY_TARGET_TOKENS", batch_size * model.max_seq_len * 20)
         gpu_type = os.environ.get("CANARY_GPU_TYPE", "H100")
         gpu_count = _env_int("CANARY_GPU_COUNT", 8)
         gpu_replicas = _env_int("CANARY_GPU_REPLICAS", 1)
+        expert_parallel = _env_int("CANARY_EXPERT_PARALLEL", gpu_count)
 
         # SlimPajama-6B with block-shuffle — small dataset, re-tokenized on first run.
         tokenize_step = default_tokenize(
@@ -132,16 +151,35 @@ def _build_step_from_env() -> ExecutorStep:
             replicas=gpu_replicas,
         )
         name = f"canary-ferry-cw-{gpu_type.lower()}x{gpu_count}-r{gpu_replicas}"
-        wandb_group = f"canary-ferry-moe-gpu-{gpu_type.lower()}-r{gpu_replicas}"
-        wandb_tags = ["canary", "ferry", "grug", "moe", "gpu", gpu_type.lower()]
+        wandb_group = f"canary-ferry-moe-gpu-{gpu_type.lower()}-d{model.hidden_dim}-l{model.num_layers}"
+        wandb_tags = [
+            "canary",
+            "ferry",
+            "grug",
+            "moe",
+            "gpu",
+            gpu_type.lower(),
+            f"d{model.hidden_dim}",
+            f"l{model.num_layers}",
+            f"ep{expert_parallel}",
+        ]
         eval_config = None
 
-    num_steps = _env_int("CANARY_STEPS", target_tokens // (batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len))
+    num_steps = _env_int("CANARY_STEPS", target_tokens // (batch_size * model.max_seq_len))
     if num_steps <= 0:
         raise ValueError(
             f"CANARY_STEPS={num_steps} invalid; set CANARY_STEPS or CANARY_TARGET_TOKENS high enough for "
-            f"batch_size={batch_size} x seq_len={GRUG_MOE_TRIAL_MODEL.max_seq_len}"
+            f"batch_size={batch_size} x seq_len={model.max_seq_len}"
         )
+    if accelerator == "gpu":
+        optimizer_tokens = float(_env_int("CANARY_OPTIMIZER_TOKENS", 10_000_000_000_000))
+        optimizer = CANARY_GPU_HEURISTIC.build_muonh_config(
+            batch_size,
+            optimizer_tokens,
+            model.hidden_dim,
+            seq_len=model.max_seq_len,
+        )
+
     if os.environ.get("CANARY_TRACKER", "wandb").lower() == "json_logger":
         tracker = JsonLoggerConfig(logger_name=os.environ.get("CANARY_JSON_LOGGER", "canary_ferry.metrics"))
     else:
@@ -163,7 +201,7 @@ def _build_step_from_env() -> ExecutorStep:
         name=f"{name}-{run_id}",
         fn=run_grug_moe_trial,
         config=GrugMoeLaunchConfig(
-            model=versioned(GRUG_MOE_TRIAL_MODEL),
+            model=versioned(model),
             data=data,
             output_path=this_output_path(),
             run_id=run_id,
@@ -173,14 +211,15 @@ def _build_step_from_env() -> ExecutorStep:
             seed=versioned(0),
             mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
             tracker=tracker,
-            optimizer=versioned(CANARY_OPTIMIZER),
-            grug_trainer=versioned(CANARY_TRAINER),
+            optimizer=versioned(optimizer),
+            grug_trainer=versioned(trainer),
             eval=versioned(eval_config) if eval_config is not None else None,
             profiler=ProfilerConfig(
                 enabled=profiler_enabled,
                 start_step=profiler_start_step,
                 num_steps=profiler_num_steps,
             ),
+            expert_parallel=versioned(expert_parallel),
         ),
     )
 
