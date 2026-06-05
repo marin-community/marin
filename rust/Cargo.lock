@@ -1938,6 +1938,8 @@ dependencies = [
  "connectrpc",
  "connectrpc-build",
  "datafusion",
+ "datafusion-datasource",
+ "datafusion-datasource-parquet",
  "futures",
  "http-body",
  "object_store",

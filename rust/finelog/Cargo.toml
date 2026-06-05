@@ -48,6 +48,14 @@ futures = "0.3"
 # `gcp` feature is for Phase 4/6 remote reads. `async-trait` is required to impl
 # datafusion's `#[async_trait] TableProvider`; `url` is for register_object_store.
 datafusion = "53"
+# Internal DataFusion crates, reached directly only for the trigram row-group
+# prune: `PartitionedFile`/`ParquetAccessPlan` (the "advanced parquet index"
+# seam) are not re-exported by the `datafusion` umbrella. Same major as
+# `datafusion` so cargo unifies them to its pinned 53.x — keeping EXACTLY ONE
+# copy of these types (a mismatched version would make the opener's
+# `downcast_ref::<ParquetAccessPlan>()` silently miss).
+datafusion-datasource = "53"
+datafusion-datasource-parquet = "53"
 object_store = { version = "0.13", features = ["gcp"] }
 async-trait = "0.1"
 url = "2"

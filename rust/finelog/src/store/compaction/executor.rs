@@ -168,6 +168,20 @@ fn apply_merge(
         ))
     })?;
 
+    // Build the trigram substring-index sidecar next to the merged output (a
+    // no-op for namespaces without the indexed column). Best-effort: the index
+    // is optional, so a missing sidecar only disables row-group pruning for this
+    // segment, never correctness. Sidecars are built here, at the L0->L1+ merge
+    // (where the bulk of queryable data lands), and carried forward verbatim by
+    // single-input level bumps; L0 is intentionally left unindexed.
+    if let Err(e) = crate::store::trigram::write_sidecar(
+        &merged_path,
+        &merged,
+        crate::store::trigram::INDEXED_COLUMN,
+    ) {
+        tracing::warn!(path = %merged_path.display(), error = %e, "trigram sidecar write failed");
+    }
+
     let size = std::fs::metadata(&merged_path)
         .map_err(|e| StatsError::Internal(format!("stat {}: {e}", merged_path.display())))?
         .len() as i64;
@@ -408,6 +422,66 @@ mod tests {
         let meta = read_segment_footer(&to, Some("key")).unwrap();
         assert_eq!(meta.level, 3);
         assert_eq!(meta.row_count, 2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn merge_writes_trigram_sidecar_for_data_column() {
+        use crate::store::trigram::{sidecar_path, TrigramIndex};
+        let dir = tempdir("tgm_sidecar");
+        // Log-form schema with a `data` column (the indexed column).
+        let log: SchemaRef = Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("key", DataType::Int64, false),
+            Field::new("data", DataType::Utf8, false),
+        ]));
+        let mk = |first_seq: i64, lines: &[&str]| {
+            let n = lines.len() as i64;
+            RecordBatch::try_new(
+                Arc::clone(&log),
+                vec![
+                    Arc::new(Int64Array::from_iter_values(first_seq..first_seq + n)),
+                    Arc::new(Int64Array::from_iter_values(
+                        std::iter::repeat(1)
+                            .take(lines.len() as usize)
+                            .map(|x| x as i64),
+                    )),
+                    Arc::new(StringArray::from(lines.to_vec())),
+                ],
+            )
+            .unwrap()
+        };
+        let (p1, _) =
+            write_segment_to_dir(&dir, 0, 1, &mk(1, &["Bootstrap completed for TPU"])).unwrap();
+        let (p2, _) = write_segment_to_dir(&dir, 0, 2, &mk(2, &["unrelated heartbeat"])).unwrap();
+        // L0 inputs have no sidecars (intentionally unindexed).
+        assert!(!sidecar_path(&p1).exists());
+
+        let job = CompactionJob {
+            inputs: vec![
+                row_for(&p1.to_string_lossy(), 0, 1, 1, 50),
+                row_for(&p2.to_string_lossy(), 0, 2, 2, 50),
+            ],
+            output_level: 1,
+            output_min_seq: 1,
+            output_max_seq: 2,
+        };
+        let swap = run_job(&job, &dir, &log, Some("key"), |_| (None, None)).unwrap();
+
+        // The merged output carries a sidecar whose mask prunes correctly.
+        let out = PathBuf::from(&swap.added.path);
+        let sc = sidecar_path(&out);
+        assert!(sc.exists(), "merge output must have a trigram sidecar");
+        let index = TrigramIndex::from_bytes(&std::fs::read(&sc).unwrap()).unwrap();
+        assert_eq!(index.len(), 1, "one row group");
+        assert_eq!(
+            index.keep_mask("Bootstrap completed for TPU").unwrap(),
+            vec![true]
+        );
+        assert_eq!(
+            index.keep_mask("string definitely absent zzz").unwrap(),
+            vec![false]
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

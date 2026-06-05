@@ -17,7 +17,7 @@
 //! freshly allocated seq under the lock, and never writes parquet.
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -39,7 +39,20 @@ use crate::store::schema::{schema_to_arrow, AlignedBatch, Schema};
 use crate::store::segment::{
     discover_segments, read_segment_footer, recover_next_seq, write_segment_to_dir,
 };
+use crate::store::trigram::sidecar_path;
 use crate::store::types::{LocalSegment, NamespaceStats, SegmentLocation, SegmentRow};
+
+/// Best-effort removal of a segment's trigram sidecar (`<path>.tgm`), co-located
+/// with every parquet unlink. A missing sidecar (an L0 / unindexed-namespace
+/// segment never had one) is not an error.
+fn remove_sidecar(parquet_path: &str) {
+    let s = sidecar_path(Path::new(parquet_path));
+    if let Err(e) = std::fs::remove_file(&s) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(path = %s.display(), error = %e, "failed to remove trigram sidecar");
+        }
+    }
+}
 
 /// Target sealed-buffer byte size before a flush is forced.
 pub const SEGMENT_TARGET_BYTES: i64 = 100 * 1024 * 1024;
@@ -664,6 +677,15 @@ impl Namespace {
                     to.display()
                 ))
             })?;
+            // Carry the trigram sidecar with the segment it indexes (a bump is a
+            // pure rename, no rewrite, so the index stays valid). Best-effort: a
+            // missing sidecar (the bumped segment was never indexed) is fine.
+            let (sidecar_from, sidecar_to) = (sidecar_path(from), sidecar_path(to));
+            if sidecar_from.exists() {
+                if let Err(e) = std::fs::rename(&sidecar_from, &sidecar_to) {
+                    tracing::warn!(namespace = %self.name, from = %sidecar_from.display(), error = %e, "failed to carry trigram sidecar on level bump");
+                }
+            }
         }
         let removed_set: std::collections::HashSet<&str> =
             swap.removed.iter().map(|s| s.as_str()).collect();
@@ -704,6 +726,9 @@ impl Namespace {
                         tracing::warn!(namespace = %self.name, path = %path, error = %e, "failed to unlink merged input");
                     }
                 }
+                // The merged output carries a freshly-built sidecar; the inputs'
+                // sidecars are now stale and unlinked with their parquet.
+                remove_sidecar(path);
             }
         }
         Ok(())
@@ -892,6 +917,9 @@ impl Namespace {
                 tracing::warn!(namespace = %self.name, path = %path, error = %e, "failed to delete evicted segment");
             }
         }
+        // The local trigram sidecar is local-only (never uploaded in v1), so it
+        // is unlinked with the local parquet on eviction.
+        remove_sidecar(path);
         removed_bytes
     }
 

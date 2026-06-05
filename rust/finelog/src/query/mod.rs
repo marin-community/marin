@@ -11,6 +11,7 @@
 //! WriteRows/PushLogs ack.
 
 pub mod provider;
+pub mod trigram_prune;
 pub mod udf;
 
 use std::sync::{Arc, OnceLock};
