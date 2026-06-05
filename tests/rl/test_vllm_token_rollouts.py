@@ -9,6 +9,7 @@ from marin.inference.types import (
     TokenizedRolloutBatchRequest,
     TokenizedRolloutRequest,
     TokenizerIdentity,
+    TokenRolloutFailureReason,
     TokenRolloutFinishReason,
     TokenSamplingParameters,
 )
@@ -156,6 +157,29 @@ def test_vllm_token_rollouts_preserve_request_identity_and_boundaries(monkeypatc
     assert sampling_params.max_tokens == 4
     assert sampling_params.top_k == 64
     assert sampling_params.stop_token_ids == [151645]
+
+
+def test_vllm_token_rollouts_report_missing_generations(monkeypatch):
+    monkeypatch.setattr(vllm_context, "SamplingParams", FakeSamplingParams)
+    monkeypatch.setattr(vllm_context, "TokensPrompt", FakeTokensPrompt)
+    output = _vllm_output("req-a", (10, 20))
+    output.outputs = output.outputs[:1]
+    batch = TokenizedRolloutBatchRequest(
+        batch_id="batch-1",
+        tokenizer=_tokenizer(),
+        policy=_policy(),
+        requests=(_request("req-a", (10, 20)),),
+    )
+    context = _context((output,))
+
+    result = context.generate_token_rollouts(batch)
+
+    assert len(result.rollouts) == 1
+    assert len(result.failures) == 1
+    assert result.failures[0].request_id == "req-a"
+    assert result.failures[0].generation_index == 1
+    assert result.failures[0].reason is TokenRolloutFailureReason.BACKEND_ERROR
+    assert result.failures[0].backend_request_id == "vllm-req-a"
 
 
 def test_vllm_token_rollouts_require_uniform_sampling(monkeypatch):

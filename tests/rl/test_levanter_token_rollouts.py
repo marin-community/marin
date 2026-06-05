@@ -10,6 +10,7 @@ from marin.inference.types import (
     TokenizedRolloutBatchRequest,
     TokenizedRolloutRequest,
     TokenizerIdentity,
+    TokenRolloutFailureReason,
     TokenRolloutFinishReason,
     TokenSamplingParameters,
 )
@@ -125,6 +126,34 @@ def test_levanter_token_rollouts_preserve_identity_and_admission_metadata(monkey
     assert [request.request_id for request in engine.requests] == [0, 1]
     assert [request.n_generations for request in engine.requests] == [2, 2]
     assert all(request.return_logprobs for request in engine.requests)
+
+
+def test_levanter_token_rollouts_report_missing_generations(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(levanter_context.hax.partitioning, "set_mesh", lambda mesh: nullcontext())
+    monkeypatch.setattr(levanter_context.hax, "axis_mapping", lambda mapping: nullcontext())
+    result = SimpleNamespace(
+        tokens=((40, 41),),
+        logprobs=((-0.2, -0.3),),
+        total_generated=2,
+        prefill_admissions=1,
+        prefill_prompt_tokens_per_admission=(2,),
+    )
+    batch = TokenizedRolloutBatchRequest(
+        batch_id="batch-1",
+        tokenizer=_tokenizer(),
+        policy=_policy(),
+        requests=(_request("req-a", (10, 20)),),
+    )
+    context, _ = _context(result)
+
+    token_result = context.generate_token_rollouts(batch)
+
+    assert len(token_result.rollouts) == 1
+    assert len(token_result.failures) == 1
+    assert token_result.failures[0].request_id == "req-a"
+    assert token_result.failures[0].generation_index == 1
+    assert token_result.failures[0].reason is TokenRolloutFailureReason.BACKEND_ERROR
+    assert token_result.failures[0].backend_request_id == "1"
 
 
 def test_levanter_token_rollouts_require_logprobs():

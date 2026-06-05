@@ -17,7 +17,9 @@ from marin.inference.types import (
     TokenizedRollout,
     TokenizedRolloutBatchRequest,
     TokenizedRolloutBatchResult,
+    TokenizedRolloutFailure,
     TokenRolloutAdmissionMetadata,
+    TokenRolloutFailureReason,
     TokenRolloutFinishReason,
     TokenRolloutTiming,
     TokenSamplingParameters,
@@ -266,7 +268,10 @@ class vLLMInferenceContext(BaseInferenceContext):
         request_id: str,
         prompt_token_ids: tuple[int, ...],
         request_output: Any,
+        expected_generations: int,
     ) -> tuple[TokenizedRollout, ...]:
+        if len(request_output.outputs) > expected_generations:
+            raise ValueError("vLLM returned more token rollout generations than requested")
         rollouts: list[TokenizedRollout] = []
         for output_idx, output in enumerate(request_output.outputs):
             completion_token_ids = tuple(int(token_id) for token_id in output.token_ids)
@@ -284,6 +289,25 @@ class vLLMInferenceContext(BaseInferenceContext):
                 )
             )
         return tuple(rollouts)
+
+    @staticmethod
+    def _missing_generation_failures(
+        *,
+        request_id: str,
+        generation_count: int,
+        expected_generations: int,
+        backend_request_id: str | None,
+    ) -> tuple[TokenizedRolloutFailure, ...]:
+        return tuple(
+            TokenizedRolloutFailure(
+                request_id=request_id,
+                generation_index=generation_index,
+                reason=TokenRolloutFailureReason.BACKEND_ERROR,
+                message="vLLM returned fewer generations than requested",
+                backend_request_id=backend_request_id,
+            )
+            for generation_index in range(generation_count, expected_generations)
+        )
 
     @staticmethod
     def _validate_token_rollout_batch(batch: TokenizedRolloutBatchRequest) -> None:
@@ -519,18 +543,40 @@ class vLLMInferenceContext(BaseInferenceContext):
         outputs = self.llm.generate(prompts_for_vllm, sampling_params)
         total_duration = time.time() - t0
         logger.info("generate_token_rollouts: done in %.1fs", total_duration)
+        if len(outputs) > len(batch.requests):
+            raise ValueError("vLLM returned more token rollout requests than requested")
 
         rollouts: list[TokenizedRollout] = []
+        failures: list[TokenizedRolloutFailure] = []
         backend_request_ids: list[str] = []
-        for request, request_output in zip(batch.requests, outputs, strict=True):
+        for request, request_output in zip(batch.requests, outputs, strict=False):
+            backend_request_id = str(request_output.request_id)
             rollouts.extend(
                 self._token_rollouts_from_vllm_output(
                     request.request_id,
                     request.prompt_token_ids,
                     request_output,
+                    request.n_generations,
                 )
             )
-            backend_request_ids.append(str(request_output.request_id))
+            failures.extend(
+                self._missing_generation_failures(
+                    request_id=request.request_id,
+                    generation_count=len(request_output.outputs),
+                    expected_generations=request.n_generations,
+                    backend_request_id=backend_request_id,
+                )
+            )
+            backend_request_ids.append(backend_request_id)
+        for request in batch.requests[len(outputs) :]:
+            failures.extend(
+                self._missing_generation_failures(
+                    request_id=request.request_id,
+                    generation_count=0,
+                    expected_generations=request.n_generations,
+                    backend_request_id=None,
+                )
+            )
 
         prompt_tokens = sum(len(request.prompt_token_ids) for request in batch.requests)
         completion_tokens = sum(len(rollout.completion_token_ids) for rollout in rollouts)
@@ -539,6 +585,7 @@ class vLLMInferenceContext(BaseInferenceContext):
             tokenizer=batch.tokenizer,
             policy=batch.policy,
             rollouts=tuple(rollouts),
+            failures=tuple(failures),
             timing=TokenRolloutTiming(total=total_duration),
             admission=TokenRolloutAdmissionMetadata(
                 queued_tokens=prompt_tokens,

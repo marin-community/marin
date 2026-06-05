@@ -28,7 +28,9 @@ from marin.inference.types import (
     TokenizedRollout,
     TokenizedRolloutBatchRequest,
     TokenizedRolloutBatchResult,
+    TokenizedRolloutFailure,
     TokenRolloutAdmissionMetadata,
+    TokenRolloutFailureReason,
     TokenRolloutFinishReason,
     TokenRolloutTiming,
     TokenSamplingParameters,
@@ -238,13 +240,41 @@ class LevanterInferenceContext(BaseInferenceContext):
         total_duration = time.time() - start
 
         rollouts: list[TokenizedRollout] = []
+        failures: list[TokenizedRolloutFailure] = []
         output_idx = 0
+        result_tokens = tuple(result.tokens)
+        result_logprobs = None if result.logprobs is None else tuple(result.logprobs)
         for request, output_count in zip(batch.requests, request_output_counts, strict=True):
             for generation_index in range(output_count):
-                completion_token_ids = tuple(int(token_id) for token_id in result.tokens[output_idx])
-                if result.logprobs is None:
+                backend_request_id = str(output_idx)
+                if output_idx >= len(result_tokens):
+                    failures.append(
+                        TokenizedRolloutFailure(
+                            request_id=request.request_id,
+                            generation_index=generation_index,
+                            reason=TokenRolloutFailureReason.BACKEND_ERROR,
+                            message="Levanter engine returned fewer generations than requested",
+                            backend_request_id=backend_request_id,
+                        )
+                    )
+                    output_idx += 1
+                    continue
+                completion_token_ids = tuple(int(token_id) for token_id in result_tokens[output_idx])
+                if result_logprobs is None:
                     raise RuntimeError("Levanter engine did not return logprobs for tokenized rollout generation.")
-                completion_logprobs = tuple(float(logprob) for logprob in result.logprobs[output_idx])
+                if output_idx >= len(result_logprobs):
+                    failures.append(
+                        TokenizedRolloutFailure(
+                            request_id=request.request_id,
+                            generation_index=generation_index,
+                            reason=TokenRolloutFailureReason.BACKEND_ERROR,
+                            message="Levanter engine returned tokens without logprobs",
+                            backend_request_id=backend_request_id,
+                        )
+                    )
+                    output_idx += 1
+                    continue
+                completion_logprobs = tuple(float(logprob) for logprob in result_logprobs[output_idx])
                 rollouts.append(
                     TokenizedRollout(
                         request_id=request.request_id,
@@ -268,6 +298,7 @@ class LevanterInferenceContext(BaseInferenceContext):
             tokenizer=batch.tokenizer,
             policy=batch.policy,
             rollouts=tuple(rollouts),
+            failures=tuple(failures),
             timing=TokenRolloutTiming(total=total_duration),
             admission=TokenRolloutAdmissionMetadata(
                 queued_tokens=prompt_tokens,
