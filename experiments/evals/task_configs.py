@@ -1,9 +1,30 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Canonical lm-eval task groups used by Marin experiments."""
+
 from collections.abc import Sequence
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
+
+RULER_CONTEXT_LENGTHS = (4096, 8192, 16384, 32768, 65536, 131072)
+RULER_MAX_GENERATION_TOKENS = 128
+RULER_TASK_NAMES = (
+    "niah_single_1",
+    "niah_single_2",
+    "niah_single_3",
+    "niah_multikey_1",
+    "niah_multikey_2",
+    "niah_multikey_3",
+    "niah_multiquery",
+    "niah_multivalue",
+    "ruler_vt",
+    "ruler_cwe",
+    "ruler_fwe",
+    "ruler_qa_squad",
+    "ruler_qa_hotpot",
+)
+RULER_NIAH_TASK_NAMES = RULER_TASK_NAMES[:8]
 
 # tasks to run (corresponding to lm_eval_harness tasks)
 # subset from from page 43 of the DCLM paper: https://arxiv.org/pdf/2406.11794

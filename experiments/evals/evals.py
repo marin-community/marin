@@ -6,6 +6,7 @@ Canonical set of evals.
 """
 
 import logging
+import os
 import re
 from collections.abc import Sequence
 
@@ -32,10 +33,19 @@ from experiments.evals.task_configs import (
     MMLU_PRO_5_SHOT,
     OPEN_LM_LEADERBOARD_GEN,
     OPEN_LM_LEADERBOARD_MCQ,
+    RULER_CONTEXT_LENGTHS,
+    RULER_MAX_GENERATION_TOKENS,
+    RULER_TASK_NAMES,
 )
 
 EVAL_DEPENDENCY_GROUPS = ["eval", "vllm", "tpu"]
 EVALCHEMY_DEPENDENCY_GROUPS = ["evalchemy", "vllm", "tpu"]
+RULER_ENV_KEYS = (
+    "HF_TOKEN",
+    "WANDB_API_KEY",
+    "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
+    "VLLM_TPU_SKIP_PRECOMPILE",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -378,6 +388,165 @@ def default_key_evals(
             max_eval_instances=max_eval_instances,
         ),
     ]
+
+
+def _ruler_context_lengths_for_model(
+    context_lengths: Sequence[int], model_max_length: int, extra_token_buffer: int = 0
+) -> tuple[int, ...]:
+    """Return RULER context lengths that fit the model window."""
+    if model_max_length <= 0:
+        raise ValueError(f"model_max_length must be positive, got {model_max_length}.")
+    if extra_token_buffer < 0:
+        raise ValueError(f"extra_token_buffer must be nonnegative, got {extra_token_buffer}.")
+
+    # Length filter
+    selected_lengths = tuple(length for length in context_lengths if length + extra_token_buffer <= model_max_length)
+    if not selected_lengths:
+        raise ValueError(
+            f"No RULER context lengths fit model_max_length={model_max_length}; "
+            f"available lengths are {tuple(context_lengths)} and extra_token_buffer={extra_token_buffer}."
+        )
+
+    return selected_lengths
+
+
+def ruler_effective_context_length(max_seq_len: int, sliding_window: int | None = None) -> int:
+    """Return the context window RULER should target for a model config."""
+    if max_seq_len <= 0:
+        raise ValueError(f"max_seq_len must be positive, got {max_seq_len}.")
+    if sliding_window is None:
+        return max_seq_len
+    if sliding_window <= 0:
+        raise ValueError(f"sliding_window must be positive, got {sliding_window}.")
+    return min(max_seq_len, sliding_window)
+
+
+def _reject_native_grug_step_for_ruler(step: ExecutorStep | InputName | str) -> None:
+    """Reject raw Grug training steps before building a vLLM RULER eval."""
+    if isinstance(step, InputName):
+        step = step.step
+    if not isinstance(step, ExecutorStep):
+        return
+    config_module = type(step.config).__module__
+    if not config_module.startswith("experiments.grug."):
+        return
+    raise ValueError(
+        "default_ruler_eval is vLLM-backed and requires an HF/vLLM-compatible checkpoint path. "
+        "Raw Grug ExecutorSteps need a native JAX generation backend before they can run RULER; "
+        "pass an exported HF checkpoint path instead."
+    )
+
+
+def _ruler_engine_kwargs(
+    engine_kwargs: dict | None,
+    required_model_length: int,
+    tokenizer: str | None = None,
+    max_gen_toks: int = RULER_MAX_GENERATION_TOKENS,
+) -> dict:
+    """Return vLLM and lm-eval context settings for RULER."""
+    if max_gen_toks <= 0:
+        raise ValueError(f"max_gen_toks must be positive, got {max_gen_toks}.")
+
+    configured_kwargs = dict(engine_kwargs or {})
+    configured_kwargs.setdefault("max_gen_toks", max_gen_toks)
+    if tokenizer is not None:
+        existing_tokenizer = configured_kwargs.get("tokenizer")
+        if existing_tokenizer is not None and existing_tokenizer != tokenizer:
+            raise ValueError(f"Conflicting RULER tokenizer values: {existing_tokenizer!r} and {tokenizer!r}.")
+        configured_kwargs["tokenizer"] = tokenizer
+
+    # Context knobs
+    max_model_len = configured_kwargs.get("max_model_len")
+    max_length = configured_kwargs.get("max_length")
+    if max_model_len is None and max_length is None:
+        configured_kwargs["max_model_len"] = required_model_length
+        configured_kwargs["max_length"] = required_model_length
+        return configured_kwargs
+
+    if max_model_len is None:
+        max_model_len = max_length
+        configured_kwargs["max_model_len"] = max_model_len
+    if max_length is None:
+        max_length = max_model_len
+        configured_kwargs["max_length"] = max_length
+
+    if max_model_len < required_model_length or max_length < required_model_length:
+        raise ValueError(
+            "RULER requires both max_model_len and max_length to cover the largest selected "
+            f"request length ({required_model_length}); got max_model_len={max_model_len}, max_length={max_length}."
+        )
+
+    return configured_kwargs
+
+
+def _ruler_task_configs(task_names: Sequence[str] | None, metadata: dict) -> list[EvalTaskConfig]:
+    """Return lm-eval RULER group or selected subtasks."""
+    if task_names is None:
+        return [EvalTaskConfig("ruler", 0, metadata=metadata)]
+
+    selected_names = tuple(task_names)
+    if not selected_names:
+        raise ValueError("At least one RULER task name is required.")
+    unknown_names = sorted(set(selected_names) - set(RULER_TASK_NAMES))
+    if unknown_names:
+        raise ValueError(f"Unknown RULER task names: {unknown_names}; known names are {list(RULER_TASK_NAMES)}.")
+
+    return [EvalTaskConfig(name, 0, task_alias=name, metadata=metadata) for name in selected_names]
+
+
+def _ruler_env_vars(env_vars: dict[str, str] | None) -> dict[str, str]:
+    """Return env vars needed by long-context RULER workers."""
+    configured_env_vars = {key: value for key in RULER_ENV_KEYS if (value := os.environ.get(key))}
+    configured_env_vars["VLLM_ALLOW_LONG_MAX_MODEL_LEN"] = "1"
+    configured_env_vars.update(env_vars or {})
+    return configured_env_vars
+
+
+def default_ruler_eval(
+    step: ExecutorStep | InputName | str,
+    model_max_length: int,
+    resource_config: ResourceConfig = ResourceConfig.with_tpu("v6e-8"),
+    context_lengths: Sequence[int] = RULER_CONTEXT_LENGTHS,
+    task_names: Sequence[str] | None = None,
+    max_eval_instances: int | None = None,
+    engine_kwargs: dict | None = None,
+    tokenizer: str | None = None,
+    max_gen_toks: int = RULER_MAX_GENERATION_TOKENS,
+    apply_chat_template: bool = False,
+    chat_template_token_buffer: int = 256,
+    discover_latest_checkpoint: bool = True,
+    wandb_tags: list[str] | None = None,
+    env_vars: dict[str, str] | None = None,
+) -> ExecutorStep:
+    """Create a vLLM-backed lm-eval RULER evaluation step.
+
+    ``model_max_length`` is the effective usable context window. For sliding-window
+    models, pass ``ruler_effective_context_length(max_seq_len, sliding_window)``.
+    Raw Grug training steps are not vLLM-loadable; pass an exported HF checkpoint
+    path once one exists.
+    """
+    _reject_native_grug_step_for_ruler(step)
+    extra_token_buffer = chat_template_token_buffer if apply_chat_template else 0
+    selected_lengths = _ruler_context_lengths_for_model(context_lengths, model_max_length, extra_token_buffer)
+    required_model_length = max(selected_lengths) + extra_token_buffer
+    configured_engine_kwargs = _ruler_engine_kwargs(engine_kwargs, required_model_length, tokenizer, max_gen_toks)
+
+    # RULER task
+    name, model_step_path = extract_model_name_and_path(step)
+    ruler_tasks = _ruler_task_configs(task_names, metadata={"max_seq_lengths": list(selected_lengths)})
+
+    return evaluate_lm_evaluation_harness(
+        name,
+        model_step_path,
+        ruler_tasks,
+        max_eval_instances=max_eval_instances,
+        engine_kwargs=configured_engine_kwargs,
+        resource_config=resource_config,
+        apply_chat_template=apply_chat_template,
+        discover_latest_checkpoint=discover_latest_checkpoint,
+        wandb_tags=wandb_tags,
+        env_vars=_ruler_env_vars(env_vars),
+    )
 
 
 def evaluate_harbor(
