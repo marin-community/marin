@@ -81,7 +81,16 @@ impl Schema {
 // ColumnType <-> Arrow DataType.
 // ---------------------------------------------------------------------------
 
-/// Map a `ColumnType` to its Arrow `DataType`.
+/// Map a `ColumnType` to its **storage** Arrow `DataType`.
+///
+/// The storage canonical unit for `COLUMN_TYPE_TIMESTAMP_MS` is MICROSECOND,
+/// not millisecond. The proto/wire logical type is named `..._MS` (clients send
+/// `Timestamp(Millisecond)`), but the reference duckdb store persisted parquet
+/// with duckdb's native microsecond `TIMESTAMP`, so every segment on disk is
+/// `Timestamp(Microsecond, None)`. We canonicalize storage to match the data on
+/// disk: reads/adoption/compaction are then cast-free and lossless, and the
+/// write path casts the millisecond wire form up to microsecond at ingress
+/// (see [`validate_and_align_batch`]).
 ///
 /// `COLUMN_TYPE_UNKNOWN` has no Arrow analogue and returns `None`.
 pub fn arrow_type_for(t: ColumnType) -> Option<DataType> {
@@ -92,7 +101,7 @@ pub fn arrow_type_for(t: ColumnType) -> Option<DataType> {
         ColumnType::COLUMN_TYPE_FLOAT64 => Some(DataType::Float64),
         ColumnType::COLUMN_TYPE_BOOL => Some(DataType::Boolean),
         ColumnType::COLUMN_TYPE_TIMESTAMP_MS => {
-            Some(DataType::Timestamp(TimeUnit::Millisecond, None))
+            Some(DataType::Timestamp(TimeUnit::Microsecond, None))
         }
         ColumnType::COLUMN_TYPE_BYTES => Some(DataType::Binary),
         ColumnType::COLUMN_TYPE_UNKNOWN => None,
@@ -384,11 +393,13 @@ pub fn arrow_to_column_type(dt: &DataType) -> Result<ColumnType, StatsError> {
         DataType::Int32 => Ok(ColumnType::COLUMN_TYPE_INT32),
         DataType::Float64 => Ok(ColumnType::COLUMN_TYPE_FLOAT64),
         DataType::Boolean => Ok(ColumnType::COLUMN_TYPE_BOOL),
-        // Only tz-naive ms timestamps map to TIMESTAMP_MS; a tz-aware column
-        // falls through to the unsupported-type error.
-        DataType::Timestamp(TimeUnit::Millisecond, None) => {
-            Ok(ColumnType::COLUMN_TYPE_TIMESTAMP_MS)
-        }
+        // Any tz-naive timestamp maps to the single logical TIMESTAMP_MS type,
+        // regardless of physical unit: microsecond from disk (the duckdb-written
+        // storage canonical), millisecond from the wire. The physical unit is
+        // reconciled to the storage canonical at the boundaries (`arrow_type_for`
+        // + `validate_and_align_batch`). A tz-aware column has no proto analogue
+        // and falls through to the unsupported-type error.
+        DataType::Timestamp(_, None) => Ok(ColumnType::COLUMN_TYPE_TIMESTAMP_MS),
         DataType::Binary => Ok(ColumnType::COLUMN_TYPE_BYTES),
         other => Err(StatsError::SchemaValidation(format!(
             "unsupported arrow type {other:?}"
@@ -521,8 +532,23 @@ pub fn validate_and_align_batch(
                         column_type_name(actual_type),
                     )));
                 }
-                byte_size += array_buffer_size(array);
-                aligned_arrays.push(Arc::clone(array));
+                // Same logical ColumnType, but the physical Arrow unit may differ
+                // (e.g. a millisecond wire timestamp vs the microsecond storage
+                // canonical). Cast to the storage type so the appended array
+                // matches its declared field; a no-op when already equal.
+                let storage_array = if *actual_dt == arrow_dt {
+                    Arc::clone(array)
+                } else {
+                    cast(array, &arrow_dt).map_err(|e| {
+                        StatsError::SchemaValidation(format!(
+                            "column {:?}: cannot cast batch type {actual_dt:?} to storage type \
+                             {arrow_dt:?}: {e}",
+                            col.name
+                        ))
+                    })?
+                };
+                byte_size += array_buffer_size(&storage_array);
+                aligned_arrays.push(storage_array);
             }
             None => {
                 if !col.nullable {
@@ -588,9 +614,11 @@ mod tests {
             arrow_type_for(ColumnType::COLUMN_TYPE_BOOL),
             Some(DataType::Boolean)
         );
+        // Storage canonical for TIMESTAMP_MS is microsecond (matches the
+        // duckdb-written parquet on disk), not the wire's millisecond.
         assert_eq!(
             arrow_type_for(ColumnType::COLUMN_TYPE_TIMESTAMP_MS),
-            Some(DataType::Timestamp(TimeUnit::Millisecond, None))
+            Some(DataType::Timestamp(TimeUnit::Microsecond, None))
         );
         assert_eq!(
             arrow_type_for(ColumnType::COLUMN_TYPE_BYTES),
@@ -799,11 +827,93 @@ mod tests {
             let dt = arrow_type_for(t).unwrap();
             assert_eq!(arrow_to_column_type(&dt).unwrap(), t);
         }
-        // timestamp_ms has no timezone.
+        // Storage canonical for the logical timestamp type is microsecond, with
+        // no timezone.
         assert_eq!(
             arrow_type_for(ColumnType::COLUMN_TYPE_TIMESTAMP_MS).unwrap(),
-            DataType::Timestamp(TimeUnit::Millisecond, None)
+            DataType::Timestamp(TimeUnit::Microsecond, None)
         );
+        // Any tz-naive timestamp unit (microsecond from disk, millisecond from
+        // the wire) maps back to the single logical TIMESTAMP_MS type.
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
+            assert_eq!(
+                arrow_to_column_type(&DataType::Timestamp(unit, None)).unwrap(),
+                ColumnType::COLUMN_TYPE_TIMESTAMP_MS
+            );
+        }
+        // A tz-aware timestamp has no proto analogue and is rejected.
+        assert!(arrow_to_column_type(&DataType::Timestamp(
+            TimeUnit::Microsecond,
+            Some("UTC".into())
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn validate_casts_millisecond_wire_timestamp_to_microsecond_storage() {
+        use arrow::array::{TimestampMicrosecondArray, TimestampMillisecondArray};
+        let registered = with_implicit_seq(Schema::new(
+            vec![col("ts", ColumnType::COLUMN_TYPE_TIMESTAMP_MS, false)],
+            "",
+        ));
+        // The client sends the wire form: Timestamp(Millisecond).
+        let b = batch(
+            vec![Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                false,
+            )],
+            vec![Arc::new(TimestampMillisecondArray::from(vec![
+                1_700_000_000_000_i64,
+                1_700_000_000_001,
+            ]))],
+        );
+        let aligned = validate_and_align_batch(&b, &registered).unwrap();
+        // Stored as the microsecond canonical; values scaled up by 1000.
+        assert_eq!(
+            aligned.fields[0].data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, None)
+        );
+        let arr = aligned.arrays[0]
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .unwrap();
+        assert_eq!(
+            arr.values(),
+            &[1_700_000_000_000_000_i64, 1_700_000_000_001_000]
+        );
+    }
+
+    #[test]
+    fn validate_accepts_microsecond_disk_timestamp_unchanged() {
+        use arrow::array::TimestampMicrosecondArray;
+        let registered = with_implicit_seq(Schema::new(
+            vec![col("ts", ColumnType::COLUMN_TYPE_TIMESTAMP_MS, false)],
+            "",
+        ));
+        // A microsecond batch (the storage canonical, e.g. a re-ingested legacy
+        // row) passes through without a value change.
+        let b = batch(
+            vec![Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                false,
+            )],
+            vec![Arc::new(TimestampMicrosecondArray::from(vec![
+                1_700_000_000_000_000_i64,
+            ]))],
+        );
+        let aligned = validate_and_align_batch(&b, &registered).unwrap();
+        let arr = aligned.arrays[0]
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .unwrap();
+        assert_eq!(arr.values(), &[1_700_000_000_000_000_i64]);
     }
 
     #[test]

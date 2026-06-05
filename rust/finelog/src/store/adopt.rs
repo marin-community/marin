@@ -784,6 +784,63 @@ mod tests {
     }
 
     #[test]
+    fn adopts_microsecond_timestamp_namespace() {
+        use arrow::array::TimestampMicrosecondArray;
+        use arrow::datatypes::TimeUnit;
+
+        let data_dir = tempdir("us_ts");
+        let ns_dir = data_dir.join("infra.canary.probes");
+        std::fs::create_dir_all(&ns_dir).unwrap();
+
+        // A segment whose timestamp column is microsecond — the legacy
+        // duckdb-written form. The adopter must accept it (and report the logical
+        // TIMESTAMP_MS type) rather than dropping the whole namespace.
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new(
+                "started_at",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                false,
+            ),
+        ]));
+        let batch = RecordBatch::try_new(
+            arrow_schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1_i64, 2])),
+                Arc::new(StringArray::from(vec![
+                    "controller-ping",
+                    "iris-job-submit",
+                ])),
+                Arc::new(TimestampMicrosecondArray::from(vec![
+                    1_780_178_046_162_000_i64,
+                    1_780_178_106_596_000,
+                ])),
+            ],
+        )
+        .unwrap();
+        write_segment_to_dir(&ns_dir, 1, 1, &batch).unwrap();
+
+        let recovered =
+            recover_schema_from_segments(&ns_dir).expect("microsecond ts segment must adopt");
+        assert_eq!(
+            recovered.column("started_at").unwrap().r#type,
+            ColumnType::COLUMN_TYPE_TIMESTAMP_MS
+        );
+
+        // End-to-end: the namespace is adopted with its segment, not skipped.
+        let catalog = Catalog::open(Some(&data_dir)).unwrap();
+        ensure_catalog_adopted(Some(&data_dir), &catalog).unwrap();
+        let stats = catalog
+            .aggregate_namespace_stats("infra.canary.probes")
+            .unwrap();
+        assert_eq!(stats.segment_count, 1);
+        assert_eq!(stats.row_count, 2);
+
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    #[test]
     fn in_memory_mode_is_noop() {
         let catalog = Catalog::open(None).unwrap();
         ensure_catalog_adopted(None, &catalog).unwrap();

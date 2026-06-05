@@ -16,8 +16,10 @@ use std::collections::BinaryHeap;
 use std::sync::Arc;
 
 use arrow::array::{new_null_array, Array, ArrayRef, RecordBatch};
-use arrow::compute::{interleave, lexsort_to_indices, take_record_batch, SortColumn, SortOptions};
-use arrow::datatypes::{Schema as ArrowSchema, SchemaRef};
+use arrow::compute::{
+    cast, interleave, lexsort_to_indices, take_record_batch, SortColumn, SortOptions,
+};
+use arrow::datatypes::{DataType, Schema as ArrowSchema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::row::{OwnedRow, RowConverter, Rows, SortField};
 
@@ -28,9 +30,12 @@ use crate::store::segment::ROW_GROUP_SIZE;
 ///
 /// A segment written before an additive schema evolution lacks the new (nullable)
 /// columns, so they are materialized as null arrays of the target type. Columns
-/// are reordered to match `target_schema`; an existing column whose type differs
-/// from the target is an error (non-additive change, which the register path
-/// already rejects).
+/// are reordered to match `target_schema`. A column whose physical type differs
+/// from the target only by timestamp unit is cast to the target (a legacy
+/// microsecond segment already equals the microsecond storage canonical; a stray
+/// millisecond segment from an older build is up-cast, so the merge output is
+/// uniformly canonical). Any other type difference is a non-additive schema
+/// conflict the register path already rejects and surfaces as an `ArrowError`.
 pub fn project_to_schema(
     batch: &RecordBatch,
     target_schema: &SchemaRef,
@@ -42,7 +47,17 @@ pub fn project_to_schema(
         match src_schema.index_of(field.name()) {
             Ok(idx) => {
                 let col = batch.column(idx);
-                if col.data_type() != field.data_type() {
+                if col.data_type() == field.data_type() {
+                    columns.push(Arc::clone(col));
+                } else if matches!(col.data_type(), DataType::Timestamp(_, _))
+                    && matches!(field.data_type(), DataType::Timestamp(_, _))
+                {
+                    // The only legitimate physical-type difference is a timestamp
+                    // unit (a legacy microsecond segment is already equal to the
+                    // microsecond storage canonical; a stray millisecond segment
+                    // from an older build is up-cast). Reconcile by casting.
+                    columns.push(cast(col, field.data_type())?);
+                } else {
                     return Err(ArrowError::SchemaError(format!(
                         "column {:?}: type mismatch projecting to merge schema: \
                          input={:?} target={:?}",
@@ -51,7 +66,6 @@ pub fn project_to_schema(
                         field.data_type()
                     )));
                 }
-                columns.push(Arc::clone(col));
             }
             Err(_) => columns.push(new_null_array(field.data_type(), n)),
         }
@@ -356,7 +370,8 @@ mod tests {
 
     #[test]
     fn project_to_schema_type_mismatch_errors() {
-        // target says `key` is Utf8 but batch has Int64.
+        // target says `key` is Utf8 but batch has Int64 — a non-additive conflict
+        // (NOT a timestamp-unit difference), so it must still error.
         let target: SchemaRef = Arc::new(ArrowSchema::new(vec![
             Field::new("seq", DataType::Int64, false),
             Field::new("key", DataType::Utf8, false),
@@ -364,6 +379,49 @@ mod tests {
         ]));
         let b = batch(vec![(1, 10, "a1")]);
         assert!(project_to_schema(&b, &target).is_err());
+    }
+
+    #[test]
+    fn project_to_schema_upcasts_millisecond_timestamp_to_microsecond() {
+        use arrow::array::{TimestampMicrosecondArray, TimestampMillisecondArray};
+        use arrow::datatypes::TimeUnit;
+
+        // A stray millisecond segment merged under the microsecond storage target.
+        let target: SchemaRef = Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                false,
+            ),
+        ]));
+        let ms = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("seq", DataType::Int64, false),
+                Field::new(
+                    "ts",
+                    DataType::Timestamp(TimeUnit::Millisecond, None),
+                    false,
+                ),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![1_i64])),
+                Arc::new(TimestampMillisecondArray::from(vec![1_700_000_000_000_i64])),
+            ],
+        )
+        .unwrap();
+
+        let projected = project_to_schema(&ms, &target).unwrap();
+        assert_eq!(
+            projected.column(1).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, None)
+        );
+        let ts = projected
+            .column(1)
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .unwrap();
+        assert_eq!(ts.values(), &[1_700_000_000_000_000_i64]);
     }
 
     #[test]
