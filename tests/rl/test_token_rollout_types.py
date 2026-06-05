@@ -9,9 +9,11 @@ from marin.inference.types import (
     TokenizedRollout,
     TokenizedRolloutBatchRequest,
     TokenizedRolloutBatchResult,
+    TokenizedRolloutFailure,
     TokenizedRolloutRequest,
     TokenizerIdentity,
     TokenRolloutAdmissionMetadata,
+    TokenRolloutFailureReason,
     TokenRolloutFinishReason,
     TokenRolloutTiming,
     TokenSamplingParameters,
@@ -133,6 +135,28 @@ def test_admission_metadata_requires_prefill_counts_to_match():
         TokenRolloutAdmissionMetadata(
             prefill_admissions=2,
             prefill_prompt_tokens_per_admission=(128,),
+        )
+
+
+def test_tokenized_rollout_failure_preserves_failed_generation_identity():
+    failure = TokenizedRolloutFailure(
+        request_id="req-1",
+        generation_index=2,
+        reason=TokenRolloutFailureReason.RESOURCE_EXHAUSTED,
+        message="device allocation failed",
+        backend_request_id="levanter-7",
+    )
+
+    assert failure.request_id == "req-1"
+    assert failure.generation_index == 2
+    assert failure.reason is TokenRolloutFailureReason.RESOURCE_EXHAUSTED
+    assert failure.backend_request_id == "levanter-7"
+
+    with pytest.raises(ValueError, match="generation_index"):
+        TokenizedRolloutFailure(
+            request_id="req-1",
+            generation_index=-1,
+            reason=TokenRolloutFailureReason.BACKEND_ERROR,
         )
 
 

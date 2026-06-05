@@ -57,6 +57,16 @@ class TokenRolloutFinishReason(StrEnum):
     ERROR = "error"
 
 
+class TokenRolloutFailureReason(StrEnum):
+    """Backend-independent reason a tokenized rollout request failed."""
+
+    INVALID_REQUEST = "invalid_request"
+    BACKEND_ERROR = "backend_error"
+    RESOURCE_EXHAUSTED = "resource_exhausted"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+
+
 @dataclass(frozen=True)
 class TokenizerIdentity:
     """Tokenizer identity needed to replay tokenized rollout batches."""
@@ -296,6 +306,24 @@ class TokenizedRollout:
 
 
 @dataclass(frozen=True)
+class TokenizedRolloutFailure:
+    """One failed request or generation in a tokenized rollout batch."""
+
+    request_id: str
+    reason: TokenRolloutFailureReason
+    generation_index: int | None = None
+    message: str = ""
+    backend_request_id: str | None = None
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if not self.request_id:
+            raise ValueError("request_id must be non-empty")
+        if self.generation_index is not None and self.generation_index < 0:
+            raise ValueError("generation_index must be non-negative when set")
+
+
+@dataclass(frozen=True)
 class TokenizedRolloutBatchResult:
     """Result for a tokenized rollout batch."""
 
@@ -303,6 +331,7 @@ class TokenizedRolloutBatchResult:
     tokenizer: TokenizerIdentity
     policy: PolicyIdentity
     rollouts: tuple[TokenizedRollout, ...]
+    failures: tuple[TokenizedRolloutFailure, ...] = ()
     timing: TokenRolloutTiming = field(default_factory=TokenRolloutTiming)
     admission: TokenRolloutAdmissionMetadata = field(default_factory=TokenRolloutAdmissionMetadata)
     metadata: Mapping[str, object] = field(default_factory=dict)

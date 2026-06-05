@@ -10,8 +10,10 @@ from marin.inference.types import (
     PolicyIdentity,
     TokenizedRollout,
     TokenizedRolloutBatchResult,
+    TokenizedRolloutFailure,
     TokenizerIdentity,
     TokenRolloutAdmissionMetadata,
+    TokenRolloutFailureReason,
     TokenRolloutFinishReason,
     TokenRolloutTiming,
 )
@@ -74,10 +76,16 @@ class DummyInferenceContext(LevanterInferenceContext):
 
 
 class DummyTokenInferenceContext(BaseInferenceContext):
-    def __init__(self, tokenizer, generation_limit: int | None = None):
+    def __init__(
+        self,
+        tokenizer,
+        generation_limit: int | None = None,
+        failure_reason: TokenRolloutFailureReason | None = None,
+    ):
         self.tokenizer = tokenizer
         self.batch = None
         self.generation_limit = generation_limit
+        self.failure_reason = failure_reason
 
     def reload_model(self, model, state_dict):
         return model
@@ -95,7 +103,18 @@ class DummyTokenInferenceContext(BaseInferenceContext):
         self.batch = batch
         response_tokens = tuple(self.tokenizer.encode("\\boxed{4}", add_special_tokens=False))
         rollouts = []
+        failures = []
         for request in batch.requests:
+            if self.failure_reason is not None:
+                failures.append(
+                    TokenizedRolloutFailure(
+                        request_id=request.request_id,
+                        generation_index=0,
+                        reason=self.failure_reason,
+                        message="simulated backend failure",
+                    )
+                )
+                continue
             generation_count = request.n_generations
             if self.generation_limit is not None:
                 generation_count = min(generation_count, self.generation_limit)
@@ -117,6 +136,7 @@ class DummyTokenInferenceContext(BaseInferenceContext):
             tokenizer=batch.tokenizer,
             policy=batch.policy,
             rollouts=tuple(rollouts),
+            failures=tuple(failures),
             timing=TokenRolloutTiming(total=0.25),
             admission=TokenRolloutAdmissionMetadata(prefill_admissions=1, prefill_prompt_tokens_per_admission=(10,)),
         )
@@ -223,6 +243,27 @@ def test_math_env_token_rollout_path_rejects_missing_generations(gpt2_tokenizer)
             prng_key=jax.random.PRNGKey(0),
             mode="train",
         )
+
+
+def test_math_env_token_rollout_path_reports_structured_failures(gpt2_tokenizer):
+    inference_ctx = DummyTokenInferenceContext(gpt2_tokenizer, failure_reason=TokenRolloutFailureReason.BACKEND_ERROR)
+    env = MathEnv(
+        train_dataset=[{"problem": "What is 2+2?", "solution": "\\boxed{4}"}],
+        eval_dataset=[],
+        max_train_examples=1,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        env.sample(
+            inference_ctx=inference_ctx,
+            n_examples=1,
+            n_generations=2,
+            decoding=DecodingConfig(temperature=0.7, max_output_tokens=16),
+            prng_key=jax.random.PRNGKey(0),
+            mode="train",
+        )
+
+    assert TokenRolloutFailureReason.BACKEND_ERROR.value in str(exc_info.value)
 
 
 def test_token_rollout_batch_rejects_unsupported_decoding_fields(gpt2_tokenizer):
