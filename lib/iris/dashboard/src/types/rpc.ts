@@ -300,6 +300,14 @@ export interface SliceInfo {
   errorMessage?: string
   lastActive?: ProtoTimestamp
   idle?: boolean
+  /**
+   * Authoritative slice lifecycle state from the autoscaler:
+   * "requesting" | "booting" | "initializing" | "ready" | "failed".
+   * Empty when served by a controller that predates this field — render via
+   * sliceLifecycle() in the autoscaler tab, which falls back to inferring the
+   * state from `vms` (a slice with no VMs is booting, never "unknown").
+   */
+  state?: string
 }
 
 export interface ScaleGroupConfig {

@@ -682,6 +682,19 @@ def test_get_autoscaler_status_includes_slice_details(client_with_autoscaler):
     assert group["config"]["resources"]["deviceVariant"] == "v4-8"
 
 
+def test_get_autoscaler_status_populates_worker_id_for_unrostered_vm(client_with_autoscaler):
+    """worker_id (and the running-task lookup) must be populated for every VM in the
+    status, even one absent from the liveness roster — otherwise its running tasks
+    silently drop out of the dashboard. The mock VMs are not registered workers."""
+    resp = rpc_post(client_with_autoscaler, "GetAutoscalerStatus")
+    vms = [vm for group in resp["status"]["groups"] for s in group["slices"] for vm in s["vms"]]
+    assert vms
+    # vm_id IS the worker_id; it is set unconditionally now (previously skipped
+    # when the VM was missing from the roster).
+    for vm in vms:
+        assert vm["workerId"] == vm["vmId"]
+
+
 def test_pending_reason_uses_autoscaler_hint_for_scale_up(
     client_with_autoscaler,
     state,

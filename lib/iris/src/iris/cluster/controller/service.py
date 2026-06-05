@@ -1727,11 +1727,14 @@ class ControllerServiceImpl:
             str(w.worker_id): liveness_by_id[w.worker_id].healthy for w, _attrs in workers
         }
 
-        # The vm_ids appearing in the autoscaler status are the only candidates
-        # for the running-task lookup; restrict to those known to be in the
-        # roster to keep the IN-clause bounded by visible VMs, not roster size.
+        # Look up running tasks for every VM in the status. The vm_id IS the
+        # worker_id (the worker registers under its vm_id), so the IN-clause is
+        # bounded by visible VMs. We must NOT restrict to roster membership here:
+        # a VM running tasks but momentarily absent from the liveness snapshot
+        # would otherwise lose its worker_id and task count, dropping its tasks
+        # from the dashboard.
         vm_ids = {vm.vm_id for group in status.groups for slice_info in group.slices for vm in slice_info.vms}
-        candidate_ids = {WorkerId(vid) for vid in vm_ids if vid in worker_id_to_health}
+        candidate_ids = {WorkerId(vid) for vid in vm_ids if vid}
         if candidate_ids:
             with self._db.read_snapshot() as tx:
                 running = reads.running_tasks_by_worker(tx, candidate_ids)
@@ -1741,12 +1744,14 @@ class ControllerServiceImpl:
         for group in status.groups:
             for slice_info in group.slices:
                 for vm in slice_info.vms:
-                    healthy = worker_id_to_health.get(vm.vm_id)
-                    if healthy is None:
-                        continue
+                    # worker_id and running_task_count are intrinsic to the VM
+                    # and always populated; health is overlaid only when the
+                    # worker is present in the liveness roster.
                     vm.worker_id = vm.vm_id
-                    vm.worker_healthy = healthy
                     vm.running_task_count = len(running.get(WorkerId(vm.vm_id), set()))
+                    healthy = worker_id_to_health.get(vm.vm_id)
+                    if healthy is not None:
+                        vm.worker_healthy = healthy
 
         return controller_pb2.Controller.GetAutoscalerStatusResponse(status=status)
 

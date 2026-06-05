@@ -88,6 +88,14 @@ message SliceInfo {
   iris.time.Timestamp last_active = 6;
   // True if the slice is currently eligible for scale-down (idle >= idle_threshold)
   bool idle = 7;
+
+  // Authoritative slice lifecycle state from the autoscaler:
+  // "requesting", "booting", "initializing", "ready", or "failed"
+  // (same vocabulary as ScaleGroupStatus.slice_state_counts keys).
+  // Clients MUST render this directly and MUST NOT infer state from `vms`:
+  // `vms` is empty until the slice's workers register, so a booting slice
+  // has no VMs yet. (Previously clients showed such slices as "unknown".)
+  string state = 8;
 }
 
 // A scaling decision

@@ -280,6 +280,7 @@ def slice_state_to_proto(state: SliceState, idle_threshold: Duration | None = No
     return vm_pb2.SliceInfo(
         slice_id=state.handle.slice_id,
         scale_group=state.handle.scale_group,
+        state=state.lifecycle.value,
         created_at=time_pb2.Timestamp(epoch_ms=created_at.epoch_ms()),
         vms=[
             vm_pb2.VmInfo(

@@ -773,9 +773,14 @@ def vm_status(ctx, scale_group):
         if group.slices:
             click.echo("  Slices:")
             for si in group.slices:
-                all_ready = bool(si.vms) and all(vm.state == vm_pb2.VM_STATE_READY for vm in si.vms)
-                any_failed = any(vm.state in (vm_pb2.VM_STATE_FAILED, vm_pb2.VM_STATE_PREEMPTED) for vm in si.vms)
-                ss = "READY" if all_ready else ("FAILED" if any_failed else "PENDING")
+                # Prefer the authoritative slice state; fall back to inferring
+                # from VMs only for controllers that predate SliceInfo.state.
+                if si.state:
+                    ss = si.state.upper()
+                else:
+                    all_ready = bool(si.vms) and all(vm.state == vm_pb2.VM_STATE_READY for vm in si.vms)
+                    any_failed = any(vm.state in (vm_pb2.VM_STATE_FAILED, vm_pb2.VM_STATE_PREEMPTED) for vm in si.vms)
+                    ss = "READY" if all_ready else ("FAILED" if any_failed else "BOOTING")
                 click.echo(f"    {si.slice_id}: {ss}")
                 for vi in si.vms:
                     click.echo(f"      {vi.vm_id}: {vm_state_name(vi.state)} ({vi.address})")
