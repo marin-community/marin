@@ -5,7 +5,6 @@
 
 Supports YAML config files for cluster management. This module provides:
 - Configuration loading and validation (load_config, apply_defaults)
-- Configuration serialization (config_to_dict)
 - SSH configuration resolution (get_ssh_config)
 - ScaleGroupSpec wrapper for extended group metadata
 - IrisConfig high-level wrapper with component factories
@@ -22,17 +21,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from google.protobuf.json_format import MessageToDict, ParseDict
+from google.protobuf.json_format import ParseDict
 from rigging.timing import Duration
 
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.worker_provider import WorkerProvider
-from iris.cluster.providers.k8s.tasks import K8sTaskProvider
-from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.types import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, parse_memory_string, tpu_variant_name
-from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import config_pb2
-from iris.time_proto import duration_from_proto, duration_to_proto
+from iris.cluster.providers.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, K8sTaskProvider
+from iris.cluster.providers.types import local_queue_name
+from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
+from iris.cluster.types import parse_memory_string
+from iris.rpc import config_pb2, job_pb2
+from iris.time_proto import duration_to_proto
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +44,6 @@ IrisClusterConfig = config_pb2.IrisClusterConfig
 DEFAULT_CONFIG = config_pb2.DefaultsConfig(
     ssh=config_pb2.SshConfig(
         user="root",
-        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_METADATA,
         connect_timeout=duration_to_proto(Duration.from_seconds(30)),
     ),
     autoscaler=config_pb2.AutoscalerConfig(
@@ -75,18 +73,19 @@ _CAPACITY_TYPE_MAP = {
     "reserved": "CAPACITY_TYPE_RESERVED",
 }
 
-# Reverse mapping for YAML serialization: proto enum name → friendly YAML name
-_CAPACITY_TYPE_REVERSE_MAP = {
-    "CAPACITY_TYPE_PREEMPTIBLE": "preemptible",
-    "CAPACITY_TYPE_ON_DEMAND": "on-demand",
-    "CAPACITY_TYPE_RESERVED": "reserved",
-}
-
 _COREWEAVE_TOPOLOGY_LABEL_PREFIXES = (
     "backend.coreweave.cloud/",
     "ib.coreweave.cloud/",
     "node.coreweave.cloud/",
 )
+
+# Maps the band names used as keys in KueueConfig.priority_classes to the
+# PriorityBand enum the provider stamps onto pods.
+_KUEUE_PRIORITY_BANDS = {
+    "production": job_pb2.PRIORITY_BAND_PRODUCTION,
+    "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
+    "batch": job_pb2.PRIORITY_BAND_BATCH,
+}
 
 
 def _normalize_accelerator_type_field(d: dict) -> None:
@@ -315,27 +314,23 @@ def _validate_provider_platform_compat(config: config_pb2.IrisClusterConfig) -> 
         )
 
 
-def _validate_gcp_os_login_service_accounts(config: config_pb2.IrisClusterConfig) -> None:
-    """Require explicit GCP service accounts when OS Login is enabled."""
-    ssh_config = config.defaults.ssh
-    if ssh_config.auth_mode != config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN:
-        return
+def _validate_gcp_service_accounts(config: config_pb2.IrisClusterConfig) -> None:
+    """Require explicit service accounts on every GCP VM.
 
+    OS Login is always enabled on cluster VMs (see ``OS_LOGIN_METADATA``),
+    which requires the VM to run as a specific service account so the
+    caller's OS Login profile can authorize.
+    """
     controller_kind = config.controller.WhichOneof("controller")
     if controller_kind == "gcp" and not config.controller.gcp.service_account:
-        raise ValueError(
-            "controller.gcp.service_account is required when defaults.ssh.auth_mode=SSH_AUTH_MODE_OS_LOGIN."
-        )
+        raise ValueError("controller.gcp.service_account is required for GCP controllers.")
 
     for name, sg_config in config.scale_groups.items():
         template = sg_config.slice_template
         if template.WhichOneof("platform") != "gcp":
             continue
         if not template.gcp.service_account:
-            raise ValueError(
-                f"Scale group '{name}': slice_template.gcp.service_account is required when "
-                "defaults.ssh.auth_mode=SSH_AUTH_MODE_OS_LOGIN."
-            )
+            raise ValueError(f"Scale group '{name}': slice_template.gcp.service_account is required.")
 
 
 def validate_config(config: config_pb2.IrisClusterConfig) -> None:
@@ -356,7 +351,7 @@ def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     _validate_slice_templates(config)
     _validate_worker_settings(config)
     _validate_worker_defaults(config)
-    _validate_gcp_os_login_service_accounts(config)
+    _validate_gcp_service_accounts(config)
 
 
 def _validate_worker_defaults(config: config_pb2.IrisClusterConfig) -> None:
@@ -587,6 +582,37 @@ def make_local_config(
     return config
 
 
+def _validate_zone_list(zones: object, context: str) -> list[str]:
+    """Validate that *zones* is a non-empty list of unique, non-empty strings.
+
+    *context* prefixes error messages (e.g. ``"tpu_pools.foo"`` or
+    ``"Scale group 'bar'"``). Returns the validated list.
+    """
+    if not isinstance(zones, list) or not zones:
+        raise ValueError(f"{context}: zones must be a non-empty list")
+    for zone in zones:
+        if not isinstance(zone, str) or not zone.strip():
+            raise ValueError(f"{context}: each zone must be a non-empty string, got {zone!r}")
+    if len(zones) != len(set(zones)):
+        raise ValueError(f"{context}: zones list contains duplicates: {zones}")
+    return zones
+
+
+def _merge_zones_into_platform_gcp(data: dict, zones: set[str]) -> None:
+    """Merge *zones* into ``data['platform']['gcp']['zones']`` (sorted, deduped).
+
+    No-op when *zones* is empty or no ``platform.gcp`` mapping is configured.
+    """
+    if not zones:
+        return
+    platform = data.setdefault("platform", {})
+    platform_gcp = platform.get("gcp")
+    if isinstance(platform_gcp, dict):
+        existing = set(platform_gcp.get("zones", []))
+        existing.update(zones)
+        platform_gcp["zones"] = sorted(existing)
+
+
 def _expand_tpu_pools(data: dict) -> None:
     """Expand ``tpu_pools`` into per-(size, zone) scale groups.
 
@@ -606,6 +632,7 @@ def _expand_tpu_pools(data: dict) -> None:
         raise ValueError("tpu_pools must be a mapping")
 
     scale_groups = data.setdefault("scale_groups", {})
+    all_zones: set[str] = set()
 
     for pool_name, pool in tpu_pools.items():
         if not isinstance(pool, dict):
@@ -617,14 +644,8 @@ def _expand_tpu_pools(data: dict) -> None:
                 f"tpu_pools.{pool_name}: 'family' must be one of {sorted(TPU_FAMILY_VARIANT_PREFIX)}, got {family!r}"
             )
 
-        zones = pool.get("zones")
-        if not isinstance(zones, list) or not zones:
-            raise ValueError(f"tpu_pools.{pool_name}: 'zones' must be a non-empty list")
-        for z in zones:
-            if not isinstance(z, str) or not z.strip():
-                raise ValueError(f"tpu_pools.{pool_name}: each zone must be a non-empty string, got {z!r}")
-        if len(zones) != len(set(zones)):
-            raise ValueError(f"tpu_pools.{pool_name}: zones list contains duplicates: {zones}")
+        zones = _validate_zone_list(pool.get("zones"), f"tpu_pools.{pool_name}")
+        all_zones.update(zones)
 
         sizes = pool.get("sizes")
         if not isinstance(sizes, dict) or not sizes:
@@ -683,18 +704,7 @@ def _expand_tpu_pools(data: dict) -> None:
                 scale_groups[sg_name] = sg
 
     # Merge all TPU pool zones into platform.gcp.zones
-    all_zones: set[str] = set()
-    for pool in (tpu_pools or {}).values():
-        if isinstance(pool, dict):
-            for z in pool.get("zones", []):
-                all_zones.add(z)
-    if all_zones:
-        platform = data.setdefault("platform", {})
-        platform_gcp = platform.get("gcp")
-        if isinstance(platform_gcp, dict):
-            existing = set(platform_gcp.get("zones", []))
-            existing.update(all_zones)
-            platform_gcp["zones"] = sorted(existing)
+    _merge_zones_into_platform_gcp(data, all_zones)
 
 
 def _expand_multi_zone_groups(data: dict) -> None:
@@ -725,16 +735,7 @@ def _expand_multi_zone_groups(data: dict) -> None:
         if not isinstance(sg, dict) or "zones" not in sg:
             continue
 
-        zones = sg.pop("zones")
-        if not isinstance(zones, list) or not zones:
-            raise ValueError(f"Scale group '{name}': zones must be a non-empty list")
-
-        for zone in zones:
-            if not isinstance(zone, str) or not zone.strip():
-                raise ValueError(f"Scale group '{name}': each zone must be a non-empty string, got {zone!r}")
-
-        if len(zones) != len(set(zones)):
-            raise ValueError(f"Scale group '{name}': zones list contains duplicates: {zones}")
+        zones = _validate_zone_list(sg.pop("zones"), f"Scale group '{name}'")
 
         to_remove.append(name)
 
@@ -789,13 +790,7 @@ def _expand_multi_zone_groups(data: dict) -> None:
     scale_groups.update(expanded)
 
     # Merge expanded zones into platform.gcp.zones
-    if all_expanded_zones:
-        platform = data.setdefault("platform", {})
-        platform_gcp = platform.get("gcp")
-        if isinstance(platform_gcp, dict):
-            existing = set(platform_gcp.get("zones", []))
-            existing.update(all_expanded_zones)
-            platform_gcp["zones"] = sorted(existing)
+    _merge_zones_into_platform_gcp(data, all_expanded_zones)
 
 
 def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
@@ -978,37 +973,6 @@ def _parse_memory_value(value: object, field_name: str) -> int:
     raise ValueError(f"{field_name} must be an int or size string (got {type(value).__name__})")
 
 
-def config_to_dict(config: config_pb2.IrisClusterConfig) -> dict:
-    """Convert config to dict for YAML serialization."""
-    data = MessageToDict(config, preserving_proto_field_name=True)
-    scale_groups = data.get("scale_groups")
-    if isinstance(scale_groups, dict):
-        for sg in scale_groups.values():
-            if not isinstance(sg, dict):
-                continue
-            resources = sg.get("resources")
-            if not isinstance(resources, dict):
-                continue
-            normalized: dict[str, object] = {}
-            if "cpu_millicores" in resources:
-                normalized["cpu"] = resources["cpu_millicores"] / 1000
-            if "memory_bytes" in resources:
-                normalized["ram"] = resources["memory_bytes"]
-            if "disk_bytes" in resources:
-                normalized["disk"] = resources["disk_bytes"]
-            if "device_type" in resources:
-                normalized["device_type"] = resources["device_type"]
-            if "device_variant" in resources:
-                normalized["device_variant"] = resources["device_variant"]
-            if "device_count" in resources:
-                normalized["device_count"] = resources["device_count"]
-            if "capacity_type" in resources:
-                raw_ct = resources["capacity_type"]
-                normalized["capacity_type"] = _CAPACITY_TYPE_REVERSE_MAP.get(raw_ct, raw_ct)
-            sg["resources"] = normalized
-    return data
-
-
 def get_ssh_config(
     cluster_config: config_pb2.IrisClusterConfig,
     group_name: str | None = None,
@@ -1035,8 +999,6 @@ def get_ssh_config(
     user = ssh.user or DEFAULT_CONFIG.ssh.user
     key_file = ssh.key_file or ""
     port = ssh.port if ssh.HasField("port") and ssh.port > 0 else DEFAULT_SSH_PORT
-    auth_mode = ssh.auth_mode if ssh.auth_mode else DEFAULT_CONFIG.ssh.auth_mode
-    os_login_user = ssh.os_login_user or ""
     impersonate_service_account = ssh.impersonate_service_account or ""
     connect_timeout = (
         ssh.connect_timeout
@@ -1058,8 +1020,6 @@ def get_ssh_config(
         user=user,
         key_file=key_file,
         port=port,
-        auth_mode=auth_mode,
-        os_login_user=os_login_user,
         impersonate_service_account=impersonate_service_account,
     )
     result.connect_timeout.CopyFrom(connect_timeout)
@@ -1200,85 +1160,6 @@ def connect_cluster(config: config_pb2.IrisClusterConfig) -> Iterator[str]:
             bundle.controller.shutdown()
 
 
-def create_autoscaler(
-    platform: WorkerInfraProvider,
-    autoscaler_config: config_pb2.AutoscalerConfig,
-    scale_groups: dict[str, config_pb2.ScaleGroupConfig],
-    label_prefix: str,
-    base_worker_config: config_pb2.WorkerConfig | None = None,
-    threads: ThreadContainer | None = None,
-    db: "ControllerDB | None" = None,  # noqa: F821, UP037 — circular import
-):
-    """Create autoscaler from WorkerInfraProvider and explicit config.
-
-    Args:
-        platform: WorkerInfraProvider instance for creating/discovering slices
-        autoscaler_config: Autoscaler settings (already resolved with defaults)
-        scale_groups: Map of scale group name to config
-        label_prefix: Prefix for labels on managed resources
-        base_worker_config: Base worker configuration passed through to platform.create_slice().
-            None disables bootstrap (test/local mode).
-        threads: Thread container for background threads. Uses global default if not provided.
-        db: Optional DB handle for write-through persistence.
-
-    Returns:
-        Configured Autoscaler instance
-
-    Raises:
-        ValueError: If autoscaler_config has invalid timing values
-    """
-    # Local import: controller modules import config.py, creating a circular dependency.
-    from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.controller.autoscaler.scaling_group import (
-        DEFAULT_SCALE_DOWN_RATE_LIMIT,
-        DEFAULT_SCALE_UP_RATE_LIMIT,
-        ScalingGroup,
-    )
-
-    threads = threads or get_thread_container()
-
-    _validate_autoscaler_config(autoscaler_config, context="create_autoscaler")
-    _validate_scale_group_resources(_scale_groups_to_config(scale_groups))
-
-    scale_down_delay = duration_from_proto(autoscaler_config.scale_down_delay)
-
-    scaling_groups: dict[str, ScalingGroup] = {}
-    for name, group_config in scale_groups.items():
-        scaling_groups[name] = ScalingGroup(
-            config=group_config,
-            platform=platform,
-            label_prefix=label_prefix,
-            idle_threshold=scale_down_delay,
-            scale_up_rate_limit=group_config.scale_up_rate_limit or DEFAULT_SCALE_UP_RATE_LIMIT,
-            scale_down_rate_limit=group_config.scale_down_rate_limit or DEFAULT_SCALE_DOWN_RATE_LIMIT,
-            db=db,
-        )
-        resources = group_config.resources
-        worker_attrs = dict(group_config.worker.attributes) if group_config.HasField("worker") else {}
-        slice_template = group_config.slice_template
-        cw_instance = slice_template.coreweave.instance_type if slice_template.HasField("coreweave") else ""
-        logger.info(
-            "Scale group %s: device=%s:%s device_count=%d num_vms=%d buffer=%d max=%d instance=%s worker_attrs=%s",
-            name,
-            resources.device_type,
-            resources.device_variant,
-            resources.device_count,
-            group_config.num_vms,
-            group_config.buffer_slices,
-            group_config.max_slices,
-            cw_instance or "n/a",
-            worker_attrs or "none",
-        )
-
-    return Autoscaler.from_config(
-        scale_groups=scaling_groups,
-        config=autoscaler_config,
-        platform=platform,
-        base_worker_config=base_worker_config,
-        db=db,
-    )
-
-
 def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvider | K8sTaskProvider:
     """Create a TaskProvider from cluster configuration.
 
@@ -1294,17 +1175,34 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
         namespace = kp.namespace or "iris"
         label_prefix = cluster_config.platform.label_prefix
         managed_label = f"iris-{label_prefix}-managed" if label_prefix else ""
+        priority_classes: dict[int, str] = {}
+        for band_name, wpc in kp.kueue.priority_classes.items():
+            band = _KUEUE_PRIORITY_BANDS.get(band_name)
+            if band is None:
+                raise ValueError(
+                    f"Unknown Kueue priority band {band_name!r} in kueue.priority_classes; "
+                    f"valid bands: {sorted(_KUEUE_PRIORITY_BANDS)}"
+                )
+            priority_classes[band] = wpc
+        # Empty topologies falls back to the CoreWeave-convention defaults (the
+        # provider would otherwise be handed an empty map, suppressing them).
+        topologies = {group_by: (topo.node_label, topo.required) for group_by, topo in kp.kueue.topologies.items()}
+        # Kueue is enabled by a configured cluster_queue; the LocalQueue name Iris
+        # stamps and reconciles is derived from label_prefix, not configured.
+        local_queue = local_queue_name(label_prefix) if kp.kueue.cluster_queue else ""
         return K8sTaskProvider(
             kubectl=CloudK8sService(namespace=namespace, kubeconfig_path=kp.kubeconfig or None),
             namespace=namespace,
             default_image=kp.default_image,
-            colocation_topology_key=kp.colocation_topology_key or "coreweave.cloud/spine",
             service_account=kp.service_account or "",
             host_network=kp.host_network,
             cache_dir=kp.cache_dir or "/cache",
             controller_address=kp.controller_address or None,
             managed_label=managed_label,
             task_env=dict(cluster_config.defaults.task_env),
+            local_queue=local_queue,
+            kueue_priority_classes=priority_classes,
+            kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
         )
     if which == "worker_provider":
         from iris.cluster.controller.worker_provider import RpcWorkerStubFactory

@@ -14,6 +14,7 @@ import warnings
 from pathlib import Path
 
 import pytest
+from iris.client.local_client import make_local_client
 from iris.cluster.config import load_config, make_local_config
 from iris.managed_thread import thread_container_scope
 from iris.rpc import config_pb2
@@ -115,7 +116,6 @@ def local_iris_client():
     reuse, override this fixture in your test file with ``scope="module"`` and
     the same body — ``make_local_client`` does not depend on per-test state.
     """
-    from iris.client.local_client import make_local_client
 
     client = make_local_client()
     try:

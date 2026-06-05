@@ -6,6 +6,7 @@
 import sys
 
 import pytest
+from click.testing import CliRunner
 from iris.cli.job import (
     build_resources,
     load_env_vars,
@@ -13,8 +14,11 @@ from iris.cli.job import (
     parse_reservation_spec,
     run_iris_job,
 )
+from iris.cli.job import run as run_cmd
 from iris.cluster.config import IrisConfig
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute
+from iris.cluster.types import JobName
+from iris.rpc import job_pb2
 
 
 def test_load_env_vars_single_key():
@@ -210,7 +214,6 @@ def test_run_iris_job_adds_region_and_zone_constraints(monkeypatch):
 
 def test_run_iris_job_passes_priority_band(monkeypatch):
     """run_iris_job converts a priority name to its proto value."""
-    from iris.rpc import job_pb2
 
     captured: dict[str, object] = {}
 
@@ -234,7 +237,6 @@ def test_run_iris_job_passes_priority_band(monkeypatch):
 
 def test_run_iris_job_default_priority_unspecified(monkeypatch):
     """run_iris_job defaults to PRIORITY_BAND_UNSPECIFIED when --priority is omitted."""
-    from iris.rpc import job_pb2
 
     captured: dict[str, object] = {}
 
@@ -257,9 +259,6 @@ def test_run_iris_job_default_priority_unspecified(monkeypatch):
 
 def test_no_wait_prints_job_id(monkeypatch):
     """--no-wait prints the job ID to stdout."""
-    from click.testing import CliRunner
-    from iris.cli.job import run as run_cmd
-    from iris.cluster.types import JobName
 
     class FakeJob:
         job_id = JobName.from_wire("/test-user/test-job")

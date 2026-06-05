@@ -19,7 +19,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
-import re
 import threading
 import time
 from collections import deque
@@ -50,6 +49,7 @@ from finelog.store.compactor import (
     parse_seg_filename,
     seg_filename,
 )
+from finelog.store.policy import StoragePolicy
 from finelog.store.rwlock import RWLock
 from finelog.store.schema import (
     IMPLICIT_SEQ_COLUMN,
@@ -100,8 +100,11 @@ _PERSIST_WAIT_BACKOFF_INITIAL_SEC = 0.001
 _PERSIST_WAIT_BACKOFF_MAX_SEC = 0.05
 
 # Hard ceiling on the per-read parquet working set; safety net for body-LIKE
-# queries that cannot be pruned by row-group statistics.
-_MAX_PARQUET_BYTES_PER_READ = 10 * 1024 * 1024 * 1024
+# queries that cannot be pruned by row-group statistics. Both the FetchLogs
+# read path and the stats Query path scan the newest segments up to this many
+# bytes, so this directly bounds query latency on large namespaces (e.g. `log`)
+# at the cost of not matching older rows.
+_MAX_PARQUET_BYTES_PER_READ = 2560 * 1024 * 1024  # 2.5 GiB
 
 
 class SegmentMetadata(NamedTuple):
@@ -465,6 +468,7 @@ class DiskLogNamespace:
         read_pool: _ReadPoolProtocol,
         catalog: Catalog,
         merge_semaphore: threading.Semaphore,
+        storage_policy: StoragePolicy = StoragePolicy(),
     ) -> None:
         self.name = name
         self.schema = schema
@@ -477,6 +481,9 @@ class DiskLogNamespace:
 
         self._segment_target_bytes = segment_target_bytes
         self._compactor = Compactor(compaction_config)
+        # Per-namespace retention overrides; ``None`` fields fall back to
+        # the cluster-wide CompactionConfig caps inside _eviction_step.
+        self._storage_policy = storage_policy
 
         # Per-namespace insertion mutex. Guards ``_buffers`` (seq counter,
         # ram chunks, flushing buffer) and ``_local_segments``. Writes to
@@ -852,6 +859,10 @@ class DiskLogNamespace:
         _assert_additive_schema_evolution(self.schema, new_schema)
         self.schema = new_schema
         self._arrow_schema = schema_to_arrow(new_schema)
+
+    def update_policy(self, new_policy: StoragePolicy) -> None:
+        """Swap in a new retention policy. Picked up on the next eviction tick."""
+        self._storage_policy = new_policy
 
     def _flush_loop(self) -> None:
         """Drain in-RAM chunks to L0 on a timer or explicit wake.
@@ -1588,25 +1599,33 @@ class DiskLogNamespace:
     def _eviction_step(self) -> None:
         """Evict the namespace's oldest L>=1 copied segments until under caps.
 
-        Runs at the tail of every compaction tick. Per-namespace caps live
-        on ``CompactionConfig`` (``max_segments_per_namespace``,
-        ``max_bytes_per_namespace``); FIFO-by-min_seq picks the oldest
-        eligible segment.
+        Runs at the tail of every compaction tick. Caps are resolved from
+        the per-namespace :class:`StoragePolicy` first; unset fields fall
+        back to the cluster-wide ``CompactionConfig`` values. Size /
+        count caps trim oldest-first by ``min_seq``; the policy's
+        ``max_age_seconds`` (when set) additionally drops any eligible
+        segment whose ``created_at_ms`` is older than ``now - max_age``.
         """
         config = self._compactor.config
+        policy = self._storage_policy
+        max_segments = policy.max_segments if policy.max_segments is not None else config.max_segments_per_namespace
+        max_bytes = policy.max_bytes if policy.max_bytes is not None else config.max_bytes_per_namespace
+        max_age_ms = policy.max_age_seconds * 1000 if policy.max_age_seconds is not None else None
+
+        # Size + count trim: FIFO-by-min_seq through select_eviction_candidate.
         while True:
             with self._insertion_lock:
                 seg_count = len(self._local_segments)
                 byte_total = sum(s.size_bytes for s in self._local_segments)
-            if seg_count <= config.max_segments_per_namespace and byte_total <= config.max_bytes_per_namespace:
-                return
+            if seg_count <= max_segments and byte_total <= max_bytes:
+                break
             with self._insertion_lock:
                 row = self._catalog.select_eviction_candidate(self.name)
             if row is None:
                 # Over the cap but nothing eligible (everything still L0,
                 # or terminal segments not yet copied). Bail and let the
                 # next tick try again.
-                return
+                break
             self.evict_segment(row.path)
             logger.info(
                 "Evicted L%d segment %s (bytes=%d, remaining=%d segments)",
@@ -1616,12 +1635,49 @@ class DiskLogNamespace:
                 seg_count - 1,
             )
 
+        # Age trim: independent of size; only L>=1 BOTH segments are
+        # eligible. Order by created_at_ms (not min_seq) because
+        # compaction outputs inherit their inputs' min_seq but get a
+        # fresh created_at_ms — so the lowest-min_seq segment can be
+        # the youngest, and a min_seq scan would short-circuit on it
+        # and miss strictly-older siblings at higher min_seq.
+        if max_age_ms is None:
+            return
+        cutoff_ms = int(time.time() * 1000) - max_age_ms
+        while True:
+            with self._insertion_lock:
+                row = self._catalog.select_aged_eviction_candidate(self.name, cutoff_ms)
+            if row is None:
+                return
+            self.evict_segment(row.path)
+            logger.info(
+                "Aged out L%d segment %s (created_at_ms=%d, cutoff_ms=%d)",
+                row.level,
+                Path(row.path).name,
+                row.created_at_ms,
+                cutoff_ms,
+            )
+
     def query_snapshot(self) -> list[LocalSegment]:
-        """Return queryable local segments. Queries see only flushed data;
-        the in-RAM buffer is not exposed (flush cadence is ≤1s).
+        """Return queryable local segments, newest-first and capped to
+        ``_MAX_PARQUET_BYTES_PER_READ``.
+
+        The cap matches the FetchLogs read path: a stats Query over a large
+        namespace would otherwise build a ``read_parquet(union_by_name=true)``
+        view over *every* segment, forcing DuckDB to open every file's footer
+        up front (seconds on the multi-GB ``log`` namespace). Capping bounds
+        that to the newest ``_MAX_PARQUET_BYTES_PER_READ`` per namespace.
+
+        Trade-off: a Query sees only the newest few GB, the same recency bound
+        FetchLogs already applies. Full-history aggregations are out of scope
+        until the query engine is replaced.
+
+        Queries see only flushed data; the in-RAM buffer is not exposed (flush
+        cadence is ≤1s).
         """
         with self._insertion_lock:
-            return list(self._local_segments)
+            segments = list(self._local_segments)
+        return _cap_segments(segments)
 
     def all_segments_unlocked(self) -> list[LocalSegment]:
         """Snapshot every locally-tracked segment. Caller MUST hold the insertion lock."""
@@ -1887,6 +1943,11 @@ class MemoryLogNamespace:
             self.schema = new_schema
             self._arrow_schema = new_arrow
 
+    def update_policy(self, new_policy: StoragePolicy) -> None:
+        # In-memory namespaces don't evict; policy is accepted for
+        # protocol uniformity and ignored.
+        pass
+
     def evict_segment(self, path: str) -> int:
         return 0
 
@@ -1997,16 +2058,42 @@ def _cap_segments(segments: list[LocalSegment]) -> list[LocalSegment]:
     return capped
 
 
-# Characters that hint a regex was passed where PREFIX was intended; used
-# only for a friendlier error if a caller forgets to set match_scope=REGEX.
-_REGEX_HINT_RE = re.compile(r"[.*+?\[\](){}^$|\\]")
+# Regex metacharacters that terminate a literal prefix. Backslash is handled
+# separately in ``_regex_literal_prefix`` (an escaped punctuation char is a
+# literal and extends the prefix).
+_REGEX_METACHARS = frozenset(".*+?[](){}^$|")
 
 
-def _regex_literal_prefix(pattern: str) -> str:
-    match = _REGEX_HINT_RE.search(pattern)
-    if match is None:
-        return pattern
-    return pattern[: match.start()]
+def _regex_literal_prefix(pattern: str) -> tuple[str, int]:
+    """Return ``(literal_prefix, consumed)`` for a regex ``pattern``.
+
+    Walks the leading run of literal characters, decoding ``re.escape``-style
+    single-character escapes (``\\-`` -> ``-``) so an escaped-but-literal key
+    still yields a long, prunable prefix. Stops at the first true
+    metacharacter or character-class/anchor escape (``\\d``, ``\\w``, ``\\b`` …).
+
+    ``consumed`` is the number of *source* characters the literal spans — which
+    exceeds ``len(literal_prefix)`` when escapes were decoded — so the caller
+    can slice the remaining regex suffix as ``pattern[consumed:]``.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(pattern)
+    while i < n:
+        c = pattern[i]
+        if c == "\\":
+            # A trailing backslash or an alphanumeric escape (\d, \w, \b, \1)
+            # is a class/anchor/backref, not a literal — stop before it.
+            if i + 1 >= n or pattern[i + 1].isalnum():
+                break
+            out.append(pattern[i + 1])
+            i += 2
+            continue
+        if c in _REGEX_METACHARS:
+            break
+        out.append(c)
+        i += 1
+    return "".join(out), i
 
 
 def _scope_query(
@@ -2044,8 +2131,8 @@ def _scope_query(
         # Pull off any leading literal prefix to keep row-group pruning even
         # for regex queries. `prefix(key, $p)` is monotone, so it remains
         # correct as long as the regex requires that prefix to match.
-        literal_prefix = _regex_literal_prefix(source)
-        suffix = source[len(literal_prefix) :]
+        literal_prefix, consumed = _regex_literal_prefix(source)
+        suffix = source[consumed:]
         # `^literal$`, `^literal`, `^literal.*` all reduce to the literal prefix
         # alone; we still need regexp_matches for any other suffix.
         is_pure_prefix = suffix in (".*", "")

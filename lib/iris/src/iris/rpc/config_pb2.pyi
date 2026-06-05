@@ -340,28 +340,18 @@ class WorkerConfig(_message.Message):
     def __init__(self, docker_image: _Optional[str] = ..., host: _Optional[str] = ..., port: _Optional[int] = ..., port_range: _Optional[str] = ..., worker_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., cache_dir: _Optional[str] = ..., default_task_image: _Optional[str] = ..., task_env: _Optional[_Mapping[str, str]] = ..., runtime: _Optional[str] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., gpu_count: _Optional[int] = ..., capacity_type: _Optional[_Union[CapacityType, str]] = ..., worker_attributes: _Optional[_Mapping[str, str]] = ..., poll_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., heartbeat_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., slice_id: _Optional[str] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., storage_prefix: _Optional[str] = ..., auth_token: _Optional[str] = ...) -> None: ...
 
 class SshConfig(_message.Message):
-    __slots__ = ("user", "key_file", "port", "connect_timeout", "auth_mode", "os_login_user", "impersonate_service_account")
-    class AuthMode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-        __slots__ = ()
-        SSH_AUTH_MODE_METADATA: _ClassVar[SshConfig.AuthMode]
-        SSH_AUTH_MODE_OS_LOGIN: _ClassVar[SshConfig.AuthMode]
-    SSH_AUTH_MODE_METADATA: SshConfig.AuthMode
-    SSH_AUTH_MODE_OS_LOGIN: SshConfig.AuthMode
+    __slots__ = ("user", "key_file", "port", "connect_timeout", "impersonate_service_account")
     USER_FIELD_NUMBER: _ClassVar[int]
     KEY_FILE_FIELD_NUMBER: _ClassVar[int]
     PORT_FIELD_NUMBER: _ClassVar[int]
     CONNECT_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
-    AUTH_MODE_FIELD_NUMBER: _ClassVar[int]
-    OS_LOGIN_USER_FIELD_NUMBER: _ClassVar[int]
     IMPERSONATE_SERVICE_ACCOUNT_FIELD_NUMBER: _ClassVar[int]
     user: str
     key_file: str
     port: int
     connect_timeout: _time_pb2.Duration
-    auth_mode: SshConfig.AuthMode
-    os_login_user: str
     impersonate_service_account: str
-    def __init__(self, user: _Optional[str] = ..., key_file: _Optional[str] = ..., port: _Optional[int] = ..., connect_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., auth_mode: _Optional[_Union[SshConfig.AuthMode, str]] = ..., os_login_user: _Optional[str] = ..., impersonate_service_account: _Optional[str] = ...) -> None: ...
+    def __init__(self, user: _Optional[str] = ..., key_file: _Optional[str] = ..., port: _Optional[int] = ..., connect_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., impersonate_service_account: _Optional[str] = ...) -> None: ...
 
 class StorageConfig(_message.Message):
     __slots__ = ("local_state_dir", "remote_state_dir")
@@ -493,25 +483,57 @@ class WorkerProviderConfig(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
+class KueueTopology(_message.Message):
+    __slots__ = ("node_label", "required")
+    NODE_LABEL_FIELD_NUMBER: _ClassVar[int]
+    REQUIRED_FIELD_NUMBER: _ClassVar[int]
+    node_label: str
+    required: bool
+    def __init__(self, node_label: _Optional[str] = ..., required: _Optional[bool] = ...) -> None: ...
+
+class KueueConfig(_message.Message):
+    __slots__ = ("cluster_queue", "priority_classes", "topologies")
+    class PriorityClassesEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    class TopologiesEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: KueueTopology
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[KueueTopology, _Mapping]] = ...) -> None: ...
+    CLUSTER_QUEUE_FIELD_NUMBER: _ClassVar[int]
+    PRIORITY_CLASSES_FIELD_NUMBER: _ClassVar[int]
+    TOPOLOGIES_FIELD_NUMBER: _ClassVar[int]
+    cluster_queue: str
+    priority_classes: _containers.ScalarMap[str, str]
+    topologies: _containers.MessageMap[str, KueueTopology]
+    def __init__(self, cluster_queue: _Optional[str] = ..., priority_classes: _Optional[_Mapping[str, str]] = ..., topologies: _Optional[_Mapping[str, KueueTopology]] = ...) -> None: ...
+
 class KubernetesProviderConfig(_message.Message):
-    __slots__ = ("namespace", "kubeconfig", "default_image", "colocation_topology_key", "service_account", "host_network", "cache_dir", "controller_address")
+    __slots__ = ("namespace", "kubeconfig", "default_image", "service_account", "host_network", "cache_dir", "controller_address", "kueue")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     KUBECONFIG_FIELD_NUMBER: _ClassVar[int]
     DEFAULT_IMAGE_FIELD_NUMBER: _ClassVar[int]
-    COLOCATION_TOPOLOGY_KEY_FIELD_NUMBER: _ClassVar[int]
     SERVICE_ACCOUNT_FIELD_NUMBER: _ClassVar[int]
     HOST_NETWORK_FIELD_NUMBER: _ClassVar[int]
     CACHE_DIR_FIELD_NUMBER: _ClassVar[int]
     CONTROLLER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
+    KUEUE_FIELD_NUMBER: _ClassVar[int]
     namespace: str
     kubeconfig: str
     default_image: str
-    colocation_topology_key: str
     service_account: str
     host_network: bool
     cache_dir: str
     controller_address: str
-    def __init__(self, namespace: _Optional[str] = ..., kubeconfig: _Optional[str] = ..., default_image: _Optional[str] = ..., colocation_topology_key: _Optional[str] = ..., service_account: _Optional[str] = ..., host_network: _Optional[bool] = ..., cache_dir: _Optional[str] = ..., controller_address: _Optional[str] = ...) -> None: ...
+    kueue: KueueConfig
+    def __init__(self, namespace: _Optional[str] = ..., kubeconfig: _Optional[str] = ..., default_image: _Optional[str] = ..., service_account: _Optional[str] = ..., host_network: _Optional[bool] = ..., cache_dir: _Optional[str] = ..., controller_address: _Optional[str] = ..., kueue: _Optional[_Union[KueueConfig, _Mapping]] = ...) -> None: ...
 
 class UserBudgetTier(_message.Message):
     __slots__ = ("user_ids", "budget_limit", "max_band")
@@ -539,7 +561,7 @@ class EndpointSpec(_message.Message):
     def __init__(self, uri: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class IrisClusterConfig(_message.Message):
-    __slots__ = ("name", "platform", "defaults", "storage", "controller", "scale_groups", "auth", "kubernetes_provider", "worker_provider", "user_budgets", "endpoints", "log_server_config")
+    __slots__ = ("name", "platform", "defaults", "storage", "controller", "scale_groups", "auth", "kubernetes_provider", "worker_provider", "user_budgets", "endpoints", "log_server_config", "dashboard_url")
     class ScaleGroupsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -566,6 +588,7 @@ class IrisClusterConfig(_message.Message):
     USER_BUDGETS_FIELD_NUMBER: _ClassVar[int]
     ENDPOINTS_FIELD_NUMBER: _ClassVar[int]
     LOG_SERVER_CONFIG_FIELD_NUMBER: _ClassVar[int]
+    DASHBOARD_URL_FIELD_NUMBER: _ClassVar[int]
     name: str
     platform: PlatformConfig
     defaults: DefaultsConfig
@@ -578,4 +601,5 @@ class IrisClusterConfig(_message.Message):
     user_budgets: _containers.RepeatedCompositeFieldContainer[UserBudgetTier]
     endpoints: _containers.MessageMap[str, EndpointSpec]
     log_server_config: str
-    def __init__(self, name: _Optional[str] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., defaults: _Optional[_Union[DefaultsConfig, _Mapping]] = ..., storage: _Optional[_Union[StorageConfig, _Mapping]] = ..., controller: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ..., auth: _Optional[_Union[AuthConfig, _Mapping]] = ..., kubernetes_provider: _Optional[_Union[KubernetesProviderConfig, _Mapping]] = ..., worker_provider: _Optional[_Union[WorkerProviderConfig, _Mapping]] = ..., user_budgets: _Optional[_Iterable[_Union[UserBudgetTier, _Mapping]]] = ..., endpoints: _Optional[_Mapping[str, EndpointSpec]] = ..., log_server_config: _Optional[str] = ...) -> None: ...
+    dashboard_url: str
+    def __init__(self, name: _Optional[str] = ..., platform: _Optional[_Union[PlatformConfig, _Mapping]] = ..., defaults: _Optional[_Union[DefaultsConfig, _Mapping]] = ..., storage: _Optional[_Union[StorageConfig, _Mapping]] = ..., controller: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ..., auth: _Optional[_Union[AuthConfig, _Mapping]] = ..., kubernetes_provider: _Optional[_Union[KubernetesProviderConfig, _Mapping]] = ..., worker_provider: _Optional[_Union[WorkerProviderConfig, _Mapping]] = ..., user_budgets: _Optional[_Iterable[_Union[UserBudgetTier, _Mapping]]] = ..., endpoints: _Optional[_Mapping[str, EndpointSpec]] = ..., log_server_config: _Optional[str] = ..., dashboard_url: _Optional[str] = ...) -> None: ...

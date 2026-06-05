@@ -8,7 +8,7 @@ import asyncio
 import pytest
 from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
-from iris.cluster.controller.transitions import DirectProviderBatch
+from iris.cluster.controller.direct_provider import DirectProviderBatch
 from iris.cluster.providers.k8s.fake import InMemoryK8sService
 from iris.cluster.providers.k8s.tasks import (
     _LABEL_MANAGED,
@@ -81,6 +81,14 @@ def provider(k8s, log_client, task_stats_table):
     p.close()
 
 
+@pytest.fixture
+def kueue_provider(k8s):
+    """K8sTaskProvider with Kueue gang admission enabled (a configured LocalQueue)."""
+    p = make_kueue_provider(k8s)
+    yield p
+    p.close()
+
+
 def pod_config(
     namespace: str = "iris",
     default_image: str = "myrepo/iris:latest",
@@ -89,15 +97,38 @@ def pod_config(
     return PodConfig(namespace=namespace, default_image=default_image, **kwargs)
 
 
-def make_run_req(task_id: str, attempt_id: int = 0, cpu_mc: int = 1000) -> job_pb2.RunTaskRequest:
+def make_run_req(
+    task_id: str,
+    attempt_id: int = 0,
+    cpu_mc: int = 1000,
+    num_tasks: int = 0,
+    coscheduling_group_by: str = "",
+    priority: int = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+) -> job_pb2.RunTaskRequest:
     req = job_pb2.RunTaskRequest()
     req.task_id = task_id
     req.attempt_id = attempt_id
+    req.num_tasks = num_tasks
     req.entrypoint.run_command.argv.extend(["python", "train.py"])
     req.environment.env_vars["IRIS_JOB_ID"] = "test-job"
     req.resources.cpu_millicores = cpu_mc
     req.resources.memory_bytes = 4 * 1024**3
+    if coscheduling_group_by:
+        req.coscheduling.group_by = coscheduling_group_by
+    req.priority = priority
     return req
+
+
+def make_kueue_provider(k8s, *, local_queue: str = "iris-lq", **kwargs) -> K8sTaskProvider:
+    """K8sTaskProvider with Kueue gang admission enabled (a configured LocalQueue)."""
+    return K8sTaskProvider(
+        kubectl=k8s,
+        namespace="iris",
+        default_image="myrepo/iris:latest",
+        cache_dir="/cache",
+        local_queue=local_queue,
+        **kwargs,
+    )
 
 
 def make_batch(

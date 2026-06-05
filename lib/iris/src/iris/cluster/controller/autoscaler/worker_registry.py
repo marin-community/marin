@@ -3,8 +3,6 @@
 
 """Tracked worker registry for the autoscaler."""
 
-from __future__ import annotations
-
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
@@ -121,11 +119,6 @@ class WorkerRegistry:
         """Restore tracked worker state from a snapshot."""
 
         self.workers.update(workers)
-
-    def tracked_worker(self, worker_id: str) -> TrackedWorker | None:
-        """Look up a tracked worker by ID."""
-
-        return self.workers.get(worker_id)
 
     def vm_info(self, vm_id: str) -> vm_pb2.VmInfo | None:
         """Build VM status for a tracked worker."""

@@ -3,6 +3,8 @@
 
 """Tests for iris.cluster.types — Entrypoint, EnvironmentSpec, and constraint helpers."""
 
+import hashlib
+
 import pytest
 from iris.cluster.constraints import (
     Constraint,
@@ -15,14 +17,7 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
-from iris.cluster.types import (
-    Entrypoint,
-    JobName,
-    TaskAttempt,
-    adjust_tpu_replicas,
-    gpu_device,
-    tpu_device,
-)
+from iris.cluster.types import Entrypoint, JobName, TaskAttempt, adjust_tpu_replicas, gpu_device, tpu_device
 from iris.rpc import job_pb2
 
 
@@ -47,6 +42,19 @@ def test_entrypoint_proto_roundtrip_preserves_bytes():
     assert ep2.workdir_files == original_files
     fn, args, kwargs = ep2.resolve()
     assert fn(*args, **kwargs) == 3
+
+
+def test_entrypoint_proto_roundtrip_preserves_workdir_file_refs():
+    """workdir_file_refs survive to_proto -> from_proto."""
+    refs = {"_callable.pkl": "abc123", "model.bin": "def456"}
+    ep = Entrypoint(command=["python", "run.py"], workdir_files={"small.txt": b"hi"}, workdir_file_refs=refs)
+
+    proto = ep.to_proto()
+    ep2 = Entrypoint.from_proto(proto)
+
+    assert ep2.workdir_file_refs == refs
+    assert ep2.workdir_files == {"small.txt": b"hi"}
+    assert ep2.command == ["python", "run.py"]
 
 
 def test_entrypoint_command():
@@ -85,6 +93,15 @@ def test_job_name_roundtrip_and_hierarchy():
     assert not parsed.is_ancestor_of(JobName.root("test-user", "root"), include_self=False)
 
 
+@pytest.mark.parametrize("base", ["https://iris.oa.dev", "https://iris.oa.dev/"])
+def test_job_name_dashboard_url(base: str):
+    job = JobName.from_string("/rav/datakit-ref-smoke-20260604-135004")
+    assert job.dashboard_url(base) == "https://iris.oa.dev/#/job/%2Frav%2Fdatakit-ref-smoke-20260604-135004"
+    # Nested task names percent-encode every slash.
+    task = JobName.from_string("/rav/root/child/0")
+    assert task.dashboard_url("https://iris.oa.dev") == "https://iris.oa.dev/#/job/%2Frav%2Froot%2Fchild%2F0"
+
+
 @pytest.mark.parametrize(
     "value",
     ["", "root", "/root", "/test-user//child", "/test-user/root/ ", "/test-user/root/", "/test-user/root//0"],
@@ -100,8 +117,6 @@ def test_job_name_require_task_errors_on_non_task():
 
 
 def test_job_name_to_safe_token_and_deep_nesting():
-    import hashlib
-
     job = JobName.from_string("/test-user/a/b/c/d/e/0")
     expected_hash = hashlib.sha256(str(job).encode()).hexdigest()
     assert job.to_safe_token() == f"test-user-{expected_hash}"

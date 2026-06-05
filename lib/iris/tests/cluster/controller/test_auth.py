@@ -15,23 +15,31 @@ from iris.cluster.controller.auth import (
     _get_or_create_signing_key,
     create_api_key,
     list_api_keys,
-    lookup_api_key_by_hash,
+    lookup_api_key_by_id,
     revoke_api_key,
     revoke_login_keys_for_user,
 )
-from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.cluster.controller.dashboard import (
+    ControllerDashboard,
+    _LegacyFetchLogsRedirect,
+    _RouteAuthMiddleware,
+    _SubdomainProxyMiddleware,
+    requires_auth,
+)
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, hash_token, resolve_auth
 from rigging.timing import Timestamp
 from sqlalchemy import text
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from tests.cluster.conftest import fake_log_client_from_service
+from tests.cluster.controller._test_support import ControllerTestState
 
 _TEST_TOKEN = "valid-test-token"
 _TEST_USER = "test-user"
@@ -50,7 +58,7 @@ def db(tmp_path):
 
 @pytest.fixture
 def state(db, tmp_path):
-    s = ControllerTransitions(db)
+    s = ControllerTestState(db)
     yield s
 
 
@@ -67,7 +75,6 @@ def service(state, tmp_path, log_service):
     controller_mock.provider = Mock()
     controller_mock.has_direct_provider = False
     return ControllerServiceImpl(
-        state,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(log_service),
@@ -269,7 +276,7 @@ def test_write_connection_can_access_auth_tables(db: ControllerDB):
     create_api_key(db, key_id="k1", key_hash="hash1", key_prefix="pfx", user_id="test-user", name="test", now=now)
 
     with db.transaction() as q:
-        rows = q.execute(text(f"SELECT key_id FROM {db.api_keys_table}")).all()
+        rows = q.execute(text("SELECT key_id FROM auth.api_keys")).all()
         assert len(rows) == 1
         assert rows[0].key_id == "k1"
 
@@ -297,9 +304,10 @@ def test_api_key_create_lookup_revoke(db: ControllerDB):
         db, key_id="k1", key_hash=hash_token("secret1"), key_prefix="sec", user_id="alice", name="my-key", now=now
     )
 
-    found = lookup_api_key_by_hash(db, hash_token("secret1"))
+    found = lookup_api_key_by_id(db, "k1")
     assert found is not None
     assert found.key_id == "k1"
+    assert found.key_hash == hash_token("secret1")
 
     keys = list_api_keys(db, user_id="alice")
     assert len(keys) == 1
@@ -470,19 +478,10 @@ def test_route_auth_middleware_uses_resolve_auth(service, log_service, verifier,
     We build a dashboard with a @requires_auth route injected and verify it
     agrees with resolve_auth for every (token, optional) combination.
     """
-    from iris.cluster.controller.dashboard import (
-        ControllerDashboard,
-        _LegacyFetchLogsRedirect,
-        _RouteAuthMiddleware,
-        _SubdomainProxyMiddleware,
-        requires_auth,
-    )
-    from starlette.responses import JSONResponse as _J
-    from starlette.routing import Route
 
     @requires_auth
     def _protected(_request):
-        return _J({"ok": True})
+        return JSONResponse({"ok": True})
 
     dashboard = ControllerDashboard(
         service,

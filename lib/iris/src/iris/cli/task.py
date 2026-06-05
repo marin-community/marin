@@ -12,7 +12,7 @@ import sys
 
 import click
 
-from iris.cli.main import require_controller_url, rpc_client
+from iris.cli.connect import require_controller_url, rpc_client
 from iris.rpc import controller_pb2
 from iris.rpc.auth import TokenProvider
 

@@ -12,15 +12,16 @@ from pathlib import Path
 
 import pytest
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.projections import (
-    PROJECTIONS,
-    ConfigurationError,
-    assert_owned_tables_not_externally_written,
-)
+from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.schema import endpoints_table, worker_attributes_table
-from iris.cluster.controller.writes import REGISTERED_WRITE_FUNCTIONS, writes_to
+from iris.cluster.controller.schema import endpoints_table, meta_table, worker_attributes_table
+from iris.cluster.controller.writes import (
+    REGISTERED_WRITE_FUNCTIONS,
+    ConfigurationError,
+    validate,
+    writes_to,
+)
 
 
 @pytest.fixture
@@ -64,7 +65,7 @@ def test_violation_detected(projections_built, registry_isolated):
         pass
 
     with pytest.raises(ConfigurationError) as exc_info:
-        assert_owned_tables_not_externally_written()
+        validate()
 
     msg = str(exc_info.value)
     assert "rogue_write" in msg
@@ -78,14 +79,13 @@ def test_cascade_violation_detected(projections_built, registry_isolated):
     # endpoints_table is harmless filler so this isn't *also* flagged as a
     # direct write to a Projection-owned table; the assertion below targets
     # the cascade leg specifically.
-    from iris.cluster.controller.schema import meta_table
 
     @writes_to(meta_table, cascades_into=(worker_attributes_table,))
     def rogue_cascade(tx) -> None:
         pass
 
     with pytest.raises(ConfigurationError) as exc_info:
-        assert_owned_tables_not_externally_written()
+        validate()
 
     msg = str(exc_info.value)
     assert "rogue_cascade" in msg
@@ -104,7 +104,7 @@ def test_projection_method_allowed(projections_built, registry_isolated):
     fake_method.__qualname__ = "EndpointsProjection.some_write"
 
     # Must not raise.
-    assert_owned_tables_not_externally_written()
+    validate()
 
 
 def test_clean_codebase_passes(fresh_db):
@@ -115,4 +115,4 @@ def test_clean_codebase_passes(fresh_db):
     regressions as a normal assertion rather than as fixture-setup failure.
     """
     del fresh_db  # only needed to materialize writes/projections modules
-    assert_owned_tables_not_externally_written()
+    validate()

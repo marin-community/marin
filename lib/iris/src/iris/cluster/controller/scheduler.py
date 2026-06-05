@@ -32,12 +32,7 @@ from iris.cluster.constraints import (
     soft_constraint_score,
     split_hard_soft,
 )
-from iris.cluster.types import (
-    JobName,
-    PendingTask,
-    UserBudgetDefaults,
-    WorkerId,
-)
+from iris.cluster.types import JobName, PendingTask, UserBudgetDefaults, WorkerId
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +47,9 @@ task assignments until existing tasks complete their build phase.
 DEFAULT_MAX_ASSIGNMENTS_PER_WORKER = 1
 """Default limit for task assignments per worker per scheduling cycle.
 
-Set to 1 for normal scheduling (round-robin distribution). The dry-run in
-compute_demand_entries sets this to sys.maxsize so that a big worker with
-spare CPU can absorb multiple tasks, preventing false demand signals.
+Set to 1 for normal scheduling (round-robin distribution). Dry-run demand
+estimation raises this to an effectively unlimited value so a big worker
+with spare CPU can absorb multiple tasks, preventing false demand signals.
 """
 
 
@@ -71,7 +66,7 @@ class WorkerSnapshot:
     The ``committed_*`` fields hold the resources reserved by unfinished
     worker-bound attempts at cycle start; they are *not* persisted on the
     workers table — the controller fetches them per cycle from
-    ``reads.scheduler.resource_usage_by_worker``.
+    ``reads.resource_usage_by_worker``.
     """
 
     worker_id: WorkerId
@@ -180,7 +175,7 @@ class RejectionReason:
                 return f"Unknown rejection: {self.kind}"
 
 
-@dataclass
+@dataclass(frozen=True)
 class JobRequirements:
     """What a job needs from a worker. Scheduler's input type.
 
@@ -198,9 +193,6 @@ class JobRequirements:
     constraints: list[Constraint]
     is_coscheduled: bool
     coscheduling_group_by: str | None
-
-
-_evaluate_constraint = evaluate_constraint
 
 
 @dataclass
@@ -314,7 +306,7 @@ class WorkerCapacity:
         """Check if this worker matches all given constraints."""
         for constraint in constraints:
             attr = self.attributes.get(constraint.key)
-            if not _evaluate_constraint(attr, constraint):
+            if not evaluate_constraint(attr, constraint):
                 return False
         return True
 
@@ -384,10 +376,6 @@ class SchedulingContext:
         self.index = ConstraintIndex.build(entity_attrs)
         self.assignment_counts = {}
         self._soft_score_cache = {}
-
-    @property
-    def all_worker_ids(self) -> set[WorkerId]:
-        return {self._str_to_wid[s] for s in self.index._all_ids}
 
     def evolve_with_workers(
         self,

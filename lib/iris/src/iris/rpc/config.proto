@@ -309,20 +309,17 @@ message WorkerConfig {
   string auth_token = 70;
 }
 
-// SSH configuration for manual hosts
+// SSH configuration. GCP cluster SSH always uses gcloud auto-detection
+// (OS Login vs metadata is determined by the VM's own enable-oslogin
+// metadata), so there's no auth-mode knob here. The fields below cover
+// the manual provider and the gcloud impersonation flag.
 message SshConfig {
-  enum AuthMode {
-    SSH_AUTH_MODE_METADATA = 0;
-    SSH_AUTH_MODE_OS_LOGIN = 1;
-  }
-
   string user = 1;                        // Default: "root"
   string key_file = 2;                    // Path to SSH private key
   int32 port = 3;                         // Default: 22
   iris.time.Duration connect_timeout = 4;  // Default: 30s
-  AuthMode auth_mode = 5;                 // Default: SSH_AUTH_MODE_METADATA
-  string os_login_user = 6;               // Optional explicit POSIX username for OS Login
-  string impersonate_service_account = 7; // Optional SA email for gcloud/OS Login impersonation
+  string impersonate_service_account = 7; // Optional SA email for gcloud impersonation
+  reserved 5, 6;  // formerly auth_mode (enum), os_login_user (string)
 }
 
 // ============================================================================
@@ -439,20 +436,52 @@ message AuthConfig {
 // No fields needed — all configuration is in defaults.worker and scale_groups.
 message WorkerProviderConfig {}
 
+// One Kueue topology placement rule (see KueueConfig.topologies).
+message KueueTopology {
+  // Node label the gang shares. Must be a level in the cluster's Kueue
+  // Topology CR for topology-aware scheduling to honor it, e.g.
+  // "ib.coreweave.cloud/leafgroup" or "ds.coreweave.com/nvlink.domain".
+  string node_label = 1;
+  // true  => kueue.x-k8s.io/podset-required-topology  (hard: one domain).
+  // false => kueue.x-k8s.io/podset-preferred-topology (soft: best effort).
+  bool required = 2;
+}
+
+// Kueue gang-admission config for the K8s direct provider. Iris follows the
+// cluster's Kueue conventions rather than dictating its own: these fields map
+// Iris concepts (priority bands, coscheduling group_by) onto whatever
+// WorkloadPriorityClasses and Topology levels the cluster admin provisioned.
+message KueueConfig {
+  // ClusterQueue the cluster's LocalQueue binds to. Admin-provisioned
+  // (cluster-scoped, holds the quota); created by scripts/install_kueue.py
+  // (--with-queues), not by Iris. Setting this ENABLES Kueue gang admission:
+  // empty disables it (coscheduled jobs then fail — there is no non-Kueue
+  // fallback). The LocalQueue itself is owned by Iris, which creates it in its
+  // namespace at controller start (see ensure_kueue_queues) and names it
+  // {label_prefix}-lq — it is derived, not configured.
+  string cluster_queue = 1;
+  // PriorityBand -> WorkloadPriorityClass name. A band with no entry is left
+  // unstamped so Kueue applies its default priority; Iris never invents a class
+  // name, since a missing WorkloadPriorityClass makes Kueue reject the pod.
+  // Keys: "production" | "interactive" | "batch".
+  map<string, string> priority_classes = 2;
+  // group_by attribute -> topology placement. A group_by with no entry gets no
+  // topology annotation (the gang still admits atomically via
+  // pod-group-total-count, just unconstrained). When the whole map is empty the
+  // provider falls back to CoreWeave-convention defaults (see make_provider).
+  map<string, KueueTopology> topologies = 3;
+}
+
 // Configuration for KubernetesProvider: direct Pod dispatch without worker daemons.
 message KubernetesProviderConfig {
   string namespace = 1;    // Kubernetes namespace for task pods (default: "iris")
   string kubeconfig = 2;   // Path to kubeconfig file; empty string uses in-cluster auth
   string default_image = 3; // Default container image for task pods
-  // Topology key for pod affinity on multi-VM gang-scheduled jobs.
-  // When set, sibling task pods for the same job prefer scheduling on nodes
-  // sharing this topology (e.g. "coreweave.cloud/spine" for IB colocation).
-  // Leave empty to disable. Default: "coreweave.cloud/spine".
-  string colocation_topology_key = 4;
   string service_account = 5;    // K8s ServiceAccount for task pods (default: "")
   bool host_network = 6;         // Run task pods with hostNetwork (for NCCL/IB)
   string cache_dir = 7;          // hostPath base for cache mounts (default: "/cache")
   string controller_address = 8; // Controller URL injected into task pods
+  KueueConfig kueue = 9;  // Kueue gang admission; empty kueue.cluster_queue disables it
 }
 
 // ============================================================================
@@ -531,4 +560,8 @@ message IrisClusterConfig {
   // can manage the deployment via `iris cluster log-server` subcommands.
   // Mutually exclusive with endpoints[/system/log-server].
   string log_server_config = 20;
+
+  // Public dashboard origin for this deployment (e.g. "https://iris.oa.dev").
+  // When set, the CLI prints a clickable job URL on submit. Optional.
+  string dashboard_url = 21;
 }

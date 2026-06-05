@@ -22,6 +22,7 @@ from finelog.errors import (
     SchemaValidationError,
     StatsError,
 )
+from finelog.store.policy import StoragePolicy
 
 __all__ = [
     "FlushResult",
@@ -33,6 +34,7 @@ __all__ = [
     "SchemaConflictError",
     "SchemaValidationError",
     "StatsError",
+    "StoragePolicy",
     "Table",
     "schema_from_dataclass",
 ]

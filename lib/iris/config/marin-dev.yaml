@@ -3,6 +3,7 @@
 # Usage: uv run iris --cluster=marin-dev cluster start
 
 log_server_config: marin-dev
+dashboard_url: https://iris-dev.oa.dev
 
 platform:
   label_prefix: marin-dev
@@ -11,7 +12,6 @@ platform:
 
 defaults:
   ssh:
-    auth_mode: SSH_AUTH_MODE_OS_LOGIN
     impersonate_service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
   autoscaler:
     evaluation_interval:
