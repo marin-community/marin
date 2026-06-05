@@ -707,6 +707,7 @@ class ProxyControllerDashboard:
             Route("/auth/{path:path}", self._proxy_auth),
             Route("/iris.cluster.ControllerService/{method}", self._proxy_rpc, methods=["POST"]),
             Route("/finelog.logging.LogService/{method}", self._proxy_log_rpc, methods=["POST"]),
+            Route("/proxy/{path:path}", self._proxy_endpoint, methods=list(endpoint_proxy.ALLOWED_METHODS)),
             static_files_mount(),
         ]
 
@@ -760,6 +761,29 @@ class ProxyControllerDashboard:
         upstream_resp = await self._client.post(
             f"/finelog.logging.LogService/{method}",
             content=body,
+            headers={"content-type": request.headers.get("content-type", "application/json")},
+        )
+        return Response(
+            content=upstream_resp.content,
+            status_code=upstream_resp.status_code,
+            media_type=upstream_resp.headers.get("content-type"),
+        )
+
+    async def _proxy_endpoint(self, request: Request) -> Response:
+        """Forward generic ``/proxy/<endpoint>/<sub_path>`` requests upstream.
+
+        The dashboard's stats panels (live resource usage, status text, profile
+        history) reach the bundled log server through
+        ``/proxy/system.log-server/finelog.stats.StatsService/...``. The upstream
+        controller already exposes the endpoint proxy at the same path, so we pass
+        the request through verbatim (method, body, query, content-type).
+        """
+        path = request.path_params["path"]
+        query = f"?{request.url.query}" if request.url.query else ""
+        upstream_resp = await self._client.request(
+            request.method,
+            f"/proxy/{path}{query}",
+            content=await request.body(),
             headers={"content-type": request.headers.get("content-type", "application/json")},
         )
         return Response(
