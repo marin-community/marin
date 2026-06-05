@@ -53,6 +53,7 @@ _AUTOTUNE_BLOCK_SIZE_CACHE: dict[str, BlockSizes] = {}
 _AUTOTUNE_CACHE_LOADED = False
 _AUTOTUNE_COMPILE_HIT_THRESHOLD_S = 0.20
 _VMEM_COMPILE_FALLBACK_WARNINGS_EMITTED: set[str] = set()
+_NVIDIA_WEIGHT_TILE_BYTES_LIMIT = 101_376
 
 logger = logging.getLogger(__name__)
 _CANONICAL_PALLAS_IMPLEMENTATIONS: dict[str, ArrayImpl] = {}
@@ -96,6 +97,9 @@ def _default_implementations() -> tuple[Implementation, ...]:
 
 def _warn_pallas_fallback_once(exc: Exception) -> None:
     message = str(exc)
+    if isinstance(exc, ExceptionGroup):
+        nested = "; ".join(f"{type(e).__name__}: {e}" for e in exc.exceptions[:3])
+        message = f"{message}; first errors: {nested}"
     if "requires TPU backend" in message:
         return
     if message in _PALLAS_FALLBACK_WARNINGS_EMITTED:
@@ -308,14 +312,25 @@ def _candidate_block_sizes(
                     )
                 )
     elif impl_name == "pallas_gpu":
-        for v_block in (64, 128, 256, 512, 1024, 2048, 4096):
-            candidates.append(
-                BlockSizes(
-                    b_block_size=inferred.b_block_size,
-                    h_block_size=inferred.h_block_size,
-                    v_block_size=v_block,
+        h_blocks = (32, 64, 128, 256, 512, inferred.h_block_size)
+        v_blocks = (64, 128, 256, 512, 1024, 2048, 4096)
+        device_kind = jax.devices()[0].device_kind.lower() if jax.devices() else ""
+        max_weight_tile_bytes = _NVIDIA_WEIGHT_TILE_BYTES_LIMIT if "nvidia" in device_kind else None
+        for h_block in h_blocks:
+            if h_block <= 0 or h_block % 16 != 0:
+                continue
+            for v_block in v_blocks:
+                if max_weight_tile_bytes is not None:
+                    requested = h_block * v_block * jnp.dtype(w.dtype).itemsize
+                    if requested > max_weight_tile_bytes:
+                        continue
+                candidates.append(
+                    BlockSizes(
+                        b_block_size=inferred.b_block_size,
+                        h_block_size=h_block,
+                        v_block_size=v_block,
+                    )
                 )
-            )
     deduped: list[BlockSizes] = []
     seen: set[tuple[int, int, int]] = set()
     for entry in candidates:

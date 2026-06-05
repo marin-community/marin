@@ -1104,6 +1104,27 @@ def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pyte
     assert faster in seen_block_sizes
 
 
+def test_pallas_gpu_autotune_candidates_sweep_hidden_blocks(monkeypatch: pytest.MonkeyPatch):
+    class FakeDevice:
+        device_kind = "NVIDIA H100 80GB HBM3"
+
+    class FakeArray:
+        def __init__(self, shape: tuple[int, int], dtype: jnp.dtype):
+            self.shape = shape
+            self.dtype = dtype
+
+    monkeypatch.setattr(fused_api.jax, "devices", lambda: [FakeDevice()])
+
+    inferred = fused_api.BlockSizes(b_block_size=256, h_block_size=256, v_block_size=2048)
+    x = FakeArray((4096, 2560), jnp.bfloat16)
+    w = FakeArray((2560, 128256), jnp.float32)
+
+    candidates = fused_api._candidate_block_sizes("pallas_gpu", inferred, x=x, w=w, dtype=jnp.float32)
+
+    assert fused_api.BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256) in candidates
+    assert fused_api.BlockSizes(b_block_size=256, h_block_size=128, v_block_size=128) in candidates
+
+
 def test_pallas_tpu_vmem_compile_error_falls_back_to_xla_when_requested(monkeypatch: pytest.MonkeyPatch):
     x = jnp.ones((4, 8), dtype=jnp.float32)
     w = jnp.ones((8, 16), dtype=jnp.float32)
