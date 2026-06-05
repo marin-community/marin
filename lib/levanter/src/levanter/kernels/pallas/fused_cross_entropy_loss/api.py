@@ -282,7 +282,7 @@ def _candidate_block_sizes(
     w: jax.Array,
     dtype: Optional[jnp.dtype],
 ) -> list[BlockSizes]:
-    candidates: list[BlockSizes] = [inferred]
+    candidates: list[BlockSizes] = [] if impl_name == "pallas_gpu" else [inferred]
     if impl_name == "pallas_tpu":
         bucket = shape_bucket_name(x.shape[0], x.shape[1], w.shape[1])
         if bucket == "large-batch-medium-h":

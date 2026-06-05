@@ -1121,6 +1121,7 @@ def test_pallas_gpu_autotune_candidates_sweep_hidden_blocks(monkeypatch: pytest.
 
     candidates = fused_api._candidate_block_sizes("pallas_gpu", inferred, x=x, w=w, dtype=jnp.float32)
 
+    assert inferred not in candidates
     assert fused_api.BlockSizes(b_block_size=256, h_block_size=64, v_block_size=256) in candidates
     assert fused_api.BlockSizes(b_block_size=256, h_block_size=128, v_block_size=128) in candidates
 
