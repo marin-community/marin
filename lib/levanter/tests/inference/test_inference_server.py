@@ -73,7 +73,6 @@ def test_merge_ready_batches_coalesces_pending_work_up_to_sequence_limit():
         first_batch,
         ready_batches,
         max_seqs=16,
-        max_prompt_tokens_per_batch=4096,
         max_tokens_per_batch=4096,
     )
 
@@ -93,7 +92,6 @@ def test_merge_ready_batches_preserves_overflow_order():
         first_batch,
         ready_batches,
         max_seqs=16,
-        max_prompt_tokens_per_batch=4096,
         max_tokens_per_batch=4096,
     )
 
@@ -101,7 +99,7 @@ def test_merge_ready_batches_preserves_overflow_order():
     assert [[request.request_id for request in leftover] for leftover in leftovers] == [["req_2"], ["req_3"]]
 
 
-def test_merge_ready_batches_respects_prefill_prompt_budget():
+def test_merge_ready_batches_allows_aggregate_prompts_over_prefill_budget():
     first_batch = InferenceBatch([_inference_request("req_0", n_generations=1, prompt_tokens=512, max_tokens=1)])
     ready_batches = [
         InferenceBatch(
@@ -117,12 +115,11 @@ def test_merge_ready_batches_respects_prefill_prompt_budget():
         first_batch,
         ready_batches,
         max_seqs=16,
-        max_prompt_tokens_per_batch=1024,
         max_tokens_per_batch=4096,
     )
 
-    assert [request.request_id for request in merged] == ["req_0", "req_1"]
-    assert [[request.request_id for request in leftover] for leftover in leftovers] == [["req_2"], ["req_3"]]
+    assert [request.request_id for request in merged] == ["req_0", "req_1", "req_2", "req_3"]
+    assert leftovers == []
 
 
 @pytest.fixture(scope="module")

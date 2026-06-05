@@ -1436,6 +1436,8 @@ def test_run_levanter_without_lm_head_case_preserves_warmup_flag(monkeypatch):
 
             class Result:
                 total_generated = 2
+                prefill_admissions = 1
+                prefill_prompt_tokens_per_admission = [1]
 
             return Result()
 
@@ -1514,6 +1516,8 @@ def test_run_levanter_without_lm_head_case_preserves_warmup_flag(monkeypatch):
     assert lm_head_no_sampling.backend == "levanter:auto:lm_head_no_sampling"
     assert measured.hbm_used_bytes == 123
     assert measured.compiled_shape_count == 2
+    assert warmup.prefill_admissions == 1
+    assert warmup.prefill_prompt_tokens_per_admission == [1]
     assert events == [
         "enter:mesh",
         "enter:axis_mapping",

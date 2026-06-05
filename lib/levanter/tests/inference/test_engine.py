@@ -314,6 +314,87 @@ def test_generate_streaming_greedy_lm_head_emits_argmax_tokens_after_prefill():
     assert result.tokens == [[3, 3, 3]]
 
 
+def test_generate_admits_multiple_prefill_chunks_for_one_logical_batch():
+    model = DummyModel(vocab_size=10, eos_id=3)
+    service = InferenceEngine.from_model_with_config(
+        model=model,  # type: ignore
+        tokenizer=None,
+        config=InferenceEngineConfig(
+            max_seq_len=32,
+            max_pages=64,
+            max_seqs=4,
+            page_size=8,
+            compute_dtype=jnp.float32,
+            max_queued_tokens=16,
+            max_rounds=1,
+            max_prefill_size=4,
+            max_seqs_in_prefill=4,
+            use_streaming_greedy_lm_head=True,
+        ),
+    )
+    requests = [
+        Request(
+            prompt_tokens=[1, 2],
+            request_id=request_id,
+            decode_params=SeqDecodingParams(
+                max_num_tokens=jnp.asarray(4, dtype=jnp.int32),
+                stop_tokens=None,
+                temperature=jnp.asarray(0.0, dtype=jnp.float32),
+                top_p=jnp.asarray(1.0, dtype=jnp.float32),
+                top_k=jnp.asarray(0, dtype=jnp.int32),
+                key=jax.random.PRNGKey(request_id),
+            ),
+            n_generations=1,
+        )
+        for request_id in range(4)
+    ]
+
+    result = service.generate(requests)
+
+    assert result.tokens == [[3, 3], [3, 3], [3, 3], [3, 3]]
+    assert result.total_generated == 8
+    assert result.prefill_admissions == 2
+    assert result.prefill_prompt_tokens_per_admission == [4, 4]
+
+
+@pytest.mark.parametrize("method_name", ["generate_without_lm_head", "generate_with_lm_head_no_sampling"])
+def test_diagnostic_generation_rejects_aggregate_prefill_overflow(method_name):
+    model = DummyModel(vocab_size=10, eos_id=3)
+    service = InferenceEngine.from_model_with_config(
+        model=model,  # type: ignore
+        tokenizer=None,
+        config=InferenceEngineConfig(
+            max_seq_len=32,
+            max_pages=64,
+            max_seqs=4,
+            page_size=8,
+            compute_dtype=jnp.float32,
+            max_queued_tokens=16,
+            max_prefill_size=4,
+            max_seqs_in_prefill=4,
+        ),
+    )
+    requests = [
+        Request(
+            prompt_tokens=[1, 2],
+            request_id=request_id,
+            decode_params=SeqDecodingParams(
+                max_num_tokens=jnp.asarray(4, dtype=jnp.int32),
+                stop_tokens=None,
+                temperature=jnp.asarray(0.0, dtype=jnp.float32),
+                top_p=jnp.asarray(1.0, dtype=jnp.float32),
+                top_k=jnp.asarray(0, dtype=jnp.int32),
+                key=jax.random.PRNGKey(request_id),
+            ),
+            n_generations=1,
+        )
+        for request_id in range(3)
+    ]
+
+    with pytest.raises(ValueError, match="aggregate prompt tokens"):
+        getattr(service, method_name)(requests)
+
+
 def test_streaming_greedy_lm_head_returns_logprobs_without_materialized_logits():
     Pos = Axis("position", 2)
     Embed = Axis("embed", 2)

@@ -123,12 +123,10 @@ def _request_fits_batch(
     request: InferenceRequest,
     *,
     max_seqs: int,
-    max_prompt_tokens_per_batch: int,
     max_tokens_per_batch: int,
 ) -> bool:
     return (
         batch.num_seqs() + request.n_generations <= max_seqs
-        and batch.prompt_tokens() + len(request.prompt_tokens) <= max_prompt_tokens_per_batch
         and batch.total_tokens() + len(request.prompt_tokens) + request.max_tokens <= max_tokens_per_batch
     )
 
@@ -138,7 +136,6 @@ def _merge_ready_batches(
     ready_batches: list[InferenceBatch],
     *,
     max_seqs: int,
-    max_prompt_tokens_per_batch: int,
     max_tokens_per_batch: int,
 ) -> tuple[InferenceBatch, list[InferenceBatch]]:
     """Merge already-queued inference batches while preserving request order."""
@@ -153,7 +150,6 @@ def _merge_ready_batches(
                 merged,
                 request,
                 max_seqs=max_seqs,
-                max_prompt_tokens_per_batch=max_prompt_tokens_per_batch,
                 max_tokens_per_batch=max_tokens_per_batch,
             ):
                 merged.append(request)
@@ -235,6 +231,8 @@ class InferenceContext:
         self.inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
         self.batch_thread = threading.Thread(target=self._batch_processing_loop, daemon=True)
         self._next_request_id = 0
+        self.last_prefill_admissions: int | None = None
+        self.last_prefill_prompt_tokens_per_admission: list[int] = []
 
     def start(self):
         """Start the inference and batch processing threads"""
@@ -376,7 +374,6 @@ class InferenceContext:
                     batch,
                     r,
                     max_seqs=self.engine.config.max_seqs,
-                    max_prompt_tokens_per_batch=max_prompt_tokens_per_batch,
                     max_tokens_per_batch=max_tokens_per_batch,
                 ):
                     batch.append(r)
@@ -403,7 +400,6 @@ class InferenceContext:
                         batch,
                         ready_batches,
                         max_seqs=self.engine.config.max_seqs,
-                        max_prompt_tokens_per_batch=_max_prompt_tokens_per_batch(self.engine),
                         max_tokens_per_batch=_max_tokens_per_batch(self.engine),
                     )
                     for leftover in leftovers:
@@ -474,8 +470,16 @@ class InferenceContext:
         # Generate responses
         start_time = time.time()
         result = self.engine.generate(service_requests)
+        self.last_prefill_admissions = result.prefill_admissions
+        self.last_prefill_prompt_tokens_per_admission = list(result.prefill_prompt_tokens_per_admission)
         duration = time.time() - start_time
-        logger.info(f"Batch completed in {duration:.2f}s, generated {result.total_generated} tokens")
+        logger.info(
+            "Batch completed in %.2fs, generated %d tokens, prefill admissions=%d chunks=%s",
+            duration,
+            result.total_generated,
+            result.prefill_admissions,
+            result.prefill_prompt_tokens_per_admission,
+        )
 
         # Return results to futures
         output_idx = 0

@@ -1026,6 +1026,21 @@ class GenerationResult:
     tokens: list[list[int]]
     logprobs: list[list[float]] | None
     total_generated: int
+    prefill_admissions: int = 0
+    prefill_prompt_tokens_per_admission: list[int] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PrefillAdmissionPlan:
+    request_count: int
+    prompt_tokens: int
+    sequence_count: int
+
+
+@dataclass(frozen=True)
+class PrefillAdmissionResult:
+    outputs: _DecodeOutputs
+    plan: PrefillAdmissionPlan
 
 
 FIRST_TOKEN_LOGPROB = 0.0
@@ -1195,15 +1210,58 @@ class InferenceEngine:
             float(np.asarray(request.decode_params.top_p, dtype=np.float32).item()) < 1.0 for request in requests
         )
 
+    def _prefill_admission_plan(self, requests: Sequence[Request]) -> PrefillAdmissionPlan | None:
+        """Return the leading request prefix that fits in the next prefill call."""
+
+        max_seqs_in_prefill = self.config.max_seqs_in_prefill
+        max_prefill_size = self.config.max_prefill_size or self.model.Pos.size
+        available_slots = len(self.free_slots)
+
+        request_count = 0
+        prompt_tokens = 0
+        sequence_count = 0
+        primary_sequences = 0
+
+        for request in requests:
+            if len(request.prompt_tokens) + prompt_tokens > max_prefill_size:
+                break
+            if primary_sequences >= max_seqs_in_prefill:
+                break
+            if available_slots < request.n_generations:
+                if max_seqs_in_prefill < request.n_generations:
+                    raise RuntimeError(
+                        f"Request {request.request_id} asked for {request.n_generations} generations, "
+                        f"but max_seqs_in_prefill={max_seqs_in_prefill} is too small to accommodate. "
+                        "Increase max_seqs_in_prefill or reduce n_generations."
+                    )
+                break
+
+            request_count += 1
+            prompt_tokens += len(request.prompt_tokens)
+            sequence_count += request.n_generations
+            primary_sequences += 1
+            available_slots -= request.n_generations
+
+        if request_count == 0:
+            return None
+        return PrefillAdmissionPlan(
+            request_count=request_count,
+            prompt_tokens=prompt_tokens,
+            sequence_count=sequence_count,
+        )
+
     def _prefill_batch(
         self, batch: Sequence[Request], *, apply_top_p: bool, return_logprobs: bool
-    ) -> _DecodeOutputs | None:
+    ) -> PrefillAdmissionResult | None:
         """Admit a batch from the head of the queue that fits in free slots/pages.
 
         Returns the decode outputs for the admitted prefill batch, or None if no work was admitted.
         """
+        plan = self._prefill_admission_plan(batch)
+        if plan is None:
+            return None
         # Build a single PrefillWork description and run prefill exactly once
-        prefill_work = self._prefill_prompts(batch)
+        prefill_work = self._prefill_prompts(batch[: plan.request_count])
         if prefill_work is None:
             return None
         new_state = _run_prefill(
@@ -1220,7 +1278,16 @@ class InferenceEngine:
 
         # _run_prefill returns (GenState, _DecodeOutputs)
         self.gen_state, outputs = new_state
-        return outputs
+        return PrefillAdmissionResult(outputs=outputs, plan=plan)
+
+    def _reject_diagnostic_multi_prefill(self, requests: Sequence[Request], diagnostic_name: str) -> None:
+        max_prefill_size = self.config.max_prefill_size or self.model.Pos.size
+        prompt_tokens = sum(len(request.prompt_tokens) for request in requests)
+        if prompt_tokens > max_prefill_size:
+            raise ValueError(
+                f"{diagnostic_name} does not support multi-prefill admission: aggregate prompt tokens "
+                f"{prompt_tokens} exceed max_prefill_size={max_prefill_size}. Use generate() for multi-prefill batches."
+            )
 
     def _prefill_prompts(
         self,
@@ -1393,13 +1460,21 @@ class InferenceEngine:
             requests: Sequence of generation requests
             step_callback: Optional callback function called at each decode iteration with iteration number
         """
-        # validate we don't have any sequences with n_generations exceeding max_seqs
-        max_needed = max(int(r.n_generations) for r in requests)
-        if max_needed > int(self.gen_state.decode_state.page_table.max_seqs):
+        max_seqs = int(self.gen_state.decode_state.page_table.max_seqs)
+        total_needed = sum(int(r.n_generations) for r in requests)
+        if total_needed > max_seqs:
             raise ValueError(
-                f"Total sequences needed ({max_needed}) exceeds max_seqs ({self.gen_state.decode_state.page_table.max_seqs})."
+                f"Total sequences needed ({total_needed}) exceeds max_seqs ({max_seqs}). "
                 "Decompose your request into smaller batches or increase max_seqs when building the service."
             )
+
+        max_prefill_size = self.config.max_prefill_size or self.model.Pos.size
+        for request in requests:
+            if len(request.prompt_tokens) > max_prefill_size:
+                raise ValueError(
+                    f"Request {request.request_id} prompt has {len(request.prompt_tokens)} tokens, "
+                    f"which exceeds max_prefill_size={max_prefill_size}."
+                )
 
         # for now, reset the engine state between each batch - the engine cannot be called with
         # parallel batches.
@@ -1410,6 +1485,9 @@ class InferenceEngine:
         expected_children: dict[int, int] = {rid: int(r.n_generations) for rid, r in zip(call_rids, requests)}
         return_logprobs = any(r.return_logprobs for r in requests)
         apply_top_p = self._requests_need_top_p(requests)
+        pending_requests = list(requests)
+        prefill_admissions = 0
+        prefill_prompt_tokens_per_admission: list[int] = []
         # Initialize fresh result buckets for this call
         for rid in call_rids:
             self.results[rid] = {
@@ -1459,14 +1537,27 @@ class InferenceEngine:
                     "Increase max_stop_seqs/max_stop_tokens when constructing the service."
                 )
 
+        def _record_prefill(admission: PrefillAdmissionResult | None) -> int:
+            nonlocal pending_requests, prefill_admissions
+            if admission is None:
+                return 0
+            prefill_admissions += 1
+            prefill_prompt_tokens_per_admission.append(admission.plan.prompt_tokens)
+            pending_requests = pending_requests[admission.plan.request_count :]
+            return self._ingest_outputs(admission.outputs)
+
         time_in = time.time()
         # Initial admission from queue and extract prompt tokens
-        decode_outputs = self._prefill_batch(requests, apply_top_p=apply_top_p, return_logprobs=return_logprobs)
+        prefill_admission = self._prefill_batch(
+            pending_requests,
+            apply_top_p=apply_top_p,
+            return_logprobs=return_logprobs,
+        )
         prefill_submit_done = time.time()
         prefill_device_start = time.time()
-        _block_until_ready_optional((self.gen_state, decode_outputs))
+        _block_until_ready_optional((self.gen_state, None if prefill_admission is None else prefill_admission.outputs))
         prefill_device_done = time.time()
-        self._ingest_outputs(decode_outputs)
+        _record_prefill(prefill_admission)
         initial_prefill_out = time.time()
         logger.info(
             "Initial prefill: submit %.3fs, device %.3fs, extraction %.3fs, total %.3fs",
@@ -1495,6 +1586,31 @@ class InferenceEngine:
                 step_callback(decode_iteration)
 
             iter_start = time.time()
+            iter_new_tokens = 0
+
+            if pending_requests:
+                prefill_start = time.time()
+                prefill_admission = self._prefill_batch(
+                    pending_requests,
+                    apply_top_p=apply_top_p,
+                    return_logprobs=return_logprobs,
+                )
+                prefill_submit_done = time.time()
+                _block_until_ready_optional(
+                    (self.gen_state, None if prefill_admission is None else prefill_admission.outputs)
+                )
+                prefill_device_done = time.time()
+                iter_new_tokens += _record_prefill(prefill_admission)
+                if prefill_admission is not None:
+                    logger.info(
+                        "Prefill admission %d: %d requests, %d seqs, %d prompt tokens, %.3fs",
+                        prefill_admissions,
+                        prefill_admission.plan.request_count,
+                        prefill_admission.plan.sequence_count,
+                        prefill_admission.plan.prompt_tokens,
+                        prefill_device_done - prefill_start,
+                    )
+                logger.debug("Prefill submit overhead %.3fs", prefill_submit_done - prefill_start)
 
             fake_submit_start = time.time()
             # future_state, decode_outputs = _run_generation_loop(
@@ -1531,7 +1647,8 @@ class InferenceEngine:
             self.gen_state = future_state
 
             extract_start = time.time()
-            new_tokens = self._ingest_outputs(decode_outputs)
+            decode_new_tokens = self._ingest_outputs(decode_outputs)
+            new_tokens = iter_new_tokens + decode_new_tokens
             extract_time = time.time() - extract_start
 
             iter_end = time.time()
@@ -1587,7 +1704,13 @@ class InferenceEngine:
         for rid in call_rids:
             if rid in self.results:
                 self.results.pop(rid, None)
-        return GenerationResult(tokens=outputs_list, logprobs=logprobs_list, total_generated=total_generated)
+        return GenerationResult(
+            tokens=outputs_list,
+            logprobs=logprobs_list,
+            total_generated=total_generated,
+            prefill_admissions=prefill_admissions,
+            prefill_prompt_tokens_per_admission=prefill_prompt_tokens_per_admission,
+        )
 
     def generate_without_lm_head(self, requests: Sequence[Request]) -> GenerationResult:
         """Diagnostic generation path that skips LM-head projection and sampling after prefill.
@@ -1596,6 +1719,7 @@ class InferenceEngine:
         is seeded in the usual way; subsequent decode rounds run the transformer and cache update, then enqueue dummy
         token IDs.
         """
+        self._reject_diagnostic_multi_prefill(requests, "generate_without_lm_head")
         self.reset()
 
         call_rids = [int(r.request_id) for r in requests]
@@ -1606,9 +1730,12 @@ class InferenceEngine:
                 k: DecodeResult(id=rid, choice=k, token_list=[]) for k in range(expected_children[rid])
             }
 
-        decode_outputs = self._prefill_batch(requests, apply_top_p=apply_top_p, return_logprobs=False)
-        _block_until_ready_optional((self.gen_state, decode_outputs))
-        self._ingest_outputs(decode_outputs)
+        prefill_admission = self._prefill_batch(requests, apply_top_p=apply_top_p, return_logprobs=False)
+        _block_until_ready_optional((self.gen_state, None if prefill_admission is None else prefill_admission.outputs))
+        self._ingest_outputs(None if prefill_admission is None else prefill_admission.outputs)
+        prefill_prompt_tokens_per_admission = (
+            [] if prefill_admission is None else [prefill_admission.plan.prompt_tokens]
+        )
 
         def _all_done() -> bool:
             for rid, n_kids in expected_children.items():
@@ -1657,7 +1784,13 @@ class InferenceEngine:
 
         for rid in call_rids:
             self.results.pop(rid, None)
-        return GenerationResult(tokens=outputs_list, logprobs=None, total_generated=total_generated)
+        return GenerationResult(
+            tokens=outputs_list,
+            logprobs=None,
+            total_generated=total_generated,
+            prefill_admissions=0 if prefill_admission is None else 1,
+            prefill_prompt_tokens_per_admission=prefill_prompt_tokens_per_admission,
+        )
 
     def generate_with_lm_head_no_sampling(self, requests: Sequence[Request]) -> GenerationResult:
         """Diagnostic generation path that computes LM-head logits but skips sampling after prefill.
@@ -1665,6 +1798,7 @@ class InferenceEngine:
         This is for performance attribution only. It keeps the transformer, cache update, and LM-head projection live,
         then enqueues dummy token IDs without argmax/top-p/logprob work.
         """
+        self._reject_diagnostic_multi_prefill(requests, "generate_with_lm_head_no_sampling")
         self.reset()
 
         call_rids = [int(r.request_id) for r in requests]
@@ -1675,9 +1809,12 @@ class InferenceEngine:
                 k: DecodeResult(id=rid, choice=k, token_list=[]) for k in range(expected_children[rid])
             }
 
-        decode_outputs = self._prefill_batch(requests, apply_top_p=apply_top_p, return_logprobs=False)
-        _block_until_ready_optional((self.gen_state, decode_outputs))
-        self._ingest_outputs(decode_outputs)
+        prefill_admission = self._prefill_batch(requests, apply_top_p=apply_top_p, return_logprobs=False)
+        _block_until_ready_optional((self.gen_state, None if prefill_admission is None else prefill_admission.outputs))
+        self._ingest_outputs(None if prefill_admission is None else prefill_admission.outputs)
+        prefill_prompt_tokens_per_admission = (
+            [] if prefill_admission is None else [prefill_admission.plan.prompt_tokens]
+        )
 
         def _all_done() -> bool:
             for rid, n_kids in expected_children.items():
@@ -1726,7 +1863,13 @@ class InferenceEngine:
 
         for rid in call_rids:
             self.results.pop(rid, None)
-        return GenerationResult(tokens=outputs_list, logprobs=None, total_generated=total_generated)
+        return GenerationResult(
+            tokens=outputs_list,
+            logprobs=None,
+            total_generated=total_generated,
+            prefill_admissions=0 if prefill_admission is None else 1,
+            prefill_prompt_tokens_per_admission=prefill_prompt_tokens_per_admission,
+        )
 
     def write_kernel_jaxprs(
         self,

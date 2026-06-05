@@ -112,6 +112,8 @@ class CaseResult:
     total_tokens_per_second: float
     hbm_used_bytes: int | None
     compiled_shape_count: int | None
+    prefill_admissions: int | None = None
+    prefill_prompt_tokens_per_admission: list[int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,7 +161,7 @@ class ServerHandle:
     hbm_used_bytes: int | None = None
     compiled_shape_count: int | None = None
     supports_seed: bool = True
-    metrics_snapshot: Callable[[], dict[str, int | None]] | None = None
+    metrics_snapshot: Callable[[], dict[str, Any]] | None = None
     diagnose_without_lm_head: (
         Callable[
             [BenchmarkCase, str, int, bool, int, float, float, float],
@@ -1053,6 +1055,7 @@ def run_case(
 
     elapsed = time.perf_counter() - start
     total_tokens = prompt_total + completion_total
+    prefill_admissions, prefill_chunks = _case_admission_metrics(handle.metrics_snapshot)
     return CaseResult(
         case_name=case.name,
         backend=handle.name,
@@ -1073,6 +1076,8 @@ def run_case(
         total_tokens_per_second=total_tokens / elapsed if elapsed > 0 else 0.0,
         hbm_used_bytes=handle.hbm_used_bytes,
         compiled_shape_count=handle.compiled_shape_count,
+        prefill_admissions=prefill_admissions,
+        prefill_prompt_tokens_per_admission=prefill_chunks,
     )
 
 
@@ -1084,7 +1089,7 @@ def _completion_error_key(exc: BaseException) -> str:
 
 def _update_stress_metric_maxima(
     maxima: dict[str, int],
-    metrics_snapshot: Callable[[], dict[str, int | None]] | None,
+    metrics_snapshot: Callable[[], dict[str, Any]] | None,
 ) -> None:
     if metrics_snapshot is None:
         return
@@ -1096,12 +1101,27 @@ def _update_stress_metric_maxima(
 
 
 def _stress_service_static_metric(
-    metrics_snapshot: Callable[[], dict[str, int | None]] | None,
+    metrics_snapshot: Callable[[], dict[str, Any]] | None,
     key: str,
 ) -> int | None:
     if metrics_snapshot is None:
         return None
-    return metrics_snapshot().get(key)
+    value = metrics_snapshot().get(key)
+    return None if value is None else int(value)
+
+
+def _case_admission_metrics(
+    metrics_snapshot: Callable[[], dict[str, Any]] | None,
+) -> tuple[int | None, list[int] | None]:
+    if metrics_snapshot is None:
+        return None, None
+    metrics = metrics_snapshot()
+    admissions = metrics.get("prefill_admissions")
+    chunks = metrics.get("prefill_prompt_tokens_per_admission")
+    return (
+        None if admissions is None else int(admissions),
+        None if chunks is None else [int(chunk) for chunk in chunks],
+    )
 
 
 def run_stress_case(
@@ -1410,6 +1430,8 @@ def run_levanter_without_lm_head_case(
         total_tokens_per_second=total_tokens / elapsed if elapsed > 0 else 0.0,
         hbm_used_bytes=hbm_used_bytes,
         compiled_shape_count=compiled_shape_count,
+        prefill_admissions=result.prefill_admissions,
+        prefill_prompt_tokens_per_admission=result.prefill_prompt_tokens_per_admission,
     )
 
 
@@ -1646,13 +1668,17 @@ def start_levanter_server(
             top_k=None,
         )
 
-    def metrics_snapshot() -> dict[str, int | None]:
+    def metrics_snapshot() -> dict[str, Any]:
         engine = server.inference_context.engine
         return {
             "request_queue_depth": server.inference_context.request_queue.qsize(),
             "batch_queue_depth": server.inference_context.batch_queue.qsize(),
             "page_size": engine.config.page_size if engine is not None else None,
             "max_pages": engine.config.max_pages if engine is not None else None,
+            "prefill_admissions": server.inference_context.last_prefill_admissions,
+            "prefill_prompt_tokens_per_admission": (
+                list(server.inference_context.last_prefill_prompt_tokens_per_admission)
+            ),
         }
 
     logger.info("Started Levanter server at %s", base_url)
@@ -1846,6 +1872,12 @@ def _optional_int(value: int | None) -> str:
     return str(value)
 
 
+def _optional_int_list(value: list[int] | None) -> str:
+    if value is None:
+        return ""
+    return ",".join(str(item) for item in value)
+
+
 def _parity_target_status(result: CaseResult, baseline: CaseResult | None) -> str:
     if baseline is None or result.backend == baseline.backend or baseline.decode_tokens_per_second == 0.0:
         return ""
@@ -1923,6 +1955,8 @@ def write_outputs(
         "p90 ms",
         "hbm bytes",
         "shape buckets",
+        "prefill admissions",
+        "prefill chunks",
         "decode/vllm",
         "total/vllm",
         "target",
@@ -1943,6 +1977,8 @@ def write_outputs(
             f"{result.request_latency_ms_p90:.1f}",
             _optional_int(result.hbm_used_bytes),
             _optional_int(result.compiled_shape_count),
+            _optional_int(result.prefill_admissions),
+            _optional_int_list(result.prefill_prompt_tokens_per_admission),
             (
                 _ratio(result.decode_tokens_per_second, vllm_by_case.get(result.case_name).decode_tokens_per_second)
                 if result.case_name in vllm_by_case
