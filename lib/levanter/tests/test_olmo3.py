@@ -336,7 +336,7 @@ def test_olmo3_sliding_vs_full_attention_differ():
 @skip_if_no_torch
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
-def test_olmo3_roundtrip(scan_layers, num_kv_heads):
+def test_olmo3_roundtrip(scan_layers, num_kv_heads, local_gpt2_tokenizer_path):
     """Test save/load roundtrip with HuggingFace.
 
     Uses config parameters from allenai/OLMo-3-1025-7B but with scaled-down
@@ -353,7 +353,9 @@ def test_olmo3_roundtrip(scan_layers, num_kv_heads):
     import torch
     from transformers import AutoModelForCausalLM, Olmo3ForCausalLM
 
-    converter = Olmo3Config().hf_checkpoint_converter()
+    # Local tokenizer + no remote reference keeps the roundtrip off the Hub; the
+    # tokenizer is incidental (random inputs, logit-equivalence only).
+    converter = Olmo3Config(reference_checkpoint=None, tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter()
 
     # YARN config from allenai/OLMo-3-1025-7B with scaled-down original_max_position_embeddings
     # Real: original_max_position_embeddings=8192, but we scale down proportionally
@@ -431,7 +433,7 @@ def test_olmo3_roundtrip(scan_layers, num_kv_heads):
         assert np.isclose(torch_out, np.array(jax_out), rtol=1e-4, atol=1e-4).all(), f"{torch_out} != {jax_out}"
 
         # Save our model
-        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
+        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False, save_tokenizer=False)
 
         # Load saved model into HF
         torch_model2 = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
