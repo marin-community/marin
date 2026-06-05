@@ -71,10 +71,13 @@ def _backfill(raw_conn) -> None:
 def _rebuild_not_null(raw_conn) -> None:
     """Rebuild ``task_attempts`` with ``attempt_uid`` promoted to ``NOT NULL``.
 
-    The rebuilt table mirrors ``schema.py``'s ``task_attempts_table`` exactly:
-    same columns, the ``(task_id, attempt_id)`` primary key, the FKs to
-    ``tasks`` and ``workers``, and the two non-unique indexes. The unique
-    ``idx_task_attempts_uid`` index is created separately by ``migrate``.
+    The DDL here is hardcoded to mirror ``schema.py``'s ``task_attempts_table``
+    exactly: same columns, the ``(task_id, attempt_id)`` primary key, the FKs to
+    ``tasks`` and ``workers``, and the two non-unique indexes
+    ``idx_task_attempts_worker_task`` and ``idx_task_attempts_live_workerbound``.
+    The unique ``idx_task_attempts_uid`` index is created separately by
+    ``migrate``. If ``schema.py`` gains a new index on ``task_attempts``, add a
+    matching ``CREATE INDEX`` below so a fresh rebuild reproduces it.
     """
     if _column_is_notnull(raw_conn, "task_attempts", "attempt_uid"):
         return

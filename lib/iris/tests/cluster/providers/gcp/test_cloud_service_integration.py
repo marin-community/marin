@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import urllib.parse
 from dataclasses import dataclass, field
 
 import httpx
@@ -22,6 +23,7 @@ from iris.cluster.providers.gcp.service import (
     CloudGcpService,
     TpuCreateRequest,
     VmCreateRequest,
+    operation_error,
 )
 from iris.cluster.providers.types import QuotaExhaustedError
 from iris.rpc import config_pb2
@@ -268,8 +270,6 @@ class GcpFakeBackend:
         return "unknown"
 
     def _matches_label_filter(self, labels: dict[str, str], filter_str: str) -> bool:
-        import urllib.parse
-
         decoded = urllib.parse.unquote(filter_str)
         for part in decoded.split(" AND "):
             part = part.strip()
@@ -369,9 +369,12 @@ def test_tpu_full_lifecycle(svc: CloudGcpService, backend: GcpFakeBackend):
 
     log_str = _dump_http_log(backend.http_log)
 
+    # Create returns immediately with the node CREATING and the create LRO name;
+    # it no longer blocks for READY (that would let a slow create-status tear
+    # down a live slice — see #6087).
     assert tpu.name == "test-slice", f"Expected test-slice, got {tpu.name}\n{log_str}"
-    assert tpu.state == "READY", f"Expected READY, got {tpu.state}\n{log_str}"
-    assert len(tpu.network_endpoints) == 4, f"Expected 4 endpoints, got {tpu.network_endpoints}\n{log_str}"
+    assert tpu.state == "CREATING", f"Expected CREATING, got {tpu.state}\n{log_str}"
+    assert tpu.operation_name, f"Expected a create operation name\n{log_str}"
 
     # Verify the create request body was correct
     create_req = next(e for e in backend.http_log if e.method == "POST" and "nodeId=test-slice" in e.url)
@@ -384,10 +387,15 @@ def test_tpu_full_lifecycle(svc: CloudGcpService, backend: GcpFakeBackend):
     assert create_req.request_body["serviceAccount"] == {"email": "worker@test.iam.gserviceaccount.com"}
     assert create_req.request_body["networkConfig"]["enableExternalIps"] is True
 
-    # Describe should return the same TPU
+    # Polling the create operation (as the bootstrap loop does) completes it
+    # without error and the node then reaches READY with its endpoints.
+    status = svc.tpu_operation_status(tpu.operation_name)
+    assert status.done
+    assert operation_error(status) is None
     described = svc.tpu_describe("test-slice", ZONE_EU)
     assert described is not None
     assert described.state == "READY"
+    assert len(described.network_endpoints) == 4, f"Expected 4 endpoints, got {described.network_endpoints}\n{log_str}"
 
     # List with label filter
     results = svc.tpu_list(zones=[ZONE_EU], labels={"iris-managed": "true"})
@@ -514,10 +522,11 @@ def test_serial_port_output(svc: CloudGcpService, backend: GcpFakeBackend):
 # ========================================================================
 
 
-def test_tpu_create_lro_resource_exhausted_raises_quota_error(svc: CloudGcpService, backend: GcpFakeBackend):
-    """LRO finishing with code=8 (RESOURCE_EXHAUSTED) raises QuotaExhaustedError,
-    not generic InfraError. This lets the autoscaler log it without a stack trace."""
-    # Inject a pending operation whose poll returns an error with code 8
+def test_tpu_operation_status_resource_exhausted_maps_to_quota_error(svc: CloudGcpService, backend: GcpFakeBackend):
+    """A create LRO finishing with code=8 (RESOURCE_EXHAUSTED) classifies as
+    QuotaExhaustedError via operation_error, not generic InfraError, so the
+    autoscaler logs it without a stack trace. The create itself no longer waits
+    on the LRO (#6087); the bootstrap loop polls this status instead."""
     op_name = f"projects/{PROJECT}/locations/{ZONE_EU}/operations/op-tpu-stockout"
     backend.operations[op_name] = {
         "name": op_name,
@@ -528,23 +537,8 @@ def test_tpu_create_lro_resource_exhausted_raises_quota_error(svc: CloudGcpServi
         },
     }
 
-    # Patch the POST to return this operation name
-    orig_handle = backend._handle_tpu
-
-    def _patched_tpu(method, url, body):
-        if method == "POST" and "/nodes" in url and "nodeId=" in url:
-            return httpx.Response(200, json={"name": op_name, "done": False})
-        return orig_handle(method, url, body)
-
-    backend._handle_tpu = _patched_tpu
-
-    with pytest.raises(QuotaExhaustedError, match="no more capacity"):
-        svc.tpu_create(
-            TpuCreateRequest(
-                name="stockout-tpu",
-                zone=ZONE_EU,
-                accelerator_type="v5litepod-16",
-                runtime_version="v2-alpha-tpuv5-lite",
-                capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
-            )
-        )
+    status = svc.tpu_operation_status(op_name)
+    assert status.done
+    err = operation_error(status)
+    assert isinstance(err, QuotaExhaustedError)
+    assert "no more capacity" in str(err)

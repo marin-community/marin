@@ -1,11 +1,11 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Comprehensive test suite for MarinTokenizer backends (HF, kitoken).
+"""Comprehensive test suite for the HF-backed MarinTokenizer.
 
-Tests are parameterized across all available backends. Backends that are not
-installed are skipped gracefully. The test model is meta-llama/Llama-3.1-8B,
-which requires HF authentication (tests skip if auth is missing).
+Tests are parameterized over the available tokenizer backends. The test model
+is meta-llama/Llama-3.1-8B, which requires HF authentication (tests skip if
+auth is missing).
 """
 
 import json
@@ -18,6 +18,9 @@ from unittest.mock import patch
 import pytest
 from huggingface_hub import __version__ as _hf_hub_version
 
+import levanter.tokenizers as tk
+from levanter.data.text._batch_tokenizer import BatchTokenizer
+from levanter.data.text.formats import ChatProcessor
 from levanter.tokenizers import (
     MarinTokenizer,
     TokenizerBackend,
@@ -28,13 +31,6 @@ from levanter.tokenizers import (
     _try_load_tokenizer_from_dir,
     load_tokenizer,
 )
-
-try:
-    import kitoken as _kitoken  # noqa: F401
-
-    HAS_KITOKEN = True
-except ImportError:
-    HAS_KITOKEN = False
 
 
 MODEL_NAME = "meta-llama/Llama-3.1-8B"
@@ -70,9 +66,6 @@ if _MODEL_AVAILABLE:
     load_tokenizer.cache_clear()
     _BACKEND_TOKENIZERS["hf"] = load_tokenizer(MODEL_NAME, backend=TokenizerBackend.HF)
     _AVAILABLE_BACKENDS.append("hf")
-    if HAS_KITOKEN:
-        _BACKEND_TOKENIZERS["kitoken"] = load_tokenizer(MODEL_NAME, backend=TokenizerBackend.KITOKEN)
-        _AVAILABLE_BACKENDS.append("kitoken")
 
 
 @pytest.fixture(scope="module", params=_AVAILABLE_BACKENDS if _AVAILABLE_BACKENDS else ["_skip_all"])
@@ -671,7 +664,6 @@ def test_multi_chunk_path_preserves_bos(backend_tokenizer, monkeypatch):
     Forces the multi-chunk path by feeding text with a long run of whitespace
     and capping the homogeneous-run limit so the splitter cuts it up.
     """
-    import levanter.tokenizers as tk
 
     if backend_tokenizer.bos_token_id is None:
         pytest.skip("Backend has no BOS token to verify against")
@@ -730,12 +722,7 @@ def test_normal_text_unchanged_by_splitter(backend_tokenizer):
 
     # Bypass our splitter and call the underlying Rust tokenizer directly.
     inner = backend_tokenizer._tokenizer
-    if hasattr(inner, "encode_batch"):
-        # HF tokenizers backend
-        direct = inner.encode(text, add_special_tokens=False).ids
-    else:
-        # kitoken backend: encode(text, encode_specials=True)
-        direct = inner.encode(text, True)
+    direct = inner.encode(text, add_special_tokens=False).ids
 
     assert via_split == direct, (
         f"splitter changed tokenization on normal text: "
@@ -747,7 +734,6 @@ def test_normal_text_unchanged_by_splitter(backend_tokenizer):
 def test_encode_batch_scatters_parts_back_to_originals(backend_tokenizer, monkeypatch):
     """encode_batch must reassemble per-text token sequences correctly when
     some texts are split into multiple parts and others aren't."""
-    import levanter.tokenizers as tk
 
     monkeypatch.setattr(tk, "_MAX_HOMOGENEOUS_RUN_CHARS", 100)
     monkeypatch.setattr(tk, "_OVERLONG_RUN_RE", re.compile(r"\s{100,}|\S{100,}"))
@@ -781,7 +767,6 @@ def test_encode_batch_scatters_parts_back_to_originals(backend_tokenizer, monkey
 def test_safe_split_caps_runs_and_roundtrips(monkeypatch):
     """The splitter must cap homogeneous runs within each part and round-trip
     losslessly on a pathological all-whitespace input."""
-    import levanter.tokenizers as tk
 
     # 1 MB of spaces with two real words at the ends — the realistic shape of
     # the FDLP/lps47065 OOM document.
@@ -1201,7 +1186,6 @@ CHAT_MODEL_WITH_PAD = "mistralai/Mistral-7B-Instruct-v0.2"
 
 def test_padding_uses_pad_token_id_not_zero():
     """Verify BatchTokenizer pads input_ids with pad_token_id, not hardcoded 0."""
-    from levanter.data.text._batch_tokenizer import BatchTokenizer
 
     try:
         tok = load_tokenizer(CHAT_MODEL_WITH_PAD)
@@ -1239,8 +1223,6 @@ def test_chat_processor_with_marin_tokenizer():
     if not _MODEL_AVAILABLE:
         pytest.skip("HF auth or network unavailable")
 
-    from levanter.data.text.formats import ChatProcessor
-
     tok = load_tokenizer(MODEL_NAME)
     assert isinstance(tok, MarinTokenizer)
 
@@ -1260,39 +1242,11 @@ def test_chat_processor_with_marin_tokenizer():
     assert any(m == 1 for m in mask), "assistant_masks should mark assistant content"
 
 
-@requires_model
-@pytest.mark.parametrize("text", BASIC_TEXTS, ids=[t[:30] for t in BASIC_TEXTS])
-def test_encode_batch_respects_prepend_bos(backend_tokenizer, text):
-    """encode_batch with add_special_tokens must agree with encode.
-
-    When _prepend_bos is False (e.g. models without a TemplateProcessing
-    post-processor), encode_batch should not prepend BOS either. This
-    regression test patches _prepend_bos=False to exercise the code path
-    that was previously unchecked in encode_batch.
-    """
-    import dataclasses as _dc
-
-    from levanter.tokenizers import KitokenMarinTokenizer
-
-    if not isinstance(backend_tokenizer, KitokenMarinTokenizer):
-        pytest.skip("Bug only affects KitokenMarinTokenizer")
-
-    # Simulate a model whose post-processor does NOT prepend BOS.
-    patched = _dc.replace(backend_tokenizer, _prepend_bos=False)
-
-    single = patched.encode(text, add_special_tokens=True)
-    batch = patched.encode_batch([text], add_special_tokens=True)
-    assert batch[0] == single, (
-        f"encode_batch diverged from encode with _prepend_bos=False: "
-        f"encode returned {single[:5]}..., encode_batch returned {batch[0][:5]}..."
-    )
-
-
 _GEMMA_TOKENIZERS: dict[str, MarinTokenizer] = {}
 _GEMMA_BACKENDS: list[str] = []
 try:
     load_tokenizer.cache_clear()
-    for _b in [TokenizerBackend.HF, TokenizerBackend.KITOKEN]:
+    for _b in [TokenizerBackend.HF]:
         _GEMMA_TOKENIZERS[_b.value] = load_tokenizer("google/gemma-3-4b-it", backend=_b)
         _GEMMA_BACKENDS.append(_b.value)
 except Exception:
@@ -1307,7 +1261,7 @@ def gemma_tokenizer(request):
     return _GEMMA_TOKENIZERS[name]
 
 
-# Regression test for Systemcluster/kitoken#3: SentencePiece BPE merge rank mishandling.
+# Correctness check for SentencePiece BPE merge-rank handling on gemma-3.
 _GEMMA_EXPECTED_IDS = {
     "In [[political philosophy]], the concept of [[limited government]]": [
         902,

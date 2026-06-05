@@ -10,6 +10,8 @@ the OCI spec builder, the trace decoder, and the stdout/stderr capper.
 
 from __future__ import annotations
 
+import json
+import struct
 from pathlib import Path
 
 from experiments.swe_rebench_trace.run_one import (
@@ -153,9 +155,6 @@ def test_sanitize_container_id_uniqueness_across_calls():
 
 
 def _frame(record: dict) -> bytes:
-    import json
-    import struct
-
     payload = json.dumps(record).encode("utf-8")
     return struct.pack(">I", len(payload)) + payload
 

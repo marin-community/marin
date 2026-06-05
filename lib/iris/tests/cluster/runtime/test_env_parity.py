@@ -12,6 +12,7 @@ before the shared function was introduced.
 import json
 
 import pytest
+from google.protobuf import json_format as jf
 from iris.cluster.providers.k8s.tasks import PodConfig, _build_pod_manifest
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.rpc import job_pb2
@@ -229,7 +230,6 @@ def test_standard_paths_always_present():
 
 def test_task_resources_uses_proto_json():
     """IRIS_TASK_RESOURCES should be valid proto-JSON for ResourceSpecProto."""
-    from google.protobuf import json_format as jf
 
     env = _common_env(_make_req())
     raw = env["IRIS_TASK_RESOURCES"]
@@ -240,8 +240,6 @@ def test_task_resources_uses_proto_json():
 
 
 def test_task_resources_includes_gpu_device():
-    from google.protobuf import json_format as jf
-
     env = _common_env(_make_req(gpu_count=8))
     proto = job_pb2.ResourceSpecProto()
     jf.Parse(env["IRIS_TASK_RESOURCES"], proto)
@@ -250,8 +248,6 @@ def test_task_resources_includes_gpu_device():
 
 
 def test_task_resources_includes_tpu_device():
-    from google.protobuf import json_format as jf
-
     env = _common_env(_make_req(tpu=True))
     proto = job_pb2.ResourceSpecProto()
     jf.Parse(env["IRIS_TASK_RESOURCES"], proto)

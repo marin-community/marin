@@ -150,6 +150,14 @@ Dependency direction: {`iris`, `haliax`} → {`levanter`, `zephyr`} → `marin`.
 - Always fix tests you broke. Do not relax tolerances or hack around failures.
 - Prefer integration-style tests that validate externally-observable behavior.
 - Do not write tautological tests: tests must fail if behavior is wrong, not just if implementation changes.
+- Do not write "slop" tests that assert on incidental strings — the exact text of a log
+  message, or that a constructed command line contains a particular word or flag. These
+  couple the test to copy and to how a command is assembled, not to behavior: they break
+  on a harmless reword or flag-form change while a real regression slips through. They are
+  pure maintenance burden. Assert on the structured output or the effect instead. Assert on
+  a string only when that string *is* the contract (machine-readable output, a wire format,
+  a log line a downstream tool parses) — and then assert on the structured field, not the
+  rendered text.
 - Use pytest fixtures and parameterization to avoid duplication.
 - Prefer top-level `def test_*` with fixtures over test classes.
 - Search for existing test files before creating new ones. Extend existing files first.

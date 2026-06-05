@@ -29,7 +29,8 @@ from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging
 from zephyr import Dataset, ZephyrContext
 from zephyr import counters as zephyr_counters
-from zephyr.writers import ThreadedBatchWriter, atomic_rename, batchify, ensure_parent_dir
+from rigging.filesystem import atomic_rename
+from zephyr.writers import ThreadedBatchWriter, batchify, ensure_parent_dir
 
 from levanter.data.dataset import AsyncDataset
 from levanter.utils.jax_utils import broadcast_one_to_all
@@ -832,6 +833,11 @@ def write_levanter_cache(
         output_path: Path to output cache directory
         metadata: Metadata for the cache
         batch_size: Number of records to accumulate before flushing to disk.
+
+    Returns:
+        ``{"path", "count", "exemplar"}`` where ``exemplar`` is the first record
+        written (or ``None`` for an empty shard). Callers that need a structural
+        template for cache consolidation can reuse it instead of re-deriving one.
     """
     if batch_size < 1:
         raise ValueError(f"batch_size must be >= 1, got {batch_size}")
@@ -842,7 +848,7 @@ def write_levanter_cache(
     try:
         exemplar = next(record_iter)
     except StopIteration:
-        return {"path": output_path, "count": 0}
+        return {"path": output_path, "count": 0, "exemplar": None}
 
     count = 0
     logger.info("write_levanter_cache: starting write to %s (batch_size=%d)", output_path, batch_size)
@@ -870,7 +876,7 @@ def write_levanter_cache(
     with open_url(f"{output_path}/.success", "w") as f:
         f.write("")
 
-    return {"path": output_path, "count": count}
+    return {"path": output_path, "count": count, "exemplar": exemplar}
 
 
 def _serialize_json_and_commit(path: str, obj):

@@ -3,6 +3,7 @@
 
 """Tests for ControllerDB transaction, read snapshot, and migration helpers."""
 
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -194,7 +195,6 @@ def test_migration_0027_runs_unconditionally_idempotent(tmp_path: Path) -> None:
     (_has_column / _column_is_notnull / IF NOT EXISTS) must also make a direct
     re-invocation a no-op — that is what makes a crash-and-retry safe.
     """
-    import importlib.util
 
     db = ControllerDB(db_dir=tmp_path)
     _revert_to_pre_0027(db)
@@ -264,14 +264,14 @@ def test_transaction_rollback_on_exception(db: ControllerDB) -> None:
     assert len(rows) == 0
 
 
-def test_on_commit_hook_fires(db: ControllerDB) -> None:
-    """on_commit alias fires post-commit hooks just like register."""
+def test_register_hook_fires(db: ControllerDB) -> None:
+    """register fires post-commit hooks after the surrounding commit."""
     _create_simple_table(db)
     calls: list[int] = []
 
     with db.transaction() as cur:
         cur.execute(text("INSERT INTO kv (key, value) VALUES (:k, :v)"), {"k": "a", "v": "1"})
-        cur.on_commit(lambda: calls.append(1))
+        cur.register(lambda: calls.append(1))
 
     assert calls == [1]
 

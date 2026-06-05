@@ -9,7 +9,7 @@ import click
 
 from iris.actor import ActorClient, ProxyResolver
 from iris.actor.resolver import ResolveResult
-from iris.cli.main import require_controller_url
+from iris.cli.connect import require_controller_url
 from iris.rpc.auth import GcpAccessTokenProvider, TokenProvider
 
 

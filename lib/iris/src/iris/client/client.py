@@ -38,7 +38,7 @@ from iris.cluster.client import (
     resolve_job_user,
 )
 from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
-from iris.cluster.log_store_helpers import build_log_source
+from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -53,7 +53,7 @@ from iris.cluster.types import (
 )
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
-from iris.rpc.proto_utils import job_state_friendly
+from iris.rpc.proto_display import job_state_friendly
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
@@ -487,7 +487,11 @@ class IrisClient:
         timeout_ms: int = 30000,
         token_provider: TokenProvider | None = None,
     ) -> "IrisClient":
-        """Create an IrisClient for RPC-based cluster execution.
+        """Create an IrisClient for an external client (CLI, laptop, notebook).
+
+        Finelog logs/stats are routed through the controller, the only ingress
+        an external client can reach. In-cluster callers should use
+        :meth:`in_cluster` instead.
 
         Args:
             controller_address: Controller URL (e.g., "http://localhost:8080")
@@ -502,6 +506,53 @@ class IrisClient:
         Returns:
             IrisClient wrapping RemoteClusterClient
         """
+        return cls._make(
+            controller_address,
+            workspace=workspace,
+            bundle_id=bundle_id,
+            timeout_ms=timeout_ms,
+            token_provider=token_provider,
+            use_controller_proxy=True,
+        )
+
+    @classmethod
+    def in_cluster(
+        cls,
+        controller_address: str,
+        *,
+        workspace: Path | None = None,
+        bundle_id: str | None = None,
+        timeout_ms: int = 30000,
+        token_provider: TokenProvider | None = None,
+    ) -> "IrisClient":
+        """Create an IrisClient for code running inside the cluster (in-task).
+
+        Same as :meth:`remote`, except finelog logs/stats are written straight
+        to the resolved finelog server instead of through the controller's
+        StatsServiceProxy — so high-frequency task-status pushes don't compete
+        for the controller's RPC thread pool. Only valid where the finelog
+        server's internal address is reachable (i.e. inside the cluster).
+        """
+        return cls._make(
+            controller_address,
+            workspace=workspace,
+            bundle_id=bundle_id,
+            timeout_ms=timeout_ms,
+            token_provider=token_provider,
+            use_controller_proxy=False,
+        )
+
+    @classmethod
+    def _make(
+        cls,
+        controller_address: str,
+        *,
+        workspace: Path | None,
+        bundle_id: str | None,
+        timeout_ms: int,
+        token_provider: TokenProvider | None,
+        use_controller_proxy: bool,
+    ) -> "IrisClient":
         interceptors = []
         if token_provider is not None:
             interceptors.append(AuthTokenInjector(token_provider))
@@ -512,6 +563,7 @@ class IrisClient:
             workspace=workspace,
             timeout_ms=timeout_ms,
             interceptors=interceptors,
+            use_controller_proxy=use_controller_proxy,
         )
         return cls(cluster)
 
@@ -742,6 +794,13 @@ class IrisClient:
             query.job_id_prefix = prefix
 
         return list(self._cluster_client.list_jobs(query=query))
+
+    def list_workers(
+        self,
+        query: controller_pb2.Controller.WorkerQuery | None = None,
+    ) -> list[controller_pb2.Controller.WorkerHealthStatus]:
+        """List workers registered with the controller."""
+        return list(self._cluster_client.list_workers(query=query))
 
     def terminate_prefix(
         self,
@@ -1034,7 +1093,9 @@ def get_iris_ctx() -> IrisContext | None:
     client = None
     if job_info.controller_address:
         bundle_id = job_info.bundle_id
-        client = IrisClient.remote(
+        # In-task code runs inside the cluster and can reach the finelog server
+        # directly, so task-status pushes bypass the controller's StatsServiceProxy.
+        client = IrisClient.in_cluster(
             controller_address=job_info.controller_address,
             bundle_id=bundle_id,
         )

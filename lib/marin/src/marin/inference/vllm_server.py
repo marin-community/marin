@@ -5,6 +5,7 @@ import dataclasses
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -31,7 +32,45 @@ class VllmServerHandle:
     server_url: str
     port: int
     process: subprocess.Popen[str]
+    process_group_id: int | None
     log_dir: str
+
+    def stop(self, *, timeout_seconds: float = 10) -> None:
+        self._signal(signal.SIGTERM)
+        try:
+            self.process.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            self._signal(signal.SIGKILL)
+            self.process.wait(timeout=timeout_seconds)
+
+        if self._process_group_exists():
+            # The API parent can exit before EngineCore does, so check the group after wait().
+            self._signal(signal.SIGKILL)
+
+    def _signal(self, sig: signal.Signals) -> None:
+        if self.process_group_id is not None:
+            try:
+                os.killpg(self.process_group_id, sig)
+            except ProcessLookupError:
+                pass
+            return
+
+        if self.process.poll() is None:
+            logger.warning(
+                "vLLM process group unavailable; signaling only parent process pid=%s signal=%s",
+                self.process.pid,
+                sig.name,
+            )
+            self.process.send_signal(sig)
+
+    def _process_group_exists(self) -> bool:
+        if self.process_group_id is None:
+            return False
+        try:
+            os.killpg(self.process_group_id, 0)
+            return True
+        except ProcessLookupError:
+            return False
 
 
 def resolve_model_name_or_path(model: ModelConfig) -> tuple[str, ModelConfig]:
@@ -170,7 +209,7 @@ def _get_first_model_id(server_url: str) -> str:
 
 
 class VllmEnvironment:
-    """Manage vLLM server lifecycle and lm-eval configuration."""
+    """Manage vLLM server lifecycle and eval-client configuration."""
 
     def __init__(
         self,
@@ -234,7 +273,7 @@ class VllmEnvironment:
 
     def close(self) -> None:
         if self.vllm_server is not None:
-            self.vllm_server.process.kill()
+            self.vllm_server.stop()
             self.vllm_server = None
 
     @property
@@ -307,7 +346,7 @@ def _start_vllm_native_server(
     timeout_seconds: int = 3600,
     extra_cli_args: list[str] | None = None,
 ) -> VllmServerHandle:
-    """Start `vllm serve` in-process and wait until `/v1/models` responds."""
+    """Start `vllm serve` as a subprocess and wait until `/v1/models` responds."""
 
     resolved_port = port if port is not None else 8000
 
@@ -327,15 +366,30 @@ def _start_vllm_native_server(
     log_dir = tempfile.mkdtemp(prefix="vllm_server_")
     stdout_path = os.path.join(log_dir, "stdout.log")
     stderr_path = os.path.join(log_dir, "stderr.log")
-    stdout_f = open(stdout_path, "w")
-    stderr_f = open(stderr_path, "w")
+    # These handles are owned by the long-lived vLLM subprocess below and must
+    # stay open for its lifetime, so a context manager is not applicable here.
+    stdout_f = open(stdout_path, "w")  # noqa: SIM115
+    stderr_f = open(stderr_path, "w")  # noqa: SIM115
     native_env = _vllm_env()
     logger.info(
         "Starting vLLM native server with "
         f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "
         f"TPU_STDERR_LOG_LEVEL={native_env.get('TPU_STDERR_LOG_LEVEL')}"
     )
-    process = subprocess.Popen(cmd, stdout=stdout_f, stderr=stderr_f, text=True, env=native_env)
+    process = subprocess.Popen(
+        cmd,
+        stdout=stdout_f,
+        stderr=stderr_f,
+        text=True,
+        env=native_env,
+        # vLLM can leave EngineCore children alive after the API parent exits; a process group lets cleanup
+        # release the TPU instead of leaving libtpu held by a stale child.
+        start_new_session=True,
+    )
+    try:
+        process_group_id = os.getpgid(process.pid)
+    except ProcessLookupError:
+        process_group_id = None
 
     server_url: str = f"http://{host}:{resolved_port}/v1"
 
@@ -352,6 +406,14 @@ def _start_vllm_native_server(
                 f"{logs}"
             )
 
+    handle = VllmServerHandle(
+        server_url=server_url,
+        port=resolved_port,
+        process=process,
+        process_group_id=process_group_id,
+        log_dir=log_dir,
+    )
+
     try:
         _poll_until_ready(
             server_url,
@@ -359,14 +421,9 @@ def _start_vllm_native_server(
             check_alive=_check_process_alive,
         )
     except Exception:
-        process.kill()
+        handle.stop()
         raise
     finally:
         stdout_f.close()
         stderr_f.close()
-    return VllmServerHandle(
-        server_url=server_url,
-        port=resolved_port,
-        process=process,
-        log_dir=log_dir,
-    )
+    return handle

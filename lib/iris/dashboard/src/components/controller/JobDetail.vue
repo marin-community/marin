@@ -461,6 +461,14 @@ const pageTitle = computed(() => {
   return (name && name !== props.jobId) ? name : `Job: ${props.jobId}`
 })
 
+// Child jobs link back to their parent job; root jobs link to the jobs list.
+const backTo = computed(() => {
+  const parentJobId = job.value?.parentJobId
+  return parentJobId ? `/job/${encodeURIComponent(parentJobId)}` : '/'
+})
+
+const backLabel = computed(() => (job.value?.parentJobId ? 'Back to parent job' : 'Jobs'))
+
 const subtitle = computed(() => {
   if (!job.value) return ''
   return (job.value.name && job.value.name !== props.jobId) ? `ID: ${props.jobId}` : ''
@@ -677,7 +685,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
 </script>
 
 <template>
-  <PageShell :title="pageTitle" back-to="/" back-label="Jobs">
+  <PageShell :title="pageTitle" :back-to="backTo" :back-label="backLabel">
     <template v-if="job?.name" #title-suffix>
       <button
         class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs text-text-muted hover:text-text

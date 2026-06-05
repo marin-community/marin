@@ -96,32 +96,33 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
         """Encode one over-long text by splitting at safe whitespace boundaries
         and concatenating ids in-place.
 
-        Splits are buffered in groups of ``_LONG_STRING_BATCH_SIZE`` pieces;
-        each group is passed through ``encode_batch`` and the resulting ids
-        are extended into the running ``ids`` list before the next group is
+        A cursor walks the original string, slicing only the emitted piece
+        (bounded by ``_workaround_len``) so total work stays O(N) in the text
+        length. Splits are buffered in groups of ``_LONG_STRING_BATCH_SIZE``
+        pieces; each group is passed through ``encode_batch`` and the resulting
+        ids are extended into the running ``ids`` list before the next group is
         produced. Peak in-flight memory is one sub-batch's input strings +
         tokens, regardless of how long the original text is.
         """
         ids: list[int] = []
         pieces: list[str] = []
-        remaining = text
-        while True:
-            if len(remaining) > self._workaround_len:
-                match = ws.search(remaining, self._workaround_len)
-                split = match.start() if match is not None else len(remaining)
-                pieces.append(remaining[:split])
-                remaining = remaining[split:]
+        pos = 0
+        n = len(text)
+        while pos < n:
+            if n - pos > self._workaround_len:
+                # ``search`` scans from ``pos`` without copying; only the emitted
+                # piece is materialized below.
+                match = ws.search(text, pos + self._workaround_len)
+                split = match.start() if match is not None else n
             else:
-                pieces.append(remaining)
-                remaining = ""
+                split = n
+            pieces.append(text[pos:split])
+            pos = split
 
-            if len(pieces) >= _LONG_STRING_BATCH_SIZE or not remaining:
+            if len(pieces) >= _LONG_STRING_BATCH_SIZE or pos >= n:
                 for encoded_piece in self.tokenizer.encode_batch(pieces, add_special_tokens=False):
                     ids.extend(encoded_piece)
                 pieces.clear()
-
-            if not remaining:
-                break
 
         return ids
 

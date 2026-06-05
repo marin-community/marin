@@ -10,3 +10,14 @@ NVIDIA_GPU_TOLERATION: dict = {
     "operator": "Exists",
     "effect": "NoSchedule",
 }
+
+# CoreWeave taints nodes provisioned from interruptable capacity with
+# qos.coreweave.cloud/interruptable:NoExecute. Iris tasks are retryable/preemptible,
+# so we tolerate it to run on interruptable capacity (and so Kueue's TAS, which
+# excludes nodes whose NoExecute taints the pod doesn't tolerate, can place the
+# gang). Harmless on clusters without the taint (kind, CoreWeave reserved pools).
+COREWEAVE_INTERRUPTABLE_TOLERATION: dict = {
+    "key": "qos.coreweave.cloud/interruptable",
+    "operator": "Exists",
+    "effect": "NoExecute",
+}

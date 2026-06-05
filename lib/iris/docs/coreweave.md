@@ -679,7 +679,7 @@ client.submit(
     command=["python", "train.py"],
     replicas=2,
     ports=["jax"],
-    coscheduling=CoschedulingConfig(group_by="pool"),
+    coscheduling=CoschedulingConfig(group_by="leafgroup"),
     resources={"gpu": 8},
 )
 ```

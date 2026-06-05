@@ -3,6 +3,9 @@
 
 """Tests for adaptive curriculum learning system."""
 
+import json
+from dataclasses import asdict
+
 import numpy as np
 import pytest
 from marin.rl.curriculum import (
@@ -12,6 +15,7 @@ from marin.rl.curriculum import (
     LessonDependency,
     LessonStats,
     PerformanceStats,
+    compute_smoothed_success,
     is_plateaued,
     update_performance_stats,
 )
@@ -53,7 +57,6 @@ def test_update_performance_stats():
     assert stats.last_update_step == 2
 
     # Compute smoothed success on demand
-    from marin.rl.curriculum import compute_smoothed_success
 
     smoothed = compute_smoothed_success(stats.reward_history)
     assert 0.0 < smoothed < 1.0  # Should be between 0 and 1
@@ -215,7 +218,6 @@ def test_sampling_distribution():
 
 def test_lesson_stats_serialization():
     """Test that LessonStats can be serialized and deserialized via JSON."""
-    import json
 
     stats = LessonStats(
         training_stats=PerformanceStats(
@@ -876,7 +878,6 @@ def test_rollout_stats_dataclass():
     assert rollout_stats.env_example_id == "example_123"
 
     # Test that it's serializable for distributed execution.
-    from dataclasses import asdict
 
     stats_dict = asdict(rollout_stats)
     assert stats_dict["lesson_id"] == "test_lesson"

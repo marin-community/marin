@@ -346,6 +346,10 @@ message JobStatus {
 
   // Whether this job currently has direct child jobs.
   bool has_children = 32;
+
+  // Parent job id, if this job was launched as a child of another job.
+  // Empty for root jobs.
+  string parent_job_id = 33;
 }
 
 // ============================================================================
@@ -606,6 +610,17 @@ message RunTaskRequest {
   // Controller-minted attempt routing key (16 hex chars). The worker echoes
   // it back on Reconcile observations so the controller can route by UID.
   string attempt_uid = 12;
+
+  // Coscheduling configuration for the owning job. Empty group_by => the job
+  // is not coscheduled. On the K8s direct path this drives Kueue gang
+  // admission: all pods carrying the same pod-group-name are admitted
+  // atomically. group_by additionally selects the topology the gang prefers
+  // (soft) or requires (hard) to land on.
+  CoschedulingConfig coscheduling = 13;
+
+  // Effective priority band for the owning job, used to select the Kueue
+  // WorkloadPriorityClass on the K8s direct path. UNSPECIFIED => INTERACTIVE.
+  PriorityBand priority = 14;
 }
 
 // Deprecated. Kept for one release so pre-cutover clients don't crash on the

@@ -236,8 +236,9 @@ def test_tokenize_full_pipeline_integration(tmp_path):
 
 
 @pytest.mark.slow
-def test_exemplar_for_skips_empty_leading_shard(tmp_path):
-    """Regression for #5790."""
+def test_tokenize_skips_empty_leading_shard(tmp_path):
+    """Regression for #5790: a sparse leading shard (empty parquet) must not break
+    tokenization. The consolidation exemplar is taken from the first non-empty shard."""
     # train_paths must not contain "test"; pytest's tmp_path always does.
     with tempfile.TemporaryDirectory(prefix="sparse_") as raw_dir:
         data_dir = Path(raw_dir)

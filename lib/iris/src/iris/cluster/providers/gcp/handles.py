@@ -30,7 +30,7 @@ from iris.cluster.providers.types import (
     SliceStatus,
     WorkerStatus,
 )
-from iris.cluster.types import get_tpu_topology
+from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -103,14 +103,42 @@ def _composite_slice_state(
     cloud_state: CloudSliceState,
     bootstrap_state: CloudSliceState | None,
 ) -> CloudSliceState:
-    """Compose cloud lifecycle with bootstrap lifecycle into effective slice state."""
-    if cloud_state != CloudSliceState.READY:
+    """Compose cloud lifecycle with bootstrap lifecycle into effective slice state.
+
+    Worker health is canonical for liveness: once bootstrap is READY the slice
+    is READY even if the GCP-reported cloud state still lags at CREATING — a TPU
+    can boot and serve long before its create operation flips to READY. A slice
+    rediscovered on controller restart (no bootstrap monitoring) carries a READY
+    bootstrap sentinel, so it too becomes READY and is validated by the
+    autoscaler's health probe, which reaps it if the workers are in fact dead.
+
+    A bootstrap that definitively FAILED is authoritative — even when the cloud
+    is no longer describable (UNKNOWN). A stockout/quota create failure leaves no
+    TPU resource to describe, so describe() reports UNKNOWN; without surfacing the
+    FAILED bootstrap verdict the autoscaler would wait out the full
+    unresolvable-timeout grace period (and keep re-describing the dead TPU) before
+    reaping a slice it already knows never came up.
+
+    Cloud states that mean "gone or doomed" — FAILED and DELETING — are likewise
+    authoritative. A bare UNKNOWN (cloud no longer describable, bootstrap still in
+    progress or a stale READY sentinel) is reported as UNKNOWN so a vanished node
+    never lingers as READY and the unresolvable-timeout path can reap it.
+    """
+    if cloud_state in (CloudSliceState.FAILED, CloudSliceState.DELETING):
         return cloud_state
-    if bootstrap_state is None:
-        return CloudSliceState.BOOTSTRAPPING
+    # A definitive bootstrap failure wins over UNKNOWN: the slice never came up,
+    # so reap it now instead of waiting out the unresolvable timeout.
     if bootstrap_state == CloudSliceState.FAILED:
         return CloudSliceState.FAILED
-    return CloudSliceState.READY
+    if cloud_state == CloudSliceState.UNKNOWN:
+        return CloudSliceState.UNKNOWN
+    if bootstrap_state == CloudSliceState.READY:
+        return CloudSliceState.READY
+    # Bootstrap still in progress: surface BOOTSTRAPPING once cloud is READY,
+    # otherwise reflect the raw cloud state (CREATING/REPAIRING).
+    if cloud_state == CloudSliceState.READY:
+        return CloudSliceState.BOOTSTRAPPING
+    return cloud_state
 
 
 # ============================================================================
@@ -225,6 +253,7 @@ class GcpSliceHandle:
         _service_account: str | None = None,
         _bootstrapping: bool = False,
         _is_queued_resource: bool = False,
+        _create_operation: str = "",
     ):
         self._slice_id = _slice_id
         self._zone = _zone
@@ -239,6 +268,7 @@ class GcpSliceHandle:
         self._ssh_config = _ssh_config
         self._service_account = _service_account
         self.is_queued_resource: bool = _is_queued_resource
+        self._create_operation = _create_operation
         self._bootstrap_state: CloudSliceState | None = None if _bootstrapping else CloudSliceState.READY
         self._bootstrap_lock = threading.Lock()
 
@@ -295,11 +325,16 @@ class GcpSliceHandle:
 
         state = _TPU_STATE_MAP.get(tpu_info.state, CloudSliceState.UNKNOWN)
 
+        # Derive the topology from the live TPU rather than self._accelerator_variant:
+        # queued-resource handles adopted during boot recovery carry an empty variant
+        # (the QR API doesn't report one), and that handle is never refreshed once the
+        # backing TPU VM provisions. tpu_info always reports the real accelerator_type.
+        accelerator_variant = tpu_info.accelerator_type
         try:
-            worker_count = get_tpu_topology(self._accelerator_variant).vm_count
+            worker_count = get_tpu_topology(accelerator_variant).vm_count
         except ValueError as e:
             raise InfraError(
-                f"Unknown TPU topology '{self._accelerator_variant}' for slice {self._slice_id}. "
+                f"Unknown TPU topology '{accelerator_variant}' for slice {self._slice_id}. "
                 f"Cannot determine worker count without a known topology."
             ) from e
 

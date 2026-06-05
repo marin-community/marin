@@ -13,7 +13,7 @@ from rigging.timing import Duration
 
 from iris.chaos import chaos
 from iris.cluster.controller.provider import ProviderError
-from iris.cluster.controller.reconcile import ReconcileResult, WorkerReconcilePlan
+from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
 from iris.cluster.types import WorkerId
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -171,7 +171,7 @@ class WorkerProvider:
 
         return asyncio.run(_run())
 
-    async def _reconcile_one_via_reconcile(
+    async def _reconcile_one(
         self,
         sem: asyncio.Semaphore,
         plan: WorkerReconcilePlan,
@@ -193,7 +193,7 @@ class WorkerProvider:
             except Exception as e:
                 return ReconcileResult(worker_id=plan.worker_id, observations=[], error=str(e))
 
-    def reconcile_workers(
+    def dispatch_reconcile_plans(
         self,
         plans: list[WorkerReconcilePlan],
         addresses: dict[WorkerId, str],
@@ -204,9 +204,7 @@ class WorkerProvider:
 
         async def _run() -> list[ReconcileResult]:
             sem = asyncio.Semaphore(self.parallelism)
-            return await asyncio.gather(
-                *(self._reconcile_one_via_reconcile(sem, p, addresses[p.worker_id]) for p in plans)
-            )
+            return await asyncio.gather(*(self._reconcile_one(sem, p, addresses[p.worker_id]) for p in plans))
 
         return asyncio.run(_run())
 

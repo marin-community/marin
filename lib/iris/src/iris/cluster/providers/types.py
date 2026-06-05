@@ -39,6 +39,17 @@ def generate_slice_suffix() -> str:
     return f"{now.strftime('%Y%m%d-%H%M')}-{short_uuid}"
 
 
+def local_queue_name(label_prefix: str) -> str:
+    """Kueue LocalQueue name for this cluster.
+
+    Iris owns the LocalQueue (it creates it in its namespace and stamps the same
+    name on coscheduled pods), so the name is derived, not configured. It is
+    keyed on the per-cluster ``label_prefix`` — matching NodePool naming
+    (``{label_prefix}-<suffix>``) — so co-located Iris clusters don't collide.
+    """
+    return f"{label_prefix}-lq"
+
+
 class Labels:
     """Label keys for Iris-managed cloud resources.
 

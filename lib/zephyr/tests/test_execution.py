@@ -24,6 +24,8 @@ from zephyr.dataset import Dataset
 from zephyr.execution import (
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
+    ZEPHYR_STAGE_BYTES_PROCESSED_KEY,
+    ZEPHYR_STAGE_ITEM_COUNT_KEY,
     CoordinatorUnreachable,
     CounterSnapshot,
     ListShard,
@@ -404,7 +406,6 @@ def test_log_status_omits_throughput_when_counters_missing(actor_context, tmp_pa
     status log should drop the ``items=... bytes_processed=...`` segment rather
     than print misleading zeros. Once either counter is recorded, the segment
     reappears."""
-    from zephyr.execution import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")

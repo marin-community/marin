@@ -15,13 +15,12 @@ import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
-from urllib.parse import urlparse
 
 import draccus
 from datasets import get_dataset_config_names, load_dataset
-from google.cloud import storage
 from marin.core.data import QAExample, QAExampleMetadata
 from marin.utilities.dataclass_utils import asdict_without_nones
+from rigging.filesystem import filesystem as marin_filesystem
 from zephyr import Dataset, ZephyrContext
 
 logger = logging.getLogger(__name__)
@@ -130,39 +129,19 @@ class DatasetWithMetaData:
     revision: str
 
 
-def download_directory_from_gcs(bucket_name: str, gcs_directory_path: str, local_directory_path: str) -> None:
+def download_gcs_dir_to_local(gcs_path: str) -> str:
+    """Download the contents of a ``gs://`` directory into a local directory.
+
+    The local directory is named after the basename of ``gcs_path`` (e.g.
+    ``gs://my-bucket/path/to/mmlu`` -> ``mmlu``) and its path is returned.
     """
-    Download an entire directory from a GCS bucket to a local directory.
-
-    Args:
-        bucket_name (str): The name of the GCS bucket.
-        gcs_directory_path (str): The path to the directory in GCS (excluding the bucket name).
-        local_directory_path (str): The local directory path where the files will be saved.
-    """
-    # Make download dir
-    if not os.path.exists(local_directory_path):
-        os.makedirs(local_directory_path)
-    # Initialize the client
-    storage_client = storage.Client()
-
-    # Get the bucket
-    bucket = storage_client.bucket(bucket_name)
-
-    # List all the blobs (files) with the specified prefix
-    blobs = bucket.list_blobs(prefix=gcs_directory_path)
-
-    # Download each blob to the local directory
-    for blob in blobs:
-        # Construct the relative path of the file
-        relative_path = os.path.relpath(blob.name, gcs_directory_path)
-        local_file_path = os.path.join(local_directory_path, relative_path)
-
-        # Create local directories if they do not exist
-        os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
-
-        # Download the blob to the local file path
-        blob.download_to_filename(local_file_path)
-        logger.info(f"Downloaded {blob.name} to {local_file_path}")
+    local_dir = os.path.basename(gcs_path.rstrip("/"))
+    os.makedirs(local_dir, exist_ok=True)
+    fs = marin_filesystem("gcs")
+    # The trailing slash downloads the directory's contents into ``local_dir``.
+    fs.get(gcs_path.rstrip("/") + "/", local_dir, recursive=True)
+    logger.info(f"Downloaded {gcs_path} to {local_dir}")
+    return local_dir
 
 
 def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
@@ -181,14 +160,7 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
     # set up input path which can be GCP path, HF Hub path, or local path
     # handle case of gs:// path which requires downloading resource from GCP to local for processing
     if config.input_path.startswith("gs://"):
-        # parse gs://my-bucket/path/to/mmlu into "my-bucket", "path/to/mmlu", and "mmlu"
-        parsed_url = urlparse(config.input_path)
-        bucket = parsed_url.netloc
-        gcp_path = parsed_url.path.lstrip("/")
-        dir_name = os.path.basename(gcp_path)
-        # download the repo from GCP path into local directory which is basename of provided path (e.g. mmlu)
-        download_directory_from_gcs(bucket, gcp_path, dir_name)
-        input_path = dir_name
+        input_path = download_gcs_dir_to_local(config.input_path)
     else:
         # for now other handled input paths such as local paths and HF Hub paths do not require special processing
         input_path = config.input_path
@@ -336,6 +308,7 @@ def standardize_options(options: list | dict) -> list:
         sorted_keys = sorted(list(options.keys()))
         sorted_values = [options[key] for key in sorted_keys]
         return sorted_values
+    raise TypeError(f"Unsupported options format: {type(options).__name__}")
 
 
 def format_prompt_response(

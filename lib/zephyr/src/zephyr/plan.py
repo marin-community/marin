@@ -33,6 +33,7 @@ from zephyr.dataset import (
     GlobSource,
     GroupByOp,
     JoinOp,
+    JoinType,
     LoadFileOp,
     MapOp,
     MapShardOp,
@@ -194,19 +195,10 @@ def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
         yield {k: item[k] for k in columns if k in item}
 
 
-def _load_file_batch_gen(stream: Iterator, *, include_file_paths: bool = False, file_path_column: str) -> Iterator:
+def _load_file_gen(stream: Iterator, loader: Callable, *, include_file_paths: bool, file_path_column: str) -> Iterator:
     for spec in stream:
         try:
-            yield from load_file_batch(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
-        except Exception as e:
-            e.add_note(f"While loading from {spec}")
-            raise
-
-
-def _load_file_gen(stream: Iterator, *, include_file_paths: bool = False, file_path_column: str) -> Iterator:
-    for spec in stream:
-        try:
-            yield from load_file(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
+            yield from loader(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
         except Exception as e:
             e.add_note(f"While loading from {spec}")
             raise
@@ -226,14 +218,13 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
     def pipeline(stream: Iterator, *, shard_idx: int = 0, total_shards: int = 1) -> Iterator:
         for op in operations:
             if isinstance(op, LoadFileOp):
-                if op.batch_mode:
-                    stream = _load_file_batch_gen(
-                        stream, include_file_paths=op.include_file_paths, file_path_column=op.file_path_column
-                    )
-                else:
-                    stream = _load_file_gen(
-                        stream, include_file_paths=op.include_file_paths, file_path_column=op.file_path_column
-                    )
+                loader = load_file_batch if op.batch_mode else load_file
+                stream = _load_file_gen(
+                    stream,
+                    loader,
+                    include_file_paths=op.include_file_paths,
+                    file_path_column=op.file_path_column,
+                )
             elif isinstance(op, MapOp):
                 stream = _map_gen(stream, op.fn)
             elif isinstance(op, FilterOp):
@@ -257,7 +248,7 @@ def compose_join(
     left_key_fn: Callable,
     right_key_fn: Callable,
     combiner_fn: Callable,
-    join_type: str,
+    join_type: JoinType,
 ) -> Callable[[Iterator, Iterator], Iterator]:
     """Create a join function.
 
@@ -265,7 +256,7 @@ def compose_join(
         left_key_fn: Function to extract key from left items
         right_key_fn: Function to extract key from right items
         combiner_fn: Function to combine matched items
-        join_type: "inner" or "left"
+        join_type: inner or left join semantics
 
     Returns:
         Function that takes (left_stream, right_stream) and yields joined items
@@ -331,11 +322,6 @@ class PhysicalPlan:
         if not self.source_items:
             return 0
         return len({item.shard_idx for item in self.source_items})
-
-    @property
-    def num_chunks(self) -> int:
-        """Total number of chunks across all shards."""
-        return len(self.source_items)
 
 
 @dataclass
@@ -726,7 +712,7 @@ def _sorted_merge_join(
     left_key_fn: Callable,
     right_key_fn: Callable,
     combiner_fn: Callable,
-    join_type: str,
+    join_type: JoinType,
 ) -> Iterator:
     """Perform a sorted merge join between two streams.
 
@@ -736,7 +722,7 @@ def _sorted_merge_join(
         left_key_fn: Function to extract key from left items
         right_key_fn: Function to extract key from right items
         combiner_fn: Function to combine matched items
-        join_type: "inner" or "left"
+        join_type: inner or left join semantics
 
     Yields:
         Joined items according to join_type
@@ -755,12 +741,12 @@ def _sorted_merge_join(
         for side, _, item in group:
             (left_group if side == "left" else right_group).append(item)
 
-        if join_type == "inner":
+        if join_type == JoinType.INNER:
             if left_group and right_group:
                 for left_item in left_group:
                     for right_item in right_group:
                         yield combiner_fn(left_item, right_item)
-        elif join_type == "left":
+        elif join_type == JoinType.LEFT:
             for left_item in left_group:
                 if right_group:
                     for right_item in right_group:

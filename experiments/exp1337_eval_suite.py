@@ -63,7 +63,8 @@ Launch via iris:
 
 from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import ExecutorStep, InputName, executor_main
+from marin.execution.executor import executor_main
+from marin.execution.types import ExecutorStep, InputName
 
 from experiments.evals.evals import (
     evaluate_levanter_lm_evaluation_harness,

@@ -2,6 +2,7 @@
 # Usage: uv run iris --cluster=marin cluster start
 
 log_server_config: marin
+dashboard_url: https://iris.oa.dev
 
 platform:
   label_prefix: marin
@@ -9,6 +10,8 @@ platform:
     project_id: hai-gcp-models
 
 defaults:
+  ssh:
+    impersonate_service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
   autoscaler:
     evaluation_interval:
       milliseconds: 10000
@@ -199,7 +202,7 @@ scale_groups:
 user_budgets:
   # Admins: standard budget, may submit PRIORITY_BAND_PRODUCTION for work that
   # must not be downgraded. INTERACTIVE work still counts against the budget.
-  - user_ids: [runner, power, dlwh, rav, romain, held, larry]
+  - user_ids: [runner, power, dlwh, rav, romain, held, larry, wmoss]
     budget_limit: 75000
     max_band: PRIORITY_BAND_PRODUCTION
   # Researchers: standard budget, capped at PRIORITY_BAND_INTERACTIVE.

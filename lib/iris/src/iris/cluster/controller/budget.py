@@ -3,8 +3,6 @@
 
 """Budget tracking: resource value function and per-user spend."""
 
-from __future__ import annotations
-
 import logging
 from collections import defaultdict
 from collections.abc import Iterable
@@ -18,7 +16,7 @@ from iris.cluster.controller import writes
 from iris.cluster.controller.codec import device_counts_from_json
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.schema import job_config_table, tasks_table
-from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, hint_rare_state
 from iris.cluster.types import UserBudgetDefaults
 from iris.rpc import config_pb2, job_pb2
 
@@ -31,10 +29,6 @@ T = TypeVar("T")
 class UserTask(Generic[T]):
     user_id: str
     task: T
-
-
-# Task states that count as "active" for budget spend (re-exported from db for local use)
-_ACTIVE_TASK_STATES = tuple(ACTIVE_TASK_STATES)
 
 
 def resource_value(cpu_millicores: int, memory_bytes: int, accelerator_count: int) -> int:
@@ -57,7 +51,7 @@ _USER_SPEND_QUERY = (
         func.count().label("task_count"),
     )
     .select_from(tasks_table.join(job_config_table, job_config_table.c.job_id == tasks_table.c.job_id))
-    .where(tasks_table.c.state.in_(bindparam("states", expanding=True)))
+    .where(hint_rare_state(tasks_table.c.state.in_(bindparam("states", expanding=True))))
     .where(job_config_table.c.priority_band != job_pb2.PRIORITY_BAND_BATCH)
     .group_by(tasks_table.c.job_id)
 )
@@ -78,7 +72,7 @@ def compute_user_spend(tx: Tx) -> dict[str, int]:
 
     Returns ``{user_id: total_resource_value}`` for users with active tasks.
     """
-    rows = tx.execute(_USER_SPEND_QUERY, {"states": list(_ACTIVE_TASK_STATES)}).all()
+    rows = tx.execute(_USER_SPEND_QUERY, {"states": list(ACTIVE_TASK_STATES)}).all()
 
     spend: dict[str, int] = defaultdict(int)
     for row in rows:

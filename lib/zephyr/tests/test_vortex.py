@@ -9,8 +9,8 @@ from fray.local_backend import LocalClient
 from zephyr import Dataset
 from zephyr.execution import ZephyrContext
 from zephyr.expr import col
-from zephyr.readers import InputFileSpec, load_vortex
-from zephyr.writers import write_vortex_file
+from zephyr.readers import InputFileSpec, load_parquet, load_vortex
+from zephyr.writers import write_parquet_file, write_vortex_file
 
 
 @pytest.fixture
@@ -145,7 +145,6 @@ class TestVortexPipeline:
         assert len(results) == 1
 
         # Verify parquet output
-        from zephyr.readers import load_parquet
 
         loaded = list(load_parquet(results[0]))
         assert len(loaded) == 100
@@ -153,7 +152,6 @@ class TestVortexPipeline:
     def test_parquet_to_vortex_conversion(self, sync_ctx, tmp_path):
         """Test converting parquet to vortex."""
         # Create parquet file
-        from zephyr.writers import write_parquet_file
 
         records = [{"a": i, "b": f"val_{i}"} for i in range(50)]
         parquet_path = tmp_path / "input.parquet"

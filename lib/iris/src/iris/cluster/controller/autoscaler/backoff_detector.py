@@ -26,8 +26,6 @@ whether the termination counts as a failure. State is in-memory; on
 controller restart ``health`` resets to ``1.0``.
 """
 
-from __future__ import annotations
-
 import threading
 from enum import StrEnum
 
@@ -215,11 +213,6 @@ class BackoffDetector:
         if deadline is None or deadline.expired(now=now):
             return None
         return deadline.as_timestamp()
-
-    def status_label(self, now: Timestamp) -> str:
-        """``"<label> health=<score>"`` (e.g. ``"churning health=0.34"``) for dashboards/logs."""
-        h = self.health(now)
-        return f"{self.health_label(now).value} health={h:.2f}"
 
     # -----------------------------------------------------------------------
     # Internals (caller holds _lock)
