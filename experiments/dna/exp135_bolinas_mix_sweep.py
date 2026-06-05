@@ -655,6 +655,55 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
         data_seed=21,
         checkpoints_per_run=5,
     ),
+    # Chained continuation from exp135-zoonomia-m3.1 at step-41405 (~78% through
+    # m3.1's absolute span of 53239, the nearest permanent checkpoint at/just
+    # before m3.1's cooldown starts at step 42591 = 0.8 * 53239). Same
+    # upstream-heavy 0.25/0.1875×4 mixture and cds-sized new portion as m3.1.
+    # No rewarmup — picks up at peak LR; combined run cools down over its last
+    # 20%.
+    MixConfig(
+        name="exp135-zoonomia-m3.2",
+        weights={
+            "cds": 0.1875,
+            "upstream": 0.25,
+            "downstream": 0.1875,
+            "ncrna_exon": 0.1875,
+            "ccre_non_promoter": 0.1875,
+        },
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["cds"],
+        continuation=ResumeBeforeCooldown(
+            checkpoint_path=(
+                "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i25-exp135-zoonomia-m3.1-e9bc43/checkpoints/step-41405/"
+            ),
+            parent_step=41405,
+        ),
+        data_seed=22,
+        checkpoints_per_run=5,
+    ),
+    # Chained continuation from exp135-zoonomia-m1.1 at step-41412 (~78% through
+    # m1.1's absolute span of 53244, the nearest permanent checkpoint at/just
+    # before m1.1's cooldown starts at step 42595 = 0.8 * 53244). Same uniform
+    # 1/5 mixture and cds-sized new portion as m1.1. No rewarmup — picks up at
+    # peak LR; combined run cools down over its last 20%.
+    MixConfig(
+        name="exp135-zoonomia-m1.2",
+        weights={
+            "cds": 1 / 5,
+            "upstream": 1 / 5,
+            "downstream": 1 / 5,
+            "ncrna_exon": 1 / 5,
+            "ccre_non_promoter": 1 / 5,
+        },
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["cds"],
+        continuation=ResumeBeforeCooldown(
+            checkpoint_path=(
+                "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i26-exp135-zoonomia-m1.1-256ffd/checkpoints/step-41412/"
+            ),
+            parent_step=41412,
+        ),
+        data_seed=23,
+        checkpoints_per_run=5,
+    ),
 )
 
 
