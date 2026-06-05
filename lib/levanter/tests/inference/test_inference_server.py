@@ -238,20 +238,24 @@ class _FakeCompletionContext:
         max_tokens: int,
         temperature: float,
         top_p: float | None,
+        top_k: int | None,
         stop_tokens: list[int] | None,
         seed: int | None,
         future,
         n_generations: int = 1,
         echo_logprobs_top_k: int | None = None,
+        return_logprobs: bool = False,
     ) -> str:
         if (
             prompt_tokens != [0, 1]
             or max_tokens != 1
             or temperature != 0
+            or top_k is not None
             or stop_tokens is not None
             or seed != 1234
             or n_generations != 1
             or echo_logprobs_top_k != 1
+            or return_logprobs
         ):
             raise ValueError("The deterministic test context only supports one fixed completion request.")
         self.submitted_requests += 1
