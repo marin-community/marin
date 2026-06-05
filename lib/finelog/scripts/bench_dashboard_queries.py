@@ -366,6 +366,8 @@ class DiscoveredKeys:
     log_worker_source: str | None = None  # FAMILY A: a /system/worker/<id> log key
     log_task_source: str | None = None  # FAMILY A: a task-attempt log key (e.g. /user/job/0:0)
     log_controller_source: str = "/system/controller"  # FAMILY A: the controller log key
+    log_run_prefix: str | None = None  # FAMILY D: a /team/iris-run-.../ run-level prefix (many task keys)
+    log_task_prefix: str | None = None  # FAMILY D: a single task's all-attempts prefix ("<taskKey>:")
 
 
 def _segment_paths(namespace_dir: Path) -> list[Path]:
@@ -490,11 +492,47 @@ def _best_key(counts: Counter, predicate) -> str | None:
     return None
 
 
+def _discover_log_prefixes(data_dir: Path) -> tuple[str | None, str | None]:
+    """Pick a real run-level log-key prefix (many task keys) and a single task's
+    all-attempts prefix from the log slice.
+
+    The iris dashboard LogViewer issues ``MATCH_SCOPE_PREFIX`` FetchLogs for
+    "all attempts of a task" (``<taskKey>:``) and "all tasks of a run/job"
+    (``<run>/``, e.g. ``/bizon/iris-run-cli-<ts>/``). The run-level prefix spans
+    a whole run's task-attempt keys — many distinct keys scattered across the
+    seq-ordered ``log``, which the ``prefix()`` UDF cannot prune. That is the
+    slow shape observed in prod. Pick the highest-row-count run prefix so the
+    tail returns a full page.
+    """
+    ns_dir = data_dir / "log"
+    if not ns_dir.is_dir():
+        return None, None
+    paths = _segment_paths(ns_dir)
+    if not paths:
+        return None, None
+    counts = _top_values(paths, "key", limit_segments=12)
+    run_counts: Counter = Counter()
+    for key, n in counts.items():
+        # Skip /system/* daemon keys; a run key is /<team>/<run>/<task>/<n>:<a>.
+        if key.startswith("/system/"):
+            continue
+        parts = key.split("/")  # ["", team, run, task, "n:a", ...]
+        if len(parts) >= 4 and parts[1] and parts[2]:
+            run_counts["/".join(parts[:3]) + "/"] += n
+    run_prefix = run_counts.most_common(1)[0][0] if run_counts else None
+    # One task's all-attempts prefix: take the busiest attempt key (".../n:a")
+    # and strip back to the ":" boundary the dashboard appends.
+    task_key = _best_key(counts, lambda k: ":" in k.rsplit("/", 1)[-1] and not k.startswith("/system/"))
+    task_prefix = task_key.rsplit(":", 1)[0] + ":" if task_key else None
+    return run_prefix, task_prefix
+
+
 def discover_keys(data_dir: Path) -> DiscoveredKeys:
     """Inspect the pulled parquet and return concrete key values for each family."""
     task_prefix, task_hi = _discover_task_prefix(data_dir)
     profile_source, captured_at = _discover_profile_key(data_dir)
     log_worker, log_task = _discover_log_sources(data_dir)
+    log_run_prefix, log_task_prefix = _discover_log_prefixes(data_dir)
     return DiscoveredKeys(
         task_prefix=task_prefix,
         task_range_hi=task_hi,
@@ -502,6 +540,8 @@ def discover_keys(data_dir: Path) -> DiscoveredKeys:
         profile_captured_at=captured_at,
         log_worker_source=log_worker,
         log_task_source=log_task,
+        log_run_prefix=log_run_prefix,
+        log_task_prefix=log_task_prefix,
     )
 
 
@@ -557,6 +597,52 @@ def build_family_queries(keys: DiscoveredKeys) -> list[BenchQuery]:
                     match_scope=logging_pb2.MATCH_SCOPE_EXACT,
                     max_lines=500,
                     tail=True,
+                ),
+            )
+        )
+
+    # FAMILY D — LOG TAIL BY PREFIX (FetchLogs MATCH_SCOPE_PREFIX, `log`). The
+    # dashboard LogViewer issues these for "all attempts of a task" and "all
+    # tasks of a run". `source` is matched against the log `key` via the
+    # `prefix()` UDF, which cannot prune the seq-ordered log — the slow shape
+    # observed in prod. Contrast the EXACT `log_tail_controller` above.
+    if keys.log_task_prefix:
+        queries.append(
+            BenchQuery(
+                name="log_tail_task_prefix",
+                source="FAMILY D FetchLogs PREFIX tail=500 — one task, all attempts",
+                fetch=logging_pb2.FetchLogsRequest(
+                    source=keys.log_task_prefix,
+                    match_scope=logging_pb2.MATCH_SCOPE_PREFIX,
+                    max_lines=500,
+                    tail=True,
+                ),
+            )
+        )
+    if keys.log_run_prefix:
+        queries.append(
+            BenchQuery(
+                name="log_tail_run_prefix",
+                source="FAMILY D FetchLogs PREFIX tail=500 — whole run/job (no level filter)",
+                fetch=logging_pb2.FetchLogsRequest(
+                    source=keys.log_run_prefix,
+                    match_scope=logging_pb2.MATCH_SCOPE_PREFIX,
+                    max_lines=500,
+                    tail=True,
+                ),
+            )
+        )
+        # The exact prod-reported shape: run-level prefix + INFO level filter.
+        queries.append(
+            BenchQuery(
+                name="log_tail_run_prefix_info",
+                source="FAMILY D FetchLogs PREFIX tail=500 minLevel=INFO — prod-reported slow shape",
+                fetch=logging_pb2.FetchLogsRequest(
+                    source=keys.log_run_prefix,
+                    match_scope=logging_pb2.MATCH_SCOPE_PREFIX,
+                    max_lines=500,
+                    tail=True,
+                    min_level="INFO",
                 ),
             )
         )
@@ -996,7 +1082,8 @@ def _boot_backend(backend: Backend, server_bin: Path, data_dir: Path, port: int,
 
 def _fetch_summary(req: logging_pb2.FetchLogsRequest) -> str:
     scope = logging_pb2.MatchScope.Name(req.match_scope)
-    return f"FetchLogs(source={req.source!r}, scope={scope}, max_lines={req.max_lines}, tail={req.tail})"
+    level = f", min_level={req.min_level!r}" if req.min_level else ""
+    return f"FetchLogs(source={req.source!r}, scope={scope}, max_lines={req.max_lines}, tail={req.tail}{level})"
 
 
 def _run_one(client: LogClient, query: BenchQuery, backend: Backend) -> tuple[int, float]:
@@ -1088,7 +1175,10 @@ def _run_backend(
 def _slow_rpc_lines(log_path: Path, limit: int = 40) -> list[str]:
     if not log_path.exists():
         return []
-    out = [line for line in log_path.read_text(errors="replace").splitlines() if "Slow RPC" in line]
+    # "Slow RPC" is the interceptor's whole-chain warn; "slow FetchLogs"/"slow
+    # Query" are the query-engine warns that carry the executed SQL text.
+    markers = ("Slow RPC", "slow FetchLogs", "slow Query")
+    out = [line for line in log_path.read_text(errors="replace").splitlines() if any(m in line for m in markers)]
     return out[-limit:]
 
 
@@ -1173,6 +1263,8 @@ def cmd_bench(args: argparse.Namespace) -> int:
     print(f"  log_worker_source    = {keys.log_worker_source}")
     print(f"  log_task_source      = {keys.log_task_source}")
     print(f"  log_controller       = {keys.log_controller_source}")
+    print(f"  log_run_prefix       = {keys.log_run_prefix}")
+    print(f"  log_task_prefix      = {keys.log_task_prefix}")
 
     queries = DASHBOARD_QUERIES + build_family_queries(keys)
     if args.only:
@@ -1224,6 +1316,8 @@ def cmd_bench(args: argparse.Namespace) -> int:
             "log_worker_source": keys.log_worker_source,
             "log_task_source": keys.log_task_source,
             "log_controller_source": keys.log_controller_source,
+            "log_run_prefix": keys.log_run_prefix,
+            "log_task_prefix": keys.log_task_prefix,
         },
         "namespaces_on_disk": _namespaces_on_disk(data_dir),
         "results": {str(b): [_result_to_dict(r) for r in rs] for b, rs in by_backend.items()},

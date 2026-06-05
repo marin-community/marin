@@ -14,6 +14,7 @@ pub mod provider;
 pub mod udf;
 
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Field, Schema as ArrowSchema, SchemaRef};
@@ -188,6 +189,56 @@ fn relax_result_nullability(
     Ok((relaxed, out))
 }
 
+/// Threshold (ms) at or above which a completed query is logged at WARN with its
+/// SQL — the diagnostic the RPC-level slow-warn can't provide (the interceptor
+/// only sees the encoded request, never the SQL). Defaults to the same bar as the
+/// RPC warn ([`crate::server::interceptors::DEFAULT_SLOW_RPC_THRESHOLD_MS`]);
+/// `FINELOG_SLOW_QUERY_LOG_MS` overrides it (set it low to capture more while
+/// debugging a specific slow shape).
+fn slow_query_log_ms() -> u128 {
+    static MS: OnceLock<u128> = OnceLock::new();
+    *MS.get_or_init(|| {
+        std::env::var("FINELOG_SLOW_QUERY_LOG_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u128>().ok())
+            .unwrap_or(crate::server::interceptors::DEFAULT_SLOW_RPC_THRESHOLD_MS as u128)
+    })
+}
+
+/// Cap arbitrary (possibly user-supplied) SQL for a single log line. Truncates on
+/// a char boundary — never mid-codepoint — so non-ASCII SQL can't panic the
+/// logger, in a single pass over at most `MAX_CHARS + 1` chars.
+fn truncate_sql_for_log(sql: &str) -> String {
+    const MAX_CHARS: usize = 4000;
+    let mut chars = sql.chars();
+    let head: String = chars.by_ref().take(MAX_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{head} …[truncated]")
+    } else {
+        head
+    }
+}
+
+/// Emit one WARN carrying the SQL when a query's execution time reached the slow
+/// threshold. `rows` is the result row count on success, `None` when the query
+/// errored — a slow *failed* query (e.g. `ResourcesExhausted` after a long scan)
+/// is exactly the case worth seeing.
+fn log_slow_query(elapsed: Duration, kind: &str, sql: &str, rows: Option<usize>) {
+    let elapsed_ms = elapsed.as_millis();
+    if elapsed_ms < slow_query_log_ms() {
+        return;
+    }
+    let preview = truncate_sql_for_log(sql);
+    let rows_str = rows.map_or_else(|| "ERR".to_string(), |n| n.to_string());
+    tracing::warn!(
+        kind,
+        elapsed_ms = elapsed_ms as u64,
+        rows = %rows_str,
+        sql = %preview,
+        "slow {kind}: {elapsed_ms}ms rows={rows_str} sql={preview}",
+    );
+}
+
 /// Register every namespace in `providers`, run `sql` verbatim, collect, and
 /// deregister. Returns the result schema + batches.
 ///
@@ -209,6 +260,7 @@ pub async fn run_query_over(
         // quoted `FROM "iris.worker"` resolves to exactly this registration.
         ctx.register_table(TableReference::bare(rp.name), Arc::new(rp.provider))?;
     }
+    let started = Instant::now();
     let result = async {
         let df = ctx.sql(sql).await?;
         let schema = Arc::new(df.schema().as_arrow().clone());
@@ -219,11 +271,17 @@ pub async fn run_query_over(
         Ok(QueryResult { schema, batches })
     }
     .await;
+    let elapsed = started.elapsed();
     for name in &names {
         // Best-effort cleanup; a deregister failure must not mask the query
         // result/error.
         let _ = ctx.deregister_table(TableReference::bare(name.as_str()));
     }
+    let rows = result
+        .as_ref()
+        .ok()
+        .map(|r| r.batches.iter().map(|b| b.num_rows()).sum());
+    log_slow_query(elapsed, "Query", sql, rows);
     result
 }
 
@@ -270,12 +328,19 @@ pub async fn fetch_log_rows(
     let sql =
         format!("SELECT {select_cols} FROM \"{LOG_TABLE}\" WHERE {where_clause} {order} {limit}");
 
+    let started = Instant::now();
     let collected = async {
         let df = ctx.sql(&sql).await?;
         df.collect().await
     }
     .await;
+    let elapsed = started.elapsed();
     let _ = ctx.deregister_table(TableReference::bare(LOG_TABLE));
+    let rows = collected
+        .as_ref()
+        .ok()
+        .map(|b| b.iter().map(|x| x.num_rows()).sum());
+    log_slow_query(elapsed, "FetchLogs", &sql, rows);
     let batches = collected?;
 
     let mut rows = Vec::new();
@@ -327,6 +392,20 @@ mod tests {
     use super::*;
     use crate::store::ipc::{decode_one_record_batch, encode_ipc};
     use datafusion::arrow::array::Int64Array;
+
+    #[test]
+    fn truncate_sql_caps_on_char_boundary() {
+        // Short SQL is returned unchanged.
+        let short = "SELECT 1";
+        assert_eq!(truncate_sql_for_log(short), short);
+        // A long multibyte string must truncate WITHOUT panicking mid-codepoint
+        // and gain a marker. 5000 '✓' (3 bytes each) exceeds the 4000-char cap;
+        // byte-indexed truncation would panic here.
+        let long: String = "✓".repeat(5000);
+        let out = truncate_sql_for_log(&long);
+        assert!(out.ends_with("…[truncated]"));
+        assert_eq!(out.chars().filter(|&c| c == '✓').count(), 4000);
+    }
 
     #[tokio::test]
     async fn select_one_roundtrips() {
@@ -389,5 +468,75 @@ mod tests {
                 .unwrap();
             assert_eq!(col.value(0), *expected, "col {i}");
         }
+    }
+
+    #[tokio::test]
+    async fn prefix_fetch_returns_exactly_the_prefix_rows() {
+        // End-to-end guard for the PREFIX key-range rewrite: keys chosen to
+        // straddle the half-open range [P, succ(P)) for P = "/a/". A wrong
+        // successor would drop "/a/*" rows or leak "/ab/1" / "/b/1"; "/a" sits
+        // just below the lower bound. The result set (not the SQL) is asserted.
+        use crate::proto::finelog::logging::MatchScope;
+        use crate::query::provider::NamespaceProvider;
+        use crate::store::log_read::build_log_predicates;
+        use crate::store::segment::{discover_segments, write_segment_to_dir};
+        use datafusion::arrow::array::{Int32Array, Int64Array, StringArray};
+        use datafusion::arrow::datatypes::DataType;
+
+        let dir = std::env::temp_dir().join(format!(
+            "finelog_prefix_fetch_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let keys = ["/a", "/a/1", "/a/2", "/ab/1", "/b/1"];
+        let schema: SchemaRef = Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("key", DataType::Utf8, false),
+            Field::new("source", DataType::Utf8, false),
+            Field::new("data", DataType::Utf8, false),
+            Field::new("epoch_ms", DataType::Int64, false),
+            Field::new("level", DataType::Int32, false),
+        ]));
+        let n = keys.len() as i64;
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int64Array::from_iter_values(1..=n)),
+                Arc::new(StringArray::from(keys.to_vec())),
+                Arc::new(StringArray::from(vec!["stdout"; keys.len()])),
+                Arc::new(StringArray::from(vec!["line"; keys.len()])),
+                Arc::new(Int64Array::from_iter_values(1..=n)),
+                Arc::new(Int32Array::from(vec![2; keys.len()])),
+            ],
+        )
+        .unwrap();
+        write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
+        let paths: Vec<String> = discover_segments(&dir)
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+
+        let provider = NamespaceProvider::build(schema, &paths).unwrap();
+        let preds = build_log_predicates("/a/", 0, MatchScope::MATCH_SCOPE_PREFIX).unwrap();
+        let ctx = make_ctx();
+        let rows = fetch_log_rows(
+            &ctx,
+            provider,
+            &preds.where_parts,
+            preds.include_key,
+            true,
+            100,
+        )
+        .await
+        .unwrap();
+        let mut got: Vec<String> = rows.into_iter().filter_map(|r| r.key).collect();
+        got.sort();
+        assert_eq!(got, vec!["/a/1".to_string(), "/a/2".to_string()]);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
