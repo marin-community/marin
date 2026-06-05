@@ -161,10 +161,24 @@ def _merge_ready_batches(
     return merged, leftovers
 
 
-def _drain_ready_batches(batch_queue: queue.Queue) -> list[InferenceBatch]:
-    """Return batches already waiting behind the next executable batch."""
+def _drain_ready_batches(batch_queue: queue.Queue, *, coalesce_timeout: float = 0.0) -> list[InferenceBatch]:
+    """Return batches waiting behind the next executable batch.
+
+    If no batch is immediately ready, wait briefly for a batch that is still
+    being assembled by the request-collection thread.
+    """
 
     batches = []
+    try:
+        batches.append(batch_queue.get_nowait())
+    except queue.Empty:
+        if coalesce_timeout <= 0:
+            return batches
+        try:
+            batches.append(batch_queue.get(timeout=coalesce_timeout))
+        except queue.Empty:
+            return batches
+
     while True:
         try:
             batches.append(batch_queue.get_nowait())
@@ -394,7 +408,10 @@ class InferenceContext:
         while not self.shutdown_event.is_set():
             try:
                 batch = self.batch_queue.get(timeout=1)
-                ready_batches = _drain_ready_batches(self.batch_queue)
+                ready_batches = _drain_ready_batches(
+                    self.batch_queue,
+                    coalesce_timeout=self.config.batch_timeout,
+                )
                 if ready_batches:
                     batch, leftovers = _merge_ready_batches(
                         batch,

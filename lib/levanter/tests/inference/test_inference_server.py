@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import queue
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -32,6 +33,7 @@ try:
         InferenceResponse,
         InferenceServer,
         InferenceServerConfig,
+        _drain_ready_batches,
         _merge_ready_batches,
     )
 
@@ -120,6 +122,34 @@ def test_merge_ready_batches_allows_aggregate_prompts_over_prefill_budget():
 
     assert [request.request_id for request in merged] == ["req_0", "req_1", "req_2", "req_3"]
     assert leftovers == []
+
+
+def test_drain_ready_batches_uses_coalescing_window_for_trailing_work():
+    delayed_batch = InferenceBatch([_inference_request("req_1", n_generations=1)])
+    immediate_batch = InferenceBatch([_inference_request("req_2", n_generations=1)])
+
+    class DelayedBatchQueue:
+        def __init__(self):
+            self.timeout_seen: float | None = None
+            self.ready_batches = [immediate_batch]
+
+        def get_nowait(self):
+            if self.timeout_seen is None:
+                raise queue.Empty
+            if self.ready_batches:
+                return self.ready_batches.pop(0)
+            raise queue.Empty
+
+        def get(self, timeout: float):
+            self.timeout_seen = timeout
+            return delayed_batch
+
+    batch_queue = DelayedBatchQueue()
+
+    batches = _drain_ready_batches(batch_queue, coalesce_timeout=0.25)
+
+    assert batch_queue.timeout_seen == 0.25
+    assert [[request.request_id for request in batch] for batch in batches] == [["req_1"], ["req_2"]]
 
 
 @pytest.fixture(scope="module")
