@@ -159,11 +159,16 @@ impl RemoteStore {
 
     /// Async footer read of `{namespace}/{basename}` — `(row_count, key_min,
     /// key_max)` where the key bounds are the Int64 statistics for `key_column`.
-    /// Returns `None` on an unreadable footer. One ranged GET of the file tail.
+    /// Returns `None` on an unreadable footer.
+    ///
+    /// `file_size` is the object size already known from `list_segment_objects`,
+    /// passed in so this is a single ranged GET of the file tail with NO preceding
+    /// `head` round-trip — halving the cross-region RPCs per segment on reconcile.
     pub async fn read_footer(
         &self,
         namespace: &str,
         basename: &str,
+        file_size: u64,
         key_column: Option<&str>,
     ) -> Option<(i64, Option<i64>, Option<i64>)> {
         use parquet::arrow::async_reader::ParquetObjectReader;
@@ -171,9 +176,8 @@ impl RemoteStore {
         use parquet::file::statistics::Statistics;
 
         let remote = self.object_path(namespace, basename);
-        let meta = self.store.head(&remote).await.ok()?;
         let mut reader =
-            ParquetObjectReader::new(Arc::clone(&self.store), remote).with_file_size(meta.size);
+            ParquetObjectReader::new(Arc::clone(&self.store), remote).with_file_size(file_size);
         let md = ParquetMetaDataReader::new()
             .with_prefetch_hint(Some(64 * 1024))
             .load_via_suffix_and_finish(&mut reader)

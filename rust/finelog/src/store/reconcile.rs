@@ -16,10 +16,18 @@
 
 use std::collections::HashMap;
 
+use futures::StreamExt;
+
 use crate::errors::StatsError;
 use crate::store::catalog::Catalog;
 use crate::store::remote::RemoteStore;
 use crate::store::types::{parse_seg_filename, SegmentLocation, SegmentRow};
+
+/// Bounded concurrency for the boot reconcile's remote footer reads. High enough
+/// to hide cross-region round-trip latency (a sequential await chain costs O(N)
+/// RTTs — minutes on a first-ever reconcile of a large archived namespace), low
+/// enough to keep the object_store connection pool sane.
+const RECONCILE_FOOTER_CONCURRENCY: usize = 64;
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -67,32 +75,43 @@ pub async fn reconcile_remote_segments(
         min_key: Option<i64>,
         max_key: Option<i64>,
     }
-    let mut footers: Vec<Footer> = Vec::new();
-    for (name, size) in &objects {
-        if catalog_by_basename.contains_key(name) {
-            continue;
-        }
-        let Some((level, min_seq)) = parse_seg_filename(name) else {
-            continue;
-        };
-        let Some((row_count, min_key, max_key)) =
-            remote.read_footer(namespace, name, key_column).await
-        else {
-            tracing::warn!(namespace, %name, "failed reading remote parquet footer");
-            continue;
-        };
-        let max_seq = min_seq + (row_count - 1).max(0);
-        footers.push(Footer {
-            basename: name.clone(),
-            level,
-            min_seq,
-            max_seq,
-            row_count,
-            byte_size: *size as i64,
-            min_key,
-            max_key,
-        });
-    }
+    // The unknown remote parquet to footer-fetch (basename, size, level,
+    // min_seq), skipping catalog-known files and unparseable names.
+    let pending: Vec<(String, u64, i32, i64)> = objects
+        .iter()
+        .filter(|(name, _)| !catalog_by_basename.contains_key(name))
+        .filter_map(|(name, size)| {
+            parse_seg_filename(name).map(|(level, min_seq)| (name.clone(), *size, level, min_seq))
+        })
+        .collect();
+    // Fetch footers CONCURRENTLY: these are latency-bound cross-region round
+    // trips, so a sequential await would cost O(N) RTTs. `buffer_unordered`
+    // caps in-flight requests; `read_footer` is a single ranged GET (size is
+    // already known, no `head`).
+    let footers: Vec<Footer> = futures::stream::iter(pending)
+        .map(|(name, size, level, min_seq)| async move {
+            let footer = remote.read_footer(namespace, &name, size, key_column).await;
+            (name, size, level, min_seq, footer)
+        })
+        .buffer_unordered(RECONCILE_FOOTER_CONCURRENCY)
+        .filter_map(|(name, size, level, min_seq, footer)| async move {
+            let Some((row_count, min_key, max_key)) = footer else {
+                tracing::warn!(namespace, %name, "failed reading remote parquet footer");
+                return None;
+            };
+            Some(Footer {
+                basename: name,
+                level,
+                min_seq,
+                max_seq: min_seq + (row_count - 1).max(0),
+                row_count,
+                byte_size: size as i64,
+                min_key,
+                max_key,
+            })
+        })
+        .collect()
+        .await;
 
     // Union catalog + remote-only seq ranges; mark any segment fully spanned by
     // a strictly-higher level as redundant (transitivity makes a single pass
