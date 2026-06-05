@@ -13,13 +13,33 @@ from typing import Any
 
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
-from marin.inference.types import TokenizedRolloutBatchRequest, TokenizedRolloutBatchResult
-from marin.rl.decoding import DecodingConfig
+from marin.inference.types import (
+    PolicyIdentity,
+    TokenizedRollout,
+    TokenizedRolloutBatchRequest,
+    TokenizedRolloutBatchResult,
+    TokenizedRolloutRequest,
+    TokenizerIdentity,
+    TokenRolloutFinishReason,
+    TokenSamplingParameters,
+)
+from marin.rl.decoding import DecodingConfig, DecodingStrategy
 from marin.rl.types import Rollout
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice
 
 logger = logging.getLogger(__name__)
+
+
+PromptInput = str | list[dict[str, str]]
+UNSUPPORTED_TOKEN_ROLLOUT_DECODING_FIELDS: tuple[str, ...] = (
+    "min_p",
+    "repetition_penalty",
+    "presence_penalty",
+    "frequency_penalty",
+    "min_output_tokens",
+    "ignore_eos",
+)
 
 
 class BaseInferenceContext:
@@ -48,6 +68,53 @@ class BaseInferenceContext:
         del batch
         raise NotImplementedError("This inference context does not implement tokenized rollout generation.")
 
+    def tokenizer_identity(self) -> TokenizerIdentity:
+        """Return stable tokenizer identity for token-native rollout replay."""
+        name_or_path = getattr(self.tokenizer, "name_or_path", None)
+        if name_or_path is None:
+            name_or_path = getattr(self.tokenizer, "_name_or_path", None)
+        if name_or_path is None:
+            name_or_path = getattr(self.tokenizer, "init_kwargs", {}).get("name_or_path")
+        if not name_or_path:
+            name_or_path = type(self.tokenizer).__name__
+        revision = getattr(self.tokenizer, "init_kwargs", {}).get("revision")
+        vocab_size = len(self.tokenizer) if hasattr(self.tokenizer, "__len__") else None
+        return TokenizerIdentity(name_or_path=str(name_or_path), revision=revision, vocab_size=vocab_size)
+
+    def policy_identity(self) -> PolicyIdentity:
+        """Return best-effort policy identity for token-native rollout batches."""
+        model_ref = getattr(self, "canonical_model_name", None)
+        if model_ref is None:
+            model_ref = getattr(self, "model_name", None)
+        if model_ref is None and hasattr(self, "_inference_server"):
+            server_config = getattr(self._inference_server, "config", None)
+            model_ref = getattr(server_config, "model_name", None)
+        if not model_ref:
+            model_ref = type(self).__name__
+        return PolicyIdentity(policy_name=str(model_ref), checkpoint_ref=str(model_ref))
+
+    @staticmethod
+    def _messages_for_prompt(prompt: PromptInput, system_prompt: str | None) -> list[dict[str, str]]:
+        if isinstance(prompt, list):
+            if system_prompt is not None:
+                raise ValueError("system_prompt cannot be combined with message-list prompts")
+            return prompt
+        if system_prompt is not None:
+            return [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]
+        return [{"role": "user", "content": prompt}]
+
+    def tokenize_messages(self, messages: list[dict[str, str]]) -> np.ndarray:
+        """Tokenize chat messages with the backend's generation prompt template."""
+        try:
+            tokens = self.tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+        except Exception as e:
+            logger.warning(f"Chat template failed: {e}")
+            prompt_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
+            tokens = self.tokenizer.encode(prompt_text, add_special_tokens=True)
+            if not tokens:
+                raise ValueError("Failed to tokenize prompt messages") from None
+        return np.array(tokens, dtype=np.int32)
+
     def batch_completions(
         self,
         prompts: list[str] | list[list[dict]],
@@ -60,17 +127,68 @@ class BaseInferenceContext:
 
     def tokenize_prompt(self, prompt: str, choice: Choice | None = None, system_prompt: str | None = None) -> np.ndarray:
         """Tokenize with chat template matching server behavior."""
-        messages = [{"role": "user", "content": prompt}]
-        try:
-            tokens = self.tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
-        except Exception as e:
-            logger.warning(f"Chat template failed: {e}")
-            prompt_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
-            tokens = self.tokenizer.encode(prompt_text, add_special_tokens=True)
-            if not tokens:
-                raise ValueError(f"Failed to tokenize: {prompt[:100]}...") from None
+        del choice
+        return self.tokenize_messages(self._messages_for_prompt(prompt, system_prompt))
 
-        return np.array(tokens, dtype=np.int32)
+    def tokenize_prompt_input(self, prompt: PromptInput, system_prompt: str | None = None) -> np.ndarray:
+        """Tokenize a string prompt or chat message list for token-native generation."""
+        return self.tokenize_messages(self._messages_for_prompt(prompt, system_prompt))
+
+    @staticmethod
+    def _token_sampling_from_decoding(decoding: DecodingConfig) -> TokenSamplingParameters:
+        unsupported_fields = [
+            field_name for field_name in UNSUPPORTED_TOKEN_ROLLOUT_DECODING_FIELDS if getattr(decoding, field_name)
+        ]
+        if unsupported_fields:
+            unsupported_field_names = ", ".join(unsupported_fields)
+            raise ValueError(
+                f"Token-native rollout generation does not support decoding fields: {unsupported_field_names}"
+            )
+        if decoding.stop_strings is not None:
+            raise ValueError("Token-native rollout generation does not support stop_strings; use stop_token_ids.")
+        return TokenSamplingParameters(
+            max_tokens=decoding.max_output_tokens,
+            temperature=0.0 if decoding.strategy == DecodingStrategy.GREEDY else decoding.temperature,
+            top_p=decoding.top_p,
+            top_k=decoding.top_k,
+            stop_token_ids=tuple(decoding.stop_token_ids or ()),
+            seed=decoding.seed,
+            return_logprobs=True,
+        )
+
+    def create_token_rollout_batch(
+        self,
+        *,
+        batch_id: str,
+        prompts: list[PromptInput],
+        n: int,
+        decoding: DecodingConfig,
+        system_prompt: str | None = None,
+    ) -> TokenizedRolloutBatchRequest:
+        """Build a token-native rollout request batch from environment prompts."""
+        if n <= 0:
+            raise ValueError("n must be positive")
+        decoding = self.resolve_decoding(decoding)
+        sampling = self._token_sampling_from_decoding(decoding)
+        requests = []
+        for prompt_index, prompt in enumerate(prompts):
+            prompt_tokens = self.tokenize_prompt_input(prompt, system_prompt)
+            if prompt_tokens.size == 0:
+                raise ValueError(f"Prompt {prompt_index} tokenized to an empty sequence")
+            requests.append(
+                TokenizedRolloutRequest(
+                    request_id=f"{batch_id}:{prompt_index}",
+                    prompt_token_ids=tuple(int(token_id) for token_id in prompt_tokens),
+                    sampling=sampling,
+                    n_generations=n,
+                )
+            )
+        return TokenizedRolloutBatchRequest(
+            batch_id=batch_id,
+            tokenizer=self.tokenizer_identity(),
+            policy=self.policy_identity(),
+            requests=tuple(requests),
+        )
 
     def response_tokens_from_choice(self, choice: Choice) -> np.ndarray:
         """Extract token IDs with BPE round-trip."""
@@ -142,4 +260,31 @@ class BaseInferenceContext:
             correctness_reward=correctness_reward,
             decoding=decoding.as_trace(),
             is_truncated=is_truncated,
+        )
+
+    def create_rollout_from_tokenized_rollout(
+        self,
+        rollout: TokenizedRollout,
+        env_name: str,
+        env_example_id: str,
+        reward: float,
+        decoding: DecodingConfig,
+        correctness_reward: float | None = None,
+    ) -> Rollout:
+        """Construct a training rollout from token-native generation output."""
+        decoding = self.resolve_decoding(decoding)
+        response_tokens = np.array(rollout.completion_token_ids, dtype=np.int32)
+        response_logprobs = np.array(rollout.completion_logprobs, dtype=np.float32)
+        token_rewards = np.full(len(response_tokens), reward, dtype=np.float32)
+        return Rollout(
+            env_name=env_name,
+            env_example_id=env_example_id,
+            prompt_tokens=np.array(rollout.prompt_token_ids, dtype=np.int32),
+            response_tokens=response_tokens,
+            response_logprobs=response_logprobs,
+            token_rewards=token_rewards,
+            episode_reward=float(reward),
+            correctness_reward=correctness_reward,
+            decoding=decoding.as_trace(),
+            is_truncated=rollout.finish_reason == TokenRolloutFinishReason.LENGTH,
         )

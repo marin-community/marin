@@ -10,6 +10,7 @@ from typing import Any
 
 import jax
 import numpy as np
+from marin.inference.types import TokenizedRollout
 from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.tinker_environments.math_env import (
@@ -156,6 +157,16 @@ class MathEnv(MarinEnv):
         prompts = [
             [*self.fewshot_prefix, {"role": "user", "content": example.processed_prompt}] for example in sampled_examples
         ]
+        if inference_ctx.supports_token_rollouts() and decoding.stop_strings is None:
+            return self._sample_token_rollouts(
+                inference_ctx=inference_ctx,
+                sampled_examples=sampled_examples,
+                prompts=prompts,
+                n_generations=n_generations,
+                decoding=decoding,
+                mode=mode,
+            )
+
         completions = inference_ctx.batch_completions(
             prompts=prompts,
             n=n_generations,
@@ -220,6 +231,97 @@ class MathEnv(MarinEnv):
             f"{prefix}_truncated_percentage": float(truncated_count) / total_choices,
         }
 
+        return rollout_groups, metrics
+
+    def _sample_token_rollouts(
+        self,
+        *,
+        inference_ctx: BaseInferenceContext,
+        sampled_examples: list[DataExample],
+        prompts: list[list[dict[str, str]]],
+        n_generations: int,
+        decoding: DecodingConfig,
+        mode: str,
+    ) -> tuple[list[RolloutGroup], dict[str, float]]:
+        decoding = inference_ctx.resolve_decoding(decoding)
+        batch = inference_ctx.create_token_rollout_batch(
+            batch_id=f"math.{mode}",
+            prompts=prompts,
+            n=n_generations,
+            decoding=decoding,
+        )
+        batch_result = inference_ctx.generate_token_rollouts(batch)
+        rollouts_by_request: dict[str, list[TokenizedRollout]] = {}
+        for rollout in batch_result.rollouts:
+            rollouts_by_request.setdefault(rollout.request_id, []).append(rollout)
+
+        rollout_groups: list[RolloutGroup] = []
+        total_choices = 0
+        reward_sum = 0.0
+        format_sum = 0.0
+        correct_sum = 0.0
+        response_token_count = 0
+        truncated_count = 0
+
+        for prompt_index, example in enumerate(sampled_examples):
+            request_id = batch.requests[prompt_index].request_id
+            token_rollouts = sorted(
+                rollouts_by_request.get(request_id, []),
+                key=lambda rollout: rollout.generation_index,
+            )
+            if len(token_rollouts) != n_generations:
+                raise RuntimeError(
+                    f"Token rollout request {request_id} returned {len(token_rollouts)} generations; "
+                    f"expected {n_generations}"
+                )
+            group_rollouts: list[Rollout] = []
+            for token_rollout in token_rollouts:
+                response_text = inference_ctx.tokenizer.decode(
+                    list(token_rollout.completion_token_ids),
+                    skip_special_tokens=True,
+                )
+                reward, fmt_score, correct_score = self._score_choice(
+                    example=example,
+                    response_text=response_text,
+                    finish_reason=token_rollout.finish_reason.value,
+                    tokenizer=inference_ctx.tokenizer,
+                )
+                rollout = inference_ctx.create_rollout_from_tokenized_rollout(
+                    rollout=token_rollout,
+                    env_name="math",
+                    env_example_id=example.example_id,
+                    reward=reward,
+                    correctness_reward=correct_score,
+                    decoding=decoding,
+                )
+                group_rollouts.append(rollout)
+                total_choices += 1
+                reward_sum += reward
+                format_sum += fmt_score
+                correct_sum += correct_score
+                response_token_count += rollout.response_tokens.size
+                if token_rollout.finish_reason.value == "length":
+                    truncated_count += 1
+
+            if group_rollouts:
+                rollout_groups.append(RolloutGroup(rollouts=group_rollouts))
+
+        if total_choices == 0:
+            raise RuntimeError("Inference context returned no token rollouts; cannot compute metrics")
+
+        prefix = f"math.{mode}"
+        metrics = {
+            f"{prefix}_mean_reward": reward_sum / total_choices,
+            f"{prefix}_format_accuracy": format_sum / total_choices,
+            f"{prefix}_correct_accuracy": correct_sum / total_choices,
+            f"{prefix}_mean_response_tokens": response_token_count / total_choices,
+            f"{prefix}_total_responses": float(total_choices),
+            f"{prefix}_sampled_examples": float(len(sampled_examples)),
+            f"{prefix}_truncated_percentage": float(truncated_count) / total_choices,
+            f"{prefix}_token_rollout_prefill_admissions": float(batch_result.admission.prefill_admissions),
+        }
+        if batch_result.timing.total is not None:
+            metrics[f"{prefix}_token_rollout_total_seconds"] = batch_result.timing.total
         return rollout_groups, metrics
 
     def _score_choice(

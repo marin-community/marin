@@ -8,7 +8,7 @@ import os
 import time
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
@@ -373,6 +373,10 @@ class vLLMInferenceContext(BaseInferenceContext):
             seed=engine_config.seed,
         )
 
+    def tokenize_messages(self, messages: list[dict[str, str]]) -> np.ndarray:
+        """Tokenize messages with the same renderer used for vLLM generation."""
+        return np.array(self._render_messages_to_tokens(cast(list[Message], messages)), dtype=np.int32)
+
     def tokenize_prompt(self, prompt: str, choice: Choice | None = None, system_prompt: str | None = None) -> np.ndarray:
         """Tokenize the prompt with the choice's prompt token IDs.
 
@@ -381,6 +385,8 @@ class vLLMInferenceContext(BaseInferenceContext):
         This is a known issue documented here:
         https://github.com/vllm-project/vllm/issues/27486
         """
+        if choice is None:
+            return self.tokenize_prompt_input(prompt, system_prompt)
         return np.array(choice.prompt_token_ids, dtype=np.int32)
 
     def response_tokens_from_choice(self, choice: Choice) -> np.ndarray:
