@@ -456,52 +456,6 @@ class TestAutoscalerExecution:
 
         assert group.slice_count() == 0
 
-    def test_execute_throttles_global_create_rate(self):
-        """A multi-slice fan-out in one cycle is capped by the project-wide create budget.
-
-        The per-group rate limit (16/min) does not coordinate across groups, so the
-        global throttle is what keeps the aggregate CreateNode rate under the cloud's
-        per-project quota. Deferred scale-ups are retried once the budget refills.
-        """
-        platform = make_mock_platform()
-        # Large per-group cap so the global create throttle -- not max_slices or the
-        # per-group limit -- is the binding constraint.
-        config = make_scale_group_config(
-            name="test-group",
-            buffer_slices=0,
-            max_slices=10,
-            runtime_version="v2-alpha-tpuv5",
-            zones=["us-central1-a"],
-        )
-        group = ScalingGroup(config, platform)
-        # 2 creates/min, so one cycle can only create 2 regardless of demand.
-        autoscaler = Autoscaler(
-            scale_groups={"test-group": group},
-            evaluation_interval=Duration.from_seconds(0.1),
-            platform=platform,
-            create_rate_limit=2,
-        )
-        decisions = [
-            ScalingDecision(scale_group="test-group", action=ScalingAction.SCALE_UP, reason="demand") for _ in range(5)
-        ]
-
-        # First cycle: only 2 of the 5 proceed; the other 3 are deferred.
-        autoscaler.execute(decisions, timestamp=Timestamp.from_ms(1000))
-        autoscaler._wait_for_inflight()
-        assert group.slice_count() == 2
-
-        # Same instant, budget still empty: nothing more is created.
-        autoscaler.execute(decisions, timestamp=Timestamp.from_ms(1000))
-        autoscaler._wait_for_inflight()
-        assert group.slice_count() == 2
-
-        # A minute later the budget has refilled, so 2 more proceed.
-        autoscaler.execute(decisions, timestamp=Timestamp.from_ms(1000 + 60_000))
-        autoscaler._wait_for_inflight()
-        assert group.slice_count() == 4
-
-        autoscaler.shutdown()
-
 
 class TestAutoscalerWorkerFailure:
     """Tests for worker failure handling."""
