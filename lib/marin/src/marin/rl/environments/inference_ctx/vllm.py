@@ -8,7 +8,7 @@ import os
 import time
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
@@ -41,6 +41,13 @@ except ImportError:
 
 # Disable multiprocessing to have direct access to the model weights
 os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+
+
+def _state_dict_key_to_mapping_key(key: str) -> str:
+    split_key = key.split(".")
+    if len(split_key) >= 2 and split_key[-1] == "bias":
+        return ".".join([*split_key[:-2], f"{split_key[-2]}_bias"])
+    return ".".join(split_key[:-1])
 
 
 class InferenceMode(StrEnum):
@@ -362,12 +369,22 @@ class vLLMInferenceContext(BaseInferenceContext):
 
         logger.info("reload_model: converting state dict")
         # TODO(chris): levanter to vllm state dict
+        mappings = MODEL_MAPPINGS[self.canonical_model_name]
+        if os.environ.get("VLLM_TARGET_DEVICE") == "tpu":
+            unsupported_keys = [key for key in state_dict if _state_dict_key_to_mapping_key(key) not in mappings]
+            if unsupported_keys:
+                unsupported_preview = ", ".join(sorted(unsupported_keys)[:10])
+                raise ValueError(
+                    "TPU vLLM weight hot-swap only supports source tensors that map "
+                    "one-to-one into the live dict-backed vLLM state. Unsupported "
+                    f"source tensor count={len(unsupported_keys)}; examples: {unsupported_preview}"
+                )
         nnx_state = levanter_state_dict_to_nnx_state_on_cpu(state_dict)
         t1 = time.time()
         logger.info("reload_model: calling sync_weights (%d params, %.1fs so far)", len(nnx_state), t1 - t0)
         self.llm.llm_engine.model_executor.driver_worker.sync_weights(
             nnx_state,
-            mappings=MODEL_MAPPINGS[self.canonical_model_name],
+            mappings=mappings,
             transpose_keys=MODEL_TRANSPOSE_KEYS[self.canonical_model_name],
             reshard_fn=None,
         )
@@ -409,13 +426,16 @@ class vLLMInferenceContext(BaseInferenceContext):
         elif system_prompt:
             # Plain string prompts with system prompt
             assert all(isinstance(p, str) for p in prompts), "prompts must be strings when system_prompt is provided"
+            string_prompts = cast(list[str], prompts)
             message_lists = [
-                [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}] for prompt in prompts  # type: ignore
+                [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]
+                for prompt in string_prompts
             ]
         else:
             # Plain string prompts without system prompt
             assert all(isinstance(p, str) for p in prompts), "prompts must be strings when no system_prompt is provided"
-            message_lists = [[{"role": "user", "content": prompt}] for prompt in prompts]  # type: ignore
+            string_prompts = cast(list[str], prompts)
+            message_lists = [[{"role": "user", "content": prompt}] for prompt in string_prompts]
 
         # Render messages to token IDs using the appropriate renderer
         prompt_token_ids = []

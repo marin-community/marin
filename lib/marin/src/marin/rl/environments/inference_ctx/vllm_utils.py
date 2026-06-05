@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 
 def levanter_llama_to_vllm_mapping():
     return {
@@ -72,6 +74,50 @@ def levanter_qwen_to_vllm_mapping():
     return mapping
 
 
+def levanter_llama_to_vllm_tpu_mapping():
+    return {
+        "lm_head": ("vllm_model.lm_head.weight", (None, "model")),
+        "model.embed_tokens": (
+            "vllm_model.model.embed_tokens.weight",
+            ("model", None),
+        ),
+        "model.layers.*.input_layernorm": (
+            "vllm_model.model.layers.*.input_layernorm.weight",
+            (None,),
+        ),
+        "model.layers.*.mlp.down_proj": (
+            "vllm_model.model.layers.*.mlp.down_proj.weight",
+            ("model", None),
+        ),
+        "model.layers.*.post_attention_layernorm": (
+            "vllm_model.model.layers.*.post_attention_layernorm.weight",
+            (None,),
+        ),
+        "model.layers.*.self_attn.o_proj": (
+            "vllm_model.model.layers.*.self_attn.o_proj.weight",
+            ("model", None, None),
+        ),
+        "model.norm": ("vllm_model.model.norm.weight", (None,)),
+    }
+
+
+def levanter_qwen_to_vllm_tpu_mapping():
+    mapping = levanter_llama_to_vllm_tpu_mapping()
+    mapping.update(
+        {
+            "model.layers.*.self_attn.q_norm": (
+                "vllm_model.model.layers.*.self_attn.q_norm.weight",
+                (None,),
+            ),
+            "model.layers.*.self_attn.k_norm": (
+                "vllm_model.model.layers.*.self_attn.k_norm.weight",
+                (None,),
+            ),
+        }
+    )
+    return mapping
+
+
 llama_transpose_keys = {
     "lm_head": (1, 0),
     "gate_proj": (1, 0),
@@ -96,6 +142,16 @@ _MODEL_MAPPINGS = {
     "marin-community/marin-8b-instruct": levanter_llama_to_vllm_mapping(),
 }
 
+_VLLM_TPU_MODEL_MAPPINGS = {
+    "meta-llama/Llama-3.2-1B-Instruct": levanter_llama_to_vllm_tpu_mapping(),
+    "meta-llama/Llama-3.2-3B-Instruct": levanter_llama_to_vllm_tpu_mapping(),
+    "Qwen/Qwen3-0.6B": levanter_qwen_to_vllm_tpu_mapping(),
+    "Qwen/Qwen3-1.7B": levanter_qwen_to_vllm_tpu_mapping(),
+    "meta-llama/Llama-3.1-8B-Instruct": levanter_llama_to_vllm_tpu_mapping(),
+    "Qwen/Qwen3-8B": levanter_qwen_to_vllm_tpu_mapping(),
+    "marin-community/marin-8b-instruct": levanter_llama_to_vllm_tpu_mapping(),
+}
+
 _MODEL_TRANSPOSE_KEYS = {
     "meta-llama/Llama-3.2-1B-Instruct": llama_transpose_keys,
     "meta-llama/Llama-3.2-3B-Instruct": llama_transpose_keys,
@@ -107,8 +163,17 @@ _MODEL_TRANSPOSE_KEYS = {
 }
 
 
+def _use_vllm_tpu_mapping() -> bool:
+    return os.environ.get("VLLM_TARGET_DEVICE") == "tpu"
+
+
 def _infer_mapping(model_name: str) -> dict:
     """Infer the vLLM mapping for a model name, falling back to substring matching."""
+    if _use_vllm_tpu_mapping():
+        if model_name in _VLLM_TPU_MODEL_MAPPINGS:
+            return _VLLM_TPU_MODEL_MAPPINGS[model_name]
+        if "Qwen2.5" in model_name:
+            return levanter_qwen_to_vllm_tpu_mapping()
     if model_name in _MODEL_MAPPINGS:
         return _MODEL_MAPPINGS[model_name]
     if "Qwen2.5" in model_name:

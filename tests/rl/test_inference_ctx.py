@@ -23,7 +23,7 @@ from marin.rl.environments.inference_ctx import (
     vLLMInferenceContextConfig,
 )
 from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
-from marin.rl.environments.inference_ctx.vllm import InferenceMode
+from marin.rl.environments.inference_ctx.vllm import InferenceMode, _state_dict_key_to_mapping_key
 from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
 from transformers import AutoTokenizer
@@ -679,6 +679,27 @@ def test_worker_extension_uses_public_sync_weights():
     assert calls["mappings"] == MODEL_MAPPINGS["meta-llama/Llama-3.1-8B-Instruct"]
     assert calls["transpose_keys"] == MODEL_TRANSPOSE_KEYS["meta-llama/Llama-3.1-8B-Instruct"]
     assert calls["reshard_fn"] is None
+
+
+def test_vllm_tpu_mapping_uses_live_dict_backed_keys(monkeypatch):
+    monkeypatch.setenv("VLLM_TARGET_DEVICE", "tpu")
+
+    mapping = MODEL_MAPPINGS["Qwen/Qwen3-0.6B"]
+
+    assert mapping["model.norm"] == ("vllm_model.model.norm.weight", (None,))
+    assert mapping["model.layers.*.self_attn.q_norm"] == (
+        "vllm_model.model.layers.*.self_attn.q_norm.weight",
+        (None,),
+    )
+    assert "model.layers.*.self_attn.q_proj" not in mapping
+    assert "model.layers.*.mlp.gate_proj" not in mapping
+
+
+def test_state_dict_key_to_mapping_key_matches_nnx_conversion():
+    assert _state_dict_key_to_mapping_key("model.norm.weight") == "model.norm"
+    assert (
+        _state_dict_key_to_mapping_key("model.layers.0.self_attn.q_proj.bias") == "model.layers.0.self_attn.q_proj_bias"
+    )
 
 
 def test_patch_tpu_inference_registry_registers_mistral_alias(monkeypatch):
