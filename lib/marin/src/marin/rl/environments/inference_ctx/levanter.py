@@ -11,14 +11,28 @@ as well as methods for tokenization and logprob extraction from an OpenAI ChatCo
 import asyncio
 import logging
 import threading
+import time
 from dataclasses import dataclass, replace
 from typing import Any
 
 import haliax as hax
+import jax.numpy as jnp
+import jax.random as jrandom
 from jax.sharding import Mesh
+from levanter.inference.engine import Request
+from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.lm_model import LmHeadModel
 from levanter.tokenizers import MarinTokenizer
+from marin.inference.types import (
+    TokenizedRollout,
+    TokenizedRolloutBatchRequest,
+    TokenizedRolloutBatchResult,
+    TokenRolloutAdmissionMetadata,
+    TokenRolloutFinishReason,
+    TokenRolloutTiming,
+    TokenSamplingParameters,
+)
 from marin.rl.decoding import DecodingConfig, DecodingStrategy, stop_strings_for_decoding
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 
@@ -98,6 +112,55 @@ class LevanterInferenceContext(BaseInferenceContext):
     def shutdown(self) -> None:
         self._inference_server.shutdown()
 
+    @staticmethod
+    def _decode_params_from_token_sampling(
+        prompt_token_count: int,
+        sampling: TokenSamplingParameters,
+        request_index: int,
+    ) -> SeqDecodingParams:
+        stop_tokens = None
+        if sampling.stop_token_ids:
+            stop_tokens = hax.named(jnp.asarray(sampling.stop_token_ids, dtype=jnp.int32), axis="position")
+            stop_tokens = stop_tokens.broadcast_axis({"stop_seq": 1})
+        seed = sampling.seed if sampling.seed is not None else request_index
+        return SeqDecodingParams(
+            max_num_tokens=jnp.array(prompt_token_count + sampling.max_tokens, dtype=jnp.int32),
+            stop_tokens=stop_tokens,
+            temperature=jnp.array(sampling.temperature, dtype=jnp.float32),
+            top_p=jnp.array(1.0 if sampling.top_p is None else sampling.top_p, dtype=jnp.float32),
+            top_k=jnp.array(0 if sampling.top_k is None else sampling.top_k, dtype=jnp.int32),
+            key=jrandom.PRNGKey(seed),
+        )
+
+    @staticmethod
+    def _finish_reason_from_tokens(
+        completion_token_ids: tuple[int, ...],
+        sampling: TokenSamplingParameters,
+    ) -> TokenRolloutFinishReason:
+        if len(completion_token_ids) >= sampling.max_tokens:
+            return TokenRolloutFinishReason.LENGTH
+        if sampling.stop_token_ids and completion_token_ids and completion_token_ids[-1] in sampling.stop_token_ids:
+            return TokenRolloutFinishReason.STOP
+        return TokenRolloutFinishReason.STOP
+
+    @staticmethod
+    def _stop_token_id_from_tokens(
+        completion_token_ids: tuple[int, ...],
+        sampling: TokenSamplingParameters,
+    ) -> int | None:
+        if not completion_token_ids or not sampling.stop_token_ids:
+            return None
+        last_token_id = completion_token_ids[-1]
+        if last_token_id in sampling.stop_token_ids:
+            return last_token_id
+        return None
+
+    @staticmethod
+    def _validate_token_rollout_batch(batch: TokenizedRolloutBatchRequest) -> None:
+        for request in batch.requests:
+            if not request.sampling.return_logprobs:
+                raise ValueError("Levanter tokenized rollouts require return_logprobs=True")
+
     def resolve_decoding(self, decoding: DecodingConfig) -> DecodingConfig:
         """Bake Levanter fallback stop-token config into the applied decoding trace."""
         if decoding.stop_strings is not None or decoding.stop_token_ids is not None or not self._stop_tokens:
@@ -135,6 +198,86 @@ class LevanterInferenceContext(BaseInferenceContext):
             "stop": stop_strings_for_decoding(decoding, self.tokenizer),
             "seed": decoding.seed,
         }
+
+    def supports_token_rollouts(self) -> bool:
+        """Return whether this context implements token-native rollout generation."""
+        return True
+
+    def generate_token_rollouts(self, batch: TokenizedRolloutBatchRequest) -> TokenizedRolloutBatchResult:
+        """Generate already-tokenized rollout requests without OpenAI serialization."""
+        self._validate_token_rollout_batch(batch)
+        ctx = self._inference_server.inference_context
+
+        service_requests = []
+        request_output_counts = []
+        for request_index, request in enumerate(batch.requests):
+            service_requests.append(
+                Request(
+                    prompt_tokens=list(request.prompt_token_ids),
+                    request_id=request_index,
+                    decode_params=self._decode_params_from_token_sampling(
+                        len(request.prompt_token_ids),
+                        request.sampling,
+                        request_index,
+                    ),
+                    n_generations=request.n_generations,
+                    return_logprobs=request.sampling.return_logprobs,
+                )
+            )
+            request_output_counts.append(request.n_generations)
+
+        start = time.time()
+        with (
+            ctx.model_lock,
+            hax.partitioning.set_mesh(ctx.config.trainer.device_mesh),
+            hax.axis_mapping(ctx.config.trainer.compute_axis_mapping),
+        ):
+            if ctx.engine is None:
+                raise RuntimeError("Levanter inference engine is not initialized.")
+            result = ctx.engine.generate(service_requests)
+        total_duration = time.time() - start
+
+        rollouts: list[TokenizedRollout] = []
+        output_idx = 0
+        for request, output_count in zip(batch.requests, request_output_counts, strict=True):
+            for generation_index in range(output_count):
+                completion_token_ids = tuple(int(token_id) for token_id in result.tokens[output_idx])
+                if result.logprobs is None:
+                    raise RuntimeError("Levanter engine did not return logprobs for tokenized rollout generation.")
+                completion_logprobs = tuple(float(logprob) for logprob in result.logprobs[output_idx])
+                rollouts.append(
+                    TokenizedRollout(
+                        request_id=request.request_id,
+                        generation_index=generation_index,
+                        prompt_token_ids=request.prompt_token_ids,
+                        completion_token_ids=completion_token_ids,
+                        completion_logprobs=completion_logprobs,
+                        finish_reason=self._finish_reason_from_tokens(completion_token_ids, request.sampling),
+                        prompt_mask=tuple(False for _ in request.prompt_token_ids),
+                        completion_mask=tuple(True for _ in completion_token_ids),
+                        stop_token_id=self._stop_token_id_from_tokens(completion_token_ids, request.sampling),
+                        metadata={"backend": "levanter"},
+                    )
+                )
+                output_idx += 1
+
+        prompt_tokens = sum(len(request.prompt_token_ids) for request in batch.requests)
+        completion_tokens = sum(len(rollout.completion_token_ids) for rollout in rollouts)
+        return TokenizedRolloutBatchResult(
+            batch_id=batch.batch_id,
+            tokenizer=batch.tokenizer,
+            policy=batch.policy,
+            rollouts=tuple(rollouts),
+            timing=TokenRolloutTiming(total=total_duration),
+            admission=TokenRolloutAdmissionMetadata(
+                queued_tokens=prompt_tokens,
+                admitted_tokens=prompt_tokens + completion_tokens,
+                prefill_admissions=result.prefill_admissions,
+                prefill_prompt_tokens_per_admission=tuple(result.prefill_prompt_tokens_per_admission),
+                backend_request_ids=tuple(str(index) for index in range(len(batch.requests))),
+            ),
+            metadata={"backend": "levanter"},
+        )
 
     # TODO: add support for ChatCompletion style [ { role, content} ] messages
     def batch_completions(
