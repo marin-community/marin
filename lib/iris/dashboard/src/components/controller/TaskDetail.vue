@@ -21,7 +21,7 @@ import InfoRow from '@/components/shared/InfoRow.vue'
 import ResourceGauge from '@/components/shared/ResourceGauge.vue'
 import Sparkline from '@/components/shared/Sparkline.vue'
 import ProfileButtons from '@/components/shared/ProfileButtons.vue'
-import ProfileHistory from '@/components/shared/ProfileHistory.vue'
+import ProfileLink from '@/components/shared/ProfileLink.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
 
@@ -479,7 +479,8 @@ watch(() => props.taskId, async () => {
         <LogViewer ref="logViewerRef" :task-id="taskId" :attempts="task.attempts" :current-attempt-id="task.currentAttemptId" />
       </div>
 
-      <ProfileHistory :source="taskId" class="mb-6" />
+      <!-- Latest captured profile for this task; self-hides when none exist -->
+      <ProfileLink :source="taskId" class="mb-6" />
     </template>
   </PageShell>
 </template>

@@ -21,7 +21,6 @@ import MetricCard from '@/components/shared/MetricCard.vue'
 import Sparkline from '@/components/shared/Sparkline.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 import CopyButton from '@/components/shared/CopyButton.vue'
-import ProfileHistory from '@/components/shared/ProfileHistory.vue'
 
 const props = defineProps<{
   workerId: string
@@ -471,8 +470,6 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
           style="max-height: 40vh"
         >{{ data.bootstrapLogs }}</pre>
       </div>
-
-      <ProfileHistory :source="`/system/worker/${workerId}`" class="mb-6" />
     </template>
   </PageShell>
 </template>

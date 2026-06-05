@@ -1,17 +1,14 @@
 <script setup lang="ts">
 /**
- * Compact "recent profiles" list sourced from the iris.profile finelog namespace.
+ * "Latest profile" link for a single source (a task wire ID).
  *
- * Lists the last 10 captures for `source` and anything nested under it: pass a
- * task wire ID, /system/worker/<id>, or /system/controller to scope to one
- * source, or a job ID to cover every task under that job. The list never reads
- * the profile_data blob — the bytes are fetched on click — so it stays cheap on
- * the log server.
- *
- * Each entry is a link. Speedscope captures open in the bundled viewer; every
- * other format downloads. The viewer is opened synchronously inside the click
- * gesture (see openSpeedscopeWindow) so it isn't suppressed as a popup after the
- * fetch latency.
+ * Queries the most recent iris.profile capture for `source` and renders one
+ * link. Speedscope captures open in the bundled viewer (same-origin via a blob
+ * URL); every other format downloads. The viewer is opened synchronously inside
+ * the click gesture (see openSpeedscopeWindow) so it isn't suppressed as a popup
+ * after the fetch latency. Only metadata is selected — never profile_data — so
+ * the lookup stays cheap; the bytes are fetched on click. Self-hides when the
+ * source has no captures.
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useLogServerStatsRpc } from '@/composables/useRpc'
@@ -27,14 +24,13 @@ const props = withDefaults(defineProps<Props>(), {
   refreshIntervalMs: 30_000,
 })
 
-interface ProfileHistoryRow {
+interface ProfileRow {
   // Epoch milliseconds: the stats server returns captured_at as a TIMESTAMP,
   // which apache-arrow decodes to a number (ms since epoch), not a string.
   captured_at?: number
   source?: string
   type?: string
   format?: string
-  trigger?: string
 }
 
 interface QueryResponse {
@@ -49,17 +45,14 @@ function formatCaptured(capturedAt: number | undefined): string {
   return capturedAt == null ? '-' : new Date(capturedAt).toLocaleString()
 }
 
-// Match the source itself plus anything nested under it (a job → its tasks). The
-// '/' delimiter keeps '/task/1' from also matching '/task/10'. Only small
-// metadata columns are selected — never profile_data — so the list stays cheap.
 const { data, refresh } = useLogServerStatsRpc<QueryResponse>('Query', () => {
   const src = escape(props.source)
   return {
-    sql: `SELECT captured_at, source, type, format, trigger
+    sql: `SELECT captured_at, source, type, format
 FROM "iris.profile"
-WHERE source = '${src}' OR starts_with(source, '${src}/')
+WHERE source = '${src}'
 ORDER BY captured_at DESC
-LIMIT 10`,
+LIMIT 1`,
   }
 })
 
@@ -67,10 +60,11 @@ useAutoRefresh(refresh, props.refreshIntervalMs)
 onMounted(refresh)
 watch(() => props.source, refresh)
 
-const rows = computed<ProfileHistoryRow[]>(() => {
+const latest = computed<ProfileRow | null>(() => {
   const ipc = data.value?.arrowIpc
-  if (!ipc) return []
-  return decodeArrowIpc(ipc).rows as ProfileHistoryRow[]
+  if (!ipc) return null
+  const rows = decodeArrowIpc(ipc).rows as ProfileRow[]
+  return rows.length ? rows[0] : null
 })
 
 const busy = ref(false)
@@ -96,18 +90,12 @@ function defaultLabel(source: string): string {
   return source.replace(/^\//, '').replace(/\//g, '_')
 }
 
-// Short descriptor for the link text, e.g. "cpu speedscope". Speedscope rows get
-// an "open in viewer" affordance; others read as a download.
-function profileLabel(row: ProfileHistoryRow): string {
-  const parts = [row.type, row.format].filter(Boolean)
-  return parts.length ? parts.join(' ') : 'profile'
-}
-
-async function openProfile(row: ProfileHistoryRow) {
-  if (busy.value || row.captured_at == null || !row.source) return
+async function openLatest() {
+  const row = latest.value
+  if (busy.value || !row || row.captured_at == null || !row.source) return
   busy.value = true
   // Open the viewer synchronously within the click gesture so it isn't blocked
-  // as a popup after the fetch; non-speedscope rows download instead.
+  // as a popup after the fetch; non-speedscope captures download instead.
   const pending = isSpeedscope(row.format) ? openSpeedscopeWindow() : null
   try {
     // captured_at arrives as epoch ms; match the TIMESTAMP column via epoch_ms()
@@ -152,24 +140,16 @@ async function openProfile(row: ProfileHistoryRow) {
     busy.value = false
   }
 }
-
-defineExpose({ refresh })
 </script>
 
 <template>
-  <div v-if="rows.length > 0" class="text-sm">
-    <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Recent Profiles</h3>
-    <ul class="space-y-0.5">
-      <li v-for="row in rows" :key="`${row.source ?? ''}@${row.captured_at ?? ''}`">
-        <a
-          href="#"
-          class="text-accent hover:underline"
-          :class="{ 'pointer-events-none opacity-60': busy }"
-          @click.prevent="openProfile(row)"
-        >{{ profileLabel(row) }}<span aria-hidden="true">{{ isSpeedscope(row.format) ? ' ↗' : ' ↓' }}</span></a>
-        <span class="text-text-muted ml-2 text-xs font-mono">{{ formatCaptured(row.captured_at) }}</span>
-        <span v-if="row.trigger" class="text-text-muted ml-2 text-xs">· {{ row.trigger }}</span>
-      </li>
-    </ul>
+  <div v-if="latest" class="text-sm">
+    <a
+      href="#"
+      class="text-accent hover:underline"
+      :class="{ 'pointer-events-none opacity-60': busy }"
+      @click.prevent="openLatest"
+    >{{ isSpeedscope(latest.format) ? 'View latest profile' : 'Download latest profile' }}<span aria-hidden="true">{{ isSpeedscope(latest.format) ? ' ↗' : ' ↓' }}</span></a>
+    <span class="text-text-muted ml-2 text-xs font-mono">{{ [latest.type, latest.format].filter(Boolean).join(' ') }} · {{ formatCaptured(latest.captured_at) }}</span>
   </div>
 </template>
