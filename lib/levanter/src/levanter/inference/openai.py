@@ -111,6 +111,9 @@ class InferenceBatch(list):
     def num_seqs(self) -> int:
         return sum(req.n_generations for req in self)
 
+    def prompt_tokens(self) -> int:
+        return sum(len(req.prompt_tokens) for req in self)
+
     def total_tokens(self) -> int:
         return sum(len(req.prompt_tokens) + req.max_tokens for req in self)
 
@@ -120,10 +123,12 @@ def _request_fits_batch(
     request: InferenceRequest,
     *,
     max_seqs: int,
+    max_prompt_tokens_per_batch: int,
     max_tokens_per_batch: int,
 ) -> bool:
     return (
         batch.num_seqs() + request.n_generations <= max_seqs
+        and batch.prompt_tokens() + len(request.prompt_tokens) <= max_prompt_tokens_per_batch
         and batch.total_tokens() + len(request.prompt_tokens) + request.max_tokens <= max_tokens_per_batch
     )
 
@@ -133,6 +138,7 @@ def _merge_ready_batches(
     ready_batches: list[InferenceBatch],
     *,
     max_seqs: int,
+    max_prompt_tokens_per_batch: int,
     max_tokens_per_batch: int,
 ) -> tuple[InferenceBatch, list[InferenceBatch]]:
     """Merge already-queued inference batches while preserving request order."""
@@ -147,6 +153,7 @@ def _merge_ready_batches(
                 merged,
                 request,
                 max_seqs=max_seqs,
+                max_prompt_tokens_per_batch=max_prompt_tokens_per_batch,
                 max_tokens_per_batch=max_tokens_per_batch,
             ):
                 merged.append(request)
@@ -174,6 +181,13 @@ def _max_tokens_per_batch(engine: InferenceEngine) -> int:
     if max_pages is None:
         raise RuntimeError("Inference engine max_pages must be resolved before serving requests.")
     return engine.config.page_size * max_pages
+
+
+def _max_prompt_tokens_per_batch(engine: InferenceEngine) -> int:
+    max_prefill_size = engine.config.max_prefill_size
+    if max_prefill_size is None:
+        raise RuntimeError("Inference engine max_prefill_size must be resolved before serving requests.")
+    return max_prefill_size
 
 
 # A callback which replaces the current model.
@@ -319,8 +333,14 @@ class InferenceContext:
 
             batch = InferenceBatch()
             max_tokens_per_seq = self.engine.config.max_seq_len
+            max_prompt_tokens_per_batch = _max_prompt_tokens_per_batch(self.engine)
             max_tokens_per_batch = _max_tokens_per_batch(self.engine)
-            logger.info(f"Max tokens per seq: {max_tokens_per_seq}, per batch: {max_tokens_per_batch}")
+            logger.info(
+                "Max tokens per seq: %d, prompt tokens per batch: %d, total tokens per batch: %d",
+                max_tokens_per_seq,
+                max_prompt_tokens_per_batch,
+                max_tokens_per_batch,
+            )
 
             for r in requests:
                 if len(r.prompt_tokens) > max_tokens_per_seq:
@@ -343,9 +363,21 @@ class InferenceContext:
                     r.future.get_loop().call_soon_threadsafe(r.future.set_exception, ValueError(error_msg))
                     continue
 
-                if (
-                    batch.num_seqs() + r.n_generations <= self.engine.config.max_seqs
-                    and batch.total_tokens() + (len(r.prompt_tokens) + r.max_tokens) <= max_tokens_per_batch
+                if len(r.prompt_tokens) > max_prompt_tokens_per_batch:
+                    error_msg = (
+                        f"Request {r.request_id} prompt has {len(r.prompt_tokens)} tokens, which exceeds "
+                        f"the maximum prefill capacity {max_prompt_tokens_per_batch}"
+                    )
+                    logger.error(error_msg)
+                    r.future.get_loop().call_soon_threadsafe(r.future.set_exception, ValueError(error_msg))
+                    continue
+
+                if _request_fits_batch(
+                    batch,
+                    r,
+                    max_seqs=self.engine.config.max_seqs,
+                    max_prompt_tokens_per_batch=max_prompt_tokens_per_batch,
+                    max_tokens_per_batch=max_tokens_per_batch,
                 ):
                     batch.append(r)
                 else:
@@ -371,6 +403,7 @@ class InferenceContext:
                         batch,
                         ready_batches,
                         max_seqs=self.engine.config.max_seqs,
+                        max_prompt_tokens_per_batch=_max_prompt_tokens_per_batch(self.engine),
                         max_tokens_per_batch=_max_tokens_per_batch(self.engine),
                     )
                     for leftover in leftovers:
