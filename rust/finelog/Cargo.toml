@@ -56,6 +56,15 @@ url = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 regex = "1"
 
+# Process allocator (see the `#[global_allocator]` in `main.rs`). The default
+# glibc malloc retains freed query-buffer pages in its per-CPU arenas instead of
+# returning them to the OS, so RSS pins at the high-water mark of the largest
+# query (measured ~3.5x higher, drifting, vs jemalloc for repeated heavy scans).
+# jemalloc's background thread purges dirty pages on a decay schedule, so RSS
+# tracks real usage. Unix-only; the deploy target is Linux.
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = { version = "0.6", features = ["background_threads"] }
+
 [build-dependencies]
 connectrpc-build = "0.6"
 # Vendors a pinned protoc so the build needs no system protoc. connectrpc-build

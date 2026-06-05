@@ -15,6 +15,18 @@ use finelog::server::diagnostics::spawn_pool_diagnostics;
 use finelog::store::Store;
 use tokio::sync::Notify;
 
+/// Bound process RSS. DataFusion frees its query buffers promptly (the pool
+/// returns to ~0 between queries), but the default glibc allocator retains the
+/// freed pages in its per-CPU arenas rather than returning them to the OS, so
+/// RSS pins at the high-water mark of the largest query until restart (measured
+/// ~3.5x higher and slowly drifting vs jemalloc over repeated heavy scans).
+/// jemalloc's background thread purges dirty pages on a decay schedule, so RSS
+/// follows real usage. The `background_threads` feature turns that thread on by
+/// default. Unix-only; the binary ships on Linux.
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 #[derive(Parser, Debug)]
 #[command(name = "finelog-server")]
 struct Args {
