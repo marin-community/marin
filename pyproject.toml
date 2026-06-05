@@ -98,42 +98,6 @@ conflicts = [
     ],
 ]
 
-# Static tpu-inference metadata mirrors marin-community/tpu-inference@2bb5e4af
-# requirements.txt. uv treats this block as the package metadata, so keep the
-# upstream runtime requirements here and relax only the lines that make Marin's
-# shared TPU-vLLM environment unsatisfiable.
-[[tool.uv.dependency-metadata]]
-name = "tpu-inference"
-version = "0.0.0"
-requires-dist = [
-    "tpu-info==0.7.1",
-    "yapf==0.43.0",
-    "pytest",
-    "pytest-mock",
-    "absl-py",
-    "numpy",
-    "google-cloud-storage",
-    "jax==0.9.2",
-    "jaxlib==0.9.2",
-    "libtpu==0.0.39",
-    "jaxtyping",
-    "flax==0.12.4",
-    "torchax==0.0.11",
-    "qwix==0.1.2",
-    # tpu-inference pins 0.25.0, but Marin's TPU-vLLM stack uses torch 2.11.0
-    # with torchvision 0.26.x.
-    "torchvision>=0.26.0,<0.27",
-    "pathwaysutils",
-    "parameterized",
-    "numba==0.62.1",
-    "runai-model-streamer[s3,gcs]==0.15.4",
-    "gcsfs==2026.1.0",
-    "hypothesis==6.151.9",
-    "sortedcontainers==2.4.0",
-    # tpu-inference pins 5.5.3, but Marin/Levanter and vLLM exclude transformers 5.x.
-    "transformers>=4.57.1,<5.0",
-]
-
 [tool.uv.workspace]
 members = [
     "lib/iris",
@@ -159,7 +123,7 @@ marin-zephyr = { workspace = true }
 # harbor lives in marin-community/harbor as a pinned git dependency.
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
 vllm = { git = "https://github.com/marin-community/vllm.git", rev = "ac691fe16a94a7d2ae11c6d4eb752f2bef1f07d2" }
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "2bb5e4af833fcda1bf971e09cd99eb14f95e58c6" }
+tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "260d811b054425f3a82ca140195400e1ba547971" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
