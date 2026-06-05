@@ -134,9 +134,10 @@ impl Namespace {
     /// namespace) the maintenance task takes the WRITE side of before any
     /// rename/unlink. `remote_log_dir` configures the offload target (empty
     /// disables sync). `storage_policy` is the per-namespace retention override.
-    /// The spawned per-namespace maintenance task and the boot remote reconcile
-    /// are NOT started here — the caller runs [`boot_reconcile`] (async) then
-    /// [`spawn_maintenance`] once the store is fully built.
+    /// The per-namespace maintenance task and the boot remote reconcile are NOT
+    /// started here — the caller calls [`spawn_maintenance`] once the store is
+    /// fully built, and the task runs [`boot_reconcile`] in the background as its
+    /// first step (or the caller reconciles synchronously for the runtime path).
     #[allow(clippy::too_many_arguments)]
     pub fn open(
         name: &str,
@@ -962,11 +963,20 @@ impl Namespace {
 
     /// Spawn the per-namespace maintenance task.
     /// No-op in memory mode. Called once by the store after construction.
-    pub fn spawn_maintenance(self: &Arc<Self>) {
+    ///
+    /// When `reconcile_first` is set, the task runs the boot remote reconcile
+    /// (adopt unknown remote parquet, redundancy-drop covered segments) as its
+    /// FIRST step, in the background, before the periodic loop — so a large
+    /// first-time reconcile never blocks the listener bind / `/health`. The boot
+    /// path (rehydrated namespaces, already backed by local segments → next_seq
+    /// recovered locally) passes `true`. The runtime-register path reconciles
+    /// synchronously beforehand (cold-boot next_seq safety) and passes `false` so
+    /// the task does not reconcile twice.
+    pub fn spawn_maintenance(self: &Arc<Self>, reconcile_first: bool) {
         if self.data_dir.is_none() {
             return;
         }
-        let handle = spawn_maintenance_task(Arc::clone(self));
+        let handle = spawn_maintenance_task(Arc::clone(self), reconcile_first);
         self.task_handles.lock().unwrap().push(handle);
     }
 
@@ -1223,14 +1233,31 @@ fn spawn_flush_task(ns: Arc<Namespace>) -> tokio::task::JoinHandle<()> {
 
 /// Spawn the per-namespace maintenance task.
 ///
-/// Every `check_interval` it runs one `run_maintenance` cycle (compaction drain,
-/// then sync, then evict). The cycle's heavy work is dispatched onto
+/// When `reconcile_first` is set, the task FIRST runs the boot remote reconcile
+/// (adopt unknown remote parquet, redundancy-drop covered segments), then enters
+/// the periodic loop. Running it here — on the spawned task rather than before
+/// the listener binds — keeps the reconcile's object_store footer reads off the
+/// startup / `/health` path, while still sequencing it before the first
+/// maintenance tick so the tick can never race adoption. A stop signalled during
+/// the reconcile is honoured (the latch is checked before it runs, and the
+/// in-flight reconcile future is cancelled when the task is aborted on shutdown).
+///
+/// Every `check_interval` the loop runs one `run_maintenance` cycle (compaction
+/// drain, then sync, then evict). The cycle's heavy work is dispatched onto
 /// `spawn_blocking` inside `run_maintenance`, so the reactor is never stalled. On
 /// the stop notify the task exits immediately WITHOUT a final maintenance cycle;
 /// the final drain-to-disk and reconcile on shutdown are handled by
 /// [`Namespace::shutdown`].
-fn spawn_maintenance_task(ns: Arc<Namespace>) -> tokio::task::JoinHandle<()> {
+fn spawn_maintenance_task(
+    ns: Arc<Namespace>,
+    reconcile_first: bool,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        if reconcile_first && ns.has_remote() && !ns.stopped.load(Ordering::SeqCst) {
+            if let Err(e) = ns.boot_reconcile().await {
+                tracing::warn!(namespace = %ns.name, error = %e, "boot reconcile failed");
+            }
+        }
         let interval = ns.compaction_config.check_interval;
         loop {
             // Stop latch: a stop signalled while a maintenance cycle was running
@@ -1709,6 +1736,69 @@ mod tests {
         assert_eq!(segs[0].level, 1);
         // Remote file is NOT deleted by adoption.
         assert_eq!(remote_files(&remote, "iris.worker").len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn spawn_maintenance_reconciles_remote_in_background() {
+        // The boot path defers remote reconcile onto the maintenance task
+        // (reconcile_first=true) so it never blocks startup. Prove the task
+        // actually performs the adoption: set up a remote-only segment (catalog +
+        // local parquet wiped), `spawn_maintenance(true)` WITHOUT an explicit
+        // boot_reconcile await, and assert the background task adopts it.
+        let dir = tempdir();
+        let remote = dir.join("remote");
+        let ns_dir = dir.join("iris.worker");
+        {
+            let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+            let ns = open_ns_remote(
+                "iris.worker",
+                worker_schema(),
+                Some(ns_dir.clone()),
+                catalog,
+                remote.to_str().unwrap(),
+                StoragePolicy::default(),
+            );
+            write_one(&ns).await;
+            ns.run_maintenance(true).await.unwrap();
+            assert_eq!(remote_files(&remote, "iris.worker").len(), 1);
+        }
+        std::fs::remove_file(dir.join(crate::store::catalog::CATALOG_DB_FILENAME)).ok();
+        std::fs::remove_dir_all(&ns_dir).ok();
+
+        let catalog2 = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns2 = open_ns_remote(
+            "iris.worker",
+            worker_schema(),
+            Some(ns_dir),
+            catalog2,
+            remote.to_str().unwrap(),
+            StoragePolicy::default(),
+        );
+        // No explicit boot_reconcile: the background maintenance task must run it.
+        assert!(
+            ns2.catalog.list_segments("iris.worker").unwrap().is_empty(),
+            "fresh catalog starts with no segment rows",
+        );
+        ns2.spawn_maintenance(true);
+        // Poll (bounded) for the background reconcile to adopt the remote row.
+        // The first periodic tick is check_interval (30s) away, so only the
+        // reconcile can mutate the catalog within this window.
+        let mut segs = Vec::new();
+        for _ in 0..200 {
+            segs = ns2.catalog.list_segments("iris.worker").unwrap();
+            if !segs.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            segs.len(),
+            1,
+            "background reconcile adopted the remote segment"
+        );
+        assert_eq!(segs[0].location, SegmentLocation::Remote);
+        ns2.shutdown(Duration::from_secs(2)).await;
         std::fs::remove_dir_all(&dir).ok();
     }
 }

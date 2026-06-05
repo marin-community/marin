@@ -108,7 +108,8 @@ impl Store {
         // `namespaces` + `segments` rows BEFORE `rehydrate_from_catalog` reads
         // them back to build the engines. No-op in in-memory mode + on the done
         // sentinel (subsequent boots). REMOTE adoption is the engines'
-        // `boot_reconcile` (run by `bootstrap_maintenance` before bind).
+        // `boot_reconcile`, run in the background by each namespace's
+        // maintenance task (spawned by `bootstrap_maintenance`), not before bind.
         crate::store::adopt::ensure_catalog_adopted(data_dir.as_deref(), &catalog)?;
         let store = Store {
             data_dir,
@@ -122,30 +123,31 @@ impl Store {
         Ok(store)
     }
 
-    /// Run the boot remote reconcile for every namespace, then start each
-    /// namespace's maintenance task. Called once after `new`, before serving.
+    /// Start each namespace's maintenance task. Called once after `new`, before
+    /// serving.
     ///
-    /// Reconcile is async (object_store footer reads); the maintenance task must
-    /// not start until reconcile has populated the catalog so the first tick
-    /// doesn't race adoption.
-    pub async fn bootstrap_maintenance(&self) -> Result<(), StatsError> {
+    /// Each task runs its boot remote reconcile (adopt unknown remote parquet,
+    /// redundancy-drop covered segments) in the BACKGROUND as its first step,
+    /// before the periodic loop — so the reconcile's object_store footer reads
+    /// never block the listener bind / `/health`, and the first maintenance tick
+    /// still can't race adoption (it is sequenced after reconcile within the
+    /// task). Rehydrated namespaces are backed by local segments, so `next_seq`
+    /// is already recovered locally; deferring the remote reconcile only delays
+    /// archived-row catalog visibility + redundancy cleanup, never correct
+    /// serving of live (local) rows.
+    pub fn bootstrap_maintenance(&self) {
         let engines: Vec<Arc<Namespace>> = self.engines.lock().unwrap().values().cloned().collect();
         for engine in &engines {
-            if engine.has_remote() {
-                engine.boot_reconcile().await?;
-            }
+            engine.spawn_maintenance(true);
         }
-        for engine in &engines {
-            engine.spawn_maintenance();
-        }
-        Ok(())
     }
 
     fn rehydrate_from_catalog(&self) -> Result<(), StatsError> {
         for (name, schema) in self.catalog.list_all()? {
             let policy = self.catalog.get_policy(&name)?;
             // Do NOT spawn the maintenance task here — `bootstrap_maintenance`
-            // runs boot reconcile first, then spawns for the rehydrated set.
+            // spawns it for the whole rehydrated set (the task then runs its boot
+            // reconcile in the background as its first step).
             self.build_engine(&name, schema.clone(), policy.clone(), false)?;
             self.catalog.insert_live(RegisteredNamespace {
                 name,
@@ -172,9 +174,10 @@ impl Store {
     /// any prior engine. The engine recovers next_seq + adopts local segments.
     ///
     /// `spawn_maint` starts the per-namespace maintenance task immediately —
-    /// `true` for a runtime `register_table` (no boot reconcile needed for a
-    /// fresh dir), `false` during boot rehydrate (where `bootstrap_maintenance`
-    /// reconciles first, then spawns).
+    /// `true` for a runtime `register_table` (which reconciles synchronously
+    /// first for cold-boot next_seq safety, then spawns a task that skips its own
+    /// reconcile), `false` during boot rehydrate (where `bootstrap_maintenance`
+    /// spawns the task, which reconciles in the background as its first step).
     fn build_engine(
         &self,
         name: &str,
@@ -220,7 +223,9 @@ impl Store {
                 tokio::runtime::Handle::current()
                     .block_on(async move { engine_for_reconcile.boot_reconcile().await })?;
             }
-            engine.spawn_maintenance();
+            // Reconcile already ran synchronously above (cold-boot next_seq
+            // safety), so the task must NOT reconcile again — pass false.
+            engine.spawn_maintenance(false);
         }
         self.engines
             .lock()
@@ -255,8 +260,8 @@ impl Store {
             StoragePolicy::default(),
             |existing| Ok(existing.clone()),
         )?;
-        // No maintenance spawn here — `bootstrap_maintenance` handles the log
-        // namespace alongside the rehydrated set (boot reconcile first).
+        // No maintenance spawn here — `bootstrap_maintenance` spawns the task for
+        // the log namespace alongside the rehydrated set (background reconcile).
         self.build_engine(LOG_NAMESPACE_NAME, stored, StoragePolicy::default(), false)?;
         Ok(())
     }

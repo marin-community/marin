@@ -60,14 +60,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .map_err(|e| format!("failed to open store: {e}"))?,
     );
-    // Boot remote reconcile (adopt unknown remote parquet, redundancy-drop
-    // covered segments) then start each namespace's maintenance task. Done before
-    // binding so a wiped-catalog reboot has its REMOTE rows visible to the first
-    // request.
-    store
-        .bootstrap_maintenance()
-        .await
-        .map_err(|e| format!("failed to bootstrap maintenance: {e}"))?;
+    // Start each namespace's maintenance task. Each task runs its boot remote
+    // reconcile (adopt unknown remote parquet, redundancy-drop covered segments)
+    // in the BACKGROUND as its first step, so a large first-time reconcile (e.g.
+    // a namespace just self-healed into the catalog, whose thousands of archived
+    // segments have never been footer-scanned) never blocks the listener bind
+    // below. The server serves — and /health is green — while archived rows are
+    // still being reconciled into the catalog.
+    store.bootstrap_maintenance();
     let app = build_app(Arc::clone(&store), args.debug_admin);
 
     // Periodic pool/RSS diagnostics task; cancelled on shutdown via a latched

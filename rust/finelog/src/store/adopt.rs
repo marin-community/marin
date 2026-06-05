@@ -29,8 +29,9 @@
 //! ## Remote adoption
 //!
 //! REMOTE (GCS) segment adoption — the wiped-local-PV-but-bucket-survives
-//! recovery — is performed by the per-namespace engine's `boot_reconcile`
-//! (`bootstrap_maintenance` runs it before bind), which reuses the SAME
+//! recovery — is performed by the per-namespace engine's `boot_reconcile`, run
+//! in the background by the maintenance task (spawned by `bootstrap_maintenance`)
+//! so its footer reads never block startup. It reuses the SAME
 //! `reconcile_remote_segments` as [`adopt_remote_segments`] here. The disk scan
 //! therefore only does the LOCAL pass; the engine's boot reconcile handles the
 //! bucket once the engine exists, avoiding a double pass.
@@ -420,7 +421,8 @@ fn assert_namespaced_layout(data_dir: &Path) -> Result<(), StatsError> {
 ///
 /// Does NOT touch the live registry — the caller's `rehydrate_from_catalog`
 /// reads these persisted rows back and builds the engines. The remote pass is
-/// the engine's `boot_reconcile` (run by `bootstrap_maintenance`), not here.
+/// the engine's `boot_reconcile`, run in the background by the maintenance task,
+/// not here.
 pub fn adopt_store_from_disk(data_dir: &Path, catalog: &Catalog) -> Result<(), StatsError> {
     assert_namespaced_layout(data_dir)?;
     for (namespace, ns_dir) in enumerate_namespace_dirs(data_dir)? {
