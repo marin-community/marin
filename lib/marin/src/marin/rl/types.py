@@ -18,6 +18,7 @@ import haliax.haxtyping as ht
 import jax
 import numpy as np
 from haliax import NamedArray
+from marin.inference.types import PolicyIdentity, TokenizerIdentity
 from marin.rl.decoding import RolloutDecodingTrace
 
 
@@ -43,6 +44,12 @@ class RolloutMetadata:
 
     weight_step: int = -1
     """The step at which the model weights were used to generate this rollout."""
+
+    tokenizer: TokenizerIdentity | None = None
+    """Tokenizer identity used to render and replay the rollout tokens."""
+
+    policy: PolicyIdentity | None = None
+    """Policy/checkpoint identity used to generate the rollout."""
 
 
 class Rollout(eqx.Module):

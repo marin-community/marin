@@ -561,6 +561,8 @@ class RolloutWorker:
             worker_id=f"{socket.gethostname()}_{os.getpid()}",
             timestamp=time.time(),
             weight_step=self._current_weight_step,
+            tokenizer=self._policy_ctx.tokenizer_identity(),
+            policy=self._current_policy_identity(),
         )
 
         # Attach metadata to each rollout in each group
