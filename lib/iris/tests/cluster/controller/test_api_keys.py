@@ -26,7 +26,7 @@ from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjecti
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.rpc import config_pb2, job_pb2
-from iris.rpc.auth import VerifiedIdentity, _verified_identity, hash_token
+from iris.rpc.auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Timestamp
 
 from tests.cluster.conftest import fake_log_client_from_service
@@ -452,7 +452,6 @@ def test_null_auth_rpcs_work_with_anonymous_token(db):
     create_api_key(
         db,
         key_id=f"iris_k_test_{secrets.token_hex(4)}",
-        key_hash=hash_token(anonymous_token),
         key_prefix=anonymous_token[:8],
         user_id="anonymous",
         name="test-null-auth",

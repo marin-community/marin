@@ -27,7 +27,6 @@ from iris.rpc.auth import (
     StaticTokenVerifier,
     TokenVerifier,
     VerifiedIdentity,
-    hash_token,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,19 +43,17 @@ DEFAULT_JWT_TTL_SECONDS = 86400 * 30  # 30 days
 def create_api_key(
     db: ControllerDB,
     key_id: str,
-    key_hash: str | None,
     key_prefix: str,
     user_id: str,
     name: str,
     now: Timestamp,
     expires_at: Timestamp | None = None,
 ) -> None:
-    """Insert a new API key row. ``key_hash`` is ``None`` for JWT-backed keys, which carry no stored hash."""
+    """Insert a new API key row."""
     with db.transaction() as tx:
         tx.execute(
             insert(auth_api_keys_table).values(
                 key_id=key_id,
-                key_hash=key_hash,
                 key_prefix=key_prefix,
                 user_id=user_id,
                 name=name,
@@ -380,8 +377,8 @@ def _preload_static_tokens(
 ) -> None:
     """Insert static config tokens into the api_keys table for audit.
 
-    The raw token hashes are stored so that the Login RPC can verify
-    static tokens during the login exchange flow.
+    Verification of static tokens happens in-memory via ``StaticTokenVerifier``;
+    these rows exist only so configured tokens surface in ``iris key list``.
     """
     tokens = dict(static_config.tokens)
     if not tokens:
@@ -397,7 +394,6 @@ def _preload_static_tokens(
         create_api_key(
             db,
             key_id=key_id,
-            key_hash=hash_token(raw_token),
             key_prefix=raw_token[:8],
             user_id=username,
             name=f"static-config-{username}",
@@ -418,7 +414,6 @@ def _create_worker_jwt(db: ControllerDB, jwt_mgr: JwtTokenManager, now: Timestam
     create_api_key(
         db,
         key_id=key_id,
-        key_hash=None,
         key_prefix="jwt",
         user_id=WORKER_USER,
         name="worker-token",

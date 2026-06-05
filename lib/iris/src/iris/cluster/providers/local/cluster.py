@@ -47,7 +47,6 @@ from iris.cluster.token_store import store_token
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
-from iris.rpc.auth import hash_token
 
 
 def create_local_autoscaler(
@@ -235,7 +234,6 @@ class LocalCluster:
             create_api_key(
                 db,
                 key_id=key_id,
-                key_hash=None,
                 key_prefix="jwt",
                 user_id="local-admin",
                 name="local-auto-login",
@@ -248,7 +246,6 @@ class LocalCluster:
             create_api_key(
                 db,
                 key_id=key_id,
-                key_hash=hash_token(jwt_token),
                 key_prefix=jwt_token[:8],
                 user_id="local-admin",
                 name="local-auto-login",
