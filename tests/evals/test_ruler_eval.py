@@ -5,8 +5,9 @@
 
 import pytest
 from fray.cluster import ResourceConfig
+from marin.execution.types import ExecutorStep
 
-from experiments.evals.evals import _ruler_context_lengths_for_model, default_ruler_eval
+from experiments.evals.evals import _ruler_context_lengths_for_model, default_ruler_eval, ruler_effective_context_length
 from experiments.evals.task_configs import RULER_MAX_GENERATION_TOKENS
 
 
@@ -21,6 +22,13 @@ def test_ruler_context_lengths_reject_too_short_model() -> None:
     """RULER should fail fast when no benchmark length fits."""
     with pytest.raises(ValueError):
         _ruler_context_lengths_for_model((4096, 8192), model_max_length=2048)
+
+
+def test_ruler_effective_context_length_respects_sliding_window() -> None:
+    """Sliding-window models should use the attention window for RULER."""
+    assert ruler_effective_context_length(max_seq_len=8192) == 8192
+    assert ruler_effective_context_length(max_seq_len=8192, sliding_window=4096) == 4096
+    assert ruler_effective_context_length(max_seq_len=4096, sliding_window=8192) == 4096
 
 
 def test_default_ruler_eval_sets_metadata_and_context_kwargs() -> None:
@@ -108,6 +116,31 @@ def test_default_ruler_eval_rejects_conflicting_tokenizers() -> None:
             resource_config=ResourceConfig.with_cpu(cpu=1),
             engine_kwargs={"tokenizer": "existing-tokenizer"},
             tokenizer="different-tokenizer",
+            discover_latest_checkpoint=False,
+        )
+
+
+def test_default_ruler_eval_rejects_native_grug_step() -> None:
+    """Raw Grug train steps are not vLLM-loadable RULER inputs."""
+
+    class GrugLaunchConfig:
+        pass
+
+    GrugLaunchConfig.__module__ = "experiments.grug.moe.launch"
+    grug_step = ExecutorStep(name="grug/test", fn=None, config=GrugLaunchConfig())
+
+    with pytest.raises(ValueError):
+        default_ruler_eval(
+            grug_step,
+            model_max_length=4096,
+            resource_config=ResourceConfig.with_cpu(cpu=1),
+            discover_latest_checkpoint=False,
+        )
+    with pytest.raises(ValueError):
+        default_ruler_eval(
+            grug_step.as_input_name(),
+            model_max_length=4096,
+            resource_config=ResourceConfig.with_cpu(cpu=1),
             discover_latest_checkpoint=False,
         )
 

@@ -410,6 +410,33 @@ def _ruler_context_lengths_for_model(
     return selected_lengths
 
 
+def ruler_effective_context_length(max_seq_len: int, sliding_window: int | None = None) -> int:
+    """Return the context window RULER should target for a model config."""
+    if max_seq_len <= 0:
+        raise ValueError(f"max_seq_len must be positive, got {max_seq_len}.")
+    if sliding_window is None:
+        return max_seq_len
+    if sliding_window <= 0:
+        raise ValueError(f"sliding_window must be positive, got {sliding_window}.")
+    return min(max_seq_len, sliding_window)
+
+
+def _reject_native_grug_step_for_ruler(step: ExecutorStep | InputName | str) -> None:
+    """Reject raw Grug training steps before building a vLLM RULER eval."""
+    if isinstance(step, InputName):
+        step = step.step
+    if not isinstance(step, ExecutorStep):
+        return
+    config_module = type(step.config).__module__
+    if not config_module.startswith("experiments.grug."):
+        return
+    raise ValueError(
+        "default_ruler_eval is vLLM-backed and requires an HF/vLLM-compatible checkpoint path. "
+        "Raw Grug ExecutorSteps need a native JAX generation backend before they can run RULER; "
+        "pass an exported HF checkpoint path instead."
+    )
+
+
 def _ruler_engine_kwargs(
     engine_kwargs: dict | None,
     required_model_length: int,
@@ -491,7 +518,14 @@ def default_ruler_eval(
     wandb_tags: list[str] | None = None,
     env_vars: dict[str, str] | None = None,
 ) -> ExecutorStep:
-    """Create a vLLM-backed lm-eval RULER evaluation step."""
+    """Create a vLLM-backed lm-eval RULER evaluation step.
+
+    ``model_max_length`` is the effective usable context window. For sliding-window
+    models, pass ``ruler_effective_context_length(max_seq_len, sliding_window)``.
+    Raw Grug training steps are not vLLM-loadable; pass an exported HF checkpoint
+    path once one exists.
+    """
+    _reject_native_grug_step_for_ruler(step)
     extra_token_buffer = chat_template_token_buffer if apply_chat_template else 0
     selected_lengths = _ruler_context_lengths_for_model(context_lengths, model_max_length, extra_token_buffer)
     required_model_length = max(selected_lengths) + extra_token_buffer
