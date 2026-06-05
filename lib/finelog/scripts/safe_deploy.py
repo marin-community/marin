@@ -88,12 +88,19 @@ def _require_gcp(cfg: FinelogConfig) -> None:
         raise click.ClickException("safe_deploy only supports GCP deployments.")
 
 
-def _bootstrap_with_image(cfg: FinelogConfig, image: str) -> None:
-    """Re-render and re-run the bootstrap with an explicit image (no pinning)."""
+def _bootstrap_with_image(cfg: FinelogConfig, image: str) -> bool:
+    """Re-render and re-run the bootstrap with an explicit image (no pinning).
+
+    Returns whether the remote bootstrap exited 0. The bootstrap script polls
+    ``/health`` itself and exits non-zero when the container never becomes
+    healthy (crash-loop or timeout), so a ``False`` return means the image
+    failed to come up. The caller decides what that means: for the new image it
+    triggers the auto-rollback; for the rollback target it is itself the
+    failure.
+    """
     bootstrap = render_bootstrap(image=image, port=cfg.port, remote_log_dir=cfg.remote_log_dir)
     result = subprocess.run(_ssh_args(cfg, "bash -s"), input=bootstrap, text=True)
-    if result.returncode != 0:
-        raise click.ClickException(f"Bootstrap failed for image {image}; see SSH output above")
+    return result.returncode == 0
 
 
 def _verify_health(cfg: FinelogConfig) -> bool:
@@ -173,10 +180,16 @@ def rollout_cmd(name: str, auto_rollback: bool, force: bool, build: bool, fast: 
     click.echo(f"state recorded at {state_path}")
 
     click.echo("re-running bootstrap with new image...")
-    _bootstrap_with_image(cfg, new_digest)
+    # The remote bootstrap polls /health itself and exits non-zero on a
+    # crash-loop or timeout. Treat that exactly like a failed post-bootstrap
+    # health check — both flow into the auto-rollback path below. (Previously a
+    # non-zero bootstrap raised here, short-circuiting the rollback entirely.)
+    healthy = _bootstrap_with_image(cfg, new_digest)
+    if healthy:
+        click.echo("waiting for /health...")
+        healthy = _verify_health(cfg)
 
-    click.echo("waiting for /health...")
-    if _verify_health(cfg):
+    if healthy:
         _write_state(cfg, current_digest=new_digest, rollout_succeeded_at=_now())
         click.echo(f"OK — {cfg.name} healthy on {new_digest}")
         if old_digest:
@@ -190,8 +203,7 @@ def rollout_cmd(name: str, auto_rollback: bool, force: bool, build: bool, fast: 
         )
 
     click.echo(f"auto-rolling back to {old_digest}...", err=True)
-    _bootstrap_with_image(cfg, old_digest)
-    if not _verify_health(cfg):
+    if not _bootstrap_with_image(cfg, old_digest) or not _verify_health(cfg):
         raise click.ClickException(f"Rollback to {old_digest} ALSO failed — manual intervention required.")
     _write_state(
         cfg,
@@ -235,8 +247,7 @@ def rollback_cmd(name: str, to_digest: str | None) -> None:
             click.echo("rollback target matches running digest; nothing to do.")
             return
 
-    _bootstrap_with_image(cfg, to_digest)
-    if not _verify_health(cfg):
+    if not _bootstrap_with_image(cfg, to_digest) or not _verify_health(cfg):
         raise click.ClickException(f"Rollback to {to_digest} did not become healthy.")
     _write_state(
         cfg,
