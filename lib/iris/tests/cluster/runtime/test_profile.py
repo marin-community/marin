@@ -17,9 +17,12 @@ from dataclasses import dataclass, field
 import pytest
 from iris.cluster.runtime.profile import (
     ExecResult,
+    IrisProfile,
+    ProfileTrigger,
     _run_memray_profile,
     build_memray_attach_cmd,
     build_memray_transform_cmd,
+    build_profile_row,
     build_pyspy_cmd,
     capture_cpu,
     capture_memory_attach,
@@ -316,3 +319,41 @@ def test_capture_memory_table_returns_transform_stdout():
     # Both scratch paths are reserved up front and cleaned up, even though the
     # table reporter writes to stdout and never uses the .txt output file.
     assert dispatch.removed == ["/tmp/fake-1.bin", "/tmp/fake-2.txt"]
+
+
+# ---------------------------------------------------------------------------
+# IrisProfile schema: dashboard list queries prune on source and never need to
+# read the profile_data blob for sizes. Pinning these two properties is what
+# keeps the profile-history panel from collapsing back into a full scan.
+# ---------------------------------------------------------------------------
+
+
+def test_iris_profile_clusters_on_source():
+    """``WHERE source = …`` is the dashboard hot path; segments must cluster by source."""
+    assert IrisProfile.key_column == "source"
+
+
+@pytest.mark.parametrize(
+    "profile_type",
+    [
+        job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.SPEEDSCOPE)),
+        job_pb2.ProfileType(memory=job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.FLAMEGRAPH)),
+        job_pb2.ProfileType(threads=job_pb2.ThreadsProfile()),
+    ],
+)
+def test_build_profile_row_records_size_bytes_so_list_query_skips_blob(profile_type):
+    """``size_bytes`` is the column ``ProfileHistory.vue`` selects in place of
+    ``length(profile_data)``; it must equal the captured payload length for every
+    profiler branch so the list never has to materialize the blob column."""
+    payload = b"x" * 1234
+    row = build_profile_row(
+        source="/user/job/abc/task/0",
+        attempt_id=1,
+        vm_id="worker-1",
+        duration_seconds=5,
+        profile_type=profile_type,
+        profile_data=payload,
+        trigger=ProfileTrigger.ON_DEMAND,
+    )
+    assert row.size_bytes == len(payload)
+    assert row.size_bytes == len(row.profile_data)

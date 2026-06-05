@@ -41,7 +41,7 @@ function escape(value: string): string {
 }
 
 const { data, refresh } = useLogServerStatsRpc<QueryResponse>('Query', () => ({
-  sql: `SELECT captured_at, type, attempt_id, vm_id, duration_seconds, format, trigger, length(profile_data) AS size_bytes
+  sql: `SELECT captured_at, type, attempt_id, vm_id, duration_seconds, format, trigger, size_bytes
 FROM "iris.profile"
 WHERE source = '${escape(props.source)}'
 ORDER BY captured_at DESC

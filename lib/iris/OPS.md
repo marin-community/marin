@@ -163,7 +163,7 @@ Namespaces:
 
 - `iris.worker` — per-tick host utilization (cpu, mem, disk, running task count, net bps), keyed by `ts`.
 - `iris.task` — per-attempt task resource snapshots, keyed by `ts`.
-- `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `captured_at`. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — periodic CPU captures are py-spy **speedscope** JSON. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`).
+- `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `source` so the dashboard's per-source list query prunes via parquet row-group min/max. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — periodic CPU captures are py-spy **speedscope** JSON. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`). `size_bytes` records the blob length at capture time so lists never have to read the blob column.
 
 Retention is finelog segment-based. Target for `iris.profile` is 7 days.
 

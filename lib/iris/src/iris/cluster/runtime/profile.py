@@ -64,9 +64,16 @@ class ProfileTrigger(StrEnum):
 
 @dataclass
 class IrisProfile:
-    """One row per profile capture. Written by worker / k8s provider / controller; read by dashboard."""
+    """One row per profile capture. Written by worker / k8s provider / controller; read by dashboard.
 
-    key_column: ClassVar[str] = "captured_at"
+    Clustered by ``source`` so dashboard list queries (``WHERE source = '<task or worker>'
+    ORDER BY captured_at DESC LIMIT 50``) prune to the few segments holding that source via
+    parquet row-group min/max. ``seq`` is monotonic with capture time within a writer, so the
+    ``ORDER BY captured_at DESC`` still lands on recent rows. ``size_bytes`` is recorded at
+    capture time so the list query never has to touch the large ``profile_data`` blob column.
+    """
+
+    key_column: ClassVar[str] = "source"
 
     source: str
     attempt_id: int | None
@@ -76,6 +83,7 @@ class IrisProfile:
     type: str
     format: str
     trigger: str
+    size_bytes: int
     rate_hz: int | None = None
     native: bool | None = None
     leaks: bool | None = None
@@ -526,6 +534,7 @@ def build_profile_row(
     / ``vm_id``), the captured bytes, and the trigger.
     """
     captured_at = datetime.now(UTC).replace(tzinfo=None)
+    size_bytes = len(profile_data)
     which = profile_type.WhichOneof("profiler")
     if which == "cpu":
         cpu_spec = resolve_cpu_spec(profile_type.cpu, duration_seconds, pid="")
@@ -538,6 +547,7 @@ def build_profile_row(
             type=ProfileType.CPU.value,
             format=cpu_spec.py_spy_format,
             trigger=trigger.value,
+            size_bytes=size_bytes,
             rate_hz=cpu_spec.rate_hz,
             native=cpu_spec.native,
             profile_data=profile_data,
@@ -554,6 +564,7 @@ def build_profile_row(
             type=ProfileType.MEMORY.value,
             format=fmt.value,
             trigger=trigger.value,
+            size_bytes=size_bytes,
             leaks=memory_spec.leaks,
             profile_data=profile_data,
         )
@@ -567,6 +578,7 @@ def build_profile_row(
             type=ProfileType.THREAD.value,
             format=ProfileFormat.RAW.value,
             trigger=trigger.value,
+            size_bytes=size_bytes,
             locals_dump=bool(profile_type.threads.locals),
             profile_data=profile_data,
         )
