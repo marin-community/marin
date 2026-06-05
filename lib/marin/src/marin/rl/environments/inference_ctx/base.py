@@ -8,6 +8,7 @@ This context is provided to environments and provides access to the inference se
 as well as methods for tokenization and logprob extraction from an OpenAI ChatCompletion.
 """
 
+import hashlib
 import logging
 from typing import Any
 
@@ -32,6 +33,15 @@ logger = logging.getLogger(__name__)
 
 
 PromptInput = str | list[dict[str, str]]
+SPECIAL_TOKEN_ID_ATTRIBUTES: tuple[tuple[str, str], ...] = (
+    ("bos_token", "bos_token_id"),
+    ("eos_token", "eos_token_id"),
+    ("unk_token", "unk_token_id"),
+    ("sep_token", "sep_token_id"),
+    ("pad_token", "pad_token_id"),
+    ("cls_token", "cls_token_id"),
+    ("mask_token", "mask_token_id"),
+)
 UNSUPPORTED_TOKEN_ROLLOUT_DECODING_FIELDS: tuple[str, ...] = (
     "min_p",
     "repetition_penalty",
@@ -79,7 +89,28 @@ class BaseInferenceContext:
             name_or_path = type(self.tokenizer).__name__
         revision = getattr(self.tokenizer, "init_kwargs", {}).get("revision")
         vocab_size = len(self.tokenizer) if hasattr(self.tokenizer, "__len__") else None
-        return TokenizerIdentity(name_or_path=str(name_or_path), revision=revision, vocab_size=vocab_size)
+        chat_template = getattr(self.tokenizer, "chat_template", None)
+        chat_template_hash = None
+        if chat_template:
+            chat_template_hash = hashlib.sha256(str(chat_template).encode("utf-8")).hexdigest()
+
+        special_token_ids: dict[str, int] = {}
+        for token_name, token_id_name in SPECIAL_TOKEN_ID_ATTRIBUTES:
+            token_id = getattr(self.tokenizer, token_id_name, None)
+            if token_id is not None:
+                special_token_ids[token_name] = int(token_id)
+        additional_special_token_ids = getattr(self.tokenizer, "additional_special_tokens_ids", None)
+        if additional_special_token_ids:
+            for token_index, token_id in enumerate(additional_special_token_ids):
+                special_token_ids[f"additional_special_token_{token_index}"] = int(token_id)
+
+        return TokenizerIdentity(
+            name_or_path=str(name_or_path),
+            revision=revision,
+            vocab_size=vocab_size,
+            chat_template_hash=chat_template_hash,
+            special_token_ids=special_token_ids,
+        )
 
     def set_policy_identity(self, policy: PolicyIdentity) -> None:
         """Set policy identity used for subsequent token-native rollout batches."""

@@ -3,6 +3,7 @@
 
 """Tests for InferenceContext utilities and chat template handling."""
 
+import hashlib
 import sys
 from dataclasses import dataclass
 from types import ModuleType, SimpleNamespace
@@ -22,6 +23,7 @@ from marin.rl.environments.inference_ctx import (
     vLLMInferenceContext,
     vLLMInferenceContextConfig,
 )
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
 from marin.rl.environments.inference_ctx.vllm import InferenceMode
 from openai.types.chat import ChatCompletionMessage
@@ -248,6 +250,38 @@ def test_create_rollout_from_choice_end_to_end(inference_ctx, llama3_tokenizer):
     # Verify token rewards
     assert len(rollout.token_rewards) == len(expected_response_tokens)
     np.testing.assert_array_equal(rollout.token_rewards, np.full(len(expected_response_tokens), reward))
+
+
+def test_tokenizer_identity_records_template_hash_and_special_tokens():
+    class FakeTokenizer:
+        def __init__(self):
+            self.name_or_path = "fake-tokenizer"
+            self.init_kwargs = {"revision": "abc123"}
+            self.chat_template = "{{ messages }}"
+            self.bos_token_id = 1
+            self.eos_token_id = 2
+            self.pad_token_id = 0
+            self.additional_special_tokens_ids = [100, 101]
+
+        def __len__(self):
+            return 1024
+
+    context = BaseInferenceContext()
+    context.tokenizer = FakeTokenizer()
+
+    identity = context.tokenizer_identity()
+
+    assert identity.name_or_path == "fake-tokenizer"
+    assert identity.revision == "abc123"
+    assert identity.vocab_size == 1024
+    assert identity.chat_template_hash == hashlib.sha256(b"{{ messages }}").hexdigest()
+    assert identity.special_token_ids == {
+        "bos_token": 1,
+        "eos_token": 2,
+        "pad_token": 0,
+        "additional_special_token_0": 100,
+        "additional_special_token_1": 101,
+    }
 
 
 def _test_levanter_context(tokenizer, dummy_server, client) -> LevanterInferenceContext:
