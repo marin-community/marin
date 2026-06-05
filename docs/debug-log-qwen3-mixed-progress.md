@@ -62,3 +62,19 @@ Increasing `--max-prefill-size` enough to fit all prompts in one prefill should 
 - Levanter failed on the completion endpoint with `Axis position has different sizes ... 4096 != 16384`.
 
 This does not disprove the prefill-admission hypothesis. It shows that simply making `max_prefill_size` larger than `max_seq_len` is invalid with the current prefill-work arrays. The smaller code fix is to prevent the OpenAI service batcher from passing a batch whose aggregate prompt tokens exceed the configured prefill buffer. That should split `mixed_b32_i512_*` into four 8-request engine calls instead of passing all 32 requests to one `generate()` call.
+
+## Hypothesis 4
+
+After splitting OpenAI service batches by aggregate prompt-token budget, the original `mixed_b32_i512_o512_n1` shape should complete all 16384 completion tokens without no-progress warnings. Throughput may drop because the service now processes four 8-request engine batches sequentially.
+
+## Results
+
+`/dlwh/qwen3-mixed-triage-v6e8-i512-o512-patched` succeeded at the Iris job level.
+
+- Case: original `mixed_b32_i512_o512_n1`, default prefill size, patched OpenAI batcher.
+- Expected completion tokens: 32 active sequences by 512 output tokens = 16384.
+- vLLM canonical row: 4739.37 decode tok/s, 9478.74 total tok/s, 3.457 steady seconds.
+- Levanter completed all 16384 tokens per measured round as four 4096-token engine batches. There were no no-progress warnings.
+- Levanter rows: 1544.84, 1543.93, 1539.65 decode tok/s; total tok/s 3089.67, 3087.85, 3079.30; HBM bytes 1207959552; shape buckets 2; decode ratios about 0.326.
+
+The progress bug is isolated: service batching must respect prefill prompt-token capacity. The implemented fix restores correctness and avoids the no-progress bail-out. The remaining performance gap is expected from serializing the 32-request long-prompt workload into four engine calls; the next performance fix would need the engine to admit multiple prefill chunks for one logical service batch or otherwise overlap those chunks without dropping requests.
