@@ -24,6 +24,7 @@ from levanter.analysis.perplexity_gap import (
     write_report_files,
     _byte_span_to_char_span,
 )
+from levanter.utils.fsspec_utils import mkdirs
 
 
 SCORED_DOCUMENTS_FILENAME = "scored_documents.parquet"
@@ -203,8 +204,7 @@ def write_model_score_files(
     scored_documents_path = os.path.join(output_path, SCORED_DOCUMENTS_FILENAME)
     token_counts_path = os.path.join(output_path, TOKEN_COUNTS_FILENAME)
     token_count_summary_path = os.path.join(output_path, TOKEN_COUNT_SUMMARY_FILENAME)
-    fs, _, _ = fsspec.get_fs_token_paths(summary_path)
-    fs.makedirs(output_path, exist_ok=True)
+    mkdirs(output_path)
 
     with open_url(summary_path, "w") as f:
         json.dump(summary, f, indent=2, sort_keys=True)

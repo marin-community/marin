@@ -33,8 +33,9 @@ def get_project_id() -> str | None:
         return None
 
 
-def list_tpu_nodes(project: str, zone: str, filter_expr: str = "") -> list[dict[str, Any]]:
+def list_tpu_nodes(project: str, zone: str | None = None, filter_expr: str = "") -> list[dict[str, Any]]:
     """List TPU nodes in a zone."""
+    zone_arg = zone or "-"
     cmd = [
         "gcloud",
         "compute",
@@ -42,7 +43,7 @@ def list_tpu_nodes(project: str, zone: str, filter_expr: str = "") -> list[dict[
         "tpu-vm",
         "list",
         f"--project={project}",
-        f"--zone={zone}",
+        f"--zone={zone_arg}",
         "--format=json",
     ]
     if filter_expr:
@@ -52,32 +53,69 @@ def list_tpu_nodes(project: str, zone: str, filter_expr: str = "") -> list[dict[
     return json.loads(result.stdout)
 
 
-def find_tpu_by_ip(target_ip: str, project: str, zone: str = "-") -> tuple[str, str, int] | None:
-    """Find TPU node by its internal IP address.
+def _parse_tpu_node_name(full_name: str, fallback_zone: str) -> tuple[str, str]:
+    name_parts = full_name.split("/")
+    if len(name_parts) >= 6:
+        return name_parts[5], name_parts[3]
+    return full_name, fallback_zone
 
-    Searches all zones by default (zone="-").
+
+def _find_tpu_by_name_in_nodes(
+    target_name: str,
+    tpu_nodes: list[dict[str, Any]],
+    *,
+    fallback_zone: str,
+) -> tuple[str, str] | None:
+    for node in tpu_nodes:
+        simple_name, node_zone = _parse_tpu_node_name(node["name"], fallback_zone)
+        if simple_name == target_name or node["name"] == target_name:
+            return simple_name, node_zone
+
+    return None
+
+
+def find_tpu_by_name(target_name: str, project: str, zone: str | None = None) -> tuple[str, str] | None:
+    """Find TPU node by name.
+
+    Searches all zones by default.
+
+    Returns:
+        Tuple of (tpu_name, zone) or None if not found.
+    """
+    tpu_nodes = list_tpu_nodes(project, zone)
+
+    return _find_tpu_by_name_in_nodes(target_name, tpu_nodes, fallback_zone=zone or "-")
+
+
+def _find_tpu_by_ip_in_nodes(
+    target_ip: str,
+    tpu_nodes: list[dict[str, Any]],
+    *,
+    fallback_zone: str,
+) -> tuple[str, str, int] | None:
+    for node in tpu_nodes:
+        network_endpoints = node.get("networkEndpoints", [])
+        for worker_index, endpoint in enumerate(network_endpoints):
+            # Iris worker RPC addresses can surface either TPU-internal IPs or NATed external IPs.
+            external_ip = (endpoint.get("accessConfig") or {}).get("externalIp")
+            if endpoint.get("ipAddress") == target_ip or external_ip == target_ip:
+                simple_name, node_zone = _parse_tpu_node_name(node["name"], fallback_zone)
+                return simple_name, node_zone, worker_index
+
+    return None
+
+
+def find_tpu_by_ip(target_ip: str, project: str, zone: str | None = None) -> tuple[str, str, int] | None:
+    """Find TPU node by its internal or external IP address.
+
+    Searches all zones by default.
 
     Returns:
         Tuple of (tpu_name, zone, worker_index) or None if not found
     """
     tpu_nodes = list_tpu_nodes(project, zone)
 
-    for node in tpu_nodes:
-        network_endpoints = node.get("networkEndpoints", [])
-        for worker_index, endpoint in enumerate(network_endpoints):
-            if endpoint.get("ipAddress") == target_ip:
-                # Extract simple name from full resource path
-                full_name = node["name"]
-                name_parts = full_name.split("/")
-                if len(name_parts) >= 6:
-                    simple_name = name_parts[5]  # nodes/simple-name
-                    node_zone = name_parts[3]  # locations/zone
-                    return simple_name, node_zone, worker_index
-                else:
-                    # Fallback for different naming schemes
-                    return full_name, zone, worker_index
-
-    return None
+    return _find_tpu_by_ip_in_nodes(target_ip, tpu_nodes, fallback_zone=zone or "-")
 
 
 def find_vm_by_ip(target_ip: str, project: str) -> tuple[str, str] | None:

@@ -4,13 +4,13 @@
 """Controller task and attempt state predicates."""
 
 from dataclasses import dataclass
-from typing import Any, NamedTuple, Protocol
+from typing import NamedTuple, Protocol
 
 from rigging.timing import Deadline, Duration, Timestamp
 from sqlalchemy import func, literal_column
 from sqlalchemy.sql.elements import ColumnElement
 
-from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
 
 ACTIVE_TASK_STATES: frozenset[int] = frozenset(
@@ -53,10 +53,17 @@ def hint_rare_state(predicate: ColumnElement[bool]) -> ColumnElement[bool]:
 
 
 class RunningTaskEntry(NamedTuple):
-    """Task ID and attempt ID pair captured at snapshot time."""
+    """Task ID and attempt ID pair captured at snapshot time.
+
+    ``coscheduled`` lets the direct (K8s) provider classify a vanished pod as
+    a gang preemption (WORKER_FAILED) rather than an application failure: when
+    Kueue preempts a pod group it deletes every pod, leaving no terminal pod
+    status to read — only the absence. See K8sTaskProvider._poll_pods.
+    """
 
     task_id: JobName
     attempt_id: int
+    coscheduled: bool = False
 
 
 def task_is_finished(
@@ -78,16 +85,16 @@ def task_is_finished(
     return False
 
 
-def task_row_can_be_scheduled(task: Any) -> bool:
-    if task.state != job_pb2.TASK_STATE_PENDING:
-        return False
-    return task.current_attempt_id < 0 or not task_is_finished(
-        task.state,
-        task.failure_count,
-        task.max_retries_failure,
-        task.preemption_count,
-        task.max_retries_preemption,
-    )
+class TaskStateRow(Protocol):
+    """Minimal row shape for state-only predicates."""
+
+    state: int
+
+
+def task_row_can_be_scheduled(task: TaskStateRow) -> bool:
+    # Only PENDING tasks are schedulable; a PENDING task is never finished and
+    # never has retries exhausted, so state is the sole discriminator here.
+    return task.state == job_pb2.TASK_STATE_PENDING
 
 
 def job_scheduling_deadline(scheduling_deadline_epoch_ms: int | None) -> Deadline | None:
@@ -95,11 +102,6 @@ def job_scheduling_deadline(scheduling_deadline_epoch_ms: int | None) -> Deadlin
     if scheduling_deadline_epoch_ms is None:
         return None
     return Deadline.after(Timestamp.from_ms(scheduling_deadline_epoch_ms), Duration.from_ms(0))
-
-
-def attempt_is_terminal(state: int) -> bool:
-    """Check if an attempt is in a terminal state."""
-    return state in TERMINAL_TASK_STATES
 
 
 def attempt_is_worker_failure(state: int) -> bool:

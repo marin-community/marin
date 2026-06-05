@@ -282,16 +282,22 @@ def make_direct_job_request(
     name: str = "test-job",
     replicas: int = 1,
     task_image: str = "",
+    coscheduling_group_by: str = "",
+    priority_band: int = 0,
 ) -> controller_pb2.Controller.LaunchJobRequest:
     job_name = JobName.root("test-user", name)
-    return controller_pb2.Controller.LaunchJobRequest(
+    req = controller_pb2.Controller.LaunchJobRequest(
         name=job_name.to_wire(),
         entrypoint=make_test_entrypoint(),
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
         replicas=replicas,
         task_image=task_image,
+        priority_band=priority_band,
     )
+    if coscheduling_group_by:
+        req.coscheduling.group_by = coscheduling_group_by
+    return req
 
 
 def submit_direct_job(
@@ -299,9 +305,17 @@ def submit_direct_job(
     name: str,
     replicas: int = 1,
     task_image: str = "",
+    coscheduling_group_by: str = "",
+    priority_band: int = 0,
 ) -> list[JobName]:
     jid = JobName.root("test-user", name)
-    req = make_direct_job_request(name, replicas, task_image=task_image)
+    req = make_direct_job_request(
+        name,
+        replicas,
+        task_image=task_image,
+        coscheduling_group_by=coscheduling_group_by,
+        priority_band=priority_band,
+    )
     with state._db.transaction() as cur:
         ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now(), run_template_cache=state._run_template_cache)
     with state._db.read_snapshot() as tx:
@@ -928,7 +942,7 @@ def make_demand_entries(
             constraint_list.append(zone_constraint(z))
     return [
         DemandEntry(
-            task_ids=[f"{task_prefix}-{i}"],
+            task_ids=(f"{task_prefix}-{i}",),
             coschedule_group_id=None,
             normalized=normalized,
             constraints=constraint_list,
@@ -965,7 +979,7 @@ def make_big_demand_entries(
     if coschedule_group_id:
         return [
             DemandEntry(
-                task_ids=[f"{task_prefix}-{i}" for i in range(count)],
+                task_ids=tuple(f"{task_prefix}-{i}" for i in range(count)),
                 coschedule_group_id=coschedule_group_id,
                 normalized=normalized,
                 constraints=[],
@@ -974,7 +988,7 @@ def make_big_demand_entries(
         ]
     return [
         DemandEntry(
-            task_ids=[f"{task_prefix}-{i}"],
+            task_ids=(f"{task_prefix}-{i}",),
             coschedule_group_id=None,
             normalized=normalized,
             constraints=[],

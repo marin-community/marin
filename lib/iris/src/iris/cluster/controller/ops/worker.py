@@ -171,12 +171,12 @@ def fail(
     if not worker_ids:
         return WorkerFailureBatchResult(removed_workers=[])
     with db.read_snapshot() as snap:
-        _liveness = health.all()
-        _active_ids = sorted(
+        liveness = health.all()
+        active_ids = sorted(
             {
                 WorkerId(str(wid))
                 for wid in worker_ids
-                if (e := _liveness.get(WorkerId(str(wid)))) is not None and e.active
+                if (e := liveness.get(WorkerId(str(wid)))) is not None and e.active
             }
         )
         rows = (
@@ -184,9 +184,9 @@ def fail(
                 select(*reads.WORKER_DETAIL_COLS).where(
                     workers_table.c.worker_id.in_(bindparam("worker_ids", expanding=True))
                 ),
-                {"worker_ids": _active_ids},
+                {"worker_ids": active_ids},
             ).all()
-            if _active_ids
+            if active_ids
             else []
         )
     failures: list[tuple[WorkerId, str | None, str]] = [(row.worker_id, row.address, reason) for row in rows]
@@ -238,9 +238,6 @@ def _apply_worker_failures_chunk(
     Per-chunk shape: one closed snapshot, one :class:`Overlay`, then
     ``writes.remove_worker`` after ``commit_effects``.
     """
-    if not failures:
-        return
-
     worker_ids = [wid for wid, _, _ in failures]
     # Seeding by worker closes every active task on the failed workers (plus
     # their jobs' peer/descendant graph), so the batch derives its per-worker

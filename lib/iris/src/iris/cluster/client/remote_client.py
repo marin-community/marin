@@ -419,11 +419,16 @@ class RemoteClusterClient:
             raise ConnectionError(f"No {endpoint_name!r} endpoint registered on controller")
         return endpoints[0].address
 
-    def list_workers(self) -> list[controller_pb2.Controller.WorkerHealthStatus]:
+    def list_workers(
+        self,
+        query: controller_pb2.Controller.WorkerQuery | None = None,
+    ) -> list[controller_pb2.Controller.WorkerHealthStatus]:
         """List all workers registered with the controller."""
 
         def _call():
             request = controller_pb2.Controller.ListWorkersRequest()
+            if query is not None:
+                request.query.CopyFrom(query)
             response = self._client.list_workers(request)
             return list(response.workers)
 

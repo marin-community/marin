@@ -191,6 +191,19 @@ def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state)
     assert len(job.bundle_id) == 64
 
 
+def test_launch_job_rejects_coscheduling_without_group_by(service):
+    """Coscheduling with an empty group_by is rejected at submit: group_by names the
+    topology level to gang on, and an empty one fails differently (and silently) on each
+    scheduling path downstream."""
+    request = make_job_request("no-group-by")
+    request.coscheduling.SetInParent()  # coscheduling present, group_by left empty
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+
+
 def test_launch_job_rejects_tpu_chip_count_mismatch(service):
     """A job requesting fewer chips than the variant's chips_per_vm is rejected."""
     request = make_job_request("bad-tpu-chip-count")

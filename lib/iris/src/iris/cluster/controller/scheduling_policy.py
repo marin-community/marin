@@ -13,6 +13,7 @@ over an in-memory ``SchedulingContext``.
 import logging
 import sys
 from collections import defaultdict
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -154,6 +155,39 @@ def job_requirements_from_job(job: PendingTask) -> JobRequirements:
     )
 
 
+def reservation_unsatisfied(
+    task: PendingTask,
+    claims_by_job: dict[str, int],
+    reservation_entry_counts: dict[JobName, int],
+) -> bool:
+    """Whether a real task must wait for its job's reservation to be claimed.
+
+    A non-holder task of a directly-reserved job is *unsatisfied* until the
+    number of workers claimed for its reservation reaches the reservation's
+    entry count. Such a task must neither be scheduled nor generate autoscaler
+    demand: the reservation's holder task provisions the reserved capacity, and
+    the real task runs only once that capacity exists.
+
+    Both the scheduling gate (:func:`apply_scheduling_gates`) and the demand
+    path (:func:`compute_demand_entries`) consult this predicate so they agree.
+    If they disagree — demand emitting for a task the gate blocks — the
+    autoscaler provisions generic capacity the task can never occupy and
+    thrashes, booting workers that are reaped as idle every cycle.
+    """
+    if task.is_reservation_holder or not task.has_reservation:
+        return False
+    required = reservation_entry_counts.get(task.job_id, 0)
+    return claims_by_job.get(task.job_id.to_wire(), 0) < required
+
+
+def _claims_by_job(claims: dict[WorkerId, ReservationClaim] | None) -> dict[str, int]:
+    """Count reservation claims per claiming job (wire id) for the reservation gate."""
+    counts: dict[str, int] = defaultdict(int)
+    for claim in (claims or {}).values():
+        counts[claim.job_id] += 1
+    return counts
+
+
 def compute_demand_entries(
     queries: ControllerDB,
     scheduler: Scheduler | None = None,
@@ -196,9 +230,15 @@ def compute_demand_entries(
     all_schedulable: list[PendingTask] = []
     with queries.read_snapshot() as tx:
         pending = _pending_tasks_with_jobs(tx)
+        reservation_entry_counts = _reservation_entry_counts_for_pending(tx, pending)
     for task in pending:
         tasks_by_job[task.job_id].append(task)
         all_schedulable.append(task)
+
+    # Index reservation claims by job so the reservation gate below can compare
+    # claimed workers against required entries, exactly as apply_scheduling_gates
+    # does for the real scheduling pass.
+    claims_by_job = _claims_by_job(reservation_claims)
 
     # Build job requirements once, shared between dry-run and demand emission.
     # Also track which jobs have reservations so we can apply taint injection.
@@ -263,6 +303,15 @@ def compute_demand_entries(
         if is_job_finished(job_row.job_state):
             continue
 
+        # Reservation gate (mirrors apply_scheduling_gates): a real task of a
+        # directly-reserved job emits no demand until its reservation is
+        # claimed. The holder task (a separate job) provisions the reserved
+        # capacity; emitting demand for the real task here would provision
+        # generic capacity the scheduler gate will never let it occupy, so the
+        # autoscaler would boot workers that idle out and get reaped forever.
+        if reservation_unsatisfied(job_row, claims_by_job, reservation_entry_counts):
+            continue
+
         job_constraints = constraints_from_json(job_row.constraints_json)
         # Build the proto here — DemandEntry.resources is an autoscaler RPC field (legitimate boundary).
         job_resources = resource_spec_from_scalars(
@@ -291,7 +340,7 @@ def compute_demand_entries(
             if remaining_ids:
                 demand_entries.append(
                     DemandEntry(
-                        task_ids=remaining_ids,
+                        task_ids=tuple(remaining_ids),
                         coschedule_group_id=job_id.to_wire(),
                         normalized=normalized,
                         constraints=job_constraints,
@@ -306,7 +355,7 @@ def compute_demand_entries(
                 continue
             demand_entries.append(
                 DemandEntry(
-                    task_ids=[task.task_id.to_wire()],
+                    task_ids=(task.task_id.to_wire(),),
                     coschedule_group_id=None,
                     normalized=normalized,
                     constraints=job_constraints,
@@ -908,7 +957,7 @@ def _reserved_job_ids(queries: ControllerDB) -> set[JobName]:
     return {row.job_id for row in rows}
 
 
-def _find_reservation_ancestor(reserved_jobs: set[JobName], job_id: JobName) -> JobName | None:
+def _find_reservation_ancestor(reserved_jobs: AbstractSet[JobName], job_id: JobName) -> JobName | None:
     """Walk up the job hierarchy to find the nearest ancestor with a reservation.
 
     Pure Python walk against the pre-fetched ``reserved_jobs`` set. The old
@@ -1092,9 +1141,7 @@ def apply_scheduling_gates(
     filter_counts: dict[str, int] = defaultdict(int)
 
     # Index claims by wire id so reservation-satisfaction is O(1) per check.
-    claims_by_job: dict[str, int] = defaultdict(int)
-    for claim in claims.values():
-        claims_by_job[claim.job_id] += 1
+    claims_by_job = _claims_by_job(claims)
 
     for task in ctx.pending_task_rows:
         if not task_row_can_be_scheduled(task):
@@ -1107,12 +1154,9 @@ def apply_scheduling_gates(
             continue
         # Gate: skip real tasks whose job has an unsatisfied reservation.
         # Holder tasks are always schedulable (they ARE the reservation).
-        if not task.is_reservation_holder and task.has_reservation:
-            wire_id = task.job_id.to_wire()
-            required = ctx.reservation_entry_counts.get(task.job_id, 0)
-            if claims_by_job.get(wire_id, 0) < required:
-                filter_counts["reservation_unsatisfied"] += 1
-                continue
+        if reservation_unsatisfied(task, claims_by_job, ctx.reservation_entry_counts):
+            filter_counts["reservation_unsatisfied"] += 1
+            continue
         if (
             max_tasks_per_job_per_cycle > 0
             and not task.has_coscheduling
@@ -1127,7 +1171,7 @@ def apply_scheduling_gates(
             if task.has_reservation:
                 has_reservation.add(task.job_id)
                 has_direct_reservation.add(task.job_id)
-            elif _find_reservation_ancestor(set(ctx.reserved_job_ids), task.job_id) is not None:
+            elif _find_reservation_ancestor(ctx.reserved_job_ids, task.job_id) is not None:
                 has_reservation.add(task.job_id)
     if trace:
         logger.info(

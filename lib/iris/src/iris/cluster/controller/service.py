@@ -205,19 +205,19 @@ class TaskWithAttempts:
     preemption_count: int
     max_retries_failure: int
     max_retries_preemption: int
-    submitted_at_ms: object
+    submitted_at_ms: Timestamp
     priority_band: int
     error: str | None
     exit_code: int | None
-    started_at_ms: object | None
-    finished_at_ms: object | None
+    started_at_ms: Timestamp | None
+    finished_at_ms: Timestamp | None
     current_worker_id: WorkerId | None
     current_worker_address: str | None
     container_id: str | None
-    attempts: tuple
+    attempts: tuple[Any, ...]
 
     @classmethod
-    def from_row(cls, row, attempts: tuple) -> "TaskWithAttempts":
+    def from_row(cls, row, attempts: tuple[Any, ...]) -> "TaskWithAttempts":
         """Build from an SA Row (matching TASK_DETAIL_COLS) plus attempt rows."""
         return cls(
             task_id=row.task_id,
@@ -946,6 +946,17 @@ class ControllerServiceImpl:
         if not request.name:
             raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
 
+        # Coscheduling requires a non-empty group_by: it names the topology level
+        # the gang is scheduled onto. An empty group_by is permanently
+        # unschedulable on the worker path and silently admits without gang on the
+        # K8s direct path, so reject it here rather than let it fail differently
+        # (and silently) downstream.
+        if request.HasField("coscheduling") and not request.coscheduling.group_by:
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                "coscheduling requires a non-empty group_by (the topology level to gang on)",
+            )
+
         job_id = JobName.from_wire(request.name)
 
         # Reject root RPC submissions from stale clients. Direct in-process
@@ -1382,11 +1393,6 @@ class ControllerServiceImpl:
         state_ids = _resolve_state_filter(query.state_filter)
         if state_ids is None:
             return controller_pb2.Controller.ListJobsResponse(jobs=[], total_count=0, has_more=False)
-        if query.scope == controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN and not query.parent_job_id:
-            raise ConnectError(
-                Code.INVALID_ARGUMENT,
-                "query.parent_job_id is required for JOB_QUERY_SCOPE_CHILDREN",
-            )
 
         with self._db.read_snapshot() as q:
             page, total_count = _query_jobs(q, query, state_ids)

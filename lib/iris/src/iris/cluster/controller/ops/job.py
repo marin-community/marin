@@ -70,13 +70,13 @@ def submit(
     parent_job_id = job_id.parent.to_wire() if job_id.parent is not None else None
     root_submitted_ms = effective_submission_ms
     if job_id.parent is not None:
-        _parent_row = cur.execute(
+        parent_row = cur.execute(
             select(jobs_table.c.root_submitted_at_ms).where(jobs_table.c.job_id == bindparam("job_id")),
             {"job_id": job_id.parent},
         ).first()
-        if _parent_row is None:
+        if parent_row is None:
             raise ValueError(f"Cannot submit job {job_id}: parent {parent_job_id} is absent from the database")
-        root_submitted_ms = _parent_row.root_submitted_at_ms.epoch_ms()
+        root_submitted_ms = parent_row.root_submitted_at_ms.epoch_ms()
 
     deadline_epoch_ms: int | None = None
     if request.HasField("scheduling_timeout") and request.scheduling_timeout.milliseconds > 0:
@@ -185,11 +185,11 @@ def submit(
         fail_if_exists=bool(request.fail_if_exists),
     )
 
-    _workdir_files = dict(request.entrypoint.workdir_files)
-    if _workdir_files:
+    workdir_files = dict(request.entrypoint.workdir_files)
+    if workdir_files:
         cur.execute(
             insert(job_workdir_files_table),
-            [{"job_id": job_id, "filename": name, "data": data} for name, data in _workdir_files.items()],
+            [{"job_id": job_id, "filename": name, "data": data} for name, data in workdir_files.items()],
         )
 
     if validation_error is None:
@@ -226,7 +226,7 @@ def submit(
             )
             merged = merge_constraints(
                 constraints_from_resources(entry.resources),
-                [Constraint.from_proto(c) for c in entry.constraints or request.constraints],
+                [Constraint.from_proto(c) for c in entry.constraints],
             )
             for constraint in merged:
                 holder_request.constraints.append(constraint.to_proto())

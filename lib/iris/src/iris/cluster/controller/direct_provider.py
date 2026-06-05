@@ -143,6 +143,9 @@ def run_request_template(
     )
     for filename, data in reads.get_workdir_files(snap, job_id).items():
         template.entrypoint.workdir_files[filename] = data
+    # cache.put interns: it returns the already-cached instance for this key if
+    # one exists, otherwise the template we just built. Callers must use the
+    # returned value, not ``template``, to share a single canonical instance.
     return cache.put(wire, template)
 
 
@@ -166,6 +169,8 @@ def build_run_request(
         attempt_id=attempt_id,
         constraints=[c.to_proto() for c in constraints_from_json(row.constraints_json)],
         task_image=row.task_image,
+        # Priority selects the Kueue WorkloadPriorityClass on the direct path.
+        priority=row.priority_band,
     )
     # Load inline workdir files from the job_workdir_files table.
     for filename, data in reads.get_workdir_files(cur, row.job_id).items():
@@ -173,6 +178,9 @@ def build_run_request(
     # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
     if row.timeout_ms is not None and row.timeout_ms > 0:
         run_req.timeout.milliseconds = row.timeout_ms
+    # Coscheduling drives Kueue gang admission on the direct path.
+    if row.has_coscheduling:
+        run_req.coscheduling.group_by = row.coscheduling_group_by
     return run_req
 
 
@@ -206,6 +214,10 @@ def drain_for_direct_provider(
     now_ms = Timestamp.now().epoch_ms()
     tasks_to_run: list[job_pb2.RunTaskRequest] = []
 
+    dispatch_join = tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id).join(
+        job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
+    )
+
     # Snapshot redrive set BEFORE the PENDING promotion loop so newly-
     # promoted rows (which become ASSIGNED+null_worker mid-transaction)
     # don't get dispatched twice.
@@ -213,11 +225,7 @@ def drain_for_direct_provider(
         pending_dispatch_row(r)
         for r in cur.execute(
             select(*PENDING_DISPATCH_COLS)
-            .select_from(
-                tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id).join(
-                    job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
-                )
-            )
+            .select_from(dispatch_join)
             .where(
                 tasks_table.c.state == int(job_pb2.TASK_STATE_ASSIGNED),
                 tasks_table.c.current_worker_id.is_(None),
@@ -226,33 +234,75 @@ def drain_for_direct_provider(
         ).all()
     ]
 
-    pending_rows: list[PendingDispatchRow] = []
+    def _promote(row: PendingDispatchRow) -> None:
+        attempt_id = row.current_attempt_id + 1
+        writes.promote_to_direct_provider(cur, row.task_id, attempt_id, now_ms)
+        tasks_to_run.append(build_run_request(cur, row, attempt_id))
+
+    promoted_count = 0
     if max_promotions > 0:
-        pending_rows = [
+        # Coscheduled gangs are promoted all-or-none in a single cycle.
+        # Kueue only admits a pod group once it has observed every
+        # ``pod-group-total-count`` pod, so a gang split across drain
+        # cycles — or one larger than the per-cycle cap — would deadlock
+        # waiting for pods Iris never created. Fetch the full coscheduled
+        # PENDING set (no SQL limit) and promote each gang only once all
+        # its tasks are PENDING together; this also keeps every sibling on
+        # the same attempt_id, which is the pod-group generation key (see
+        # _pod_group_name). Non-coscheduled rows keep the flat,
+        # budget-bounded first-fit behavior.
+        cosched_pending = [
             pending_dispatch_row(r)
             for r in cur.execute(
                 select(*PENDING_DISPATCH_COLS)
-                .select_from(
-                    tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id).join(
-                        job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
-                    )
-                )
+                .select_from(dispatch_join)
                 .where(
                     tasks_table.c.state == int(job_pb2.TASK_STATE_PENDING),
+                    job_config_table.c.has_coscheduling == True,  # noqa: E712
                     jobs_table.c.is_reservation_holder == False,  # noqa: E712
                 )
-                .limit(max_promotions),
+                .order_by(tasks_table.c.job_id),
             ).all()
         ]
-    for row in pending_rows:
-        attempt_id = row.current_attempt_id + 1
-        writes.promote_to_direct_provider(
-            cur,
-            row.task_id,
-            attempt_id,
-            now_ms,
-        )
-        tasks_to_run.append(build_run_request(cur, row, attempt_id))
+        gangs: dict[JobName, list[PendingDispatchRow]] = {}
+        for row in cosched_pending:
+            gangs.setdefault(row.job_id, []).append(row)
+        for gang in gangs.values():
+            num_tasks = gang[0].num_tasks
+            if len(gang) != num_tasks:
+                # Gang not fully assembled yet (siblings still in flight,
+                # e.g. mid-bounce); a later cycle promotes it whole once
+                # they converge to PENDING.
+                continue
+            remaining = max_promotions - promoted_count
+            if len(gang) > remaining and len(gang) <= max_promotions:
+                # Gang fits within the per-cycle cap but not this cycle's
+                # remaining budget — defer to a later cycle. (Oversized
+                # gangs, larger than the cap itself, fall through and are
+                # promoted whole to avoid a permanent deadlock.)
+                continue
+            for row in gang:
+                _promote(row)
+            promoted_count += len(gang)
+
+        # Non-coscheduled first-fit, bounded by the remaining budget.
+        remaining = max_promotions - promoted_count
+        if remaining > 0:
+            noncosched_pending = [
+                pending_dispatch_row(r)
+                for r in cur.execute(
+                    select(*PENDING_DISPATCH_COLS)
+                    .select_from(dispatch_join)
+                    .where(
+                        tasks_table.c.state == int(job_pb2.TASK_STATE_PENDING),
+                        job_config_table.c.has_coscheduling == False,  # noqa: E712
+                        jobs_table.c.is_reservation_holder == False,  # noqa: E712
+                    )
+                    .limit(remaining),
+                ).all()
+            ]
+            for row in noncosched_pending:
+                _promote(row)
 
     # Redrive: pods for these rows may not exist yet (crash between
     # assign-commit and apply, or apply errored last cycle). `kubectl
@@ -275,6 +325,7 @@ def drain_for_direct_provider(
         RunningTaskEntry(
             task_id=row.task_id,
             attempt_id=row.current_attempt_id,
+            coscheduled=row.has_coscheduling,
         )
         for row in running_rows
     ]

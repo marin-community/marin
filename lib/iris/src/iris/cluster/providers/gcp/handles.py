@@ -325,11 +325,16 @@ class GcpSliceHandle:
 
         state = _TPU_STATE_MAP.get(tpu_info.state, CloudSliceState.UNKNOWN)
 
+        # Derive the topology from the live TPU rather than self._accelerator_variant:
+        # queued-resource handles adopted during boot recovery carry an empty variant
+        # (the QR API doesn't report one), and that handle is never refreshed once the
+        # backing TPU VM provisions. tpu_info always reports the real accelerator_type.
+        accelerator_variant = tpu_info.accelerator_type
         try:
-            worker_count = get_tpu_topology(self._accelerator_variant).vm_count
+            worker_count = get_tpu_topology(accelerator_variant).vm_count
         except ValueError as e:
             raise InfraError(
-                f"Unknown TPU topology '{self._accelerator_variant}' for slice {self._slice_id}. "
+                f"Unknown TPU topology '{accelerator_variant}' for slice {self._slice_id}. "
                 f"Cannot determine worker count without a known topology."
             ) from e
 

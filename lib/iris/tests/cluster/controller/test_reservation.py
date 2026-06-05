@@ -21,6 +21,7 @@ from iris.cluster.constraints import (
     device_variant_constraint,
     get_device_type,
     get_device_variant,
+    preemptible_constraint,
 )
 from iris.cluster.controller import ops, writes
 from iris.cluster.controller.codec import constraints_from_json
@@ -49,6 +50,7 @@ from iris.cluster.controller.scheduling_policy import (
     build_scheduling_context,
     claim_workers_for_reservations,
     cleanup_stale_claims,
+    compute_demand_entries,
     inject_reservation_taints,
     inject_taint_constraints,
     job_requirements_from_job,
@@ -587,6 +589,59 @@ def test_gate_satisfied_for_jobs_without_reservation(ctrl):
     ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults)
     gated = apply_scheduling_gates(ctx, claims, max_tasks_per_job_per_cycle=0)
     assert jid.task(0) in gated.schedulable_task_ids
+
+
+# =============================================================================
+# Reservation gate parity: the demand path must match the scheduling gate
+# =============================================================================
+
+
+def _holder_demand(demand):
+    return [d for d in demand if any(RESERVATION_HOLDER_JOB_NAME in t for t in d.task_ids)]
+
+
+def _real_demand(demand):
+    return [d for d in demand if not any(RESERVATION_HOLDER_JOB_NAME in t for t in d.task_ids)]
+
+
+def test_demand_gates_real_task_until_reservation_claimed(ctrl):
+    """A reserved job's real task must not emit demand until its reservation is claimed.
+
+    Regression for the europe-west4-a autoscaler thrash: an ``iris run`` job's
+    parent task is a tiny CPU driver that holds a GPU/TPU reservation. While the
+    reservation is unclaimed the scheduler gate (``apply_scheduling_gates``)
+    blocks the parent task, but ``compute_demand_entries`` used to emit CPU
+    demand for it anyway. The autoscaler then booted CPU workers the scheduler
+    would never let the task occupy; they idled out and were reaped every cycle,
+    forever. The demand path must apply the same reservation gate: only the
+    holder task generates demand (to provision the reserved capacity) until the
+    reservation is satisfied.
+    """
+    # Parent task is a CPU driver; the reservation is for a GPU no CPU worker can
+    # satisfy, so it stays unclaimed even though a CPU worker is available.
+    _register_worker(ctrl, "cpu1", _cpu_metadata())
+    req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_gpu_device("H100"))])
+    jid = _submit_job(ctrl, "j1", req)
+
+    _claim_for_reservations(ctrl)
+    claims = read_reservation_claims(ctrl._db)
+    assert claims == {}  # no GPU worker, reservation unfulfilled
+
+    demand = compute_demand_entries(ctrl._db, reservation_claims=claims)
+    # Holder provisions the reserved GPU; the parent's real task is gated.
+    assert len(_holder_demand(demand)) == 1
+    assert _real_demand(demand) == [], "real task must not emit demand while reservation is unclaimed"
+
+    # Once a matching worker is claimed, the gate opens and the real task may
+    # emit demand again.
+    _register_worker(ctrl, "gpu1", _gpu_metadata("H100"))
+    _claim_for_reservations(ctrl)
+    claims = read_reservation_claims(ctrl._db)
+    assert len(claims) == 1
+
+    demand = compute_demand_entries(ctrl._db, reservation_claims=claims)
+    real_ids = {t for d in _real_demand(demand) for t in d.task_ids}
+    assert jid.task(0).to_wire() in real_ids
 
 
 # =============================================================================
@@ -1694,6 +1749,37 @@ def test_holder_task_gets_device_constraints_from_tpu_entry(state):
         WellKnownAttribute.DEVICE_VARIANT in constraint_keys
     ), f"holder job missing device-variant constraint; got keys: {constraint_keys}"
     assert "region" in constraint_keys, "holder job should still have the explicit region constraint"
+
+
+@pytest.mark.parametrize(
+    ("entry_preemptible", "expected_holder_values"),
+    [
+        (None, []),
+        (True, ["true"]),
+    ],
+)
+def test_holder_task_uses_entry_preemptible_constraints_not_parent(
+    state,
+    entry_preemptible,
+    expected_holder_values,
+):
+    entry_constraints = []
+    if entry_preemptible is not None:
+        entry_constraints.append(preemptible_constraint(entry_preemptible).to_proto())
+
+    entry = _make_reservation_entry(device=_tpu_device("v5p-8", count=4), constraints=entry_constraints)
+    request = _make_job_request_with_reservation(reservation_entries=[entry])
+    request.constraints.append(preemptible_constraint(False).to_proto())
+
+    parent_job_id = _submit_job(state, "res-job", request)
+    holder_job_id = parent_job_id.child(RESERVATION_HOLDER_JOB_NAME)
+
+    holder_job = _query_job(state, holder_job_id)
+    assert holder_job is not None
+    constraints = constraints_from_json(holder_job.constraints_json)
+    preemptible_constraints = [c for c in constraints if c.key == WellKnownAttribute.PREEMPTIBLE]
+
+    assert [c.values[0].value for c in preemptible_constraints] == expected_holder_values
 
 
 def test_holder_task_not_scheduled_on_wrong_device_type(state):

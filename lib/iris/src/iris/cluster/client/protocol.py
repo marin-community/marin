@@ -78,7 +78,10 @@ class ClusterClient(Protocol):
 
     def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[controller_pb2.Controller.Endpoint]: ...
 
-    def list_workers(self) -> list[controller_pb2.Controller.WorkerHealthStatus]: ...
+    def list_workers(
+        self,
+        query: controller_pb2.Controller.WorkerQuery | None = None,
+    ) -> list[controller_pb2.Controller.WorkerHealthStatus]: ...
 
     def list_jobs(
         self,

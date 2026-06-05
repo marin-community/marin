@@ -449,8 +449,9 @@ def resolve_multinode_defaults(
 
     For TPUs with vm_count > 1, infers replicas from the topology and enables
     coscheduling by ``tpu-name`` so that all tasks land on workers in the same
-    TPU slice. For GPUs with replicas > 1, enables coscheduling by ``pool`` so
-    that all replicas are scheduled together.
+    TPU slice. For GPUs with replicas > 1, enables coscheduling by ``leafgroup``
+    (the H100 InfiniBand multi-node colocation level) so all replicas are
+    scheduled together.
 
     Args:
         tpu: TPU type string (e.g. ``"v6e-32"``), or ``None``.
@@ -464,7 +465,7 @@ def resolve_multinode_defaults(
     """
     if not tpu:
         if gpu and replicas is not None and replicas > 1:
-            return replicas, CoschedulingConfig(group_by="pool")
+            return replicas, CoschedulingConfig(group_by="leafgroup")
         return replicas or 1, None
 
     try:
@@ -551,11 +552,14 @@ def run_iris_job(
     preemptible: bool | None = None,
     token_provider: TokenProvider | None = None,
     submit_argv: list[str] | None = None,
+    dashboard_url: str | None = None,
 ) -> int:
     """Core job submission logic.
 
     Args:
         controller_url: Controller URL (from parent context tunnel).
+        dashboard_url: Public dashboard origin (e.g. https://iris.oa.dev). When
+            set, a clickable job URL is logged on submit.
         terminate_on_exit: If True, terminate the job on any non-normal exit
             (KeyboardInterrupt, unexpected exceptions). Normal completion is unaffected.
         regions: If provided, restrict the job to workers in these regions.
@@ -653,6 +657,7 @@ def run_iris_job(
         priority_band=priority_band,
         token_provider=token_provider,
         submit_argv=submit_argv,
+        dashboard_url=dashboard_url,
     )
 
 
@@ -675,6 +680,7 @@ def _submit_and_wait_job(
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     token_provider: TokenProvider | None = None,
     submit_argv: list[str] | None = None,
+    dashboard_url: str | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
@@ -701,6 +707,8 @@ def _submit_and_wait_job(
     )
 
     logger.info(f"Job submitted: {job.job_id}")
+    if dashboard_url:
+        logger.info(f"Dashboard: {job.job_id.dashboard_url(dashboard_url)}")
     click.echo(str(job.job_id))
 
     if not wait:
@@ -867,6 +875,8 @@ def run(
 ):
     """Submit jobs to Iris clusters."""
     controller_url = require_controller_url(ctx)
+    config = ctx.obj.get("config") if ctx.obj else None
+    dashboard_url = config.dashboard_url if config else None
     validate_extra_resources(tpu, gpu, memory, disk, enable_extra_resources)
     validate_region_zone(region or None, zone, ctx.obj.get("config"))
 
@@ -914,6 +924,7 @@ def run(
             preemptible=preemptible,
             token_provider=ctx.obj.get("token_provider"),
             submit_argv=submit_argv,
+            dashboard_url=dashboard_url or None,
         )
     except Exception:
         bundle = ctx.obj.get("provider_bundle")

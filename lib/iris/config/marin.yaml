@@ -2,6 +2,7 @@
 # Usage: uv run iris --cluster=marin cluster start
 
 log_server_config: marin
+dashboard_url: https://iris.oa.dev
 
 platform:
   label_prefix: marin
@@ -9,6 +10,8 @@ platform:
     project_id: hai-gcp-models
 
 defaults:
+  ssh:
+    impersonate_service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
   autoscaler:
     evaluation_interval:
       milliseconds: 10000
