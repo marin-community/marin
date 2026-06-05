@@ -46,28 +46,40 @@ def test_rl_decode_matrix_cases_are_decode_heavy():
 
 def test_dense_expansion_matrix_covers_required_workload_shapes():
     cases = bench.matrix_cases(bench.DENSE_EXPANSION_MATRIX)
-    by_name = {case.name: case for case in cases}
 
-    assert set(by_name) == {
-        "decode_b32_i1_o128_n1",
-        "decode_b32_i1_o512_n1",
-        "decode_b32_i1_o2048_n1",
-        "decode_b32_i1_o128_n4",
-        "decode_b32_i1_o512_n4",
-        "decode_b32_i1_o2048_n4",
-        "mixed_b32_i128_o512_n1",
-        "mixed_b32_i512_o128_n1",
-        "mixed_b32_i512_o512_n1",
-        "mixed_b32_i512_o512_n4",
-        "mixed_b8_i512_o512_n1",
-        "prefill_b8_i2048_o128_n1",
-        "prefill_b8_i2048_o128_n4",
-        "pressure_b128_i1_o128_n1",
-        "pressure_b128_i1_o128_n4",
-        "churn_b64_i128_o512_n1",
-        "churn_b64_i128_o512_n4",
+    decode_cases = [case for case in cases if case.input_tokens == 1 and case.active_sequences == 32]
+    mixed_cases = [case for case in cases if case.input_tokens in {128, 512} and case.active_sequences in {8, 32}]
+    prefill_cases = [case for case in cases if case.input_tokens == 2048]
+    pressure_cases = [case for case in cases if case.active_sequences == 128]
+    churn_cases = [case for case in cases if case.active_sequences == 64]
+
+    assert {(case.output_tokens, case.n) for case in decode_cases} == {
+        (128, 1),
+        (512, 1),
+        (2048, 1),
+        (128, 4),
+        (512, 4),
+        (2048, 4),
     }
-    assert {case.output_tokens for case in cases if case.name.startswith("decode_")} == {128, 512, 2048}
+    assert {(case.active_sequences, case.input_tokens, case.output_tokens, case.n) for case in mixed_cases} == {
+        (32, 128, 512, 1),
+        (32, 512, 128, 1),
+        (32, 512, 512, 1),
+        (32, 512, 512, 4),
+        (8, 512, 512, 1),
+    }
+    assert {(case.active_sequences, case.output_tokens, case.n) for case in prefill_cases} == {
+        (8, 128, 1),
+        (8, 128, 4),
+    }
+    assert {(case.input_tokens, case.output_tokens, case.n) for case in pressure_cases} == {
+        (1, 128, 1),
+        (1, 128, 4),
+    }
+    assert {(case.input_tokens, case.output_tokens, case.n) for case in churn_cases} == {
+        (128, 512, 1),
+        (128, 512, 4),
+    }
     assert {case.n for case in cases} == {1, 4}
     assert all(case.input_tokens + case.output_tokens <= 4096 for case in cases)
     assert any(case.input_tokens > case.output_tokens for case in cases)

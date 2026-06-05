@@ -1,4 +1,31 @@
-# Debugging log for Qwen3 mixed progress
+---
+date: 2026-06-04
+system: levanter
+severity: degraded
+resolution: mitigated
+pr: https://github.com/marin-community/marin/pull/6176
+issue: https://github.com/marin-community/marin/issues/6184
+---
+
+# Qwen3 Mixed-Prompt TPU Inference Progress
+
+## TL;DR
+
+- Levanter `mixed_b32_i512_o512_n1` on v6e-8 generated only 4096 of the expected
+  16384 completion tokens, then stopped after two zero-progress decode
+  iterations.
+- The issue was caused by passing 32 prompts of 512 tokens into one engine
+  `generate()` call while `max_prefill_size` was 4096. Only the first 8 prompts
+  fit in the single prefill admission; the remaining 24 requests were never
+  admitted.
+- PR #6176 mitigates correctness by splitting OpenAI serving batches by
+  aggregate prompt-token budget, so long-prompt workloads complete instead of
+  silently dropping requests.
+- This mitigation serializes the original 32-request workload into four
+  8-request engine calls. Issue #6184 tracks the next performance fix:
+  engine-level multi-prefill admission or overlap for one logical service batch.
+
+## Goal
 
 Goal: isolate why Levanter `mixed_b32_i512_o512_n1` on v6e-8 generated about 4096 completion tokens instead of 16384, then hit two zero-progress decode iterations.
 
