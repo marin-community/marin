@@ -91,9 +91,6 @@ class DummyTokenInferenceContext(BaseInferenceContext):
     def tokenizer_identity(self) -> TokenizerIdentity:
         return TokenizerIdentity(name_or_path="gpt2", vocab_size=len(self.tokenizer))
 
-    def policy_identity(self) -> PolicyIdentity:
-        return PolicyIdentity(policy_name="test-policy", checkpoint_ref="test-checkpoint")
-
     def generate_token_rollouts(self, batch):
         self.batch = batch
         response_tokens = tuple(self.tokenizer.encode("\\boxed{4}", add_special_tokens=False))
@@ -172,6 +169,7 @@ def test_math_env_reward_calculation(gpt2_tokenizer):
 
 def test_math_env_uses_token_rollout_path_when_supported(gpt2_tokenizer):
     inference_ctx = DummyTokenInferenceContext(gpt2_tokenizer)
+    inference_ctx.set_policy_identity(PolicyIdentity(policy_name="policy-a", checkpoint_ref="checkpoint-a"))
     train_data = [
         {"problem": "What is 2+2?", "solution": "\\boxed{4}"},
     ]
@@ -188,6 +186,8 @@ def test_math_env_uses_token_rollout_path_when_supported(gpt2_tokenizer):
 
     assert inference_ctx.batch is not None
     assert inference_ctx.batch.batch_id == "math.train"
+    assert inference_ctx.batch.policy.policy_name == "policy-a"
+    assert inference_ctx.batch.policy.checkpoint_ref == "checkpoint-a"
     assert len(inference_ctx.batch.requests) == 1
     assert inference_ctx.batch.requests[0].n_generations == 2
     assert inference_ctx.batch.requests[0].sampling.top_k == 8

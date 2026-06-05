@@ -194,6 +194,46 @@ def test_log_lesson_eval_uses_wandb_default_step_and_context_metrics():
     ]
 
 
+def test_current_policy_identity_records_live_weight_and_train_steps():
+    worker = object.__new__(RolloutWorker)
+    worker.config = SimpleNamespace(
+        run_id="rl-run",
+        initial_checkpoint="gs://checkpoints/initial",
+        inference_type="levanter",
+        worker_index=2,
+    )
+    worker._current_weight_step = 128
+    worker._current_train_step = 130
+
+    policy = worker._current_policy_identity()
+
+    assert policy.policy_name == "rl-run"
+    assert policy.checkpoint_ref == "rl-run:weight_step:128"
+    assert policy.checkpoint_step == 128
+    assert policy.weight_version == "weight_step:128"
+    assert policy.metadata == {"train_step": 130, "inference_type": "levanter", "worker_index": 2}
+
+
+def test_current_policy_identity_uses_initial_checkpoint_before_weight_step():
+    worker = object.__new__(RolloutWorker)
+    worker.config = SimpleNamespace(
+        run_id="rl-run",
+        initial_checkpoint="gs://checkpoints/initial",
+        inference_type="vllm",
+        worker_index=0,
+    )
+    worker._current_weight_step = -1
+    worker._current_train_step = -1
+
+    policy = worker._current_policy_identity()
+
+    assert policy.policy_name == "rl-run"
+    assert policy.checkpoint_ref == "gs://checkpoints/initial"
+    assert policy.checkpoint_step is None
+    assert policy.weight_version == "weight_step:-1"
+    assert policy.metadata == {"train_step": -1, "inference_type": "vllm", "worker_index": 0}
+
+
 def test_stage_vllm_metadata_locally_copies_hf_metadata(tmp_path, monkeypatch):
     remote_dir = tmp_path / "remote-model"
     remote_dir.mkdir()

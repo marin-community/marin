@@ -81,8 +81,14 @@ class BaseInferenceContext:
         vocab_size = len(self.tokenizer) if hasattr(self.tokenizer, "__len__") else None
         return TokenizerIdentity(name_or_path=str(name_or_path), revision=revision, vocab_size=vocab_size)
 
+    def set_policy_identity(self, policy: PolicyIdentity) -> None:
+        """Set policy identity used for subsequent token-native rollout batches."""
+        self._policy_identity = policy
+
     def policy_identity(self) -> PolicyIdentity:
         """Return best-effort policy identity for token-native rollout batches."""
+        if hasattr(self, "_policy_identity"):
+            return self._policy_identity
         model_ref = getattr(self, "canonical_model_name", None)
         if model_ref is None:
             model_ref = getattr(self, "model_name", None)
