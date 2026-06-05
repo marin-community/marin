@@ -423,57 +423,98 @@ fn assert_namespaced_layout(data_dir: &Path) -> Result<(), StatsError> {
 /// the engine's `boot_reconcile` (run by `bootstrap_maintenance`), not here.
 pub fn adopt_store_from_disk(data_dir: &Path, catalog: &Catalog) -> Result<(), StatsError> {
     assert_namespaced_layout(data_dir)?;
-    let ns_dirs = enumerate_namespace_dirs(data_dir)?;
+    for (namespace, ns_dir) in enumerate_namespace_dirs(data_dir)? {
+        adopt_one_namespace_dir(catalog, &namespace, &ns_dir)?;
+    }
+    Ok(())
+}
 
-    for (namespace, ns_dir) in ns_dirs {
-        let is_log = namespace == LOG_NAMESPACE_NAME;
+/// Footer-scan one namespace dir and persist its `namespaces` + `segments` rows.
+///
+/// Returns `true` when the namespace was adopted (had a readable segment),
+/// `false` when the dir had no readable segment (skipped). NOT the live
+/// registry — the caller's `rehydrate_from_catalog` reads these rows back and
+/// builds the engine. The store-form schema already carries `seq` (recovered
+/// from the footer).
+///
+/// EXCEPTION: the privileged `log` namespace's schema is NOT recovered from
+/// parquet — `Store::ensure_log_namespace_registered` re-establishes its
+/// canonical fixed schema (key_column="key") on every boot. Skipping the `log`
+/// schema row here means rehydrate builds no log engine, so
+/// ensure_log_namespace_registered's register path runs with the canonical
+/// schema. The log SEGMENTS are still persisted, and the log engine's
+/// `adopt_local_segments` picks them up from the catalog.
+fn adopt_one_namespace_dir(
+    catalog: &Catalog,
+    namespace: &str,
+    ns_dir: &Path,
+) -> Result<bool, StatsError> {
+    let is_log = namespace == LOG_NAMESPACE_NAME;
 
-        let schema = match recover_schema_from_segments(&ns_dir) {
-            Some(s) => s,
-            None => {
-                // No readable segment. A non-log namespace dir with no parquet
-                // contributes nothing: the dir's existence alone is not enough
-                // to recover a schema, so we skip — the log ns is re-established
-                // by ensure_log_namespace_registered regardless.
-                if !is_log {
-                    tracing::info!(
-                        namespace,
-                        "adopt: namespace dir has no readable segment; skipping"
-                    );
-                }
-                continue;
+    let schema = match recover_schema_from_segments(ns_dir) {
+        Some(s) => s,
+        None => {
+            // No readable segment. A non-log namespace dir with no parquet
+            // contributes nothing: the dir's existence alone is not enough to
+            // recover a schema, so we skip — the log ns is re-established by
+            // ensure_log_namespace_registered regardless.
+            if !is_log {
+                tracing::info!(
+                    namespace,
+                    "adopt: namespace dir has no readable segment; skipping"
+                );
             }
-        };
-
-        // Persist the namespaces row (NOT the live registry) so the subsequent
-        // `rehydrate_from_catalog` builds the engine. The store-form schema
-        // already carries `seq` (recovered from the footer).
-        //
-        // EXCEPTION: the privileged `log` namespace's schema is NOT recovered
-        // from parquet — `Store::ensure_log_namespace_registered` re-establishes
-        // its canonical fixed schema (key_column="key") on every boot. Skipping
-        // the `log` schema row here means rehydrate builds no log engine, so
-        // ensure_log_namespace_registered's register path runs with the
-        // canonical schema. The log SEGMENTS are still persisted below, and the
-        // log engine's `adopt_local_segments` picks them up from the catalog.
-        if !is_log {
-            catalog.upsert(&namespace, &schema)?;
+            return Ok(false);
         }
+    };
 
-        // Footer-scan with the namespace's effective key column. For `log` the
-        // canonical key is "key" (a STRING column carrying no Int64 stats, so
-        // key bounds stay None), which the heuristic schema also resolves to.
-        let rows = adopt_namespace_from_disk(&ns_dir, &namespace, &schema);
-        for row in &rows {
-            catalog.upsert_segment(row)?;
+    if !is_log {
+        catalog.upsert(namespace, &schema)?;
+    }
+
+    // Footer-scan with the namespace's effective key column. For `log` the
+    // canonical key is "key" (a STRING column carrying no Int64 stats, so key
+    // bounds stay None), which the heuristic schema also resolves to.
+    let rows = adopt_namespace_from_disk(ns_dir, namespace, &schema);
+    for row in &rows {
+        catalog.upsert_segment(row)?;
+    }
+
+    tracing::info!(
+        namespace,
+        segments = rows.len(),
+        next_seq = recover_next_seq(&rows),
+        "adopt: rebuilt namespace from disk"
+    );
+    Ok(true)
+}
+
+/// Reconcile namespace dirs present on disk but ABSENT from the persisted
+/// catalog, WITHOUT a full rescan.
+///
+/// Runs on every `done`-sentinel boot. The sentinel fast-path otherwise blocks
+/// the disk scan forever, so a namespace an OLDER binary skipped — e.g. a
+/// microsecond-timestamp namespace that `recover_schema_from_segments` rejected
+/// before the `arrow_to_column_type` fix — would stay permanently invisible
+/// even after the binary is fixed. This re-discovers exactly those: it skips
+/// `log` (re-established separately) and every already-cataloged namespace, so
+/// the steady state is one `readdir` + footer reads of ONLY the not-yet-known
+/// dirs (the large `log`/iris.* namespaces are never re-scanned).
+fn adopt_missing_namespaces(data_dir: &Path, catalog: &Catalog) -> Result<(), StatsError> {
+    assert_namespaced_layout(data_dir)?;
+    let known: std::collections::HashSet<String> =
+        catalog.list_all()?.into_iter().map(|(n, _)| n).collect();
+    for (namespace, ns_dir) in enumerate_namespace_dirs(data_dir)? {
+        if namespace == LOG_NAMESPACE_NAME || known.contains(&namespace) {
+            continue;
         }
-
-        tracing::info!(
-            namespace,
-            segments = rows.len(),
-            next_seq = recover_next_seq(&rows),
-            "adopt: rebuilt namespace from disk"
-        );
+        if adopt_one_namespace_dir(catalog, &namespace, &ns_dir)? {
+            tracing::warn!(
+                namespace,
+                "adopt: reconciled a namespace present on disk but missing from the catalog \
+                 (an older binary likely skipped it before the done sentinel was stamped)"
+            );
+        }
     }
     Ok(())
 }
@@ -497,7 +538,13 @@ pub fn ensure_catalog_adopted(
         return Ok(());
     };
     if read_sentinel_state(data_dir) == Some(AdoptionState::Done) {
-        tracing::debug!("catalog adoption: done sentinel; skipping disk scan");
+        tracing::debug!("catalog adoption: done sentinel; skipping full disk scan");
+        // The sidecar is authoritative for known namespaces, but still
+        // reconcile any namespace dir on disk that the catalog doesn't know
+        // about — otherwise a namespace an older binary skipped stays invisible
+        // forever (the sentinel blocks the full scan). Cheap: skips `log` and
+        // every cataloged namespace, footer-scanning only unknown dirs.
+        adopt_missing_namespaces(data_dir, catalog)?;
         return Ok(());
     }
     // Cheap top-level pre-flight BEFORE stamping in-progress: a flat (legacy)
@@ -726,6 +773,45 @@ mod tests {
         // The sidecar persisted 2 segments; the fast path did not rescan, so the
         // new (untracked) segment is invisible until a real re-adoption.
         assert_eq!(after_second.segment_count, 2);
+
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    #[test]
+    fn ensure_catalog_adopted_reconciles_missing_namespace_on_done() {
+        // Regression: a namespace dir present on disk but absent from the catalog
+        // (e.g. one an older binary skipped) must be re-adopted on a done-sentinel
+        // boot — otherwise the sentinel hides it forever.
+        let data_dir = tempdir("reconcile");
+        let worker_dir = data_dir.join("iris.worker");
+        std::fs::create_dir_all(&worker_dir).unwrap();
+        write_segment_to_dir(&worker_dir, 0, 1, &worker_batch(1, vec![10, 20, 30])).unwrap();
+
+        // First boot: adopts iris.worker, stamps done.
+        let catalog = Catalog::open(Some(&data_dir)).unwrap();
+        ensure_catalog_adopted(Some(&data_dir), &catalog).unwrap();
+        assert_eq!(read_sentinel_state(&data_dir), Some(AdoptionState::Done));
+
+        // A namespace dir the catalog never learned about appears on disk.
+        let probes_dir = data_dir.join("infra.canary.probes");
+        std::fs::create_dir_all(&probes_dir).unwrap();
+        write_segment_to_dir(&probes_dir, 0, 1, &worker_batch(1, vec![40, 50])).unwrap();
+
+        // Second boot on the done sentinel: the missing namespace is reconciled
+        // in (the full scan stays skipped).
+        let catalog2 = Catalog::open(Some(&data_dir)).unwrap();
+        ensure_catalog_adopted(Some(&data_dir), &catalog2).unwrap();
+        let stats = catalog2
+            .aggregate_namespace_stats("infra.canary.probes")
+            .unwrap();
+        assert_eq!(stats.segment_count, 1);
+        assert_eq!(stats.row_count, 2);
+        // The already-known namespace is untouched.
+        assert!(catalog2
+            .list_all()
+            .unwrap()
+            .iter()
+            .any(|(n, _)| n == "iris.worker"));
 
         std::fs::remove_dir_all(&data_dir).ok();
     }
