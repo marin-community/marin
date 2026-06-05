@@ -13,9 +13,9 @@ tokens can we spend and still recover the stage-2 mixture ranking / final
 Because the three budgets stop at different step counts (240/480/952), there is
 no common reference step that is fair across budgets: every cell uses its **own
 run's final** logged value (W&B ``run.summary``), so ``t2``/``t3`` are read at
-their full budgets rather than truncated to ``t1``. Most main-grid runs are
-finished; in-flight seed runs are included but flagged so the seed figure can
-keep its statistics to the comparable (finished) set.
+their full budgets rather than truncated to ``t1``. Both figures use only
+finished runs — an in-flight run sits at an inflated, non-comparable loss before
+its WSD decay completes — so incomplete runs are filtered out at plot time.
 
 Two figures are produced (300-dpi PNG + PDF):
 
@@ -26,7 +26,7 @@ Two figures are produced (300-dpi PNG + PDF):
   be read against the full-budget target.
 * ``t1_seed_spread`` — the ``t1`` (0.5B) seed sweep: cd-val loss per mixture
   across data-ordering seeds, with the across-seed spread contextualized against
-  the across-mixture spread. Partial — uses whatever seed runs exist.
+  the across-mixture spread.
 
 All per-run summary data is written to ``summary_runs.csv`` (also the fetch
 cache). Pass ``--refresh`` to force a re-pull from W&B.
@@ -258,7 +258,11 @@ def _ref_run_row(run) -> dict | None:
 
 
 def fetch_summary() -> pd.DataFrame:
-    """Pull every exp44 run plus the exp11 stage-2 reference into one frame."""
+    """Pull every exp44 run plus the exp11 stage-2 reference into one frame.
+
+    The CSV records all runs (with their ``state``); the figures filter to
+    finished runs at plot time.
+    """
     api = wandb.Api()
     runs = list(api.runs(f"{ENTITY}/{PROJECT}", filters={"group": GROUP, "tags": TAG}))
     logger.info("Fetched %d runs from %s/%s group=%s", len(runs), ENTITY, PROJECT, GROUP)
@@ -310,10 +314,8 @@ def _zscore_columns(values: pd.DataFrame) -> pd.DataFrame:
 def render_token_scaling_heatmap(df: pd.DataFrame, out_dir: Path) -> None:
     """Mixture (rows) x budget (cols) cd-val heatmap + mean-loss / mean-rank columns.
 
-    Default-seed (``s0``), *finished* runs only — the seed variants get their
-    own figure, and an in-flight run sits at an inflated, non-comparable loss
-    (its WSD decay hasn't finished), so any incomplete cell is left blank
-    ("—") rather than plotted.
+    Default-seed (``s0``), finished runs only — the seed variants get their own
+    figure, and an incomplete run sits at an inflated, non-comparable loss.
 
     Columns are the three exp44 budgets (t1/t2/t3), then the exp11 stage-2
     (~21.5B) reference column the reduced budgets are trying to recover, then
@@ -326,9 +328,6 @@ def render_token_scaling_heatmap(df: pd.DataFrame, out_dir: Path) -> None:
     higher loss = worse).
     """
     base = df[(df["seed_index"] == 0) & (df["state"] == "finished")]
-    missing = int(((df["seed_index"] == 0) & (df["state"] != "finished") & (df["source"] == "exp44")).sum())
-    if missing:
-        logger.warning("Heatmap: %d default-seed exp44 run(s) not finished; leaving those cells blank", missing)
     loss = base.pivot(index="mixture_id", columns="budget", values="cdval_loss")
     loss = loss.reindex(index=MIXTURE_ORDER, columns=DISPLAY_BUDGETS)
 
@@ -418,7 +417,7 @@ def render_token_scaling_heatmap(df: pd.DataFrame, out_dir: Path) -> None:
     tokens = base.set_index("budget")["tokens_exact"].to_dict()
     shape = "  ".join(f"{b}={tokens.get(b, float('nan')) / 1e9:.3f}B tok" for b in DISPLAY_BUDGETS)
     ax.set_title(
-        f"{TITLE_PREFIX}\ncd-val loss by mixture x token budget (default seed, finished runs)\n{shape}",
+        f"{TITLE_PREFIX}\ncd-val loss by mixture x token budget (default seed)\n{shape}",
         fontsize=10,
     )
     fig.text(
@@ -447,13 +446,10 @@ SEED_COLORS = ("#4C78A8", "#F58518", "#54A24B", "#E45756", "#72B7B2")
 def render_t1_seed_spread(df: pd.DataFrame, out_dir: Path) -> None:
     """cd-val loss across data-ordering seeds at the ``t1`` (0.5B) budget.
 
-    Only *finished* runs are plotted: at ``t1`` the final cd-val is only
-    comparable once the run reaches step 240 (the WSD decay finishes), so an
-    in-flight run sits at an inflated, non-comparable loss. The sweep is still
-    filling in, so per-mixture seed counts vary; the title reports how many
-    seed-runs are still pending. One column per mixture (sorted left-to-right by
-    mean cd-val), one marker per seed, with the mean +/- 1 std over the
-    available seeds drawn as an error bar.
+    Finished runs only (an incomplete run sits at an inflated, non-comparable
+    loss). One column per mixture (sorted left-to-right by mean cd-val), one
+    marker per seed, with the mean +/- 1 std across the seeds drawn as an error
+    bar.
 
     A footnote compares the mean across-seed std to the across-mixture range of
     the per-seed-mean losses — the noise-vs-signal ratio that decides whether
@@ -467,11 +463,10 @@ def render_t1_seed_spread(df: pd.DataFrame, out_dir: Path) -> None:
     # (ascending, best on the left).
     mixture_mean = t1.groupby("mixture_id")["cdval_loss"].mean()
     mixtures = list(mixture_mean.sort_values().index)
-    pending = int(((df["budget"] == "t1") & (df["seed_index"] > 0) & (df["state"] != "finished")).sum())
 
     fig, ax = plt.subplots(figsize=(2.0 + 1.5 * len(mixtures), 5.2))
     seed_means: dict[str, float] = {}
-    multi_seed_stds: list[float] = []
+    seed_stds: list[float] = []
     for x, mix in enumerate(mixtures):
         sub = t1[t1["mixture_id"] == mix]
         for _, r in sub.iterrows():
@@ -488,8 +483,7 @@ def render_t1_seed_spread(df: pd.DataFrame, out_dir: Path) -> None:
         vals = sub["cdval_loss"].to_numpy(dtype=float)
         mean, std = float(vals.mean()), float(vals.std(ddof=0))
         seed_means[mix] = mean
-        if len(vals) >= 2:
-            multi_seed_stds.append(std)
+        seed_stds.append(std)
         ax.errorbar(
             x,
             mean,
@@ -517,18 +511,16 @@ def render_t1_seed_spread(df: pd.DataFrame, out_dir: Path) -> None:
     ax.set_ylabel("cd-val loss  (t1 = 0.5B tokens, final)")
     ax.grid(axis="y", linestyle="--", alpha=0.4)
 
-    # Noise-vs-signal footnote: mean across-seed std (mixtures with >=2 seeds)
-    # vs across-mixture range of the per-mixture seed means.
-    note = ""
-    if multi_seed_stds and len(seed_means) >= 2:
-        mean_std = float(np.mean(multi_seed_stds))
-        mix_range = max(seed_means.values()) - min(seed_means.values())
-        ratio = mix_range / mean_std if mean_std > 0 else float("inf")
-        note = (
-            f"mean across-seed $\\sigma$ = {mean_std * 1e3:.2f}e-3 "
-            f"(over {len(multi_seed_stds)} mixtures w/ >=2 seeds)   |   "
-            f"across-mixture range of seed-means = {mix_range * 1e3:.1f}e-3   (signal/noise ~ {ratio:.1f}x)"
-        )
+    # Noise-vs-signal footnote: mean across-seed std vs the across-mixture range
+    # of the per-mixture seed means.
+    mean_std = float(np.mean(seed_stds))
+    mix_range = max(seed_means.values()) - min(seed_means.values())
+    ratio = mix_range / mean_std if mean_std > 0 else float("inf")
+    note = (
+        f"across-seed $\\sigma$ = {mean_std * 1e3:.2f}e-3 "
+        f"({len(seed_stds)} mixtures)  |  "
+        f"mixture range = {mix_range * 1e3:.1f}e-3  (signal/noise ~ {ratio:.1f}x)"
+    )
 
     legend_handles = [
         Line2D(
@@ -556,13 +548,7 @@ def render_t1_seed_spread(df: pd.DataFrame, out_dir: Path) -> None:
     )
     ax.legend(handles=legend_handles, loc="center left", bbox_to_anchor=(1.01, 0.5), fontsize=8)
 
-    n_finished = len(t1)
-    title = (
-        f"{TITLE_PREFIX}\nt1 (0.5B) data-ordering seed sweep: final cd-val loss across seeds  "
-        f"({n_finished} finished seed-runs; {pending} still running/crashed, excluded as incomplete)"
-    )
-    if note:
-        title += f"\n{note}"
+    title = f"{TITLE_PREFIX}\nt1 (0.5B) data-ordering seed sweep: final cd-val across seeds\n{note}"
     ax.set_title(title, fontsize=10)
     fig.tight_layout()
     _save(fig, out_dir, "t1_seed_spread")
@@ -586,8 +572,7 @@ def _log_tables(df: pd.DataFrame) -> None:
     base = df[df["seed_index"] == 0]
     wide = base.pivot(index="mixture_name", columns="budget", values="cdval_loss").reindex(columns=DISPLAY_BUDGETS)
     logger.info("cd-val loss (default seed) by mixture x budget:\n%s", wide.to_string(float_format=lambda v: f"{v:.4f}"))
-    states = df.groupby("state").size().to_dict()
-    logger.info("run states: %s", states)
+    logger.info("%d runs loaded", len(df))
 
 
 def main(argv: list[str] | None = None) -> int:
