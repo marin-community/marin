@@ -51,7 +51,7 @@ from iris.env_resources import TaskResources
 from rigging.filesystem import open_url, url_to_fs
 from rigging.timing import RateLimiter, log_time
 
-from zephyr.plan import deterministic_hash
+from zephyr.plan import composite_sort_key, deterministic_hash
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -512,15 +512,7 @@ class ScatterWriter:
             buffer_limit_bytes if buffer_limit_bytes is not None else _default_scatter_write_buffer_bytes()
         )
 
-        if sort_fn is not None:
-            captured_sort_fn = sort_fn
-
-            def _sort_key(item: Any) -> Any:
-                return (key_fn(item), captured_sort_fn(item))
-
-            self._sort_key = _sort_key
-        else:
-            self._sort_key = key_fn
+        self._sort_key = composite_sort_key(key_fn, sort_fn)
 
         self._buffers: dict[int, list] = defaultdict(list)
         self._shard_ranges: dict[int, list[tuple[int, int]]] = defaultdict(list)

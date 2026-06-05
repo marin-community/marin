@@ -636,6 +636,22 @@ def make_windows(
         yield window
 
 
+def composite_sort_key(key_fn: Callable, sort_fn: Callable | None) -> Callable:
+    """Build a merge/sort key from a grouping key and an optional secondary sort.
+
+    Returns ``key_fn`` unchanged when ``sort_fn`` is None. Otherwise returns a
+    callable producing ``(key_fn(item), sort_fn(item))`` so items order first by
+    group key and then by the secondary key; grouping should still use
+    ``key_fn`` alone. Used by both the scatter writer (pre-sort within a chunk)
+    and the reduce-side k-way merge so the two stay consistent.
+    """
+    if sort_fn is None:
+        return key_fn
+    # Bind to a non-Optional local so the closure captures a narrowed type.
+    secondary = sort_fn
+    return lambda item: (key_fn(item), secondary(item))
+
+
 def _merge_sorted_chunks(
     shard: Shard, key_fn: Callable, sort_fn: Callable | None = None, external_sort_dir: str | None = None
 ) -> Iterator[tuple[object, Iterator]]:
@@ -655,15 +671,7 @@ def _merge_sorted_chunks(
         Tuples of (key, iterator_of_items) for each unique key
     """
     # Merge by composite key when sort_fn is provided, but group by key_fn only.
-    # Rebind to captured_sort_fn so pyrefly narrows the type inside the closure.
-    if sort_fn is not None:
-        captured_sort_fn = sort_fn
-
-        def merge_key(item):
-            return (key_fn(item), captured_sort_fn(item))
-
-    else:
-        merge_key = key_fn
+    merge_key = composite_sort_key(key_fn, sort_fn)
 
     # Check if external sort is needed BEFORE materializing all iterators.
     # ScatterReader can decide using manifest stats (no file opens needed).
