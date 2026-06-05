@@ -7,7 +7,7 @@ Companion to ``exp44_token_scaling_sweep.py``. The sweep asks: how few training
 tokens can we spend and still recover the stage-2 mixture ranking / final
 ``protein-docs-cd-val`` loss? It is a 2-D grid — three token budgets
 (``t1``=0.5B, ``t2``=1B, ``t3``=2B) crossed with six ``cd`` mixtures
-(``m10``..``m15``) — plus a ``t1``-only data-ordering seed sweep
+(``m10``..``m15``) — plus a ``t1``- and ``t3``-budget data-ordering seed sweep
 (``s0``=default 1729 .. ``s4``) that isolates data-permutation noise.
 
 Because the three budgets stop at different step counts (240/480/952), there is
@@ -17,16 +17,16 @@ their full budgets rather than truncated to ``t1``. Both figures use only
 finished runs — an in-flight run sits at an inflated, non-comparable loss before
 its WSD decay completes — so incomplete runs are filtered out at plot time.
 
-Two figures are produced (300-dpi PNG + PDF):
+Three figures are produced (300-dpi PNG + PDF):
 
 * ``token_scaling_heatmap`` — the mixture x budget table heatmap of cd-val loss,
   with per-budget ranks and two aggregation columns (mean loss across budgets,
   mean rank across budgets). A subtly-marked reference column reuses exp11's
   stage-2 (~21.5B-token) scale-sweep cd-val so the reduced-budget rankings can
   be read against the full-budget target.
-* ``t1_seed_spread`` — the ``t1`` (0.5B) seed sweep: cd-val loss per mixture
-  across data-ordering seeds, with the across-seed spread contextualized against
-  the across-mixture spread.
+* ``t1_seed_spread`` / ``t3_seed_spread`` — the ``t1`` (0.5B) and ``t3`` (2B)
+  seed sweeps: cd-val loss per mixture across data-ordering seeds, with the
+  across-seed spread contextualized against the across-mixture spread.
 
 All per-run summary data is written to ``summary_runs.csv`` (also the fetch
 cache). Pass ``--refresh`` to force a re-pull from W&B.
@@ -242,9 +242,9 @@ def _ref_run_row(run) -> dict | None:
         "state": run.state,
         "step": int(step) if step is not None else None,
         "num_train_steps": int(num_train_steps) if num_train_steps else None,
-        "pct_complete": round(100.0 * (int(step) + 1) / int(num_train_steps), 1)
-        if step is not None and num_train_steps
-        else None,
+        "pct_complete": (
+            round(100.0 * (int(step) + 1) / int(num_train_steps), 1) if step is not None and num_train_steps else None
+        ),
         "tokens_exact": tokens_exact,
         "params_exact": _parse_int_tag(tags, "params_exact="),
         "total_gflops": summary.get(TOTAL_GFLOPS_KEY),
@@ -443,8 +443,8 @@ def render_token_scaling_heatmap(df: pd.DataFrame, out_dir: Path) -> None:
 SEED_COLORS = ("#4C78A8", "#F58518", "#54A24B", "#E45756", "#72B7B2")
 
 
-def render_t1_seed_spread(df: pd.DataFrame, out_dir: Path) -> None:
-    """cd-val loss across data-ordering seeds at the ``t1`` (0.5B) budget.
+def render_seed_spread(df: pd.DataFrame, out_dir: Path, budget: str) -> None:
+    """cd-val loss across data-ordering seeds at one swept budget (``t1``/``t3``).
 
     Finished runs only (an incomplete run sits at an inflated, non-comparable
     loss). One column per mixture (sorted left-to-right by mean cd-val), one
@@ -453,22 +453,23 @@ def render_t1_seed_spread(df: pd.DataFrame, out_dir: Path) -> None:
 
     A footnote compares the mean across-seed std to the across-mixture range of
     the per-seed-mean losses — the noise-vs-signal ratio that decides whether
-    the mixture ranking is recoverable at 0.5B tokens.
+    the mixture ranking is recoverable at this token budget.
     """
-    t1 = df[(df["budget"] == "t1") & (df["state"] == "finished") & df["cdval_loss"].notna()].copy()
-    if t1.empty:
-        logger.warning("No finished t1 cd-val data; skipping seed figure")
+    budget_label = f"{budget} = {BUDGET_NOMINAL[budget]} tokens"
+    seeded = df[(df["budget"] == budget) & (df["state"] == "finished") & df["cdval_loss"].notna()].copy()
+    if seeded.empty:
+        logger.warning("No finished %s cd-val data; skipping seed figure", budget)
         return
     # Sort the x-axis by each mixture's mean cd-val across its finished seeds
     # (ascending, best on the left).
-    mixture_mean = t1.groupby("mixture_id")["cdval_loss"].mean()
+    mixture_mean = seeded.groupby("mixture_id")["cdval_loss"].mean()
     mixtures = list(mixture_mean.sort_values().index)
 
     fig, ax = plt.subplots(figsize=(2.0 + 1.5 * len(mixtures), 5.2))
     seed_means: dict[str, float] = {}
     seed_stds: list[float] = []
     for x, mix in enumerate(mixtures):
-        sub = t1[t1["mixture_id"] == mix]
+        sub = seeded[seeded["mixture_id"] == mix]
         for _, r in sub.iterrows():
             si = int(r["seed_index"])
             ax.scatter(
@@ -508,7 +509,7 @@ def render_t1_seed_spread(df: pd.DataFrame, out_dir: Path) -> None:
 
     ax.set_xticks(range(len(mixtures)))
     ax.set_xticklabels([MIXTURE_NAMES[m] for m in mixtures], rotation=20, ha="right")
-    ax.set_ylabel("cd-val loss  (t1 = 0.5B tokens, final)")
+    ax.set_ylabel(f"cd-val loss  ({budget_label}, final)")
     ax.grid(axis="y", linestyle="--", alpha=0.4)
 
     # Noise-vs-signal footnote: mean across-seed std vs the across-mixture range
@@ -548,10 +549,13 @@ def render_t1_seed_spread(df: pd.DataFrame, out_dir: Path) -> None:
     )
     ax.legend(handles=legend_handles, loc="center left", bbox_to_anchor=(1.01, 0.5), fontsize=8)
 
-    title = f"{TITLE_PREFIX}\nt1 (0.5B) data-ordering seed sweep: final cd-val across seeds\n{note}"
+    title = (
+        f"{TITLE_PREFIX}\n{budget} ({BUDGET_NOMINAL[budget]}) data-ordering seed sweep: "
+        f"final cd-val across seeds\n{note}"
+    )
     ax.set_title(title, fontsize=10)
     fig.tight_layout()
-    _save(fig, out_dir, "t1_seed_spread")
+    _save(fig, out_dir, f"{budget}_seed_spread")
 
 
 # ---------------------------------------------------------------------------
@@ -584,7 +588,8 @@ def main(argv: list[str] | None = None) -> int:
     df = load_or_fetch_summary(refresh=args.refresh)
     _log_tables(df)
     render_token_scaling_heatmap(df, PLOTS_DIR)
-    render_t1_seed_spread(df, PLOTS_DIR)
+    render_seed_spread(df, PLOTS_DIR, "t1")
+    render_seed_spread(df, PLOTS_DIR, "t3")
     return 0
 
 

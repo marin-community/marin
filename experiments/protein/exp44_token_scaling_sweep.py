@@ -21,12 +21,13 @@ Token budgets (``num_evals=8`` each, so the step counts match the issue):
 18 configs = 3 budgets x 6 mixtures. Each config has id ``<budget>-<mixture>``
 (e.g. ``t1-m10``) and is selected with ``RUNS``.
 
-A data-ordering seed sweep adds 24 more configs: the ``t1`` (500M) budget x 6
-mixtures x 4 extra ``data_seed`` values. Index 0 is the default 1729 and keeps
-the original bare id/name; the variants have id ``t1-s<i>-<mixture>`` (e.g.
-``t1-s1-m10``, i in 1..4) and only vary the data permutation — model init stays
-fixed. Variants are selected *only* when the ``SEEDS`` env var opts in, so with
-``SEEDS`` unset the original 18 are returned for any ``RUNS`` needle.
+A data-ordering seed sweep adds 48 more configs: the ``t1`` (500M) and ``t3``
+(2B) budgets x 6 mixtures x 4 extra ``data_seed`` values. Index 0 is the default
+1729 and keeps the original bare id/name; the variants have id
+``<budget>-s<i>-<mixture>`` (e.g. ``t1-s1-m10``, ``t3-s1-m10``, i in 1..4) and
+only vary the data permutation — model init stays fixed. Variants are selected
+*only* when the ``SEEDS`` env var opts in, so with ``SEEDS`` unset the original
+18 are returned for any ``RUNS`` needle.
 
 Structure mirrors ``exp29_arch_sweep`` / ``exp11_data_mix_sweep``: this script
 runs as a lightweight CPU driver that submits ONE Fray training job (a TPU
@@ -68,12 +69,13 @@ form used to launch the sweep::
             -- python -m experiments.protein.exp44_token_scaling_sweep
     done
 
-Seed sweep (``t1`` / 500M only) — one driver per (mixture, seed); ``SEEDS``
-selects the seed index and ``RUNS`` the variant id::
+Seed sweep (``t1`` / 500M and ``t3`` / 2B) — one driver per (budget, mixture,
+seed); ``SEEDS`` selects the seed index and ``RUNS`` the variant id::
 
-    for s in 1 2 3 4; do
+    for t in t1 t3; do
+     for s in 1 2 3 4; do
       for m in m10 m11 m12 m13 m14 m15; do
-        cfg=t1-s${s}-${m}
+        cfg=${t}-s${s}-${m}
         uv run iris --cluster=marin job run --user "$USERNAME" --no-wait \\
             --job-name prot-exp44-ts-${cfg}-${TIMESTAMP} \\
             --region us-east5 --memory=1GB \\
@@ -83,13 +85,14 @@ selects the seed index and ``RUNS`` the variant id::
             -e SEEDS ${s} -e RUNS ${cfg} \\
             -- python -m experiments.protein.exp44_token_scaling_sweep
       done
+     done
     done
 
 Preview without submitting (seed variants need ``SEEDS`` to appear)::
 
     RUNS=t1-m10 PREVIEW=yes \\
         uv run python -m experiments.protein.exp44_token_scaling_sweep
-    SEEDS=1,2,3,4 RUNS=t1 PREVIEW=yes \\
+    SEEDS=1,2,3,4 RUNS=t1,t3 PREVIEW=yes \\
         uv run python -m experiments.protein.exp44_token_scaling_sweep
 """
 
@@ -224,14 +227,15 @@ LR_DECAY: float = 0.2
 # exp11 scale sweep so cd-val numbers stay directly comparable).
 DATA_SEED: int = 1729
 
-# Data-ordering seed sweep (500M / ``t1`` budget only). Index 0 is the default
-# 1729 — its runs are byte-identical to the original sweep (no seed tag, same
-# config id and trial name). Indices 1..4 add the ``s1``..``s4`` variants that
-# only vary ``data_seed`` (model init / training key stay fixed at the levanter
-# default ``trainer.seed=0``), so this isolates data-permutation noise. Variants
-# are selected only via the ``SEEDS`` env var; see :func:`selected_configs`.
+# Data-ordering seed sweep (``t1`` / 500M and ``t3`` / 2B budgets). Index 0 is
+# the default 1729 — its runs are byte-identical to the original sweep (no seed
+# tag, same config id and trial name). Indices 1..4 add the ``s1``..``s4``
+# variants that only vary ``data_seed`` (model init / training key stay fixed at
+# the levanter default ``trainer.seed=0``), so this isolates data-permutation
+# noise. Variants are selected only via the ``SEEDS`` env var; see
+# :func:`selected_configs`.
 DATA_SEEDS: tuple[int, ...] = (DATA_SEED, 1730, 1731, 1732, 1733)
-SEED_SWEEP_BUDGET_ID: str = "t1"
+SEED_SWEEP_BUDGET_IDS: tuple[str, ...] = ("t1", "t3")
 
 SHUFFLE: bool = True
 PERMUTATION_TYPE: str = "feistel"
@@ -445,11 +449,12 @@ class Config:
 
 # The original 18 configs (every budget x mixture, default seed) — unchanged.
 _DEFAULT_CONFIGS: tuple[Config, ...] = tuple(Config(b, m) for b in TOKEN_BUDGETS for m in SCALE_MIXTURES)
-# Data-seed variants: ``t1`` (500M) only x 6 mixtures x seed indices 1..4 = 24.
+# Data-seed variants: ``t1`` (500M) + ``t3`` (2B) x 6 mixtures x seed indices
+# 1..4 = 48.
 _SEED_VARIANT_CONFIGS: tuple[Config, ...] = tuple(
     Config(b, m, seed_index=i)
     for b in TOKEN_BUDGETS
-    if b.id == SEED_SWEEP_BUDGET_ID
+    if b.id in SEED_SWEEP_BUDGET_IDS
     for m in SCALE_MIXTURES
     for i in range(1, len(DATA_SEEDS))
 )
