@@ -48,17 +48,17 @@ jobs:
     env:
       RUN_ID: canary-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       CANARY_ACCELERATOR: gpu
-      CANARY_BATCH_SIZE: "8"
+      CANARY_BATCH_SIZE: "16"
       CANARY_MODEL_DIM: "2560"
       CANARY_NUM_LAYERS: "20"
-      CANARY_EXPERT_PARALLEL: "8"
+      CANARY_EXPERT_PARALLEL: "16"
       CANARY_OPTIMIZER_TOKENS: "10000000000000"
-      CANARY_GPU_REPLICAS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.gpu_replicas) || '1' }}
+      CANARY_GPU_REPLICAS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.gpu_replicas) || '2' }}
       # TODO(#5524): remove this override once Levanter profiler stop is
       # idempotent. Keeping the profile window off the final callback lets
       # CoreWeave validation proceed independently of that fix.
       CANARY_PROFILER_NUM_STEPS: "10"
-      CANARY_TARGET_TOKENS: "655360"
+      CANARY_TARGET_TOKENS: "1310720"
       CANARY_MIN_STEPS: "20"
       CANARY_MAX_LOSS: "20.0"
       WANDB_ENTITY: marin-community
