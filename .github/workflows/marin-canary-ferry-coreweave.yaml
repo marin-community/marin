@@ -26,6 +26,36 @@ on:
         type: number
         default: 1
         required: false
+      batch_size:
+        description: 'Per-step global batch size'
+        type: number
+        default: 8
+        required: false
+      model_dim:
+        description: 'GPU MoE hidden dimension'
+        type: number
+        default: 2560
+        required: false
+      num_layers:
+        description: 'GPU MoE layer count'
+        type: number
+        default: 19
+        required: false
+      expert_parallel:
+        description: 'Expert-parallel mesh axis size'
+        type: number
+        default: 8
+        required: false
+      profiler_start_step:
+        description: 'Profiler start step'
+        type: number
+        default: 5
+        required: false
+      profiler_num_steps:
+        description: 'Profiler duration in steps'
+        type: number
+        default: 10
+        required: false
 
 permissions:
   contents: read   # actions/checkout
@@ -48,17 +78,19 @@ jobs:
     env:
       RUN_ID: canary-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       CANARY_ACCELERATOR: gpu
-      CANARY_BATCH_SIZE: "16"
-      CANARY_MODEL_DIM: "2560"
-      CANARY_NUM_LAYERS: "20"
-      CANARY_EXPERT_PARALLEL: "16"
+      CANARY_BATCH_SIZE: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.batch_size) || '8' }}
+      CANARY_MODEL_DIM: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.model_dim) || '2560' }}
+      CANARY_NUM_LAYERS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.num_layers) || '19' }}
+      CANARY_EXPERT_PARALLEL: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.expert_parallel) || '8' }}
       CANARY_OPTIMIZER_TOKENS: "10000000000000"
-      CANARY_GPU_REPLICAS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.gpu_replicas) || '2' }}
+      CANARY_GPU_REPLICAS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.gpu_replicas) || '1' }}
       # TODO(#5524): remove this override once Levanter profiler stop is
       # idempotent. Keeping the profile window off the final callback lets
       # CoreWeave validation proceed independently of that fix.
-      CANARY_PROFILER_NUM_STEPS: "10"
-      CANARY_TARGET_TOKENS: "1310720"
+      CANARY_PROFILER_START_STEP: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.profiler_start_step) || '5' }}
+      CANARY_PROFILER_NUM_STEPS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.profiler_num_steps) || '10' }}
+      CANARY_TARGET_TOKENS: "655360"
+      CANARY_CHILD_WAIT_TIMEOUT: "1800"
       CANARY_MIN_STEPS: "20"
       CANARY_MAX_LOSS: "20.0"
       WANDB_ENTITY: marin-community
@@ -133,6 +165,7 @@ jobs:
             -e CANARY_EXPERT_PARALLEL "$CANARY_EXPERT_PARALLEL" \
             -e CANARY_OPTIMIZER_TOKENS "$CANARY_OPTIMIZER_TOKENS" \
             -e CANARY_GPU_REPLICAS "$CANARY_GPU_REPLICAS" \
+            -e CANARY_PROFILER_START_STEP "$CANARY_PROFILER_START_STEP" \
             -e CANARY_PROFILER_NUM_STEPS "$CANARY_PROFILER_NUM_STEPS" \
             -e CANARY_TARGET_TOKENS "$CANARY_TARGET_TOKENS" \
             -e WANDB_ENTITY "$WANDB_ENTITY" \
@@ -159,7 +192,7 @@ jobs:
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "$IRIS_CONFIG" \
             --poll-interval 30 \
-            --timeout 10500 \
+            --child-wait-timeout "$CANARY_CHILD_WAIT_TIMEOUT" \
             --github-output
 
       - name: Validate canary metrics
