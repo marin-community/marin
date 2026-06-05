@@ -31,7 +31,7 @@ from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, hash_token, resolve_auth
+from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, resolve_auth
 from rigging.timing import Timestamp
 from sqlalchemy import text
 from starlette.responses import JSONResponse
@@ -260,7 +260,7 @@ def test_read_snapshot_cannot_access_auth_tables(db: ControllerDB):
     with db.transaction() as _tx:
         writes.ensure_user(_tx, "test-user", now)
     _get_or_create_signing_key(db)
-    create_api_key(db, key_id="k1", key_hash="hash1", key_prefix="pfx", user_id="test-user", name="test", now=now)
+    create_api_key(db, key_id="k1", key_prefix="pfx", user_id="test-user", name="test", now=now)
 
     with db.read_snapshot() as q:
         for table in ["api_keys", "controller_secrets", "auth.api_keys"]:
@@ -273,7 +273,7 @@ def test_write_connection_can_access_auth_tables(db: ControllerDB):
     with db.transaction() as _tx:
         writes.ensure_user(_tx, "test-user", now)
     _get_or_create_signing_key(db)
-    create_api_key(db, key_id="k1", key_hash="hash1", key_prefix="pfx", user_id="test-user", name="test", now=now)
+    create_api_key(db, key_id="k1", key_prefix="pfx", user_id="test-user", name="test", now=now)
 
     with db.transaction() as q:
         rows = q.execute(text("SELECT key_id FROM auth.api_keys")).all()
@@ -300,14 +300,12 @@ def test_api_key_create_lookup_revoke(db: ControllerDB):
     with db.read_snapshot() as _snap:
         assert reads.get_user_role(_snap, "alice") == "admin"
 
-    create_api_key(
-        db, key_id="k1", key_hash=hash_token("secret1"), key_prefix="sec", user_id="alice", name="my-key", now=now
-    )
+    create_api_key(db, key_id="k1", key_prefix="sec", user_id="alice", name="my-key", now=now)
 
     found = lookup_api_key_by_id(db, "k1")
     assert found is not None
     assert found.key_id == "k1"
-    assert found.key_hash == hash_token("secret1")
+    assert found.key_prefix == "sec"
 
     keys = list_api_keys(db, user_id="alice")
     assert len(keys) == 1
@@ -323,7 +321,7 @@ def test_jwt_create_and_verify(db: ControllerDB):
     signing_key = _get_or_create_signing_key(db)
     mgr = JwtTokenManager(signing_key, db=db)
 
-    create_api_key(db, key_id="k-bob", key_hash=None, key_prefix="jwt", user_id="bob", name="test", now=now)
+    create_api_key(db, key_id="k-bob", key_prefix="jwt", user_id="bob", name="test", now=now)
 
     token = mgr.create_token("bob", "user", "k-bob")
     identity = mgr.verify(token)
@@ -340,7 +338,6 @@ def test_revoke_login_keys(db: ControllerDB):
         create_api_key(
             db,
             key_id=f"k-login-{i}",
-            key_hash=None,
             key_prefix="jwt",
             user_id="carol",
             name=f"login-{i}",

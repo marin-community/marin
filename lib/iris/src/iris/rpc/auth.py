@@ -13,7 +13,6 @@ pass through as the anonymous admin user.
 """
 
 import contextlib
-import hashlib
 import logging
 import time
 from contextvars import ContextVar
@@ -60,11 +59,6 @@ def extract_bearer_token(headers: dict) -> str | None:
         return auth_header[len("Bearer ") :]
     cookie_header = headers.get("cookie", "")
     return _extract_cookie(cookie_header, SESSION_COOKIE)
-
-
-def hash_token(raw_token: str) -> str:
-    """SHA-256 hex digest of a raw API key. Used for storage and lookup."""
-    return hashlib.sha256(raw_token.encode()).hexdigest()
 
 
 # Per-request identity set by AuthInterceptor, read by service handlers.
