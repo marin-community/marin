@@ -37,10 +37,21 @@ SHARD_ROWS = Path("scratch/nemotron_math_shard_rows.json")
 CACHE = Path("scratch/jaccard_viewer_cache.json")
 OUTPUT = Path("scratch/jaccard_viewer.html")
 
-BANDS = [(0.95, 1.01), (0.9, 0.95), (0.85, 0.9), (0.8, 0.85), (0.75, 0.8), (0.5, 0.75)]
-PAIRS_PER_BAND = 25
-MAX_TRAIN_SHARDS = 2
-TOP_PAIRS = 25  # always include the globally highest-Jaccard pairs, fetched via row filters
+BANDS = [
+    (0.95, 1.01),
+    (0.9, 0.95),
+    (0.85, 0.9),
+    (0.8, 0.85),
+    (0.75, 0.8),
+    (0.7, 0.75),
+    (0.65, 0.7),
+    (0.6, 0.65),
+    (0.55, 0.6),
+    (0.5, 0.55),
+]
+PAIRS_PER_BAND = 100
+MAX_TRAIN_SHARDS = 16
+TOP_PAIRS = 100  # always include the globally highest-Jaccard pairs, fetched via row filters
 MAX_DOC_CHARS = 40_000
 
 
