@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
+from marin.inference.types import TokenizedRolloutBatchRequest, TokenizedRolloutBatchResult
 from marin.rl.decoding import DecodingConfig
 from marin.rl.types import Rollout
 from openai.types.chat import ChatCompletion
@@ -37,6 +38,15 @@ class BaseInferenceContext:
     def resolve_decoding(self, decoding: DecodingConfig) -> DecodingConfig:
         """Return the concrete decoding config this backend will apply."""
         return decoding
+
+    def supports_token_rollouts(self) -> bool:
+        """Return whether this context implements the low-level token rollout API."""
+        return False
+
+    def generate_token_rollouts(self, batch: TokenizedRolloutBatchRequest) -> TokenizedRolloutBatchResult:
+        """Generate tokenized rollouts without going through OpenAI-compatible serialization."""
+        del batch
+        raise NotImplementedError("This inference context does not implement tokenized rollout generation.")
 
     def batch_completions(
         self,
