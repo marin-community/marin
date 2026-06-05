@@ -441,11 +441,7 @@ mod tests {
                 Arc::clone(&log),
                 vec![
                     Arc::new(Int64Array::from_iter_values(first_seq..first_seq + n)),
-                    Arc::new(Int64Array::from_iter_values(
-                        std::iter::repeat(1)
-                            .take(lines.len() as usize)
-                            .map(|x| x as i64),
-                    )),
+                    Arc::new(Int64Array::from(vec![1_i64; lines.len()])),
                     Arc::new(StringArray::from(lines.to_vec())),
                 ],
             )

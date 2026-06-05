@@ -122,14 +122,26 @@ impl TableProvider for NamespaceProvider {
             Inner::Listing(t) => {
                 // Delegate to DataFusion's parquet scan (which keeps the existing
                 // range / min-max / bloom row-group pruning), then layer the
-                // trigram prune on top by injecting per-file access plans. A query
-                // with no `contains(data, …)` filter is returned untouched.
+                // trigram prune on top by injecting per-file access plans.
                 let plan = t.scan(state, projection, filters, limit).await?;
-                Ok(crate::query::trigram_prune::apply(
-                    plan,
-                    &self.segment_paths,
-                    filters,
-                ))
+                // Hot path: a query with no `contains(data, …)` filter does only
+                // this cheap expr inspection (no I/O) and returns untouched.
+                let needles = crate::query::trigram_prune::indexed_column_needles(filters);
+                if needles.is_empty() {
+                    return Ok(plan);
+                }
+                // Substring query: the sidecar + footer reads are blocking, so run
+                // the prune off the async worker.
+                let segment_paths = self.segment_paths.clone();
+                tokio::task::spawn_blocking(move || {
+                    crate::query::trigram_prune::apply_with_needles(plan, &segment_paths, &needles)
+                })
+                .await
+                .map_err(|e| {
+                    datafusion::error::DataFusionError::Execution(format!(
+                        "trigram prune task join: {e}"
+                    ))
+                })
             }
             Inner::Empty(t) => t.scan(state, projection, filters, limit).await,
         }
@@ -385,7 +397,7 @@ mod tests {
         // 1) End-to-end correctness: the contains() query returns exactly the two
         //    matching rows (and prunes row group 0 along the way).
         let ctx = crate::query::make_ctx();
-        let provider = NamespaceProvider::build(log_arrow(), &[path.clone()]).unwrap();
+        let provider = NamespaceProvider::build(log_arrow(), std::slice::from_ref(&path)).unwrap();
         ctx.register_table(
             datafusion::common::TableReference::bare("log"),
             Arc::new(provider),

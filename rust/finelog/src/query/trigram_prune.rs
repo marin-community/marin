@@ -40,11 +40,29 @@ pub fn apply(
     segment_paths: &[String],
     filters: &[Expr],
 ) -> Arc<dyn ExecutionPlan> {
-    let needles = contains_needles(filters, INDEXED_COLUMN);
+    apply_with_needles(plan, segment_paths, &indexed_column_needles(filters))
+}
+
+/// Needles of every top-level `contains(INDEXED_COLUMN, <utf8 literal>)`
+/// conjunct. Pure expr inspection, no I/O — the provider calls this on the hot
+/// path to decide (cheaply) whether the substring prune applies at all before
+/// touching any sidecar.
+pub fn indexed_column_needles(filters: &[Expr]) -> Vec<String> {
+    contains_needles(filters, INDEXED_COLUMN)
+}
+
+/// Inject access plans for already-extracted `needles`. Does the blocking
+/// sidecar + footer reads, so the provider runs it under `spawn_blocking`.
+/// Returns `plan` unchanged when `needles` is empty or nothing prunes.
+pub fn apply_with_needles(
+    plan: Arc<dyn ExecutionPlan>,
+    segment_paths: &[String],
+    needles: &[String],
+) -> Arc<dyn ExecutionPlan> {
     if needles.is_empty() {
         return plan;
     }
-    let access_plans = build_access_plans(segment_paths, &needles);
+    let access_plans = build_access_plans(segment_paths, needles);
     if access_plans.is_empty() {
         return plan;
     }

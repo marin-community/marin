@@ -114,6 +114,34 @@ optional, derivable function of the segment's `data` column**:
 The hot path is the keyed tail without `contains()`. Sidecar keeps that path at
 zero added cost; ride-along cannot. Recommendation stands: **sidecar**.
 
+### Alternative considered: a trigram *column* scanned before the body
+
+The natural first question: rather than a sidecar, store the trigrams as an
+extra **column** in the parquet, scan it first, then decode `data` only for the
+rows that pass. The "scan a cheap column, then late-materialize the body" part is
+real and we *do* use it (DataFusion `pushdown_filters`). The problem is what the
+column would hold:
+
+- **A parquet column is per-row; the presence we need is per-row-group.** To
+  answer "does this row contain all the needle's trigrams" with no false
+  negatives, a per-row column must store that row's whole trigram set (a list, or
+  a per-row Bloom). Sized on the real data, a per-row Bloom is ~120 B/row →
+  **~3.3 GB per L3 segment** vs `data`'s 4.2 GB — roughly doubling storage; shrink
+  it and the FPR climbs to ~1.0 (every row says "maybe"). No win.
+- **The win is skipping whole row groups, which a column can't do.** Even with
+  late materialization, the engine reads the index column for *every* row in the
+  band — O(rows scanned). Our measured win (98.7% of row groups never opened)
+  comes from answering "can this 16 384-row block match at all?" *before* touching
+  it, which is inherently per-row-group. Parquet has no per-row-group user column.
+- **The ideal form is parquet's own per-row-group Bloom** — body-resident,
+  offset-referenced, read lazily on probe — but it indexes whole values for
+  *equality*, not substrings (hence "bloom filters prune 0 row groups" in the
+  issue), and arrow-rs exposes no hook to write a custom trigram-seeded one.
+
+So the sidecar *is* the "trigram index scanned first," realized at the row-group
+granularity that makes it sub-linear and stored in the one place per-row-group
+data can live.
+
 ## Does trigram pruning actually work on repetitive log text?
 
 The issue flags "index size vs selectivity for highly repetitive log text" as
@@ -136,13 +164,35 @@ the motivating 27-char needle prunes **98.7%** of row groups. The worst case
 conservative contract: ~3% of row groups survive on trigram co-occurrence but
 **zero** false negatives. Feature is justified.
 
+## Measured end-to-end on the real prod slice
+
+Built the sidecars and ran `SELECT count(*) … WHERE contains(data, needle)` over
+the full pulled `log` namespace (54 segments, 12 319 row groups, 2.32 GB
+parquet) once through a plain `ListingTable` (today's path) and once through the
+trigram-pruned `NamespaceProvider`. Results match by construction; the figures
+are wall-clock at the engine (`examples/bench_trigram.rs`):
+
+| needle                          | matches | unpruned | pruned | speedup |
+|---------------------------------|---------|----------|--------|---------|
+| `Bootstrap completed for TPU` (motivating) | 3 124 | 10 589 ms | **633 ms** | **16.7×** |
+| `Lifecycle Leak!` (50.9 M matches) | 50 940 663 | 10 341 ms | 2 765 ms | 3.7× |
+| `disconnected unexpectedly` (absent) | 0 | 10 731 ms | **321 ms** | **33.4×** |
+
+The motivating shape drops from ~10.6 s to **0.63 s**; an absent needle (the
+common "search for a string that isn't there" dashboard case) is **33×**; even a
+pathological substring matching 50.9 M rows is 3.7× (the index still skips the
+row groups that lack it). **Index size: 78.7 MB = 3.39 % of the parquet** — the
+~3 % the Bloom sizing predicted. Build cost: 324 s to index all 54 segments
+cold; in production this is paid incrementally per merge in the background
+compactor, not on the read or write-ack path.
+
 ## Sidecar format (v1)
 
 `seg_L{level}_{min_seq}.parquet.tgm`, sitting next to its parquet:
 
 ```
-magic "FLTG" | version u8 | column id u8 | row_group_count u32
-per row group: { m_bits u32, k u8, byte_len u32, bloom bytes }   # split-block / double-hash bloom
+magic "FLTG" | version u8 | column_name_len u8 | column_name | row_group_count u32
+per row group: { k u8, m_words u32, m_words × u64 bloom words }   # double-hash bloom
 ```
 
 - One **per-row-group Bloom filter** over the byte-trigrams of `data`, sized per
@@ -167,49 +217,65 @@ the parquet opener reads `PartitionedFile.extensions`, downcasts to a
 (`datafusion-datasource-parquet-53.1.0/src/opener.rs:927`,
 `access_plan.rs:90`). Absent an access plan it scans all row groups.
 
-`NamespaceProvider::scan` (`query/provider.rs`):
+`NamespaceProvider::scan` (`query/provider.rs`) uses **delegate-then-inject** —
+not a hand-built scan — so it preserves every existing prune:
 
-1. If the pushed-down `filters` contain no `contains(indexed_col, needle≥3)`
-   term, **delegate to `ListingTable::scan` exactly as today** — hot path
-   untouched, zero new cost.
-2. Otherwise, build a parquet scan by hand: for each snapshotted segment, load
-   its `.tgm`, decompose each needle into trigrams, compute the row-group mask
-   (skip rg unless every trigram probes present), and attach
-   `PartitionedFile::with_extensions(Arc::new(access_plan))`. The `contains()`
-   filter stays pushed down (`supports_filters_pushdown` remains `Inexact`) so
-   the decoder still verifies survivors exactly — the index only ever *removes*
-   provably-empty row groups. A missing/short-needle case yields `new_all`
-   (scan everything) — identical results, just unpruned.
+1. Delegate to `ListingTable::scan` exactly as today. ListingTable sets the
+   parquet `predicate`, which is what drives the existing range / min-max /
+   bloom row-group pruning (e.g. the `key =` controller-band prune the
+   motivating query relies on). Building a scan from scratch would have *lost*
+   that.
+2. A cheap, no-I/O check: if no filter is a top-level
+   `contains(INDEXED_COLUMN, <literal>)`, return the delegated plan untouched —
+   the hot path pays nothing.
+3. Otherwise, off the async worker (`spawn_blocking`), rewrite each
+   `PartitionedFile` to carry a `ParquetAccessPlan` extension that *skips* the
+   row groups the sidecar rules out. The opener composes our skips with its own
+   range/stats/bloom pruning (`opener.rs:495`). The `contains()` filter stays
+   `Inexact`, so a `FilterExec` re-checks survivors exactly — the index only ever
+   *removes* provably-empty row groups; a missing/short-needle/misaligned case
+   simply doesn't inject (scan everything, identical results).
+
+Only top-level conjuncts are pruned on: a `contains()` under `OR` could drop rows
+matching the other branch, so those are ignored.
 
 Write path:
 
-- **L0 seal** (`store/segment.rs::write_segment*`) and **compaction output**
-  (`store/compaction/executor.rs::write_merged_segment`) build the sidecar from
-  the same in-order `data` values they write, chunked at `ROW_GROUP_SIZE`.
-- **Lifecycle** (mapped to existing seams): rename the `.tgm` with its parquet on
-  level-bump and unlink it with merged inputs in `namespace.rs::commit_swap`;
-  unlink with `evict_segment`; upload/delete it alongside the parquet in
-  `remote.rs::{upload,delete}` and `reconcile.rs`. `discover_segments` is
-  unchanged (returns parquet paths); a missing sidecar is detected at adopt and
-  simply disables pruning for that segment.
+- **Build at the compaction merge output** (`compaction/executor.rs::apply_merge`)
+  from the in-order merged `data` values. `kway_merge` already emits exactly
+  16384-row chunks, so the index aligns 1:1 with the parquet row groups. L0→L1 is
+  always a merge (small L0 flushes never hit the L1 byte target alone), so every
+  queryable L1+ segment gets indexed. **L0 is intentionally unindexed** (small,
+  short-lived) to keep the write-ack path fast.
+- **Lifecycle** (existing seams in `namespace.rs`): carry the `.tgm` with its
+  parquet on the single-input **level-bump rename** in `commit_swap` (a bump is a
+  pure rename, no rewrite, so the index stays valid); **unlink** it with merged
+  inputs (`commit_swap`) and on **eviction** (`evict_segment`).
+- **Sidecars are local-only in v1.** They survive restarts (local files), are
+  rebuilt by compaction, and self-heal after a full disk-loss recovery. This
+  keeps the data-safety-critical GCS `sync_step` (with its phase-ordering
+  durability invariant) untouched. Because the prod query path reads the
+  compacting VM's *local* segments, the live dashboard win lands without remote
+  sync. Syncing sidecars to GCS (for cross-VM / post-recovery pruning) is a safe
+  follow-up — the index is optional, so a remote-restored segment without one is
+  merely unpruned.
 
-## Plan
+## Status (implemented in this PR)
 
-1. `store/trigram.rs` — tokenizer, per-rg Bloom index, build-from-batches,
-   serialize/deserialize, and `needle → row-group mask` against parquet metadata.
-2. Wire the build into L0 seal + compaction output.
-3. Wire the lifecycle (rename/unlink/sync) onto the existing segment seams.
-4. Wire the prune into `NamespaceProvider::scan` behind the `contains()` check.
-5. Tests: tokenize + serde round-trip; no-false-negative mask; rg-count
-   alignment; end-to-end provider prune with correct rows + skipped row groups;
-   compaction sidecar follow.
-6. Benchmark: extend `lib/finelog/scripts/bench_dashboard_queries.py` with the
-   controller `contains()` FetchLogs shape; report before/after p50/p95 on the
-   real slice.
+1. ✅ `store/trigram.rs` — tokenizer, per-rg Bloom index, build-from-batches,
+   serde, and `keep_mask(needle)`.
+2. ✅ Build at the compaction merge output; carry on bump; unlink with parquet.
+3. ✅ Prune injected in `NamespaceProvider::scan` behind the cheap `contains()`
+   check, off the async worker.
+4. ✅ Tests: serde round-trip; no-false-negative mask; rg-count alignment;
+   end-to-end provider prune (correct rows + row group 0 skipped, hot path
+   untouched); merge writes a working sidecar.
+5. ✅ Benchmark: `examples/bench_trigram.rs` on the real prod slice (numbers
+   above).
 
-## Explicitly out of scope (Part 2)
+## Explicitly out of scope (Part 2 / follow-ups)
 
-The optimizer-rule relocation of `prefix`/`regexp`/`LIKE`→range rewrites, and
-segment-level seq/epoch_ms pruning, are Part 2. This PR is Part 1 only: the
-trigram index + its row-group pruning hook. The frozen protobuf contract is not
-touched.
+The optimizer-rule relocation of `prefix`/`regexp`/`LIKE`→range rewrites and
+segment-level seq/epoch_ms pruning are Part 2. Remote (GCS) sidecar sync, and
+indexing `key`, are follow-ups. This PR is Part 1 only: the trigram index + its
+row-group pruning hook. The frozen protobuf contract is not touched.

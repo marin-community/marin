@@ -170,10 +170,10 @@ impl TrigramIndex {
     /// positive or trigrams present in different rows); the caller re-checks
     /// `contains()` exactly. A truly-matching group is never dropped.
     pub fn keep_mask(&self, needle: &str) -> Option<Vec<bool>> {
-        let trigrams = distinct_trigrams(needle.as_bytes());
-        if trigrams.is_empty() {
+        if needle.len() < MIN_TRIGRAM_LEN {
             return None;
         }
+        let trigrams = distinct_trigrams(needle.as_bytes());
         Some(
             self.groups
                 .iter()
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn missing_or_non_string_column_yields_none() {
         let b = data_batch(vec![Some("x")]);
-        assert!(TrigramIndex::build(&[b.clone()], "nonexistent").is_none());
+        assert!(TrigramIndex::build(std::slice::from_ref(&b), "nonexistent").is_none());
         // `seq` is Int64, not a string column.
         assert!(TrigramIndex::build(&[b], "seq").is_none());
     }
