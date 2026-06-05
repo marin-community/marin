@@ -40,6 +40,15 @@ pub struct RegisteredProvider {
 /// - `enable_ident_normalization` left at the DF53 default (true): the corpus
 ///   quotes dotted identifiers (`"iris.worker"`), which are preserved verbatim;
 ///   lowercase unquoted column names are unaffected.
+/// - `parquet.pushdown_filters = true` + `parquet.reorder_filters = true`: apply
+///   scan predicates *inside* the parquet decoder via a row selection, so other
+///   projected columns are read only for surviving rows. Without this, DataFusion
+///   reads every projected column for all rows and filters afterward — fatal for
+///   namespaces with a large blob column (e.g. `iris.profile.profile_data`):
+///   `SELECT length(profile_data) ... WHERE source = ?` would otherwise decode
+///   the entire ~GB blob column before the `source` filter drops the rows, where
+///   DuckDB's late materialization reads zero blobs for a non-matching key. This
+///   is the dominant cost in the dashboard's profile-history query.
 ///
 /// The compat UDFs (`prefix`/`regexp_matches`/`contains`) are registered so the
 /// corpus and FetchLogs resolve them.
@@ -47,6 +56,8 @@ pub fn make_ctx() -> SessionContext {
     let mut cfg = SessionConfig::new();
     cfg.options_mut().sql_parser.map_string_types_to_utf8view = false;
     cfg.options_mut().sql_parser.dialect = Dialect::DuckDB;
+    cfg.options_mut().execution.parquet.pushdown_filters = true;
+    cfg.options_mut().execution.parquet.reorder_filters = true;
     let ctx = SessionContext::new_with_config(cfg);
     udf::register_compat_udfs(&ctx);
     ctx
