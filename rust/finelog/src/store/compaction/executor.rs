@@ -174,6 +174,13 @@ fn apply_merge(
     // segment, never correctness. Sidecars are built here, at the L0->L1+ merge
     // (where the bulk of queryable data lands), and carried forward verbatim by
     // single-input level bumps; L0 is intentionally left unindexed.
+    //
+    // The parquet rename above already committed the segment, so a crash in the
+    // gap before this write leaves the segment without a sidecar. That is the
+    // same correct-but-unpruned state as any missing sidecar; a later compaction
+    // consuming this segment rebuilds it. Only a terminal-level segment that is
+    // never re-merged would stay unindexed — closing that fully needs a
+    // boot-adoption sweep that rebuilds missing sidecars, left as a follow-up.
     if let Err(e) = crate::store::trigram::write_sidecar(
         &merged_path,
         &merged,
@@ -477,6 +484,63 @@ mod tests {
         assert_eq!(
             index.keep_mask("string definitely absent zzz").unwrap(),
             vec![false]
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn sidecar_row_groups_match_parquet_across_batch_boundaries() {
+        // The prune contract depends on the index having exactly one Bloom per
+        // parquet row group. The index chunks at ROW_GROUP_SIZE; `ArrowWriter`
+        // (via `segment_writer_properties`) flushes at the same stride REGARDLESS
+        // of how the written batches are split. Lock that with input batches whose
+        // boundaries straddle a row-group boundary (10k|10k|10005 over a 16384
+        // stride), so the writer must re-chunk across `write()` calls.
+        use crate::store::segment::{segment_row_group_count, ROW_GROUP_SIZE};
+        use crate::store::trigram::TrigramIndex;
+
+        let dir = tempdir("tgm_align");
+        let log: SchemaRef = Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("key", DataType::Int64, false),
+            Field::new("data", DataType::Utf8, false),
+        ]));
+        let mk = |first_seq: i64, n: usize| {
+            let lines: Vec<String> = (0..n).map(|i| format!("log line number {i}")).collect();
+            RecordBatch::try_new(
+                Arc::clone(&log),
+                vec![
+                    Arc::new(Int64Array::from_iter_values(
+                        first_seq..first_seq + n as i64,
+                    )),
+                    Arc::new(Int64Array::from(vec![1_i64; n])),
+                    Arc::new(StringArray::from(lines)),
+                ],
+            )
+            .unwrap()
+        };
+        let batches = vec![mk(1, 10_000), mk(10_001, 10_000), mk(20_001, 10_005)];
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        let expected_groups = total.div_ceil(ROW_GROUP_SIZE);
+        assert_eq!(
+            expected_groups, 2,
+            "30005 rows over a 16384 stride is 2 groups"
+        );
+
+        let path = dir.join("seg_L1_00000000000000000001.parquet");
+        write_merged_segment(&path, &log, &batches).unwrap();
+
+        let parquet_groups =
+            segment_row_group_count(&path).expect("readable footer for the written segment");
+        let index = TrigramIndex::build(&batches, "data").unwrap();
+        assert_eq!(
+            parquet_groups, expected_groups,
+            "ArrowWriter must flush a row group every ROW_GROUP_SIZE rows"
+        );
+        assert_eq!(
+            index.len(),
+            parquet_groups,
+            "sidecar must carry exactly one Bloom per parquet row group"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

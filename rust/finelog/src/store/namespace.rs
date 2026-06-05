@@ -684,6 +684,11 @@ impl Namespace {
             if sidecar_from.exists() {
                 if let Err(e) = std::fs::rename(&sidecar_from, &sidecar_to) {
                     tracing::warn!(namespace = %self.name, from = %sidecar_from.display(), error = %e, "failed to carry trigram sidecar on level bump");
+                    // The parquet at `from` is gone (renamed to `to`), so no later
+                    // unlink or eviction will ever reach this sidecar — it would
+                    // linger as a stale orphan forever. Drop it; the bumped segment
+                    // then scans unpruned, which is correct.
+                    let _ = std::fs::remove_file(&sidecar_from);
                 }
             }
         }

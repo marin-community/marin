@@ -477,6 +477,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn like_substring_query_prunes_row_groups() {
+        // `data LIKE '%needle%'` must prune like `contains(data, 'needle')`: the
+        // expression survives the simplifier as `Expr::Like` and the prune
+        // extracts the framed substring. Asserts both the matching rows and the
+        // injected skip of the needle-free row group 0.
+        use datafusion::datasource::physical_plan::FileScanConfig;
+        use datafusion::datasource::source::DataSourceExec;
+        use datafusion_datasource_parquet::ParquetAccessPlan;
+
+        let dir = tempdir("like_prune");
+        let needle = "Bootstrap completed for TPU-xyz";
+        let rg1 = vec![
+            "idle heartbeat ok",
+            "E0601 Bootstrap completed for TPU-xyz started",
+            "idle heartbeat ok",
+        ];
+        let path = write_two_rg_log_segment(&dir, "idle heartbeat ok", &rg1);
+
+        let ctx = crate::query::make_ctx();
+        let provider = NamespaceProvider::build(log_arrow(), std::slice::from_ref(&path)).unwrap();
+        ctx.register_table(
+            datafusion::common::TableReference::bare("log"),
+            Arc::new(provider),
+        )
+        .unwrap();
+        let batches = ctx
+            .sql(&format!(
+                "SELECT data FROM \"log\" WHERE data LIKE '%{needle}%' ORDER BY seq"
+            ))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let got: Vec<String> = batches
+            .iter()
+            .flat_map(|b| {
+                let c = b.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+                (0..c.len())
+                    .map(|i| c.value(i).to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec!["E0601 Bootstrap completed for TPU-xyz started".to_string()],
+            "LIKE must return exactly the matching row"
+        );
+
+        // The injected access plan skips the needle-free row group 0.
+        let plan = NamespaceProvider::build(log_arrow(), &[path])
+            .unwrap()
+            .scan(
+                &ctx.state(),
+                None,
+                std::slice::from_ref(
+                    &datafusion::prelude::col("data")
+                        .like(datafusion::prelude::lit(format!("%{needle}%"))),
+                ),
+                None,
+            )
+            .await
+            .unwrap();
+        let cfg = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("a parquet DataSourceExec")
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        let mut checked = 0;
+        for group in &cfg.file_groups {
+            for pf in group.files() {
+                let ap = pf
+                    .extensions
+                    .as_ref()
+                    .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
+                    .expect("trigram access plan attached for the LIKE query");
+                assert!(
+                    !ap.should_scan(0),
+                    "row group 0 (no needle) must be skipped"
+                );
+                assert!(
+                    ap.should_scan(1),
+                    "row group 1 (has needle) must be scanned"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
     async fn non_contains_query_leaves_plan_unchanged() {
         // A query with no contains() filter must not be rewritten — the hot path
         // pays nothing. The returned plan is the untouched ListingTable scan.

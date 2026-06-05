@@ -170,16 +170,18 @@ impl TrigramIndex {
     /// positive or trigrams present in different rows); the caller re-checks
     /// `contains()` exactly. A truly-matching group is never dropped.
     pub fn keep_mask(&self, needle: &str) -> Option<Vec<bool>> {
-        if needle.len() < MIN_TRIGRAM_LEN {
-            return None;
-        }
-        let trigrams = distinct_trigrams(needle.as_bytes());
-        Some(
-            self.groups
-                .iter()
-                .map(|bloom| trigrams.iter().all(|&t| bloom.contains(t)))
-                .collect(),
-        )
+        Some(self.keep_mask_for(&needle_trigrams(needle)?))
+    }
+
+    /// Per-row-group keep mask for a needle's already-tokenized `trigrams` (see
+    /// [`needle_trigrams`]): `keep[i]` is `true` unless row group `i`'s Bloom
+    /// proves it lacks at least one trigram. Splitting tokenization from masking
+    /// lets a caller decompose the needle once and reuse it across many segments.
+    pub fn keep_mask_for(&self, trigrams: &[[u8; 3]]) -> Vec<bool> {
+        self.groups
+            .iter()
+            .map(|bloom| trigrams.iter().all(|&t| bloom.contains(t)))
+            .collect()
     }
 
     /// Build an index over `column` across `batches` in row order, chunking at
@@ -299,6 +301,19 @@ pub fn write_sidecar(
     }
     std::fs::write(sidecar_path(parquet_path), index.to_bytes())?;
     Ok(true)
+}
+
+/// The distinct byte 3-grams of `needle`, or `None` when it is shorter than
+/// [`MIN_TRIGRAM_LEN`] (no trigrams ⇒ cannot prune, scan all).
+///
+/// Decompose the needle once per query with this, then feed the result to
+/// [`TrigramIndex::keep_mask_for`] for each segment — re-tokenizing per segment
+/// is wasted work when a query spans many of them.
+pub fn needle_trigrams(needle: &str) -> Option<Vec<[u8; 3]>> {
+    if needle.len() < MIN_TRIGRAM_LEN {
+        return None;
+    }
+    Some(distinct_trigrams(needle.as_bytes()))
 }
 
 /// Distinct 3-byte windows of `bytes`.
