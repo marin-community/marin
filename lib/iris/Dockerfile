@@ -72,13 +72,16 @@ ENV PATH="/app/.venv/bin:$PATH"
 # Rigging is a workspace-local dep not on PyPI. finelog is a native (maturin)
 # package consumed as a pre-built wheel from the index — its wheel bundles the
 # in-process server ext (finelog._native) the controller starts, so it is NOT a
-# workspace member here (slim base has no Rust toolchain). `prerelease = "allow"`
-# + iris's `marin-finelog >= 0.2.0.dev0` pin pull the latest nightly wheel.
-# Copy only metadata first so source changes don't bust the dep cache.
+# workspace member here (slim base has no Rust toolchain). `prerelease =
+# "explicit"` allows a prerelease only when a specifier asks for one (iris's
+# `marin-finelog >= 0.2.0.dev0`). Plain `"allow"` also pulls unrelated
+# prereleases — it grabbed httpx 1.0.dev, which drops `httpx.Limits` and crashes
+# the controller — because this reduced workspace lacks the full lock's httpx<1
+# bound. Copy only metadata first so source changes don't bust the dep cache.
 COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
 COPY lib/iris/pyproject.toml ./lib/iris/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    printf '[tool.uv]\nprerelease = "allow"\n\n[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging"]\n\n[tool.uv.sources]\nmarin-rigging = { workspace = true }\n' > pyproject.toml \
+    printf '[tool.uv]\nprerelease = "explicit"\n\n[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging"]\n\n[tool.uv.sources]\nmarin-rigging = { workspace = true }\n' > pyproject.toml \
     && uv sync --package marin-iris --no-install-project
 
 # Now copy full source for rigging and iris, then install.
