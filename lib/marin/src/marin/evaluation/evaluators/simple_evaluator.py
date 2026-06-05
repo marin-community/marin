@@ -1,13 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import time
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
-from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.inference.vllm_server import resolve_model_name_or_path
+
+if TYPE_CHECKING:
+    from marin.evaluation.evaluation_config import EvalTaskConfig
 
 
 @dataclass(frozen=True)
@@ -133,7 +137,9 @@ class SimpleEvaluator(Evaluator):
         # Download and load the model with vLLM
         # Use the model name if a path is not specified (e.g., for Hugging Face models)
         model_name_or_path, model = resolve_model_name_or_path(model)
-        llm = LLM(model=model_name_or_path, enforce_eager=False, trust_remote_code=True)
+        engine_kwargs = {"enforce_eager": False, "trust_remote_code": True}
+        engine_kwargs.update(model.engine_kwargs)
+        llm = LLM(model=model_name_or_path, **engine_kwargs)
 
         inference_times: dict[str, float] = {}
         for eval_config in evals:

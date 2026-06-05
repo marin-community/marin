@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import sys
+from types import SimpleNamespace
+
 from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.evaluation.evaluators.simple_evaluator import SimpleEvaluator
 from marin.inference.vllm import BrokeredVllmSystemConfig
 from marin.inference.vllm_server import DEFAULT_TPU_MAX_NUM_BATCHED_TOKENS, _vllm_env, resolve_model_name_or_path
 
@@ -47,3 +51,42 @@ def test_brokered_vllm_workers_use_vllm_extra_without_general_tpu_extra():
     config = BrokeredVllmSystemConfig(model="test-model")
 
     assert config.worker_environment_extras == ("vllm",)
+
+
+def test_simple_evaluator_passes_resolved_engine_kwargs_to_llm(monkeypatch, tmp_path):
+    calls = {}
+
+    class FakeLLM:
+        def __init__(self, **kwargs):
+            calls["llm_kwargs"] = kwargs
+
+        def generate(self, prompts, sampling_params):
+            calls["prompts"] = prompts
+            calls["sampling_params"] = sampling_params
+            return []
+
+    class FakeSamplingParams:
+        def __init__(self, **kwargs):
+            calls["sampling_kwargs"] = kwargs
+
+    monkeypatch.setitem(sys.modules, "vllm", SimpleNamespace(LLM=FakeLLM, SamplingParams=FakeSamplingParams))
+    monkeypatch.delenv("VLLM_TARGET_DEVICE", raising=False)
+
+    SimpleEvaluator().evaluate(
+        ModelConfig(
+            name="test-model",
+            path=None,
+            engine_kwargs={"max_model_len": 8192, "enforce_eager": True},
+        ),
+        evals=[SimpleNamespace(name="quick")],
+        output_path=str(tmp_path),
+    )
+
+    assert calls["llm_kwargs"] == {
+        "model": "test-model",
+        "enforce_eager": True,
+        "trust_remote_code": True,
+        "max_model_len": 8192,
+        "max_num_batched_tokens": DEFAULT_TPU_MAX_NUM_BATCHED_TOKENS,
+    }
+    assert calls["prompts"] == SimpleEvaluator.QUICK_TEST_PLAN.prompts

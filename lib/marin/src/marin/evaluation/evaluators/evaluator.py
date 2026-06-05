@@ -1,11 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from marin.evaluation.evaluation_config import EvalTaskConfig
+if TYPE_CHECKING:
+    from marin.evaluation.evaluation_config import EvalTaskConfig
 
 
 @dataclass
