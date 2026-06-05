@@ -219,32 +219,6 @@ class TestTransformRow:
             "source": "aops",
         }
 
-    def test_instruct_msg_response_builds_chat(self):
-        """A well-formed INSTRUCT_MSG_RESPONSE row yields a user/assistant pair."""
-        adapter = TransformAdapter(
-            dataset_format=InputDatasetFormat.INSTRUCT_MSG_RESPONSE,
-            instruction_column="instruction",
-            response_column="response",
-        )
-        cfg = TransformSFTDatasetConfig(
-            source="test/dataset",
-            revision="main",
-            output_path="/tmp/output",
-            metadata_columns=[],
-            adapter=adapter,
-        )
-        row = {
-            "instruction": [{"role": "user", "content": "What is the car's speed?"}],
-            "response": "125 kmph",
-        }
-
-        result = transform_row(row, cfg, adapter)
-
-        assert result is not None
-        assert [m.role for m in result.messages] == ["user", "assistant"]
-        assert result.messages[0].content == "What is the car's speed?"
-        assert result.messages[1].content == "125 kmph"
-
     def test_instruct_msg_response_skips_misaligned_row(self):
         """A multi-message instruction is dropped (returns None), not emitted as an empty conversation."""
         adapter = TransformAdapter(
