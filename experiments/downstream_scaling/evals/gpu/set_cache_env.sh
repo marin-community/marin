@@ -17,3 +17,4 @@ export TORCHINDUCTOR_CACHE_DIR="$CACHE_ROOT/torchinductor" # torch.compile / Ind
 export CUDA_CACHE_PATH="$CACHE_ROOT/cuda"                 # NVIDIA driver's kernel-binary cache (~/.nv/ComputeCache by default)
 export TORCH_HOME="$CACHE_ROOT/torch"                     # torch.hub downloads
 export XDG_CACHE_HOME="$CACHE_ROOT/xdg"                   # umbrella for anything that respects XDG and has no specific env var
+export FLASHINFER_WORKSPACE_BASE="$CACHE_ROOT/flashinfer-root"  # FlashInfer JIT writes to $FLASHINFER_WORKSPACE_BASE/.cache/flashinfer/
