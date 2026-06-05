@@ -6,6 +6,11 @@ an in-process ``ExecutorStep`` (no remote dispatch) because it runs on the same
 GPU box that drives the executor. Outputs land under the prefix from ``--prefix``
 if given, otherwise from the ``MARIN_PREFIX`` env var, otherwise the GCE region
 bucket (``gs://marin-{region}``) when running on GCP, otherwise ``/tmp/marin``.
+
+Install the required packages into the project venv before running::
+
+    uv pip install --python .venv/bin/python 'joint-decode-gpu @ git+https://github.com/RohithKuditipudi/joint-decode-gpu'
+    uv pip install --python .venv/bin/python 'lm-eval[math,api]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab'
 """
 
 from __future__ import annotations
