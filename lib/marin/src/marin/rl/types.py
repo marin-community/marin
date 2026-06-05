@@ -51,6 +51,21 @@ class RolloutMetadata:
     policy: PolicyIdentity | None = None
     """Policy/checkpoint identity used to generate the rollout."""
 
+    token_rollout_backend: str | None = None
+    """Token-native backend that produced this rollout, when available."""
+
+    token_rollout_request_id: str | None = None
+    """Backend-independent token rollout request ID."""
+
+    token_rollout_generation_index: int | None = None
+    """Generation index within the token rollout request."""
+
+    token_rollout_finish_reason: str | None = None
+    """Backend-independent reason token-native generation stopped."""
+
+    token_rollout_stop_token_id: int | None = None
+    """Stop token ID that ended token-native generation, when applicable."""
+
 
 class Rollout(eqx.Module):
     """A single rollout: one prompt + one generated response + rewards."""

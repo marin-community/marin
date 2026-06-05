@@ -25,7 +25,7 @@ from marin.inference.types import (
     TokenSamplingParameters,
 )
 from marin.rl.decoding import DecodingConfig, DecodingStrategy
-from marin.rl.types import Rollout
+from marin.rl.types import Rollout, RolloutMetadata
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice
 
@@ -313,6 +313,12 @@ class BaseInferenceContext:
         response_tokens = np.array(rollout.completion_token_ids, dtype=np.int32)
         response_logprobs = np.array(rollout.completion_logprobs, dtype=np.float32)
         token_rewards = np.full(len(response_tokens), reward, dtype=np.float32)
+        backend_value = rollout.metadata.get("backend")
+        backend: str | None = None
+        if backend_value is not None:
+            if not isinstance(backend_value, str):
+                raise ValueError("Token rollout backend metadata must be a string when set")
+            backend = backend_value
         return Rollout(
             env_name=env_name,
             env_example_id=env_example_id,
@@ -324,4 +330,11 @@ class BaseInferenceContext:
             correctness_reward=correctness_reward,
             decoding=decoding.as_trace(),
             is_truncated=rollout.finish_reason == TokenRolloutFinishReason.LENGTH,
+            metadata=RolloutMetadata(
+                token_rollout_backend=backend,
+                token_rollout_request_id=rollout.request_id,
+                token_rollout_generation_index=rollout.generation_index,
+                token_rollout_finish_reason=rollout.finish_reason.value,
+                token_rollout_stop_token_id=rollout.stop_token_id,
+            ),
         )

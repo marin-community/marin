@@ -129,6 +129,7 @@ class DummyTokenInferenceContext(BaseInferenceContext):
                         finish_reason=TokenRolloutFinishReason.STOP,
                         prompt_mask=tuple(False for _ in request.prompt_token_ids),
                         completion_mask=tuple(True for _ in response_tokens),
+                        metadata={"backend": "dummy-token"},
                     )
                 )
         return TokenizedRolloutBatchResult(
@@ -222,6 +223,10 @@ def test_math_env_uses_token_rollout_path_when_supported(gpt2_tokenizer):
     )
     np.testing.assert_allclose(rollout.response_logprobs, -0.5)
     assert rollout.episode_reward == pytest.approx(1.0)
+    assert rollout.metadata.token_rollout_backend == "dummy-token"
+    assert rollout.metadata.token_rollout_request_id == "math.train:0"
+    assert rollout.metadata.token_rollout_generation_index == 0
+    assert rollout.metadata.token_rollout_finish_reason == TokenRolloutFinishReason.STOP.value
     assert metrics["math.train_total_responses"] == 2.0
     assert metrics["math.train_token_rollout_prefill_admissions"] == 1.0
 

@@ -570,8 +570,15 @@ class RolloutWorker:
         for group in rollout_groups:
             rollouts_with_metadata = []
             for rollout in group.rollouts:
-                # Create new rollout with metadata attached
-                rollout_with_meta = eqx.tree_at(lambda r: r.metadata, rollout, batch_metadata)
+                rollout_metadata = dataclasses.replace(
+                    rollout.metadata,
+                    worker_id=batch_metadata.worker_id,
+                    timestamp=batch_metadata.timestamp,
+                    weight_step=batch_metadata.weight_step,
+                    tokenizer=batch_metadata.tokenizer,
+                    policy=batch_metadata.policy,
+                )
+                rollout_with_meta = eqx.tree_at(lambda r: r.metadata, rollout, rollout_metadata)
                 rollouts_with_metadata.append(rollout_with_meta)
 
             rollout_groups_with_metadata.append(RolloutGroup(rollouts=rollouts_with_metadata))

@@ -25,7 +25,7 @@ from marin.rl.rollout_worker import (
     create_inference_context,
 )
 from marin.rl.run_state import RolloutTransferCounters
-from marin.rl.types import Rollout, RolloutGroup
+from marin.rl.types import Rollout, RolloutGroup, RolloutMetadata
 
 
 def test_rollout_tracker_uses_explicit_name_when_provided(monkeypatch):
@@ -270,6 +270,12 @@ def test_sample_batch_persists_tokenizer_and_policy_identity():
                 episode_reward=1.0,
                 decoding=DecodingConfig(temperature=0.7).as_trace(),
                 is_truncated=False,
+                metadata=RolloutMetadata(
+                    token_rollout_backend="levanter",
+                    token_rollout_request_id="math.train:0",
+                    token_rollout_generation_index=0,
+                    token_rollout_finish_reason="stop",
+                ),
             )
             return [RolloutGroup(rollouts=[rollout])], {"reward": 1.0}
 
@@ -308,6 +314,10 @@ def test_sample_batch_persists_tokenizer_and_policy_identity():
     rollout_metadata = batch.groups[0].rollouts[0].metadata
     assert rollout_metadata.tokenizer == batch.metadata.tokenizer
     assert rollout_metadata.policy == batch.metadata.policy
+    assert rollout_metadata.token_rollout_backend == "levanter"
+    assert rollout_metadata.token_rollout_request_id == "math.train:0"
+    assert rollout_metadata.token_rollout_generation_index == 0
+    assert rollout_metadata.token_rollout_finish_reason == "stop"
 
 
 def test_stage_vllm_metadata_locally_copies_hf_metadata(tmp_path, monkeypatch):
