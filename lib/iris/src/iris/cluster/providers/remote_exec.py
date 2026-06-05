@@ -40,6 +40,16 @@ def _extend_gcloud_ssh_options(
     return cmd
 
 
+def _run_command(cmd: list[str], timeout_seconds: float) -> subprocess.CompletedProcess:
+    """Run a built command synchronously, capturing combined output as text."""
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_seconds)
+
+
+def _popen_streaming(cmd: list[str]) -> subprocess.Popen:
+    """Start a built command, streaming stdout with stderr merged in."""
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+
 # ============================================================================
 # Protocol
 # ============================================================================
@@ -137,15 +147,10 @@ class GcloudRemoteExec:
         return cmd
 
     def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
-        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout.to_seconds())
+        return _run_command(self._build_cmd(command), timeout.to_seconds())
 
     def run_streaming(self, command: str) -> subprocess.Popen:
-        return subprocess.Popen(
-            self._build_cmd(command),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        return _popen_streaming(self._build_cmd(command))
 
 
 @dataclass
@@ -199,15 +204,10 @@ class GceRemoteExec:
         return cmd
 
     def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
-        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout.to_seconds())
+        return _run_command(self._build_cmd(command), timeout.to_seconds())
 
     def run_streaming(self, command: str) -> subprocess.Popen:
-        return subprocess.Popen(
-            self._build_cmd(command),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        return _popen_streaming(self._build_cmd(command))
 
 
 @dataclass
@@ -255,15 +255,11 @@ class DirectSshRemoteExec:
         return cmd
 
     def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
-        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout.to_seconds() + 5)
+        # +5s buffer over the requested timeout so SSH's own ConnectTimeout fires first.
+        return _run_command(self._build_cmd(command), timeout.to_seconds() + 5)
 
     def run_streaming(self, command: str) -> subprocess.Popen:
-        return subprocess.Popen(
-            self._build_cmd(command),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        return _popen_streaming(self._build_cmd(command))
 
 
 # ============================================================================
