@@ -1133,8 +1133,9 @@ def test_preemption_nonexistent_task_is_noop():
 def test_preempt_then_worker_terminal_heartbeat_stamps_finished_at_ms():
     """Regression for #5918: worker's post-preempt terminal heartbeat must finalize the attempt.
 
-    ``preempt_task`` marks the attempt PREEMPTED via ``task.mark_task_terminating``,
-    which deliberately leaves ``finished_at_ms`` NULL and relies on the worker's
+    ``preempt_task`` marks the attempt PREEMPTED via
+    ``task.merge_task_termination(stamp_attempt_finished=False)``, which
+    deliberately leaves ``finished_at_ms`` NULL and relies on the worker's
     subsequent terminal-state heartbeat to stamp it. Without the stamp the row
     stays counted by ``resource_usage_by_worker`` and ghost-pins the worker's
     capacity for as long as the worker lives.
@@ -1632,7 +1633,7 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
 
         # Sanity: task went to PENDING (budget remains), attempt row is in
         # PREEMPTED reporting state. ``preempt_task`` is a producer transition
-        # (``finalize_attempt=False``), so ``finished_at_ms`` is intentionally
+        # (``stamp_attempt_finished=False``), so ``finished_at_ms`` is intentionally
         # left NULL — the worker still holds the chips until a terminal
         # heartbeat (or worker-failure synthesis) lands.
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_PENDING

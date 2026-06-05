@@ -1528,7 +1528,7 @@ def test_coscheduled_cascade_holds_sibling_resources_until_heartbeat(state):
     heartbeats finalize them.
 
     Under the new derived-usage contract, ``_terminate_coscheduled_siblings``
-    runs as a producer (``finalize_attempt=False``) — it transitions the
+    runs as a producer (``stamp_attempt_finished=False``) — it transitions the
     siblings' tasks to COSCHED_FAILED but leaves their attempts unfinished so
     the worker's chips stay accounted for. Only the originating task's worker
     (w0) gets capacity back, because that release came from the heartbeat

@@ -297,7 +297,7 @@ class TestPreemptionReassignment:
         Under the new contract the trigger task IS finalized via the
         heartbeat path that delivered WORKER_FAILED, but the siblings
         bounced by ``_requeue_coscheduled_siblings`` use
-        ``finalize_attempt=False``. So one worker in each slice has its
+        ``stamp_attempt_finished=False``. So one worker in each slice has its
         capacity released; the other 7 hold ``CHIPS_PER_VM`` until their
         own terminal heartbeats arrive.
         """

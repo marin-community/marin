@@ -18,9 +18,8 @@ from iris.cluster.controller import ops
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.pruner import prune_old_data
-from iris.cluster.controller.reads import ReservationClaim
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.schema import jobs_table, tasks_table
+from iris.cluster.controller.schema import ReservationClaim, jobs_table, tasks_table
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging import timing

@@ -43,7 +43,7 @@ from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.engine.cursor import CursorResult
 
-from iris.cluster.controller.schema import auth_metadata, metadata
+from iris.cluster.controller.schema import auth_metadata, metadata, schema_migrations_table
 
 logger = logging.getLogger(__name__)
 
@@ -357,12 +357,16 @@ class ControllerDB:
         """
         baseline_stem = Path(self.BASELINE_MIGRATION).stem
 
+        # ``Table.create`` checks out its own connection from the write engine,
+        # so run it before we hold a raw connection (the pool_size=1 pool can
+        # only hand out one at a time).
+        self._ensure_schema_migrations_table()
+
         # Baseline step. ``metadata.create_all`` checks out its own connection
         # from the write engine, which collides with the pool_size=1 pool if we
         # hold one ourselves — so scope each raw-connection use tightly.
         raw_conn = self._sa_write_engine.raw_connection()
         try:
-            self._ensure_schema_migrations_table(raw_conn)
             applied_stems = self._applied_migration_stems(raw_conn)
             needs_baseline = baseline_stem not in applied_stems
             has_user_tables = self._has_user_tables(raw_conn) if needs_baseline else False
@@ -405,17 +409,10 @@ class ControllerDB:
             checkpointed,
         )
 
-    @staticmethod
-    def _ensure_schema_migrations_table(raw_conn) -> None:
-        raw_conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                name TEXT PRIMARY KEY,
-                applied_at_ms INTEGER NOT NULL
-            )
-            """
-        )
-        raw_conn.commit()
+    def _ensure_schema_migrations_table(self) -> None:
+        # Single source of truth: emit the DDL from the SA Table definition
+        # (checkfirst => CREATE TABLE IF NOT EXISTS) rather than hand-written SQL.
+        schema_migrations_table.create(self._sa_write_engine, checkfirst=True)
 
     @staticmethod
     def _applied_migration_stems(raw_conn) -> set[str]:

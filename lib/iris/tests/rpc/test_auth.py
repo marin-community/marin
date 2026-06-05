@@ -491,7 +491,7 @@ def test_jwt_token_manager_load_revocations(tmp_path):
     create_api_key(
         db,
         key_id="k-revoked",
-        key_hash="jwt:k-revoked",
+        key_hash=None,
         key_prefix="jwt",
         user_id="alice",
         name="test-key",
@@ -503,7 +503,7 @@ def test_jwt_token_manager_load_revocations(tmp_path):
     create_api_key(
         db,
         key_id="k-active",
-        key_hash="jwt:k-active",
+        key_hash=None,
         key_prefix="jwt",
         user_id="alice",
         name="active-key",

@@ -105,7 +105,7 @@ class BackoffDetector:
         self._scale_up_bucket = scale_up_bucket
         self._base_refill_per_second = base_scale_up_per_minute / 60.0
         self._floor = probe_floor_per_minute / base_scale_up_per_minute
-        self._decay = decay_per_failure
+        self.decay = decay_per_failure
         self._recovery_per_second = (1.0 - self._floor) / recovery_duration.to_seconds()
         self._short_lived_threshold = short_lived_threshold
         self._quota_block_duration = quota_block_duration
@@ -231,7 +231,7 @@ class BackoffDetector:
 
     def _apply_decay(self, now: Timestamp) -> None:
         """Multiply health by ``decay`` (clamped at the floor) and cap bucket inventory at ``capacity * health``."""
-        self._health = max(self._floor, self._health * self._decay)
+        self._health = max(self._floor, self._health * self.decay)
         self._scale_up_bucket.cap_tokens(self._scale_up_bucket.capacity * self._health, now=now)
 
     def _snapshot_quota(self) -> tuple[Deadline | None, str]:

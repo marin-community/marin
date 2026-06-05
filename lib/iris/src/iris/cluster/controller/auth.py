@@ -44,14 +44,14 @@ DEFAULT_JWT_TTL_SECONDS = 86400 * 30  # 30 days
 def create_api_key(
     db: ControllerDB,
     key_id: str,
-    key_hash: str,
+    key_hash: str | None,
     key_prefix: str,
     user_id: str,
     name: str,
     now: Timestamp,
     expires_at: Timestamp | None = None,
 ) -> None:
-    """Insert a new API key row."""
+    """Insert a new API key row. ``key_hash`` is ``None`` for JWT-backed keys, which carry no stored hash."""
     with db.transaction() as tx:
         tx.execute(
             insert(auth_api_keys_table).values(
@@ -112,27 +112,20 @@ def list_api_keys(db: ControllerDB, user_id: str | None = None) -> list:
 
 
 def revoke_login_keys_for_user(db: ControllerDB, user_id: str, now: Timestamp) -> list[str]:
-    """Revoke all active login keys for a user. Returns list of revoked key_ids."""
-    with db.auth_read_snapshot() as tx:
-        active_rows = tx.execute(
-            select(auth_api_keys_table.c.key_id).where(
+    """Revoke all active login keys for a user. Returns the revoked key_ids."""
+    with db.transaction() as tx:
+        rows = tx.execute(
+            update(auth_api_keys_table)
+            .where(
                 auth_api_keys_table.c.user_id == user_id,
                 auth_api_keys_table.c.name.like("login-%"),
                 auth_api_keys_table.c.revoked_at_ms.is_(None),
             )
+            .values(revoked_at_ms=now)
+            .returning(auth_api_keys_table.c.key_id)
         ).all()
-    revoked_ids = [str(row.key_id) for row in active_rows]
+    revoked_ids = [str(row.key_id) for row in rows]
     if revoked_ids:
-        with db.transaction() as tx:
-            tx.execute(
-                update(auth_api_keys_table)
-                .where(
-                    auth_api_keys_table.c.user_id == user_id,
-                    auth_api_keys_table.c.name.like("login-%"),
-                    auth_api_keys_table.c.revoked_at_ms.is_(None),
-                )
-                .values(revoked_at_ms=now)
-            )
         logger.info(
             "event=login_keys_revoked entity=%s trigger=- count=%d",
             user_id,
@@ -425,7 +418,7 @@ def _create_worker_jwt(db: ControllerDB, jwt_mgr: JwtTokenManager, now: Timestam
     create_api_key(
         db,
         key_id=key_id,
-        key_hash=f"jwt:{key_id}",
+        key_hash=None,
         key_prefix="jwt",
         user_id=WORKER_USER,
         name="worker-token",

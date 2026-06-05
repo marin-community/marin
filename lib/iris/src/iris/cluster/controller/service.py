@@ -48,6 +48,7 @@ from iris.cluster.controller.codec import (
     worker_metadata_to_proto,
 )
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.direct_provider import RunTemplateCache
 from iris.cluster.controller.projections.endpoints import (
     AddEndpointOutcome,
     EndpointQuery,
@@ -66,7 +67,7 @@ from iris.cluster.controller.schema import (
     worker_attributes_table,
     workers_table,
 )
-from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, attempt_is_worker_failure, task_row_can_be_scheduled
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
@@ -98,6 +99,11 @@ from iris.rpc.proto_display import job_state_friendly, priority_band_name, task_
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
+
+
+def attempt_is_worker_failure(state: int) -> bool:
+    """Whether a terminal state (worker-failed or preempted) is a worker-side failure, not an application failure."""
+    return state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED)
 
 
 @dataclass(frozen=True)
@@ -804,6 +810,9 @@ class ControllerProtocol(Protocol):
     def has_direct_provider(self) -> bool: ...
 
     @property
+    def run_template_cache(self) -> RunTemplateCache: ...
+
+    @property
     def provider_scheduling_events(self) -> list: ...
 
     @property
@@ -1194,7 +1203,7 @@ class ControllerServiceImpl:
                 job_id=job_id,
                 request=request,
                 ts=Timestamp.now(),
-                run_template_cache=self._controller._run_template_cache,
+                run_template_cache=self._controller.run_template_cache,
             )
         self._controller.wake()
 
@@ -1683,6 +1692,18 @@ class ControllerServiceImpl:
             ]
         )
 
+    @property
+    def has_direct_provider(self) -> bool:
+        """Whether the controller runs a direct (Kubernetes) provider."""
+        return self._controller.has_direct_provider
+
+    def resolve_endpoint(self, name: str) -> str | None:
+        """Resolve an endpoint name to its address, or None. Task endpoints take priority over ``/system/`` endpoints."""
+        row = self._endpoints.resolve(name)
+        if row is not None:
+            return row.address
+        return self._system_endpoints.get(name)
+
     def _list_system_endpoints(self, prefix: str, *, exact: bool) -> controller_pb2.Controller.ListEndpointsResponse:
         """Resolve system endpoints from the in-memory map."""
         results: list[controller_pb2.Controller.Endpoint] = []
@@ -2067,8 +2088,7 @@ class ControllerServiceImpl:
         now = Timestamp.now()
         with self._db.transaction() as _tx:
             writes.ensure_user(_tx, username, now)
-        with self._db.read_snapshot() as _snap:
-            role = reads.get_user_role(_snap, username)
+            role = reads.get_user_role(_tx, username)
 
         # Revoke old login keys and propagate to in-memory revocation set
         revoked_ids = revoke_login_keys_for_user(self._db, username, now)
@@ -2080,7 +2100,7 @@ class ControllerServiceImpl:
         create_api_key(
             self._db,
             key_id=key_id,
-            key_hash=f"jwt:{key_id}",
+            key_hash=None,
             key_prefix="jwt",
             user_id=username,
             name=f"login-{now.epoch_ms()}",
@@ -2110,8 +2130,7 @@ class ControllerServiceImpl:
         now = Timestamp.now()
         with self._db.transaction() as _tx:
             writes.ensure_user(_tx, target_user, now)
-        with self._db.read_snapshot() as _snap:
-            role = reads.get_user_role(_snap, target_user)
+            role = reads.get_user_role(_tx, target_user)
 
         key_id = f"iris_k_{secrets.token_urlsafe(8)}"
         ttl = request.ttl_ms // 1000 if request.ttl_ms > 0 else DEFAULT_JWT_TTL_SECONDS
@@ -2121,7 +2140,7 @@ class ControllerServiceImpl:
         create_api_key(
             self._db,
             key_id=key_id,
-            key_hash=f"jwt:{key_id}",
+            key_hash=None,
             key_prefix="jwt",
             user_id=target_user,
             name=request.name or f"key-{now.epoch_ms()}",

@@ -124,7 +124,7 @@ def _validate_accelerator_types(config: config_pb2.IrisClusterConfig) -> None:
             raise ValueError(f"Scale group '{name}' must set resources.device_type to cpu, gpu, or tpu.")
 
 
-def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> None:
+def validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> None:
     """Validate that scale groups define per-VM resources and num_vms."""
     for name, sg_config in config.scale_groups.items():
         if not sg_config.HasField("resources"):
@@ -347,7 +347,7 @@ def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     """
     _validate_provider_platform_compat(config)
     _validate_accelerator_types(config)
-    _validate_scale_group_resources(config)
+    validate_scale_group_resources(config)
     _validate_slice_templates(config)
     _validate_worker_settings(config)
     _validate_worker_defaults(config)
@@ -378,7 +378,7 @@ def _validate_worker_defaults(config: config_pb2.IrisClusterConfig) -> None:
         raise ValueError(f"defaults.worker.runtime must be 'docker' or 'kubernetes', got {runtime!r}.")
 
 
-def _scale_groups_to_config(scale_groups: dict[str, config_pb2.ScaleGroupConfig]) -> config_pb2.IrisClusterConfig:
+def scale_groups_to_config(scale_groups: dict[str, config_pb2.ScaleGroupConfig]) -> config_pb2.IrisClusterConfig:
     config = config_pb2.IrisClusterConfig()
     for name, sg_config in scale_groups.items():
         config.scale_groups[name].CopyFrom(sg_config)
@@ -457,7 +457,7 @@ def _deep_merge_defaults(target: config_pb2.DefaultsConfig, source: config_pb2.D
         target.task_env[key] = value
 
 
-def _validate_autoscaler_config(config: config_pb2.AutoscalerConfig, context: str = "autoscaler") -> None:
+def validate_autoscaler_config(config: config_pb2.AutoscalerConfig, context: str = "autoscaler") -> None:
     """Validate that autoscaler config has valid timing values.
 
     Assumes defaults have already been applied, so all fields must be set.
@@ -532,7 +532,7 @@ def apply_defaults(config: config_pb2.IrisClusterConfig) -> config_pb2.IrisClust
 
     # Validate merged autoscaler config
     if merged.defaults.HasField("autoscaler"):
-        _validate_autoscaler_config(merged.defaults.autoscaler, context="config.defaults.autoscaler")
+        validate_autoscaler_config(merged.defaults.autoscaler, context="config.defaults.autoscaler")
 
     return merged
 

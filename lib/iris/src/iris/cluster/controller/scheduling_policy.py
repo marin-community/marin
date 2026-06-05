@@ -49,7 +49,7 @@ from iris.cluster.controller.codec import (
 )
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.reads import ReservationClaim, SchedulableWorker
+from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile.policy import RESERVATION_HOLDER_JOB_NAME
 from iris.cluster.controller.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
@@ -62,6 +62,7 @@ from iris.cluster.controller.scheduler import (
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.schema import (
+    ReservationClaim,
     job_config_table,
     jobs_table,
     tasks_table,
@@ -466,7 +467,7 @@ def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> l
             .select_from(jobs_table.join(job_config_table, jobs_table.c.job_id == job_config_table.c.job_id))
             .where(
                 jobs_table.c.state.in_(bindparam("states", expanding=True)),
-                jobs_table.c.has_reservation == True,  # noqa: E712 — SQLAlchemy requires == not `is`
+                jobs_table.c.has_reservation == 1,
             ),
             {"states": list(states)},
         ).all()
@@ -946,6 +947,12 @@ def inject_taint_constraints(
     return modified
 
 
+def _reserved_job_ids_in_tx(tx: Tx) -> set[JobName]:
+    """Job_ids with ``has_reservation = 1``, read from an open snapshot ``tx``."""
+    rows = tx.execute(select(jobs_table.c.job_id).where(jobs_table.c.has_reservation == 1)).all()
+    return {row.job_id for row in rows}
+
+
 def _reserved_job_ids(queries: ControllerDB) -> set[JobName]:
     """Return the set of job_ids with ``has_reservation = 1`` on the jobs table.
 
@@ -953,8 +960,7 @@ def _reserved_job_ids(queries: ControllerDB) -> set[JobName]:
     Python instead of issuing one SQL chain-walk per pending job.
     """
     with queries.read_snapshot() as tx:
-        rows = tx.execute(select(jobs_table.c.job_id).where(jobs_table.c.has_reservation == 1)).all()
-    return {row.job_id for row in rows}
+        return _reserved_job_ids_in_tx(tx)
 
 
 def _find_reservation_ancestor(reserved_jobs: AbstractSet[JobName], job_id: JobName) -> JobName | None:
@@ -1075,10 +1081,7 @@ def build_scheduling_context(
             user_spend = compute_user_spend(snap)
             user_budget_limits = reads.get_all_user_budget_limits(snap)
             requested_bands = reads.get_priority_bands(snap, {t.job_id for t in pending})
-            reserved_jobs = {
-                row.job_id
-                for row in snap.execute(select(jobs_table.c.job_id).where(jobs_table.c.has_reservation == 1)).all()
-            }
+            reserved_jobs = _reserved_job_ids_in_tx(snap)
             reservation_entry_counts = _reservation_entry_counts_for_pending(snap, pending)
             building_counts = reads.building_counts(snap, [w.worker_id for w in workers])
 

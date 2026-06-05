@@ -743,6 +743,35 @@ def normalize(s: str) -> str:
     return s.strip().lower()
 ```
 
+### `ml-impl-narration-docstring` — Docstring narrates implementation, not the caller contract
+
+**Why it's bad:** A docstring states what a function does *for its caller* — the
+contract. Narrating *how* it is implemented is noise to the caller and rots when the
+implementation changes. The tells: a sentence describing the mechanism ("a single
+atomic `UPDATE ... RETURNING`, so no TOCTOU window"), self-congratulation ("single
+source of truth for the proto fields"), caller-enumeration ("Used by cancel_job and
+prune"), or a cross-reference to a sibling function ("same fallback order as the
+ListEndpoints branch") — git grep finds callers, and the cross-ref goes stale. If an
+implementation detail is genuinely load-bearing — a non-obvious correctness invariant,
+or a performance choice a later edit would naively undo — put it in an inline comment
+*next to the code it explains*, not in the docstring. A property/getter that only
+returns a field is the same smell in method form: expose the attribute.
+
+**When allowed:** When the detail *is* the contract the caller must know — a nullable
+parameter's meaning, an edge-case return (`NULL str_value` → `""`), an ordering or
+idempotency guarantee, or what the caller must pass. State the behavior, not the
+mechanism.
+
+**Bad example:**
+```python
+def revoke_login_keys(db, user_id, now) -> list[str]:
+    """Revoke a user's login keys. Returns the revoked key_ids.
+
+    Single atomic ``UPDATE ... RETURNING`` so the revoke and the returned ids come
+    from one statement — no read-then-write TOCTOU window.   # how, not what — delete it
+    """
+```
+
 ### `ml-pr-reference-comment` — Comment names a task / PR / kata / phase
 
 **Why it's bad:** "Added for the canary ferry flow (see PR #5712)" belongs

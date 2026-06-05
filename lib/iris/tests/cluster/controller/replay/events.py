@@ -18,10 +18,10 @@ from typing import Any
 from iris.cluster.controller import direct_provider, ops, reads, writes
 from iris.cluster.controller.ops.task import Assignment, apply_direct_provider_updates, finalize
 from iris.cluster.controller.projections.endpoints import EndpointRow
-from iris.cluster.controller.reads import ReservationClaim
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.scheduling_policy import claim_workers_for_reservations, cleanup_stale_claims
+from iris.cluster.controller.schema import ReservationClaim
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp

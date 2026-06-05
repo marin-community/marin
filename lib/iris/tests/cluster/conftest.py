@@ -143,7 +143,7 @@ class _HarnessController:
         self.autoscaler = None
         self.provider: object = Mock()
         self.has_direct_provider = False
-        self._run_template_cache: RunTemplateCache = new_run_template_cache()
+        self.run_template_cache: RunTemplateCache = new_run_template_cache()
 
 
 @dataclass

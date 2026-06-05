@@ -510,6 +510,21 @@ def first_fitting_worker(
     return None
 
 
+def _format_rejection_summary(
+    rejection_counts: dict[RejectionKind, int],
+    rejection_samples: dict[RejectionKind, RejectionReason],
+) -> str:
+    """Render per-rejection-kind reason lines, most-common first.
+
+    One ``"<sample> - <count> worker(s)"`` line per kind, joined by newlines.
+    """
+    reason_lines = [
+        f"{rejection_samples[kind]} - {rejection_counts[kind]} worker(s)"
+        for kind in sorted(rejection_counts, key=lambda k: rejection_counts[k], reverse=True)
+    ]
+    return "\n".join(reason_lines)
+
+
 def explain_unfittable(
     req: JobRequirements,
     context: SchedulingContext,
@@ -525,12 +540,8 @@ def explain_unfittable(
     if not context.capacities:
         return "No healthy workers available"
 
-    hard_constraints, soft_constraints = split_hard_soft(list(req.constraints))
-    matching = context.matching_workers(hard_constraints)
-    if soft_constraints:
-        candidates = rank_by_soft_score(matching, soft_constraints, context)
-    else:
-        candidates = list(matching)
+    hard_constraints, _ = split_hard_soft(list(req.constraints))
+    candidates = compute_candidates(req, context)
 
     rejection_counts: dict[RejectionKind, int] = defaultdict(int)
     rejection_samples: dict[RejectionKind, RejectionReason] = {}
@@ -562,12 +573,7 @@ def explain_unfittable(
                     f"but have sufficient resources for this task"
                 )
 
-        reason_lines = []
-        for kind in sorted(rejection_counts.keys(), key=lambda k: rejection_counts[k], reverse=True):
-            count = rejection_counts[kind]
-            sample = rejection_samples[kind]
-            reason_lines.append(f"{sample} - {count} worker(s)")
-        failure_reason = "\n".join(reason_lines)
+        failure_reason = _format_rejection_summary(rejection_counts, rejection_samples)
         if hard_constraints:
             constraint_keys = [c.key for c in hard_constraints]
             failure_reason = f"{failure_reason}\n(with constraints={constraint_keys})"
@@ -892,13 +898,7 @@ class Scheduler:
 
             # If this is the largest group, report why it doesn't have capacity
             if len(group_worker_ids) == best and rejection_counts:
-                # Format all rejection reasons with counts
-                reason_lines = []
-                for kind in sorted(rejection_counts.keys(), key=lambda k: rejection_counts[k], reverse=True):
-                    count = rejection_counts[kind]
-                    sample = rejection_samples[kind]
-                    reason_lines.append(f"{sample} - {count} worker(s)")
-                reasons = "\n".join(reason_lines)
+                reasons = _format_rejection_summary(rejection_counts, rejection_samples)
                 return (
                     f"Coscheduling: need {num_tasks} workers in '{group_by}' group '{group_key}', "
                     f"only {len(available)} of {len(group_worker_ids)} have capacity:\n{reasons}"

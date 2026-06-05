@@ -193,7 +193,7 @@ def _make_committed_budget(group: ScalingGroup) -> RoutingBudget | None:
     )
 
 
-def _format_variants(variants: frozenset[str] | None) -> str:
+def format_variants(variants: frozenset[str] | None) -> str:
     if not variants:
         return "*"
     return ",".join(sorted(variants))
@@ -219,7 +219,7 @@ def _diagnose(
     """
     device_type = placement.device_type or DeviceType.CPU
     device_matches = [g for g in groups if g.matches_device_requirement(device_type, placement.device_variants)]
-    variants_str = _format_variants(placement.device_variants)
+    variants_str = format_variants(placement.device_variants)
 
     if not device_matches:
         available = ", ".join(g.name for g in groups)
@@ -333,14 +333,11 @@ def job_feasibility(
 
 
 def _diagnose_no_capacity(
-    entry: DemandEntry,
     matching_groups: list[ScalingGroup],
     budgets: dict[str, RoutingBudget],
     ts: Timestamp,
 ) -> str:
     """Produce a specific reason when matching groups exist but none can accept demand."""
-
-    del entry
 
     per_group: list[str] = []
     for group in matching_groups:
@@ -535,9 +532,7 @@ def route_demand(
                     break
 
         if not matched:
-            unmet.append(
-                UnmetDemand(entry=entry, reason=_diagnose_no_capacity(entry, matching_groups, full_budgets, ts))
-            )
+            unmet.append(UnmetDemand(entry=entry, reason=_diagnose_no_capacity(matching_groups, full_budgets, ts)))
 
     group_to_launch: dict[str, int] = {}
     group_required_slices: dict[str, int] = {}

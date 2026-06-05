@@ -757,4 +757,4 @@ class Autoscaler:
         return result.sibling_worker_ids
 
     def _terminate_slice_handle(self, group: ScalingGroup, slice_id: str, handle: SliceHandle) -> None:
-        group._terminate_slice_handle(handle, context="cleaning up anyway")
+        group.terminate_slice_handle(handle, context="cleaning up anyway")

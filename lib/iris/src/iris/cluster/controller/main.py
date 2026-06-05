@@ -70,6 +70,29 @@ def _resolve_cluster_endpoints(cluster_config: config_pb2.IrisClusterConfig) -> 
     return resolved
 
 
+def _build_worker_config(
+    worker_defaults: config_pb2.WorkerConfig,
+    platform: config_pb2.PlatformConfig,
+    *,
+    controller_address: str,
+    storage_prefix: str,
+    auth_token: str,
+) -> config_pb2.WorkerConfig:
+    """Build the worker config once instead of mutating a shared proto across bootstrap.
+
+    ``controller_address`` is pre-resolved by the caller (discovery runs only when the
+    configured default is empty).
+    """
+    worker_config = config_pb2.WorkerConfig()
+    worker_config.CopyFrom(worker_defaults)
+    worker_config.controller_address = controller_address
+    worker_config.platform.CopyFrom(platform)
+    worker_config.storage_prefix = storage_prefix
+    if auth_token:
+        worker_config.auth_token = auth_token
+    return worker_config
+
+
 def run_controller_serve(
     cluster_config: config_pb2.IrisClusterConfig,
     *,
@@ -156,6 +179,8 @@ def run_controller_serve(
     # In dry-run mode the autoscaler is fully gated anyway, and creating the
     # provider bundle requires platform credentials (GCP SSH keys etc.) that
     # are unavailable on a local dev machine.
+    auth = create_controller_auth(cluster_config.auth, db=db)
+
     autoscaler: Autoscaler | None = None
     base_worker_config = None
     if dry_run:
@@ -171,11 +196,16 @@ def run_controller_serve(
         logger.info("Provider bundle created")
 
         if cluster_config.defaults.worker.docker_image:
-            base_worker_config = config_pb2.WorkerConfig()
-            base_worker_config.CopyFrom(cluster_config.defaults.worker)
-            if not base_worker_config.controller_address:
-                base_worker_config.controller_address = bundle.controller.discover_controller(cluster_config.controller)
-            base_worker_config.platform.CopyFrom(cluster_config.platform)
+            controller_address = cluster_config.defaults.worker.controller_address
+            if not controller_address:
+                controller_address = bundle.controller.discover_controller(cluster_config.controller)
+            base_worker_config = _build_worker_config(
+                cluster_config.defaults.worker,
+                cluster_config.platform,
+                controller_address=controller_address,
+                storage_prefix=remote_state_dir,
+                auth_token=auth.worker_token or "",
+            )
 
         autoscaler = create_autoscaler(
             platform=workers,
@@ -193,19 +223,11 @@ def run_controller_serve(
         autoscaler.restore_from_db(db, workers)
         logger.info("Autoscaler state restored from DB")
 
-    # Workers need the resolved remote_state_dir to upload task artifacts (profiles).
-    if base_worker_config is not None:
-        base_worker_config.storage_prefix = remote_state_dir
-
     if checkpoint_interval is None:
         checkpoint_interval = HOURLY_CHECKPOINT_SECONDS
         logger.info("Defaulting to hourly checkpointing")
 
     logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)
-
-    auth = create_controller_auth(cluster_config.auth, db=db)
-    if auth.worker_token and base_worker_config is not None:
-        base_worker_config.auth_token = auth.worker_token
 
     # Reconcile per-user budget tiers from the cluster config into the DB.
     # Runs after migrations have cleared user_budgets (see migration 0037).

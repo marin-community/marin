@@ -7,8 +7,6 @@ from dataclasses import dataclass
 from typing import NamedTuple, Protocol
 
 from rigging.timing import Deadline, Duration, Timestamp
-from sqlalchemy import func, literal_column
-from sqlalchemy.sql.elements import ColumnElement
 
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
@@ -28,28 +26,6 @@ EXECUTING_TASK_STATES: frozenset[int] = frozenset(
         job_pb2.TASK_STATE_RUNNING,
     }
 )
-
-# SQLite planner hint: `tasks.state IN (<active states>)` selects ~0.5% of rows
-# on a populated controller DB (~3.7k of ~773k). `sqlite_stat1` only stores the
-# average rows-per-distinct-value of an index's leading column, so the planner
-# estimates an active-state predicate as ~14% of the table and full-scans
-# instead of driving off the small active set. Wrap such predicates with
-# `hint_rare_state(...)` so the planner picks the state-driven plan.
-#
-# The probability argument to SQLite's `likelihood()` must be a literal constant
-# in the SQL text, not a bound parameter — `literal_column` inlines it.
-# See https://www.sqlite.org/lang_corefunc.html#likelihood.
-_RARE_STATE_PROBABILITY = literal_column("0.005")
-
-
-def hint_rare_state(predicate: ColumnElement[bool]) -> ColumnElement[bool]:
-    """Wrap a `state IN (<rare states>)` predicate in SQLite's `likelihood()` hint.
-
-    Used by scheduling-loop queries (per-tick budget spend, per-minute timeout
-    enforcement) so the planner drives off the active-state index instead of
-    full-scanning the tasks table.
-    """
-    return func.likelihood(predicate, _RARE_STATE_PROBABILITY)
 
 
 class RunningTaskEntry(NamedTuple):
@@ -102,11 +78,6 @@ def job_scheduling_deadline(scheduling_deadline_epoch_ms: int | None) -> Deadlin
     if scheduling_deadline_epoch_ms is None:
         return None
     return Deadline.after(Timestamp.from_ms(scheduling_deadline_epoch_ms), Duration.from_ms(0))
-
-
-def attempt_is_worker_failure(state: int) -> bool:
-    """Check if an attempt is a worker failure or preemption."""
-    return state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED)
 
 
 @dataclass(frozen=True, slots=True)

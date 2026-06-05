@@ -24,6 +24,7 @@ from sqlalchemy import select
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import db
+from iris.cluster.controller.codec import WorkerAttributeRow, attribute_value_from_row
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.schema import worker_attributes_table
@@ -45,17 +46,12 @@ class PostCommitRegistrar(Protocol):
 logger = logging.getLogger(__name__)
 
 
-def _decode_value(row) -> AttributeValue:
+def _decode_value(row: WorkerAttributeRow) -> AttributeValue:
     """Decode a single ``worker_attributes`` SA row to an ``AttributeValue``.
 
-    ``value_type`` is a plain string column (CHECK 'str'/'int'/'float');
-    no TypeDecorator handles the three-way dispatch so it is done here.
+    Shares the str/int/float dispatch with :func:`codec.attribute_value_from_row`.
     """
-    if row.value_type == "int":
-        return AttributeValue(int(row.int_value))
-    if row.value_type == "float":
-        return AttributeValue(float(row.float_value))
-    return AttributeValue(str(row.str_value or ""))
+    return AttributeValue(attribute_value_from_row(row))
 
 
 class WorkerAttrsProjection:

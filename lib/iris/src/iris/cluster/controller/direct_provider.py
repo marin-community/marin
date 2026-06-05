@@ -102,6 +102,44 @@ class DirectProviderSyncResult:
     capacity: ClusterCapacity | None = None
 
 
+def _build_run_request_fields(
+    *,
+    num_tasks: int,
+    entrypoint_json: str,
+    environment_json: str,
+    bundle_id: str,
+    resources: job_pb2.ResourceSpecProto,
+    ports_json: list,
+    constraints_json: str | None,
+    task_image: str,
+    task_id: str = "",
+    attempt_id: int = 0,
+    priority: int = 0,
+) -> job_pb2.RunTaskRequest:
+    """Build a RunTaskRequest carrying the per-job fields shared by the template
+    and per-attempt construction paths.
+
+    The template path leaves ``task_id``/``attempt_id``/``priority`` at their
+    proto defaults; the per-attempt path stamps them. proto_from_json returns
+    shared cached instances — set via constructor kwarg so RunTaskRequest
+    copies them; callers then mutate the copy's workdir_files (never the cached
+    source).
+    """
+    return job_pb2.RunTaskRequest(
+        num_tasks=num_tasks,
+        entrypoint=proto_from_json(entrypoint_json, job_pb2.RuntimeEntrypoint),
+        environment=proto_from_json(environment_json, job_pb2.EnvironmentConfig),
+        bundle_id=bundle_id,
+        resources=resources,
+        ports=ports_json,
+        constraints=[c.to_proto() for c in constraints_from_json(constraints_json)],
+        task_image=task_image,
+        task_id=task_id,
+        attempt_id=attempt_id,
+        priority=priority,
+    )
+
+
 def run_request_template(
     cache: RunTemplateCache,
     snap: Tx,
@@ -128,17 +166,14 @@ def run_request_template(
         job.res_disk_bytes,
         job.res_device_json,
     )
-    # proto_from_json returns shared cached instances — set via constructor
-    # kwarg so RunTaskRequest copies, then mutate the copy's workdir_files
-    # (never the cached source) to add inline files.
-    template = job_pb2.RunTaskRequest(
+    template = _build_run_request_fields(
         num_tasks=job.num_tasks,
-        entrypoint=proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint),
-        environment=proto_from_json(job.environment_json, job_pb2.EnvironmentConfig),
+        entrypoint_json=job.entrypoint_json,
+        environment_json=job.environment_json,
         bundle_id=job.bundle_id,
         resources=resources,
-        ports=job.ports_json,
-        constraints=[c.to_proto() for c in constraints_from_json(job.constraints_json)],
+        ports_json=job.ports_json,
+        constraints_json=job.constraints_json,
         task_image=job.task_image,
     )
     for filename, data in reads.get_workdir_files(snap, job_id).items():
@@ -155,20 +190,17 @@ def build_run_request(
     attempt_id: int,
 ) -> job_pb2.RunTaskRequest:
     """Assemble a RunTaskRequest for a direct-provider dispatch row."""
-    # proto_from_json returns shared cached instances — set via constructor
-    # kwarg so RunTaskRequest copies, then mutate the copy's workdir_files
-    # (never the cached source) to add inline files.
-    run_req = job_pb2.RunTaskRequest(
-        task_id=row.task_id.to_wire(),
+    run_req = _build_run_request_fields(
         num_tasks=row.num_tasks,
-        entrypoint=proto_from_json(row.entrypoint_json, job_pb2.RuntimeEntrypoint),
-        environment=proto_from_json(row.environment_json, job_pb2.EnvironmentConfig),
+        entrypoint_json=row.entrypoint_json,
+        environment_json=row.environment_json,
         bundle_id=row.bundle_id,
         resources=row.resources,
-        ports=row.ports_json,
-        attempt_id=attempt_id,
-        constraints=[c.to_proto() for c in constraints_from_json(row.constraints_json)],
+        ports_json=row.ports_json,
+        constraints_json=row.constraints_json,
         task_image=row.task_image,
+        task_id=row.task_id.to_wire(),
+        attempt_id=attempt_id,
         # Priority selects the Kueue WorkloadPriorityClass on the direct path.
         priority=row.priority_band,
     )
@@ -182,6 +214,37 @@ def build_run_request(
     if row.has_coscheduling:
         run_req.coscheduling.group_by = row.coscheduling_group_by
     return run_req
+
+
+def _dispatch_query(
+    cur: Tx,
+    *predicates,
+    order_by_job_id: bool = False,
+    limit: int | None = None,
+) -> list[PendingDispatchRow]:
+    """Fetch :class:`PendingDispatchRow`s for the direct-provider drain.
+
+    All drain queries select ``PENDING_DISPATCH_COLS`` over the
+    tasks⋈jobs⋈job_config join and exclude reservation holders; callers
+    supply the distinct state / coscheduling predicates plus optional
+    ordering and limit.
+    """
+    dispatch_join = tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id).join(
+        job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
+    )
+    stmt = (
+        select(*PENDING_DISPATCH_COLS)
+        .select_from(dispatch_join)
+        .where(
+            jobs_table.c.is_reservation_holder == False,  # noqa: E712
+            *predicates,
+        )
+    )
+    if order_by_job_id:
+        stmt = stmt.order_by(tasks_table.c.job_id)
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    return [pending_dispatch_row(r) for r in cur.execute(stmt).all()]
 
 
 def drain_for_direct_provider(
@@ -214,25 +277,14 @@ def drain_for_direct_provider(
     now_ms = Timestamp.now().epoch_ms()
     tasks_to_run: list[job_pb2.RunTaskRequest] = []
 
-    dispatch_join = tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id).join(
-        job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
-    )
-
     # Snapshot redrive set BEFORE the PENDING promotion loop so newly-
     # promoted rows (which become ASSIGNED+null_worker mid-transaction)
     # don't get dispatched twice.
-    redrive_rows = [
-        pending_dispatch_row(r)
-        for r in cur.execute(
-            select(*PENDING_DISPATCH_COLS)
-            .select_from(dispatch_join)
-            .where(
-                tasks_table.c.state == int(job_pb2.TASK_STATE_ASSIGNED),
-                tasks_table.c.current_worker_id.is_(None),
-                jobs_table.c.is_reservation_holder == False,  # noqa: E712
-            ),
-        ).all()
-    ]
+    redrive_rows = _dispatch_query(
+        cur,
+        tasks_table.c.state == int(job_pb2.TASK_STATE_ASSIGNED),
+        tasks_table.c.current_worker_id.is_(None),
+    )
 
     def _promote(row: PendingDispatchRow) -> None:
         attempt_id = row.current_attempt_id + 1
@@ -251,19 +303,12 @@ def drain_for_direct_provider(
         # the same attempt_id, which is the pod-group generation key (see
         # _pod_group_name). Non-coscheduled rows keep the flat,
         # budget-bounded first-fit behavior.
-        cosched_pending = [
-            pending_dispatch_row(r)
-            for r in cur.execute(
-                select(*PENDING_DISPATCH_COLS)
-                .select_from(dispatch_join)
-                .where(
-                    tasks_table.c.state == int(job_pb2.TASK_STATE_PENDING),
-                    job_config_table.c.has_coscheduling == True,  # noqa: E712
-                    jobs_table.c.is_reservation_holder == False,  # noqa: E712
-                )
-                .order_by(tasks_table.c.job_id),
-            ).all()
-        ]
+        cosched_pending = _dispatch_query(
+            cur,
+            tasks_table.c.state == int(job_pb2.TASK_STATE_PENDING),
+            job_config_table.c.has_coscheduling == True,  # noqa: E712
+            order_by_job_id=True,
+        )
         gangs: dict[JobName, list[PendingDispatchRow]] = {}
         for row in cosched_pending:
             gangs.setdefault(row.job_id, []).append(row)
@@ -288,19 +333,12 @@ def drain_for_direct_provider(
         # Non-coscheduled first-fit, bounded by the remaining budget.
         remaining = max_promotions - promoted_count
         if remaining > 0:
-            noncosched_pending = [
-                pending_dispatch_row(r)
-                for r in cur.execute(
-                    select(*PENDING_DISPATCH_COLS)
-                    .select_from(dispatch_join)
-                    .where(
-                        tasks_table.c.state == int(job_pb2.TASK_STATE_PENDING),
-                        job_config_table.c.has_coscheduling == False,  # noqa: E712
-                        jobs_table.c.is_reservation_holder == False,  # noqa: E712
-                    )
-                    .limit(remaining),
-                ).all()
-            ]
+            noncosched_pending = _dispatch_query(
+                cur,
+                tasks_table.c.state == int(job_pb2.TASK_STATE_PENDING),
+                job_config_table.c.has_coscheduling == False,  # noqa: E712
+                limit=remaining,
+            )
             for row in noncosched_pending:
                 _promote(row)
 

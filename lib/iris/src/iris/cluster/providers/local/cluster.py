@@ -235,7 +235,7 @@ class LocalCluster:
             create_api_key(
                 db,
                 key_id=key_id,
-                key_hash=f"jwt:{key_id}",
+                key_hash=None,
                 key_prefix="jwt",
                 user_id="local-admin",
                 name="local-auto-login",
