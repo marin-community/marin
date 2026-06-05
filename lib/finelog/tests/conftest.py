@@ -12,8 +12,8 @@ import pyarrow as pa
 import pyarrow.ipc as paipc
 import pytest
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
+from finelog.schema import Column, Schema
 from finelog.store.duckdb_store import DuckDBLogStore
-from finelog.store.schema import Column, Schema
 
 
 def _ipc_bytes(batch: pa.RecordBatch) -> bytes:

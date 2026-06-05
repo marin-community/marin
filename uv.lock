@@ -5391,6 +5391,7 @@ server = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "httpx" },
     { name = "marin-finelog", extra = ["server"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -5420,6 +5421,7 @@ provides-extras = ["server"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "httpx" },
     { name = "marin-finelog", extras = ["server"], editable = "lib/finelog" },
     { name = "pytest", specifier = ">=8.4" },
     { name = "pytest-asyncio" },

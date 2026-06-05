@@ -6,8 +6,8 @@ from __future__ import annotations
 import threading
 
 import pyarrow as pa
+from finelog.schema import NamespaceNotFoundError
 from finelog.store.duckdb_store import DuckDBLogStore
-from finelog.store.schema import NamespaceNotFoundError
 
 from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema
 

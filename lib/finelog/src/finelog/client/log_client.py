@@ -36,14 +36,14 @@ from finelog.errors import (
     SchemaValidationError,
     StatsError,
 )
+from finelog.policy import StoragePolicy
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 from finelog.rpc.logging_connect import LogServiceClientSync
-from finelog.store.log_namespace import LOG_REGISTERED_SCHEMA
-from finelog.store.policy import StoragePolicy
-from finelog.store.schema import (
+from finelog.schema import (
     IMPLICIT_SEQ_COLUMN,
+    LOG_REGISTERED_SCHEMA,
     Column,
     ColumnTypeValue,
     Schema,

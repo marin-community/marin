@@ -15,9 +15,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
+from finelog.policy import StoragePolicy
 from finelog.rpc import logging_pb2
-from finelog.store.policy import StoragePolicy
-from finelog.store.schema import AlignedBatch, Schema
+from finelog.schema import AlignedBatch, Schema
 from finelog.types import LogReadResult
 
 
@@ -136,6 +136,12 @@ class LogNamespaceProtocol(Protocol):
     def query_snapshot(self) -> list[LocalSegment]: ...
 
     def all_segments_unlocked(self) -> list[LocalSegment]: ...
+
+    def flush(self) -> None: ...
+
+    def compact(self) -> None: ...
+
+    def force_compact_l0(self) -> None: ...
 
     def update_schema(self, new_schema: Schema) -> None: ...
 

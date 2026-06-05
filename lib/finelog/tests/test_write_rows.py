@@ -6,14 +6,14 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
-from finelog.store.duckdb_store import DuckDBLogStore
-from finelog.store.schema import (
+from finelog.schema import (
     MAX_WRITE_ROWS_BYTES,
     Column,
     NamespaceNotFoundError,
     Schema,
     SchemaValidationError,
 )
+from finelog.store.duckdb_store import DuckDBLogStore
 
 from tests.conftest import _ipc_bytes, _seal, _worker_schema
 

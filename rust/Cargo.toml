@@ -1,8 +1,18 @@
 [workspace]
-members = ["dupekit"]
+members = ["dupekit", "finelog"]
 resolver = "2"
 
 [profile.release]
 lto = "fat"
 codegen-units = 1
 strip = "symbols"
+
+# Fast-iteration profile for dev/test deploys (e.g. marin-dev). Skips
+# whole-program fat LTO and uses parallel codegen, so the final link is
+# multi-threaded seconds instead of a single-threaded multi-minute pass over
+# the entire dependency tree. Still optimized enough to be representative.
+[profile.fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+opt-level = 2

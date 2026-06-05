@@ -101,6 +101,7 @@ def run_log_server(
     port: int,
     log_dir: Path,
     remote_log_dir: str,
+    debug_admin: bool = False,
 ) -> None:
     """Start a standalone log server, block until SIGTERM/SIGINT."""
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -113,7 +114,7 @@ def run_log_server(
 
     service = LogServiceImpl(log_dir=log_dir, remote_log_dir=remote_log_dir)
     stats_service = StatsServiceImpl(log_store=service.log_store)
-    app = build_log_server_asgi(service, stats_service=stats_service)
+    app = build_log_server_asgi(service, stats_service=stats_service, debug_admin=debug_admin)
 
     config = uvicorn.Config(
         app,
@@ -168,9 +169,16 @@ def run_log_server(
     envvar="FINELOG_LOG_LEVEL",
     help="Log level.",
 )
-def main(port: int, log_dir: Path, remote_log_dir: str, log_level: str) -> None:
+@click.option(
+    "--debug-admin",
+    is_flag=True,
+    default=False,
+    envvar="FINELOG_DEBUG_ADMIN",
+    help="Mount the non-proto /debug/* test-only admin routes (parity harness only; never in prod).",
+)
+def main(port: int, log_dir: Path, remote_log_dir: str, log_level: str, debug_admin: bool) -> None:
     configure_logging(level=getattr(logging, log_level))
-    run_log_server(port=port, log_dir=log_dir, remote_log_dir=remote_log_dir)
+    run_log_server(port=port, log_dir=log_dir, remote_log_dir=remote_log_dir, debug_admin=debug_admin)
 
 
 if __name__ == "__main__":

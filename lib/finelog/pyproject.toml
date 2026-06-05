@@ -41,6 +41,11 @@ dev = [
     "pytest-asyncio",
     "pytest-timeout",
     "pytest-xdist",
+    # Used directly by tests/conftest.py, tests/test_server.py, and the
+    # tests/parity/ harness to talk to the server over HTTP. Present
+    # transitively in a full workspace install; declared here so the dev
+    # group is self-sufficient on its own.
+    "httpx",
     "marin-finelog[server]",
 ]
 
