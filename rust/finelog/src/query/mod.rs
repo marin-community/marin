@@ -13,13 +13,15 @@
 pub mod provider;
 pub mod udf;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Field, Schema as ArrowSchema, SchemaRef};
 use datafusion::common::config::Dialect;
 use datafusion::common::TableReference;
 use datafusion::error::Result as DFResult;
+use datafusion::execution::memory_pool::GreedyMemoryPool;
+use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::prelude::{SessionConfig, SessionContext};
 
 use crate::query::provider::NamespaceProvider;
@@ -29,6 +31,85 @@ use crate::query::provider::NamespaceProvider;
 pub struct RegisteredProvider {
     pub name: String,
     pub provider: NamespaceProvider,
+}
+
+/// Floor for the query memory pool so a tiny/misreported cgroup can't strangle
+/// every query (256 MiB).
+const MIN_QUERY_POOL_BYTES: usize = 256 * 1024 * 1024;
+
+/// Fraction of the container/host memory the query engine may use for
+/// pool-tracked operators (sorts, joins, aggregations). The remainder is
+/// headroom for non-pool allocations (parquet decode scratch, IPC encode,
+/// tokio/allocator overhead).
+const QUERY_POOL_FRACTION: f64 = 0.7;
+
+/// Best-effort detect the process memory ceiling: the cgroup v2 limit
+/// (`memory.max`, i.e. the container's `--memory`) if set, else `/proc/meminfo`
+/// `MemTotal`. `None` when neither is readable/finite.
+fn detect_memory_limit_bytes() -> Option<usize> {
+    if let Ok(raw) = std::fs::read_to_string("/sys/fs/cgroup/memory.max") {
+        let raw = raw.trim();
+        if raw != "max" {
+            if let Ok(v) = raw.parse::<usize>() {
+                return Some(v);
+            }
+        }
+    }
+    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+    for line in meminfo.lines() {
+        if let Some(rest) = line.strip_prefix("MemTotal:") {
+            return rest
+                .trim()
+                .trim_end_matches("kB")
+                .trim()
+                .parse::<usize>()
+                .ok()
+                .map(|kb| kb.saturating_mul(1024));
+        }
+    }
+    None
+}
+
+/// The byte ceiling for the shared query memory pool.
+///
+/// `FINELOG_QUERY_MEMORY_LIMIT_MB` overrides everything (explicit ops control);
+/// otherwise `QUERY_POOL_FRACTION` of the detected container/host memory, floored
+/// at `MIN_QUERY_POOL_BYTES`. When memory can't be detected the pool is left
+/// effectively unbounded (no regression vs. an un-pooled context).
+fn query_pool_bytes() -> usize {
+    if let Ok(raw) = std::env::var("FINELOG_QUERY_MEMORY_LIMIT_MB") {
+        if let Ok(mb) = raw.trim().parse::<usize>() {
+            return mb.saturating_mul(1024 * 1024).max(MIN_QUERY_POOL_BYTES);
+        }
+    }
+    match detect_memory_limit_bytes() {
+        Some(total) => (((total as f64) * QUERY_POOL_FRACTION) as usize).max(MIN_QUERY_POOL_BYTES),
+        None => usize::MAX / 2,
+    }
+}
+
+/// A process-wide `RuntimeEnv` whose `GreedyMemoryPool` bounds total query
+/// memory. Shared across every `make_ctx` so concurrent queries compete for one
+/// budget (bounding the SERVER, not each query independently): a runaway query
+/// — e.g. an `ORDER BY <blob> DESC LIMIT n` whose TopK can't push a pruning
+/// filter through an intervening join, so it materializes the whole blob column
+/// — hits the ceiling and fails with `ResourcesExhausted` instead of
+/// OOM-killing the process (which surfaces to clients as a dropped connection /
+/// 502).
+fn shared_runtime_env() -> Arc<RuntimeEnv> {
+    static RT: OnceLock<Arc<RuntimeEnv>> = OnceLock::new();
+    RT.get_or_init(|| {
+        let bytes = query_pool_bytes();
+        tracing::info!(
+            limit_mb = bytes / (1024 * 1024),
+            "query engine: bounded memory pool (GreedyMemoryPool)"
+        );
+        RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(bytes)))
+            .build_arc()
+            .expect("build query RuntimeEnv")
+    })
+    .clone()
 }
 
 /// Build a read-only `SessionContext` matching DuckDB's externally-observable
@@ -52,13 +133,17 @@ pub struct RegisteredProvider {
 ///
 /// The compat UDFs (`prefix`/`regexp_matches`/`contains`) are registered so the
 /// corpus and FetchLogs resolve them.
+///
+/// The context runs on a shared, memory-bounded `RuntimeEnv` (see
+/// [`shared_runtime_env`]) so a pathological query fails cleanly rather than
+/// OOM-killing the server.
 pub fn make_ctx() -> SessionContext {
     let mut cfg = SessionConfig::new();
     cfg.options_mut().sql_parser.map_string_types_to_utf8view = false;
     cfg.options_mut().sql_parser.dialect = Dialect::DuckDB;
     cfg.options_mut().execution.parquet.pushdown_filters = true;
     cfg.options_mut().execution.parquet.reorder_filters = true;
-    let ctx = SessionContext::new_with_config(cfg);
+    let ctx = SessionContext::new_with_config_rt(cfg, shared_runtime_env());
     udf::register_compat_udfs(&ctx);
     ctx
 }
