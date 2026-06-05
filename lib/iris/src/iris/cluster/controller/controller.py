@@ -852,11 +852,15 @@ class Controller:
         claims = self._refresh_reservation_claims()
 
         timer = Timer()
+        # Source max_building_tasks from the scheduler so the no-claims fast path
+        # (reusing ctx) and the claims path (rebuilding via evolve_with_workers)
+        # use one cap, not two independently-defaulted ones.
         ctx = build_scheduling_context(
             self._db,
             self._health,
             self._worker_attrs,
             self._config.user_budget_defaults,
+            max_building_tasks=self._scheduler.max_building_tasks_per_worker,
         )
 
         if trace:
@@ -930,15 +934,12 @@ class Controller:
         timer: Timer,
         trace: bool = False,
     ) -> tuple[list[tuple[JobName, WorkerId]], SchedulingContext, dict[JobName, JobRequirements]]:
-        """Run preference + normal assignment passes.
-
-        Reservation taints are injected here so gates/order/diagnostics see
-        un-tainted workers. When there are no claims we reuse ``ctx`` directly
-        to avoid an index rebuild.
-        """
+        """Inject reservation taints, then run the preference + assignment passes."""
         modified_jobs = inject_taint_constraints(gated.jobs, gated.has_reservation, gated.has_direct_reservation)
 
         if claims:
+            # Taints reorder/relabel workers, so rebuild the capacity/constraint
+            # indexes over the tainted set.
             modified_workers = inject_reservation_taints(list(ctx.workers), claims)
             building_counts = {wid: cap.building_task_count for wid, cap in ctx.capacities.items()}
             ctx.pending_tasks = list(order.ordered_task_ids)
@@ -949,6 +950,9 @@ class Controller:
                 max_building_tasks=self._scheduler.max_building_tasks_per_worker,
             )
         else:
+            # No claims: taint injection is a no-op and ctx's per-pass state is
+            # still empty, so a rebuild would reproduce ctx exactly — reuse it and
+            # skip the index rebuild.
             ctx.pending_tasks = list(order.ordered_task_ids)
             ctx.jobs = modified_jobs
             context = ctx

@@ -275,12 +275,12 @@ class EndpointsProjection:
         """Remove all endpoints owned by a task. Returns the removed endpoint_ids."""
         with self._lock:
             ids = list(self._by_task.get(task_id, ()))
-        # Issue the DELETE even if ids is empty: belt-and-suspenders for any
-        # rows the projection might not have observed yet (unlikely race with
-        # an in-flight concurrent writer).
-        cur.execute(delete(endpoints_table).where(endpoints_table.c.task_id == task_id))
+        # Empty index means no committed rows (the index mirrors committed state
+        # under the write lock), so the DELETE would be a no-op — skip it, as
+        # remove() does.
         if not ids:
             return []
+        cur.execute(delete(endpoints_table).where(endpoints_table.c.task_id == task_id))
 
         def apply() -> None:
             with self._lock:
