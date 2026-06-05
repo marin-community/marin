@@ -3,6 +3,7 @@
 # Usage: uv run iris --cluster=marin-dev cluster start
 
 log_server_config: marin-dev
+dashboard_url: https://iris-dev.oa.dev
 
 platform:
   label_prefix: marin-dev
