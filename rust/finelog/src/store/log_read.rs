@@ -8,16 +8,19 @@
 //! - EXACT: `key = <literal source> AND seq > cursor`. The source is a literal;
 //!   regex metacharacters are never reinterpreted. `attempt_id` comes from the
 //!   one `exact_key`.
-//! - PREFIX: `seq > cursor` plus a half-open key range (`key >= <source>` and,
-//!   when a finite successor exists, `key < succ(<source>)`) so DataFusion can
-//!   prune parquet row groups on the `[key, seq]`-sorted segments, plus
-//!   `prefix(key, <source>)` as the exact residual. The `prefix()` UDF alone is
-//!   opaque to statistics pruning, so without the range bounds a prefix tail
-//!   full-scans the whole log; the range is what makes it fast. Empty source ->
+//! - PREFIX: `seq > cursor` plus `prefix(key, <source>)`. Empty source ->
 //!   `invalid_argument` ("source is required"). `attempt_id` is per-row.
-//! - REGEX: `seq > cursor` plus the same key-range prune + `prefix()` residual
-//!   for the leading literal prefix, and `regexp_matches(key, <pattern>)` for
-//!   any non-pure-prefix pattern. `attempt_id` is per-row.
+//! - REGEX: `seq > cursor` plus `prefix(key, <leading literal>)` and, for a
+//!   non-pure-prefix pattern, `regexp_matches(key, <pattern>)`. `attempt_id` is
+//!   per-row.
+//!
+//! These builders emit the `prefix()` / `regexp_matches()` predicates as the
+//! user's intent. The `prefix()` UDF alone is opaque to statistics pruning, so
+//! the half-open key range that makes a prefix tail fast (`key >= P AND
+//! key < succ(P)`) is added by the [`crate::query::optimizer::PrefixRangeRewrite`]
+//! analyzer rule at plan time — one place, applied to both this path and the
+//! generic Query API. The rule is tautology-preserving, so emitting `prefix()`
+//! here is correct on its own; the range is purely a pruning optimization.
 
 use buffa::Enumeration;
 
@@ -69,37 +72,13 @@ fn sql_literal(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
-/// The exclusive upper bound of the half-open key range `[prefix, succ)` that
-/// exactly covers every key starting with `prefix`: increment the last byte
-/// below `0xFF` and drop the rest. `None` when no finite bound exists (empty, or
-/// all-`0xFF`) or when the result isn't valid UTF-8 (a non-ASCII edge) — callers
-/// fall back to the `prefix()` residual for exactness in that case.
-fn key_prefix_upper_bound(prefix: &str) -> Option<String> {
-    let mut bytes = prefix.as_bytes().to_vec();
-    while let Some(&last) = bytes.last() {
-        if last < 0xFF {
-            let n = bytes.len();
-            bytes[n - 1] = last + 1;
-            return String::from_utf8(bytes).ok();
-        }
-        bytes.pop();
-    }
-    None
-}
-
-/// Push the predicates matching keys that start with `prefix`: a half-open key
-/// range (`key >= prefix`, and `key < succ(prefix)` when a finite successor
-/// exists) plus the `prefix()` UDF residual. The range bounds are
-/// statistics-comparable, so DataFusion prunes row groups on the
-/// `[key, seq]`-sorted segments; the `prefix()` UDF is opaque to pruning and is
-/// kept only as the exact filter. The lower bound and the residual hold for
-/// every prefix match; the upper bound is a pruning optimization, omitted on the
-/// rare no-successor edge (where the residual still guarantees correctness).
+/// Push the `prefix(key, <prefix>)` predicate for keys starting with `prefix`.
+///
+/// This is the exact (and sole) residual; the statistics-prunable half-open key
+/// range it implies is synthesized by
+/// [`crate::query::optimizer::PrefixRangeRewrite`] at plan time, so it is not
+/// hand-built here.
 fn push_key_prefix_predicates(where_parts: &mut Vec<String>, prefix: &str) {
-    where_parts.push(format!("key >= {}", sql_literal(prefix)));
-    if let Some(hi) = key_prefix_upper_bound(prefix) {
-        where_parts.push(format!("key < {}", sql_literal(&hi)));
-    }
     where_parts.push(format!("prefix(key, {})", sql_literal(prefix)));
 }
 
@@ -333,34 +312,19 @@ mod tests {
     }
 
     #[test]
-    fn prefix_scope_emits_prunable_key_range_plus_residual() {
-        // PREFIX must emit the half-open key range (so DataFusion prunes row
-        // groups on the [key, seq]-sorted segments) AND the prefix() residual.
-        // succ("/job/test/0:") increments ':' (0x3A) -> ';' (0x3B).
+    fn prefix_scope_emits_prefix_residual() {
+        // PREFIX emits seq filter + the prefix() residual; the prunable key range
+        // is added later by the PrefixRangeRewrite analyzer rule, not here.
         let p = build_log_predicates("/job/test/0:", 7, MatchScope::MATCH_SCOPE_PREFIX).unwrap();
         assert_eq!(
             p.where_parts,
             vec![
                 "seq > 7".to_string(),
-                "key >= '/job/test/0:'".to_string(),
-                "key < '/job/test/0;'".to_string(),
                 "prefix(key, '/job/test/0:')".to_string(),
             ]
         );
         assert!(p.include_key);
         assert_eq!(p.exact_key, None);
-    }
-
-    #[test]
-    fn key_prefix_upper_bound_cases() {
-        // ASCII: increment the last byte.
-        assert_eq!(key_prefix_upper_bound("/a/").as_deref(), Some("/a0")); // '/' (0x2F) -> '0'
-        assert_eq!(key_prefix_upper_bound("abc").as_deref(), Some("abd"));
-        // No finite bound for an empty prefix.
-        assert_eq!(key_prefix_upper_bound(""), None);
-        // Incrementing past ASCII into a lone continuation byte isn't valid
-        // UTF-8 -> None (caller keeps the prefix() residual for exactness).
-        assert_eq!(key_prefix_upper_bound("a\u{7f}"), None); // 0x7F -> 0x80
     }
 
     #[test]
@@ -371,15 +335,13 @@ mod tests {
 
     #[test]
     fn regex_pure_prefix_prunes_without_regexp_matches() {
-        // `/job/test/.*` is a pure-prefix: the key-range prune + prefix()
-        // residual, no regexp. succ("/job/test/") increments '/' -> '0'.
+        // `/job/test/.*` is a pure-prefix: just the prefix() residual, no regexp.
+        // The key range it implies is added by the analyzer rule.
         let p = build_log_predicates("/job/test/.*", 0, MatchScope::MATCH_SCOPE_REGEX).unwrap();
         assert_eq!(
             p.where_parts,
             vec![
                 "seq > 0".to_string(),
-                "key >= '/job/test/'".to_string(),
-                "key < '/job/test0'".to_string(),
                 "prefix(key, '/job/test/')".to_string(),
             ]
         );
@@ -388,15 +350,13 @@ mod tests {
 
     #[test]
     fn regex_non_pure_prefix_adds_regexp_matches() {
-        // A regex with an interior metachar pattern needs regexp_matches too,
-        // on top of the leading-literal-prefix key-range prune.
+        // A regex with an interior metachar pattern needs regexp_matches too, on
+        // top of the leading-literal prefix() residual (whose range the rule adds).
         let p = build_log_predicates("/job/(a|b)/0", 2, MatchScope::MATCH_SCOPE_REGEX).unwrap();
         assert_eq!(
             p.where_parts,
             vec![
                 "seq > 2".to_string(),
-                "key >= '/job/'".to_string(),
-                "key < '/job0'".to_string(),
                 "prefix(key, '/job/')".to_string(),
                 "regexp_matches(key, '/job/(a|b)/0')".to_string(),
             ]
