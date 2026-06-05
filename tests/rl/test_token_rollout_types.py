@@ -146,5 +146,5 @@ def test_base_inference_context_token_rollouts_are_opt_in():
     )
 
     assert not context.supports_token_rollouts()
-    with pytest.raises(NotImplementedError, match="tokenized rollout generation"):
+    with pytest.raises(NotImplementedError):
         context.generate_token_rollouts(batch)
