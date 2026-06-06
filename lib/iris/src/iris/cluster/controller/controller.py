@@ -25,6 +25,7 @@ from finelog.store.duckdb_store import EMBEDDED_DUCKDB_MEMORY_LIMIT, EMBEDDED_DU
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import bindparam, select
 
+from iris.cluster.backends.types import find_free_port, resolve_external_host
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller import direct_provider, ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
@@ -92,7 +93,6 @@ from iris.cluster.controller.schema import (
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
-from iris.cluster.providers.types import find_free_port, resolve_external_host
 from iris.cluster.runtime.profile import PROFILE_NAMESPACE, IrisProfile
 from iris.cluster.types import (
     JobName,

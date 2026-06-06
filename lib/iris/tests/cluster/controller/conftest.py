@@ -15,6 +15,9 @@ from unittest.mock import MagicMock, Mock
 import pytest
 from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
+from iris.cluster.backends.gcp.fake import InMemoryGcpService
+from iris.cluster.backends.gcp.workers import GcpWorkerProvider
+from iris.cluster.backends.types import CloudSliceState
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
     AttributeValue,
@@ -61,9 +64,6 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
-from iris.cluster.providers.gcp.fake import InMemoryGcpService
-from iris.cluster.providers.gcp.workers import GcpWorkerProvider
-from iris.cluster.providers.types import CloudSliceState
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId, is_job_finished
 from iris.rpc import config_pb2, controller_pb2, job_pb2
@@ -72,10 +72,10 @@ from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 
+from tests.cluster.backends.conftest import make_mock_platform
 from tests.cluster.conftest import fake_log_client_from_service
 from tests.cluster.controller._test_support import ControllerTestState, set_task_state_for_test
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
-from tests.cluster.providers.conftest import make_mock_platform
 
 check_task_can_be_scheduled = task_row_can_be_scheduled
 

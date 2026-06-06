@@ -22,6 +22,7 @@ from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration, Timestamp
 
+from iris.cluster.backends.factory import create_provider_bundle
 from iris.cluster.config import load_config, make_provider
 from iris.cluster.controller.auth import create_controller_auth
 from iris.cluster.controller.autoscaler_factory import create_autoscaler
@@ -30,7 +31,6 @@ from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
-from iris.cluster.providers.factory import create_provider_bundle
 from iris.rpc import config_pb2
 from iris.time_proto import duration_from_proto
 

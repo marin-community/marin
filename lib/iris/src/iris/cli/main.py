@@ -68,7 +68,7 @@ def create_client_token_provider(
 
 def _configure_client_s3(config) -> None:
     """Configure S3 env vars for fsspec access. Delegates to the canonical implementation."""
-    from iris.cluster.providers.k8s.controller import configure_client_s3
+    from iris.cluster.backends.k8s.controller import configure_client_s3
 
     configure_client_s3(config)
 

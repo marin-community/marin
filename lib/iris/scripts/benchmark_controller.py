@@ -64,6 +64,7 @@ from iris.managed_thread import ThreadContainer
 if not hasattr(_Tx, "fetchall"):
     _Tx.fetchall = lambda self, stmt, params=None: self.execute(stmt, params).all()
     _Tx.fetchone = lambda self, stmt, params=None: self.execute(stmt, params).first()
+from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.controller import ops
 from iris.cluster.controller.backend import BackendReconcileInput, BackendReconcileResult, Placement
 from iris.cluster.controller.ops.task import Assignment
@@ -97,7 +98,6 @@ from iris.cluster.controller.service import (
     _worker_roster,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.providers.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS

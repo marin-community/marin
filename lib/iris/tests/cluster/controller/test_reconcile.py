@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 import pytest
+from iris.cluster.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.controller import ops, writes
 from iris.cluster.controller.backend import (
     BackendReconcileInput,
@@ -45,7 +46,6 @@ from iris.cluster.controller.reconcile.worker import (
 )
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import task_attempts_table
-from iris.cluster.providers.rpc.backend import RpcTaskBackend
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2, worker_pb2
 from rigging.timing import Timestamp

@@ -26,6 +26,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 from rigging.timing import Duration, Timestamp
 
+from iris.cluster.backends.protocols import WorkerInfraProvider
+from iris.cluster.backends.types import (
+    CloudSliceState,
+    QuotaExhaustedError,
+    RemoteWorkerHandle,
+    SliceHandle,
+)
 from iris.cluster.constraints import Constraint
 from iris.cluster.controller.autoscaler.models import (
     DemandEntry,
@@ -47,13 +54,6 @@ from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pen
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
-from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.providers.types import (
-    CloudSliceState,
-    QuotaExhaustedError,
-    RemoteWorkerHandle,
-    SliceHandle,
-)
 from iris.cluster.types import WorkerStatusMap
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2, vm_pb2

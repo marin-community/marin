@@ -11,6 +11,9 @@ from unittest.mock import Mock
 import pytest
 from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
+from iris.cluster.backends.k8s.fake import FakeNodeResources, InMemoryK8sService
+from iris.cluster.backends.k8s.tasks import K8sTaskProvider
+from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller import direct_provider, ops
@@ -22,9 +25,6 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.schema import task_attempts_table, tasks_table, workers_table
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
-from iris.cluster.providers.k8s.tasks import K8sTaskProvider
-from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp

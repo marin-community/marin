@@ -11,6 +11,7 @@ from unittest.mock import Mock
 
 import pytest
 from finelog.server import LogServiceImpl
+from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import ops, reads
@@ -32,7 +33,6 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
@@ -1377,8 +1377,8 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path):
 
 def _make_k8s_dashboard_client(state, scheduler, tmp_path):
     """Build a TestClient wired to a real K8sTaskProvider backed by InMemoryK8sService."""
-    from iris.cluster.providers.k8s.fake import InMemoryK8sService
-    from iris.cluster.providers.k8s.tasks import K8sTaskProvider
+    from iris.cluster.backends.k8s.fake import InMemoryK8sService
+    from iris.cluster.backends.k8s.tasks import K8sTaskProvider
 
     k8s = InMemoryK8sService(namespace="iris")
     provider = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest")
@@ -1401,8 +1401,8 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path):
 
 def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path):
     """GetKubernetesClusterStatus returns node capacity and pod statuses after sync."""
+    from iris.cluster.backends.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
     from iris.cluster.controller.backend import BackendReconcileInput
-    from iris.cluster.providers.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
 
     client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path)
 

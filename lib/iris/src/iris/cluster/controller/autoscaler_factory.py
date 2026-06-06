@@ -11,6 +11,7 @@ through ``controller.db`` -> ``controller.projections``).
 
 import logging
 
+from iris.cluster.backends.protocols import WorkerInfraProvider
 from iris.cluster.config import (
     scale_groups_to_config,
     validate_autoscaler_config,
@@ -22,7 +23,6 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     DEFAULT_SCALE_UP_RATE_LIMIT,
     ScalingGroup,
 )
-from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.rpc import config_pb2
 from iris.time_proto import duration_from_proto
 
