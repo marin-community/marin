@@ -37,10 +37,12 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   vLLM-TPU at 3408.09 tok/s, or 93.8%.
 - Dense matrix coverage has started on v6e-8 for greedy `n=1`, sampled `n=4`,
   `o128` and `o512`, and logprobs on/off.
-- Mixed long-prompt correctness is fixed at the OpenAI serving layer by
-  splitting service batches by aggregate prompt-token budget before calling the
-  engine. This avoids silent request drops when one logical service batch
-  exceeds one `max_prefill_size` admission.
+- Mixed long-prompt correctness is fixed by the #6185 serving/engine path:
+  service batching no longer silently drops overflow prompts, normal generation
+  can admit one logical request batch through multiple prefill chunks, and
+  prefill-drain scheduling admits all currently possible prompts before decode.
+  This avoids silent early-stop when one logical service batch exceeds one
+  `max_prefill_size` admission.
 - The prior weak mixed regime, `mixed_b32_i512_o512_n1`, is now correct and
   above the issue-level throughput bar after prefill-drain scheduling. Levanter
   completes the full 16384-token workload under default prefill settings at
@@ -96,6 +98,9 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 
 4. Long-prompt mixed performance has an engine-level follow-up.
    - Support multi-prefill admission or overlap for one logical service batch.
+     The #6185 prefill-drain path satisfies the first issue-level version of
+     this target on v6e-8; remaining work is broader parity characterization
+     and any additional overlap/kernel work needed beyond the 0.75 issue bar.
    - `mixed_b32_i512_o512_n1` should complete all 16384 expected completion
      tokens under default prefill settings with no no-progress warnings.
    - Target at least 0.75 of vLLM decode throughput, or explain the remaining
