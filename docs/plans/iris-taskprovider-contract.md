@@ -384,7 +384,10 @@ commit (the order the existing fakes make safe). Status as of this revision:
    backend (`attach_autoscaler`); `main.py`/`Controller.__init__` simplified.
 5. ✅ **Relocate scheduling primitives** — `scheduler.py`/`scheduling_policy.py`
    into `controller/scheduling/` (`scheduler.py` + `policy.py`); pure import churn.
-6. ⏳ **Dashboard descriptor** — capability-driven tabs; retire `has_direct_provider`.
+6. ✅ **Dashboard descriptor** — `/auth/config` serves a backend descriptor
+   (name/placement/manages_capacity/capabilities); `App.vue` filters one tab list
+   by capabilities; `provider_kind` retired. (Frontend `build:check` is red on
+   `main` independently — TS 6.0.3 pin from #6173; the App.vue change is type-clean.)
 7. ⏳ **Docs** — AGENTS.md, coreweave.md, README, OPS.md, archived design doc.
 
 The reconcile refactor already proved this functional-core boundary is testable
@@ -523,11 +526,16 @@ Grouped `scheduler.py` / `scheduling_policy.py` under `controller/scheduling/`
 and `controller/autoscaler/` stay where they are. Pure import churn; full
 `tests/cluster` green, pyrefly clean.
 
-### T6 — Capability-driven dashboard  `exec: session`  `value: medium`  `deps: T2`
+### T6 — Capability-driven dashboard  `exec: session`  `value: medium`  `deps: T2`  ✅
 
-Expose a backend descriptor (capabilities + the panel list) via `/auth/config`;
-make `App.vue` tab selection data-driven; retire `has_direct_provider` in favor of
-`placement`/`manages_capacity`. `npm run build:check` green.
+`/auth/config` serves a backend descriptor (`name`/`placement`/`manages_capacity`/
+`capabilities`) built by `backend_descriptor(backend)`; `App.vue` filters a single
+tab list by the advertised capabilities (`workers`/`autoscaler`/`cluster`) instead
+of two hard-coded lists; the `provider_kind` binary is retired. The internal
+`has_direct_provider` property + RPC gates stay (placement-based, correct).
+`test_dashboard.py` asserts the descriptor for both backends (43 passed, pyrefly
+clean). `App.vue` is type-clean; note `npm run build:check` is already red on
+`main` (TypeScript `^6.0.3` pin from #6173 vs 5.x-era code — unrelated to this PR).
 
 ### T7 — Documentation  `exec: session`  `value: medium`  `deps: T4, T6`
 
