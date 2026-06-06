@@ -305,6 +305,7 @@ class MarinFlightServer(flight.FlightServerBase):
                     logger.debug(f"Requested weight_id {weight_id} stale, returning {self._latest_weight_id}")
                     weight_id = self._latest_weight_id
 
+                assert weight_id is not None, "No weights have been published yet"
                 (schema, batches) = self._weights_store[weight_id][param_name]
 
             return flight.RecordBatchStream(pa.RecordBatchReader.from_batches(schema, batches))

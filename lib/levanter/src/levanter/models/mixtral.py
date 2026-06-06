@@ -5,7 +5,7 @@ import dataclasses
 import inspect
 from dataclasses import dataclass
 from functools import partial
-from typing import Callable, Dict, List, Optional, Type, Union
+from typing import Callable, Dict, List, Optional, Type, Union, cast
 
 import equinox as eqx
 import jax
@@ -545,7 +545,7 @@ class MixtralTransformer(eqx.Module):
         self, x: NamedArray, attn_mask: Optional[NamedArray], *, key, pos_ids: NamedArray | None = None
     ) -> tuple[NamedArray, dict]:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x, extras = self.layers.scan(x, mask=attn_mask, key=keys)
+        x, extras = cast(tuple[NamedArray, dict], self.layers.scan(x, mask=attn_mask, key=keys))
         x = self.norm(x)
 
         # moe logging

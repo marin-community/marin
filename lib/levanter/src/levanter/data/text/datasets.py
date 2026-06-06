@@ -1052,4 +1052,4 @@ if __name__ == "__main__":
                 metric = key.split("/")[4]
                 print(f"{name} {metric}: {value}")
 
-    main()
+    main()  # pyrefly: ignore[missing-argument]

@@ -647,6 +647,7 @@ def _make_custom_vjp(
                 dout_lse,
                 block_size=xla_block_size,
                 dtype=dtype,
+                batch_block_size=block_sizes.b_block_size,
                 logit_soft_cap=logit_soft_cap,
                 precision=precision,
             )
