@@ -169,6 +169,7 @@ jobs:
           set +e
           JOB_OUTPUT=$(.venv/bin/iris --config="$IRIS_CONFIG" \
             job run --no-wait \
+            --enable-extra-resources \
             --memory=16G --disk=32G --cpu=4 --extra=cpu \
             -e MARIN_PREFIX s3://marin-na/marin/ \
             -e RUN_ID "$RUN_ID" \
