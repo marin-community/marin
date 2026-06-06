@@ -74,6 +74,20 @@ REFERENCE_LOGIT_ARTIFACT_MD = "levanter_reference_logits.md"
 REFERENCE_LOGIT_TOP_KS = (1, 10, 100, 1000, 4096)
 REFERENCE_LOGIT_HISTOGRAM_BOUNDS = (0.0, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1, 3e-1, 1.0)
 REFERENCE_LOGIT_CACHE_DTYPE_POLICIES = ("auto", "default", "bfloat16", "float32")
+VLLM_STARTUP_ENV_KEYS = (
+    "JAX_COMPILATION_CACHE_DIR",
+    "JAX_ENABLE_COMPILATION_CACHE",
+    "JAX_PLATFORMS",
+    "LIBTPU_INIT_ARGS",
+    "MODEL_IMPL_TYPE",
+    "TPU_CHIPS_PER_HOST_BOUNDS",
+    "TPU_HOST_BOUNDS",
+    "TPU_MIN_LOG_LEVEL",
+    "TPU_STDERR_LOG_LEVEL",
+    "TPU_VISIBLE_DEVICES",
+    "VLLM_XLA_CACHE_PATH",
+    "XLA_FLAGS",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,6 +334,7 @@ def _vllm_startup_error_message(
     cmd: list[str],
     process_return_code: int | None,
     cause: Exception,
+    startup_snapshot: dict[str, Any] | None = None,
 ) -> str:
     process_state = (
         f"vLLM process exited with code {process_return_code}"
@@ -330,6 +345,8 @@ def _vllm_startup_error_message(
         f"vLLM failed to start. Logs: {log_dir}. Command: {' '.join(cmd)}",
         f"{process_state}. Startup error: {cause}",
     ]
+    if startup_snapshot is not None:
+        parts.append(f"startup snapshot:\n{json.dumps(startup_snapshot, indent=2, sort_keys=True)}")
     stderr_tail = _tail_text_file(log_dir / "stderr.log")
     if stderr_tail:
         parts.append(f"stderr tail:\n{stderr_tail}")
@@ -337,6 +354,13 @@ def _vllm_startup_error_message(
     if stdout_tail:
         parts.append(f"stdout tail:\n{stdout_tail}")
     return "\n\n".join(parts)
+
+
+def _vllm_startup_snapshot(env: dict[str, str]) -> dict[str, Any]:
+    return {
+        "runtime": _runtime_env_snapshot(include_jax_devices=False),
+        "env": {key: env.get(key) for key in VLLM_STARTUP_ENV_KEYS},
+    }
 
 
 def _prompt_for_token_count(tokenizer, target_tokens: int) -> tuple[str, int]:
@@ -1441,6 +1465,7 @@ def start_vllm_server(
     env.setdefault("JAX_ENABLE_COMPILATION_CACHE", "1")
     env.setdefault("TPU_MIN_LOG_LEVEL", "3")
     env.setdefault("TPU_STDERR_LOG_LEVEL", "3")
+    startup_snapshot = _vllm_startup_snapshot(env)
 
     if log_dir is None:
         log_dir = Path(tempfile.mkdtemp(prefix="qwen3_vllm_bench_"))
@@ -1472,6 +1497,7 @@ def start_vllm_server(
                 cmd=cmd,
                 process_return_code=process_return_code,
                 cause=exc,
+                startup_snapshot=startup_snapshot,
             )
         ) from exc
 

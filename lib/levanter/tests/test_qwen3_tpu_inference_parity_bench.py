@@ -1038,6 +1038,53 @@ def test_vllm_startup_error_includes_log_tails(tmp_path):
     assert "loading model" in message
 
 
+def test_vllm_startup_snapshot_records_versions_and_selected_env(monkeypatch):
+    def runtime_snapshot(*, include_jax_devices):
+        assert include_jax_devices is False
+        return {
+            "jax_version": "0.0.test",
+            "vllm_tpu_version": "0.20.0",
+            "devices": None,
+            "device_kind": None,
+        }
+
+    monkeypatch.setattr(bench, "_runtime_env_snapshot", runtime_snapshot)
+
+    snapshot = bench._vllm_startup_snapshot(
+        {
+            "LIBTPU_INIT_ARGS": "--xla_tpu_scoped_vmem_limit_kib=50000",
+            "MODEL_IMPL_TYPE": "vllm",
+            "UNRELATED_SECRET": "do-not-report",
+        }
+    )
+
+    assert snapshot["runtime"]["vllm_tpu_version"] == "0.20.0"
+    assert snapshot["env"]["LIBTPU_INIT_ARGS"] == "--xla_tpu_scoped_vmem_limit_kib=50000"
+    assert snapshot["env"]["MODEL_IMPL_TYPE"] == "vllm"
+    assert "UNRELATED_SECRET" not in snapshot["env"]
+
+
+def test_vllm_startup_error_includes_startup_snapshot(tmp_path):
+    log_dir = tmp_path / "vllm_profiles"
+    log_dir.mkdir()
+
+    message = bench._vllm_startup_error_message(
+        log_dir=log_dir,
+        cmd=["vllm", "serve", "Qwen/Qwen3-8B"],
+        process_return_code=None,
+        cause=TimeoutError("models endpoint timed out"),
+        startup_snapshot={
+            "runtime": {"vllm_tpu_version": "0.20.0", "jax_version": "0.0.test"},
+            "env": {"LIBTPU_INIT_ARGS": "--xla_tpu_scoped_vmem_limit_kib=50000"},
+        },
+    )
+
+    assert "vLLM process was still running when startup timed out" in message
+    assert "startup snapshot:" in message
+    assert '"vllm_tpu_version": "0.20.0"' in message
+    assert '"LIBTPU_INIT_ARGS": "--xla_tpu_scoped_vmem_limit_kib=50000"' in message
+
+
 def test_main_rejects_vllm_greedy_multi_generation_cases():
     with pytest.raises(ValueError, match="n > 1 with greedy sampling"):
         bench.main(
