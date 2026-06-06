@@ -620,3 +620,10 @@ complete; 0.5 was 56% under. Failures: verify broadcast OOM (3.3B pairs);
 4-cpu drivers unschedulable us-central1 (2-cpu pool); 1-cpu v3 ok.
 Pending: `3`, `4plus_mind` scans us-central1. Verified pairs:
 `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/4plus_284x71/verified_pairs`.
+
+### math `3` scan done (2026-06-06, /ahmed/val-scan-3-e5b)
+
+3.40B candidates, 1.31B len-pruned, 439,618 verified J>=0.5. Val docs with
+near-dup in math/3: 13,238 (0.5) / 4,155 (0.7) / 2,702 (0.75) / 147 (0.9).
+4plus_mind scan still running. Note: cross-subset scans needed val-doc minhash
+(val ids absent from corpus) — fixed in nemotron_math_val_full_scan.py.
