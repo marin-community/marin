@@ -34,6 +34,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import fsspec
+import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData
@@ -63,7 +65,6 @@ SUBSETS = {
     ),
 }
 
-_PAIRS: dict[str, list[str]] | None = None
 _VAL_TEXT: dict[str, str] | None = None
 
 
@@ -127,44 +128,63 @@ def _shingles(text: str, n: int = 5) -> set[str]:
     return {cleaned[i : i + n] for i in range(max(1, len(cleaned) - n + 1))}
 
 
-def _load_verify_state(pairs_dir: str, val_docs: str) -> tuple[dict[str, list[str]], dict[str, str]]:
-    global _PAIRS, _VAL_TEXT
-    if _PAIRS is None:
-        by_other = defaultdict(set)
-        for path in fsspec_glob(f"{pairs_dir}/*.parquet"):
-            t = pq.read_table(path, columns=["val_id", "other_id"])
-            for val_id, other_id in zip(t.column("val_id").to_pylist(), t.column("other_id").to_pylist(), strict=True):
-                by_other[other_id].add(val_id)
-        _PAIRS = {k: sorted(v) for k, v in by_other.items()}
+def _load_val_text(val_docs: str) -> dict[str, str]:
+    global _VAL_TEXT
+    if _VAL_TEXT is None:
         val_text: dict[str, str] = {}
         for path in fsspec_glob(f"{val_docs}/*.parquet"):
             t = pq.read_table(path, columns=["id", "text"])
             val_text.update(zip(t.column("id").to_pylist(), t.column("text").to_pylist(), strict=True))
         _VAL_TEXT = val_text
-    assert _PAIRS is not None and _VAL_TEXT is not None
-    return _PAIRS, _VAL_TEXT
+    return _VAL_TEXT
+
+
+def _shard_pairs(pairs_dir: str, shard_ids: set[str]) -> dict[str, list[str]]:
+    """Stream candidate pairs, keep only this shard's other_ids, deduped.
+
+    High-recall banding emits billions of (val_id, other_id) rows corpus-wide
+    (one per shared bucket); broadcasting that dict OOMs workers. The deduped
+    per-shard slice is ~1/n_shards of it.
+    """
+    id_array = pa.array(shard_ids, type=pa.string())
+    by_other: dict[str, set[str]] = defaultdict(set)
+    for path in fsspec_glob(f"{pairs_dir}/*.parquet"):
+        for batch in pq.ParquetFile(fsspec.open(path, "rb").open()).iter_batches(batch_size=262144):
+            mask = pc.is_in(batch.column("other_id"), value_set=id_array)
+            hits = pa.RecordBatch.from_arrays(batch.columns, batch.schema.names).filter(mask)
+            for val_id, other_id in zip(hits.column("val_id").to_pylist(), hits.column("other_id").to_pylist(), strict=True):
+                by_other[other_id].add(val_id)
+    return {k: sorted(v) for k, v in by_other.items()}
 
 
 def _verify_shard(shard_path: str, pairs_dir: str, val_docs: str) -> Iterator[dict]:
-    pairs_by_other, val_text = _load_verify_state(pairs_dir, val_docs)
+    val_text = _load_val_text(val_docs)
+    table = pq.read_table(shard_path, columns=["id", "text"])
+    texts = dict(zip(table.column("id").to_pylist(), table.column("text").to_pylist(), strict=True))
+    del table
+    pairs_by_other = _shard_pairs(pairs_dir, set(texts))
+    counters.increment("verify/shard_pairs", sum(len(v) for v in pairs_by_other.values()))
     val_shingles: dict[str, set[str]] = {}
-    for batch in pq.ParquetFile(shard_path).iter_batches(columns=["id", "text"], batch_size=2048):
-        for doc_id, text in zip(batch.column("id"), batch.column("text"), strict=True):
-            id_str = doc_id.as_py()
-            val_ids = pairs_by_other.get(id_str)
-            if not val_ids:
+    for id_str, val_ids in pairs_by_other.items():
+        text = texts[id_str]
+        other: set[str] | None = None
+        for val_id in val_ids:
+            # Length bound: shingle Jaccard <= min(len)/max(len); prune cheap.
+            la, lb = len(text), len(val_text[val_id])
+            if min(la, lb) / max(la, lb, 1) < MIN_REPORT_JACCARD:
+                counters.increment("verify/len_pruned")
                 continue
-            counters.increment("verify/candidates")
-            other = _shingles(text.as_py())
-            for val_id in val_ids:
-                if val_id not in val_shingles:
-                    val_shingles[val_id] = _shingles(val_text[val_id])
-                vs = val_shingles[val_id]
-                union = len(vs | other)
-                jaccard = len(vs & other) / union if union else 0.0
-                if jaccard >= MIN_REPORT_JACCARD:
-                    counters.increment("verify/reported")
-                    yield {"val_id": val_id, "other_id": id_str, "jaccard": round(jaccard, 4)}
+            if other is None:
+                other = _shingles(text)
+            if val_id not in val_shingles:
+                val_shingles[val_id] = _shingles(val_text[val_id])
+            vs = val_shingles[val_id]
+            union = len(vs | other)
+            jaccard = len(vs & other) / union if union else 0.0
+            counters.increment("verify/exact")
+            if jaccard >= MIN_REPORT_JACCARD:
+                counters.increment("verify/reported")
+                yield {"val_id": val_id, "other_id": id_str, "jaccard": round(jaccard, 4)}
 
 
 def main() -> None:
@@ -228,7 +248,7 @@ def main() -> None:
     verify_ctx = ZephyrContext(
         name=f"verify-val-pairs-{args.subset}",
         max_workers=sub.shards,
-        resources=ResourceConfig(cpu=2, ram="32g", disk="10g"),
+        resources=ResourceConfig(cpu=2, ram="48g", disk="10g"),
         coordinator_resources=ResourceConfig(cpu=4, ram="32g", disk="10g"),
     )
     outcome = verify_ctx.execute(
