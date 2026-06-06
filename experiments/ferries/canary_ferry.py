@@ -8,6 +8,7 @@ Config is driven by env vars set in the GH Actions workflow env: block and forwa
 to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
 
     CANARY_ACCELERATOR   tpu | gpu
+    CANARY_ATTENTION_IMPLEMENTATION gpu-only attention backend, e.g. gpu_fa4_cute
     CANARY_BATCH_SIZE    per-device batch size
     CANARY_CACHE_COPY_MAX_WORKERS gpu-only cache-copy worker cap
     CANARY_GPU_TYPE      gpu-only accelerator type, e.g. H100, GH200, B200
@@ -26,10 +27,12 @@ to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
 import dataclasses
 import datetime
 import os
+from typing import cast
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.data.text import BlockShuffleConfig, TextLmDatasetFormat
+from levanter.grug.attention import GrugAttentionImplementation
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
@@ -60,6 +63,11 @@ CANARY_TRAINER = GrugTrainerConfig(
     z_loss_weight=1e-4,
     ema_beta=None,
     log_every=1,
+)
+_GPU_ATTENTION_IMPLEMENTATIONS: tuple[GrugAttentionImplementation, ...] = (
+    "reference",
+    "gpu_fa4_cute",
+    "gpu_fa4_thd",
 )
 
 
@@ -100,6 +108,24 @@ def _build_step_from_env() -> ExecutorStep:
     else:
         batch_size = _env_int("CANARY_BATCH_SIZE", 32)
         target_tokens = _env_int("CANARY_TARGET_TOKENS", batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len * 50)
+        attention_implementation = os.environ.get("CANARY_ATTENTION_IMPLEMENTATION", "gpu_fa4_cute")
+        if attention_implementation not in _GPU_ATTENTION_IMPLEMENTATIONS:
+            raise ValueError(
+                f"Unknown CANARY_ATTENTION_IMPLEMENTATION={attention_implementation!r}, expected one of "
+                f"{_GPU_ATTENTION_IMPLEMENTATIONS}"
+            )
+        attention_implementation = cast(GrugAttentionImplementation, attention_implementation)
+        model = dataclasses.replace(
+            GRUG_MOE_TRIAL_MODEL,
+            attention_implementation=attention_implementation,
+            # The THD backend only handles full causal windows. Setting the model
+            # window to 2x seq_len makes Grug's short-window mask a full window.
+            sliding_window=(
+                GRUG_MOE_TRIAL_MODEL.max_seq_len * 2
+                if attention_implementation == "gpu_fa4_thd"
+                else GRUG_MOE_TRIAL_MODEL.sliding_window
+            ),
+        )
         gpu_type = os.environ.get("CANARY_GPU_TYPE", "H100")
         gpu_count = _env_int("CANARY_GPU_COUNT", 8)
         gpu_replicas = _env_int("CANARY_GPU_REPLICAS", 1)
@@ -131,10 +157,13 @@ def _build_step_from_env() -> ExecutorStep:
             disk="256g",
             replicas=gpu_replicas,
         )
-        name = f"canary-ferry-cw-{gpu_type.lower()}x{gpu_count}-r{gpu_replicas}"
-        wandb_group = f"canary-ferry-moe-gpu-{gpu_type.lower()}-r{gpu_replicas}"
-        wandb_tags = ["canary", "ferry", "grug", "moe", "gpu", gpu_type.lower()]
+        attention_tag = attention_implementation.removeprefix("gpu_")
+        name = f"canary-ferry-cw-{gpu_type.lower()}x{gpu_count}-r{gpu_replicas}-{attention_tag}"
+        wandb_group = f"canary-ferry-moe-gpu-{gpu_type.lower()}-r{gpu_replicas}-{attention_tag}"
+        wandb_tags = ["canary", "ferry", "grug", "moe", "gpu", gpu_type.lower(), attention_tag]
         eval_config = None
+    if accelerator == "tpu":
+        model = GRUG_MOE_TRIAL_MODEL
 
     num_steps = _env_int("CANARY_STEPS", target_tokens // (batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len))
     if num_steps <= 0:
@@ -163,7 +192,7 @@ def _build_step_from_env() -> ExecutorStep:
         name=f"{name}-{run_id}",
         fn=run_grug_moe_trial,
         config=GrugMoeLaunchConfig(
-            model=versioned(GRUG_MOE_TRIAL_MODEL),
+            model=versioned(model),
             data=data,
             output_path=this_output_path(),
             run_id=run_id,

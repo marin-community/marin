@@ -45,6 +45,7 @@ from marin.execution.executor_step_status import (
 )
 from marin.execution.remote import RemoteCallable, _sanitize_job_name
 from marin.execution.step_spec import StepSpec
+from marin.training.run_environment import extras_for_resources
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger(__name__)
@@ -373,13 +374,18 @@ def _submit_iris_job(
         result = raw_fn(output_path)
         Artifact.save(result, output_path)
 
+    if pip_dependency_groups is None:
+        extras = extras_for_resources(resources)
+    else:
+        extras = pip_dependency_groups
+
     job_name = _sanitize_job_name(f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}")
     request = JobRequest(
         name=job_name,
         entrypoint=Entrypoint.from_callable(_fn_with_artifact_save),
         resources=resources,
         environment=create_environment(
-            extras=pip_dependency_groups or [],
+            extras=extras,
             env_vars=env_vars or {},
         ),
     )

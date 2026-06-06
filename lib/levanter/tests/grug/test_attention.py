@@ -162,6 +162,30 @@ def test_gpu_fa4_thd_rejects_mha_before_kernel_config(monkeypatch):
         attention(q, k, v, mask, implementation="gpu_fa4_thd")
 
 
+def test_gpu_fa4_thd_accepts_full_sequence_window():
+    q = jnp.ones((1, 4, 2, 8), dtype=jnp.float32)
+    k = jnp.ones((1, 4, 1, 8), dtype=jnp.float32)
+    v = jnp.ones((1, 4, 1, 8), dtype=jnp.float32)
+    segment_ids = jnp.array([[0, 0, 1, 1]], dtype=jnp.int32)
+
+    full_window = AttentionMask.causal(sliding_window=4).with_segment_ids(segment_ids, max_segments=2)
+    fa4_thd._validate_simple_causal_self_attention(q, k, v, full_window, backend_name="gpu_fa4_thd_attention")
+
+    short_window = AttentionMask.causal(sliding_window=3).with_segment_ids(segment_ids, max_segments=2)
+    with pytest.raises(NotImplementedError, match="sliding-window"):
+        fa4_thd._validate_simple_causal_self_attention(q, k, v, short_window, backend_name="gpu_fa4_thd_attention")
+
+
+def test_gpu_fa4_thd_supports_hopper_kernel_config(monkeypatch):
+    monkeypatch.setattr(fa4_thd, "_gpu_compute_arch", lambda: 90)
+
+    config = fa4_thd._thd_kernel_config(128)
+
+    assert config.forward_tile == (128, 64)
+    assert config.backward_tile == (128, 64)
+    assert config.num_threads == 384
+
+
 def test_attention_rejects_unknown_implementation():
     q, k, v = _make_qkv()
 

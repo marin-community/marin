@@ -762,6 +762,28 @@ def test_step_resources_dispatches_via_fray(tmp_path: Path, fray_client):
     assert loaded.path == tmp_path.as_posix()
 
 
+def test_step_resources_dispatch_uses_device_extra(tmp_path: Path, fray_client):
+    spy = _SubmitSpy(fray_client)
+
+    resources = ResourceConfig.with_gpu("H100", count=8)
+
+    def my_step(output_path: str) -> PathMetadata:
+        return PathMetadata(path=output_path)
+
+    step = StepSpec(
+        name="gpu_resourced_step",
+        override_output_path=tmp_path.as_posix(),
+        fn=my_step,
+        resources=resources,
+    )
+
+    with set_current_client(spy):
+        StepRunner().run([step])
+
+    assert len(spy.requests) == 1
+    assert spy.requests[0].environment.extras == ["gpu"]
+
+
 # ---------------------------------------------------------------------------
 # @remote decorator tests
 # ---------------------------------------------------------------------------

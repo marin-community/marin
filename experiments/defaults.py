@@ -55,12 +55,12 @@ from marin.processing.tokenize import (
     tokenize,
 )
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
+from marin.training.run_environment import extras_for_resources
 from marin.training.training import (
     TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
     bake_output_path,
     check_train_config_paths,
-    extras_for_resources,
     impute_run_id,
     resolve_training_env,
     run_levanter_train_dpo,

@@ -19,34 +19,46 @@ from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug.attention._core import AttentionMask
 from levanter.grug.attention._fa4_cute import _gpu_compute_arch
-from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig
-
-
-_BLACKWELL_FA4_ARCH = 100
+from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, flash4_cute_kernel_config
 
 
 @dataclass(frozen=True)
 class _UpstreamFa4CuteModules:
+    arch: int
     cutlass: Any
     cute: Any
     cjax: Any
     cuda: Any
-    FlashAttentionForwardSm100: Any
-    FlashAttentionBackwardSm100: Any
+    FlashAttentionForward: Any
+    FlashAttentionBackward: Any
     FlashAttentionBackwardPreprocess: Any
     FlashAttentionBackwardPostprocess: Any
 
 
 def _import_upstream_fa4_cute() -> _UpstreamFa4CuteModules:
     try:
+        arch = _gpu_compute_arch()
+        arch_family = arch // 10
         cutlass = importlib.import_module("cutlass")
         cute = importlib.import_module("cutlass.cute")
         cjax = importlib.import_module("cutlass.jax")
         cuda = importlib.import_module("cuda.bindings.driver")
-        flash_fwd = importlib.import_module("flash_attn.cute.flash_fwd_sm100")
-        flash_bwd = importlib.import_module("flash_attn.cute.flash_bwd_sm100")
+        if arch_family == 9:
+            flash_fwd = importlib.import_module("flash_attn.cute.flash_fwd_sm90")
+            flash_bwd = importlib.import_module("flash_attn.cute.flash_bwd_sm90")
+            flash_fwd_cls = flash_fwd.FlashAttentionForwardSm90
+            flash_bwd_cls = flash_bwd.FlashAttentionBackwardSm90
+        elif arch_family in (10, 11):
+            flash_fwd = importlib.import_module("flash_attn.cute.flash_fwd_sm100")
+            flash_bwd = importlib.import_module("flash_attn.cute.flash_bwd_sm100")
+            flash_fwd_cls = flash_fwd.FlashAttentionForwardSm100
+            flash_bwd_cls = flash_bwd.FlashAttentionBackwardSm100
+        else:
+            raise NotImplementedError(f"gpu_fa4_thd_attention supports SM90/SM100/SM110, got SM{arch}.")
         flash_bwd_preprocess = importlib.import_module("flash_attn.cute.flash_bwd_preprocess")
         flash_bwd_postprocess = importlib.import_module("flash_attn.cute.flash_bwd_postprocess")
+    except NotImplementedError:
+        raise
     except Exception as exc:
         raise RuntimeError(
             "gpu_fa4_thd_attention requires upstream flash-attn-4 CuTe internals and "
@@ -55,12 +67,13 @@ def _import_upstream_fa4_cute() -> _UpstreamFa4CuteModules:
         ) from exc
 
     return _UpstreamFa4CuteModules(
+        arch=arch,
         cutlass=cutlass,
         cute=cute,
         cjax=cjax,
         cuda=cuda,
-        FlashAttentionForwardSm100=flash_fwd.FlashAttentionForwardSm100,
-        FlashAttentionBackwardSm100=flash_bwd.FlashAttentionBackwardSm100,
+        FlashAttentionForward=flash_fwd_cls,
+        FlashAttentionBackward=flash_bwd_cls,
         FlashAttentionBackwardPreprocess=flash_bwd_preprocess.FlashAttentionBackwardPreprocess,
         FlashAttentionBackwardPostprocess=flash_bwd_postprocess.FlashAttentionBackwardPostprocess,
     )
@@ -71,6 +84,14 @@ def _optional_dependency_error() -> RuntimeError:
         "gpu_fa4_thd_attention requires upstream flash-attn-4 CuTe internals and "
         "nvidia-cutlass-dsl with JAX support in the GPU environment."
     )
+
+
+def _cutlass_dtype(cutlass: Any, dtype: Any) -> Any:
+    if str(dtype) == "bfloat16":
+        return cutlass.BFloat16
+    if str(dtype) == "float16":
+        return cutlass.Float16
+    raise TypeError(f"gpu_fa4_thd_attention expects bf16/fp16, got {dtype}")
 
 
 def _validate_simple_causal_self_attention(
@@ -87,7 +108,7 @@ def _validate_simple_causal_self_attention(
         raise NotImplementedError(f"{backend_name} requires an AttentionMask with packed segment_ids.")
     if not mask.is_causal:
         raise NotImplementedError(f"{backend_name} supports only causal self-attention.")
-    if mask.sliding_window is not None:
+    if mask.sliding_window is not None and mask.sliding_window < q.shape[1]:
         raise NotImplementedError(f"{backend_name} does not support sliding-window attention.")
 
     if len(q.shape) != 4 or len(k.shape) != 4 or len(v.shape) != 4:
@@ -115,10 +136,18 @@ def _validate_simple_causal_self_attention(
 
 def _thd_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
     arch = _gpu_compute_arch()
-    if arch // 10 not in (10, 11):
-        raise NotImplementedError(f"gpu_fa4_thd_attention currently supports only SM100/SM110, got SM{arch}.")
+    arch_family = arch // 10
+    if arch_family not in (9, 10, 11):
+        raise NotImplementedError(f"gpu_fa4_thd_attention currently supports only SM90/SM100/SM110, got SM{arch}.")
     if head_dim != 128:
         raise NotImplementedError(f"gpu_fa4_thd_attention is only wired for head_dim=128, got {head_dim}.")
+    if arch_family == 9:
+        base = flash4_cute_kernel_config(head_dim, arch=arch)
+        return Flash4CuteKernelConfig(
+            forward_tile=base.forward_tile,
+            backward_tile=base.backward_tile,
+            num_threads=384,
+        )
     return Flash4CuteKernelConfig(forward_tile=(128, 128), backward_tile=(128, 128), num_threads=384)
 
 
@@ -214,6 +243,7 @@ def _sharding_of(x: Array | None) -> jax.sharding.Sharding | None:
 def _upstream_fa4_thd_forward_launcher(
     modules: _UpstreamFa4CuteModules,
     *,
+    dtype: Any,
     head_dim: int,
     head_dim_v: int,
     qhead_per_kvhead: int,
@@ -222,27 +252,48 @@ def _upstream_fa4_thd_forward_launcher(
     cutlass = modules.cutlass
     cute = modules.cute
     cuda = modules.cuda
-    flash_fwd = modules.FlashAttentionForwardSm100(
-        head_dim,
-        head_dim_v,
-        qhead_per_kvhead=qhead_per_kvhead,
-        is_causal=True,
-        is_local=False,
-        is_split_kv=False,
-        pack_gqa=qhead_per_kvhead > 1,
-        m_block_size=kernel_config.forward_tile[0],
-        n_block_size=kernel_config.forward_tile[1],
-        q_stage=2,
-        is_persistent=False,
-        score_mod=None,
-        mask_mod=None,
-        has_aux_tensors=False,
-        paged_kv_non_tma=False,
-        is_varlen_q=True,
-        q_subtile_factor=None,
-        use_2cta_instrs=False,
-        use_clc_scheduler=False,
-    )
+    cute_dtype = _cutlass_dtype(cutlass, dtype)
+    if modules.arch // 10 == 9:
+        flash_fwd = modules.FlashAttentionForward(
+            cute_dtype,
+            head_dim,
+            head_dim_v,
+            qhead_per_kvhead=qhead_per_kvhead,
+            is_causal=True,
+            is_local=False,
+            pack_gqa=qhead_per_kvhead > 1,
+            tile_m=kernel_config.forward_tile[0],
+            tile_n=kernel_config.forward_tile[1],
+            num_stages=2,
+            num_threads=kernel_config.num_threads,
+            score_mod=None,
+            mask_mod=None,
+            has_aux_tensors=False,
+            q_subtile_factor=None,
+            paged_kv_non_tma=False,
+        )
+    else:
+        flash_fwd = modules.FlashAttentionForward(
+            head_dim,
+            head_dim_v,
+            qhead_per_kvhead=qhead_per_kvhead,
+            is_causal=True,
+            is_local=False,
+            is_split_kv=False,
+            pack_gqa=qhead_per_kvhead > 1,
+            m_block_size=kernel_config.forward_tile[0],
+            n_block_size=kernel_config.forward_tile[1],
+            q_stage=2,
+            is_persistent=False,
+            score_mod=None,
+            mask_mod=None,
+            has_aux_tensors=False,
+            paged_kv_non_tma=False,
+            is_varlen_q=True,
+            q_subtile_factor=None,
+            use_2cta_instrs=False,
+            use_clc_scheduler=False,
+        )
 
     @cute.jit
     def _launch_upstream_fa4_thd_forward(
@@ -265,16 +316,7 @@ def _upstream_fa4_thd_forward_launcher(
             softmax_scale,
             cu_seqlens,
             cu_seqlens,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            stream,
+            stream=stream,
         )
 
     return _launch_upstream_fa4_thd_forward
@@ -292,12 +334,7 @@ def _upstream_fa4_thd_backward_launcher(
     cutlass = modules.cutlass
     cute = modules.cute
     cuda = modules.cuda
-    if str(dtype) == "bfloat16":
-        cute_dtype = cutlass.BFloat16
-    elif str(dtype) == "float16":
-        cute_dtype = cutlass.Float16
-    else:
-        raise TypeError(f"gpu_fa4_thd_attention expects bf16/fp16, got {dtype}")
+    cute_dtype = _cutlass_dtype(cutlass, dtype)
 
     tile_m, tile_n = kernel_config.backward_tile
     preprocess = modules.FlashAttentionBackwardPreprocess(
@@ -308,51 +345,74 @@ def _upstream_fa4_thd_backward_launcher(
         num_threads=128,
         use_padded_offsets=False,
     )
-    backward = modules.FlashAttentionBackwardSm100(
-        head_dim,
-        head_dim_v,
-        is_causal=True,
-        is_local=False,
-        qhead_per_kvhead=qhead_per_kvhead,
-        tile_m=tile_m,
-        tile_n=tile_n,
-        is_persistent=False,
-        deterministic=False,
-        spt=False,
-        cluster_size=2,
-        use_2cta_instrs=True,
-        score_mod=None,
-        score_mod_bwd=None,
-        mask_mod=None,
-        has_aux_tensors=False,
-        subtile_factor=1,
-    )
+    if modules.arch // 10 == 9:
+        backward = modules.FlashAttentionBackward(
+            cute_dtype,
+            head_dim,
+            head_dim_v,
+            qhead_per_kvhead=qhead_per_kvhead,
+            is_causal=True,
+            is_local=False,
+            deterministic=False,
+            tile_m=tile_m,
+            tile_n=tile_n,
+            num_threads=kernel_config.num_threads,
+            score_mod=None,
+            score_mod_bwd=None,
+            mask_mod=None,
+            has_aux_tensors=False,
+            subtile_factor=1,
+        )
+        cluster_size = 1
+        use_2cta_instrs = False
+    else:
+        backward = modules.FlashAttentionBackward(
+            head_dim,
+            head_dim_v,
+            is_causal=True,
+            is_local=False,
+            qhead_per_kvhead=qhead_per_kvhead,
+            tile_m=tile_m,
+            tile_n=tile_n,
+            is_persistent=False,
+            deterministic=False,
+            spt=False,
+            cluster_size=2,
+            use_2cta_instrs=True,
+            score_mod=None,
+            score_mod_bwd=None,
+            mask_mod=None,
+            has_aux_tensors=False,
+            subtile_factor=1,
+        )
+        cluster_size = 2
+        use_2cta_instrs = True
     dq_postprocess = modules.FlashAttentionBackwardPostprocess(
         cute_dtype,
         head_dim,
-        _BLACKWELL_FA4_ARCH,
+        modules.arch,
         tile_m,
         num_threads=128,
         AtomLayoutMdQ=1,
-        use_2cta_instrs=True,
+        use_2cta_instrs=use_2cta_instrs,
     )
     dk_postprocess = modules.FlashAttentionBackwardPostprocess(
         cute_dtype,
         head_dim,
-        _BLACKWELL_FA4_ARCH,
+        modules.arch,
         tile_n,
         num_threads=128,
         AtomLayoutMdQ=1,
-        cluster_size=2,
+        cluster_size=cluster_size,
     )
     dv_postprocess = modules.FlashAttentionBackwardPostprocess(
         cute_dtype,
         head_dim_v,
-        _BLACKWELL_FA4_ARCH,
+        modules.arch,
         tile_n,
         num_threads=128,
         AtomLayoutMdQ=1,
-        cluster_size=2,
+        cluster_size=cluster_size,
     )
 
     class _Float32ZeroFill:
@@ -415,16 +475,7 @@ def _upstream_fa4_thd_backward_launcher(
             softmax_scale,
             cu_seqlens,
             cu_seqlens,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            stream,
+            stream=stream,
         )
         dq_postprocess(dq_accum, dq, softmax_scale, cu_seqlens, None, stream)
         dk_postprocess(dk_accum, dk, softmax_scale, cu_seqlens, None, stream)
@@ -450,6 +501,7 @@ def fa4_thd_attention_forward(
 
     launcher = _upstream_fa4_thd_forward_launcher(
         modules,
+        dtype=q.dtype,
         head_dim=q.shape[-1],
         head_dim_v=v.shape[-1],
         qhead_per_kvhead=q.shape[1] // k.shape[1],
