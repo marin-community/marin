@@ -62,6 +62,16 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   per outer iteration instead of draining all pending prefills before decode.
   Treat those two rows as confounded until the diagnostic path mirrors normal
   prefill-drain scheduling.
+- The corrected Levanter-only v6e-8 diagnostic now gives a clean attribution
+  split for the same prefill-heavy shape. On #6185 head `82bb6dbfb`, Iris job
+  `/dlwh/qwen3-v6e8-prefilldiag-drain-prefill-b8-i2048-o128-n1-20260606-1532`
+  succeeded with all three rows using prefill chunks `4096,4096,4096,4096` and
+  `1022` decode iteration tokens. Normal `levanter:auto` measured `906.62`
+  decode tok/s and `15412.56` total tok/s. `no_lm_head` measured `1244.03`
+  decode tok/s and `21148.47` total tok/s. `lm_head_no_sampling` measured
+  `1154.22` decode tok/s and `19621.78` total tok/s. This points to the
+  remaining prefill-heavy gap living in production LM-head/sampling/submit
+  overhead rather than prefill chunking or transformer/cache decode.
 
 ## Authoritative Artifacts
 
@@ -69,8 +79,8 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   `https://github.com/marin-community/marin/pull/6176`, head
   `104bf901e33c5f0b34d32d4f59edf27b82f66714`.
 - Multi-prefill serving fix: #6185,
-  `https://github.com/marin-community/marin/pull/6185`, head
-  `ba82f306d96fb5ac3501f8db7214e8b392b56843`.
+  `https://github.com/marin-community/marin/pull/6185`, current head
+  `82bb6dbfba443f39997c6fcd38e43c26871a58fe`.
 - Long-prompt serving issue: #6184,
   `https://github.com/marin-community/marin/issues/6184`.
 - RL token rollout contracts: #6186,
@@ -101,6 +111,16 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   tok/s. The diagnostic rows are not yet a clean LM-head/sampling attribution
   because their decode iteration tokens were `510,256,256` instead of the
   normal row's `1022`.
+- Corrected prefill-heavy v6e-8 diagnostic: Iris job
+  `/dlwh/qwen3-v6e8-prefilldiag-drain-prefill-b8-i2048-o128-n1-20260606-1532`,
+  Levanter-only on #6185 head `82bb6dbfb`, after the diagnostic prefill-drain
+  fix. The job succeeded with no Iris failures. Results: normal
+  `levanter:auto` `906.62` decode tok/s and `15412.56` total tok/s,
+  `no_lm_head` `1244.03` decode tok/s and `21148.47` total tok/s,
+  `lm_head_no_sampling` `1154.22` decode tok/s and `19621.78` total tok/s.
+  All rows used prefill chunks `4096,4096,4096,4096` and `1022` decode
+  iteration tokens, so this is the clean attribution row for the prefill-heavy
+  gap.
 
 ## Acceptance Criteria
 
@@ -221,6 +241,23 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   attribution. Code inspection shows normal `generate()` drains all pending
   prefill admissions before decode, while `_generate_diagnostic()` admits only
   one pending prefill per outer iteration.
+- PR #6185 corrected Levanter-only prefill-heavy diagnostic:
+  `/dlwh/qwen3-v6e8-prefilldiag-drain-prefill-b8-i2048-o128-n1-20260606-1532`.
+  The job succeeded for `prefill_b8_i2048_o128_n1`, Qwen3-8B, v6e-8, TP=8,
+  `--max-pages 512`, two warmups, one measured round, `--profile-levanter`,
+  `--levanter-diagnose-without-lm-head`, and
+  `--levanter-diagnose-lm-head-no-sampling`, from #6185 head `82bb6dbfb`.
+  All rows used prefill chunks `4096,4096,4096,4096` and `1022` decode
+  iteration tokens, validating the diagnostic prefill-drain fix. The normal
+  `levanter:auto` row measured `906.62` decode tok/s and `15412.56` total
+  tok/s, with decode iteration `0.813`s total, `0.623`s device, `0.190`s host,
+  and `0.184`s submit. The `no_lm_head` row measured `1244.03` decode tok/s
+  and `21148.47` total tok/s, with decode iteration `0.751`s total, `0.573`s
+  device, `0.178`s host, and `0.003`s submit. The `lm_head_no_sampling` row
+  measured `1154.22` decode tok/s and `19621.78` total tok/s, with decode
+  iteration `0.815`s total, `0.637`s device, `0.178`s host, and `0.003`s
+  submit. The clean split points at production LM-head/sampling/submit overhead
+  rather than prefill chunking or transformer/cache decode as the next target.
 - PR #6185 current CI state as of 2026-06-06T05:21Z: all visible checks are
   green, including the rerun `marin-integration` job `79853218990`. The prior
   red lane was the external Hugging Face `429 Too Many Requests` for `gpt2`
@@ -401,13 +438,12 @@ thread. Keep background-style work narrow and explicit until the app is stable:
      This is a terminal infra/backend failure for the v5p comparison, not a
      Levanter benchmark result. No follow-up decode-heavy v5p row has been
      launched.
-5. Fix the diagnostic harness before using it for v6e prefill-heavy attribution.
-   The first Levanter-only diagnostic completed, but the
-   `no_lm_head`/`lm_head_no_sampling` rows changed service scheduling by
-   decoding after each pending prefill admission. Make `_generate_diagnostic()`
-   mirror normal prefill-drain scheduling, then rerun at most one corrected
-   Levanter-only `prefill_b8_i2048_o128_n1` diagnostic if clean attribution is
-   still needed.
+5. Use the corrected v6e prefill-heavy attribution to target the remaining gap.
+   The corrected Levanter-only diagnostic shows `no_lm_head` reaches `1244.03`
+   decode tok/s, close to the original vLLM `1262.90`, while production
+   `levanter:auto` remains at `906.62` with `0.184`s submit overhead. The next
+   implementation target is production LM-head/sampling/submit overhead for
+   prefill-heavy greedy decode, not prefill chunking or transformer/cache decode.
 6. Develop the RL batched-token API slice in parallel with the runtime wait.
    vLLM, Levanter, MathEnv, rollout-worker policy identity, tokenizer replay
    identity, and persisted rollout metadata now exercise the token-native
