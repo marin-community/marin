@@ -312,8 +312,8 @@ def _candidate_block_sizes(
                     )
                 )
     elif impl_name == "pallas_gpu":
-        h_blocks = (32, 64, 128, 256, 512, inferred.h_block_size)
-        v_blocks = (64, 128, 256, 512, 1024, 2048, 4096)
+        h_blocks = (16, 32, 64, 128, 256, 512, inferred.h_block_size)
+        v_blocks = (1024, 512, 256, 128, 64, 2048, 4096)
         device_kind = jax.devices()[0].device_kind.lower() if jax.devices() else ""
         max_weight_tile_bytes = _NVIDIA_WEIGHT_TILE_BYTES_LIMIT if "nvidia" in device_kind else None
         for h_block in h_blocks:
@@ -429,6 +429,13 @@ def _autotune_block_sizes_on_miss(
         return cached
 
     candidates = _candidate_block_sizes(impl_name, inferred, x=x, w=w, dtype=dtype)
+    if impl_name == "pallas_gpu":
+        selected = candidates[0] if candidates else inferred
+        _AUTOTUNE_BLOCK_SIZE_CACHE[cache_key] = selected
+        _persist_autotune_cache()
+        logger.info("Fused CE GPU autotune miss for %s. Using fixed safe block sizes %s.", impl_name, selected)
+        return selected
+
     logger.info(
         "Fused CE autotune miss for %s. Sweeping %d block-size candidates.",
         impl_name,
