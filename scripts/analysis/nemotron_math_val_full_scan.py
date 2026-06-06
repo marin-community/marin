@@ -57,11 +57,12 @@ class Subset:
     shards: int
 
 
+# 3 and 4plus_mind were rsync'd from us-central1 (no CPU pool there) on 2026-06-06.
 SUBSETS = {
     "4plus": Subset("gs://marin-us-east5/normalized/nemotron_cc_math_v1/4plus_b05688a8/outputs/main", "us-east5", 231),
-    "3": Subset("gs://marin-us-central1/normalized/nemotron_cc_math_v1/3_f8007d22/outputs/main", "us-central1", 400),
+    "3": Subset("gs://marin-us-east5/normalized/nemotron_cc_math_v1/3_f8007d22/outputs/main", "us-east5", 400),
     "4plus_mind": Subset(
-        "gs://marin-us-central1/normalized/nemotron_cc_math_v1/4plus_mind_1173e12a/outputs/main", "us-central1", 336
+        "gs://marin-us-east5/normalized/nemotron_cc_math_v1/4plus_mind_1173e12a/outputs/main", "us-east5", 336
     ),
 }
 
@@ -152,7 +153,9 @@ def _shard_pairs(pairs_dir: str, shard_ids: set[str]) -> dict[str, list[str]]:
         for batch in pq.ParquetFile(fsspec.open(path, "rb").open()).iter_batches(batch_size=262144):
             mask = pc.is_in(batch.column("other_id"), value_set=id_array)
             hits = pa.RecordBatch.from_arrays(batch.columns, batch.schema.names).filter(mask)
-            for val_id, other_id in zip(hits.column("val_id").to_pylist(), hits.column("other_id").to_pylist(), strict=True):
+            for val_id, other_id in zip(
+                hits.column("val_id").to_pylist(), hits.column("other_id").to_pylist(), strict=True
+            ):
                 by_other[other_id].add(val_id)
     return {k: sorted(v) for k, v in by_other.items()}
 
