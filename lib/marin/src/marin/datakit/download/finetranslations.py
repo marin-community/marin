@@ -20,7 +20,7 @@ from collections.abc import Iterator
 
 import dupekit
 from fray import ResourceConfig
-from zephyr import Dataset, ZephyrContext, counters, load_parquet
+from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step
@@ -30,6 +30,10 @@ FINETRANSLATIONS_HF_ID = "HuggingFaceFW/finetranslations"
 FINETRANSLATIONS_REVISION = "af3f4ca"
 
 SEPARATOR = "\n\n"
+
+# Only the columns the fold needs; projected at read time so the upstream's
+# heavy chunk/score/warc columns never leave parquet.
+COLUMNS = ["id", "og_full_text", "translated_text"]
 
 
 def fold_parallel_text(record: dict) -> Iterator[dict]:
@@ -66,7 +70,7 @@ def transform(input_path: str, output_path: str) -> None:
     """Fold each parallel row into a single-text-column parquet document."""
     pipeline = (
         Dataset.from_files(f"{input_path}/data/**/*.parquet")
-        .flat_map(load_parquet)
+        .load_parquet(columns=COLUMNS)
         .flat_map(fold_parallel_text)
         .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
