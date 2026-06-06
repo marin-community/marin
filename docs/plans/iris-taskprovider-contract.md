@@ -371,16 +371,17 @@ commit (the order the existing fakes make safe). Status as of this revision:
    → `providers/rpc/backend.py` `RpcTaskBackend`; controller drives both through
    `reconcile`, no `isinstance`; delete `controller/provider.py`. (Scheduler +
    Autoscaler still controller-owned at this point.)
-3. ⏳ **Move scheduling into the backend** — `backend.schedule(snapshot)`;
+3. ✅ **Move scheduling into the backend** — `backend.schedule(snapshot)`;
    `RpcTaskBackend` owns the (stateless) `Scheduler` and runs preference +
    find_assignments + preemption; K8s no-op. Controller scheduling loop becomes
    read-snapshot → schedule → commit.
-4. ⏳ **Move autoscaling into the backend, DB-less** — make `ScalingGroup`/`Autoscaler`
-   DB-less (return deltas); `RpcTaskBackend` owns the autoscaler;
-   `backend.manage_capacity(snapshot)` + `backend.on_workers_failed(...)`; K8s
-   no-op. Controller autoscale loop + worker-failure path become thin dispatch +
-   delta-commit. Construction moves the Scheduler/Autoscaler wiring into the
-   backend factory; `main.py`/`Controller.__init__` simplify.
+4. ✅ **Move autoscaling into the backend, DB-less** — `ScalingGroup`/`Autoscaler`
+   are DB-less (in-memory state authoritative, exposed via `persistable_state()`);
+   `RpcTaskBackend` owns the autoscaler; `backend.manage_capacity(snapshot)` +
+   `backend.on_workers_failed(...)`; K8s no-op. Controller autoscale loop +
+   worker-failure path are thin dispatch + wholesale state sync
+   (`persist_autoscaler_state`). Construction attaches the autoscaler to the
+   backend (`attach_autoscaler`); `main.py`/`Controller.__init__` simplified.
 5. ⏳ **Relocate scheduling primitives** — `scheduler.py`/`scheduling_policy.py`
    into a `scheduling/` layer; pure import churn.
 6. ⏳ **Dashboard descriptor** — capability-driven tabs; retire `has_direct_provider`.
@@ -487,7 +488,7 @@ controller drives both via `reconcile` with no `isinstance`; on-demand RPCs via
 `TaskTarget`; `main.py` autoscaler gate on `manages_capacity`; delete
 `controller/provider.py`.
 
-### T3 — Move scheduling into the backend  `exec: session`  `value: high`  `deps: T2`
+### T3 — Move scheduling into the backend  `exec: session`  `value: high`  `deps: T2`  ✅
 
 Add `schedule(ScheduleInput) -> ScheduleResult` to the contract. `RpcTaskBackend`
 owns the (stateless) `Scheduler` and runs the preference + `find_assignments` +
@@ -497,19 +498,23 @@ unschedulable). All scheduling *decision* logic leaves `controller.py`; the DB
 read (`build_scheduling_context`, running-task info for preemption) and the commit
 stay. Reservation-claim refresh stays controller-owned (it is DB read+write).
 
-### T4 — Move autoscaling into the backend, DB-less  `exec: session`  `value: high`  `deps: T3`
+### T4 — Move autoscaling into the backend, DB-less  `exec: session`  `value: high`  `deps: T3`  ✅
 
-Make `ScalingGroup`/`Autoscaler` DB-less: drop their `db` handles; `refresh`/scale
-ops mutate in-memory state and accumulate **deltas**. Add
+Made `ScalingGroup`/`Autoscaler` DB-less: dropped their `db` handles; mutations
+update in-memory state only, and the autoscaler exposes its tracked slices/groups
+via `persistable_state() -> AutoscalerState`. Added
 `manage_capacity(CapacityInput) -> CapacityResult` and
 `on_workers_failed(worker_ids) -> WorkersFailedResult` to the contract;
 `RpcTaskBackend` owns the autoscaler and performs the cloud I/O; K8s no-ops.
-Controller's autoscale loop + worker-failure path become read-snapshot →
-backend-call → apply-deltas (persist `slices`/`scaling_groups` rows; fail sibling
-workers). Startup restore stays controller-owned (reads the checkpoint, hands the
-backend its initial tracked state at construction). Move the Scheduler/Autoscaler
-construction into the backend factory; simplify `main.py` + `Controller.__init__`.
-Keep `tests/cluster/controller/test_autoscaler*.py` green.
+Controller's autoscale loop + worker-failure path are read-snapshot →
+backend-call → **wholesale state sync** (`persist_autoscaler_state` upserts
+present `slices`/`scaling_groups` rows and deletes slice rows no longer tracked;
+fails sibling workers). Startup restore stays controller-owned (`main()` reads the
+checkpoint via `restore_from_db`, then `attach_autoscaler`s the seeded autoscaler
+to the backend — the one-time bootstrap DB touch). `Controller.__init__` dropped
+its `autoscaler` param; `Controller.autoscaler` is now a read-only proxy over the
+backend for dashboard/status RPCs. `tests/cluster/controller/test_autoscaler*.py`
+green, full `tests/cluster` green, pyrefly clean.
 
 ### T5 — Name the shared scheduling layer  `exec: session`  `value: medium`  `deps: T4`
 
