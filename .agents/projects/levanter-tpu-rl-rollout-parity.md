@@ -23,8 +23,10 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - Prefer short local file edits, short REST `gh api` checks, and written
   handoffs. Delegate new runs to subagents when useful, then monitor them with
   tightly scoped heartbeats rather than foreground polling.
-- There is no active heartbeat for the v5p follow-up. The heartbeat was deleted
-  after the watched v5p job reached terminal failure before benchmark results.
+- Heartbeat `poll-rl-rollout-epic-progress` watches the v5p follow-up thread,
+  #6185, and this handoff PR, and should update the epic/child issues before
+  notifying on terminal results, concrete failures, review actions, or CI
+  failures.
 
 ## Current Evidence
 
@@ -46,6 +48,12 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   4084.24 decode tok/s versus vLLM-TPU at 4985.21 decode tok/s, or 81.9%.
   The remaining performance work is now a generic parity push, not a correctness
   or service-admission blocker.
+- The first v5p mixed confirmation did not produce a benchmark row. Iris job
+  `/dlwh/qwen3-mixed-v5p-prefilldrain-i512-o512-20260606-0447` failed before
+  measurement because vLLM never became ready within the 3600-second startup
+  timeout; `/v1/models` stayed connection-refused on the local vLLM port. Treat
+  this as a terminal infra/backend failure for the v5p comparison, not evidence
+  about Levanter throughput.
 - A prefill-heavy v6e-8 row has identified the next parity gap. For
   `prefill_b8_i2048_o128_n1`, backend `both`, dense matrix, TP=8,
   `--max-pages 512`, two warmups and one measured round, vLLM reached
@@ -75,7 +83,10 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   not pure decode submit overhead. The clean signal is that the production
   decode iteration itself is `1022 / 0.813s`, essentially matching the vLLM
   `1262.90` tok/s row; the remaining work is to fix benchmark attribution and
-  then target any residual LM-head/sampling cost with corrected metrics.
+  then target any residual LM-head/sampling cost with corrected metrics. #6185
+  commit `6d74fc7ea` now adds `decode_iteration_tokens_per_second` and
+  `decode_device_tokens_per_second` to future benchmark summaries and
+  `summary.json` rows.
 
 ## Authoritative Artifacts
 
@@ -84,7 +95,11 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   `104bf901e33c5f0b34d32d4f59edf27b82f66714`.
 - Multi-prefill serving fix: #6185,
   `https://github.com/marin-community/marin/pull/6185`, current head
-  `82bb6dbfba443f39997c6fcd38e43c26871a58fe`.
+  `6d74fc7eac344b2cf06cdf7a98f0fd08f76d8717`.
+- RL rollout tracking epic: #6227,
+  `https://github.com/marin-community/marin/issues/6227`, with child issues
+  #6228 for dense v6e parity, #6229 for the v6e prefill-heavy gap, #6230 for
+  v5p startup/benchmark evidence, and #6231 for the token-native RL data plane.
 - Long-prompt serving issue: #6184,
   `https://github.com/marin-community/marin/issues/6184`.
 - RL token rollout contracts: #6186,
@@ -125,6 +140,11 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   All rows used prefill chunks `4096,4096,4096,4096` and `1022` decode
   iteration tokens, so this is the clean attribution row for the prefill-heavy
   gap.
+- Benchmark attribution metric update: #6185 commit `6d74fc7ea`,
+  `Report pure decode iteration throughput`. Future parity outputs include
+  `decode_iteration_tokens_per_second` and `decode_device_tokens_per_second` in
+  `summary.json` and the markdown summary table, alongside the existing
+  end-to-end row throughput.
 
 ## Acceptance Criteria
 
@@ -201,12 +221,14 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - Issue #6184 tracks engine-level multi-prefill admission for long-prompt TPU
   serving.
 - PR #6185 implements the long-prompt correctness and mixed-workload performance
-  fix. The final branch head, `ba82f306d`, combines engine-level multi-prefill
-  admission, OpenAI service relaxation for aggregate prompt-token budgets,
-  benchmark admission/timing metrics, and prefill-drain scheduling before decode.
-  Local validation for the final patch passed: `py_compile`, focused engine plus
-  Qwen3 harness pytest (`61 passed`), and `./infra/pre-commit.py --all-files
-  --fix`.
+  fix. The current branch head, `6d74fc7ea`, combines engine-level
+  multi-prefill admission, OpenAI service relaxation for aggregate prompt-token
+  budgets, benchmark admission/timing metrics, prefill-drain scheduling before
+  decode, corrected diagnostic prefill-drain behavior, decode-submit attribution
+  cleanup, and pure decode iteration/device throughput reporting. Local
+  validation for the latest focused patch passed: focused engine plus Qwen3
+  harness pytest (`61 passed`), focused `./infra/pre-commit.py --files ... --fix`,
+  and the commit hook including Pyrefly.
 - PR #6185 final v6e-8 proof is
   `/dlwh/qwen3-mixed-v6e8-prefilldrain-i512-o512-20260606-0428`. The job
   succeeded with no failures or preemptions for `mixed_b32_i512_o512_n1`,
@@ -267,11 +289,15 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   transformer/cache plus greedy LM-head decode is close to the vLLM row; fix
   benchmark timing attribution before treating the prefill-heavy ratio as a
   production decode-kernel gap.
-- PR #6185 current CI state as of 2026-06-06T05:21Z: all visible checks are
-  green, including the rerun `marin-integration` job `79853218990`. The prior
-  red lane was the external Hugging Face `429 Too Many Requests` for `gpt2`
-  tokenizer staging, and the rerun passed without code changes. The PR is
-  non-draft, mergeable, and ready for maintainer review/merge.
+- PR #6185 benchmark attribution follow-up: commit `6d74fc7ea` adds
+  `decode_iteration_tokens_per_second` and `decode_device_tokens_per_second` to
+  future `summary.json` rows and markdown tables. This preserves the existing
+  end-to-end decode ratio while giving reviewers a direct pure decode-loop and
+  device-throughput signal for prefill-heavy rows.
+- PR #6185 current CI state after commit `6d74fc7ea`: the PR is non-draft and
+  mergeable, with no visible failed checks at the latest lightweight metadata
+  check. `marin-integration`, `levanter-unit`, `levanter-torch`, and
+  `levanter-tpu-tests` were still in progress.
 - Issue #6184 has the final proof comment:
   `https://github.com/marin-community/marin/issues/6184#issuecomment-4637412411`.
 - PR #6186 adds the first RL batched-token rollout API contracts, stacked on
@@ -447,14 +473,14 @@ thread. Keep background-style work narrow and explicit until the app is stable:
      This is a terminal infra/backend failure for the v5p comparison, not a
      Levanter benchmark result. No follow-up decode-heavy v5p row has been
      launched.
-5. Fix benchmark timing attribution for prefill-heavy rows before changing
-   kernels. The corrected Levanter-only diagnostic shows `no_lm_head` reaches
-   `1244.03` decode tok/s, close to the original vLLM `1262.90`, and production
-   `levanter:auto` decodes `1022` tokens in `0.813`s. The production
-   `decode_submit_seconds` metric currently includes prefill admission time, so
-   future rows should separate prefill-drain wall time, pure decode submit,
-   pure decode device, and end-to-end request latency before assigning the
-   residual gap to LM-head/sampling or kernels.
+5. Use the corrected benchmark attribution before changing kernels. Commit
+   `6d74fc7ea` now reports pure decode iteration and device throughput for
+   future rows. The corrected Levanter-only diagnostic shows `no_lm_head`
+   reaches `1244.03` decode tok/s, close to the original vLLM `1262.90`, and
+   production `levanter:auto` decodes `1022` tokens in `0.813`s. Future
+   prefill-heavy rows should compare end-to-end row throughput against
+   `decode_iteration_tokens_per_second` and `decode_device_tokens_per_second`
+   before assigning any residual gap to LM-head/sampling or kernels.
 6. Develop the RL batched-token API slice in parallel with the runtime wait.
    vLLM, Levanter, MathEnv, rollout-worker policy identity, tokenizer replay
    identity, and persisted rollout metadata now exercise the token-native
@@ -749,10 +775,31 @@ implementation slice should be:
      `>=0.75` vLLM ratio target for the known weak regime. The benchmark summary
      still marks the row as a generic target failure because that threshold is
      stricter than the issue-level acceptance bar.
-   - #6185 CI state after reruns: visible checks are green on `ba82f306d`,
-     including the Hugging Face-flaked `marin-integration` and `levanter-torch`
-     lanes. The PR is non-draft and mergeable; the remaining action is
-     maintainer review/merge.
+   - Later commits moved #6185 past `ba82f306d`; do not use this old CI snapshot
+     as the current PR state.
+
+15. #6185 latest v6e prefill-heavy attribution and PR state:
+   - Corrected prefill-heavy diagnostic
+     `/dlwh/qwen3-v6e8-prefilldiag-drain-prefill-b8-i2048-o128-n1-20260606-1532`
+     succeeded from `82bb6dbfb`. All rows used prefill chunks
+     `4096,4096,4096,4096` and `1022` decode iteration tokens.
+   - `levanter:auto`: `906.62` decode tok/s, `15412.56` total tok/s, decode
+     iteration `0.813`s total / `0.623`s device / `0.190`s host / `0.184`s
+     submit.
+   - `no_lm_head`: `1244.03` decode tok/s, `21148.47` total tok/s, decode
+     iteration `0.751`s total / `0.573`s device / `0.178`s host / `0.003`s
+     submit.
+   - `lm_head_no_sampling`: `1154.22` decode tok/s, `19621.78` total tok/s,
+     decode iteration `0.815`s total / `0.637`s device / `0.178`s host /
+     `0.003`s submit.
+   - Follow-up code inspection found the production submit timer included
+     prefill-drain work. Commit `6d74fc7ea` adds
+     `decode_iteration_tokens_per_second` and `decode_device_tokens_per_second`
+     to future benchmark outputs so the next prefill-heavy rows can separate
+     end-to-end row throughput from pure decode-loop and device throughput.
+   - #6185 current head is `6d74fc7ea`. The PR is non-draft and mergeable, with
+     no visible failed checks at the latest lightweight metadata check; the
+     Levanter lanes and `marin-integration` were still in progress.
 
 ## RL Token Data Plane Gate
 
