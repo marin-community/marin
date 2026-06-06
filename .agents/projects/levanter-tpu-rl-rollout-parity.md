@@ -69,9 +69,13 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   `1022` decode iteration tokens. Normal `levanter:auto` measured `906.62`
   decode tok/s and `15412.56` total tok/s. `no_lm_head` measured `1244.03`
   decode tok/s and `21148.47` total tok/s. `lm_head_no_sampling` measured
-  `1154.22` decode tok/s and `19621.78` total tok/s. This points to the
-  remaining prefill-heavy gap living in production LM-head/sampling/submit
-  overhead rather than prefill chunking or transformer/cache decode.
+  `1154.22` decode tok/s and `19621.78` total tok/s. Code inspection after the
+  result found the production `decode submit s` metric starts before draining
+  pending prefills, unlike the diagnostic path, so the `0.184`s submit field is
+  not pure decode submit overhead. The clean signal is that the production
+  decode iteration itself is `1022 / 0.813s`, essentially matching the vLLM
+  `1262.90` tok/s row; the remaining work is to fix benchmark attribution and
+  then target any residual LM-head/sampling cost with corrected metrics.
 
 ## Authoritative Artifacts
 
@@ -256,8 +260,13 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   device, `0.178`s host, and `0.003`s submit. The `lm_head_no_sampling` row
   measured `1154.22` decode tok/s and `19621.78` total tok/s, with decode
   iteration `0.815`s total, `0.637`s device, `0.178`s host, and `0.003`s
-  submit. The clean split points at production LM-head/sampling/submit overhead
-  rather than prefill chunking or transformer/cache decode as the next target.
+  submit. Follow-up code inspection found the production submit timer starts at
+  the beginning of the outer iteration, before pending prefills are drained, so
+  it includes prefill admission work and is not directly comparable to the
+  diagnostic submit field. The corrected per-iteration signal says production
+  transformer/cache plus greedy LM-head decode is close to the vLLM row; fix
+  benchmark timing attribution before treating the prefill-heavy ratio as a
+  production decode-kernel gap.
 - PR #6185 current CI state as of 2026-06-06T05:21Z: all visible checks are
   green, including the rerun `marin-integration` job `79853218990`. The prior
   red lane was the external Hugging Face `429 Too Many Requests` for `gpt2`
@@ -438,12 +447,14 @@ thread. Keep background-style work narrow and explicit until the app is stable:
      This is a terminal infra/backend failure for the v5p comparison, not a
      Levanter benchmark result. No follow-up decode-heavy v5p row has been
      launched.
-5. Use the corrected v6e prefill-heavy attribution to target the remaining gap.
-   The corrected Levanter-only diagnostic shows `no_lm_head` reaches `1244.03`
-   decode tok/s, close to the original vLLM `1262.90`, while production
-   `levanter:auto` remains at `906.62` with `0.184`s submit overhead. The next
-   implementation target is production LM-head/sampling/submit overhead for
-   prefill-heavy greedy decode, not prefill chunking or transformer/cache decode.
+5. Fix benchmark timing attribution for prefill-heavy rows before changing
+   kernels. The corrected Levanter-only diagnostic shows `no_lm_head` reaches
+   `1244.03` decode tok/s, close to the original vLLM `1262.90`, and production
+   `levanter:auto` decodes `1022` tokens in `0.813`s. The production
+   `decode_submit_seconds` metric currently includes prefill admission time, so
+   future rows should separate prefill-drain wall time, pure decode submit,
+   pure decode device, and end-to-end request latency before assigning the
+   residual gap to LM-head/sampling or kernels.
 6. Develop the RL batched-token API slice in parallel with the runtime wait.
    vLLM, Levanter, MathEnv, rollout-worker policy identity, tokenizer replay
    identity, and persisted rollout metadata now exercise the token-native
