@@ -245,6 +245,23 @@ def main() -> None:
         .write_parquet(f"{pairs_dir}/pairs-{{shard:05d}}-of-{{total:05d}}.parquet")
     )
 
+    # Dedup the (val_id, other_id) pairs once (3-4B rows -> ~10M); verify
+    # workers then read ~200 MB instead of re-streaming the raw pair list.
+    dedup_dir = f"{scratch}/val_pairs_dedup"
+    dedup_ctx = ZephyrContext(
+        name=f"dedup-pairs-{args.subset}",
+        max_workers=sub.shards,
+        resources=ResourceConfig(cpu=2, ram="32g", disk="10g"),
+        coordinator_resources=ResourceConfig(cpu=4, ram="32g", disk="10g"),
+    )
+    dedup_ctx.execute(
+        Dataset.from_files(f"{pairs_dir}/*.parquet")
+        .load_parquet()
+        .group_by(lambda r: f"{r['val_id']}|{r['other_id']}", reducer=lambda _k, items: [next(iter(items))])
+        .write_parquet(f"{dedup_dir}/pairs-{{shard:05d}}-of-{{total:05d}}.parquet")
+    )
+    pairs_dir = dedup_dir
+
     corpus_files = sorted(fsspec_glob(f"{sub.corpus}/*.parquet"))
     verify_ctx = ZephyrContext(
         name=f"verify-val-pairs-{args.subset}",
