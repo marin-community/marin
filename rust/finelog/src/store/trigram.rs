@@ -482,6 +482,13 @@ pub fn parse_column(bytes: &[u8], rg_count: u32) -> Option<ColumnIndex> {
     for _ in 0..rg_count {
         let k = r.u8()?;
         let words_len = r.u32()? as usize;
+        // A well-formed bloom always has `k >= 1` and at least one word (see
+        // `RowGroupBloom::with_capacity`). Reject a corrupt zero here: an empty
+        // word array makes `m_bits == 0`, so a later `probes`/`contains` would
+        // panic on `% 0` instead of degrading to "absent" as the format promises.
+        if k == 0 || words_len == 0 {
+            return None;
+        }
         // Guard against a corrupt length forcing a huge allocation before the
         // bounds check in `take` would fire word-by-word.
         if words_len.checked_mul(8)? > r.remaining() {
@@ -995,6 +1002,27 @@ mod tests {
         bytes[4] = TGM_VERSION + 1;
         assert!(peek_header_len(&bytes).is_none());
         assert!(parse_header(&bytes).is_none());
+    }
+
+    #[test]
+    fn parse_column_rejects_degenerate_blooms() {
+        // A row group is `k u8 | words_len u32 | words[words_len] u64`. A corrupt
+        // `words_len == 0` would make `m_bits == 0` and panic on `% 0` at query
+        // time; it must be rejected (treated as absent), never panic. Likewise
+        // `k == 0` (a real bloom always probes at least one bit).
+        assert!(
+            parse_column(&[1u8, 0, 0, 0, 0], 1).is_none(),
+            "words_len == 0"
+        );
+        assert!(
+            parse_column(&[0u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 1).is_none(),
+            "k == 0"
+        );
+        // A valid single-word group parses.
+        assert!(
+            parse_column(&[1u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 1).is_some(),
+            "k=1, one zero word is valid"
+        );
     }
 
     #[test]
