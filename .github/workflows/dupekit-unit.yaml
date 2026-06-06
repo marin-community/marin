@@ -24,7 +24,7 @@ jobs:
         with:
           filters: |
             relevant:
-              - 'rust/dupekit/**'
+              - 'lib/dupekit/**'
               - 'uv.lock'
               - '.github/workflows/dupekit-unit.yaml'
 
@@ -67,11 +67,11 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          cache-dependency-glob: "rust/dupekit/uv.lock"
+          cache-dependency-glob: "lib/dupekit/uv.lock"
 
       - name: Test dupekit
         run: |
-          cd rust/dupekit && uv run --frozen --group test pytest tests/ -v
+          cd lib/dupekit && uv run --frozen --group test pytest tests/ -v
 
   rust-checks:
     needs: changes
@@ -84,8 +84,8 @@ jobs:
         with:
           components: clippy, rustfmt
       - name: cargo fmt
-        run: cargo fmt --manifest-path rust/dupekit/Cargo.toml -- --check
+        run: cargo fmt --manifest-path lib/dupekit/rust/Cargo.toml -- --check
       - name: cargo clippy
-        run: cargo clippy --manifest-path rust/dupekit/Cargo.toml -- -D warnings
+        run: cargo clippy --manifest-path lib/dupekit/rust/Cargo.toml -- -D warnings
       - name: cargo test
-        run: cargo test --manifest-path rust/dupekit/Cargo.toml
+        run: cargo test --manifest-path lib/dupekit/rust/Cargo.toml

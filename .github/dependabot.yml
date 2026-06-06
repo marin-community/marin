@@ -12,7 +12,7 @@ updates:
   - package-ecosystem: "uv"
     directories:
       - "/"
-      - "/rust/dupekit"
+      - "/lib/dupekit"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 0

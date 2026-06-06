@@ -23,7 +23,7 @@ on:
       - "dupekit-v*"
   pull_request:
     paths:
-      - "rust/dupekit/**"
+      - "lib/dupekit/**"
       - ".github/workflows/dupekit-release-wheels.yaml"
 
 concurrency:
@@ -57,7 +57,7 @@ jobs:
           set -euo pipefail
           # 25h not 24h: small buffer so a cron that drifts a few minutes late
           # still sees yesterday's commits.
-          changes=$(git log --since='25 hours ago' --format=%H -- rust/dupekit/ .github/workflows/dupekit-release-wheels.yaml)
+          changes=$(git log --since='25 hours ago' --format=%H -- lib/dupekit/ .github/workflows/dupekit-release-wheels.yaml)
           if [[ -z "$changes" ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "::notice::no dupekit changes in the last 25h, skipping nightly"
@@ -102,7 +102,7 @@ jobs:
           MODE: ${{ steps.pick.outputs.mode }}
           INPUT_VERSION: ${{ steps.pick.outputs.input_version }}
         run: |
-          python rust/dupekit/build_package.py \
+          python lib/dupekit/build_package.py \
             --mode "$MODE" \
             --version "$INPUT_VERSION" \
             --resolve-only
@@ -125,7 +125,7 @@ jobs:
 
       - name: Build wheels
         run: |
-          python rust/dupekit/build_package.py \
+          python lib/dupekit/build_package.py \
             --mode "${{ needs.resolve.outputs.mode }}" \
             --version "${{ needs.resolve.outputs.version }}" \
             --build "${{ matrix.target }}"
@@ -162,7 +162,7 @@ jobs:
       # into so gh-action-pypi-publish uploads everything as one release.
       - name: Build sdist
         run: |
-          python rust/dupekit/build_package.py \
+          python lib/dupekit/build_package.py \
             --mode "${{ needs.resolve.outputs.mode }}" \
             --version "${{ needs.resolve.outputs.version }}" \
             --build sdist

@@ -1,7 +1,16 @@
 ---
 plan: remove-rust-namespace-build-rust-per-package-under-lib-project-rust
-status: draft
+status: implemented
 ---
+
+> **Implemented.** Decisions taken (per reviewer): (1) `lib/dupekit` stays a
+> non-uv-member wheel dep and its crate is a plain package (no `[workspace]`
+> table); (2) per-package independent Cargo workspaces; (3) the latent Iris
+> rust-dev finelog-build gap is fixed (T5 now builds every maturin package
+> under `lib/`). Verified locally: both Cargo workspaces compile (finelog 185
+> tests pass), both wheels build via maturin (dupekit pytest green; finelog
+> `marin_finelog-*.whl` produced from `rust/pyext`), `rust_mode.py` dev/user
+> round-trips, Iris entrypoint tests pass, fmt/clippy/pre-commit clean.
 
 # Remove rust/ namespace; build Rust per-package under lib/{project}/rust
 
