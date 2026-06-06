@@ -11,6 +11,7 @@ from typing import Any, ClassVar, Protocol
 import jax
 import numpy as np
 from levanter.tokenizers import MarinTokenizer
+from marin.inference.types import TokenizedRollout
 from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import RolloutGroup
@@ -301,6 +302,17 @@ class MockEnv(MarinEnv):
             sampled_examples[example["prompt"]] = example["answer"]
 
         prompts = list(sampled_examples.keys())
+        if inference_ctx.supports_token_rollouts() and decoding.stop_strings is None:
+            return self._sample_token_rollouts(
+                inference_ctx=inference_ctx,
+                sampled_examples=sampled_examples,
+                prompts=prompts,
+                n_generations=n_generations,
+                decoding=decoding,
+                mode=mode,
+                system_prompt=system_prompt,
+            )
+
         completions = inference_ctx.batch_completions(
             prompts=prompts,
             n=n_generations,
@@ -328,6 +340,75 @@ class MockEnv(MarinEnv):
                 )
 
                 group.append(rollout)
+            rollout_groups.append(RolloutGroup(rollouts=group))
+
+        return rollout_groups, {}
+
+    def _sample_token_rollouts(
+        self,
+        *,
+        inference_ctx: BaseInferenceContext,
+        sampled_examples: dict[str, str],
+        prompts: list[str],
+        n_generations: int,
+        decoding: DecodingConfig,
+        mode: str,
+        system_prompt: str | None,
+    ) -> tuple[list[RolloutGroup], dict[str, float]]:
+        decoding = inference_ctx.resolve_decoding(decoding)
+        batch = inference_ctx.create_token_rollout_batch(
+            batch_id=f"mock_env.{self.task_type}.{mode}",
+            prompts=prompts,
+            n=n_generations,
+            decoding=decoding,
+            system_prompt=system_prompt,
+        )
+        batch_result = inference_ctx.generate_token_rollouts(batch)
+        rollouts_by_request: dict[str, list[TokenizedRollout]] = {}
+        for rollout in batch_result.rollouts:
+            rollouts_by_request.setdefault(rollout.request_id, []).append(rollout)
+        failures_by_request = {}
+        for failure in batch_result.failures:
+            failures_by_request.setdefault(failure.request_id, []).append(failure)
+
+        rollout_groups = []
+        for prompt_index, prompt in enumerate(prompts):
+            request_id = batch.requests[prompt_index].request_id
+            request_failures = failures_by_request.get(request_id, [])
+            if request_failures:
+                failure_summary = ", ".join(
+                    f"{failure.reason.value}"
+                    + (f"[generation={failure.generation_index}]" if failure.generation_index is not None else "")
+                    for failure in request_failures
+                )
+                raise RuntimeError(f"Token rollout request {request_id} failed: {failure_summary}")
+            token_rollouts = sorted(
+                rollouts_by_request.get(request_id, []),
+                key=lambda rollout: rollout.generation_index,
+            )
+            if len(token_rollouts) != n_generations:
+                raise RuntimeError(
+                    f"Token rollout request {request_id} returned {len(token_rollouts)} generations; "
+                    f"expected {n_generations}"
+                )
+
+            group = []
+            true_answer = sampled_examples[prompt]
+            for token_rollout in token_rollouts:
+                response_text = inference_ctx.tokenizer.decode(
+                    list(token_rollout.completion_token_ids),
+                    skip_special_tokens=True,
+                )
+                reward = self.task.compute_reward(true_answer, response_text, tokenizer=inference_ctx.tokenizer)
+                group.append(
+                    inference_ctx.create_rollout_from_tokenized_rollout(
+                        rollout=token_rollout,
+                        env_name=f"mock_env:{self.task_type}",
+                        env_example_id=hash(prompt),
+                        reward=reward,
+                        decoding=decoding,
+                    )
+                )
             rollout_groups.append(RolloutGroup(rollouts=group))
 
         return rollout_groups, {}
