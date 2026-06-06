@@ -407,6 +407,7 @@ class MockEnv(MarinEnv):
                         env_example_id=hash(prompt),
                         reward=reward,
                         decoding=decoding,
+                        batch_id=batch_result.batch_id,
                     )
                 )
             rollout_groups.append(RolloutGroup(rollouts=group))

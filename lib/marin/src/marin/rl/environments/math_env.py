@@ -304,6 +304,7 @@ class MathEnv(MarinEnv):
                     reward=reward,
                     correctness_reward=correct_score,
                     decoding=decoding,
+                    batch_id=batch_result.batch_id,
                 )
                 group_rollouts.append(rollout)
                 total_choices += 1

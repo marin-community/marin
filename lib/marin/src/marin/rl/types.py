@@ -54,6 +54,9 @@ class RolloutMetadata:
     token_rollout_backend: str | None = None
     """Token-native backend that produced this rollout, when available."""
 
+    token_rollout_batch_id: str | None = None
+    """Token-native batch ID that produced this rollout, when available."""
+
     token_rollout_request_id: str | None = None
     """Backend-independent token rollout request ID."""
 

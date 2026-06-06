@@ -307,6 +307,7 @@ class BaseInferenceContext:
         reward: float,
         decoding: DecodingConfig,
         correctness_reward: float | None = None,
+        batch_id: str | None = None,
     ) -> Rollout:
         """Construct a training rollout from token-native generation output."""
         decoding = self.resolve_decoding(decoding)
@@ -332,6 +333,7 @@ class BaseInferenceContext:
             is_truncated=rollout.finish_reason == TokenRolloutFinishReason.LENGTH,
             metadata=RolloutMetadata(
                 token_rollout_backend=backend,
+                token_rollout_batch_id=batch_id,
                 token_rollout_request_id=rollout.request_id,
                 token_rollout_generation_index=rollout.generation_index,
                 token_rollout_finish_reason=rollout.finish_reason.value,

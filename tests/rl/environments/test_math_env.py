@@ -224,6 +224,7 @@ def test_math_env_uses_token_rollout_path_when_supported(gpt2_tokenizer):
     np.testing.assert_allclose(rollout.response_logprobs, -0.5)
     assert rollout.episode_reward == pytest.approx(1.0)
     assert rollout.metadata.token_rollout_backend == "dummy-token"
+    assert rollout.metadata.token_rollout_batch_id == "math.train"
     assert rollout.metadata.token_rollout_request_id == "math.train:0"
     assert rollout.metadata.token_rollout_generation_index == 0
     assert rollout.metadata.token_rollout_finish_reason == TokenRolloutFinishReason.STOP.value
