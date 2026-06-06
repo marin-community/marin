@@ -25,7 +25,7 @@ from rigging.timing import Duration, Timestamp
 from iris.cluster.backends.factory import create_provider_bundle
 from iris.cluster.config import load_config, make_provider
 from iris.cluster.controller.auth import create_controller_auth
-from iris.cluster.controller.autoscaler_factory import create_autoscaler
+from iris.cluster.controller.autoscaler.factory import create_autoscaler
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import Controller, ControllerConfig

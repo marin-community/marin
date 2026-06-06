@@ -3,10 +3,11 @@
 
 """Factory for building an :class:`Autoscaler` from proto configuration.
 
-Lives downstream of both :mod:`iris.cluster.config` and
-:mod:`iris.cluster.controller.autoscaler` so it can import from each
-without dragging autoscaler imports back into config (which would cycle
-through ``controller.db`` -> ``controller.projections``).
+Imports from both :mod:`iris.cluster.config` and the rest of the autoscaler
+package. The autoscaler package ``__init__`` does not import this module, so
+pulling in ``config`` here never cycles back through the package during its own
+initialization (``config`` -> ``controller.backend`` -> ``controller.autoscaler``
+resolves against the already-initialized package).
 """
 
 import logging
