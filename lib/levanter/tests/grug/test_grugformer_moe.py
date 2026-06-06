@@ -27,6 +27,8 @@ from levanter.grug.grug_moe import (
 )
 from levanter.utils.activation import ActivationFunctionEnum
 
+from experiments.grug.moe.model import GrugModelConfig, Transformer
+
 
 def _make_dense_mesh() -> Mesh:
     devices = jax.devices()
@@ -155,6 +157,31 @@ def test_moe_mlp_runs_without_ep_axis():
         )
         out_jit = jit_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
         np.testing.assert_allclose(np.asarray(out), np.asarray(out_jit), rtol=1e-5, atol=1e-5)
+
+
+def test_transformer_vocab_params_use_loss_vocab_axis():
+    mesh = _make_ep_mesh_or_none()
+    if mesh is None:
+        pytest.skip("vocab parameter sharding test needs at least two local devices")
+
+    cfg = GrugModelConfig(
+        vocab_size=16,
+        hidden_dim=8,
+        intermediate_dim=8,
+        shared_expert_intermediate_dim=0,
+        num_experts=2,
+        num_experts_per_token=1,
+        num_layers=0,
+        num_heads=2,
+        num_kv_heads=1,
+        loss_vocab_axis="expert",
+    )
+
+    with jax.set_mesh(mesh):
+        model = Transformer.init(cfg, key=jax.random.PRNGKey(0))
+
+    assert model.token_embed.sharding.spec == P("expert", ("data",))
+    assert model.output_proj.sharding.spec == P(("data",), "expert")
 
 
 def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():
