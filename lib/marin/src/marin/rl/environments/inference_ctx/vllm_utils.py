@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
 
 def levanter_llama_to_vllm_mapping():
     return {
@@ -144,3 +149,93 @@ class _FallbackDict:
 
 MODEL_MAPPINGS = _FallbackDict(_infer_mapping)
 MODEL_TRANSPOSE_KEYS = _FallbackDict(_infer_transpose_keys)
+
+
+def _state_path_to_str(path: Any) -> str:
+    if isinstance(path, str):
+        return path
+    if hasattr(path, "to_str"):
+        return path.to_str()
+    if isinstance(path, tuple | list):
+        return ".".join(str(part) for part in path)
+    return str(path)
+
+
+def _flat_state_items(state: Any):
+    if not hasattr(state, "flat_state"):
+        return []
+
+    flat_state = state.flat_state()
+    return flat_state.items() if hasattr(flat_state, "items") else flat_state
+
+
+def _flat_state_keys(state: Any) -> set[str]:
+    return {_state_path_to_str(path) for path, _leaf in _flat_state_items(state)}
+
+
+def _native_nnx_target_candidates(source_key: str) -> tuple[str, ...]:
+    candidates = [source_key]
+    if source_key.endswith("_bias"):
+        candidates.append(f"{source_key.removesuffix('_bias')}.bias")
+    else:
+        candidates.append(f"{source_key}.weight")
+    return tuple(candidates)
+
+
+def _native_nnx_mapping(source_state: Any, target_state: Any) -> dict[str, tuple[str, None]] | None:
+    source_keys = _flat_state_keys(source_state)
+    target_keys = _flat_state_keys(target_state)
+    if not source_keys or not target_keys:
+        return None
+
+    mapping = {}
+    missing = []
+    for source_key in source_keys:
+        for target_key in _native_nnx_target_candidates(source_key):
+            if target_key in target_keys:
+                mapping[source_key] = (target_key, None)
+                break
+        else:
+            missing.append(source_key)
+
+    if missing:
+        logger.info(
+            "reload_model: live target state looked native NNX, but %d/%d source keys had no native target match",
+            len(missing),
+            len(source_keys),
+        )
+        return None
+
+    logger.info("reload_model: using native NNX weight mapping for %d params", len(mapping))
+    return mapping
+
+
+def _target_state_from_worker(worker: Any) -> Any | None:
+    candidates = [
+        worker,
+        getattr(worker, "model_runner", None),
+        getattr(worker, "worker", None),
+    ]
+    nested_worker = getattr(worker, "worker", None)
+    if nested_worker is not None:
+        candidates.append(getattr(nested_worker, "model_runner", None))
+
+    for candidate in candidates:
+        if candidate is not None and hasattr(candidate, "state"):
+            return candidate.state
+    return None
+
+
+def sync_weight_mapping_kwargs(model_name: str, source_state: Any, worker: Any) -> dict[str, Any]:
+    target_state = _target_state_from_worker(worker)
+    native_mapping = _native_nnx_mapping(source_state, target_state)
+    if native_mapping is not None:
+        return {
+            "mappings": native_mapping,
+            "transpose_keys": {},
+        }
+
+    return {
+        "mappings": MODEL_MAPPINGS[model_name],
+        "transpose_keys": MODEL_TRANSPOSE_KEYS[model_name],
+    }

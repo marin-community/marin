@@ -17,7 +17,7 @@ from marin.rl.decoding import DecodingConfig, DecodingStrategy
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
 from marin.rl.environments.inference_ctx.render import Llama3Renderer, Message, Qwen3Renderer, Renderer
-from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
+from marin.rl.environments.inference_ctx.vllm_utils import sync_weight_mapping_kwargs
 from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
@@ -362,10 +362,10 @@ class vLLMInferenceContext(BaseInferenceContext):
         nnx_state = levanter_state_dict_to_nnx_state_on_cpu(state_dict)
         t1 = time.time()
         logger.info("reload_model: calling sync_weights (%d params, %.1fs so far)", len(nnx_state), t1 - t0)
-        self.llm.llm_engine.model_executor.driver_worker.sync_weights(
+        driver_worker = self.llm.llm_engine.model_executor.driver_worker
+        driver_worker.sync_weights(
             nnx_state,
-            mappings=MODEL_MAPPINGS[self.canonical_model_name],
-            transpose_keys=MODEL_TRANSPOSE_KEYS[self.canonical_model_name],
+            **sync_weight_mapping_kwargs(self.canonical_model_name, nnx_state, driver_worker),
             reshard_fn=None,
         )
 

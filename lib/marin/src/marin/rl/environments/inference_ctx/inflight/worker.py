@@ -6,7 +6,7 @@ import logging
 
 import numpy as np
 from marin.rl.environments.inference_ctx.inflight.async_bridge import AsyncBridge
-from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
+from marin.rl.environments.inference_ctx.vllm_utils import sync_weight_mapping_kwargs
 from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 
 logger = logging.getLogger(__name__)
@@ -165,8 +165,7 @@ class WorkerExtension:
         new_state = levanter_state_dict_to_nnx_state_on_cpu(deserialized_state_dict)
         self.sync_weights(
             new_state,
-            mappings=MODEL_MAPPINGS[model_name],
-            transpose_keys=MODEL_TRANSPOSE_KEYS[model_name],
+            **sync_weight_mapping_kwargs(model_name, new_state, self),
             reshard_fn=None,
         )
 

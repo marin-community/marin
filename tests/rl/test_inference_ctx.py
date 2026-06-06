@@ -677,6 +677,44 @@ def test_worker_extension_uses_public_sync_weights():
     assert calls["reshard_fn"] is None
 
 
+def test_worker_extension_uses_native_nnx_mapping_when_target_keys_match():
+    calls = {}
+
+    class _FakeState:
+        def __init__(self, keys):
+            self.keys = keys
+
+        def flat_state(self):
+            return [(tuple(key.split(".")), object()) for key in self.keys]
+
+    class _FakeWorker:
+        def __init__(self):
+            self.model_runner = SimpleNamespace(
+                state=_FakeState(["model.layers.0.input_layernorm.weight"]),
+            )
+
+        def sync_weights(self, new_state, *, mappings, transpose_keys, reshard_fn):
+            calls["new_state"] = new_state
+            calls["mappings"] = mappings
+            calls["transpose_keys"] = transpose_keys
+            calls["reshard_fn"] = reshard_fn
+
+    serialized_state = {
+        "model.layers.0.input_layernorm.weight": (
+            np.zeros((2,), dtype=np.float32).tobytes(),
+            "float32",
+            (2,),
+        ),
+    }
+
+    WorkerExtension.update_weight(_FakeWorker(), serialized_state, "meta-llama/Llama-3.1-8B-Instruct")
+
+    assert hasattr(calls["new_state"], "flat_state")
+    assert calls["mappings"] == {"model.layers.0.input_layernorm": ("model.layers.0.input_layernorm.weight", None)}
+    assert calls["transpose_keys"] == {}
+    assert calls["reshard_fn"] is None
+
+
 def test_patch_tpu_inference_registry_registers_mistral_alias(monkeypatch):
     registry = {}
 

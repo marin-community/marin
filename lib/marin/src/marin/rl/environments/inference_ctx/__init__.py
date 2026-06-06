@@ -5,13 +5,12 @@ from .async_vllm import AsyncvLLMInferenceContext
 from .base import BaseInferenceContext
 from .levanter import LevanterInferenceContext, LevanterInferenceContextConfig
 from .vllm import (
-    MODEL_MAPPINGS,
-    MODEL_TRANSPOSE_KEYS,
     VLLMEngineConfig,
     VLLMFallbackSamplingConfig,
     vLLMInferenceContext,
     vLLMInferenceContextConfig,
 )
+from .vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 
 __all__ = [
     "MODEL_MAPPINGS",
