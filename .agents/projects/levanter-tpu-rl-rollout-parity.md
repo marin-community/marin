@@ -23,11 +23,8 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - Prefer short local file edits, short REST `gh api` checks, and written
   handoffs. Delegate new runs to subagents when useful, then monitor them with
   tightly scoped heartbeats rather than foreground polling.
-- Active heartbeat: `poll-v5p-and-handoff-pr`, hourly. It polls side-agent
-  thread `019e9b3f-8ff1-79c3-9884-02f847973191` for the v5p prefill-drain
-  follow-up and draft PR #6214 for lightweight review/check state. It should
-  notify only on non-capacity blockage, drift, concrete failure/fix, actionable
-  review/CI state, PR updates, or terminal benchmark results.
+- There is no active heartbeat for the v5p follow-up. The heartbeat was deleted
+  after the watched v5p job reached terminal failure before benchmark results.
 
 ## Current Evidence
 
@@ -49,6 +46,12 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   4084.24 decode tok/s versus vLLM-TPU at 4985.21 decode tok/s, or 81.9%.
   The remaining performance work is now a generic parity push, not a correctness
   or service-admission blocker.
+- A prefill-heavy v6e-8 row has identified the next parity gap. For
+  `prefill_b8_i2048_o128_n1`, backend `both`, dense matrix, TP=8,
+  `--max-pages 512`, two warmups and one measured round, vLLM reached
+  `1262.90` decode tok/s and `21469.31` total tok/s. Levanter reached
+  `1006.83` decode tok/s and `17116.08` total tok/s, for a ratio of `0.797`;
+  the generic benchmark target marked this row `fail`.
 
 ## Authoritative Artifacts
 
@@ -73,6 +76,10 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   `/dlwh/qwen3-mixed-v6e8-prefilldrain-i512-o512-20260606-0428`, Levanter
   `4084.24` decode tok/s versus vLLM `4985.21`, ratio `0.819`, with full
   `16384` completion tokens and no no-progress warnings.
+- Prefill-heavy v6e-8 gap: Iris job
+  `/dlwh/qwen3-v6e8-prefilldrain-prefill-b8-i2048-o128-n1-20260606-0703`,
+  Levanter `1006.83` decode tok/s and `17116.08` total tok/s versus vLLM
+  `1262.90` decode tok/s and `21469.31` total tok/s, ratio `0.797`.
 
 ## Acceptance Criteria
 
@@ -128,8 +135,8 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   drain (`4084.24 / 4985.21 = 0.819`). The old 0.40x service/decode split is a
   resolved failure mode, not the current baseline.
 - Performance characterization: incomplete. v6e-8 has useful decode and mixed
-  rows; v5p, prefill-heavy, churn, pressure, and longer-output coverage remain
-  open.
+  rows, plus one prefill-heavy target failure at `0.797`; v5p, churn,
+  pressure, and longer-output coverage remain open.
 - RL token data plane: substantially implemented in #6186 and green on the PR
   head, but still stack-dependent and not landed. Runtime integration remains a
   follow-up after the serving and benchmark PRs merge.
@@ -166,6 +173,17 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   Levanter admitted four prefill chunks `4096,4096,4096,4096` before decode,
   then decoded the logical 32-request workload in one decode iteration. This
   clears the #6184 mixed-regime target of at least 0.75 vLLM ratio.
+- PR #6185 prefill-heavy v6e-8 follow-up:
+  `/dlwh/qwen3-v6e8-prefilldrain-prefill-b8-i2048-o128-n1-20260606-0703`.
+  The job succeeded for `prefill_b8_i2048_o128_n1`, Qwen3-8B, v6e-8, TP=8,
+  backend `both`, dense matrix, default prefill, `--max-pages 512`, two
+  warmups and one measured round. vLLM reached `1262.90` decode tok/s and
+  `21469.31` total tok/s. Levanter reached `1006.83` decode tok/s and
+  `17116.08` total tok/s, for ratios `0.797`/`0.797`, so the generic target
+  failed. Levanter admitted four prefill chunks `4096,4096,4096,4096`; the
+  measured decode iteration was `0.802`s total, with `0.623`s device,
+  `0.178`s host, `0.174`s submit, `0.003`s extract, and `1022` iteration
+  tokens. This row is now the narrow v6e prefill-heavy diagnostic target.
 - PR #6185 current CI state as of 2026-06-06T05:21Z: all visible checks are
   green, including the rerun `marin-integration` job `79853218990`. The prior
   red lane was the external Hugging Face `429 Too Many Requests` for `gpt2`
@@ -336,17 +354,23 @@ thread. Keep background-style work narrow and explicit until the app is stable:
      and only proceed to the canonical decode-heavy v5p row after clean mixed
      success.
    - The v5p job was launched as
-     `/dlwh/qwen3-mixed-v5p-prefilldrain-i512-o512-20260606-0447`. Latest
-     direct Iris check at 2026-06-06T06:06Z: `JOB_STATE_PENDING`, one pending
-     task, no failures or preemptions. The pending reason is capacity-only and
-     has oscillated between waiting for v5p preemptible workers and quota-pool
-     tier monotonicity blocking.
-   - Latest subagent-thread check, without direct Iris polling from the main
-     thread: the same v5p job remains launched and was last known
-     `JOB_STATE_PENDING` on v5p capacity/quota-tier scheduling, with no task
-     logs yet and no non-capacity blocker. No follow-up decode-heavy v5p row has
-     been launched.
-5. Develop the RL batched-token API slice in parallel with the runtime wait.
+     `/dlwh/qwen3-mixed-v5p-prefilldrain-i512-o512-20260606-0447`.
+   - Terminal result: `JOB_STATE_FAILED` before benchmark results. vLLM did not
+     become ready within the 3600-second startup timeout; `/v1/models` stayed
+     connection-refused on the local vLLM port. The final error was
+     `RuntimeError: vLLM failed to start` for
+     `/app/.venv/bin/vllm serve Qwen/Qwen3-8B --trust-remote-code --host
+     127.0.0.1 --port 42361 --max-model-len 4096 --tensor-parallel-size 8`.
+     This is a terminal infra/backend failure for the v5p comparison, not a
+     Levanter benchmark result. No follow-up decode-heavy v5p row has been
+     launched.
+5. Investigate the v6e prefill-heavy gap with one narrow Levanter-only follow-up
+   for `prefill_b8_i2048_o128_n1`. Prefer the existing engine diagnostics:
+   `--levanter-diagnose-without-lm-head` and
+   `--levanter-diagnose-lm-head-no-sampling`, optionally with
+   `--profile-levanter`, so the next row separates transformer/cache decode
+   from LM-head/sampling and submit/host overhead without rerunning vLLM.
+6. Develop the RL batched-token API slice in parallel with the runtime wait.
    vLLM, Levanter, MathEnv, rollout-worker policy identity, tokenizer replay
    identity, and persisted rollout metadata now exercise the token-native
    contract on #6186. The next implementation step is hardening the rollout data
