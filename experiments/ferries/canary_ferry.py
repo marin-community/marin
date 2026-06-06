@@ -8,6 +8,7 @@ Config is driven by env vars set in the GH Actions workflow env: block and forwa
 to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
 
     CANARY_ACCELERATOR   tpu | gpu
+    CANARY_ATTENTION_IMPLEMENTATION gpu-only attention backend
     CANARY_BATCH_SIZE    per-device batch size
     CANARY_CACHE_COPY_MAX_WORKERS gpu-only cache-copy worker cap
     CANARY_GPU_TYPE      gpu-only accelerator type, e.g. H100, GH200, B200
@@ -30,10 +31,12 @@ to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
 import dataclasses
 import datetime
 import os
+from typing import cast
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.data.text import BlockShuffleConfig, TextLmDatasetFormat
+from levanter.grug.attention import GrugAttentionImplementation
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
@@ -68,6 +71,7 @@ CANARY_TRAINER = GrugTrainerConfig(
 )
 
 CANARY_GPU_HEURISTIC = MoeMuonHHeuristic()
+_GPU_ATTENTION_IMPLEMENTATIONS = {"reference", "gpu_fa4_cute", "gpu_fa4_thd"}
 
 
 def _env_int(key: str, default: int) -> int:
@@ -80,6 +84,18 @@ def _env_bool(key: str, default: bool) -> bool:
     if not raw:
         return default
     return raw.lower() in ("1", "true")
+
+
+def _env_gpu_attention_implementation(
+    default: GrugAttentionImplementation | None,
+) -> GrugAttentionImplementation | None:
+    raw = os.environ.get("CANARY_ATTENTION_IMPLEMENTATION", "").strip()
+    if not raw:
+        return default
+    if raw not in _GPU_ATTENTION_IMPLEMENTATIONS:
+        options = ", ".join(sorted(_GPU_ATTENTION_IMPLEMENTATIONS))
+        raise ValueError(f"Unknown CANARY_ATTENTION_IMPLEMENTATION={raw!r}; expected one of: {options}")
+    return cast(GrugAttentionImplementation, raw)
 
 
 def _build_step_from_env() -> ExecutorStep:
@@ -115,7 +131,7 @@ def _build_step_from_env() -> ExecutorStep:
         model = dataclasses.replace(
             CANARY_GPU_HEURISTIC.build_model_config(model_dim),
             num_layers=num_layers,
-            attention_implementation="gpu_fa4_cute",
+            attention_implementation=_env_gpu_attention_implementation("reference"),
             loss_vocab_axis="expert",
         )
         trainer = dataclasses.replace(CANARY_TRAINER, z_loss_weight=0.0)

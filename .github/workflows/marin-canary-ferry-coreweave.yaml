@@ -46,6 +46,11 @@ on:
         type: number
         default: 8
         required: false
+      attention_implementation:
+        description: 'GPU attention backend (reference, gpu_fa4_cute, gpu_fa4_thd)'
+        type: string
+        default: 'reference'
+        required: false
       profiler_start_step:
         description: 'Profiler start step'
         type: number
@@ -97,6 +102,7 @@ jobs:
       CANARY_MODEL_DIM: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.model_dim) || '2560' }}
       CANARY_NUM_LAYERS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.num_layers) || '20' }}
       CANARY_EXPERT_PARALLEL: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.expert_parallel) || '8' }}
+      CANARY_ATTENTION_IMPLEMENTATION: ${{ github.event_name == 'workflow_dispatch' && inputs.attention_implementation || 'reference' }}
       CANARY_OPTIMIZER_TOKENS: "10000000000000"
       CANARY_GPU_REPLICAS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.gpu_replicas) || '1' }}
       # TODO(#5524): remove this override once Levanter profiler stop is
@@ -184,6 +190,7 @@ jobs:
             -e CANARY_MODEL_DIM "$CANARY_MODEL_DIM" \
             -e CANARY_NUM_LAYERS "$CANARY_NUM_LAYERS" \
             -e CANARY_EXPERT_PARALLEL "$CANARY_EXPERT_PARALLEL" \
+            -e CANARY_ATTENTION_IMPLEMENTATION "$CANARY_ATTENTION_IMPLEMENTATION" \
             -e CANARY_OPTIMIZER_TOKENS "$CANARY_OPTIMIZER_TOKENS" \
             -e CANARY_GPU_REPLICAS "$CANARY_GPU_REPLICAS" \
             -e CANARY_PROFILER_START_STEP "$CANARY_PROFILER_START_STEP" \
