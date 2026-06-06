@@ -17,8 +17,11 @@
 For each PR merged in the last N days:
   1. Pull review/inline/issue comments via the `gh` CLI.
   2. Drop bot comments (only humans should be in the denominator).
-  3. Classify each human comment with Gemini 3.5 Flash. Two independent
-     "could automation have caught this?" signals:
+  3. Classify each human comment with a pluggable classifier (Gemini 3.5 Flash
+     by default). Comments from all PRs are pooled, batched, and the batches
+     classified in parallel so a many-PR run is not a long serial trickle of
+     one request per comment. Two independent "could automation have caught
+     this?" signals:
        - catchable_strict   — a deterministic linter / type checker / ml-*
                               catalog rule could mechanically flag it.
        - catchable_generous — a modern LLM running on the diff alone would
@@ -46,6 +49,8 @@ import logging
 import os
 import subprocess
 import sys
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Literal
 
@@ -53,7 +58,7 @@ import click
 import wandb
 from google import genai
 from google.genai import types
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
 logger = logging.getLogger("codehealth.review")
 
@@ -61,6 +66,8 @@ WANDB_PROJECT = "marin-review-stats"
 WANDB_RUN_ID = "review-stats"
 DEFAULT_REPO = "marin-community/marin"
 DEFAULT_MODEL = "gemini-3.5-flash"
+DEFAULT_BATCH_SIZE = 20
+DEFAULT_CONCURRENCY = 16
 
 HUMAN_COMMENT_COLUMNS = [
     "ts",
@@ -115,11 +122,41 @@ class CommentClassification(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+@dataclass
+class CommentToClassify:
+    """One comment handed to a classifier. `id` is a caller-assigned marker the
+    classifier echoes back so batched results can be matched to their input."""
+
+    id: int
+    file: str | None
+    line: int | None
+    body: str
+
+
+class BatchedClassification(CommentClassification):
+    """A `CommentClassification` plus the `id` marker echoed back in a batch."""
+
+    id: int
+
+
+# A classifier turns a batch of comments into classifications keyed by their
+# `id` marker. Comments it cannot classify are simply absent from the result.
+# Pluggable so the Gemini backend can be swapped (e.g. for `claude -p`) without
+# touching the batching/parallelism orchestration.
+Classifier = Callable[[list[CommentToClassify]], dict[int, CommentClassification]]
+
+
 CLASSIFIER_SYSTEM = """\
 You triage human PR review comments to measure how much reviewer effort our
-review automation is missing. For each comment, emit a single JSON object.
+review automation is missing. You receive a batch of comments, each delimited
+by a `=== COMMENT id=N ===` marker. Classify each comment independently and
+return a JSON array holding exactly one object per comment — never merge,
+split, drop, or reorder comments.
 
 Fields:
+
+  id — echo back, unchanged, the integer N from this comment's
+       `=== COMMENT id=N ===` marker so the result can be matched to its input.
 
   class — what is the comment about? Pick exactly one:
     bug       — flags a logic error, missing await, wrong type, null deref
@@ -166,6 +203,7 @@ Fields:
            a human would need.
 
 Hard rules:
+  - Return one object per input comment, each echoing the comment's `id`.
   - If catchable_strict is TRUE, catchable_generous must be TRUE.
   - approval / ack comments are never catchable.
   - When a comment is multi-issue, classify by the most material issue.
@@ -173,35 +211,81 @@ Hard rules:
 """
 
 
-def classify_comment(
-    client: genai.Client, model: str, file: str | None, line: int | None, body: str
-) -> CommentClassification | None:
-    """Return classification, or None if the API call fails."""
-    where = f"File: {file}\nLine: {line}\n" if file else "Comment scope: top-level PR comment\n"
-    prompt = f"{where}Body:\n{body.strip()}"
-    try:
-        resp = client.models.generate_content(
-            model=model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=CLASSIFIER_SYSTEM,
-                response_mime_type="application/json",
-                response_schema=CommentClassification,
-                temperature=0.0,
-            ),
-        )
-    except Exception as e:
-        logger.warning("Gemini call failed: %s", e)
-        return None
-    try:
-        c = CommentClassification.model_validate_json(resp.text)
-    except Exception as e:
-        logger.warning("Gemini returned unparseable JSON: %s | text=%r", e, resp.text[:200])
-        return None
-    # Enforce the strict ⊆ generous invariant even if the model slipped.
-    if c.catchable_strict and not c.catchable_generous:
-        c.catchable_generous = True
-    return c
+_BATCH_ADAPTER = TypeAdapter(list[BatchedClassification])
+
+
+def _format_batch(items: list[CommentToClassify]) -> str:
+    """Render a batch as marker-delimited blocks the classifier can split."""
+    blocks = []
+    for it in items:
+        where = f"File: {it.file}\nLine: {it.line}" if it.file else "Comment scope: top-level PR comment"
+        blocks.append(f"=== COMMENT id={it.id} ===\n{where}\nBody:\n{it.body.strip()}")
+    return "\n\n".join(blocks)
+
+
+def make_gemini_classifier(client: genai.Client, model: str) -> Classifier:
+    """Build a `Classifier` backed by Gemini structured output.
+
+    One API call per batch: the prompt carries every comment's `id` marker and
+    the response is a JSON array of `BatchedClassification`. A failed call (or
+    unparseable response) yields no classifications for that batch; those
+    comments are dropped from the metric, same as the previous behavior.
+    """
+
+    def classify(items: list[CommentToClassify]) -> dict[int, CommentClassification]:
+        if not items:
+            return {}
+        try:
+            resp = client.models.generate_content(
+                model=model,
+                contents=_format_batch(items),
+                config=types.GenerateContentConfig(
+                    system_instruction=CLASSIFIER_SYSTEM,
+                    response_mime_type="application/json",
+                    response_schema=list[BatchedClassification],
+                    temperature=0.0,
+                ),
+            )
+        except Exception as e:
+            logger.warning("Gemini call failed for batch of %d: %s", len(items), e)
+            return {}
+        try:
+            parsed = _BATCH_ADAPTER.validate_json(resp.text)
+        except Exception as e:
+            logger.warning("Gemini returned unparseable JSON: %s | text=%r", e, (resp.text or "")[:200])
+            return {}
+        wanted = {it.id for it in items}
+        out: dict[int, CommentClassification] = {}
+        for c in parsed:
+            if c.id not in wanted:
+                continue
+            # Enforce the strict ⊆ generous invariant even if the model slipped.
+            if c.catchable_strict and not c.catchable_generous:
+                c.catchable_generous = True
+            out[c.id] = c
+        missing = len(wanted) - len(out)
+        if missing:
+            logger.warning("Gemini omitted %d of %d comments in a batch", missing, len(items))
+        return out
+
+    return classify
+
+
+def classify_comments(
+    classifier: Classifier, items: list[CommentToClassify], batch_size: int, concurrency: int
+) -> dict[int, CommentClassification]:
+    """Classify every comment, batched into groups of `batch_size` and run
+    `concurrency` batches at a time. Returns a map from comment `id` to its
+    classification; ids absent from the map could not be classified."""
+    if not items:
+        return {}
+    batches = [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
+    results: dict[int, CommentClassification] = {}
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = [pool.submit(classifier, batch) for batch in batches]
+        for fut in as_completed(futures):
+            results.update(fut.result())
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -424,13 +508,36 @@ def overlap_count(bot_findings: list[dict], human_comments: list[Comment], windo
 @click.option("--limit", type=int, default=100, show_default=True, help="Max PRs to process")
 @click.option("--model", default=DEFAULT_MODEL, show_default=True)
 @click.option(
+    "--batch-size",
+    type=int,
+    default=DEFAULT_BATCH_SIZE,
+    show_default=True,
+    help="Comments classified per model request",
+)
+@click.option(
+    "--concurrency",
+    type=int,
+    default=DEFAULT_CONCURRENCY,
+    show_default=True,
+    help="Batches classified in parallel",
+)
+@click.option(
     "--bot-logins",
     default="github-actions,dependabot,claude,claude-review,renovate",
     show_default=True,
     help="Comma-separated bot logins to skip (lowercase)",
 )
 @click.option("--dry-run", is_flag=True, help="Skip W&B upload; print rollup")
-def main(repo: str, days: int, limit: int, model: str, bot_logins: str, dry_run: bool) -> None:
+def main(
+    repo: str,
+    days: int,
+    limit: int,
+    model: str,
+    batch_size: int,
+    concurrency: int,
+    bot_logins: str,
+    dry_run: bool,
+) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     bot_login_set = {x.strip().lower() for x in bot_logins.split(",") if x.strip()}
 
@@ -439,6 +546,7 @@ def main(repo: str, days: int, limit: int, model: str, bot_logins: str, dry_run:
         sys.exit(2)
 
     client = genai.Client()
+    classifier = make_gemini_classifier(client, model)
 
     logger.info("Listing PRs merged in last %d day(s) in %s", days, repo)
     prs = list_merged_prs(repo, days, limit)
@@ -472,16 +580,33 @@ def main(repo: str, days: int, limit: int, model: str, bot_logins: str, dry_run:
         )
         findings_by_sha = load_findings_for_shas(wandb, all_shas)
 
-    # Classify + build rows.
+    # Flatten every human comment across all PRs into one list, assign each a
+    # stable marker (its index), classify the whole set in parallel batches,
+    # then map results back to comments. Batching across PRs keeps requests
+    # full even when most PRs have only a comment or two.
+    human_by_pr = {pr["number"]: [c for c in per_pr_comments.get(pr["number"], []) if not c.is_bot] for pr in prs}
+    flat_comments = [c for pr in prs for c in human_by_pr[pr["number"]]]
+    items = [CommentToClassify(id=i, file=c.file, line=c.line, body=c.body) for i, c in enumerate(flat_comments)]
+    logger.info("Classifying %d human comments in batches of %d, %d in parallel", len(items), batch_size, concurrency)
+    classifications = classify_comments(classifier, items, batch_size, concurrency)
+    # Regroup classifications by PR, preserving flat-list ordering for markers.
+    marker = 0
+    classified_by_pr: dict[int, list[tuple[Comment, CommentClassification | None]]] = {}
+    for pr in prs:
+        pairs: list[tuple[Comment, CommentClassification | None]] = []
+        for c in human_by_pr[pr["number"]]:
+            pairs.append((c, classifications.get(marker)))
+            marker += 1
+        classified_by_pr[pr["number"]] = pairs
+
+    # Build rows.
     for pr in prs:
         n = pr["number"]
-        comments = per_pr_comments.get(n, [])
-        human = [c for c in comments if not c.is_bot]
+        human = human_by_pr[n]
         by_class: dict[str, int] = {}
         strict_cnt = generous_cnt = 0
 
-        for c in human:
-            cls = classify_comment(client, model, c.file, c.line, c.body)
+        for c, cls in classified_by_pr[n]:
             if cls is None:
                 continue
             by_class[cls.klass] = by_class.get(cls.klass, 0) + 1
