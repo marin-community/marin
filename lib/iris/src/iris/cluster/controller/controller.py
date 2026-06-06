@@ -18,10 +18,7 @@ from typing import Any
 import uvicorn
 from finelog.client import LogClient, RemoteLogHandler
 from finelog.client.proxy import LogServiceProxy, StatsServiceProxy
-from finelog.server import LogServiceImpl
-from finelog.server.asgi import build_log_server_asgi
-from finelog.server.stats_service import StatsServiceImpl
-from finelog.store.duckdb_store import EMBEDDED_DUCKDB_MEMORY_LIMIT, EMBEDDED_DUCKDB_THREADS, DuckDBLogStore
+from finelog.embedded import require_embedded_server
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp, TokenBucket
 from sqlalchemy import bindparam, select
 
@@ -97,7 +94,7 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
-from iris.cluster.providers.types import find_free_port, resolve_external_host
+from iris.cluster.providers.types import resolve_external_host
 from iris.cluster.runtime.profile import PROFILE_NAMESPACE, IrisProfile
 from iris.cluster.types import (
     JobName,
@@ -109,7 +106,7 @@ from iris.cluster.types import (
 from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider, TokenVerifier
+from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider, TokenVerifier
 
 logger = logging.getLogger(__name__)
 
@@ -222,10 +219,11 @@ class ControllerConfig:
 
     log_service_address: str | None = None
     """Address of an externally-hosted log server (e.g. http://localhost:10001).
-    When set, the controller connects to the existing server. When None,
-    the Controller starts an in-process LogServiceImpl on a free port (used by
-    tests and local-mode runs). In production this address is sourced from
-    `endpoints["/system/log-server"]` and passed in here by the daemon entrypoint."""
+    When set, the controller connects to the existing server. When None, the
+    Controller starts an in-process native ``finelog._native`` server on a free
+    port (used by tests and local-mode runs). In production this address is
+    sourced from `endpoints["/system/log-server"]` and passed in here by the
+    daemon entrypoint."""
 
     endpoints: dict[str, str] = field(default_factory=dict)
     """Resolved cluster endpoints: logical name -> concrete URL. Built from
@@ -316,18 +314,15 @@ class Controller:
         self._seed_liveness_from_workers()
         self._db.register_reopen_hook(self._seed_liveness_from_workers)
 
-        # ThreadContainer must be initialized before the log service setup
-        # because _start_local_log_server spawns a uvicorn thread.
         self._threads = threads if threads is not None else get_thread_container()
 
         # --- Log service setup ---
         # The log server is always accessed via RPC. In production the
-        # controller's main() starts a subprocess; in tests/local mode
-        # the Controller spins up an in-process uvicorn thread. After the
-        # server is running, all access goes through RPC clients — no
-        # branching on hosting mode.
-        self._log_service: LogServiceImpl | None = None
-        self._log_server: uvicorn.Server | None = None
+        # controller's main() starts a subprocess; in tests/local mode the
+        # Controller spins up an in-process native finelog server
+        # (finelog._native). After the server is running, all access goes
+        # through RPC clients — no branching on hosting mode.
+        self._log_server: Any = None  # finelog._native.EmbeddedServer when started locally
 
         if config.log_service_address:
             self._log_service_address = config.log_service_address
@@ -478,47 +473,22 @@ class Controller:
         """Start a bundled in-process log + stats server and return its address.
 
         Used as a fallback when ``cluster_config.endpoints`` does not declare
-        ``/system/log-server`` (and in tests). Backed by an in-memory
-        ``DuckDBLogStore`` — no segmentation, no flush thread, no compaction,
-        and logs are lost on controller restart. The stats RPC surface
-        (RegisterTable / WriteRows / Query / DropTable) is still available.
-        For any deployment that needs persistence or scale, run
-        ``finelog-server`` out-of-band (point it at a local dir with
-        ``remote_log_dir=""`` if you just want disk persistence without
-        remote sync) and point ``endpoints["/system/log-server"]`` at it.
+        ``/system/log-server`` (and in tests). Backed by the native
+        ``finelog._native`` server (the same engine the ``finelog-server`` binary
+        runs), storing segments under ``local_state_dir/log-server`` so written
+        logs are queryable: the engine's in-memory mode spawns no maintenance
+        task, so its RAM buffer never flushes to a readable segment — only a
+        disk-backed store serves reads. The server is bound and ready when the
+        constructor returns. For any deployment that needs scale or durability
+        beyond the controller's local disk, run ``finelog-server`` out-of-band
+        and point ``endpoints["/system/log-server"]`` at it.
         """
-        log_server_port = find_free_port()
-        log_store = DuckDBLogStore(
-            log_dir=None,
-            duckdb_memory_limit=EMBEDDED_DUCKDB_MEMORY_LIMIT,
-            duckdb_threads=EMBEDDED_DUCKDB_THREADS,
-        )
-        self._log_service = LogServiceImpl(log_store=log_store)
-        stats_service = StatsServiceImpl(log_store=log_store)
+        log_dir = self._config.local_state_dir / "log-server"
+        embedded_server_cls = require_embedded_server()
+        self._log_server = embedded_server_cls(log_dir=str(log_dir), host=self._config.host)
 
-        interceptors = (NullAuthInterceptor(verifier=self._config.auth_verifier),)
-        app = build_log_server_asgi(
-            self._log_service,
-            interceptors=interceptors,
-            stats_service=stats_service,
-        )
-        log_server_config = uvicorn.Config(
-            app,
-            host=self._config.host,
-            port=log_server_port,
-            log_level="warning",
-            log_config=None,
-            timeout_keep_alive=120,
-        )
-        self._log_server = uvicorn.Server(log_server_config)
-        self._threads.spawn_server(self._log_server, name="log-server")
-        ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-            lambda: self._log_server is not None and self._log_server.started,
-            timeout=Duration.from_seconds(5.0),
-        )
-
-        address = f"http://{self.external_host}:{log_server_port}"
-        logger.info("Local log server ready at %s", address)
+        address = f"http://{self.external_host}:{self._log_server.port}"
+        logger.info("Local log server ready at %s (log_dir=%s)", address, log_dir)
         return address
 
     def start(self) -> None:
@@ -645,8 +615,8 @@ class Controller:
         self._log_client.close()
         self._remote_log_service.close()
         self._remote_stats_service.close()
-        if self._log_service:
-            self._log_service.close()
+        if self._log_server is not None:
+            self._log_server.stop()
         self._db.close()
         self._bundle_store.close()
 
@@ -852,11 +822,15 @@ class Controller:
         claims = self._refresh_reservation_claims()
 
         timer = Timer()
+        # Source max_building_tasks from the scheduler so the no-claims fast path
+        # (reusing ctx) and the claims path (rebuilding via evolve_with_workers)
+        # use one cap, not two independently-defaulted ones.
         ctx = build_scheduling_context(
             self._db,
             self._health,
             self._worker_attrs,
             self._config.user_budget_defaults,
+            max_building_tasks=self._scheduler.max_building_tasks_per_worker,
         )
 
         if trace:
@@ -930,15 +904,12 @@ class Controller:
         timer: Timer,
         trace: bool = False,
     ) -> tuple[list[tuple[JobName, WorkerId]], SchedulingContext, dict[JobName, JobRequirements]]:
-        """Run preference + normal assignment passes.
-
-        Reservation taints are injected here so gates/order/diagnostics see
-        un-tainted workers. When there are no claims we reuse ``ctx`` directly
-        to avoid an index rebuild.
-        """
+        """Inject reservation taints, then run the preference + assignment passes."""
         modified_jobs = inject_taint_constraints(gated.jobs, gated.has_reservation, gated.has_direct_reservation)
 
         if claims:
+            # Taints reorder/relabel workers, so rebuild the capacity/constraint
+            # indexes over the tainted set.
             modified_workers = inject_reservation_taints(list(ctx.workers), claims)
             building_counts = {wid: cap.building_task_count for wid, cap in ctx.capacities.items()}
             ctx.pending_tasks = list(order.ordered_task_ids)
@@ -949,6 +920,9 @@ class Controller:
                 max_building_tasks=self._scheduler.max_building_tasks_per_worker,
             )
         else:
+            # No claims: taint injection is a no-op and ctx's per-pass state is
+            # still empty, so a rebuild would reproduce ctx exactly — reuse it and
+            # skip the index rebuild.
             ctx.pending_tasks = list(order.ordered_task_ids)
             ctx.jobs = modified_jobs
             context = ctx

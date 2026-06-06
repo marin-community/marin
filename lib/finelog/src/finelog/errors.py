@@ -3,8 +3,8 @@
 
 """Public stats-service error types.
 
-The schema module re-exports these so server-side imports keep working
-alongside the client API.
+Raised by :mod:`finelog.client` to translate ConnectRPC error codes into
+typed exceptions callers can catch.
 """
 
 

@@ -51,6 +51,7 @@ from iris.cluster.controller.scheduling_policy import (
     claim_workers_for_reservations,
     cleanup_stale_claims,
     compute_demand_entries,
+    compute_scheduling_order,
     inject_reservation_taints,
     inject_taint_constraints,
     job_requirements_from_job,
@@ -589,6 +590,60 @@ def test_gate_satisfied_for_jobs_without_reservation(ctrl):
     ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults)
     gated = apply_scheduling_gates(ctx, claims, max_tasks_per_job_per_cycle=0)
     assert jid.task(0) in gated.schedulable_task_ids
+
+
+# =============================================================================
+# No-claims fast-path equivalence
+# =============================================================================
+
+
+def _no_reservation_request(name: str) -> controller_pb2.Controller.LaunchJobRequest:
+    return controller_pb2.Controller.LaunchJobRequest(
+        name=name,
+        entrypoint=_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+
+
+def test_no_claims_fast_path_matches_evolve(ctrl):
+    """The no-claims fast path schedules identically to the evolve rebuild."""
+    _register_worker(ctrl, "w1")
+    _register_worker(ctrl, "w2")
+    for name in ("j1", "j2"):
+        _submit_job(ctrl, name, _no_reservation_request(name))
+
+    scheduler = ctrl._scheduler
+    no_claims: dict[WorkerId, ReservationClaim] = {}
+
+    def _assign(rebuild: bool) -> set[tuple[JobName, WorkerId]]:
+        ctx = build_scheduling_context(
+            ctrl._db,
+            ctrl._health,
+            ctrl._worker_attrs,
+            ctrl._config.user_budget_defaults,
+            max_building_tasks=scheduler.max_building_tasks_per_worker,
+        )
+        gated = apply_scheduling_gates(ctx, no_claims, max_tasks_per_job_per_cycle=0)
+        order = compute_scheduling_order(ctx, gated)
+        jobs = inject_taint_constraints(gated.jobs, gated.has_reservation, gated.has_direct_reservation)
+        ctx.pending_tasks = list(order.ordered_task_ids)
+        if rebuild:  # controller's claims branch
+            building_counts = {wid: cap.building_task_count for wid, cap in ctx.capacities.items()}
+            ctx = ctx.evolve_with_workers(
+                workers=inject_reservation_taints(list(ctx.workers), no_claims),
+                jobs=jobs,
+                building_counts=building_counts,
+                max_building_tasks=scheduler.max_building_tasks_per_worker,
+            )
+        else:  # controller's no-claims branch
+            ctx.jobs = jobs
+        return set(scheduler.find_assignments(ctx).assignments)
+
+    fast = _assign(rebuild=False)
+    assert len(fast) == 2  # two fitting tasks, two workers — non-vacuous
+    assert fast == _assign(rebuild=True)
 
 
 # =============================================================================

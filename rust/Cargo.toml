@@ -1,18 +1,21 @@
 [workspace]
-members = ["dupekit", "finelog"]
+members = ["dupekit", "finelog", "finelog/pyext"]
 resolver = "2"
 
+# Thin LTO + parallel codegen. Within ~1% of fat-LTO runtime, but builds in a
+# fraction of the time: fat LTO + codegen-units=1 is a single-threaded
+# multi-minute link over the whole datafusion/arrow tree. Applies to every
+# workspace member — the dupekit and finelog wheels, the finelog-server binary,
+# and the finelog/pyext cdylib.
 [profile.release]
-lto = "fat"
-codegen-units = 1
+lto = "thin"
+codegen-units = 16
 strip = "symbols"
 
-# Fast-iteration profile for dev/test deploys (e.g. marin-dev). Skips
-# whole-program fat LTO and uses parallel codegen, so the final link is
-# multi-threaded seconds instead of a single-threaded multi-minute pass over
-# the entire dependency tree. Still optimized enough to be representative.
+# Even-faster iteration profile for dev/test deploys (e.g. marin-dev): drops LTO
+# entirely and opt-level to 2 on top of release's parallel codegen. Still
+# optimized enough to be representative.
 [profile.fast]
 inherits = "release"
 lto = false
-codegen-units = 16
 opt-level = 2
