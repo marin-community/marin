@@ -397,18 +397,6 @@
       "severity": "error"
     },
     {
-      "line": 572,
-      "column": 13,
-      "stop_line": 572,
-      "stop_column": 15,
-      "path": "lib/levanter/src/levanter/eval_harness.py",
-      "code": -2,
-      "name": "unknown-name",
-      "description": "Could not find name `os`",
-      "concise_description": "Could not find name `os`",
-      "severity": "error"
-    },
-    {
       "line": 742,
       "column": 27,
       "stop_line": 742,
@@ -1258,30 +1246,6 @@
       "name": "unsupported-operation",
       "description": "Cannot set item in `list[tuple[Unknown, Unknown]]`\n  No matching overload found for function `list.__setitem__` called with arguments: (int, list[int | Unknown])\n  Possible overloads:\n  (key: SupportsIndex, value: tuple[Unknown, Unknown], /) -> None [closest match]\n  (key: slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | Unknown | None], value: Iterable[tuple[Unknown, Unknown]], /) -> None",
       "concise_description": "Cannot set item in `list[tuple[Unknown, Unknown]]`",
-      "severity": "error"
-    },
-    {
-      "line": 596,
-      "column": 17,
-      "stop_line": 596,
-      "stop_column": 26,
-      "path": "lib/levanter/src/levanter/trainer.py",
-      "code": -2,
-      "name": "unknown-name",
-      "description": "Could not find name `callbacks`\n  Did you mean `Callback`?",
-      "concise_description": "Could not find name `callbacks`",
-      "severity": "error"
-    },
-    {
-      "line": 617,
-      "column": 17,
-      "stop_line": 617,
-      "stop_column": 26,
-      "path": "lib/levanter/src/levanter/trainer.py",
-      "code": -2,
-      "name": "unknown-name",
-      "description": "Could not find name `callbacks`\n  Did you mean `Callback`?",
-      "concise_description": "Could not find name `callbacks`",
       "severity": "error"
     },
     {
