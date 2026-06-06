@@ -1,6 +1,6 @@
 ---
 plan: iris-taskprovider-contract
-status: draft
+status: approved
 ---
 
 # Iris TaskProvider / Backend Contract — Stage 1
@@ -340,10 +340,13 @@ proto churn required in Stage 1 beyond adding the capability fields to the
 
 ### Q2: Rollout — chonky PRs
 
-**One chonky PR per stage**, each green and behavior-preserving on its own.
-Stage 1 is itself one chonky PR (~contract + relocations + loop unify + dashboard
-descriptor). Within it, commit in a spiral so the branch builds and tests pass at
-every commit (the order the existing fakes make safe):
+**Decided: Stage 1 ships as a single PR** so the new model is validated end-to-end
+together (rather than landing a half-migrated contract). Commits T1–T7 are the
+spiral *within* that one PR; each commit builds and passes tests, but they are not
+split across PRs. Later stages (2–5) are their own chonky PRs.
+
+Within Stage 1, commit in a spiral so the branch builds and tests pass at every
+commit (the order the existing fakes make safe):
 
 1. **Add, don't change** — introduce `TaskBackend` protocol + `cluster/backend_types.py`
    (move the neutral types, leave shims/aliases). No behavior change; everything
@@ -521,18 +524,23 @@ Sketch only, for context (each = one chonky PR):
 
 ---
 
-## Open questions
+## Resolved decisions
 
-- **Naming.** <a id="naming"></a>Recommend **`TaskBackend`** for the new contract
-  (the issue author wrote "backend"; "provider" already means three things). The
-  launch goal said "TaskProvider"; happy to keep `TaskProvider` as the protocol
-  name if preferred, but the *concept* is "backend." **Decision needed before T1.**
-- **Where do the neutral types live** — `cluster/backend_types.py` (proposed) vs
-  reusing `cluster/types.py`? And do we move `TaskUpdate` out of
-  `controller/reconcile/snapshot.py` or re-export it to avoid `providers→controller`?
-- **Liveness for `placement=IRIS`** — keep the dedicated ping thread, or fold the
-  heartbeat into `reconcile`'s return? (Latency vs. one-loop simplicity.)
+- <a id="naming"></a>**Naming: `TaskBackend`** for the new contract (confirmed).
+  "Provider" stays for the infra protocols (`ControllerProvider`,
+  `WorkerInfraProvider`); the bare `TaskProvider` name is retired.
+- **PR size: one PR for all of Stage 1** (T1–T7), validated end-to-end; commits
+  are the spiral within it.
+
+## Open questions (carried into implementation, decide as we hit them)
+
+- **Where the neutral types live** — `cluster/backend_types.py` (proposed) vs
+  reusing `cluster/types.py`; and whether to move `TaskUpdate` out of
+  `controller/reconcile/snapshot.py` or re-export it to avoid `providers→controller`.
+  *Leaning:* new `cluster/backend_types.py`; re-export `TaskUpdate` to avoid a wide move.
+- **Liveness for `placement=IRIS`** — keep the dedicated ping thread (preserves the
+  5 s heartbeat cadence + fast failure detection) vs. fold the heartbeat into
+  `reconcile`'s return. *Leaning:* keep the ping thread, gated by capability — least
+  behavioral risk for Stage 1.
 - **Dashboard descriptor transport** — extend `/auth/config` (already fetched on
-  load) vs. a dedicated `GetBackendInfo` RPC.
-- **Stage 1 PR size** — is bundling the dashboard (T6) into Stage 1 acceptable, or
-  split it into an immediate fast-follow PR?
+  load) vs. a dedicated `GetBackendInfo` RPC. *Leaning:* extend `/auth/config`.
