@@ -46,6 +46,7 @@ from starlette.routing import Match, Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from iris.cluster.controller import endpoint_proxy
+from iris.cluster.controller.backend import backend_descriptor
 from iris.cluster.controller.endpoint_proxy import EndpointProxy
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import (
@@ -582,13 +583,18 @@ class ControllerDashboard:
     def _auth_config(self, request: Request) -> JSONResponse:
         """Unauthenticated endpoint telling the frontend whether auth is required."""
         has_session = SESSION_COOKIE in request.cookies
-        provider_kind = "kubernetes" if self._service.has_direct_provider else "worker"
+        descriptor = backend_descriptor(self._service.provider)
         return JSONResponse(
             {
                 "auth_enabled": self._auth_provider is not None,
                 "provider": self._auth_provider,
                 "has_session": has_session,
-                "provider_kind": provider_kind,
+                "backend": {
+                    "name": descriptor.name,
+                    "placement": descriptor.placement.value,
+                    "manages_capacity": descriptor.manages_capacity,
+                    "capabilities": descriptor.capabilities,
+                },
                 "optional": self._auth_optional,
             }
         )

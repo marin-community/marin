@@ -88,6 +88,43 @@ class Placement(StrEnum):
 
 
 @dataclass(frozen=True)
+class BackendDescriptor:
+    """Capabilities the dashboard uses to choose which panels to show.
+
+    Derived from the live :class:`TaskBackend`; served (as JSON) by ``/auth/config``
+    so the frontend tab list is data-driven rather than keyed on a provider-kind
+    binary.
+    """
+
+    name: str
+    placement: Placement
+    manages_capacity: bool
+    capabilities: list[str]
+
+
+def backend_descriptor(backend: TaskBackend) -> BackendDescriptor:
+    """Build the dashboard capability descriptor from a live backend.
+
+    Capability strings drive which conditional dashboard tabs render:
+    ``workers`` (Iris tracks worker daemons), ``autoscaler`` (Iris provisions
+    capacity), ``cluster`` (the backend places tasks on its own cluster).
+    """
+    capabilities: list[str] = []
+    if backend.placement is Placement.IRIS:
+        capabilities.append("workers")  # Iris tracks worker daemons -> Workers (Fleet) tab
+    if not backend.manages_capacity:
+        capabilities.append("autoscaler")  # Iris autoscaler -> Autoscaler tab
+    if backend.placement is Placement.BACKEND:
+        capabilities.append("cluster")  # underlying cluster view -> Cluster tab
+    return BackendDescriptor(
+        name=backend.name,
+        placement=backend.placement,
+        manages_capacity=backend.manages_capacity,
+        capabilities=capabilities,
+    )
+
+
+@dataclass(frozen=True)
 class SchedulingEvent:
     """A scheduling event surfaced by the execution backend (e.g. k8s events)."""
 

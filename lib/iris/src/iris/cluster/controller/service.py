@@ -36,7 +36,7 @@ from iris.cluster.controller.auth import (
     revoke_login_keys_for_user,
 )
 from iris.cluster.controller.autoscaler.status import PendingHint
-from iris.cluster.controller.backend import ProviderError, TaskTarget
+from iris.cluster.controller.backend import ProviderError, TaskBackend, TaskTarget
 from iris.cluster.controller.budget import (
     compute_effective_band,
     compute_user_spend,
@@ -1696,6 +1696,11 @@ class ControllerServiceImpl:
     def has_direct_provider(self) -> bool:
         """Whether the controller runs a direct (Kubernetes) provider."""
         return self._controller.has_direct_provider
+
+    @property
+    def provider(self) -> TaskBackend:
+        """The live execution backend (read-only handle for dashboard descriptors)."""
+        return self._controller.provider
 
     def resolve_endpoint(self, name: str) -> str | None:
         """Resolve an endpoint name to its address, or None. Task endpoints take priority over ``/system/`` endpoints."""

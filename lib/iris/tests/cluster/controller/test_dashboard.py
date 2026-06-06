@@ -15,6 +15,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint
+from iris.cluster.controller.backend import Placement
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.ops.task import Assignment
@@ -194,7 +195,8 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock.get_job_scheduling_diagnostics = _get_job_scheduling_diagnostics
     controller_mock.last_scheduling_context = None
     controller_mock.autoscaler = autoscaler
-    controller_mock.provider = Mock()
+    controller_mock.provider = Mock(name="worker", placement=Placement.IRIS, manages_capacity=False)
+    controller_mock.provider.name = "worker"
     controller_mock.has_direct_provider = False
     return controller_mock
 
@@ -1325,18 +1327,25 @@ def test_auth_config_returns_enabled_when_verifier_set(service, log_service):
     assert data["provider"] == "gcp"
 
 
-def test_auth_config_worker_provider_kind(client):
-    """auth/config returns provider_kind=worker when no direct provider."""
+def test_auth_config_worker_capabilities(client):
+    """auth/config advertises worker + autoscaler capabilities for an Iris backend."""
     resp = client.get("/auth/config")
     assert resp.status_code == 200
-    data = resp.json()
-    assert data["provider_kind"] == "worker"
+    backend = resp.json()["backend"]
+    assert backend["name"] == "worker"
+    assert backend["placement"] == "iris"
+    assert backend["manages_capacity"] is False
+    assert "workers" in backend["capabilities"]
+    assert "autoscaler" in backend["capabilities"]
+    assert "cluster" not in backend["capabilities"]
 
 
-def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
-    """auth/config returns provider_kind=kubernetes when controller has direct provider."""
+def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path):
+    """auth/config advertises the cluster capability for a backend-placed (k8s) backend."""
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.has_direct_provider = True
+    controller_mock.provider = Mock(placement=Placement.BACKEND, manages_capacity=True)
+    controller_mock.provider.name = "kubernetes"
     log_service = LogServiceImpl()
     svc = ControllerServiceImpl(
         controller=controller_mock,
@@ -1352,8 +1361,13 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
 
     resp = k8s_client.get("/auth/config")
     assert resp.status_code == 200
-    data = resp.json()
-    assert data["provider_kind"] == "kubernetes"
+    backend = resp.json()["backend"]
+    assert backend["name"] == "kubernetes"
+    assert backend["placement"] == "backend"
+    assert backend["manages_capacity"] is True
+    assert "cluster" in backend["capabilities"]
+    assert "workers" not in backend["capabilities"]
+    assert "autoscaler" not in backend["capabilities"]
 
 
 # =============================================================================
