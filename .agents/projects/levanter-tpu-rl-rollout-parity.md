@@ -23,10 +23,10 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - Prefer short local file edits, short REST `gh api` checks, and written
   handoffs. Delegate new runs to subagents when useful, then monitor them with
   tightly scoped heartbeats rather than foreground polling.
-- Heartbeat `poll-rl-rollout-epic-progress` watches #6185 and this handoff PR
-  with lightweight GitHub metadata. It should update the epic/child issues
-  before notifying on terminal results, concrete failures, review actions, or
-  CI failures. The old v5p side-agent thread
+- Heartbeat `poll-rl-rollout-epic-progress` watches #6176, #6185, #6186, and
+  this handoff PR with lightweight GitHub metadata. It should update the
+  epic/child issues before notifying on terminal results, concrete failures,
+  review actions, or CI failures. The old v5p side-agent thread
   `019e9b3f-8ff1-79c3-9884-02f847973191` is no longer a hard dependency after
   the app restart; future subagents should be explicitly instructed to update
   #6227 and the matching child issue before reporting material progress.
@@ -216,12 +216,12 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   head, but still stack-dependent and not landed. Runtime integration remains a
   follow-up after the serving and benchmark PRs merge.
 - Merge state verified by lightweight GitHub metadata after the app restart on
-  2026-06-06: #6185 is open, non-draft, mergeable, and at head `91f6ec06a`;
-  #6214 is open, draft, mergeable, and at head `b70b7da6a`. #6214 has all
-  visible checks green. #6185 has no visible failed checks; `levanter-unit` is
-  green and `levanter-tpu-tests` is the only remaining in-progress lane at the
-  latest poll. The goal is not complete until the required code paths and
-  benchmark artifacts are landed or otherwise accepted by maintainers.
+  2026-06-06: #6176 is open, non-draft, mergeable, and at head `104bf901`;
+  #6185 is open, non-draft, mergeable, and at head `91f6ec06a`; #6186 is open,
+  non-draft, mergeable, and at head `c4ba37b`; #6214 is open, draft, mergeable,
+  and at head `16338c3c9`. All visible checks are green on these heads. The
+  goal is not complete until the required code paths and benchmark artifacts are
+  landed or otherwise accepted by maintainers.
 
 ## Active Work
 
@@ -313,8 +313,8 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   turn the next terminal backend failure into an actionable log-bearing failure.
 - PR #6185 current CI state after commit `91f6ec06a`: the PR is non-draft and
   mergeable, with no visible failed checks at the latest lightweight metadata
-  check. `levanter-unit` is green; `levanter-tpu-tests` remains in progress.
-  #6214 has all visible checks green and remains draft as a handoff artifact.
+  check. #6214 at `16338c3c9` also has all visible checks green and remains
+  draft as a handoff artifact.
 - Issue #6184 has the final proof comment:
   `https://github.com/marin-community/marin/issues/6184#issuecomment-4637412411`.
 - PR #6186 adds the first RL batched-token rollout API contracts, stacked on
@@ -462,9 +462,9 @@ thread. Keep background-style work narrow and explicit until the app is stable:
    maintainer is ready; CI and Claude review are clean.
 2. PR #6185 now has runtime proof for correctness, service-batch coalescing,
    and prefill-drain scheduling. The `mixed_b32_i512_o512_n1` v6e-8 run clears
-   the issue-level 0.75 vLLM throughput target at 0.819. No CI failures are
-   visible at the latest metadata check; wait for the remaining
-   `levanter-tpu-tests` lane to finish before treating #6185 as fully green.
+   the issue-level 0.75 vLLM throughput target at 0.819. All visible checks are
+   green at the latest metadata check, so the next action is maintainer
+   review/merge.
 3. The next mixed-workload performance step is raising the generic benchmark
    parity target beyond the issue bar: explain the remaining 18% gap on the
    prefill-drained row, then decide whether to optimize decode scheduling,
