@@ -166,7 +166,8 @@ jobs:
         run: |
           echo "GPU replicas: $CANARY_GPU_REPLICAS"
           echo "XLA_FLAGS: $CANARY_XLA_FLAGS"
-          JOB_ID=$(.venv/bin/iris --config="$IRIS_CONFIG" \
+          set +e
+          JOB_OUTPUT=$(.venv/bin/iris --config="$IRIS_CONFIG" \
             job run --no-wait \
             --memory=16G --disk=32G --cpu=4 --extra=cpu \
             -e MARIN_PREFIX s3://marin-na/marin/ \
@@ -191,6 +192,20 @@ jobs:
             -e AWS_SECRET_ACCESS_KEY "$R2_SECRET_ACCESS_KEY" \
             -e AWS_ENDPOINT_URL "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com" \
             -- python -m experiments.ferries.canary_ferry)
+          JOB_STATUS=$?
+          set -e
+          printf '%s\n' "$JOB_OUTPUT"
+          if [ "$JOB_STATUS" -ne 0 ]; then
+            exit "$JOB_STATUS"
+          fi
+          JOB_ID=$(printf '%s\n' "$JOB_OUTPUT" | sed -n 's/.*Job submitted: //p' | tail -n 1)
+          if [ -z "$JOB_ID" ]; then
+            JOB_ID=$(printf '%s\n' "$JOB_OUTPUT" | grep -Eo '/[^[:space:]]+/[^[:space:]]+' | tail -n 1 || true)
+          fi
+          if [ -z "$JOB_ID" ] || [[ ! "$JOB_ID" =~ ^/[^/]+/[^[:space:]]+$ ]]; then
+            echo "Failed to parse Iris job id from submit output" >&2
+            exit 1
+          fi
           echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
           echo "Submitted job: $JOB_ID"
         env:
