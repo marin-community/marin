@@ -3,144 +3,53 @@ plan: iris-taskprovider-contract
 status: approved
 ---
 
-# Iris TaskProvider / Backend Contract — Stage 1
+# Iris TaskBackend Contract — Stage 1 (landed) + cleanup pass
 
 Tracking: [marin#6178](https://github.com/marin-community/marin/issues/6178) ·
-weaver issue #21
+weaver issue #21 · PR [#6209](https://github.com/marin-community/marin/pull/6209)
 
-## Problem & goal
+## Status
 
-Iris supports two execution models today — Iris-scheduled (GCP/TPU, manual,
-local) and backend-scheduled (Kubernetes/CoreWeave) — but it has **no named
-boundary** for what a "backend" is. The split is encoded as
-`isinstance(self._provider, K8sTaskProvider)` in four places in
-`controller.py` plus a `not isinstance(...)` gate in `main.py`, with the
-controller's provider typed as the union `TaskProvider | K8sTaskProvider` (a
-protocol OR-ed with a concrete class). The word "provider" already means three
-unrelated things (see [Current state](#current-state)). Adding a third backend
-(Slurm) by extending the `isinstance` ladder is not viable.
+**Stage 1 — the DB-less `TaskBackend` contract — is implemented** (commits
+T1–T7 on this branch) and open for review as PR #6209. The controller now drives
+every backend through one `TaskBackend` protocol: it owns the DB and the loop
+cadences, hands the backend read-only snapshots, and commits what the backend
+returns. No `isinstance` on backend type remains in `controller.py` / `main.py`;
+both implementations (`RpcTaskBackend` for GCP/manual/local, `K8sTaskProvider`
+for Kueue) satisfy the contract and are selected on a `placement` capability.
 
-**Stage 1 goal.** Define one clear backend contract and refactor the existing
-two implementations behind it, so the controller drives every backend through a
-single, DB-free interface shaped like the loop the issue author asked for:
+**We are now in a cleanup pass** responding to PR review (rjpower) plus two
+structural renames. The bulk refactor is done; this pass is naming, module
+placement, and a few thin-dispatcher simplifications. Progress and remaining
+work are tracked in [Cleanup pass](#cleanup-pass-pr-review-response) below.
 
-```python
-# controller.py — the target driving tick
-def reconcile(self):
-    task_state  = self._read_control_state(cur)   # query_db   (only the controller touches the DB)
-    task_update = self._backend.reconcile(task_state)  # backend does backend-specific I/O, no DB
-    self._apply(cur, task_update)                  # update_db
-```
+Done so far in the cleanup pass (C1–C7, each its own commit, tests green):
+`cluster/providers` → `cluster/backends`; `autoscaler_factory.py` →
+`autoscaler/factory.py`; `direct_provider.py` → `reconcile/dispatch.py` (+ the
+`direct_provider` → `dispatch` vocabulary retirement); `Placement` →
+`PlacementOwner {IRIS_CONTROLLER, TASK_BACKEND}`; `Controller._provider` →
+`_task_backend`; scheduling decision passes renamed (`apply_placements` /
+`apply_preemptions` / `compute_diagnostics`) and two moved into
+`scheduling/decision.py`; contract docstrings fixed.
 
-**Done when, after Stage 1:**
-
-1. The controller talks to a single `TaskBackend` protocol (naming discussed
-   [below](#naming)) via a clear, non-DB interface. No `isinstance` on backend
-   type anywhere in `controller.py` / `main.py`.
-2. The two existing implementations (`K8sTaskProvider`, the GCP/manual/local RPC
-   fan-out) both satisfy that protocol and live under `providers/`.
-3. Backend-neutral scheduling primitives (`scheduler.py`, `scheduling_policy.py`,
-   `constraints.py`) sit in their own clearly-labelled layer, importable by any
-   backend.
-4. The dashboard renders from a backend **capability descriptor**, not a
-   hard-coded "k8s vs gcp" boolean.
-5. No behavioral change: GCP/TPU, CoreWeave, manual, and local clusters behave
-   exactly as before. Existing fakes + tests are the safety net.
-
-**Stage 1 is explicitly NOT:** adding Slurm, supporting more than one backend at
-once, or collapsing the autoscaler's slow provisioning I/O into the reconcile
-tick. Those are Stages 2–5 (sketched at the [end](#beyond-stage-1)).
-
-This document is the design for review. Implementation lands as one chonky PR
-after sign-off (see [Rollout](#q2-rollout--chonky-prs)).
+Remaining (C8–C13): two thin-dispatcher simplifications the reviewer flagged
+(uniform loop spawning; `on_workers_failed` shape), the backend-construction
+cleanup (factory builds+attaches the autoscaler; de-duplicate the log client),
+lifting one scheduling DB read into `build_scheduling_context`, retiring the
+`has_direct_provider` provider-status field, and the doc sync for the renames.
 
 ---
 
-## Current state
-
-### "Provider" means three different things
-
-| Name | File | Role | Implementers |
-|------|------|------|--------------|
-| `TaskProvider` (Protocol) | `controller/provider.py:20` | RPC fan-out to **worker daemons**: `get_process_status`, `profile_task`, `on_worker_failed`, `close`. **Incomplete** — the controller also calls `dispatch_reconcile_plans` and `ping_workers`, which are *not* on the protocol. | `WorkerProvider` (`controller/worker_provider.py:105`) |
-| `K8sTaskProvider` (concrete class) | `providers/k8s/tasks.py:1229` | Direct pod control. Exposes `sync(batch) -> result`, `profile_task`, `exec_in_container`, `get_cluster_status`, `close`. Does **not** implement `TaskProvider`. | itself |
-| `ControllerProvider` + `WorkerInfraProvider` (Protocols) | `providers/protocols.py:23,96` | **Infra lifecycle** — controller VM start/stop/tunnel, slice/VM CRUD for the Autoscaler. Orthogonal to task execution. | `providers/gcp/`, `providers/k8s/`, `providers/manual/` |
-
-So `self._provider: TaskProvider | K8sTaskProvider` unions a protocol with a
-concrete class, and the controller `isinstance`-branches to pick an execution
-model.
-
-### Two execution models, branched by `isinstance`
-
-| | Iris-scheduled (GCP / manual / local) | Backend-scheduled (K8s / CoreWeave) |
-|---|---|---|
-| Loops | `_run_scheduling_loop` + `_run_polling_loop` + `_run_ping_loop` (+ prune, +autoscaler) | `_run_direct_provider_loop` only |
-| Placement | Iris `Scheduler.find_assignments` matches task→worker | Kueue / k8s scheduler places pods |
-| Dispatch | `provider.dispatch_reconcile_plans(plans, addrs)` — RPC to worker daemons | `provider.sync(batch)` — `kubectl apply` |
-| Capacity | Iris `Autoscaler` provisions slices via `WorkerInfraProvider` | cluster autoscaler provisions nodes (k8s-native) |
-| Liveness | `provider.ping_workers` heartbeat (5s) | pod-phase polling inside `sync` |
-| Status feedback | reconcile RPC results | pod poll → `DirectProviderSyncResult` |
-
-The `isinstance` sites (to be removed in Stage 1):
-`controller.py:345` (log-client injection), `controller.py:530` (which loops to
-spawn), `controller.py:800` (assert in `_sync_direct_provider`),
-`controller.py:1512` (`has_direct_provider` property), `main.py:188` (autoscaler
-gate).
-
-### The loop the user wants already exists — for K8s only
-
-`controller.py:797 _sync_direct_provider` is already
-`query_db → provider.sync → update_db`:
-
-```python
-batch  = drain_for_direct_provider(cur, cache=..., max_promotions=...)  # query_db
-result = provider.sync(batch)                                           # provider.reconcile
-apply_direct_provider_updates(cur, result.updates, ...)                # update_db
-```
-
-Stage 1 generalizes this shape to **both** backends. The GCP path already has
-the same bones — `_reconcile_tick` does
-`snapshot → build_reconcile_plans (pure) → provider.dispatch_reconcile_plans →
-apply_reconcile` — it just splits "build plans" out as a controller-side pure
-step and fans out per-worker. The unification is to express both as one
-`reconcile(desired_state) -> observed_updates` call.
-
-### What's already backend-neutral (good news)
-
-From the subsystem audit: `scheduler.py` (`Scheduler.find_assignments`,
-`scheduler.py:616`), `scheduling_policy.py` (`compute_demand_entries`), and
-`constraints.py` (`Constraint`, `ConstraintIndex`, `WellKnownAttribute`,
-`PlacementRequirements`) are **already pure and backend-agnostic** — they
-operate on `WorkerSnapshot` / `JobRequirements` / abstract attributes with zero
-GCP types. The autoscaler's `planning.py` and `routing.py` are pure too; only
-`runtime.py` / `scaling_group.py` / `operations.py` touch `WorkerInfraProvider`
-and parse `.gcp`/`.coreweave` config fields. So "shared scheduling primitives"
-mostly already exist — Stage 1 *names and relocates* them rather than rewriting.
-
----
-
-## The core abstraction
+## The core abstraction (as implemented)
 
 > **A backend is the control-plane driver for one cluster.** It owns
 > *scheduling*, *reconciliation*, *capacity management (autoscaling)*, and the
 > *one-off* operations (status / profile / exec) for that cluster. Some backends
 > (k8s, later slurm) implement these by **dispatching to the underlying system**;
 > others (gcp/manual/local) **do the work themselves** with Iris's own scheduler
-> and autoscaler primitives. **The controller becomes a thin dispatcher: it owns
-> the DB and the loop cadences, hands the backend read-only snapshots, and
-> commits the decisions the backend returns. The backend never touches the DB.**
-
-This extends the existing *functional core / imperative shell* design (see
-`.agents/projects/2026-05-31_iris_reconcile_control_flow.md`) to the backend
-boundary:
-
-- **Controller = imperative shell + the only DB owner.** Each loop reads a
-  snapshot (DB → plain dataclass), calls one backend method, commits the
-  returned decisions/deltas. It holds *no* scheduling, autoscaling, or dispatch
-  logic of its own — only the read/commit glue and the cadence.
-- **Backend = the cluster's control logic.** Snapshot in, decisions + side
-  effects (RPC fan-out, `kubectl apply`, VM provisioning) out, deltas back.
-  No SQLite, no controller internals.
+> and autoscaler primitives. **The controller is a thin dispatcher: it owns the
+> DB and the loop cadences, hands the backend read-only snapshots, and commits
+> the decisions the backend returns. The backend never touches the DB.**
 
 The DB-less contract is the load-bearing invariant: **every backend method takes
 a snapshot dataclass and returns a result/delta dataclass; the backend performs
@@ -148,294 +57,57 @@ no DB I/O.** A backend may hold in-memory state (RPC stub caches, autoscaler
 slice tracking) seeded once at construction, but its steady-state methods are
 pure-in / effects-and-data-out.
 
-### Proposed protocol
+### The contract
 
-Lives in `controller/backend.py` (the consumer side; the reconcile/scheduling
-data types it references are controller-internal). The infra protocols
-(`ControllerProvider`, `WorkerInfraProvider`) stay in `providers/protocols.py`.
+`controller/backend.py` (the consumer side; the reconcile/scheduling data types
+it references are controller-internal, which is why the contract module stays in
+`controller/` — moving it into `backends/` would make `backends/` import the
+scheduling/reconcile/autoscaler layers and cycle). The infra protocols
+(`ControllerProvider`, `WorkerInfraProvider`) stay in `backends/protocols.py` —
+"provider" remains the right word for the VM-lifecycle layer a backend drives.
 
 ```python
-class Placement(StrEnum):
-    IRIS = "iris"        # Iris schedules task→worker; backend fans RPCs to worker daemons
-    BACKEND = "backend"  # the backend places tasks (Kueue, slurmctld); Iris does not schedule
+class PlacementOwner(StrEnum):
+    IRIS_CONTROLLER = "iris_controller"  # Iris schedules task→worker; backend fans RPCs to daemons
+    TASK_BACKEND    = "task_backend"     # the backend places tasks (Kueue, slurmctld); Iris does not schedule
 
 class TaskBackend(Protocol):
-    """Control-plane driver for a single cluster backend. Never touches the DB."""
+    name: str
+    placement: ClassVar[PlacementOwner]
+    manages_capacity: ClassVar[bool]      # True => backend provisions nodes itself (k8s)
 
-    # --- capabilities (replace the isinstance ladder) ---
-    name: str                  # "gcp", "coreweave", "manual", "local", later "slurm-stanford"
-    placement: Placement       # who schedules; selects the controller's commit path
-    manages_capacity: bool     # True => backend provisions nodes itself (k8s); False => its own Autoscaler does
-
-    # --- scheduling: pure decision from a DB snapshot; controller commits ---
-    #   IRIS: preference + find_assignments + preemption (uses the shared Scheduler).
-    #   BACKEND: no-op (the backend system schedules) — returns an empty result.
     def schedule(self, snapshot: ScheduleInput) -> ScheduleResult: ...
-
-    # --- reconciliation: converge running tasks, observe; controller commits ---
-    #   IRIS: fan out the per-worker Reconcile RPC -> raw worker_results.
-    #   BACKEND: apply pods / poll -> pre-computed task updates.
-    def reconcile(self, snapshot: BackendReconcileInput) -> BackendReconcileResult: ...
-
-    # --- capacity management (autoscaling): cloud I/O here, DB deltas back ---
-    #   IRIS: autoscaler refresh + probe + scale (provisions via WorkerInfraProvider).
-    #   BACKEND: no-op (the cluster autoscaler handles capacity).
+    def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult: ...
     def manage_capacity(self, snapshot: CapacityInput) -> CapacityResult: ...
-
-    # --- liveness + worker-failure handling (IRIS); no-ops for BACKEND ---
-    def ping_workers(self, workers: list[tuple[WorkerId, str | None]]) -> list[PingResult]: ...
     def on_workers_failed(self, worker_ids: list[WorkerId]) -> WorkersFailedResult: ...
-
-    # --- capacity rollup for the dashboard ---
+    def ping_workers(self, workers: list[tuple[WorkerId, str | None]]) -> list[PingResult]: ...
     def capacity(self) -> ClusterCapacity | None: ...
-
-    # --- on-demand request/response (NOT loop-driven; see Async ops) ---
-    def get_process_status(self, target: TaskTarget, request) -> ...: ...
-    def profile_task(self, target: TaskTarget, request, timeout_ms) -> ...: ...
-    def exec_in_container(self, target: TaskTarget, request, timeout_seconds=60) -> ...: ...
-    def on_worker_failed(self, worker_id, address) -> None: ...   # evict stub cache
-
-    def close(self) -> None: ...
+    def attach_autoscaler(self, autoscaler: Autoscaler) -> None: ...
+    # on-demand (not loop-driven), via TaskTarget:
+    def get_process_status(self, target, request) -> ...: ...
+    def profile_task(self, target, request, timeout_ms) -> ...: ...
+    def exec_in_container(self, target, request, timeout_seconds) -> ...: ...
 ```
 
-`schedule`/`reconcile`/`manage_capacity`/`ping_workers`/`on_workers_failed` are
-each driven by an existing controller loop (cadences preserved); the K8s backend
-implements `schedule`/`manage_capacity`/`ping_workers`/`on_workers_failed` as
-no-ops because Kueue + the cluster autoscaler own those. The result is that the
-**only execution-model-specific logic left in `controller.py` is which snapshot
-to build and how to commit — and even that is selected on `placement`, never on
-the concrete type.**
+### Two apply paths, selected on `placement` (not `isinstance`)
 
-### The reconcile data types (the DB-free interface)
-
-`BackendReconcileInput` carries the placement-appropriate desired/observed state
-(`tasks_to_run` + `running_tasks` for BACKEND; pre-built `plans` +
-`worker_addresses` for IRIS); `BackendReconcileResult` carries `updates`
-(BACKEND) or raw `worker_results` (IRIS) plus shared `scheduling_events` and
-`capacity`. `ScheduleInput`/`ScheduleResult` and `CapacityInput`/`CapacityResult`
-follow the same shape: a read-only snapshot in, decisions/deltas out. These live
-in `controller/backend.py` (done for the reconcile pair in T1).
-
-### Why two apply paths, selected on `placement`
-
-`reconcile`'s two apply paths are **not interchangeable** and must both be kept:
-- IRIS → `ops.worker.apply_reconcile` (emits worker heartbeats,
+`reconcile`'s two apply paths are **not interchangeable**:
+- `IRIS_CONTROLLER` → `ops.worker.apply_reconcile` (emits worker heartbeats,
   `WORKER_RECONCILE` transition source).
-- BACKEND → `ops.task.apply_direct_provider_updates` (`DIRECT_PROVIDER` source,
-  no heartbeats, no build-failed reaping).
+- `TASK_BACKEND` → `ops.task.apply_dispatch_updates` (`DISPATCH` source, no
+  heartbeats). The controller-side, DB-coupled input builder for this path is
+  `controller/reconcile/dispatch.py` (`drain_for_dispatch`) — the counterpart to
+  `reconcile/worker.py` for the IRIS path.
 
-The controller picks the path on `backend.placement`. A new backend slots in by
-declaring its placement; no controller `isinstance`.
+### Thin-dispatcher loops + DB-less autoscaler
 
----
-
-## The thin dispatcher loops
-
-Each controller loop keeps its own cadence but its body collapses to
-read-snapshot → call-backend → commit. No `isinstance`; no scheduling or
-autoscaling logic in `controller.py`.
-
-```python
-# scheduling loop (adaptive backoff; IRIS does work, BACKEND returns empty)
-snap   = build_schedule_input(db)              # query_db: pending/workers/usage/budgets/claims/running
-result = backend.schedule(snap)                # pure decision (Scheduler + preemption) or no-op
-commit_schedule(db, result)                    # update_db: ASSIGNED rows + preemptions + unschedulable
-
-# poll/reconcile loop (1s)
-snap   = build_reconcile_input(db)             # query_db: desired + running (+ addresses for IRIS)
-result = backend.reconcile(snap)               # RPC fan-out OR kubectl apply
-apply_reconcile_result(db, result)             # update_db (placement-selected apply path)
-
-# capacity loop (autoscaler cadence; IRIS provisions, BACKEND no-op)
-snap   = build_capacity_input(db)              # query_db: demand + worker status
-result = backend.manage_capacity(snap)         # cloud I/O (create/terminate slices), DB deltas back
-apply_capacity_deltas(db, result)              # update_db: slices/scaling_groups rows
-
-# ping loop (5s) — liveness + slice-sibling termination on failure
-results = backend.ping_workers(addresses)
-... if unhealthy: failed = backend.on_workers_failed(ids); commit(db, failed)
-```
-
-The fast-wake events and adaptive backoff are preserved; this changes *what each
-loop calls*, not the cadence model. Collapsing the loops into a single tick is a
-possible later simplification but is **not** done here — the cadences differ
-(scheduling ~10s adaptive, reconcile 1s, autoscale ~10s, ping 5s) and the slow
-provisioning I/O must not block the 1s reconcile path (see [async ops](#q3-async-operations)).
-
-### Making the autoscaler DB-less
-
-The autoscaler is the one piece with real DB coupling: `ScalingGroup` today holds
-a `db` handle and writes the `slices` / `scaling_groups` tables during
-`refresh`/scale operations (`_db_upsert_slice`, `_db_update_group`,
-`_db_remove_slice`). To honor the DB-less contract when the backend owns the
-autoscaler:
-
-1. Remove the `db` handle from `ScalingGroup` / `Autoscaler`; the in-memory slice
-   state is the source of truth during operation.
-2. `manage_capacity` (and `on_workers_failed`) accumulate slice/scaling-group
-   **deltas** (created / ready / failed / removed, scale timestamps) and return
-   them in `CapacityResult` / `WorkersFailedResult`.
-3. The controller applies those deltas to the `slices` / `scaling_groups` tables
-   in one transaction — the same write-through, now controller-owned.
-4. Startup recovery stays controller-owned: the controller reads the slices
-   checkpoint and hands the backend its initial tracked state at construction
-   (a one-time bootstrap, not a steady-state DB touch).
-
-This is the largest single piece of the migration and lands as its own commit.
-
----
-
-## Module & provider refactor
-
-Goal: backend implementations under `providers/<backend>/`, shared primitives in
-a named layer, neutral contract types in a leaf module. Dependency direction
-within `iris.cluster`: `providers → {scheduling, backend_types, types}` and
-`controller → {providers, scheduling, backend_types}`. No reverse edges.
-
-| Today | Stage 1 target | Why |
-|------|----------------|-----|
-| `controller/provider.py` (`TaskProvider` protocol) | **deleted**; folded into `TaskBackend` in `providers/protocols.py` | one contract, not an incomplete one |
-| `controller/worker_provider.py` (`WorkerProvider` = RPC fan-out) | `providers/rpc/backend.py` as `RpcTaskBackend` | it's the daemon-RPC backend shared by gcp/manual/local — belongs under `providers/`, not `controller/` |
-| `controller/direct_provider.py` types (`DirectProviderBatch/SyncResult`, `ClusterCapacity`, `SchedulingEvent`) | `cluster/backend_types.py` (renamed per [above](#neutral-data-types-the-db-free-interface)) | neutral contract types; breaks the `providers→controller` import |
-| `controller/direct_provider.py` drain + `RunTaskRequest` building (`drain_for_direct_provider`, `build_run_request`, template cache) | stays controller-side (it's DB reads) → `controller/dispatch.py`; `RunTaskRequest` *construction* is shared by both backends, keep it neutral | drain is `query_db`; request-building is shared |
-| `providers/k8s/tasks.py` `K8sTaskProvider.sync` | rename `sync`→`reconcile`, adapt to `BackendReconcileInput/Result`, declare `placement=BACKEND, manages_capacity=True` | implement the protocol |
-| GCP RPC backend `dispatch_reconcile_plans` / `ping_workers` (on `WorkerProvider`) | become `RpcTaskBackend.reconcile` (+ internal `build_reconcile_plans`) / `ping_workers`; declare `placement=IRIS, manages_capacity=False` | implement the protocol |
-| `controller/scheduler.py`, `controller/scheduling_policy.py` | `controller/scheduling/` package (or `cluster/scheduling/`) — the shared "scheduling primitives" layer | name the neutral layer the issue calls for |
-| `cluster/constraints.py` | stays (already at the right level); re-exported from the scheduling layer | already neutral |
-| autoscaler (`controller/autoscaler/*`) | unchanged in Stage 1; gated by `backend.manages_capacity` instead of `isinstance` in `main.py` | autoscaler refactor is Stage 2 |
-
-`providers/factory.py` already returns `workers=None` for CoreWeave — extend it
-(or a sibling) to also construct the `TaskBackend`, so `main.py` gets a backend
-+ optional infra bundle and drops its `isinstance` gate.
-
-Misplaced code noted for cleanup (low priority, fold in opportunistically):
-`providers/gcp/local.py` is generic but lives under `gcp/`; daemon/port helpers
-in `providers/types.py` are RPC-path-specific.
-
----
-
-## Answers to the four questions
-
-### Q1: UI / dashboard
-
-Today the dashboard is binary: `dashboard.py:585` sets
-`provider_kind = "kubernetes" if has_direct_provider else "worker"`; `App.vue`
-swaps whole tab sets (`WORKER_TABS` = Jobs/Scheduler/**Fleet**/Endpoints/**Autoscaler**/…
-vs `KUBERNETES_TABS` = Jobs/Scheduler/**Cluster**/Endpoints/…). The GCP-only view
-is `GetAutoscalerStatus` (slices, scale groups — `vm.proto` `SliceInfo`,
-`ScaleGroupStatus`); the K8s-only view is `GetKubernetesClusterStatus` (node
-pools, pods).
-
-**Approach: replace the boolean with a capability descriptor; keep the dashboard
-a thin UI over RPC (per `lib/iris/AGENTS.md`).** The controller already knows the
-backend's capabilities (`name`, `placement`, `manages_capacity`); expose them
-plus the list of backend-specific panels the backend supports, and let the
-frontend render tabs from that list instead of a k8s/worker `if`.
-
-- Neutral, always-present tabs (already backend-agnostic): **Jobs, Tasks,
-  Scheduler, Endpoints, Account, Status, Logs.** These read jobs/tasks/workers —
-  unchanged.
-- Backend-specific panels become *optional, capability-gated*: `GetAutoscalerStatus`
-  (the Fleet/Autoscaler/slice view) renders only when the backend advertises it;
-  `GetKubernetesClusterStatus` (node pools/pods) likewise. A future Slurm backend
-  advertises e.g. a `partitions` panel without touching the frontend's core
-  routing.
-- `has_direct_provider` (`controller.py:1512`, consumed at `dashboard.py:585`,
-  `service.py:1731/1781/1819`) is replaced by `backend.placement` /
-  `backend.manages_capacity` / the panel list. The RPC `get_*_status` methods stay
-  but key off capabilities, not `isinstance`.
-
-Stage 1 scope: introduce the descriptor + make tab selection data-driven; keep
-the two existing status RPCs as-is behind capability gates. A genuinely unified
-"capacity/topology" view (a generic scaling-unit model spanning slices ↔ node
-pools ↔ partitions) is deferred — not needed until backend #3.
-
-The proto/`rpc.ts` messages are already provider-shaped but coexist fine; no
-proto churn required in Stage 1 beyond adding the capability fields to the
-`/auth/config` (or a small `GetBackendInfo`) response the frontend already reads.
-
-### Q2: Rollout — chonky PRs
-
-**Decided: Stage 1 ships as a single PR** so the new model is validated end-to-end
-together (rather than landing a half-migrated contract). Commits T1–T7 are the
-spiral *within* that one PR; each commit builds and passes tests, but they are not
-split across PRs. Later stages (2–5) are their own chonky PRs.
-
-Within the PR, commit in a spiral so the branch builds and tests pass at every
-commit (the order the existing fakes make safe). Status as of this revision:
-
-1. ✅ **Contract + neutral types** — `controller/backend.py`: `TaskBackend`,
-   `Placement`, `BackendReconcileInput/Result`, `ClusterCapacity`,
-   `SchedulingEvent`, `PingResult`, `TaskTarget`; rename out of `direct_provider.py`.
-2. ✅ **Adopt the reconcile contract** — K8s `sync`→`reconcile`; `WorkerProvider`
-   → `providers/rpc/backend.py` `RpcTaskBackend`; controller drives both through
-   `reconcile`, no `isinstance`; delete `controller/provider.py`. (Scheduler +
-   Autoscaler still controller-owned at this point.)
-3. ✅ **Move scheduling into the backend** — `backend.schedule(snapshot)`;
-   `RpcTaskBackend` owns the (stateless) `Scheduler` and runs preference +
-   find_assignments + preemption; K8s no-op. Controller scheduling loop becomes
-   read-snapshot → schedule → commit.
-4. ✅ **Move autoscaling into the backend, DB-less** — `ScalingGroup`/`Autoscaler`
-   are DB-less (in-memory state authoritative, exposed via `persistable_state()`);
-   `RpcTaskBackend` owns the autoscaler; `backend.manage_capacity(snapshot)` +
-   `backend.on_workers_failed(...)`; K8s no-op. Controller autoscale loop +
-   worker-failure path are thin dispatch + wholesale state sync
-   (`persist_autoscaler_state`). Construction attaches the autoscaler to the
-   backend (`attach_autoscaler`); `main.py`/`Controller.__init__` simplified.
-5. ✅ **Relocate scheduling primitives** — `scheduler.py`/`scheduling_policy.py`
-   into `controller/scheduling/` (`scheduler.py` + `policy.py`); pure import churn.
-6. ✅ **Dashboard descriptor** — `/auth/config` serves a backend descriptor
-   (name/placement/manages_capacity/capabilities); `App.vue` filters one tab list
-   by capabilities; `provider_kind` retired. (Frontend `build:check` is red on
-   `main` independently — TS 6.0.3 pin from #6173; the App.vue change is type-clean.)
-7. ✅ **Docs** — architecture.md (contract + retired boundary debt), AGENTS.md,
-   README, coreweave.md, and the archived record
-   `.agents/projects/2026-06-06_iris_task_backend_contract.md`. (OPS.md needed no
-   change — its references were already current.)
-
-The reconcile refactor already proved this functional-core boundary is testable
-in isolation; we lean on `providers/gcp/fake.py`, `providers/k8s/fake.py`, the
-autoscaler tests, and the controller test suite as the regression net.
-
-Rationale for one PR: a half-migrated contract (reconcile unified but scheduling/
-autoscaling still controller-owned, or `has_direct_provider` still UI-shaped) is
-a worse intermediate state to review than one cohesive change proving the whole
-model works together.
-
-### Q3: Async operations
-
-Every control activity becomes a backend method driven by a controller loop on
-its own cadence. The controller keeps the *threads* (it owns timing); the backend
-owns the *logic*. What each becomes:
-
-| Operation | Today | This PR | Principle |
-|-----------|-------|---------|-----------|
-| **Status / profile / exec** | sync RPC handler → provider | on-demand `TaskBackend` method via `TaskTarget`, called from the RPC handler | request/response, **not** loop-driven |
-| **Liveness ping** | `_run_ping_loop` (5s) → `provider.ping_workers` | `backend.ping_workers` (IRIS) / no-op (BACKEND); ping thread runs only when meaningful | per-backend liveness |
-| **Scheduling** | `_run_scheduling_loop` runs Scheduler + preemption *in the controller* | `backend.schedule(snapshot) -> decisions`; controller reads the snapshot and commits the result | logic in the backend; controller reads/commits |
-| **Autoscaling** | `_run_autoscaler_loop` drives a controller-owned, DB-writing `Autoscaler` | `backend.manage_capacity(snapshot) -> deltas`; the backend owns the (now DB-less) autoscaler and does the cloud I/O; controller applies deltas | logic in the backend; **slow I/O on its own cadence, never the 1s reconcile path** |
-
-The governing principle: **each loop reads a snapshot, calls one backend method,
-commits; fast backend I/O (kubectl apply, worker RPC with hard
-`ThreadPoolExecutor` timeouts) runs in-tick; slow infra I/O (VM provisioning,
-10–60 s) stays on the autoscaler cadence and its effects are observed on a later
-tick** (eventual consistency — "create a slice now, see its worker register
-later"). This is *why* the loops keep separate cadences rather than collapsing
-into one 1s tick. The autoscaler is made DB-less by returning slice/scaling-group
-deltas the controller persists (see [Making the autoscaler DB-less](#making-the-autoscaler-db-less)),
-so the backend owns the logic without owning a DB handle.
-
-### Q4: Documentation
-
-| Doc | Change |
-|-----|--------|
-| `lib/iris/AGENTS.md` | **Source Layout** (new `providers/rpc/`, `cluster/backend_types.py`, `scheduling/` layer; deleted `controller/provider.py`); **Architecture Notes** (replace "two execution models" framing with the `TaskBackend` contract + `placement`/`manages_capacity` capabilities) |
-| `lib/iris/docs/coreweave.md` | reframe `runtime=kubernetes` / "direct provider" language as "the CoreWeave backend (`placement=BACKEND`)" |
-| `lib/iris/README.md` | overview/provider section, if it enumerates providers |
-| `lib/iris/OPS.md` | any provider-type-specific operational commands / dashboard tab references |
-| **New** `.agents/projects/2026-06-06_iris_task_backend_contract.md` | durable archived design record (this plan, distilled), per the `2026*_iris_*.md` convention — the repo's canonical home for implemented design docs |
-| `docs/task-states.md` | review only — the task state machine is unchanged by Stage 1 |
-| dashboard docs / comments | tab model is now capability-driven |
+Each controller loop keeps its cadence (scheduling ~10s adaptive, reconcile 1s,
+autoscale ~10s, ping 5s) but its body is read-snapshot → call-backend → commit.
+The autoscaler is DB-less: `ScalingGroup`/`Autoscaler` hold in-memory state as
+authoritative and expose `persistable_state() -> AutoscalerState`;
+`manage_capacity` / `on_workers_failed` return it and the controller does a
+wholesale state sync (`persist_autoscaler_state`). Startup restore is a one-time
+controller-owned bootstrap (`restore_from_db`, then `attach_autoscaler`).
 
 ---
 
@@ -447,31 +119,24 @@ flowchart TD
         LOOPS["loops: schedule · reconcile · manage_capacity · ping<br/>each: read snapshot → call backend → commit"]
         DB[("SQLite<br/>tasks · workers · jobs · slices")]
     end
-
     subgraph contract["controller/backend.py — the contract"]
-        TB["TaskBackend Protocol<br/>schedule · reconcile · manage_capacity<br/>ping · on_workers_failed · status · caps"]
+        TB["TaskBackend Protocol<br/>schedule · reconcile · manage_capacity<br/>ping · on_workers_failed · caps"]
     end
-
-    subgraph impls["providers/&lt;backend&gt;/ — implementations"]
-        RPC["rpc/RpcTaskBackend · placement=IRIS<br/>owns Scheduler + Autoscaler<br/>(gcp · manual · local)"]
-        K8S["k8s/K8sTaskProvider · placement=BACKEND<br/>dispatches to Kueue + cluster autoscaler"]
+    subgraph impls["cluster/backends/&lt;backend&gt;/ — implementations"]
+        RPC["rpc/RpcTaskBackend · placement=IRIS_CONTROLLER<br/>owns Scheduler + Autoscaler (gcp · manual · local)"]
+        K8S["k8s/K8sTaskProvider · placement=TASK_BACKEND<br/>dispatches to Kueue + cluster autoscaler"]
         SLURM["slurm/… (future)"]
     end
-
-    subgraph prim["scheduling/ — shared primitives (backend-neutral)"]
-        SP["scheduler.py · scheduling_policy.py · autoscaler/"]
-        CN["constraints.py"]
+    subgraph prim["controller/scheduling/ + autoscaler/ — shared primitives"]
+        SP["scheduler.py · policy.py · decision.py · autoscaler/"]
     end
-
-    INFRA["WorkerInfraProvider · ControllerProvider<br/>(providers/protocols.py)"]
-
+    INFRA["WorkerInfraProvider · ControllerProvider<br/>(backends/protocols.py)"]
     LOOPS --> DB
     LOOPS -->|"snapshot in · decisions/deltas out (DB-less)"| TB
     TB -.implemented by.-> RPC
     TB -.implemented by.-> K8S
     TB -.implemented by.-> SLURM
     RPC --> SP
-    SP --> CN
     RPC --> INFRA
 ```
 
@@ -479,110 +144,145 @@ flowchart TD
 
 ## Tasks
 
-The one PR, as a commit spiral. T1–T2 are landed; T3–T7 remain.
+### Stage 1 — the contract (one PR, commit spiral) — all ✅
 
-### T1 — Contract + neutral reconcile types  `exec: session`  `value: high`  `deps: —`  ✅
+- **T1 — Contract + neutral reconcile types** ✅ — `controller/backend.py`:
+  `TaskBackend`, `PlacementOwner`, `BackendReconcileInput/Result`,
+  `ClusterCapacity`, `SchedulingEvent`, `PingResult`, `TaskTarget`.
+- **T2 — Adopt the reconcile contract** ✅ — K8s `sync`→`reconcile`;
+  `WorkerProvider`→`backends/rpc/backend.py` `RpcTaskBackend`; controller drives
+  both via `reconcile`, no `isinstance`; deleted `controller/provider.py`.
+- **T3 — Scheduling into the backend** ✅ — `backend.schedule(snapshot)`;
+  `RpcTaskBackend` owns the stateless `Scheduler`; K8s no-op.
+- **T4 — Autoscaling into the backend, DB-less** ✅ — `manage_capacity` /
+  `on_workers_failed`; wholesale state sync; `attach_autoscaler`.
+- **T5 — Name the shared scheduling layer** ✅ — `controller/scheduling/`.
+- **T6 — Capability-driven dashboard** ✅ — `/auth/config` backend descriptor;
+  `App.vue` filters one tab list by capabilities; `provider_kind` retired.
+- **T7 — Documentation** ✅ — architecture.md, AGENTS.md, README, coreweave.md,
+  archived design record.
 
-`controller/backend.py`: `TaskBackend`, `Placement`, `BackendReconcileInput/Result`,
-`ClusterCapacity`, `SchedulingEvent`, `PingResult`, `TaskTarget`,
-`ProviderError`/`ProviderUnsupportedError`; renamed out of `direct_provider.py`.
+### Cleanup pass (PR review response)
 
-### T2 — Adopt the reconcile contract across providers + controller + service  `exec: session`  `value: high`  `deps: T1`  ✅
+Each is its own commit. Structural renames are pure moves + import rewrites
+(behavior-preserving, verified by pyrefly + `tests/cluster`).
 
-K8s `sync`→`reconcile`; `WorkerProvider`→`providers/rpc/backend.py` `RpcTaskBackend`;
-controller drives both via `reconcile` with no `isinstance`; on-demand RPCs via
-`TaskTarget`; `main.py` autoscaler gate on `manages_capacity`; delete
-`controller/provider.py`.
+- **C1 — `cluster/providers` → `cluster/backends`** ✅ — vocabulary clash from
+  review ("can't have backend.py and a providers/ module"): the package
+  implements the `TaskBackend` contract (rpc, k8s) plus the machine-lifecycle
+  providers those backends drive (gcp, manual, local). `WorkerInfraProvider` /
+  `ControllerProvider` keep the "provider" name. 88 files, import rewrite only.
+- **C2 — `autoscaler_factory.py` → `autoscaler/factory.py`** ✅ — the package
+  `__init__` does not import it, so the `config` import inside still resolves
+  without a cycle.
+- **C3 — `direct_provider.py` → `reconcile/dispatch.py`** ✅ — answers the review
+  question "should it be in backends/k8s?": no. It reads *and writes* the DB in a
+  controller transaction (the `TASK_BACKEND` reconcile-input builder, counterpart
+  to `reconcile/worker.py`), so it belongs with the reconcile thin-I/O layer, not
+  a DB-less backend.
+- **C4 — `Placement` → `PlacementOwner {IRIS_CONTROLLER, TASK_BACKEND}`** ✅ —
+  reads clearly at the comparison sites; wire values follow the member names
+  (`/auth/config` consumes the placement string opaquely).
+- **C5 — `Controller._provider` → `_task_backend`** ✅ — field name matches the
+  contract; also trimmed a superfluous "applied in one transaction" docstring.
+- **C6 — Scheduling decision passes renamed + relocated** ✅ — `_placement_pass`
+  → `apply_placements`, `_preemption_pass` → `apply_preemptions`,
+  `_job_scheduling_diagnostics` → `compute_diagnostics`. `apply_preemptions` and
+  `compute_diagnostics` reference only scheduling-layer types and moved to
+  `scheduling/decision.py`; `apply_placements` stays in `backend.py` (it needs the
+  controller-layer `ReservationClaim`, and moving it would make `scheduling/`
+  import the controller layer). Also fixed three contract docstrings to state
+  what the data *is*, not how it is assembled.
+- **C7 — `direct_provider` → `dispatch` vocabulary retirement** ✅ —
+  `drain_for_direct_provider`→`drain_for_dispatch`,
+  `DIRECT_PROVIDER_PROMOTION_RATE`→`DISPATCH_PROMOTION_RATE`,
+  `writes.promote_to_direct_provider`→`promote_for_dispatch`,
+  `ops.task.apply_direct_provider_updates`→`apply_dispatch_updates`,
+  `TransitionSource.DIRECT_PROVIDER`→`DISPATCH`, and the `_sync_dispatch` /
+  `_run_dispatch_loop` controller methods. Safe per the user: none of this goes
+  over the wire (the `direct_provider` term in proto is config-parsing only).
 
-### T3 — Move scheduling into the backend  `exec: session`  `value: high`  `deps: T2`  ✅
-
-Add `schedule(ScheduleInput) -> ScheduleResult` to the contract. `RpcTaskBackend`
-owns the (stateless) `Scheduler` and runs the preference + `find_assignments` +
-preemption decision; K8s returns an empty result. Controller's scheduling loop
-becomes read-snapshot → `backend.schedule` → commit (assignments / preemptions /
-unschedulable). All scheduling *decision* logic leaves `controller.py`; the DB
-read (`build_scheduling_context`, running-task info for preemption) and the commit
-stay. Reservation-claim refresh stays controller-owned (it is DB read+write).
-
-### T4 — Move autoscaling into the backend, DB-less  `exec: session`  `value: high`  `deps: T3`  ✅
-
-Made `ScalingGroup`/`Autoscaler` DB-less: dropped their `db` handles; mutations
-update in-memory state only, and the autoscaler exposes its tracked slices/groups
-via `persistable_state() -> AutoscalerState`. Added
-`manage_capacity(CapacityInput) -> CapacityResult` and
-`on_workers_failed(worker_ids) -> WorkersFailedResult` to the contract;
-`RpcTaskBackend` owns the autoscaler and performs the cloud I/O; K8s no-ops.
-Controller's autoscale loop + worker-failure path are read-snapshot →
-backend-call → **wholesale state sync** (`persist_autoscaler_state` upserts
-present `slices`/`scaling_groups` rows and deletes slice rows no longer tracked;
-fails sibling workers). Startup restore stays controller-owned (`main()` reads the
-checkpoint via `restore_from_db`, then `attach_autoscaler`s the seeded autoscaler
-to the backend — the one-time bootstrap DB touch). `Controller.__init__` dropped
-its `autoscaler` param; `Controller.autoscaler` is now a read-only proxy over the
-backend for dashboard/status RPCs. `tests/cluster/controller/test_autoscaler*.py`
-green, full `tests/cluster` green, pyrefly clean.
-
-### T5 — Name the shared scheduling layer  `exec: session`  `value: medium`  `deps: T4`  ✅
-
-Grouped `scheduler.py` / `scheduling_policy.py` under `controller/scheduling/`
-(`scheduler.py` + `policy.py`) — the package the backends compose. `constraints.py`
-and `controller/autoscaler/` stay where they are. Pure import churn; full
-`tests/cluster` green, pyrefly clean.
-
-### T6 — Capability-driven dashboard  `exec: session`  `value: medium`  `deps: T2`  ✅
-
-`/auth/config` serves a backend descriptor (`name`/`placement`/`manages_capacity`/
-`capabilities`) built by `backend_descriptor(backend)`; `App.vue` filters a single
-tab list by the advertised capabilities (`workers`/`autoscaler`/`cluster`) instead
-of two hard-coded lists; the `provider_kind` binary is retired. The internal
-`has_direct_provider` property + RPC gates stay (placement-based, correct).
-`test_dashboard.py` asserts the descriptor for both backends (43 passed, pyrefly
-clean). `App.vue` is type-clean; note `npm run build:check` is already red on
-`main` (TypeScript `^6.0.3` pin from #6173 vs 5.x-era code — unrelated to this PR).
-
-### T7 — Documentation  `exec: session`  `value: medium`  `deps: T4, T6`  ✅
-
-Updated `architecture.md` (contract + retired the TaskProvider/isinstance boundary
-debt), `AGENTS.md`, `README.md`, `coreweave.md`; wrote the archived design record
-`.agents/projects/2026-06-06_iris_task_backend_contract.md`. OPS.md needed no
-change (references already current).
+- **C8 — Lift `running_for_preemption` into `build_scheduling_context`** ⬜ —
+  review comment at `controller.py:847` ("move this into get_scheduling_context?").
+  The preemption-band DB read currently sits between context-build and
+  `backend.schedule`. Pass `claims` into `build_scheduling_context` and read it
+  there so the controller's scheduling tick is one read + one backend call + one
+  commit. `value: medium`.
+- **C9 — Backend construction: factory builds+attaches the autoscaler; one log
+  client** ⬜ — review comments at `main.py:187` ("the factory should do this, not
+  hacks here — the rpc backend builds+attaches the autoscaler at setup, k8s
+  doesn't") and `controller.py:345` ("make the backend constructor accept
+  `self._log_client`; rpc et al may ignore it"). Move the autoscaler
+  build+`restore_from_db`+`attach_autoscaler` into the backend factory keyed on
+  `manages_capacity`, and pass the single controller `LogClient` into the backend
+  (drop the duplicate `LogClient.connect` for the k8s log sink). `value: medium`.
+- **C10 — Uniform loop spawning (design)** ⬜ — review comments at
+  `controller.py:528` and `:574`: "run the same loops for all backends; k8s just
+  has a no-op polling/autoscaler loop." Today `start()` branches on `placement`
+  to spawn either the dispatch loop or the scheduling/polling/ping loops, and
+  gates the autoscaler loop on `manages_capacity`. Target: always spawn the loop
+  set; the backend's no-op `schedule`/`manage_capacity`/`ping_workers` make the
+  k8s versions cheap no-ops. Needs care — the dispatch loop and the
+  scheduling+polling loops are genuinely different bodies today; unifying them is
+  the "make the controller a pure dispatch point" step. `value: medium`,
+  `deps: keep behavior identical`.
+- **C11 — `on_workers_failed` shape (design)** ⬜ — review comment at
+  `controller.py:1233`: "we just called the backend to reconcile — doesn't it
+  already know the failed workers? this feels weird." Re-examine why the
+  controller calls `ops.worker.fail` then passes the failed worker ids to
+  `backend.on_workers_failed`; fold the worker-failure signal into the reconcile
+  return or otherwise remove the double-handling. `value: medium`.
+- **C12 — Retire the `has_direct_provider` provider-status field** ⬜ — distinct
+  from the dispatch drain (it is the `GetProviderStatus` RPC's
+  `has_direct_provider` bool + the `Controller.has_direct_provider` property +
+  service gates). Post-T6 the dashboard reads capabilities from `/auth/config`, so
+  this internal flag and possibly the whole `GetProviderStatus` RPC may be
+  removable rather than renamed. Touches `controller.proto` (regen) +
+  `service.py` + test mocks. `value: low`, `deps: assess remove-vs-rename`.
+- **C13 — Doc sync for the renames** ⬜ — update path/prose references for
+  `backends/`, `PlacementOwner`, `dispatch`, `scheduling/decision.py` in
+  `lib/iris/docs/architecture.md`, `AGENTS.md`, `TESTING.md`, `coreweave.md`,
+  `reconcile_rpc.md`, and the archived design record. `value: low`.
 
 ---
 
 ## Beyond this PR
 
-Sketch only, for context (each = one chonky PR):
+Sketch only (each = one chonky PR):
 
-- **Slurm backend.** `placement=BACKEND`, `manages_capacity=True`;
-  `sbatch`/`squeue`/`sacct`; reuse the contract. Open question carried from the
-  issue: worker daemon inside the allocation (reuse `RpcTaskBackend`) vs direct
-  sbatch launch (closer to k8s).
+- **Slurm backend.** `placement=TASK_BACKEND`, `manages_capacity=True`;
+  `sbatch`/`squeue`/`sacct`; reuse the contract. Open question: worker daemon
+  inside the allocation (reuse `RpcTaskBackend`) vs direct sbatch launch (closer
+  to k8s).
 - **Multi-backend.** `Controller` accepts `list[TaskBackend]`; a meta-scheduler
-  routes pending tasks to backends by constraint/selector; capacity + reconcile
-  fan out per backend in parallel.
-- **Single-tick collapse (optional).** If cadences allow, fold the per-activity
-  loops into one driving tick. Deferred — separate cadences + slow provisioning
-  I/O are load-bearing today.
+  routes pending tasks by constraint/selector; capacity + reconcile fan out per
+  backend.
+- **Single-tick collapse (optional).** Fold the per-activity loops into one
+  driving tick if cadences allow. Deferred — separate cadences + slow provisioning
+  I/O are load-bearing today. C10 is the prerequisite groundwork.
 
 ---
 
 ## Resolved decisions
 
-- <a id="naming"></a>**Naming: `TaskBackend`** for the new contract (confirmed).
-  "Provider" stays for the infra protocols (`ControllerProvider`,
-  `WorkerInfraProvider`); the bare `TaskProvider` name is retired.
-- **PR size: one PR for all of Stage 1** (T1–T7), validated end-to-end; commits
-  are the spiral within it.
+- **Naming: `TaskBackend`** for the contract; **`PlacementOwner`** for the
+  scheduling-owner enum. "Provider" stays for the infra protocols
+  (`ControllerProvider`, `WorkerInfraProvider`); the bare `TaskProvider` is gone.
+- **The contract module stays in `controller/`** — it references controller-layer
+  scheduling/reconcile/autoscaler types; relocating it into `backends/` would
+  cycle. Renaming `providers/`→`backends/` resolves the vocabulary clash without
+  the cycle.
+- **`direct_provider.py` is controller-side**, not a backend module — it owns DB
+  I/O. Renamed to `reconcile/dispatch.py`.
+- **One PR for all of Stage 1** (T1–T7); the cleanup pass lands as further
+  commits on the same PR.
 
-## Open questions (carried into implementation, decide as we hit them)
+## Open questions
 
-- **Where the neutral types live** — `cluster/backend_types.py` (proposed) vs
-  reusing `cluster/types.py`; and whether to move `TaskUpdate` out of
-  `controller/reconcile/snapshot.py` or re-export it to avoid `providers→controller`.
-  *Leaning:* new `cluster/backend_types.py`; re-export `TaskUpdate` to avoid a wide move.
-- **Liveness for `placement=IRIS`** — keep the dedicated ping thread (preserves the
-  5 s heartbeat cadence + fast failure detection) vs. fold the heartbeat into
-  `reconcile`'s return. *Leaning:* keep the ping thread, gated by capability — least
-  behavioral risk for Stage 1.
-- **Dashboard descriptor transport** — extend `/auth/config` (already fetched on
-  load) vs. a dedicated `GetBackendInfo` RPC. *Leaning:* extend `/auth/config`.
+- **C10 loop unification depth** — make the k8s loops cheap no-ops in place, or
+  actually merge the dispatch loop and the scheduling/polling loops into one
+  reconcile tick? *Leaning:* no-op-in-place first (lowest behavioral risk), full
+  merge as Stage-2 groundwork.
+- **C12 `GetProviderStatus`** — rename the field, or delete the RPC now that the
+  dashboard is capability-driven? *Leaning:* check for remaining consumers; delete
+  if dead.

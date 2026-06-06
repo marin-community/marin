@@ -57,7 +57,7 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.db import Tx as _Tx
-from iris.cluster.controller.reconcile import direct_provider
+from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.managed_thread import ThreadContainer
 
@@ -1385,19 +1385,19 @@ def benchmark_polling(db: ControllerDB) -> None:
 
         def _template_first():
             # Fresh cache to defeat the LRU cache on every call.
-            cold_cache = direct_provider.RunTemplateCache()
+            cold_cache = dispatch.RunTemplateCache()
             with db.read_snapshot() as snap:
-                direct_provider.run_request_template(cold_cache, snap, first_job)
+                dispatch.run_request_template(cold_cache, snap, first_job)
 
         bench("Polling: run_request_template (cold, per-job build)", _template_first)
 
         # Warm cache: same job repeatedly.
         with db.read_snapshot() as snap:
-            direct_provider.run_request_template(txns._run_template_cache, snap, first_job)
+            dispatch.run_request_template(txns._run_template_cache, snap, first_job)
 
         def _template_warm():
             with db.read_snapshot() as snap:
-                direct_provider.run_request_template(txns._run_template_cache, snap, first_job)
+                dispatch.run_request_template(txns._run_template_cache, snap, first_job)
 
         bench("Polling: run_request_template (cached hit)", _template_warm)
 
@@ -2483,9 +2483,7 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
             if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
                 continue
             if row.job_id not in templates_by_job:
-                templates_by_job[row.job_id] = direct_provider.run_request_template(
-                    txns._run_template_cache, snap, row.job_id
-                )
+                templates_by_job[row.job_id] = dispatch.run_request_template(txns._run_template_cache, snap, row.job_id)
 
     rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in worker_ids}
     for row in rows:

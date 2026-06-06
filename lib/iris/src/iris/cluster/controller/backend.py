@@ -21,7 +21,7 @@ Two execution models exist, distinguished by :attr:`TaskBackend.placement`:
   placement. The controller passes the desired ``tasks_to_run`` plus the
   ``running_tasks`` snapshot; the backend converges its own resources and
   returns pre-computed ``updates`` applied through
-  ``ops.task.apply_direct_provider_updates`` (``DIRECT_PROVIDER`` source).
+  ``ops.task.apply_dispatch_updates`` (``DISPATCH`` source).
 
 The two apply paths are NOT interchangeable — they emit different effects — so
 the controller selects between them on the declared ``placement`` capability

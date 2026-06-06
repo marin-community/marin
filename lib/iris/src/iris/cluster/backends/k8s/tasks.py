@@ -169,7 +169,7 @@ def _pod_group_name(task_id: JobName, attempt_id: int) -> str:
 
     Keyed by the job (parent path) so all siblings join one group, and by
     attempt_id as the generation key. A full-gang requeue bumps every
-    sibling's attempt in lockstep (drain_for_direct_provider promotes the gang
+    sibling's attempt in lockstep (drain_for_dispatch promotes the gang
     all-or-none), so the retry gets a fresh pod-group-name and a fresh atomic
     admission; Kueue never resurrects the prior generation's Workload.
     """

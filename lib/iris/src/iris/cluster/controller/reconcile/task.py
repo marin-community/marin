@@ -59,7 +59,7 @@ class TransitionSource(StrEnum):
     """Caller policy for side effects attached to task-state updates."""
 
     WORKER_RECONCILE = "worker_reconcile"
-    DIRECT_PROVIDER = "direct_provider"
+    DISPATCH = "dispatch"
 
 
 @dataclass(frozen=True, slots=True)

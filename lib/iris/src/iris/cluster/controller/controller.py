@@ -51,7 +51,7 @@ from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.ops.task import (
     Assignment,
-    apply_direct_provider_updates,
+    apply_dispatch_updates,
     finalize,
 )
 from iris.cluster.controller.ops.worker import (
@@ -60,9 +60,9 @@ from iris.cluster.controller.ops.worker import (
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.pruner import prune_old_data
-from iris.cluster.controller.reconcile import direct_provider
-from iris.cluster.controller.reconcile.direct_provider import (
-    DIRECT_PROVIDER_PROMOTION_RATE,
+from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.reconcile.dispatch import (
+    DISPATCH_PROMOTION_RATE,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import (
@@ -299,7 +299,7 @@ class Controller:
         self._provider_scheduling_events: list[SchedulingEvent] = []
         self._provider_capacity: ClusterCapacity | None = None
         self._promotion_bucket = TokenBucket(
-            capacity=DIRECT_PROVIDER_PROMOTION_RATE,
+            capacity=DISPATCH_PROMOTION_RATE,
             refill_period=Duration.from_minutes(1),
         )
 
@@ -400,7 +400,7 @@ class Controller:
         self._server: uvicorn.Server | None = None
         self._scheduling_thread: ManagedThread | None = None
         self._polling_thread: ManagedThread | None = None
-        self._direct_provider_thread: ManagedThread | None = None
+        self._dispatch_thread: ManagedThread | None = None
         self._autoscaler_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
         self._ping_thread: ManagedThread | None = None
@@ -527,7 +527,7 @@ class Controller:
             logger.info("[DRY-RUN] Controller started in dry-run mode — all side effects suppressed")
 
         if self._task_backend.placement is PlacementOwner.TASK_BACKEND:
-            self._direct_provider_thread = self._threads.spawn(self._run_direct_provider_loop, name="provider-loop")
+            self._dispatch_thread = self._threads.spawn(self._run_dispatch_loop, name="dispatch-loop")
         else:
             self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
             self._polling_thread = self._threads.spawn(self._run_polling_loop, name="polling-loop")
@@ -614,9 +614,9 @@ class Controller:
         if self._polling_thread:
             self._polling_thread.stop()
             self._polling_thread.join(timeout=join_timeout)
-        if self._direct_provider_thread:
-            self._direct_provider_thread.stop()
-            self._direct_provider_thread.join(timeout=join_timeout)
+        if self._dispatch_thread:
+            self._dispatch_thread.stop()
+            self._dispatch_thread.join(timeout=join_timeout)
         if self._ping_thread:
             self._ping_thread.stop()
             self._ping_thread.join(timeout=join_timeout)
@@ -780,23 +780,23 @@ class Controller:
             except Exception:
                 logger.exception("Periodic checkpoint failed")
 
-    def _run_direct_provider_loop(self, stop_event: threading.Event) -> None:
+    def _run_dispatch_loop(self, stop_event: threading.Event) -> None:
         """Reconcile loop for BACKEND-placement backends: no scheduling, no workers."""
         limiter = RateLimiter(interval_seconds=self._config.heartbeat_interval.to_seconds())
         while not stop_event.is_set():
             if not limiter.wait(cancel=stop_event):
                 break
             try:
-                self._sync_direct_provider()
+                self._sync_dispatch()
             except Exception:
                 logger.exception("Direct provider sync round failed, will retry next interval")
 
-    def _sync_direct_provider(self) -> None:
+    def _sync_dispatch(self) -> None:
         if self._config.dry_run:
             return
         max_promotions = self._promotion_bucket.available
         with self._db.transaction() as cur:
-            batch = direct_provider.drain_for_direct_provider(
+            batch = dispatch.drain_for_dispatch(
                 cur,
                 cache=self._run_template_cache,
                 max_promotions=max_promotions,
@@ -805,7 +805,7 @@ class Controller:
             self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
         result = self._task_backend.reconcile(batch)
         with self._db.transaction() as cur:
-            apply_direct_provider_updates(
+            apply_dispatch_updates(
                 cur,
                 result.updates,
                 health=self._health,
@@ -1097,7 +1097,7 @@ class Controller:
                 if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
                     continue
                 if row.job_id not in templates_by_job:
-                    templates_by_job[row.job_id] = direct_provider.run_request_template(
+                    templates_by_job[row.job_id] = dispatch.run_request_template(
                         self._run_template_cache, snap, row.job_id
                     )
             timeout_decisions = self._scan_execution_timeouts(snap, now_ms) if scan_timeouts else []

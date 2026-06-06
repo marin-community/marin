@@ -10,11 +10,6 @@ transaction to produce the :class:`BackendReconcileInput` a TASK_BACKEND
 ``RunTaskRequest`` templates (LRU-cached) and per-attempt requests, and
 snapshots the running set. Because it owns DB I/O it lives controller-side, not
 in the DB-less backend.
-
-The ``direct_provider`` naming throughout (``drain_for_direct_provider``,
-``DIRECT_PROVIDER_PROMOTION_RATE``) predates the TaskBackend contract and is
-slated for retirement once the persisted ``TransitionSource.DIRECT_PROVIDER``
-and the ``has_direct_provider`` proto field are migrated.
 """
 
 from rigging.timing import Timestamp
@@ -36,7 +31,7 @@ from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, RunningTaskEn
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
-DIRECT_PROVIDER_PROMOTION_RATE = 128
+DISPATCH_PROMOTION_RATE = 128
 """Token bucket capacity for task promotion (pods per minute).
 
 The direct provider relies on the Kubernetes scheduler (and the cloud
@@ -190,11 +185,11 @@ def _dispatch_query(
     return [pending_dispatch_row(r) for r in cur.execute(stmt).all()]
 
 
-def drain_for_direct_provider(
+def drain_for_dispatch(
     cur: Tx,
     *,
     cache: RunTemplateCache,
-    max_promotions: int = DIRECT_PROVIDER_PROMOTION_RATE,
+    max_promotions: int = DISPATCH_PROMOTION_RATE,
 ) -> BackendReconcileInput:
     """Drain pending tasks and snapshot running tasks for a direct provider sync cycle.
 
@@ -231,7 +226,7 @@ def drain_for_direct_provider(
 
     def _promote(row: PendingDispatchRow) -> None:
         attempt_id = row.current_attempt_id + 1
-        writes.promote_to_direct_provider(cur, row.task_id, attempt_id, now_ms)
+        writes.promote_for_dispatch(cur, row.task_id, attempt_id, now_ms)
         tasks_to_run.append(build_run_request(cur, row, attempt_id))
 
     promoted_count = 0

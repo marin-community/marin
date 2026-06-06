@@ -18,10 +18,10 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller import ops
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.ops.task import Assignment, apply_direct_provider_updates
+from iris.cluster.controller.ops.task import Assignment, apply_dispatch_updates
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.reconcile import direct_provider
+from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.schema import task_attempts_table, tasks_table, workers_table
@@ -241,10 +241,10 @@ class ServiceTestHarness:
         """Run one K8s direct provider sync cycle."""
         assert self.k8s_provider is not None, "sync_k8s requires K8s harness"
         with self.db.transaction() as cur:
-            batch = direct_provider.drain_for_direct_provider(cur, cache=self.state._run_template_cache)
+            batch = dispatch.drain_for_dispatch(cur, cache=self.state._run_template_cache)
         result = self.k8s_provider.reconcile(batch)
         with self.db.transaction() as cur:
-            apply_direct_provider_updates(
+            apply_dispatch_updates(
                 cur,
                 result.updates,
                 health=self.state._health,

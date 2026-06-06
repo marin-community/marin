@@ -3,7 +3,7 @@
 
 """Per-job ``RunTaskRequest`` template cache.
 
-A leaf module so both the dispatch path (``direct_provider``) and the command
+A leaf module so both the dispatch path (``dispatch``) and the command
 layer (``ops.job``) can name the cache type without pulling the dispatch logic
 — and, transitively, the ``backend`` contract — into the ``ops`` aggregator's
 import graph.
