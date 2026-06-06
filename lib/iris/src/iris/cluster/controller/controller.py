@@ -295,7 +295,7 @@ class Controller:
 
         self._config = config
         self._stopped = False
-        self._provider: TaskBackend = provider
+        self._task_backend: TaskBackend = provider
         self._provider_scheduling_events: list[SchedulingEvent] = []
         self._provider_capacity: ClusterCapacity | None = None
         self._promotion_bucket = TokenBucket(
@@ -341,9 +341,9 @@ class Controller:
         # to the log server via RPC. K8s pods have no worker daemon, so the
         # provider also writes per-pod resource samples to iris.task itself —
         # mirroring what the worker daemon does on the GCE/TPU path.
-        if self._provider.placement is PlacementOwner.TASK_BACKEND:
+        if self._task_backend.placement is PlacementOwner.TASK_BACKEND:
             k8s_log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
-            self._provider.set_log_sink(
+            self._task_backend.set_log_sink(
                 k8s_log_client,
                 k8s_log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat),
                 k8s_log_client.get_table(PROFILE_NAMESPACE, IrisProfile),
@@ -526,7 +526,7 @@ class Controller:
         if self._config.dry_run:
             logger.info("[DRY-RUN] Controller started in dry-run mode — all side effects suppressed")
 
-        if self._provider.placement is PlacementOwner.TASK_BACKEND:
+        if self._task_backend.placement is PlacementOwner.TASK_BACKEND:
             self._direct_provider_thread = self._threads.spawn(self._run_direct_provider_loop, name="provider-loop")
         else:
             self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
@@ -572,7 +572,7 @@ class Controller:
             logger.info("Registered system endpoint %s -> %s", name, url)
         self._service._system_endpoints["/system/log-server"] = self._log_service_address
 
-        if not self._provider.manages_capacity and not self._config.dry_run:
+        if not self._task_backend.manages_capacity and not self._config.dry_run:
             self._autoscaler_thread = self._threads.spawn(self._run_autoscaler_loop, name="autoscaler-loop")
 
         if self._periodic_checkpoint_limiter is not None and not self._config.dry_run:
@@ -633,7 +633,7 @@ class Controller:
         self._threads.stop()
         # The backend owns the autoscaler now; close() shuts it down (terminates
         # VMs, stops the platform) and releases the backend's own resources.
-        self._provider.close()
+        self._task_backend.close()
 
         # Remove log handler before closing log resources to avoid errors
         # from late log records hitting a closed store or connection.
@@ -803,7 +803,7 @@ class Controller:
             )
         if batch.tasks_to_run:
             self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
-        result = self._provider.reconcile(batch)
+        result = self._task_backend.reconcile(batch)
         with self._db.transaction() as cur:
             apply_direct_provider_updates(
                 cur,
@@ -861,7 +861,7 @@ class Controller:
             self._last_scheduling_context = ctx
             return SchedulingOutcome.NO_PENDING_TASKS
 
-        result = self._provider.schedule(
+        result = self._task_backend.schedule(
             ScheduleInput(
                 context=ctx,
                 claims=claims,
@@ -927,9 +927,9 @@ class Controller:
     def _apply_preemptions(self, preemptions: list[TerminalDecision]) -> None:
         """Finalize the backend's PREEMPT decisions.
 
-        Applied in one transaction so slice evictions (the N siblings of a
-        coscheduled preemptor) are all-or-nothing. Victims stop on the next
-        reconcile tick: the planner drops them from the worker's desired set.
+        Slice evictions for a coscheduled preemptor's N siblings are
+        all-or-nothing. Victims stop on the next reconcile tick: the planner
+        drops them from the worker's desired set.
         """
         if not preemptions:
             return
@@ -1133,7 +1133,7 @@ class Controller:
         plans = build_reconcile_plans(inputs) if inputs.worker_ids else []
         if plans:
             reconcile_input = BackendReconcileInput(plans=plans, worker_addresses=addresses)
-            results = self._provider.reconcile(reconcile_input).worker_results
+            results = self._task_backend.reconcile(reconcile_input).worker_results
         else:
             results = []
 
@@ -1181,7 +1181,7 @@ class Controller:
                 break
             try:
                 workers = self._get_active_worker_addresses()
-                results = self._provider.ping_workers(workers)
+                results = self._task_backend.ping_workers(workers)
 
                 live_worker_ids: list[WorkerId] = []
                 for result in results:
@@ -1229,9 +1229,9 @@ class Controller:
         )
         removed: list[WorkerId] = []
         for wid, addr in failure_result.removed_workers:
-            self._provider.on_worker_failed(wid, addr)
+            self._task_backend.on_worker_failed(wid, addr)
             removed.append(wid)
-        failed_result = self._provider.on_workers_failed([wid for wid, _ in failure_result.removed_workers])
+        failed_result = self._task_backend.on_workers_failed([wid for wid, _ in failure_result.removed_workers])
         persist_autoscaler_state(self._db, failed_result.state)
         if failed_result.sibling_worker_ids:
             for wid in failed_result.sibling_worker_ids:
@@ -1245,7 +1245,7 @@ class Controller:
                 worker_attrs=self._worker_attrs,
             )
             for wid, addr in sibling_failures.removed_workers:
-                self._provider.on_worker_failed(wid, addr)
+                self._task_backend.on_worker_failed(wid, addr)
                 removed.append(wid)
         # Surviving-slice siblings stop on the next reconcile tick: the
         # planner drops them from the worker's desired set (or marks them
@@ -1273,7 +1273,7 @@ class Controller:
             workers,
             reservation_claims=read_reservation_claims(self._db),
         )
-        result = self._provider.manage_capacity(
+        result = self._task_backend.manage_capacity(
             CapacityInput(worker_status_map=worker_status_map, demand_entries=demand_entries)
         )
         persist_autoscaler_state(self._db, result.state)
@@ -1345,11 +1345,11 @@ class Controller:
 
     @property
     def provider(self) -> TaskBackend:
-        return self._provider
+        return self._task_backend
 
     @property
     def has_direct_provider(self) -> bool:
-        return self._provider.placement is PlacementOwner.TASK_BACKEND
+        return self._task_backend.placement is PlacementOwner.TASK_BACKEND
 
     @property
     def run_template_cache(self) -> RunTemplateCache:
@@ -1398,4 +1398,4 @@ class Controller:
         pending hints). Capacity is driven through ``backend.manage_capacity``,
         not this handle.
         """
-        return self._provider.autoscaler
+        return self._task_backend.autoscaler
