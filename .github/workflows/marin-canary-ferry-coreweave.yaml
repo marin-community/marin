@@ -39,7 +39,7 @@ on:
       num_layers:
         description: 'GPU MoE layer count'
         type: number
-        default: 19
+        default: 20
         required: false
       expert_parallel:
         description: 'Expert-parallel mesh axis size'
@@ -90,7 +90,7 @@ jobs:
       CANARY_ACCELERATOR: gpu
       CANARY_BATCH_SIZE: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.batch_size) || '8' }}
       CANARY_MODEL_DIM: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.model_dim) || '2560' }}
-      CANARY_NUM_LAYERS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.num_layers) || '19' }}
+      CANARY_NUM_LAYERS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.num_layers) || '20' }}
       CANARY_EXPERT_PARALLEL: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.expert_parallel) || '8' }}
       CANARY_OPTIMIZER_TOKENS: "10000000000000"
       CANARY_GPU_REPLICAS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.gpu_replicas) || '1' }}
