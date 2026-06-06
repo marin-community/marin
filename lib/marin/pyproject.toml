@@ -120,8 +120,14 @@ conflicts = [
         { extra = "cpu" },
     ],
     [
-        # The vllm extra ships vllm-tpu only, so it must use CPU/torch_xla
-        # torch rather than the cu128-pinned torch from the gpu extra.
+        # The vllm extra is its own TPU runtime and carries the vLLM fork's
+        # torch line, so do not combine it with the generic TPU extra.
+        { extra = "vllm" },
+        { extra = "tpu" },
+    ],
+    [
+        # The vllm extra is TPU-only, so it must use CPU/torch_xla torch
+        # rather than the cu128-pinned torch from the gpu extra.
         { extra = "vllm" },
         { extra = "gpu" },
     ],
@@ -191,15 +197,15 @@ vizier = [
 vllm = [
     "jax==0.9.2",
     "jaxlib==0.9.2",
-    "vllm-tpu==0.19.0",
-    "tpu-inference==0.19.0",
+    "vllm",
+    "tpu-inference",
     "triton==3.6.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
     # Pin torch + torchvision explicitly so the per-extra source map below
     # routes them to the pytorch-cpu index during fresh Iris resolves.
-    "torch==2.10.0",
-    "torchvision==0.25.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "torchvision==0.25.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
-    "torchvision==0.25.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
+    "torch==2.11.0",
+    "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torchvision==0.26.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
+    "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
 harbor = [
