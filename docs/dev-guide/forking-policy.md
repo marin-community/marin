@@ -10,7 +10,7 @@ maintaining such forks.
 1. **Host the fork in `marin-community/<package>`.**
    Do not pull the forked source tree into the Marin repo. Keep it as a
    standalone repository under the organization (e.g.
-   `marin-community/harbor`, `marin-community/vllm-tpu`).
+   `marin-community/harbor`, `marin-community/vllm`).
 
 2. **Set up CI to autobuild wheels on push to main.**
    Every push to the fork's `main` branch must produce a versioned wheel via
@@ -30,8 +30,9 @@ maintaining such forks.
 
 | Package | Repository | How Marin depends on it |
 |---------|-----------|------------------------|
-| Harbor  | [`marin-community/harbor`](https://github.com/marin-community/harbor) | Git dependency pinned to a commit rev in the root `pyproject.toml` |
-| vllm-tpu | [`marin-community/vllm-tpu`](https://github.com/marin-community/vllm-tpu) | PyPI version pin (`vllm-tpu==0.19.0`) in `lib/marin/pyproject.toml` |
+| Harbor | [`marin-community/harbor`](https://github.com/marin-community/harbor) | Git dependency pinned to a commit rev in the root `pyproject.toml` |
+| vllm | [`marin-community/vllm`](https://github.com/marin-community/vllm) | Git dependency pinned to a commit rev in the root `pyproject.toml`; installed by the `marin-core[vllm]` extra |
+| tpu-inference | [`marin-community/tpu-inference`](https://github.com/marin-community/tpu-inference) | Git dependency pinned to a commit rev in the root `pyproject.toml`; installed by the `marin-core[vllm]` extra |
 
 ## When to Fork
 
