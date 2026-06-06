@@ -56,6 +56,11 @@ on:
         type: number
         default: 10
         required: false
+      profiler_enabled:
+        description: 'Enable JAX profiler during the GPU canary'
+        type: boolean
+        default: true
+        required: false
       xla_flags:
         description: 'XLA_FLAGS passed to the GPU training container'
         type: string
@@ -99,6 +104,7 @@ jobs:
       # CoreWeave validation proceed independently of that fix.
       CANARY_PROFILER_START_STEP: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.profiler_start_step) || '5' }}
       CANARY_PROFILER_NUM_STEPS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.profiler_num_steps) || '10' }}
+      CANARY_PROFILER_ENABLED: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.profiler_enabled) || 'true' }}
       CANARY_TARGET_TOKENS: "655360"
       CANARY_CHILD_WAIT_TIMEOUT: "1800"
       CANARY_MIN_STEPS: "20"
@@ -182,6 +188,7 @@ jobs:
             -e CANARY_GPU_REPLICAS "$CANARY_GPU_REPLICAS" \
             -e CANARY_PROFILER_START_STEP "$CANARY_PROFILER_START_STEP" \
             -e CANARY_PROFILER_NUM_STEPS "$CANARY_PROFILER_NUM_STEPS" \
+            -e CANARY_PROFILER_ENABLED "$CANARY_PROFILER_ENABLED" \
             -e CANARY_TARGET_TOKENS "$CANARY_TARGET_TOKENS" \
             -e CANARY_MP "$CANARY_MP" \
             -e XLA_FLAGS "$CANARY_XLA_FLAGS" \
