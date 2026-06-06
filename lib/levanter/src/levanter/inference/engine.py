@@ -8,7 +8,7 @@ import os
 import time
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Optional, Sequence, cast
+from typing import Any, Callable, Optional, Sequence, cast
 
 import equinox as eqx
 import haliax as hax
@@ -1287,15 +1287,6 @@ class InferenceEngine:
         self.gen_state, outputs = new_state
         return PrefillAdmissionResult(outputs=outputs, plan=plan)
 
-    def _reject_diagnostic_multi_prefill(self, requests: Sequence[Request], diagnostic_name: str) -> None:
-        max_prefill_size = self.config.max_prefill_size or self.model.Pos.size
-        prompt_tokens = sum(len(request.prompt_tokens) for request in requests)
-        if prompt_tokens > max_prefill_size:
-            raise ValueError(
-                f"{diagnostic_name} does not support multi-prefill admission: aggregate prompt tokens "
-                f"{prompt_tokens} exceed max_prefill_size={max_prefill_size}. Use generate() for multi-prefill batches."
-            )
-
     def _prefill_prompts(
         self,
         requests: Sequence[Request],
@@ -1743,32 +1734,53 @@ class InferenceEngine:
             decode_tokens_per_iteration=decode_tokens_per_iteration,
         )
 
-    def generate_without_lm_head(self, requests: Sequence[Request]) -> GenerationResult:
-        """Diagnostic generation path that skips LM-head projection and sampling after prefill.
-
-        This is for performance attribution only. Prefill still uses normal logits and sampling so the decode queue
-        is seeded in the usual way; subsequent decode rounds run the transformer and cache update, then enqueue dummy
-        token IDs.
-        """
-        self._reject_diagnostic_multi_prefill(requests, "generate_without_lm_head")
+    def _generate_diagnostic(
+        self,
+        requests: Sequence[Request],
+        *,
+        decode_loop: Callable[
+            [GenState, LmHeadModel, int, int, TpuPagedAttentionConfig],
+            tuple[GenState, _DecodeOutputs],
+        ],
+        diagnostic_name: str,
+    ) -> GenerationResult:
         self.reset()
 
+        pending_requests = list(requests)
         call_rids = [int(r.request_id) for r in requests]
         expected_children: dict[int, int] = {rid: int(r.n_generations) for rid, r in zip(call_rids, requests)}
         apply_top_p = self._requests_need_top_p(requests)
+        prefill_admissions = 0
+        prefill_prompt_tokens_per_admission: list[int] = []
+        prefill_seconds_per_admission: list[float] = []
+        decode_seconds_per_iteration: list[float] = []
+        decode_device_seconds_per_iteration: list[float] = []
+        decode_host_seconds_per_iteration: list[float] = []
+        decode_submit_seconds_per_iteration: list[float] = []
+        decode_extract_seconds_per_iteration: list[float] = []
+        decode_tokens_per_iteration: list[int] = []
         for rid in call_rids:
             self.results[rid] = {
                 k: DecodeResult(id=rid, choice=k, token_list=[]) for k in range(expected_children[rid])
             }
 
-        prefill_start = time.time()
-        prefill_admission = self._prefill_batch(requests, apply_top_p=apply_top_p, return_logprobs=False)
-        _block_until_ready_optional((self.gen_state, None if prefill_admission is None else prefill_admission.outputs))
-        self._ingest_outputs(None if prefill_admission is None else prefill_admission.outputs)
-        prefill_seconds = time.time() - prefill_start
-        prefill_prompt_tokens_per_admission = (
-            [] if prefill_admission is None else [prefill_admission.plan.prompt_tokens]
-        )
+        def _admit_pending_prefill() -> int:
+            nonlocal pending_requests, prefill_admissions
+            if not pending_requests:
+                return 0
+            prefill_start = time.time()
+            prefill_admission = self._prefill_batch(pending_requests, apply_top_p=apply_top_p, return_logprobs=False)
+            _block_until_ready_optional(
+                (self.gen_state, None if prefill_admission is None else prefill_admission.outputs)
+            )
+            prefill_done = time.time()
+            if prefill_admission is None:
+                return 0
+            prefill_admissions += 1
+            prefill_prompt_tokens_per_admission.append(prefill_admission.plan.prompt_tokens)
+            prefill_seconds_per_admission.append(prefill_done - prefill_start)
+            pending_requests = pending_requests[prefill_admission.plan.request_count :]
+            return self._ingest_outputs(prefill_admission.outputs)
 
         def _all_done() -> bool:
             for rid, n_kids in expected_children.items():
@@ -1779,27 +1791,47 @@ class InferenceEngine:
                         return False
             return True
 
+        _admit_pending_prefill()
         stagnant_iters = 0
         for _ in range(self.config.max_seq_len // self.config.max_rounds):
             if _all_done():
                 break
+            iter_start = time.time()
+            iter_new_tokens = _admit_pending_prefill()
 
-            future_state, decode_outputs = _run_generation_loop_without_lm_head(
+            submit_start = time.time()
+            future_state, decode_outputs = decode_loop(
                 self.gen_state,
-                self.model,
+                self.model,  # type: ignore[arg-type]
                 self.config.imputed_max_tokens_per_round,
                 self.config.max_rounds,
                 self.config.tpu_paged_attention,
             )
+            submit_done = time.time()
+
+            device_start = time.time()
             _block_until_ready_optional((future_state, decode_outputs))
+            device_time = time.time() - device_start
             self.gen_state = future_state
-            new_tokens = self._ingest_outputs(decode_outputs)
+
+            extract_start = time.time()
+            decode_new_tokens = self._ingest_outputs(decode_outputs)
+            extract_time = time.time() - extract_start
+            new_tokens = iter_new_tokens + decode_new_tokens
+            iter_time = time.time() - iter_start
+            host_time = max(iter_time - device_time, 0.0)
+            decode_seconds_per_iteration.append(iter_time)
+            decode_device_seconds_per_iteration.append(device_time)
+            decode_host_seconds_per_iteration.append(host_time)
+            decode_submit_seconds_per_iteration.append(submit_done - submit_start)
+            decode_extract_seconds_per_iteration.append(extract_time)
+            decode_tokens_per_iteration.append(new_tokens)
             if new_tokens == 0 and int(jax.device_get(self.gen_state.decode_state.num_queued_tokens)) == 0:
                 stagnant_iters += 1
             else:
                 stagnant_iters = 0
             if stagnant_iters >= 2:
-                logger.warning("No progress in no-LM-head decoding for 2 consecutive iterations; breaking.")
+                logger.warning("No progress in %s decoding for 2 consecutive iterations; breaking.", diagnostic_name)
                 break
 
         outputs_list: list[list[int]] = []
@@ -1821,9 +1853,28 @@ class InferenceEngine:
             tokens=outputs_list,
             logprobs=None,
             total_generated=total_generated,
-            prefill_admissions=0 if prefill_admission is None else 1,
+            prefill_admissions=prefill_admissions,
             prefill_prompt_tokens_per_admission=prefill_prompt_tokens_per_admission,
-            prefill_seconds_per_admission=[] if prefill_admission is None else [prefill_seconds],
+            prefill_seconds_per_admission=prefill_seconds_per_admission,
+            decode_seconds_per_iteration=decode_seconds_per_iteration,
+            decode_device_seconds_per_iteration=decode_device_seconds_per_iteration,
+            decode_host_seconds_per_iteration=decode_host_seconds_per_iteration,
+            decode_submit_seconds_per_iteration=decode_submit_seconds_per_iteration,
+            decode_extract_seconds_per_iteration=decode_extract_seconds_per_iteration,
+            decode_tokens_per_iteration=decode_tokens_per_iteration,
+        )
+
+    def generate_without_lm_head(self, requests: Sequence[Request]) -> GenerationResult:
+        """Diagnostic generation path that skips LM-head projection and sampling after prefill.
+
+        This is for performance attribution only. Prefill still uses normal logits and sampling so the decode queue
+        is seeded in the usual way; subsequent decode rounds run the transformer and cache update, then enqueue dummy
+        token IDs.
+        """
+        return self._generate_diagnostic(
+            requests,
+            decode_loop=_run_generation_loop_without_lm_head,
+            diagnostic_name="no-LM-head",
         )
 
     def generate_with_lm_head_no_sampling(self, requests: Sequence[Request]) -> GenerationResult:
@@ -1832,80 +1883,10 @@ class InferenceEngine:
         This is for performance attribution only. It keeps the transformer, cache update, and LM-head projection live,
         then enqueues dummy token IDs without argmax/top-p/logprob work.
         """
-        self._reject_diagnostic_multi_prefill(requests, "generate_with_lm_head_no_sampling")
-        self.reset()
-
-        call_rids = [int(r.request_id) for r in requests]
-        expected_children: dict[int, int] = {rid: int(r.n_generations) for rid, r in zip(call_rids, requests)}
-        apply_top_p = self._requests_need_top_p(requests)
-        for rid in call_rids:
-            self.results[rid] = {
-                k: DecodeResult(id=rid, choice=k, token_list=[]) for k in range(expected_children[rid])
-            }
-
-        prefill_start = time.time()
-        prefill_admission = self._prefill_batch(requests, apply_top_p=apply_top_p, return_logprobs=False)
-        _block_until_ready_optional((self.gen_state, None if prefill_admission is None else prefill_admission.outputs))
-        self._ingest_outputs(None if prefill_admission is None else prefill_admission.outputs)
-        prefill_seconds = time.time() - prefill_start
-        prefill_prompt_tokens_per_admission = (
-            [] if prefill_admission is None else [prefill_admission.plan.prompt_tokens]
-        )
-
-        def _all_done() -> bool:
-            for rid, n_kids in expected_children.items():
-                kid_map = self.results.get(rid, {})
-                for cid in range(n_kids):
-                    dr = kid_map.get(cid)
-                    if dr is None or not dr.done:
-                        return False
-            return True
-
-        stagnant_iters = 0
-        for _ in range(self.config.max_seq_len // self.config.max_rounds):
-            if _all_done():
-                break
-
-            future_state, decode_outputs = _run_generation_loop_with_lm_head_no_sampling(
-                self.gen_state,
-                self.model,
-                self.config.imputed_max_tokens_per_round,
-                self.config.max_rounds,
-                self.config.tpu_paged_attention,
-            )
-            _block_until_ready_optional((future_state, decode_outputs))
-            self.gen_state = future_state
-            new_tokens = self._ingest_outputs(decode_outputs)
-            if new_tokens == 0 and int(jax.device_get(self.gen_state.decode_state.num_queued_tokens)) == 0:
-                stagnant_iters += 1
-            else:
-                stagnant_iters = 0
-            if stagnant_iters >= 2:
-                logger.warning("No progress in LM-head/no-sampling decoding for 2 consecutive iterations; breaking.")
-                break
-
-        outputs_list: list[list[int]] = []
-        for r in requests:
-            rid = int(r.request_id)
-            kid_map = self.results.get(rid, {})
-            for k in range(int(r.n_generations)):
-                dr = kid_map.get(k)
-                if dr is None:
-                    kid_map[k] = DecodeResult(id=rid, choice=k, token_list=[])
-                    dr = kid_map[k]
-                outputs_list.append(dr.token_list)
-            self.results[rid] = kid_map
-        total_generated = sum(len(seq_outputs) for seq_outputs in outputs_list)
-
-        for rid in call_rids:
-            self.results.pop(rid, None)
-        return GenerationResult(
-            tokens=outputs_list,
-            logprobs=None,
-            total_generated=total_generated,
-            prefill_admissions=0 if prefill_admission is None else 1,
-            prefill_prompt_tokens_per_admission=prefill_prompt_tokens_per_admission,
-            prefill_seconds_per_admission=[] if prefill_admission is None else [prefill_seconds],
+        return self._generate_diagnostic(
+            requests,
+            decode_loop=_run_generation_loop_with_lm_head_no_sampling,
+            diagnostic_name="LM-head/no-sampling",
         )
 
     def write_kernel_jaxprs(

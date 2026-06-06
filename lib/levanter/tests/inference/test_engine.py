@@ -367,7 +367,7 @@ def test_generate_admits_multiple_prefill_chunks_for_one_logical_batch():
 
 
 @pytest.mark.parametrize("method_name", ["generate_without_lm_head", "generate_with_lm_head_no_sampling"])
-def test_diagnostic_generation_rejects_aggregate_prefill_overflow(method_name):
+def test_diagnostic_generation_supports_multi_prefill(method_name):
     model = DummyModel(vocab_size=10, eos_id=3)
     service = InferenceEngine.from_model_with_config(
         model=model,  # type: ignore
@@ -400,8 +400,18 @@ def test_diagnostic_generation_rejects_aggregate_prefill_overflow(method_name):
         for request_id in range(3)
     ]
 
-    with pytest.raises(ValueError, match="aggregate prompt tokens"):
-        getattr(service, method_name)(requests)
+    result = getattr(service, method_name)(requests)
+
+    assert result.total_generated == 6
+    assert result.prefill_admissions == 2
+    assert result.prefill_prompt_tokens_per_admission == [4, 2]
+    assert len(result.prefill_seconds_per_admission) == 2
+    assert result.decode_seconds_per_iteration
+    assert len(result.decode_seconds_per_iteration) == len(result.decode_device_seconds_per_iteration)
+    assert len(result.decode_seconds_per_iteration) == len(result.decode_host_seconds_per_iteration)
+    assert len(result.decode_seconds_per_iteration) == len(result.decode_submit_seconds_per_iteration)
+    assert len(result.decode_seconds_per_iteration) == len(result.decode_extract_seconds_per_iteration)
+    assert 0 < sum(result.decode_tokens_per_iteration) <= result.total_generated
 
 
 def test_streaming_greedy_lm_head_returns_logprobs_without_materialized_logits():
