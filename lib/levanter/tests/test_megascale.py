@@ -19,6 +19,11 @@ class _FakeJobInfo:
 @dataclass(frozen=True)
 class _FakeResolveResult:
     is_empty: bool
+    url: str | None = None
+
+    def first(self):
+        assert self.url is not None
+        return self
 
 
 class _FakeRegistry:
@@ -37,12 +42,15 @@ class _FakeRegistry:
 
 
 class _FakeResolver:
-    def __init__(self, ready_tasks: set[int]):
+    def __init__(self, ready_tasks: set[int], coordinator: str):
         self.ready_tasks = ready_tasks
+        self.coordinator = coordinator
 
     def resolve(self, name: str) -> _FakeResolveResult:
+        if name == megascale.MEGASCALE_COORDINATOR_ENDPOINT:
+            return _FakeResolveResult(is_empty=False, url=self.coordinator)
         if not name.startswith(megascale.MEGASCALE_READY_ENDPOINT_PREFIX):
-            return _FakeResolveResult(is_empty=True)
+            raise AssertionError(f"unexpected endpoint lookup: {name}")
         task_index = int(name.removeprefix(megascale.MEGASCALE_READY_ENDPOINT_PREFIX))
         return _FakeResolveResult(is_empty=task_index not in self.ready_tasks)
 
@@ -60,11 +68,14 @@ def test_configure_megascale_skips_without_iris_slice_topology(monkeypatch):
 
 
 def test_configure_megascale_maps_iris_slice_topology_to_megascale_env(monkeypatch):
+    ready_tasks = set(range(8))
+    registry = _FakeRegistry(ready_tasks)
+    resolver = _FakeResolver(ready_tasks, coordinator="10.0.0.1:8081")
+
     monkeypatch.setenv(megascale.IRIS_SLICE_COUNT, "2")
     monkeypatch.setenv(megascale.IRIS_TASKS_PER_SLICE, "4")
     monkeypatch.setattr(megascale, "get_job_info", lambda: _FakeJobInfo(task_index=5, num_tasks=8))
-    monkeypatch.setattr(megascale, "_wait_for_all_tasks_ready", lambda *args, **kwargs: None)
-    monkeypatch.setattr(megascale, "_coordinator_address", lambda *args, **kwargs: "10.0.0.1:8081")
+    monkeypatch.setattr(megascale, "iris_ctx", lambda: _FakeIrisContext(registry=registry, resolver=resolver))
 
     env = megascale.configure_megascale_from_iris()
 
@@ -75,6 +86,7 @@ def test_configure_megascale_maps_iris_slice_topology_to_megascale_env(monkeypat
         "MEGASCALE_SLICE_ID": "1",
     }
     assert all(os.environ[key] == value for key, value in env.items())
+    assert registry.registered == [(f"{megascale.MEGASCALE_READY_ENDPOINT_PREFIX}5", "10.0.0.2")]
 
 
 def test_megascale_env_rejects_wrong_task_count(monkeypatch):
@@ -82,18 +94,3 @@ def test_megascale_env_rejects_wrong_task_count(monkeypatch):
 
     with pytest.raises(ValueError, match="Megascale expects 4"):
         megascale.megascale_env_for_iris_task(slice_count=2, tasks_per_slice=2)
-
-
-def test_wait_for_all_tasks_ready_registers_current_task_and_waits(monkeypatch):
-    ready_tasks = {0}
-    registry = _FakeRegistry(ready_tasks)
-    resolver = _FakeResolver(ready_tasks)
-    monkeypatch.setattr(megascale, "iris_ctx", lambda: _FakeIrisContext(registry=registry, resolver=resolver))
-
-    megascale._wait_for_all_tasks_ready(
-        _FakeJobInfo(task_index=1, num_tasks=2, advertise_host="10.0.0.3"),
-        timeout=1.0,
-        poll_interval=0.01,
-    )
-
-    assert registry.registered == [(f"{megascale.MEGASCALE_READY_ENDPOINT_PREFIX}1", "10.0.0.3")]
