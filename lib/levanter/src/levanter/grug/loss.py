@@ -78,6 +78,7 @@ def fused_linear_softmax_cross_entropy_loss(
     dtype: jnp.dtype = jnp.float32,
     precision: jax.lax.PrecisionLike = None,
     implementation: str | tuple[str, ...] | None = None,
+    vocab_axis: str | None = None,
 ) -> jax.Array:
     """Compute cross-entropy loss via the fused kernel path.
 
@@ -91,6 +92,9 @@ def fused_linear_softmax_cross_entropy_loss(
         dtype: Accumulator dtype for logits/logsumexp.
         precision: Optional matmul precision override for XLA/reference paths.
         implementation: Optional fused CE backend selection override.
+        vocab_axis: Optional mesh axis that shards the lm head vocab dimension
+            for the loss. Hidden/labels are replicated across this axis and the
+            per-shard logsumexp/label logits are reduced across it.
 
     Returns:
         If reduction=="none": array with shape labels.shape.
@@ -115,6 +119,83 @@ def fused_linear_softmax_cross_entropy_loss(
     weight_array = weight if weight is not None else jnp.ones_like(labels, dtype=dtype)
     batch_axis_spec = _batch_axis_spec(hidden) if has_mesh else None
     batch_axis_names = _axis_names_from_spec(batch_axis_spec) if has_mesh else ()
+
+    if has_mesh and vocab_axis is not None:
+        if vocab_axis not in mesh.shape:
+            raise ValueError(f"vocab_axis={vocab_axis!r} is not in mesh axes {tuple(mesh.shape)}")
+        vocab_axis_size = int(mesh.shape[vocab_axis])
+        if lm_head.shape[1] % vocab_axis_size != 0:
+            raise ValueError(
+                f"lm_head vocab size {lm_head.shape[1]} must be divisible by "
+                f"vocab_axis={vocab_axis!r} size {vocab_axis_size}"
+            )
+        vocab_batch_axis_names = tuple(name for name in batch_axis_names if name != vocab_axis)
+
+        def _vocab_sharded_loss(
+            shard_hidden: jax.Array,
+            shard_lm_head: jax.Array,
+            shard_labels: jax.Array,
+            shard_weight: jax.Array,
+        ) -> jax.Array:
+            flat_hidden = shard_hidden.reshape((-1, hidden_dim))
+            flat_labels = shard_labels.reshape((-1,)).astype(jnp.int32)
+            flat_weight = shard_weight.reshape((-1,))
+
+            local_vocab_size = shard_lm_head.shape[1]
+            vocab_start = jax.lax.axis_index(vocab_axis) * local_vocab_size
+            shifted_labels = flat_labels - jnp.asarray(vocab_start, dtype=jnp.int32)
+            local_labels = jnp.where(
+                flat_labels < 0, -1, jnp.where(shifted_labels < 0, local_vocab_size, shifted_labels)
+            )
+
+            local_logits = jax.lax.dot_general(
+                flat_hidden,
+                shard_lm_head,
+                (((1,), (0,)), ((), ())),
+                precision=precision,
+            ).astype(dtype)
+            local_lse = jax.nn.logsumexp(local_logits, axis=-1)
+            label_in_shard = (flat_labels >= 0) & (shifted_labels >= 0) & (shifted_labels < local_vocab_size)
+            safe_label_offsets = jnp.clip(local_labels, 0, local_vocab_size - 1)
+            local_label_logits = jnp.take_along_axis(local_logits, safe_label_offsets[:, None], axis=1).squeeze(-1)
+            local_label_logits = jnp.where(label_in_shard, local_label_logits, -jnp.inf)
+
+            lse_max = jax.lax.pmax(local_lse, vocab_axis)
+            global_lse = lse_max + jnp.log(jax.lax.psum(jnp.exp(local_lse - lse_max), vocab_axis))
+            global_label_logits = jax.lax.pmax(local_label_logits, vocab_axis)
+            loss = global_lse - global_label_logits
+            loss = jnp.where(flat_labels >= 0, loss, 0.0)
+
+            if logsumexp_weight is not None and logsumexp_weight != 0.0:
+                loss = loss + logsumexp_weight * (global_lse**2)
+
+            loss = loss * flat_weight.astype(loss.dtype)
+            if reduction_mode is None:
+                return loss.reshape(shard_labels.shape)
+
+            local_sum = jnp.sum(loss)
+            local_denom = jnp.sum(flat_weight)
+            total_sum = _psum_over_axes(local_sum, vocab_batch_axis_names)
+            if reduction_mode == "sum":
+                return total_sum
+            total_denom = _psum_over_axes(local_denom, vocab_batch_axis_names)
+            return jnp.where(total_denom != 0, total_sum / total_denom, jnp.zeros_like(total_denom))
+
+        hidden_spec = P("data", *(None for _ in range(hidden.ndim - 1)))
+        lm_head_spec = P(None, vocab_axis)
+        label_spec = P("data", *(None for _ in range(labels.ndim - 1)))
+        hidden = _reshard_for_shard_map(hidden, mesh, hidden_spec)
+        lm_head = _reshard_for_shard_map(lm_head, mesh, lm_head_spec)
+        labels = _reshard_for_shard_map(labels, mesh, label_spec)
+        weight_array = _reshard_for_shard_map(weight_array, mesh, label_spec)
+        out_specs = label_spec if reduction_mode is None else P()
+        return jax.shard_map(
+            _vocab_sharded_loss,
+            mesh=mesh,
+            in_specs=(hidden_spec, lm_head_spec, label_spec, label_spec),
+            out_specs=out_specs,
+            check_vma=False,
+        )(hidden, lm_head, labels, weight_array)
 
     def _loss_shard(
         shard_hidden: jax.Array,

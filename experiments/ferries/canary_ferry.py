@@ -115,6 +115,7 @@ def _build_step_from_env() -> ExecutorStep:
         model = dataclasses.replace(
             CANARY_GPU_HEURISTIC.build_model_config(model_dim),
             num_layers=num_layers,
+            loss_vocab_axis="expert",
         )
         trainer = dataclasses.replace(CANARY_TRAINER, z_loss_weight=0.0)
         target_tokens = _env_int("CANARY_TARGET_TOKENS", batch_size * model.max_seq_len * 20)

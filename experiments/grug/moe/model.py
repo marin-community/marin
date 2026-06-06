@@ -89,6 +89,7 @@ class GrugModelConfig:
     router_z_loss_coef: float = 0.0
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    loss_vocab_axis: str | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -621,6 +622,7 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
+            vocab_axis=self.config.loss_vocab_axis,
         )
         # No load-balancing loss; router z-loss only.
         num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
