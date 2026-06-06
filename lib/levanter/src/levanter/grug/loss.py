@@ -160,9 +160,9 @@ def fused_linear_softmax_cross_entropy_loss(
             local_label_logits = jnp.take_along_axis(local_logits, safe_label_offsets[:, None], axis=1).squeeze(-1)
             local_label_logits = jnp.where(label_in_shard, local_label_logits, -jnp.inf)
 
-            lse_max = jax.lax.pmax(local_lse, vocab_axis)
+            lse_max = jax.lax.pmax(jax.lax.stop_gradient(local_lse), vocab_axis)
             global_lse = lse_max + jnp.log(jax.lax.psum(jnp.exp(local_lse - lse_max), vocab_axis))
-            global_label_logits = jax.lax.pmax(local_label_logits, vocab_axis)
+            global_label_logits = jax.lax.psum(jnp.where(label_in_shard, local_label_logits, 0.0), vocab_axis)
             loss = global_lse - global_label_logits
             loss = jnp.where(flat_labels >= 0, loss, 0.0)
 
