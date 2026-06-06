@@ -388,7 +388,10 @@ commit (the order the existing fakes make safe). Status as of this revision:
    (name/placement/manages_capacity/capabilities); `App.vue` filters one tab list
    by capabilities; `provider_kind` retired. (Frontend `build:check` is red on
    `main` independently — TS 6.0.3 pin from #6173; the App.vue change is type-clean.)
-7. ⏳ **Docs** — AGENTS.md, coreweave.md, README, OPS.md, archived design doc.
+7. ✅ **Docs** — architecture.md (contract + retired boundary debt), AGENTS.md,
+   README, coreweave.md, and the archived record
+   `.agents/projects/2026-06-06_iris_task_backend_contract.md`. (OPS.md needed no
+   change — its references were already current.)
 
 The reconcile refactor already proved this functional-core boundary is testable
 in isolation; we lean on `providers/gcp/fake.py`, `providers/k8s/fake.py`, the
@@ -537,10 +540,12 @@ of two hard-coded lists; the `provider_kind` binary is retired. The internal
 clean). `App.vue` is type-clean; note `npm run build:check` is already red on
 `main` (TypeScript `^6.0.3` pin from #6173 vs 5.x-era code — unrelated to this PR).
 
-### T7 — Documentation  `exec: session`  `value: medium`  `deps: T4, T6`
+### T7 — Documentation  `exec: session`  `value: medium`  `deps: T4, T6`  ✅
 
-Update `AGENTS.md`, `coreweave.md`, `README.md`, `OPS.md`; write the archived
-design doc under `.agents/projects/`.
+Updated `architecture.md` (contract + retired the TaskProvider/isinstance boundary
+debt), `AGENTS.md`, `README.md`, `coreweave.md`; wrote the archived design record
+`.agents/projects/2026-06-06_iris_task_backend_contract.md`. OPS.md needed no
+change (references already current).
 
 ---
 
