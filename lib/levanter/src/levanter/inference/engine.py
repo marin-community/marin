@@ -1633,7 +1633,7 @@ class InferenceEngine:
             )
             fake_submit_done = time.time()
 
-            submit_start = iter_start
+            submit_start = time.time()
             future_state, decode_outputs = _run_generation_loop(
                 self.gen_state,
                 self.model,

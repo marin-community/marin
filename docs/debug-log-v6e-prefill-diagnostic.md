@@ -36,6 +36,23 @@ Focused validation passed:
 - `./infra/pre-commit.py --files lib/levanter/src/levanter/inference/engine.py lib/levanter/tests/inference/test_engine.py docs/debug-log-v6e-prefill-diagnostic.md --fix`
   passed.
 
+## Hypothesis 2
+
+The corrected diagnostic run showed production `levanter:auto` with high
+`decode submit s` while `lm_head_no_sampling` had near-zero submit time. Code
+inspection found that production `generate()` started the submit timer before
+draining pending prefills, while `_generate_diagnostic()` started it immediately
+before submitting the diagnostic decode loop. The production metric therefore
+included prefill admission work and was not directly comparable to the
+diagnostic submit field.
+
+## Changes to make
+
+Start the production `decode_submit_seconds_per_iteration` timer immediately
+before `_run_generation_loop(...)`, after pending prefill admissions have been
+drained. This preserves serving behavior and fixes metric attribution for
+future benchmark rows.
+
 ## Future work
 
 - [ ] Rerun one corrected Levanter-only v6e diagnostic if clean LM-head and
