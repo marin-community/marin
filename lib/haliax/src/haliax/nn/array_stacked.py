@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import functools
-from typing import Any, Callable, Generic, Sequence, TypeVar
+from typing import Any, Callable, Generic, Self, Sequence, TypeVar
 
 import equinox as eqx
 import jax
@@ -274,7 +274,7 @@ class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
         state_dict: StateDict = super().to_state_dict(prefix)
         return _unstack_state_dict(state_dict, prefix)
 
-    def from_state_dict(self: M, state_dict: StateDict, prefix: str | None = None) -> M:
+    def from_state_dict(self, state_dict: StateDict, prefix: str | None = None) -> Self:
         stacked = _stack_state_dict(state_dict, prefix=prefix)
         return super().from_state_dict(stacked, prefix=prefix)  # type: ignore
 

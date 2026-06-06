@@ -305,10 +305,9 @@ class MixtralMoEMlp(ModuleWithStateDictSerialization):
                 # val = state_dict[key][..., None, :, :]
                 w[j].append(val)
 
-        for j in range(3):
-            w[j] = jnp.concat(w[j], axis=1)
+        stacked: List[Array] = [jnp.concat(w[j], axis=1) for j in range(3)]
 
-        return eqx.tree_at(lambda m: [m.w1.weight.array, m.w2.weight.array, m.w3.weight.array], self, w)
+        return eqx.tree_at(lambda m: [m.w1.weight.array, m.w2.weight.array, m.w3.weight.array], self, stacked)
 
 
 class MixtralSparseMoeBlock(eqx.Module):

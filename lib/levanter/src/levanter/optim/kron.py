@@ -484,7 +484,7 @@ def scale_by_kron(
             balance_counter=jnp.zeros([], jnp.int32),
         )
 
-    def update_fn(updates: base.Updates, state: dict, params: base.Params = None):
+    def update_fn(updates: base.Updates, state: dict, params: Optional[base.Params] = None):
         del params
         count_inc = safe_int32_increment(state["count"])
         key, subkey = jax.random.split(state["key"])
@@ -1087,7 +1087,7 @@ def _init_Q_exprs(
         params_specs = param_sharding
         if param_sharding is None:
             params_specs = PartitionSpec(*((None,) * len(t_shape)))
-        sharding_out = [None] * len(t_shape)
+        sharding_out: list[PartitionSpec | None] = [None] * len(t_shape)
         if have_qs_sharding:
             sharding_out = [PartitionSpec(None)] * len(t_shape)
 

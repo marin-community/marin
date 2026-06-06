@@ -155,7 +155,9 @@ class _GenerationSentinelExtension(jinja2.ext.Extension):
     def parse(self, parser: jinja2.parser.Parser) -> jinja2.nodes.CallBlock:
         lineno = next(parser.stream).lineno
         body = parser.parse_statements(["name:endgeneration"], drop_needle=True)
-        return jinja2.nodes.CallBlock(self.call_method("_wrap_generation"), [], [], body).set_lineno(lineno)
+        block = jinja2.nodes.CallBlock(self.call_method("_wrap_generation"), [], [], body)
+        block.set_lineno(lineno)
+        return block
 
     @staticmethod
     def _wrap_generation(caller: jinja2.runtime.Macro) -> str:
@@ -171,7 +173,9 @@ class _GenerationStripExtension(jinja2.ext.Extension):
     def parse(self, parser: jinja2.parser.Parser) -> jinja2.nodes.CallBlock:
         lineno = next(parser.stream).lineno
         body = parser.parse_statements(["name:endgeneration"], drop_needle=True)
-        return jinja2.nodes.CallBlock(self.call_method("_passthrough"), [], [], body).set_lineno(lineno)
+        block = jinja2.nodes.CallBlock(self.call_method("_passthrough"), [], [], body)
+        block.set_lineno(lineno)
+        return block
 
     @staticmethod
     def _passthrough(caller: jinja2.runtime.Macro) -> str:

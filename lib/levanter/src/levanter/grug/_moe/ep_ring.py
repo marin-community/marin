@@ -57,7 +57,7 @@ def _moe_mlp_ep_ring_local(
 
         expert_axis = jax.lax.axis_index("expert")
         expert_start = expert_axis * local_experts
-        local_expert = expert_flat - expert_start
+        local_expert: jax.Array = expert_flat - expert_start
         local_mask = jnp.logical_and(local_expert >= 0, local_expert < local_experts)
 
         # Keep only the assignments this shard will execute, ordered by

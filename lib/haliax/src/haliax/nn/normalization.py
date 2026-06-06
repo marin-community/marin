@@ -166,8 +166,10 @@ def standardize(
 ) -> NamedArray:
     """Analogous to [jax.nn.standardize][], but with support for NamedArrays."""
     x, mean, variance, where = haliax.broadcast_arrays(x, mean, variance, where)  # type: ignore
-    raw_x, mean, variance, where = unwrap_namedarrays(x, mean, variance, where)
+    raw_x, raw_mean, raw_variance, raw_where = unwrap_namedarrays(x, mean, variance, where)
     axis_indices = x.axis_indices(axis)
 
-    plain = jnn.standardize(raw_x, axis_indices, mean=mean, variance=variance, epsilon=epsilon, where=where)
+    plain = jnn.standardize(
+        raw_x, axis_indices, mean=raw_mean, variance=raw_variance, epsilon=epsilon, where=raw_where
+    )
     return NamedArray(plain, x.axes)

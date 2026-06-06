@@ -16,7 +16,7 @@ import urllib.parse
 import warnings
 from dataclasses import dataclass
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, Type, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Self, Tuple, Type, TypeVar, Union, cast
 
 import draccus
 import equinox as eqx
@@ -253,7 +253,7 @@ class HFCompatConfig(LmConfig["LmWithHfSerializationMixin"]):
 
     @classmethod
     @abc.abstractmethod
-    def from_hf_config(cls, hf_config: HfConfig):
+    def from_hf_config(cls, hf_config: HfConfig) -> Self:
         pass
 
     @abc.abstractmethod
@@ -586,7 +586,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
     def with_config_overrides(self, config_overrides: dict, merge: bool = True) -> "HFCheckpointConverter":
         if self.config_overrides is not None and merge:
-            config_overrides = mergedeep.merge({}, self.config_overrides, config_overrides)
+            config_overrides = cast(dict, mergedeep.merge({}, self.config_overrides, config_overrides))
         return dataclasses.replace(self, config_overrides=config_overrides)  # type: ignore
 
     @staticmethod
@@ -1450,7 +1450,7 @@ def _shard_hf_checkpoint(
     state_dict: dict[str, Array | ShapeDtypeStruct],
     max_shard_size: int = DEFAULT_MAX_SHARD_SIZE,
     weights_name: str = SAFE_TENSORS_MODEL,
-) -> tuple[dict[str, dict[str, Array]], dict | None]:
+) -> tuple[dict[str, dict[str, Array | ShapeDtypeStruct]], dict | None]:
     """
     Splits a model state dictionary in sub-checkpoints so that the final size of each sub-checkpoint does not exceed a
     given size.
@@ -1481,7 +1481,7 @@ def _shard_hf_checkpoint(
 
         The index may be None if there is only one shard.
     """
-    sharded_state_dicts: list[dict[str, Array]] = [{}]
+    sharded_state_dicts: list[dict[str, Array | ShapeDtypeStruct]] = [{}]
     last_block_size = 0
     total_size = 0
 
@@ -1504,7 +1504,7 @@ def _shard_hf_checkpoint(
 
     # Otherwise, let's build the index
     weight_map = {}
-    shards: dict[str, dict[str, Array]] = {}
+    shards: dict[str, dict[str, Array | ShapeDtypeStruct]] = {}
     for idx, shard in enumerate(sharded_state_dicts):
         # NOTE(dlwh): this is how it is in the HF code. it hurts me
         shard_file = weights_name.replace(".bin", f"-{idx + 1:05d}-of-{len(sharded_state_dicts):05d}.bin")
