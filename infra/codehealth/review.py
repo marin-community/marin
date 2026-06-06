@@ -597,6 +597,13 @@ def _pr_link(repo: str, number: object) -> str:
     return f"[#{number}](https://github.com/{repo}/pull/{number})"
 
 
+def _where(file: object, line: object) -> str:
+    """`file:line` for an inline comment, the file alone if unlocated, else —."""
+    if not file:
+        return "—"
+    return f"{file}:{line}" if line not in (None, "") else str(file)
+
+
 def build_report(
     outcomes: list[dict], comments: list[dict], repo: str, start: dt.datetime, now: dt.datetime, days: int
 ) -> str:
@@ -725,32 +732,40 @@ def build_report(
         else "_No human review comments in this window._"
     )
 
-    # A few concrete, high-confidence strictly-catchable comments: the clearest
-    # "automation should have caught this" evidence.
-    examples = sorted(
-        (c for c in comments if c["catchable_strict"] and float(c["confidence"]) >= 0.7),
-        key=lambda c: float(c["confidence"]),
-        reverse=True,
-    )[:8]
-    example_rows = [
+    # Every comment an automated check could have caught — the full "automation
+    # should have caught this" list, not a sample (strict ⊆ generous, so the
+    # catchable_strict/generous flags together cover all flagged comments).
+    # Volume is low (~tens/month), so it is intentionally not truncated.
+    flagged = sorted(
+        (c for c in comments if c["catchable_strict"] or c["catchable_generous"]),
+        key=lambda c: (not c["catchable_strict"], -float(c["confidence"])),
+    )
+    flagged_rows = [
         [
             _pr_link(repo, c["pr_number"]),
+            _cell(_where(c.get("file"), c.get("line"))),
+            "strict" if c["catchable_strict"] else "generous",
             _cell(c["class"]),
             f"{float(c['confidence']):.2f}",
+            _cell(c["body"], 120),
             _cell(c["reason"], 80),
-            _cell(c["body"], 80),
         ]
-        for c in examples
+        for c in flagged
     ]
-    examples_section = "## Sample strictly-catchable comments\n\n" + (
-        _md_table(
-            ["PR", "Class", "Conf.", "Why catchable", "Comment"], ["---", "---", "---:", "---", "---"], example_rows
+    flagged_section = f"## Catchable comments ({len(flagged_rows)})\n\n" + (
+        "Every human comment an automated check could plausibly have caught, "
+        "strict (deterministic) first. **strict** = a linter/type-check could "
+        "flag it; **generous** = an LLM reading the diff could.\n\n"
+        + _md_table(
+            ["PR", "Where", "Tier", "Class", "Conf.", "Comment", "Why catchable"],
+            ["---", "---", "---", "---", "---:", "---", "---"],
+            flagged_rows,
         )
-        if example_rows
-        else "_No strictly-catchable comments above the confidence threshold in this window._"
+        if flagged_rows
+        else "_No catchable comments in this window._"
     )
 
-    return "\n\n".join([header, narrative, summary, by_class_section, trend_section, top_section, examples_section])
+    return "\n\n".join([header, narrative, summary, by_class_section, trend_section, top_section, flagged_section])
 
 
 def publish_gist(markdown: str, desc: str, public: bool, filename: str) -> str:
