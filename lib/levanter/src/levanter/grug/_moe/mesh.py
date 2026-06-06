@@ -6,6 +6,8 @@
 import jax
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, get_abstract_mesh, get_mesh, reshard
 
+from levanter.grug.sharding import batch_spec as _public_batch_spec
+
 
 def _current_mesh() -> Mesh | jax.sharding.AbstractMesh:
     try:
@@ -30,9 +32,7 @@ def _mesh_axis_size(mesh: Mesh | jax.sharding.AbstractMesh | None, axis_name: st
 
 
 def _batch_spec(mesh: Mesh | jax.sharding.AbstractMesh | None) -> P:
-    if _mesh_has_axis(mesh, "expert"):
-        return P(("data", "expert"))
-    return P(("data",))
+    return _public_batch_spec(mesh)
 
 
 def _batch_spec_from_x(x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | None) -> P:

@@ -40,7 +40,7 @@ from levanter.grug.grug_moe import (
     resolve_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pbatch, Pembed_vocab, Plm_head, unshard
+from levanter.grug.sharding import Pbatch, Pembed_vocab, Plm_head, batch_axes, unshard
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -55,8 +55,14 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
     return int(mesh.shape[axis_name])
 
 
+def _batch_axes(mesh: jax.sharding.AbstractMesh | None = None) -> tuple[str, ...]:
+    if mesh is None:
+        mesh = get_abstract_mesh()
+    return batch_axes(mesh)
+
+
 def _batch_spec() -> P:
-    return P(("data", "expert"))
+    return P(_batch_axes())
 
 
 def _batch_reshard(x: jax.Array) -> jax.Array:
@@ -208,9 +214,9 @@ class CausalSelfAttention(eqx.Module):
         # Half-RoPE's slice+concat on the head_dim axis can leave the explicit-mesh
         # propagator with ``model`` annotated on ``head_dim`` rather than
         # ``num_q_heads``; force the canonical TP layout so it matches ``aligned_v``.
-        attn_out = reshard(attn_out, P(("data", "expert"), None, "model", None))
+        attn_out = reshard(attn_out, P(_batch_axes(), None, "model", None))
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
-        aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
+        aligned_v = reshard(aligned_v, P(_batch_axes(), None, "model", None))
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
@@ -449,7 +455,7 @@ class MoEMLP(eqx.Module):
         # Sharded QB: compute beta locally per device, then average.
         s_minus_alpha = router_logits - qb_alpha
         mesh = get_abstract_mesh()
-        batch_axes = ("data", "expert")
+        batch_axes = _batch_axes(mesh)
         num_devices = 1
         for a in batch_axes:
             if a in mesh.shape:
@@ -672,15 +678,16 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
     expert = 2 if num_devices % 2 == 0 else 1
     data = max(1, num_devices // expert)
     mesh = jax.sharding.AbstractMesh(
-        axis_sizes=(data, expert, 1),
-        axis_names=("data", "expert", "model"),
+        axis_sizes=(1, data, expert, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
         axis_types=(
+            jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
         ),
     )
-    return mesh, P(("data", "expert"), None)
+    return mesh, P(("replica_dcn", "data", "expert"), None)
 
 
 __all__ = [
