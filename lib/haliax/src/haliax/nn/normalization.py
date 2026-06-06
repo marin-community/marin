@@ -13,11 +13,11 @@ from jax import numpy as jnp
 import haliax
 import haliax as hax
 
-from .._src.state_dict import Mod, ModuleWithStateDictSerialization
-from ..axis import AxisSelection, AxisSpec
-from ..core import NamedArray
-from ..types import Scalar
-from ..wrap import unwrap_namedarrays, wrap_axiswise_call, wrap_reduction_call
+from haliax._src.state_dict import Mod, ModuleWithStateDictSerialization
+from haliax.axis import AxisSelection, AxisSpec
+from haliax.core import NamedArray
+from haliax.types import Scalar
+from haliax.wrap import unwrap_namedarrays, wrap_axiswise_call, wrap_reduction_call
 
 A = TypeVar("A", Scalar, NamedArray, jnp.ndarray)
 

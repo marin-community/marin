@@ -29,9 +29,9 @@ import haliax.util
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.util import is_jax_or_hax_array_like
 
-from .._src.scan import ScanCheckpointPolicy, ScanCheckpointSpec
-from .._src.state_dict import ModuleWithStateDictSerialization, StateDict, with_prefix
-from ..axis import Axis
+from haliax._src.scan import ScanCheckpointPolicy, ScanCheckpointSpec
+from haliax._src.state_dict import ModuleWithStateDictSerialization, StateDict, with_prefix
+from haliax.axis import Axis
 
 M = TypeVar("M", bound=eqx.Module)
 M_co = TypeVar("M_co", bound=eqx.Module, covariant=True)

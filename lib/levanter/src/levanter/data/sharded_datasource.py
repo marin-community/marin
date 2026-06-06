@@ -17,8 +17,8 @@ import pyarrow.parquet as pq
 
 from levanter.utils import fsspec_utils
 
-from ..data import AsyncDataset
-from ..utils.fsspec_utils import expand_glob
+from levanter.data import AsyncDataset
+from levanter.utils.fsspec_utils import expand_glob
 from ._preprocessor import (
     BatchResult,
     _BatchMapTransform,
@@ -88,7 +88,7 @@ class ShardedDataSource(Generic[T_co]):
         """
 
         source, processor = _construct_composite_batch_processor(self)
-        from ..store.cache import build_or_load_cache  # lazy: store.cache imports levanter.data modules
+        from levanter.store.cache import build_or_load_cache  # lazy: store.cache imports levanter.data modules
 
         cache = build_or_load_cache(
             path,

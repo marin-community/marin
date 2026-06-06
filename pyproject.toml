@@ -169,6 +169,12 @@ extend-include = ["scripts/workflows/**/*.py"]
 select = [
     "A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W",
     "N805", "PLR0124", "PLR1722", "RET502", "RET503", "SIM115",
+    # Local-import hygiene (issue #6219):
+    #   TID252 -> "relative-imports" (prefer absolute over parent-relative imports)
+    #   ICN001 -> "unconventional-import-alias" (e.g. `import numpy as np`)
+    # lib/haliax and lib/levanter carry their own [tool.ruff.lint] configs; these
+    # two rules are mirrored there via extend-select so they apply repo-wide.
+    "TID252", "ICN001",
 ]
 ignore = ["F722", "B008", "UP015", "A005", "E741"]
 

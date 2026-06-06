@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import haliax as hax
 import equinox as eqx
 
-from ..axis import AxisSpec
+from haliax.axis import AxisSpec
 
 
 class AbstractReparam(ABC):
