@@ -75,7 +75,6 @@ from iris.cluster.controller.run_template import RunTemplateCache, new_run_templ
 from iris.cluster.controller.scheduling.policy import (
     build_scheduling_context,
     compute_demand_entries,
-    get_running_tasks_with_band_and_value,
     read_reservation_claims,
     refresh_reservation_claims,
 )
@@ -821,10 +820,11 @@ class Controller:
         """Run one scheduling cycle.
 
         The controller owns only the I/O: it refreshes reservation claims and
-        reads a DB-less snapshot (scheduling context + running-task band/value
-        for preemption), hands the snapshot to ``backend.schedule`` for the pure
-        placement decision, then commits the returned assignments, preemptions,
-        and unschedulable marks. The backend (IRIS placement) runs the full
+        builds the scheduling context in a single DB snapshot (which folds in the
+        running-task band/value the preemption pass may evict), hands the
+        resulting DB-less snapshot to ``backend.schedule`` for the pure placement
+        decision, then commits the returned assignments, preemptions, and
+        unschedulable marks. The backend (IRIS placement) runs the full
         gates → order → taints → preference → find_assignments → preemption
         pipeline; BACKEND placement returns an empty result (Kueue schedules).
 
@@ -841,11 +841,8 @@ class Controller:
             self._health,
             self._worker_attrs,
             self._config.user_budget_defaults,
+            claims,
         )
-        # Lifted DB read: band/value of running tasks the preemption pass may
-        # evict. Read here (against the claimed-worker set) so ``schedule`` stays
-        # DB-less; the same workers the old conditional read covered.
-        running_for_preemption = get_running_tasks_with_band_and_value(self._db, set(claims.keys()))
 
         if trace:
             logger.info(
@@ -865,7 +862,6 @@ class Controller:
             ScheduleInput(
                 context=ctx,
                 claims=claims,
-                running_for_preemption=running_for_preemption,
                 max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
                 trace=trace,
             )

@@ -13,13 +13,12 @@ from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKin
 from iris.cluster.controller.reconcile.task import resolve_task_failure_state as _resolve_task_failure_state
 from iris.cluster.controller.scheduling.policy import (
     PreemptionCandidate,
-    RunningTaskInfo,
     _pending_tasks_with_jobs,
     _sort_pending_tasks_by_resolved_band,
     get_running_tasks_with_band_and_value,
     run_preemption_pass,
 )
-from iris.cluster.controller.scheduling.scheduler import JobRequirements, WorkerCapacity
+from iris.cluster.controller.scheduling.scheduler import JobRequirements, RunningTaskInfo, WorkerCapacity
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp

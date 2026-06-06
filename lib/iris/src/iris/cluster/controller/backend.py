@@ -50,7 +50,6 @@ from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReco
 from iris.cluster.controller.scheduling.decision import apply_preemptions, compute_diagnostics
 from iris.cluster.controller.scheduling.policy import (
     GatedCandidates,
-    RunningTaskInfo,
     SchedulingOrder,
     apply_scheduling_gates,
     compute_scheduling_order,
@@ -216,8 +215,6 @@ class ScheduleInput:
     """Built by ``build_scheduling_context`` (un-tainted workers + raw reads)."""
     claims: dict[WorkerId, ReservationClaim]
     """Reservation claims from ``refresh_reservation_claims``."""
-    running_for_preemption: list[RunningTaskInfo]
-    """Band/value of the currently-running tasks the preemption pass may evict."""
     max_tasks_per_job_per_cycle: int
     trace: bool = False
     """Whether to emit the per-phase scheduling trace logs this cycle."""
@@ -307,7 +304,7 @@ def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> Sc
 
     order = compute_scheduling_order(ctx, gated, trace=trace)
     all_assignments, context, tainted_jobs = apply_placements(scheduler, order, gated, ctx, claims, trace=trace)
-    preemptions = apply_preemptions(order, tainted_jobs, all_assignments, snapshot.running_for_preemption, context)
+    preemptions = apply_preemptions(order, tainted_jobs, all_assignments, ctx.running_for_preemption, context)
     diagnostics = compute_diagnostics(scheduler, context, tainted_jobs, all_assignments, order.ordered_task_ids)
 
     return ScheduleResult(

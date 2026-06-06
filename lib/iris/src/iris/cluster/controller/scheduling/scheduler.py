@@ -312,6 +312,26 @@ class WorkerCapacity:
 
 
 @dataclass
+class RunningTaskInfo:
+    """Info about a running task used by the preemption pass."""
+
+    task_id: JobName
+    worker_id: WorkerId
+    band_sort_key: int  # 1=production, 2=interactive, 3=batch
+    resource_value: int
+    is_coscheduled: bool
+    cpu_millicores: int
+    memory_bytes: int
+    gpu_count: int
+    tpu_count: int
+    # Device variant (e.g. "v5p-64") the task is running on, derived from the
+    # task's own resource spec. Used to gate preemption to same-variant victims
+    # so a v5p-64 request can never reclaim a v5p-256 slice and vice versa.
+    device_variant: str | None = None
+    already_preempted: bool = False
+
+
+@dataclass
 class SchedulingContext:
     """Single-tick scheduling state: raw reads + derived indexes.
 
@@ -344,6 +364,7 @@ class SchedulingContext:
     reserved_job_ids: frozenset[JobName]
     reservation_entry_counts: dict[JobName, int]
     user_budget_defaults: UserBudgetDefaults
+    running_for_preemption: list[RunningTaskInfo] = field(default_factory=list)
 
     # Derived from ``workers`` in __post_init__.
     capacities: dict[WorkerId, WorkerCapacity] = field(init=False)
@@ -406,6 +427,7 @@ class SchedulingContext:
             reserved_job_ids=self.reserved_job_ids,
             reservation_entry_counts=self.reservation_entry_counts,
             user_budget_defaults=self.user_budget_defaults,
+            running_for_preemption=self.running_for_preemption,
         )
 
     def matching_workers(self, constraints: Sequence[Constraint]) -> set[WorkerId]:

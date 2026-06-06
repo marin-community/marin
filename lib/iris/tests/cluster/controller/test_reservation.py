@@ -552,7 +552,7 @@ def test_gate_satisfied_when_claims_meet_entries(ctrl):
     _claim_for_reservations(ctrl)
 
     claims = ctrl.reservation_claims
-    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults)
+    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults, claims)
     gated = apply_scheduling_gates(ctx, claims, max_tasks_per_job_per_cycle=0)
     # The task_id for a 1-replica job is jid.task(0)
     assert jid.task(0) in gated.schedulable_task_ids
@@ -569,7 +569,7 @@ def test_gate_unsatisfied_when_claims_below_entries(ctrl):
 
     # Only 1 worker available for 2 entries — gate must stay closed.
     claims = ctrl.reservation_claims
-    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults)
+    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults, claims)
     gated = apply_scheduling_gates(ctx, claims, max_tasks_per_job_per_cycle=0)
     assert jid.task(0) not in gated.schedulable_task_ids
 
@@ -586,7 +586,7 @@ def test_gate_satisfied_for_jobs_without_reservation(ctrl):
     jid = _submit_job(ctrl, "no-res", req)
 
     claims: dict[WorkerId, ReservationClaim] = {}
-    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults)
+    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults, claims)
     gated = apply_scheduling_gates(ctx, claims, max_tasks_per_job_per_cycle=0)
     assert jid.task(0) in gated.schedulable_task_ids
 

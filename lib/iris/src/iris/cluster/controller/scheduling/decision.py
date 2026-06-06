@@ -12,11 +12,15 @@ from __future__ import annotations
 
 from iris.cluster.controller.scheduling.policy import (
     PreemptionCandidate,
-    RunningTaskInfo,
     SchedulingOrder,
     run_preemption_pass,
 )
-from iris.cluster.controller.scheduling.scheduler import JobRequirements, Scheduler, SchedulingContext
+from iris.cluster.controller.scheduling.scheduler import (
+    JobRequirements,
+    RunningTaskInfo,
+    Scheduler,
+    SchedulingContext,
+)
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
 

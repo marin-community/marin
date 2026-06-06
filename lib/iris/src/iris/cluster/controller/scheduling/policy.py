@@ -55,6 +55,7 @@ from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
     JobRequirements,
+    RunningTaskInfo,
     Scheduler,
     SchedulingContext,
     WorkerCapacity,
@@ -89,26 +90,6 @@ _UNLIMITED = sys.maxsize
 # for this key; reservation jobs do not, so they naturally prefer claimed
 # workers (which appear first in the worker list).
 RESERVATION_TAINT_KEY = "reservation-job"
-
-
-@dataclass
-class RunningTaskInfo:
-    """Info about a running task used by the preemption pass."""
-
-    task_id: JobName
-    worker_id: WorkerId
-    band_sort_key: int  # 1=production, 2=interactive, 3=batch
-    resource_value: int
-    is_coscheduled: bool
-    cpu_millicores: int
-    memory_bytes: int
-    gpu_count: int
-    tpu_count: int
-    # Device variant (e.g. "v5p-64") the task is running on, derived from the
-    # task's own resource spec. Used to gate preemption to same-variant victims
-    # so a v5p-64 request can never reclaim a v5p-256 slice and vice versa.
-    device_variant: str | None = None
-    already_preempted: bool = False
 
 
 @dataclass(frozen=True)
@@ -490,24 +471,29 @@ def get_running_tasks_with_band_and_value(
     users sitting at their limits.
     """
     with db.read_snapshot() as tx:
-        rows = tx.execute(
-            select(
-                tasks_table.c.task_id,
-                tasks_table.c.priority_band,
-                tasks_table.c.current_worker_id.label("worker_id"),
-                job_config_table.c.res_cpu_millicores,
-                job_config_table.c.res_memory_bytes,
-                job_config_table.c.res_disk_bytes,
-                job_config_table.c.res_device_json,
-                job_config_table.c.has_coscheduling,
-            )
-            .select_from(tasks_table.join(job_config_table, tasks_table.c.job_id == job_config_table.c.job_id))
-            .where(
-                tasks_table.c.state == bindparam("state"),
-                tasks_table.c.current_worker_id.is_not(None),
-            ),
-            {"state": job_pb2.TASK_STATE_RUNNING},
-        ).all()
+        return _running_tasks_with_band_and_value(tx, claimed_workers)
+
+
+def _running_tasks_with_band_and_value(tx: Tx, claimed_workers: set[WorkerId]) -> list[RunningTaskInfo]:
+    """Read running-task band/value/resource info from an already-open snapshot."""
+    rows = tx.execute(
+        select(
+            tasks_table.c.task_id,
+            tasks_table.c.priority_band,
+            tasks_table.c.current_worker_id.label("worker_id"),
+            job_config_table.c.res_cpu_millicores,
+            job_config_table.c.res_memory_bytes,
+            job_config_table.c.res_disk_bytes,
+            job_config_table.c.res_device_json,
+            job_config_table.c.has_coscheduling,
+        )
+        .select_from(tasks_table.join(job_config_table, tasks_table.c.job_id == job_config_table.c.job_id))
+        .where(
+            tasks_table.c.state == bindparam("state"),
+            tasks_table.c.current_worker_id.is_not(None),
+        ),
+        {"state": job_pb2.TASK_STATE_RUNNING},
+    ).all()
     result: list[RunningTaskInfo] = []
     for row in rows:
         wid = row.worker_id
@@ -1065,13 +1051,15 @@ def build_scheduling_context(
     health: WorkerHealthTracker,
     worker_attrs: WorkerAttrsProjection,
     defaults: UserBudgetDefaults,
+    claims: dict[WorkerId, ReservationClaim],
     max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
 ) -> SchedulingContext:
     """Build a ``SchedulingContext`` from a single read snapshot.
 
     All scheduling-tick DB I/O lives here. The returned context carries
     un-tainted workers; reservation taints are applied during the assignment
-    pass only (in ``run_scheduling_decision``).
+    pass only (in ``run_scheduling_decision``). The running-for-preemption read
+    shares this same snapshot, so the scheduling tick is a single DB read.
     """
     with slow_log(logger, "scheduling tick context", threshold_ms=50):
         with queries.read_snapshot() as snap:
@@ -1084,6 +1072,7 @@ def build_scheduling_context(
             reserved_jobs = _reserved_job_ids_in_tx(snap)
             reservation_entry_counts = _reservation_entry_counts_for_pending(snap, pending)
             building_counts = reads.building_counts(snap, [w.worker_id for w in workers])
+            running = _running_tasks_with_band_and_value(snap, set(claims.keys()))
 
     snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
     sorted_pending = _sort_pending_tasks_by_resolved_band(pending, requested_bands)
@@ -1101,6 +1090,7 @@ def build_scheduling_context(
         reserved_job_ids=frozenset(reserved_jobs),
         reservation_entry_counts=reservation_entry_counts,
         user_budget_defaults=defaults,
+        running_for_preemption=running,
     )
 
 
