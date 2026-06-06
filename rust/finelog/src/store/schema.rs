@@ -312,8 +312,12 @@ pub fn resolve_key_column(schema: &Schema) -> Result<String, StatsError> {
 ///
 /// - identical / requested ⊆ registered -> `registered` unchanged.
 /// - requested adds nullable columns -> the union (registered then new).
-/// - any conflicting column (type or nullability change) -> `SchemaConflict`.
+/// - a conflicting column *type* -> `SchemaConflict`.
 /// - a new non-nullable column -> `SchemaConflict`.
+/// - a nullability difference on an existing column is *not* a conflict: warn
+///   and keep the registered nullability (adopt-from-disk widens compacted
+///   columns to nullable, and re-registration with the original schema must be
+///   accepted, not rejected).
 /// - a differing `key_column` is a *hint*: warn and keep the registered value.
 pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, StatsError> {
     if registered.key_column != requested.key_column {
@@ -345,11 +349,22 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
                         column_type_name(rc.r#type),
                     )));
                 }
+                // A nullability difference on an existing column is NOT a conflict.
+                // Adopt-from-disk widens every compacted column to nullable
+                // (DuckDB's COPY drops Arrow non-nullability), and the adopt
+                // design relies on a later RegisterTable with the original
+                // non-nullable schema being accepted rather than rejected. Keep
+                // the registered nullability (the per-batch align path enforces
+                // column presence against it); treating this as a conflict would
+                // permanently wedge every namespace with non-nullable columns
+                // once a compacted segment is adopted.
                 if existing.nullable != rc.nullable {
-                    return Err(StatsError::SchemaConflict(format!(
-                        "column {:?}: nullable mismatch registered={} requested={}",
-                        rc.name, existing.nullable, rc.nullable,
-                    )));
+                    tracing::warn!(
+                        column = %rc.name,
+                        registered = existing.nullable,
+                        requested = rc.nullable,
+                        "register: nullability differs — keeping registered",
+                    );
                 }
             }
         }
@@ -755,16 +770,36 @@ mod tests {
     }
 
     #[test]
-    fn merge_nullable_change_rejects() {
+    fn merge_nullability_difference_keeps_registered() {
+        // A re-register that flips an existing column's nullability is accepted
+        // (not a conflict) and keeps the registered nullability. This is the
+        // path that un-wedges a namespace whose compacted segments were adopted
+        // as all-nullable: the client re-registers with the original
+        // non-nullable schema and the merge succeeds as a no-op.
         let reg = with_implicit_seq(worker_schema());
-        let req = Schema::new(
+        let widened = Schema::new(
             vec![col("mem_bytes", ColumnType::COLUMN_TYPE_INT64, true)],
             "",
         );
-        assert!(matches!(
-            merge_schemas(&reg, &req),
-            Err(StatsError::SchemaConflict(_))
-        ));
+        assert_eq!(merge_schemas(&reg, &widened).unwrap(), reg);
+
+        let narrowed = Schema::new(
+            vec![col("mem_bytes", ColumnType::COLUMN_TYPE_INT64, false)],
+            "",
+        );
+        let reg_nullable = Schema::new(
+            vec![
+                col("seq", ColumnType::COLUMN_TYPE_INT64, false),
+                col("worker_id", ColumnType::COLUMN_TYPE_STRING, true),
+                col("mem_bytes", ColumnType::COLUMN_TYPE_INT64, true),
+                col("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, true),
+            ],
+            "",
+        );
+        assert_eq!(
+            merge_schemas(&reg_nullable, &narrowed).unwrap(),
+            reg_nullable
+        );
     }
 
     #[test]

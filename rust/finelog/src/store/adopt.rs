@@ -68,8 +68,11 @@
 //!    registered non-nullable but lives only in a compacted segment is adopted
 //!    as nullable. This is benign: a nullable-superset never changes queryable
 //!    contents (the cutover gate asserts Query Arrow + the data are identical),
-//!    and deploy's startup RegisterTable re-establishes the exact registered
-//!    nullability.
+//!    and a later RegisterTable with the original non-nullable schema is
+//!    accepted as a no-op (`merge_schemas` treats a nullability difference on
+//!    an existing column as compatible, keeping the adopted nullable form). The
+//!    column stays nullable rather than narrowing back, which is harmless for
+//!    every read and write path.
 //!
 //! Additive-merge history is likewise collapsed: the recovered schema is the
 //! newest segment's columns (which already reflect every additive evolution
