@@ -36,7 +36,7 @@ def test_ppl_circuit_coverage_v2_registry_uses_supervised_target_only_format():
     for slice_ in PPL_CIRCUIT_COVERAGE_V2_SLICES:
         dataset = datasets[slice_.registry_key]
         assert dataset.input_key == "input"
-        assert dataset.target_key == "target"
+        assert dataset.target_key == "output"
         assert "loss:target_only" in dataset.tags
         assert f"family:{slice_.family.value}" in dataset.tags
         assert f"task:{slice_.task_name}" in dataset.tags
@@ -104,15 +104,15 @@ def test_ppl_circuit_coverage_v2_records_are_deterministic_supervised_examples()
     assert rows == rows_again
     assert len(rows) == 2 * len(PPL_CIRCUIT_COVERAGE_V2_SLICES)
     for row in rows:
-        assert set(row) == {"id", "input", "target", "subset", "task", "seed", "tags", "metadata"}
+        assert set(row) == {"id", "input", "output", "subset", "task", "seed", "tags", "metadata"}
         assert row["input"]
-        assert row["target"].endswith("\n")
+        assert row["output"].endswith("\n")
         assert "loss:target_only" in row["tags"]
         assert row["metadata"]["family"]
         assert row["metadata"]["generator"] == "generated_ppl_circuit_coverage_v2"
 
 
-def test_new_basic_functionality_slices_use_few_shot_context_without_final_answer_leak():
+def test_new_basic_functionality_slices_use_compact_few_shot_context_without_output_leak():
     new_families = {
         PplCircuitCoverageV2Family.ARITHMETIC.value,
         PplCircuitCoverageV2Family.STRUCTURED_SERIALIZATION.value,
@@ -127,15 +127,13 @@ def test_new_basic_functionality_slices_use_few_shot_context_without_final_answe
 
     assert len(rows) == 16
     for row in rows:
-        assert row["input"].startswith("worked examples:\n")
-        assert "held-out query:\n" in row["input"]
-        held_out_query = row["input"].split("held-out query:\n", maxsplit=1)[1]
-        assert held_out_query.rstrip().endswith("answer:")
-        assert row["target"].strip() not in {line.strip() for line in held_out_query.splitlines()}
-        assert not row["input"].endswith(row["target"])
+        assert "worked examples:" not in row["input"]
+        assert "held-out query:" not in row["input"]
+        assert "answer:" not in row["input"]
+        assert not row["input"].endswith(row["output"])
 
 
-def test_string_and_indexing_slices_use_few_shot_context_without_final_answer_leak():
+def test_string_and_indexing_slices_use_compact_few_shot_context_without_output_leak():
     rows = [
         row
         for row in iter_ppl_circuit_coverage_v2_records(examples_per_config=2)
@@ -144,22 +142,34 @@ def test_string_and_indexing_slices_use_few_shot_context_without_final_answer_le
 
     assert len(rows) == 2 * len(STRING_INDEXING_TASK_NAMES)
     for row in rows:
-        assert row["input"].startswith("worked examples:\n")
-        assert "held-out query:\n" in row["input"]
-        final_query = row["input"].split("held-out query:\n", maxsplit=1)[1]
-        assert final_query.rstrip().endswith("answer:")
-        assert not row["input"].endswith(row["target"])
+        assert "worked examples:" not in row["input"]
+        assert "held-out query:" not in row["input"]
+        assert "answer:" not in row["input"]
+        assert not row["input"].endswith(row["output"])
+
+
+def test_string_slicing_template_is_compact_and_completion_only():
+    row = next(
+        row for row in iter_ppl_circuit_coverage_v2_records(examples_per_config=1) if row["task"] == "string_slicing"
+    )
+
+    lines = row["input"].splitlines()
+
+    assert lines[0] == "text = \"abcdef\"; text[1:5:2] -> 'bd'"
+    assert lines[1] == "text = \"marin\"; text[0:4:1] -> 'mari'"
+    assert lines[-1].endswith(" -> ")
+    assert row["output"].strip() not in lines[-1]
 
 
 def test_selected_new_basic_functionality_targets_match_metadata():
     rows = {row["task"]: row for row in iter_ppl_circuit_coverage_v2_records(examples_per_config=1)}
 
     carry = rows["carry_addition"]
-    assert carry["target"] == f"{carry['metadata']['left'] + carry['metadata']['right']}\n"
+    assert carry["output"] == f"{carry['metadata']['left'] + carry['metadata']['right']}\n"
     assert carry["metadata"]["carry_positions"]
 
     borrow = rows["borrow_subtraction"]
-    assert borrow["target"] == f"{borrow['metadata']['left'] - borrow['metadata']['right']}\n"
+    assert borrow["output"] == f"{borrow['metadata']['left'] - borrow['metadata']['right']}\n"
     assert borrow["metadata"]["borrow_positions"]
 
     checksum = rows["digit_checksum"]
@@ -170,10 +180,10 @@ def test_selected_new_basic_functionality_targets_match_metadata():
         )
         % 10
     )
-    assert checksum["target"] == f"{checksum_value}\n"
+    assert checksum["output"] == f"{checksum_value}\n"
 
     finite_automata = rows["finite_automata"]
-    dfa_target = json.loads(finite_automata["target"])
+    dfa_target = json.loads(finite_automata["output"])
     bits = finite_automata["metadata"]["bits"]
     assert dfa_target == {
         "state": f"ones_{bits.count('1') % 2}_zeros_{bits.count('0') % 3}",
@@ -187,7 +197,7 @@ def test_selected_new_basic_functionality_targets_match_metadata():
             expected_stack.pop()
         else:
             expected_stack.append(operation.split(" ", maxsplit=1)[1])
-    assert stack["target"] == f"{expected_stack!r}\n"
+    assert stack["output"] == f"{expected_stack!r}\n"
 
 
 def test_borrow_subtraction_generator_handles_minimum_left_boundary():
@@ -209,7 +219,7 @@ def test_borrow_subtraction_generator_handles_minimum_left_boundary():
     assert row["metadata"]["left"] == 1010
     assert row["metadata"]["right"] == 1009
     assert row["metadata"]["borrow_positions"]
-    assert row["target"] == "1\n"
+    assert row["output"] == "1\n"
 
 
 def test_string_transform_targets_match_metadata():
@@ -231,7 +241,7 @@ def test_string_transform_targets_match_metadata():
     for row in rows:
         metadata = row["metadata"]
         task = row["task"]
-        target = row["target"]
+        target = row["output"]
         text = metadata["text"]
 
         if task == "string_slicing":
@@ -277,7 +287,7 @@ def test_indexing_targets_match_metadata():
     for row in rows:
         metadata = row["metadata"]
         task = row["task"]
-        target = row["target"]
+        target = row["output"]
         text = metadata["text"]
 
         if task == "character_at_index":
@@ -313,7 +323,7 @@ def test_format_style_instruction_targets_match_metadata():
     }
     for row in rows:
         metadata = row["metadata"]
-        target = row["target"].rstrip("\n")
+        target = row["output"].rstrip("\n")
         if row["task"] == "markdown_table_padding":
             lines = target.splitlines()
             assert len(lines) >= 5
@@ -338,13 +348,14 @@ def test_plain_text_pretraining_documents_use_the_supervised_prompt_template():
 
     text = render_ppl_circuit_coverage_v2_plain_text_document(row)
 
-    assert "### Circuit practice example" in text
-    assert "Family: format_style_instruction" in text
-    assert "Task: markdown_table_padding" in text
+    assert "### Circuit practice example" not in text
+    assert "Family:" not in text
+    assert "Task:" not in text
+    assert "Prompt:" not in text
     assert "Final answer:" not in text
-    assert row["input"] + row["target"] in text
-    assert row["target"].strip() in text
-    assert row["target"].strip() not in row["input"]
+    assert text == row["input"] + row["output"]
+    assert row["output"].strip() in text
+    assert row["output"].strip() not in row["input"]
 
 
 def test_plain_text_pretraining_stream_reaches_approximate_token_budget():

@@ -81,7 +81,7 @@ class PplCircuitCoverageV2Slice:
         return supervised_text_dataset(
             raw_step.cd(f"{self.output_name}{RAW_SHARD_SUFFIX}"),
             input_key="input",
-            target_key="target",
+            target_key="output",
             tags=self.tags,
         )
 
@@ -147,8 +147,8 @@ def _record(
     normalized_target = target if target.endswith("\n") else f"{target}\n"
     return {
         "id": f"{slice_.output_name}_{row_index:05d}",
-        "input": _append_answer_cue(input_text, normalized_target),
-        "target": normalized_target,
+        "input": _completion_prefix(input_text, normalized_target),
+        "output": normalized_target,
         "subset": slice_.output_name,
         "task": slice_.task_name,
         "seed": seed,
@@ -163,11 +163,23 @@ def _record(
     }
 
 
-def _append_answer_cue(input_text: str, target: str) -> str:
-    input_prefix = input_text if input_text.endswith("\n") else f"{input_text}\n"
-    if "\n" in target.rstrip("\n"):
-        return f"{input_prefix}answer:\n"
-    return f"{input_prefix}answer: "
+def _completion_separator(query: str, answer: str) -> str:
+    if "\n" in answer.rstrip("\n"):
+        return "\n"
+    stripped_query = query.rstrip()
+    if stripped_query.endswith(("->", ":")):
+        return " "
+    if stripped_query.endswith("="):
+        return ""
+    return " -> "
+
+
+def _completed_example(query: str, answer: str) -> str:
+    return f"{query.rstrip()}{_completion_separator(query, answer)}{answer.rstrip()}"
+
+
+def _completion_prefix(input_text: str, target: str) -> str:
+    return f"{input_text.rstrip()}{_completion_separator(input_text, target)}"
 
 
 def _json_string(text: str) -> str:
@@ -175,11 +187,7 @@ def _json_string(text: str) -> str:
 
 
 def _few_shot_block(examples: tuple[tuple[str, str], ...]) -> str:
-    lines = ["worked examples:"]
-    for query, answer in examples:
-        lines.append(query)
-        lines.append(f"answer: {answer}")
-    lines.append("held-out query:")
+    lines = [_completed_example(query, answer) for query, answer in examples]
     return "\n".join(lines) + "\n"
 
 
@@ -1297,7 +1305,7 @@ class PplCircuitCoverageV2RawConfig:
     source: str = PPL_CIRCUIT_COVERAGE_V2_SOURCE
     examples_per_config: int = EXAMPLES_PER_CONFIG
     seed: int = PPL_CIRCUIT_COVERAGE_V2_SEED
-    schema: tuple[str, ...] = ("input", "target", "id", "subset", "task", "seed", "tags", "metadata")
+    schema: tuple[str, ...] = ("input", "output", "id", "subset", "task", "seed", "tags", "metadata")
 
 
 def materialize_ppl_circuit_coverage_v2_raw_from_config(config: PplCircuitCoverageV2RawConfig) -> None:
@@ -1313,20 +1321,9 @@ def estimated_plain_text_tokens(text: str) -> int:
 
 
 def render_ppl_circuit_coverage_v2_plain_text_document(record: dict[str, object]) -> str:
-    metadata = record["metadata"]
-    if not isinstance(metadata, dict):
-        raise ValueError(f"Expected record metadata dict, got {type(metadata).__name__}")
-    family = metadata["family"]
-    task = record["task"]
     input_text = str(record["input"])
-    target = str(record["target"])
-    header = f"""### Circuit practice example
-Family: {family}
-Task: {task}
-
-Prompt:
-"""
-    return f"{header}{input_text}{target}"
+    output = str(record["output"])
+    return f"{input_text}{output}"
 
 
 def _pretraining_weight(slice_: PplCircuitCoverageV2Slice) -> int:
