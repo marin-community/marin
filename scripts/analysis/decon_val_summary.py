@@ -76,24 +76,27 @@ def main() -> None:
             p += 1
     logger.info("mapped %d/%d drop ids to doc indices", len(doc_of), len(ids))
 
-    win_docs = [
-        range(
-            int(np.searchsorted(offsets, w * SEQ_LEN, "right") - 1),
-            int(np.searchsorted(offsets, (w + 1) * SEQ_LEN - 1, "right")),
-        )
-        for w in windows
-    ]
+    # Doc-level dedupe: drop contaminated docs, keep every other val token
+    # (token-exact window∩doc overlap; no whole-window pruning).
+    win_spans = [(w * SEQ_LEN, (w + 1) * SEQ_LEN) for w in windows]
     summary = {"subsets": SUBSETS, "pair_files": len(files), "val_docs_total": VAL_DOCS_TOTAL, "cutoffs": {}}
     for cut in CUTOFFS:
         drop_docs = {doc_of[i] for i, j in best.items() if j >= cut and i in doc_of}
-        clean_w = sum(1 for docs in win_docs if not any(d in drop_docs for d in docs))
+        dropped_tokens = 0
+        for a, b in win_spans:
+            d0 = int(np.searchsorted(offsets, a, "right") - 1)
+            d1 = int(np.searchsorted(offsets, b - 1, "right") - 1)
+            for d in range(d0, d1 + 1):
+                if d in drop_docs:
+                    dropped_tokens += min(b, int(offsets[d + 1])) - max(a, int(offsets[d]))
+        total = len(win_spans) * SEQ_LEN
         summary["cutoffs"][str(cut)] = {
             "drop_docs": len(drop_docs),
             "clean_docs": VAL_DOCS_TOTAL - len(drop_docs),
-            "clean_windows": clean_w,
-            "clean_tokens": clean_w * SEQ_LEN,
+            "clean_tokens": total - dropped_tokens,
+            "dropped_tokens": dropped_tokens,
         }
-        logger.info("J>=%.2f: drop=%d clean_windows=%d", cut, len(drop_docs), clean_w)
+        logger.info("J>=%.2f: drop=%d clean_tokens=%d", cut, len(drop_docs), total - dropped_tokens)
 
     with fsspec.open(OUT, "w") as f:
         json.dump(summary, f, indent=2)
