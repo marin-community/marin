@@ -280,6 +280,60 @@ def _poll_json(url: str, *, timeout: float) -> dict[str, Any]:
     raise TimeoutError(f"{url} did not become ready within {timeout}s; last_error={last_error}")
 
 
+def _poll_json_while_process_alive(url: str, *, timeout: float, process: subprocess.Popen) -> dict[str, Any]:
+    deadline = time.time() + timeout
+    last_error: Exception | None = None
+    while time.time() < deadline:
+        return_code = process.poll()
+        if return_code is not None:
+            raise RuntimeError(
+                f"process exited with code {return_code} before {url} became ready; last_error={last_error}"
+            )
+        try:
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                return response.json()
+        except Exception as exc:
+            last_error = exc
+        time.sleep(2)
+    raise TimeoutError(f"{url} did not become ready within {timeout}s; last_error={last_error}")
+
+
+def _tail_text_file(path: Path, *, max_bytes: int = 12000) -> str:
+    if not path.exists():
+        return ""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        f.seek(max(0, size - max_bytes), os.SEEK_SET)
+        return f.read().decode("utf-8", errors="replace").strip()
+
+
+def _vllm_startup_error_message(
+    *,
+    log_dir: Path,
+    cmd: list[str],
+    process_return_code: int | None,
+    cause: Exception,
+) -> str:
+    process_state = (
+        f"vLLM process exited with code {process_return_code}"
+        if process_return_code is not None
+        else "vLLM process was still running when startup timed out"
+    )
+    parts = [
+        f"vLLM failed to start. Logs: {log_dir}. Command: {' '.join(cmd)}",
+        f"{process_state}. Startup error: {cause}",
+    ]
+    stderr_tail = _tail_text_file(log_dir / "stderr.log")
+    if stderr_tail:
+        parts.append(f"stderr tail:\n{stderr_tail}")
+    stdout_tail = _tail_text_file(log_dir / "stdout.log")
+    if stdout_tail:
+        parts.append(f"stdout tail:\n{stdout_tail}")
+    return "\n\n".join(parts)
+
+
 def _prompt_for_token_count(tokenizer, target_tokens: int) -> tuple[str, int]:
     if target_tokens <= 0:
         raise ValueError("target_tokens must be positive")
@@ -1378,11 +1432,19 @@ def start_vllm_server(
         stderr.close()
 
     try:
-        payload = _poll_json(f"{base_url}/models", timeout=timeout)
+        payload = _poll_json_while_process_alive(f"{base_url}/models", timeout=timeout, process=process)
         model_id = str(payload["data"][0]["id"])
-    except Exception:
+    except Exception as exc:
+        process_return_code = process.poll()
         close()
-        raise RuntimeError(f"vLLM failed to start. Logs: {log_dir}. Command: {' '.join(cmd)}")
+        raise RuntimeError(
+            _vllm_startup_error_message(
+                log_dir=log_dir,
+                cmd=cmd,
+                process_return_code=process_return_code,
+                cause=exc,
+            )
+        ) from exc
 
     logger.info("Started vLLM server at %s with logs in %s", base_url, log_dir)
     return ServerHandle("vllm-tpu", base_url, model_id, close, cmd, supports_seed=False)

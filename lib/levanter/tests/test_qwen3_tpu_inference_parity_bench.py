@@ -983,6 +983,36 @@ def test_start_backend_places_vllm_logs_under_output_dir(monkeypatch, tmp_path):
     assert captured["log_dir"] == tmp_path / "vllm_profiles"
 
 
+def test_vllm_startup_poll_fails_when_process_exits():
+    class ExitedProcess:
+        def poll(self):
+            return 17
+
+    with pytest.raises(RuntimeError, match="process exited with code 17"):
+        bench._poll_json_while_process_alive("http://127.0.0.1:1234/v1/models", timeout=60, process=ExitedProcess())
+
+
+def test_vllm_startup_error_includes_log_tails(tmp_path):
+    log_dir = tmp_path / "vllm_profiles"
+    log_dir.mkdir()
+    (log_dir / "stderr.log").write_text("compile failed\nbad vmem allocation\n")
+    (log_dir / "stdout.log").write_text("loading model\n")
+
+    message = bench._vllm_startup_error_message(
+        log_dir=log_dir,
+        cmd=["vllm", "serve", "Qwen/Qwen3-8B"],
+        process_return_code=1,
+        cause=TimeoutError("models endpoint timed out"),
+    )
+
+    assert "vLLM process exited with code 1" in message
+    assert "models endpoint timed out" in message
+    assert "stderr tail:" in message
+    assert "bad vmem allocation" in message
+    assert "stdout tail:" in message
+    assert "loading model" in message
+
+
 def test_main_rejects_vllm_greedy_multi_generation_cases():
     with pytest.raises(ValueError, match="n > 1 with greedy sampling"):
         bench.main(
