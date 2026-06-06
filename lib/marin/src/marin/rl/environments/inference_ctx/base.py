@@ -408,4 +408,5 @@ class BaseInferenceContext:
                 router_replay=rollout.router_replay,
                 expert_load=rollout.expert_load,
             ),
+            response_loss_mask=np.array(rollout.completion_mask, dtype=np.float32),
         )

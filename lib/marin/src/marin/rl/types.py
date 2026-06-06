@@ -109,6 +109,9 @@ class Rollout(eqx.Module):
     metadata: RolloutMetadata = RolloutMetadata()
     """Metadata about when/where this rollout was generated."""
 
+    response_loss_mask: np.ndarray | None = None
+    """Optional mask for response tokens that should contribute to training loss."""
+
     correctness_reward: float | None = None
     """The reward for the correctness of the response."""
 

@@ -275,6 +275,33 @@ def test_create_rollout_from_tokenized_rollout_preserves_moe_replay_metadata():
     assert rollout.metadata.expert_load == expert_load
 
 
+def test_create_rollout_from_tokenized_rollout_preserves_completion_loss_mask():
+    context = BaseInferenceContext()
+    context.tokenizer = SimpleNamespace(name_or_path="tokenizer")
+    context.set_policy_identity(PolicyIdentity(policy_name="policy", checkpoint_ref="checkpoint"))
+    token_rollout = TokenizedRollout(
+        request_id="req-1",
+        generation_index=0,
+        prompt_token_ids=(10, 20),
+        completion_token_ids=(30, 40, 50),
+        completion_logprobs=(-0.5, -0.4, -0.3),
+        finish_reason=TokenRolloutFinishReason.STOP,
+        prompt_mask=(False, False),
+        completion_mask=(True, False, True),
+    )
+
+    rollout = context.create_rollout_from_tokenized_rollout(
+        rollout=token_rollout,
+        env_name="math",
+        env_example_id="example-1",
+        reward=1.0,
+        decoding=DecodingConfig(temperature=0.7),
+        batch_id="batch-1",
+    )
+
+    np.testing.assert_array_equal(rollout.response_loss_mask, np.array([1, 0, 1], dtype=np.float32))
+
+
 def create_choice_with_logprobs(tokenizer, response_text: str, logprobs_values: list[float] | None = None) -> Choice:
     """Create a Choice with proper BPE tokens and logprobs."""
     # Tokenize the response to get real token IDs
