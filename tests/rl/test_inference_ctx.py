@@ -379,6 +379,15 @@ def test_response_tokens_from_choice(inference_ctx, llama3_tokenizer):
     np.testing.assert_array_equal(tokens, expected_tokens)
 
 
+def test_response_tokens_from_choice_prefers_attached_token_ids(inference_ctx, llama3_tokenizer):
+    choice = create_choice_with_logprobs(llama3_tokenizer, "ignored")
+    choice.response_token_ids = [50257, 7]
+
+    tokens = inference_ctx.response_tokens_from_choice(choice)
+
+    np.testing.assert_array_equal(tokens, np.array([50257, 7], dtype=np.int32))
+
+
 def test_logprobs_from_choice(inference_ctx, llama3_tokenizer):
     """Test extracting logprobs array from Choice."""
     response_text = "The answer"

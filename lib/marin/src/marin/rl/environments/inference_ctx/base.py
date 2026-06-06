@@ -286,6 +286,10 @@ class BaseInferenceContext:
 
     def response_tokens_from_choice(self, choice: Choice) -> np.ndarray:
         """Extract token IDs with BPE round-trip."""
+        response_token_ids = getattr(choice, "response_token_ids", None)
+        if response_token_ids is not None:
+            return np.array([int(token_id) for token_id in response_token_ids], dtype=np.int32)
+
         if not choice.logprobs or not choice.logprobs.content:
             raise ValueError("Choice missing logprobs. Use logprobs=True in API call.")
 
