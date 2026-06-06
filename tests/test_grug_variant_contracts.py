@@ -20,6 +20,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import numpy as np
 import optax
 import pytest
 from fray.cluster import ResourceConfig
@@ -179,6 +180,38 @@ def test_grug_moe_variant_threads_moe_implementation_to_kernel():
         closed_jaxpr, _, _ = eqx.filter_make_jaxpr(one_step)()
 
     assert "ragged_all_to_all" in str(closed_jaxpr)
+
+
+def test_grug_moe_variant_one_step_executes_with_concrete_mesh():
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=128, seq_len=8)
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+    train_step = train_module._make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
+    mesh = jax.sharding.Mesh(
+        np.array(jax.devices()[:1]).reshape((1, 1, 1)),
+        ("data", "expert", "model"),
+        axis_types=(
+            jax.sharding.AxisType.Explicit,
+            jax.sharding.AxisType.Explicit,
+            jax.sharding.AxisType.Explicit,
+        ),
+    )
+    batch_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(("data", "expert"), None))
+    batch = GrugLmExample(
+        tokens=jax.device_put(jnp.zeros((1, cfg.max_seq_len), dtype=jnp.int32), batch_sharding),
+        loss_weight=jax.device_put(jnp.ones((1, cfg.max_seq_len), dtype=jnp.float32), batch_sharding),
+        attn_mask=GrugAttentionMask.causal(),
+    )
+
+    with jax.set_mesh(mesh):
+        state = train_module.initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
+        next_state, metrics, watch = train_step(state, batch, compute_watch=False)
+        jax.block_until_ready(metrics["train/loss"])
+
+    assert int(jax.device_get(next_state.step)) == 1
+    assert watch is None
 
 
 @pytest.mark.parametrize(

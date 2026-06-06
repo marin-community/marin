@@ -248,7 +248,7 @@ class DenseMLP(eqx.Module):
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
         out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
-        return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
+        return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
 
 
 def _routing_stats(
@@ -387,9 +387,9 @@ class MoEMLP(eqx.Module):
             num_experts_per_token=self.cfg.num_experts_per_token,
         )
         # Sharded QB: compute beta locally per device, then average.
-        s_minus_alpha = router_logits - qb_alpha
         mesh = get_abstract_mesh()
         batch_axes = ("data", "expert")
+        s_minus_alpha = reshard(router_logits - qb_alpha, P(batch_axes, None))
         num_devices = 1
         for a in batch_axes:
             if a in mesh.shape:
