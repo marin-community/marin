@@ -1653,6 +1653,23 @@ def test_infer_block_sizes_uses_widest_operand_dtype_bucket(monkeypatch: pytest.
     assert mixed_block_sizes != bf16_block_sizes
 
 
+@pytest.mark.parametrize("batch", [16_384, 131_072])
+def test_infer_block_sizes_nvidia_issue6044_medium_h_fits_gpu_shared_memory(batch: int):
+    block_sizes, has_tuned_match = tuned_block_sizes.infer_block_sizes_with_tuned_match(
+        batch,
+        2_560,
+        128_256,
+        dtype=jnp.float32,
+        x_dtype=jnp.bfloat16,
+        w_dtype=jnp.bfloat16,
+        device_kind="NVIDIA H100 80GB HBM3",
+    )
+
+    assert has_tuned_match is True
+    assert block_sizes == fused_api.BlockSizes(b_block_size=1024, h_block_size=64, v_block_size=256)
+    assert block_sizes.h_block_size * block_sizes.v_block_size * jnp.dtype(jnp.float32).itemsize <= 101_376
+
+
 def test_shape_bucket_name_large_batch_medium_h_boundary():
     assert (
         tuned_block_sizes.shape_bucket_name(32_767, 2_048, 128_256, device_kind="TPU v5p") == "medium-batch-medium-h"
