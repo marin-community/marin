@@ -56,6 +56,11 @@ on:
         type: number
         default: 10
         required: false
+      xla_flags:
+        description: 'XLA_FLAGS passed to the GPU training container'
+        type: string
+        default: '--xla_gpu_autotune_level=0'
+        required: false
 
 permissions:
   contents: read   # actions/checkout
@@ -93,6 +98,7 @@ jobs:
       CANARY_CHILD_WAIT_TIMEOUT: "1800"
       CANARY_MIN_STEPS: "20"
       CANARY_MAX_LOSS: "20.0"
+      CANARY_XLA_FLAGS: ${{ github.event_name == 'workflow_dispatch' && inputs.xla_flags || '--xla_gpu_autotune_level=0' }}
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
       IRIS_CONFIG: lib/iris/config/coreweave-ci.yaml
@@ -153,6 +159,7 @@ jobs:
         shell: bash -l {0}
         run: |
           echo "GPU replicas: $CANARY_GPU_REPLICAS"
+          echo "XLA_FLAGS: $CANARY_XLA_FLAGS"
           JOB_ID=$(.venv/bin/iris --config="$IRIS_CONFIG" \
             job run --no-wait \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
@@ -168,6 +175,7 @@ jobs:
             -e CANARY_PROFILER_START_STEP "$CANARY_PROFILER_START_STEP" \
             -e CANARY_PROFILER_NUM_STEPS "$CANARY_PROFILER_NUM_STEPS" \
             -e CANARY_TARGET_TOKENS "$CANARY_TARGET_TOKENS" \
+            -e XLA_FLAGS "$CANARY_XLA_FLAGS" \
             -e WANDB_ENTITY "$WANDB_ENTITY" \
             -e WANDB_PROJECT "$WANDB_PROJECT" \
             -e WANDB_API_KEY "$WANDB_API_KEY" \
