@@ -368,6 +368,8 @@ class BaseInferenceContext:
             decoding=decoding.as_trace(),
             is_truncated=rollout.finish_reason == TokenRolloutFinishReason.LENGTH,
             metadata=RolloutMetadata(
+                tokenizer=self.tokenizer_identity(),
+                policy=self.policy_identity(),
                 token_rollout_backend=backend,
                 token_rollout_batch_id=batch_id,
                 token_rollout_request_id=rollout.request_id,

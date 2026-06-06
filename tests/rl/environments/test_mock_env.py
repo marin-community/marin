@@ -315,6 +315,8 @@ def test_mock_env_uses_token_rollout_path_when_supported():
     assert len(rollout_groups[0].rollouts) == 2
     rollout = rollout_groups[0].rollouts[0]
     assert rollout.env_name == "mock_env:addition"
+    assert rollout.metadata.tokenizer == inference_ctx.tokenizer_identity()
+    assert rollout.metadata.policy == inference_ctx.policy_identity()
     assert rollout.metadata.token_rollout_backend == "dummy-token"
     assert rollout.metadata.token_rollout_batch_id == "mock_env.addition.train"
     assert rollout.metadata.token_rollout_request_id == "mock_env.addition.train:0"
