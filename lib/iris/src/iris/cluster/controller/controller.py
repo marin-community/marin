@@ -520,19 +520,21 @@ class Controller:
         return address
 
     def start(self) -> None:
-        """Start main controller loop, dashboard server, and optionally autoscaler."""
+        """Start the dashboard server and all loop threads uniformly.
+
+        Every backend gets the same thread set; each tick no-ops for the
+        placements it does not serve.
+        """
         self._started = True
         if self._config.dry_run:
             logger.info("[DRY-RUN] Controller started in dry-run mode — all side effects suppressed")
 
-        if self._task_backend.placement is PlacementOwner.TASK_BACKEND:
-            self._dispatch_thread = self._threads.spawn(self._run_dispatch_loop, name="dispatch-loop")
-        else:
-            self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
-            self._polling_thread = self._threads.spawn(self._run_polling_loop, name="polling-loop")
-            self._ping_thread = self._threads.spawn(self._run_ping_loop, name="ping-loop")
-            if not self._config.dry_run:
-                self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
+        self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
+        self._polling_thread = self._threads.spawn(self._run_polling_loop, name="polling-loop")
+        self._ping_thread = self._threads.spawn(self._run_ping_loop, name="ping-loop")
+        self._dispatch_thread = self._threads.spawn(self._run_dispatch_loop, name="dispatch-loop")
+        if not self._config.dry_run:
+            self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
 
         # Create and start uvicorn server via spawn_server, which bridges the
         # ManagedThread stop_event to server.should_exit automatically.
@@ -571,7 +573,7 @@ class Controller:
             logger.info("Registered system endpoint %s -> %s", name, url)
         self._service._system_endpoints["/system/log-server"] = self._log_service_address
 
-        if not self._task_backend.manages_capacity and not self._config.dry_run:
+        if not self._config.dry_run:
             self._autoscaler_thread = self._threads.spawn(self._run_autoscaler_loop, name="autoscaler-loop")
 
         if self._periodic_checkpoint_limiter is not None and not self._config.dry_run:
@@ -780,7 +782,7 @@ class Controller:
                 logger.exception("Periodic checkpoint failed")
 
     def _run_dispatch_loop(self, stop_event: threading.Event) -> None:
-        """Reconcile loop for BACKEND-placement backends: no scheduling, no workers."""
+        """Dispatch loop spawned for all backends; ``_sync_dispatch`` no-ops unless placement is TASK_BACKEND."""
         limiter = RateLimiter(interval_seconds=self._config.heartbeat_interval.to_seconds())
         while not stop_event.is_set():
             if not limiter.wait(cancel=stop_event):
@@ -788,9 +790,11 @@ class Controller:
             try:
                 self._sync_dispatch()
             except Exception:
-                logger.exception("Direct provider sync round failed, will retry next interval")
+                logger.exception("Dispatch sync round failed, will retry next interval")
 
     def _sync_dispatch(self) -> None:
+        if self._task_backend.placement is not PlacementOwner.TASK_BACKEND:
+            return
         if self._config.dry_run:
             return
         max_promotions = self._promotion_bucket.available
@@ -1119,6 +1123,8 @@ class Controller:
         """
         if self._config.dry_run:
             return
+        if self._task_backend.placement is PlacementOwner.TASK_BACKEND:
+            return
 
         now = Timestamp.now()
         scan_timeouts = self._timeout_rate_limiter.should_run()
@@ -1258,6 +1264,8 @@ class Controller:
         """
         if self._config.dry_run:
             logger.info("[DRY-RUN] Skipping autoscaler cycle (manage_capacity)")
+            return
+        if self._task_backend.manages_capacity:
             return
 
         worker_status_map = self._build_worker_status_map()
