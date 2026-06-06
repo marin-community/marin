@@ -368,7 +368,7 @@ def simple_attention_with_dropout(
     precision: PrecisionLike = None,
     *,
     prng: Optional[PRNGKeyArray] = None,
-    scaling_factor: float | None = None,
+    scaling_factor: float | jax.Array | None = None,
     logits_soft_cap: Optional[float] = None,
 ):
     QPos = query.resolve_axis(QPos)
@@ -2363,7 +2363,7 @@ class MultiHeadLatentAttention(eqx.Module):
     kv_b_proj: hnn.Linear
     o_proj: hnn.Linear
 
-    q_proj: hnn.Linear = None
+    q_proj: Optional[hnn.Linear] = None
     q_a_proj: Optional[hnn.Linear] = None
     q_a_norm: Optional[LayerNormBase] = None
     q_b_proj: Optional[hnn.Linear] = None
@@ -2476,6 +2476,7 @@ class MultiHeadLatentAttention(eqx.Module):
 
         # Optional step of doing LoRA on Q (as done in DeepSeek).
         if self.config.q_lora_rank is None:
+            assert self.q_proj is not None, "q_lora_rank not defined, but q_proj is missing."
             q = self.q_proj(x, key=k_q_a)
         else:
             assert (

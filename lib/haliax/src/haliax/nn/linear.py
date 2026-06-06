@@ -8,7 +8,6 @@ from typing import Optional
 
 import equinox as eqx
 import jax
-from jax.random import PRNGKey
 from jaxtyping import PRNGKeyArray
 
 import haliax as hax
@@ -54,7 +53,7 @@ class Linear(ModuleWithStateDictSerialization, ReparamEnabled):
         In: AxisSpec,
         Out: AxisSpec,
         *,
-        key: PRNGKey,
+        key: PRNGKeyArray,
         use_bias: bool = True,
         out_first: bool = True,
         dot_general: DotGeneralOp | None = None,
@@ -206,7 +205,7 @@ class MoELinear(eqx.Module):
         In: Axis,
         Out: Axis,
         *,
-        key: PRNGKey,
+        key: PRNGKeyArray,
         use_bias: bool = True,
         out_first: bool = False,
         init_scale: float = 1.0,

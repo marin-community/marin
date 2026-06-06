@@ -356,7 +356,7 @@ class WhisperEncoder(ModuleWithStateDictSerialization):
         x = self.transformer(x, key=k_transformer)
         return x
 
-    def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "WhisperDecoder":
+    def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "WhisperEncoder":
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=key)
         return dataclasses.replace(self, embeddings=new_embeddings)
 

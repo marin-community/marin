@@ -26,19 +26,19 @@ import socket
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import equinox as eqx
 import jax.random as jrandom
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmHeadModel
-from levanter.tokenizers import MarinTokenizer
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from levanter.trainer import TrainerConfig
 from openai import AsyncOpenAI
 from rigging.log_setup import configure_logging
@@ -130,7 +130,9 @@ def _load_model_and_tokenizer(config: ReplayConfig) -> tuple[LmHeadModel, MarinT
             )
             model = config.trainer.mp.cast_to_compute(model)
 
-    return model, tokenizer
+    # `load_pretrained` is typed as returning the broad `ModelWithHfSerializationMixin`,
+    # but loading a config's `model_type` always yields an `LmHeadModel` at runtime.
+    return cast(LmHeadModel, model), tokenizer
 
 
 def create_inference_server(config: ReplayConfig) -> tuple[InferenceServer, AsyncOpenAI, int]:

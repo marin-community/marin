@@ -13,7 +13,7 @@ import threading
 import time
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple, TypeVar, Union, cast
+from typing import Any, Dict, Generic, List, Optional, Protocol, Sequence, Tuple, TypeVar, Union, cast
 
 import deepdiff
 import jax
@@ -443,7 +443,7 @@ class _TreeCacheReader(Protocol[T_co]):
     async def get_flat_field_batch(self, field: str, offsets: Sequence[int], length: int) -> Sequence[np.ndarray]: ...
 
 
-class _MaterializedTreeCacheReader:
+class _MaterializedTreeCacheReader(Generic[T_co]):
     def __init__(self, store: TreeStore[T_co]):
         self._store = store
 
@@ -498,7 +498,7 @@ class _MaterializedTreeCacheReader:
         return await asyncio.gather(*futures)
 
 
-class _ShardedTreeCacheReader:
+class _ShardedTreeCacheReader(Generic[T_co]):
     def __init__(self, cache: TreeCache[T_co]):
         self._cache = cache
 
@@ -779,7 +779,7 @@ class SerialCacheWriter:
     ):
         self.cache_dir = cache_dir
         self.metadata = metadata
-        self._exemplar = exemplar
+        self._exemplar: Any = exemplar
         self._shard_name = shard_name
         self._tree_store = TreeStore.open(exemplar, self.cache_dir, mode=mode, cache_metadata=True)
         self._is_closed = False

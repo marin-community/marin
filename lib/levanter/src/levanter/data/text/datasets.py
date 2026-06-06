@@ -58,6 +58,7 @@ from levanter.utils.logging import silence_transformer_nag
 silence_transformer_nag()  # noqa
 
 T_co = TypeVar("T_co", covariant=True)
+T = TypeVar("T")
 
 logger = logging.getLogger("levanter.data.text")
 
@@ -550,8 +551,8 @@ def _component_cache_dir(name: str, component: DatasetComponent, default_root: s
 
 
 def _split_into_trainval_sets(
-    dataset: "AsyncDataset[LmExample]", num_validation_sequences: int, *, shuffle: bool = True
-) -> tuple["AsyncDataset[LmExample]", "AsyncDataset[LmExample]"]:
+    dataset: "AsyncDataset[T]", num_validation_sequences: int, *, shuffle: bool = True
+) -> tuple["AsyncDataset[T]", "AsyncDataset[T]"]:
     """Split a dataset into train/val portions, optionally shuffling first.
 
     When shuffle is True, a deterministic shuffle is applied before

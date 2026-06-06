@@ -228,9 +228,10 @@ search-path = [
 ]
 disable-search-path-heuristics = true
 
-# Prevent pyrefly from querying the Python interpreter for site-packages
-# which would auto-detect workspace members as site packages and exclude them
-skip-interpreter-query = true
+# Type-check against real installed third-party types. CI's marin-lint job syncs
+# this venv (uv sync --all-packages --extra=cpu --no-default-groups); locally it is
+# your worktree .venv. Relative path keeps it worktree-local.
+python-interpreter-path = ".venv/bin/python"
 use-ignore-files = false
 
 # Parse jaxtyping/native tensor shape annotations (e.g. Float[Array, "batch seq"])
@@ -239,6 +240,51 @@ use-ignore-files = false
 # as undefined forward references and emits ~141 false `unknown-name` errors across
 # levanter/grug and levanter/kernels. See docs/plans/pyrefly-tensor-shapes.md.
 tensor-shapes = true
+
+# Deps the cpu lint profile does not install (extras-only like vllm/lm_eval, or
+# compiled packages without stubs like resiliparse/jaxlib). Unlike
+# replace-imports-with-any, this substitutes Any only when the module is truly
+# absent on disk, so a deleted/misspelled internal module still trips missing-import.
+# HAND-MAINTAINED: a new uninstalled dep trips missing-import until added here
+# (list both `pkg` and `pkg.*`).
+ignore-missing-imports = [
+    "harbor",
+    "harbor.*",
+    "jax_triton",
+    "jax_triton.*",
+    "jaxlib",
+    "jaxlib.*",
+    "kubernetes",
+    "kubernetes.*",
+    "librosa",
+    "librosa.*",
+    "lm_eval",
+    "lm_eval.*",
+    "math_verify",
+    "math_verify.*",
+    "memray",
+    "memray.*",
+    "prompt_toolkit",
+    "prompt_toolkit.*",
+    "pylatexenc",
+    "pylatexenc.*",
+    "resiliparse",
+    "resiliparse.*",
+    "tensorboardX",
+    "tensorboardX.*",
+    "tpu_inference",
+    "tpu_inference.*",
+    "trackio",
+    "trackio.*",
+    "triton",
+    "triton.*",
+    "verifiers",
+    "verifiers.*",
+    "vllm",
+    "vllm.*",
+    "xprof",
+    "xprof.*",
+]
 
 # Exclude non-production code from type checking
 project-excludes = [
@@ -273,9 +319,6 @@ project-excludes = [
 # Disable specific error codes that are primarily noise from missing type stubs
 # These can be gradually enabled as the codebase improves
 [tool.pyrefly.errors]
-# Missing imports (824 occurrences) - third-party libs without stubs
-missing-import = false
-
 # Missing attributes (315 occurrences) - often from untyped libraries like JAX, etc.
 # These are mostly false positives from libraries without complete type stubs
 missing-attribute = false

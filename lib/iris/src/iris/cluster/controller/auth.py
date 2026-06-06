@@ -12,10 +12,11 @@ import dataclasses
 import logging
 import secrets
 import time
+from collections.abc import Sequence
 
 import jwt
 from rigging.timing import Timestamp
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import Row, delete, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from iris.cluster.controller import writes
@@ -99,8 +100,8 @@ def lookup_api_key_by_id(db: ControllerDB, key_id: str):
         return tx.execute(select(auth_api_keys_table).where(auth_api_keys_table.c.key_id == key_id)).first()
 
 
-def list_api_keys(db: ControllerDB, user_id: str | None = None) -> list:
-    """List API keys, optionally filtered by user. Returns list[Row]."""
+def list_api_keys(db: ControllerDB, user_id: str | None = None) -> Sequence[Row]:
+    """List API keys, optionally filtered by user."""
     with db.auth_read_snapshot() as tx:
         stmt = select(auth_api_keys_table)
         if user_id:

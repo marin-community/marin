@@ -13,12 +13,13 @@ over an in-memory ``SchedulingContext``.
 import logging
 import sys
 from collections import defaultdict
+from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from typing import Any
 
 from rigging.log_setup import slow_log
-from sqlalchemy import bindparam, select
+from sqlalchemy import Row, bindparam, select
 
 from iris.cluster.constraints import (
     AttributeValue,
@@ -454,7 +455,7 @@ def _pending_tasks_with_jobs(tx: Tx) -> list[PendingTask]:
     return [task for task in pending_tasks if task_row_can_be_scheduled(task)]
 
 
-def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list:
+def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> Sequence[Row]:
     """Fetch (job_id, reservation_json) for jobs that hold a reservation.
 
     Per-tick hot path: only decode what the reservation-claim recomputation

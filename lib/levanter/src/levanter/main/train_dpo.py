@@ -14,6 +14,7 @@ import jax.numpy as jnp
 import jax.random as jrandom
 from haliax import Axis
 from haliax.partitioning import named_jit, round_axis_for_partitioning
+from jaxtyping import PRNGKeyArray
 
 import levanter
 import levanter.callbacks
@@ -146,7 +147,7 @@ def _shuffle_dpo_dataset(
     dataset: AsyncDataset[DpoExample],
     shuffle: bool | BlockShuffleConfig,
     *,
-    key: jrandom.PRNGKey,
+    key: PRNGKeyArray,
     perm_type: Literal["feistel", "linear"],
 ) -> AsyncDataset[DpoExample]:
     if isinstance(shuffle, BlockShuffleConfig):
@@ -165,7 +166,7 @@ def _build_dpo_dataset(
     config: PreferenceLmDataConfig,
     Pos: Axis,
     *,
-    key: jrandom.PRNGKey,
+    key: PRNGKeyArray,
 ) -> AsyncDataset[DpoExample]:
     """Build a DPO training dataset from a single component config."""
     training_components = _get_training_components(config)
@@ -205,7 +206,7 @@ def _build_validation_split(
     config: PreferenceLmDataConfig,
     Pos: Axis,
     *,
-    key: jrandom.PRNGKey,
+    key: PRNGKeyArray,
     fraction: float,
 ) -> tuple[AsyncDataset[DpoExample], dict[str, ValidationDatasetSpec]]:
     """Build train/validation split from a single component config."""

@@ -353,7 +353,7 @@ def list_jobs(
         stmt = stmt.limit(limit).offset(offset)
 
     params = {"job_state_ids": list(state_ids)}
-    rows = tx.execute(stmt, params).all()
+    rows = list(tx.execute(stmt, params).all())
     total = int(tx.execute(count_stmt, params).scalar() or 0)
     return rows, total
 

@@ -131,7 +131,7 @@ def moe_mlp(
     *,
     activation: MoeActivation = ActivationFunctionEnum.silu,
     implementation: MoeImplementation | str | None = None,
-    mesh: jax.sharding.AbstractMesh | None = None,
+    mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
