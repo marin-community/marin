@@ -23,10 +23,11 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - Prefer short local file edits, short REST `gh api` checks, and written
   handoffs. Delegate new runs to subagents when useful, then monitor them with
   tightly scoped heartbeats rather than foreground polling.
-- Active heartbeat: `poll-v5p-prefilldrain-subagent`, hourly. It polls only
-  side-agent thread `019e9b3f-8ff1-79c3-9884-02f847973191` for the v5p
-  prefill-drain follow-up and should notify only on non-capacity blockage,
-  drift, concrete failure/fix, PR updates, or terminal benchmark results.
+- Active heartbeat: `poll-v5p-and-handoff-pr`, hourly. It polls side-agent
+  thread `019e9b3f-8ff1-79c3-9884-02f847973191` for the v5p prefill-drain
+  follow-up and draft PR #6214 for lightweight review/check state. It should
+  notify only on non-capacity blockage, drift, concrete failure/fix, actionable
+  review/CI state, PR updates, or terminal benchmark results.
 
 ## Current Evidence
 
@@ -60,6 +61,9 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - RL token rollout contracts: #6186,
   `https://github.com/marin-community/marin/pull/6186`, head
   `c4ba37bda1f429700528a442e2f18e906b96d1b9`.
+- Durable handoff artifact: #6214,
+  `https://github.com/marin-community/marin/pull/6214`, branch
+  `codex/levanter-rl-rollout-handoff`.
 - Canonical decode-heavy proof: 60-minute v6e-8
   `decode_b32_i1_o128_n4` batch-merge soak, Levanter `3197.58` decode tok/s
   versus vLLM `3408.09`, ratio `0.938`.
