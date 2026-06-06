@@ -39,8 +39,10 @@ jobs:
 
       - name: Ensure pyproject.toml is in user mode
         run: |
-          if grep -q 'dupekit = { path' pyproject.toml; then
-            echo "ERROR: pyproject.toml has dev-mode dupekit source. Run 'make rust-user' before committing."
+          # The RUST-DEV SOURCES block governs both native packages (dupekit and
+          # finelog); either editable path source committed means dev mode leaked.
+          if grep -qE 'marin-(dupekit|finelog) = \{ path' pyproject.toml; then
+            echo "ERROR: pyproject.toml has a dev-mode rust source. Run 'python scripts/rust_mode.py user' before committing."
             exit 1
           fi
 

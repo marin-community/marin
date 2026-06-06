@@ -36,7 +36,6 @@ from finelog.rpc.finelog_stats_connect import (
     StatsServiceASGIApplication as FinelogStatsServiceASGIApplication,
 )
 from finelog.rpc.logging_connect import LogServiceASGIApplication
-from finelog.server import LogServiceImpl
 from rigging.rpc import ConcurrencyLimitInterceptor
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
@@ -370,7 +369,7 @@ class ControllerDashboard:
     def __init__(
         self,
         service: ControllerServiceImpl,
-        log_service: LogServiceImpl | LogServiceProxy,
+        log_service: LogServiceProxy,
         host: str = "0.0.0.0",
         port: int = 8080,
         auth_verifier: TokenVerifier | None = None,

@@ -3,7 +3,6 @@
 
 """Shared fixtures for controller unit tests."""
 
-import asyncio
 import shutil
 import tempfile
 from contextlib import contextmanager
@@ -13,8 +12,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
 import pytest
-from finelog.rpc import logging_pb2
-from finelog.server import LogServiceImpl
+from finelog.client.proxy import LogServiceProxy
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
     AttributeValue,
@@ -60,7 +58,6 @@ from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 
-from tests.cluster.conftest import fake_log_client_from_service
 from tests.cluster.controller._test_support import ControllerTestState, set_task_state_for_test
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 from tests.cluster.providers.conftest import make_mock_platform
@@ -145,48 +142,25 @@ def mock_controller() -> MockController:
 
 
 @pytest.fixture
-def log_service(state, tmp_path) -> LogServiceImpl:
-    """LogServiceImpl with its own internal log store.
+def log_service(embedded_log_server) -> LogServiceProxy:
+    """A LogService client (RPC proxy) against a fresh in-process finelog server.
 
-    Wraps ``push_logs`` / ``fetch_logs`` to force flush (and compact on read)
-    so push→fetch in the same test is synchronously visible. The production
-    path relies on the bg flush tick (5s default); tests can't afford that
-    wait — without the push wrapper, each push's ``await_persisted`` blocks
-    for one flush interval, making N sequential pushes take ~N*5s.
+    The native server makes pushed log entries immediately fetchable (RAM
+    buffer), so push→fetch is synchronously visible within a test without any
+    manual flush. ``LogServiceProxy`` exposes the same async
+    ``push_logs(request, ctx)`` / ``fetch_logs(request, ctx)`` surface the tests
+    drive, so callers are unchanged.
     """
-    svc = LogServiceImpl(log_dir=tmp_path / "log_service_logs")
-    original_fetch = svc.fetch_logs
-
-    async def push_logs(request, ctx):
-        # Append, then force-flush before returning. Bypasses the original
-        # ``await_persisted`` poll-wait that otherwise blocks for one bg
-        # flush tick (5s by default) on every push.
-        if not request.entries:
-            return logging_pb2.PushLogsResponse()
-        await asyncio.to_thread(svc._log_store.append, request.key, list(request.entries))
-        svc._log_store._force_flush()
-        return logging_pb2.PushLogsResponse()
-
-    def fetch_logs(request, ctx):
-        # Force a flush + compaction so just-pushed data is queryable
-        # within the same test, bypassing the production bg tick.
-        svc._log_store._force_flush()
-        svc._log_store._force_compaction()
-        return original_fetch(request, ctx)
-
-    svc.push_logs = push_logs  # type: ignore[method-assign]
-    svc.fetch_logs = fetch_logs  # type: ignore[method-assign]
-    yield svc
-    svc.close()
+    return LogServiceProxy(embedded_log_server.address)
 
 
 @pytest.fixture
-def controller_service(state, log_service, mock_controller, tmp_path) -> ControllerServiceImpl:
+def controller_service(state, log_client, mock_controller, tmp_path) -> ControllerServiceImpl:
     """ControllerServiceImpl with fresh DB, log service, and mock controller."""
     return ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_client=fake_log_client_from_service(log_service),
+        log_client=log_client,
         db=state._db,
         health=state._health,
         endpoints=state._endpoints,
