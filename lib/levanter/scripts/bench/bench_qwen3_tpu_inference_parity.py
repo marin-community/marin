@@ -1961,6 +1961,15 @@ def _optional_float_list(value: list[float] | None) -> str:
     return ",".join(f"{item:.3f}" for item in value)
 
 
+def _optional_tokens_per_second(tokens: list[int] | None, seconds: list[float] | None) -> float | None:
+    if not tokens or not seconds:
+        return None
+    elapsed = sum(seconds)
+    if elapsed <= 0.0:
+        return None
+    return sum(tokens) / elapsed
+
+
 def _parity_target_status(result: CaseResult, baseline: CaseResult | None) -> str:
     if baseline is None or result.backend == baseline.backend or baseline.decode_tokens_per_second == 0.0:
         return ""
@@ -2006,7 +2015,18 @@ def write_outputs(
     stress_results: list[StressResult] | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    result_dicts = [dataclasses.asdict(result) for result in results]
+    result_dicts = []
+    for result in results:
+        result_dict = dataclasses.asdict(result)
+        result_dict["decode_iteration_tokens_per_second"] = _optional_tokens_per_second(
+            result.decode_tokens_per_iteration,
+            result.decode_seconds_per_iteration,
+        )
+        result_dict["decode_device_tokens_per_second"] = _optional_tokens_per_second(
+            result.decode_tokens_per_iteration,
+            result.decode_device_seconds_per_iteration,
+        )
+        result_dicts.append(result_dict)
     stress_result_dicts = [dataclasses.asdict(result) for result in stress_results or []]
     comparisons = parity_comparisons(results)
     with open(output_dir / "summary.json", "w") as f:
@@ -2047,6 +2067,8 @@ def write_outputs(
         "decode submit s",
         "decode extract s",
         "decode iter toks",
+        "decode iter tok/s",
+        "decode device tok/s",
         "decode/vllm",
         "total/vllm",
         "target",
@@ -2076,6 +2098,14 @@ def write_outputs(
             _optional_float_list(result.decode_submit_seconds_per_iteration),
             _optional_float_list(result.decode_extract_seconds_per_iteration),
             _optional_int_list(result.decode_tokens_per_iteration),
+            _optional_float(
+                _optional_tokens_per_second(result.decode_tokens_per_iteration, result.decode_seconds_per_iteration)
+            ),
+            _optional_float(
+                _optional_tokens_per_second(
+                    result.decode_tokens_per_iteration, result.decode_device_seconds_per_iteration
+                )
+            ),
             (
                 _ratio(result.decode_tokens_per_second, vllm_by_case.get(result.case_name).decode_tokens_per_second)
                 if result.case_name in vllm_by_case

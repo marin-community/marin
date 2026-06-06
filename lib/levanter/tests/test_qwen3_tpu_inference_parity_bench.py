@@ -722,6 +722,9 @@ def _case_result(
     compile_including_seconds: float | None = None,
     hbm_used_bytes: int | None = None,
     compiled_shape_count: int | None = None,
+    decode_seconds_per_iteration: list[float] | None = None,
+    decode_device_seconds_per_iteration: list[float] | None = None,
+    decode_tokens_per_iteration: list[int] | None = None,
 ) -> bench.CaseResult:
     return bench.CaseResult(
         case_name=case_name,
@@ -743,6 +746,9 @@ def _case_result(
         total_tokens_per_second=decode_tokens_per_second + 1.0,
         hbm_used_bytes=hbm_used_bytes,
         compiled_shape_count=compiled_shape_count,
+        decode_seconds_per_iteration=decode_seconds_per_iteration,
+        decode_device_seconds_per_iteration=decode_device_seconds_per_iteration,
+        decode_tokens_per_iteration=decode_tokens_per_iteration,
     )
 
 
@@ -758,6 +764,9 @@ def test_summary_markdown_includes_vllm_ratio_columns(tmp_path):
                 compile_including_seconds=12.3456,
                 hbm_used_bytes=123456,
                 compiled_shape_count=2,
+                decode_seconds_per_iteration=[0.5],
+                decode_device_seconds_per_iteration=[0.25],
+                decode_tokens_per_iteration=[100],
             ),
         ],
         {"backend": "both"},
@@ -777,7 +786,11 @@ def test_summary_markdown_includes_vllm_ratio_columns(tmp_path):
     assert "decode device s" in summary
     assert "decode host s" in summary
     assert "decode iter toks" in summary
+    assert "decode iter tok/s" in summary
+    assert "decode device tok/s" in summary
     assert "0.900" in summary
+    assert "200.000" in summary
+    assert "400.000" in summary
     assert "pass" in summary
     assert "12.346" in summary
     assert "123456" in summary
@@ -790,7 +803,14 @@ def test_summary_json_includes_machine_readable_parity_comparisons(tmp_path):
             _case_result("decode_b8_i1_o128_n1", "vllm-tpu", 100.0),
             _case_result("decode_b8_i1_o128_n1", "levanter:auto", 90.0),
             _case_result("decode_b32_i1_o128_n1", "vllm-tpu", 100.0),
-            _case_result("decode_b32_i1_o128_n1", "levanter:auto", 70.0),
+            _case_result(
+                "decode_b32_i1_o128_n1",
+                "levanter:auto",
+                70.0,
+                decode_seconds_per_iteration=[0.25, 0.25],
+                decode_device_seconds_per_iteration=[0.2, 0.2],
+                decode_tokens_per_iteration=[64, 64],
+            ),
         ],
         {"backend": "both"},
     )
@@ -803,6 +823,13 @@ def test_summary_json_includes_machine_readable_parity_comparisons(tmp_path):
     assert comparisons["decode_b8_i1_o128_n1"]["meets_decode_ratio_target"] is True
     assert comparisons["decode_b32_i1_o128_n1"]["decode_ratio"] == 0.7
     assert comparisons["decode_b32_i1_o128_n1"]["meets_decode_ratio_target"] is False
+    levanter_rows = [
+        result
+        for result in summary["results"]
+        if result["case_name"] == "decode_b32_i1_o128_n1" and result["backend"] == "levanter:auto"
+    ]
+    assert levanter_rows[0]["decode_iteration_tokens_per_second"] == pytest.approx(256.0)
+    assert levanter_rows[0]["decode_device_tokens_per_second"] == pytest.approx(320.0)
 
 
 def _stress_result() -> bench.StressResult:
