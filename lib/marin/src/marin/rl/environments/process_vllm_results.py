@@ -44,14 +44,17 @@ def parse_chat_completion_tokens_from_bytes(chat_completion: ChatCompletion, tok
         List of token IDs
     """
     assert len(chat_completion.choices) == 1, f"Expected 1 choice, got {len(chat_completion.choices)}: {chat_completion}"
-    assert chat_completion.choices[0].logprobs is not None, f"Logprobs should not be None: {chat_completion}"
-    assert (
-        chat_completion.choices[0].logprobs.content is not None
-    ), f"Logprob content should not be None: {chat_completion}"
+    choice = chat_completion.choices[0]
+    response_token_ids = getattr(choice, "response_token_ids", None)
+    if response_token_ids is not None:
+        return [int(token_id) for token_id in response_token_ids]
+
+    assert choice.logprobs is not None, f"Logprobs should not be None: {chat_completion}"
+    assert choice.logprobs.content is not None, f"Logprob content should not be None: {chat_completion}"
 
     vocab = tokenizer.get_vocab()
     tokens = []
-    logprob_content = chat_completion.choices[0].logprobs.content
+    logprob_content = choice.logprobs.content
 
     for token_logprob in logprob_content:
         token_str = token_logprob.token

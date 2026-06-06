@@ -18,6 +18,7 @@ import haliax.haxtyping as ht
 import jax
 import numpy as np
 from haliax import NamedArray
+from marin.inference.types import ExpertLoadAccounting, MoeRouterReplayMetadata, PolicyIdentity, TokenizerIdentity
 from marin.rl.decoding import RolloutDecodingTrace
 
 
@@ -43,6 +44,36 @@ class RolloutMetadata:
 
     weight_step: int = -1
     """The step at which the model weights were used to generate this rollout."""
+
+    tokenizer: TokenizerIdentity | None = None
+    """Tokenizer identity used to render and replay the rollout tokens."""
+
+    policy: PolicyIdentity | None = None
+    """Policy/checkpoint identity used to generate the rollout."""
+
+    token_rollout_backend: str | None = None
+    """Token-native backend that produced this rollout, when available."""
+
+    token_rollout_batch_id: str | None = None
+    """Token-native batch ID that produced this rollout, when available."""
+
+    token_rollout_request_id: str | None = None
+    """Backend-independent token rollout request ID."""
+
+    token_rollout_generation_index: int | None = None
+    """Generation index within the token rollout request."""
+
+    token_rollout_finish_reason: str | None = None
+    """Backend-independent reason token-native generation stopped."""
+
+    token_rollout_stop_token_id: int | None = None
+    """Stop token ID that ended token-native generation, when applicable."""
+
+    router_replay: MoeRouterReplayMetadata | None = None
+    """MoE router replay metadata captured during token-native generation."""
+
+    expert_load: ExpertLoadAccounting | None = None
+    """MoE expert-load accounting captured during token-native generation."""
 
 
 class Rollout(eqx.Module):
@@ -77,6 +108,9 @@ class Rollout(eqx.Module):
 
     metadata: RolloutMetadata = RolloutMetadata()
     """Metadata about when/where this rollout was generated."""
+
+    response_loss_mask: np.ndarray | None = None
+    """Optional mask for response tokens that should contribute to training loss."""
 
     correctness_reward: float | None = None
     """The reward for the correctness of the response."""

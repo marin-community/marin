@@ -15,7 +15,7 @@ from marin.rl.decoding import DecodingConfig, DecodingStrategy, stop_strings_for
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.inference_ctx import BaseInferenceContext
 from marin.rl.environments.process_vllm_results import process_vllm_chat_results
-from marin.rl.types import Rollout, RolloutGroup
+from marin.rl.types import Rollout, RolloutGroup, RolloutMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +175,10 @@ class PrimeIntellectEnv(MarinEnv):
                     episode_reward=float(reward),
                     decoding=decoding.as_trace(),
                     is_truncated=False,  # prime intellect doesn't seem to report this easily
+                    metadata=RolloutMetadata(
+                        tokenizer=inference_ctx.tokenizer_identity(),
+                        policy=inference_ctx.policy_identity(),
+                    ),
                 )
                 rollouts.append(rollout)
 

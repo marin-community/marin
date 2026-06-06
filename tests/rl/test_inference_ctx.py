@@ -3,6 +3,7 @@
 
 """Tests for InferenceContext utilities and chat template handling."""
 
+import hashlib
 import sys
 from dataclasses import dataclass
 from types import ModuleType, SimpleNamespace
@@ -11,6 +12,20 @@ from unittest.mock import AsyncMock
 import numpy as np
 import pytest
 from levanter.inference.openai import ChatMessage
+from marin.inference.types import (
+    ExpertLoadAccounting,
+    MoeRouterReplayMetadata,
+    PolicyIdentity,
+    TokenizedRollout,
+    TokenizedRolloutBatchRequest,
+    TokenizedRolloutBatchResult,
+    TokenizedRolloutFailure,
+    TokenizedRolloutRequest,
+    TokenizerIdentity,
+    TokenRolloutFailureReason,
+    TokenRolloutFinishReason,
+    TokenSamplingParameters,
+)
 from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx import (
     MODEL_MAPPINGS,
@@ -22,6 +37,7 @@ from marin.rl.environments.inference_ctx import (
     vLLMInferenceContext,
     vLLMInferenceContextConfig,
 )
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
 from marin.rl.environments.inference_ctx.vllm import InferenceMode
 from openai.types.chat import ChatCompletionMessage
@@ -76,6 +92,214 @@ def inference_ctx(llama3_tokenizer, dummy_server):
             axis_mapping={},
         )
     )
+
+
+def _token_rollout_batch(n_generations: int = 2) -> TokenizedRolloutBatchRequest:
+    return TokenizedRolloutBatchRequest(
+        batch_id="batch-1",
+        tokenizer=TokenizerIdentity(name_or_path="tokenizer"),
+        policy=PolicyIdentity(policy_name="policy", checkpoint_ref="checkpoint"),
+        requests=(
+            TokenizedRolloutRequest(
+                request_id="req-1",
+                prompt_token_ids=(10, 20),
+                sampling=TokenSamplingParameters(max_tokens=4, temperature=0.7),
+                n_generations=n_generations,
+            ),
+        ),
+    )
+
+
+def _token_rollout(request_id: str = "req-1", generation_index: int = 0) -> TokenizedRollout:
+    return TokenizedRollout(
+        request_id=request_id,
+        generation_index=generation_index,
+        prompt_token_ids=(10, 20),
+        completion_token_ids=(30,),
+        completion_logprobs=(-0.5,),
+        finish_reason=TokenRolloutFinishReason.STOP,
+        prompt_mask=(False, False),
+        completion_mask=(True,),
+    )
+
+
+def test_rollouts_by_token_request_groups_valid_result():
+    batch = _token_rollout_batch()
+    result = TokenizedRolloutBatchResult(
+        batch_id=batch.batch_id,
+        tokenizer=batch.tokenizer,
+        policy=batch.policy,
+        rollouts=(_token_rollout(generation_index=1), _token_rollout(generation_index=0)),
+    )
+
+    grouped = BaseInferenceContext.rollouts_by_token_request(batch, result)
+
+    assert tuple(rollout.generation_index for rollout in grouped["req-1"]) == (0, 1)
+
+
+def test_rollouts_by_token_request_reports_structured_failure():
+    batch = _token_rollout_batch()
+    result = TokenizedRolloutBatchResult(
+        batch_id=batch.batch_id,
+        tokenizer=batch.tokenizer,
+        policy=batch.policy,
+        rollouts=(_token_rollout(),),
+        failures=(
+            TokenizedRolloutFailure(
+                request_id="req-1",
+                generation_index=1,
+                reason=TokenRolloutFailureReason.BACKEND_ERROR,
+            ),
+        ),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        BaseInferenceContext.rollouts_by_token_request(batch, result)
+
+    assert "backend_error[generation=1]" in str(exc_info.value)
+
+
+def test_rollouts_by_token_request_rejects_missing_generations():
+    batch = _token_rollout_batch()
+    result = TokenizedRolloutBatchResult(
+        batch_id=batch.batch_id,
+        tokenizer=batch.tokenizer,
+        policy=batch.policy,
+        rollouts=(_token_rollout(),),
+    )
+
+    with pytest.raises(RuntimeError, match="returned 1 generations; expected 2"):
+        BaseInferenceContext.rollouts_by_token_request(batch, result)
+
+
+def test_rollouts_by_token_request_rejects_batch_identity_mismatch():
+    batch = _token_rollout_batch()
+    result = TokenizedRolloutBatchResult(
+        batch_id="other-batch",
+        tokenizer=batch.tokenizer,
+        policy=batch.policy,
+        rollouts=(),
+    )
+
+    with pytest.raises(RuntimeError, match="batch ID mismatch"):
+        BaseInferenceContext.rollouts_by_token_request(batch, result)
+
+
+def test_rollouts_by_token_request_rejects_tokenizer_identity_mismatch():
+    batch = _token_rollout_batch()
+    result = TokenizedRolloutBatchResult(
+        batch_id=batch.batch_id,
+        tokenizer=TokenizerIdentity(name_or_path="other-tokenizer"),
+        policy=batch.policy,
+        rollouts=(),
+    )
+
+    with pytest.raises(RuntimeError, match="tokenizer identity mismatch"):
+        BaseInferenceContext.rollouts_by_token_request(batch, result)
+
+
+def test_rollouts_by_token_request_rejects_policy_identity_mismatch():
+    batch = _token_rollout_batch()
+    result = TokenizedRolloutBatchResult(
+        batch_id=batch.batch_id,
+        tokenizer=batch.tokenizer,
+        policy=PolicyIdentity(policy_name="other-policy", checkpoint_ref="other-checkpoint"),
+        rollouts=(),
+    )
+
+    with pytest.raises(RuntimeError, match="policy identity mismatch"):
+        BaseInferenceContext.rollouts_by_token_request(batch, result)
+
+
+def test_rollouts_by_token_request_rejects_unknown_request_ids():
+    batch = _token_rollout_batch()
+    result = TokenizedRolloutBatchResult(
+        batch_id=batch.batch_id,
+        tokenizer=batch.tokenizer,
+        policy=batch.policy,
+        rollouts=(_token_rollout(request_id="unknown"),),
+    )
+
+    with pytest.raises(RuntimeError, match="unknown request ID unknown"):
+        BaseInferenceContext.rollouts_by_token_request(batch, result)
+
+
+def test_rollouts_by_token_request_rejects_duplicate_generation_indexes():
+    batch = _token_rollout_batch()
+    result = TokenizedRolloutBatchResult(
+        batch_id=batch.batch_id,
+        tokenizer=batch.tokenizer,
+        policy=batch.policy,
+        rollouts=(_token_rollout(generation_index=0), _token_rollout(generation_index=0)),
+    )
+
+    with pytest.raises(RuntimeError, match="generation indexes"):
+        BaseInferenceContext.rollouts_by_token_request(batch, result)
+
+
+def test_create_rollout_from_tokenized_rollout_preserves_moe_replay_metadata():
+    context = BaseInferenceContext()
+    context.tokenizer = SimpleNamespace(name_or_path="tokenizer")
+    context.set_policy_identity(PolicyIdentity(policy_name="policy", checkpoint_ref="checkpoint"))
+    router_replay = MoeRouterReplayMetadata(
+        format="marin-router-replay-v1",
+        payload_ref="gs://rollouts/router/batch-1",
+        layer_names=("decoder.layers.0.mlp",),
+    )
+    expert_load = ExpertLoadAccounting(num_experts=4, tokens_per_expert=(8, 7, 6, 5), capacity=16)
+    token_rollout = TokenizedRollout(
+        request_id="req-1",
+        generation_index=0,
+        prompt_token_ids=(10, 20),
+        completion_token_ids=(30,),
+        completion_logprobs=(-0.5,),
+        finish_reason=TokenRolloutFinishReason.STOP,
+        prompt_mask=(False, False),
+        completion_mask=(True,),
+        router_replay=router_replay,
+        expert_load=expert_load,
+    )
+
+    rollout = context.create_rollout_from_tokenized_rollout(
+        rollout=token_rollout,
+        env_name="math",
+        env_example_id="example-1",
+        reward=1.0,
+        decoding=DecodingConfig(temperature=0.7),
+        batch_id="batch-1",
+    )
+
+    assert rollout.metadata.tokenizer == context.tokenizer_identity()
+    assert rollout.metadata.policy == context.policy_identity()
+    assert rollout.metadata.router_replay == router_replay
+    assert rollout.metadata.expert_load == expert_load
+
+
+def test_create_rollout_from_tokenized_rollout_preserves_completion_loss_mask():
+    context = BaseInferenceContext()
+    context.tokenizer = SimpleNamespace(name_or_path="tokenizer")
+    context.set_policy_identity(PolicyIdentity(policy_name="policy", checkpoint_ref="checkpoint"))
+    token_rollout = TokenizedRollout(
+        request_id="req-1",
+        generation_index=0,
+        prompt_token_ids=(10, 20),
+        completion_token_ids=(30, 40, 50),
+        completion_logprobs=(-0.5, -0.4, -0.3),
+        finish_reason=TokenRolloutFinishReason.STOP,
+        prompt_mask=(False, False),
+        completion_mask=(True, False, True),
+    )
+
+    rollout = context.create_rollout_from_tokenized_rollout(
+        rollout=token_rollout,
+        env_name="math",
+        env_example_id="example-1",
+        reward=1.0,
+        decoding=DecodingConfig(temperature=0.7),
+        batch_id="batch-1",
+    )
+
+    np.testing.assert_array_equal(rollout.response_loss_mask, np.array([1, 0, 1], dtype=np.float32))
 
 
 def create_choice_with_logprobs(tokenizer, response_text: str, logprobs_values: list[float] | None = None) -> Choice:
@@ -182,6 +406,15 @@ def test_response_tokens_from_choice(inference_ctx, llama3_tokenizer):
     np.testing.assert_array_equal(tokens, expected_tokens)
 
 
+def test_response_tokens_from_choice_prefers_attached_token_ids(inference_ctx, llama3_tokenizer):
+    choice = create_choice_with_logprobs(llama3_tokenizer, "ignored")
+    choice.response_token_ids = [50257, 7]
+
+    tokens = inference_ctx.response_tokens_from_choice(choice)
+
+    np.testing.assert_array_equal(tokens, np.array([50257, 7], dtype=np.int32))
+
+
 def test_logprobs_from_choice(inference_ctx, llama3_tokenizer):
     """Test extracting logprobs array from Choice."""
     response_text = "The answer"
@@ -233,6 +466,8 @@ def test_create_rollout_from_choice_end_to_end(inference_ctx, llama3_tokenizer):
     assert rollout.env_name == "math_env"
     assert rollout.env_example_id == "ex_001"
     assert rollout.episode_reward == reward
+    assert rollout.metadata.tokenizer == inference_ctx.tokenizer_identity()
+    assert rollout.metadata.policy == inference_ctx.policy_identity()
 
     # Verify prompt tokens use chat template (longer than plain encoding)
     plain_prompt_tokens = llama3_tokenizer.encode(prompt, add_special_tokens=False)
@@ -248,6 +483,38 @@ def test_create_rollout_from_choice_end_to_end(inference_ctx, llama3_tokenizer):
     # Verify token rewards
     assert len(rollout.token_rewards) == len(expected_response_tokens)
     np.testing.assert_array_equal(rollout.token_rewards, np.full(len(expected_response_tokens), reward))
+
+
+def test_tokenizer_identity_records_template_hash_and_special_tokens():
+    class FakeTokenizer:
+        def __init__(self):
+            self.name_or_path = "fake-tokenizer"
+            self.init_kwargs = {"revision": "abc123"}
+            self.chat_template = "{{ messages }}"
+            self.bos_token_id = 1
+            self.eos_token_id = 2
+            self.pad_token_id = 0
+            self.additional_special_tokens_ids = [100, 101]
+
+        def __len__(self):
+            return 1024
+
+    context = BaseInferenceContext()
+    context.tokenizer = FakeTokenizer()
+
+    identity = context.tokenizer_identity()
+
+    assert identity.name_or_path == "fake-tokenizer"
+    assert identity.revision == "abc123"
+    assert identity.vocab_size == 1024
+    assert identity.chat_template_hash == hashlib.sha256(b"{{ messages }}").hexdigest()
+    assert identity.special_token_ids == {
+        "bos_token": 1,
+        "eos_token": 2,
+        "pad_token": 0,
+        "additional_special_token_0": 100,
+        "additional_special_token_1": 101,
+    }
 
 
 def _test_levanter_context(tokenizer, dummy_server, client) -> LevanterInferenceContext:

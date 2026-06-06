@@ -2,12 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import jax.numpy as jnp
+import jax.random
 import numpy as np
 import pytest
+from marin.inference.types import (
+    TokenizedRollout,
+    TokenizedRolloutBatchResult,
+    TokenizerIdentity,
+    TokenRolloutAdmissionMetadata,
+    TokenRolloutFinishReason,
+    TokenRolloutTiming,
+)
 from marin.rl.decoding import DecodingConfig
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.mock_env import (
     AdditionTask,
     MoarCatsTask,
+    MockEnv,
     NumberComparisonTask,
     OppositesTask,
     compute_soft_reward,
@@ -25,8 +36,11 @@ def create_test_tokenizer():
         def encode(self, text, add_special_tokens=True):
             return [ord(c) for c in text]
 
-        def decode(self, token_ids):
+        def decode(self, token_ids, skip_special_tokens=False):
             return "".join(chr(tid) for tid in token_ids)
+
+        def __len__(self):
+            return 256
 
         def apply_chat_template(self, messages, tokenize, add_generation_prompt):
             # Simple: just return tokens for the user message content
@@ -88,6 +102,9 @@ def create_test_inference_context():
     class TestInferenceContext:
         def __init__(self):
             self.tokenizer = create_test_tokenizer()
+
+        def supports_token_rollouts(self):
+            return False
 
         def batch_completions(
             self,
@@ -161,6 +178,55 @@ def create_test_inference_context():
     return TestInferenceContext()
 
 
+class DummyTokenInferenceContext(BaseInferenceContext):
+    def __init__(self):
+        self.tokenizer = create_test_tokenizer()
+        self.batch = None
+
+    def reload_model(self, model, state_dict):
+        return model
+
+    def shutdown(self) -> None:
+        pass
+
+    def supports_token_rollouts(self) -> bool:
+        return True
+
+    def tokenizer_identity(self) -> TokenizerIdentity:
+        return TokenizerIdentity(name_or_path="simple-tokenizer", vocab_size=len(self.tokenizer))
+
+    def batch_completions(self, prompts, n, decoding, system_prompt=None):
+        raise AssertionError("token-native path should not call batch_completions")
+
+    def generate_token_rollouts(self, batch):
+        self.batch = batch
+        response_tokens = tuple(self.tokenizer.encode("mock_response", add_special_tokens=False))
+        rollouts = []
+        for request in batch.requests:
+            for generation_index in range(request.n_generations):
+                rollouts.append(
+                    TokenizedRollout(
+                        request_id=request.request_id,
+                        generation_index=generation_index,
+                        prompt_token_ids=request.prompt_token_ids,
+                        completion_token_ids=response_tokens,
+                        completion_logprobs=tuple(-1.0 for _ in response_tokens),
+                        finish_reason=TokenRolloutFinishReason.STOP,
+                        prompt_mask=tuple(False for _ in request.prompt_token_ids),
+                        completion_mask=tuple(True for _ in response_tokens),
+                        metadata={"backend": "dummy-token"},
+                    )
+                )
+        return TokenizedRolloutBatchResult(
+            batch_id=batch.batch_id,
+            tokenizer=batch.tokenizer,
+            policy=batch.policy,
+            rollouts=tuple(rollouts),
+            timing=TokenRolloutTiming(total=0.1),
+            admission=TokenRolloutAdmissionMetadata(prefill_admissions=1, prefill_prompt_tokens_per_admission=(10,)),
+        )
+
+
 @pytest.fixture
 def test_tokenizer():
     return create_test_tokenizer()
@@ -223,3 +289,36 @@ def test_cats_task_reward():
 
     assert task.compute_reward("cats", "cat") > 0
     assert task.compute_reward("cats", "dog") == 0
+
+
+def test_mock_env_uses_token_rollout_path_when_supported():
+    env = MockEnv(task_type="addition", seed=0)
+    inference_ctx = DummyTokenInferenceContext()
+
+    rollout_groups, metrics = env.sample(
+        inference_ctx=inference_ctx,
+        n_examples=1,
+        n_generations=2,
+        decoding=DecodingConfig(temperature=0.7, top_k=8, max_output_tokens=16),
+        prng_key=jax.random.PRNGKey(0),
+        mode="train",
+    )
+
+    assert metrics == {}
+    assert inference_ctx.batch is not None
+    assert inference_ctx.batch.batch_id == "mock_env.addition.train"
+    assert len(inference_ctx.batch.requests) == 1
+    assert inference_ctx.batch.requests[0].n_generations == 2
+    assert inference_ctx.batch.requests[0].sampling.top_k == 8
+
+    assert len(rollout_groups) == 1
+    assert len(rollout_groups[0].rollouts) == 2
+    rollout = rollout_groups[0].rollouts[0]
+    assert rollout.env_name == "mock_env:addition"
+    assert rollout.metadata.tokenizer == inference_ctx.tokenizer_identity()
+    assert rollout.metadata.policy == inference_ctx.policy_identity()
+    assert rollout.metadata.token_rollout_backend == "dummy-token"
+    assert rollout.metadata.token_rollout_batch_id == "mock_env.addition.train"
+    assert rollout.metadata.token_rollout_request_id == "mock_env.addition.train:0"
+    assert rollout.metadata.token_rollout_generation_index == 0
+    assert rollout.metadata.token_rollout_finish_reason == TokenRolloutFinishReason.STOP.value

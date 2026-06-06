@@ -8,11 +8,22 @@ import os
 import time
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
 from levanter.tokenizers import load_tokenizer
+from marin.inference.types import (
+    TokenizedRollout,
+    TokenizedRolloutBatchRequest,
+    TokenizedRolloutBatchResult,
+    TokenizedRolloutFailure,
+    TokenRolloutAdmissionMetadata,
+    TokenRolloutFailureReason,
+    TokenRolloutFinishReason,
+    TokenRolloutTiming,
+    TokenSamplingParameters,
+)
 from marin.rl.decoding import DecodingConfig, DecodingStrategy
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
@@ -184,6 +195,134 @@ class vLLMInferenceContext(BaseInferenceContext):
             kwargs["output_kind"] = RequestOutputKind.FINAL_ONLY
         return SamplingParams(**kwargs)
 
+    def _sampling_params_from_token_sampling(self, sampling: TokenSamplingParameters, n: int):
+        """Translate token rollout sampling parameters into vLLM SamplingParams."""
+        if SamplingParams is None:
+            raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
+        if not sampling.return_logprobs:
+            raise ValueError("Tokenized rollouts require return_logprobs=True")
+
+        kwargs: dict[str, Any] = {
+            "temperature": sampling.temperature,
+            "n": n,
+            "max_tokens": sampling.max_tokens,
+            "logprobs": 1,
+            "include_stop_str_in_output": self.fallback_sampling.include_stop_str_in_output,
+        }
+        if sampling.top_p is not None:
+            kwargs["top_p"] = sampling.top_p
+        if sampling.top_k is not None:
+            kwargs["top_k"] = sampling.top_k
+        if sampling.stop_token_ids:
+            if not self._sampling_params_supports_argument("stop_token_ids"):
+                raise ValueError(
+                    "This vLLM SamplingParams implementation does not support stop_token_ids; "
+                    "configure stop strings instead."
+                )
+            kwargs["stop_token_ids"] = list(sampling.stop_token_ids)
+        if sampling.seed is not None:
+            kwargs["seed"] = sampling.seed
+        if self._use_final_only and RequestOutputKind is not None:
+            kwargs["output_kind"] = RequestOutputKind.FINAL_ONLY
+        return SamplingParams(**kwargs)
+
+    @staticmethod
+    def _finish_reason_from_vllm(finish_reason: Any) -> TokenRolloutFinishReason:
+        if finish_reason is None:
+            return TokenRolloutFinishReason.ERROR
+        normalized = str(finish_reason).lower()
+        if normalized == "stop":
+            return TokenRolloutFinishReason.STOP
+        if normalized == "length":
+            return TokenRolloutFinishReason.LENGTH
+        if normalized in ("eos", "eos_token"):
+            return TokenRolloutFinishReason.EOS_TOKEN
+        if normalized == "cancelled":
+            return TokenRolloutFinishReason.CANCELLED
+        return TokenRolloutFinishReason.ERROR
+
+    @staticmethod
+    def _selected_logprobs_from_vllm_output(output: Any) -> tuple[float, ...]:
+        token_ids = tuple(int(token_id) for token_id in output.token_ids)
+        logprob_steps = output.logprobs
+        if logprob_steps is None:
+            raise ValueError("vLLM output is missing logprobs for tokenized rollout generation")
+        if len(logprob_steps) != len(token_ids):
+            raise ValueError("vLLM output token_ids and logprobs must have the same length")
+
+        selected_logprobs: list[float] = []
+        for token_id, logprob_by_token in zip(token_ids, logprob_steps, strict=True):
+            selected = logprob_by_token.get(token_id)
+            if selected is None:
+                selected = next(
+                    (logprob for logprob in logprob_by_token.values() if getattr(logprob, "rank", None) == 1),
+                    None,
+                )
+            if selected is None:
+                raise ValueError(f"vLLM output is missing selected logprob for token {token_id}")
+            selected_logprobs.append(float(selected.logprob))
+        return tuple(selected_logprobs)
+
+    @staticmethod
+    def _token_rollouts_from_vllm_output(
+        request_id: str,
+        prompt_token_ids: tuple[int, ...],
+        request_output: Any,
+        expected_generations: int,
+    ) -> tuple[TokenizedRollout, ...]:
+        if len(request_output.outputs) > expected_generations:
+            raise ValueError("vLLM returned more token rollout generations than requested")
+        rollouts: list[TokenizedRollout] = []
+        for output_idx, output in enumerate(request_output.outputs):
+            completion_token_ids = tuple(int(token_id) for token_id in output.token_ids)
+            rollouts.append(
+                TokenizedRollout(
+                    request_id=request_id,
+                    generation_index=output_idx,
+                    prompt_token_ids=prompt_token_ids,
+                    completion_token_ids=completion_token_ids,
+                    completion_logprobs=vLLMInferenceContext._selected_logprobs_from_vllm_output(output),
+                    finish_reason=vLLMInferenceContext._finish_reason_from_vllm(output.finish_reason),
+                    prompt_mask=tuple(False for _ in prompt_token_ids),
+                    completion_mask=tuple(True for _ in completion_token_ids),
+                    metadata={"backend": "vllm"},
+                )
+            )
+        return tuple(rollouts)
+
+    @staticmethod
+    def _missing_generation_failures(
+        *,
+        request_id: str,
+        generation_count: int,
+        expected_generations: int,
+        backend_request_id: str | None,
+    ) -> tuple[TokenizedRolloutFailure, ...]:
+        return tuple(
+            TokenizedRolloutFailure(
+                request_id=request_id,
+                generation_index=generation_index,
+                reason=TokenRolloutFailureReason.BACKEND_ERROR,
+                message="vLLM returned fewer generations than requested",
+                backend_request_id=backend_request_id,
+            )
+            for generation_index in range(generation_count, expected_generations)
+        )
+
+    @staticmethod
+    def _validate_token_rollout_batch(batch: TokenizedRolloutBatchRequest) -> None:
+        first_sampling = batch.requests[0].sampling
+        first_n_generations = batch.requests[0].n_generations
+        for request in batch.requests:
+            if request.sampling != first_sampling:
+                raise ValueError("vLLM tokenized rollout batches require identical sampling parameters")
+            if request.n_generations != first_n_generations:
+                raise ValueError("vLLM tokenized rollout batches require identical n_generations")
+
+    def supports_token_rollouts(self) -> bool:
+        """Return whether this context implements token-native rollout generation."""
+        return True
+
     @staticmethod
     def _get_renderer(model_name: str, tokenizer) -> Renderer:
         """Get the appropriate renderer based on model name."""
@@ -258,6 +397,10 @@ class vLLMInferenceContext(BaseInferenceContext):
             seed=engine_config.seed,
         )
 
+    def tokenize_messages(self, messages: list[dict[str, str]]) -> np.ndarray:
+        """Tokenize messages with the same renderer used for vLLM generation."""
+        return np.array(self._render_messages_to_tokens(cast(list[Message], messages)), dtype=np.int32)
+
     def tokenize_prompt(self, prompt: str, choice: Choice | None = None, system_prompt: str | None = None) -> np.ndarray:
         """Tokenize the prompt with the choice's prompt token IDs.
 
@@ -266,6 +409,8 @@ class vLLMInferenceContext(BaseInferenceContext):
         This is a known issue documented here:
         https://github.com/vllm-project/vllm/issues/27486
         """
+        if choice is None:
+            return self.tokenize_prompt_input(prompt, system_prompt)
         return np.array(choice.prompt_token_ids, dtype=np.int32)
 
     def response_tokens_from_choice(self, choice: Choice) -> np.ndarray:
@@ -380,6 +525,75 @@ class vLLMInferenceContext(BaseInferenceContext):
 
     def shutdown(self) -> None:
         pass
+
+    def generate_token_rollouts(self, batch: TokenizedRolloutBatchRequest) -> TokenizedRolloutBatchResult:
+        """Generate already-tokenized rollout requests without OpenAI serialization."""
+        self._validate_token_rollout_batch(batch)
+        if TokensPrompt is None:
+            raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
+
+        sampling_params = self._sampling_params_from_token_sampling(
+            batch.requests[0].sampling,
+            batch.requests[0].n_generations,
+        )
+        prompts_for_vllm = [TokensPrompt(prompt_token_ids=list(request.prompt_token_ids)) for request in batch.requests]
+
+        logger.info("generate_token_rollouts: starting, %d prompts", len(prompts_for_vllm))
+        t0 = time.time()
+        outputs = self.llm.generate(prompts_for_vllm, sampling_params)
+        total_duration = time.time() - t0
+        logger.info("generate_token_rollouts: done in %.1fs", total_duration)
+        if len(outputs) > len(batch.requests):
+            raise ValueError("vLLM returned more token rollout requests than requested")
+
+        rollouts: list[TokenizedRollout] = []
+        failures: list[TokenizedRolloutFailure] = []
+        backend_request_ids: list[str] = []
+        for request, request_output in zip(batch.requests, outputs, strict=False):
+            backend_request_id = str(request_output.request_id)
+            rollouts.extend(
+                self._token_rollouts_from_vllm_output(
+                    request.request_id,
+                    request.prompt_token_ids,
+                    request_output,
+                    request.n_generations,
+                )
+            )
+            failures.extend(
+                self._missing_generation_failures(
+                    request_id=request.request_id,
+                    generation_count=len(request_output.outputs),
+                    expected_generations=request.n_generations,
+                    backend_request_id=backend_request_id,
+                )
+            )
+            backend_request_ids.append(backend_request_id)
+        for request in batch.requests[len(outputs) :]:
+            failures.extend(
+                self._missing_generation_failures(
+                    request_id=request.request_id,
+                    generation_count=0,
+                    expected_generations=request.n_generations,
+                    backend_request_id=None,
+                )
+            )
+
+        prompt_tokens = sum(len(request.prompt_token_ids) for request in batch.requests)
+        completion_tokens = sum(len(rollout.completion_token_ids) for rollout in rollouts)
+        return TokenizedRolloutBatchResult(
+            batch_id=batch.batch_id,
+            tokenizer=batch.tokenizer,
+            policy=batch.policy,
+            rollouts=tuple(rollouts),
+            failures=tuple(failures),
+            timing=TokenRolloutTiming(total=total_duration),
+            admission=TokenRolloutAdmissionMetadata(
+                queued_tokens=prompt_tokens,
+                admitted_tokens=prompt_tokens + completion_tokens,
+                backend_request_ids=tuple(backend_request_ids),
+            ),
+            metadata={"backend": "vllm"},
+        )
 
     def batch_completions(
         self,

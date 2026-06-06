@@ -5,7 +5,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import fsspec
+import numpy as np
 import pytest
+from marin.inference.types import TokenizerIdentity
+from marin.rl.decoding import DecodingConfig, SamplingParams
 from marin.rl.environments.inference_ctx.staging import stage_vllm_metadata_locally
 from marin.rl.environments.inference_ctx.vllm import (
     VLLMEngineConfig,
@@ -22,6 +25,7 @@ from marin.rl.rollout_worker import (
     create_inference_context,
 )
 from marin.rl.run_state import RolloutTransferCounters
+from marin.rl.types import Rollout, RolloutGroup, RolloutMetadata
 
 
 def test_rollout_tracker_uses_explicit_name_when_provided(monkeypatch):
@@ -192,6 +196,128 @@ def test_log_lesson_eval_uses_wandb_default_step_and_context_metrics():
             None,
         )
     ]
+
+
+def test_current_policy_identity_records_live_weight_and_train_steps():
+    worker = object.__new__(RolloutWorker)
+    worker.config = SimpleNamespace(
+        run_id="rl-run",
+        initial_checkpoint="gs://checkpoints/initial",
+        inference_type="levanter",
+        worker_index=2,
+    )
+    worker._current_weight_step = 128
+    worker._current_train_step = 130
+
+    policy = worker._current_policy_identity()
+
+    assert policy.policy_name == "rl-run"
+    assert policy.checkpoint_ref == "rl-run:weight_step:128"
+    assert policy.checkpoint_step == 128
+    assert policy.weight_version == "weight_step:128"
+    assert policy.metadata == {"train_step": 130, "inference_type": "levanter", "worker_index": 2}
+
+
+def test_current_policy_identity_uses_initial_checkpoint_before_weight_step():
+    worker = object.__new__(RolloutWorker)
+    worker.config = SimpleNamespace(
+        run_id="rl-run",
+        initial_checkpoint="gs://checkpoints/initial",
+        inference_type="vllm",
+        worker_index=0,
+    )
+    worker._current_weight_step = -1
+    worker._current_train_step = -1
+
+    policy = worker._current_policy_identity()
+
+    assert policy.policy_name == "rl-run"
+    assert policy.checkpoint_ref == "gs://checkpoints/initial"
+    assert policy.checkpoint_step is None
+    assert policy.weight_version == "weight_step:-1"
+    assert policy.metadata == {"train_step": -1, "inference_type": "vllm", "worker_index": 0}
+
+
+def test_sample_batch_persists_tokenizer_and_policy_identity():
+    class _FakePolicyContext:
+        def __init__(self):
+            self.mesh = None
+            self.axis_mapping = {}
+            self.policy = None
+
+        def set_policy_identity(self, policy):
+            self.policy = policy
+
+        def tokenizer_identity(self):
+            return TokenizerIdentity(
+                name_or_path="fake-tokenizer",
+                revision="abc123",
+                vocab_size=1024,
+                chat_template_hash="template-hash",
+                special_token_ids={"eos_token": 2},
+            )
+
+    class _FakeEnv:
+        def sample(self, *, inference_ctx, n_examples, n_generations, decoding, prng_key, mode, system_prompt):
+            del inference_ctx, n_examples, n_generations, decoding, prng_key, mode, system_prompt
+            rollout = Rollout(
+                env_name="fake",
+                env_example_id="ex-1",
+                prompt_tokens=np.array([1, 2], dtype=np.int32),
+                response_tokens=np.array([3], dtype=np.int32),
+                response_logprobs=np.array([-0.5], dtype=np.float32),
+                token_rewards=np.array([1.0], dtype=np.float32),
+                episode_reward=1.0,
+                decoding=DecodingConfig(temperature=0.7).as_trace(),
+                is_truncated=False,
+                metadata=RolloutMetadata(
+                    token_rollout_backend="levanter",
+                    token_rollout_request_id="math.train:0",
+                    token_rollout_generation_index=0,
+                    token_rollout_finish_reason="stop",
+                ),
+            )
+            return [RolloutGroup(rollouts=[rollout])], {"reward": 1.0}
+
+    worker = object.__new__(RolloutWorker)
+    worker.config = SimpleNamespace(
+        curriculum_config=SimpleNamespace(lessons=SimpleNamespace()),
+        run_id="rl-run",
+        initial_checkpoint=None,
+        inference_type="levanter",
+        worker_index=3,
+        system_prompt=None,
+    )
+    worker.config.curriculum_config.lessons = {
+        "lesson-a": SimpleNamespace(sampling_params=SamplingParams(train_decoding=DecodingConfig(temperature=0.7)))
+    }
+    worker._policy_ctx = _FakePolicyContext()
+    worker._current_weight_step = 42
+    worker._current_train_step = 43
+    worker._load_environment = lambda lesson_id: _FakeEnv()
+
+    batch, metrics = worker._sample_batch(
+        lesson_id="lesson-a",
+        n_examples=1,
+        n_generations=1,
+        mode="train",
+        rng=0,
+    )
+
+    assert batch is not None
+    assert metrics == {"reward": 1.0}
+    assert batch.metadata.weight_step == 42
+    assert batch.metadata.tokenizer == worker._policy_ctx.tokenizer_identity()
+    assert batch.metadata.policy is not None
+    assert batch.metadata.policy.policy_name == "rl-run"
+    assert batch.metadata.policy.checkpoint_ref == "rl-run:weight_step:42"
+    rollout_metadata = batch.groups[0].rollouts[0].metadata
+    assert rollout_metadata.tokenizer == batch.metadata.tokenizer
+    assert rollout_metadata.policy == batch.metadata.policy
+    assert rollout_metadata.token_rollout_backend == "levanter"
+    assert rollout_metadata.token_rollout_request_id == "math.train:0"
+    assert rollout_metadata.token_rollout_generation_index == 0
+    assert rollout_metadata.token_rollout_finish_reason == "stop"
 
 
 def test_stage_vllm_metadata_locally_copies_hf_metadata(tmp_path, monkeypatch):

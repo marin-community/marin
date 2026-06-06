@@ -16,6 +16,7 @@ def create_test_rollout(
     env_name: str = "test_env",
     episode_reward: float = 1.0,
     unique_id: int = 12345,
+    response_loss_mask: np.ndarray | None = None,
 ) -> Rollout:
     """Create a test rollout with predictable token values."""
     prompt_tokens = np.full(prompt_len, unique_id, dtype=np.int32)
@@ -33,6 +34,7 @@ def create_test_rollout(
         episode_reward=episode_reward,
         decoding=DecodingConfig(temperature=1.0).as_trace(),
         is_truncated=False,
+        response_loss_mask=response_loss_mask,
     )
 
 
@@ -93,6 +95,33 @@ def test_loss_mask_correct():
     # First 4 tokens (prompt) should be 0, next 3 (response) should be 1, rest should be 0 (padding)
     expected_mask = np.array([0, 0, 0, 0, 1, 1, 1] + [0] * 9, dtype=np.float32)
     np.testing.assert_array_equal(loss_mask, expected_mask)
+
+
+def test_response_loss_mask_controls_training_loss_positions():
+    rollout = create_test_rollout(
+        prompt_len=4,
+        response_len=3,
+        response_loss_mask=np.array([1, 0, 1], dtype=np.float32),
+    )
+    advantage = 2.5
+
+    result = train_batch.convert_rollout_to_training_format(rollout, advantage, max_tokens=16, pad_token_id=0, pad_to=16)
+
+    expected_mask = np.array([0, 0, 0, 0, 1, 0, 1] + [0] * 9, dtype=np.float32)
+    expected_weights = np.array([0, 0, 0, 0, 2.5, 0, 2.5] + [0] * 9, dtype=np.float32)
+    np.testing.assert_array_equal(result["loss_masks"], expected_mask)
+    np.testing.assert_array_equal(result["loss_weights"], expected_weights)
+
+
+def test_response_loss_mask_length_must_match_response_tokens():
+    rollout = create_test_rollout(
+        prompt_len=4,
+        response_len=3,
+        response_loss_mask=np.array([1, 0], dtype=np.float32),
+    )
+
+    with pytest.raises(ValueError, match="response_loss_mask length"):
+        train_batch.convert_rollout_to_training_format(rollout, advantage=1.0, max_tokens=16, pad_token_id=0, pad_to=16)
 
 
 def test_loss_weights_have_advantage():

@@ -102,6 +102,8 @@ def test_prime_intellect_env_sample(tokenizer, inference_ctx, vf_env):
         for rollout in group.rollouts:
             assert rollout.env_name == "prime_intellect:primeintellect/gsm8k"
             assert rollout.env_example_id.startswith("primeintellect/gsm8k_example_")
+            assert rollout.metadata.tokenizer == inference_ctx.tokenizer_identity()
+            assert rollout.metadata.policy == inference_ctx.policy_identity()
             assert len(rollout.prompt_tokens) > 0
             assert len(rollout.response_tokens) > 0
             assert len(rollout.response_logprobs) == len(rollout.response_tokens)

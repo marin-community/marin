@@ -49,12 +49,21 @@ def convert_rollout_to_training_format(
     """
     input_tokens = np.concatenate([rollout.prompt_tokens, rollout.response_tokens])
     position_ids = np.arange(len(input_tokens), dtype=np.int32)
+    if rollout.response_loss_mask is None:
+        response_loss_mask = np.ones(len(rollout.response_tokens), dtype=np.float32)
+    else:
+        if len(rollout.response_loss_mask) != len(rollout.response_tokens):
+            raise ValueError(
+                "response_loss_mask length must match response_tokens length: "
+                f"{len(rollout.response_loss_mask)} != {len(rollout.response_tokens)}"
+            )
+        response_loss_mask = rollout.response_loss_mask.astype(np.float32)
 
     # Loss mask (only on response tokens)
     loss_mask = np.concatenate(
         [
             np.zeros(len(rollout.prompt_tokens), dtype=np.float32),
-            np.ones(len(rollout.response_tokens), dtype=np.float32),
+            response_loss_mask,
         ]
     )
 
@@ -62,7 +71,7 @@ def convert_rollout_to_training_format(
     loss_weight = np.concatenate(
         [
             np.zeros(len(rollout.prompt_tokens), dtype=np.float32),
-            np.full(len(rollout.response_tokens), advantage, dtype=np.float32),
+            response_loss_mask * np.float32(advantage),
         ]
     )
 
