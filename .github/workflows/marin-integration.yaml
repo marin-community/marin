@@ -85,7 +85,11 @@ jobs:
           timeout 600 uv run pytest tests/test_integration_test.py \
             -m integration -o "addopts=" --timeout=600 -v -s
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          # The pipeline uses a vendored tokenizer fixture and degrades gracefully
+          # when the reference HF config is unreachable, so it must not touch HF Hub.
+          # HF_HUB_OFFLINE makes any accidental Hub access fail fast instead of
+          # reintroducing a flaky network dependency.
+          HF_HUB_OFFLINE: "1"
           WANDB_MODE: disabled
           WANDB_API_KEY: ""
           JAX_TRACEBACK_FILTERING: off

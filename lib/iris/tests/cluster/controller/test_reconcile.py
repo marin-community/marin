@@ -1028,6 +1028,25 @@ def test_observations_to_updates_routes_batch_by_uid():
         assert by_task[task_b].new_state == job_pb2.TASK_STATE_FAILED
 
 
+@pytest.mark.parametrize(
+    ("obs_state", "exit_code", "expected"),
+    [
+        # proto3 has no scalar presence, so a real exit 0 (wire-0) is collapsed to
+        # None to avoid clobbering a recorded code via the commit-time coalesce;
+        # success is conveyed by the SUCCEEDED state, not by exit 0.
+        (job_pb2.TASK_STATE_SUCCEEDED, 0, None),
+        # A genuine non-zero code must survive.
+        (job_pb2.TASK_STATE_FAILED, 137, 137),
+    ],
+)
+def test_exit_code_zero_coalesced_to_none(obs_state, exit_code, expected):
+    """exit_code 0 is intentionally collapsed to None."""
+    with make_controller_state() as state:
+        _, _, uid = _setup_running_task(state)
+        [update] = _observations_to_updates(state, [_obs(uid, obs_state, exit_code=exit_code)])
+    assert update.exit_code == expected
+
+
 # --- End-to-end: full controller tick over both wires ----------------------
 
 

@@ -10,8 +10,8 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from finelog.client.proxy import LogServiceProxy
 from finelog.rpc import logging_pb2
-from finelog.server import LogServiceImpl
 from iris.cluster.backends.k8s.tasks import (
     _GC_MAX_AGE_SECONDS,
     _KUEUE_POD_GROUP_NAME,
@@ -44,7 +44,7 @@ from iris.rpc import job_pb2
 from .conftest import make_batch, make_run_req, populate_node, populate_pod
 
 
-def _fetch_logs(log_service: LogServiceImpl, key: str, max_lines: int = 100) -> list[logging_pb2.LogEntry]:
+def _fetch_logs(log_service: LogServiceProxy, key: str, max_lines: int = 100) -> list[logging_pb2.LogEntry]:
     resp = asyncio.run(log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=key, max_lines=max_lines), ctx=None))
     return list(resp.entries)
 
@@ -255,7 +255,7 @@ def test_pod_not_found_grace_resets_when_pod_reappears(provider, k8s):
     assert result.updates[0].new_state == job_pb2.TASK_STATE_FAILED
 
 
-def test_sync_succeeded_pod_fetches_logs(provider, k8s, log_service: LogServiceImpl):
+def test_sync_succeeded_pod_fetches_logs(provider, k8s, log_service: LogServiceProxy, log_client):
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
     pod_name = _pod_name(task_id, attempt_id)
@@ -268,7 +268,9 @@ def test_sync_succeeded_pod_fetches_logs(provider, k8s, log_service: LogServiceI
     result = provider.reconcile(batch)
 
     assert result.updates[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
-    # Logs are pushed through the LogService via LogCollector (set_pods removal does a final fetch).
+    # set_pods() removal does a synchronous final fetch that enqueues the entries
+    # on the (buffered) log client; flush forces them to the server before we read.
+    log_client.flush(timeout=5.0)
     key = task_log_key(TaskAttempt(task_id=task_id, attempt_id=attempt_id))
     logs = _fetch_logs(log_service, key)
     assert any(e.data == "task complete" for e in logs)
@@ -285,7 +287,7 @@ def test_sync_empty_batch(provider):
 # ---------------------------------------------------------------------------
 
 
-def test_poll_fetches_incremental_logs_for_running_pods(provider, k8s, log_service: LogServiceImpl):
+def test_poll_fetches_incremental_logs_for_running_pods(provider, k8s, log_service: LogServiceProxy):
     """Running pods get incremental logs via the background LogCollector."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
@@ -309,7 +311,7 @@ def test_poll_fetches_incremental_logs_for_running_pods(provider, k8s, log_servi
     assert logs[0].data == "hello from running pod"
 
 
-def test_log_cursors_advance_across_sync_cycles(provider, k8s, log_service: LogServiceImpl):
+def test_log_cursors_advance_across_sync_cycles(provider, k8s, log_service: LogServiceProxy):
     """LogCollector advances byte offsets: repeated fetches don't duplicate."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
@@ -336,7 +338,7 @@ def test_log_cursors_advance_across_sync_cycles(provider, k8s, log_service: LogS
     assert logs[1].data == "line 2"
 
 
-def test_final_log_fetch_on_pod_completion(provider, k8s, log_service: LogServiceImpl):
+def test_final_log_fetch_on_pod_completion(provider, k8s, log_service: LogServiceProxy, log_client):
     """Completed pods get a final log fetch when removed from the collector's tracked set."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
@@ -349,7 +351,9 @@ def test_final_log_fetch_on_pod_completion(provider, k8s, log_service: LogServic
     result = provider.reconcile(make_batch(running_tasks=[entry]))
 
     assert result.updates[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
-    # set_pods() removal does a synchronous final fetch — logs should be in the service.
+    # set_pods() removal does a synchronous final fetch that enqueues the entries
+    # on the (buffered) log client; flush forces them to the server before we read.
+    log_client.flush(timeout=5.0)
     key = task_log_key(TaskAttempt(task_id=task_id, attempt_id=attempt_id))
     logs = _fetch_logs(log_service, key)
     assert len(logs) == 3

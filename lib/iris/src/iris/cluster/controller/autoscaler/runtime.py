@@ -24,7 +24,7 @@ from collections import deque
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Duration, Timestamp, TokenBucket
 
 from iris.cluster.backends.protocols import WorkerInfraProvider
 from iris.cluster.backends.types import (
@@ -64,6 +64,11 @@ logger = logging.getLogger(__name__)
 
 # After this long in UNKNOWN state, treat the slice as FAILED (quota timeout is 5 min, so this is conservative)
 DEFAULT_UNRESOLVABLE_TIMEOUT = Duration.from_minutes(15)
+
+# Project-wide cap on slice creates per minute, shared across all scale groups.
+# Per-group limits don't coordinate, so a fan-out across groups in one cycle can
+# burst past GCP's per-project create quota (tpu.googleapis.com/qps/create, ~91/min).
+DEFAULT_CREATE_RATE_LIMIT = 60
 
 # How long the autoscaler waits for a worker /health response per probe.
 _HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
@@ -113,6 +118,7 @@ class Autoscaler:
         threads: ThreadContainer | None = None,
         base_worker_config: config_pb2.WorkerConfig | None = None,
         unresolvable_timeout: Duration = DEFAULT_UNRESOLVABLE_TIMEOUT,
+        create_rate_limit: int = DEFAULT_CREATE_RATE_LIMIT,
     ):
         """Create autoscaler with explicit parameters.
 
@@ -124,12 +130,19 @@ class Autoscaler:
             base_worker_config: Base worker config merged with per-group overrides
                 and passed to platform.create_slice(). None disables bootstrap (test/local mode).
             unresolvable_timeout: How long a slice can remain UNKNOWN before being treated as FAILED.
+            create_rate_limit: Project-wide ceiling on slice-creation requests per minute,
+                shared across all scale groups. See ``DEFAULT_CREATE_RATE_LIMIT``.
         """
         self._groups = scale_groups
         self._platform = platform
         self.evaluation_interval = evaluation_interval
         self._base_worker_config = base_worker_config
         self._unresolvable_timeout = unresolvable_timeout
+
+        # Project-wide slice-creation throttle, shared across all groups. Deferred
+        # scale-ups are retried on the next evaluation cycle.
+        self._create_rate_limit = create_rate_limit
+        self._create_bucket = TokenBucket(capacity=create_rate_limit, refill_period=Duration.from_minutes(1))
 
         # Centralized per-worker state indexed by worker_id
         self._worker_registry = WorkerRegistry()
@@ -324,6 +337,10 @@ class Autoscaler:
         # Aggregate rate-limited decisions per group so we emit a single summary
         # line per group per cycle instead of one per deferred slice (#5580).
         rate_limited: dict[str, list[ScalingDecision]] = {}
+        # Scale-ups deferred by the project-wide create budget (not a per-group
+        # limit), summarized once per cycle so a global throttle doesn't spam a
+        # line per group.
+        create_throttled = 0
         for decision in decisions:
             group = self._groups.get(decision.scale_group)
             if not group:
@@ -331,10 +348,28 @@ class Autoscaler:
                 continue
 
             if decision.action == ScalingAction.SCALE_UP:
+                # Per-group gate first: it honors the group's health/quota block,
+                # so we never spend the scarce global create budget on a group
+                # that couldn't scale anyway.
                 if not group.try_acquire_scale_up(timestamp):
                     rate_limited.setdefault(decision.scale_group, []).append(decision)
                     continue
+                if not self._create_bucket.try_acquire(now=timestamp):
+                    create_throttled += 1
+                    continue
                 self._execute_scale_up(group, timestamp, reason=decision.reason)
+
+        if create_throttled:
+            logger.info(
+                "Throttled %d scale-up(s) to stay under the global create limit (%d/min)",
+                create_throttled,
+                self._create_rate_limit,
+            )
+            self._log_action(
+                "create_throttled",
+                "",
+                reason=f"deferred={create_throttled} limit={self._create_rate_limit}/min",
+            )
 
         for scale_group, deferred in rate_limited.items():
             # All decisions in a cycle share the same target/demand snapshot;

@@ -3,11 +3,8 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
-from finelog.rpc import logging_pb2
-from finelog.server import LogServiceImpl
+from finelog.client.proxy import LogServiceProxy
 from iris.cluster.backends.k8s.fake import InMemoryK8sService
 from iris.cluster.backends.k8s.tasks import (
     _LABEL_MANAGED,
@@ -20,20 +17,6 @@ from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.controller.backend import BackendReconcileInput
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.rpc import job_pb2
-
-
-class InProcessLogClient:
-    """LogClient stand-in that calls LogServiceImpl directly (no RPC plumbing)."""
-
-    def __init__(self, log_service: LogServiceImpl) -> None:
-        self._log_service = log_service
-
-    def write_batch(self, key: str, messages: list[logging_pb2.LogEntry]) -> None:
-        if messages:
-            asyncio.run(self._log_service.push_logs(logging_pb2.PushLogsRequest(key=key, entries=messages), ctx=None))
-
-    def close(self) -> None:
-        pass
 
 
 class FakeStatsTable:
@@ -52,13 +35,8 @@ def k8s() -> InMemoryK8sService:
 
 
 @pytest.fixture
-def log_service() -> LogServiceImpl:
-    return LogServiceImpl()
-
-
-@pytest.fixture
-def log_client(log_service) -> InProcessLogClient:
-    return InProcessLogClient(log_service)
+def log_service(embedded_log_server) -> LogServiceProxy:
+    return LogServiceProxy(embedded_log_server.address)
 
 
 @pytest.fixture

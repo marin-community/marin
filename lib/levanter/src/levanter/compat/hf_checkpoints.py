@@ -314,6 +314,22 @@ KEYS_TO_COPY_FROM_BASE_CONFIG = {
 }
 
 
+def _causal_lm_architecture_name(hf_config_class: type) -> Optional[str]:
+    """Return the HF causal-LM architecture class name for *hf_config_class*, or None.
+
+    Uses the transformers name mapping (model_type -> architecture class name), which is a plain
+    string table that does not require torch — unlike ``AutoModelForCausalLM._model_mapping``. This
+    lets us record ``architectures`` in a saved config even when the reference checkpoint can't be
+    fetched (gated repo or HF outage) and torch isn't installed.
+    """
+    from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES
+
+    model_type = getattr(hf_config_class, "model_type", None)
+    if model_type is None:
+        return None
+    return MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.get(model_type)
+
+
 def _load_torch(path, dtype, fs: AbstractFileSystem | None = None):
     import torch  # noqa: F401
 
@@ -920,17 +936,20 @@ class HFCheckpointConverter(Generic[LevConfig]):
             # sufficient for most built-in architectures.
             base_config = None
             logger.warning("No reference checkpoint set; skipping base HF config metadata copy.")
-        except Exception as e:  # noqa: BLE001
-            if isinstance(e, GatedRepoError) or isinstance(e.__cause__, GatedRepoError):
-                warnings.warn("Could not copy keys from base config because the repo is gated. Making assumptions.")
-                dict_config["auto_map"] = {
-                    "AutoModelForCausalLM": self.HFAutoModelClass(AutoModelForCausalLM).__qualname__,
-                    "AutoConfig": self.HfConfigClass.__qualname__,
-                }
-                dict_config["architectures"] = [self.HFAutoModelClass(AutoModelForCausalLM).__name__]
-                base_config = None
-            else:
-                raise
+        except OSError as e:
+            # The reference config could not be read: the repo is gated, or the Hub is unreachable
+            # (HF outage, or HF_HUB_OFFLINE in CI). Every HF/transformers "can't fetch" error is an
+            # OSError subclass. We can still save: `to_hf_config()` already produced a complete config,
+            # so an HF outage never blocks a save. Record `architectures` from the model type (torch-free)
+            # so the checkpoint stays loadable.
+            warnings.warn(
+                f"Could not load reference HF config from {self.reference_checkpoint!r} ({type(e).__name__});"
+                " saving with architecture metadata derived from the model type."
+            )
+            base_config = None
+            architecture = _causal_lm_architecture_name(self.HfConfigClass)
+            if architecture is not None:
+                dict_config["architectures"] = [architecture]
 
         if base_config is not None:
             for k in KEYS_TO_COPY_FROM_BASE_CONFIG:

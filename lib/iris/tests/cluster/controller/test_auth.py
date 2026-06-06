@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 import sqlalchemy.exc
-from finelog.server import LogServiceImpl
+from finelog.client.proxy import LogServiceProxy
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import (
@@ -39,7 +39,6 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from tests.cluster.conftest import fake_log_client_from_service
 from tests.cluster.controller._test_support import ControllerTestState
 
 _TEST_TOKEN = "valid-test-token"
@@ -64,12 +63,12 @@ def state(db, tmp_path):
 
 
 @pytest.fixture
-def log_service() -> LogServiceImpl:
-    return LogServiceImpl()
+def log_service(embedded_log_server) -> LogServiceProxy:
+    return LogServiceProxy(embedded_log_server.address)
 
 
 @pytest.fixture
-def service(state, tmp_path, log_service):
+def service(state, tmp_path, log_client):
     controller_mock = Mock()
     controller_mock.wake = Mock()
     controller_mock.autoscaler = None
@@ -79,7 +78,7 @@ def service(state, tmp_path, log_service):
     return ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_client=fake_log_client_from_service(log_service),
+        log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
         endpoints=EndpointsProjection(state._db),

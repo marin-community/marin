@@ -10,7 +10,7 @@ The dashboard serves a web UI that fetches data via RPC calls.
 from unittest.mock import Mock
 
 import pytest
-from finelog.server import LogServiceImpl
+from finelog.client.proxy import LogServiceProxy
 from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
@@ -41,7 +41,6 @@ from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 from starlette.testclient import TestClient
 
-from tests.cluster.conftest import fake_log_client_from_service
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
@@ -202,17 +201,17 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
 
 
 @pytest.fixture
-def log_service() -> LogServiceImpl:
-    return LogServiceImpl()
+def log_service(embedded_log_server) -> LogServiceProxy:
+    return LogServiceProxy(embedded_log_server.address)
 
 
 @pytest.fixture
-def service(state, scheduler, tmp_path, log_service):
+def service(state, scheduler, tmp_path, log_client):
     controller_mock = _make_controller_mock(state, scheduler)
     return ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_client=fake_log_client_from_service(log_service),
+        log_client=log_client,
         db=state._db,
         health=state._health,
         endpoints=state._endpoints,
@@ -227,12 +226,12 @@ def client(service, log_service):
 
 
 @pytest.fixture
-def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path, log_service):
+def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path, log_client):
     controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
     return ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_client=fake_log_client_from_service(log_service),
+        log_client=log_client,
         db=state._db,
         health=state._health,
         endpoints=state._endpoints,
@@ -1340,17 +1339,17 @@ def test_auth_config_worker_capabilities(client):
     assert "cluster" not in backend["capabilities"]
 
 
-def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path):
+def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, embedded_log_server, log_client):
     """auth/config advertises the cluster capability for a backend-placed (k8s) backend."""
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.placement = PlacementOwner.TASK_BACKEND
     controller_mock.provider = Mock(placement=PlacementOwner.TASK_BACKEND, manages_capacity=True)
     controller_mock.provider.name = "kubernetes"
-    log_service = LogServiceImpl()
+    log_service = LogServiceProxy(embedded_log_server.address)
     svc = ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_client=fake_log_client_from_service(log_service),
+        log_client=log_client,
         db=state._db,
         health=state._health,
         endpoints=state._endpoints,
@@ -1375,7 +1374,7 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path):
 # =============================================================================
 
 
-def _make_k8s_dashboard_client(state, scheduler, tmp_path):
+def _make_k8s_dashboard_client(state, scheduler, tmp_path, embedded_log_server, log_client):
     """Build a TestClient wired to a real K8sTaskProvider backed by InMemoryK8sService."""
     from iris.cluster.backends.k8s.fake import InMemoryK8sService
     from iris.cluster.backends.k8s.tasks import K8sTaskProvider
@@ -1385,11 +1384,11 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path):
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.placement = PlacementOwner.TASK_BACKEND
     controller_mock.provider = provider
-    log_service = LogServiceImpl()
+    log_service = LogServiceProxy(embedded_log_server.address)
     svc = ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_client=fake_log_client_from_service(log_service),
+        log_client=log_client,
         db=state._db,
         health=state._health,
         endpoints=state._endpoints,
@@ -1399,12 +1398,12 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path):
     return TestClient(dashboard.app), k8s, provider
 
 
-def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path):
+def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path, embedded_log_server, log_client):
     """GetKubernetesClusterStatus returns node capacity and pod statuses after sync."""
     from iris.cluster.backends.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
     from iris.cluster.controller.backend import BackendReconcileInput
 
-    client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path)
+    client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path, embedded_log_server, log_client)
 
     # Seed nodes and a pod.
     k8s.seed_resource(
@@ -1455,9 +1454,9 @@ def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path):
     provider.close()
 
 
-def test_k8s_cluster_status_empty_before_sync(state, scheduler, tmp_path):
+def test_k8s_cluster_status_empty_before_sync(state, scheduler, tmp_path, embedded_log_server, log_client):
     """GetKubernetesClusterStatus returns empty data when no sync has run yet."""
-    client, _k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path)
+    client, _k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path, embedded_log_server, log_client)
 
     resp = client.post(
         "/iris.cluster.ControllerService/GetKubernetesClusterStatus",
