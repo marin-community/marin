@@ -10,7 +10,6 @@ from typing import Any
 
 import jax
 import numpy as np
-from marin.inference.types import TokenizedRollout, TokenizedRolloutFailure
 from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.tinker_environments.math_env import (
@@ -251,12 +250,7 @@ class MathEnv(MarinEnv):
             decoding=decoding,
         )
         batch_result = inference_ctx.generate_token_rollouts(batch)
-        rollouts_by_request: dict[str, list[TokenizedRollout]] = {}
-        for rollout in batch_result.rollouts:
-            rollouts_by_request.setdefault(rollout.request_id, []).append(rollout)
-        failures_by_request: dict[str, list[TokenizedRolloutFailure]] = {}
-        for failure in batch_result.failures:
-            failures_by_request.setdefault(failure.request_id, []).append(failure)
+        rollouts_by_request = inference_ctx.rollouts_by_token_request(batch, batch_result)
 
         rollout_groups: list[RolloutGroup] = []
         total_choices = 0
@@ -268,23 +262,7 @@ class MathEnv(MarinEnv):
 
         for prompt_index, example in enumerate(sampled_examples):
             request_id = batch.requests[prompt_index].request_id
-            request_failures = failures_by_request.get(request_id, [])
-            if request_failures:
-                failure_summary = ", ".join(
-                    f"{failure.reason.value}"
-                    + (f"[generation={failure.generation_index}]" if failure.generation_index is not None else "")
-                    for failure in request_failures
-                )
-                raise RuntimeError(f"Token rollout request {request_id} failed: {failure_summary}")
-            token_rollouts = sorted(
-                rollouts_by_request.get(request_id, []),
-                key=lambda rollout: rollout.generation_index,
-            )
-            if len(token_rollouts) != n_generations:
-                raise RuntimeError(
-                    f"Token rollout request {request_id} returned {len(token_rollouts)} generations; "
-                    f"expected {n_generations}"
-                )
+            token_rollouts = rollouts_by_request[request_id]
             group_rollouts: list[Rollout] = []
             for token_rollout in token_rollouts:
                 response_text = inference_ctx.tokenizer.decode(

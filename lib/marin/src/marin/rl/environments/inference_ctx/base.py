@@ -78,6 +78,42 @@ class BaseInferenceContext:
         del batch
         raise NotImplementedError("This inference context does not implement tokenized rollout generation.")
 
+    @staticmethod
+    def rollouts_by_token_request(
+        batch: TokenizedRolloutBatchRequest,
+        batch_result: TokenizedRolloutBatchResult,
+    ) -> dict[str, tuple[TokenizedRollout, ...]]:
+        """Return validated token rollouts keyed by request ID."""
+        rollouts_by_request: dict[str, list[TokenizedRollout]] = {}
+        for rollout in batch_result.rollouts:
+            rollouts_by_request.setdefault(rollout.request_id, []).append(rollout)
+        failures_by_request = {}
+        for failure in batch_result.failures:
+            failures_by_request.setdefault(failure.request_id, []).append(failure)
+
+        grouped_rollouts: dict[str, tuple[TokenizedRollout, ...]] = {}
+        for request in batch.requests:
+            request_failures = failures_by_request.get(request.request_id, [])
+            if request_failures:
+                failure_summary = ", ".join(
+                    f"{failure.reason.value}"
+                    + (f"[generation={failure.generation_index}]" if failure.generation_index is not None else "")
+                    for failure in request_failures
+                )
+                raise RuntimeError(f"Token rollout request {request.request_id} failed: {failure_summary}")
+
+            token_rollouts = sorted(
+                rollouts_by_request.get(request.request_id, []),
+                key=lambda rollout: rollout.generation_index,
+            )
+            if len(token_rollouts) != request.n_generations:
+                raise RuntimeError(
+                    f"Token rollout request {request.request_id} returned {len(token_rollouts)} generations; "
+                    f"expected {request.n_generations}"
+                )
+            grouped_rollouts[request.request_id] = tuple(token_rollouts)
+        return grouped_rollouts
+
     def tokenizer_identity(self) -> TokenizerIdentity:
         """Return stable tokenizer identity for token-native rollout replay."""
         name_or_path = getattr(self.tokenizer, "name_or_path", None)

@@ -11,7 +11,6 @@ from typing import Any, ClassVar, Protocol
 import jax
 import numpy as np
 from levanter.tokenizers import MarinTokenizer
-from marin.inference.types import TokenizedRollout
 from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import RolloutGroup
@@ -364,33 +363,12 @@ class MockEnv(MarinEnv):
             system_prompt=system_prompt,
         )
         batch_result = inference_ctx.generate_token_rollouts(batch)
-        rollouts_by_request: dict[str, list[TokenizedRollout]] = {}
-        for rollout in batch_result.rollouts:
-            rollouts_by_request.setdefault(rollout.request_id, []).append(rollout)
-        failures_by_request = {}
-        for failure in batch_result.failures:
-            failures_by_request.setdefault(failure.request_id, []).append(failure)
+        rollouts_by_request = inference_ctx.rollouts_by_token_request(batch, batch_result)
 
         rollout_groups = []
         for prompt_index, prompt in enumerate(prompts):
             request_id = batch.requests[prompt_index].request_id
-            request_failures = failures_by_request.get(request_id, [])
-            if request_failures:
-                failure_summary = ", ".join(
-                    f"{failure.reason.value}"
-                    + (f"[generation={failure.generation_index}]" if failure.generation_index is not None else "")
-                    for failure in request_failures
-                )
-                raise RuntimeError(f"Token rollout request {request_id} failed: {failure_summary}")
-            token_rollouts = sorted(
-                rollouts_by_request.get(request_id, []),
-                key=lambda rollout: rollout.generation_index,
-            )
-            if len(token_rollouts) != n_generations:
-                raise RuntimeError(
-                    f"Token rollout request {request_id} returned {len(token_rollouts)} generations; "
-                    f"expected {n_generations}"
-                )
+            token_rollouts = rollouts_by_request[request_id]
 
             group = []
             true_answer = sampled_examples[prompt]

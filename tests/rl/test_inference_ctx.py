@@ -12,6 +12,18 @@ from unittest.mock import AsyncMock
 import numpy as np
 import pytest
 from levanter.inference.openai import ChatMessage
+from marin.inference.types import (
+    PolicyIdentity,
+    TokenizedRollout,
+    TokenizedRolloutBatchRequest,
+    TokenizedRolloutBatchResult,
+    TokenizedRolloutFailure,
+    TokenizedRolloutRequest,
+    TokenizerIdentity,
+    TokenRolloutFailureReason,
+    TokenRolloutFinishReason,
+    TokenSamplingParameters,
+)
 from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx import (
     MODEL_MAPPINGS,
@@ -78,6 +90,84 @@ def inference_ctx(llama3_tokenizer, dummy_server):
             axis_mapping={},
         )
     )
+
+
+def _token_rollout_batch(n_generations: int = 2) -> TokenizedRolloutBatchRequest:
+    return TokenizedRolloutBatchRequest(
+        batch_id="batch-1",
+        tokenizer=TokenizerIdentity(name_or_path="tokenizer"),
+        policy=PolicyIdentity(policy_name="policy", checkpoint_ref="checkpoint"),
+        requests=(
+            TokenizedRolloutRequest(
+                request_id="req-1",
+                prompt_token_ids=(10, 20),
+                sampling=TokenSamplingParameters(max_tokens=4, temperature=0.7),
+                n_generations=n_generations,
+            ),
+        ),
+    )
+
+
+def _token_rollout(request_id: str = "req-1", generation_index: int = 0) -> TokenizedRollout:
+    return TokenizedRollout(
+        request_id=request_id,
+        generation_index=generation_index,
+        prompt_token_ids=(10, 20),
+        completion_token_ids=(30,),
+        completion_logprobs=(-0.5,),
+        finish_reason=TokenRolloutFinishReason.STOP,
+        prompt_mask=(False, False),
+        completion_mask=(True,),
+    )
+
+
+def test_rollouts_by_token_request_groups_valid_result():
+    batch = _token_rollout_batch()
+    result = TokenizedRolloutBatchResult(
+        batch_id=batch.batch_id,
+        tokenizer=batch.tokenizer,
+        policy=batch.policy,
+        rollouts=(_token_rollout(generation_index=1), _token_rollout(generation_index=0)),
+    )
+
+    grouped = BaseInferenceContext.rollouts_by_token_request(batch, result)
+
+    assert tuple(rollout.generation_index for rollout in grouped["req-1"]) == (0, 1)
+
+
+def test_rollouts_by_token_request_reports_structured_failure():
+    batch = _token_rollout_batch()
+    result = TokenizedRolloutBatchResult(
+        batch_id=batch.batch_id,
+        tokenizer=batch.tokenizer,
+        policy=batch.policy,
+        rollouts=(_token_rollout(),),
+        failures=(
+            TokenizedRolloutFailure(
+                request_id="req-1",
+                generation_index=1,
+                reason=TokenRolloutFailureReason.BACKEND_ERROR,
+            ),
+        ),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        BaseInferenceContext.rollouts_by_token_request(batch, result)
+
+    assert "backend_error[generation=1]" in str(exc_info.value)
+
+
+def test_rollouts_by_token_request_rejects_missing_generations():
+    batch = _token_rollout_batch()
+    result = TokenizedRolloutBatchResult(
+        batch_id=batch.batch_id,
+        tokenizer=batch.tokenizer,
+        policy=batch.policy,
+        rollouts=(_token_rollout(),),
+    )
+
+    with pytest.raises(RuntimeError, match="returned 1 generations; expected 2"):
+        BaseInferenceContext.rollouts_by_token_request(batch, result)
 
 
 def create_choice_with_logprobs(tokenizer, response_text: str, logprobs_values: list[float] | None = None) -> Choice:
