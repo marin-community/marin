@@ -216,33 +216,38 @@ Each is its own commit. Structural renames are pure moves + import rewrites
   build+`restore_from_db`+`attach_autoscaler` into the backend factory keyed on
   `manages_capacity`, and pass the single controller `LogClient` into the backend
   (drop the duplicate `LogClient.connect` for the k8s log sink). `value: medium`.
-- **C10 — Uniform loop spawning (design)** ⬜ — review comments at
-  `controller.py:528` and `:574`: "run the same loops for all backends; k8s just
-  has a no-op polling/autoscaler loop." Today `start()` branches on `placement`
-  to spawn either the dispatch loop or the scheduling/polling/ping loops, and
-  gates the autoscaler loop on `manages_capacity`. Target: always spawn the loop
-  set; the backend's no-op `schedule`/`manage_capacity`/`ping_workers` make the
-  k8s versions cheap no-ops. Needs care — the dispatch loop and the
-  scheduling+polling loops are genuinely different bodies today; unifying them is
-  the "make the controller a pure dispatch point" step. `value: medium`,
-  `deps: keep behavior identical`.
+- **C10 — Uniform loop spawning** ⬜ — review comments at `controller.py:528`
+  and `:574`. **Decided (rjpower): keep all the loops; k8s is a no-op on the
+  parts irrelevant to it.** `start()` spawns the same loop set for every backend
+  and drops the `placement`/`manages_capacity` branching around *which* loops to
+  spawn; the backend's no-op `schedule`/`manage_capacity`/`ping_workers` (k8s)
+  make the irrelevant loops cheap no-ops. Must stay behavior-identical (no
+  double-work between the dispatch path and the scheduling/polling paths).
+  `value: medium`.
 - **C11 — `on_workers_failed` shape (design)** ⬜ — review comment at
   `controller.py:1233`: "we just called the backend to reconcile — doesn't it
   already know the failed workers? this feels weird." Re-examine why the
   controller calls `ops.worker.fail` then passes the failed worker ids to
   `backend.on_workers_failed`; fold the worker-failure signal into the reconcile
   return or otherwise remove the double-handling. `value: medium`.
-- **C12 — Retire the `has_direct_provider` provider-status field** ⬜ — distinct
-  from the dispatch drain (it is the `GetProviderStatus` RPC's
-  `has_direct_provider` bool + the `Controller.has_direct_provider` property +
-  service gates). Post-T6 the dashboard reads capabilities from `/auth/config`, so
-  this internal flag and possibly the whole `GetProviderStatus` RPC may be
-  removable rather than renamed. Touches `controller.proto` (regen) +
-  `service.py` + test mocks. `value: low`, `deps: assess remove-vs-rename`.
-- **C13 — Doc sync for the renames** ⬜ — update path/prose references for
-  `backends/`, `PlacementOwner`, `dispatch`, `scheduling/decision.py` in
-  `lib/iris/docs/architecture.md`, `AGENTS.md`, `TESTING.md`, `coreweave.md`,
-  `reconcile_rpc.md`, and the archived design record. `value: low`.
+- **C12 — Remove the dead `GetProviderStatus` RPC; replace `has_direct_provider`
+  with `placement`** ⬜ — **Decided (rjpower): remove the RPC (no external clients
+  use it; confirmed no frontend consumer either); keep k8s task & node status
+  visibility via `GetKubernetesClusterStatus` (the dashboard's `KubernetesClusterTab`
+  uses it).** Two parts:
+  - **C12a** — delete the `GetProviderStatus` RPC + its proto messages
+    (`GetProviderStatusRequest/Response`, including the `has_direct_provider`,
+    `scheduling_events`, `capacity` fields) from `controller.proto`, regenerate
+    `controller_pb2`/`controller_connect`, and delete `service.get_provider_status`.
+  - **C12b** — replace the `Controller.has_direct_provider` property and its ~12
+    `service.py` gates with `placement is PlacementOwner.TASK_BACKEND` checks, then
+    delete the property and the test-mock fields.
+  Touches `controller.proto` (needs the proto regen toolchain) + `service.py` +
+  `controller.py` + test mocks. `value: medium`.
+- **C13 — Doc sync for the renames** ✅ — updated `architecture.md`, `AGENTS.md`,
+  `TESTING.md`, `coreweave.md`, `reconcile_rpc.md`, `task-states.md`, and the
+  archived design record for `backends/`, `PlacementOwner`, `dispatch`,
+  `scheduling/decision.py`. Source-code links validated.
 
 ---
 
@@ -279,10 +284,10 @@ Sketch only (each = one chonky PR):
 
 ## Open questions
 
-- **C10 loop unification depth** — make the k8s loops cheap no-ops in place, or
-  actually merge the dispatch loop and the scheduling/polling loops into one
-  reconcile tick? *Leaning:* no-op-in-place first (lowest behavioral risk), full
-  merge as Stage-2 groundwork.
-- **C12 `GetProviderStatus`** — rename the field, or delete the RPC now that the
-  dashboard is capability-driven? *Leaning:* check for remaining consumers; delete
-  if dead.
+- **C11 `on_workers_failed` shape** — fold the failed-worker signal into the
+  reconcile return, or keep a dedicated method but stop the controller from
+  re-deriving the list? Needs a concrete approach before implementing.
+
+Resolved by rjpower: C10 keeps all loops with k8s no-ops (no full loop merge);
+C12 deletes the dead `GetProviderStatus` RPC (no clients) while keeping
+`GetKubernetesClusterStatus` for k8s task/node visibility.
