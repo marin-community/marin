@@ -85,6 +85,19 @@ def test_parse_chat_completion_tokens_token_id_format(tokenizer):
     assert parsed_tokens == [123, 456, 789]
 
 
+def test_parse_chat_completion_tokens_prefers_attached_response_token_ids(tokenizer):
+    chat_completion = create_mock_chat_completion_with_logprobs(
+        "ignored",
+        token_strs=["not-in-vocab", "also-not-in-vocab"],
+        logprobs=[-0.1, -0.2],
+    )
+    chat_completion.choices[0].response_token_ids = [50257, 7]
+
+    parsed_tokens = parse_chat_completion_tokens_from_bytes(chat_completion, tokenizer)
+
+    assert parsed_tokens == [50257, 7]
+
+
 def test_parse_chat_completion_logprobs(tokenizer):
     """Test logprob extraction."""
     token_strs = ["Hello", "Ġworld"]
