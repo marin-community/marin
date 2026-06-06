@@ -1,9 +1,9 @@
 {
   "errors": [
     {
-      "line": 508,
+      "line": 519,
       "column": 9,
-      "stop_line": 508,
+      "stop_line": 519,
       "stop_column": 22,
       "path": "lib/fray/src/fray/types.py",
       "code": -2,
@@ -13,27 +13,15 @@
       "severity": "error"
     },
     {
-      "line": 516,
+      "line": 527,
       "column": 9,
-      "stop_line": 516,
+      "stop_line": 527,
       "stop_column": 20,
       "path": "lib/fray/src/fray/types.py",
       "code": -2,
       "name": "invalid-annotation",
       "description": "`Self` cannot be used in a static method",
       "concise_description": "`Self` cannot be used in a static method",
-      "severity": "error"
-    },
-    {
-      "line": 108,
-      "column": 47,
-      "stop_line": 108,
-      "stop_column": 73,
-      "path": "lib/haliax/src/haliax/_src/einsum.py",
-      "code": -2,
-      "name": "bad-specialization",
-      "description": "`Mapping[str, int]` is not assignable to upper bound `Axis | str` of type variable `Ax`",
-      "concise_description": "`Mapping[str, int]` is not assignable to upper bound `Axis | str` of type variable `Ax`",
       "severity": "error"
     },
     {
@@ -49,9 +37,9 @@
       "severity": "error"
     },
     {
-      "line": 197,
+      "line": 191,
       "column": 16,
-      "stop_line": 199,
+      "stop_line": 193,
       "stop_column": 10,
       "path": "lib/haliax/src/haliax/_src/state_dict.py",
       "code": -2,
@@ -61,9 +49,9 @@
       "severity": "error"
     },
     {
-      "line": 201,
+      "line": 195,
       "column": 16,
-      "stop_line": 203,
+      "stop_line": 197,
       "stop_column": 10,
       "path": "lib/haliax/src/haliax/_src/state_dict.py",
       "code": -2,
@@ -73,9 +61,9 @@
       "severity": "error"
     },
     {
-      "line": 235,
+      "line": 229,
       "column": 16,
-      "stop_line": 235,
+      "stop_line": 229,
       "stop_column": 44,
       "path": "lib/haliax/src/haliax/_src/state_dict.py",
       "code": -2,
@@ -121,9 +109,9 @@
       "severity": "error"
     },
     {
-      "line": 376,
+      "line": 377,
       "column": 9,
-      "stop_line": 376,
+      "stop_line": 377,
       "stop_column": 21,
       "path": "lib/haliax/src/haliax/core.py",
       "code": -2,
@@ -133,9 +121,9 @@
       "severity": "error"
     },
     {
-      "line": 379,
+      "line": 380,
       "column": 9,
-      "stop_line": 379,
+      "stop_line": 380,
       "stop_column": 21,
       "path": "lib/haliax/src/haliax/core.py",
       "code": -2,
@@ -145,9 +133,9 @@
       "severity": "error"
     },
     {
-      "line": 382,
+      "line": 383,
       "column": 9,
-      "stop_line": 382,
+      "stop_line": 383,
       "stop_column": 21,
       "path": "lib/haliax/src/haliax/core.py",
       "code": -2,
@@ -157,9 +145,9 @@
       "severity": "error"
     },
     {
-      "line": 779,
+      "line": 778,
       "column": 9,
-      "stop_line": 779,
+      "stop_line": 778,
       "stop_column": 15,
       "path": "lib/haliax/src/haliax/core.py",
       "code": -2,
@@ -169,9 +157,9 @@
       "severity": "error"
     },
     {
-      "line": 790,
+      "line": 789,
       "column": 9,
-      "stop_line": 790,
+      "stop_line": 789,
       "stop_column": 15,
       "path": "lib/haliax/src/haliax/core.py",
       "code": -2,
@@ -181,9 +169,9 @@
       "severity": "error"
     },
     {
-      "line": 1355,
+      "line": 1354,
       "column": 12,
-      "stop_line": 1355,
+      "stop_line": 1354,
       "stop_column": 36,
       "path": "lib/haliax/src/haliax/core.py",
       "code": -2,
@@ -193,9 +181,9 @@
       "severity": "error"
     },
     {
-      "line": 360,
+      "line": 356,
       "column": 35,
-      "stop_line": 360,
+      "stop_line": 356,
       "stop_column": 47,
       "path": "lib/haliax/src/haliax/jax_utils.py",
       "code": -2,
@@ -238,174 +226,6 @@
       "name": "bad-specialization",
       "description": "`Self@Linear` is not assignable to upper bound `DataclassInstance` of type variable `_DataclassT`",
       "concise_description": "`Self@Linear` is not assignable to upper bound `DataclassInstance` of type variable `_DataclassT`",
-      "severity": "error"
-    },
-    {
-      "line": 68,
-      "column": 9,
-      "stop_line": 68,
-      "stop_column": 21,
-      "path": "lib/haliax/src/haliax/nn/mup.py",
-      "code": -2,
-      "name": "bad-override",
-      "description": "Class member `LinearStandardParam.active_scale` overrides parent class `AbstractLinearReparam` in an inconsistent manner\n  Property getter for `LinearStandardParam.active_scale` has type `(self: LinearStandardParam) -> Literal[1]`, which is not assignable to `(self: LinearStandardParam) -> Never`, the property getter for `AbstractLinearReparam.active_scale`\n  Signature mismatch:\n  expected: def active_scale(self: LinearStandardParam) -> Never: ...\n                                                           ^^^^^ return type\n  found:    def active_scale(self: LinearStandardParam) -> Literal[1]: ...\n                                                           ^^^^^^^^^^ return type",
-      "concise_description": "Class member `LinearStandardParam.active_scale` overrides parent class `AbstractLinearReparam` in an inconsistent manner",
-      "severity": "error"
-    },
-    {
-      "line": 72,
-      "column": 9,
-      "stop_line": 72,
-      "stop_column": 17,
-      "path": "lib/haliax/src/haliax/nn/mup.py",
-      "code": -2,
-      "name": "bad-override",
-      "description": "Class member `LinearStandardParam.lr_scale` overrides parent class `AbstractLinearReparam` in an inconsistent manner\n  Property getter for `LinearStandardParam.lr_scale` has type `(self: LinearStandardParam) -> Literal[1]`, which is not assignable to `(self: LinearStandardParam) -> Never`, the property getter for `AbstractLinearReparam.lr_scale`\n  Signature mismatch:\n  expected: def lr_scale(self: LinearStandardParam) -> Never: ...\n                                                       ^^^^^ return type\n  found:    def lr_scale(self: LinearStandardParam) -> Literal[1]: ...\n                                                       ^^^^^^^^^^ return type",
-      "concise_description": "Class member `LinearStandardParam.lr_scale` overrides parent class `AbstractLinearReparam` in an inconsistent manner",
-      "severity": "error"
-    },
-    {
-      "line": 88,
-      "column": 9,
-      "stop_line": 88,
-      "stop_column": 21,
-      "path": "lib/haliax/src/haliax/nn/mup.py",
-      "code": -2,
-      "name": "bad-override",
-      "description": "Class member `InputLinearMup.active_scale` overrides parent class `AbstractLinearReparam` in an inconsistent manner\n  Property getter for `InputLinearMup.active_scale` has type `(self: InputLinearMup) -> Literal[1]`, which is not assignable to `(self: InputLinearMup) -> Never`, the property getter for `AbstractLinearReparam.active_scale`\n  Signature mismatch:\n  expected: def active_scale(self: InputLinearMup) -> Never: ...\n                                                      ^^^^^ return type\n  found:    def active_scale(self: InputLinearMup) -> Literal[1]: ...\n                                                      ^^^^^^^^^^ return type",
-      "concise_description": "Class member `InputLinearMup.active_scale` overrides parent class `AbstractLinearReparam` in an inconsistent manner",
-      "severity": "error"
-    },
-    {
-      "line": 92,
-      "column": 9,
-      "stop_line": 92,
-      "stop_column": 17,
-      "path": "lib/haliax/src/haliax/nn/mup.py",
-      "code": -2,
-      "name": "bad-override",
-      "description": "Class member `InputLinearMup.lr_scale` overrides parent class `AbstractLinearReparam` in an inconsistent manner\n  Property getter for `InputLinearMup.lr_scale` has type `(self: InputLinearMup) -> Literal[1]`, which is not assignable to `(self: InputLinearMup) -> Never`, the property getter for `AbstractLinearReparam.lr_scale`\n  Signature mismatch:\n  expected: def lr_scale(self: InputLinearMup) -> Never: ...\n                                                  ^^^^^ return type\n  found:    def lr_scale(self: InputLinearMup) -> Literal[1]: ...\n                                                  ^^^^^^^^^^ return type",
-      "concise_description": "Class member `InputLinearMup.lr_scale` overrides parent class `AbstractLinearReparam` in an inconsistent manner",
-      "severity": "error"
-    },
-    {
-      "line": 108,
-      "column": 9,
-      "stop_line": 108,
-      "stop_column": 21,
-      "path": "lib/haliax/src/haliax/nn/mup.py",
-      "code": -2,
-      "name": "bad-override",
-      "description": "Class member `HiddenLinearMup.active_scale` overrides parent class `AbstractLinearReparam` in an inconsistent manner\n  Property getter for `HiddenLinearMup.active_scale` has type `(self: HiddenLinearMup) -> Literal[1]`, which is not assignable to `(self: HiddenLinearMup) -> Never`, the property getter for `AbstractLinearReparam.active_scale`\n  Signature mismatch:\n  expected: def active_scale(self: HiddenLinearMup) -> Never: ...\n                                                       ^^^^^ return type\n  found:    def active_scale(self: HiddenLinearMup) -> Literal[1]: ...\n                                                       ^^^^^^^^^^ return type",
-      "concise_description": "Class member `HiddenLinearMup.active_scale` overrides parent class `AbstractLinearReparam` in an inconsistent manner",
-      "severity": "error"
-    },
-    {
-      "line": 112,
-      "column": 9,
-      "stop_line": 112,
-      "stop_column": 17,
-      "path": "lib/haliax/src/haliax/nn/mup.py",
-      "code": -2,
-      "name": "bad-override",
-      "description": "Class member `HiddenLinearMup.lr_scale` overrides parent class `AbstractLinearReparam` in an inconsistent manner\n  Property getter for `HiddenLinearMup.lr_scale` has type `(self: HiddenLinearMup) -> float`, which is not assignable to `(self: HiddenLinearMup) -> Never`, the property getter for `AbstractLinearReparam.lr_scale`\n  Signature mismatch:\n  expected: def lr_scale(self: HiddenLinearMup) -> Never: ...\n                                                   ^^^^^ return type\n  found:    def lr_scale(self: HiddenLinearMup) -> float: ...\n                                                   ^^^^^ return type",
-      "concise_description": "Class member `HiddenLinearMup.lr_scale` overrides parent class `AbstractLinearReparam` in an inconsistent manner",
-      "severity": "error"
-    },
-    {
-      "line": 128,
-      "column": 9,
-      "stop_line": 128,
-      "stop_column": 21,
-      "path": "lib/haliax/src/haliax/nn/mup.py",
-      "code": -2,
-      "name": "bad-override",
-      "description": "Class member `OutputLinearMup.active_scale` overrides parent class `AbstractLinearReparam` in an inconsistent manner\n  Property getter for `OutputLinearMup.active_scale` has type `(self: OutputLinearMup) -> float`, which is not assignable to `(self: OutputLinearMup) -> Never`, the property getter for `AbstractLinearReparam.active_scale`\n  Signature mismatch:\n  expected: def active_scale(self: OutputLinearMup) -> Never: ...\n                                                       ^^^^^ return type\n  found:    def active_scale(self: OutputLinearMup) -> float: ...\n                                                       ^^^^^ return type",
-      "concise_description": "Class member `OutputLinearMup.active_scale` overrides parent class `AbstractLinearReparam` in an inconsistent manner",
-      "severity": "error"
-    },
-    {
-      "line": 132,
-      "column": 9,
-      "stop_line": 132,
-      "stop_column": 17,
-      "path": "lib/haliax/src/haliax/nn/mup.py",
-      "code": -2,
-      "name": "bad-override",
-      "description": "Class member `OutputLinearMup.lr_scale` overrides parent class `AbstractLinearReparam` in an inconsistent manner\n  Property getter for `OutputLinearMup.lr_scale` has type `(self: OutputLinearMup) -> Literal[1]`, which is not assignable to `(self: OutputLinearMup) -> Never`, the property getter for `AbstractLinearReparam.lr_scale`\n  Signature mismatch:\n  expected: def lr_scale(self: OutputLinearMup) -> Never: ...\n                                                   ^^^^^ return type\n  found:    def lr_scale(self: OutputLinearMup) -> Literal[1]: ...\n                                                   ^^^^^^^^^^ return type",
-      "concise_description": "Class member `OutputLinearMup.lr_scale` overrides parent class `AbstractLinearReparam` in an inconsistent manner",
-      "severity": "error"
-    },
-    {
-      "line": 162,
-      "column": 9,
-      "stop_line": 162,
-      "stop_column": 21,
-      "path": "lib/haliax/src/haliax/nn/mup.py",
-      "code": -2,
-      "name": "bad-override",
-      "description": "Class member `EmbeddingStandardParam.active_scale` overrides parent class `AbstractEmbeddingReparam` in an inconsistent manner\n  Property getter for `EmbeddingStandardParam.active_scale` has type `(self: EmbeddingStandardParam) -> Literal[1]`, which is not assignable to `(self: EmbeddingStandardParam) -> Never`, the property getter for `AbstractEmbeddingReparam.active_scale`\n  Signature mismatch:\n  expected: def active_scale(self: EmbeddingStandardParam) -> Never: ...\n                                                              ^^^^^ return type\n  found:    def active_scale(self: EmbeddingStandardParam) -> Literal[1]: ...\n                                                              ^^^^^^^^^^ return type",
-      "concise_description": "Class member `EmbeddingStandardParam.active_scale` overrides parent class `AbstractEmbeddingReparam` in an inconsistent manner",
-      "severity": "error"
-    },
-    {
-      "line": 166,
-      "column": 9,
-      "stop_line": 166,
-      "stop_column": 17,
-      "path": "lib/haliax/src/haliax/nn/mup.py",
-      "code": -2,
-      "name": "bad-override",
-      "description": "Class member `EmbeddingStandardParam.lr_scale` overrides parent class `AbstractEmbeddingReparam` in an inconsistent manner\n  Property getter for `EmbeddingStandardParam.lr_scale` has type `(self: EmbeddingStandardParam) -> Literal[1]`, which is not assignable to `(self: EmbeddingStandardParam) -> Never`, the property getter for `AbstractEmbeddingReparam.lr_scale`\n  Signature mismatch:\n  expected: def lr_scale(self: EmbeddingStandardParam) -> Never: ...\n                                                          ^^^^^ return type\n  found:    def lr_scale(self: EmbeddingStandardParam) -> Literal[1]: ...\n                                                          ^^^^^^^^^^ return type",
-      "concise_description": "Class member `EmbeddingStandardParam.lr_scale` overrides parent class `AbstractEmbeddingReparam` in an inconsistent manner",
-      "severity": "error"
-    },
-    {
-      "line": 170,
-      "column": 9,
-      "stop_line": 170,
-      "stop_column": 29,
-      "path": "lib/haliax/src/haliax/nn/mup.py",
-      "code": -2,
-      "name": "bad-override",
-      "description": "Class member `EmbeddingStandardParam.unembed_active_scale` overrides parent class `AbstractEmbeddingReparam` in an inconsistent manner\n  Property getter for `EmbeddingStandardParam.unembed_active_scale` has type `(self: EmbeddingStandardParam) -> Literal[1]`, which is not assignable to `(self: EmbeddingStandardParam) -> Never`, the property getter for `AbstractEmbeddingReparam.unembed_active_scale`\n  Signature mismatch:\n  expected: def unembed_active_scale(self: EmbeddingStandardParam) -> Never: ...\n                                                                      ^^^^^ return type\n  found:    def unembed_active_scale(self: EmbeddingStandardParam) -> Literal[1]: ...\n                                                                      ^^^^^^^^^^ return type",
-      "concise_description": "Class member `EmbeddingStandardParam.unembed_active_scale` overrides parent class `AbstractEmbeddingReparam` in an inconsistent manner",
-      "severity": "error"
-    },
-    {
-      "line": 187,
-      "column": 9,
-      "stop_line": 187,
-      "stop_column": 21,
-      "path": "lib/haliax/src/haliax/nn/mup.py",
-      "code": -2,
-      "name": "bad-override",
-      "description": "Class member `EmbeddingMup.active_scale` overrides parent class `AbstractEmbeddingReparam` in an inconsistent manner\n  Property getter for `EmbeddingMup.active_scale` has type `(self: EmbeddingMup) -> Literal[1]`, which is not assignable to `(self: EmbeddingMup) -> Never`, the property getter for `AbstractEmbeddingReparam.active_scale`\n  Signature mismatch:\n  expected: def active_scale(self: EmbeddingMup) -> Never: ...\n                                                    ^^^^^ return type\n  found:    def active_scale(self: EmbeddingMup) -> Literal[1]: ...\n                                                    ^^^^^^^^^^ return type",
-      "concise_description": "Class member `EmbeddingMup.active_scale` overrides parent class `AbstractEmbeddingReparam` in an inconsistent manner",
-      "severity": "error"
-    },
-    {
-      "line": 191,
-      "column": 9,
-      "stop_line": 191,
-      "stop_column": 17,
-      "path": "lib/haliax/src/haliax/nn/mup.py",
-      "code": -2,
-      "name": "bad-override",
-      "description": "Class member `EmbeddingMup.lr_scale` overrides parent class `AbstractEmbeddingReparam` in an inconsistent manner\n  Property getter for `EmbeddingMup.lr_scale` has type `(self: EmbeddingMup) -> Literal[1]`, which is not assignable to `(self: EmbeddingMup) -> Never`, the property getter for `AbstractEmbeddingReparam.lr_scale`\n  Signature mismatch:\n  expected: def lr_scale(self: EmbeddingMup) -> Never: ...\n                                                ^^^^^ return type\n  found:    def lr_scale(self: EmbeddingMup) -> Literal[1]: ...\n                                                ^^^^^^^^^^ return type",
-      "concise_description": "Class member `EmbeddingMup.lr_scale` overrides parent class `AbstractEmbeddingReparam` in an inconsistent manner",
-      "severity": "error"
-    },
-    {
-      "line": 195,
-      "column": 9,
-      "stop_line": 195,
-      "stop_column": 29,
-      "path": "lib/haliax/src/haliax/nn/mup.py",
-      "code": -2,
-      "name": "bad-override",
-      "description": "Class member `EmbeddingMup.unembed_active_scale` overrides parent class `AbstractEmbeddingReparam` in an inconsistent manner\n  Property getter for `EmbeddingMup.unembed_active_scale` has type `(self: EmbeddingMup) -> float`, which is not assignable to `(self: EmbeddingMup) -> Never`, the property getter for `AbstractEmbeddingReparam.unembed_active_scale`\n  Signature mismatch:\n  expected: def unembed_active_scale(self: EmbeddingMup) -> Never: ...\n                                                            ^^^^^ return type\n  found:    def unembed_active_scale(self: EmbeddingMup) -> float: ...\n                                                            ^^^^^ return type",
-      "concise_description": "Class member `EmbeddingMup.unembed_active_scale` overrides parent class `AbstractEmbeddingReparam` in an inconsistent manner",
       "severity": "error"
     },
     {
@@ -469,9 +289,9 @@
       "severity": "error"
     },
     {
-      "line": 587,
+      "line": 583,
       "column": 5,
-      "stop_line": 587,
+      "stop_line": 583,
       "stop_column": 9,
       "path": "lib/haliax/src/haliax/partitioning.py",
       "code": -2,
@@ -505,21 +325,9 @@
       "severity": "error"
     },
     {
-      "line": 2294,
-      "column": 26,
-      "stop_line": 2296,
-      "stop_column": 18,
-      "path": "lib/iris/src/iris/cluster/controller/controller.py",
-      "code": -2,
-      "name": "unsupported-operation",
-      "description": "`None` is not subscriptable",
-      "concise_description": "`None` is not subscriptable",
-      "severity": "error"
-    },
-    {
-      "line": 140,
+      "line": 116,
       "column": 50,
-      "stop_line": 140,
+      "stop_line": 116,
       "stop_column": 112,
       "path": "lib/levanter/src/levanter/callbacks/watch.py",
       "code": -2,
@@ -541,9 +349,9 @@
       "severity": "error"
     },
     {
-      "line": 615,
+      "line": 654,
       "column": 16,
-      "stop_line": 615,
+      "stop_line": 654,
       "stop_column": 22,
       "path": "lib/levanter/src/levanter/compat/hf_checkpoints.py",
       "code": -2,
@@ -553,9 +361,9 @@
       "severity": "error"
     },
     {
-      "line": 332,
+      "line": 327,
       "column": 14,
-      "stop_line": 332,
+      "stop_line": 327,
       "stop_column": 21,
       "path": "lib/levanter/src/levanter/data/dataset.py",
       "code": -2,
@@ -565,9 +373,9 @@
       "severity": "error"
     },
     {
-      "line": 534,
+      "line": 557,
       "column": 14,
-      "stop_line": 534,
+      "stop_line": 557,
       "stop_column": 16,
       "path": "lib/levanter/src/levanter/data/sharded_datasource.py",
       "code": -2,
@@ -577,9 +385,9 @@
       "severity": "error"
     },
     {
-      "line": 414,
+      "line": 434,
       "column": 25,
-      "stop_line": 414,
+      "stop_line": 434,
       "stop_column": 35,
       "path": "lib/levanter/src/levanter/eval_harness.py",
       "code": -2,
@@ -589,21 +397,9 @@
       "severity": "error"
     },
     {
-      "line": 694,
-      "column": 55,
-      "stop_line": 694,
-      "stop_column": 69,
-      "path": "lib/levanter/src/levanter/eval_harness.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `property`",
-      "concise_description": "Expected a callable, got `property`",
-      "severity": "error"
-    },
-    {
-      "line": 725,
+      "line": 742,
       "column": 27,
-      "stop_line": 725,
+      "stop_line": 742,
       "stop_column": 48,
       "path": "lib/levanter/src/levanter/eval_harness.py",
       "code": -2,
@@ -613,9 +409,9 @@
       "severity": "error"
     },
     {
-      "line": 912,
+      "line": 929,
       "column": 24,
-      "stop_line": 912,
+      "stop_line": 929,
       "stop_column": 50,
       "path": "lib/levanter/src/levanter/eval_harness.py",
       "code": -2,
@@ -625,9 +421,9 @@
       "severity": "error"
     },
     {
-      "line": 177,
+      "line": 179,
       "column": 35,
-      "stop_line": 184,
+      "stop_line": 186,
       "stop_column": 10,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -637,9 +433,9 @@
       "severity": "error"
     },
     {
-      "line": 188,
+      "line": 190,
       "column": 35,
-      "stop_line": 188,
+      "stop_line": 190,
       "stop_column": 70,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -649,9 +445,9 @@
       "severity": "error"
     },
     {
-      "line": 357,
+      "line": 359,
       "column": 44,
-      "stop_line": 357,
+      "stop_line": 359,
       "stop_column": 115,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -661,9 +457,9 @@
       "severity": "error"
     },
     {
-      "line": 526,
+      "line": 528,
       "column": 40,
-      "stop_line": 532,
+      "stop_line": 534,
       "stop_column": 10,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -673,9 +469,9 @@
       "severity": "error"
     },
     {
-      "line": 541,
+      "line": 543,
       "column": 35,
-      "stop_line": 541,
+      "stop_line": 543,
       "stop_column": 64,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -685,9 +481,9 @@
       "severity": "error"
     },
     {
-      "line": 664,
+      "line": 669,
       "column": 35,
-      "stop_line": 664,
+      "stop_line": 669,
       "stop_column": 85,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -697,9 +493,9 @@
       "severity": "error"
     },
     {
-      "line": 676,
+      "line": 681,
       "column": 35,
-      "stop_line": 676,
+      "stop_line": 681,
       "stop_column": 62,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -709,9 +505,9 @@
       "severity": "error"
     },
     {
-      "line": 680,
+      "line": 685,
       "column": 35,
-      "stop_line": 680,
+      "stop_line": 685,
       "stop_column": 62,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -721,9 +517,9 @@
       "severity": "error"
     },
     {
-      "line": 690,
+      "line": 695,
       "column": 35,
-      "stop_line": 690,
+      "stop_line": 695,
       "stop_column": 85,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -733,9 +529,9 @@
       "severity": "error"
     },
     {
-      "line": 694,
+      "line": 699,
       "column": 35,
-      "stop_line": 694,
+      "stop_line": 699,
       "stop_column": 85,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -745,9 +541,9 @@
       "severity": "error"
     },
     {
-      "line": 698,
+      "line": 703,
       "column": 35,
-      "stop_line": 698,
+      "stop_line": 703,
       "stop_column": 85,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -757,22 +553,10 @@
       "severity": "error"
     },
     {
-      "line": 702,
+      "line": 707,
       "column": 35,
-      "stop_line": 702,
+      "stop_line": 707,
       "stop_column": 62,
-      "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
-      "code": -2,
-      "name": "bad-specialization",
-      "description": "`Self@DecodeState` is not assignable to upper bound `DataclassInstance` of type variable `_DataclassT`",
-      "concise_description": "`Self@DecodeState` is not assignable to upper bound `DataclassInstance` of type variable `_DataclassT`",
-      "severity": "error"
-    },
-    {
-      "line": 722,
-      "column": 35,
-      "stop_line": 722,
-      "stop_column": 60,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
       "name": "bad-specialization",
@@ -805,9 +589,21 @@
       "severity": "error"
     },
     {
-      "line": 759,
+      "line": 737,
       "column": 35,
-      "stop_line": 759,
+      "stop_line": 737,
+      "stop_column": 60,
+      "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
+      "code": -2,
+      "name": "bad-specialization",
+      "description": "`Self@DecodeState` is not assignable to upper bound `DataclassInstance` of type variable `_DataclassT`",
+      "concise_description": "`Self@DecodeState` is not assignable to upper bound `DataclassInstance` of type variable `_DataclassT`",
+      "severity": "error"
+    },
+    {
+      "line": 764,
+      "column": 35,
+      "stop_line": 764,
       "stop_column": 66,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -817,9 +613,9 @@
       "severity": "error"
     },
     {
-      "line": 766,
+      "line": 771,
       "column": 35,
-      "stop_line": 766,
+      "stop_line": 771,
       "stop_column": 85,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -829,9 +625,9 @@
       "severity": "error"
     },
     {
-      "line": 825,
+      "line": 830,
       "column": 40,
-      "stop_line": 836,
+      "stop_line": 841,
       "stop_column": 10,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -841,9 +637,9 @@
       "severity": "error"
     },
     {
-      "line": 839,
+      "line": 844,
       "column": 44,
-      "stop_line": 844,
+      "stop_line": 850,
       "stop_column": 14,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -853,9 +649,9 @@
       "severity": "error"
     },
     {
-      "line": 854,
+      "line": 860,
       "column": 52,
-      "stop_line": 854,
+      "stop_line": 860,
       "stop_column": 92,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -865,9 +661,9 @@
       "severity": "error"
     },
     {
-      "line": 867,
+      "line": 873,
       "column": 52,
-      "stop_line": 867,
+      "stop_line": 873,
       "stop_column": 86,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -877,9 +673,9 @@
       "severity": "error"
     },
     {
-      "line": 940,
+      "line": 946,
       "column": 35,
-      "stop_line": 942,
+      "stop_line": 948,
       "stop_column": 10,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -889,9 +685,9 @@
       "severity": "error"
     },
     {
-      "line": 1048,
+      "line": 1054,
       "column": 35,
-      "stop_line": 1054,
+      "stop_line": 1060,
       "stop_column": 10,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -901,9 +697,9 @@
       "severity": "error"
     },
     {
-      "line": 1083,
+      "line": 1089,
       "column": 44,
-      "stop_line": 1089,
+      "stop_line": 1095,
       "stop_column": 10,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -913,9 +709,9 @@
       "severity": "error"
     },
     {
-      "line": 1126,
+      "line": 1132,
       "column": 35,
-      "stop_line": 1132,
+      "stop_line": 1138,
       "stop_column": 10,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -925,9 +721,9 @@
       "severity": "error"
     },
     {
-      "line": 1207,
+      "line": 1213,
       "column": 35,
-      "stop_line": 1214,
+      "stop_line": 1220,
       "stop_column": 10,
       "path": "lib/levanter/src/levanter/inference/jit_scheduler.py",
       "code": -2,
@@ -985,9 +781,9 @@
       "severity": "error"
     },
     {
-      "line": 458,
+      "line": 455,
       "column": 39,
-      "stop_line": 458,
+      "stop_line": 455,
       "stop_column": 93,
       "path": "lib/levanter/src/levanter/models/apertus.py",
       "code": -2,
@@ -997,9 +793,9 @@
       "severity": "error"
     },
     {
-      "line": 460,
+      "line": 457,
       "column": 39,
-      "stop_line": 460,
+      "stop_line": 457,
       "stop_column": 72,
       "path": "lib/levanter/src/levanter/models/apertus.py",
       "code": -2,
@@ -1009,9 +805,9 @@
       "severity": "error"
     },
     {
-      "line": 179,
+      "line": 177,
       "column": 42,
-      "stop_line": 179,
+      "stop_line": 177,
       "stop_column": 81,
       "path": "lib/levanter/src/levanter/models/flash_attention.py",
       "code": -2,
@@ -1021,9 +817,9 @@
       "severity": "error"
     },
     {
-      "line": 426,
+      "line": 424,
       "column": 46,
-      "stop_line": 426,
+      "stop_line": 424,
       "stop_column": 85,
       "path": "lib/levanter/src/levanter/models/flash_attention.py",
       "code": -2,
@@ -1033,9 +829,9 @@
       "severity": "error"
     },
     {
-      "line": 439,
+      "line": 436,
       "column": 39,
-      "stop_line": 439,
+      "stop_line": 436,
       "stop_column": 93,
       "path": "lib/levanter/src/levanter/models/gemma.py",
       "code": -2,
@@ -1045,9 +841,9 @@
       "severity": "error"
     },
     {
-      "line": 441,
+      "line": 438,
       "column": 39,
-      "stop_line": 441,
+      "stop_line": 438,
       "stop_column": 72,
       "path": "lib/levanter/src/levanter/models/gemma.py",
       "code": -2,
@@ -1057,9 +853,9 @@
       "severity": "error"
     },
     {
-      "line": 770,
+      "line": 765,
       "column": 39,
-      "stop_line": 770,
+      "stop_line": 765,
       "stop_column": 93,
       "path": "lib/levanter/src/levanter/models/gemma.py",
       "code": -2,
@@ -1069,9 +865,9 @@
       "severity": "error"
     },
     {
-      "line": 772,
+      "line": 767,
       "column": 39,
-      "stop_line": 772,
+      "stop_line": 767,
       "stop_column": 72,
       "path": "lib/levanter/src/levanter/models/gemma.py",
       "code": -2,
@@ -1081,9 +877,9 @@
       "severity": "error"
     },
     {
-      "line": 813,
+      "line": 808,
       "column": 9,
-      "stop_line": 813,
+      "stop_line": 808,
       "stop_column": 19,
       "path": "lib/levanter/src/levanter/models/gemma.py",
       "code": -2,
@@ -1093,9 +889,9 @@
       "severity": "error"
     },
     {
-      "line": 992,
+      "line": 988,
       "column": 39,
-      "stop_line": 992,
+      "stop_line": 988,
       "stop_column": 93,
       "path": "lib/levanter/src/levanter/models/gemma.py",
       "code": -2,
@@ -1105,9 +901,9 @@
       "severity": "error"
     },
     {
-      "line": 994,
+      "line": 990,
       "column": 39,
-      "stop_line": 994,
+      "stop_line": 990,
       "stop_column": 72,
       "path": "lib/levanter/src/levanter/models/gemma.py",
       "code": -2,
@@ -1153,9 +949,9 @@
       "severity": "error"
     },
     {
-      "line": 512,
+      "line": 509,
       "column": 35,
-      "stop_line": 512,
+      "stop_line": 509,
       "stop_column": 71,
       "path": "lib/levanter/src/levanter/models/llama.py",
       "code": -2,
@@ -1165,9 +961,9 @@
       "severity": "error"
     },
     {
-      "line": 611,
+      "line": 608,
       "column": 39,
-      "stop_line": 611,
+      "stop_line": 608,
       "stop_column": 93,
       "path": "lib/levanter/src/levanter/models/llama.py",
       "code": -2,
@@ -1177,9 +973,9 @@
       "severity": "error"
     },
     {
-      "line": 613,
+      "line": 610,
       "column": 39,
-      "stop_line": 613,
+      "stop_line": 610,
       "stop_column": 72,
       "path": "lib/levanter/src/levanter/models/llama.py",
       "code": -2,
@@ -1189,9 +985,9 @@
       "severity": "error"
     },
     {
-      "line": 58,
+      "line": 59,
       "column": 11,
-      "stop_line": 58,
+      "stop_line": 59,
       "stop_column": 49,
       "path": "lib/levanter/src/levanter/models/loss.py",
       "code": -2,
@@ -1213,9 +1009,9 @@
       "severity": "error"
     },
     {
-      "line": 672,
+      "line": 669,
       "column": 39,
-      "stop_line": 672,
+      "stop_line": 669,
       "stop_column": 93,
       "path": "lib/levanter/src/levanter/models/mixtral.py",
       "code": -2,
@@ -1225,9 +1021,9 @@
       "severity": "error"
     },
     {
-      "line": 674,
+      "line": 671,
       "column": 39,
-      "stop_line": 674,
+      "stop_line": 671,
       "stop_column": 72,
       "path": "lib/levanter/src/levanter/models/mixtral.py",
       "code": -2,
@@ -1237,9 +1033,9 @@
       "severity": "error"
     },
     {
-      "line": 460,
+      "line": 454,
       "column": 35,
-      "stop_line": 460,
+      "stop_line": 454,
       "stop_column": 106,
       "path": "lib/levanter/src/levanter/models/olmo.py",
       "code": -2,
@@ -1249,9 +1045,9 @@
       "severity": "error"
     },
     {
-      "line": 570,
+      "line": 564,
       "column": 39,
-      "stop_line": 570,
+      "stop_line": 564,
       "stop_column": 93,
       "path": "lib/levanter/src/levanter/models/olmo.py",
       "code": -2,
@@ -1261,9 +1057,9 @@
       "severity": "error"
     },
     {
-      "line": 572,
+      "line": 566,
       "column": 39,
-      "stop_line": 572,
+      "stop_line": 566,
       "stop_column": 72,
       "path": "lib/levanter/src/levanter/models/olmo.py",
       "code": -2,
@@ -1273,9 +1069,9 @@
       "severity": "error"
     },
     {
-      "line": 417,
+      "line": 416,
       "column": 39,
-      "stop_line": 417,
+      "stop_line": 416,
       "stop_column": 93,
       "path": "lib/levanter/src/levanter/models/olmo3.py",
       "code": -2,
@@ -1285,9 +1081,9 @@
       "severity": "error"
     },
     {
-      "line": 419,
+      "line": 418,
       "column": 39,
-      "stop_line": 419,
+      "stop_line": 418,
       "stop_column": 72,
       "path": "lib/levanter/src/levanter/models/olmo3.py",
       "code": -2,
@@ -1297,9 +1093,9 @@
       "severity": "error"
     },
     {
-      "line": 273,
+      "line": 270,
       "column": 39,
-      "stop_line": 273,
+      "stop_line": 270,
       "stop_column": 93,
       "path": "lib/levanter/src/levanter/models/qwen.py",
       "code": -2,
@@ -1309,9 +1105,9 @@
       "severity": "error"
     },
     {
-      "line": 275,
+      "line": 272,
       "column": 39,
-      "stop_line": 275,
+      "stop_line": 272,
       "stop_column": 72,
       "path": "lib/levanter/src/levanter/models/qwen.py",
       "code": -2,
@@ -1375,7 +1171,7 @@
       "stop_column": 15,
       "path": "lib/levanter/src/levanter/optim/model_averaging.py",
       "code": -2,
-      "name": "bad-param-name-override",
+      "name": "bad-override-param-name",
       "description": "Class member `EmaModelAveraging.update` overrides parent class `ModelAveraging` in an inconsistent manner\n  Got parameter name `new_model`, expected `model`",
       "concise_description": "Class member `EmaModelAveraging.update` overrides parent class `ModelAveraging` in an inconsistent manner",
       "severity": "error"
@@ -1387,15 +1183,39 @@
       "stop_column": 15,
       "path": "lib/levanter/src/levanter/optim/model_averaging.py",
       "code": -2,
-      "name": "bad-param-name-override",
+      "name": "bad-override-param-name",
       "description": "Class member `EmaDecaySqrtModelAveraging.update` overrides parent class `ModelAveraging` in an inconsistent manner\n  Got parameter name `new_model`, expected `model`",
       "concise_description": "Class member `EmaDecaySqrtModelAveraging.update` overrides parent class `ModelAveraging` in an inconsistent manner",
       "severity": "error"
     },
     {
-      "line": 235,
+      "line": 448,
       "column": 14,
-      "stop_line": 235,
+      "stop_line": 448,
+      "stop_column": 20,
+      "path": "lib/levanter/src/levanter/store/cache.py",
+      "code": -2,
+      "name": "invalid-type-var",
+      "description": "Attribute `_store` cannot depend on type variable `T_co`, which is not in the scope of class `_MaterializedTreeCacheReader`",
+      "concise_description": "Attribute `_store` cannot depend on type variable `T_co`, which is not in the scope of class `_MaterializedTreeCacheReader`",
+      "severity": "error"
+    },
+    {
+      "line": 503,
+      "column": 14,
+      "stop_line": 503,
+      "stop_column": 20,
+      "path": "lib/levanter/src/levanter/store/cache.py",
+      "code": -2,
+      "name": "invalid-type-var",
+      "description": "Attribute `_cache` cannot depend on type variable `T_co`, which is not in the scope of class `_ShardedTreeCacheReader`",
+      "concise_description": "Attribute `_cache` cannot depend on type variable `T_co`, which is not in the scope of class `_ShardedTreeCacheReader`",
+      "severity": "error"
+    },
+    {
+      "line": 782,
+      "column": 14,
+      "stop_line": 782,
       "stop_column": 23,
       "path": "lib/levanter/src/levanter/store/cache.py",
       "code": -2,
@@ -1405,9 +1225,9 @@
       "severity": "error"
     },
     {
-      "line": 527,
+      "line": 523,
       "column": 13,
-      "stop_line": 527,
+      "stop_line": 523,
       "stop_column": 30,
       "path": "lib/levanter/src/levanter/store/jagged_array.py",
       "code": -2,
@@ -1417,9 +1237,9 @@
       "severity": "error"
     },
     {
-      "line": 551,
+      "line": 547,
       "column": 13,
-      "stop_line": 551,
+      "stop_line": 547,
       "stop_column": 30,
       "path": "lib/levanter/src/levanter/store/jagged_array.py",
       "code": -2,
@@ -1429,9 +1249,9 @@
       "severity": "error"
     },
     {
-      "line": 162,
+      "line": 158,
       "column": 32,
-      "stop_line": 164,
+      "stop_line": 160,
       "stop_column": 14,
       "path": "lib/levanter/src/levanter/trainer_state.py",
       "code": -2,
@@ -1441,69 +1261,45 @@
       "severity": "error"
     },
     {
-      "line": 129,
+      "line": 105,
       "column": 9,
-      "stop_line": 129,
+      "stop_line": 105,
       "stop_column": 16,
       "path": "lib/levanter/src/levanter/utils/py_utils.py",
       "code": -2,
-      "name": "bad-param-name-override",
+      "name": "bad-override-param-name",
       "description": "Class member `FailSafeJSONEncoder.default` overrides parent class `JSONEncoder` in an inconsistent manner\n  Got parameter name `obj`, expected `o`",
       "concise_description": "Class member `FailSafeJSONEncoder.default` overrides parent class `JSONEncoder` in an inconsistent manner",
       "severity": "error"
     },
     {
-      "line": 416,
-      "column": 52,
-      "stop_line": 416,
-      "stop_column": 62,
-      "path": "lib/marin/src/marin/cluster/config.py",
+      "line": 185,
+      "column": 12,
+      "stop_line": 185,
+      "stop_column": 24,
+      "path": "lib/marin/src/marin/datakit/download/formal_methods_evals.py",
       "code": -2,
-      "name": "bad-typed-dict-key",
-      "description": "Invalid key for TypedDict `<anonymous>`, got `dict[str, int]`",
-      "concise_description": "Invalid key for TypedDict `<anonymous>`, got `dict[str, int]`",
+      "name": "bad-return",
+      "description": "Returned type `tuple[JsonValue, ...]` is not assignable to declared return type `tuple[str, ...]`",
+      "concise_description": "Returned type `tuple[JsonValue, ...]` is not assignable to declared return type `tuple[str, ...]`",
       "severity": "error"
     },
     {
-      "line": 416,
-      "column": 52,
-      "stop_line": 416,
-      "stop_column": 62,
-      "path": "lib/marin/src/marin/cluster/config.py",
+      "line": 194,
+      "column": 12,
+      "stop_line": 194,
+      "stop_column": 24,
+      "path": "lib/marin/src/marin/datakit/download/formal_methods_evals.py",
       "code": -2,
-      "name": "bad-typed-dict-key",
-      "description": "Invalid key for TypedDict `<anonymous>`, got `dict[Unknown, Unknown]`",
-      "concise_description": "Invalid key for TypedDict `<anonymous>`, got `dict[Unknown, Unknown]`",
+      "name": "bad-return",
+      "description": "Returned type `tuple[JsonValue, ...]` is not assignable to declared return type `tuple[str, ...]`",
+      "concise_description": "Returned type `tuple[JsonValue, ...]` is not assignable to declared return type `tuple[str, ...]`",
       "severity": "error"
     },
     {
-      "line": 416,
-      "column": 52,
-      "stop_line": 416,
-      "stop_column": 62,
-      "path": "lib/marin/src/marin/cluster/config.py",
-      "code": -2,
-      "name": "bad-typed-dict-key",
-      "description": "Invalid key for TypedDict `<anonymous>`, got `int`",
-      "concise_description": "Invalid key for TypedDict `<anonymous>`, got `int`",
-      "severity": "error"
-    },
-    {
-      "line": 155,
-      "column": 52,
-      "stop_line": 155,
-      "stop_column": 61,
-      "path": "lib/marin/src/marin/execution/executor.py",
-      "code": -2,
-      "name": "not-a-type",
-      "description": "Expected a type form, got instance of `Overload[\n  [_T](cls: type[_T], /, *, init: bool = True, repr: bool = True, eq: bool = True, order: bool = False, unsafe_hash: bool = False, frozen: bool = False, match_args: bool = True, kw_only: bool = False, slots: bool = False, weakref_slot: bool = False) -> type[_T]\n  (cls: None = None, /, *, init: bool = True, repr: bool = True, eq: bool = True, order: bool = False, unsafe_hash: bool = False, frozen: bool = False, match_args: bool = True, kw_only: bool = False, slots: bool = False, weakref_slot: bool = False) -> [_T](type[_T]) -> type[_T]\n]`",
-      "concise_description": "Expected a type form, got instance of `Overload[\n  [_T](cls: type[_T], /, *, init: bool = True, repr: bool = True, eq: bool = True, order: bool = False, unsafe_hash: bool = False, frozen: bool = False, match_args: bool = True, kw_only: bool = False, slots: bool = False, weakref_slot: bool = False) -> type[_T]\n  (cls: None = None, /, *, init: bool = True, repr: bool = True, eq: bool = True, order: bool = False, unsafe_hash: bool = False, frozen: bool = False, match_args: bool = True, kw_only: bool = False, slots: bool = False, weakref_slot: bool = False) -> [_T](type[_T]) -> type[_T]\n]`",
-      "severity": "error"
-    },
-    {
-      "line": 634,
+      "line": 597,
       "column": 37,
-      "stop_line": 634,
+      "stop_line": 597,
       "stop_column": 46,
       "path": "lib/marin/src/marin/execution/executor.py",
       "code": -2,
@@ -1513,9 +1309,9 @@
       "severity": "error"
     },
     {
-      "line": 973,
+      "line": 852,
       "column": 13,
-      "stop_line": 973,
+      "stop_line": 852,
       "stop_column": 22,
       "path": "lib/marin/src/marin/execution/executor.py",
       "code": -2,
@@ -1525,33 +1321,9 @@
       "severity": "error"
     },
     {
-      "line": 1137,
-      "column": 13,
-      "stop_line": 1137,
-      "stop_column": 22,
-      "path": "lib/marin/src/marin/execution/executor.py",
-      "code": -2,
-      "name": "not-a-type",
-      "description": "Expected a type form, got instance of `Overload[\n  [_T](cls: type[_T], /, *, init: bool = True, repr: bool = True, eq: bool = True, order: bool = False, unsafe_hash: bool = False, frozen: bool = False, match_args: bool = True, kw_only: bool = False, slots: bool = False, weakref_slot: bool = False) -> type[_T]\n  (cls: None = None, /, *, init: bool = True, repr: bool = True, eq: bool = True, order: bool = False, unsafe_hash: bool = False, frozen: bool = False, match_args: bool = True, kw_only: bool = False, slots: bool = False, weakref_slot: bool = False) -> [_T](type[_T]) -> type[_T]\n]`",
-      "concise_description": "Expected a type form, got instance of `Overload[\n  [_T](cls: type[_T], /, *, init: bool = True, repr: bool = True, eq: bool = True, order: bool = False, unsafe_hash: bool = False, frozen: bool = False, match_args: bool = True, kw_only: bool = False, slots: bool = False, weakref_slot: bool = False) -> type[_T]\n  (cls: None = None, /, *, init: bool = True, repr: bool = True, eq: bool = True, order: bool = False, unsafe_hash: bool = False, frozen: bool = False, match_args: bool = True, kw_only: bool = False, slots: bool = False, weakref_slot: bool = False) -> [_T](type[_T]) -> type[_T]\n]`",
-      "severity": "error"
-    },
-    {
-      "line": 1138,
-      "column": 6,
-      "stop_line": 1138,
-      "stop_column": 15,
-      "path": "lib/marin/src/marin/execution/executor.py",
-      "code": -2,
-      "name": "not-a-type",
-      "description": "Expected a type form, got instance of `Overload[\n  [_T](cls: type[_T], /, *, init: bool = True, repr: bool = True, eq: bool = True, order: bool = False, unsafe_hash: bool = False, frozen: bool = False, match_args: bool = True, kw_only: bool = False, slots: bool = False, weakref_slot: bool = False) -> type[_T]\n  (cls: None = None, /, *, init: bool = True, repr: bool = True, eq: bool = True, order: bool = False, unsafe_hash: bool = False, frozen: bool = False, match_args: bool = True, kw_only: bool = False, slots: bool = False, weakref_slot: bool = False) -> [_T](type[_T]) -> type[_T]\n]`",
-      "concise_description": "Expected a type form, got instance of `Overload[\n  [_T](cls: type[_T], /, *, init: bool = True, repr: bool = True, eq: bool = True, order: bool = False, unsafe_hash: bool = False, frozen: bool = False, match_args: bool = True, kw_only: bool = False, slots: bool = False, weakref_slot: bool = False) -> type[_T]\n  (cls: None = None, /, *, init: bool = True, repr: bool = True, eq: bool = True, order: bool = False, unsafe_hash: bool = False, frozen: bool = False, match_args: bool = True, kw_only: bool = False, slots: bool = False, weakref_slot: bool = False) -> [_T](type[_T]) -> type[_T]\n]`",
-      "severity": "error"
-    },
-    {
-      "line": 1209,
+      "line": 1115,
       "column": 42,
-      "stop_line": 1209,
+      "stop_line": 1115,
       "stop_column": 51,
       "path": "lib/marin/src/marin/execution/executor.py",
       "code": -2,
@@ -1561,9 +1333,9 @@
       "severity": "error"
     },
     {
-      "line": 226,
+      "line": 230,
       "column": 16,
-      "stop_line": 226,
+      "stop_line": 230,
       "stop_column": 85,
       "path": "lib/marin/src/marin/rl/environments/inference_ctx/inflight/worker.py",
       "code": -2,
@@ -1573,9 +1345,9 @@
       "severity": "error"
     },
     {
-      "line": 214,
+      "line": 247,
       "column": 39,
-      "stop_line": 219,
+      "stop_line": 252,
       "stop_column": 6,
       "path": "lib/marin/src/marin/rl/rl_experiment_utils.py",
       "code": -2,
@@ -1597,45 +1369,9 @@
       "severity": "error"
     },
     {
-      "line": 187,
-      "column": 6,
-      "stop_line": 187,
-      "stop_column": 20,
-      "path": "lib/marin/src/marin/rl/scripts/replay_completions.py",
-      "code": -2,
-      "name": "bad-return",
-      "description": "Function declared to return `dict[str, Any]`, but one or more paths are missing an explicit `return`",
-      "concise_description": "Function declared to return `dict[str, Any]`, but one or more paths are missing an explicit `return`",
-      "severity": "error"
-    },
-    {
-      "line": 58,
-      "column": 16,
-      "stop_line": 58,
-      "stop_column": 33,
-      "path": "lib/marin/src/marin/rl/weight_transfer/__init__.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `None`",
-      "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 87,
-      "column": 16,
-      "stop_line": 87,
-      "stop_column": 33,
-      "path": "lib/marin/src/marin/rl/weight_transfer/__init__.py",
-      "code": -2,
-      "name": "not-callable",
-      "description": "Expected a callable, got `None`",
-      "concise_description": "Expected a callable, got `None`",
-      "severity": "error"
-    },
-    {
-      "line": 184,
+      "line": 183,
       "column": 12,
-      "stop_line": 184,
+      "stop_line": 183,
       "stop_column": 18,
       "path": "lib/marin/src/marin/rl/weight_transfer/arrow_flight.py",
       "code": -2,
@@ -1645,21 +1381,9 @@
       "severity": "error"
     },
     {
-      "line": 267,
+      "line": 268,
       "column": 16,
-      "stop_line": 267,
-      "stop_column": 19,
-      "path": "lib/marin/src/marin/rl/weight_transfer/arrow_flight.py",
-      "code": -2,
-      "name": "bad-return",
-      "description": "Returned type `Literal[123]` is not assignable to declared return type `None`",
-      "concise_description": "Returned type `Literal[123]` is not assignable to declared return type `None`",
-      "severity": "error"
-    },
-    {
-      "line": 270,
-      "column": 16,
-      "stop_line": 270,
+      "stop_line": 268,
       "stop_column": 33,
       "path": "lib/marin/src/marin/rl/weight_transfer/arrow_flight.py",
       "code": -2,
@@ -1669,9 +1393,9 @@
       "severity": "error"
     },
     {
-      "line": 567,
+      "line": 565,
       "column": 9,
-      "stop_line": 567,
+      "stop_line": 565,
       "stop_column": 20,
       "path": "lib/marin/src/marin/rl/weight_transfer/arrow_flight.py",
       "code": -2,
@@ -1681,9 +1405,9 @@
       "severity": "error"
     },
     {
-      "line": 571,
+      "line": 569,
       "column": 9,
-      "stop_line": 571,
+      "stop_line": 569,
       "stop_column": 27,
       "path": "lib/marin/src/marin/rl/weight_transfer/arrow_flight.py",
       "code": -2,
@@ -1693,10 +1417,10 @@
       "severity": "error"
     },
     {
-      "line": 115,
-      "column": 21,
-      "stop_line": 119,
-      "stop_column": 6,
+      "line": 316,
+      "column": 31,
+      "stop_line": 316,
+      "stop_column": 62,
       "path": "lib/marin/src/marin/training/training.py",
       "code": -2,
       "name": "bad-specialization",
@@ -1705,33 +1429,21 @@
       "severity": "error"
     },
     {
-      "line": 129,
-      "column": 23,
-      "stop_line": 135,
+      "line": 324,
+      "column": 31,
+      "stop_line": 328,
       "stop_column": 10,
       "path": "lib/marin/src/marin/training/training.py",
       "code": -2,
       "name": "bad-specialization",
-      "description": "`TrainConfigT` is not assignable to upper bound `DataclassInstance` of type variable `_DataclassT`",
-      "concise_description": "`TrainConfigT` is not assignable to upper bound `DataclassInstance` of type variable `_DataclassT`",
+      "description": "`object` is not assignable to upper bound `DataclassInstance` of type variable `_DataclassT`",
+      "concise_description": "`object` is not assignable to upper bound `DataclassInstance` of type variable `_DataclassT`",
       "severity": "error"
     },
     {
-      "line": 138,
-      "column": 23,
-      "stop_line": 141,
-      "stop_column": 10,
-      "path": "lib/marin/src/marin/training/training.py",
-      "code": -2,
-      "name": "bad-specialization",
-      "description": "`TrainConfigT` is not assignable to upper bound `DataclassInstance` of type variable `_DataclassT`",
-      "concise_description": "`TrainConfigT` is not assignable to upper bound `DataclassInstance` of type variable `_DataclassT`",
-      "severity": "error"
-    },
-    {
-      "line": 150,
+      "line": 343,
       "column": 25,
-      "stop_line": 150,
+      "stop_line": 343,
       "stop_column": 44,
       "path": "lib/marin/src/marin/training/training.py",
       "code": -2,
@@ -1741,21 +1453,9 @@
       "severity": "error"
     },
     {
-      "line": 185,
-      "column": 27,
-      "stop_line": 187,
-      "stop_column": 6,
-      "path": "lib/marin/src/marin/training/training.py",
-      "code": -2,
-      "name": "bad-specialization",
-      "description": "`object` is not assignable to upper bound `DataclassInstance` of type variable `_DataclassT`",
-      "concise_description": "`object` is not assignable to upper bound `DataclassInstance` of type variable `_DataclassT`",
-      "severity": "error"
-    },
-    {
-      "line": 263,
+      "line": 475,
       "column": 31,
-      "stop_line": 263,
+      "stop_line": 475,
       "stop_column": 62,
       "path": "lib/marin/src/marin/training/training.py",
       "code": -2,
@@ -1813,21 +1513,9 @@
       "severity": "error"
     },
     {
-      "line": 101,
-      "column": 24,
-      "stop_line": 101,
-      "stop_column": 28,
-      "path": "lib/marin/src/marin/transform/conversation/adapters.py",
-      "code": -2,
-      "name": "bad-return",
-      "description": "Returned type `None` is not assignable to declared return type `list[OpenAIChatMessage]`",
-      "concise_description": "Returned type `None` is not assignable to declared return type `list[OpenAIChatMessage]`",
-      "severity": "error"
-    },
-    {
-      "line": 110,
+      "line": 115,
       "column": 28,
-      "stop_line": 110,
+      "stop_line": 115,
       "stop_column": 61,
       "path": "lib/marin/src/marin/transform/conversation/adapters.py",
       "code": -2,
@@ -1837,21 +1525,9 @@
       "severity": "error"
     },
     {
-      "line": 46,
-      "column": 89,
-      "stop_line": 46,
-      "stop_column": 93,
-      "path": "lib/marin/src/marin/transform/fasttext/transform.py",
-      "code": -2,
-      "name": "bad-return",
-      "description": "Function declared to return `bool` but is missing an explicit `return`",
-      "concise_description": "Function declared to return `bool` but is missing an explicit `return`",
-      "severity": "error"
-    },
-    {
-      "line": 186,
+      "line": 181,
       "column": 16,
-      "stop_line": 186,
+      "stop_line": 181,
       "stop_column": 20,
       "path": "lib/marin/src/marin/transform/wikipedia/transform_wikipedia.py",
       "code": -2,
@@ -1861,9 +1537,9 @@
       "severity": "error"
     },
     {
-      "line": 197,
+      "line": 192,
       "column": 16,
-      "stop_line": 197,
+      "stop_line": 192,
       "stop_column": 20,
       "path": "lib/marin/src/marin/transform/wikipedia/transform_wikipedia.py",
       "code": -2,
@@ -1879,15 +1555,15 @@
       "stop_column": 16,
       "path": "lib/marin/src/marin/utilities/json_encoder.py",
       "code": -2,
-      "name": "bad-param-name-override",
+      "name": "bad-override-param-name",
       "description": "Class member `CustomJsonEncoder.default` overrides parent class `JSONEncoder` in an inconsistent manner\n  Got parameter name `obj`, expected `o`",
       "concise_description": "Class member `CustomJsonEncoder.default` overrides parent class `JSONEncoder` in an inconsistent manner",
       "severity": "error"
     },
     {
-      "line": 92,
+      "line": 90,
       "column": 12,
-      "stop_line": 92,
+      "stop_line": 90,
       "stop_column": 15,
       "path": "lib/marin/src/marin/web/convert.py",
       "code": -2,
@@ -1897,9 +1573,189 @@
       "severity": "error"
     },
     {
-      "line": 937,
+      "line": 447,
       "column": 16,
-      "stop_line": 940,
+      "stop_line": 447,
+      "stop_column": 67,
+      "path": "lib/zephyr/src/zephyr/dataset.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[R]`",
+      "concise_description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[R]`",
+      "severity": "error"
+    },
+    {
+      "line": 488,
+      "column": 16,
+      "stop_line": 488,
+      "stop_column": 82,
+      "path": "lib/zephyr/src/zephyr/dataset.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[dict[Unknown, Unknown]]`",
+      "concise_description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[dict[Unknown, Unknown]]`",
+      "severity": "error"
+    },
+    {
+      "line": 529,
+      "column": 16,
+      "stop_line": 529,
+      "stop_column": 83,
+      "path": "lib/zephyr/src/zephyr/dataset.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[list[T]]`",
+      "concise_description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[list[T]]`",
+      "severity": "error"
+    },
+    {
+      "line": 557,
+      "column": 16,
+      "stop_line": 557,
+      "stop_column": 92,
+      "path": "lib/zephyr/src/zephyr/dataset.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[list[T]]`",
+      "concise_description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[list[T]]`",
+      "severity": "error"
+    },
+    {
+      "line": 578,
+      "column": 16,
+      "stop_line": 578,
+      "stop_column": 71,
+      "path": "lib/zephyr/src/zephyr/dataset.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[R]`",
+      "concise_description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[R]`",
+      "severity": "error"
+    },
+    {
+      "line": 610,
+      "column": 16,
+      "stop_line": 613,
+      "stop_column": 10,
+      "path": "lib/zephyr/src/zephyr/dataset.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[dict[Unknown, Unknown]]`",
+      "concise_description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[dict[Unknown, Unknown]]`",
+      "severity": "error"
+    },
+    {
+      "line": 680,
+      "column": 16,
+      "stop_line": 683,
+      "stop_column": 10,
+      "path": "lib/zephyr/src/zephyr/dataset.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[dict[Unknown, Unknown]]`",
+      "concise_description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[dict[Unknown, Unknown]]`",
+      "severity": "error"
+    },
+    {
+      "line": 699,
+      "column": 16,
+      "stop_line": 702,
+      "stop_column": 10,
+      "path": "lib/zephyr/src/zephyr/dataset.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[dict[Unknown, Unknown]]`",
+      "concise_description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[dict[Unknown, Unknown]]`",
+      "severity": "error"
+    },
+    {
+      "line": 741,
+      "column": 16,
+      "stop_line": 741,
+      "stop_column": 72,
+      "path": "lib/zephyr/src/zephyr/dataset.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[R]`",
+      "concise_description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[R]`",
+      "severity": "error"
+    },
+    {
+      "line": 780,
+      "column": 16,
+      "stop_line": 790,
+      "stop_column": 10,
+      "path": "lib/zephyr/src/zephyr/dataset.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[str]`",
+      "concise_description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[str]`",
+      "severity": "error"
+    },
+    {
+      "line": 803,
+      "column": 16,
+      "stop_line": 813,
+      "stop_column": 10,
+      "path": "lib/zephyr/src/zephyr/dataset.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[str]`",
+      "concise_description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[str]`",
+      "severity": "error"
+    },
+    {
+      "line": 831,
+      "column": 16,
+      "stop_line": 842,
+      "stop_column": 10,
+      "path": "lib/zephyr/src/zephyr/dataset.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[str]`",
+      "concise_description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[str]`",
+      "severity": "error"
+    },
+    {
+      "line": 851,
+      "column": 16,
+      "stop_line": 862,
+      "stop_column": 10,
+      "path": "lib/zephyr/src/zephyr/dataset.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[str]`",
+      "concise_description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[str]`",
+      "severity": "error"
+    },
+    {
+      "line": 938,
+      "column": 16,
+      "stop_line": 941,
+      "stop_column": 10,
+      "path": "lib/zephyr/src/zephyr/dataset.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[R]`",
+      "concise_description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[R]`",
+      "severity": "error"
+    },
+    {
+      "line": 995,
+      "column": 16,
+      "stop_line": 995,
+      "stop_column": 97,
+      "path": "lib/zephyr/src/zephyr/dataset.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[R]`",
+      "concise_description": "Returned type `Dataset[T]` is not assignable to declared return type `Dataset[R]`",
+      "severity": "error"
+    },
+    {
+      "line": 1008,
+      "column": 16,
+      "stop_line": 1011,
       "stop_column": 10,
       "path": "lib/zephyr/src/zephyr/dataset.py",
       "code": -2,
