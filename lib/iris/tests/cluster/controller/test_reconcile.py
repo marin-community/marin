@@ -25,7 +25,7 @@ from iris.cluster.controller import ops, writes
 from iris.cluster.controller.backend import (
     BackendReconcileInput,
     BackendReconcileResult,
-    Placement,
+    PlacementOwner,
     ScheduleInput,
     ScheduleResult,
     run_scheduling_decision,
@@ -1043,7 +1043,7 @@ class _ScriptedProvider:
     script: list[Any] = field(default_factory=list)
     calls: list[tuple[list[WorkerReconcilePlan], dict]] = field(default_factory=list)
     name: str = "worker"
-    placement: ClassVar[Placement] = Placement.IRIS
+    placement: ClassVar[PlacementOwner] = PlacementOwner.IRIS_CONTROLLER
     manages_capacity: ClassVar[bool] = False
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
 

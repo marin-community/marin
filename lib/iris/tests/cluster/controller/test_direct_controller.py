@@ -8,7 +8,7 @@ from iris.cluster.controller import ops
 from iris.cluster.controller.backend import (
     BackendReconcileInput,
     BackendReconcileResult,
-    Placement,
+    PlacementOwner,
     ProviderUnsupportedError,
     ScheduleInput,
     ScheduleResult,
@@ -36,7 +36,7 @@ class FakeDirectProvider:
     """Minimal BACKEND-placement TaskBackend (K8s-like) for testing."""
 
     name = "kubernetes"
-    placement = Placement.BACKEND
+    placement = PlacementOwner.TASK_BACKEND
     manages_capacity = True
 
     def __init__(self):

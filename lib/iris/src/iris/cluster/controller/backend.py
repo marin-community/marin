@@ -12,12 +12,12 @@ data out.
 
 Two execution models exist, distinguished by :attr:`TaskBackend.placement`:
 
-* ``Placement.IRIS`` — the Iris :class:`~iris.cluster.controller.scheduling.scheduler.Scheduler`
+* ``PlacementOwner.IRIS_CONTROLLER`` — the Iris :class:`~iris.cluster.controller.scheduling.scheduler.Scheduler`
   assigns task→worker, then the backend fans the per-worker reconcile RPC out
   to worker daemons. The controller passes pre-built ``plans`` and applies the
   raw ``worker_results`` through ``ops.worker.apply_reconcile`` (which emits
   worker heartbeats and runs the ``WORKER_RECONCILE`` transition source).
-* ``Placement.BACKEND`` — the backend (Kueue, and later slurmctld) owns
+* ``PlacementOwner.TASK_BACKEND`` — the backend (Kueue, and later slurmctld) owns
   placement. The controller passes the desired ``tasks_to_run`` plus the
   ``running_tasks`` snapshot; the backend converges its own resources and
   returns pre-computed ``updates`` applied through
@@ -77,13 +77,13 @@ class ProviderUnsupportedError(ProviderError):
     """Operation not supported by this backend implementation."""
 
 
-class Placement(StrEnum):
+class PlacementOwner(StrEnum):
     """Who decides which node a task runs on."""
 
-    IRIS = "iris"
+    IRIS_CONTROLLER = "iris_controller"
     """Iris schedules task→worker; the backend fans reconcile RPCs to daemons."""
 
-    BACKEND = "backend"
+    TASK_BACKEND = "task_backend"
     """The backend places tasks itself (Kueue, slurmctld); Iris does not schedule."""
 
 
@@ -97,7 +97,7 @@ class BackendDescriptor:
     """
 
     name: str
-    placement: Placement
+    placement: PlacementOwner
     manages_capacity: bool
     capabilities: list[str]
 
@@ -110,11 +110,11 @@ def backend_descriptor(backend: TaskBackend) -> BackendDescriptor:
     capacity), ``cluster`` (the backend places tasks on its own cluster).
     """
     capabilities: list[str] = []
-    if backend.placement is Placement.IRIS:
+    if backend.placement is PlacementOwner.IRIS_CONTROLLER:
         capabilities.append("workers")  # Iris tracks worker daemons -> Workers (Fleet) tab
     if not backend.manages_capacity:
         capabilities.append("autoscaler")  # Iris autoscaler -> Autoscaler tab
-    if backend.placement is Placement.BACKEND:
+    if backend.placement is PlacementOwner.TASK_BACKEND:
         capabilities.append("cluster")  # underlying cluster view -> Cluster tab
     return BackendDescriptor(
         name=backend.name,
@@ -231,7 +231,7 @@ class ScheduleInput:
 
 @dataclass(frozen=True)
 class ScheduleResult:
-    """Placement decisions returned by :meth:`TaskBackend.schedule`.
+    """PlacementOwner decisions returned by :meth:`TaskBackend.schedule`.
 
     Pure data: the controller commits ``assignments`` (``ops.task.assign``),
     ``preemptions`` (``finalize`` PREEMPT), and ``unschedulable`` (``finalize``
@@ -461,7 +461,7 @@ class TaskBackend(Protocol):
     name: str
     """Stable identifier, e.g. ``"gcp"``, ``"coreweave"``, later ``"slurm-stanford"``."""
 
-    placement: ClassVar[Placement]
+    placement: ClassVar[PlacementOwner]
     """Who schedules task→node (selects the controller's input-build + apply path)."""
 
     manages_capacity: ClassVar[bool]

@@ -67,7 +67,7 @@ if not hasattr(_Tx, "fetchall"):
     _Tx.fetchone = lambda self, stmt, params=None: self.execute(stmt, params).first()
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.controller import ops
-from iris.cluster.controller.backend import BackendReconcileInput, BackendReconcileResult, Placement
+from iris.cluster.controller.backend import BackendReconcileInput, BackendReconcileResult, PlacementOwner
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
@@ -157,7 +157,7 @@ class _FakeProvider:
     """
 
     name = "worker"
-    placement = Placement.IRIS
+    placement = PlacementOwner.IRIS_CONTROLLER
     manages_capacity = False
 
     def get_process_status(self, target, request):

@@ -32,6 +32,10 @@ from finelog.types import LogWriterProtocol, str_to_log_level
 from rigging.log_setup import parse_log_level
 from rigging.timing import Timestamp
 
+from iris.cluster.backends.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
+from iris.cluster.backends.k8s.coreweave_topology import CW_LABEL_LEAFGROUP, CW_LABEL_NVLINK_DOMAIN
+from iris.cluster.backends.k8s.service import K8sService
+from iris.cluster.backends.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.backend import (
     BackendReconcileInput,
@@ -40,7 +44,7 @@ from iris.cluster.controller.backend import (
     CapacityResult,
     ClusterCapacity,
     PingResult,
-    Placement,
+    PlacementOwner,
     ProviderUnsupportedError,
     ScheduleInput,
     ScheduleResult,
@@ -51,10 +55,6 @@ from iris.cluster.controller.backend import (
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.log_keys import task_log_key
-from iris.cluster.backends.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
-from iris.cluster.backends.k8s.coreweave_topology import CW_LABEL_LEAFGROUP, CW_LABEL_NVLINK_DOMAIN
-from iris.cluster.backends.k8s.service import K8sService
-from iris.cluster.backends.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
@@ -1241,7 +1241,7 @@ class _K8sProfileDispatch:
 class K8sTaskProvider:
     """Executes tasks as Kubernetes Pods without worker daemons.
 
-    A ``Placement.BACKEND`` :class:`~iris.cluster.controller.backend.TaskBackend`:
+    A ``PlacementOwner.TASK_BACKEND`` :class:`~iris.cluster.controller.backend.TaskBackend`:
     the controller calls reconcile() with a BackendReconcileInput (desired
     ``tasks_to_run`` + ``running_tasks``) and receives back a
     BackendReconcileResult — Kueue owns placement, so no Iris scheduling and no
@@ -1254,7 +1254,7 @@ class K8sTaskProvider:
     Pod naming: iris-{task_id_sanitized}-{attempt_id}
     """
 
-    placement: ClassVar[Placement] = Placement.BACKEND
+    placement: ClassVar[PlacementOwner] = PlacementOwner.TASK_BACKEND
     manages_capacity: ClassVar[bool] = True
 
     kubectl: K8sService

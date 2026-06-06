@@ -16,7 +16,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint
-from iris.cluster.controller.backend import Placement
+from iris.cluster.controller.backend import PlacementOwner
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.ops.task import Assignment
@@ -195,7 +195,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock.get_job_scheduling_diagnostics = _get_job_scheduling_diagnostics
     controller_mock.last_scheduling_context = None
     controller_mock.autoscaler = autoscaler
-    controller_mock.provider = Mock(name="worker", placement=Placement.IRIS, manages_capacity=False)
+    controller_mock.provider = Mock(name="worker", placement=PlacementOwner.IRIS_CONTROLLER, manages_capacity=False)
     controller_mock.provider.name = "worker"
     controller_mock.has_direct_provider = False
     return controller_mock
@@ -1333,7 +1333,7 @@ def test_auth_config_worker_capabilities(client):
     assert resp.status_code == 200
     backend = resp.json()["backend"]
     assert backend["name"] == "worker"
-    assert backend["placement"] == "iris"
+    assert backend["placement"] == "iris_controller"
     assert backend["manages_capacity"] is False
     assert "workers" in backend["capabilities"]
     assert "autoscaler" in backend["capabilities"]
@@ -1344,7 +1344,7 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path):
     """auth/config advertises the cluster capability for a backend-placed (k8s) backend."""
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.has_direct_provider = True
-    controller_mock.provider = Mock(placement=Placement.BACKEND, manages_capacity=True)
+    controller_mock.provider = Mock(placement=PlacementOwner.TASK_BACKEND, manages_capacity=True)
     controller_mock.provider.name = "kubernetes"
     log_service = LogServiceImpl()
     svc = ControllerServiceImpl(
@@ -1363,7 +1363,7 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path):
     assert resp.status_code == 200
     backend = resp.json()["backend"]
     assert backend["name"] == "kubernetes"
-    assert backend["placement"] == "backend"
+    assert backend["placement"] == "task_backend"
     assert backend["manages_capacity"] is True
     assert "cluster" in backend["capabilities"]
     assert "workers" not in backend["capabilities"]

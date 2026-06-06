@@ -36,7 +36,7 @@ from iris.cluster.controller.backend import (
     BackendReconcileInput,
     CapacityInput,
     ClusterCapacity,
-    Placement,
+    PlacementOwner,
     ScheduleInput,
     SchedulingEvent,
     TaskBackend,
@@ -341,7 +341,7 @@ class Controller:
         # to the log server via RPC. K8s pods have no worker daemon, so the
         # provider also writes per-pod resource samples to iris.task itself —
         # mirroring what the worker daemon does on the GCE/TPU path.
-        if self._provider.placement is Placement.BACKEND:
+        if self._provider.placement is PlacementOwner.TASK_BACKEND:
             k8s_log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
             self._provider.set_log_sink(
                 k8s_log_client,
@@ -526,7 +526,7 @@ class Controller:
         if self._config.dry_run:
             logger.info("[DRY-RUN] Controller started in dry-run mode — all side effects suppressed")
 
-        if self._provider.placement is Placement.BACKEND:
+        if self._provider.placement is PlacementOwner.TASK_BACKEND:
             self._direct_provider_thread = self._threads.spawn(self._run_direct_provider_loop, name="provider-loop")
         else:
             self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
@@ -1349,7 +1349,7 @@ class Controller:
 
     @property
     def has_direct_provider(self) -> bool:
-        return self._provider.placement is Placement.BACKEND
+        return self._provider.placement is PlacementOwner.TASK_BACKEND
 
     @property
     def run_template_cache(self) -> RunTemplateCache:

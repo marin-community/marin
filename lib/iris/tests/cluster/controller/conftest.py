@@ -41,7 +41,7 @@ from iris.cluster.controller.backend import (
     BackendReconcileInput,
     BackendReconcileResult,
     CapacityResult,
-    Placement,
+    PlacementOwner,
     ProviderUnsupportedError,
     ScheduleInput,
     ScheduleResult,
@@ -99,7 +99,7 @@ class FakeProvider:
     """Minimal IRIS-placement TaskBackend for tests exercising transitions, not RPCs."""
 
     name = "worker"
-    placement = Placement.IRIS
+    placement = PlacementOwner.IRIS_CONTROLLER
     manages_capacity = False
     autoscaler = None
 

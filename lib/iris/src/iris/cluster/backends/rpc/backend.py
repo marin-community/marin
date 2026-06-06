@@ -3,7 +3,7 @@
 
 """RpcTaskBackend: a TaskBackend backed by worker daemons via Connect RPC.
 
-The ``Placement.IRIS`` backend used by the GCP/TPU, CoreWeave-bare-metal,
+The ``PlacementOwner.IRIS_CONTROLLER`` backend used by the GCP/TPU, CoreWeave-bare-metal,
 manual, and local clusters. The Iris scheduler assigns task→worker; this
 backend fans the per-worker Reconcile RPC out to the worker daemons and reports
 the raw observations back to the controller.
@@ -31,7 +31,7 @@ from iris.cluster.controller.backend import (
     CapacityResult,
     ClusterCapacity,
     PingResult,
-    Placement,
+    PlacementOwner,
     ProviderError,
     ScheduleInput,
     ScheduleResult,
@@ -120,7 +120,7 @@ class RpcWorkerStubFactory:
 
 @dataclass
 class RpcTaskBackend:
-    """``Placement.IRIS`` :class:`~iris.cluster.controller.backend.TaskBackend`
+    """``PlacementOwner.IRIS_CONTROLLER`` :class:`~iris.cluster.controller.backend.TaskBackend`
     backed by worker daemons via async Connect RPCs.
 
     Each public method spins up an asyncio event loop and dispatches the
@@ -136,7 +136,7 @@ class RpcTaskBackend:
     # the controller's main() after construction (mirrors set_log_sink); None for
     # clusters with no scale groups, where capacity calls are no-ops.
     autoscaler: Autoscaler | None = None
-    placement: ClassVar[Placement] = Placement.IRIS
+    placement: ClassVar[PlacementOwner] = PlacementOwner.IRIS_CONTROLLER
     manages_capacity: ClassVar[bool] = False
     # Stateless: holds no per-tick state, so one shared instance is reused
     # across scheduling cycles (mirrors the autoscaler's own Scheduler).
