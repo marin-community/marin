@@ -354,6 +354,10 @@ class BaseInferenceContext:
             correctness_reward=correctness_reward,
             decoding=decoding.as_trace(),
             is_truncated=is_truncated,
+            metadata=RolloutMetadata(
+                tokenizer=self.tokenizer_identity(),
+                policy=self.policy_identity(),
+            ),
         )
 
     def create_rollout_from_tokenized_rollout(

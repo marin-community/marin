@@ -430,6 +430,8 @@ def test_create_rollout_from_choice_end_to_end(inference_ctx, llama3_tokenizer):
     assert rollout.env_name == "math_env"
     assert rollout.env_example_id == "ex_001"
     assert rollout.episode_reward == reward
+    assert rollout.metadata.tokenizer == inference_ctx.tokenizer_identity()
+    assert rollout.metadata.policy == inference_ctx.policy_identity()
 
     # Verify prompt tokens use chat template (longer than plain encoding)
     plain_prompt_tokens = llama3_tokenizer.encode(prompt, add_special_tokens=False)
