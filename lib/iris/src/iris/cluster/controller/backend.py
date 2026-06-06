@@ -465,3 +465,12 @@ class TaskBackend(Protocol):
         backends ignore these — the worker writes its own rows.
         """
         ...
+
+    def close(self) -> None:
+        """Release backend-owned resources at controller shutdown.
+
+        Called from Controller.stop(). Capacity-managing backends shut down
+        their attached autoscaler here (terminating VMs, stopping the platform);
+        others close any connections or collectors they own.
+        """
+        ...
