@@ -12,9 +12,16 @@
 # ]
 # ///
 
-"""Daily aggregator for the code-health stats dashboard.
+"""Aggregator and reporter for the code-health stats dashboard.
 
-For each PR merged in the last N days:
+Two subcommands:
+  - `aggregate` (designed to run as a daily GHA cron) classifies reviewer
+    comments and appends them to the shared `review-stats` W&B run.
+  - `report` reads those accumulated tables back and renders a markdown digest
+    (summary table, by-class breakdown, weekly trend, top PRs, examples),
+    published as a gist by default.
+
+`aggregate`, for each PR merged in the last N days:
   1. Pull review/inline/issue comments via the `gh` CLI.
   2. Drop bot comments (only humans should be in the denominator).
   3. Classify each human comment with a pluggable classifier (Gemini 3.5 Flash
@@ -49,9 +56,11 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 import click
@@ -498,11 +507,221 @@ def overlap_count(bot_findings: list[dict], human_comments: list[Comment], windo
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Report: render the accumulated W&B tables into a shareable markdown digest
 # ---------------------------------------------------------------------------
 
 
-@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+def _rows_to_dicts(columns: list[str], rows: list[list]) -> list[dict]:
+    """Zip the flat W&B table rows back into dicts keyed by column name."""
+    return [dict(zip(columns, r, strict=False)) for r in rows]
+
+
+def _parse_ts(s: str) -> dt.datetime:
+    return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+def _pct(n: int, d: int) -> str:
+    return f"{round(100 * n / d)}%" if d else "—"
+
+
+def _cell(value: object, maxlen: int | None = None) -> str:
+    """Render a value as a single safe markdown table cell."""
+    text = " ".join(str(value).split()).replace("|", "\\|")
+    if maxlen and len(text) > maxlen:
+        text = text[: maxlen - 1] + "…"
+    return text
+
+
+def _md_table(headers: list[str], aligns: list[str], rows: list[list]) -> str:
+    lines = ["| " + " | ".join(headers) + " |", "| " + " | ".join(aligns) + " |"]
+    lines += ["| " + " | ".join(str(c) for c in r) + " |" for r in rows]
+    return "\n".join(lines)
+
+
+def _pr_link(repo: str, number: object) -> str:
+    return f"[#{number}](https://github.com/{repo}/pull/{number})"
+
+
+def build_report(
+    outcomes: list[dict], comments: list[dict], repo: str, start: dt.datetime, now: dt.datetime, days: int
+) -> str:
+    """Render the per-PR outcome rows and classified comments into a markdown
+    digest. Pure: takes already-loaded rows, returns markdown. Rows are filtered
+    to PRs merged on/after `start`."""
+
+    def in_window(row: dict) -> bool:
+        merged = row.get("merged_at")
+        if not merged:
+            return False
+        try:
+            return _parse_ts(merged) >= start
+        except ValueError:
+            return False
+
+    outcomes = [d for d in outcomes if in_window(d)]
+    comments = [d for d in comments if in_window(d)]
+
+    header = (
+        f"# Marin code-health review report\n\n"
+        f"**Window:** {start.date()} → {now.date()} ({days} days)  \n"
+        f"**Generated:** {now.replace(microsecond=0).isoformat()}"
+    )
+
+    if not outcomes:
+        return f"{header}\n\nNo PRs merged in the last {days} days were found in the review-stats tables."
+
+    n_prs = len(outcomes)
+    reviewed = sum(1 for d in outcomes if int(d["total_human_comments"]) > 0)
+    total = sum(int(d["total_human_comments"]) for d in outcomes)
+    strict = sum(int(d["catchable_strict_count"]) for d in outcomes)
+    generous = sum(int(d["catchable_generous_count"]) for d in outcomes)
+    bot_findings = sum(int(d["bot_findings_count"]) for d in outcomes)
+    overlap = sum(int(d["overlap_count"]) for d in outcomes)
+
+    narrative = (
+        f"Over the last {days} days, **{n_prs}** PRs merged; **{reviewed}** ({_pct(reviewed, n_prs)}) drew human "
+        f"review comments. Of **{total}** human comments, **{strict}** ({_pct(strict, total)}) were strictly "
+        f"catchable by a deterministic tool and **{generous}** ({_pct(generous, total)}) generously catchable by an "
+        f"LLM reading the diff alone. The review bot emitted **{bot_findings}** findings and independently flagged "
+        f"**{overlap}** of the spots humans commented on."
+    )
+
+    summary = "## Summary\n\n" + _md_table(
+        ["Metric", "Value"],
+        ["---", "---:"],
+        [
+            ["PRs merged", n_prs],
+            ["PRs with human review comments", f"{reviewed} ({_pct(reviewed, n_prs)})"],
+            ["Human review comments", total],
+            ["— strictly catchable", f"{strict} ({_pct(strict, total)})"],
+            ["— generously catchable", f"{generous} ({_pct(generous, total)})"],
+            ["Bot findings", bot_findings],
+            ["Human comments overlapping a bot finding", overlap],
+        ],
+    )
+
+    # By-class breakdown comes from the per-comment table, which carries the
+    # per-comment class + catchable flags the per-PR rollup does not.
+    by_class: dict[str, list[int]] = {}
+    for c in comments:
+        e = by_class.setdefault(str(c["class"]), [0, 0, 0])
+        e[0] += 1
+        e[1] += 1 if c["catchable_strict"] else 0
+        e[2] += 1 if c["catchable_generous"] else 0
+    class_rows = [
+        [cls, n, _pct(n, total), f"{s} ({_pct(s, n)})", f"{g} ({_pct(g, n)})"]
+        for cls, (n, s, g) in sorted(by_class.items(), key=lambda kv: kv[1][0], reverse=True)
+    ]
+    by_class_section = "## By comment class\n\n" + (
+        _md_table(
+            ["Class", "Comments", "% of all", "Strict", "Generous"], ["---", "---:", "---:", "---:", "---:"], class_rows
+        )
+        if class_rows
+        else "_No classified human comments in this window._"
+    )
+
+    # Weekly trend, keyed by ISO week of the merge date.
+    weeks: dict[tuple[int, int], list[int]] = {}
+    for d in outcomes:
+        try:
+            y, w, _ = _parse_ts(d["merged_at"]).isocalendar()
+        except ValueError:
+            continue
+        e = weeks.setdefault((y, w), [0, 0, 0, 0])
+        e[0] += 1
+        e[1] += int(d["total_human_comments"])
+        e[2] += int(d["catchable_strict_count"])
+        e[3] += int(d["catchable_generous_count"])
+    week_rows = [
+        [f"{y}-W{w:02d}", prs, cmts, st, gen, _pct(gen, cmts)] for (y, w), (prs, cmts, st, gen) in sorted(weeks.items())
+    ]
+    trend_section = "## Weekly trend\n\n" + _md_table(
+        ["Week", "PRs", "Comments", "Strict", "Generous", "Generous %"],
+        ["---", "---:", "---:", "---:", "---:", "---:"],
+        week_rows,
+    )
+
+    # Top PRs by how much catchable feedback they drew — where automation would
+    # have helped reviewers most.
+    top = sorted(
+        (d for d in outcomes if int(d["total_human_comments"]) > 0),
+        key=lambda d: (int(d["catchable_generous_count"]), int(d["total_human_comments"])),
+        reverse=True,
+    )[:10]
+    top_rows = [
+        [
+            _pr_link(repo, d["pr_number"]),
+            _cell(d["pr_title"], 60),
+            int(d["total_human_comments"]),
+            int(d["catchable_strict_count"]),
+            int(d["catchable_generous_count"]),
+            int(d["bot_findings_count"]),
+            int(d["overlap_count"]),
+        ]
+        for d in top
+    ]
+    top_section = "## PRs with the most catchable feedback\n\n" + (
+        _md_table(
+            ["PR", "Title", "Comments", "Strict", "Generous", "Bot findings", "Overlap"],
+            ["---", "---", "---:", "---:", "---:", "---:", "---:"],
+            top_rows,
+        )
+        if top_rows
+        else "_No human review comments in this window._"
+    )
+
+    # A few concrete, high-confidence strictly-catchable comments: the clearest
+    # "automation should have caught this" evidence.
+    examples = sorted(
+        (c for c in comments if c["catchable_strict"] and float(c["confidence"]) >= 0.7),
+        key=lambda c: float(c["confidence"]),
+        reverse=True,
+    )[:8]
+    example_rows = [
+        [
+            _pr_link(repo, c["pr_number"]),
+            _cell(c["class"]),
+            f"{float(c['confidence']):.2f}",
+            _cell(c["reason"], 80),
+            _cell(c["body"], 80),
+        ]
+        for c in examples
+    ]
+    examples_section = "## Sample strictly-catchable comments\n\n" + (
+        _md_table(
+            ["PR", "Class", "Conf.", "Why catchable", "Comment"], ["---", "---", "---:", "---", "---"], example_rows
+        )
+        if example_rows
+        else "_No strictly-catchable comments above the confidence threshold in this window._"
+    )
+
+    return "\n\n".join([header, narrative, summary, by_class_section, trend_section, top_section, examples_section])
+
+
+def publish_gist(markdown: str, desc: str, public: bool, filename: str) -> str:
+    """Write `markdown` to a temp file and create a gist via `gh`. Returns the
+    gist URL `gh` prints. Gists default to secret unless `public` is set."""
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / filename
+        path.write_text(markdown)
+        args = ["gist", "create", str(path), "--desc", desc]
+        if public:
+            args.append("--public")
+        result = subprocess.run(["gh", *args], capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+def cli() -> None:
+    """Code-health review stats: classify reviewer comments, and report on them."""
+
+
+@cli.command()
 @click.option("--repo", default=DEFAULT_REPO, show_default=True)
 @click.option("--days", type=int, default=1, show_default=True, help="Look back N days of merged PRs")
 @click.option("--limit", type=int, default=100, show_default=True, help="Max PRs to process")
@@ -528,7 +747,7 @@ def overlap_count(bot_findings: list[dict], human_comments: list[Comment], windo
     help="Comma-separated bot logins to skip (lowercase)",
 )
 @click.option("--dry-run", is_flag=True, help="Skip W&B upload; print rollup")
-def main(
+def aggregate(
     repo: str,
     days: int,
     limit: int,
@@ -538,6 +757,7 @@ def main(
     bot_logins: str,
     dry_run: bool,
 ) -> None:
+    """Classify reviewer comments on recently-merged PRs and append to W&B."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     bot_login_set = {x.strip().lower() for x in bot_logins.split(",") if x.strip()}
 
@@ -692,5 +912,47 @@ def main(
     )
 
 
+@cli.command()
+@click.option("--repo", default=DEFAULT_REPO, show_default=True, help="Repo used to build PR links")
+@click.option("--days", type=int, default=30, show_default=True, help="Report window: PRs merged in last N days")
+@click.option("--out", type=click.Path(dir_okay=False), default=None, help="Also write the markdown report here")
+@click.option("--public", is_flag=True, help="Create a public gist (default: secret)")
+@click.option("--no-gist", is_flag=True, help="Print the report to stdout instead of creating a gist")
+def report(repo: str, days: int, out: str | None, public: bool, no_gist: bool) -> None:
+    """Render the accumulated review stats into a markdown digest and gist it."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    now = dt.datetime.now(dt.timezone.utc)
+    start = now - dt.timedelta(days=days)
+
+    wandb.init(
+        project=WANDB_PROJECT,
+        id=WANDB_RUN_ID,
+        resume="allow",
+        settings=wandb.Settings(silent=True, _disable_stats=True, _disable_meta=True),
+    )
+    outcomes = _rows_to_dicts(PR_OUTCOME_COLUMNS, _load_existing_rows(wandb, "pr_review_outcomes"))
+    comments = _rows_to_dicts(HUMAN_COMMENT_COLUMNS, _load_existing_rows(wandb, "human_comments"))
+    wandb.finish(quiet=True)
+
+    markdown = build_report(outcomes, comments, repo=repo, start=start, now=now, days=days)
+
+    if out:
+        Path(out).write_text(markdown)
+        logger.info("Wrote report to %s", out)
+
+    if no_gist:
+        click.echo(markdown)
+        return
+
+    url = publish_gist(
+        markdown,
+        desc=f"Marin code-health review — last {days} days ({now.date()})",
+        public=public,
+        filename="marin-code-health-report.md",
+    )
+    logger.info("Published gist: %s", url)
+    click.echo(url)
+
+
 if __name__ == "__main__":
-    main()
+    cli()
