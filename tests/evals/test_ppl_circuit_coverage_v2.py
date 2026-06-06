@@ -130,7 +130,7 @@ def test_new_basic_functionality_slices_use_few_shot_context_without_final_answe
         assert row["input"].startswith("worked examples:\n")
         assert "held-out query:\n" in row["input"]
         held_out_query = row["input"].split("held-out query:\n", maxsplit=1)[1]
-        assert "answer:" not in held_out_query
+        assert held_out_query.rstrip().endswith("answer:")
         assert row["target"].strip() not in {line.strip() for line in held_out_query.splitlines()}
         assert not row["input"].endswith(row["target"])
 
@@ -147,7 +147,7 @@ def test_string_and_indexing_slices_use_few_shot_context_without_final_answer_le
         assert row["input"].startswith("worked examples:\n")
         assert "held-out query:\n" in row["input"]
         final_query = row["input"].split("held-out query:\n", maxsplit=1)[1]
-        assert "answer:" not in final_query
+        assert final_query.rstrip().endswith("answer:")
         assert not row["input"].endswith(row["target"])
 
 
@@ -329,7 +329,7 @@ def test_format_style_instruction_targets_match_metadata():
             raise AssertionError(f"unexpected format/style task: {row['task']}")
 
 
-def test_plain_text_pretraining_documents_include_final_answer_and_metadata():
+def test_plain_text_pretraining_documents_use_the_supervised_prompt_template():
     row = next(
         row
         for row in iter_ppl_circuit_coverage_v2_records(examples_per_config=1)
@@ -341,7 +341,8 @@ def test_plain_text_pretraining_documents_include_final_answer_and_metadata():
     assert "### Circuit practice example" in text
     assert "Family: format_style_instruction" in text
     assert "Task: markdown_table_padding" in text
-    assert "Final answer:\n" in text
+    assert "Final answer:" not in text
+    assert row["input"] + row["target"] in text
     assert row["target"].strip() in text
     assert row["target"].strip() not in row["input"]
 

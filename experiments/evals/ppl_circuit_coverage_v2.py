@@ -144,10 +144,11 @@ def _record(
     target: str,
     metadata: dict[str, object],
 ) -> dict[str, object]:
+    normalized_target = target if target.endswith("\n") else f"{target}\n"
     return {
         "id": f"{slice_.output_name}_{row_index:05d}",
-        "input": input_text,
-        "target": target if target.endswith("\n") else f"{target}\n",
+        "input": _append_answer_cue(input_text, normalized_target),
+        "target": normalized_target,
         "subset": slice_.output_name,
         "task": slice_.task_name,
         "seed": seed,
@@ -160,6 +161,13 @@ def _record(
             **metadata,
         },
     }
+
+
+def _append_answer_cue(input_text: str, target: str) -> str:
+    input_prefix = input_text if input_text.endswith("\n") else f"{input_text}\n"
+    if "\n" in target.rstrip("\n"):
+        return f"{input_prefix}answer:\n"
+    return f"{input_prefix}answer: "
 
 
 def _json_string(text: str) -> str:
@@ -1310,18 +1318,15 @@ def render_ppl_circuit_coverage_v2_plain_text_document(record: dict[str, object]
         raise ValueError(f"Expected record metadata dict, got {type(metadata).__name__}")
     family = metadata["family"]
     task = record["task"]
-    target = str(record["target"]).rstrip("\n")
-    return (
-        "### Circuit practice example\n"
-        f"Family: {family}\n"
-        f"Task: {task}\n"
-        "\n"
-        "Prompt:\n"
-        f"{record['input'].rstrip()}\n"
-        "\n"
-        "Final answer:\n"
-        f"{target}\n"
-    )
+    input_text = str(record["input"])
+    target = str(record["target"])
+    header = f"""### Circuit practice example
+Family: {family}
+Task: {task}
+
+Prompt:
+"""
+    return f"{header}{input_text}{target}"
 
 
 def _pretraining_weight(slice_: PplCircuitCoverageV2Slice) -> int:
