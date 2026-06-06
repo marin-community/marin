@@ -8,7 +8,7 @@ import asyncio
 import pytest
 from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
-from iris.cluster.controller.direct_provider import DirectProviderBatch
+from iris.cluster.controller.backend import BackendReconcileInput
 from iris.cluster.providers.k8s.fake import InMemoryK8sService
 from iris.cluster.providers.k8s.tasks import (
     _LABEL_MANAGED,
@@ -134,8 +134,8 @@ def make_kueue_provider(k8s, *, local_queue: str = "iris-lq", **kwargs) -> K8sTa
 def make_batch(
     tasks_to_run=None,
     running_tasks=None,
-) -> DirectProviderBatch:
-    return DirectProviderBatch(
+) -> BackendReconcileInput:
+    return BackendReconcileInput(
         running_tasks=running_tasks or [],
         tasks_to_run=tasks_to_run or [],
     )

@@ -5,9 +5,9 @@
 
 from finelog.rpc import logging_pb2
 from iris.cluster.controller import direct_provider, ops
-from iris.cluster.controller.direct_provider import (
-    DirectProviderBatch,
-    DirectProviderSyncResult,
+from iris.cluster.controller.backend import (
+    BackendReconcileInput,
+    BackendReconcileResult,
 )
 from iris.cluster.controller.ops.task import apply_direct_provider_updates
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
@@ -30,11 +30,11 @@ class FakeDirectProvider:
     """Minimal KubernetesProvider-like implementation for testing."""
 
     def __init__(self):
-        self.sync_calls: list[DirectProviderBatch] = []
-        self.sync_result = DirectProviderSyncResult()
+        self.sync_calls: list[BackendReconcileInput] = []
+        self.sync_result = BackendReconcileResult()
         self.closed = False
 
-    def sync(self, batch: DirectProviderBatch) -> DirectProviderSyncResult:
+    def sync(self, batch: BackendReconcileInput) -> BackendReconcileResult:
         self.sync_calls.append(batch)
         return self.sync_result
 

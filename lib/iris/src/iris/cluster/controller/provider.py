@@ -1,20 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""TaskProvider protocol: abstraction over a task execution backend."""
+"""TaskProvider protocol: abstraction over a task execution backend.
+
+Superseded by :mod:`iris.cluster.controller.backend` (``TaskBackend``); this
+module survives only for the legacy ``TaskProvider`` protocol used as a type
+hint until the controller is fully migrated. The exceptions are re-exported
+from ``backend`` so there is a single canonical class for each.
+"""
 
 from typing import Protocol
 
+from iris.cluster.controller.backend import ProviderError, ProviderUnsupportedError
 from iris.cluster.types import WorkerId
 from iris.rpc import job_pb2
 
-
-class ProviderError(Exception):
-    """Communication failure with the execution backend."""
-
-
-class ProviderUnsupportedError(ProviderError):
-    """Operation not supported by this provider implementation."""
+__all__ = ["ProviderError", "ProviderUnsupportedError", "TaskProvider"]
 
 
 class TaskProvider(Protocol):

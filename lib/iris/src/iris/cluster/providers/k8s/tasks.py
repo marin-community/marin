@@ -31,10 +31,10 @@ from finelog.types import LogWriterProtocol, str_to_log_level
 from rigging.log_setup import parse_log_level
 from rigging.timing import Timestamp
 
-from iris.cluster.controller.direct_provider import (
+from iris.cluster.controller.backend import (
+    BackendReconcileInput,
+    BackendReconcileResult,
     ClusterCapacity,
-    DirectProviderBatch,
-    DirectProviderSyncResult,
     SchedulingEvent,
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
@@ -1230,12 +1230,12 @@ class _K8sProfileDispatch:
 class K8sTaskProvider:
     """Executes tasks as Kubernetes Pods without worker daemons.
 
-    Implements the "direct provider" interface used by the controller when no
-    separate worker daemon is involved. The controller calls sync() with a
-    DirectProviderBatch and receives back a DirectProviderSyncResult — not the
-    per-worker RPC-based TaskProvider protocol used by GCP. This is intentional:
-    K8s pods are launched and monitored directly via kubectl rather than
-    through a worker gRPC daemon.
+    A ``Placement.BACKEND`` :class:`~iris.cluster.controller.backend.TaskBackend`:
+    the controller calls reconcile() with a BackendReconcileInput (desired
+    ``tasks_to_run`` + ``running_tasks``) and receives back a
+    BackendReconcileResult — Kueue owns placement, so no Iris scheduling and no
+    worker daemon are involved. K8s pods are launched and monitored directly via
+    kubectl rather than through a worker gRPC daemon.
 
     Capacity is derived from node allocatable resources minus running pod
     resource requests, queried via kubectl each sync cycle.
@@ -1288,7 +1288,7 @@ class K8sTaskProvider:
             )
         return self._log_collector
 
-    def sync(self, batch: DirectProviderBatch) -> DirectProviderSyncResult:
+    def sync(self, batch: BackendReconcileInput) -> BackendReconcileResult:
         """Sync task state: apply new pods, delete strays, poll running pods.
 
         Kill targets are derived here, not buffered in the controller: any
@@ -1345,7 +1345,7 @@ class K8sTaskProvider:
 
         self._maybe_gc_terminal_resources(managed_pods)
 
-        return DirectProviderSyncResult(updates=updates, scheduling_events=scheduling_events, capacity=capacity)
+        return BackendReconcileResult(updates=updates, scheduling_events=scheduling_events, capacity=capacity)
 
     def profile_task(
         self,

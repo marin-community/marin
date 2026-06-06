@@ -30,6 +30,7 @@ from iris.cluster.controller import direct_provider, ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.backend import ClusterCapacity, SchedulingEvent
 from iris.cluster.controller.checkpoint import (
     CheckpointResult,
     backup_databases,
@@ -40,9 +41,7 @@ from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.direct_provider import (
     DIRECT_PROVIDER_PROMOTION_RATE,
-    ClusterCapacity,
     RunTemplateCache,
-    SchedulingEvent,
     new_run_template_cache,
 )
 from iris.cluster.controller.ops.task import (

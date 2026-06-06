@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
-from iris.cluster.controller.direct_provider import ClusterCapacity, SchedulingEvent
+from iris.cluster.controller.backend import ClusterCapacity, SchedulingEvent
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.log_keys import task_log_key
 from iris.cluster.providers.k8s.tasks import (

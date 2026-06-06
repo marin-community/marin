@@ -1387,7 +1387,7 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path):
 
 def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path):
     """GetKubernetesClusterStatus returns node capacity and pod statuses after sync."""
-    from iris.cluster.controller.direct_provider import DirectProviderBatch
+    from iris.cluster.controller.backend import BackendReconcileInput
     from iris.cluster.providers.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
 
     client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path)
@@ -1421,7 +1421,7 @@ def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path):
     )
 
     # Sync to populate ClusterState.
-    provider.sync(DirectProviderBatch(tasks_to_run=[], running_tasks=[]))
+    provider.sync(BackendReconcileInput(tasks_to_run=[], running_tasks=[]))
 
     resp = client.post(
         "/iris.cluster.ControllerService/GetKubernetesClusterStatus",

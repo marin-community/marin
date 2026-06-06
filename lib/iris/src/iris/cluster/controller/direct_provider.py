@@ -7,12 +7,11 @@ Builds per-job RunTaskRequest templates (LRU-cached), promotes PENDING tasks
 and snapshots the running set, and assembles per-attempt requests.
 """
 
-from dataclasses import dataclass, field
-
 from rigging.timing import Timestamp
 from sqlalchemy import select
 
 from iris.cluster.controller import reads, writes
+from iris.cluster.controller.backend import BackendReconcileInput
 from iris.cluster.controller.codec import constraints_from_json, proto_from_json, resource_spec_from_scalars
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.lru_cache import LRUCache
@@ -22,7 +21,6 @@ from iris.cluster.controller.reads import (
     TaskScope,
     pending_dispatch_row,
 )
-from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import job_config_table, jobs_table, tasks_table
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, RunningTaskEntry
 from iris.cluster.types import JobName
@@ -53,53 +51,6 @@ RunTemplateCache = LRUCache[str, job_pb2.RunTaskRequest]
 
 def new_run_template_cache() -> RunTemplateCache:
     return LRUCache(RUN_REQUEST_TEMPLATE_CACHE_SIZE)
-
-
-@dataclass(frozen=True)
-class SchedulingEvent:
-    """A scheduling event from the execution backend (e.g. k8s events)."""
-
-    task_id: str
-    attempt_id: int
-    event_type: str
-    reason: str
-    message: str
-    timestamp: Timestamp
-
-
-@dataclass(frozen=True)
-class ClusterCapacity:
-    """Aggregate capacity reported by the execution backend."""
-
-    schedulable_nodes: int
-    total_cpu_millicores: int
-    available_cpu_millicores: int
-    total_memory_bytes: int
-    available_memory_bytes: int
-
-
-@dataclass(frozen=True)
-class DirectProviderBatch:
-    """Work batch for a KubernetesProvider sync cycle.
-
-    No worker_id — tasks run without a registered worker daemon.
-    task_attempts rows use NULL worker_id. Kill targets are derived from
-    a pod-listing diff inside the provider rather than from a buffered
-    queue: any pod whose ``(task_id, attempt_id)`` is not in the desired
-    set (``tasks_to_run`` union ``running_tasks``) is deleted.
-    """
-
-    tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
-    running_tasks: list[RunningTaskEntry] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class DirectProviderSyncResult:
-    """Result from a KubernetesProvider sync cycle."""
-
-    updates: list[TaskUpdate] = field(default_factory=list)
-    scheduling_events: list[SchedulingEvent] = field(default_factory=list)
-    capacity: ClusterCapacity | None = None
 
 
 def _build_run_request_fields(
@@ -252,7 +203,7 @@ def drain_for_direct_provider(
     *,
     cache: RunTemplateCache,
     max_promotions: int = DIRECT_PROVIDER_PROMOTION_RATE,
-) -> DirectProviderBatch:
+) -> BackendReconcileInput:
     """Drain pending tasks and snapshot running tasks for a direct provider sync cycle.
 
     Builds RunTaskRequest for two row classes:
@@ -368,7 +319,7 @@ def drain_for_direct_provider(
         for row in running_rows
     ]
 
-    return DirectProviderBatch(
+    return BackendReconcileInput(
         tasks_to_run=tasks_to_run,
         running_tasks=running_tasks,
     )
