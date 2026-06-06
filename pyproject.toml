@@ -328,6 +328,7 @@ markers = [
     "integration: mark tests as integration tests that require cluster infrastructure",
     "data_integration: mark tests that require external data fixtures (e.g. HuggingFace datasets)",
     "requires_cluster: mark tests that need a running iris cluster",
+    "timeout: override the default per-test timeout",
 ]
 testpaths = ["tests", "experiments"]
 

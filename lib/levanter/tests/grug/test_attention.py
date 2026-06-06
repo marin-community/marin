@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -111,12 +113,16 @@ def test_thd_segment_metadata_rejects_mismatched_q_kv_segments():
 
 
 def test_gpu_fa4_thd_registered_backend_jits_with_cutlass_boundary(monkeypatch):
-    def fake_fwd(q, k, v, cu_seqlens, *, softmax_scale, kernel_config):
+    seen_sliding_windows = []
+
+    def fake_fwd(q, k, v, cu_seqlens, *, softmax_scale, kernel_config, sliding_window):
         del k, v, cu_seqlens, softmax_scale, kernel_config
+        seen_sliding_windows.append(sliding_window)
         return q * jnp.asarray(2, dtype=q.dtype), jnp.zeros((q.shape[1], q.shape[0]), dtype=jnp.float32)
 
-    def fake_bwd(q, k, v, out, dout, lse, cu_seqlens, *, softmax_scale, kernel_config):
+    def fake_bwd(q, k, v, out, dout, lse, cu_seqlens, *, softmax_scale, kernel_config, sliding_window):
         del out, lse, cu_seqlens, softmax_scale, kernel_config
+        seen_sliding_windows.append(sliding_window)
         return (
             dout * jnp.asarray(2, dtype=dout.dtype),
             jnp.zeros_like(k),
@@ -140,13 +146,57 @@ def test_gpu_fa4_thd_registered_backend_jits_with_cutlass_boundary(monkeypatch):
     k = jnp.ones((2, 4, 1, 8), dtype=jnp.float32)
     v = jnp.ones((2, 4, 1, 8), dtype=jnp.float32)
     segment_ids = jnp.array([[0, 0, 1, 1], [2, 2, 3, 3]], dtype=jnp.int32)
-    mask = AttentionMask.causal().with_segment_ids(segment_ids, max_segments=2)
+    mask = AttentionMask.causal(sliding_window=3).with_segment_ids(segment_ids, max_segments=2)
 
     out = jax.jit(lambda q_arg: attention(q_arg, k, v, mask, implementation="gpu_fa4_thd"))(q)
     np.testing.assert_array_equal(out, jnp.full_like(q, 2))
 
     grad = jax.jit(jax.grad(lambda q_arg: jnp.sum(attention(q_arg, k, v, mask, implementation="gpu_fa4_thd"))))(q)
     np.testing.assert_array_equal(grad, jnp.full_like(q, 2))
+    assert seen_sliding_windows
+    assert all(sliding_window == 3 for sliding_window in seen_sliding_windows)
+
+
+def test_gpu_fa4_thd_forward_launcher_threads_local_window_arguments():
+    calls = {}
+
+    class FakeFlashForward:
+        def __init__(self, *args, **kwargs):
+            calls["init_args"] = args
+            calls["init_kwargs"] = kwargs
+
+        def __call__(self, *args):
+            calls["call_args"] = args
+
+    modules = SimpleNamespace(
+        cutlass=SimpleNamespace(Float32=float),
+        cute=SimpleNamespace(Tensor=object, jit=lambda fn: fn),
+        cuda=SimpleNamespace(CUstream=object),
+        FlashAttentionForwardSm100=FakeFlashForward,
+    )
+
+    launcher = fa4_thd._upstream_fa4_thd_forward_launcher(
+        modules,
+        head_dim=128,
+        head_dim_v=128,
+        qhead_per_kvhead=4,
+        kernel_config=fa4_thd.Flash4CuteKernelConfig(
+            forward_tile=(128, 128),
+            backward_tile=(128, 128),
+            num_threads=384,
+        ),
+        sliding_window=2048,
+    )
+    launcher("stream", "q", "k", "v", "cu", "out", "lse", softmax_scale=1.0)
+
+    assert calls["init_kwargs"]["is_causal"] is False
+    assert calls["init_kwargs"]["is_local"] is True
+    call_args = calls["call_args"]
+    assert len(call_args) == 18
+    assert call_args[10] is None
+    assert call_args[11] == 2047
+    assert call_args[12] == 0
+    assert call_args[17] == "stream"
 
 
 def test_gpu_fa4_thd_rejects_mha_before_kernel_config(monkeypatch):

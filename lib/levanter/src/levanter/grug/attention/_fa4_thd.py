@@ -88,7 +88,8 @@ def _validate_simple_causal_self_attention(
     if not mask.is_causal:
         raise NotImplementedError(f"{backend_name} supports only causal self-attention.")
     if mask.sliding_window is not None:
-        raise NotImplementedError(f"{backend_name} does not support sliding-window attention.")
+        if mask.sliding_window <= 0:
+            raise ValueError(f"sliding_window must be positive, got {mask.sliding_window}")
 
     if len(q.shape) != 4 or len(k.shape) != 4 or len(v.shape) != 4:
         raise ValueError(
@@ -218,6 +219,7 @@ def _upstream_fa4_thd_forward_launcher(
     head_dim_v: int,
     qhead_per_kvhead: int,
     kernel_config: Flash4CuteKernelConfig,
+    sliding_window: int | None,
 ) -> Any:
     cutlass = modules.cutlass
     cute = modules.cute
@@ -226,8 +228,8 @@ def _upstream_fa4_thd_forward_launcher(
         head_dim,
         head_dim_v,
         qhead_per_kvhead=qhead_per_kvhead,
-        is_causal=True,
-        is_local=False,
+        is_causal=sliding_window is None,
+        is_local=sliding_window is not None,
         is_split_kv=False,
         pack_gqa=qhead_per_kvhead > 1,
         m_block_size=kernel_config.forward_tile[0],
@@ -268,8 +270,8 @@ def _upstream_fa4_thd_forward_launcher(
             None,
             None,
             None,
-            None,
-            None,
+            None if sliding_window is None else sliding_window - 1,
+            None if sliding_window is None else 0,
             None,
             None,
             None,
@@ -288,6 +290,7 @@ def _upstream_fa4_thd_backward_launcher(
     head_dim_v: int,
     qhead_per_kvhead: int,
     kernel_config: Flash4CuteKernelConfig,
+    sliding_window: int | None,
 ) -> Any:
     cutlass = modules.cutlass
     cute = modules.cute
@@ -311,8 +314,8 @@ def _upstream_fa4_thd_backward_launcher(
     backward = modules.FlashAttentionBackwardSm100(
         head_dim,
         head_dim_v,
-        is_causal=True,
-        is_local=False,
+        is_causal=sliding_window is None,
+        is_local=sliding_window is not None,
         qhead_per_kvhead=qhead_per_kvhead,
         tile_m=tile_m,
         tile_n=tile_n,
@@ -417,8 +420,8 @@ def _upstream_fa4_thd_backward_launcher(
             cu_seqlens,
             None,
             None,
-            None,
-            None,
+            None if sliding_window is None else sliding_window - 1,
+            None if sliding_window is None else 0,
             None,
             None,
             None,
@@ -441,6 +444,7 @@ def fa4_thd_attention_forward(
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
+    sliding_window: int | None,
 ) -> tuple[Float[Array, "T Hq D"], Float[Array, "Hq T"]]:
     _validate_thd_inputs(q, k, v, cu_seqlens, softmax_scale=softmax_scale)
     try:
@@ -454,6 +458,7 @@ def fa4_thd_attention_forward(
         head_dim_v=v.shape[-1],
         qhead_per_kvhead=q.shape[1] // k.shape[1],
         kernel_config=kernel_config,
+        sliding_window=sliding_window,
     )
     input_spec, output_spec = _cutlass_thd_forward_specs(modules)
     out_shape_dtype = jax.ShapeDtypeStruct(q.shape, q.dtype)
@@ -480,6 +485,7 @@ def fa4_thd_attention_backward(
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
+    sliding_window: int | None,
 ) -> tuple[Float[Array, "T Hq D"], Float[Array, "T Hkv D"], Float[Array, "T Hkv D"]]:
     _validate_thd_inputs(q, k, v, cu_seqlens, softmax_scale=softmax_scale)
     if q.shape[1] == k.shape[1]:
@@ -496,6 +502,7 @@ def fa4_thd_attention_backward(
         head_dim_v=v.shape[-1],
         qhead_per_kvhead=q.shape[1] // k.shape[1],
         kernel_config=kernel_config,
+        sliding_window=sliding_window,
     )
     input_spec, output_spec = _cutlass_thd_backward_specs(modules)
     output_shape_dtype = _cutlass_thd_backward_output_shapes(q, k, v, cu_seqlens, kernel_config.backward_tile)
@@ -563,7 +570,7 @@ def _num_thd_sequences(*, cu_seqlens_shape: int, cu_seqlens_rank: int) -> int:
     return cu_seqlens_shape - 1
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(4, 5))
+@partial(jax.custom_vjp, nondiff_argnums=(4, 5, 6))
 def _jax_fa4_thd_attention(
     q: Float[Array, "T Hq D"],
     k: Float[Array, "T Hkv D"],
@@ -571,6 +578,7 @@ def _jax_fa4_thd_attention(
     cu_seqlens: Int[Array, "N"],
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
+    sliding_window: int | None,
 ) -> Float[Array, "T Hq D"]:
     out, _ = fa4_thd_attention_forward(
         q,
@@ -579,6 +587,7 @@ def _jax_fa4_thd_attention(
         cu_seqlens,
         softmax_scale=softmax_scale,
         kernel_config=kernel_config,
+        sliding_window=sliding_window,
     )
     return out
 
@@ -590,6 +599,7 @@ def _jax_fa4_thd_attention_fwd(
     cu_seqlens: Int[Array, "N"],
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
+    sliding_window: int | None,
 ) -> tuple[
     Float[Array, "T Hq D"],
     tuple[
@@ -608,6 +618,7 @@ def _jax_fa4_thd_attention_fwd(
         cu_seqlens,
         softmax_scale=softmax_scale,
         kernel_config=kernel_config,
+        sliding_window=sliding_window,
     )
     return out, (q, k, v, out, lse, cu_seqlens)
 
@@ -615,6 +626,7 @@ def _jax_fa4_thd_attention_fwd(
 def _jax_fa4_thd_attention_bwd(
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
+    sliding_window: int | None,
     residuals: tuple[
         Float[Array, "T Hq D"],
         Float[Array, "T Hkv D"],
@@ -638,6 +650,7 @@ def _jax_fa4_thd_attention_bwd(
         cu_seqlens,
         softmax_scale=softmax_scale,
         kernel_config=kernel_config,
+        sliding_window=sliding_window,
     )
     return dq, dk, dv, None
 
@@ -708,6 +721,7 @@ def gpu_fa4_thd_attention(
         cu_seqlens,
         1.0 / math.sqrt(head_dim),
         kernel_config,
+        mask.sliding_window,
     )
     return out.reshape(batch_size, seq_len, q.shape[2], head_dim)
 

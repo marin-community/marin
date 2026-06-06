@@ -507,9 +507,7 @@ class Transformer(eqx.Module):
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
-        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
-        long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+        short_mask, long_mask = _model_sliding_attention_masks(mask, cfg)
 
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
@@ -572,6 +570,27 @@ class Transformer(eqx.Module):
             summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
             return loss, summarized_metrics
         return loss
+
+
+def _model_sliding_attention_masks(
+    mask: AttentionMask | jax.Array,
+    cfg: GrugModelConfig,
+) -> tuple[AttentionMask, AttentionMask]:
+    segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+    thd_segment_metadata = mask.thd_segment_metadata if isinstance(mask, AttentionMask) else None
+    short_mask = AttentionMask(
+        is_causal=True,
+        sliding_window=cfg.sliding_window // 2,
+        segment_ids=segment_ids,
+        thd_segment_metadata=thd_segment_metadata,
+    )
+    long_mask = AttentionMask(
+        is_causal=True,
+        sliding_window=cfg.sliding_window,
+        segment_ids=segment_ids,
+        thd_segment_metadata=thd_segment_metadata,
+    )
+    return short_mask, long_mask
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:

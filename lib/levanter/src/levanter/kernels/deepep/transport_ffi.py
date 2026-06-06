@@ -18,6 +18,7 @@ import sysconfig
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -38,8 +39,12 @@ from levanter.kernels.deepep.availability import (
 )
 
 _DISPATCH_TARGET = "levanter_deepep_dispatch_intranode"
+_DISPATCH_WITH_ASSIGNMENTS_TARGET = "levanter_deepep_dispatch_intranode_with_assignments"
 _DISPATCH_CACHED_TARGET = "levanter_deepep_dispatch_intranode_cached"
 _COMBINE_TARGET = "levanter_deepep_combine_intranode"
+_PACK_LOCAL_ASSIGNMENTS_TARGET = "levanter_deepep_pack_local_assignments"
+_PACK_LOCAL_ASSIGNMENTS_FROM_COUNTS_TARGET = "levanter_deepep_pack_local_assignments_from_counts"
+_COLLAPSE_LOCAL_ASSIGNMENTS_TARGET = "levanter_deepep_collapse_local_assignments"
 _INIT_SYMBOL = "levanter_deepep_init_intranode_runtime"
 _SHUTDOWN_SYMBOL = "levanter_deepep_shutdown_intranode_runtime"
 _LAST_ERROR_SYMBOL = "levanter_deepep_last_error"
@@ -48,7 +53,7 @@ _RUN_HOST_DISPATCH_SYMBOL = "levanter_deepep_run_host_dispatch_round"
 _EXTENDED_INTRNODE_DISPATCH_MACRO = "LEVANTER_DEEPEP_EXTENDED_INTRNODE_DISPATCH"
 _PYEXT_MODULE_NAME_MACRO = "LEVANTER_DEEPEP_PYEXT_MODULE_NAME"
 _DISPATCH_THREADS_ENV = "DEEPEP_DISPATCH_NUM_THREADS"
-_BUILD_CACHE_SCHEMA_VERSION = "transport_ffi_raw_dlink_v18"
+_BUILD_CACHE_SCHEMA_VERSION = "transport_ffi_raw_dlink_v27"
 _LIBRARY_DLOPEN_MODE = getattr(os, "RTLD_NOW", 0) | getattr(ctypes, "RTLD_GLOBAL", 0)
 _SM100_TMA_DISPATCH_THREADS = 512
 _UPSTREAM_DISPATCH_THREADS = 768
@@ -67,15 +72,44 @@ class BuildArtifact:
     module_name: str | None
 
 
+class DeepEPDispatch(NamedTuple):
+    recv_x: jax.Array
+    recv_topk_idx: jax.Array
+    recv_topk_weights: jax.Array
+    recv_src_idx: jax.Array
+    rank_prefix_matrix: jax.Array
+    channel_prefix_matrix: jax.Array
+    recv_channel_prefix_matrix: jax.Array
+    send_head: jax.Array
+    local_expert_counts: jax.Array
+    num_recv_tokens: jax.Array
+
+
+class DeepEPDispatchWithAssignments(NamedTuple):
+    recv_x: jax.Array
+    recv_topk_weights: jax.Array
+    recv_src_idx: jax.Array
+    rank_prefix_matrix: jax.Array
+    channel_prefix_matrix: jax.Array
+    recv_channel_prefix_matrix: jax.Array
+    send_head: jax.Array
+    local_group_sizes: jax.Array
+    num_recv_tokens: jax.Array
+    x_dispatch: jax.Array
+    assignment_weights: jax.Array
+    recv_token_indices: jax.Array
+    assignment_destinations: jax.Array
+
+
 _DEFAULT_DISPATCH_CONFIGS = {
     2: IntranodeConfig(num_sms=20, num_max_send_tokens=24, num_max_recv_tokens=256),
-    4: IntranodeConfig(num_sms=20, num_max_send_tokens=6, num_max_recv_tokens=256),
+    4: IntranodeConfig(num_sms=120, num_max_send_tokens=12, num_max_recv_tokens=256),
     8: IntranodeConfig(num_sms=20, num_max_send_tokens=6, num_max_recv_tokens=256),
 }
 
 _DEFAULT_COMBINE_CONFIGS = {
     2: IntranodeConfig(num_sms=20, num_max_send_tokens=10, num_max_recv_tokens=256),
-    4: IntranodeConfig(num_sms=20, num_max_send_tokens=9, num_max_recv_tokens=256),
+    4: IntranodeConfig(num_sms=120, num_max_send_tokens=18, num_max_recv_tokens=256),
     8: IntranodeConfig(num_sms=20, num_max_send_tokens=4, num_max_recv_tokens=256),
 }
 
@@ -187,6 +221,8 @@ def _dispatch_thread_override() -> int | None:
 def _intranode_source_bytes(deepep_root: Path) -> bytes:
     source = _intranode_source(deepep_root)
     text = source.read_text()
+    if "#include <cuda_bf16.h>" not in text:
+        text = "#include <cuda_bf16.h>\n" + text
     dispatch_threads = _dispatch_thread_override()
     if dispatch_threads is not None and dispatch_threads != _UPSTREAM_DISPATCH_THREADS:
         dispatch_start = text.find("\nvoid dispatch(")
@@ -220,13 +256,135 @@ def _intranode_source_bytes(deepep_root: Path) -> bytes:
             raise RuntimeError("Could not patch DeepEP intranode TMA launch pattern for this source tree")
         text = text.replace(old, new, 1)
 
+    assignment_dispatch_threads = dispatch_threads or _UPSTREAM_DISPATCH_THREADS
+    text = _add_assignment_dispatch_source(text, dispatch_threads=assignment_dispatch_threads)
     return text.encode("utf-8")
 
 
+def _add_assignment_dispatch_source(text: str, *, dispatch_threads: int = _UPSTREAM_DISPATCH_THREADS) -> str:
+    kernel_anchor = "__global__ void __launch_bounds__(kNumThreads, 1)\ndispatch("
+    kernel_anchor_start = text.find(kernel_anchor)
+    kernel_start = text.rfind("\ntemplate", 0, kernel_anchor_start) + 1
+    host_start = text.find("\nvoid dispatch(", kernel_start)
+    if kernel_anchor_start < 0 or kernel_start <= 0 or host_start < 0:
+        raise RuntimeError("Could not find DeepEP intranode dispatch kernel for assignment-native patch")
+
+    assignment_kernel = text[kernel_start:host_start]
+    assignment_kernel = assignment_kernel.replace(
+        "dispatch(int4* recv_x, float* recv_x_scales, float* recv_x_sf_scale_for_nvfp4, int* recv_src_idx, "
+        "int64_t* recv_topk_idx, float* recv_topk_weights, int* recv_channel_offset,",
+        "dispatch_assignments(int4* recv_x, float* recv_x_scales, float* recv_x_sf_scale_for_nvfp4, "
+        "int* recv_src_idx, int64_t* recv_topk_idx, float* recv_topk_weights, int* recv_channel_offset,\n"
+        "                     int4* x_dispatch, nv_bfloat16* assignment_weights, int* recv_token_indices,\n"
+        "                     int* local_group_cursors, int* recv_assignment_indices, int* assignment_destinations,",
+        1,
+    )
+
+    receiver_anchor = "        // Workers for receiving and copying into buffer\n"
+    receiver_start = assignment_kernel.find(receiver_anchor)
+    receive_start = assignment_kernel.find("            // Copy data\n", receiver_start)
+    receive_end = assignment_kernel.find("            // Copy `x_scales`\n", receive_start)
+    if receiver_start < 0 or receive_start < 0 or receive_end < 0:
+        raise RuntimeError("Could not find DeepEP intranode receive loop for assignment-native patch")
+    assignment_receive = """            // Copy queue payloads directly into local-expert assignment order.
+            int num_recv_tokens = cached_channel_tail_idx - cached_channel_head_idx;
+            for (int chunk_idx = recv_warp_id_in_rank; chunk_idx < num_recv_tokens; chunk_idx += num_recv_warps_per_rank) {
+                int token_idx_in_buffer = (cached_channel_head_idx + chunk_idx) % num_recv_buffer_tokens;
+                int recv_token_idx = total_offset + chunk_idx;
+
+                if (lane_id == 0)
+                    recv_src_idx[recv_token_idx] = ld_nc_global(channel_src_idx_buffers.buffer() + token_idx_in_buffer);
+
+                #pragma unroll
+                for (int token_topk_idx = 0; token_topk_idx < num_topk; ++ token_topk_idx) {
+                    auto buffer_idx = token_idx_in_buffer * num_topk + token_topk_idx;
+                    auto recv_idx = static_cast<int64_t>(recv_token_idx) * num_topk + token_topk_idx;
+                    int local_expert = ld_nc_global(channel_topk_idx_buffers.buffer() + buffer_idx);
+                    float weight = ld_nc_global(channel_topk_weights_buffers.buffer() + buffer_idx);
+                    if (lane_id == token_topk_idx) {
+                        recv_topk_idx[recv_idx] = local_expert;
+                        recv_topk_weights[recv_idx] = weight;
+                    }
+                    if (local_expert < 0)
+                        continue;
+
+                    int destination = -1;
+                    if (lane_id == 0) {
+                        destination = atomicAdd(local_group_cursors + local_expert, 1);
+                        int assignment_idx = recv_token_idx * num_topk + token_topk_idx;
+                        recv_token_indices[destination] = recv_token_idx;
+                        recv_assignment_indices[destination] = assignment_idx;
+                        assignment_destinations[assignment_idx] = destination;
+                        assignment_weights[destination] = __float2bfloat16(weight);
+                    }
+                    destination = __shfl_sync(0xffffffff, destination, 0);
+                    auto shifted_buffer_x_int4 = channel_x_buffers.buffer() + token_idx_in_buffer * hidden_int4;
+                    auto shifted_x_dispatch_int4 = x_dispatch + static_cast<int64_t>(destination) * hidden_int4;
+                    UNROLLED_WARP_COPY(5, lane_id, hidden_int4, shifted_x_dispatch_int4, shifted_buffer_x_int4,
+                                       ld_nc_global, st_na_global);
+                }
+            }
+
+"""
+    assignment_kernel = assignment_kernel[:receive_start] + assignment_receive + assignment_kernel[receive_end:]
+
+    combine_start = text.find(
+        "\ntemplate<typename dtype_t, int kNumRanks, int kNumThreads, int kNumTMABytesPerWarp>", host_start
+    )
+    if combine_start < 0:
+        raise RuntimeError("Could not find DeepEP intranode combine kernel insertion point")
+    assignment_host = """
+void dispatch_assignments(void* recv_x, float* recv_x_scales, float* recv_x_sf_scale_for_nvfp4,
+                          int* recv_src_idx, int64_t* recv_topk_idx, float* recv_topk_weights,
+                          int* recv_channel_offset, void* x_dispatch, nv_bfloat16* assignment_weights,
+                          int* recv_token_indices, int* local_group_cursors,
+                          int* recv_assignment_indices, int* assignment_destinations, int* send_head,
+                          const void* x, const float* x_scales, const float* sf_scale_for_nvfp4,
+                          const int64_t* topk_idx, const float* topk_weights,
+                          const bool* is_token_in_rank, const int* channel_prefix_matrix,
+                          int num_tokens, int num_worst_tokens, int hidden_int4, int num_topk, int num_experts,
+                          int num_scales, int num_sf_scales_for_nvfp4, int scale_token_stride,
+                          int scale_hidden_stride, int sf_scale_for_nvfp4_token_stride,
+                          int sf_scale_for_nvfp4_hidden_stride, void** buffer_ptrs, int rank, int num_ranks,
+                          cudaStream_t stream, int num_sms, int num_max_send_tokens,
+                          int num_recv_buffer_tokens) {
+    constexpr int kNumThreads = __DISPATCH_THREADS__;
+    constexpr int kNumTMABytesPerWarp = 8192;
+#ifndef DISABLE_SM90_FEATURES
+    constexpr int smem_size = kNumTMABytesPerWarp * (kNumThreads / 32);
+#endif
+
+    EP_HOST_ASSERT(static_cast<int64_t>(num_scales) * scale_hidden_stride < std::numeric_limits<int>::max());
+    EP_HOST_ASSERT(static_cast<int64_t>(num_sf_scales_for_nvfp4) * sf_scale_for_nvfp4_hidden_stride < std::numeric_limits<int>::max());
+
+#define DISPATCH_ASSIGNMENTS_LAUNCH_CASE(ranks) { \\
+    SET_SHARED_MEMORY_FOR_TMA((dispatch_assignments<ranks, kNumThreads, kNumTMABytesPerWarp>)); \\
+    auto kernel = dispatch_assignments<ranks, kNumThreads, kNumTMABytesPerWarp>; \\
+    LAUNCH_KERNEL(&cfg, kernel, \\
+        reinterpret_cast<int4*>(recv_x), recv_x_scales, recv_x_sf_scale_for_nvfp4, recv_src_idx, recv_topk_idx, recv_topk_weights, recv_channel_offset, \\
+        reinterpret_cast<int4*>(x_dispatch), assignment_weights, recv_token_indices, local_group_cursors, recv_assignment_indices, assignment_destinations, \\
+        send_head, reinterpret_cast<const int4*>(x), x_scales, sf_scale_for_nvfp4, topk_idx, topk_weights, \\
+        is_token_in_rank, channel_prefix_matrix, \\
+        num_tokens, num_worst_tokens, hidden_int4, num_topk, num_experts, num_scales, num_sf_scales_for_nvfp4, \\
+        scale_token_stride, scale_hidden_stride, sf_scale_for_nvfp4_token_stride, sf_scale_for_nvfp4_hidden_stride, \\
+        buffer_ptrs, rank, \\
+        num_max_send_tokens, num_recv_buffer_tokens); \\
+    } \\
+    break
+
+    EP_HOST_ASSERT(num_sms % 2 == 0);
+    SETUP_LAUNCH_CONFIG(num_sms, kNumThreads, stream);
+    SWITCH_RANKS(DISPATCH_ASSIGNMENTS_LAUNCH_CASE);
+#undef DISPATCH_ASSIGNMENTS_LAUNCH_CASE
+}
+
+""".replace(
+        "__DISPATCH_THREADS__", str(dispatch_threads)
+    )
+    return text[:combine_start] + "\n" + assignment_kernel + "\n" + assignment_host + text[combine_start:]
+
+
 def _prepare_intranode_source(build_dir: Path, deepep_root: Path) -> Path:
-    dispatch_threads = _dispatch_thread_override()
-    if dispatch_threads is None or dispatch_threads == _UPSTREAM_DISPATCH_THREADS:
-        return _intranode_source(deepep_root)
     patched_source = build_dir / "generated" / "intranode.cu"
     patched_source.parent.mkdir(parents=True, exist_ok=True)
     patched_source.write_bytes(_intranode_source_bytes(deepep_root))
@@ -658,7 +816,15 @@ def _register_targets() -> None:
     if getattr(_register_targets, "_done", False):
         return
     library = _load_library()
-    for target in (_DISPATCH_TARGET, _DISPATCH_CACHED_TARGET, _COMBINE_TARGET):
+    for target in (
+        _DISPATCH_TARGET,
+        _DISPATCH_WITH_ASSIGNMENTS_TARGET,
+        _DISPATCH_CACHED_TARGET,
+        _COMBINE_TARGET,
+        _PACK_LOCAL_ASSIGNMENTS_TARGET,
+        _PACK_LOCAL_ASSIGNMENTS_FROM_COUNTS_TARGET,
+        _COLLAPSE_LOCAL_ASSIGNMENTS_TARGET,
+    ):
         handler = getattr(library, target)
         handler.restype = ctypes.c_void_p
         jax.ffi.register_ffi_target(
@@ -905,6 +1071,125 @@ def _dispatch_intranode_impl(
     return results[:10]
 
 
+def _dispatch_intranode_with_assignments_impl(
+    x: jax.Array,
+    topk_idx: jax.Array,
+    topk_weights: jax.Array,
+    num_tokens_per_rank: jax.Array,
+    num_tokens_per_expert: jax.Array,
+    is_token_in_rank: jax.Array,
+    *,
+    num_experts: int,
+    dispatch_config: IntranodeConfig | None,
+    combine_config: IntranodeConfig | None,
+    max_recv_tokens: int | None,
+) -> tuple[
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+]:
+    _register_targets()
+    num_ranks = int(num_tokens_per_rank.shape[0])
+    resolved_dispatch_config = _resolve_runtime(
+        x=x,
+        num_ranks=num_ranks,
+        dispatch_config=dispatch_config,
+        combine_config=combine_config,
+    )
+
+    x_bf16 = jnp.asarray(x, dtype=jnp.bfloat16)
+    topk_idx_i32 = jnp.asarray(topk_idx, dtype=jnp.int32)
+    topk_weights_f32 = jnp.asarray(topk_weights, dtype=jnp.float32)
+    num_tokens_per_rank_i32 = jnp.asarray(num_tokens_per_rank, dtype=jnp.int32)
+    num_tokens_per_expert_i32 = jnp.asarray(num_tokens_per_expert, dtype=jnp.int32)
+    local_experts = num_experts // num_ranks
+    if max_recv_tokens is None:
+        max_recv_tokens = x_bf16.shape[0] * num_ranks
+    elif max_recv_tokens <= 0:
+        raise ValueError(f"max_recv_tokens must be positive, got {max_recv_tokens}")
+    num_channels = resolved_dispatch_config.num_sms // 2
+    topk = topk_idx_i32.shape[1]
+    max_assignments = max_recv_tokens * topk
+    result_shape_dtypes = (
+        jax.ShapeDtypeStruct((max_recv_tokens, x_bf16.shape[1]), x_bf16.dtype),
+        jax.ShapeDtypeStruct((max_recv_tokens, topk), jnp.float32),
+        jax.ShapeDtypeStruct((max_recv_tokens,), jnp.int32),
+        jax.ShapeDtypeStruct((num_ranks, num_ranks), jnp.int32),
+        jax.ShapeDtypeStruct((num_ranks, num_channels), jnp.int32),
+        jax.ShapeDtypeStruct((num_ranks, num_channels), jnp.int32),
+        jax.ShapeDtypeStruct((x_bf16.shape[0], num_ranks), jnp.int32),
+        jax.ShapeDtypeStruct((local_experts,), jnp.int32),
+        jax.ShapeDtypeStruct((1,), jnp.int32),
+        jax.ShapeDtypeStruct((x_bf16.shape[0], topk * 2), jnp.int32),
+        jax.ShapeDtypeStruct((max_recv_tokens, topk * 2), jnp.int32),
+        jax.ShapeDtypeStruct((max_assignments, x_bf16.shape[1]), x_bf16.dtype),
+        jax.ShapeDtypeStruct((max_assignments,), x_bf16.dtype),
+        jax.ShapeDtypeStruct((max_assignments,), jnp.int32),
+        jax.ShapeDtypeStruct((local_experts,), jnp.int32),
+        jax.ShapeDtypeStruct((max_assignments,), jnp.int32),
+        jax.ShapeDtypeStruct((max_assignments,), jnp.int32),
+    )
+    (
+        recv_x,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        channel_prefix_matrix,
+        recv_channel_prefix_matrix,
+        send_head,
+        local_group_sizes,
+        num_recv_tokens,
+        _topk_idx_s64_scratch,
+        _recv_topk_idx_s64_scratch,
+        x_dispatch,
+        assignment_weights,
+        recv_token_indices,
+        _local_group_cursors,
+        recv_assignment_indices,
+        assignment_destinations,
+    ) = jax.ffi.ffi_call(
+        _DISPATCH_WITH_ASSIGNMENTS_TARGET,
+        result_shape_dtypes,
+        has_side_effect=True,
+        vmap_method="broadcast_all",
+    )(
+        x_bf16,
+        topk_idx_i32,
+        topk_weights_f32,
+        num_tokens_per_rank_i32,
+        num_tokens_per_expert_i32,
+        is_token_in_rank,
+        num_experts=np.int32(num_experts),
+    )
+    return (
+        recv_x,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        channel_prefix_matrix,
+        recv_channel_prefix_matrix,
+        send_head,
+        local_group_sizes,
+        num_recv_tokens,
+        x_dispatch,
+        assignment_weights,
+        recv_token_indices,
+        recv_assignment_indices,
+        assignment_destinations,
+    )
+
+
 def _dispatch_intranode_cached_impl(
     x: jax.Array,
     is_token_in_rank: jax.Array,
@@ -996,6 +1281,419 @@ def _combine_intranode_impl(
     return combined_x, combined_topk_weights
 
 
+def deepep_pack_local_assignments(
+    recv_x: jax.Array,
+    recv_topk_idx: jax.Array,
+    recv_topk_weights: jax.Array,
+    num_recv_tokens: jax.Array,
+    *,
+    local_experts: int,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    x_dispatch, assignment_weights, recv_token_indices, local_group_sizes, _ = _pack_local_assignments_with_vjp(
+        recv_x,
+        recv_topk_idx,
+        recv_topk_weights,
+        num_recv_tokens,
+        local_experts,
+    )
+    return x_dispatch, assignment_weights, recv_token_indices, local_group_sizes
+
+
+def deepep_pack_local_assignments_from_counts(
+    recv_x: jax.Array,
+    recv_topk_idx: jax.Array,
+    recv_topk_weights: jax.Array,
+    num_recv_tokens: jax.Array,
+    local_group_sizes: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    x_dispatch, assignment_weights, recv_token_indices, recv_assignment_indices, assignment_destinations = (
+        _pack_local_assignments_from_counts_with_vjp(
+            recv_x,
+            recv_topk_idx,
+            recv_topk_weights,
+            num_recv_tokens,
+            local_group_sizes,
+        )
+    )
+    del recv_assignment_indices
+    return x_dispatch, assignment_weights, recv_token_indices, local_group_sizes, assignment_destinations
+
+
+def _pack_local_assignments_impl(
+    recv_x: jax.Array,
+    recv_topk_idx: jax.Array,
+    recv_topk_weights: jax.Array,
+    num_recv_tokens: jax.Array,
+    *,
+    local_experts: int,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    _register_targets()
+    if local_experts <= 0:
+        raise ValueError(f"local_experts must be positive, got {local_experts}")
+    recv_x_bf16 = jnp.asarray(recv_x, dtype=jnp.bfloat16)
+    recv_topk_idx_i32 = jnp.asarray(recv_topk_idx, dtype=jnp.int32)
+    recv_topk_weights_f32 = jnp.asarray(recv_topk_weights, dtype=jnp.float32)
+    num_recv_tokens_i32 = jnp.asarray(num_recv_tokens, dtype=jnp.int32)
+    if num_recv_tokens_i32.ndim == 0:
+        num_recv_tokens_i32 = jnp.reshape(num_recv_tokens_i32, (1,))
+
+    recv_capacity, hidden = recv_x_bf16.shape
+    topk = recv_topk_idx_i32.shape[1]
+    max_assignments = recv_capacity * topk
+    result_shape_dtypes = (
+        jax.ShapeDtypeStruct((max_assignments, hidden), recv_x_bf16.dtype),
+        jax.ShapeDtypeStruct((max_assignments,), recv_x_bf16.dtype),
+        jax.ShapeDtypeStruct((max_assignments,), jnp.int32),
+        jax.ShapeDtypeStruct((local_experts,), jnp.int32),
+        jax.ShapeDtypeStruct((local_experts,), jnp.int32),
+        jax.ShapeDtypeStruct((max_assignments,), jnp.int32),
+        jax.ShapeDtypeStruct((max_assignments,), jnp.int32),
+    )
+    (
+        x_dispatch,
+        assignment_weights,
+        recv_token_indices,
+        local_group_sizes,
+        _,
+        recv_assignment_indices,
+        _,
+    ) = jax.ffi.ffi_call(
+        _PACK_LOCAL_ASSIGNMENTS_TARGET,
+        result_shape_dtypes,
+        has_side_effect=True,
+        vmap_method="broadcast_all",
+    )(
+        recv_x_bf16,
+        recv_topk_idx_i32,
+        recv_topk_weights_f32,
+        num_recv_tokens_i32,
+        local_experts=np.int32(local_experts),
+    )
+    return x_dispatch, assignment_weights, recv_token_indices, local_group_sizes, recv_assignment_indices
+
+
+def _pack_local_assignments_from_counts_impl(
+    recv_x: jax.Array,
+    recv_topk_idx: jax.Array,
+    recv_topk_weights: jax.Array,
+    num_recv_tokens: jax.Array,
+    local_group_sizes: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    _register_targets()
+    recv_x_bf16 = jnp.asarray(recv_x, dtype=jnp.bfloat16)
+    recv_topk_idx_i32 = jnp.asarray(recv_topk_idx, dtype=jnp.int32)
+    recv_topk_weights_f32 = jnp.asarray(recv_topk_weights, dtype=jnp.float32)
+    num_recv_tokens_i32 = jnp.asarray(num_recv_tokens, dtype=jnp.int32)
+    local_group_sizes_i32 = jnp.asarray(local_group_sizes, dtype=jnp.int32)
+    if num_recv_tokens_i32.ndim == 0:
+        num_recv_tokens_i32 = jnp.reshape(num_recv_tokens_i32, (1,))
+
+    recv_capacity, hidden = recv_x_bf16.shape
+    topk = recv_topk_idx_i32.shape[1]
+    max_assignments = recv_capacity * topk
+    result_shape_dtypes = (
+        jax.ShapeDtypeStruct((max_assignments, hidden), recv_x_bf16.dtype),
+        jax.ShapeDtypeStruct((max_assignments,), recv_x_bf16.dtype),
+        jax.ShapeDtypeStruct((max_assignments,), jnp.int32),
+        jax.ShapeDtypeStruct((local_group_sizes_i32.shape[0],), jnp.int32),
+        jax.ShapeDtypeStruct((max_assignments,), jnp.int32),
+        jax.ShapeDtypeStruct((max_assignments,), jnp.int32),
+    )
+    (
+        x_dispatch,
+        assignment_weights,
+        recv_token_indices,
+        _,
+        recv_assignment_indices,
+        assignment_destinations,
+    ) = jax.ffi.ffi_call(
+        _PACK_LOCAL_ASSIGNMENTS_FROM_COUNTS_TARGET,
+        result_shape_dtypes,
+        has_side_effect=True,
+        vmap_method="broadcast_all",
+    )(
+        recv_x_bf16,
+        recv_topk_idx_i32,
+        recv_topk_weights_f32,
+        num_recv_tokens_i32,
+        local_group_sizes_i32,
+    )
+    return x_dispatch, assignment_weights, recv_token_indices, recv_assignment_indices, assignment_destinations
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(4,))
+def _pack_local_assignments_with_vjp(
+    recv_x: jax.Array,
+    recv_topk_idx: jax.Array,
+    recv_topk_weights: jax.Array,
+    num_recv_tokens: jax.Array,
+    local_experts: int,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    return _pack_local_assignments_impl(
+        recv_x,
+        recv_topk_idx,
+        recv_topk_weights,
+        num_recv_tokens,
+        local_experts=local_experts,
+    )
+
+
+def _pack_local_assignments_with_vjp_fwd(
+    recv_x: jax.Array,
+    recv_topk_idx: jax.Array,
+    recv_topk_weights: jax.Array,
+    num_recv_tokens: jax.Array,
+    local_experts: int,
+):
+    outputs = _pack_local_assignments_impl(
+        recv_x,
+        recv_topk_idx,
+        recv_topk_weights,
+        num_recv_tokens,
+        local_experts=local_experts,
+    )
+    residuals = (outputs[2], outputs[3], outputs[4], recv_x.shape, recv_topk_weights.shape)
+    return outputs, residuals
+
+
+def _pack_assignment_gradients(
+    *,
+    recv_token_indices: jax.Array,
+    recv_assignment_indices: jax.Array,
+    local_group_sizes: jax.Array,
+    recv_x_shape: tuple[int, ...],
+    recv_topk_weights_shape: tuple[int, ...],
+    cotangents,
+) -> tuple[jax.Array, jax.Array]:
+    valid_assignments = jnp.arange(recv_assignment_indices.shape[0], dtype=jnp.int32) < jnp.sum(local_group_sizes)
+    safe_recv_token_indices = jnp.where(valid_assignments, recv_token_indices, 0)
+    safe_recv_assignment_indices = jnp.where(valid_assignments, recv_assignment_indices, 0)
+    grad_x_dispatch = _materialize_cotangent(
+        cotangents[0],
+        dtype=jnp.bfloat16,
+        shape=(recv_assignment_indices.shape[0], recv_x_shape[1]),
+    )
+    grad_x_dispatch = jnp.where(valid_assignments[:, None], grad_x_dispatch, 0)
+    grad_assignment_weights = _materialize_cotangent(
+        cotangents[1],
+        dtype=jnp.float32,
+        shape=(recv_assignment_indices.shape[0],),
+    )
+    grad_assignment_weights = jnp.where(valid_assignments, grad_assignment_weights, 0)
+    grad_recv_x = jax.ops.segment_sum(
+        grad_x_dispatch,
+        safe_recv_token_indices,
+        num_segments=recv_x_shape[0],
+        indices_are_sorted=False,
+    )
+    grad_recv_topk_weights = jax.ops.segment_sum(
+        grad_assignment_weights.astype(jnp.float32),
+        safe_recv_assignment_indices,
+        num_segments=recv_topk_weights_shape[0] * recv_topk_weights_shape[1],
+        indices_are_sorted=False,
+    ).reshape(recv_topk_weights_shape)
+    return grad_recv_x, grad_recv_topk_weights
+
+
+def _pack_local_assignments_with_vjp_bwd(local_experts: int, residuals, cotangents):
+    del local_experts
+    recv_token_indices, local_group_sizes, recv_assignment_indices, recv_x_shape, recv_topk_weights_shape = residuals
+    grad_recv_x, grad_recv_topk_weights = _pack_assignment_gradients(
+        recv_token_indices=recv_token_indices,
+        recv_assignment_indices=recv_assignment_indices,
+        local_group_sizes=local_group_sizes,
+        recv_x_shape=recv_x_shape,
+        recv_topk_weights_shape=recv_topk_weights_shape,
+        cotangents=cotangents,
+    )
+    return grad_recv_x, None, grad_recv_topk_weights, None
+
+
+_pack_local_assignments_with_vjp.defvjp(
+    _pack_local_assignments_with_vjp_fwd,
+    _pack_local_assignments_with_vjp_bwd,
+)
+
+
+@jax.custom_vjp
+def _pack_local_assignments_from_counts_with_vjp(
+    recv_x: jax.Array,
+    recv_topk_idx: jax.Array,
+    recv_topk_weights: jax.Array,
+    num_recv_tokens: jax.Array,
+    local_group_sizes: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    return _pack_local_assignments_from_counts_impl(
+        recv_x,
+        recv_topk_idx,
+        recv_topk_weights,
+        num_recv_tokens,
+        local_group_sizes,
+    )
+
+
+def _pack_local_assignments_from_counts_with_vjp_fwd(
+    recv_x: jax.Array,
+    recv_topk_idx: jax.Array,
+    recv_topk_weights: jax.Array,
+    num_recv_tokens: jax.Array,
+    local_group_sizes: jax.Array,
+):
+    outputs = _pack_local_assignments_from_counts_impl(
+        recv_x,
+        recv_topk_idx,
+        recv_topk_weights,
+        num_recv_tokens,
+        local_group_sizes,
+    )
+    residuals = (outputs[2], outputs[3], local_group_sizes, recv_x.shape, recv_topk_weights.shape)
+    return outputs, residuals
+
+
+def _pack_local_assignments_from_counts_with_vjp_bwd(residuals, cotangents):
+    recv_token_indices, recv_assignment_indices, local_group_sizes, recv_x_shape, recv_topk_weights_shape = residuals
+    grad_recv_x, grad_recv_topk_weights = _pack_assignment_gradients(
+        recv_token_indices=recv_token_indices,
+        recv_assignment_indices=recv_assignment_indices,
+        local_group_sizes=local_group_sizes,
+        recv_x_shape=recv_x_shape,
+        recv_topk_weights_shape=recv_topk_weights_shape,
+        cotangents=cotangents,
+    )
+    return grad_recv_x, None, grad_recv_topk_weights, None, None
+
+
+_pack_local_assignments_from_counts_with_vjp.defvjp(
+    _pack_local_assignments_from_counts_with_vjp_fwd,
+    _pack_local_assignments_from_counts_with_vjp_bwd,
+)
+
+
+def deepep_collapse_local_assignments(
+    out_dispatch: jax.Array,
+    assignment_weights: jax.Array,
+    recv_token_indices: jax.Array,
+    assignment_destinations: jax.Array,
+    local_group_sizes: jax.Array,
+    num_recv_tokens: jax.Array,
+    *,
+    recv_capacity: int,
+) -> jax.Array:
+    return _collapse_local_assignments_with_vjp(
+        out_dispatch,
+        assignment_weights,
+        recv_token_indices,
+        assignment_destinations,
+        local_group_sizes,
+        num_recv_tokens,
+        recv_capacity,
+    )
+
+
+def _collapse_local_assignments_impl(
+    out_dispatch: jax.Array,
+    assignment_weights: jax.Array,
+    recv_token_indices: jax.Array,
+    assignment_destinations: jax.Array,
+    local_group_sizes: jax.Array,
+    num_recv_tokens: jax.Array,
+    *,
+    recv_capacity: int,
+) -> jax.Array:
+    _register_targets()
+    if recv_capacity <= 0:
+        raise ValueError(f"recv_capacity must be positive, got {recv_capacity}")
+    out_dispatch_bf16 = jnp.asarray(out_dispatch, dtype=jnp.bfloat16)
+    assignment_weights_bf16 = jnp.asarray(assignment_weights, dtype=jnp.bfloat16)
+    del recv_token_indices
+    assignment_destinations_i32 = jnp.asarray(assignment_destinations, dtype=jnp.int32)
+    local_group_sizes_i32 = jnp.asarray(local_group_sizes, dtype=jnp.int32)
+    accepted_total_i32 = jnp.reshape(jnp.sum(local_group_sizes_i32, dtype=jnp.int32), (1,))
+    num_recv_tokens_i32 = jnp.asarray(num_recv_tokens, dtype=jnp.int32)
+    if num_recv_tokens_i32.ndim == 0:
+        num_recv_tokens_i32 = jnp.reshape(num_recv_tokens_i32, (1,))
+
+    result_shape_dtype = jax.ShapeDtypeStruct((recv_capacity, out_dispatch_bf16.shape[1]), out_dispatch_bf16.dtype)
+    recv_out = jax.ffi.ffi_call(
+        _COLLAPSE_LOCAL_ASSIGNMENTS_TARGET,
+        result_shape_dtype,
+        has_side_effect=True,
+        vmap_method="broadcast_all",
+    )(
+        out_dispatch_bf16,
+        assignment_weights_bf16,
+        assignment_destinations_i32,
+        accepted_total_i32,
+        num_recv_tokens_i32,
+    )
+    return recv_out
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(6,))
+def _collapse_local_assignments_with_vjp(
+    out_dispatch: jax.Array,
+    assignment_weights: jax.Array,
+    recv_token_indices: jax.Array,
+    assignment_destinations: jax.Array,
+    local_group_sizes: jax.Array,
+    num_recv_tokens: jax.Array,
+    recv_capacity: int,
+) -> jax.Array:
+    return _collapse_local_assignments_impl(
+        out_dispatch,
+        assignment_weights,
+        recv_token_indices,
+        assignment_destinations,
+        local_group_sizes,
+        num_recv_tokens,
+        recv_capacity=recv_capacity,
+    )
+
+
+def _collapse_local_assignments_with_vjp_fwd(
+    out_dispatch: jax.Array,
+    assignment_weights: jax.Array,
+    recv_token_indices: jax.Array,
+    assignment_destinations: jax.Array,
+    local_group_sizes: jax.Array,
+    num_recv_tokens: jax.Array,
+    recv_capacity: int,
+):
+    output = _collapse_local_assignments_impl(
+        out_dispatch,
+        assignment_weights,
+        recv_token_indices,
+        assignment_destinations,
+        local_group_sizes,
+        num_recv_tokens,
+        recv_capacity=recv_capacity,
+    )
+    return output, (out_dispatch, assignment_weights, recv_token_indices, local_group_sizes)
+
+
+def _collapse_local_assignments_with_vjp_bwd(recv_capacity: int, residuals, cotangent):
+    out_dispatch, assignment_weights, recv_token_indices, local_group_sizes = residuals
+    valid_assignments = jnp.arange(assignment_weights.shape[0], dtype=jnp.int32) < jnp.sum(local_group_sizes)
+    safe_recv_token_indices = jnp.where(valid_assignments, recv_token_indices, 0)
+    grad_recv_out = _materialize_cotangent(
+        cotangent,
+        dtype=jnp.bfloat16,
+        shape=(recv_capacity, out_dispatch.shape[1]),
+    )
+    gathered_grad = jnp.take(grad_recv_out, safe_recv_token_indices, axis=0)
+    gathered_grad = jnp.where(valid_assignments[:, None], gathered_grad, 0)
+    out_dispatch = jnp.where(valid_assignments[:, None], out_dispatch, 0)
+    grad_out_dispatch = gathered_grad * assignment_weights[:, None].astype(gathered_grad.dtype)
+    grad_assignment_weights = jnp.sum(gathered_grad.astype(jnp.float32) * out_dispatch.astype(jnp.float32), axis=1)
+    return grad_out_dispatch, grad_assignment_weights, None, None, None, None
+
+
+_collapse_local_assignments_with_vjp.defvjp(
+    _collapse_local_assignments_with_vjp_fwd,
+    _collapse_local_assignments_with_vjp_bwd,
+)
+
+
 @partial(jax.custom_vjp, nondiff_argnums=(6, 7, 8, 9))
 def _dispatch_intranode_with_vjp(
     x: jax.Array,
@@ -1051,7 +1749,7 @@ def _dispatch_intranode_with_vjp_fwd(
     )
     (
         recv_x,
-        _,
+        _recv_topk_idx,
         recv_topk_weights,
         recv_src_idx,
         rank_prefix_matrix,
@@ -1111,6 +1809,177 @@ def _dispatch_intranode_with_vjp_bwd(
 _dispatch_intranode_with_vjp.defvjp(
     _dispatch_intranode_with_vjp_fwd,
     _dispatch_intranode_with_vjp_bwd,
+)
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(6, 7, 8, 9))
+def _dispatch_intranode_with_assignments_with_vjp(
+    x: jax.Array,
+    topk_idx: jax.Array,
+    topk_weights: jax.Array,
+    num_tokens_per_rank: jax.Array,
+    num_tokens_per_expert: jax.Array,
+    is_token_in_rank: jax.Array,
+    num_experts: int,
+    dispatch_config: IntranodeConfig | None,
+    combine_config: IntranodeConfig | None,
+    max_recv_tokens: int | None,
+) -> tuple[
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+    jax.Array,
+]:
+    return _dispatch_intranode_with_assignments_impl(
+        x,
+        topk_idx,
+        topk_weights,
+        num_tokens_per_rank,
+        num_tokens_per_expert,
+        is_token_in_rank,
+        num_experts=num_experts,
+        dispatch_config=dispatch_config,
+        combine_config=combine_config,
+        max_recv_tokens=max_recv_tokens,
+    )
+
+
+def _dispatch_intranode_with_assignments_with_vjp_fwd(
+    x: jax.Array,
+    topk_idx: jax.Array,
+    topk_weights: jax.Array,
+    num_tokens_per_rank: jax.Array,
+    num_tokens_per_expert: jax.Array,
+    is_token_in_rank: jax.Array,
+    num_experts: int,
+    dispatch_config: IntranodeConfig | None,
+    combine_config: IntranodeConfig | None,
+    max_recv_tokens: int | None,
+):
+    outputs = _dispatch_intranode_with_assignments_impl(
+        x,
+        topk_idx,
+        topk_weights,
+        num_tokens_per_rank,
+        num_tokens_per_expert,
+        is_token_in_rank,
+        num_experts=num_experts,
+        dispatch_config=dispatch_config,
+        combine_config=combine_config,
+        max_recv_tokens=max_recv_tokens,
+    )
+    (
+        recv_x,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        _,
+        recv_channel_prefix_matrix,
+        send_head,
+        local_group_sizes,
+        num_recv_tokens,
+        _,
+        _,
+        recv_token_indices,
+        recv_assignment_indices,
+        _assignment_destinations,
+    ) = outputs
+    residuals = (
+        recv_x,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        recv_channel_prefix_matrix,
+        send_head,
+        local_group_sizes,
+        num_recv_tokens,
+        recv_token_indices,
+        recv_assignment_indices,
+    )
+    return outputs, residuals
+
+
+def _dispatch_intranode_with_assignments_with_vjp_bwd(
+    num_experts: int,
+    dispatch_config: IntranodeConfig | None,
+    combine_config: IntranodeConfig | None,
+    max_recv_tokens: int | None,
+    residuals,
+    cotangents,
+):
+    del num_experts, dispatch_config, combine_config, max_recv_tokens
+    (
+        recv_x,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        recv_channel_prefix_matrix,
+        send_head,
+        local_group_sizes,
+        num_recv_tokens,
+        recv_token_indices,
+        recv_assignment_indices,
+    ) = residuals
+    valid_assignments = jnp.arange(recv_assignment_indices.shape[0], dtype=jnp.int32) < jnp.sum(local_group_sizes)
+
+    grad_recv_x = _materialize_cotangent(cotangents[0], dtype=recv_x.dtype, reference=recv_x)
+    grad_recv_topk_weights = _materialize_cotangent(
+        cotangents[1],
+        dtype=recv_topk_weights.dtype,
+        reference=recv_topk_weights,
+    )
+
+    grad_x_dispatch = _materialize_cotangent(
+        cotangents[9],
+        dtype=recv_x.dtype,
+        shape=(recv_assignment_indices.shape[0], recv_x.shape[1]),
+    )
+    grad_x_dispatch = jnp.where(valid_assignments[:, None], grad_x_dispatch, 0)
+    grad_assignment_weights = _materialize_cotangent(
+        cotangents[10],
+        dtype=jnp.float32,
+        shape=(recv_assignment_indices.shape[0],),
+    )
+    grad_assignment_weights = jnp.where(valid_assignments, grad_assignment_weights, 0)
+
+    grad_recv_x += jax.ops.segment_sum(
+        grad_x_dispatch,
+        recv_token_indices,
+        num_segments=recv_x.shape[0],
+        indices_are_sorted=False,
+    )
+    grad_recv_topk_weights += jax.ops.segment_sum(
+        grad_assignment_weights.astype(jnp.float32),
+        recv_assignment_indices,
+        num_segments=recv_topk_weights.shape[0] * recv_topk_weights.shape[1],
+        indices_are_sorted=False,
+    ).reshape(recv_topk_weights.shape)
+
+    grad_x, grad_topk_weights = _combine_intranode_impl(
+        grad_recv_x,
+        grad_recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        recv_channel_prefix_matrix,
+        send_head,
+        num_recv_tokens,
+    )
+    return grad_x, None, grad_topk_weights, None, None, None
+
+
+_dispatch_intranode_with_assignments_with_vjp.defvjp(
+    _dispatch_intranode_with_assignments_with_vjp_fwd,
+    _dispatch_intranode_with_assignments_with_vjp_bwd,
 )
 
 
@@ -1225,10 +2094,52 @@ def deepep_dispatch_intranode(
     dispatch_config: IntranodeConfig | None = None,
     combine_config: IntranodeConfig | None = None,
     max_recv_tokens: int | None = None,
-) -> tuple[
-    jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array
-]:
-    return _dispatch_intranode_with_vjp(
+) -> DeepEPDispatch:
+    return DeepEPDispatch(
+        *_dispatch_intranode_with_vjp(
+            x,
+            topk_idx,
+            topk_weights,
+            num_tokens_per_rank,
+            num_tokens_per_expert,
+            is_token_in_rank,
+            num_experts,
+            dispatch_config,
+            combine_config,
+            max_recv_tokens,
+        )
+    )
+
+
+def deepep_dispatch_intranode_with_assignments(
+    x: jax.Array,
+    topk_idx: jax.Array,
+    topk_weights: jax.Array,
+    num_tokens_per_rank: jax.Array,
+    num_tokens_per_expert: jax.Array,
+    is_token_in_rank: jax.Array,
+    *,
+    num_experts: int,
+    dispatch_config: IntranodeConfig | None = None,
+    combine_config: IntranodeConfig | None = None,
+    max_recv_tokens: int | None = None,
+) -> DeepEPDispatchWithAssignments:
+    (
+        recv_x,
+        recv_topk_weights,
+        recv_src_idx,
+        rank_prefix_matrix,
+        channel_prefix_matrix,
+        recv_channel_prefix_matrix,
+        send_head,
+        local_group_sizes,
+        num_recv_tokens,
+        x_dispatch,
+        assignment_weights,
+        recv_token_indices,
+        _recv_assignment_indices,
+        assignment_destinations,
+    ) = _dispatch_intranode_with_assignments_with_vjp(
         x,
         topk_idx,
         topk_weights,
@@ -1239,6 +2150,21 @@ def deepep_dispatch_intranode(
         dispatch_config,
         combine_config,
         max_recv_tokens,
+    )
+    return DeepEPDispatchWithAssignments(
+        recv_x=recv_x,
+        recv_topk_weights=recv_topk_weights,
+        recv_src_idx=recv_src_idx,
+        rank_prefix_matrix=rank_prefix_matrix,
+        channel_prefix_matrix=channel_prefix_matrix,
+        recv_channel_prefix_matrix=recv_channel_prefix_matrix,
+        send_head=send_head,
+        local_group_sizes=local_group_sizes,
+        num_recv_tokens=num_recv_tokens,
+        x_dispatch=x_dispatch,
+        assignment_weights=assignment_weights,
+        recv_token_indices=recv_token_indices,
+        assignment_destinations=assignment_destinations,
     )
 
 
