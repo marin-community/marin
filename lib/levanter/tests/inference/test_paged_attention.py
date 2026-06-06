@@ -20,7 +20,7 @@ from levanter.inference.jit_scheduler import SequenceTable
 from levanter.inference.utils import INVALID
 import levanter.layers.attention as attention_module
 from levanter.layers import AttentionConfig, AttentionBackend, Attention
-from levanter.layers.attention import AttentionMask, ragged_paged_attention, simple_attention_with_dropout
+from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import KvPageCache
 from test_utils import use_test_mesh
 
@@ -84,129 +84,10 @@ def _build_random_case(rng, seq_lens):
     return q, kv_pages, kv_lens, page_indices, cu_q_lens, jnp.array(num_seqs, dtype=jnp.int32)
 
 
-def _build_incremental_case(rng, seq_lens, k_lens):
-    """Like ``_build_random_case`` but query only contains the last ``k`` tokens.
-
-    ``seq_lens`` gives the total tokens already in the KV cache for each
-    sequence. ``k_lens`` is how many query tokens each sequence has. The KV
-    cache still contains ``seq_lens`` tokens for every sequence.
-    """
-    q_full, kv_pages, kv_lens, page_indices, full_cu_q_lens, num_seqs = _build_random_case(rng, seq_lens)
-
-    assert len(seq_lens) == len(k_lens)
-
-    chunks = []
-    new_offsets = [0]
-    for sid, (total_len, k) in enumerate(zip(seq_lens, k_lens)):
-        start = int(full_cu_q_lens["seq", sid]) + total_len - k
-        chunks.append(q_full["position", hax.ds(start, k)])
-        new_offsets.append(new_offsets[-1] + k)
-
-    q = hax.concatenate("position", chunks)
-    cu_q_lens = hax.named(jnp.asarray(new_offsets, dtype=jnp.int32), "seq")
-
-    return q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs
-
-
-def _reference_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, seq_lens):
-    """Naïve per‑sequence causal soft‑max (slow but tiny)."""
-    out_chunks = []
-    for sid, qlen in enumerate(seq_lens):
-        # slice query tokens for this sequence
-        start = int(cu_q_lens["seq", sid])
-        q_seq = q["position", hax.ds(start, qlen)]
-        TOK_S = hax.Axis("position", qlen)
-
-        # gather kv for the sequence
-        n_pages = (kv_lens["seq", sid] + SLOT.size - 1) // SLOT.size
-        pages = page_indices["seq", sid, "page", : n_pages.scalar()]
-        kv_flat = kv_pages["page", pages, "slot", :].flatten_axes(("page", "slot"), "kv_position")
-        kv_flat = kv_flat["kv_position", hax.ds(0, kv_lens["seq", sid].scalar())]
-
-        k_seq = kv_flat["kv_head", 0::2]
-        v_seq = kv_flat["kv_head", 1::2]
-
-        # rename axes so they line up with dot_product_attention sig
-        q_seq = q_seq.rename({"position": TOK_S.name})
-
-        offset = kv_lens["seq", sid].scalar() - qlen
-        mask = AttentionMask.causal(offset=offset)
-        ref = simple_attention_with_dropout(
-            "position", "kv_position", D, q_seq, k_seq, v_seq, mask=mask, scaling_factor=SM_SCALE
-        )
-
-        out_chunks.append(ref)
-
-    return hax.concatenate("position", out_chunks)
-
-
-# very loose tolerance. JAX uses a very loose tolerance for their ragged_attention tests.
 def _rpa_tol() -> float:
-    devices = jax.devices()
-    # 2%?!?!
-    return 2e-2 if any(device.platform == "tpu" for device in devices) else 1e-4
-
-
-def test_ragged_paged_attention_single_seq():
-    with use_test_mesh():
-        rng = jr.PRNGKey(0)
-        seq_lens = [1]  # one sequence
-        q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs = _build_random_case(rng, seq_lens)
-
-        ragged = ragged_paged_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, sm_scale=SM_SCALE)
-        ref = _reference_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, seq_lens)
-
-    assert ragged.axes == ref.axes
-    tol = _rpa_tol()
-    for i in range(len(ragged.array)):
-        assert_trees_all_close(ragged.array[i], ref.array[i], atol=tol, rtol=tol, custom_message=f" at index {i}")
-    # assert_trees_all_close(ragged.array[:-1], ref.array[:-1], atol=_rpa_tol(), rtol=_rpa_tol())
-    # assert_trees_all_close(ragged.array[-1], ref.array[-1], atol=_rpa_tol(), rtol=_rpa_tol())
-    # assert_trees_all_close(ragged.array, ref.array, atol=_rpa_tol(), rtol=_rpa_tol())
-
-
-jit_rpa = jax.jit(ragged_paged_attention)
-
-
-@pytest.mark.parametrize("seq_lens", [[8], [8, 32, 16], [10, 37, 64], [9, 10, 34, 17]])
-def test_ragged_paged_attention_multi_seq(seq_lens):
-    rng = jr.PRNGKey(hash(tuple(seq_lens)))
-    q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs = _build_random_case(rng, seq_lens)
-
-    ragged = jit_rpa(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, sm_scale=SM_SCALE)
-    ref = _reference_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, seq_lens)
-
-    assert ragged.axes == ref.axes
-    tol = _rpa_tol()
-    assert_trees_all_close(ragged.array, ref.array, atol=tol, rtol=tol)
-
-
-def test_ragged_paged_attention_incremental_single_seq():
-    rng = jr.PRNGKey(2)
-    seq_lens = [47]
-    k_lens = [5]
-    q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs = _build_incremental_case(rng, seq_lens, k_lens)
-
-    ragged = jit_rpa(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, sm_scale=SM_SCALE)
-    ref = _reference_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, k_lens)
-
-    assert ragged.axes == ref.axes
-    tol = _rpa_tol()
-    assert_trees_all_close(ragged.array, ref.array, atol=tol, rtol=tol)
-
-
-def test_ragged_paged_attention_incremental_multi_seq():
-    rng = jr.PRNGKey(3)
-    seq_lens = [10, 37, 64]
-    k_lens = [1, 3, 9]
-    q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs = _build_incremental_case(rng, seq_lens, k_lens)
-
-    ragged = jit_rpa(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, sm_scale=SM_SCALE)
-    ref = _reference_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, k_lens)
-
-    assert ragged.axes == ref.axes
-    tol = _rpa_tol()
-    assert_trees_all_close(ragged.array, ref.array, atol=tol, rtol=tol)
+    # JAX uses a very loose tolerance for its ragged attention tests.
+    # 2% on TPU is inherited from that contract.
+    return 2e-2 if any(device.platform == "tpu" for device in jax.devices()) else 1e-4
 
 
 def test_do_tpu_ragged_paged_attention_accepts_traced_sm_scale(monkeypatch):
@@ -222,8 +103,21 @@ def test_do_tpu_ragged_paged_attention_accepts_traced_sm_scale(monkeypatch):
         *,
         sm_scale,
         soft_cap,
+        num_kv_pages_per_block,
+        num_queries_per_block,
+        vmem_limit_bytes,
     ):
-        del kv_pages_arr, kv_lens_arr, page_indices_arr, cu_q_lens_arr, num_seqs_arr, soft_cap
+        del (
+            kv_pages_arr,
+            kv_lens_arr,
+            page_indices_arr,
+            cu_q_lens_arr,
+            num_seqs_arr,
+            soft_cap,
+            num_kv_pages_per_block,
+            num_queries_per_block,
+            vmem_limit_bytes,
+        )
         return q_arr * jnp.asarray(sm_scale, dtype=q_arr.dtype)
 
     monkeypatch.setattr(attention_module, "tpu_ragged_paged_attention", _fake_tpu_rpa)
@@ -242,6 +136,9 @@ def test_do_tpu_ragged_paged_attention_accepts_traced_sm_scale(monkeypatch):
             num_seqs_,
             sm_scale=traced_scale,
             soft_cap=None,
+            num_kv_pages_per_block=64,
+            num_queries_per_block=16,
+            vmem_limit_bytes=64 * 1024 * 1024,
         )
 
     with use_test_mesh():

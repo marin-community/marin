@@ -46,6 +46,7 @@ else:
     _SPLASH_KERNEL_SUPPORTS_SINKS = "sinks" in inspect.signature(_splash_attention).parameters
 
 from ..inference.page_table import PageBatchInfo, PageTableSpec
+from ..inference.paged_attention_kernels import PagedAttentionConfig, paged_attention_with_kv_update
 from .kv_cache import KvPageCache
 from .normalization import LayerNormConfigBase
 from .rotary import RotaryEmbeddings, RotaryEmbeddingsConfig
@@ -1773,6 +1774,7 @@ class Attention(eqx.Module):
         batch_info: PageBatchInfo,
         *,
         pos_ids: NamedArray,
+        paged_attention: PagedAttentionConfig = PagedAttentionConfig(),
         key=None,
     ) -> tuple[NamedArray, "KvPageCache"]:
         """Decode-time forward pass using a paged KV cache.
@@ -1785,27 +1787,26 @@ class Attention(eqx.Module):
 
         q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
 
-        kv_cache = kv_cache.update(batch_info, k, v)
-
         sm_scale = (
             self.config.scaling_factor
             if self.config.scaling_factor is not None
             else 1.0 / math.sqrt(self.config.HeadSize.size)
         )
 
-        attn_tokens = ragged_paged_attention(
+        attn_tokens, kv_cache = paged_attention_with_kv_update(
             q,
-            kv_cache.kv_pages,
-            batch_info.seq_lens,
-            batch_info.page_indices,
-            batch_info.cu_q_lens,
-            batch_info.num_seqs,
+            k,
+            v,
+            kv_cache,
+            batch_info,
             sm_scale=sm_scale,
             soft_cap=self.config.logits_soft_cap,
+            config=paged_attention,
         )
 
         attn_output = attn_tokens.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
-        attn_output = attn_output.astype(x.dtype)
+        if not paged_attention.preserve_attention_output_dtype:
+            attn_output = attn_output.astype(x.dtype)
         attn_output = self.o_proj(attn_output, key=key_o)
 
         return attn_output, kv_cache
@@ -1957,12 +1958,11 @@ class GatedAttention(Attention):
         batch_info: PageBatchInfo,
         *,
         pos_ids: NamedArray,
+        paged_attention: PagedAttentionConfig = PagedAttentionConfig(),
         key=None,
     ) -> tuple[NamedArray, "KvPageCache"]:
         key_proj, key_o = maybe_rng_split(key, 2)
         q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
-
-        kv_cache = kv_cache.update(batch_info, k, v)
 
         sm_scale = (
             self.config.scaling_factor
@@ -1970,15 +1970,15 @@ class GatedAttention(Attention):
             else 1.0 / math.sqrt(self.config.HeadSize.size)
         )
 
-        attn_tokens = ragged_paged_attention(
+        attn_tokens, kv_cache = paged_attention_with_kv_update(
             q,
-            kv_cache.kv_pages,
-            batch_info.seq_lens,
-            batch_info.page_indices,
-            batch_info.cu_q_lens,
-            batch_info.num_seqs,
+            k,
+            v,
+            kv_cache,
+            batch_info,
             sm_scale=sm_scale,
             soft_cap=self.config.logits_soft_cap,
+            config=paged_attention,
         )
 
         assert self.gate_proj is not None
@@ -1987,67 +1987,9 @@ class GatedAttention(Attention):
         attn_tokens = attn_tokens * gate
 
         attn_output = attn_tokens.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
-        attn_output = attn_output.astype(x.dtype)
+        if not paged_attention.preserve_attention_output_dtype:
+            attn_output = attn_output.astype(x.dtype)
         return self.o_proj(attn_output, key=key_o), kv_cache
-
-
-@named_call
-def ragged_paged_attention(
-    q: NamedArray,  # [Tok, KVHeads, QHeadsPerGroup, HeadSize]
-    kv_pages: NamedArray,  # [Page, PageSize, 2 * KVHeads, HeadDim]
-    kv_lens: NamedArray,  # i32[Seq]
-    page_indices: NamedArray,  # i32[Seq, PagePerSeq]
-    cu_q_lens: NamedArray,  # i32[Seq + 1] <-- cumulative lengths for the sequences, including new tokens
-    num_seqs: jnp.ndarray,
-    sm_scale: float = 1.0,
-    soft_cap: float | None = None,
-) -> NamedArray:
-    """Ragged attention for paged KV caches.
-
-    This function dispatches to the TPU implementation when available and
-    supported, otherwise it falls back to :func:`default_ragged_paged_attention`.
-    """
-
-    def _tpu_rpa_available() -> bool:
-        if tpu_ragged_paged_attention is None:
-            return False
-        if jax.default_backend() != "tpu":
-            return False
-        kind = str(getattr(jax.devices()[0], "device_kind", "")).lower()
-        if "tpu v2" in kind or "tpu v3" in kind:
-            return False
-        return True
-
-    if _tpu_rpa_available():
-        try:
-            out = _do_tpu_ragged_paged_attention(
-                q,
-                kv_pages,
-                kv_lens,
-                page_indices,
-                cu_q_lens,
-                num_seqs,
-                sm_scale=sm_scale,
-                soft_cap=soft_cap,
-            )
-            return out
-        except Exception:  # pragma: no cover - fall back if kernel fails
-            warnings.warn("TPU ragged paged attention failed. Falling back to reference implementation.")
-            logger.warning(
-                "Failed to use TPU ragged paged attention. Falling back to reference",
-                exc_info=True,
-            )
-
-    return default_ragged_paged_attention(
-        q,
-        kv_pages,
-        kv_lens,
-        page_indices,
-        cu_q_lens.array,
-        num_seqs,
-        sm_scale=sm_scale,
-        soft_cap=soft_cap,
-    )
 
 
 def _do_tpu_ragged_paged_attention(
@@ -2059,6 +2001,9 @@ def _do_tpu_ragged_paged_attention(
     num_seqs: jnp.ndarray,  # scalar int32
     sm_scale: float = 1.0,
     soft_cap: float | None = None,
+    num_kv_pages_per_block: int | None = None,
+    num_queries_per_block: int | None = None,
+    vmem_limit_bytes: int | None = None,
 ) -> NamedArray:
     if tpu_ragged_paged_attention is None:
         msg = "TPU ragged paged attention kernel is unavailable."
@@ -2118,6 +2063,9 @@ def _do_tpu_ragged_paged_attention(
             num_seqs_arg,
             sm_scale=1.0,
             soft_cap=soft_cap,
+            num_kv_pages_per_block=num_kv_pages_per_block,
+            num_queries_per_block=num_queries_per_block,
+            vmem_limit_bytes=vmem_limit_bytes,
         )
 
     o = shard_map(
@@ -2212,7 +2160,7 @@ def default_ragged_paged_attention(
     q_orig = q
     q = padded_q
 
-    output = hax.zeros_like(q)
+    output = hax.zeros_like(q).astype(jnp.float32)
 
     def _compute_attention_for_seq(seq_id, carry):
         o = carry

@@ -5,11 +5,20 @@ import dataclasses
 import json
 import tempfile
 
+import jax.numpy as jnp
 import numpy as np
+import pytest
 from jax import random
 
 import haliax as hax
 
+from levanter.inference.jit_scheduler import SequenceTable
+from levanter.inference.page_table import PageTable
+from levanter.inference.paged_attention_kernels import (
+    PagedAttentionBackend,
+    PagedAttentionConfig,
+    available_paged_attention_backends,
+)
 from levanter.layers.attention import AttentionMask
 from levanter.models.qwen import Qwen3Config, Qwen3LMHeadModel
 from test_utils import skip_if_no_torch, use_test_mesh
@@ -34,6 +43,24 @@ def _hf_qwen_config(vocab_size=151936):
         "no_bias": True,
     }
     return Qwen3Config(**cfg_dict)  # type: ignore
+
+
+def _tiny_qwen3_config() -> Qwen3Config:
+    return Qwen3Config(
+        max_seq_len=8,
+        hidden_dim=16,
+        intermediate_dim=64,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        head_dim=4,
+        scan_layers=True,
+    )
+
+
+def _qwen_decode_backends() -> tuple[PagedAttentionBackend, ...]:
+    available = available_paged_attention_backends()
+    return (PagedAttentionBackend.AUTO, *available)
 
 
 @skip_if_no_torch
@@ -92,3 +119,43 @@ def test_qwen3_roundtrip(local_gpt2_tokenizer_path):
             hf_out = hf_model(input_torch).logits[0].detach().cpu().numpy()
             assert hf_out.shape == jax_out.shape
             np.testing.assert_allclose(hf_out, jax_out, rtol=1e-4, atol=1e-4)
+
+
+@pytest.mark.parametrize("backend", _qwen_decode_backends())
+def test_qwen3_paged_decode_matches_full_logits_for_available_backends(backend: PagedAttentionBackend):
+    Vocab = hax.Axis("vocab", 32)
+    Pos = hax.Axis("position", 6)
+    config = _tiny_qwen3_config()
+
+    with use_test_mesh():
+        model = Qwen3LMHeadModel.init(Vocab, config, key=random.PRNGKey(0))
+        input_ids = hax.named(jnp.asarray([1, 7, 5, 9, 3, 11], dtype=jnp.int32), Pos)
+        full_logits = model(input_ids, attn_mask=AttentionMask.causal())
+
+        page_table = PageTable.init(max_pages=4, max_seqs=1, page_size=4, max_pages_per_seq=2)
+        sequences = SequenceTable.init(page_table.max_seqs, page_table.pages_per_seq, page_table.page_size)
+        sequences, seq_id_arr = sequences.reserve_slot(0)
+        seq_id = int(seq_id_arr)
+        kv_cache = model.initial_cache(page_table.spec(), dtype=jnp.float32)
+
+        logits_chunks = []
+        for start, chunk_size in [(0, 2), (2, 1), (3, 3)]:
+            ChunkPos = hax.Axis("position", chunk_size)
+            slot_ids = hax.named([seq_id] * chunk_size, ChunkPos)
+            pos_ids = hax.arange(ChunkPos, start=start, dtype=jnp.int32)
+            token_chunk = input_ids[Pos, hax.dslice(start, chunk_size)]
+
+            sequences, page_table, batch_info = sequences.allocate_for_seq(page_table, slot_ids, pos_ids)
+            logits_chunk, kv_cache = model.decode(
+                token_chunk,
+                kv_cache,
+                batch_info,
+                pos_ids,
+                paged_attention=PagedAttentionConfig(backend=backend),
+            )
+            logits_chunks.append(logits_chunk)
+
+        decode_logits = hax.concatenate("position", logits_chunks)
+
+    assert decode_logits.axes == full_logits.axes
+    np.testing.assert_allclose(decode_logits.array, full_logits.array, rtol=1e-4, atol=1e-4)
