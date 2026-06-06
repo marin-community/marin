@@ -4,7 +4,7 @@
 
 import string
 from functools import cached_property
-from typing import Sequence, TypeVar
+from typing import Sequence, TypeVar, cast
 
 import equinox as eqx
 import jax
@@ -426,4 +426,5 @@ def _compute_output_axes(inputs, batch_dims, In, Out):
     2. turn spatial dims (non-batch, non-In, non-Out) into raw names b/c they change size in convolutions
     """
     unchanging_dims = [Out, *batch_dims]
-    return [ax.name if ax not in unchanging_dims else ax for ax in replace_axis(inputs.axes, In, Out)]
+    new_axes = cast(Sequence[Axis], replace_axis(inputs.axes, In, Out))
+    return [ax.name if ax not in unchanging_dims else ax for ax in new_axes]

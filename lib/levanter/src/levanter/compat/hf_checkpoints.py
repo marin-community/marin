@@ -503,7 +503,11 @@ class HFCheckpointConverter(Generic[LevConfig]):
         # TODO: hacky hacky
         for k, v in LmConfig.get_known_choices().items():
             if issubclass(v, HFCompatConfig):
-                if v().hf_checkpoint_converter().HfConfigClass.__name__ == config_class.__name__:
+                # `v` is typed as the abstract LmConfig base (registry value), whose __init__
+                # requires max_seq_len; at runtime every registered choice is a concrete config
+                # that supplies a default, so the no-arg construction is safe.
+                instance = v()  # pyrefly: ignore[missing-argument]
+                if instance.hf_checkpoint_converter().HfConfigClass.__name__ == config_class.__name__:
                     LevConfigClass = v
                     break
         else:

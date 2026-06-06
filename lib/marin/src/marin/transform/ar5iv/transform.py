@@ -14,6 +14,7 @@ from html import escape, unescape
 import draccus
 from bs4 import BeautifulSoup
 from marin import markdown
+from marin.schemas.web.convert import HtmlToMarkdownConfig
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
 logger = logging.getLogger(__name__)
@@ -228,7 +229,7 @@ def markdownify_ar5iv_record(html_blob: dict) -> dict:
     """
     content = BeautifulSoup(html_blob["text"], "html.parser")
     try:
-        content = markdown.MyMarkdownConverter().convert_soup(content)
+        content = markdown.MyMarkdownConverter(HtmlToMarkdownConfig()).convert_soup(content)
     except Exception:
         logger.exception("Error converting to markdown; content was: %s", content)
         raise
