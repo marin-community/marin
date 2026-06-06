@@ -16,7 +16,7 @@ import jax
 import jax.random as jrandom
 from jax import numpy as jnp
 
-from ..inference.utils import is_valid
+from levanter.inference.utils import is_valid
 
 try:
     from jax.experimental.pallas.ops.tpu.ragged_paged_attention import (
@@ -45,7 +45,7 @@ except Exception:
 else:
     _SPLASH_KERNEL_SUPPORTS_SINKS = "sinks" in inspect.signature(_splash_attention).parameters
 
-from ..inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from .kv_cache import KvPageCache
 from .normalization import LayerNormConfigBase
 from .rotary import RotaryEmbeddings, RotaryEmbeddingsConfig

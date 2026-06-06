@@ -13,7 +13,7 @@ from jaxtyping import PRNGKeyArray
 
 import haliax.partitioning
 
-from ..axis import (
+from haliax.axis import (
     Axis,
     AxisSelection,
     axis_name,
@@ -23,10 +23,10 @@ from ..axis import (
     unsize_axes,
     without_axes,
 )
-from ..core import NamedArray, named
-from ..jax_utils import named_call
-from ..random import uniform
-from ..util import ensure_tuple
+from haliax.core import NamedArray, named
+from haliax.jax_utils import named_call
+from haliax.random import uniform
+from haliax.util import ensure_tuple
 
 T = TypeVar("T")
 

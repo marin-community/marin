@@ -36,8 +36,8 @@ from levanter.data.dataset import AsyncDataset
 from levanter.utils.jax_utils import broadcast_one_to_all
 from levanter.utils.thread_utils import blocking_wait
 
-from ..data._preprocessor import BatchProcessor, BatchResult, dict_from_record_batch
-from ..data.sharded_datasource import ShardedDataSource
+from levanter.data._preprocessor import BatchProcessor, BatchResult, dict_from_record_batch
+from levanter.data.sharded_datasource import ShardedDataSource
 from .jagged_array import JaggedArrayStore, _no_cache_read_context
 from .tree_store import TreeStore
 

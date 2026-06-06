@@ -20,7 +20,7 @@ from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes
 from .tuned_block_sizes import infer_xla_v_block_size
-from ..cost_estimate_utils import with_io_bytes_accessed
+from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 from .xla import _linear_softmax_cross_entropy_loss_streaming_bwd
 
 

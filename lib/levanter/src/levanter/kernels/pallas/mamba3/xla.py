@@ -8,12 +8,12 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..ssd.reference import (
+from levanter.kernels.pallas.ssd.reference import (
     intra_chunk_log_alpha_cumsum,
     local_log_alpha,
     ssd_scan_chunk_states_reference_batched,
 )
-from ..ssd.xla import (
+from levanter.kernels.pallas.ssd.xla import (
     LOCAL_OUTPUT_AUTO,
     LocalOutputVariant,
     PREFIX_EMIT_AUTO,
