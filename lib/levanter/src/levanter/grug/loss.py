@@ -10,11 +10,13 @@ reference implementation on non-TPU backends.
 import jax
 import jax.numpy as jnp
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, get_abstract_mesh, get_mesh, reshard
+from typing import cast
 
 from haliax.jax_utils import named_call
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
+from levanter.kernels.pallas.fused_cross_entropy_loss.xla import linear_softmax_cross_entropy_loss_xla
 
 
 def _batch_axis_spec(x: jax.Array):
@@ -36,6 +38,14 @@ def _axis_names_from_spec(axis_spec) -> tuple[str, ...]:
     if isinstance(axis_spec, tuple):
         return tuple(str(name) for name in axis_spec)
     return (str(axis_spec),)
+
+
+def _axis_spec_from_names(axis_names: tuple[str, ...]):
+    if len(axis_names) == 0:
+        return None
+    if len(axis_names) == 1:
+        return axis_names[0]
+    return axis_names
 
 
 def _psum_over_axes(x: jax.Array, axis_names: tuple[str, ...]) -> jax.Array:
@@ -144,21 +154,22 @@ def fused_linear_softmax_cross_entropy_loss(
             local_vocab_size = shard_lm_head.shape[1]
             vocab_start = jax.lax.axis_index(vocab_axis) * local_vocab_size
             shifted_labels = flat_labels - jnp.asarray(vocab_start, dtype=jnp.int32)
-            local_labels = jnp.where(
-                flat_labels < 0, -1, jnp.where(shifted_labels < 0, local_vocab_size, shifted_labels)
-            )
-
-            local_logits = jax.lax.dot_general(
-                flat_hidden,
-                shard_lm_head,
-                (((1,), (0,)), ((), ())),
-                precision=precision,
-            ).astype(dtype)
-            local_lse = jax.nn.logsumexp(local_logits, axis=-1)
             label_in_shard = (flat_labels >= 0) & (shifted_labels >= 0) & (shifted_labels < local_vocab_size)
-            safe_label_offsets = jnp.clip(local_labels, 0, local_vocab_size - 1)
-            local_label_logits = jnp.take_along_axis(local_logits, safe_label_offsets[:, None], axis=1).squeeze(-1)
-            local_label_logits = jnp.where(label_in_shard, local_label_logits, -jnp.inf)
+            local_labels = jnp.where(label_in_shard, shifted_labels, 0)
+
+            local_loss, local_lse = cast(
+                tuple[jax.Array, jax.Array],
+                linear_softmax_cross_entropy_loss_xla(
+                    flat_hidden,
+                    local_labels,
+                    shard_lm_head,
+                    dtype=dtype,
+                    logit_soft_cap=None,
+                    precision=precision,
+                    return_argmax=False,
+                ),
+            )
+            local_label_logits = jnp.where(label_in_shard, local_lse - local_loss, 0.0)
 
             lse_max = jax.lax.pmax(jax.lax.stop_gradient(local_lse), vocab_axis)
             global_lse = lse_max + jnp.log(jax.lax.psum(jnp.exp(local_lse - lse_max), vocab_axis))
@@ -181,9 +192,10 @@ def fused_linear_softmax_cross_entropy_loss(
             total_denom = _psum_over_axes(local_denom, vocab_batch_axis_names)
             return jnp.where(total_denom != 0, total_sum / total_denom, jnp.zeros_like(total_denom))
 
-        hidden_spec = P("data", *(None for _ in range(hidden.ndim - 1)))
+        batch_without_vocab_spec = _axis_spec_from_names(vocab_batch_axis_names)
+        hidden_spec = P(batch_without_vocab_spec, *(None for _ in range(hidden.ndim - 1)))
         lm_head_spec = P(None, vocab_axis)
-        label_spec = P("data", *(None for _ in range(labels.ndim - 1)))
+        label_spec = P(batch_without_vocab_spec, *(None for _ in range(labels.ndim - 1)))
         hidden = _reshard_for_shard_map(hidden, mesh, hidden_spec)
         lm_head = _reshard_for_shard_map(lm_head, mesh, lm_head_spec)
         labels = _reshard_for_shard_map(labels, mesh, label_spec)
