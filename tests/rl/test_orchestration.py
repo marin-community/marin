@@ -6,7 +6,14 @@ from types import SimpleNamespace
 
 import pytest
 from fray.types import JobStatus
-from marin.rl.orchestration import _HostedRuntime, _run_rl_coordinator, _train_worker_entry
+from marin.rl.orchestration import (
+    _coordinator_extras,
+    _HostedRuntime,
+    _rollout_worker_extras,
+    _run_rl_coordinator,
+    _train_worker_entry,
+    _train_worker_extras,
+)
 from marin.rl.rl_job import RunConfig
 from marin.rl.rollout_worker import RolloutTrackerConfig
 
@@ -99,6 +106,22 @@ class _FakeWorkerConfig:
     )
 
 
+def test_vllm_rl_worker_extras_keep_generic_tpu_off_rollout_workers():
+    config = SimpleNamespace(pip_dependency_groups=["math", "tpu"], inference_type="vllm")
+
+    assert _coordinator_extras(config) == ["math"]
+    assert _train_worker_extras(config) == ["math", "tpu"]
+    assert _rollout_worker_extras(config) == ["math", "vllm"]
+
+
+def test_levanter_rl_worker_extras_keep_generic_tpu_on_rollout_workers():
+    config = SimpleNamespace(pip_dependency_groups=["math", "vllm"], inference_type="levanter")
+
+    assert _coordinator_extras(config) == ["math"]
+    assert _train_worker_extras(config) == ["math", "tpu"]
+    assert _rollout_worker_extras(config) == ["math", "tpu"]
+
+
 def test_run_rl_coordinator_shuts_down_hosted_actors_when_child_job_fails(monkeypatch):
     shutdown_calls: list[str] = []
     client = _FakeClient()
@@ -111,6 +134,7 @@ def test_run_rl_coordinator_shuts_down_hosted_actors_when_child_job_fails(monkey
         run_id="rl-test",
         resolved_instance_id="rl-test",
         pip_dependency_groups=["math"],
+        inference_type="vllm",
         run_config=RunConfig(
             train_tpu_type="v5p-8",
             inference_tpu_type="v5p-8",
@@ -145,6 +169,7 @@ def test_run_rl_coordinator_stops_rollouts_after_trainer_success(monkeypatch):
         run_id="rl-test",
         resolved_instance_id="rl-test",
         pip_dependency_groups=["math"],
+        inference_type="vllm",
         run_config=RunConfig(
             train_tpu_type="v5p-8",
             inference_tpu_type="v5p-8",
@@ -181,6 +206,7 @@ def test_run_rl_coordinator_uses_run_config_ram_overrides(monkeypatch):
         run_id="rl-test",
         resolved_instance_id="rl-test",
         pip_dependency_groups=["math"],
+        inference_type="vllm",
         run_config=RunConfig(
             train_tpu_type="v5p-8",
             inference_tpu_type="v5p-8",
@@ -213,6 +239,7 @@ def test_run_rl_coordinator_uses_run_config_zone_for_child_tpu_jobs(monkeypatch)
         run_id="rl-test",
         resolved_instance_id="rl-test",
         pip_dependency_groups=["math"],
+        inference_type="vllm",
         run_config=RunConfig(
             train_tpu_type="v6e-8",
             inference_tpu_type="v6e-8",
@@ -244,6 +271,7 @@ def test_run_rl_coordinator_enables_unbuffered_logs_for_debug_checkpointer(monke
         run_id="rl-test",
         resolved_instance_id="rl-test",
         pip_dependency_groups=["math"],
+        inference_type="vllm",
         run_config=RunConfig(
             train_tpu_type="v5p-8",
             inference_tpu_type="v5p-8",
@@ -291,6 +319,7 @@ def test_run_rl_coordinator_enables_transfer_debug_env_vars(monkeypatch):
         run_id="rl-test",
         resolved_instance_id="rl-test",
         pip_dependency_groups=["math"],
+        inference_type="vllm",
         run_config=RunConfig(
             train_tpu_type="v5p-8",
             inference_tpu_type="v5p-8",
@@ -337,6 +366,7 @@ def test_run_rl_coordinator_assigns_stable_rollout_wandb_names(monkeypatch):
         run_id="rl-test",
         resolved_instance_id="rl-test-instance",
         pip_dependency_groups=["math"],
+        inference_type="vllm",
         run_config=RunConfig(
             train_tpu_type="v5p-8",
             inference_tpu_type="v5p-8",

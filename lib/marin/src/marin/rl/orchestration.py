@@ -76,7 +76,9 @@ def _train_worker_extras(config: RLJobConfig) -> list[str]:
 
 def _rollout_worker_extras(config: RLJobConfig) -> list[str]:
     """Dependency extras for rollout workers."""
-    return sorted({*config.pip_dependency_groups, "tpu", "vllm"})
+    if config.inference_type == "vllm":
+        return sorted({*config.pip_dependency_groups, "vllm"} - {"tpu"})
+    return sorted({*config.pip_dependency_groups, "tpu"} - {"vllm"})
 
 
 def submit_rl_job(config: RLJobConfig) -> JobHandle:

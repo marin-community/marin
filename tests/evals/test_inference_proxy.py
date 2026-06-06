@@ -149,6 +149,12 @@ def test_local_brokered_vllm_rejects_multiple_workers() -> None:
             pass
 
 
+def test_brokered_vllm_workers_use_self_contained_vllm_extra() -> None:
+    config = BrokeredVllmSystemConfig(model="gpt2")
+
+    assert config.worker_environment_extras == ("vllm",)
+
+
 def test_inference_proxy_forwards_completions_to_running_model(mock_cluster: MockInferenceCluster) -> None:
     assert_completions_scoring_contract(mock_cluster.proxy.endpoint.base_url, mock_cluster.proxy.endpoint.model)
 

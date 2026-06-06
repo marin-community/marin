@@ -15,6 +15,8 @@ from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environmen
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.vllm_server import VllmEnvironment
 
+REMOTE_VLLM_SMOKE_EXTRAS = ["eval", "vllm"]
+
 
 def run_one_query(
     *,
@@ -205,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         entrypoint=Entrypoint.from_callable(_run),
         resources=resources,
         environment=create_environment(
-            extras=["eval", "tpu", "vllm"],
+            extras=REMOTE_VLLM_SMOKE_EXTRAS,
             pip_packages=(),
             env_vars=env_vars or None,
         ),

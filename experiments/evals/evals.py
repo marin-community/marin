@@ -34,8 +34,8 @@ from experiments.evals.task_configs import (
     OPEN_LM_LEADERBOARD_MCQ,
 )
 
-EVAL_DEPENDENCY_GROUPS = ["eval", "vllm", "tpu"]
-EVALCHEMY_DEPENDENCY_GROUPS = ["evalchemy", "vllm", "tpu"]
+EVAL_DEPENDENCY_GROUPS = ["eval", "vllm"]
+EVALCHEMY_DEPENDENCY_GROUPS = ["evalchemy", "vllm"]
 
 logger = logging.getLogger(__name__)
 
