@@ -33,15 +33,7 @@ from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile.policy import RESERVATION_HOLDER_JOB_NAME
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.scheduler import (
-    DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
-    DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
-    JobRequirements,
-    Scheduler,
-    SchedulingContext,
-    worker_snapshot_from_row,
-)
-from iris.cluster.controller.scheduling_policy import (
+from iris.cluster.controller.scheduling.policy import (
     RESERVATION_TAINT_KEY,
     _find_reservation_ancestor,
     _reserved_job_ids,
@@ -56,6 +48,14 @@ from iris.cluster.controller.scheduling_policy import (
     job_requirements_from_job,
     preference_pass,
     read_reservation_claims,
+)
+from iris.cluster.controller.scheduling.scheduler import (
+    DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+    DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
+    JobRequirements,
+    Scheduler,
+    SchedulingContext,
+    worker_snapshot_from_row,
 )
 from iris.cluster.controller.task_state import task_row_can_be_scheduled
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, is_job_finished

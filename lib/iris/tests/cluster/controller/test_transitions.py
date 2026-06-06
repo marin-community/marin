@@ -44,14 +44,14 @@ from iris.cluster.controller.reconcile.snapshot import (
     TransitionSnapshot,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
-from iris.cluster.controller.scheduler import (
+from iris.cluster.controller.scheduling.policy import compute_demand_entries
+from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     JobRequirements,
     Scheduler,
     SchedulingContext,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.scheduling_policy import compute_demand_entries
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table, workers_table
 from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, TaskAttempt, UserBudgetDefaults, WorkerId

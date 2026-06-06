@@ -40,7 +40,7 @@ from iris.cluster.controller.backend import (
     run_scheduling_decision,
 )
 from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
-from iris.cluster.controller.scheduler import Scheduler
+from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.runtime.profile import IrisProfile
 from iris.cluster.types import WorkerId
 from iris.rpc import job_pb2, worker_pb2

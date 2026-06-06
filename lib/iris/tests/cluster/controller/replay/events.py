@@ -20,7 +20,7 @@ from iris.cluster.controller.ops.task import Assignment, apply_direct_provider_u
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
-from iris.cluster.controller.scheduling_policy import claim_workers_for_reservations, cleanup_stale_claims
+from iris.cluster.controller.scheduling.policy import claim_workers_for_reservations, cleanup_stale_claims
 from iris.cluster.controller.schema import ReservationClaim
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
@@ -104,7 +104,7 @@ class ReplaceReservationClaims:
 class RunReservationClaimCycle:
     """Run the controller's reservation claim phase: clean up stale claims, then
     claim eligible workers for unsatisfied reservation entries, persisting the
-    result. Drives the same ``scheduling_policy.refresh_reservation_claims`` path
+    result. Drives the same ``policy.refresh_reservation_claims`` path
     the controller runs each scheduling cycle.
     """
 

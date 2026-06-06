@@ -70,16 +70,16 @@ from iris.cluster.controller.reconcile.worker import (
     build_reconcile_plans,
 )
 from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
-from iris.cluster.controller.scheduler import (
-    Scheduler,
-    SchedulingContext,
-)
-from iris.cluster.controller.scheduling_policy import (
+from iris.cluster.controller.scheduling.policy import (
     build_scheduling_context,
     compute_demand_entries,
     get_running_tasks_with_band_and_value,
     read_reservation_claims,
     refresh_reservation_claims,
+)
+from iris.cluster.controller.scheduling.scheduler import (
+    Scheduler,
+    SchedulingContext,
 )
 from iris.cluster.controller.schema import (
     ReservationClaim,

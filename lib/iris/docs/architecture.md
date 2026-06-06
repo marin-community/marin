@@ -19,8 +19,7 @@ it.** Reading top to bottom answers a chain of questions:
 ┌─ CONTROLLER  (cluster/controller/) — the brain ──▼────────────────────┐
 │  transport/loops  controller.py · service.py · dashboard.py · main.py │
 │  imperative shell  ops/{job,task,worker} · direct_provider · pruner   │
-│  decision kernels  reconcile/ · scheduler.py · scheduling_policy.py · │
-│                    autoscaler/                                        │
+│  decision kernels  reconcile/ · scheduling/ · autoscaler/             │
 │  state predicates  task_state.py · worker_health.py · audit.py        │
 │  persistence spine schema→codec→db→reads/writes · projections/        │
 └──────────────────────────────┬───────────────────────────────────────┘
@@ -78,7 +77,7 @@ sub-layered:
 |---|---|---|
 | Persistence spine | `schema` → `codec` → `db` → `reads`/`writes` · `projections/` | State at rest. `reads`/`writes` are the **only** sanctioned query/mutation surface; `projections/` are write-through caches. |
 | State predicates | `task_state` · `worker_health` · `audit` | What the rows *mean*. |
-| Decision kernels | `reconcile/` (lifecycle) · `scheduler.py` (matching) · `scheduling_policy.py` (preemption/reservation/gating) · `autoscaler/` (capacity) | Compute what *should* change. Parameterized; no live I/O. |
+| Decision kernels | `reconcile/` (lifecycle) · `scheduling/scheduler.py` (matching) · `scheduling/policy.py` (preemption/reservation/gating) · `autoscaler/` (capacity) | Compute what *should* change. Parameterized; no live I/O. |
 | Imperative shell | `ops/{job,task,worker}` · `direct_provider` · `pruner` | Load a snapshot, call a kernel, apply effects. |
 | Transport / loops | `controller.py` (loops) · `service.py` (RPC) · `dashboard.py` · `main.py` | Drive it / expose it. |
 

@@ -12,7 +12,7 @@ data out.
 
 Two execution models exist, distinguished by :attr:`TaskBackend.placement`:
 
-* ``Placement.IRIS`` — the Iris :class:`~iris.cluster.controller.scheduler.Scheduler`
+* ``Placement.IRIS`` — the Iris :class:`~iris.cluster.controller.scheduling.scheduler.Scheduler`
   assigns task→worker, then the backend fans the per-worker reconcile RPC out
   to worker daemons. The controller passes pre-built ``plans`` and applies the
   raw ``worker_results`` through ``ops.worker.apply_reconcile`` (which emits
@@ -47,8 +47,7 @@ from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
-from iris.cluster.controller.scheduling_policy import (
+from iris.cluster.controller.scheduling.policy import (
     GatedCandidates,
     PreemptionCandidate,
     RunningTaskInfo,
@@ -60,6 +59,7 @@ from iris.cluster.controller.scheduling_policy import (
     preference_pass,
     run_preemption_pass,
 )
+from iris.cluster.controller.scheduling.scheduler import JobRequirements, Scheduler, SchedulingContext
 from iris.cluster.controller.schema import ReservationClaim
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.runtime.profile import IrisProfile

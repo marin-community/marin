@@ -43,7 +43,7 @@ from iris.cluster.controller.reconcile.worker import (
 from iris.cluster.controller.reconcile.worker import (
     observations_to_updates as worker_observations_to_updates,
 )
-from iris.cluster.controller.scheduler import Scheduler
+from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.providers.rpc.backend import RpcTaskBackend
 from iris.cluster.types import AttemptUid, JobName, WorkerId

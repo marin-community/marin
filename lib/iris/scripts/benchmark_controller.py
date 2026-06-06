@@ -77,11 +77,11 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcilePlan,
     build_reconcile_plans,
 )
-from iris.cluster.controller.scheduler import Scheduler
-from iris.cluster.controller.scheduling_policy import (
+from iris.cluster.controller.scheduling.policy import (
     _pending_tasks_with_jobs as _schedulable_tasks,
 )
-from iris.cluster.controller.scheduling_policy import compute_demand_entries
+from iris.cluster.controller.scheduling.policy import compute_demand_entries
+from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
     endpoints_table,
     job_config_table,
