@@ -93,8 +93,8 @@ def main() -> None:
         summary["cutoffs"][str(cut)] = {
             "drop_docs": len(drop_docs),
             "clean_docs": VAL_DOCS_TOTAL - len(drop_docs),
-            "clean_tokens": total - dropped_tokens,
-            "dropped_tokens": dropped_tokens,
+            "clean_tokens": int(total - dropped_tokens),
+            "dropped_tokens": int(dropped_tokens),
         }
         logger.info("J>=%.2f: drop=%d clean_tokens=%d", cut, len(drop_docs), total - dropped_tokens)
 
