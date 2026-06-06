@@ -94,9 +94,6 @@ class ControllerService(Protocol):
     async def get_current_user(self, request: job__pb2.GetCurrentUserRequest, ctx: RequestContext) -> job__pb2.GetCurrentUserResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def get_provider_status(self, request: controller__pb2.Controller.GetProviderStatusRequest, ctx: RequestContext) -> controller__pb2.Controller.GetProviderStatusResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
     async def get_kubernetes_cluster_status(self, request: controller__pb2.Controller.GetKubernetesClusterStatusRequest, ctx: RequestContext) -> controller__pb2.Controller.GetKubernetesClusterStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -373,16 +370,6 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.get_current_user,
-                ),
-                "/iris.cluster.ControllerService/GetProviderStatus": Endpoint.unary(
-                    method=MethodInfo(
-                        name="GetProviderStatus",
-                        service_name="iris.cluster.ControllerService",
-                        input=controller__pb2.Controller.GetProviderStatusRequest,
-                        output=controller__pb2.Controller.GetProviderStatusResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.get_provider_status,
                 ),
                 "/iris.cluster.ControllerService/GetKubernetesClusterStatus": Endpoint.unary(
                     method=MethodInfo(
@@ -967,26 +954,6 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
-    async def get_provider_status(
-        self,
-        request: controller__pb2.Controller.GetProviderStatusRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> controller__pb2.Controller.GetProviderStatusResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetProviderStatus",
-                service_name="iris.cluster.ControllerService",
-                input=controller__pb2.Controller.GetProviderStatusRequest,
-                output=controller__pb2.Controller.GetProviderStatusResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
     async def get_kubernetes_cluster_status(
         self,
         request: controller__pb2.Controller.GetKubernetesClusterStatusRequest,
@@ -1178,8 +1145,6 @@ class ControllerServiceSync(Protocol):
     def list_api_keys(self, request: job__pb2.ListApiKeysRequest, ctx: RequestContext) -> job__pb2.ListApiKeysResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_current_user(self, request: job__pb2.GetCurrentUserRequest, ctx: RequestContext) -> job__pb2.GetCurrentUserResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def get_provider_status(self, request: controller__pb2.Controller.GetProviderStatusRequest, ctx: RequestContext) -> controller__pb2.Controller.GetProviderStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_kubernetes_cluster_status(self, request: controller__pb2.Controller.GetKubernetesClusterStatusRequest, ctx: RequestContext) -> controller__pb2.Controller.GetKubernetesClusterStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -1450,16 +1415,6 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.get_current_user,
-                ),
-                "/iris.cluster.ControllerService/GetProviderStatus": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="GetProviderStatus",
-                        service_name="iris.cluster.ControllerService",
-                        input=controller__pb2.Controller.GetProviderStatusRequest,
-                        output=controller__pb2.Controller.GetProviderStatusResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.get_provider_status,
                 ),
                 "/iris.cluster.ControllerService/GetKubernetesClusterStatus": EndpointSync.unary(
                     method=MethodInfo(
@@ -2038,26 +1993,6 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=job__pb2.GetCurrentUserRequest,
                 output=job__pb2.GetCurrentUserResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def get_provider_status(
-        self,
-        request: controller__pb2.Controller.GetProviderStatusRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> controller__pb2.Controller.GetProviderStatusResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetProviderStatus",
-                service_name="iris.cluster.ControllerService",
-                input=controller__pb2.Controller.GetProviderStatusRequest,
-                output=controller__pb2.Controller.GetProviderStatusResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

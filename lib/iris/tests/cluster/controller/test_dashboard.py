@@ -197,7 +197,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock.autoscaler = autoscaler
     controller_mock.provider = Mock(name="worker", placement=PlacementOwner.IRIS_CONTROLLER, manages_capacity=False)
     controller_mock.provider.name = "worker"
-    controller_mock.has_direct_provider = False
+    controller_mock.placement = PlacementOwner.IRIS_CONTROLLER
     return controller_mock
 
 
@@ -1343,7 +1343,7 @@ def test_auth_config_worker_capabilities(client):
 def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path):
     """auth/config advertises the cluster capability for a backend-placed (k8s) backend."""
     controller_mock = _make_controller_mock(state, scheduler)
-    controller_mock.has_direct_provider = True
+    controller_mock.placement = PlacementOwner.TASK_BACKEND
     controller_mock.provider = Mock(placement=PlacementOwner.TASK_BACKEND, manages_capacity=True)
     controller_mock.provider.name = "kubernetes"
     log_service = LogServiceImpl()
@@ -1383,7 +1383,7 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path):
     k8s = InMemoryK8sService(namespace="iris")
     provider = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest")
     controller_mock = _make_controller_mock(state, scheduler)
-    controller_mock.has_direct_provider = True
+    controller_mock.placement = PlacementOwner.TASK_BACKEND
     controller_mock.provider = provider
     log_service = LogServiceImpl()
     svc = ControllerServiceImpl(

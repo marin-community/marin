@@ -29,7 +29,6 @@ from iris.cluster.controller.backend import (
     BackendReconcileResult,
     CapacityInput,
     CapacityResult,
-    ClusterCapacity,
     PingResult,
     PlacementOwner,
     ProviderError,
@@ -182,9 +181,6 @@ class RpcTaskBackend:
             sibling_worker_ids=[WorkerId(wid) for wid in siblings],
             state=self.autoscaler.persistable_state(),
         )
-
-    def capacity(self) -> ClusterCapacity | None:
-        return None
 
     def get_process_status(
         self,

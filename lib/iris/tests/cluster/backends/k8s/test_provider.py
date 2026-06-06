@@ -12,9 +12,6 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
-from iris.cluster.controller.backend import ClusterCapacity, SchedulingEvent, TaskTarget
-from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.log_keys import task_log_key
 from iris.cluster.backends.k8s.tasks import (
     _GC_MAX_AGE_SECONDS,
     _KUEUE_POD_GROUP_NAME,
@@ -37,11 +34,14 @@ from iris.cluster.backends.k8s.tasks import (
     _task_hash,
 )
 from iris.cluster.backends.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage
+from iris.cluster.controller.backend import TaskTarget
+from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import JobName, TaskAttempt
 from iris.cluster.worker.stats import IrisTaskStat
 from iris.rpc import job_pb2
 
-from .conftest import make_batch, make_run_req, populate_node, populate_pod, populate_running_pod_resource
+from .conftest import make_batch, make_run_req, populate_node, populate_pod
 
 
 def _fetch_logs(log_service: LogServiceImpl, key: str, max_lines: int = 100) -> list[logging_pb2.LogEntry]:
@@ -357,116 +357,6 @@ def test_final_log_fetch_on_pod_completion(provider, k8s, log_service: LogServic
 
 
 # ---------------------------------------------------------------------------
-# ClusterState.capacity (via sync)
-# ---------------------------------------------------------------------------
-
-
-def test_capacity_returns_cluster_capacity(provider, k8s):
-    """Capacity reports total and available resources as ClusterCapacity."""
-    populate_node(k8s, "node-1", cpu="4", memory="8Gi")
-    populate_node(k8s, "node-2", cpu="4", memory="8Gi")
-    populate_running_pod_resource(k8s, "running-pod-1", cpu_limits="1000m", memory_limits=str(2 * 1024**3))
-
-    provider.reconcile(make_batch())
-    cap = provider._cluster_state.capacity()
-
-    assert cap is not None
-    assert isinstance(cap, ClusterCapacity)
-    assert cap.schedulable_nodes == 2
-    assert cap.total_cpu_millicores == 8000
-    assert cap.total_memory_bytes == 2 * 8 * 1024**3
-    assert cap.available_cpu_millicores == 7000
-    assert cap.available_memory_bytes == (2 * 8 - 2) * 1024**3
-
-
-def test_capacity_skips_tainted_nodes(provider, k8s):
-    populate_node(
-        k8s,
-        "tainted-node",
-        cpu="8",
-        memory="16Gi",
-        taints=[{"key": "nvidia.com/gpu", "effect": "NoSchedule"}],
-    )
-    populate_node(k8s, "clean-node", cpu="4", memory="8Gi")
-
-    provider.reconcile(make_batch())
-    cap = provider._cluster_state.capacity()
-
-    assert cap is not None
-    assert cap.schedulable_nodes == 1
-    assert cap.total_memory_bytes == 8 * 1024**3
-
-
-def test_capacity_returns_none_when_all_tainted(provider, k8s):
-    populate_node(k8s, "tainted-only", cpu="4", memory="8Gi", taints=[{"effect": "NoSchedule"}])
-
-    provider.reconcile(make_batch())
-    cap = provider._cluster_state.capacity()
-
-    assert cap is None
-
-
-# ---------------------------------------------------------------------------
-# _fetch_scheduling_events
-# ---------------------------------------------------------------------------
-
-
-def test_fetch_scheduling_events_returns_events(provider, k8s):
-    pod_name = _pod_name(JobName.from_wire("/test-job/0"), 1)
-    populate_pod(
-        k8s,
-        pod_name,
-        "Pending",
-        labels={
-            _LABEL_TASK_ID: "test-job.0",
-            _LABEL_ATTEMPT_ID: "1",
-        },
-    )
-
-    event = {
-        "kind": "Event",
-        "metadata": {"name": "evt-1"},
-        "involvedObject": {"kind": "Pod", "name": pod_name},
-        "type": "Warning",
-        "reason": "FailedScheduling",
-        "message": "0/3 nodes available",
-    }
-    k8s.seed_resource(K8sResource.EVENTS, "evt-1", event)
-
-    events = provider._fetch_scheduling_events(k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS))
-    assert len(events) == 1
-    assert isinstance(events[0], SchedulingEvent)
-    assert events[0].task_id == "test-job.0"
-    assert events[0].attempt_id == 1
-    assert events[0].reason == "FailedScheduling"
-
-
-def test_fetch_scheduling_events_ignores_non_iris_events(provider, k8s):
-    event = {
-        "kind": "Event",
-        "metadata": {"name": "evt-non-iris"},
-        "involvedObject": {"kind": "Pod", "name": "some-other-pod"},
-        "type": "Warning",
-        "reason": "FailedScheduling",
-        "message": "0/3 nodes available",
-    }
-    k8s.seed_resource(K8sResource.EVENTS, "evt-non-iris", event)
-
-    events = provider._fetch_scheduling_events(k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS))
-    assert events == []
-
-
-def test_fetch_scheduling_events_returns_empty_on_failure(provider, k8s):
-    """Events fetch failure returns empty list (pods are pre-cached, only events call can fail)."""
-    # Seed a pod so pod_names is non-empty, then fail the events list call.
-    populate_pod(k8s, "iris-test-0", "Running")
-    cached_pods = k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS)
-    k8s.inject_failure("list_json", RuntimeError("events API unavailable"))
-    events = provider._fetch_scheduling_events(cached_pods)
-    assert events == []
-
-
-# ---------------------------------------------------------------------------
 # get_cluster_status
 # ---------------------------------------------------------------------------
 
@@ -593,14 +483,13 @@ def test_get_cluster_status_includes_node_pools(provider, k8s):
     assert any(np.name == "gpu-pool" for np in resp.node_pools)
 
 
-def test_sync_node_failure_yields_no_capacity(provider, k8s):
-    """When node list fails during sync, capacity is None but sync still returns."""
+def test_sync_survives_node_list_failure(provider, k8s):
+    """When the node list fails during sync, reconcile still returns and pod statuses populate from the pod list."""
     populate_pod(k8s, "iris-running", "Running")
     k8s.inject_failure("list_json:node", RuntimeError("nodes unavailable"))
 
-    result = provider.reconcile(make_batch())
+    provider.reconcile(make_batch())
 
-    assert result.capacity is None
     # Pod statuses are still populated from the successful pod list.
     resp = provider.get_cluster_status()
     assert any(ps.pod_name == "iris-running" for ps in resp.pod_statuses)

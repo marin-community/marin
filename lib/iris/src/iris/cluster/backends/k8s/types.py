@@ -29,7 +29,6 @@ class K8sResource(Enum):
     CONFIGMAPS = ("", "v1", True, "configmaps", "ConfigMap")
     SERVICES = ("", "v1", True, "services", "Service")
     SECRETS = ("", "v1", True, "secrets", "Secret")
-    EVENTS = ("", "v1", True, "events", "Event")
     NAMESPACES = ("", "v1", False, "namespaces", "Namespace")
     NODES = ("", "v1", False, "nodes", "Node")
     SERVICE_ACCOUNTS = ("", "v1", True, "serviceaccounts", "ServiceAccount")

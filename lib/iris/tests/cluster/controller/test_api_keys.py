@@ -20,6 +20,7 @@ from iris.cluster.controller.auth import (
     create_controller_auth,
     list_api_keys,
 )
+from iris.cluster.controller.backend import PlacementOwner
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
@@ -51,7 +52,7 @@ def _make_service(db, auth=None):
     controller_mock.last_scheduling_context = None
     controller_mock.autoscaler = None
     controller_mock.provider = Mock()
-    controller_mock.has_direct_provider = False
+    controller_mock.placement = PlacementOwner.IRIS_CONTROLLER
 
     return ControllerServiceImpl(
         controller=controller_mock,

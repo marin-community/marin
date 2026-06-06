@@ -35,10 +35,8 @@ from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_st
 from iris.cluster.controller.backend import (
     BackendReconcileInput,
     CapacityInput,
-    ClusterCapacity,
     PlacementOwner,
     ScheduleInput,
-    SchedulingEvent,
     TaskBackend,
 )
 from iris.cluster.controller.checkpoint import (
@@ -295,8 +293,6 @@ class Controller:
         self._config = config
         self._stopped = False
         self._task_backend: TaskBackend = provider
-        self._provider_scheduling_events: list[SchedulingEvent] = []
-        self._provider_capacity: ClusterCapacity | None = None
         self._promotion_bucket = TokenBucket(
             capacity=DISPATCH_PROMOTION_RATE,
             refill_period=Duration.from_minutes(1),
@@ -813,8 +809,6 @@ class Controller:
                 endpoints=self._endpoints,
                 now=Timestamp.now(),
             )
-        self._provider_scheduling_events = list(result.scheduling_events) if result.scheduling_events else []
-        self._provider_capacity = result.capacity
         # Worker-side kills are surfaced through the next K8s pod-diff sync;
         # no immediate RPC fan-out here.
 
@@ -1350,21 +1344,13 @@ class Controller:
         return self._task_backend
 
     @property
-    def has_direct_provider(self) -> bool:
-        return self._task_backend.placement is PlacementOwner.TASK_BACKEND
+    def placement(self) -> PlacementOwner:
+        return self._task_backend.placement
 
     @property
     def run_template_cache(self) -> RunTemplateCache:
         """Per-job RunTaskRequest template cache, shared with the dispatch path."""
         return self._run_template_cache
-
-    @property
-    def provider_scheduling_events(self) -> list[SchedulingEvent]:
-        return self._provider_scheduling_events
-
-    @property
-    def provider_capacity(self) -> ClusterCapacity | None:
-        return self._provider_capacity
 
     @property
     def port(self) -> int:

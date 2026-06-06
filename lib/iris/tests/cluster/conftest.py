@@ -17,6 +17,7 @@ from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller import ops
+from iris.cluster.controller.backend import PlacementOwner
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.ops.task import Assignment, apply_dispatch_updates
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
@@ -143,7 +144,7 @@ class _HarnessController:
         self.last_scheduling_context = None
         self.autoscaler = None
         self.provider: object = Mock()
-        self.has_direct_provider = False
+        self.placement = PlacementOwner.IRIS_CONTROLLER
         self.run_template_cache: RunTemplateCache = new_run_template_cache()
 
 
@@ -462,7 +463,7 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
     )
 
     ctrl = _HarnessController()
-    ctrl.has_direct_provider = True
+    ctrl.placement = PlacementOwner.TASK_BACKEND
     ctrl.provider = k8s_provider
 
     service = ControllerServiceImpl(
@@ -495,7 +496,7 @@ def _make_gcp_harness(tmp_path) -> ServiceTestHarness:
     state = ControllerTestState(db, health=health, endpoints=endpoints, worker_attrs=worker_attrs)
 
     ctrl = _HarnessController()
-    ctrl.has_direct_provider = False
+    ctrl.placement = PlacementOwner.IRIS_CONTROLLER
 
     service = ControllerServiceImpl(
         controller=ctrl,

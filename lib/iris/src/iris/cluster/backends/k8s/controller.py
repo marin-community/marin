@@ -23,11 +23,11 @@ from urllib.parse import urlparse
 import fsspec.config
 from rigging.timing import Deadline
 
-from iris.cluster.config_serde import config_to_dict
 from iris.cluster.backends.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.backends.k8s.service import K8sService
 from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.backends.types import InfraError, Labels, local_queue_name
+from iris.cluster.config_serde import config_to_dict
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -500,11 +500,6 @@ class K8sControllerProvider:
                 {
                     "apiGroups": [""],
                     "resources": ["nodes"],
-                    "verbs": ["get", "list", "watch"],
-                },
-                {
-                    "apiGroups": [""],
-                    "resources": ["events"],
                     "verbs": ["get", "list", "watch"],
                 },
                 {

@@ -42,13 +42,11 @@ from iris.cluster.controller.backend import (
     BackendReconcileResult,
     CapacityInput,
     CapacityResult,
-    ClusterCapacity,
     PingResult,
     PlacementOwner,
     ProviderUnsupportedError,
     ScheduleInput,
     ScheduleResult,
-    SchedulingEvent,
     TaskTarget,
     WorkersFailedResult,
 )
@@ -878,9 +876,9 @@ class ClusterState:
     """Live cluster state maintained by the sync thread.
 
     update() is called once per sync cycle with the freshly-fetched raw
-    kubectl data. capacity() and to_status_response() may be called from
-    any thread (e.g. the dashboard RPC handler) without holding any external
-    lock — the internal lock is acquired only for the brief copy.
+    kubectl data. to_status_response() may be called from any thread (e.g.
+    the dashboard RPC handler) without holding any external lock — the
+    internal lock is acquired only for the brief copy.
 
     Pods are kept sorted by name so that pagination is stable across
     consecutive dashboard polls.
@@ -905,56 +903,6 @@ class ClusterState:
             self._pods = new_pods
             self._nodes = new_nodes
             self._node_pools = list(node_pools)
-
-    def capacity(self) -> ClusterCapacity | None:
-        """Compute scheduling capacity: node allocatable minus running pod requests."""
-        with self._lock:
-            pods = self._pods[:]
-            nodes = self._nodes[:]
-
-        total_cpu_mc = 0
-        total_memory_bytes = 0
-        schedulable_count = 0
-        for node in nodes:
-            spec = node.get("spec", {})
-            taints = spec.get("taints", [])
-            if any(t.get("effect") in ("NoSchedule", "NoExecute") for t in taints):
-                continue
-            allocatable = node.get("status", {}).get("allocatable", {})
-            cpu_str = allocatable.get("cpu", "0")
-            cpu_val = parse_k8s_quantity(cpu_str)
-            if not cpu_str.endswith("m"):
-                cpu_val *= 1000
-            total_cpu_mc += cpu_val
-            total_memory_bytes += parse_k8s_quantity(allocatable.get("memory", "0"))
-            schedulable_count += 1
-
-        if schedulable_count == 0:
-            return None
-
-        used_cpu_mc = 0
-        used_memory_bytes = 0
-        for pod in pods:
-            if pod.get("status", {}).get("phase", "") not in ("Pending", "Running"):
-                continue
-            for container in pod.get("spec", {}).get("containers", []):
-                requests = container.get("resources", {}).get("requests", {})
-                limits = container.get("resources", {}).get("limits", {})
-                cpu_req = requests.get("cpu") or limits.get("cpu", "0")
-                mem_req = requests.get("memory") or limits.get("memory", "0")
-                cpu_v = parse_k8s_quantity(cpu_req)
-                if not cpu_req.endswith("m"):
-                    cpu_v *= 1000
-                used_cpu_mc += cpu_v
-                used_memory_bytes += parse_k8s_quantity(mem_req)
-
-        return ClusterCapacity(
-            schedulable_nodes=schedulable_count,
-            total_cpu_millicores=total_cpu_mc,
-            available_cpu_millicores=total_cpu_mc - used_cpu_mc,
-            total_memory_bytes=total_memory_bytes,
-            available_memory_bytes=total_memory_bytes - used_memory_bytes,
-        )
 
     def to_status_response(self, namespace: str) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Build the dashboard RPC response from current state. No kubectl calls."""
@@ -1364,7 +1312,6 @@ class K8sTaskProvider:
             desired_keys.add((_task_hash(entry.task_id.to_wire()), int(entry.attempt_id)))
         self._delete_stray_pods(managed_pods, desired_keys)
         updates = apply_failures + self._poll_pods(batch.running_tasks, managed_pods)
-        scheduling_events = self._fetch_scheduling_events(managed_pods)
 
         try:
             nodes = self.kubectl.list_json(K8sResource.NODES)
@@ -1374,11 +1321,10 @@ class K8sTaskProvider:
 
         node_pools = _fetch_node_pools(self.kubectl, self.managed_label)
         self._cluster_state.update(managed_pods, nodes, node_pools)
-        capacity = self._cluster_state.capacity()
 
         self._maybe_gc_terminal_resources(managed_pods)
 
-        return BackendReconcileResult(updates=updates, scheduling_events=scheduling_events, capacity=capacity)
+        return BackendReconcileResult(updates=updates)
 
     def profile_task(
         self,
@@ -1446,10 +1392,6 @@ class K8sTaskProvider:
             )
         except Exception as e:
             return worker_pb2.Worker.ExecInContainerResponse(error=str(e))
-
-    def capacity(self) -> ClusterCapacity | None:
-        """Latest aggregate cluster capacity from the most recent reconcile cycle."""
-        return self._cluster_state.capacity()
 
     def ping_workers(self, workers: list[tuple[WorkerId, str | None]]) -> list[PingResult]:
         """No worker daemons exist on K8s — there is nothing to ping."""
@@ -1825,57 +1767,3 @@ class K8sTaskProvider:
             resource_collector.set_pods(resource_pods)
 
         return updates
-
-    def _fetch_scheduling_events(self, cached_pods: list[dict]) -> list[SchedulingEvent]:
-        """Fetch recent k8s events for iris-managed pods.
-
-        K8s Events don't carry pod labels, so we query all events in the
-        namespace and filter client-side by pod name prefix.
-        """
-        pod_names = {pod.get("metadata", {}).get("name", "") for pod in cached_pods}
-        pod_labels = {
-            pod.get("metadata", {}).get("name", ""): pod.get("metadata", {}).get("labels", {}) for pod in cached_pods
-        }
-
-        if not pod_names:
-            return []
-
-        try:
-            # Filter server-side to pod warning events only; fetching all namespace
-            # events is expensive and causes OOM on busy clusters.
-            events = self.kubectl.list_json(
-                K8sResource.EVENTS,
-                field_selector="involvedObject.kind=Pod,type=Warning",
-            )
-        except Exception as e:
-            logger.warning("Failed to fetch scheduling events: %s", e)
-            return []
-
-        result: list[SchedulingEvent] = []
-        for ev in events:
-            involved = ev.get("involvedObject", {})
-            if involved.get("kind") != "Pod":
-                continue
-            involved_name = involved.get("name", "")
-            if involved_name not in pod_names:
-                continue
-
-            labels = pod_labels.get(involved_name, {})
-            task_id = labels.get(_LABEL_TASK_ID, "")
-            attempt_str = labels.get(_LABEL_ATTEMPT_ID, "0")
-            try:
-                attempt_id = int(attempt_str)
-            except (ValueError, TypeError):
-                attempt_id = 0
-
-            result.append(
-                SchedulingEvent(
-                    task_id=task_id,
-                    attempt_id=attempt_id,
-                    event_type=ev.get("type", "Normal"),
-                    reason=ev.get("reason", ""),
-                    message=ev.get("message", ""),
-                    timestamp=Timestamp.now(),
-                )
-            )
-        return result

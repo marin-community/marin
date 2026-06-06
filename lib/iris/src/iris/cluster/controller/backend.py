@@ -38,7 +38,6 @@ from typing import ClassVar, Protocol
 
 from finelog.client.log_client import Table
 from finelog.types import LogWriterProtocol
-from rigging.timing import Timestamp
 
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
@@ -123,29 +122,6 @@ def backend_descriptor(backend: TaskBackend) -> BackendDescriptor:
 
 
 @dataclass(frozen=True)
-class SchedulingEvent:
-    """A scheduling event surfaced by the execution backend (e.g. k8s events)."""
-
-    task_id: str
-    attempt_id: int
-    event_type: str
-    reason: str
-    message: str
-    timestamp: Timestamp
-
-
-@dataclass(frozen=True)
-class ClusterCapacity:
-    """Aggregate capacity reported by the execution backend."""
-
-    schedulable_nodes: int
-    total_cpu_millicores: int
-    available_cpu_millicores: int
-    total_memory_bytes: int
-    available_memory_bytes: int
-
-
-@dataclass(frozen=True)
 class BackendReconcileInput:
     """Desired + observed task state handed to :meth:`TaskBackend.reconcile`.
 
@@ -170,14 +146,11 @@ class BackendReconcileResult:
     BACKEND placement returns pre-computed ``updates`` (the backend mapped its
     own observations to task states). IRIS placement returns raw
     ``worker_results``; the controller converts them against its DB snapshot at
-    apply time (uid resolution + worker-loss interpretation). ``scheduling_events``
-    and ``capacity`` are shared and may be empty/None where a backend has none.
+    apply time (uid resolution + worker-loss interpretation).
     """
 
     updates: list[TaskUpdate] = field(default_factory=list)
     worker_results: list[ReconcileResult] = field(default_factory=list)
-    scheduling_events: list[SchedulingEvent] = field(default_factory=list)
-    capacity: ClusterCapacity | None = None
 
 
 @dataclass(frozen=True)
@@ -443,10 +416,6 @@ class TaskBackend(Protocol):
         ``manages_capacity`` False; capacity-managing backends (k8s) never
         receive one.
         """
-        ...
-
-    def capacity(self) -> ClusterCapacity | None:
-        """Latest aggregate capacity, or None if the backend does not report it."""
         ...
 
     def ping_workers(self, workers: list[tuple[WorkerId, str | None]]) -> list[PingResult]:

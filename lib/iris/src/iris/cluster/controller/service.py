@@ -36,7 +36,7 @@ from iris.cluster.controller.auth import (
     revoke_login_keys_for_user,
 )
 from iris.cluster.controller.autoscaler.status import PendingHint
-from iris.cluster.controller.backend import ProviderError, TaskBackend, TaskTarget
+from iris.cluster.controller.backend import PlacementOwner, ProviderError, TaskBackend, TaskTarget
 from iris.cluster.controller.budget import (
     compute_effective_band,
     compute_user_spend,
@@ -807,16 +807,10 @@ class ControllerProtocol(Protocol):
     def provider(self) -> Any: ...
 
     @property
-    def has_direct_provider(self) -> bool: ...
+    def placement(self) -> PlacementOwner: ...
 
     @property
     def run_template_cache(self) -> RunTemplateCache: ...
-
-    @property
-    def provider_scheduling_events(self) -> list: ...
-
-    @property
-    def provider_capacity(self) -> Any: ...
 
 
 def _inject_resource_constraints(
@@ -1547,7 +1541,7 @@ class ControllerServiceImpl:
         paging (preserves CLI callers that fetch the whole roster); ``limit > 0``
         is clamped to ``MAX_LIST_WORKERS_LIMIT``.
         """
-        if self._controller.has_direct_provider:
+        if self._controller.placement is PlacementOwner.TASK_BACKEND:
             return controller_pb2.Controller.ListWorkersResponse()
 
         query = controller_pb2.Controller.WorkerQuery()
@@ -1693,11 +1687,6 @@ class ControllerServiceImpl:
         )
 
     @property
-    def has_direct_provider(self) -> bool:
-        """Whether the controller runs a direct (Kubernetes) provider."""
-        return self._controller.has_direct_provider
-
-    @property
     def provider(self) -> TaskBackend:
         """The live execution backend (read-only handle for dashboard descriptors)."""
         return self._controller.provider
@@ -1739,7 +1728,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> controller_pb2.Controller.GetAutoscalerStatusResponse:
         """Get current autoscaler status with worker info populated."""
-        if self._controller.has_direct_provider:
+        if self._controller.placement is PlacementOwner.TASK_BACKEND:
             return controller_pb2.Controller.GetAutoscalerStatusResponse(status=vm_pb2.AutoscalerStatus())
         autoscaler = self._controller.autoscaler
         if not autoscaler:
@@ -1781,44 +1770,6 @@ class ControllerServiceImpl:
 
         return controller_pb2.Controller.GetAutoscalerStatusResponse(status=status)
 
-    # --- Provider Status ---
-
-    def get_provider_status(
-        self,
-        request: controller_pb2.Controller.GetProviderStatusRequest,
-        ctx: Any,
-    ) -> controller_pb2.Controller.GetProviderStatusResponse:
-        """Get provider status for direct-dispatch providers."""
-        if not self._controller.has_direct_provider:
-            return controller_pb2.Controller.GetProviderStatusResponse(has_direct_provider=False)
-        events = [
-            controller_pb2.Controller.SchedulingEvent(
-                task_id=e.task_id,
-                attempt_id=e.attempt_id,
-                event_type=e.event_type,
-                reason=e.reason,
-                message=e.message,
-                timestamp=timestamp_to_proto(e.timestamp),
-            )
-            for e in self._controller.provider_scheduling_events
-        ]
-        resp = controller_pb2.Controller.GetProviderStatusResponse(
-            has_direct_provider=True,
-            scheduling_events=events,
-        )
-        cap = self._controller.provider_capacity
-        if cap is not None:
-            resp.capacity.CopyFrom(
-                controller_pb2.Controller.ClusterCapacity(
-                    schedulable_nodes=cap.schedulable_nodes,
-                    total_cpu_millicores=cap.total_cpu_millicores,
-                    available_cpu_millicores=cap.available_cpu_millicores,
-                    total_memory_bytes=cap.total_memory_bytes,
-                    available_memory_bytes=cap.available_memory_bytes,
-                )
-            )
-        return resp
-
     # --- Kubernetes Cluster Status ---
 
     def get_kubernetes_cluster_status(
@@ -1827,7 +1778,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Get Kubernetes cluster status: node counts, capacity, and recent pod statuses."""
-        if not self._controller.has_direct_provider:
+        if self._controller.placement is not PlacementOwner.TASK_BACKEND:
             return controller_pb2.Controller.GetKubernetesClusterStatusResponse()
 
         # KubernetesProvider exposes get_cluster_status().
@@ -1930,7 +1881,7 @@ class ControllerServiceImpl:
         task_worker_id = _task_worker_id(task)
         if not task_worker_id:
             # BACKEND placement (K8s) chooses the node itself: route by task, no worker.
-            if not self._controller.has_direct_provider:
+            if self._controller.placement is not PlacementOwner.TASK_BACKEND:
                 raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not yet assigned to a worker")
             task_target = TaskTarget(
                 task_id=task.task_id.to_wire(),
@@ -1995,7 +1946,7 @@ class ControllerServiceImpl:
         worker state (health, tasks, logs). VM status lives on the Autoscaler
         tab.
         """
-        if self._controller.has_direct_provider:
+        if self._controller.placement is PlacementOwner.TASK_BACKEND:
             raise ConnectError(Code.UNIMPLEMENTED, "Direct provider mode: no workers")
         if not request.id:
             raise ConnectError(Code.INVALID_ARGUMENT, "id is required")
@@ -2263,7 +2214,7 @@ class ControllerServiceImpl:
         task_worker_id = _task_worker_id(task)
         if not task_worker_id:
             # BACKEND placement (K8s) execs directly into the pod; no worker daemon.
-            if not self._controller.has_direct_provider:
+            if self._controller.placement is not PlacementOwner.TASK_BACKEND:
                 raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
             exec_target = TaskTarget(
                 task_id=task.task_id.to_wire(),

@@ -8,7 +8,6 @@ import asyncio
 import pytest
 from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
-from iris.cluster.controller.backend import BackendReconcileInput
 from iris.cluster.backends.k8s.fake import InMemoryK8sService
 from iris.cluster.backends.k8s.tasks import (
     _LABEL_MANAGED,
@@ -18,6 +17,7 @@ from iris.cluster.backends.k8s.tasks import (
     PodConfig,
 )
 from iris.cluster.backends.k8s.types import K8sResource
+from iris.cluster.controller.backend import BackendReconcileInput
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.rpc import job_pb2
 
@@ -196,37 +196,6 @@ def populate_node(
         "status": {"allocatable": {"cpu": cpu, "memory": memory}},
     }
     k8s.seed_resource(K8sResource.NODES, name, node)
-
-
-def populate_running_pod_resource(
-    k8s: InMemoryK8sService,
-    name: str,
-    cpu_limits: str = "1000m",
-    memory_limits: str | None = None,
-) -> None:
-    """Insert a running pod with resource limits (for capacity calculations)."""
-    mem = memory_limits or str(2 * 1024**3)
-    pod = {
-        "kind": "Pod",
-        "metadata": {
-            "name": name,
-            "labels": {
-                _LABEL_MANAGED: "true",
-                _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
-            },
-        },
-        "status": {"phase": "Running"},
-        "spec": {
-            "containers": [
-                {
-                    "resources": {
-                        "limits": {"cpu": cpu_limits, "memory": mem},
-                    }
-                }
-            ]
-        },
-    }
-    k8s.seed_resource(K8sResource.PODS, name, pod)
 
 
 def add_eq_constraint(req: job_pb2.RunTaskRequest, key: str, value: str) -> None:

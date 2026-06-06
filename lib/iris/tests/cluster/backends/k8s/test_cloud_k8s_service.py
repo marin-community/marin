@@ -88,7 +88,6 @@ def test_collection_path_cluster_scoped(resource: K8sResource, expected: str):
         ("ClusterRole", K8sResource.CLUSTER_ROLES),
         ("ClusterRoleBinding", K8sResource.CLUSTER_ROLE_BINDINGS),
         ("NodePool", K8sResource.NODE_POOLS),
-        ("Event", K8sResource.EVENTS),
     ],
 )
 def test_from_kind_valid(kind: str, expected_resource: K8sResource):

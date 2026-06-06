@@ -75,7 +75,7 @@ def service(state, tmp_path, log_service):
     controller_mock.autoscaler = None
     controller_mock.provider = Mock(placement=PlacementOwner.IRIS_CONTROLLER, manages_capacity=False)
     controller_mock.provider.name = "worker"
-    controller_mock.has_direct_provider = False
+    controller_mock.placement = PlacementOwner.IRIS_CONTROLLER
     return ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
