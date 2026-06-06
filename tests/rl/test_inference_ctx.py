@@ -13,6 +13,8 @@ import numpy as np
 import pytest
 from levanter.inference.openai import ChatMessage
 from marin.inference.types import (
+    ExpertLoadAccounting,
+    MoeRouterReplayMetadata,
     PolicyIdentity,
     TokenizedRollout,
     TokenizedRolloutBatchRequest,
@@ -168,6 +170,44 @@ def test_rollouts_by_token_request_rejects_missing_generations():
 
     with pytest.raises(RuntimeError, match="returned 1 generations; expected 2"):
         BaseInferenceContext.rollouts_by_token_request(batch, result)
+
+
+def test_create_rollout_from_tokenized_rollout_preserves_moe_replay_metadata():
+    context = BaseInferenceContext()
+    context.tokenizer = SimpleNamespace(name_or_path="tokenizer")
+    context.set_policy_identity(PolicyIdentity(policy_name="policy", checkpoint_ref="checkpoint"))
+    router_replay = MoeRouterReplayMetadata(
+        format="marin-router-replay-v1",
+        payload_ref="gs://rollouts/router/batch-1",
+        layer_names=("decoder.layers.0.mlp",),
+    )
+    expert_load = ExpertLoadAccounting(num_experts=4, tokens_per_expert=(8, 7, 6, 5), capacity=16)
+    token_rollout = TokenizedRollout(
+        request_id="req-1",
+        generation_index=0,
+        prompt_token_ids=(10, 20),
+        completion_token_ids=(30,),
+        completion_logprobs=(-0.5,),
+        finish_reason=TokenRolloutFinishReason.STOP,
+        prompt_mask=(False, False),
+        completion_mask=(True,),
+        router_replay=router_replay,
+        expert_load=expert_load,
+    )
+
+    rollout = context.create_rollout_from_tokenized_rollout(
+        rollout=token_rollout,
+        env_name="math",
+        env_example_id="example-1",
+        reward=1.0,
+        decoding=DecodingConfig(temperature=0.7),
+        batch_id="batch-1",
+    )
+
+    assert rollout.metadata.tokenizer == context.tokenizer_identity()
+    assert rollout.metadata.policy == context.policy_identity()
+    assert rollout.metadata.router_replay == router_replay
+    assert rollout.metadata.expert_load == expert_load
 
 
 def create_choice_with_logprobs(tokenizer, response_text: str, logprobs_values: list[float] | None = None) -> Choice:

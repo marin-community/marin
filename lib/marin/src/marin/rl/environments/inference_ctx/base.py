@@ -376,5 +376,7 @@ class BaseInferenceContext:
                 token_rollout_generation_index=rollout.generation_index,
                 token_rollout_finish_reason=rollout.finish_reason.value,
                 token_rollout_stop_token_id=rollout.stop_token_id,
+                router_replay=rollout.router_replay,
+                expert_load=rollout.expert_load,
             ),
         )

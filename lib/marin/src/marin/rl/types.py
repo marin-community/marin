@@ -18,7 +18,7 @@ import haliax.haxtyping as ht
 import jax
 import numpy as np
 from haliax import NamedArray
-from marin.inference.types import PolicyIdentity, TokenizerIdentity
+from marin.inference.types import ExpertLoadAccounting, MoeRouterReplayMetadata, PolicyIdentity, TokenizerIdentity
 from marin.rl.decoding import RolloutDecodingTrace
 
 
@@ -68,6 +68,12 @@ class RolloutMetadata:
 
     token_rollout_stop_token_id: int | None = None
     """Stop token ID that ended token-native generation, when applicable."""
+
+    router_replay: MoeRouterReplayMetadata | None = None
+    """MoE router replay metadata captured during token-native generation."""
+
+    expert_load: ExpertLoadAccounting | None = None
+    """MoE expert-load accounting captured during token-native generation."""
 
 
 class Rollout(eqx.Module):
