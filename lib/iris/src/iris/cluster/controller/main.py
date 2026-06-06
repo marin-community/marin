@@ -24,8 +24,9 @@ from rigging.timing import Duration, Timestamp
 
 from iris.cluster.backends.factory import create_provider_bundle
 from iris.cluster.config import load_config, make_provider
-from iris.cluster.controller.auth import create_controller_auth
+from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
+from iris.cluster.controller.backend import TaskBackend
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import Controller, ControllerConfig
@@ -90,6 +91,68 @@ def _build_worker_config(
     if auth_token:
         worker_config.auth_token = auth_token
     return worker_config
+
+
+def make_backend(
+    cluster_config: config_pb2.IrisClusterConfig,
+    *,
+    db: ControllerDB,
+    auth: ControllerAuth,
+    remote_state_dir: str,
+    dry_run: bool,
+) -> TaskBackend:
+    """Create the TaskBackend and, for Iris-provisioned-capacity backends, build,
+    restore, and attach the autoscaler.
+
+    Capacity-managing backends (k8s) provision their own pods, so no autoscaler is
+    attached. In dry-run both the autoscaler and the provider bundle are skipped
+    (bundle creation needs platform credentials unavailable on a dev machine).
+    """
+    provider = make_provider(cluster_config)
+    logger.info("Backend created: %s", type(provider).__name__)
+
+    if dry_run:
+        logger.info("Dry-run mode: skipping autoscaler and provider bundle creation")
+        return provider
+    if provider.manages_capacity:
+        return provider
+
+    bundle = create_provider_bundle(
+        platform_config=cluster_config.platform,
+        worker_port=cluster_config.defaults.worker.port,
+        cluster_config=cluster_config,
+        ssh_config=cluster_config.defaults.ssh,
+    )
+    workers = bundle.workers
+    logger.info("Provider bundle created")
+
+    base_worker_config = None
+    if cluster_config.defaults.worker.docker_image:
+        controller_address = cluster_config.defaults.worker.controller_address
+        if not controller_address:
+            controller_address = bundle.controller.discover_controller(cluster_config.controller)
+        base_worker_config = _build_worker_config(
+            cluster_config.defaults.worker,
+            cluster_config.platform,
+            controller_address=controller_address,
+            storage_prefix=remote_state_dir,
+            auth_token=auth.worker_token or "",
+        )
+
+    autoscaler = create_autoscaler(
+        platform=workers,
+        autoscaler_config=cluster_config.defaults.autoscaler,
+        scale_groups=cluster_config.scale_groups,
+        label_prefix=cluster_config.platform.label_prefix or "iris",
+        base_worker_config=base_worker_config,
+    )
+    logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
+
+    autoscaler.restore_from_db(db, workers)
+    logger.info("Autoscaler state restored from DB")
+
+    provider.attach_autoscaler(autoscaler)
+    return provider
 
 
 def run_controller_serve(
@@ -170,60 +233,8 @@ def run_controller_serve(
 
     db = ControllerDB(db_dir=db_dir)
 
-    # --- Create provider ---
-    provider = make_provider(cluster_config)
-    logger.info("Provider created: %s", type(provider).__name__)
-
-    # --- Create autoscaler (only when Iris provisions capacity; K8s manages its own pods) ---
-    # In dry-run mode the autoscaler is fully gated anyway, and creating the
-    # provider bundle requires platform credentials (GCP SSH keys etc.) that
-    # are unavailable on a local dev machine.
     auth = create_controller_auth(cluster_config.auth, db=db)
-
-    base_worker_config = None
-    if dry_run:
-        logger.info("Dry-run mode: skipping autoscaler and provider bundle creation")
-    elif not provider.manages_capacity:
-        bundle = create_provider_bundle(
-            platform_config=cluster_config.platform,
-            worker_port=cluster_config.defaults.worker.port,
-            cluster_config=cluster_config,
-            ssh_config=cluster_config.defaults.ssh,
-        )
-        workers = bundle.workers
-        logger.info("Provider bundle created")
-
-        if cluster_config.defaults.worker.docker_image:
-            controller_address = cluster_config.defaults.worker.controller_address
-            if not controller_address:
-                controller_address = bundle.controller.discover_controller(cluster_config.controller)
-            base_worker_config = _build_worker_config(
-                cluster_config.defaults.worker,
-                cluster_config.platform,
-                controller_address=controller_address,
-                storage_prefix=remote_state_dir,
-                auth_token=auth.worker_token or "",
-            )
-
-        autoscaler = create_autoscaler(
-            platform=workers,
-            autoscaler_config=cluster_config.defaults.autoscaler,
-            scale_groups=cluster_config.scale_groups,
-            label_prefix=cluster_config.platform.label_prefix or "iris",
-            base_worker_config=base_worker_config,
-        )
-        logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
-
-        # Restore autoscaler state (tracked slices/workers/backoff) from the DB
-        # so restarted controllers don't lose cloud resource tracking and
-        # scale up duplicates. This one-time bootstrap is the only DB touch the
-        # autoscaler makes; steady-state persistence is owned by the controller.
-        autoscaler.restore_from_db(db, workers)
-        logger.info("Autoscaler state restored from DB")
-
-        # The backend owns the autoscaler; the controller drives it via
-        # manage_capacity and persists the returned state each tick.
-        provider.attach_autoscaler(autoscaler)
+    provider = make_backend(cluster_config, db=db, auth=auth, remote_state_dir=remote_state_dir, dry_run=dry_run)
 
     if checkpoint_interval is None:
         checkpoint_interval = HOURLY_CHECKPOINT_SECONDS

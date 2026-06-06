@@ -336,20 +336,18 @@ class Controller:
         self._remote_log_service = LogServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
         self._remote_stats_service = StatsServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
 
-        # Providers that collect logs outside the worker process push directly
-        # to the log server via RPC. K8s pods have no worker daemon, so the
-        # provider also writes per-pod resource samples to iris.task itself —
-        # mirroring what the worker daemon does on the GCE/TPU path.
-        if self._task_backend.placement is PlacementOwner.TASK_BACKEND:
-            k8s_log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
-            self._task_backend.set_log_sink(
-                k8s_log_client,
-                k8s_log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat),
-                k8s_log_client.get_table(PROFILE_NAMESPACE, IrisProfile),
-            )
-
-        # Controller process logs ship to the log server via RemoteLogHandler.
+        # A single log client serves both the controller's own logs and any backend
+        # that collects logs out-of-process.
         self._log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
+
+        # Backends without a worker daemon push per-task resource/profile samples to the
+        # log server directly; daemon-backed backends (RPC) ignore the sink.
+        self._task_backend.set_log_sink(
+            self._log_client,
+            self._log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat),
+            self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile),
+        )
+
         self._log_handler = RemoteLogHandler(self._log_client, key=CONTROLLER_LOG_KEY)
 
         self._log_handler.setLevel(logging.DEBUG)
