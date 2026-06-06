@@ -15,9 +15,10 @@ those methods directly when needed.
 from dataclasses import dataclass
 from typing import Any
 
-from iris.cluster.controller import direct_provider, ops, reads, writes
+from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.ops.task import Assignment, apply_direct_provider_updates, finalize
 from iris.cluster.controller.projections.endpoints import EndpointRow
+from iris.cluster.controller.reconcile import direct_provider
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.scheduling.policy import claim_workers_for_reservations, cleanup_stale_claims

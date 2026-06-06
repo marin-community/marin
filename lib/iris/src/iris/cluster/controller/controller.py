@@ -27,7 +27,7 @@ from sqlalchemy import bindparam, select
 
 from iris.cluster.backends.types import find_free_port, resolve_external_host
 from iris.cluster.bundle import BundleStore
-from iris.cluster.controller import direct_provider, ops, reads, writes
+from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
@@ -49,9 +49,6 @@ from iris.cluster.controller.checkpoint import (
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.direct_provider import (
-    DIRECT_PROVIDER_PROMOTION_RATE,
-)
 from iris.cluster.controller.ops.task import (
     Assignment,
     apply_direct_provider_updates,
@@ -63,6 +60,10 @@ from iris.cluster.controller.ops.worker import (
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.pruner import prune_old_data
+from iris.cluster.controller.reconcile import direct_provider
+from iris.cluster.controller.reconcile.direct_provider import (
+    DIRECT_PROVIDER_PROMOTION_RATE,
+)
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,

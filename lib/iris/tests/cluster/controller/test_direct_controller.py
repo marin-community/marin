@@ -4,7 +4,7 @@
 """Tests for KubernetesProvider integration with controller and transitions."""
 
 from finelog.rpc import logging_pb2
-from iris.cluster.controller import direct_provider, ops
+from iris.cluster.controller import ops
 from iris.cluster.controller.backend import (
     BackendReconcileInput,
     BackendReconcileResult,
@@ -15,6 +15,7 @@ from iris.cluster.controller.backend import (
     TaskTarget,
 )
 from iris.cluster.controller.ops.task import apply_direct_provider_updates
+from iris.cluster.controller.reconcile import direct_provider
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.types import JobName

@@ -49,7 +49,7 @@ import click
 import uvicorn
 import yaml
 from connectrpc.request import RequestContext
-from iris.cluster.controller import direct_provider, reads
+from iris.cluster.controller import reads
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
     Controller,
@@ -57,6 +57,7 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.db import Tx as _Tx
+from iris.cluster.controller.reconcile import direct_provider
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.managed_thread import ThreadContainer
 

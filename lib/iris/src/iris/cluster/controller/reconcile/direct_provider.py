@@ -1,10 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Direct-provider dispatch: RunTaskRequest construction and drain logic.
+"""Controller-side reconcile-input builder for TASK_BACKEND placement.
 
-Builds per-job RunTaskRequest templates (LRU-cached), promotes PENDING tasks
-and snapshots the running set, and assembles per-attempt requests.
+The counterpart to :mod:`reconcile.worker` (which builds per-worker plans for
+IRIS_CONTROLLER placement): this reads and writes the DB inside a controller
+transaction to produce the :class:`BackendReconcileInput` a TASK_BACKEND
+(Kueue today) reconciles against. It promotes PENDING tasks, builds per-job
+``RunTaskRequest`` templates (LRU-cached) and per-attempt requests, and
+snapshots the running set. Because it owns DB I/O it lives controller-side, not
+in the DB-less backend.
+
+The ``direct_provider`` naming throughout (``drain_for_direct_provider``,
+``DIRECT_PROVIDER_PROMOTION_RATE``) predates the TaskBackend contract and is
+slated for retirement once the persisted ``TransitionSource.DIRECT_PROVIDER``
+and the ``has_direct_provider`` proto field are migrated.
 """
 
 from rigging.timing import Timestamp
