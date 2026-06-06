@@ -84,11 +84,25 @@ class BaseInferenceContext:
         batch_result: TokenizedRolloutBatchResult,
     ) -> dict[str, tuple[TokenizedRollout, ...]]:
         """Return validated token rollouts keyed by request ID."""
+        if batch_result.batch_id != batch.batch_id:
+            raise RuntimeError(
+                f"Token rollout batch ID mismatch: got {batch_result.batch_id}, expected {batch.batch_id}"
+            )
+        if batch_result.tokenizer != batch.tokenizer:
+            raise RuntimeError("Token rollout tokenizer identity mismatch")
+        if batch_result.policy != batch.policy:
+            raise RuntimeError("Token rollout policy identity mismatch")
+
+        expected_request_ids = {request.request_id for request in batch.requests}
         rollouts_by_request: dict[str, list[TokenizedRollout]] = {}
         for rollout in batch_result.rollouts:
+            if rollout.request_id not in expected_request_ids:
+                raise RuntimeError(f"Token rollout result included unknown request ID {rollout.request_id}")
             rollouts_by_request.setdefault(rollout.request_id, []).append(rollout)
         failures_by_request = {}
         for failure in batch_result.failures:
+            if failure.request_id not in expected_request_ids:
+                raise RuntimeError(f"Token rollout failure included unknown request ID {failure.request_id}")
             failures_by_request.setdefault(failure.request_id, []).append(failure)
 
         grouped_rollouts: dict[str, tuple[TokenizedRollout, ...]] = {}
@@ -110,6 +124,13 @@ class BaseInferenceContext:
                 raise RuntimeError(
                     f"Token rollout request {request.request_id} returned {len(token_rollouts)} generations; "
                     f"expected {request.n_generations}"
+                )
+            generation_indexes = tuple(rollout.generation_index for rollout in token_rollouts)
+            expected_generation_indexes = tuple(range(request.n_generations))
+            if generation_indexes != expected_generation_indexes:
+                raise RuntimeError(
+                    f"Token rollout request {request.request_id} returned generation indexes "
+                    f"{generation_indexes}; expected {expected_generation_indexes}"
                 )
             grouped_rollouts[request.request_id] = tuple(token_rollouts)
         return grouped_rollouts

@@ -172,6 +172,71 @@ def test_rollouts_by_token_request_rejects_missing_generations():
         BaseInferenceContext.rollouts_by_token_request(batch, result)
 
 
+def test_rollouts_by_token_request_rejects_batch_identity_mismatch():
+    batch = _token_rollout_batch()
+    result = TokenizedRolloutBatchResult(
+        batch_id="other-batch",
+        tokenizer=batch.tokenizer,
+        policy=batch.policy,
+        rollouts=(),
+    )
+
+    with pytest.raises(RuntimeError, match="batch ID mismatch"):
+        BaseInferenceContext.rollouts_by_token_request(batch, result)
+
+
+def test_rollouts_by_token_request_rejects_tokenizer_identity_mismatch():
+    batch = _token_rollout_batch()
+    result = TokenizedRolloutBatchResult(
+        batch_id=batch.batch_id,
+        tokenizer=TokenizerIdentity(name_or_path="other-tokenizer"),
+        policy=batch.policy,
+        rollouts=(),
+    )
+
+    with pytest.raises(RuntimeError, match="tokenizer identity mismatch"):
+        BaseInferenceContext.rollouts_by_token_request(batch, result)
+
+
+def test_rollouts_by_token_request_rejects_policy_identity_mismatch():
+    batch = _token_rollout_batch()
+    result = TokenizedRolloutBatchResult(
+        batch_id=batch.batch_id,
+        tokenizer=batch.tokenizer,
+        policy=PolicyIdentity(policy_name="other-policy", checkpoint_ref="other-checkpoint"),
+        rollouts=(),
+    )
+
+    with pytest.raises(RuntimeError, match="policy identity mismatch"):
+        BaseInferenceContext.rollouts_by_token_request(batch, result)
+
+
+def test_rollouts_by_token_request_rejects_unknown_request_ids():
+    batch = _token_rollout_batch()
+    result = TokenizedRolloutBatchResult(
+        batch_id=batch.batch_id,
+        tokenizer=batch.tokenizer,
+        policy=batch.policy,
+        rollouts=(_token_rollout(request_id="unknown"),),
+    )
+
+    with pytest.raises(RuntimeError, match="unknown request ID unknown"):
+        BaseInferenceContext.rollouts_by_token_request(batch, result)
+
+
+def test_rollouts_by_token_request_rejects_duplicate_generation_indexes():
+    batch = _token_rollout_batch()
+    result = TokenizedRolloutBatchResult(
+        batch_id=batch.batch_id,
+        tokenizer=batch.tokenizer,
+        policy=batch.policy,
+        rollouts=(_token_rollout(generation_index=0), _token_rollout(generation_index=0)),
+    )
+
+    with pytest.raises(RuntimeError, match="generation indexes"):
+        BaseInferenceContext.rollouts_by_token_request(batch, result)
+
+
 def test_create_rollout_from_tokenized_rollout_preserves_moe_replay_metadata():
     context = BaseInferenceContext()
     context.tokenizer = SimpleNamespace(name_or_path="tokenizer")
