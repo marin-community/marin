@@ -19,6 +19,7 @@ from iris.cluster.controller.auth import (
     revoke_api_key,
     revoke_login_keys_for_user,
 )
+from iris.cluster.controller.backend import Placement
 from iris.cluster.controller.dashboard import (
     ControllerDashboard,
     _LegacyFetchLogsRedirect,
@@ -72,7 +73,8 @@ def service(state, tmp_path, log_service):
     controller_mock = Mock()
     controller_mock.wake = Mock()
     controller_mock.autoscaler = None
-    controller_mock.provider = Mock()
+    controller_mock.provider = Mock(placement=Placement.IRIS, manages_capacity=False)
+    controller_mock.provider.name = "worker"
     controller_mock.has_direct_provider = False
     return ControllerServiceImpl(
         controller=controller_mock,
