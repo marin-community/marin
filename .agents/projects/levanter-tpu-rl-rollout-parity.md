@@ -23,10 +23,13 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - Prefer short local file edits, short REST `gh api` checks, and written
   handoffs. Delegate new runs to subagents when useful, then monitor them with
   tightly scoped heartbeats rather than foreground polling.
-- Heartbeat `poll-rl-rollout-epic-progress` watches the v5p follow-up thread,
-  #6185, and this handoff PR, and should update the epic/child issues before
-  notifying on terminal results, concrete failures, review actions, or CI
-  failures.
+- Heartbeat `poll-rl-rollout-epic-progress` watches #6185 and this handoff PR
+  with lightweight GitHub metadata. It should update the epic/child issues
+  before notifying on terminal results, concrete failures, review actions, or
+  CI failures. The old v5p side-agent thread
+  `019e9b3f-8ff1-79c3-9884-02f847973191` is no longer a hard dependency after
+  the app restart; future subagents should be explicitly instructed to update
+  #6227 and the matching child issue before reporting material progress.
 
 ## Current Evidence
 
@@ -212,12 +215,13 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - RL token data plane: substantially implemented in #6186 and green on the PR
   head, but still stack-dependent and not landed. Runtime integration remains a
   follow-up after the serving and benchmark PRs merge.
-- Merge state verified by REST at 2026-06-06T06:39Z: #6176, #6185, and #6186
-  are open, non-draft, mergeable, and not merged. #6184 remains open. Check-run
-  summaries are clean on the current heads: #6176 has 30 checks with no failures
-  or pending checks; #6185 has 29; #6186 has 29. The goal is not complete until
-  the required code paths and benchmark artifacts are landed or otherwise
-  accepted by maintainers.
+- Merge state verified by lightweight GitHub metadata after the app restart on
+  2026-06-06: #6185 is open, non-draft, mergeable, and at head `91f6ec06a`;
+  #6214 is open, draft, mergeable, and at head `b70b7da6a`. #6214 has all
+  visible checks green. #6185 has no visible failed checks; `levanter-unit` is
+  green and `levanter-tpu-tests` is the only remaining in-progress lane at the
+  latest poll. The goal is not complete until the required code paths and
+  benchmark artifacts are landed or otherwise accepted by maintainers.
 
 ## Active Work
 
@@ -309,7 +313,8 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   turn the next terminal backend failure into an actionable log-bearing failure.
 - PR #6185 current CI state after commit `91f6ec06a`: the PR is non-draft and
   mergeable, with no visible failed checks at the latest lightweight metadata
-  check before this commit; new CI is expected to restart on the pushed head.
+  check. `levanter-unit` is green; `levanter-tpu-tests` remains in progress.
+  #6214 has all visible checks green and remains draft as a handoff artifact.
 - Issue #6184 has the final proof comment:
   `https://github.com/marin-community/marin/issues/6184#issuecomment-4637412411`.
 - PR #6186 adds the first RL batched-token rollout API contracts, stacked on
@@ -457,9 +462,9 @@ thread. Keep background-style work narrow and explicit until the app is stable:
    maintainer is ready; CI and Claude review are clean.
 2. PR #6185 now has runtime proof for correctness, service-batch coalescing,
    and prefill-drain scheduling. The `mixed_b32_i512_o512_n1` v6e-8 run clears
-   the issue-level 0.75 vLLM throughput target at 0.819. CI is green after
-   rerunning the external Hugging Face `marin-integration` flake, so the next
-   action is maintainer review/merge.
+   the issue-level 0.75 vLLM throughput target at 0.819. No CI failures are
+   visible at the latest metadata check; wait for the remaining
+   `levanter-tpu-tests` lane to finish before treating #6185 as fully green.
 3. The next mixed-workload performance step is raising the generic benchmark
    parity target beyond the issue bar: explain the remaining 18% gap on the
    prefill-drained row, then decide whether to optimize decode scheduling,
@@ -467,13 +472,11 @@ thread. Keep background-style work narrow and explicit until the app is stable:
    resolved by draining all currently admissible prefill chunks before decode.
 4. Expand the matrix to v5p and the highest-value prefill-heavy/churn cases once
    mixed correctness and admission accounting are stable.
-   - Subagent `019e9b3f-8ff1-79c3-9884-02f847973191` is assigned the first
-     v5p runtime follow-up: same #6185 branch head `ba82f306d`, same
-     `mixed_b32_i512_o512_n1` shape, backend `both`, default prefill,
-     `--max-pages 512`, two warmups, one measured round. It should launch one
-     Iris job with prefix `qwen3-mixed-v5p-prefilldrain-i512-o512`, babysit it,
-     and only proceed to the canonical decode-heavy v5p row after clean mixed
-     success.
+   - The old v5p runtime follow-up subagent
+     `019e9b3f-8ff1-79c3-9884-02f847973191` became unreachable after the app
+     restart, so do not rely on that thread for current state. If a new v5p
+     rerun is needed, launch it through a new subagent and tell it to update
+     #6227 plus #6230 before reporting back.
    - The v5p job was launched as
      `/dlwh/qwen3-mixed-v5p-prefilldrain-i512-o512-20260606-0447`.
    - Terminal result: `JOB_STATE_FAILED` before benchmark results. vLLM did not
