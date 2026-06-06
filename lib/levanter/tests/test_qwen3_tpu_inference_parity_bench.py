@@ -773,6 +773,10 @@ def test_summary_markdown_includes_vllm_ratio_columns(tmp_path):
     assert "hbm bytes" in summary
     assert "shape buckets" in summary
     assert "prefill s" in summary
+    assert "decode iter s" in summary
+    assert "decode device s" in summary
+    assert "decode host s" in summary
+    assert "decode iter toks" in summary
     assert "0.900" in summary
     assert "pass" in summary
     assert "12.346" in summary
@@ -1084,6 +1088,19 @@ def test_run_case_propagates_backend_static_metrics(monkeypatch):
     def send_completion(**kwargs):
         return {"usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}, "choices": []}, 0.1
 
+    def metrics_snapshot():
+        return {
+            "prefill_admissions": 1,
+            "prefill_prompt_tokens_per_admission": [1],
+            "prefill_seconds_per_admission": [0.5],
+            "decode_seconds_per_iteration": [0.25],
+            "decode_device_seconds_per_iteration": [0.2],
+            "decode_host_seconds_per_iteration": [0.05],
+            "decode_submit_seconds_per_iteration": [0.01],
+            "decode_extract_seconds_per_iteration": [0.02],
+            "decode_tokens_per_iteration": [2],
+        }
+
     monkeypatch.setattr(bench, "_send_completion", send_completion)
 
     result = bench.run_case(
@@ -1094,6 +1111,7 @@ def test_run_case_propagates_backend_static_metrics(monkeypatch):
             close=lambda: None,
             hbm_used_bytes=1234,
             compiled_shape_count=2,
+            metrics_snapshot=metrics_snapshot,
         ),
         case=bench.BenchmarkCase("decode_b1_i1_o2_n1", active_sequences=1, input_tokens=1, output_tokens=2),
         prompt="x",
@@ -1108,6 +1126,15 @@ def test_run_case_propagates_backend_static_metrics(monkeypatch):
 
     assert result.hbm_used_bytes == 1234
     assert result.compiled_shape_count == 2
+    assert result.prefill_admissions == 1
+    assert result.prefill_prompt_tokens_per_admission == [1]
+    assert result.prefill_seconds_per_admission == [0.5]
+    assert result.decode_seconds_per_iteration == [0.25]
+    assert result.decode_device_seconds_per_iteration == [0.2]
+    assert result.decode_host_seconds_per_iteration == [0.05]
+    assert result.decode_submit_seconds_per_iteration == [0.01]
+    assert result.decode_extract_seconds_per_iteration == [0.02]
+    assert result.decode_tokens_per_iteration == [2]
 
 
 def test_run_stress_case_aggregates_success_failures_and_service_metrics(monkeypatch):
@@ -1440,6 +1467,12 @@ def test_run_levanter_without_lm_head_case_preserves_warmup_flag(monkeypatch):
                 prefill_admissions = 1
                 prefill_prompt_tokens_per_admission = [1]
                 prefill_seconds_per_admission = [0.5]
+                decode_seconds_per_iteration = [0.25]
+                decode_device_seconds_per_iteration = [0.2]
+                decode_host_seconds_per_iteration = [0.05]
+                decode_submit_seconds_per_iteration = [0.01]
+                decode_extract_seconds_per_iteration = [0.02]
+                decode_tokens_per_iteration = [2]
 
             return Result()
 
@@ -1521,6 +1554,12 @@ def test_run_levanter_without_lm_head_case_preserves_warmup_flag(monkeypatch):
     assert warmup.prefill_admissions == 1
     assert warmup.prefill_prompt_tokens_per_admission == [1]
     assert warmup.prefill_seconds_per_admission == [0.5]
+    assert warmup.decode_seconds_per_iteration == [0.25]
+    assert warmup.decode_device_seconds_per_iteration == [0.2]
+    assert warmup.decode_host_seconds_per_iteration == [0.05]
+    assert warmup.decode_submit_seconds_per_iteration == [0.01]
+    assert warmup.decode_extract_seconds_per_iteration == [0.02]
+    assert warmup.decode_tokens_per_iteration == [2]
     assert events == [
         "enter:mesh",
         "enter:axis_mapping",

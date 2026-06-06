@@ -1029,6 +1029,12 @@ class GenerationResult:
     prefill_admissions: int = 0
     prefill_prompt_tokens_per_admission: list[int] = field(default_factory=list)
     prefill_seconds_per_admission: list[float] = field(default_factory=list)
+    decode_seconds_per_iteration: list[float] = field(default_factory=list)
+    decode_device_seconds_per_iteration: list[float] = field(default_factory=list)
+    decode_host_seconds_per_iteration: list[float] = field(default_factory=list)
+    decode_submit_seconds_per_iteration: list[float] = field(default_factory=list)
+    decode_extract_seconds_per_iteration: list[float] = field(default_factory=list)
+    decode_tokens_per_iteration: list[int] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -1490,6 +1496,12 @@ class InferenceEngine:
         prefill_admissions = 0
         prefill_prompt_tokens_per_admission: list[int] = []
         prefill_seconds_per_admission: list[float] = []
+        decode_seconds_per_iteration: list[float] = []
+        decode_device_seconds_per_iteration: list[float] = []
+        decode_host_seconds_per_iteration: list[float] = []
+        decode_submit_seconds_per_iteration: list[float] = []
+        decode_extract_seconds_per_iteration: list[float] = []
+        decode_tokens_per_iteration: list[int] = []
         # Initialize fresh result buckets for this call
         for rid in call_rids:
             self.results[rid] = {
@@ -1662,6 +1674,12 @@ class InferenceEngine:
             # Host time is everything except the device execution wait
             host_time = max(iter_time - device_time, 0.0)
             submit_time = submit_done - submit_start
+            decode_seconds_per_iteration.append(iter_time)
+            decode_device_seconds_per_iteration.append(device_time)
+            decode_host_seconds_per_iteration.append(host_time)
+            decode_submit_seconds_per_iteration.append(submit_time)
+            decode_extract_seconds_per_iteration.append(extract_time)
+            decode_tokens_per_iteration.append(new_tokens)
             if iter_time > 0:
                 tps_total = new_tokens / iter_time
                 logger.info(
@@ -1717,6 +1735,12 @@ class InferenceEngine:
             prefill_admissions=prefill_admissions,
             prefill_prompt_tokens_per_admission=prefill_prompt_tokens_per_admission,
             prefill_seconds_per_admission=prefill_seconds_per_admission,
+            decode_seconds_per_iteration=decode_seconds_per_iteration,
+            decode_device_seconds_per_iteration=decode_device_seconds_per_iteration,
+            decode_host_seconds_per_iteration=decode_host_seconds_per_iteration,
+            decode_submit_seconds_per_iteration=decode_submit_seconds_per_iteration,
+            decode_extract_seconds_per_iteration=decode_extract_seconds_per_iteration,
+            decode_tokens_per_iteration=decode_tokens_per_iteration,
         )
 
     def generate_without_lm_head(self, requests: Sequence[Request]) -> GenerationResult:

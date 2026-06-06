@@ -248,6 +248,12 @@ class InferenceContext:
         self.last_prefill_admissions: int | None = None
         self.last_prefill_prompt_tokens_per_admission: list[int] = []
         self.last_prefill_seconds_per_admission: list[float] = []
+        self.last_decode_seconds_per_iteration: list[float] = []
+        self.last_decode_device_seconds_per_iteration: list[float] = []
+        self.last_decode_host_seconds_per_iteration: list[float] = []
+        self.last_decode_submit_seconds_per_iteration: list[float] = []
+        self.last_decode_extract_seconds_per_iteration: list[float] = []
+        self.last_decode_tokens_per_iteration: list[int] = []
 
     def start(self):
         """Start the inference and batch processing threads"""
@@ -491,14 +497,24 @@ class InferenceContext:
         self.last_prefill_admissions = result.prefill_admissions
         self.last_prefill_prompt_tokens_per_admission = list(result.prefill_prompt_tokens_per_admission)
         self.last_prefill_seconds_per_admission = list(result.prefill_seconds_per_admission)
+        self.last_decode_seconds_per_iteration = list(result.decode_seconds_per_iteration)
+        self.last_decode_device_seconds_per_iteration = list(result.decode_device_seconds_per_iteration)
+        self.last_decode_host_seconds_per_iteration = list(result.decode_host_seconds_per_iteration)
+        self.last_decode_submit_seconds_per_iteration = list(result.decode_submit_seconds_per_iteration)
+        self.last_decode_extract_seconds_per_iteration = list(result.decode_extract_seconds_per_iteration)
+        self.last_decode_tokens_per_iteration = list(result.decode_tokens_per_iteration)
         duration = time.time() - start_time
         logger.info(
-            "Batch completed in %.2fs, generated %d tokens, prefill admissions=%d chunks=%s seconds=%s",
+            "Batch completed in %.2fs, generated %d tokens, prefill admissions=%d chunks=%s seconds=%s "
+            "decode_seconds=%s decode_device_seconds=%s decode_tokens=%s",
             duration,
             result.total_generated,
             result.prefill_admissions,
             result.prefill_prompt_tokens_per_admission,
             result.prefill_seconds_per_admission,
+            result.decode_seconds_per_iteration,
+            result.decode_device_seconds_per_iteration,
+            result.decode_tokens_per_iteration,
         )
 
         # Return results to futures

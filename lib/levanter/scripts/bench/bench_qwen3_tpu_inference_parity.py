@@ -115,6 +115,12 @@ class CaseResult:
     prefill_admissions: int | None = None
     prefill_prompt_tokens_per_admission: list[int] | None = None
     prefill_seconds_per_admission: list[float] | None = None
+    decode_seconds_per_iteration: list[float] | None = None
+    decode_device_seconds_per_iteration: list[float] | None = None
+    decode_host_seconds_per_iteration: list[float] | None = None
+    decode_submit_seconds_per_iteration: list[float] | None = None
+    decode_extract_seconds_per_iteration: list[float] | None = None
+    decode_tokens_per_iteration: list[int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1056,7 +1062,7 @@ def run_case(
 
     elapsed = time.perf_counter() - start
     total_tokens = prompt_total + completion_total
-    prefill_admissions, prefill_chunks, prefill_seconds = _case_admission_metrics(handle.metrics_snapshot)
+    runtime_metrics = _case_runtime_metrics(handle.metrics_snapshot)
     return CaseResult(
         case_name=case.name,
         backend=handle.name,
@@ -1077,9 +1083,15 @@ def run_case(
         total_tokens_per_second=total_tokens / elapsed if elapsed > 0 else 0.0,
         hbm_used_bytes=handle.hbm_used_bytes,
         compiled_shape_count=handle.compiled_shape_count,
-        prefill_admissions=prefill_admissions,
-        prefill_prompt_tokens_per_admission=prefill_chunks,
-        prefill_seconds_per_admission=prefill_seconds,
+        prefill_admissions=runtime_metrics.prefill_admissions,
+        prefill_prompt_tokens_per_admission=runtime_metrics.prefill_prompt_tokens_per_admission,
+        prefill_seconds_per_admission=runtime_metrics.prefill_seconds_per_admission,
+        decode_seconds_per_iteration=runtime_metrics.decode_seconds_per_iteration,
+        decode_device_seconds_per_iteration=runtime_metrics.decode_device_seconds_per_iteration,
+        decode_host_seconds_per_iteration=runtime_metrics.decode_host_seconds_per_iteration,
+        decode_submit_seconds_per_iteration=runtime_metrics.decode_submit_seconds_per_iteration,
+        decode_extract_seconds_per_iteration=runtime_metrics.decode_extract_seconds_per_iteration,
+        decode_tokens_per_iteration=runtime_metrics.decode_tokens_per_iteration,
     )
 
 
@@ -1112,19 +1124,60 @@ def _stress_service_static_metric(
     return None if value is None else int(value)
 
 
-def _case_admission_metrics(
-    metrics_snapshot: Callable[[], dict[str, Any]] | None,
-) -> tuple[int | None, list[int] | None, list[float] | None]:
+@dataclass(frozen=True, slots=True)
+class CaseRuntimeMetrics:
+    prefill_admissions: int | None
+    prefill_prompt_tokens_per_admission: list[int] | None
+    prefill_seconds_per_admission: list[float] | None
+    decode_seconds_per_iteration: list[float] | None
+    decode_device_seconds_per_iteration: list[float] | None
+    decode_host_seconds_per_iteration: list[float] | None
+    decode_submit_seconds_per_iteration: list[float] | None
+    decode_extract_seconds_per_iteration: list[float] | None
+    decode_tokens_per_iteration: list[int] | None
+
+
+def _optional_metric_float_list(metrics: dict[str, Any], key: str) -> list[float] | None:
+    value = metrics.get(key)
+    return None if value is None else [float(item) for item in value]
+
+
+def _optional_metric_int_list(metrics: dict[str, Any], key: str) -> list[int] | None:
+    value = metrics.get(key)
+    return None if value is None else [int(item) for item in value]
+
+
+def _case_runtime_metrics(metrics_snapshot: Callable[[], dict[str, Any]] | None) -> CaseRuntimeMetrics:
     if metrics_snapshot is None:
-        return None, None, None
+        return CaseRuntimeMetrics(
+            prefill_admissions=None,
+            prefill_prompt_tokens_per_admission=None,
+            prefill_seconds_per_admission=None,
+            decode_seconds_per_iteration=None,
+            decode_device_seconds_per_iteration=None,
+            decode_host_seconds_per_iteration=None,
+            decode_submit_seconds_per_iteration=None,
+            decode_extract_seconds_per_iteration=None,
+            decode_tokens_per_iteration=None,
+        )
     metrics = metrics_snapshot()
     admissions = metrics.get("prefill_admissions")
-    chunks = metrics.get("prefill_prompt_tokens_per_admission")
-    seconds = metrics.get("prefill_seconds_per_admission")
-    return (
-        None if admissions is None else int(admissions),
-        None if chunks is None else [int(chunk) for chunk in chunks],
-        None if seconds is None else [float(second) for second in seconds],
+    return CaseRuntimeMetrics(
+        prefill_admissions=None if admissions is None else int(admissions),
+        prefill_prompt_tokens_per_admission=_optional_metric_int_list(metrics, "prefill_prompt_tokens_per_admission"),
+        prefill_seconds_per_admission=_optional_metric_float_list(metrics, "prefill_seconds_per_admission"),
+        decode_seconds_per_iteration=_optional_metric_float_list(metrics, "decode_seconds_per_iteration"),
+        decode_device_seconds_per_iteration=_optional_metric_float_list(
+            metrics, "decode_device_seconds_per_iteration"
+        ),
+        decode_host_seconds_per_iteration=_optional_metric_float_list(metrics, "decode_host_seconds_per_iteration"),
+        decode_submit_seconds_per_iteration=_optional_metric_float_list(
+            metrics, "decode_submit_seconds_per_iteration"
+        ),
+        decode_extract_seconds_per_iteration=_optional_metric_float_list(
+            metrics, "decode_extract_seconds_per_iteration"
+        ),
+        decode_tokens_per_iteration=_optional_metric_int_list(metrics, "decode_tokens_per_iteration"),
     )
 
 
@@ -1437,6 +1490,12 @@ def run_levanter_without_lm_head_case(
         prefill_admissions=result.prefill_admissions,
         prefill_prompt_tokens_per_admission=result.prefill_prompt_tokens_per_admission,
         prefill_seconds_per_admission=result.prefill_seconds_per_admission,
+        decode_seconds_per_iteration=result.decode_seconds_per_iteration,
+        decode_device_seconds_per_iteration=result.decode_device_seconds_per_iteration,
+        decode_host_seconds_per_iteration=result.decode_host_seconds_per_iteration,
+        decode_submit_seconds_per_iteration=result.decode_submit_seconds_per_iteration,
+        decode_extract_seconds_per_iteration=result.decode_extract_seconds_per_iteration,
+        decode_tokens_per_iteration=result.decode_tokens_per_iteration,
     )
 
 
@@ -1685,6 +1744,18 @@ def start_levanter_server(
                 list(server.inference_context.last_prefill_prompt_tokens_per_admission)
             ),
             "prefill_seconds_per_admission": list(server.inference_context.last_prefill_seconds_per_admission),
+            "decode_seconds_per_iteration": list(server.inference_context.last_decode_seconds_per_iteration),
+            "decode_device_seconds_per_iteration": list(
+                server.inference_context.last_decode_device_seconds_per_iteration
+            ),
+            "decode_host_seconds_per_iteration": list(server.inference_context.last_decode_host_seconds_per_iteration),
+            "decode_submit_seconds_per_iteration": list(
+                server.inference_context.last_decode_submit_seconds_per_iteration
+            ),
+            "decode_extract_seconds_per_iteration": list(
+                server.inference_context.last_decode_extract_seconds_per_iteration
+            ),
+            "decode_tokens_per_iteration": list(server.inference_context.last_decode_tokens_per_iteration),
         }
 
     logger.info("Started Levanter server at %s", base_url)
@@ -1970,6 +2041,12 @@ def write_outputs(
         "prefill admissions",
         "prefill chunks",
         "prefill s",
+        "decode iter s",
+        "decode device s",
+        "decode host s",
+        "decode submit s",
+        "decode extract s",
+        "decode iter toks",
         "decode/vllm",
         "total/vllm",
         "target",
@@ -1993,6 +2070,12 @@ def write_outputs(
             _optional_int(result.prefill_admissions),
             _optional_int_list(result.prefill_prompt_tokens_per_admission),
             _optional_float_list(result.prefill_seconds_per_admission),
+            _optional_float_list(result.decode_seconds_per_iteration),
+            _optional_float_list(result.decode_device_seconds_per_iteration),
+            _optional_float_list(result.decode_host_seconds_per_iteration),
+            _optional_float_list(result.decode_submit_seconds_per_iteration),
+            _optional_float_list(result.decode_extract_seconds_per_iteration),
+            _optional_int_list(result.decode_tokens_per_iteration),
             (
                 _ratio(result.decode_tokens_per_second, vllm_by_case.get(result.case_name).decode_tokens_per_second)
                 if result.case_name in vllm_by_case
