@@ -471,6 +471,66 @@ def _load_existing_rows(wandb, log_key: str) -> list[list]:
         return []
 
 
+def _rows_to_dicts(columns: list[str], rows: list[list]) -> list[dict]:
+    """Zip the flat W&B table rows back into dicts keyed by column name."""
+    return [dict(zip(columns, r, strict=False)) for r in rows]
+
+
+def build_classification_cache(human_rows: list[list]) -> dict[tuple[str, int], tuple[str, CommentClassification]]:
+    """Index already-classified comments so unchanged comments can skip
+    re-classification. Keyed on (comment_type, comment_id) — GitHub's inline /
+    review / issue comment ids live in separate spaces, so the type disambiguates
+    them. Maps to (stored body, classification); the body is kept so an edited
+    comment (same id, new text) is re-classified rather than served stale. The
+    cache is model-agnostic — re-run with `--refresh` after changing `--model`,
+    since the table does not record it."""
+    cache: dict[tuple[str, int], tuple[str, CommentClassification]] = {}
+    for row in _rows_to_dicts(HUMAN_COMMENT_COLUMNS, human_rows):
+        cls = CommentClassification(
+            **{"class": row["class"]},
+            catchable_strict=bool(row["catchable_strict"]),
+            catchable_generous=bool(row["catchable_generous"]),
+            confidence=float(row["confidence"]),
+            reason=row["reason"] or "",
+        )
+        cache[(row["comment_type"], int(row["comment_id"]))] = (row["body"] or "", cls)
+    return cache
+
+
+def resolve_classifications(
+    comments: list[Comment],
+    cache: dict[tuple[str, int], tuple[str, CommentClassification]],
+    classifier: Classifier,
+    batch_size: int,
+    concurrency: int,
+) -> list[CommentClassification | None]:
+    """Classify `comments`, returning one verdict per comment aligned with the
+    input. A comment is reused from `cache` when the same (comment_type,
+    comment_id) was seen before with identical (truncated) text; the rest are
+    sent to `classifier` in parallel batches."""
+    final: list[CommentClassification | None] = [None] * len(comments)
+    pending: list[tuple[int, Comment]] = []
+    for i, c in enumerate(comments):
+        cached = cache.get((c.comment_type, c.comment_id))
+        if cached and cached[0] == c.body[:500]:
+            final[i] = cached[1]
+        else:
+            pending.append((i, c))
+    logger.info(
+        "%d human comments: %d cached, %d to classify in batches of %d, %d in parallel",
+        len(comments),
+        len(comments) - len(pending),
+        len(pending),
+        batch_size,
+        concurrency,
+    )
+    items = [CommentToClassify(id=j, file=c.file, line=c.line, body=c.body) for j, (_, c) in enumerate(pending)]
+    fresh = classify_comments(classifier, items, batch_size, concurrency)
+    for j, (i, _) in enumerate(pending):
+        final[i] = fresh.get(j)
+    return final
+
+
 def load_findings_for_shas(wandb, shas: set[str]) -> dict[str, list[dict]]:
     """Fetch bot findings rows for the given head_shas from the shared run.
 
@@ -509,11 +569,6 @@ def overlap_count(bot_findings: list[dict], human_comments: list[Comment], windo
 # ---------------------------------------------------------------------------
 # Report: render the accumulated W&B tables into a shareable markdown digest
 # ---------------------------------------------------------------------------
-
-
-def _rows_to_dicts(columns: list[str], rows: list[list]) -> list[dict]:
-    """Zip the flat W&B table rows back into dicts keyed by column name."""
-    return [dict(zip(columns, r, strict=False)) for r in rows]
 
 
 def _parse_ts(s: str) -> dt.datetime:
@@ -746,6 +801,11 @@ def cli() -> None:
     show_default=True,
     help="Comma-separated bot logins to skip (lowercase)",
 )
+@click.option(
+    "--refresh",
+    is_flag=True,
+    help="Re-classify every comment, ignoring the cache (use after changing --model)",
+)
 @click.option("--dry-run", is_flag=True, help="Skip W&B upload; print rollup")
 def aggregate(
     repo: str,
@@ -755,9 +815,15 @@ def aggregate(
     batch_size: int,
     concurrency: int,
     bot_logins: str,
+    refresh: bool,
     dry_run: bool,
 ) -> None:
-    """Classify reviewer comments on recently-merged PRs and append to W&B."""
+    """Classify reviewer comments on recently-merged PRs and append to W&B.
+
+    Comments already classified in the W&B `human_comments` table are reused by
+    `comment_id` (unless their text changed), so a daily run over a rolling
+    window only sends genuinely-new comments to the model. Pass `--refresh` to
+    re-classify everything."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     bot_login_set = {x.strip().lower() for x in bot_logins.split(",") if x.strip()}
 
@@ -788,9 +854,12 @@ def aggregate(
         per_pr_comments[pr["number"]] = comments
         all_shas.add(pr["headRefOid"])
 
-    # Pull bot findings for these shas from the shared run (skip in dry-run).
+    # Pull bot findings + the existing human_comments table from the shared run
+    # (skip in dry-run). The human_comments rows serve double duty: the
+    # classification cache below, and the replace-by-PR merge at the end.
     if dry_run:
         findings_by_sha = {sha: [] for sha in all_shas}
+        existing_human_rows: list[list] = []
     else:
         wandb.init(
             project=WANDB_PROJECT,
@@ -799,24 +868,25 @@ def aggregate(
             settings=wandb.Settings(silent=True, _disable_stats=True, _disable_meta=True),
         )
         findings_by_sha = load_findings_for_shas(wandb, all_shas)
+        existing_human_rows = _load_existing_rows(wandb, "human_comments")
+    cache = {} if refresh else build_classification_cache(existing_human_rows)
 
-    # Flatten every human comment across all PRs into one list, assign each a
-    # stable marker (its index), classify the whole set in parallel batches,
-    # then map results back to comments. Batching across PRs keeps requests
-    # full even when most PRs have only a comment or two.
+    # Flatten every human comment across all PRs. Reuse a cached classification
+    # when the same comment_id was classified before with identical text;
+    # otherwise queue it for the model. Only the queued ones are batched and
+    # classified in parallel, so an overlapping daily window stays cheap.
     human_by_pr = {pr["number"]: [c for c in per_pr_comments.get(pr["number"], []) if not c.is_bot] for pr in prs}
     flat_comments = [c for pr in prs for c in human_by_pr[pr["number"]]]
-    items = [CommentToClassify(id=i, file=c.file, line=c.line, body=c.body) for i, c in enumerate(flat_comments)]
-    logger.info("Classifying %d human comments in batches of %d, %d in parallel", len(items), batch_size, concurrency)
-    classifications = classify_comments(classifier, items, batch_size, concurrency)
-    # Regroup classifications by PR, preserving flat-list ordering for markers.
-    marker = 0
+    final_cls = resolve_classifications(flat_comments, cache, classifier, batch_size, concurrency)
+
+    # Regroup by PR, preserving flat-list ordering.
+    idx = 0
     classified_by_pr: dict[int, list[tuple[Comment, CommentClassification | None]]] = {}
     for pr in prs:
         pairs: list[tuple[Comment, CommentClassification | None]] = []
         for c in human_by_pr[pr["number"]]:
-            pairs.append((c, classifications.get(marker)))
-            marker += 1
+            pairs.append((c, final_cls[idx]))
+            idx += 1
         classified_by_pr[pr["number"]] = pairs
 
     # Build rows.
@@ -885,14 +955,16 @@ def aggregate(
         click.echo(json.dumps({"pr_rollups": pr_rows, "human_comments": human_rows[:20]}, default=str, indent=2))
         return
 
-    # Replace-by-PR: a daily cron over a rolling window re-classifies PRs we've
-    # seen before. Drop existing rows whose pr_number is in this batch, then
-    # append the fresh ones — the new rows are the source of truth for those PRs.
+    # Replace-by-PR: a daily cron over a rolling window re-emits rows for PRs
+    # we've seen before. Drop existing rows whose pr_number is in this batch,
+    # then append the fresh ones — the new rows are the source of truth for
+    # those PRs. (Cached comments are re-emitted with their stored verdict, so
+    # the dropped rows are reconstructed identically unless the text changed.)
     refreshed_prs = {pr["number"] for pr in prs}
     pr_col_idx = HUMAN_COMMENT_COLUMNS.index("pr_number")
     out_pr_col_idx = PR_OUTCOME_COLUMNS.index("pr_number")
 
-    existing_humans = [r for r in _load_existing_rows(wandb, "human_comments") if r[pr_col_idx] not in refreshed_prs]
+    existing_humans = [r for r in existing_human_rows if r[pr_col_idx] not in refreshed_prs]
     existing_humans.extend(human_rows)
     wandb.log({"human_comments": wandb.Table(columns=HUMAN_COMMENT_COLUMNS, data=existing_humans)})
 
