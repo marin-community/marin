@@ -61,6 +61,11 @@ on:
         type: string
         default: '--xla_gpu_autotune_level=0'
         required: false
+      mixed_precision:
+        description: 'JMP mixed-precision policy for the GPU canary'
+        type: string
+        default: 'params=float32,compute=bfloat16,output=bfloat16'
+        required: false
 
 permissions:
   contents: read   # actions/checkout
@@ -99,6 +104,7 @@ jobs:
       CANARY_MIN_STEPS: "20"
       CANARY_MAX_LOSS: "20.0"
       CANARY_XLA_FLAGS: ${{ github.event_name == 'workflow_dispatch' && inputs.xla_flags || '--xla_gpu_autotune_level=0' }}
+      CANARY_MP: ${{ github.event_name == 'workflow_dispatch' && inputs.mixed_precision || 'params=float32,compute=bfloat16,output=bfloat16' }}
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
       IRIS_CONFIG: lib/iris/config/coreweave-ci.yaml
@@ -175,6 +181,7 @@ jobs:
             -e CANARY_PROFILER_START_STEP "$CANARY_PROFILER_START_STEP" \
             -e CANARY_PROFILER_NUM_STEPS "$CANARY_PROFILER_NUM_STEPS" \
             -e CANARY_TARGET_TOKENS "$CANARY_TARGET_TOKENS" \
+            -e CANARY_MP "$CANARY_MP" \
             -e XLA_FLAGS "$CANARY_XLA_FLAGS" \
             -e WANDB_ENTITY "$WANDB_ENTITY" \
             -e WANDB_PROJECT "$WANDB_PROJECT" \

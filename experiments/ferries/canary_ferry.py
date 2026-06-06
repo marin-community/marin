@@ -210,7 +210,7 @@ def _build_step_from_env() -> ExecutorStep:
             steps=versioned(num_steps),
             batch_size=versioned(batch_size),
             seed=versioned(0),
-            mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+            mp=versioned(os.environ.get("CANARY_MP", "params=float32,compute=bfloat16,output=bfloat16")),
             tracker=tracker,
             optimizer=versioned(optimizer),
             grug_trainer=versioned(trainer),
