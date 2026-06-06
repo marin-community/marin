@@ -247,6 +247,7 @@ class InferenceContext:
         self._next_request_id = 0
         self.last_prefill_admissions: int | None = None
         self.last_prefill_prompt_tokens_per_admission: list[int] = []
+        self.last_prefill_seconds_per_admission: list[float] = []
 
     def start(self):
         """Start the inference and batch processing threads"""
@@ -489,13 +490,15 @@ class InferenceContext:
         result = self.engine.generate(service_requests)
         self.last_prefill_admissions = result.prefill_admissions
         self.last_prefill_prompt_tokens_per_admission = list(result.prefill_prompt_tokens_per_admission)
+        self.last_prefill_seconds_per_admission = list(result.prefill_seconds_per_admission)
         duration = time.time() - start_time
         logger.info(
-            "Batch completed in %.2fs, generated %d tokens, prefill admissions=%d chunks=%s",
+            "Batch completed in %.2fs, generated %d tokens, prefill admissions=%d chunks=%s seconds=%s",
             duration,
             result.total_generated,
             result.prefill_admissions,
             result.prefill_prompt_tokens_per_admission,
+            result.prefill_seconds_per_admission,
         )
 
         # Return results to futures

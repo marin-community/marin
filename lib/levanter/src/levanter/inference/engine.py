@@ -1028,6 +1028,7 @@ class GenerationResult:
     total_generated: int
     prefill_admissions: int = 0
     prefill_prompt_tokens_per_admission: list[int] = field(default_factory=list)
+    prefill_seconds_per_admission: list[float] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -1488,6 +1489,7 @@ class InferenceEngine:
         pending_requests = list(requests)
         prefill_admissions = 0
         prefill_prompt_tokens_per_admission: list[int] = []
+        prefill_seconds_per_admission: list[float] = []
         # Initialize fresh result buckets for this call
         for rid in call_rids:
             self.results[rid] = {
@@ -1559,6 +1561,8 @@ class InferenceEngine:
         prefill_device_done = time.time()
         _record_prefill(prefill_admission)
         initial_prefill_out = time.time()
+        if prefill_admission is not None:
+            prefill_seconds_per_admission.append(initial_prefill_out - time_in)
         logger.info(
             "Initial prefill: submit %.3fs, device %.3fs, extraction %.3fs, total %.3fs",
             prefill_submit_done - time_in,
@@ -1601,14 +1605,16 @@ class InferenceEngine:
                 )
                 prefill_device_done = time.time()
                 iter_new_tokens += _record_prefill(prefill_admission)
+                prefill_out = time.time()
                 if prefill_admission is not None:
+                    prefill_seconds_per_admission.append(prefill_out - prefill_start)
                     logger.info(
                         "Prefill admission %d: %d requests, %d seqs, %d prompt tokens, %.3fs",
                         prefill_admissions,
                         prefill_admission.plan.request_count,
                         prefill_admission.plan.sequence_count,
                         prefill_admission.plan.prompt_tokens,
-                        prefill_device_done - prefill_start,
+                        prefill_out - prefill_start,
                     )
                 logger.debug("Prefill submit overhead %.3fs", prefill_submit_done - prefill_start)
 
@@ -1710,6 +1716,7 @@ class InferenceEngine:
             total_generated=total_generated,
             prefill_admissions=prefill_admissions,
             prefill_prompt_tokens_per_admission=prefill_prompt_tokens_per_admission,
+            prefill_seconds_per_admission=prefill_seconds_per_admission,
         )
 
     def generate_without_lm_head(self, requests: Sequence[Request]) -> GenerationResult:
@@ -1730,9 +1737,11 @@ class InferenceEngine:
                 k: DecodeResult(id=rid, choice=k, token_list=[]) for k in range(expected_children[rid])
             }
 
+        prefill_start = time.time()
         prefill_admission = self._prefill_batch(requests, apply_top_p=apply_top_p, return_logprobs=False)
         _block_until_ready_optional((self.gen_state, None if prefill_admission is None else prefill_admission.outputs))
         self._ingest_outputs(None if prefill_admission is None else prefill_admission.outputs)
+        prefill_seconds = time.time() - prefill_start
         prefill_prompt_tokens_per_admission = (
             [] if prefill_admission is None else [prefill_admission.plan.prompt_tokens]
         )
@@ -1790,6 +1799,7 @@ class InferenceEngine:
             total_generated=total_generated,
             prefill_admissions=0 if prefill_admission is None else 1,
             prefill_prompt_tokens_per_admission=prefill_prompt_tokens_per_admission,
+            prefill_seconds_per_admission=[] if prefill_admission is None else [prefill_seconds],
         )
 
     def generate_with_lm_head_no_sampling(self, requests: Sequence[Request]) -> GenerationResult:
@@ -1809,9 +1819,11 @@ class InferenceEngine:
                 k: DecodeResult(id=rid, choice=k, token_list=[]) for k in range(expected_children[rid])
             }
 
+        prefill_start = time.time()
         prefill_admission = self._prefill_batch(requests, apply_top_p=apply_top_p, return_logprobs=False)
         _block_until_ready_optional((self.gen_state, None if prefill_admission is None else prefill_admission.outputs))
         self._ingest_outputs(None if prefill_admission is None else prefill_admission.outputs)
+        prefill_seconds = time.time() - prefill_start
         prefill_prompt_tokens_per_admission = (
             [] if prefill_admission is None else [prefill_admission.plan.prompt_tokens]
         )
@@ -1869,6 +1881,7 @@ class InferenceEngine:
             total_generated=total_generated,
             prefill_admissions=0 if prefill_admission is None else 1,
             prefill_prompt_tokens_per_admission=prefill_prompt_tokens_per_admission,
+            prefill_seconds_per_admission=[] if prefill_admission is None else [prefill_seconds],
         )
 
     def write_kernel_jaxprs(

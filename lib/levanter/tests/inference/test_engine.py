@@ -355,6 +355,8 @@ def test_generate_admits_multiple_prefill_chunks_for_one_logical_batch():
     assert result.total_generated == 8
     assert result.prefill_admissions == 2
     assert result.prefill_prompt_tokens_per_admission == [4, 4]
+    assert len(result.prefill_seconds_per_admission) == 2
+    assert all(seconds >= 0.0 for seconds in result.prefill_seconds_per_admission)
 
 
 @pytest.mark.parametrize("method_name", ["generate_without_lm_head", "generate_with_lm_head_no_sampling"])

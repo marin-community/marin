@@ -114,6 +114,7 @@ class CaseResult:
     compiled_shape_count: int | None
     prefill_admissions: int | None = None
     prefill_prompt_tokens_per_admission: list[int] | None = None
+    prefill_seconds_per_admission: list[float] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1055,7 +1056,7 @@ def run_case(
 
     elapsed = time.perf_counter() - start
     total_tokens = prompt_total + completion_total
-    prefill_admissions, prefill_chunks = _case_admission_metrics(handle.metrics_snapshot)
+    prefill_admissions, prefill_chunks, prefill_seconds = _case_admission_metrics(handle.metrics_snapshot)
     return CaseResult(
         case_name=case.name,
         backend=handle.name,
@@ -1078,6 +1079,7 @@ def run_case(
         compiled_shape_count=handle.compiled_shape_count,
         prefill_admissions=prefill_admissions,
         prefill_prompt_tokens_per_admission=prefill_chunks,
+        prefill_seconds_per_admission=prefill_seconds,
     )
 
 
@@ -1112,15 +1114,17 @@ def _stress_service_static_metric(
 
 def _case_admission_metrics(
     metrics_snapshot: Callable[[], dict[str, Any]] | None,
-) -> tuple[int | None, list[int] | None]:
+) -> tuple[int | None, list[int] | None, list[float] | None]:
     if metrics_snapshot is None:
-        return None, None
+        return None, None, None
     metrics = metrics_snapshot()
     admissions = metrics.get("prefill_admissions")
     chunks = metrics.get("prefill_prompt_tokens_per_admission")
+    seconds = metrics.get("prefill_seconds_per_admission")
     return (
         None if admissions is None else int(admissions),
         None if chunks is None else [int(chunk) for chunk in chunks],
+        None if seconds is None else [float(second) for second in seconds],
     )
 
 
@@ -1432,6 +1436,7 @@ def run_levanter_without_lm_head_case(
         compiled_shape_count=compiled_shape_count,
         prefill_admissions=result.prefill_admissions,
         prefill_prompt_tokens_per_admission=result.prefill_prompt_tokens_per_admission,
+        prefill_seconds_per_admission=result.prefill_seconds_per_admission,
     )
 
 
@@ -1679,6 +1684,7 @@ def start_levanter_server(
             "prefill_prompt_tokens_per_admission": (
                 list(server.inference_context.last_prefill_prompt_tokens_per_admission)
             ),
+            "prefill_seconds_per_admission": list(server.inference_context.last_prefill_seconds_per_admission),
         }
 
     logger.info("Started Levanter server at %s", base_url)
@@ -1878,6 +1884,12 @@ def _optional_int_list(value: list[int] | None) -> str:
     return ",".join(str(item) for item in value)
 
 
+def _optional_float_list(value: list[float] | None) -> str:
+    if value is None:
+        return ""
+    return ",".join(f"{item:.3f}" for item in value)
+
+
 def _parity_target_status(result: CaseResult, baseline: CaseResult | None) -> str:
     if baseline is None or result.backend == baseline.backend or baseline.decode_tokens_per_second == 0.0:
         return ""
@@ -1957,6 +1969,7 @@ def write_outputs(
         "shape buckets",
         "prefill admissions",
         "prefill chunks",
+        "prefill s",
         "decode/vllm",
         "total/vllm",
         "target",
@@ -1979,6 +1992,7 @@ def write_outputs(
             _optional_int(result.compiled_shape_count),
             _optional_int(result.prefill_admissions),
             _optional_int_list(result.prefill_prompt_tokens_per_admission),
+            _optional_float_list(result.prefill_seconds_per_admission),
             (
                 _ratio(result.decode_tokens_per_second, vllm_by_case.get(result.case_name).decode_tokens_per_second)
                 if result.case_name in vllm_by_case

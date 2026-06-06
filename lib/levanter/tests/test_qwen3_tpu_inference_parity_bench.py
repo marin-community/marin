@@ -772,6 +772,7 @@ def test_summary_markdown_includes_vllm_ratio_columns(tmp_path):
     assert "ttft p50 ms" in summary
     assert "hbm bytes" in summary
     assert "shape buckets" in summary
+    assert "prefill s" in summary
     assert "0.900" in summary
     assert "pass" in summary
     assert "12.346" in summary
@@ -1438,6 +1439,7 @@ def test_run_levanter_without_lm_head_case_preserves_warmup_flag(monkeypatch):
                 total_generated = 2
                 prefill_admissions = 1
                 prefill_prompt_tokens_per_admission = [1]
+                prefill_seconds_per_admission = [0.5]
 
             return Result()
 
@@ -1518,6 +1520,7 @@ def test_run_levanter_without_lm_head_case_preserves_warmup_flag(monkeypatch):
     assert measured.compiled_shape_count == 2
     assert warmup.prefill_admissions == 1
     assert warmup.prefill_prompt_tokens_per_admission == [1]
+    assert warmup.prefill_seconds_per_admission == [0.5]
     assert events == [
         "enter:mesh",
         "enter:axis_mapping",
