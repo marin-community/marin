@@ -52,6 +52,16 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   `1262.90` decode tok/s and `21469.31` total tok/s. Levanter reached
   `1006.83` decode tok/s and `17116.08` total tok/s, for a ratio of `0.797`;
   the generic benchmark target marked this row `fail`.
+- A narrow Levanter-only v6e-8 diagnostic follow-up completed, but it exposed a
+  benchmark harness artifact rather than a clean attribution split. The normal
+  diagnostic row measured `907.43` decode tok/s, `15426.28` total tok/s, and a
+  single `0.813`s decode iteration with `1022` iteration tokens. The
+  `no_lm_head` and `lm_head_no_sampling` rows measured `562.19` and `509.11`
+  decode tok/s, respectively, but changed decode token grouping to
+  `510,256,256` because the diagnostic path admitted only one pending prefill
+  per outer iteration instead of draining all pending prefills before decode.
+  Treat those two rows as confounded until the diagnostic path mirrors normal
+  prefill-drain scheduling.
 
 ## Authoritative Artifacts
 
@@ -80,6 +90,17 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   `/dlwh/qwen3-v6e8-prefilldrain-prefill-b8-i2048-o128-n1-20260606-0703`,
   Levanter `1006.83` decode tok/s and `17116.08` total tok/s versus vLLM
   `1262.90` decode tok/s and `21469.31` total tok/s, ratio `0.797`.
+- Prefill-heavy v6e-8 diagnostic: Iris job
+  `/dlwh/qwen3-v6e8-prefilldiag-prefill-b8-i2048-o128-n1-20260606-1504`,
+  Levanter-only on #6185 head `ba82f306d`, `--profile-levanter`,
+  `--levanter-diagnose-without-lm-head`, and
+  `--levanter-diagnose-lm-head-no-sampling`. The job succeeded with no Iris
+  failures. Results: normal `levanter:auto` `907.43` decode tok/s and
+  `15426.28` total tok/s, `no_lm_head` `562.19` decode tok/s and `9557.28`
+  total tok/s, `lm_head_no_sampling` `509.11` decode tok/s and `8654.88` total
+  tok/s. The diagnostic rows are not yet a clean LM-head/sampling attribution
+  because their decode iteration tokens were `510,256,256` instead of the
+  normal row's `1022`.
 
 ## Acceptance Criteria
 
@@ -184,6 +205,22 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   measured decode iteration was `0.802`s total, with `0.623`s device,
   `0.178`s host, `0.174`s submit, `0.003`s extract, and `1022` iteration
   tokens. This row is now the narrow v6e prefill-heavy diagnostic target.
+- PR #6185 Levanter-only prefill-heavy diagnostic:
+  `/dlwh/qwen3-v6e8-prefilldiag-prefill-b8-i2048-o128-n1-20260606-1504`.
+  The job succeeded for `prefill_b8_i2048_o128_n1`, Qwen3-8B, v6e-8, TP=8,
+  `--max-pages 512`, two warmups, one measured round, `--profile-levanter`,
+  `--levanter-diagnose-without-lm-head`, and
+  `--levanter-diagnose-lm-head-no-sampling`. The normal `levanter:auto`
+  diagnostic row measured `907.43` decode tok/s and `15426.28` total tok/s,
+  with prefill chunks `4096,4096,4096,4096` and one `0.813`s decode iteration
+  carrying `1022` iteration tokens. The `no_lm_head` row measured `562.19`
+  decode tok/s and `9557.28` total tok/s; the `lm_head_no_sampling` row
+  measured `509.11` decode tok/s and `8654.88` total tok/s. Those two
+  diagnostic rows used decode iteration token groups `510,256,256`, so they
+  are confounded by diagnostic scheduling rather than a clean LM-head/sampling
+  attribution. Code inspection shows normal `generate()` drains all pending
+  prefill admissions before decode, while `_generate_diagnostic()` admits only
+  one pending prefill per outer iteration.
 - PR #6185 current CI state as of 2026-06-06T05:21Z: all visible checks are
   green, including the rerun `marin-integration` job `79853218990`. The prior
   red lane was the external Hugging Face `429 Too Many Requests` for `gpt2`
@@ -364,12 +401,13 @@ thread. Keep background-style work narrow and explicit until the app is stable:
      This is a terminal infra/backend failure for the v5p comparison, not a
      Levanter benchmark result. No follow-up decode-heavy v5p row has been
      launched.
-5. Investigate the v6e prefill-heavy gap with one narrow Levanter-only follow-up
-   for `prefill_b8_i2048_o128_n1`. Prefer the existing engine diagnostics:
-   `--levanter-diagnose-without-lm-head` and
-   `--levanter-diagnose-lm-head-no-sampling`, optionally with
-   `--profile-levanter`, so the next row separates transformer/cache decode
-   from LM-head/sampling and submit/host overhead without rerunning vLLM.
+5. Fix the diagnostic harness before using it for v6e prefill-heavy attribution.
+   The first Levanter-only diagnostic completed, but the
+   `no_lm_head`/`lm_head_no_sampling` rows changed service scheduling by
+   decoding after each pending prefill admission. Make `_generate_diagnostic()`
+   mirror normal prefill-drain scheduling, then rerun at most one corrected
+   Levanter-only `prefill_b8_i2048_o128_n1` diagnostic if clean attribution is
+   still needed.
 6. Develop the RL batched-token API slice in parallel with the runtime wait.
    vLLM, Levanter, MathEnv, rollout-worker policy identity, tokenizer replay
    identity, and persisted rollout metadata now exercise the token-native
