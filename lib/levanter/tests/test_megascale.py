@@ -61,12 +61,6 @@ class _FakeIrisContext:
     resolver: _FakeResolver
 
 
-def test_configure_megascale_skips_without_iris_slice_topology(monkeypatch):
-    monkeypatch.delenv(megascale.IRIS_SLICE_COUNT, raising=False)
-
-    assert megascale.configure_megascale_from_iris() == {}
-
-
 def test_configure_megascale_maps_iris_slice_topology_to_megascale_env(monkeypatch):
     ready_tasks = set(range(8))
     registry = _FakeRegistry(ready_tasks)

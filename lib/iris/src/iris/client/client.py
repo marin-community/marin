@@ -696,6 +696,7 @@ class IrisClient:
                 inherited_region = region_constraint([job_info.worker_region])
                 constraints = [*constraints, inherited_region]
 
+        # Convert to wire format
         resources_proto = resources.to_proto()
         environment_proto = environment.to_proto() if environment else None
         constraints_proto = [c.to_proto() for c in constraints or []]
