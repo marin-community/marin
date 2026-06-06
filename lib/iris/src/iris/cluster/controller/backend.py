@@ -40,6 +40,9 @@ from finelog.client.log_client import Table
 from finelog.types import LogWriterProtocol
 from rigging.timing import Timestamp
 
+from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.autoscaler.state import AutoscalerState
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
@@ -60,7 +63,7 @@ from iris.cluster.controller.scheduling_policy import (
 from iris.cluster.controller.schema import ReservationClaim
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.runtime.profile import IrisProfile
-from iris.cluster.types import JobName, PendingTask, WorkerId
+from iris.cluster.types import JobName, PendingTask, WorkerId, WorkerStatusMap
 from iris.rpc import job_pb2, worker_pb2
 
 logger = logging.getLogger(__name__)
@@ -209,6 +212,45 @@ class ScheduleResult:
     # Post-taint context (or the un-tainted context when no claims were active),
     # surfaced for dashboard diagnostics. None only for the empty K8s result.
     post_taint_context: SchedulingContext | None = None
+
+
+@dataclass(frozen=True)
+class CapacityInput:
+    """DB-less snapshot handed to :meth:`TaskBackend.manage_capacity`.
+
+    The controller assembles this from its own DB reads each autoscale tick; the
+    backend evaluates scaling decisions against it without touching the database.
+    """
+
+    worker_status_map: WorkerStatusMap
+    """Per-worker idle/running state (``_build_worker_status_map``)."""
+    demand_entries: list[DemandEntry]
+    """Unmet demand grouped by requirement (``compute_demand_entries``)."""
+
+
+@dataclass(frozen=True)
+class CapacityResult:
+    """Outcome of :meth:`TaskBackend.manage_capacity`.
+
+    Carries the autoscaler's current tracked state for the controller to mirror
+    into the ``slices`` / ``scaling_groups`` tables. Empty for backends that
+    provision their own capacity (k8s).
+    """
+
+    state: AutoscalerState = field(default_factory=AutoscalerState)
+
+
+@dataclass(frozen=True)
+class WorkersFailedResult:
+    """Outcome of :meth:`TaskBackend.on_workers_failed`.
+
+    The Iris autoscaler tears down the failed workers' slices, so their healthy
+    siblings must be failed too. ``state`` carries the post-teardown autoscaler
+    state for the controller to persist.
+    """
+
+    sibling_worker_ids: list[WorkerId] = field(default_factory=list)
+    state: AutoscalerState = field(default_factory=AutoscalerState)
 
 
 def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> ScheduleResult:
@@ -390,6 +432,12 @@ class TaskBackend(Protocol):
     """True when the backend provisions its own nodes (k8s cluster autoscaler);
     False when the Iris :class:`Autoscaler` provisions capacity for it."""
 
+    autoscaler: Autoscaler | None
+    """The Iris :class:`Autoscaler` driving capacity, or None for backends that
+    manage their own (k8s) or have no scale groups. Read-only handle the
+    controller exposes for dashboard/status RPCs; capacity is driven through
+    :meth:`manage_capacity`, never this attribute."""
+
     def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
         """Converge the backend toward ``batch`` and report observed state."""
         ...
@@ -400,6 +448,34 @@ class TaskBackend(Protocol):
         IRIS placement runs the full Iris scheduling pipeline; BACKEND placement
         (Kueue, slurmctld) returns an empty result — the backend places tasks
         itself. No database access: snapshot in, decisions out.
+        """
+        ...
+
+    def manage_capacity(self, snapshot: CapacityInput) -> CapacityResult:
+        """Evaluate scaling decisions from a DB-less snapshot.
+
+        IRIS placement drives the Iris :class:`Autoscaler`; BACKEND placement
+        returns an empty result (the cluster autoscaler / Kueue handle capacity).
+        Returns the autoscaler state for the controller to persist — no DB access.
+        """
+        ...
+
+    def on_workers_failed(self, worker_ids: list[WorkerId]) -> WorkersFailedResult:
+        """Tear down slices for definitively-failed workers and return siblings.
+
+        IRIS placement terminates the failed workers' slices via the autoscaler
+        and returns the sibling worker ids the controller must fail plus the
+        post-teardown state to persist. BACKEND placement returns an empty result.
+        """
+        ...
+
+    def attach_autoscaler(self, autoscaler: Autoscaler) -> None:
+        """Attach the Iris autoscaler that provisions capacity for this backend.
+
+        Called once by the controller's main() after construction (mirrors
+        :meth:`set_log_sink`). Only invoked on backends with
+        ``manages_capacity`` False; capacity-managing backends (k8s) never
+        receive one.
         """
         ...
 

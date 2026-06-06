@@ -22,7 +22,6 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     DEFAULT_SCALE_UP_RATE_LIMIT,
     ScalingGroup,
 )
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.rpc import config_pb2
 from iris.time_proto import duration_from_proto
@@ -36,7 +35,6 @@ def create_autoscaler(
     scale_groups: dict[str, config_pb2.ScaleGroupConfig],
     label_prefix: str,
     base_worker_config: config_pb2.WorkerConfig | None = None,
-    db: ControllerDB | None = None,
 ) -> Autoscaler:
     """Create autoscaler from WorkerInfraProvider and explicit config.
 
@@ -47,7 +45,6 @@ def create_autoscaler(
         label_prefix: Prefix for labels on managed resources
         base_worker_config: Base worker configuration passed through to platform.create_slice().
             None disables bootstrap (test/local mode).
-        db: Optional DB handle for write-through persistence.
 
     Returns:
         Configured Autoscaler instance
@@ -69,7 +66,6 @@ def create_autoscaler(
             idle_threshold=scale_down_delay,
             scale_up_rate_limit=group_config.scale_up_rate_limit or DEFAULT_SCALE_UP_RATE_LIMIT,
             scale_down_rate_limit=group_config.scale_down_rate_limit or DEFAULT_SCALE_DOWN_RATE_LIMIT,
-            db=db,
         )
         resources = group_config.resources
         worker_attrs = dict(group_config.worker.attributes) if group_config.HasField("worker") else {}
@@ -93,5 +89,4 @@ def create_autoscaler(
         config=autoscaler_config,
         platform=platform,
         base_worker_config=base_worker_config,
-        db=db,
     )

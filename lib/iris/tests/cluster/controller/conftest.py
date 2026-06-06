@@ -37,11 +37,13 @@ from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.backend import (
     BackendReconcileInput,
     BackendReconcileResult,
+    CapacityResult,
     Placement,
     ProviderUnsupportedError,
     ScheduleInput,
     ScheduleResult,
     TaskTarget,
+    WorkersFailedResult,
     run_scheduling_decision,
 )
 from iris.cluster.controller.controller import Controller, ControllerConfig
@@ -99,6 +101,7 @@ class FakeProvider:
     name = "worker"
     placement = Placement.IRIS
     manages_capacity = False
+    autoscaler = None
 
     def __init__(self) -> None:
         # Real Iris scheduler: ``ctrl._run_scheduling`` routes the decision
@@ -108,6 +111,15 @@ class FakeProvider:
 
     def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
         return run_scheduling_decision(self._scheduler, snapshot)
+
+    def manage_capacity(self, snapshot) -> CapacityResult:
+        return CapacityResult()
+
+    def on_workers_failed(self, worker_ids) -> WorkersFailedResult:
+        return WorkersFailedResult()
+
+    def attach_autoscaler(self, autoscaler) -> None:
+        self.autoscaler = autoscaler
 
     def get_process_status(
         self,

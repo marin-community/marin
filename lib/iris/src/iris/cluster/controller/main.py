@@ -24,7 +24,6 @@ from rigging.timing import Duration, Timestamp
 
 from iris.cluster.config import load_config, make_provider
 from iris.cluster.controller.auth import create_controller_auth
-from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler_factory import create_autoscaler
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
@@ -33,6 +32,7 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
 from iris.cluster.providers.factory import create_provider_bundle
 from iris.rpc import config_pb2
+from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +180,6 @@ def run_controller_serve(
     # are unavailable on a local dev machine.
     auth = create_controller_auth(cluster_config.auth, db=db)
 
-    autoscaler: Autoscaler | None = None
     base_worker_config = None
     if dry_run:
         logger.info("Dry-run mode: skipping autoscaler and provider bundle creation")
@@ -212,15 +211,19 @@ def run_controller_serve(
             scale_groups=cluster_config.scale_groups,
             label_prefix=cluster_config.platform.label_prefix or "iris",
             base_worker_config=base_worker_config,
-            db=db,
         )
         logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
 
         # Restore autoscaler state (tracked slices/workers/backoff) from the DB
         # so restarted controllers don't lose cloud resource tracking and
-        # scale up duplicates.
+        # scale up duplicates. This one-time bootstrap is the only DB touch the
+        # autoscaler makes; steady-state persistence is owned by the controller.
         autoscaler.restore_from_db(db, workers)
         logger.info("Autoscaler state restored from DB")
+
+        # The backend owns the autoscaler; the controller drives it via
+        # manage_capacity and persists the returned state each tick.
+        provider.attach_autoscaler(autoscaler)
 
     if checkpoint_interval is None:
         checkpoint_interval = HOURLY_CHECKPOINT_SECONDS
@@ -247,12 +250,12 @@ def run_controller_serve(
         dry_run=dry_run,
         log_service_address=log_service_address,
         endpoints=endpoints,
+        autoscaler_evaluation_interval=duration_from_proto(cluster_config.defaults.autoscaler.evaluation_interval),
     )
 
     controller = Controller(
         config=config,
         provider=provider,
-        autoscaler=autoscaler,
         db=db,
     )
     logger.info("Controller instance created")

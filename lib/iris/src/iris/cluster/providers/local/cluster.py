@@ -47,13 +47,13 @@ from iris.cluster.token_store import store_token
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
+from iris.time_proto import duration_from_proto
 
 
 def create_local_autoscaler(
     config: config_pb2.IrisClusterConfig,
     controller_address: str,
     threads: ThreadContainer | None = None,
-    db: ControllerDB | None = None,
 ) -> tuple[Autoscaler, tempfile.TemporaryDirectory]:
     """Create Autoscaler with GcpWorkerProvider(LOCAL) for all scale groups.
 
@@ -126,7 +126,6 @@ def create_local_autoscaler(
             label_prefix=label_prefix,
             scale_up_rate_limit=sg_config.scale_up_rate_limit or DEFAULT_SCALE_UP_RATE_LIMIT,
             scale_down_rate_limit=sg_config.scale_down_rate_limit or DEFAULT_SCALE_DOWN_RATE_LIMIT,
-            db=db,
         )
 
     # Build base_worker_config from defaults so auth_token (and other fields)
@@ -142,7 +141,6 @@ def create_local_autoscaler(
         platform=platform,
         threads=threads,
         base_worker_config=base_worker_config,
-        db=db,
     )
     return autoscaler, temp_dir
 
@@ -200,8 +198,12 @@ class LocalCluster:
             self._config,
             address,
             threads=autoscaler_threads,
-            db=db,
         )
+
+        # The backend owns the autoscaler; the controller drives it via
+        # manage_capacity and persists the returned state each tick.
+        provider = RpcTaskBackend(stub_factory=RpcWorkerStubFactory())
+        provider.attach_autoscaler(self._autoscaler)
 
         self._controller = Controller(
             config=ControllerConfig(
@@ -213,9 +215,9 @@ class LocalCluster:
                 auth_verifier=auth.verifier,
                 auth_provider=auth.provider,
                 auth=auth,
+                autoscaler_evaluation_interval=duration_from_proto(self._config.defaults.autoscaler.evaluation_interval),
             ),
-            provider=RpcTaskBackend(stub_factory=RpcWorkerStubFactory()),
-            autoscaler=self._autoscaler,
+            provider=provider,
             threads=controller_threads,
             db=db,
         )

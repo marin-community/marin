@@ -23,9 +23,12 @@ from finelog.types import LogWriterProtocol
 from rigging.timing import Duration
 
 from iris.chaos import chaos
+from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.backend import (
     BackendReconcileInput,
     BackendReconcileResult,
+    CapacityInput,
+    CapacityResult,
     ClusterCapacity,
     PingResult,
     Placement,
@@ -33,6 +36,7 @@ from iris.cluster.controller.backend import (
     ScheduleInput,
     ScheduleResult,
     TaskTarget,
+    WorkersFailedResult,
     run_scheduling_decision,
 )
 from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
@@ -128,11 +132,19 @@ class RpcTaskBackend:
     stub_factory: WorkerStubFactory
     parallelism: int = 128
     name: str = "worker"
+    # The Iris autoscaler that provisions capacity for this backend. Attached by
+    # the controller's main() after construction (mirrors set_log_sink); None for
+    # clusters with no scale groups, where capacity calls are no-ops.
+    autoscaler: Autoscaler | None = None
     placement: ClassVar[Placement] = Placement.IRIS
     manages_capacity: ClassVar[bool] = False
     # Stateless: holds no per-tick state, so one shared instance is reused
     # across scheduling cycles (mirrors the autoscaler's own Scheduler).
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
+
+    def attach_autoscaler(self, autoscaler: Autoscaler) -> None:
+        """Attach the Iris autoscaler that provisions capacity for this backend."""
+        self.autoscaler = autoscaler
 
     def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
         """Fan the Reconcile RPC out across all planned workers concurrently."""
@@ -146,6 +158,30 @@ class RpcTaskBackend:
     def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
         """Run the Iris scheduling decision pipeline over the snapshot."""
         return run_scheduling_decision(self._scheduler, snapshot)
+
+    def manage_capacity(self, snapshot: CapacityInput) -> CapacityResult:
+        """Run one autoscaler cycle (refresh + probe_health + update) over the snapshot.
+
+        The DB reads (worker status, demand) are done by the controller and
+        handed in via ``snapshot``; this drives the in-memory autoscaler and
+        returns its tracked state for the controller to persist.
+        """
+        if self.autoscaler is None:
+            return CapacityResult()
+        self.autoscaler.refresh(snapshot.worker_status_map)
+        self.autoscaler.probe_health()
+        self.autoscaler.update(snapshot.demand_entries)
+        return CapacityResult(state=self.autoscaler.persistable_state())
+
+    def on_workers_failed(self, worker_ids: list[WorkerId]) -> WorkersFailedResult:
+        """Terminate the failed workers' slices and return their healthy siblings."""
+        if self.autoscaler is None:
+            return WorkersFailedResult()
+        siblings = self.autoscaler.terminate_slices_for_workers([str(wid) for wid in worker_ids])
+        return WorkersFailedResult(
+            sibling_worker_ids=[WorkerId(wid) for wid in siblings],
+            state=self.autoscaler.persistable_state(),
+        )
 
     def capacity(self) -> ClusterCapacity | None:
         return None
@@ -259,4 +295,6 @@ class RpcTaskBackend:
                 return ReconcileResult(worker_id=plan.worker_id, observations=[], error=str(e))
 
     def close(self) -> None:
+        if self.autoscaler is not None:
+            self.autoscaler.shutdown()
         self.stub_factory.close()

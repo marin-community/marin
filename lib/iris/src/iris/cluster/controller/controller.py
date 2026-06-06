@@ -30,8 +30,10 @@ from iris.cluster.controller import direct_provider, ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
 from iris.cluster.controller.backend import (
     BackendReconcileInput,
+    CapacityInput,
     ClusterCapacity,
     Placement,
     ScheduleInput,
@@ -170,6 +172,10 @@ class ControllerConfig:
     heartbeat_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     """How often to send heartbeats to workers."""
 
+    autoscaler_evaluation_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
+    """How often the controller runs an autoscale cycle (backend ``manage_capacity``).
+    Only used when the backend does not manage its own capacity."""
+
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(1.0))
     """Polling reconcile cadence. The polling thread wakes every ``poll_interval``
     (or sooner if ``_polling_wake`` is set) and runs ``_reconcile_tick``
@@ -268,16 +274,15 @@ class Controller:
 
     Args:
         config: Controller configuration
-        provider: TaskProvider for communicating with the execution backend
-        autoscaler: Optional Autoscaler for managing VM slices. If provided,
-                   the controller will run it in a background thread.
+        provider: TaskBackend for communicating with the execution backend. When
+            it does not manage its own capacity (``manages_capacity`` is False),
+            the controller drives its ``manage_capacity`` in a background loop.
     """
 
     def __init__(
         self,
         config: ControllerConfig,
         provider: TaskBackend,
-        autoscaler: "Autoscaler | None" = None,
         threads: ThreadContainer | None = None,
         db: ControllerDB | None = None,
     ):
@@ -399,8 +404,6 @@ class Controller:
         self._prune_thread: ManagedThread | None = None
         self._ping_thread: ManagedThread | None = None
         self._checkpoint_thread: ManagedThread | None = None
-
-        self._autoscaler: Autoscaler | None = autoscaler
 
         # Throttles the execution-timeout deadline scan in _reconcile_tick.
         # The reconcile tick runs frequently (poll cadence); the timeout query
@@ -568,8 +571,7 @@ class Controller:
             logger.info("Registered system endpoint %s -> %s", name, url)
         self._service._system_endpoints["/system/log-server"] = self._log_service_address
 
-        if self._autoscaler:
-            logger.info("Autoscaler configured with %d scale groups", len(self._autoscaler.groups))
+        if not self._provider.manages_capacity and not self._config.dry_run:
             self._autoscaler_thread = self._threads.spawn(self._run_autoscaler_loop, name="autoscaler-loop")
 
         if self._periodic_checkpoint_limiter is not None and not self._config.dry_run:
@@ -627,10 +629,9 @@ class Controller:
             self._checkpoint_thread.stop()
             self._checkpoint_thread.join(timeout=join_timeout)
 
-        if self._autoscaler:
-            self._autoscaler.shutdown()
-
         self._threads.stop()
+        # The backend owns the autoscaler now; close() shuts it down (terminates
+        # VMs, stops the platform) and releases the backend's own resources.
         self._provider.close()
 
         # Remove log handler before closing log resources to avoid errors
@@ -756,7 +757,7 @@ class Controller:
     def _run_autoscaler_loop(self, stop_event: threading.Event) -> None:
         """Autoscaler loop: runs on its own thread so blocking cloud API calls
         don't stall scheduling or heartbeats."""
-        limiter = RateLimiter(interval_seconds=self._autoscaler.evaluation_interval.to_seconds())
+        limiter = RateLimiter(interval_seconds=self._config.autoscaler_evaluation_interval.to_seconds())
         while not stop_event.is_set():
             if not limiter.wait(cancel=stop_event):
                 break
@@ -1229,15 +1230,14 @@ class Controller:
         for wid, addr in failure_result.removed_workers:
             self._provider.on_worker_failed(wid, addr)
             removed.append(wid)
-        if self._autoscaler:
-            sibling_worker_ids = self._autoscaler.terminate_slices_for_workers(
-                [str(wid) for wid, _ in failure_result.removed_workers]
-            )
-            for wid in sibling_worker_ids:
+        failed_result = self._provider.on_workers_failed([wid for wid, _ in failure_result.removed_workers])
+        persist_autoscaler_state(self._db, failed_result.state)
+        if failed_result.sibling_worker_ids:
+            for wid in failed_result.sibling_worker_ids:
                 log_event("worker_failing", str(wid), trigger=sibling_reason)
             sibling_failures = ops.worker.fail(
                 self._db,
-                worker_ids=sibling_worker_ids,
+                worker_ids=failed_result.sibling_worker_ids,
                 reason=sibling_reason,
                 health=self._health,
                 endpoints=self._endpoints,
@@ -1253,20 +1253,17 @@ class Controller:
         return removed
 
     def _run_autoscaler_once(self) -> None:
-        """Run one autoscaler cycle: refresh (I/O) then update (CPU).
+        """Run one autoscale cycle: read the snapshot (DB), drive the backend's
+        ``manage_capacity``, then persist the returned state.
 
-        Called from the autoscaler loop thread.
+        Called from the autoscaler loop thread. The controller owns every DB
+        read and write; the backend never touches the database.
         """
-        if not self._autoscaler:
-            return
-
         if self._config.dry_run:
-            logger.info("[DRY-RUN] Skipping autoscaler cycle (refresh + update)")
+            logger.info("[DRY-RUN] Skipping autoscaler cycle (manage_capacity)")
             return
 
         worker_status_map = self._build_worker_status_map()
-        self._autoscaler.refresh(worker_status_map)
-        self._autoscaler.probe_health()
         with self._db.read_snapshot() as tx:
             workers = reads.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
         demand_entries = compute_demand_entries(
@@ -1275,7 +1272,10 @@ class Controller:
             workers,
             reservation_claims=read_reservation_claims(self._db),
         )
-        self._autoscaler.update(demand_entries)
+        result = self._provider.manage_capacity(
+            CapacityInput(worker_status_map=worker_status_map, demand_entries=demand_entries)
+        )
+        persist_autoscaler_state(self._db, result.state)
 
     def _build_worker_status_map(self) -> WorkerStatusMap:
         """Build a map of worker_id to worker status for autoscaler idle tracking."""
@@ -1390,6 +1390,11 @@ class Controller:
         return read_reservation_claims(self._db)
 
     @property
-    def autoscaler(self) -> "Autoscaler | None":
-        """The autoscaler instance, if autoscaling is enabled."""
-        return self._autoscaler
+    def autoscaler(self) -> Autoscaler | None:
+        """The Iris autoscaler driving capacity for this backend, if any.
+
+        Read-only handle for dashboard/status RPCs (VM info, feasibility,
+        pending hints). Capacity is driven through ``backend.manage_capacity``,
+        not this handle.
+        """
+        return self._provider.autoscaler

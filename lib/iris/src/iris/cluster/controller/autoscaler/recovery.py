@@ -137,7 +137,9 @@ def restore_autoscaler_state(
             last_scale_up=restore_result.last_scale_up,
             last_scale_down=restore_result.last_scale_down,
         )
-        group.purge_persisted_slice_rows(restore_result.discarded_slice_ids)
+        # Discarded slice rows (missing from cloud) are not re-added to the
+        # group's in-memory state, so the controller's first wholesale DB sync
+        # after the next capacity call deletes them — no explicit purge needed.
 
     return restore_tracked_workers(checkpoint.tracked_worker_rows)
 

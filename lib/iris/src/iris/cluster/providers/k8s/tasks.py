@@ -32,9 +32,12 @@ from finelog.types import LogWriterProtocol, str_to_log_level
 from rigging.log_setup import parse_log_level
 from rigging.timing import Timestamp
 
+from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.backend import (
     BackendReconcileInput,
     BackendReconcileResult,
+    CapacityInput,
+    CapacityResult,
     ClusterCapacity,
     PingResult,
     Placement,
@@ -43,6 +46,7 @@ from iris.cluster.controller.backend import (
     ScheduleResult,
     SchedulingEvent,
     TaskTarget,
+    WorkersFailedResult,
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
@@ -1276,6 +1280,8 @@ class K8sTaskProvider:
     poll_concurrency: int = 32
     log_poll_interval: float = 15.0
     name: str = "kubernetes"
+    # K8s provisions its own capacity (cluster autoscaler + Kueue); no Iris autoscaler.
+    autoscaler: Autoscaler | None = field(default=None, init=False, repr=False)
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _log_collector: LogCollector | None = field(default=None, init=False, repr=False)
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
@@ -1302,6 +1308,18 @@ class K8sTaskProvider:
     def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
         """No-op: Kueue owns placement, so Iris makes no scheduling decisions."""
         return ScheduleResult()
+
+    def manage_capacity(self, snapshot: CapacityInput) -> CapacityResult:
+        """No-op: the cluster autoscaler + Kueue provision nodes for K8s."""
+        return CapacityResult()
+
+    def on_workers_failed(self, worker_ids: list[WorkerId]) -> WorkersFailedResult:
+        """No-op: K8s has no Iris-managed slices to tear down."""
+        return WorkersFailedResult()
+
+    def attach_autoscaler(self, autoscaler: Autoscaler) -> None:
+        """Never called: K8s provisions its own capacity, so no autoscaler is attached."""
+        raise AssertionError("K8sTaskProvider manages its own capacity; no autoscaler should be attached")
 
     def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
         """Sync task state: apply new pods, delete strays, poll running pods.

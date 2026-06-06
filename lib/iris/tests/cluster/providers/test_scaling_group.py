@@ -23,7 +23,6 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     prepare_slice_config,
     slice_state_to_proto,
 )
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.providers.types import (
     CloudSliceState,
     CloudWorkerState,
@@ -507,7 +506,7 @@ class TestScalingGroupIdleTracking:
         assert not group.is_slice_eligible_for_scaledown("slice-001", check_ts)
         assert group.is_slice_eligible_for_scaledown("slice-002", check_ts)
 
-    def test_continuous_activity_keeps_quiet_since_none(self, unbounded_config: config_pb2.ScaleGroupConfig, tmp_path):
+    def test_continuous_activity_keeps_quiet_since_none(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """Regression: a continuously-active slice never accrues quiet time.
 
         The previous implementation persisted ``last_active_ms`` to the DB on a
@@ -516,10 +515,9 @@ class TestScalingGroupIdleTracking:
         Under the transition model an active slice keeps ``quiet_since=None``
         through arbitrarily many ticks and is never eligible for scale-down.
         """
-        db = ControllerDB(db_dir=Path(tmp_path))
         discovered = [make_fake_slice_handle("slice-001", all_ready=True)]
         platform = make_mock_platform(slices_to_discover=discovered)
-        group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(60_000), db=db)
+        group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(60_000))
         group.reconcile()
         ready_ts = Timestamp.from_ms(1_000_000)
         _mark_discovered_ready(group, discovered, timestamp=ready_ts)
