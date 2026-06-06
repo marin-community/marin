@@ -597,6 +597,12 @@ def collect_diagnostics(
     else:
         files.append("job-tree.json")
 
+    job_logs = _run([*iris_cmd, "job", "logs", "--max-lines=500", job_id])
+    (output_dir / "job.log").write_text(job_logs.stdout + job_logs.stderr)
+    files.append("job.log")
+    if job_logs.returncode != 0:
+        errors.append(f"iris job logs failed (exit {job_logs.returncode}): {job_logs.stderr.strip()}")
+
     if provider == "gcp":
         if not project or not controller_label:
             raise click.UsageError("GCP diagnostics require --project and --controller-label")
