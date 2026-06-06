@@ -90,14 +90,6 @@ def load_val_ids(val_docs: str) -> frozenset[str]:
     return frozenset(ids)
 
 
-def _val_buckets(attr_file: str, val_ids: frozenset[str]) -> Iterator[dict]:
-    for batch in pq.ParquetFile(fsspec.open(attr_file, "rb").open()).iter_batches(columns=["id", "buckets"]):
-        for doc_id, buckets in zip(batch.column("id"), batch.column("buckets"), strict=True):
-            if doc_id.as_py() in val_ids:
-                for bucket in buckets.as_py():
-                    yield {"bucket": bucket}
-
-
 def _bucket_records(attr_file: str, val_ids: frozenset[str], val_buckets: frozenset[str]) -> Iterator[dict]:
     for batch in pq.ParquetFile(fsspec.open(attr_file, "rb").open()).iter_batches(columns=["id", "buckets"]):
         for doc_id, buckets in zip(batch.column("id"), batch.column("buckets"), strict=True):
@@ -204,6 +196,25 @@ def main() -> None:
     val_ids = load_val_ids(val_docs)
     logger.info("subset=%s shards=%d val_ids=%d scratch=%s", args.subset, sub.shards, len(val_ids), scratch)
 
+    # Val buckets come from the val docs' own minhash, not the corpus minhash:
+    # for subsets other than 4plus, val ids never appear in the corpus.
+    region_scratch = f"gs://marin-{sub.region}/scratch/ahmed/midtrain_dedup"
+    val_source = NormalizedData(main_output_dir=val_docs, dup_output_dir="", counters={})
+    val_minhash = compute_minhash_attrs(
+        source=val_source,
+        output_path=f"{region_scratch}/val_docs_minhash_{args.num_perms}x{args.num_bands}",
+        num_perms=args.num_perms,
+        num_bands=args.num_bands,
+        worker_resources=ResourceConfig(cpu=2, ram="8g", disk="5g"),
+        max_workers=64,
+    )
+    bucket_set: set[str] = set()
+    for path in fsspec_glob(f"{val_minhash.attr_dir}/*.parquet"):
+        for buckets in pq.read_table(path, columns=["buckets"]).column("buckets").to_pylist():
+            bucket_set.update(buckets)
+    val_buckets = frozenset(bucket_set)
+    logger.info("collected %d val buckets", len(val_buckets))
+
     source = NormalizedData(main_output_dir=sub.corpus, dup_output_dir="", counters={})
     minhash = compute_minhash_attrs(
         source=source,
@@ -215,23 +226,6 @@ def main() -> None:
     )
     attr_files = sorted(fsspec_glob(f"{minhash.attr_dir}/*.parquet"))
 
-    collect_ctx = ZephyrContext(
-        name=f"collect-val-buckets-{args.subset}",
-        max_workers=sub.shards,
-        resources=ResourceConfig(cpu=1, ram="8g", disk="5g"),
-        coordinator_resources=ResourceConfig(cpu=2, ram="16g", disk="10g"),
-    )
-    collect_ctx.execute(
-        Dataset.from_list(attr_files)
-        .flat_map(lambda path, ids=val_ids: _val_buckets(path, ids))
-        .write_parquet(f"{scratch}/val_buckets/buckets-{{shard:05d}}-of-{{total:05d}}.parquet")
-    )
-    bucket_set: set[str] = set()
-    for path in fsspec_glob(f"{scratch}/val_buckets/*.parquet"):
-        bucket_set.update(pq.read_table(path, columns=["bucket"]).column("bucket").to_pylist())
-    val_buckets = frozenset(bucket_set)
-    logger.info("collected %d val buckets", len(val_buckets))
-
     # 71 bands -> ~4.1M val bucket keys broadcast to every worker; 64g held at 1.5M.
     join_ctx = ZephyrContext(
         name=f"val-bucket-join-{args.subset}",
@@ -239,9 +233,13 @@ def main() -> None:
         resources=ResourceConfig(cpu=2, ram="64g", disk="10g"),
         coordinator_resources=ResourceConfig(cpu=4, ram="32g", disk="10g"),
     )
+    # Include the val docs' minhash rows so val ids appear in every bucket
+    # group (corpus shards alone lack them outside 4plus). _emit_candidate_pairs
+    # dedups via sets, so the redundant val rows for 4plus are harmless.
+    join_files = attr_files + sorted(fsspec_glob(f"{val_minhash.attr_dir}/*.parquet"))
     pairs_dir = f"{scratch}/val_candidate_pairs"
     join_ctx.execute(
-        Dataset.from_list(attr_files)
+        Dataset.from_list(join_files)
         .flat_map(lambda path, ids=val_ids, vb=val_buckets: _bucket_records(path, ids, vb))
         .group_by(lambda r: r["bucket"], reducer=_emit_candidate_pairs)
         .write_parquet(f"{pairs_dir}/pairs-{{shard:05d}}-of-{{total:05d}}.parquet")
