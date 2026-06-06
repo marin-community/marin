@@ -21,7 +21,14 @@ from typing import Any, ClassVar
 
 import pytest
 from iris.cluster.controller import ops, writes
-from iris.cluster.controller.backend import BackendReconcileInput, BackendReconcileResult, Placement
+from iris.cluster.controller.backend import (
+    BackendReconcileInput,
+    BackendReconcileResult,
+    Placement,
+    ScheduleInput,
+    ScheduleResult,
+    run_scheduling_decision,
+)
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
@@ -36,6 +43,7 @@ from iris.cluster.controller.reconcile.worker import (
 from iris.cluster.controller.reconcile.worker import (
     observations_to_updates as worker_observations_to_updates,
 )
+from iris.cluster.controller.scheduler import Scheduler
 from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.providers.rpc.backend import RpcTaskBackend
 from iris.cluster.types import AttemptUid, JobName, WorkerId
@@ -1037,6 +1045,10 @@ class _ScriptedProvider:
     name: str = "worker"
     placement: ClassVar[Placement] = Placement.IRIS
     manages_capacity: ClassVar[bool] = False
+    _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
+
+    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
+        return run_scheduling_decision(self._scheduler, snapshot)
 
     def get_process_status(self, *_args, **_kwargs):
         raise NotImplementedError

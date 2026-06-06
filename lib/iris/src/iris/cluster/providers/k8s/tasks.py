@@ -39,6 +39,8 @@ from iris.cluster.controller.backend import (
     PingResult,
     Placement,
     ProviderUnsupportedError,
+    ScheduleInput,
+    ScheduleResult,
     SchedulingEvent,
     TaskTarget,
 )
@@ -1296,6 +1298,10 @@ class K8sTaskProvider:
                 self.kubectl, self.log_client, concurrency=self.poll_concurrency, poll_interval=self.log_poll_interval
             )
         return self._log_collector
+
+    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
+        """No-op: Kueue owns placement, so Iris makes no scheduling decisions."""
+        return ScheduleResult()
 
     def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
         """Sync task state: apply new pods, delete strays, poll running pods.

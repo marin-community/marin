@@ -15,7 +15,7 @@ import asyncio
 import logging
 import threading
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ClassVar, Protocol, TypeVar
 
 from finelog.client.log_client import Table
@@ -27,12 +27,16 @@ from iris.cluster.controller.backend import (
     BackendReconcileInput,
     BackendReconcileResult,
     ClusterCapacity,
-    Placement,
     PingResult,
+    Placement,
     ProviderError,
+    ScheduleInput,
+    ScheduleResult,
     TaskTarget,
+    run_scheduling_decision,
 )
 from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
+from iris.cluster.controller.scheduler import Scheduler
 from iris.cluster.runtime.profile import IrisProfile
 from iris.cluster.types import WorkerId
 from iris.rpc import job_pb2, worker_pb2
@@ -126,6 +130,9 @@ class RpcTaskBackend:
     name: str = "worker"
     placement: ClassVar[Placement] = Placement.IRIS
     manages_capacity: ClassVar[bool] = False
+    # Stateless: holds no per-tick state, so one shared instance is reused
+    # across scheduling cycles (mirrors the autoscaler's own Scheduler).
+    _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
 
     def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
         """Fan the Reconcile RPC out across all planned workers concurrently."""
@@ -135,6 +142,10 @@ class RpcTaskBackend:
 
         results = _fan_out(batch.plans, self.parallelism, _one)
         return BackendReconcileResult(worker_results=results)
+
+    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
+        """Run the Iris scheduling decision pipeline over the snapshot."""
+        return run_scheduling_decision(self._scheduler, snapshot)
 
     def capacity(self) -> ClusterCapacity | None:
         return None

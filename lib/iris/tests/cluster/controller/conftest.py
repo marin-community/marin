@@ -39,14 +39,18 @@ from iris.cluster.controller.backend import (
     BackendReconcileResult,
     Placement,
     ProviderUnsupportedError,
+    ScheduleInput,
+    ScheduleResult,
     TaskTarget,
+    run_scheduling_decision,
 )
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.direct_provider import RunTemplateCache
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.run_template import RunTemplateCache
+from iris.cluster.controller.scheduler import Scheduler
 from iris.cluster.controller.schema import (
     jobs_table,
     task_attempts_table,
@@ -95,6 +99,15 @@ class FakeProvider:
     name = "worker"
     placement = Placement.IRIS
     manages_capacity = False
+
+    def __init__(self) -> None:
+        # Real Iris scheduler: ``ctrl._run_scheduling`` routes the decision
+        # through ``schedule`` now, so the fake must run the real pipeline for
+        # scheduler/preemption/reservation tests to exercise placement.
+        self._scheduler = Scheduler()
+
+    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
+        return run_scheduling_decision(self._scheduler, snapshot)
 
     def get_process_status(
         self,

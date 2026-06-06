@@ -15,11 +15,11 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller import direct_provider, ops
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.direct_provider import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.ops.task import Assignment, apply_direct_provider_updates
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.schema import task_attempts_table, tasks_table, workers_table
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService

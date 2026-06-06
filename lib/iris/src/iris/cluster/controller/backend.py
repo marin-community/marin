@@ -31,6 +31,7 @@ its capabilities, with no ``isinstance`` branches in the controller.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import ClassVar, Protocol
@@ -39,12 +40,30 @@ from finelog.client.log_client import Table
 from finelog.types import LogWriterProtocol
 from rigging.timing import Timestamp
 
+from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
+from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext
+from iris.cluster.controller.scheduling_policy import (
+    GatedCandidates,
+    PreemptionCandidate,
+    RunningTaskInfo,
+    SchedulingOrder,
+    apply_scheduling_gates,
+    compute_scheduling_order,
+    inject_reservation_taints,
+    inject_taint_constraints,
+    preference_pass,
+    run_preemption_pass,
+)
+from iris.cluster.controller.schema import ReservationClaim
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.runtime.profile import IrisProfile
-from iris.cluster.types import WorkerId
+from iris.cluster.types import JobName, PendingTask, WorkerId
 from iris.rpc import job_pb2, worker_pb2
+
+logger = logging.getLogger(__name__)
 
 
 class ProviderError(Exception):
@@ -149,6 +168,211 @@ class TaskTarget:
     address: str | None
 
 
+@dataclass(frozen=True)
+class ScheduleInput:
+    """DB-less snapshot handed to :meth:`TaskBackend.schedule`.
+
+    Assembled by the controller from a single set of DB reads each scheduling
+    tick. The backend turns this into placement decisions without touching the
+    database.
+    """
+
+    context: SchedulingContext
+    """Built by ``build_scheduling_context`` (un-tainted workers + raw reads)."""
+    claims: dict[WorkerId, ReservationClaim]
+    """Reservation claims from ``refresh_reservation_claims``."""
+    running_for_preemption: list[RunningTaskInfo]
+    """Band/value of running tasks (``get_running_tasks_with_band_and_value``),
+    read against ``claims.keys()`` while building the snapshot."""
+    max_tasks_per_job_per_cycle: int
+    trace: bool = False
+    """Whether to emit the per-phase scheduling trace logs this cycle."""
+
+
+@dataclass(frozen=True)
+class ScheduleResult:
+    """Placement decisions returned by :meth:`TaskBackend.schedule`.
+
+    Pure data: the controller commits ``assignments`` (``ops.task.assign``),
+    ``preemptions`` (``finalize`` PREEMPT), and ``unschedulable`` (``finalize``
+    UNSCHEDULABLE). ``diagnostics`` and ``post_taint_context`` carry the cached
+    dashboard state the controller exposes via ``get_job_scheduling_diagnostics``
+    / ``last_scheduling_context``.
+    """
+
+    assignments: list[Assignment] = field(default_factory=list)
+    preemptions: list[TerminalDecision] = field(default_factory=list)
+    # Expired/deadline-exceeded pending-task rows; the controller marks them
+    # UNSCHEDULABLE (each row carries ``scheduling_timeout_ms``).
+    unschedulable: list[PendingTask] = field(default_factory=list)
+    diagnostics: dict[str, str] = field(default_factory=dict)
+    # Post-taint context (or the un-tainted context when no claims were active),
+    # surfaced for dashboard diagnostics. None only for the empty K8s result.
+    post_taint_context: SchedulingContext | None = None
+
+
+def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> ScheduleResult:
+    """Run the full Iris scheduling decision pipeline over a DB-less snapshot.
+
+    Faithful move of the controller's old ``_run_scheduler_pass`` plus the
+    decision half of ``_apply_preemptions``: gates → order → reservation taints
+    → preference pass → ``find_assignments`` → preemption pass. Returns the
+    placement decisions plus the diagnostics/context the controller caches. Does
+    no I/O — every input comes from ``snapshot`` and every output is plain data.
+    """
+    ctx = snapshot.context
+    claims = snapshot.claims
+    trace = snapshot.trace
+
+    gated = apply_scheduling_gates(
+        ctx,
+        claims,
+        max_tasks_per_job_per_cycle=snapshot.max_tasks_per_job_per_cycle,
+        trace=trace,
+    )
+    if not gated.schedulable_task_ids:
+        # No work to place. Expired tasks (if any) still flow back so the
+        # controller can mark them UNSCHEDULABLE; the un-tainted context is the
+        # diagnostics snapshot for this tick.
+        return ScheduleResult(unschedulable=list(gated.expired_tasks), post_taint_context=ctx)
+
+    order = compute_scheduling_order(ctx, gated, trace=trace)
+    all_assignments, context, tainted_jobs = _placement_pass(scheduler, order, gated, ctx, claims, trace=trace)
+    preemptions = _preemption_pass(order, tainted_jobs, all_assignments, snapshot.running_for_preemption, context)
+    diagnostics = _job_scheduling_diagnostics(scheduler, context, tainted_jobs, all_assignments, order.ordered_task_ids)
+
+    return ScheduleResult(
+        assignments=[
+            Assignment(task_id=task_id, worker_id=worker_id, priority_band=order.task_band_map.get(task_id))
+            for task_id, worker_id in all_assignments
+        ],
+        preemptions=[
+            TerminalDecision(
+                kind=TerminalKind.PREEMPT,
+                task_id=victim_id,
+                reason=f"Preempted by {preemptor_name}",
+            )
+            for preemptor_name, victim_id in preemptions
+        ],
+        unschedulable=list(gated.expired_tasks),
+        diagnostics=diagnostics,
+        post_taint_context=context,
+    )
+
+
+def _placement_pass(
+    scheduler: Scheduler,
+    order: SchedulingOrder,
+    gated: GatedCandidates,
+    ctx: SchedulingContext,
+    claims: dict[WorkerId, ReservationClaim],
+    *,
+    trace: bool,
+) -> tuple[list[tuple[JobName, WorkerId]], SchedulingContext, dict[JobName, JobRequirements]]:
+    """Preference + normal assignment passes over a shared (post-taint) context.
+
+    Reservation taints are injected here so gates/order/diagnostics saw the
+    un-tainted workers. When there are no claims the un-tainted ``ctx`` is reused
+    to avoid an index rebuild.
+    """
+    modified_jobs = inject_taint_constraints(gated.jobs, gated.has_reservation, gated.has_direct_reservation)
+
+    if claims:
+        modified_workers = inject_reservation_taints(list(ctx.workers), claims)
+        building_counts = {wid: cap.building_task_count for wid, cap in ctx.capacities.items()}
+        ctx.pending_tasks = list(order.ordered_task_ids)
+        context = ctx.evolve_with_workers(
+            workers=modified_workers,
+            jobs=modified_jobs,
+            building_counts=building_counts,
+            max_building_tasks=scheduler.max_building_tasks_per_worker,
+        )
+    else:
+        ctx.pending_tasks = list(order.ordered_task_ids)
+        ctx.jobs = modified_jobs
+        context = ctx
+
+    if trace:
+        logger.info(
+            "[TRACE] Phase 4 context: %d workers, %d pending tasks, %d jobs",
+            len(context.capacities),
+            len(context.pending_tasks),
+            len(context.jobs),
+        )
+
+    # Soft preference — steer reservation tasks toward claimed workers. Skips
+    # coscheduled jobs (they need atomic all-or-nothing via find_assignments).
+    preference_assignments = preference_pass(context, gated.has_reservation, claims)
+    result = scheduler.find_assignments(context)
+    all_assignments = preference_assignments + result.assignments
+    if trace:
+        logger.info(
+            "[TRACE] Phase 5 assignments: %d total (%d preferred, %d normal)",
+            len(all_assignments),
+            len(preference_assignments),
+            len(result.assignments),
+        )
+    return all_assignments, context, modified_jobs
+
+
+def _preemption_pass(
+    order: SchedulingOrder,
+    jobs: dict[JobName, JobRequirements],
+    all_assignments: list[tuple[JobName, WorkerId]],
+    running_for_preemption: list[RunningTaskInfo],
+    context: SchedulingContext,
+) -> list[tuple[JobName, JobName]]:
+    """Decide which running tasks to evict for higher-priority unscheduled work."""
+    assigned_ids = {task_id for task_id, _ in all_assignments}
+    unscheduled = [
+        PreemptionCandidate(
+            job_name=tid,
+            requirements=jobs[tid.parent],
+            band=order.task_band_map.get(tid, job_pb2.PRIORITY_BAND_INTERACTIVE),
+        )
+        for tid in order.ordered_task_ids
+        if tid not in assigned_ids and tid.parent is not None and tid.parent in jobs
+    ]
+    if not unscheduled:
+        return []
+    return run_preemption_pass(unscheduled, running_for_preemption, context)
+
+
+def _job_scheduling_diagnostics(
+    scheduler: Scheduler,
+    context: SchedulingContext,
+    jobs: dict[JobName, JobRequirements],
+    assignments: list[tuple[JobName, WorkerId]],
+    schedulable_task_ids: list[JobName],
+) -> dict[str, str]:
+    """Compute per-job scheduling diagnostics for unassigned jobs."""
+    assigned_task_ids = {task_id for task_id, _ in assignments}
+
+    unscheduled: dict[JobName, tuple[JobName, int]] = {}
+    for task_id in schedulable_task_ids:
+        if task_id in assigned_task_ids or task_id.parent is None:
+            continue
+        job_id = task_id.parent
+        if job_id in unscheduled:
+            _, count = unscheduled[job_id]
+            unscheduled[job_id] = (unscheduled[job_id][0], count + 1)
+        else:
+            unscheduled[job_id] = (task_id, 1)
+
+    diagnostics: dict[str, str] = {}
+    for job_id, (representative_task, num_tasks) in unscheduled.items():
+        req = jobs.get(job_id)
+        if req is None:
+            continue
+        diagnostics[job_id.to_wire()] = scheduler.get_job_scheduling_diagnostics(
+            req,
+            context,
+            representative_task,
+            num_tasks=num_tasks,
+        )
+    return diagnostics
+
+
 class TaskBackend(Protocol):
     """Drives task execution + capacity reporting for a single cluster backend.
 
@@ -168,6 +392,15 @@ class TaskBackend(Protocol):
 
     def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
         """Converge the backend toward ``batch`` and report observed state."""
+        ...
+
+    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
+        """Decide task→worker placement from a DB-less snapshot.
+
+        IRIS placement runs the full Iris scheduling pipeline; BACKEND placement
+        (Kueue, slurmctld) returns an empty result — the backend places tasks
+        itself. No database access: snapshot in, decisions out.
+        """
         ...
 
     def capacity(self) -> ClusterCapacity | None:

@@ -49,7 +49,6 @@ from iris.cluster.controller.codec import (
     worker_metadata_to_proto,
 )
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.direct_provider import RunTemplateCache
 from iris.cluster.controller.projections.endpoints import (
     AddEndpointOutcome,
     EndpointQuery,
@@ -58,6 +57,7 @@ from iris.cluster.controller.projections.endpoints import (
 )
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import TaskJobSummary
+from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
     job_config_table,

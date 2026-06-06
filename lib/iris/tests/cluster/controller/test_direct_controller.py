@@ -10,6 +10,8 @@ from iris.cluster.controller.backend import (
     BackendReconcileResult,
     Placement,
     ProviderUnsupportedError,
+    ScheduleInput,
+    ScheduleResult,
     TaskTarget,
 )
 from iris.cluster.controller.ops.task import apply_direct_provider_updates
@@ -44,6 +46,9 @@ class FakeDirectProvider:
     def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
         self.sync_calls.append(batch)
         return self.sync_result
+
+    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
+        return ScheduleResult()
 
     def capacity(self):
         return None

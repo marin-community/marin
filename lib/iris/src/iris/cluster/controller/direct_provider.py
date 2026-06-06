@@ -14,13 +14,13 @@ from iris.cluster.controller import reads, writes
 from iris.cluster.controller.backend import BackendReconcileInput
 from iris.cluster.controller.codec import constraints_from_json, proto_from_json, resource_spec_from_scalars
 from iris.cluster.controller.db import Tx
-from iris.cluster.controller.lru_cache import LRUCache
 from iris.cluster.controller.reads import (
     PENDING_DISPATCH_COLS,
     PendingDispatchRow,
     TaskScope,
     pending_dispatch_row,
 )
+from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.schema import job_config_table, jobs_table, tasks_table
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, RunningTaskEntry
 from iris.cluster.types import JobName
@@ -33,24 +33,6 @@ The direct provider relies on the Kubernetes scheduler (and the cloud
 autoscaler) for placement and capacity management.  Pods that cannot be
 scheduled immediately stay Pending — that signal drives node provisioning.
 This rate limit exists only to bound API server pressure."""
-
-
-# Per-job RunTaskRequest templates are cached in RunTemplateCache.
-# 4096 templates ~= worst-case concurrent job count we expect in a single
-# controller process. Same-name replacement reuses the original ``job_id``,
-# so ``submit_job`` evicts the cached entry before inserting the new row to
-# prevent serving the prior submission's payload.
-RUN_REQUEST_TEMPLATE_CACHE_SIZE = 4096
-
-# LRU cache for per-job ``RunTaskRequest`` templates, keyed by wire job id.
-# Templates carry the immutable per-job fields (entrypoint, environment,
-# resources, constraints); per-attempt fields (``task_id``, ``attempt_id``)
-# are stamped onto a copy at fan-out time.
-RunTemplateCache = LRUCache[str, job_pb2.RunTaskRequest]
-
-
-def new_run_template_cache() -> RunTemplateCache:
-    return LRUCache(RUN_REQUEST_TEMPLATE_CACHE_SIZE)
 
 
 def _build_run_request_fields(
