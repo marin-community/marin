@@ -958,15 +958,15 @@ def _run_generation_loop_without_lm_head(
 @functools.partial(jax.jit, static_argnums=(2, 3, 4), donate_argnames=("gen_state",))
 def _run_generation_loop_with_lm_head_no_sampling(
     gen_state: GenState,
-    model: Any,
+    model: LmHeadModel,
     max_tokens_per_round: int,
     max_rounds: int,
     tpu_paged_attention: TpuPagedAttentionConfig,
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run decode through the LM head, then enqueue dummy tokens without sampling.
 
-    This is a performance-attribution path. The logits checksum keeps the LM-head computation live while avoiding the
-    argmax/top-p/logprob work from the normal sampler path.
+    This is a performance-attribution path. It keeps the same streaming greedy LM-head computation as the production
+    greedy path while avoiding top-p/top-k sampling and logprob work from the normal sampler path.
     """
 
     def cond(state: tuple[GenState, _DecodeOutputs, jax.Array]):
@@ -997,12 +997,13 @@ def _run_generation_loop_with_lm_head_no_sampling(
             pos_ids,
             tpu_paged_attention=tpu_paged_attention,
         )
-        logits = model.lm_head_logits(hidden)
-        logits_checksum = hax.sum(logits).scalar()
 
         num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
         new_slot_ids = slot_ids["position", sample_indices]
-        dummy_token = jnp.where(jnp.isfinite(logits_checksum), 0, 1).astype(jnp.int32)
+        hidden_at_samples = hidden["position", sample_indices]
+        greedy_tokens, _ = _streaming_greedy_lm_head(model, hidden_at_samples, return_logprobs=False)
+        token_checksum = hax.sum(greedy_tokens).scalar()
+        dummy_token = jnp.where(token_checksum >= 0, 0, 1).astype(jnp.int32)
         new_tokens = hax.zeros(new_slot_ids.axes, dtype=jnp.int32) + dummy_token
         log_probs = hax.zeros(new_slot_ids.axes, dtype=jnp.float32)
 
