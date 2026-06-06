@@ -121,151 +121,167 @@ mostly already exist — Stage 1 *names and relocates* them rather than rewritin
 
 ## The core abstraction
 
-> **A backend is a reconciler over task execution.** Given the desired set of
-> task attempts (optionally already placed on workers) and the observed running
-> set, it converges the real world toward the desired state using
-> backend-specific I/O, and reports back the observed task-state transitions,
-> scheduling events, and capacity. **It never touches the controller DB.**
+> **A backend is the control-plane driver for one cluster.** It owns
+> *scheduling*, *reconciliation*, *capacity management (autoscaling)*, and the
+> *one-off* operations (status / profile / exec) for that cluster. Some backends
+> (k8s, later slurm) implement these by **dispatching to the underlying system**;
+> others (gcp/manual/local) **do the work themselves** with Iris's own scheduler
+> and autoscaler primitives. **The controller becomes a thin dispatcher: it owns
+> the DB and the loop cadences, hands the backend read-only snapshots, and
+> commits the decisions the backend returns. The backend never touches the DB.**
 
-This is the existing *functional core / imperative shell* design (see
-`.agents/projects/2026-05-31_iris_reconcile_control_flow.md`) extended to the
-backend boundary:
+This extends the existing *functional core / imperative shell* design (see
+`.agents/projects/2026-05-31_iris_reconcile_control_flow.md`) to the backend
+boundary:
 
-- **Controller = imperative shell + the only DB owner.** It reads desired/observed
-  state, runs Iris-side scheduling decisions (for backends that need them),
-  commits everything.
-- **Backend = the I/O actuator for one cluster.** Pure-ish: data in (desired
-  attempts), side effects out (apply pods / fan out RPCs), data back (observed
-  updates). No SQLite, no controller internals.
+- **Controller = imperative shell + the only DB owner.** Each loop reads a
+  snapshot (DB → plain dataclass), calls one backend method, commits the
+  returned decisions/deltas. It holds *no* scheduling, autoscaling, or dispatch
+  logic of its own — only the read/commit glue and the cadence.
+- **Backend = the cluster's control logic.** Snapshot in, decisions + side
+  effects (RPC fan-out, `kubectl apply`, VM provisioning) out, deltas back.
+  No SQLite, no controller internals.
+
+The DB-less contract is the load-bearing invariant: **every backend method takes
+a snapshot dataclass and returns a result/delta dataclass; the backend performs
+no DB I/O.** A backend may hold in-memory state (RPC stub caches, autoscaler
+slice tracking) seeded once at construction, but its steady-state methods are
+pure-in / effects-and-data-out.
 
 ### Proposed protocol
 
-Lives in `providers/protocols.py` next to the infra protocols (the natural home
-for backend contracts); neutral data types live in a leaf module so the
-dependency flows `providers → cluster` and `controller → {providers, cluster}`,
-with **no `providers → controller` import** (today `providers/k8s/tasks.py`
-imports `DirectProviderSyncResult` from `controller/direct_provider.py` — Stage 1
-fixes that inversion).
+Lives in `controller/backend.py` (the consumer side; the reconcile/scheduling
+data types it references are controller-internal). The infra protocols
+(`ControllerProvider`, `WorkerInfraProvider`) stay in `providers/protocols.py`.
 
 ```python
-# providers/protocols.py  (alongside ControllerProvider, WorkerInfraProvider)
-
 class Placement(StrEnum):
-    IRIS = "iris"        # Iris Scheduler picks the worker; reconcile gets worker-bound attempts
-    BACKEND = "backend"  # the backend places tasks (Kueue, slurmctld); reconcile gets unplaced attempts
+    IRIS = "iris"        # Iris schedules task→worker; backend fans RPCs to worker daemons
+    BACKEND = "backend"  # the backend places tasks (Kueue, slurmctld); Iris does not schedule
 
 class TaskBackend(Protocol):
-    """Drives task execution + capacity for a single cluster backend.
-
-    The controller owns all DB access. Each tick it hands the backend a
-    read-only desired/observed snapshot and applies the returned updates.
-    Backends perform backend-specific I/O (RPC fan-out, kubectl apply,
-    sbatch) but never read or write the controller database.
-    """
+    """Control-plane driver for a single cluster backend. Never touches the DB."""
 
     # --- capabilities (replace the isinstance ladder) ---
     name: str                  # "gcp", "coreweave", "manual", "local", later "slurm-stanford"
-    placement: Placement       # who schedules: Iris or the backend
-    manages_capacity: bool     # True => backend provisions nodes itself (k8s); False => Iris Autoscaler does
+    placement: Placement       # who schedules; selects the controller's commit path
+    manages_capacity: bool     # True => backend provisions nodes itself (k8s); False => its own Autoscaler does
 
-    # --- the per-tick reconcile (the user's provider.reconcile(task_state)) ---
-    def reconcile(self, desired: BackendReconcileInput) -> BackendReconcileResult: ...
+    # --- scheduling: pure decision from a DB snapshot; controller commits ---
+    #   IRIS: preference + find_assignments + preemption (uses the shared Scheduler).
+    #   BACKEND: no-op (the backend system schedules) — returns an empty result.
+    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult: ...
 
-    # --- capacity rollup for the scheduler + dashboard ---
+    # --- reconciliation: converge running tasks, observe; controller commits ---
+    #   IRIS: fan out the per-worker Reconcile RPC -> raw worker_results.
+    #   BACKEND: apply pods / poll -> pre-computed task updates.
+    def reconcile(self, snapshot: BackendReconcileInput) -> BackendReconcileResult: ...
+
+    # --- capacity management (autoscaling): cloud I/O here, DB deltas back ---
+    #   IRIS: autoscaler refresh + probe + scale (provisions via WorkerInfraProvider).
+    #   BACKEND: no-op (the cluster autoscaler handles capacity).
+    def manage_capacity(self, snapshot: CapacityInput) -> CapacityResult: ...
+
+    # --- liveness + worker-failure handling (IRIS); no-ops for BACKEND ---
+    def ping_workers(self, workers: list[tuple[WorkerId, str | None]]) -> list[PingResult]: ...
+    def on_workers_failed(self, worker_ids: list[WorkerId]) -> WorkersFailedResult: ...
+
+    # --- capacity rollup for the dashboard ---
     def capacity(self) -> ClusterCapacity | None: ...
 
     # --- on-demand request/response (NOT loop-driven; see Async ops) ---
-    def get_process_status(self, worker_id, address, request): ...
-    def profile_task(self, target, request, timeout_ms): ...
-    def exec_in_container(self, target, request): ...   # ProviderUnsupportedError where N/A
-    def on_worker_failed(self, worker_id, address) -> None: ...
+    def get_process_status(self, target: TaskTarget, request) -> ...: ...
+    def profile_task(self, target: TaskTarget, request, timeout_ms) -> ...: ...
+    def exec_in_container(self, target: TaskTarget, request, timeout_seconds=60) -> ...: ...
+    def on_worker_failed(self, worker_id, address) -> None: ...   # evict stub cache
 
     def close(self) -> None: ...
 ```
 
-### Neutral data types (the DB-free interface)
+`schedule`/`reconcile`/`manage_capacity`/`ping_workers`/`on_workers_failed` are
+each driven by an existing controller loop (cadences preserved); the K8s backend
+implements `schedule`/`manage_capacity`/`ping_workers`/`on_workers_failed` as
+no-ops because Kueue + the cluster autoscaler own those. The result is that the
+**only execution-model-specific logic left in `controller.py` is which snapshot
+to build and how to commit — and even that is selected on `placement`, never on
+the concrete type.**
 
-Moved out of `controller/direct_provider.py` into a leaf module (proposed
-`cluster/backend_types.py`), generalizing the K8s-only names:
+### The reconcile data types (the DB-free interface)
 
-```python
-@dataclass(frozen=True)
-class DesiredAttempt:
-    """One task attempt the backend should ensure is running.
+`BackendReconcileInput` carries the placement-appropriate desired/observed state
+(`tasks_to_run` + `running_tasks` for BACKEND; pre-built `plans` +
+`worker_addresses` for IRIS); `BackendReconcileResult` carries `updates`
+(BACKEND) or raw `worker_results` (IRIS) plus shared `scheduling_events` and
+`capacity`. `ScheduleInput`/`ScheduleResult` and `CapacityInput`/`CapacityResult`
+follow the same shape: a read-only snapshot in, decisions/deltas out. These live
+in `controller/backend.py` (done for the reconcile pair in T1).
 
-    worker_id is set iff the backend's placement == IRIS (the Scheduler already
-    chose). For placement == BACKEND it is None and the backend places the task.
-    """
-    request: job_pb2.RunTaskRequest
-    worker_id: WorkerId | None
-    coscheduled: bool
+### Why two apply paths, selected on `placement`
 
-@dataclass(frozen=True)
-class BackendReconcileInput:          # generalizes DirectProviderBatch + per-worker plans
-    desired: list[DesiredAttempt]     # attempts that should be running this tick
-    running: list[RunningTaskEntry]   # attempts the DB believes are already running (for diff/poll)
-    worker_addresses: dict[WorkerId, str | None]   # for the RPC fan-out backend only
+`reconcile`'s two apply paths are **not interchangeable** and must both be kept:
+- IRIS → `ops.worker.apply_reconcile` (emits worker heartbeats,
+  `WORKER_RECONCILE` transition source).
+- BACKEND → `ops.task.apply_direct_provider_updates` (`DIRECT_PROVIDER` source,
+  no heartbeats, no build-failed reaping).
 
-@dataclass(frozen=True)
-class BackendReconcileResult:         # == today's DirectProviderSyncResult, renamed
-    updates: list[TaskUpdate]         # observed task-state transitions -> controller commits these
-    scheduling_events: list[SchedulingEvent]
-    capacity: ClusterCapacity | None
-
-# ClusterCapacity, SchedulingEvent move here verbatim from direct_provider.py.
-# TaskUpdate (today in controller/reconcile/snapshot.py) is referenced by the
-# result; either move it here or re-export to avoid providers -> controller.
-```
-
-The asymmetry between the two execution models reduces to **one field**:
-`DesiredAttempt.worker_id` is filled for `placement == IRIS` (scheduler ran
-first) and `None` for `placement == BACKEND` (backend places). Same reconcile
-contract; the backend reads only the parts it needs.
+The controller picks the path on `backend.placement`. A new backend slots in by
+declaring its placement; no controller `isinstance`.
 
 ---
 
-## The unified driving loop
+## The thin dispatcher loops
 
-The controller keeps a small number of cadenced threads, but every one routes
-through the contract — no `isinstance`. The core tick:
+Each controller loop keeps its own cadence but its body collapses to
+read-snapshot → call-backend → commit. No `isinstance`; no scheduling or
+autoscaling logic in `controller.py`.
 
 ```python
-# controller.py
-def _control_tick(self, cur: Tx) -> None:
-    # 1. query_db: read everything the decision + reconcile needs
-    state = read_control_state(cur)            # pending/assigned/running tasks, workers, capacity
+# scheduling loop (adaptive backoff; IRIS does work, BACKEND returns empty)
+snap   = build_schedule_input(db)              # query_db: pending/workers/usage/budgets/claims/running
+result = backend.schedule(snap)                # pure decision (Scheduler + preemption) or no-op
+commit_schedule(db, result)                    # update_db: ASSIGNED rows + preemptions + unschedulable
 
-    # 2. Iris-side placement, only for backends that need it (was: isinstance else-branch)
-    if self._backend.placement is Placement.IRIS:
-        assignments = self._scheduler.find_assignments(state.scheduling_context)
-        commit_assignments(cur, assignments)   # update_db (placement decisions)
+# poll/reconcile loop (1s)
+snap   = build_reconcile_input(db)             # query_db: desired + running (+ addresses for IRIS)
+result = backend.reconcile(snap)               # RPC fan-out OR kubectl apply
+apply_reconcile_result(db, result)             # update_db (placement-selected apply path)
 
-    # 3. build the DB-free desired snapshot (worker-bound iff IRIS-placed)
-    desired = build_desired_input(cur, cache=self._run_template_cache)
+# capacity loop (autoscaler cadence; IRIS provisions, BACKEND no-op)
+snap   = build_capacity_input(db)              # query_db: demand + worker status
+result = backend.manage_capacity(snap)         # cloud I/O (create/terminate slices), DB deltas back
+apply_capacity_deltas(db, result)              # update_db: slices/scaling_groups rows
 
-    # 4. provider.reconcile(task_state): the only backend I/O on this path
-    result = self._backend.reconcile(desired)
-
-    # 5. update_db: commit observed transitions + scheduling events + capacity
-    apply_backend_result(cur, result, health=self._health, endpoints=self._endpoints)
+# ping loop (5s) — liveness + slice-sibling termination on failure
+results = backend.ping_workers(addresses)
+... if unhealthy: failed = backend.on_workers_failed(ids); commit(db, failed)
 ```
 
-- **GCP/manual/local** (`placement=IRIS`): step 2 runs the `Scheduler`; the RPC
-  backend's `reconcile` builds per-worker reconcile plans from the worker-bound
-  `desired` and fans out `Reconcile` RPCs with hard timeouts, returning observed
-  updates. (`build_reconcile_plans`, today controller-side, moves *into* the RPC
-  backend — it is the RPC backend's "how do I converge" logic.)
-- **K8s/CoreWeave** (`placement=BACKEND`): step 2 is skipped; `reconcile` is
-  today's `sync` — apply pods for unplaced `desired`, delete strays, poll phases.
+The fast-wake events and adaptive backoff are preserved; this changes *what each
+loop calls*, not the cadence model. Collapsing the loops into a single tick is a
+possible later simplification but is **not** done here — the cadences differ
+(scheduling ~10s adaptive, reconcile 1s, autoscale ~10s, ping 5s) and the slow
+provisioning I/O must not block the 1s reconcile path (see [async ops](#q3-async-operations)).
 
-Liveness (`ping_workers`) and the on-demand status methods stay as separate
-backend methods (see [async ops](#q3-async-operations)); whether a cadenced ping
-thread runs is driven by a capability, not `isinstance` — backends with worker
-daemons opt in, pod-polled backends fold liveness into `reconcile`.
+### Making the autoscaler DB-less
 
-The fast-wake events (`_scheduling_wake`, `_polling_wake`) and adaptive backoff
-are preserved; this is a refactor of *what each loop calls*, not of the cadence
-model.
+The autoscaler is the one piece with real DB coupling: `ScalingGroup` today holds
+a `db` handle and writes the `slices` / `scaling_groups` tables during
+`refresh`/scale operations (`_db_upsert_slice`, `_db_update_group`,
+`_db_remove_slice`). To honor the DB-less contract when the backend owns the
+autoscaler:
+
+1. Remove the `db` handle from `ScalingGroup` / `Autoscaler`; the in-memory slice
+   state is the source of truth during operation.
+2. `manage_capacity` (and `on_workers_failed`) accumulate slice/scaling-group
+   **deltas** (created / ready / failed / removed, scale timestamps) and return
+   them in `CapacityResult` / `WorkersFailedResult`.
+3. The controller applies those deltas to the `slices` / `scaling_groups` tables
+   in one transaction — the same write-through, now controller-owned.
+4. Startup recovery stays controller-owned: the controller reads the slices
+   checkpoint and hands the backend its initial tracked state at construction
+   (a one-time bootstrap, not a steady-state DB touch).
+
+This is the largest single piece of the migration and lands as its own commit.
 
 ---
 
@@ -345,57 +361,62 @@ together (rather than landing a half-migrated contract). Commits T1–T7 are the
 spiral *within* that one PR; each commit builds and passes tests, but they are not
 split across PRs. Later stages (2–5) are their own chonky PRs.
 
-Within Stage 1, commit in a spiral so the branch builds and tests pass at every
-commit (the order the existing fakes make safe):
+Within the PR, commit in a spiral so the branch builds and tests pass at every
+commit (the order the existing fakes make safe). Status as of this revision:
 
-1. **Add, don't change** — introduce `TaskBackend` protocol + `cluster/backend_types.py`
-   (move the neutral types, leave shims/aliases). No behavior change; everything
-   still compiles against the new names.
-2. **K8s implements it** — `K8sTaskProvider.sync`→`reconcile`, capability attrs.
-   K8s path now goes through the protocol. Run k8s fakes/tests.
-3. **GCP/RPC implements it** — `WorkerProvider`→`RpcTaskBackend` under
-   `providers/rpc/`, fold `build_reconcile_plans` in, capability attrs.
-4. **Collapse `isinstance`** — `controller.py` + `main.py` switch to the unified
-   `_control_tick` + capability gates. Delete `controller/provider.py`.
-5. **Relocate scheduling primitives** — move `scheduler.py`/`scheduling_policy.py`
-   into the `scheduling/` layer; pure import churn.
-6. **Dashboard descriptor** — capability-driven tabs; delete `has_direct_provider`.
+1. ✅ **Contract + neutral types** — `controller/backend.py`: `TaskBackend`,
+   `Placement`, `BackendReconcileInput/Result`, `ClusterCapacity`,
+   `SchedulingEvent`, `PingResult`, `TaskTarget`; rename out of `direct_provider.py`.
+2. ✅ **Adopt the reconcile contract** — K8s `sync`→`reconcile`; `WorkerProvider`
+   → `providers/rpc/backend.py` `RpcTaskBackend`; controller drives both through
+   `reconcile`, no `isinstance`; delete `controller/provider.py`. (Scheduler +
+   Autoscaler still controller-owned at this point.)
+3. ⏳ **Move scheduling into the backend** — `backend.schedule(snapshot)`;
+   `RpcTaskBackend` owns the (stateless) `Scheduler` and runs preference +
+   find_assignments + preemption; K8s no-op. Controller scheduling loop becomes
+   read-snapshot → schedule → commit.
+4. ⏳ **Move autoscaling into the backend, DB-less** — make `ScalingGroup`/`Autoscaler`
+   DB-less (return deltas); `RpcTaskBackend` owns the autoscaler;
+   `backend.manage_capacity(snapshot)` + `backend.on_workers_failed(...)`; K8s
+   no-op. Controller autoscale loop + worker-failure path become thin dispatch +
+   delta-commit. Construction moves the Scheduler/Autoscaler wiring into the
+   backend factory; `main.py`/`Controller.__init__` simplify.
+5. ⏳ **Relocate scheduling primitives** — `scheduler.py`/`scheduling_policy.py`
+   into a `scheduling/` layer; pure import churn.
+6. ⏳ **Dashboard descriptor** — capability-driven tabs; retire `has_direct_provider`.
+7. ⏳ **Docs** — AGENTS.md, coreweave.md, README, OPS.md, archived design doc.
 
 The reconcile refactor already proved this functional-core boundary is testable
-in isolation; Stage 1 leans on `providers/gcp/fake.py`, `providers/k8s/fake.py`,
-and the existing controller tests as the regression net. Land Stages 2–5 as
-their own chonky PRs afterward.
+in isolation; we lean on `providers/gcp/fake.py`, `providers/k8s/fake.py`, the
+autoscaler tests, and the controller test suite as the regression net.
 
-Rationale for bundling dashboard into Stage 1 rather than a fast-follow: leaving
-`has_direct_provider` half-migrated (contract unified server-side but UI still
-`isinstance`-shaped) is a worse intermediate state than one slightly larger PR.
+Rationale for one PR: a half-migrated contract (reconcile unified but scheduling/
+autoscaling still controller-owned, or `has_direct_provider` still UI-shaped) is
+a worse intermediate state to review than one cohesive change proving the whole
+model works together.
 
 ### Q3: Async operations
 
-These are the operations that don't fit a synchronous `reconcile`, and what
-happens to each:
+Every control activity becomes a backend method driven by a controller loop on
+its own cadence. The controller keeps the *threads* (it owns timing); the backend
+owns the *logic*. What each becomes:
 
-| Operation | Today | Stage 1 | Principle |
+| Operation | Today | This PR | Principle |
 |-----------|-------|---------|-----------|
-| **Status query** (`get_process_status`) | sync RPC handler → provider (`service.py:1298`) | unchanged: on-demand `TaskBackend` method invoked from the RPC handler | request/response, **not** loop-driven — stays off the reconcile path |
-| **Profile / exec** | sync RPC handler → provider/kubectl | unchanged: on-demand `TaskBackend` methods | same |
-| **Liveness ping** | `_run_ping_loop` (5s) → `provider.ping_workers` | stays a cadenced method, but gated by a *capability* (daemon backends opt in); pod-polled backends fold liveness into `reconcile` | per-backend liveness model |
-| **Scheduling** | `_run_scheduling_loop` (adaptive backoff thread) | a synchronous *phase* of the driving tick, gated by `placement == IRIS` | **decisions are fast + DB-committed in the loop** |
-| **Autoscaling** | `_run_autoscaler_loop` on its own interval; slow GCP `createInstance` off the hot path | **stays on its own cadence** in Stage 1, gated by `manages_capacity` not `isinstance`; contract-ify in Stage 2 | **slow infra I/O must NOT block the reconcile tick** |
+| **Status / profile / exec** | sync RPC handler → provider | on-demand `TaskBackend` method via `TaskTarget`, called from the RPC handler | request/response, **not** loop-driven |
+| **Liveness ping** | `_run_ping_loop` (5s) → `provider.ping_workers` | `backend.ping_workers` (IRIS) / no-op (BACKEND); ping thread runs only when meaningful | per-backend liveness |
+| **Scheduling** | `_run_scheduling_loop` runs Scheduler + preemption *in the controller* | `backend.schedule(snapshot) -> decisions`; controller reads the snapshot and commits the result | logic in the backend; controller reads/commits |
+| **Autoscaling** | `_run_autoscaler_loop` drives a controller-owned, DB-writing `Autoscaler` | `backend.manage_capacity(snapshot) -> deltas`; the backend owns the (now DB-less) autoscaler and does the cloud I/O; controller applies deltas | logic in the backend; **slow I/O on its own cadence, never the 1s reconcile path** |
 
-The governing principle the user's loop must respect: **the reconcile tick makes
-decisions synchronously and commits them; fast backend I/O (kubectl apply, worker
-RPC with hard `ThreadPoolExecutor` timeouts) runs in-tick; slow infra I/O (VM
-provisioning, 10–60 s) is fire-and-forget and its effects are observed on a later
-tick** (eventual consistency — exactly how "create a slice now, see its worker
-register later" already works). That is *why* the autoscaler cannot naively fold
-into a 1 s tick. The convergence path (Stage 2): split the autoscaler's pure
-`evaluate()`/`planning.py`/`routing.py` (fast — can run in the tick) from
-`operations.py`/`scaling_group.py` (slow I/O — runs on a background executor the
-backend owns). Then `backend.manage_capacity(demand)` is called from the loop,
-computes the plan synchronously, and enqueues provisioning asynchronously. Stage
-1 only *names* this as the backend's capacity responsibility; it does not move the
-thread.
+The governing principle: **each loop reads a snapshot, calls one backend method,
+commits; fast backend I/O (kubectl apply, worker RPC with hard
+`ThreadPoolExecutor` timeouts) runs in-tick; slow infra I/O (VM provisioning,
+10–60 s) stays on the autoscaler cadence and its effects are observed on a later
+tick** (eventual consistency — "create a slice now, see its worker register
+later"). This is *why* the loops keep separate cadences rather than collapsing
+into one 1s tick. The autoscaler is made DB-less by returning slice/scaling-group
+deltas the controller persists (see [Making the autoscaler DB-less](#making-the-autoscaler-db-less)),
+so the backend owns the logic without owning a DB handle.
 
 ### Q4: Documentation
 
@@ -415,87 +436,92 @@ thread.
 
 ```mermaid
 flowchart TD
-    subgraph shell["Controller — imperative shell (sole DB owner)"]
-        TICK["_control_tick<br/>query_db → decide → reconcile → update_db"]
-        SCHED["Scheduler.find_assignments<br/>(only if placement=IRIS)"]
-        DB[("SQLite<br/>tasks · workers · jobs")]
+    subgraph shell["Controller — thin dispatcher (sole DB owner)"]
+        LOOPS["loops: schedule · reconcile · manage_capacity · ping<br/>each: read snapshot → call backend → commit"]
+        DB[("SQLite<br/>tasks · workers · jobs · slices")]
     end
 
-    subgraph prim["scheduling/ — shared primitives (already neutral)"]
-        SP["scheduler.py · scheduling_policy.py"]
-        CN["constraints.py"]
-    end
-
-    subgraph contract["providers/protocols.py — contracts"]
-        TB["TaskBackend Protocol<br/>reconcile · capacity · status · caps"]
-        INFRA["WorkerInfraProvider · ControllerProvider"]
+    subgraph contract["controller/backend.py — the contract"]
+        TB["TaskBackend Protocol<br/>schedule · reconcile · manage_capacity<br/>ping · on_workers_failed · status · caps"]
     end
 
     subgraph impls["providers/&lt;backend&gt;/ — implementations"]
-        RPC["rpc/RpcTaskBackend<br/>placement=IRIS · daemon RPC<br/>(gcp · manual · local)"]
-        K8S["k8s/K8sTaskProvider<br/>placement=BACKEND · kubectl"]
-        SLURM["slurm/… (Stage 4)"]
+        RPC["rpc/RpcTaskBackend · placement=IRIS<br/>owns Scheduler + Autoscaler<br/>(gcp · manual · local)"]
+        K8S["k8s/K8sTaskProvider · placement=BACKEND<br/>dispatches to Kueue + cluster autoscaler"]
+        SLURM["slurm/… (future)"]
     end
 
-    AUTO["Autoscaler<br/>(own cadence, gated by manages_capacity)"]
+    subgraph prim["scheduling/ — shared primitives (backend-neutral)"]
+        SP["scheduler.py · scheduling_policy.py · autoscaler/"]
+        CN["constraints.py"]
+    end
 
-    TICK --> DB
-    TICK --> SCHED
-    SCHED --> SP
-    SP --> CN
-    TICK -->|"reconcile(desired)"| TB
+    INFRA["WorkerInfraProvider · ControllerProvider<br/>(providers/protocols.py)"]
+
+    LOOPS --> DB
+    LOOPS -->|"snapshot in · decisions/deltas out (DB-less)"| TB
     TB -.implemented by.-> RPC
     TB -.implemented by.-> K8S
     TB -.implemented by.-> SLURM
+    RPC --> SP
+    SP --> CN
     RPC --> INFRA
-    AUTO --> INFRA
-    SCHED -.demand.-> AUTO
 ```
 
 ---
 
 ## Tasks
 
-Stage-1 implementation work, to be executed after this plan is approved. Each is
-a commit in the spiral from [Rollout](#q2-rollout--chonky-prs); together they are
-one chonky PR. (`weaver plan sync` can materialize these as issues once approved.)
+The one PR, as a commit spiral. T1–T2 are landed; T3–T7 remain.
 
-### T1 — Define the contract + neutral types  `exec: session`  `value: high`  `deps: —`
+### T1 — Contract + neutral reconcile types  `exec: session`  `value: high`  `deps: —`  ✅
 
-Add `TaskBackend` Protocol + `Placement` enum to `providers/protocols.py`; create
-`cluster/backend_types.py` with `BackendReconcileInput`, `BackendReconcileResult`,
-`DesiredAttempt` and the moved `ClusterCapacity` / `SchedulingEvent`; resolve the
-`TaskUpdate` location so `providers` no longer imports `controller`. Pure
-addition — repo compiles, no behavior change.
+`controller/backend.py`: `TaskBackend`, `Placement`, `BackendReconcileInput/Result`,
+`ClusterCapacity`, `SchedulingEvent`, `PingResult`, `TaskTarget`,
+`ProviderError`/`ProviderUnsupportedError`; renamed out of `direct_provider.py`.
 
-### T2 — K8s backend implements the contract  `exec: session`  `value: high`  `deps: T1`
+### T2 — Adopt the reconcile contract across providers + controller + service  `exec: session`  `value: high`  `deps: T1`  ✅
 
-`K8sTaskProvider.sync` → `reconcile(BackendReconcileInput) -> BackendReconcileResult`;
-add `name`/`placement=BACKEND`/`manages_capacity=True`. K8s fakes + tests green.
+K8s `sync`→`reconcile`; `WorkerProvider`→`providers/rpc/backend.py` `RpcTaskBackend`;
+controller drives both via `reconcile` with no `isinstance`; on-demand RPCs via
+`TaskTarget`; `main.py` autoscaler gate on `manages_capacity`; delete
+`controller/provider.py`.
 
-### T3 — RPC backend implements the contract  `exec: session`  `value: high`  `deps: T1`
+### T3 — Move scheduling into the backend  `exec: session`  `value: high`  `deps: T2`
 
-Move `controller/worker_provider.py` → `providers/rpc/backend.py` as
-`RpcTaskBackend`; fold `build_reconcile_plans` in; implement `reconcile`,
-`ping_workers`, status methods; `placement=IRIS`, `manages_capacity=False`.
-gcp/manual/local fakes + tests green.
+Add `schedule(ScheduleInput) -> ScheduleResult` to the contract. `RpcTaskBackend`
+owns the (stateless) `Scheduler` and runs the preference + `find_assignments` +
+preemption decision; K8s returns an empty result. Controller's scheduling loop
+becomes read-snapshot → `backend.schedule` → commit (assignments / preemptions /
+unschedulable). All scheduling *decision* logic leaves `controller.py`; the DB
+read (`build_scheduling_context`, running-task info for preemption) and the commit
+stay. Reservation-claim refresh stays controller-owned (it is DB read+write).
 
-### T4 — Unify the controller loop, delete `isinstance`  `exec: session`  `value: high`  `deps: T2, T3`
+### T4 — Move autoscaling into the backend, DB-less  `exec: session`  `value: high`  `deps: T3`
 
-Replace the two loop-sets with the capability-gated `_control_tick`; remove all
-four `controller.py` `isinstance` sites + the `main.py` gate; delete
-`controller/provider.py`. Wire the backend through `providers/factory.py`.
+Make `ScalingGroup`/`Autoscaler` DB-less: drop their `db` handles; `refresh`/scale
+ops mutate in-memory state and accumulate **deltas**. Add
+`manage_capacity(CapacityInput) -> CapacityResult` and
+`on_workers_failed(worker_ids) -> WorkersFailedResult` to the contract;
+`RpcTaskBackend` owns the autoscaler and performs the cloud I/O; K8s no-ops.
+Controller's autoscale loop + worker-failure path become read-snapshot →
+backend-call → apply-deltas (persist `slices`/`scaling_groups` rows; fail sibling
+workers). Startup restore stays controller-owned (reads the checkpoint, hands the
+backend its initial tracked state at construction). Move the Scheduler/Autoscaler
+construction into the backend factory; simplify `main.py` + `Controller.__init__`.
+Keep `tests/cluster/controller/test_autoscaler*.py` green.
 
 ### T5 — Name the shared scheduling layer  `exec: session`  `value: medium`  `deps: T4`
 
-Move `scheduler.py` / `scheduling_policy.py` into a `scheduling/` package;
-re-export `constraints`. Import churn only.
+Group `scheduler.py` / `scheduling_policy.py` (and the autoscaler primitives, if
+clean) under a `scheduling/` package the backends compose; `constraints.py` stays.
+Import churn only.
 
-### T6 — Capability-driven dashboard  `exec: session`  `value: medium`  `deps: T4`
+### T6 — Capability-driven dashboard  `exec: session`  `value: medium`  `deps: T2`
 
-Expose the backend descriptor (caps + panel list) via `/auth/config` or
-`GetBackendInfo`; make `App.vue` tab selection data-driven; delete
-`has_direct_provider`. `npm run build:check` green.
+Expose a backend descriptor (capabilities + the panel list) via `/auth/config`;
+make `App.vue` tab selection data-driven; retire `has_direct_provider` in favor of
+`placement`/`manages_capacity`. `npm run build:check` green.
 
 ### T7 — Documentation  `exec: session`  `value: medium`  `deps: T4, T6`
 
@@ -504,23 +530,20 @@ design doc under `.agents/projects/`.
 
 ---
 
-## Beyond Stage 1
+## Beyond this PR
 
 Sketch only, for context (each = one chonky PR):
 
-- **Stage 2 — autoscaler behind the contract.** Split pure
-  `evaluate`/`planning`/`routing` from slow `operations`/`scaling_group`; expose
-  `manage_capacity(demand)` driven from the loop, provisioning async. Decouple
-  `ScalingGroup` from `.gcp`/`.coreweave` template parsing.
-- **Stage 3 — single-backend loop fully unified.** One driving loop, capacity
-  rollup from `backend.capacity()`, no parallel loop-sets.
-- **Stage 4 — Slurm backend.** `placement=BACKEND`, `manages_capacity=True`;
+- **Slurm backend.** `placement=BACKEND`, `manages_capacity=True`;
   `sbatch`/`squeue`/`sacct`; reuse the contract. Open question carried from the
   issue: worker daemon inside the allocation (reuse `RpcTaskBackend`) vs direct
   sbatch launch (closer to k8s).
-- **Stage 5 — multi-backend.** `Controller` accepts `list[TaskBackend]`;
-  meta-scheduler routes pending tasks to backends by constraint/selector;
-  capacity + reconcile fan out per backend in parallel.
+- **Multi-backend.** `Controller` accepts `list[TaskBackend]`; a meta-scheduler
+  routes pending tasks to backends by constraint/selector; capacity + reconcile
+  fan out per backend in parallel.
+- **Single-tick collapse (optional).** If cadences allow, fold the per-activity
+  loops into one driving tick. Deferred — separate cadences + slow provisioning
+  I/O are load-bearing today.
 
 ---
 
