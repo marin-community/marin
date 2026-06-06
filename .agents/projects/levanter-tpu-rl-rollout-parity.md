@@ -23,6 +23,10 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - Prefer short local file edits, short REST `gh api` checks, and written
   handoffs. Delegate new runs to subagents when useful, then monitor them with
   tightly scoped heartbeats rather than foreground polling.
+- Active heartbeat: `poll-v5p-prefilldrain-subagent`, hourly. It polls only
+  side-agent thread `019e9b3f-8ff1-79c3-9884-02f847973191` for the v5p
+  prefill-drain follow-up and should notify only on non-capacity blockage,
+  drift, concrete failure/fix, PR updates, or terminal benchmark results.
 
 ## Current Evidence
 
