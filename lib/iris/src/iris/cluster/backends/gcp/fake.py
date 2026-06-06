@@ -20,7 +20,6 @@ from pathlib import Path
 
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.bundle import BundleStore
 from iris.cluster.backends.gcp.local import LocalSliceHandle
 from iris.cluster.backends.gcp.service import (
     KNOWN_GCP_ZONES,
@@ -42,6 +41,7 @@ from iris.cluster.backends.types import (
     QuotaExhaustedError,
     find_free_port,
 )
+from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.tpu_topology import get_tpu_topology

@@ -22,6 +22,11 @@ from pathlib import Path
 
 from rigging.timing import Duration, Timestamp
 
+from iris.cluster.backends.gcp.fake import InMemoryGcpService
+from iris.cluster.backends.gcp.workers import GcpWorkerProvider
+from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
+from iris.cluster.backends.types import find_free_port
+from iris.cluster.backends.vm_lifecycle import ControllerStatus
 from iris.cluster.config import make_local_config
 from iris.cluster.constraints import worker_attributes_from_resources
 from iris.cluster.controller import writes
@@ -37,11 +42,6 @@ from iris.cluster.controller.controller import (
     ControllerConfig,
 )
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.backends.gcp.fake import InMemoryGcpService
-from iris.cluster.backends.gcp.workers import GcpWorkerProvider
-from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
-from iris.cluster.backends.types import find_free_port
-from iris.cluster.backends.vm_lifecycle import ControllerStatus
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.token_store import store_token
 from iris.cluster.worker.port_allocator import PortAllocator

@@ -11,6 +11,13 @@ import logging
 from pathlib import Path
 
 import pytest
+from iris.cluster.backends.types import (
+    CloudSliceState,
+    CloudWorkerState,
+    Labels,
+    QuotaExhaustedError,
+    SliceStatus,
+)
 from iris.cluster.config import _derive_slice_config_from_resources, load_config
 from iris.cluster.constraints import DeviceType
 from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth, SliceFate
@@ -22,13 +29,6 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     _zones_from_config,
     prepare_slice_config,
     slice_state_to_proto,
-)
-from iris.cluster.backends.types import (
-    CloudSliceState,
-    CloudWorkerState,
-    Labels,
-    QuotaExhaustedError,
-    SliceStatus,
 )
 from iris.cluster.types import WorkerStatus
 from iris.rpc import config_pb2, vm_pb2

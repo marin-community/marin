@@ -6,7 +6,6 @@
 import json
 
 import pytest
-from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.backends.k8s.tasks import (
     _INFRASTRUCTURE_FAILURE_REASONS,
     _KUEUE_POD_GROUP_NAME,
@@ -34,6 +33,7 @@ from iris.cluster.backends.k8s.tasks import (
     _task_update_from_pod,
 )
 from iris.cluster.backends.k8s.types import parse_k8s_quantity
+from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
