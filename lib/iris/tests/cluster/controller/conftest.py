@@ -34,11 +34,17 @@ from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
+from iris.cluster.controller.backend import (
+    BackendReconcileInput,
+    BackendReconcileResult,
+    Placement,
+    ProviderUnsupportedError,
+    TaskTarget,
+)
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.direct_provider import RunTemplateCache
 from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.provider import ProviderUnsupportedError
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import (
@@ -84,12 +90,15 @@ def check_is_job_finished(j) -> bool:
 
 
 class FakeProvider:
-    """Minimal TaskProvider for tests that only exercise transitions, not RPCs."""
+    """Minimal IRIS-placement TaskBackend for tests exercising transitions, not RPCs."""
+
+    name = "worker"
+    placement = Placement.IRIS
+    manages_capacity = False
 
     def get_process_status(
         self,
-        worker_id: WorkerId,
-        address: str | None,
+        target: TaskTarget,
         request: job_pb2.GetProcessStatusRequest,
     ) -> job_pb2.GetProcessStatusResponse:
         raise ProviderUnsupportedError("fake")
@@ -97,9 +106,15 @@ class FakeProvider:
     def on_worker_failed(self, worker_id: WorkerId, address: str | None) -> None:
         pass
 
+    def set_log_sink(self, *args, **kwargs) -> None:
+        pass
+
+    def capacity(self):
+        return None
+
     def profile_task(
         self,
-        address: str,
+        target: TaskTarget,
         request: job_pb2.ProfileTaskRequest,
         timeout_ms: int,
     ) -> job_pb2.ProfileTaskResponse:
@@ -110,10 +125,14 @@ class FakeProvider:
     def ping_workers(self, workers):
         return []
 
-    def dispatch_reconcile_plans(self, plans, addresses):
+    def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
         from iris.cluster.controller.reconcile.worker import ReconcileResult
 
-        return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]
+        return BackendReconcileResult(
+            worker_results=[
+                ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in batch.plans
+            ]
+        )
 
     def close(self) -> None:
         pass

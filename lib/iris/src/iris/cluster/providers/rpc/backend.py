@@ -1,20 +1,39 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""WorkerProvider: TaskProvider backed by worker daemons via Connect RPC."""
+"""RpcTaskBackend: a TaskBackend backed by worker daemons via Connect RPC.
+
+The ``Placement.IRIS`` backend used by the GCP/TPU, CoreWeave-bare-metal,
+manual, and local clusters. The Iris scheduler assigns task→worker; this
+backend fans the per-worker Reconcile RPC out to the worker daemons and reports
+the raw observations back to the controller.
+"""
+
+from __future__ import annotations
 
 import asyncio
 import logging
 import threading
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Protocol, TypeVar
+from typing import ClassVar, Protocol, TypeVar
 
+from finelog.client.log_client import Table
+from finelog.types import LogWriterProtocol
 from rigging.timing import Duration
 
 from iris.chaos import chaos
-from iris.cluster.controller.provider import ProviderError
+from iris.cluster.controller.backend import (
+    BackendReconcileInput,
+    BackendReconcileResult,
+    ClusterCapacity,
+    Placement,
+    PingResult,
+    ProviderError,
+    TaskTarget,
+)
 from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
+from iris.cluster.runtime.profile import IrisProfile
 from iris.cluster.types import WorkerId
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -46,17 +65,6 @@ def _fan_out(
         return await asyncio.gather(*(run_one(sem, item) for item in items))
 
     return asyncio.run(_run())
-
-
-@dataclass(frozen=True)
-class PingResult:
-    """Result of a Ping RPC to a single worker."""
-
-    worker_id: WorkerId
-    worker_address: str | None
-    healthy: bool = True
-    health_error: str = ""
-    error: str | None = None
 
 
 class WorkerStubFactory(Protocol):
@@ -103,8 +111,9 @@ class RpcWorkerStubFactory:
 
 
 @dataclass
-class WorkerProvider:
-    """TaskProvider backed by worker daemons via async Connect RPCs.
+class RpcTaskBackend:
+    """``Placement.IRIS`` :class:`~iris.cluster.controller.backend.TaskBackend`
+    backed by worker daemons via async Connect RPCs.
 
     Each public method spins up an asyncio event loop and dispatches the
     relevant RPC to each worker concurrently via `asyncio.gather`, capped at
@@ -114,16 +123,30 @@ class WorkerProvider:
 
     stub_factory: WorkerStubFactory
     parallelism: int = 128
+    name: str = "worker"
+    placement: ClassVar[Placement] = Placement.IRIS
+    manages_capacity: ClassVar[bool] = False
+
+    def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
+        """Fan the Reconcile RPC out across all planned workers concurrently."""
+
+        async def _one(sem: asyncio.Semaphore, plan: WorkerReconcilePlan) -> ReconcileResult:
+            return await self._reconcile_one(sem, plan, batch.worker_addresses[plan.worker_id])
+
+        results = _fan_out(batch.plans, self.parallelism, _one)
+        return BackendReconcileResult(worker_results=results)
+
+    def capacity(self) -> ClusterCapacity | None:
+        return None
 
     def get_process_status(
         self,
-        worker_id: WorkerId,
-        address: str | None,
+        target: TaskTarget,
         request: job_pb2.GetProcessStatusRequest,
     ) -> job_pb2.GetProcessStatusResponse:
-        if not address:
-            raise ProviderError(f"Worker {worker_id} has no address")
-        stub = self.stub_factory.get_stub(address)
+        if not target.address:
+            raise ProviderError(f"Worker {target.worker_id} has no address")
+        stub = self.stub_factory.get_stub(target.address)
         # Forward with target cleared — the worker serves its own process status.
         forwarded = job_pb2.GetProcessStatusRequest(
             max_log_lines=request.max_log_lines,
@@ -136,22 +159,34 @@ class WorkerProvider:
         if address:
             self.stub_factory.evict(address)
 
+    def set_log_sink(
+        self,
+        log_client: LogWriterProtocol,
+        task_stats_table: Table,
+        profile_table: Table[IrisProfile],
+    ) -> None:
+        """No-op: worker daemons write their own log/resource/profile rows."""
+
     def profile_task(
         self,
-        address: str,
+        target: TaskTarget,
         request: job_pb2.ProfileTaskRequest,
         timeout_ms: int,
     ) -> job_pb2.ProfileTaskResponse:
-        stub = self.stub_factory.get_stub(address)
+        if not target.address:
+            raise ProviderError(f"Worker {target.worker_id} has no address")
+        stub = self.stub_factory.get_stub(target.address)
         return asyncio.run(stub.profile_task(request, timeout_ms=timeout_ms))
 
     def exec_in_container(
         self,
-        address: str,
+        target: TaskTarget,
         request: worker_pb2.Worker.ExecInContainerRequest,
         timeout_seconds: int = 60,
     ) -> worker_pb2.Worker.ExecInContainerResponse:
-        stub = self.stub_factory.get_stub(address)
+        if not target.address:
+            raise ProviderError(f"Worker {target.worker_id} has no address")
+        stub = self.stub_factory.get_stub(target.address)
         # Negative timeout means no limit; use a large RPC deadline (1 hour)
         if timeout_seconds < 0:
             rpc_timeout_ms = 3_600_000
@@ -211,18 +246,6 @@ class WorkerProvider:
                 )
             except Exception as e:
                 return ReconcileResult(worker_id=plan.worker_id, observations=[], error=str(e))
-
-    def dispatch_reconcile_plans(
-        self,
-        plans: list[WorkerReconcilePlan],
-        addresses: dict[WorkerId, str],
-    ) -> list[ReconcileResult]:
-        """Fan out the Reconcile RPC across all workers concurrently, capped at self.parallelism."""
-
-        async def _one(sem: asyncio.Semaphore, plan: WorkerReconcilePlan) -> ReconcileResult:
-            return await self._reconcile_one(sem, plan, addresses[plan.worker_id])
-
-        return _fan_out(plans, self.parallelism, _one)
 
     def close(self) -> None:
         self.stub_factory.close()

@@ -28,7 +28,7 @@ routing is purely UID-based — there is no (task_id, attempt_id) fallback.
 sequenceDiagram
     participant Loop as Controller<br/>_reconcile_worker_batch
     participant Pure as reconcile.py<br/>reconcile_workers()
-    participant Prov as WorkerProvider<br/>reconcile_workers()
+    participant Prov as RpcTaskBackend<br/>reconcile()
     participant W as Worker
     participant Apply as transitions<br/>apply_reconcile_result
 
@@ -49,8 +49,8 @@ rows and calls `reconcile_workers(inputs)`
 ([`reconcile.py`](../src/iris/cluster/controller/reconcile.py),
 `reconcile_workers`) to produce one `WorkerReconcilePlan` per worker (the
 `ReconcileRequest` proto is built once inside the plan). The plans flow
-through `WorkerProvider.reconcile_workers`
-([`worker_provider.py`](../src/iris/cluster/controller/worker_provider.py))
+through `RpcTaskBackend.reconcile`
+([`providers/rpc/backend.py`](../src/iris/cluster/providers/rpc/backend.py))
 which fans them out under a single `asyncio.gather` capped by
 `self.parallelism` and returns a `ReconcileResult` per worker. The apply layer
 ([`transitions.apply_reconcile_result`](../src/iris/cluster/controller/transitions.py))

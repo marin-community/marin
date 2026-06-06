@@ -1420,8 +1420,8 @@ def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path):
         },
     )
 
-    # Sync to populate ClusterState.
-    provider.sync(BackendReconcileInput(tasks_to_run=[], running_tasks=[]))
+    # Reconcile to populate ClusterState.
+    provider.reconcile(BackendReconcileInput(tasks_to_run=[], running_tasks=[]))
 
     resp = client.post(
         "/iris.cluster.ControllerService/GetKubernetesClusterStatus",

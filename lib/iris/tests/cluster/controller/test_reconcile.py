@@ -7,7 +7,7 @@ Three layers, exercised in order:
 
 1. **Pure compute** — ``build_reconcile_plans`` builds one ``ReconcileRequest``
    proto per worker from a ``ReconcileInputs`` snapshot. No DB.
-2. **Wire & dispatch** — ``WorkerProvider.dispatch_reconcile_plans`` fans out via a
+2. **Wire & dispatch** — ``RpcTaskBackend.reconcile`` fans out via a
    fake stub factory and synthesizes ``ReconcileResult.observations``.
 3. **Apply + e2e** — ``apply_reconcile`` against real SQLite DB state, plus a
    handful of end-to-end convergence ticks driven through
@@ -17,10 +17,11 @@ Three layers, exercised in order:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from iris.cluster.controller import ops, writes
+from iris.cluster.controller.backend import BackendReconcileInput, BackendReconcileResult, Placement
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
@@ -36,7 +37,7 @@ from iris.cluster.controller.reconcile.worker import (
     observations_to_updates as worker_observations_to_updates,
 )
 from iris.cluster.controller.schema import task_attempts_table
-from iris.cluster.controller.worker_provider import WorkerProvider
+from iris.cluster.providers.rpc.backend import RpcTaskBackend
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2, worker_pb2
 from rigging.timing import Timestamp
@@ -480,7 +481,7 @@ def test_reconcile_worker_emits_distinct_uids_for_distinct_rows():
 
 
 # ===========================================================================
-# Section 2: wire & dispatch (WorkerProvider.dispatch_reconcile_plans)
+# Section 2: wire & dispatch (RpcTaskBackend.reconcile)
 # ===========================================================================
 
 
@@ -521,21 +522,22 @@ class _FakeStubFactory:
         self.stubs.clear()
 
 
-def _provider_with_stub(stub: _FakeWorkerStub | None = None) -> tuple[WorkerProvider, _FakeWorkerStub]:
-    """Build a provider with a single stub at ``_W1_ADDR`` (creating a default if needed)."""
+def _provider_with_stub(stub: _FakeWorkerStub | None = None) -> tuple[RpcTaskBackend, _FakeWorkerStub]:
+    """Build a backend with a single stub at ``_W1_ADDR`` (creating a default if needed)."""
     if stub is None:
         stub = _FakeWorkerStub(address=_W1_ADDR)
     factory = _FakeStubFactory(stubs={_W1_ADDR: stub})
-    return WorkerProvider(stub_factory=factory), stub
+    return RpcTaskBackend(stub_factory=factory), stub
 
 
-def _reconcile_one(provider: WorkerProvider, plan: WorkerReconcilePlan, *, address: str = _W1_ADDR):
-    return provider.dispatch_reconcile_plans([plan], {WorkerId(_W1): address})
+def _reconcile_one(provider: RpcTaskBackend, plan: WorkerReconcilePlan, *, address: str = _W1_ADDR):
+    result = provider.reconcile(BackendReconcileInput(plans=[plan], worker_addresses={WorkerId(_W1): address}))
+    return result.worker_results
 
 
 def test_dispatch_reconcile_plans_empty_short_circuits():
     provider, _ = _provider_with_stub()
-    assert provider.dispatch_reconcile_plans([], {}) == []
+    assert provider.reconcile(BackendReconcileInput(plans=[], worker_addresses={})).worker_results == []
 
 
 def test_reconcile_rpc_forwards_observations():
@@ -1023,7 +1025,7 @@ def test_observations_to_updates_routes_batch_by_uid():
 
 @dataclass
 class _ScriptedProvider:
-    """In-process TaskProvider whose ``dispatch_reconcile_plans`` returns scripted observations.
+    """In-process IRIS-placement TaskBackend whose ``reconcile`` returns scripted observations.
 
     Each tick consumes one ``script`` entry (a callable taking the plan and
     returning a list of observations). Records every call so tests can assert
@@ -1032,6 +1034,9 @@ class _ScriptedProvider:
 
     script: list[Any] = field(default_factory=list)
     calls: list[tuple[list[WorkerReconcilePlan], dict]] = field(default_factory=list)
+    name: str = "worker"
+    placement: ClassVar[Placement] = Placement.IRIS
+    manages_capacity: ClassVar[bool] = False
 
     def get_process_status(self, *_args, **_kwargs):
         raise NotImplementedError
@@ -1039,17 +1044,27 @@ class _ScriptedProvider:
     def on_worker_failed(self, *_args, **_kwargs):
         pass
 
+    def set_log_sink(self, *_args, **_kwargs):
+        pass
+
+    def capacity(self):
+        return None
+
     def profile_task(self, *_args, **_kwargs):
         raise NotImplementedError
 
     def ping_workers(self, workers):
         return []
 
-    def dispatch_reconcile_plans(self, plans, addresses):
-        self.calls.append((list(plans), dict(addresses)))
+    def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
+        self.calls.append((list(batch.plans), dict(batch.worker_addresses)))
         tick = len(self.calls) - 1
         responder = self.script[tick] if tick < len(self.script) else (lambda plan: [])
-        return [ReconcileResult(worker_id=p.worker_id, observations=responder(p), error=None) for p in plans]
+        return BackendReconcileResult(
+            worker_results=[
+                ReconcileResult(worker_id=p.worker_id, observations=responder(p), error=None) for p in batch.plans
+            ]
+        )
 
     def close(self):
         pass

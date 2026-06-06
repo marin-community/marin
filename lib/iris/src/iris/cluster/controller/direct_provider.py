@@ -210,7 +210,7 @@ def drain_for_direct_provider(
     - Up to ``max_promotions`` PENDING rows, each promoted to ASSIGNED
       with a fresh attempt_id.
     - All ASSIGNED+null_worker rows whose pod creation may not have landed
-      (controller crashed between assign-commit and ``provider.sync``, or
+      (controller crashed between assign-commit and ``provider.reconcile``, or
       the prior ``_apply_pod`` errored). ``kubectl apply`` is idempotent;
       re-issuing for a row whose pod already exists is a no-op.
 

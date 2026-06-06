@@ -29,15 +29,20 @@ rather than on the concrete backend type. A new backend slots in by declaring
 its capabilities, with no ``isinstance`` branches in the controller.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Protocol
+from typing import ClassVar, Protocol
 
+from finelog.client.log_client import Table
+from finelog.types import LogWriterProtocol
 from rigging.timing import Timestamp
 
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.runtime.profile import IrisProfile
 from iris.cluster.types import WorkerId
 from iris.rpc import job_pb2, worker_pb2
 
@@ -154,10 +159,10 @@ class TaskBackend(Protocol):
     name: str
     """Stable identifier, e.g. ``"gcp"``, ``"coreweave"``, later ``"slurm-stanford"``."""
 
-    placement: Placement
+    placement: ClassVar[Placement]
     """Who schedules task→node (selects the controller's input-build + apply path)."""
 
-    manages_capacity: bool
+    manages_capacity: ClassVar[bool]
     """True when the backend provisions its own nodes (k8s cluster autoscaler);
     False when the Iris :class:`Autoscaler` provisions capacity for it."""
 
@@ -203,6 +208,16 @@ class TaskBackend(Protocol):
         """Evict cached connection state for a definitively-failed worker."""
         ...
 
-    def close(self) -> None:
-        """Release backend resources (connections, thread pools, daemons)."""
+    def set_log_sink(
+        self,
+        log_client: LogWriterProtocol,
+        task_stats_table: Table,
+        profile_table: Table[IrisProfile],
+    ) -> None:
+        """Inject the finelog handles the controller resolves after connecting.
+
+        Backends without a worker daemon (BACKEND placement) collect logs and
+        write resource/profile samples directly to finelog. Daemon-backed
+        backends ignore these — the worker writes its own rows.
+        """
         ...

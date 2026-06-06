@@ -65,6 +65,7 @@ if not hasattr(_Tx, "fetchall"):
     _Tx.fetchall = lambda self, stmt, params=None: self.execute(stmt, params).all()
     _Tx.fetchone = lambda self, stmt, params=None: self.execute(stmt, params).first()
 from iris.cluster.controller import ops
+from iris.cluster.controller.backend import BackendReconcileInput, BackendReconcileResult, Placement
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
@@ -96,7 +97,7 @@ from iris.cluster.controller.service import (
     _worker_roster,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
+from iris.cluster.providers.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -145,30 +146,45 @@ def _marin_remote_state_dir() -> str:
 
 
 class _FakeProvider:
-    """Minimal TaskProvider that satisfies Controller's wiring without making
-    real cluster calls. Mirrors tests/cluster/controller/conftest.py:FakeProvider.
+    """Minimal IRIS-placement TaskBackend that satisfies Controller's wiring
+    without making real cluster calls. Mirrors
+    tests/cluster/controller/conftest.py:FakeProvider.
 
     Used in combination with ``dry_run=True`` so the polling loop's reconcile
     short-circuits before it would ever call the provider — but we still need a
     real provider object to satisfy the constructor's type contract.
     """
 
-    def get_process_status(self, worker_id, address, request):
+    name = "worker"
+    placement = Placement.IRIS
+    manages_capacity = False
+
+    def get_process_status(self, target, request):
         raise RuntimeError("fake provider")
 
     def on_worker_failed(self, worker_id, address):
         pass
 
-    def profile_task(self, address, request, timeout_ms):
+    def set_log_sink(self, *args, **kwargs):
+        pass
+
+    def capacity(self):
+        return None
+
+    def profile_task(self, target, request, timeout_ms):
         raise RuntimeError("fake provider")
 
     def ping_workers(self, workers):
         return []
 
-    def reconcile_workers(self, plans, addresses):
+    def reconcile(self, batch):
         # Same shape the test-suite FakeProvider returns. Only exercised if
         # someone disables dry_run on the harness.
-        return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]
+        return BackendReconcileResult(
+            worker_results=[
+                ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in batch.plans
+            ]
+        )
 
     def close(self):
         pass
@@ -2154,7 +2170,7 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
 #        template build).
 #     2. ``build_reconcile_plans(inputs)`` (pure-compute: copies the spec proto
 #        into a ``DesiredAttempt`` for every ASSIGNED row).
-#     3. ``WorkerProvider.reconcile_workers(plans, addresses)`` (async fanout
+#     3. ``RpcTaskBackend.reconcile(BackendReconcileInput(...))`` (async fanout
 #        over Connect RPC to a single in-process fake worker that echoes
 #        observations back).
 #     4. ``apply_reconcile`` (one DB transaction fanning all per-worker
@@ -2488,14 +2504,14 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
     return inputs, addresses
 
 
-def _one_reconcile_tick(state: SyntheticReconcileState, provider: WorkerProvider) -> tuple[float, float, float, float]:
+def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend) -> tuple[float, float, float, float]:
     """Run one full reconcile tick. Returns (snapshot, compute, rpc, apply) ms."""
     t0 = time.perf_counter()
     inputs, addresses = _snapshot_reconcile_inputs(state)
     t1 = time.perf_counter()
     plans = build_reconcile_plans(inputs)
     t2 = time.perf_counter()
-    results = provider.reconcile_workers(plans, addresses)
+    results = provider.reconcile(BackendReconcileInput(plans=plans, worker_addresses=addresses)).worker_results
     t3 = time.perf_counter()
     plan_by_worker = {p.worker_id: p for p in plans}
     now = Timestamp.now()
@@ -2514,7 +2530,7 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: WorkerProvider
 
 def _measure_full_tick(
     state: SyntheticReconcileState,
-    provider: WorkerProvider,
+    provider: RpcTaskBackend,
     *,
     n_iters: int,
 ) -> tuple[_StageTimings, _StageTimings]:
@@ -2612,7 +2628,7 @@ def _run_reconcile_scenario(
             print(f"  build:                       {build_s * 1000:.0f} ms")
 
             stub_factory = RpcWorkerStubFactory()
-            provider = WorkerProvider(stub_factory=stub_factory, parallelism=parallelism)
+            provider = RpcTaskBackend(stub_factory=stub_factory, parallelism=parallelism)
             try:
                 compute_ms, total_bytes = _measure_compute_only(state, n_iters=n_iters)
                 per_worker_avg = total_bytes / max(1, len(state.worker_ids))

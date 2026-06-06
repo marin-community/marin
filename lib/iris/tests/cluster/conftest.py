@@ -241,7 +241,7 @@ class ServiceTestHarness:
         assert self.k8s_provider is not None, "sync_k8s requires K8s harness"
         with self.db.transaction() as cur:
             batch = direct_provider.drain_for_direct_provider(cur, cache=self.state._run_template_cache)
-        result = self.k8s_provider.sync(batch)
+        result = self.k8s_provider.reconcile(batch)
         with self.db.transaction() as cur:
             apply_direct_provider_updates(
                 cur,

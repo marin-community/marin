@@ -19,8 +19,8 @@ from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client import IrisClient
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.providers.local.cluster import LocalCluster
+from iris.cluster.providers.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.providers.types import find_free_port
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
@@ -152,7 +152,7 @@ class E2ECluster:
         )
         self._controller = Controller(
             config=controller_config,
-            provider=WorkerProvider(stub_factory=RpcWorkerStubFactory()),
+            provider=RpcTaskBackend(stub_factory=RpcWorkerStubFactory()),
         )
         self._controller.start()
 

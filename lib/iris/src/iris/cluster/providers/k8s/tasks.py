@@ -24,6 +24,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import ClassVar
 
 from finelog.client.log_client import Table
 from finelog.rpc import logging_pb2
@@ -35,7 +36,11 @@ from iris.cluster.controller.backend import (
     BackendReconcileInput,
     BackendReconcileResult,
     ClusterCapacity,
+    PingResult,
+    Placement,
+    ProviderUnsupportedError,
     SchedulingEvent,
+    TaskTarget,
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
@@ -56,7 +61,7 @@ from iris.cluster.runtime.profile import (
     sigcont_sweep_argv,
     wrap_with_kill_watchdog,
 )
-from iris.cluster.types import JobName, TaskAttempt, get_gpu_count
+from iris.cluster.types import JobName, TaskAttempt, WorkerId, get_gpu_count
 from iris.cluster.worker.stats import build_task_stat
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.time_proto import timestamp_to_proto
@@ -1243,6 +1248,9 @@ class K8sTaskProvider:
     Pod naming: iris-{task_id_sanitized}-{attempt_id}
     """
 
+    placement: ClassVar[Placement] = Placement.BACKEND
+    manages_capacity: ClassVar[bool] = True
+
     kubectl: K8sService
     namespace: str
     default_image: str
@@ -1265,6 +1273,7 @@ class K8sTaskProvider:
     profile_table: Table[IrisProfile] | None = None
     poll_concurrency: int = 32
     log_poll_interval: float = 15.0
+    name: str = "kubernetes"
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _log_collector: LogCollector | None = field(default=None, init=False, repr=False)
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
@@ -1288,7 +1297,7 @@ class K8sTaskProvider:
             )
         return self._log_collector
 
-    def sync(self, batch: BackendReconcileInput) -> BackendReconcileResult:
+    def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
         """Sync task state: apply new pods, delete strays, poll running pods.
 
         Kill targets are derived here, not buffered in the controller: any
@@ -1349,17 +1358,19 @@ class K8sTaskProvider:
 
     def profile_task(
         self,
-        task_id: str,
-        attempt_id: int,
+        target: TaskTarget,
         request: job_pb2.ProfileTaskRequest,
+        timeout_ms: int,
     ) -> job_pb2.ProfileTaskResponse:
         """Profile a running task pod via kubectl exec.
 
         On success, writes one IrisProfile row to the finelog profile_table
         (when not None). On failure, returns ProfileTaskResponse(error=...) and
-        skips the write.
+        skips the write. ``timeout_ms`` is unused — kubectl exec is bounded by
+        the profile duration itself.
         """
-        pod_name = _pod_name(JobName.from_wire(task_id), attempt_id)
+        attempt_id = target.attempt_id
+        pod_name = _pod_name(JobName.from_wire(target.task_id), attempt_id)
         duration = request.duration_seconds or 10
         profile_type = request.profile_type
         dispatch = _K8sProfileDispatch(self.kubectl, pod_name)
@@ -1394,13 +1405,13 @@ class K8sTaskProvider:
 
     def exec_in_container(
         self,
-        task_id: str,
-        attempt_id: int,
-        command: list[str],
+        target: TaskTarget,
+        request: worker_pb2.Worker.ExecInContainerRequest,
         timeout_seconds: int = 60,
     ) -> worker_pb2.Worker.ExecInContainerResponse:
         """Execute a command in a running task pod via kubectl exec."""
-        pod_name = _pod_name(JobName.from_wire(task_id), attempt_id)
+        command = list(request.command)
+        pod_name = _pod_name(JobName.from_wire(target.task_id), target.attempt_id)
         effective_timeout: float | None = timeout_seconds if timeout_seconds >= 0 else None
         try:
             result = self.kubectl.exec(pod_name, command, container="task", timeout=effective_timeout)
@@ -1411,6 +1422,39 @@ class K8sTaskProvider:
             )
         except Exception as e:
             return worker_pb2.Worker.ExecInContainerResponse(error=str(e))
+
+    def capacity(self) -> ClusterCapacity | None:
+        """Latest aggregate cluster capacity from the most recent reconcile cycle."""
+        return self._cluster_state.capacity()
+
+    def ping_workers(self, workers: list[tuple[WorkerId, str | None]]) -> list[PingResult]:
+        """No worker daemons exist on K8s — there is nothing to ping."""
+        return []
+
+    def get_process_status(
+        self,
+        target: TaskTarget,
+        request: job_pb2.GetProcessStatusRequest,
+    ) -> job_pb2.GetProcessStatusResponse:
+        raise ProviderUnsupportedError("K8s backend does not support per-process status")
+
+    def on_worker_failed(self, worker_id: WorkerId, address: str | None) -> None:
+        """No cached worker-daemon connections on K8s — nothing to evict."""
+
+    def set_log_sink(
+        self,
+        log_client: LogWriterProtocol,
+        task_stats_table: Table,
+        profile_table: Table[IrisProfile],
+    ) -> None:
+        """Inject the finelog handles the controller resolves after connecting.
+
+        K8s pods have no worker daemon, so the backend collects logs and writes
+        per-pod resource samples + profiles directly to finelog.
+        """
+        self.log_client = log_client
+        self.task_stats_table = task_stats_table
+        self.profile_table = profile_table
 
     def close(self) -> None:
         if self._log_collector is not None:

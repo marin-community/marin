@@ -32,7 +32,6 @@ from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
 from iris.cluster.providers.factory import create_provider_bundle
-from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -175,7 +174,7 @@ def run_controller_serve(
     provider = make_provider(cluster_config)
     logger.info("Provider created: %s", type(provider).__name__)
 
-    # --- Create autoscaler (only for WorkerProvider; KubernetesProvider manages its own pods) ---
+    # --- Create autoscaler (only when Iris provisions capacity; K8s manages its own pods) ---
     # In dry-run mode the autoscaler is fully gated anyway, and creating the
     # provider bundle requires platform credentials (GCP SSH keys etc.) that
     # are unavailable on a local dev machine.
@@ -185,7 +184,7 @@ def run_controller_serve(
     base_worker_config = None
     if dry_run:
         logger.info("Dry-run mode: skipping autoscaler and provider bundle creation")
-    elif not isinstance(provider, K8sTaskProvider):
+    elif not provider.manages_capacity:
         bundle = create_provider_bundle(
             platform_config=cluster_config.platform,
             worker_port=cluster_config.defaults.worker.port,

@@ -36,6 +36,7 @@ from iris.cluster.controller.auth import (
     revoke_login_keys_for_user,
 )
 from iris.cluster.controller.autoscaler.status import PendingHint
+from iris.cluster.controller.backend import ProviderError, TaskTarget
 from iris.cluster.controller.budget import (
     compute_effective_band,
     compute_user_spend,
@@ -56,7 +57,6 @@ from iris.cluster.controller.projections.endpoints import (
     EndpointsProjection,
 )
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.provider import ProviderError
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
@@ -1899,7 +1899,13 @@ class ControllerServiceImpl:
                 profile_type=request.profile_type,
             )
             timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
-            resp = self._controller.provider.profile_task(worker.address, forwarded, timeout_ms)
+            worker_target = TaskTarget(
+                task_id="",
+                attempt_id=0,
+                worker_id=worker.worker_id,
+                address=worker.address,
+            )
+            resp = self._controller.provider.profile_task(worker_target, forwarded, timeout_ms)
             return job_pb2.ProfileTaskResponse(
                 profile_data=resp.profile_data,
                 error=resp.error,
@@ -1915,24 +1921,31 @@ class ControllerServiceImpl:
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.target} not found")
 
+        attempt_id = target.attempt_id if target.attempt_id is not None else task.current_attempt_id
         task_worker_id = _task_worker_id(task)
         if not task_worker_id:
-            if self._controller.has_direct_provider:
-                provider = self._controller.provider
-                attempt_id = target.attempt_id if target.attempt_id is not None else task.current_attempt_id
-                resp = provider.profile_task(task.task_id.to_wire(), attempt_id, request)
-                return job_pb2.ProfileTaskResponse(
-                    profile_data=resp.profile_data,
-                    error=resp.error,
-                )
-            raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not yet assigned to a worker")
-
-        worker = _read_worker(self._db, task_worker_id)
-        if not worker or not self._health.liveness(task_worker_id).healthy:
-            raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
+            # BACKEND placement (K8s) chooses the node itself: route by task, no worker.
+            if not self._controller.has_direct_provider:
+                raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not yet assigned to a worker")
+            task_target = TaskTarget(
+                task_id=task.task_id.to_wire(),
+                attempt_id=attempt_id,
+                worker_id=None,
+                address=None,
+            )
+        else:
+            worker = _read_worker(self._db, task_worker_id)
+            if not worker or not self._health.liveness(task_worker_id).healthy:
+                raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
+            task_target = TaskTarget(
+                task_id=task.task_id.to_wire(),
+                attempt_id=attempt_id,
+                worker_id=task_worker_id,
+                address=worker.address,
+            )
 
         timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
-        resp = self._controller.provider.profile_task(worker.address, request, timeout_ms)
+        resp = self._controller.provider.profile_task(task_target, request, timeout_ms)
         return job_pb2.ProfileTaskResponse(
             profile_data=resp.profile_data,
             error=resp.error,
@@ -2053,8 +2066,14 @@ class ControllerServiceImpl:
         if not self._health.liveness(worker.worker_id).healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
 
+        process_target = TaskTarget(
+            task_id="",
+            attempt_id=0,
+            worker_id=WorkerId(worker_id),
+            address=worker.address,
+        )
         try:
-            return self._controller.provider.get_process_status(WorkerId(worker_id), worker.address, request)
+            return self._controller.provider.get_process_status(process_target, request)
         except ProviderError as exc:
             raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
 
@@ -2230,33 +2249,37 @@ class ControllerServiceImpl:
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
 
-        task_worker_id = _task_worker_id(task)
-        if not task_worker_id:
-            if self._controller.has_direct_provider:
-                provider = self._controller.provider
-                timeout = request.timeout_seconds if request.timeout_seconds else 60
-                resp = provider.exec_in_container(
-                    task.task_id.to_wire(), task.current_attempt_id, list(request.command), timeout
-                )
-                return controller_pb2.Controller.ExecInContainerResponse(
-                    exit_code=resp.exit_code,
-                    stdout=resp.stdout,
-                    stderr=resp.stderr,
-                    error=resp.error,
-                )
-            raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
-
-        worker = _read_worker(self._db, task_worker_id)
-        if not worker or not self._health.liveness(task_worker_id).healthy:
-            raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
-
-        # Proxy to worker
         worker_request = worker_pb2.Worker.ExecInContainerRequest(
             task_id=request.task_id,
             command=request.command,
             timeout_seconds=request.timeout_seconds,
         )
-        resp = self._controller.provider.exec_in_container(worker.address, worker_request, request.timeout_seconds)
+
+        task_worker_id = _task_worker_id(task)
+        if not task_worker_id:
+            # BACKEND placement (K8s) execs directly into the pod; no worker daemon.
+            if not self._controller.has_direct_provider:
+                raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
+            exec_target = TaskTarget(
+                task_id=task.task_id.to_wire(),
+                attempt_id=task.current_attempt_id,
+                worker_id=None,
+                address=None,
+            )
+            timeout = request.timeout_seconds if request.timeout_seconds else 60
+        else:
+            worker = _read_worker(self._db, task_worker_id)
+            if not worker or not self._health.liveness(task_worker_id).healthy:
+                raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
+            exec_target = TaskTarget(
+                task_id=task.task_id.to_wire(),
+                attempt_id=task.current_attempt_id,
+                worker_id=task_worker_id,
+                address=worker.address,
+            )
+            timeout = request.timeout_seconds
+
+        resp = self._controller.provider.exec_in_container(exec_target, worker_request, timeout)
         return controller_pb2.Controller.ExecInContainerResponse(
             exit_code=resp.exit_code,
             stdout=resp.stdout,

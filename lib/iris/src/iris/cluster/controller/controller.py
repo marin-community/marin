@@ -30,7 +30,13 @@ from iris.cluster.controller import direct_provider, ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.backend import ClusterCapacity, SchedulingEvent
+from iris.cluster.controller.backend import (
+    BackendReconcileInput,
+    ClusterCapacity,
+    Placement,
+    SchedulingEvent,
+    TaskBackend,
+)
 from iris.cluster.controller.checkpoint import (
     CheckpointResult,
     backup_databases,
@@ -54,7 +60,6 @@ from iris.cluster.controller.ops.worker import (
 )
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.pruner import prune_old_data
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import (
@@ -95,7 +100,6 @@ from iris.cluster.controller.schema import (
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
-from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.types import find_free_port, resolve_external_host
 from iris.cluster.runtime.profile import PROFILE_NAMESPACE, IrisProfile
 from iris.cluster.types import (
@@ -251,7 +255,7 @@ class Controller:
 
     Runs three background loops:
     - Scheduling loop: finds task assignments, checks worker timeouts
-    - Provider loop: syncs task state with the execution backend via TaskProvider
+    - Provider loop: syncs task state with the execution backend via TaskBackend
     - Autoscaler loop: evaluates scaling decisions, manages slice lifecycle
 
     Each loop runs on its own thread so blocking operations in one don't
@@ -262,7 +266,7 @@ class Controller:
         config = ControllerConfig(port=8080)
         controller = Controller(
             config=config,
-            provider=WorkerProvider(stub_factory=RpcWorkerStubFactory()),
+            provider=RpcTaskBackend(stub_factory=RpcWorkerStubFactory()),
         )
         controller.start()
         try:
@@ -282,7 +286,7 @@ class Controller:
     def __init__(
         self,
         config: ControllerConfig,
-        provider: TaskProvider | K8sTaskProvider,
+        provider: TaskBackend,
         autoscaler: "Autoscaler | None" = None,
         threads: ThreadContainer | None = None,
         db: ControllerDB | None = None,
@@ -295,7 +299,7 @@ class Controller:
 
         self._config = config
         self._stopped = False
-        self._provider: TaskProvider | K8sTaskProvider = provider
+        self._provider: TaskBackend = provider
         self._provider_scheduling_events: list[SchedulingEvent] = []
         self._provider_capacity: ClusterCapacity | None = None
         self._promotion_bucket = TokenBucket(
@@ -341,11 +345,13 @@ class Controller:
         # to the log server via RPC. K8s pods have no worker daemon, so the
         # provider also writes per-pod resource samples to iris.task itself —
         # mirroring what the worker daemon does on the GCE/TPU path.
-        if isinstance(self._provider, K8sTaskProvider):
+        if self._provider.placement is Placement.BACKEND:
             k8s_log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
-            self._provider.log_client = k8s_log_client
-            self._provider.task_stats_table = k8s_log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)
-            self._provider.profile_table = k8s_log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
+            self._provider.set_log_sink(
+                k8s_log_client,
+                k8s_log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat),
+                k8s_log_client.get_table(PROFILE_NAMESPACE, IrisProfile),
+            )
 
         # Controller process logs ship to the log server via RemoteLogHandler.
         self._log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
@@ -526,7 +532,7 @@ class Controller:
         if self._config.dry_run:
             logger.info("[DRY-RUN] Controller started in dry-run mode — all side effects suppressed")
 
-        if isinstance(self._provider, K8sTaskProvider):
+        if self._provider.placement is Placement.BACKEND:
             self._direct_provider_thread = self._threads.spawn(self._run_direct_provider_loop, name="provider-loop")
         else:
             self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
@@ -783,7 +789,7 @@ class Controller:
                 logger.exception("Periodic checkpoint failed")
 
     def _run_direct_provider_loop(self, stop_event: threading.Event) -> None:
-        """Provider sync loop for K8sTaskProvider: no scheduling, no workers."""
+        """Reconcile loop for BACKEND-placement backends: no scheduling, no workers."""
         limiter = RateLimiter(interval_seconds=self._config.heartbeat_interval.to_seconds())
         while not stop_event.is_set():
             if not limiter.wait(cancel=stop_event):
@@ -796,8 +802,6 @@ class Controller:
     def _sync_direct_provider(self) -> None:
         if self._config.dry_run:
             return
-        assert isinstance(self._provider, K8sTaskProvider)
-        provider = self._provider
         max_promotions = self._promotion_bucket.available
         with self._db.transaction() as cur:
             batch = direct_provider.drain_for_direct_provider(
@@ -807,7 +811,7 @@ class Controller:
             )
         if batch.tasks_to_run:
             self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
-        result = provider.sync(batch)
+        result = self._provider.reconcile(batch)
         with self._db.transaction() as cur:
             apply_direct_provider_updates(
                 cur,
@@ -1293,7 +1297,11 @@ class Controller:
             return
 
         plans = build_reconcile_plans(inputs) if inputs.worker_ids else []
-        results = self._provider.dispatch_reconcile_plans(plans, addresses) if plans else []
+        if plans:
+            reconcile_input = BackendReconcileInput(plans=plans, worker_addresses=addresses)
+            results = self._provider.reconcile(reconcile_input).worker_results
+        else:
+            results = []
 
         plan_by_worker: dict[WorkerId, WorkerReconcilePlan] = {p.worker_id: p for p in plans}
         for result in results:
@@ -1503,12 +1511,12 @@ class Controller:
     # Properties
 
     @property
-    def provider(self) -> TaskProvider | K8sTaskProvider:
+    def provider(self) -> TaskBackend:
         return self._provider
 
     @property
     def has_direct_provider(self) -> bool:
-        return isinstance(self._provider, K8sTaskProvider)
+        return self._provider.placement is Placement.BACKEND
 
     @property
     def run_template_cache(self) -> RunTemplateCache:

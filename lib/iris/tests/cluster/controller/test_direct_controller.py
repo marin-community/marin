@@ -8,6 +8,9 @@ from iris.cluster.controller import direct_provider, ops
 from iris.cluster.controller.backend import (
     BackendReconcileInput,
     BackendReconcileResult,
+    Placement,
+    ProviderUnsupportedError,
+    TaskTarget,
 )
 from iris.cluster.controller.ops.task import apply_direct_provider_updates
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
@@ -27,16 +30,35 @@ from .conftest import (
 
 
 class FakeDirectProvider:
-    """Minimal KubernetesProvider-like implementation for testing."""
+    """Minimal BACKEND-placement TaskBackend (K8s-like) for testing."""
+
+    name = "kubernetes"
+    placement = Placement.BACKEND
+    manages_capacity = True
 
     def __init__(self):
         self.sync_calls: list[BackendReconcileInput] = []
         self.sync_result = BackendReconcileResult()
         self.closed = False
 
-    def sync(self, batch: BackendReconcileInput) -> BackendReconcileResult:
+    def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
         self.sync_calls.append(batch)
         return self.sync_result
+
+    def capacity(self):
+        return None
+
+    def ping_workers(self, workers):
+        return []
+
+    def get_process_status(self, target: TaskTarget, request):
+        raise ProviderUnsupportedError("fake k8s")
+
+    def on_worker_failed(self, worker_id, address) -> None:
+        pass
+
+    def set_log_sink(self, *args, **kwargs) -> None:
+        pass
 
     def fetch_live_logs(
         self,

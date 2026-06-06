@@ -37,9 +37,9 @@ from iris.cluster.controller.controller import (
     ControllerConfig,
 )
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
+from iris.cluster.providers.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.providers.types import find_free_port
 from iris.cluster.providers.vm_lifecycle import ControllerStatus
 from iris.cluster.service_mode import ServiceMode
@@ -214,7 +214,7 @@ class LocalCluster:
                 auth_provider=auth.provider,
                 auth=auth,
             ),
-            provider=WorkerProvider(stub_factory=RpcWorkerStubFactory()),
+            provider=RpcTaskBackend(stub_factory=RpcWorkerStubFactory()),
             autoscaler=self._autoscaler,
             threads=controller_threads,
             db=db,
