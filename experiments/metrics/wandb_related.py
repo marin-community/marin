@@ -10,6 +10,8 @@ import wandb
 from marin.processing.tokenize import get_vocab_size_for_tokenizer
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
+from experiments.llama import LlamaConfig, compute_num_parameters
+
 logger = logging.getLogger(__name__)
 
 
@@ -139,8 +141,6 @@ def count_params_for_run(run_id: str, entity=WANDB_ENTITY, project=WANDB_PROJECT
     """
     Retrieves the number of parameters for a specific WandB run.
     """
-    from experiments.llama import LlamaConfig, compute_num_parameters
-
     # Initialize the WandB API
     api = wandb.Api()
 

@@ -46,6 +46,7 @@ from experiments.pretraining_datasets.nsf_awards import (
     nsf_awards_download,
     nsf_awards_tokenized,
 )
+from experiments.pretraining_datasets.swe_zero_12m import tokenize_swe_zero_12m
 
 __all__ = [
     "DOLMA_DATASETS",
@@ -68,4 +69,5 @@ __all__ = [
     "tokenize_nemotron",
     "tokenize_nemotron_subset",
     "tokenize_nemotron_v2_family",
+    "tokenize_swe_zero_12m",
 ]

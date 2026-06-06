@@ -3,11 +3,12 @@
 
 """Controller task and attempt state predicates."""
 
-from typing import Any, NamedTuple
+from dataclasses import dataclass
+from typing import NamedTuple, Protocol
 
 from rigging.timing import Deadline, Duration, Timestamp
 
-from iris.cluster.types import TERMINAL_TASK_STATES, JobName
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
 
 ACTIVE_TASK_STATES: frozenset[int] = frozenset(
@@ -28,10 +29,17 @@ EXECUTING_TASK_STATES: frozenset[int] = frozenset(
 
 
 class RunningTaskEntry(NamedTuple):
-    """Task ID and attempt ID pair captured at snapshot time."""
+    """Task ID and attempt ID pair captured at snapshot time.
+
+    ``coscheduled`` lets the direct (K8s) provider classify a vanished pod as
+    a gang preemption (WORKER_FAILED) rather than an application failure: when
+    Kueue preempts a pod group it deletes every pod, leaving no terminal pod
+    status to read — only the absence. See K8sTaskProvider._poll_pods.
+    """
 
     task_id: JobName
     attempt_id: int
+    coscheduled: bool = False
 
 
 def task_is_finished(
@@ -53,16 +61,16 @@ def task_is_finished(
     return False
 
 
-def task_row_can_be_scheduled(task: Any) -> bool:
-    if task.state != job_pb2.TASK_STATE_PENDING:
-        return False
-    return task.current_attempt_id < 0 or not task_is_finished(
-        task.state,
-        task.failure_count,
-        task.max_retries_failure,
-        task.preemption_count,
-        task.max_retries_preemption,
-    )
+class TaskStateRow(Protocol):
+    """Minimal row shape for state-only predicates."""
+
+    state: int
+
+
+def task_row_can_be_scheduled(task: TaskStateRow) -> bool:
+    # Only PENDING tasks are schedulable; a PENDING task is never finished and
+    # never has retries exhausted, so state is the sole discriminator here.
+    return task.state == job_pb2.TASK_STATE_PENDING
 
 
 def job_scheduling_deadline(scheduling_deadline_epoch_ms: int | None) -> Deadline | None:
@@ -72,11 +80,51 @@ def job_scheduling_deadline(scheduling_deadline_epoch_ms: int | None) -> Deadlin
     return Deadline.after(Timestamp.from_ms(scheduling_deadline_epoch_ms), Duration.from_ms(0))
 
 
-def attempt_is_terminal(state: int) -> bool:
-    """Check if an attempt is in a terminal state."""
-    return state in TERMINAL_TASK_STATES
+@dataclass(frozen=True, slots=True)
+class ActiveTaskRow:
+    """Task projection joined with ``jobs`` + ``job_config``.
+
+    Shared by every cascade/scheduling query (``_kill_non_terminal_tasks``,
+    ``peers.find_coscheduled_siblings``, ``ReconcileState`` verbs, poll paths).
+    Callers that need resource info for RPC payloads use ``PendingDispatchRow``
+    instead; ``ActiveTaskRow`` carries only the fields needed for state-machine
+    and cascade logic.
+    """
+
+    task_id: JobName
+    job_id: JobName
+    state: int
+    current_attempt_id: int
+    current_worker_id: WorkerId | None
+    failure_count: int
+    preemption_count: int
+    max_retries_failure: int
+    max_retries_preemption: int
+    is_reservation_holder: bool
+    has_coscheduling: bool
 
 
-def attempt_is_worker_failure(state: int) -> bool:
-    """Check if an attempt is a worker failure or preemption."""
-    return state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED)
+class TaskDetailRow(Protocol):
+    """Shape of the SA Row returned by ``get_task_detail`` and values in ``bulk_get_task_detail``.
+
+    Columns match ``TASK_DETAIL_COLS``.  Consumers in ``reconcile.py`` use
+    this Protocol as the value type of the task map.
+    """
+
+    task_id: JobName
+    job_id: JobName
+    state: int
+    current_attempt_id: int
+    failure_count: int
+    preemption_count: int
+    max_retries_failure: int
+    max_retries_preemption: int
+    submitted_at_ms: object  # Timestamp from TimestampMsType; typed as object to avoid a circular dep
+    priority_band: int
+    error: str | None
+    exit_code: int | None
+    started_at_ms: object | None
+    finished_at_ms: object | None
+    current_worker_id: str | None
+    current_worker_address: str | None
+    container_id: str | None

@@ -87,7 +87,7 @@ What goes in `spec.md`:
 
 - **Public API**: full Python class/function signatures with parameter/return types and a one-paragraph contract docstring per symbol (behavior, edge cases, ordering guarantees). Not implementation bodies.
 - **Proto definitions**: the full `.proto` content (name every RPC, message, field).
-- **File paths**: where each new piece lives (e.g. "proto at `lib/finelog/src/finelog/proto/stats.proto`"). A summary table at the bottom is good.
+- **File paths**: where each new piece lives (e.g. "proto at `lib/finelog/src/finelog/proto/finelog_stats.proto`"). A summary table at the bottom is good.
 - **Persisted shapes**: schema-registry `CREATE` statements, on-disk layout, file naming, JSON/proto envelope formats.
 - **Errors**: every new error type with its triggering condition, plus behavioural changes in existing error paths.
 - **Out of scope**: explicit list of related changes the design *doesn't* commit to — reviewers use this to know what *not* to push back on.

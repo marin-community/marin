@@ -27,11 +27,11 @@ from typing import Any
 import pandas as pd
 import wandb
 from huggingface_hub import snapshot_download
-from rigging.filesystem import open_url
+from rigging.filesystem import is_remote_path, open_url
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
-from marin.evaluation.utils import download_from_gcs, is_remote_path, upload_to_gcs
+from marin.evaluation.utils import download_from_gcs, upload_to_gcs
 from marin.inference.vllm_server import VllmEnvironment
 from marin.utils import fsspec_exists, fsspec_glob
 

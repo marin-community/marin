@@ -15,13 +15,17 @@ from fray.iris_backend import (
     FrayIrisClient,
     IrisActorHandle,
     convert_constraints,
+    resolve_coscheduling,
 )
 from fray.types import (
+    CpuConfig,
     Entrypoint,
+    GpuConfig,
     JobRequest,
     ResourceConfig,
     TpuConfig,
 )
+from iris.cluster.constraints import ConstraintOp
 
 
 class TestConvertConstraints:
@@ -44,7 +48,6 @@ class TestConvertConstraints:
         region_constraints = [c for c in constraints if c.key == "region"]
         assert len(region_constraints) == 1
         c = region_constraints[0]
-        from iris.cluster.constraints import ConstraintOp
 
         assert c.op == ConstraintOp.EQ
         assert c.values[0].value == "us-central1"
@@ -55,7 +58,6 @@ class TestConvertConstraints:
         region_constraints = [c for c in constraints if c.key == "region"]
         assert len(region_constraints) == 1
         c = region_constraints[0]
-        from iris.cluster.constraints import ConstraintOp
 
         assert c.op == ConstraintOp.IN
         assert tuple(v.value for v in c.values) == ("us-central1", "us-central2")
@@ -66,7 +68,6 @@ class TestConvertConstraints:
         zone_constraints = [c for c in constraints if c.key == "zone"]
         assert len(zone_constraints) == 1
         c = zone_constraints[0]
-        from iris.cluster.constraints import ConstraintOp
 
         assert c.op == ConstraintOp.EQ
         assert c.values[0].value == "us-east1-d"
@@ -85,7 +86,6 @@ class TestConvertConstraintsDeviceAlternatives:
         device_constraints = [c for c in constraints if c.key == "device-variant"]
         assert len(device_constraints) == 1
         c = device_constraints[0]
-        from iris.cluster.constraints import ConstraintOp
 
         assert c.op == ConstraintOp.IN
         assert {v.value for v in c.values} == {"v4-8", "v5p-8"}
@@ -265,3 +265,25 @@ class TestWithTpuFlexible:
         rc = ResourceConfig.with_tpu(["v5p-16", "v4-16"], slice_count=2)
         # v5p-16 has vm_count=2, so replicas = 2 * 2 = 4
         assert rc.replicas == 4
+
+
+# resolve_coscheduling: multi-host gangs pick the topology level the Iris provider maps.
+# group_by is now a literal topology level (B4 rename); an unmapped value raises at K8s
+# pod-manifest build, so the fray defaults must stay in sync with the provider's map.
+
+
+def test_resolve_coscheduling_gpu_multinode_uses_leafgroup():
+    cosched = resolve_coscheduling(GpuConfig(variant="H100", count=8), replicas=2)
+    assert cosched is not None
+    assert cosched.group_by == "leafgroup"
+
+
+def test_resolve_coscheduling_tpu_multinode_uses_tpu_name():
+    cosched = resolve_coscheduling(TpuConfig(variant="v5litepod-16"), replicas=4)
+    assert cosched is not None
+    assert cosched.group_by == "tpu-name"
+
+
+def test_resolve_coscheduling_single_replica_is_none():
+    assert resolve_coscheduling(GpuConfig(variant="H100", count=8), replicas=1) is None
+    assert resolve_coscheduling(CpuConfig(), replicas=4) is None

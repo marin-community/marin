@@ -28,7 +28,7 @@ from levanter.data._preprocessor import BatchProcessor
 from levanter.data.text import LmDatasetFormatBase, preprocessor_for_format
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from rigging.filesystem import url_to_fs
-from zephyr import Dataset, zephyr_worker_ctx
+from zephyr import Dataset, counters, zephyr_worker_ctx
 from zephyr.dataset import FileEntry
 from zephyr.readers import InputFileSpec
 
@@ -43,11 +43,6 @@ MIN_GROUP_BYTES = 100_000_000  # 100 MB floor to avoid degenerate tiny shards
 _MAX_WINDOW_SIZE = 64
 
 _TOKENIZE_EXTENSIONS = ["json.{gz,zst,zstd}", "jsonl.{gz,zst,zstd}", "parquet"]
-
-# NOTE(chris): Marin's `default_download` writes a `provenance.json` sidecar next to
-# downloaded HF data. Downstream tokenize jobs glob those directories and must
-# exclude sidecars so we don't train on provenance records.
-_MARIN_SIDECAR_NAMES = frozenset({"provenance.json"})
 
 
 def avg_parquet_row_group_rows(path: str) -> int | None:
@@ -72,7 +67,9 @@ def compute_target_group_bytes(total_input_bytes: int, max_workers: int) -> int:
 
 
 def drop_sidecars(files: list[FileEntry]) -> list[FileEntry]:
-    return [f for f in files if os.path.basename(f.path) not in _MARIN_SIDECAR_NAMES]
+    """Drop dot-prefixed files — Marin metadata sidecars (``.provenance.json``,
+    ``.artifact.json``, …), never training data even with a data extension."""
+    return [f for f in files if not os.path.basename(f.path).startswith(".")]
 
 
 def glob_with_sizes(patterns: list[str]) -> list[FileEntry]:
@@ -219,8 +216,11 @@ def tokenize_batches_with_id(
     for batch in batches:
         batch_count += 1
         for record in processor(batch):
+            n_tokens = len(record.get("input_ids", []))
+            counters.increment("tokenize/docs_out", 1)
+            counters.increment("tokenize/tokens_out", n_tokens)
             record_count += 1
-            token_count += len(record.get("input_ids", []))
+            token_count += n_tokens
             yield record
         if batch_count % 10 == 0:
             elapsed = time.monotonic() - start_time

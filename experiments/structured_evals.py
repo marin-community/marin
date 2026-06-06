@@ -43,8 +43,9 @@ from marin.datakit.ingestion_manifest import (
     UsagePolicy,
 )
 from marin.evaluation.perplexity_gap import RawTextEvaluationDataset, raw_text_dataset
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.executor import executor_main
 from marin.execution.step_spec import StepSpec
+from marin.execution.types import ExecutorStep
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
 from marin.transform.structured_text.table_records import (
@@ -56,6 +57,8 @@ from marin.transform.structured_text.web_data_commons import (
     WebDataCommonsStagingConfig,
     stage_web_data_commons_source,
 )
+
+from experiments.defaults import default_tokenize
 
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 LONG_TAIL_PPL_EPIC_ISSUE = 5005
@@ -346,7 +349,6 @@ def structured_evals_tokenized(
     tokenizer: str = llama3_tokenizer,
 ) -> dict[str, TokenizerStep]:
     """Tokenize the structured-text eval slices for a given tokenizer."""
-    from experiments.defaults import default_tokenize
 
     steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for key, staged in STRUCTURED_EVAL_STAGED.items():

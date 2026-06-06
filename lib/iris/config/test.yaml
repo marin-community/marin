@@ -28,6 +28,7 @@ worker_provider: {}
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   gcp:
+    service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
     zone: europe-west4-b
     machine_type: n2-standard-4
     port: 10000
@@ -49,6 +50,7 @@ scale_groups:
     slice_template:
       num_vms: 1
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         zone: europe-west4-b
         runtime_version: v2-alpha-tpuv5-lite
 
@@ -68,6 +70,7 @@ scale_groups:
     slice_template:
       num_vms: 4
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         zone: europe-west4-b
         runtime_version: v2-alpha-tpuv5-lite
 
@@ -87,6 +90,7 @@ scale_groups:
     slice_template:
       num_vms: 64
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         zone: europe-west4-b
         runtime_version: v2-alpha-tpuv6e
 
@@ -106,6 +110,7 @@ scale_groups:
     slice_template:
       num_vms: 1
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         zone: europe-west4-b
         runtime_version: v2-alpha-tpuv5-lite
 
@@ -125,6 +130,7 @@ scale_groups:
     slice_template:
       num_vms: 1
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         zone: europe-west4-a
         runtime_version: v2-alpha-tpuv5-lite
 
@@ -143,6 +149,7 @@ scale_groups:
     slice_template:
       num_vms: 1
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         zone: europe-west4-b
         runtime_version: v2-alpha-tpuv5-lite
 
@@ -161,5 +168,6 @@ scale_groups:
     slice_template:
       num_vms: 1
       gcp:
+        service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         zone: europe-west4-c
         runtime_version: v2-alpha-tpuv5-lite

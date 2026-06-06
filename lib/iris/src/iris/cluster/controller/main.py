@@ -22,14 +22,15 @@ from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.config import create_autoscaler, load_config, make_provider
-from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
+from iris.cluster.config import load_config, make_provider
+from iris.cluster.controller.auth import create_controller_auth
 from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler_factory import create_autoscaler
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.endpoints import resolve_endpoint_uri
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
 from iris.cluster.providers.factory import create_provider_bundle
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.rpc import config_pb2
@@ -40,8 +41,6 @@ logger = logging.getLogger(__name__)
 LOCAL_STATE_DIR_DEFAULT = Path("/var/cache/iris/controller")
 DRY_RUN_STATE_DIR_ROOT = Path("/tmp/dry-run")
 HOURLY_CHECKPOINT_SECONDS = 3600.0
-
-LOG_SERVER_ENDPOINT_NAME = "/system/log-server"
 
 
 def _resolve_cluster_endpoints(cluster_config: config_pb2.IrisClusterConfig) -> dict[str, str]:
@@ -69,6 +68,29 @@ def _resolve_cluster_endpoints(cluster_config: config_pb2.IrisClusterConfig) -> 
         uri, meta = derive_endpoint_uri(fcfg)
         resolved[LOG_SERVER_ENDPOINT_NAME] = resolve_endpoint_uri(uri, meta)
     return resolved
+
+
+def _build_worker_config(
+    worker_defaults: config_pb2.WorkerConfig,
+    platform: config_pb2.PlatformConfig,
+    *,
+    controller_address: str,
+    storage_prefix: str,
+    auth_token: str,
+) -> config_pb2.WorkerConfig:
+    """Build the worker config once instead of mutating a shared proto across bootstrap.
+
+    ``controller_address`` is pre-resolved by the caller (discovery runs only when the
+    configured default is empty).
+    """
+    worker_config = config_pb2.WorkerConfig()
+    worker_config.CopyFrom(worker_defaults)
+    worker_config.controller_address = controller_address
+    worker_config.platform.CopyFrom(platform)
+    worker_config.storage_prefix = storage_prefix
+    if auth_token:
+        worker_config.auth_token = auth_token
+    return worker_config
 
 
 def run_controller_serve(
@@ -157,6 +179,8 @@ def run_controller_serve(
     # In dry-run mode the autoscaler is fully gated anyway, and creating the
     # provider bundle requires platform credentials (GCP SSH keys etc.) that
     # are unavailable on a local dev machine.
+    auth = create_controller_auth(cluster_config.auth, db=db)
+
     autoscaler: Autoscaler | None = None
     base_worker_config = None
     if dry_run:
@@ -172,11 +196,16 @@ def run_controller_serve(
         logger.info("Provider bundle created")
 
         if cluster_config.defaults.worker.docker_image:
-            base_worker_config = config_pb2.WorkerConfig()
-            base_worker_config.CopyFrom(cluster_config.defaults.worker)
-            if not base_worker_config.controller_address:
-                base_worker_config.controller_address = bundle.controller.discover_controller(cluster_config.controller)
-            base_worker_config.platform.CopyFrom(cluster_config.platform)
+            controller_address = cluster_config.defaults.worker.controller_address
+            if not controller_address:
+                controller_address = bundle.controller.discover_controller(cluster_config.controller)
+            base_worker_config = _build_worker_config(
+                cluster_config.defaults.worker,
+                cluster_config.platform,
+                controller_address=controller_address,
+                storage_prefix=remote_state_dir,
+                auth_token=auth.worker_token or "",
+            )
 
         autoscaler = create_autoscaler(
             platform=workers,
@@ -194,29 +223,18 @@ def run_controller_serve(
         autoscaler.restore_from_db(db, workers)
         logger.info("Autoscaler state restored from DB")
 
-    # Workers need the resolved remote_state_dir to upload task artifacts (profiles).
-    if base_worker_config is not None:
-        base_worker_config.storage_prefix = remote_state_dir
-
     if checkpoint_interval is None:
         checkpoint_interval = HOURLY_CHECKPOINT_SECONDS
         logger.info("Defaulting to hourly checkpointing")
 
     logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)
 
-    auth = create_controller_auth(cluster_config.auth, db=db) if cluster_config else ControllerAuth()
-    if auth.worker_token and base_worker_config is not None:
-        base_worker_config.auth_token = auth.worker_token
-
     # Reconcile per-user budget tiers from the cluster config into the DB.
     # Runs after migrations have cleared user_budgets (see migration 0037).
     # Unlisted users are left without a row and fall through to
     # UserBudgetDefaults when the scheduler and launch-job guard look them up.
-    if cluster_config and cluster_config.user_budgets:
+    if cluster_config.user_budgets:
         reconcile_user_budget_tiers(db, cluster_config.user_budgets, Timestamp.now())
-
-    reconcile_rpc_enabled = os.environ.get("IRIS_RECONCILE_RPC_ENABLED", "").lower() in ("1", "true", "yes")
-    logger.info("Reconcile RPC wire: %s", "enabled" if reconcile_rpc_enabled else "disabled (legacy)")
 
     config = ControllerConfig(
         host=host,
@@ -230,7 +248,6 @@ def run_controller_serve(
         dry_run=dry_run,
         log_service_address=log_service_address,
         endpoints=endpoints,
-        reconcile_rpc_enabled=reconcile_rpc_enabled,
     )
 
     controller = Controller(
@@ -306,7 +323,7 @@ def cli():
     "--checkpoint-interval",
     default=None,
     type=float,
-    help="Periodic checkpoint interval in seconds (default: no periodic checkpointing)",
+    help="Periodic checkpoint interval in seconds (default: 3600s (hourly))",
 )
 @click.option(
     "--dry-run",

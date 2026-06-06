@@ -9,7 +9,6 @@ from unittest.mock import Mock
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller import reads
 from iris.cluster.controller.auth import (
@@ -24,13 +23,10 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.rpc import config_pb2, job_pb2
-from iris.rpc.auth import VerifiedIdentity, _verified_identity, hash_token
+from iris.rpc.auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Timestamp
-
-from tests.cluster.conftest import fake_log_client_from_service
 
 
 @pytest.fixture
@@ -40,12 +36,11 @@ def db(tmp_path):
     d.close()
 
 
-def _make_service(db, auth=None):
+def _make_service(db, log_client, auth=None):
     """Create a ControllerServiceImpl with minimal dependencies for API key tests."""
     health = WorkerHealthTracker()
     endpoints = EndpointsProjection(db)
     worker_attrs = WorkerAttrsProjection(db)
-    state = ControllerTransitions(db, health=health, endpoints=endpoints, worker_attrs=worker_attrs)
 
     controller_mock = Mock()
     controller_mock.wake = Mock()
@@ -56,10 +51,9 @@ def _make_service(db, auth=None):
     controller_mock.has_direct_provider = False
 
     return ControllerServiceImpl(
-        state,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
-        log_client=fake_log_client_from_service(LogServiceImpl()),
+        log_client=log_client,
         db=db,
         health=health,
         endpoints=endpoints,
@@ -159,7 +153,7 @@ def test_login_verifier_set_for_static(db):
 # ---------------------------------------------------------------------------
 
 
-def test_login_rejects_system_prefix(db):
+def test_login_rejects_system_prefix(db, log_client):
     """Login RPC rejects usernames starting with system:."""
 
     class SystemVerifier:
@@ -173,14 +167,14 @@ def test_login_rejects_system_prefix(db):
         login_verifier=SystemVerifier(),
         jwt_manager=jwt_mgr,
     )
-    service = _make_service(db, auth=auth)
+    service = _make_service(db, log_client, auth=auth)
 
     with pytest.raises(ConnectError) as exc_info:
         service.login(job_pb2.LoginRequest(identity_token="fake"), None)
     assert exc_info.value.code == Code.PERMISSION_DENIED
 
 
-def test_login_creates_user_and_key(db):
+def test_login_creates_user_and_key(db, log_client):
     """Login RPC creates a user and returns a working JWT."""
 
     class FakeVerifier:
@@ -194,7 +188,7 @@ def test_login_creates_user_and_key(db):
         login_verifier=FakeVerifier(),
         jwt_manager=jwt_mgr,
     )
-    service = _make_service(db, auth=auth)
+    service = _make_service(db, log_client, auth=auth)
 
     response = service.login(job_pb2.LoginRequest(identity_token="gcp-id-token"), None)
     assert response.user_id == "alice@example.com"
@@ -206,7 +200,7 @@ def test_login_creates_user_and_key(db):
     assert identity.user_id == "alice@example.com"
 
 
-def test_login_is_idempotent(db):
+def test_login_is_idempotent(db, log_client):
     """Logging in twice revokes the first login key, leaving only one active."""
 
     class FakeVerifier:
@@ -220,7 +214,7 @@ def test_login_is_idempotent(db):
         login_verifier=FakeVerifier(),
         jwt_manager=jwt_mgr,
     )
-    service = _make_service(db, auth=auth)
+    service = _make_service(db, log_client, auth=auth)
 
     resp1 = service.login(job_pb2.LoginRequest(identity_token="tok1"), None)
     resp2 = service.login(job_pb2.LoginRequest(identity_token="tok2"), None)
@@ -238,11 +232,11 @@ def test_login_is_idempotent(db):
     assert active[0].key_id == resp2.key_id
 
 
-def test_login_not_available_without_login_verifier(db):
+def test_login_not_available_without_login_verifier(db, log_client):
     """Login RPC returns UNIMPLEMENTED when no login_verifier is configured."""
     jwt_mgr = JwtTokenManager("test-signing-key")
     auth = ControllerAuth(verifier=jwt_mgr, provider="static", jwt_manager=jwt_mgr)
-    service = _make_service(db, auth=auth)
+    service = _make_service(db, log_client, auth=auth)
 
     with pytest.raises(ConnectError) as exc_info:
         service.login(job_pb2.LoginRequest(identity_token="token"), None)
@@ -254,11 +248,11 @@ def test_login_not_available_without_login_verifier(db):
 # ---------------------------------------------------------------------------
 
 
-def test_create_api_key_returns_raw_token(db):
+def test_create_api_key_returns_raw_token(db, log_client):
     """CreateApiKey returns a working JWT token."""
     config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}})
     auth = create_controller_auth(config, db=db)
-    service = _make_service(db, auth=auth)
+    service = _make_service(db, log_client, auth=auth)
 
     token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
     try:
@@ -278,11 +272,11 @@ def test_create_api_key_returns_raw_token(db):
     assert identity.user_id == "alice"
 
 
-def test_list_api_keys_never_exposes_hash(db):
+def test_list_api_keys_never_exposes_hash(db, log_client):
     """ListApiKeys returns key info without exposing hashes."""
     config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}})
     auth = create_controller_auth(config, db=db)
-    service = _make_service(db, auth=auth)
+    service = _make_service(db, log_client, auth=auth)
 
     token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
     try:
@@ -299,13 +293,13 @@ def test_list_api_keys_never_exposes_hash(db):
         assert key_info.user_id == "alice"
 
 
-def test_revoke_key_owner_only(db):
+def test_revoke_key_owner_only(db, log_client):
     """Non-admin user cannot revoke another user's key."""
     config = config_pb2.AuthConfig(
         static={"tokens": {"tok-a": "alice", "tok-b": "bob"}},
     )
     auth = create_controller_auth(config, db=db)
-    service = _make_service(db, auth=auth)
+    service = _make_service(db, log_client, auth=auth)
 
     # Get alice's key_id
     alice_keys = list_api_keys(db, user_id="alice")
@@ -324,14 +318,14 @@ def test_revoke_key_owner_only(db):
         _verified_identity.reset(token)
 
 
-def test_admin_can_revoke_any_key(db):
+def test_admin_can_revoke_any_key(db, log_client):
     """Admin user can revoke any user's key."""
     config = config_pb2.AuthConfig(
         static={"tokens": {"tok-a": "alice", "tok-b": "bob"}},
         admin_users=["bob"],
     )
     auth = create_controller_auth(config, db=db)
-    service = _make_service(db, auth=auth)
+    service = _make_service(db, log_client, auth=auth)
 
     alice_keys = list_api_keys(db, user_id="alice")
     assert alice_keys
@@ -357,40 +351,40 @@ def test_admin_can_revoke_any_key(db):
 # ---------------------------------------------------------------------------
 
 
-def test_get_auth_info_returns_gcp_provider(db):
+def test_get_auth_info_returns_gcp_provider(db, log_client):
     """GetAuthInfo returns provider and project_id for GCP auth."""
     config = config_pb2.AuthConfig(gcp={"project_id": "test-project"})
     auth = create_controller_auth(config, db=db)
-    service = _make_service(db, auth=auth)
+    service = _make_service(db, log_client, auth=auth)
 
     response = service.get_auth_info(job_pb2.GetAuthInfoRequest(), None)
     assert response.provider == "gcp"
     assert response.gcp_project_id == "test-project"
 
 
-def test_get_auth_info_returns_static_provider(db):
+def test_get_auth_info_returns_static_provider(db, log_client):
     """GetAuthInfo returns provider=static with no project_id."""
     config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}})
     auth = create_controller_auth(config, db=db)
-    service = _make_service(db, auth=auth)
+    service = _make_service(db, log_client, auth=auth)
 
     response = service.get_auth_info(job_pb2.GetAuthInfoRequest(), None)
     assert response.provider == "static"
     assert response.gcp_project_id == ""
 
 
-def test_get_auth_info_returns_empty_when_no_auth(db):
+def test_get_auth_info_returns_empty_when_no_auth(db, log_client):
     """GetAuthInfo returns empty provider when auth is disabled."""
     config = config_pb2.AuthConfig()
     auth = create_controller_auth(config, db=db)
-    service = _make_service(db, auth=auth)
+    service = _make_service(db, log_client, auth=auth)
 
     response = service.get_auth_info(job_pb2.GetAuthInfoRequest(), None)
     assert response.provider == ""
     assert response.gcp_project_id == ""
 
 
-def test_discovery_login_flow(db):
+def test_discovery_login_flow(db, log_client):
     """Full discovery login: GetAuthInfo → Login → returned token works.
 
     Simulates a client that has no config file and discovers the auth
@@ -409,7 +403,7 @@ def test_discovery_login_flow(db):
         gcp_project_id="test-project",
         jwt_manager=jwt_mgr,
     )
-    service = _make_service(db, auth=auth)
+    service = _make_service(db, log_client, auth=auth)
 
     # Step 1: Client discovers auth method (unauthenticated)
     auth_info = service.get_auth_info(job_pb2.GetAuthInfoRequest(), None)
@@ -444,18 +438,17 @@ def test_null_auth_creates_anonymous_admin_and_worker_token(db):
     assert auth.login_verifier is None
 
 
-def test_null_auth_rpcs_work_with_anonymous_token(db):
+def test_null_auth_rpcs_work_with_anonymous_token(db, log_client):
     """Auth RPCs work in null-auth mode via JwtTokenManager."""
     config = config_pb2.AuthConfig()
     auth = create_controller_auth(config, db=db)
-    service = _make_service(db, auth=auth)
+    service = _make_service(db, log_client, auth=auth)
 
     # Create an API key for "anonymous" to simulate authenticated access
     anonymous_token = secrets.token_urlsafe(32)
     create_api_key(
         db,
         key_id=f"iris_k_test_{secrets.token_hex(4)}",
-        key_hash=hash_token(anonymous_token),
         key_prefix=anonymous_token[:8],
         user_id="anonymous",
         name="test-null-auth",
@@ -481,11 +474,11 @@ def test_null_auth_rpcs_work_with_anonymous_token(db):
         _verified_identity.reset(reset)
 
 
-def test_null_auth_get_current_user(db):
+def test_null_auth_get_current_user(db, log_client):
     """GetCurrentUser returns anonymous/admin in null-auth mode."""
     config = config_pb2.AuthConfig()
     auth = create_controller_auth(config, db=db)
-    service = _make_service(db, auth=auth)
+    service = _make_service(db, log_client, auth=auth)
 
     # Create a JWT for anonymous/admin
     key_id = f"iris_k_test_{secrets.token_hex(4)}"

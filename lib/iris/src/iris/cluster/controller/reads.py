@@ -6,7 +6,7 @@
 All public functions return SA ``Row`` objects (or ``Sequence[Row]`` / dicts of
 them).  Return shapes are documented per-function.
 
-Areas covered (previously split across reads/<area>.py):
+Areas covered:
   budgets        — user budgets and roles
   dashboard      — job listing, task summaries, parent-child helpers
   jobs           — job/job_config lookups and CTEs
@@ -25,10 +25,11 @@ from rigging.timing import Timestamp
 from sqlalchemy import Integer, bindparam, case, cast, func, literal_column, select, tuple_
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller.codec import device_counts_from_json
+from iris.cluster.controller.codec import device_counts_from_json, resource_spec_from_scalars
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.schema import (
     USER_ROLE_DEFAULT,
+    ReservationClaim,
     job_config_table,
     job_workdir_files_table,
     jobs_table,
@@ -39,37 +40,13 @@ from iris.cluster.controller.schema import (
     users_table,
     workers_table,
 )
+from iris.cluster.controller.task_state import ActiveTaskRow, TaskDetailRow
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 
 # ---------------------------------------------------------------------------
 # Query-result dataclasses (previously rows.py)
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class ActiveTaskRow:
-    """Task projection joined with ``jobs`` + ``job_config``.
-
-    Shared by every cascade/scheduling query (``_kill_non_terminal_tasks``,
-    ``_find_coscheduled_siblings``, ``cancel_job``, ``preempt_task``,
-    ``cancel_tasks_for_timeout``, ``_remove_failed_worker``, poll paths).
-    Callers that need resource info for RPC payloads use ``PendingDispatchRow``
-    instead; ``ActiveTaskRow`` carries only the fields needed for state-machine
-    and cascade logic.
-    """
-
-    task_id: JobName
-    job_id: JobName
-    state: int
-    current_attempt_id: int
-    current_worker_id: WorkerId | None
-    failure_count: int
-    preemption_count: int
-    max_retries_failure: int
-    max_retries_preemption: int
-    is_reservation_holder: bool
-    has_coscheduling: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +58,7 @@ class PendingDispatchRow:
     / task_image / timeout) so the caller can assemble a
     ``RunTaskRequest``. Kept separate so other active-task queries don't
     pay for loading these JSON blobs. Used for both PENDING-promotion and
-    ASSIGNED-redrive paths (see `reads.tasks.list_*_for_direct_provider`).
+    ASSIGNED-redrive paths (see ``direct_provider.drain_for_direct_provider``).
     """
 
     task_id: JobName
@@ -96,6 +73,15 @@ class PendingDispatchRow:
     constraints_json: str | None
     task_image: str
     timeout_ms: int | None
+    # Coscheduling + priority drive Kueue gang admission on the direct path.
+    has_coscheduling: bool
+    coscheduling_group_by: str  # "" when not coscheduled
+    # Effective band from tasks.priority_band (normalized to INTERACTIVE at
+    # submit, overwritten with any over-budget demotion at assign time) — NOT
+    # the immutable requested band in job_config. The Kueue WorkloadPriorityClass
+    # must mirror the band Iris actually enforces, and tasks.priority_band is
+    # never UNSPECIFIED(0), so the provider's plain .get() resolves correctly.
+    priority_band: int  # job_pb2.PriorityBand, effective
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,19 +114,6 @@ class UserBudget:
     budget_limit: int
     max_band: int
     updated_at: Timestamp
-
-
-@dataclass(frozen=True)
-class ReservationClaim:
-    """A claim binding a worker to a specific reservation entry.
-
-    The controller assigns unclaimed workers to unsatisfied reservation entries
-    each scheduling cycle. Once every entry for a job is claimed, the
-    reservation gate opens and the job's tasks can be scheduled.
-    """
-
-    job_id: str
-    entry_idx: int
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +423,21 @@ def get_job_state(tx: Tx, job_id: JobName) -> int | None:
     return int(row.state) if row is not None else None
 
 
+def find_prunable_job(tx: Tx, terminal_states: Iterable[int], before_ts: Timestamp) -> JobName | None:
+    """Return one terminal job finished before ``before_ts``, or None."""
+    row = tx.execute(
+        select(jobs_table.c.job_id)
+        .where(
+            jobs_table.c.state.in_(bindparam("terminal_states", expanding=True)),
+            jobs_table.c.finished_at_ms.is_not(None),
+            jobs_table.c.finished_at_ms < bindparam("before_ts"),
+        )
+        .limit(1),
+        {"terminal_states": list(terminal_states), "before_ts": before_ts},
+    ).first()
+    return row.job_id if row is not None else None
+
+
 def get_job_detail(tx: Tx, job_id: JobName):
     """Return SA Row for ``job_id`` (joined with job_config) or None."""
     return tx.execute(
@@ -468,6 +456,7 @@ def get_job_detail(tx: Tx, job_id: JobName):
             jobs_table.c.has_reservation,
             jobs_table.c.name,
             jobs_table.c.depth,
+            jobs_table.c.parent_job_id,
             job_config_table.c.res_cpu_millicores,
             job_config_table.c.res_memory_bytes,
             job_config_table.c.res_disk_bytes,
@@ -498,17 +487,23 @@ def get_job_detail(tx: Tx, job_id: JobName):
     ).first()
 
 
-def get_job_config(tx: Tx, job_id: JobName) -> dict | None:
-    """Return the ``job_config`` row as ``{column_name: value}``, or None."""
-    row = (
+def bulk_get_job_configs(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, dict]:
+    """Return ``{job_id: config_dict}`` for all ``job_ids`` that have a config row.
+
+    Missing keys are silently absent. Uses a single IN-list query.
+    """
+    ids = list(job_ids)
+    if not ids:
+        return {}
+    rows = (
         tx.execute(
-            select(job_config_table).where(job_config_table.c.job_id == bindparam("job_id")),
-            {"job_id": job_id},
+            select(job_config_table).where(job_config_table.c.job_id.in_(bindparam("job_ids", expanding=True))),
+            {"job_ids": ids},
         )
         .mappings()
-        .first()
+        .all()
     )
-    return dict(row) if row is not None else None
+    return {row["job_id"]: dict(row) for row in rows}
 
 
 def _build_priority_bands_stmt():
@@ -841,32 +836,6 @@ class TaskScope:
     null_worker: bool = False
 
 
-class TaskDetailRow(Protocol):
-    """Shape of the SA Row returned by ``get_task_detail`` and values in ``bulk_get_task_detail``.
-
-    Columns match ``TASK_DETAIL_COLS``.  Consumers in ``transitions.py`` use
-    this Protocol as the value type of the task map.
-    """
-
-    task_id: JobName
-    job_id: JobName
-    state: int
-    current_attempt_id: int
-    failure_count: int
-    preemption_count: int
-    max_retries_failure: int
-    max_retries_preemption: int
-    submitted_at_ms: object  # Timestamp from TimestampMsType; typed as object to avoid a circular dep
-    priority_band: int
-    error: str | None
-    exit_code: int | None
-    started_at_ms: object | None
-    finished_at_ms: object | None
-    current_worker_id: str | None
-    current_worker_address: str | None
-    container_id: str | None
-
-
 TASK_DETAIL_COLS = (
     tasks_table.c.task_id,
     tasks_table.c.job_id,
@@ -1011,6 +980,41 @@ def list_active_tasks(
     return [_row_to_active_task(row) for row in rows]
 
 
+def list_active_tasks_for_jobs(
+    tx: Tx,
+    job_ids: Iterable[JobName],
+    *,
+    states: Iterable[int],
+) -> dict[JobName, tuple[ActiveTaskRow, ...]]:
+    """Return ``{job_id: (ActiveTaskRow, ...)}`` for all ``job_ids`` in one query.
+
+    Jobs with no matching tasks map to ``()``. Uses a single IN-list query
+    instead of one query per job. State filter is applied as an IN predicate,
+    identical to ``list_active_tasks``.
+    """
+    ids = list(job_ids)
+    states_tuple = tuple(states)
+    result: dict[JobName, tuple[ActiveTaskRow, ...]] = {jid: () for jid in ids}
+    if not ids or not states_tuple:
+        return result
+
+    stmt = (
+        select(*_ACTIVE_TASK_COLS)
+        .select_from(_ACTIVE_TASK_FROM)
+        .where(
+            tasks_table.c.job_id.in_(bindparam("bulk_job_ids", expanding=True)),
+            tasks_table.c.state.in_(bindparam("active_states", expanding=True)),
+        )
+    )
+    rows = tx.execute(stmt, {"bulk_job_ids": ids, "active_states": list(states_tuple)}).all()
+    lists: dict[JobName, list[ActiveTaskRow]] = {}
+    for row in rows:
+        lists.setdefault(row.job_id, []).append(_row_to_active_task(row))
+    for jid, task_rows in lists.items():
+        result[jid] = tuple(task_rows)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Worker reads (previously reads/workers.py)
 # ---------------------------------------------------------------------------
@@ -1070,17 +1074,18 @@ def get_worker_detail(tx: Tx, worker_id: WorkerId):
     ).first()
 
 
-def list_active_healthy_workers(tx: Tx, health: WorkerLivenessSource) -> dict[WorkerId, str]:
-    """Return ``{worker_id: address}`` for all active+healthy workers.
+def _healthy_active_worker_ids(health: WorkerLivenessSource) -> set[WorkerId]:
+    """Healthy+active worker ids from the in-memory tracker.
 
-    Fetches the full roster from SQL and filters by the in-memory health
-    tracker in Python. The expanding ``IN (...)`` form pays SA Core overhead
-    proportional to the IN list; since almost every persisted worker is
-    healthy, fetching the whole roster and filtering by dict lookup is
-    cheaper than the IN expansion.
+    Callers post-filter the ``workers`` table in Python against this set rather than
+    pushing a SQL ``IN`` — cheaper, since almost every persisted worker is healthy.
     """
-    liveness = health.all()
-    live_ids = {wid for wid, ent in liveness.items() if ent.healthy and ent.active}
+    return {wid for wid, ent in health.all().items() if ent.healthy and ent.active}
+
+
+def list_active_healthy_workers(tx: Tx, health: WorkerLivenessSource) -> dict[WorkerId, str]:
+    """Return ``{worker_id: address}`` for all active+healthy workers."""
+    live_ids = _healthy_active_worker_ids(health)
     if not live_ids:
         return {}
     rows = tx.execute(select(workers_table.c.worker_id, workers_table.c.address)).all()
@@ -1097,6 +1102,23 @@ def filter_existing_workers(tx: Tx, worker_ids: Iterable[WorkerId]) -> set[str]:
         {"worker_ids": ids},
     ).all()
     return {str(row.worker_id) for row in rows}
+
+
+def bulk_get_worker_addresses(tx: Tx, worker_ids: Iterable[WorkerId]) -> dict[WorkerId, str]:
+    """Return ``{worker_id: address}`` for all ``worker_ids`` that have a ``workers`` row.
+
+    Missing keys are silently absent. Uses a single IN-list query.
+    """
+    ids = list(worker_ids)
+    if not ids:
+        return {}
+    rows = tx.execute(
+        select(workers_table.c.worker_id, workers_table.c.address).where(
+            workers_table.c.worker_id.in_(bindparam("worker_ids", expanding=True))
+        ),
+        {"worker_ids": ids},
+    ).all()
+    return {row.worker_id: str(row.address) for row in rows}
 
 
 @dataclass(frozen=True, slots=True)
@@ -1127,11 +1149,10 @@ def healthy_active_workers_with_attributes(
     """Return healthy + active workers with their attributes hydrated.
 
     Reads the full worker roster and post-filters with the in-memory health
-    tracker. See :func:`list_active_healthy_workers` for why we skip the
+    tracker. See :func:`_healthy_active_worker_ids` for why we skip the
     SQL-side ``IN (...)`` filter.
     """
-    liveness = health.all()
-    healthy_active = {wid for wid, ent in liveness.items() if ent.healthy and ent.active}
+    healthy_active = _healthy_active_worker_ids(health)
     if not healthy_active:
         return []
     rows = tx.execute(
@@ -1162,3 +1183,60 @@ def healthy_active_workers_with_attributes(
         for row in rows
         if row.worker_id in healthy_active
     ]
+
+
+# ---------------------------------------------------------------------------
+# Direct-provider dispatch helpers (used by direct_provider.py)
+# ---------------------------------------------------------------------------
+
+# Columns selected for every pending-dispatch / redrive query.  Covers all
+# fields required to build a RunTaskRequest without a second DB round-trip.
+PENDING_DISPATCH_COLS = (
+    tasks_table.c.task_id,
+    tasks_table.c.job_id,
+    tasks_table.c.current_attempt_id,
+    jobs_table.c.num_tasks,
+    job_config_table.c.res_cpu_millicores,
+    job_config_table.c.res_memory_bytes,
+    job_config_table.c.res_disk_bytes,
+    job_config_table.c.res_device_json,
+    job_config_table.c.entrypoint_json,
+    job_config_table.c.environment_json,
+    job_config_table.c.bundle_id,
+    job_config_table.c.ports_json,
+    job_config_table.c.constraints_json,
+    job_config_table.c.task_image,
+    job_config_table.c.timeout_ms,
+    job_config_table.c.has_coscheduling,
+    job_config_table.c.coscheduling_group_by,
+    # Effective band (tasks), not the immutable requested band (job_config):
+    # see PendingDispatchRow.priority_band.
+    tasks_table.c.priority_band,
+)
+
+
+def pending_dispatch_row(r) -> PendingDispatchRow:
+    """Decode a raw SA result row into a :class:`PendingDispatchRow`."""
+    _tms = r.timeout_ms
+    return PendingDispatchRow(
+        task_id=r.task_id,
+        job_id=r.job_id,
+        current_attempt_id=int(r.current_attempt_id),
+        num_tasks=int(r.num_tasks),
+        resources=resource_spec_from_scalars(
+            int(r.res_cpu_millicores),
+            int(r.res_memory_bytes),
+            int(r.res_disk_bytes),
+            r.res_device_json,
+        ),
+        entrypoint_json=str(r.entrypoint_json),
+        environment_json=str(r.environment_json),
+        bundle_id=str(r.bundle_id),
+        ports_json=r.ports_json,
+        constraints_json=r.constraints_json,
+        task_image=str(r.task_image),
+        timeout_ms=int(_tms) if _tms is not None else None,
+        has_coscheduling=bool(r.has_coscheduling),
+        coscheduling_group_by=str(r.coscheduling_group_by),
+        priority_band=int(r.priority_band),
+    )

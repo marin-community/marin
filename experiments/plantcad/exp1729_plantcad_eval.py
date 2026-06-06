@@ -20,7 +20,8 @@ import numpy as np
 import torch
 from datasets import Dataset, load_dataset
 from huggingface_hub import HfApi
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import executor_main
+from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.utilities.json_encoder import CustomJsonEncoder
 from rigging.filesystem import open_url
 from transformers import AutoModelForCausalLM, AutoTokenizer

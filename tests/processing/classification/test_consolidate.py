@@ -42,6 +42,7 @@ def test_dedupe_consolidate_integration(fox_corpus):
     consolidate(
         input_path=fox_corpus["test_dir"],
         output_path=consolidated_dir,
+        filetype="parquet",
         filters=[
             FilterConfig(
                 type=FilterType.REMOVE_SPANS,

@@ -10,6 +10,7 @@ import type {
 } from '@/types/rpc'
 import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
+import { detailSql } from '@/utils/taskStatus'
 
 import { controllerRpcCall } from '@/composables/useRpc'
 import { useProfileAction } from '@/composables/useProfileAction'
@@ -20,7 +21,7 @@ import InfoRow from '@/components/shared/InfoRow.vue'
 import ResourceGauge from '@/components/shared/ResourceGauge.vue'
 import Sparkline from '@/components/shared/Sparkline.vue'
 import ProfileButtons from '@/components/shared/ProfileButtons.vue'
-import ProfileHistory from '@/components/shared/ProfileHistory.vue'
+import ProfileLink from '@/components/shared/ProfileLink.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
 
@@ -105,6 +106,24 @@ const taskStatsRows = computed<TaskStatRow[]>(() => {
   return decodeArrowIpc(ipc).rows as TaskStatRow[]
 })
 
+// Latest status text row for this task (see detailSql in utils/taskStatus).
+interface StatusTextRow {
+  status_text_detail_md?: string
+  status_text_summary_md?: string
+}
+
+const { data: statusTextData, refresh: fetchStatusText } = useLogServerStatsRpc<QueryResponse>(
+  'Query',
+  () => ({ sql: detailSql(props.taskId) }),
+)
+
+const statusTextDetail = computed<string>(() => {
+  const ipc = statusTextData.value?.arrowIpc
+  if (!ipc) return ''
+  const rows = decodeArrowIpc(ipc).rows as StatusTextRow[]
+  return rows[0]?.status_text_detail_md ?? ''
+})
+
 const orderedTaskStats = computed(() => taskStatsRows.value.slice().reverse())
 
 // Latest sample drives the current-value gauges and labels. resource_usage
@@ -166,23 +185,32 @@ const { start: startStatsRefresh, stop: stopStatsRefresh } = useAutoRefresh(
   5_000,
   false,
 )
+const { start: startStatusTextRefresh, stop: stopStatusTextRefresh } = useAutoRefresh(
+  fetchStatusText,
+  5_000,
+  false,
+)
 
 watch(isActive, (active) => {
   if (active) {
     startRefresh()
     startStatsRefresh()
+    startStatusTextRefresh()
   } else {
     stopRefresh()
     stopStatsRefresh()
+    stopStatusTextRefresh()
   }
 })
 
 onMounted(async () => {
   await fetchTask()
   fetchTaskStats()
+  fetchStatusText()
   if (isActive.value) {
     startRefresh()
     startStatsRefresh()
+    startStatusTextRefresh()
   }
 })
 
@@ -353,9 +381,9 @@ watch(() => props.taskId, async () => {
       </div>
 
       <!-- Status text -->
-      <InfoCard v-if="task.statusTextDetailMd" title="Status Text" class="mb-6">
+      <InfoCard v-if="statusTextDetail" title="Status Text" class="mb-6">
         <div class="text-sm text-text">
-          <MarkdownRenderer :content="task.statusTextDetailMd" />
+          <MarkdownRenderer :content="statusTextDetail" />
         </div>
       </InfoCard>
 
@@ -445,13 +473,14 @@ watch(() => props.taskId, async () => {
         </div>
       </div>
 
-      <ProfileHistory :source="taskId" class="mb-6" />
-
       <!-- Task logs -->
       <div id="task-logs-section" class="mb-6">
         <h3 class="text-sm font-semibold text-text mb-3">Logs</h3>
         <LogViewer ref="logViewerRef" :task-id="taskId" :attempts="task.attempts" :current-attempt-id="task.currentAttemptId" />
       </div>
+
+      <!-- Latest captured profile for this task; self-hides when none exist -->
+      <ProfileLink :source="taskId" class="mb-6" />
     </template>
   </PageShell>
 </template>

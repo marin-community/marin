@@ -33,6 +33,7 @@ from zephyr.dataset import (
     GlobSource,
     GroupByOp,
     JoinOp,
+    JoinType,
     LoadFileOp,
     MapOp,
     MapShardOp,
@@ -45,9 +46,9 @@ from zephyr.dataset import (
     WriteOp,
     resolve_glob,
 )
-from zephyr.expr import Expr
+from zephyr.expr import Expr, referenced_columns
 from zephyr.external_sort import compute_fan_in, compute_write_batch_size, external_sort_merge
-from zephyr.readers import InputFileSpec, load_file
+from zephyr.readers import InputFileSpec, compute_parquet_splits, load_file, load_file_batch
 
 logger = logging.getLogger(__name__)
 
@@ -194,10 +195,10 @@ def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
         yield {k: item[k] for k in columns if k in item}
 
 
-def _load_file_gen(stream: Iterator) -> Iterator:
+def _load_file_gen(stream: Iterator, loader: Callable, *, include_file_paths: bool, file_path_column: str) -> Iterator:
     for spec in stream:
         try:
-            yield from load_file(spec)
+            yield from loader(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
         except Exception as e:
             e.add_note(f"While loading from {spec}")
             raise
@@ -217,7 +218,13 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
     def pipeline(stream: Iterator, *, shard_idx: int = 0, total_shards: int = 1) -> Iterator:
         for op in operations:
             if isinstance(op, LoadFileOp):
-                stream = _load_file_gen(stream)
+                loader = load_file_batch if op.batch_mode else load_file
+                stream = _load_file_gen(
+                    stream,
+                    loader,
+                    include_file_paths=op.include_file_paths,
+                    file_path_column=op.file_path_column,
+                )
             elif isinstance(op, MapOp):
                 stream = _map_gen(stream, op.fn)
             elif isinstance(op, FilterOp):
@@ -241,7 +248,7 @@ def compose_join(
     left_key_fn: Callable,
     right_key_fn: Callable,
     combiner_fn: Callable,
-    join_type: str,
+    join_type: JoinType,
 ) -> Callable[[Iterator, Iterator], Iterator]:
     """Create a join function.
 
@@ -249,7 +256,7 @@ def compose_join(
         left_key_fn: Function to extract key from left items
         right_key_fn: Function to extract key from right items
         combiner_fn: Function to combine matched items
-        join_type: "inner" or "left"
+        join_type: inner or left join semantics
 
     Returns:
         Function that takes (left_stream, right_stream) and yields joined items
@@ -315,11 +322,6 @@ class PhysicalPlan:
         if not self.source_items:
             return 0
         return len({item.shard_idx for item in self.source_items})
-
-    @property
-    def num_chunks(self) -> int:
-        """Total number of chunks across all shards."""
-        return len(self.source_items)
 
 
 @dataclass
@@ -496,6 +498,11 @@ def _compute_file_pushdown(
 
     for i, op in enumerate(operations):
         if isinstance(op, FilterOp) and op.expr is not None and filter_expr is None:
+            if load_op.include_file_paths and load_op.file_path_column in referenced_columns(op.expr):
+                # The filter references the injected file path column, which doesn't
+                # exist in the source files. Stop pushdown so the filter runs normally
+                # in the pipeline after the column has been injected.
+                break
             filter_expr = op.expr
             ops_to_skip.add(i)
         elif isinstance(op, SelectOp) and select_columns is None:
@@ -511,19 +518,41 @@ def _compute_file_pushdown(
         else:
             break
 
-    # Create InputFileSpecs with final columns/filter
-    source_items = [
-        SourceItem(
-            shard_idx=i,
-            data=InputFileSpec(
-                path=entry.path,
-                format=load_op.format,
-                columns=select_columns,
-                filter_expr=filter_expr,
-            ),
-        )
-        for i, entry in enumerate(files)
-    ]
+    # Create InputFileSpecs with final columns/filter.
+    # When approx_shard_bytes is set, parquet files are split at row-group boundaries
+    # into multiple SourceItems. Splits are best-effort: a row group is never divided,
+    # so a shard can exceed approx_shard_bytes when a single row group is larger.
+    source_items: list[SourceItem] = []
+    for entry in files:
+        path = entry.path
+        is_parquet = load_op.format == "parquet" or (load_op.format == "auto" and path.endswith(".parquet"))
+        if load_op.approx_shard_bytes is not None and is_parquet:
+            for row_start, row_end in compute_parquet_splits(path, load_op.approx_shard_bytes):
+                source_items.append(
+                    SourceItem(
+                        shard_idx=len(source_items),
+                        data=InputFileSpec(
+                            path=path,
+                            format=load_op.format,
+                            columns=select_columns,
+                            row_start=row_start,
+                            row_end=row_end,
+                            filter_expr=filter_expr,
+                        ),
+                    )
+                )
+        else:
+            source_items.append(
+                SourceItem(
+                    shard_idx=len(source_items),
+                    data=InputFileSpec(
+                        path=path,
+                        format=load_op.format,
+                        columns=select_columns,
+                        filter_expr=filter_expr,
+                    ),
+                )
+            )
 
     # Build final operations list: LoadFileOp + remaining ops
     final_ops = [load_op] + [op for i, op in enumerate(operations) if i not in ops_to_skip]
@@ -607,6 +636,22 @@ def make_windows(
         yield window
 
 
+def composite_sort_key(key_fn: Callable, sort_fn: Callable | None) -> Callable:
+    """Build a merge/sort key from a grouping key and an optional secondary sort.
+
+    Returns ``key_fn`` unchanged when ``sort_fn`` is None. Otherwise returns a
+    callable producing ``(key_fn(item), sort_fn(item))`` so items order first by
+    group key and then by the secondary key; grouping should still use
+    ``key_fn`` alone. Used by both the scatter writer (pre-sort within a chunk)
+    and the reduce-side k-way merge so the two stay consistent.
+    """
+    if sort_fn is None:
+        return key_fn
+    # Bind to a non-Optional local so the closure captures a narrowed type.
+    secondary = sort_fn
+    return lambda item: (key_fn(item), secondary(item))
+
+
 def _merge_sorted_chunks(
     shard: Shard, key_fn: Callable, sort_fn: Callable | None = None, external_sort_dir: str | None = None
 ) -> Iterator[tuple[object, Iterator]]:
@@ -626,15 +671,7 @@ def _merge_sorted_chunks(
         Tuples of (key, iterator_of_items) for each unique key
     """
     # Merge by composite key when sort_fn is provided, but group by key_fn only.
-    # Rebind to captured_sort_fn so pyrefly narrows the type inside the closure.
-    if sort_fn is not None:
-        captured_sort_fn = sort_fn
-
-        def merge_key(item):
-            return (key_fn(item), captured_sort_fn(item))
-
-    else:
-        merge_key = key_fn
+    merge_key = composite_sort_key(key_fn, sort_fn)
 
     # Check if external sort is needed BEFORE materializing all iterators.
     # ScatterReader can decide using manifest stats (no file opens needed).
@@ -683,7 +720,7 @@ def _sorted_merge_join(
     left_key_fn: Callable,
     right_key_fn: Callable,
     combiner_fn: Callable,
-    join_type: str,
+    join_type: JoinType,
 ) -> Iterator:
     """Perform a sorted merge join between two streams.
 
@@ -693,7 +730,7 @@ def _sorted_merge_join(
         left_key_fn: Function to extract key from left items
         right_key_fn: Function to extract key from right items
         combiner_fn: Function to combine matched items
-        join_type: "inner" or "left"
+        join_type: inner or left join semantics
 
     Yields:
         Joined items according to join_type
@@ -712,12 +749,12 @@ def _sorted_merge_join(
         for side, _, item in group:
             (left_group if side == "left" else right_group).append(item)
 
-        if join_type == "inner":
+        if join_type == JoinType.INNER:
             if left_group and right_group:
                 for left_item in left_group:
                     for right_item in right_group:
                         yield combiner_fn(left_item, right_item)
-        elif join_type == "left":
+        elif join_type == JoinType.LEFT:
             for left_item in left_group:
                 if right_group:
                     for right_item in right_group:

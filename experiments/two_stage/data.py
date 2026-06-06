@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.execution.types import ExecutorStep, this_output_path
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer

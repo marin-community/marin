@@ -6,9 +6,10 @@ from collections.abc import Iterator
 from typing import Any, TypeVar
 
 import dupekit
+import humanfriendly
 import pyarrow as pa
 from fray import ResourceConfig
-from zephyr import ZephyrContext, counters, write_parquet_file
+from zephyr import DEFAULT_FILE_PATH_COLUMN, ZephyrContext, counters, write_parquet_file
 from zephyr.dataset import Dataset
 
 from marin.processing.classification.deduplication.dedup_commons import (
@@ -51,21 +52,19 @@ def dedup_exact_paragraph(
     input_paths: str | list[str],
     output_path: str,
     text_field: str = "text",
-    filetypes: list[str] | None = None,
     max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
 ) -> dict:
-    if filetypes is None:
-        filetypes = DEFAULT_FILETYPES
-
-    input_files = _collect_input_files(input_paths=input_paths, filetypes=filetypes)
+    input_files = _collect_input_files(input_paths=input_paths, filetypes=["parquet"])
     idx_to_path = dict(list(enumerate(input_files)))
     path_to_idx = {v: k for k, v in idx_to_path.items()}
 
     _init_wandb(mode=DedupMode.EXACT_PARAGRAPH, input_paths=input_paths)
 
     def compute_paragraph_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
+        # We know there's only one source per batch, so just get the first one
+        source = batch.column(DEFAULT_FILE_PATH_COLUMN)[0].as_py()
         pipeline = [
             dupekit.Transformation.SplitParagraphs(text_col=text_field, id_col="id"),
             dupekit.Transformation.Hash(
@@ -73,12 +72,14 @@ def dedup_exact_paragraph(
             ),
             dupekit.Transformation.SelectColumns(columns=["doc_id", "paragraph_span", "hash"]),
         ]
-        return dupekit.transform(batch, pipeline)
+        result = dupekit.transform(batch, pipeline)
+        return result.append_column(DEFAULT_FILE_PATH_COLUMN, pa.array([source] * result.num_rows, type=pa.string()))
 
     ctx_kwargs: dict = {
         "name": "exact-para-dedup",
         "max_workers": max_parallelism,
         "resources": worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
+        "map_workers_per_actor": 3,
     }
     if coordinator_resources is not None:
         ctx_kwargs["coordinator_resources"] = coordinator_resources
@@ -86,7 +87,6 @@ def dedup_exact_paragraph(
 
     def aggregate_and_write_to_corresponding_files(file_idx: int, records: Iterator[dict]) -> dict:
         # NOTE: all records belong to the specific file and are sorted by doc_id
-
         input_path = idx_to_path[file_idx]
         output_file = rebase_file_path(
             _find_base_path(input_paths, [input_path]),
@@ -153,15 +153,19 @@ def dedup_exact_paragraph(
                 "file_idx": item["file_idx"],
             }
 
-    def _flat_map_paragraph_hashes(path: str) -> Iterator[dict]:
-        for batch in _load_batches(path):
-            hashes = compute_paragraph_hashes(batch).to_pylist()
-            counters.increment("hash/paragraphs", len(hashes))
-            for hash_record in hashes:
-                yield {"file_idx": path_to_idx[path], "id": hash_record.pop("doc_id"), **hash_record}
+    def _flat_map_paragraph_hashes(batch: pa.RecordBatch) -> Iterator[dict]:
+        hashes = compute_paragraph_hashes(batch).to_pylist()
+        counters.increment("hash/paragraphs", len(hashes))
+        for hash_record in hashes:
+            yield {
+                "file_idx": path_to_idx[hash_record.pop(DEFAULT_FILE_PATH_COLUMN)],
+                "id": hash_record.pop("doc_id"),
+                **hash_record,
+            }
 
     shard_results = ctx.execute(
         Dataset.from_list(input_files)
+        .load_parquet(approx_shard_bytes=humanfriendly.parse_size("256M"), include_file_paths=True, batch_mode=True)
         .flat_map(_flat_map_paragraph_hashes)
         .group_by(
             lambda record: record["hash"],

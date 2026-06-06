@@ -1,11 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bundle ID utilities and a BundleStore with fsspec persistence and in-memory LRU cache.
+"""Content-addressed BundleStore with fsspec persistence and in-memory LRU cache.
 
-Bundles are stored as ``{storage_dir}/{bundle_id}.zip`` using fsspec (supporting
-local paths and GCS URIs). An in-memory LRU cache avoids repeated reads from
-storage. The cache is populated lazily — no startup scan is performed.
+A single content-addressed namespace serves both zipped workdirs and
+externalized workdir files. Disk layout: ``{storage_dir}/{id}``. The
+in-memory cache is populated lazily. ``get`` checks cache → fsspec
+storage → controller HTTP endpoint (when ``controller_address`` is set,
+i.e. on workers). Eviction from the in-memory cache does not delete from
+fsspec storage.
 """
 
 from __future__ import annotations
@@ -25,22 +28,12 @@ import fsspec.core
 logger = logging.getLogger(__name__)
 
 
-def bundle_id_for_zip(blob: bytes) -> str:
-    """Return canonical content id (SHA-256 hex digest) for bytes."""
-    return hashlib.sha256(blob).hexdigest()
+def content_id(data: bytes) -> str:
+    """Canonical content id (SHA-256 hex digest) for arbitrary bytes."""
+    return hashlib.sha256(data).hexdigest()
 
 
 class BundleStore:
-    """Bundle store with fsspec persistence and in-memory LRU cache.
-
-    Bundles are persisted as ``{storage_dir}/{bundle_id}.zip`` via fsspec, supporting
-    both local paths and remote URIs (e.g. ``gs://bucket/path/bundles``).
-
-    The in-memory cache is populated lazily: ``get_zip`` checks in-memory cache first,
-    then falls back to fsspec storage, then (on workers) fetches from the controller.
-    Eviction from the in-memory cache does NOT delete from fsspec storage.
-    """
-
     def __init__(
         self,
         storage_dir: str,
@@ -57,111 +50,83 @@ class BundleStore:
         self._fs, self._fs_path = fsspec.core.url_to_fs(storage_dir)
         self._fs.mkdirs(self._fs_path, exist_ok=True)
 
-        # OrderedDict mapping bundle_id -> blob bytes, ordered by access time
-        # (most recently accessed at end).
+        # content id -> bytes, ordered by access (MRU at end).
         self._cache: OrderedDict[str, bytes] = OrderedDict()
         self._cache_bytes = 0
 
-    def _bundle_fs_path(self, bundle_id: str) -> str:
-        return f"{self._fs_path}/{bundle_id}.zip"
+    def _path_for(self, cid: str) -> str:
+        return f"{self._fs_path}/{cid}"
 
-    def _exists_in_storage(self, bundle_id: str) -> bool:
-        return self._fs.exists(self._bundle_fs_path(bundle_id))
-
-    def _read_from_storage(self, bundle_id: str) -> bytes:
-        with self._fs.open(self._bundle_fs_path(bundle_id), "rb") as f:
-            return f.read()
-
-    def _write_to_storage(self, bundle_id: str, blob: bytes) -> None:
-        with self._fs.open(self._bundle_fs_path(bundle_id), "wb") as f:
-            f.write(blob)
-
-    def _cache_put(self, bundle_id: str, blob: bytes) -> None:
+    def _cache_put(self, cid: str, data: bytes) -> None:
         """Insert into in-memory cache and evict if needed. Caller must hold _lock."""
-        if bundle_id in self._cache:
-            self._cache.move_to_end(bundle_id)
+        if cid in self._cache:
+            self._cache.move_to_end(cid)
             return
-        self._cache[bundle_id] = blob
-        self._cache_bytes += len(blob)
+        self._cache[cid] = data
+        self._cache_bytes += len(data)
         self._evict_if_needed_locked()
 
-    def write_zip(self, blob: bytes) -> str:
-        """Write zip bytes if absent and return canonical bundle id."""
-        bundle_id = bundle_id_for_zip(blob)
+    def _evict_if_needed_locked(self) -> None:
+        while (self._max_cache_items > 0 and len(self._cache) > self._max_cache_items) or (
+            self._max_cache_bytes > 0 and self._cache_bytes > self._max_cache_bytes
+        ):
+            _, evicted = self._cache.popitem(last=False)
+            self._cache_bytes -= len(evicted)
+
+    def write(self, data: bytes) -> str:
+        """Write bytes if absent and return canonical content id."""
+        cid = content_id(data)
+        path = self._path_for(cid)
         with self._lock:
-            if bundle_id in self._cache:
-                self._cache.move_to_end(bundle_id)
-                return bundle_id
+            # Always ensure disk has the bytes: a cache hit without disk write
+            # would leave workers unable to fetch this id after a restart.
+            if not self._fs.exists(path):
+                with self._fs.open(path, "wb") as f:
+                    f.write(data)
+            self._cache_put(cid, data)
+        return cid
 
-            if not self._exists_in_storage(bundle_id):
-                self._write_to_storage(bundle_id, blob)
-            self._cache_put(bundle_id, blob)
-        return bundle_id
-
-    def get_zip(self, bundle_id: str) -> bytes:
-        """Read zip bytes by bundle id.
-
-        Checks in-memory cache, then fsspec storage. Raises FileNotFoundError
-        if the bundle is not found in either location.
-        """
+    def get(self, cid: str) -> bytes:
+        """Read bytes by content id. Falls back to controller on workers."""
+        path = self._path_for(cid)
         with self._lock:
-            if bundle_id in self._cache:
-                self._cache.move_to_end(bundle_id)
-                return self._cache[bundle_id]
+            if cid in self._cache:
+                self._cache.move_to_end(cid)
+                return self._cache[cid]
+            if self._fs.exists(path):
+                with self._fs.open(path, "rb") as f:
+                    data = f.read()
+                self._cache_put(cid, data)
+                return data
+        # Outside lock: fetch from controller and persist locally.
+        data = self._fetch_from_controller(cid)
+        self.write(data)
+        return data
 
-            if not self._exists_in_storage(bundle_id):
-                raise FileNotFoundError(f"Bundle not found: {bundle_id}")
-
-            blob = self._read_from_storage(bundle_id)
-            self._cache_put(bundle_id, blob)
-            return blob
-
-    def _fetch_from_controller(self, content_id: str, url_path: str) -> None:
-        """Fetch content from the controller HTTP endpoint and store it locally.
-
-        Retries up to 3 times with exponential backoff. Verifies the SHA-256
-        hash of the downloaded bytes matches ``content_id``.
-        """
+    def _fetch_from_controller(self, cid: str) -> bytes:
+        """Fetch content over HTTP and verify hash. Retries up to 3 times."""
         if not self._controller_address:
-            raise FileNotFoundError(f"Content {content_id} not found and no controller configured")
+            raise FileNotFoundError(f"Content {cid} not found and no controller configured")
 
-        url = f"{self._controller_address}/{url_path}"
+        url = f"{self._controller_address}/blobs/{cid}"
         for attempt in range(3):
             try:
                 with urlopen(url, timeout=120) as resp:
-                    blob = resp.read()
+                    data = resp.read()
                 break
             except Exception as e:
                 if attempt == 2:
-                    raise RuntimeError(f"Failed to fetch {content_id}: {e}") from e
+                    raise RuntimeError(f"Failed to fetch {cid}: {e}") from e
                 time.sleep(0.25 * (2**attempt))
 
-        actual = bundle_id_for_zip(blob)
-        if actual != content_id:
-            raise ValueError(f"Hash mismatch while fetching {content_id}: got {actual}")
-        self.write_zip(blob)
-
-    def get_or_fetch(self, content_id: str, url_path: str) -> bytes:
-        """Get content by ID, fetching from controller if not in local cache/storage.
-
-        Like ``get_zip`` but with automatic controller fallback. The ``url_path``
-        is the HTTP path suffix used to fetch from the controller (e.g.
-        ``bundles/{id}.zip`` or ``blobs/{id}``).
-        """
-        try:
-            return self.get_zip(content_id)
-        except FileNotFoundError:
-            logger.info("Content %s not in local cache, fetching from controller", content_id)
-            self._fetch_from_controller(content_id, url_path)
-            return self.get_zip(content_id)
+        actual = content_id(data)
+        if actual != cid:
+            raise ValueError(f"Hash mismatch while fetching {cid}: got {actual}")
+        return data
 
     def extract_bundle_to(self, bundle_id: str, dest: Path) -> None:
-        """Extract a bundle zip into ``dest`` with zip-slip protection.
-
-        If the bundle is not in the local cache/storage and a controller address is
-        configured, it is fetched on demand before extraction.
-        """
-        blob = self.get_or_fetch(bundle_id, f"bundles/{bundle_id}.zip")
+        """Extract a bundle zip into ``dest`` with zip-slip protection."""
+        blob = self.get(bundle_id)
 
         dest.mkdir(parents=True, exist_ok=True)
         base = dest.resolve()
@@ -172,14 +137,6 @@ class BundleStore:
                 if not member_path.is_relative_to(base):
                     raise ValueError(f"Zip slip detected: {member} attempts to write outside extract path")
             zf.extractall(dest)
-
-    def _evict_if_needed_locked(self) -> None:
-        """Evict oldest entries from in-memory cache. Caller must hold _lock."""
-        while (self._max_cache_items > 0 and len(self._cache) > self._max_cache_items) or (
-            self._max_cache_bytes > 0 and self._cache_bytes > self._max_cache_bytes
-        ):
-            _bid, blob = self._cache.popitem(last=False)
-            self._cache_bytes -= len(blob)
 
     def close(self) -> None:
         pass

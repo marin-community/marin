@@ -10,7 +10,7 @@ module-name = "levanter"
 
 [project]
 name = "marin-levanter"
-version = "0.99"
+version = "0.2.0"
 description = "Scalable Training for Foundation Models with Named Tensors and JAX"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -43,7 +43,6 @@ dependencies = [
     "einops",
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
-    "kitoken>=0.10.2",
     "transformers>=4.57.1,<5.0",
     "chex>=0.1.86",
     "optax>=0.1.9,<0.2.7",
@@ -85,6 +84,17 @@ gpu = [
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
   "nvidia-nccl-cu13>=2.28.3; sys_platform == 'linux'",
+  # Optional raw Sonic MoE gather/combine backend. Keep jax-triton exact:
+  # 0.3.0 is missing the CUDA backend API needed by our current stack.
+  "jax-triton==0.3.1; sys_platform == 'linux'",
+  # This module imports Triton directly; stay on the tested minor without
+  # forcing an exact patch version.
+  "triton>=3.6.0,<3.7; sys_platform == 'linux'",
+]
+deepep = [
+  # DeepEP itself remains an external source checkout addressed by DEEPEP_SRC_ROOT.
+  # The Levanter wheel ships the JAX FFI shim sources; CUDA toolchain dependencies
+  # come from the host GPU environment.
 ]
 tpu = ["jax==0.9.2", "jaxlib==0.9.2", "libtpu==0.0.39"]
 torch_test = [
@@ -110,10 +120,6 @@ lm_eval = [
 
 kernels = [
     "tokamax",
-]
-
-kitoken = [
-    "kitoken>=0.10.2",
 ]
 
 gcp = [
@@ -164,9 +170,6 @@ dev = [
 
 
 [tool.uv]
-find-links = [
-  "https://github.com/marin-community/kitoken/releases/expanded_assets/kitoken-0.10.2-a3012f4",
-]
 conflicts = [
   [
     { extra = "gpu" },

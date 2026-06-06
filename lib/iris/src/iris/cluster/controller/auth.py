@@ -8,8 +8,6 @@ controller_secrets table. Verification is a pure crypto check plus an
 in-memory revocation set — no per-RPC database hit.
 """
 
-from __future__ import annotations
-
 import dataclasses
 import logging
 import secrets
@@ -29,7 +27,6 @@ from iris.rpc.auth import (
     StaticTokenVerifier,
     TokenVerifier,
     VerifiedIdentity,
-    hash_token,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,7 +43,6 @@ DEFAULT_JWT_TTL_SECONDS = 86400 * 30  # 30 days
 def create_api_key(
     db: ControllerDB,
     key_id: str,
-    key_hash: str,
     key_prefix: str,
     user_id: str,
     name: str,
@@ -58,7 +54,6 @@ def create_api_key(
         tx.execute(
             insert(auth_api_keys_table).values(
                 key_id=key_id,
-                key_hash=key_hash,
                 key_prefix=key_prefix,
                 user_id=user_id,
                 name=name,
@@ -73,12 +68,6 @@ def create_api_key(
         name,
         expires_at.epoch_ms() if expires_at else "-",
     )
-
-
-def lookup_api_key_by_hash(db: ControllerDB, key_hash: str):
-    """Find an API key by its SHA-256 hash. Returns SA Row or None."""
-    with db.auth_read_snapshot() as tx:
-        return tx.execute(select(auth_api_keys_table).where(auth_api_keys_table.c.key_hash == key_hash).limit(1)).first()
 
 
 def touch_api_key(db: ControllerDB, key_id: str, now: Timestamp) -> None:
@@ -120,27 +109,20 @@ def list_api_keys(db: ControllerDB, user_id: str | None = None) -> list:
 
 
 def revoke_login_keys_for_user(db: ControllerDB, user_id: str, now: Timestamp) -> list[str]:
-    """Revoke all active login keys for a user. Returns list of revoked key_ids."""
-    with db.auth_read_snapshot() as tx:
-        active_rows = tx.execute(
-            select(auth_api_keys_table.c.key_id).where(
+    """Revoke all active login keys for a user. Returns the revoked key_ids."""
+    with db.transaction() as tx:
+        rows = tx.execute(
+            update(auth_api_keys_table)
+            .where(
                 auth_api_keys_table.c.user_id == user_id,
                 auth_api_keys_table.c.name.like("login-%"),
                 auth_api_keys_table.c.revoked_at_ms.is_(None),
             )
+            .values(revoked_at_ms=now)
+            .returning(auth_api_keys_table.c.key_id)
         ).all()
-    revoked_ids = [str(row.key_id) for row in active_rows]
+    revoked_ids = [str(row.key_id) for row in rows]
     if revoked_ids:
-        with db.transaction() as tx:
-            tx.execute(
-                update(auth_api_keys_table)
-                .where(
-                    auth_api_keys_table.c.user_id == user_id,
-                    auth_api_keys_table.c.name.like("login-%"),
-                    auth_api_keys_table.c.revoked_at_ms.is_(None),
-                )
-                .values(revoked_at_ms=now)
-            )
         logger.info(
             "event=login_keys_revoked entity=%s trigger=- count=%d",
             user_id,
@@ -395,8 +377,8 @@ def _preload_static_tokens(
 ) -> None:
     """Insert static config tokens into the api_keys table for audit.
 
-    The raw token hashes are stored so that the Login RPC can verify
-    static tokens during the login exchange flow.
+    Verification of static tokens happens in-memory via ``StaticTokenVerifier``;
+    these rows exist only so configured tokens surface in ``iris key list``.
     """
     tokens = dict(static_config.tokens)
     if not tokens:
@@ -412,7 +394,6 @@ def _preload_static_tokens(
         create_api_key(
             db,
             key_id=key_id,
-            key_hash=hash_token(raw_token),
             key_prefix=raw_token[:8],
             user_id=username,
             name=f"static-config-{username}",
@@ -433,7 +414,6 @@ def _create_worker_jwt(db: ControllerDB, jwt_mgr: JwtTokenManager, now: Timestam
     create_api_key(
         db,
         key_id=key_id,
-        key_hash=f"jwt:{key_id}",
         key_prefix="jwt",
         user_id=WORKER_USER,
         name="worker-token",

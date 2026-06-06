@@ -27,8 +27,6 @@ SQL-committed-but-cache-not-yet-updated window because the lock is held
 until every hook has run.
 """
 
-from __future__ import annotations
-
 import importlib.util
 import logging
 import sqlite3
@@ -45,7 +43,7 @@ from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.engine.cursor import CursorResult
 
-from iris.cluster.controller.schema import auth_metadata, metadata
+from iris.cluster.controller.schema import auth_metadata, metadata, schema_migrations_table
 
 logger = logging.getLogger(__name__)
 
@@ -73,19 +71,8 @@ def _make_engine(
     max_overflow: int,
     auth_db_path: Path | None = None,
 ) -> Engine:
-    """Build a SA engine for ``db_path``.
-
-    Read-only engines pin ``PRAGMA query_only = ON`` at connect time so
-    accidental writes raise without a per-snapshot pragma round-trip.
-    Write engines use ``pool_size=1, max_overflow=0`` (serialised by an
-    external ``RLock``); read engines use ``pool_size=2, max_overflow=2``.
-    A small read pool measurably reduces tail latency under concurrent reads:
-    SQLite WAL allows many readers but each one contends on the WAL-index
-    header lock to establish its snapshot, so capping in-flight readers and
-    queueing the rest at the SA pool (FIFO, cheap) beats spinning inside SQLite.
-    Both use ``isolation_level="AUTOCOMMIT"`` so callers emit explicit
-    ``BEGIN`` / ``COMMIT`` / ``ROLLBACK``.
-    """
+    """Build a SA engine for ``db_path`` (see the module docstring for the
+    write/read pool split and pragma rationale)."""
     auth_path_str = str(auth_db_path) if auth_db_path is not None else None
     engine = create_engine(
         f"sqlite:///{db_path}",
@@ -125,9 +112,7 @@ class Tx:
     rejected — use ``sqlalchemy.text()`` if you need to pass literal SQL.
 
     Post-commit hooks registered via :meth:`register` fire after ``COMMIT``,
-    while the write lock is still held (see ``write_transaction``). The
-    :attr:`on_commit` attribute is an alias for :meth:`register`; both names
-    are first-class and used at different call sites.
+    while the write lock is still held (see ``write_transaction``).
     """
 
     def __init__(self, conn: Connection):
@@ -155,10 +140,6 @@ class Tx:
         ``read_snapshot`` never fires hooks.
         """
         self._hooks.append(hook)
-
-    # Both names are first-class; ``on_commit`` is used by projection write
-    # helpers, ``register`` by inline call sites in writes/*.py.
-    on_commit = register
 
     def _fire_hooks(self) -> None:
         for hook in self._hooks:
@@ -253,17 +234,6 @@ class ControllerDB:
             raw_conn.close()
         logger.info("ANALYZE completed in %.2fs", time.monotonic() - t0)
 
-        # Enforce the @writes_to invariant. Importing the writes package
-        # re-exports every entity module so REGISTERED_WRITE_FUNCTIONS is
-        # fully populated. Projection classes load via the projections
-        # package re-export; instances appear in PROJECTIONS only after
-        # construction. The check is safe pre-instantiation — owned will be
-        # empty and no violations can fire — and is re-runnable after
-        # projections are built.
-        from iris.cluster.controller import projections, writes  # noqa: F401
-
-        projections.assert_owned_tables_not_externally_written()
-
     def register_reopen_hook(self, hook: Callable[[], None]) -> None:
         """Register a no-arg callable to run at the end of ``replace_from``."""
         self._reopen_hooks.append(hook)
@@ -336,10 +306,10 @@ class ControllerDB:
     def transaction(self) -> Iterator[Tx]:
         """Open an IMMEDIATE write transaction and yield a ``Tx``.
 
-        On successful commit, any hooks registered via ``Tx.register`` or
-        ``Tx.on_commit`` fire while the write lock is still held — keeping
-        in-memory caches in sync with the DB without exposing a torn
-        snapshot to concurrent readers.
+        On successful commit, any hooks registered via ``Tx.register``
+        fire while the write lock is still held — keeping in-memory caches
+        in sync with the DB without exposing a torn snapshot to concurrent
+        readers.
         """
         with write_transaction(self._sa_write_engine, self._lock) as tx:
             yield tx
@@ -387,12 +357,16 @@ class ControllerDB:
         """
         baseline_stem = Path(self.BASELINE_MIGRATION).stem
 
+        # ``Table.create`` checks out its own connection from the write engine,
+        # so run it before we hold a raw connection (the pool_size=1 pool can
+        # only hand out one at a time).
+        self._ensure_schema_migrations_table()
+
         # Baseline step. ``metadata.create_all`` checks out its own connection
         # from the write engine, which collides with the pool_size=1 pool if we
         # hold one ourselves — so scope each raw-connection use tightly.
         raw_conn = self._sa_write_engine.raw_connection()
         try:
-            self._ensure_schema_migrations_table(raw_conn)
             applied_stems = self._applied_migration_stems(raw_conn)
             needs_baseline = baseline_stem not in applied_stems
             has_user_tables = self._has_user_tables(raw_conn) if needs_baseline else False
@@ -435,17 +409,10 @@ class ControllerDB:
             checkpointed,
         )
 
-    @staticmethod
-    def _ensure_schema_migrations_table(raw_conn) -> None:
-        raw_conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                name TEXT PRIMARY KEY,
-                applied_at_ms INTEGER NOT NULL
-            )
-            """
-        )
-        raw_conn.commit()
+    def _ensure_schema_migrations_table(self) -> None:
+        # Single source of truth: emit the DDL from the SA Table definition
+        # (checkfirst => CREATE TABLE IF NOT EXISTS) rather than hand-written SQL.
+        schema_migrations_table.create(self._sa_write_engine, checkfirst=True)
 
     @staticmethod
     def _applied_migration_stems(raw_conn) -> set[str]:
@@ -521,14 +488,6 @@ class ControllerDB:
             raw_conn.commit()
             raw_conn.execute("PRAGMA synchronous=NORMAL")
             raw_conn.execute("PRAGMA journal_mode=WAL").fetchall()
-
-    @property
-    def api_keys_table(self) -> str:
-        return "auth.api_keys"
-
-    @property
-    def secrets_table(self) -> str:
-        return "auth.controller_secrets"
 
     def backup_to(self, destination: Path) -> None:
         """Create a hot backup to ``destination`` using SQLite backup API.

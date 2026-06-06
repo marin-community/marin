@@ -22,15 +22,8 @@ from marin.datakit.download.diagnostic_logs import (
     extract_loghub_step,
     materialize_ghalogs_step,
 )
-from marin.execution.executor import (
-    ExecutorMainConfig,
-    ExecutorStep,
-    InputName,
-    VersionedValue,
-    executor_main,
-    this_output_path,
-    versioned,
-)
+from marin.execution.executor import ExecutorMainConfig, executor_main
+from marin.execution.types import ExecutorStep, InputName, VersionedValue, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
 from experiments.llama import llama3_tokenizer
@@ -92,6 +85,22 @@ def _extract_steps(
         _ghalogs_extract_step(source_path, max_ghalogs_members),
         extract_logchunks_step(max_examples=max_logchunks_examples).as_executor_step(),
         extract_loghub_step(max_files=max_loghub_files).as_executor_step(),
+    )
+
+
+def diagnostic_log_extract_steps(
+    source_path: str | None,
+    max_ghalogs_members: int,
+    max_logchunks_examples: int,
+    max_loghub_files: int,
+) -> tuple[ExecutorStep, ExecutorStep, ExecutorStep]:
+    """Build capped public diagnostic-log extraction steps."""
+
+    return _extract_steps(
+        source_path=source_path,
+        max_ghalogs_members=max_ghalogs_members,
+        max_logchunks_examples=max_logchunks_examples,
+        max_loghub_files=max_loghub_files,
     )
 
 

@@ -32,12 +32,7 @@ from iris.cluster.constraints import (
     soft_constraint_score,
     split_hard_soft,
 )
-from iris.cluster.types import (
-    JobName,
-    PendingTask,
-    UserBudgetDefaults,
-    WorkerId,
-)
+from iris.cluster.types import JobName, PendingTask, UserBudgetDefaults, WorkerId
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +47,9 @@ task assignments until existing tasks complete their build phase.
 DEFAULT_MAX_ASSIGNMENTS_PER_WORKER = 1
 """Default limit for task assignments per worker per scheduling cycle.
 
-Set to 1 for normal scheduling (round-robin distribution). The dry-run in
-compute_demand_entries sets this to sys.maxsize so that a big worker with
-spare CPU can absorb multiple tasks, preventing false demand signals.
+Set to 1 for normal scheduling (round-robin distribution). Dry-run demand
+estimation raises this to an effectively unlimited value so a big worker
+with spare CPU can absorb multiple tasks, preventing false demand signals.
 """
 
 
@@ -71,7 +66,7 @@ class WorkerSnapshot:
     The ``committed_*`` fields hold the resources reserved by unfinished
     worker-bound attempts at cycle start; they are *not* persisted on the
     workers table — the controller fetches them per cycle from
-    ``reads.scheduler.resource_usage_by_worker``.
+    ``reads.resource_usage_by_worker``.
     """
 
     worker_id: WorkerId
@@ -180,7 +175,7 @@ class RejectionReason:
                 return f"Unknown rejection: {self.kind}"
 
 
-@dataclass
+@dataclass(frozen=True)
 class JobRequirements:
     """What a job needs from a worker. Scheduler's input type.
 
@@ -198,9 +193,6 @@ class JobRequirements:
     constraints: list[Constraint]
     is_coscheduled: bool
     coscheduling_group_by: str | None
-
-
-_evaluate_constraint = evaluate_constraint
 
 
 @dataclass
@@ -314,7 +306,7 @@ class WorkerCapacity:
         """Check if this worker matches all given constraints."""
         for constraint in constraints:
             attr = self.attributes.get(constraint.key)
-            if not _evaluate_constraint(attr, constraint):
+            if not evaluate_constraint(attr, constraint):
                 return False
         return True
 
@@ -384,10 +376,6 @@ class SchedulingContext:
         self.index = ConstraintIndex.build(entity_attrs)
         self.assignment_counts = {}
         self._soft_score_cache = {}
-
-    @property
-    def all_worker_ids(self) -> set[WorkerId]:
-        return {self._str_to_wid[s] for s in self.index._all_ids}
 
     def evolve_with_workers(
         self,
@@ -522,6 +510,21 @@ def first_fitting_worker(
     return None
 
 
+def _format_rejection_summary(
+    rejection_counts: dict[RejectionKind, int],
+    rejection_samples: dict[RejectionKind, RejectionReason],
+) -> str:
+    """Render per-rejection-kind reason lines, most-common first.
+
+    One ``"<sample> - <count> worker(s)"`` line per kind, joined by newlines.
+    """
+    reason_lines = [
+        f"{rejection_samples[kind]} - {rejection_counts[kind]} worker(s)"
+        for kind in sorted(rejection_counts, key=lambda k: rejection_counts[k], reverse=True)
+    ]
+    return "\n".join(reason_lines)
+
+
 def explain_unfittable(
     req: JobRequirements,
     context: SchedulingContext,
@@ -537,12 +540,8 @@ def explain_unfittable(
     if not context.capacities:
         return "No healthy workers available"
 
-    hard_constraints, soft_constraints = split_hard_soft(list(req.constraints))
-    matching = context.matching_workers(hard_constraints)
-    if soft_constraints:
-        candidates = rank_by_soft_score(matching, soft_constraints, context)
-    else:
-        candidates = list(matching)
+    hard_constraints, _ = split_hard_soft(list(req.constraints))
+    candidates = compute_candidates(req, context)
 
     rejection_counts: dict[RejectionKind, int] = defaultdict(int)
     rejection_samples: dict[RejectionKind, RejectionReason] = {}
@@ -574,12 +573,7 @@ def explain_unfittable(
                     f"but have sufficient resources for this task"
                 )
 
-        reason_lines = []
-        for kind in sorted(rejection_counts.keys(), key=lambda k: rejection_counts[k], reverse=True):
-            count = rejection_counts[kind]
-            sample = rejection_samples[kind]
-            reason_lines.append(f"{sample} - {count} worker(s)")
-        failure_reason = "\n".join(reason_lines)
+        failure_reason = _format_rejection_summary(rejection_counts, rejection_samples)
         if hard_constraints:
             constraint_keys = [c.key for c in hard_constraints]
             failure_reason = f"{failure_reason}\n(with constraints={constraint_keys})"
@@ -904,13 +898,7 @@ class Scheduler:
 
             # If this is the largest group, report why it doesn't have capacity
             if len(group_worker_ids) == best and rejection_counts:
-                # Format all rejection reasons with counts
-                reason_lines = []
-                for kind in sorted(rejection_counts.keys(), key=lambda k: rejection_counts[k], reverse=True):
-                    count = rejection_counts[kind]
-                    sample = rejection_samples[kind]
-                    reason_lines.append(f"{sample} - {count} worker(s)")
-                reasons = "\n".join(reason_lines)
+                reasons = _format_rejection_summary(rejection_counts, rejection_samples)
                 return (
                     f"Coscheduling: need {num_tasks} workers in '{group_by}' group '{group_key}', "
                     f"only {len(available)} of {len(group_worker_ids)} have capacity:\n{reasons}"

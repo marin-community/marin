@@ -5,14 +5,9 @@
 
 Reads raw files (JSONL, Parquet, etc.) discovered recursively under a single
 input directory, transforms each record into the standard schema (``id``,
-``text``, ``partition_id``, plus all original columns), deduplicates by
-content, sorts by ``id`` within each partition, and writes Parquet output
-with ``part-{shard}-of-{total}`` naming.
-
-``partition_id`` (int) is stamped at write time and equals the row's output
-shard index. The shard count itself lives on the artifact
-(``NormalizedData.num_partitions``) — downstream stages use the column as the
-``group_by`` key for global shuffles and the field for filename construction.
+``text``, plus all original columns), deduplicates by content, sorts by ``id``
+within each partition, and writes Parquet output with
+``part-{shard}-of-{total}`` naming.
 
 All discovered files are merged into a single output: main records land in
 ``<output_path>/outputs/main/`` and (when dedup is enabled) duplicates land in
@@ -37,7 +32,6 @@ from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_fi
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 from zephyr.writers import ThreadedBatchWriter
 
-from marin.datakit import partition_filename
 from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
@@ -75,19 +69,12 @@ class NormalizedData(BaseModel):
     Attributes:
         main_output_dir: Directory containing the main output Parquet files.
         dup_output_dir: Directory containing the duplicate side output Parquet files.
-        num_partitions: Number of output shards. Matches the ``-of-NNNNN``
-            suffix in filenames and the ``partition_id`` column's value range
-            (``0 <= partition_id < num_partitions``). Downstream shufflers
-            need this to construct co-partitioned filenames without globbing.
-            ``None`` on legacy ``v1`` artifacts that pre-date the field;
-            always populated on ``v2``+ writes.
         counters: Aggregated zephyr counters.
     """
 
-    version: str = "v2"
+    version: str = "v1"
     main_output_dir: str
     dup_output_dir: str
-    num_partitions: int | None = None
     counters: dict[str, int]
 
 
@@ -283,9 +270,8 @@ def _make_split_writer(
         shard: ShardInfo,
     ) -> Iterator[dict[str, dict[str, Any]]]:
         # NOTE: we could add support for split_existing - but we intentionally don't
-        filename = partition_filename(shard.shard_idx, shard.total_shards)
-        main_path = f"{output_dir}/outputs/main/{filename}"
-        dup_path = f"{output_dir}/outputs/dups/{filename}"
+        main_path = f"{output_dir}/outputs/main/part-{shard.shard_idx:05d}-of-{shard.total_shards:05d}.parquet"
+        dup_path = f"{output_dir}/outputs/dups/part-{shard.shard_idx:05d}-of-{shard.total_shards:05d}.parquet"
 
         # Results are populated by each writer thread. Safe to read only after
         # the ThreadedBatchWriter context exits (which joins the thread).
@@ -302,9 +288,6 @@ def _make_split_writer(
             ThreadedBatchWriter(write_to(dup_path, "dup")) as dup_writer,
         ):
             for item in records:
-                # Stamp partition_id at the writer so it reflects the actual
-                # output shard, not anything inferred upstream of group_by.
-                item.data["partition_id"] = shard.shard_idx
                 if isinstance(item, MainOutput):
                     counters.increment("normalize/unique_records_out")
                     main_writer.submit(item.data)
@@ -410,11 +393,12 @@ def normalize_to_parquet(
             tokenization. Affected records are counted via the
             ``datakit_normalize_compacted_whitespace`` Zephyr counter.
         worker_resources: Per-worker resource request for the Zephyr pipeline.
-            Defaults to 2 CPU / 16GB RAM / 10GB disk, sized for
-            ``target_partition_bytes`` of 256MB.  Scale up when increasing
-            partition size.
+            Defaults to 2 CPU / 32GB RAM / 10GB disk, sized for
+            ``target_partition_bytes`` of 256MB plus headroom for heavier
+            sources (mid-tier subsets that don't get a per-subset override).
+            Scale up when increasing partition size.
         max_workers: Maximum number of Zephyr workers for the pipeline.
-            Defaults to Zephyr's own default (128 for distributed backends).
+            Defaults to 1024.
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
             ``zephyr.readers.load_file``.
@@ -427,7 +411,9 @@ def normalize_to_parquet(
         A :class:`NormalizedData` describing the output directories and
         aggregated zephyr counters.
     """
-    resources = worker_resources or ResourceConfig(cpu=2, ram="16g", disk="10g")
+    resources = worker_resources or ResourceConfig(cpu=2, ram="32g", disk="10g")
+    if max_workers is None:
+        max_workers = 1024
 
     files = _discover_files(input_path, file_extensions=file_extensions)
     if not files:
@@ -474,7 +460,6 @@ def normalize_to_parquet(
     return NormalizedData(
         main_output_dir=os.path.join(output_path, "outputs/main"),
         dup_output_dir=os.path.join(output_path, "outputs/dups"),
-        num_partitions=num_shards,
         counters=counters_dict,
     )
 
@@ -494,7 +479,6 @@ def normalize_step(
     relative_input_path: str | None = None,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
-    version: str | None = None,
     bare: bool = False,
 ) -> StepSpec:
     """Create a StepSpec that normalizes downloaded data to Parquet.
@@ -518,14 +502,6 @@ def normalize_step(
             ``zephyr.readers.load_file``.
         dedup_mode: How to deduplicate records within each output shard.
             Defaults to ``DedupMode.EXACT``; use ``DedupMode.NONE`` to skip.
-        version: Opt-in cache-invalidation knob. When set (e.g. ``"v2"``),
-            the value is included in ``hash_attrs`` so the step's ``hash_id``
-            differs from any prior cached run. Use this when you need
-            ``partition_id``-aware downstream consumers and are willing to
-            recompute. Default ``None`` keeps cache identity with pre-v2
-            step specs — ``normalize_to_parquet`` itself always stamps
-            ``partition_id``, so existing caches stay hits but new runs still
-            produce v2 output.
     """
     if relative_input_path:
         # ``os.path.join`` collapses redundant separators when ``download.output_path``
@@ -549,10 +525,6 @@ def normalize_step(
     # identical to pre-feature step specs (cache identity).
     if bare:
         hash_attrs["bare"] = bare
-    # Only include the version key when the caller explicitly opts in, so
-    # default callers preserve their existing hash_id and cache hits.
-    if version is not None:
-        hash_attrs["version"] = version
 
     return StepSpec(
         name=name,

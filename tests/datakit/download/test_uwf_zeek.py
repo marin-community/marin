@@ -82,7 +82,7 @@ def test_download_uwf_zeek_sample_lists_categories_and_caps_rows(
         f"{base_url}Discovery/part-00002.csv": _FakeResponse(lines=(header + discovery_row).splitlines()),
         f"{base_url}Reconnaissance/part-00003.csv": _FakeResponse(lines=(header + recon_row).splitlines()),
     }
-    monkeypatch.setattr(uwf_zeek, "_build_session", lambda: _FakeSession(responses))
+    monkeypatch.setattr(uwf_zeek, "build_retrying_session", lambda: _FakeSession(responses))
 
     output_dir = tmp_path / "output"
     manifest = download_uwf_zeek_sample(

@@ -17,8 +17,6 @@ The run_once() flow splits into two phases:
 - update(): CPU phase — evaluate demand and execute scale-up decisions
 """
 
-from __future__ import annotations
-
 import logging
 import urllib.error
 import urllib.request
@@ -26,7 +24,7 @@ from collections import deque
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Duration, Timestamp, TokenBucket
 
 from iris.cluster.constraints import Constraint
 from iris.cluster.controller.autoscaler.models import (
@@ -35,12 +33,9 @@ from iris.cluster.controller.autoscaler.models import (
     ScalingDecision,
 )
 from iris.cluster.controller.autoscaler.operations import (
-    restart_worker as restart_worker_operation,
-)
-from iris.cluster.controller.autoscaler.operations import (
     terminate_slices_for_workers as terminate_slices_for_workers_operation,
 )
-from iris.cluster.controller.autoscaler.planning import ScalePlan, build_scale_plan
+from iris.cluster.controller.autoscaler.planning import build_scale_plan
 from iris.cluster.controller.autoscaler.recovery import (
     load_autoscaler_checkpoint,
     restore_autoscaler_state,
@@ -68,6 +63,11 @@ logger = logging.getLogger(__name__)
 
 # After this long in UNKNOWN state, treat the slice as FAILED (quota timeout is 5 min, so this is conservative)
 DEFAULT_UNRESOLVABLE_TIMEOUT = Duration.from_minutes(15)
+
+# Project-wide cap on slice creates per minute, shared across all scale groups.
+# Per-group limits don't coordinate, so a fan-out across groups in one cycle can
+# burst past GCP's per-project create quota (tpu.googleapis.com/qps/create, ~91/min).
+DEFAULT_CREATE_RATE_LIMIT = 60
 
 # How long the autoscaler waits for a worker /health response per probe.
 _HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
@@ -118,6 +118,7 @@ class Autoscaler:
         base_worker_config: config_pb2.WorkerConfig | None = None,
         db: ControllerDB | None = None,
         unresolvable_timeout: Duration = DEFAULT_UNRESOLVABLE_TIMEOUT,
+        create_rate_limit: int = DEFAULT_CREATE_RATE_LIMIT,
     ):
         """Create autoscaler with explicit parameters.
 
@@ -130,6 +131,8 @@ class Autoscaler:
                 and passed to platform.create_slice(). None disables bootstrap (test/local mode).
             db: Optional DB handle for write-through persistence of tracked workers.
             unresolvable_timeout: How long a slice can remain UNKNOWN before being treated as FAILED.
+            create_rate_limit: Project-wide ceiling on slice-creation requests per minute,
+                shared across all scale groups. See ``DEFAULT_CREATE_RATE_LIMIT``.
         """
         self._groups = scale_groups
         self._platform = platform
@@ -138,20 +141,22 @@ class Autoscaler:
         self._base_worker_config = base_worker_config
         self._unresolvable_timeout = unresolvable_timeout
 
+        # Project-wide slice-creation throttle, shared across all groups. Deferred
+        # scale-ups are retried on the next evaluation cycle.
+        self._create_rate_limit = create_rate_limit
+        self._create_bucket = TokenBucket(capacity=create_rate_limit, refill_period=Duration.from_minutes(1))
+
         # Centralized per-worker state indexed by worker_id
         self._worker_registry = WorkerRegistry()
 
         # Bounded log of recent autoscaler actions for dashboard/debugging
         self._action_log: deque[vm_pb2.AutoscalerAction] = deque(maxlen=100)
 
-        # Most recent routing decision (for status API)
-        self._last_scale_plan: ScalePlan | None = None
         self._last_evaluation: Timestamp = Timestamp.from_ms(0)
 
-        # Derived views of _last_scale_plan, built lazily and invalidated by
-        # evaluate(). Dashboard polls (GetJobStatus, ListJobs) hit these on
-        # every pending job; building them per request was the bottleneck
-        # described in #4844.
+        # Most recent routing decision, materialized as status protos. Dashboard
+        # polls (GetJobStatus, ListJobs) hit these on every pending job; building
+        # them per request was the bottleneck described in #4844.
         self._last_routing_decision_proto: vm_pb2.RoutingDecision | None = None
         self._last_pending_hints: dict[str, PendingHint] | None = None
 
@@ -167,7 +172,7 @@ class Autoscaler:
         threads: ThreadContainer | None = None,
         base_worker_config: config_pb2.WorkerConfig | None = None,
         db: ControllerDB | None = None,
-    ) -> Autoscaler:
+    ) -> "Autoscaler":
         """Create autoscaler from proto config.
 
         Args:
@@ -220,7 +225,7 @@ class Autoscaler:
         # Step 3: Shutdown platform (cleanup remaining threads)
         self._platform.shutdown()
 
-    def __enter__(self) -> Autoscaler:
+    def __enter__(self) -> "Autoscaler":
         return self
 
     def __exit__(self, *exc) -> None:
@@ -290,7 +295,6 @@ class Autoscaler:
 
         routing_decision = route_demand(list(self._groups.values()), demand_entries, ts)
         scale_plan = build_scale_plan(self._groups, routing_decision, ts)
-        self._last_scale_plan = scale_plan
         # Build cached views eagerly here so dashboard/service RPCs never pay
         # the conversion cost on the hot path (#4844).
         self._last_routing_decision_proto = routing_decision_to_proto(
@@ -338,6 +342,10 @@ class Autoscaler:
         # Aggregate rate-limited decisions per group so we emit a single summary
         # line per group per cycle instead of one per deferred slice (#5580).
         rate_limited: dict[str, list[ScalingDecision]] = {}
+        # Scale-ups deferred by the project-wide create budget (not a per-group
+        # limit), summarized once per cycle so a global throttle doesn't spam a
+        # line per group.
+        create_throttled = 0
         for decision in decisions:
             group = self._groups.get(decision.scale_group)
             if not group:
@@ -345,10 +353,28 @@ class Autoscaler:
                 continue
 
             if decision.action == ScalingAction.SCALE_UP:
+                # Per-group gate first: it honors the group's health/quota block,
+                # so we never spend the scarce global create budget on a group
+                # that couldn't scale anyway.
                 if not group.try_acquire_scale_up(timestamp):
                     rate_limited.setdefault(decision.scale_group, []).append(decision)
                     continue
+                if not self._create_bucket.try_acquire(now=timestamp):
+                    create_throttled += 1
+                    continue
                 self._execute_scale_up(group, timestamp, reason=decision.reason)
+
+        if create_throttled:
+            logger.info(
+                "Throttled %d scale-up(s) to stay under the global create limit (%d/min)",
+                create_throttled,
+                self._create_rate_limit,
+            )
+            self._log_action(
+                "create_throttled",
+                "",
+                reason=f"deferred={create_throttled} limit={self._create_rate_limit}/min",
+            )
 
         for scale_group, deferred in rate_limited.items():
             # All decisions in a cycle share the same target/demand snapshot;
@@ -519,7 +545,11 @@ class Autoscaler:
         Catches zombie slices whose VM is still up in the cloud but whose
         worker process is dead — these would otherwise be invisible to the
         heartbeat path (no worker row → no heartbeat to time out) and pin the
-        scale group at max_slices indefinitely.
+        scale group at max_slices indefinitely. Also catches READY slices whose
+        backing allocation vanished entirely (e.g. a preempted TPU after a
+        controller restart, when no worker URLs were cached): describe() resolves
+        zero workers, so there is nothing to probe and no heartbeat row to expire,
+        and the slice is reaped via a per-slice no-worker counter instead.
 
         Per-worker counters live on SliceState. PING_FAILURE_THRESHOLD
         consecutive failures (~100s at the default 10s evaluation interval,
@@ -532,32 +562,43 @@ class Autoscaler:
         """
         timestamp = timestamp or Timestamp.now()
 
-        # Phase 1: collect every (group, slice_id, worker_id, worker_url) probe target.
+        # Phase 1: collect every (group, slice_id, worker_id, worker_url) probe
+        # target. A READY slice that resolves to zero workers (cloud allocation
+        # gone) has nothing to probe; it's tracked via a per-slice counter and
+        # torn down after PING_FAILURE_THRESHOLD sustained empty observations,
+        # which the per-worker counters never catch.
         probes: list[tuple[ScalingGroup, str, str, str]] = []
+        tripped: dict[str, tuple[ScalingGroup, str]] = {}  # slice_id -> (group, reason)
         for group in self._groups.values():
             for slice_id, handle, worker_urls in group.ready_slice_probe_targets():
                 if not worker_urls:
-                    worker_urls = self._refresh_slice_worker_urls(group, slice_id, handle)
-                    if not worker_urls:
-                        continue  # describe() failed or partial; retry next tick
+                    refreshed = self._refresh_slice_worker_urls(group, slice_id, handle)
+                    if refreshed is None:
+                        continue  # describe() failed or still booting; retry next tick
+                    worker_urls = refreshed
+                if not worker_urls:
+                    count = group.record_slice_no_workers(slice_id)
+                    if count >= PING_FAILURE_THRESHOLD and slice_id not in tripped:
+                        reason = f"cloud allocation reports no workers ({count}x)"
+                        logger.warning("Slice %s: %s; terminating", slice_id, reason)
+                        tripped[slice_id] = (group, reason)
+                    continue
                 for worker_id, worker_url in worker_urls.items():
                     probes.append((group, slice_id, worker_id, worker_url))
-        if not probes:
-            return
 
         # Phase 2: fan out probes. Bound the pool so we don't melt the controller.
-        workers = min(_HEALTH_PROBE_MAX_WORKERS, len(probes))
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="health-probe") as pool:
-            results = list(pool.map(lambda p: _probe_worker_health(p[3]), probes))
+        if probes:
+            workers = min(_HEALTH_PROBE_MAX_WORKERS, len(probes))
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="health-probe") as pool:
+                results = list(pool.map(lambda p: _probe_worker_health(p[3]), probes))
 
-        # Phase 3: record results and collect slices that tripped the threshold.
-        tripped: dict[str, tuple[ScalingGroup, str]] = {}  # slice_id -> (group, reason)
-        for (group, slice_id, worker_id, _url), healthy in zip(probes, results, strict=True):
-            count = group.record_health_probe_result(slice_id, worker_id, healthy)
-            if count >= PING_FAILURE_THRESHOLD and slice_id not in tripped:
-                reason = f"worker {worker_id} failed /health {count}x"
-                logger.warning("Slice %s: %s; terminating", slice_id, reason)
-                tripped[slice_id] = (group, reason)
+            # Phase 3: record results and collect slices that tripped the threshold.
+            for (group, slice_id, worker_id, _url), healthy in zip(probes, results, strict=True):
+                count = group.record_health_probe_result(slice_id, worker_id, healthy)
+                if count >= PING_FAILURE_THRESHOLD and slice_id not in tripped:
+                    reason = f"worker {worker_id} failed /health {count}x"
+                    logger.warning("Slice %s: %s; terminating", slice_id, reason)
+                    tripped[slice_id] = (group, reason)
 
         # Phase 4: terminate tripped slices. Record as a PREEMPTED-style death,
         # not a boot failure — these slices booted cleanly and only died at
@@ -582,23 +623,32 @@ class Autoscaler:
         """
         return {w.worker_id: w.worker_url for w in workers if w.worker_url}
 
-    def _refresh_slice_worker_urls(self, group: ScalingGroup, slice_id: str, handle: SliceHandle) -> dict[str, str]:
+    def _refresh_slice_worker_urls(
+        self, group: ScalingGroup, slice_id: str, handle: SliceHandle
+    ) -> dict[str, str] | None:
         """Resolve worker URLs for a slice by calling handle.describe().
 
-        Returns the full map only when every worker has a URL. A partial set
-        is dropped: caching it would permanently exclude the missing workers
-        from probing, and probing the incomplete set risks terminating a
-        slice for a worker that simply hasn't published its IP yet. Next tick
-        re-describes.
+        Returns:
+            - The resolved ``worker_id -> url`` map when describe() succeeds and
+              every reported worker has published a URL. The map is *empty* when
+              the cloud reports zero workers (the backing allocation is gone) --
+              the caller treats that as a missing-worker signal, not a no-op.
+            - ``None`` when the result is inconclusive and the slice should be
+              retried next tick without penalty: describe() raised, or only some
+              workers have published an IP (the slice is still booting). A
+              partial set is never cached -- doing so would permanently exclude
+              the missing workers from probing, and probing the incomplete set
+              risks terminating a slice for a worker that simply hasn't
+              published its IP yet.
         """
         try:
             status = handle.describe()
         except Exception as e:
             logger.warning("Failed to describe slice %s for health probe: %s", slice_id, e)
-            return {}
+            return None
         worker_urls = self._worker_urls(status.workers)
-        if len(worker_urls) != len(status.workers):
-            return {}
+        if status.workers and len(worker_urls) != len(status.workers):
+            return None
         group.set_worker_urls(slice_id, worker_urls)
         return worker_urls
 
@@ -629,15 +679,6 @@ class Autoscaler:
         self.refresh(worker_status_map, timestamp)
         self.probe_health(timestamp)
         return self.update(demand_entries, timestamp)
-
-    def get_tracked_worker(self, worker_id: str) -> TrackedWorker | None:
-        """Look up a tracked worker by ID."""
-        return self._worker_registry.tracked_worker(worker_id)
-
-    def restart_worker(self, worker_id: str) -> None:
-        """Restart a worker with a fresh bootstrap script using the latest image."""
-
-        restart_worker_operation(self._groups, self._db, worker_id, self._per_group_worker_config)
 
     def restore_tracked_workers(self, workers: dict[str, TrackedWorker]) -> None:
         """Restore tracked worker state from a snapshot. Called before loops start."""
@@ -714,10 +755,6 @@ class Autoscaler:
             status.last_routing_decision.CopyFrom(routing_proto)
         return status
 
-    def get_group(self, name: str) -> ScalingGroup | None:
-        """Get a scale group by name."""
-        return self._groups.get(name)
-
     @property
     def groups(self) -> dict[str, ScalingGroup]:
         """All scale groups."""
@@ -755,4 +792,4 @@ class Autoscaler:
         return result.sibling_worker_ids
 
     def _terminate_slice_handle(self, group: ScalingGroup, slice_id: str, handle: SliceHandle) -> None:
-        group._terminate_slice_handle(handle, context="cleaning up anyway")
+        group.terminate_slice_handle(handle, context="cleaning up anyway")

@@ -7,35 +7,44 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
+from finelog.client.proxy import LogServiceProxy
 from finelog.rpc import logging_pb2
-from finelog.server import LogServiceImpl
-from iris.cluster.controller.transitions import ClusterCapacity, RunningTaskEntry, SchedulingEvent
-from iris.cluster.log_store_helpers import task_log_key
+from iris.cluster.controller.direct_provider import ClusterCapacity, SchedulingEvent
+from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.log_keys import task_log_key
 from iris.cluster.providers.k8s.tasks import (
     _GC_MAX_AGE_SECONDS,
+    _KUEUE_POD_GROUP_NAME,
+    _KUEUE_POD_GROUP_TOTAL,
+    _LABEL_ATTEMPT_ID,
     _LABEL_JOB_ID,
     _LABEL_MANAGED,
     _LABEL_RUNTIME,
     _LABEL_TASK_HASH,
+    _LABEL_TASK_ID,
     _MANAGED_POD_LABELS,
     _POD_NOT_FOUND_GRACE_CYCLES,
     _RUNTIME_LABEL_VALUE,
     K8sTaskProvider,
+    LogCollector,
+    ResourceCollector,
     _LogPod,
     _pod_name,
     _sanitize_label_value,
     _task_hash,
 )
-from iris.cluster.providers.k8s.types import ExecResult, K8sResource, PodResourceUsage
+from iris.cluster.providers.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage
 from iris.cluster.types import JobName, TaskAttempt
+from iris.cluster.worker.stats import IrisTaskStat
 from iris.rpc import job_pb2
 
 from .conftest import make_batch, make_run_req, populate_node, populate_pod, populate_running_pod_resource
 
 
-def _fetch_logs(log_service: LogServiceImpl, key: str, max_lines: int = 100) -> list[logging_pb2.LogEntry]:
+def _fetch_logs(log_service: LogServiceProxy, key: str, max_lines: int = 100) -> list[logging_pb2.LogEntry]:
     resp = asyncio.run(log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=key, max_lines=max_lines), ctx=None))
     return list(resp.entries)
 
@@ -66,12 +75,16 @@ def test_sync_propagates_non_kubectl_failure(provider, k8s):
         provider.sync(batch)
 
 
-def test_sync_catches_kubectl_error_and_returns_task_failure(provider, k8s):
-    from iris.cluster.providers.k8s.types import KubectlError
+def test_sync_apply_error_yields_worker_failed(provider, k8s):
+    """A pod-apply KubectlError -> WORKER_FAILED (retryable worker loss).
 
+    The pod was never created, so there is no k8s verdict to track and nothing
+    ran. Any apply failure is treated as worker loss so the task retries on the
+    next sync rather than permanently failing the job.
+    """
     k8s.inject_failure(
         "apply_json",
-        KubectlError("kubectl apply failed: Error from server (RequestEntityTooLarge): limit is 3145728"),
+        KubectlError("apply Pod/x failed: apiserver unavailable"),
     )
     req = make_run_req("/test-job/0")
     batch = make_batch(tasks_to_run=[req])
@@ -79,9 +92,7 @@ def test_sync_catches_kubectl_error_and_returns_task_failure(provider, k8s):
     result = provider.sync(batch)
 
     assert len(result.updates) == 1
-    update = result.updates[0]
-    assert update.new_state == job_pb2.TASK_STATE_FAILED
-    assert "RequestEntityTooLarge" in update.error
+    assert result.updates[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +110,7 @@ def test_sync_deletes_pods_not_in_desired_set(provider, k8s):
         "Running",
         labels={
             _LABEL_TASK_HASH: _task_hash(task_id),
-            "iris.attempt_id": "0",
+            _LABEL_ATTEMPT_ID: "0",
             _LABEL_JOB_ID: _sanitize_label_value("/test-job"),
         },
     )
@@ -122,7 +133,7 @@ def test_sync_keeps_pods_in_desired_running_set(provider, k8s):
         "Running",
         labels={
             _LABEL_TASK_HASH: _task_hash(task_id.to_wire()),
-            "iris.attempt_id": "0",
+            _LABEL_ATTEMPT_ID: "0",
         },
     )
     batch = make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=0)])
@@ -142,7 +153,7 @@ def test_sync_deletes_pod_for_stale_attempt(provider, k8s):
         "Running",
         labels={
             _LABEL_TASK_HASH: _task_hash(task_id.to_wire()),
-            "iris.attempt_id": "0",
+            _LABEL_ATTEMPT_ID: "0",
         },
     )
     # Desired = attempt 1 (task was preempted and re-promoted).
@@ -151,40 +162,6 @@ def test_sync_deletes_pod_for_stale_attempt(provider, k8s):
     provider.sync(batch)
 
     assert k8s.get_json(K8sResource.PODS, old_pod) is None
-
-
-def test_delete_pods_uses_task_hash_label(provider, k8s):
-    """_delete_pods_by_task_id must filter by _LABEL_TASK_HASH, not sanitized task_id."""
-    task_id = "/test-job/0"
-    task_hash = _task_hash(task_id)
-
-    populate_pod(k8s, "iris-test-pod", "Running", labels={_LABEL_TASK_HASH: task_hash})
-    populate_pod(k8s, "iris-other-pod", "Running", labels={_LABEL_TASK_HASH: "wrong-hash"})
-
-    provider._delete_pods_by_task_id(task_id)
-
-    assert k8s.get_json(K8sResource.PODS, "iris-test-pod") is None
-    assert k8s.get_json(K8sResource.PODS, "iris-other-pod") is not None
-
-
-def test_delete_pods_does_not_delete_colliding_task(provider, k8s):
-    """Two task IDs with the same sanitized label must not share hash-based pod deletion."""
-    base = "a" * 63
-    task_id_a = base + "X"
-    task_id_b = base + "Y"
-    assert _sanitize_label_value(task_id_a) == _sanitize_label_value(task_id_b)
-
-    hash_a = _task_hash(task_id_a)
-    hash_b = _task_hash(task_id_b)
-    assert hash_a != hash_b, "distinct task IDs must use distinct hash labels for deletion"
-
-    populate_pod(k8s, "pod-a", "Running", labels={_LABEL_TASK_HASH: hash_a})
-    populate_pod(k8s, "pod-b", "Running", labels={_LABEL_TASK_HASH: hash_b})
-
-    provider._delete_pods_by_task_id(task_id_a)
-
-    assert k8s.get_json(K8sResource.PODS, "pod-a") is None
-    assert k8s.get_json(K8sResource.PODS, "pod-b") is not None
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +199,21 @@ def test_sync_pod_not_found_marks_failed(provider, k8s):
     result = provider.sync(batch)
     assert len(result.updates) == 1
     assert result.updates[0].new_state == job_pb2.TASK_STATE_FAILED
-    assert result.updates[0].error == "Pod not found"
+
+
+def test_sync_coscheduled_pod_not_found_is_worker_failed(provider, k8s):
+    """A vanished pod for a coscheduled task is billed as WORKER_FAILED (gang preemption),
+    not FAILED — Kueue deletes every pod in a preempted group, leaving only the absence."""
+    task_id = JobName.from_wire("/gang/task/0")
+    entry = RunningTaskEntry(task_id=task_id, attempt_id=0, coscheduled=True)
+    batch = make_batch(running_tasks=[entry])
+
+    for _ in range(_POD_NOT_FOUND_GRACE_CYCLES - 1):
+        result = provider.sync(batch)
+        assert result.updates[0].new_state == job_pb2.TASK_STATE_RUNNING
+
+    result = provider.sync(batch)
+    assert result.updates[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
 
 
 def test_pod_not_found_grace_period(provider, k8s):
@@ -264,7 +255,7 @@ def test_pod_not_found_grace_resets_when_pod_reappears(provider, k8s):
     assert result.updates[0].new_state == job_pb2.TASK_STATE_FAILED
 
 
-def test_sync_succeeded_pod_fetches_logs(provider, k8s, log_service: LogServiceImpl):
+def test_sync_succeeded_pod_fetches_logs(provider, k8s, log_service: LogServiceProxy, log_client):
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
     pod_name = _pod_name(task_id, attempt_id)
@@ -277,7 +268,9 @@ def test_sync_succeeded_pod_fetches_logs(provider, k8s, log_service: LogServiceI
     result = provider.sync(batch)
 
     assert result.updates[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
-    # Logs are pushed through the LogService via LogCollector (set_pods removal does a final fetch).
+    # set_pods() removal does a synchronous final fetch that enqueues the entries
+    # on the (buffered) log client; flush forces them to the server before we read.
+    log_client.flush(timeout=5.0)
     key = task_log_key(TaskAttempt(task_id=task_id, attempt_id=attempt_id))
     logs = _fetch_logs(log_service, key)
     assert any(e.data == "task complete" for e in logs)
@@ -294,7 +287,7 @@ def test_sync_empty_batch(provider):
 # ---------------------------------------------------------------------------
 
 
-def test_poll_fetches_incremental_logs_for_running_pods(provider, k8s, log_service: LogServiceImpl):
+def test_poll_fetches_incremental_logs_for_running_pods(provider, k8s, log_service: LogServiceProxy):
     """Running pods get incremental logs via the background LogCollector."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
@@ -318,7 +311,7 @@ def test_poll_fetches_incremental_logs_for_running_pods(provider, k8s, log_servi
     assert logs[0].data == "hello from running pod"
 
 
-def test_log_cursors_advance_across_sync_cycles(provider, k8s, log_service: LogServiceImpl):
+def test_log_cursors_advance_across_sync_cycles(provider, k8s, log_service: LogServiceProxy):
     """LogCollector advances byte offsets: repeated fetches don't duplicate."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
@@ -345,7 +338,7 @@ def test_log_cursors_advance_across_sync_cycles(provider, k8s, log_service: LogS
     assert logs[1].data == "line 2"
 
 
-def test_final_log_fetch_on_pod_completion(provider, k8s, log_service: LogServiceImpl):
+def test_final_log_fetch_on_pod_completion(provider, k8s, log_service: LogServiceProxy, log_client):
     """Completed pods get a final log fetch when removed from the collector's tracked set."""
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
@@ -358,7 +351,9 @@ def test_final_log_fetch_on_pod_completion(provider, k8s, log_service: LogServic
     result = provider.sync(make_batch(running_tasks=[entry]))
 
     assert result.updates[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
-    # set_pods() removal does a synchronous final fetch — logs should be in the service.
+    # set_pods() removal does a synchronous final fetch that enqueues the entries
+    # on the (buffered) log client; flush forces them to the server before we read.
+    log_client.flush(timeout=5.0)
     key = task_log_key(TaskAttempt(task_id=task_id, attempt_id=attempt_id))
     logs = _fetch_logs(log_service, key)
     assert len(logs) == 3
@@ -427,8 +422,8 @@ def test_fetch_scheduling_events_returns_events(provider, k8s):
         pod_name,
         "Pending",
         labels={
-            "iris.task_id": "test-job.0",
-            "iris.attempt_id": "1",
+            _LABEL_TASK_ID: "test-job.0",
+            _LABEL_ATTEMPT_ID: "1",
         },
     )
 
@@ -496,8 +491,8 @@ def test_get_cluster_status_basic(k8s):
         "iris-task-0",
         "Running",
         labels={
-            "iris.task_id": "job-0",
-            "iris.attempt_id": "0",
+            _LABEL_TASK_ID: "job-0",
+            _LABEL_ATTEMPT_ID: "0",
         },
     )
     pod = k8s.get_json(K8sResource.PODS, "iris-task-0")
@@ -622,7 +617,6 @@ def test_sync_node_failure_yields_no_capacity(provider, k8s):
 
 def test_resource_stats_from_kubectl_top(provider, k8s, task_stats_table):
     """Running pods emit IrisTaskStat rows via the background ResourceCollector."""
-    from iris.cluster.worker.stats import IrisTaskStat
 
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
@@ -779,7 +773,7 @@ def test_profile_memory_flamegraph_via_kubectl_exec(provider, k8s):
     # Two exec calls: attach + transform
     k8s.set_exec_response(pod_name, _success_cp())
     k8s.set_exec_response(pod_name, _success_cp())
-    k8s.set_file_content(pod_name, "/tmp/iris-memray.html", b"<html>flamegraph</html>")
+    k8s.set_file_content(pod_name, "/tmp/iris-profile.html", b"<html>flamegraph</html>")
 
     request = job_pb2.ProfileTaskRequest(
         target="/job/0",
@@ -886,29 +880,6 @@ def test_no_configmap_when_no_workdir_files(provider, k8s):
     assert pods[0]["kind"] == "Pod"
 
 
-def test_configmap_cleaned_up_on_delete(provider, k8s):
-    """_delete_pods_by_task_id also deletes associated ConfigMaps."""
-    task_id = "/my-job/task-0"
-    task_hash = _task_hash(task_id)
-    labels = {
-        _LABEL_MANAGED: "true",
-        _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
-        _LABEL_TASK_HASH: task_hash,
-    }
-
-    populate_pod(k8s, "iris-pod-1", "Running", labels={_LABEL_TASK_HASH: task_hash})
-    cm = {
-        "kind": "ConfigMap",
-        "metadata": {"name": "iris-pod-1-wf", "labels": labels},
-    }
-    k8s.seed_resource(K8sResource.CONFIGMAPS, "iris-pod-1-wf", cm)
-
-    provider._delete_pods_by_task_id(task_id)
-
-    assert k8s.get_json(K8sResource.PODS, "iris-pod-1") is None
-    assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-pod-1-wf") is None
-
-
 # ---------------------------------------------------------------------------
 # PodDisruptionBudget for coordinator tasks
 # ---------------------------------------------------------------------------
@@ -943,7 +914,7 @@ def test_stray_delete_defers_pdb_cleanup_to_gc(provider, k8s):
         k8s,
         "iris-coord-pod",
         "Running",
-        labels={_LABEL_TASK_HASH: task_hash, "iris.attempt_id": "0"},
+        labels={_LABEL_TASK_HASH: task_hash, _LABEL_ATTEMPT_ID: "0"},
     )
     pdb = {
         "kind": "PodDisruptionBudget",
@@ -1006,8 +977,6 @@ def _seed_configmap(k8s, name: str, task_hash: str, created: str) -> None:
 
 
 def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
-    from datetime import datetime, timedelta, timezone
-
     now = datetime.now(timezone.utc)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
     recent_ts = (now - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1040,7 +1009,6 @@ def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
 
 def test_gc_respects_interval(provider, k8s):
     """_maybe_gc_terminal_resources should only run every _GC_INTERVAL_SECONDS."""
-    from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1092,7 +1060,7 @@ def test_gc_retains_pending_hash_when_pod_still_in_snapshot(provider, k8s):
     labels = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE, _LABEL_TASK_HASH: task_hash}
 
     # Seed the pod and its configmap.
-    populate_pod(k8s, "iris-kill-me-0-0", "Running", labels={_LABEL_TASK_HASH: task_hash, "iris.attempt_id": "0"})
+    populate_pod(k8s, "iris-kill-me-0-0", "Running", labels={_LABEL_TASK_HASH: task_hash, _LABEL_ATTEMPT_ID: "0"})
     cm = {"kind": "ConfigMap", "metadata": {"name": "iris-kill-me-0-0-wf", "labels": labels}}
     k8s.seed_resource(K8sResource.CONFIGMAPS, "iris-kill-me-0-0-wf", cm)
 
@@ -1124,7 +1092,6 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
     terminal (old) and attempt 1 is still Running, deleting by task_hash would
     remove the active attempt's configmap and PDB protection.
     """
-    from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1171,8 +1138,6 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
 
 def test_log_collector_set_pods_adds_and_removes(k8s, log_client):
     """LogCollector.set_pods() adds new pods and removes absent ones."""
-    from iris.cluster.providers.k8s.tasks import LogCollector
-    from iris.cluster.types import JobName
 
     collector = LogCollector(k8s, log_client, concurrency=1)
     task_a = JobName.from_wire("/job/0")
@@ -1210,10 +1175,6 @@ def test_log_collector_set_pods_adds_and_removes(k8s, log_client):
 
 def test_log_collector_set_pods_preserves_cursor_state(k8s, log_client):
     """set_pods() preserves last_timestamp for pods that remain tracked."""
-    from datetime import datetime, timezone
-
-    from iris.cluster.providers.k8s.tasks import LogCollector
-    from iris.cluster.types import JobName
 
     collector = LogCollector(k8s, log_client, concurrency=1)
     task_id = JobName.from_wire("/job/0")
@@ -1244,7 +1205,6 @@ def test_log_collector_set_pods_preserves_cursor_state(k8s, log_client):
 
 def test_resource_collector_set_pods_replaces_active_set(k8s, task_stats_table):
     """set_pods() replaces the tracked pod set wholesale."""
-    from iris.cluster.providers.k8s.tasks import ResourceCollector
 
     collector = ResourceCollector(k8s, task_stats_table, concurrency=1)
     key_a = ("/job/0", 0)
@@ -1263,8 +1223,6 @@ def test_resource_collector_set_pods_replaces_active_set(k8s, task_stats_table):
 
 def test_resource_collector_writes_iris_task_rows(k8s, task_stats_table):
     """A successful kubectl top read appends one IrisTaskStat row to the Table."""
-    from iris.cluster.providers.k8s.tasks import ResourceCollector
-    from iris.cluster.worker.stats import IrisTaskStat
 
     k8s.set_top_pod("pod-a", PodResourceUsage(cpu_millicores=750, memory_bytes=2 * 1024 * 1024 * 1024))
 
@@ -1282,3 +1240,79 @@ def test_resource_collector_writes_iris_task_rows(k8s, task_stats_table):
     assert row.worker_id == "pod-a"
     assert row.cpu_millicores == 750
     assert row.memory_mb == 2048
+
+
+# ---------------------------------------------------------------------------
+# Kueue gang admission: sync() applies one pod-group per gang generation
+# ---------------------------------------------------------------------------
+
+
+def test_coscheduled_gang_pods_share_pod_group_name(kueue_provider, k8s):
+    """sync() applies one Kueue pod-group-name across all sibling pods of a gang,
+    each annotated with the full pod-group-total-count."""
+    reqs = [
+        make_run_req(f"/gang/task/{i}", attempt_id=0, num_tasks=4, coscheduling_group_by="leafgroup") for i in range(4)
+    ]
+    kueue_provider.sync(make_batch(tasks_to_run=reqs))
+
+    pods = k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS)
+    assert len(pods) == 4
+    group_names = {p["metadata"]["labels"][_KUEUE_POD_GROUP_NAME] for p in pods}
+    assert len(group_names) == 1, "all siblings must share one pod-group-name"
+    for p in pods:
+        assert p["metadata"]["annotations"][_KUEUE_POD_GROUP_TOTAL] == "4"
+
+
+def test_coscheduled_sibling_failure_bumps_pod_group_generation(kueue_provider, k8s):
+    """A full-gang requeue (new attempt) yields a fresh pod-group-name so Kueue
+    forms a new Workload and re-admits the gang atomically."""
+    gen0 = [
+        make_run_req(f"/run/task/{i}", attempt_id=0, num_tasks=2, coscheduling_group_by="leafgroup") for i in range(2)
+    ]
+    kueue_provider.sync(make_batch(tasks_to_run=gen0))
+    gen0_names = {
+        p["metadata"]["labels"][_KUEUE_POD_GROUP_NAME]
+        for p in k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS)
+    }
+    assert len(gen0_names) == 1
+
+    # Requeue: every sibling moves to the next attempt in lockstep.
+    gen1 = [
+        make_run_req(f"/run/task/{i}", attempt_id=1, num_tasks=2, coscheduling_group_by="leafgroup") for i in range(2)
+    ]
+    kueue_provider.sync(make_batch(tasks_to_run=gen1))
+    gen1_names = {
+        p["metadata"]["labels"][_KUEUE_POD_GROUP_NAME]
+        for p in k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS)
+        if p["metadata"]["labels"][_LABEL_ATTEMPT_ID] == "1"
+    }
+    assert len(gen1_names) == 1
+    assert gen0_names.isdisjoint(gen1_names), "new generation must use a fresh pod-group-name"
+
+
+def test_gang_teardown_deletes_kueue_workload(kueue_provider, k8s):
+    """Tearing down a coscheduled gang deletes its Kueue Workload, releasing the
+    reserved quota.
+
+    Kueue parks a coscheduled Workload in WaitingForReplacementPods when its
+    pods are deleted (it expects replacement pods per the plain-pod-group
+    contract), holding the quota until the Workload itself is removed. Without
+    deleting it, a gang requeue — which bumps to a fresh pod-group generation —
+    would deadlock behind the old generation's still-reserved quota.
+    """
+    reqs = [
+        make_run_req(f"/gang/task/{i}", attempt_id=0, num_tasks=3, coscheduling_group_by="leafgroup") for i in range(3)
+    ]
+    kueue_provider.sync(make_batch(tasks_to_run=reqs))
+
+    pods = k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS)
+    group_name = pods[0]["metadata"]["labels"][_KUEUE_POD_GROUP_NAME]
+    # Kueue names the Workload exactly after the pod-group-name; seed it as the
+    # controller would observe it on a live cluster once Kueue admits the gang.
+    k8s.seed_resource(K8sResource.WORKLOADS, group_name, {"kind": "Workload", "metadata": {"name": group_name}})
+
+    # Empty desired set: the whole gang is now stray and gets torn down.
+    kueue_provider.sync(make_batch())
+
+    assert k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS) == []
+    assert k8s.get_json(K8sResource.WORKLOADS, group_name) is None, "stray-pod teardown must release the Kueue Workload"

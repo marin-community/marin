@@ -26,8 +26,6 @@ whether the termination counts as a failure. State is in-memory; on
 controller restart ``health`` resets to ``1.0``.
 """
 
-from __future__ import annotations
-
 import threading
 from enum import StrEnum
 
@@ -44,8 +42,12 @@ DEFAULT_DECAY_PER_FAILURE = 0.7
 # bottoms out so the group keeps producing non-failure samples.
 DEFAULT_PROBE_FLOOR_PER_MINUTE = 0.5
 
-# Slices younger than this at termination count as failures.
-DEFAULT_SHORT_LIVED_THRESHOLD = Duration.from_minutes(5)
+# Slices younger than this at termination count as failures. Sized so that a
+# slice has time to boot, advance, and checkpoint before it is treated as a
+# normal preemption: GCP routinely returns spot capacity that lives 10-25 min
+# before reclaim (see issue #5976), and a 5-min threshold mostly catches only
+# boot-time failures and lets the longer churn pass through unnoticed.
+DEFAULT_SHORT_LIVED_THRESHOLD = Duration.from_minutes(15)
 
 # How long a quota-exhausted error blocks scale-up before we attempt again.
 DEFAULT_QUOTA_BLOCK_DURATION = Duration.from_minutes(5)
@@ -103,7 +105,7 @@ class BackoffDetector:
         self._scale_up_bucket = scale_up_bucket
         self._base_refill_per_second = base_scale_up_per_minute / 60.0
         self._floor = probe_floor_per_minute / base_scale_up_per_minute
-        self._decay = decay_per_failure
+        self.decay = decay_per_failure
         self._recovery_per_second = (1.0 - self._floor) / recovery_duration.to_seconds()
         self._short_lived_threshold = short_lived_threshold
         self._quota_block_duration = quota_block_duration
@@ -212,11 +214,6 @@ class BackoffDetector:
             return None
         return deadline.as_timestamp()
 
-    def status_label(self, now: Timestamp) -> str:
-        """``"<label> health=<score>"`` (e.g. ``"churning health=0.34"``) for dashboards/logs."""
-        h = self.health(now)
-        return f"{self.health_label(now).value} health={h:.2f}"
-
     # -----------------------------------------------------------------------
     # Internals (caller holds _lock)
     # -----------------------------------------------------------------------
@@ -234,7 +231,7 @@ class BackoffDetector:
 
     def _apply_decay(self, now: Timestamp) -> None:
         """Multiply health by ``decay`` (clamped at the floor) and cap bucket inventory at ``capacity * health``."""
-        self._health = max(self._floor, self._health * self._decay)
+        self._health = max(self._floor, self._health * self.decay)
         self._scale_up_bucket.cap_tokens(self._scale_up_bucket.capacity * self._health, now=now)
 
     def _snapshot_quota(self) -> tuple[Deadline | None, str]:

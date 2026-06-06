@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import marin.mcp.babysitter as babysitter
-from iris.cli.token_store import store_token
+from iris.cluster.token_store import store_token
 from iris.rpc import job_pb2, time_pb2
 from marin.mcp.babysitter import (
     _token_provider,

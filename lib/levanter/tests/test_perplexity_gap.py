@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import json
 import math
 import os
@@ -25,6 +26,7 @@ from levanter.analysis.model_perplexity import (
     write_model_score_files,
 )
 import levanter.analysis.perplexity_gap as gap_analysis
+import levanter.main.perplexity_gap as perplexity_gap_main
 from levanter.analysis.perplexity_gap import (
     GapReportBuilder,
     RawTextDocument,
@@ -46,10 +48,14 @@ from levanter.distributed import DistributedConfig
 from levanter.main.perplexity_gap import (
     GapFinderConfig,
     GapFinderModelConfig,
+    ModelPerplexityConfig,
     _accumulate_token_losses,
     _check_finite_losses,
+    _document_batches,
+    _elapsed_share,
     _log_report_artifact,
     main,
+    score_main,
 )
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.tracker import current_tracker
@@ -424,7 +430,9 @@ def test_model_score_files_roundtrip():
         tokenized=tokenized,
     )
     summary = ModelScoreReportBuilder(model_name="model-a")
-    summary.add_document(document=document, per_byte_loss=scored_document.per_byte_loss)
+    summary.add_document(
+        document=document, per_byte_loss=scored_document.per_byte_loss, token_count=1, elapsed_seconds=0.25
+    )
     built_summary = summary.build_summary()
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -436,6 +444,9 @@ def test_model_score_files_roundtrip():
     assert loaded_summary["model"] == "model-a"
     assert loaded_summary["datasets"][0]["name"] == "paloma/example"
     assert loaded_summary["datasets"][0]["bytes"] == 2
+    assert loaded_summary["datasets"][0]["tokens"] == 1
+    assert loaded_summary["datasets"][0]["eval_seconds"] == pytest.approx(0.25)
+    assert loaded_summary["datasets"][0]["tokens_per_second"] == pytest.approx(4.0)
     assert len(loaded_documents) == 1
     assert loaded_documents[0].document == document
     assert np.allclose(loaded_documents[0].per_byte_loss, scored_document.per_byte_loss)
@@ -544,8 +555,18 @@ def test_model_score_files_write_token_count_summary():
     )
 
     report = ModelScoreReportBuilder(model_name="model-a")
-    report.add_document(document=first_document, per_byte_loss=first_scored_document.per_byte_loss)
-    report.add_document(document=second_document, per_byte_loss=second_scored_document.per_byte_loss)
+    report.add_document(
+        document=first_document,
+        per_byte_loss=first_scored_document.per_byte_loss,
+        token_count=3,
+        elapsed_seconds=0.3,
+    )
+    report.add_document(
+        document=second_document,
+        per_byte_loss=second_scored_document.per_byte_loss,
+        token_count=2,
+        elapsed_seconds=0.2,
+    )
     summary = report.build_summary()
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -572,6 +593,95 @@ def test_model_score_files_write_token_count_summary():
         "token_id": 1,
         "token_text": "<bos>",
     }
+    summary_by_name = {row["name"]: row for row in summary["datasets"]}
+    assert summary_by_name["paloma/example"]["tokens"] == 3
+    assert summary_by_name["paloma/example"]["eval_seconds"] == pytest.approx(0.3)
+    assert summary_by_name["paloma/example"]["tokens_per_second"] == pytest.approx(10.0)
+
+
+def test_score_main_writes_outputs_without_uploading_model_score_artifact(monkeypatch):
+    document = RawTextDocument(
+        dataset_name="paloma/example",
+        tags=("paloma", "paloma/example"),
+        shard_name="docs",
+        row_index=0,
+        text="abc",
+        score_byte_end=3,
+    )
+
+    class FakeTrainer:
+        eval_batch_size = 1
+        compute_axis_mapping = {}
+        parameter_axis_mapping = {}
+
+        def use_device_mesh(self):
+            return contextlib.nullcontext()
+
+    class FakeTokenizer:
+        def __len__(self):
+            return 4
+
+    class FakeHfTokenizer:
+        def convert_ids_to_tokens(self, token_ids):
+            return [f"tok_{token_id}" for token_id in token_ids]
+
+    class FakeRunner:
+        label = "fake-model"
+        tokenizer = FakeTokenizer()
+        hf_tokenizer = FakeHfTokenizer()
+
+        def warmup(self):
+            pass
+
+        def score_texts(self, texts):
+            assert texts == ["abc"]
+            return [
+                TokenizedDocument(
+                    token_ids=np.asarray([1, 2], dtype=np.int32),
+                    byte_starts=np.asarray([0, 1], dtype=np.int32),
+                    byte_ends=np.asarray([1, 3], dtype=np.int32),
+                    num_bytes=3,
+                )
+            ], [np.asarray([0.1, 0.2, 0.3], dtype=np.float64)]
+
+    def fake_iter_raw_text_documents(*args, **kwargs):
+        yield document
+
+    monkeypatch.setattr(perplexity_gap_main.levanter, "initialize", lambda config: None)
+    monkeypatch.setattr(perplexity_gap_main, "_load_model_runner", lambda **kwargs: FakeRunner())
+    monkeypatch.setattr(perplexity_gap_main, "iter_raw_text_documents", fake_iter_raw_text_documents)
+
+    tracker = DictTracker()
+
+    def fail_artifact_upload(*args, **kwargs):
+        raise AssertionError("model perplexity scores should only be written to output_path")
+
+    tracker.log_artifact = fail_artifact_upload  # type: ignore[method-assign]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config = ModelPerplexityConfig(
+            model=GapFinderModelConfig(
+                checkpoint_path="fake-checkpoint",
+                model=LlamaConfig(num_layers=1, num_heads=1, num_kv_heads=1, hidden_dim=8, max_seq_len=8),
+                tokenizer="fake-tokenizer",
+            ),
+            datasets={"paloma/example": DatasetComponent(format=TextLmDatasetFormat())},
+            trainer=FakeTrainer(),  # type: ignore[arg-type]
+            output_path=tmpdir,
+            max_eval_length=8,
+            max_docs_per_dataset=1,
+        )
+
+        with current_tracker(tracker):
+            score_main(config)
+
+        loaded_summary = read_model_score_summary(tmpdir)
+        loaded_documents = read_scored_documents(tmpdir)
+        token_count_summary = read_token_count_summary(tmpdir)
+
+    assert loaded_summary["model"] == "fake-model"
+    assert loaded_documents[0].document == document
+    assert token_count_summary["overall"]["total_tokens"] == 2
 
 
 def test_compare_scored_documents_matches_direct_gap_builder():
@@ -621,6 +731,55 @@ def test_compare_scored_documents_matches_direct_gap_builder():
     assert scored_summary["top_documents"] == direct_summary["top_documents"]
 
 
+def test_compare_scored_documents_attaches_per_dataset_score_metrics():
+    document = RawTextDocument(
+        dataset_name="paloma/example",
+        tags=("paloma", "paloma/example"),
+        shard_name="docs",
+        row_index=0,
+        text="abc",
+    )
+    tokenized_a = TokenizedDocument(
+        token_ids=np.asarray([1, 2, 3], dtype=np.int32),
+        byte_starts=np.asarray([0, 1, 2], dtype=np.int32),
+        byte_ends=np.asarray([1, 2, 3], dtype=np.int32),
+        num_bytes=3,
+    )
+    tokenized_b = TokenizedDocument(
+        token_ids=np.asarray([1, 2], dtype=np.int32),
+        byte_starts=np.asarray([0, 1], dtype=np.int32),
+        byte_ends=np.asarray([1, 3], dtype=np.int32),
+        num_bytes=3,
+    )
+    losses_a = np.asarray([0.2, 0.2, 0.2], dtype=np.float64)
+    losses_b = np.asarray([0.0, 0.0, 0.0], dtype=np.float64)
+
+    score_report_a = ModelScoreReportBuilder(model_name="a")
+    score_report_a.add_document(document=document, per_byte_loss=losses_a, token_count=2, elapsed_seconds=0.5)
+    score_report_b = ModelScoreReportBuilder(model_name="b")
+    score_report_b.add_document(document=document, per_byte_loss=losses_b, token_count=1, elapsed_seconds=0.25)
+
+    summary = compare_scored_documents(
+        model_a_name="a",
+        model_b_name="b",
+        scored_documents_a=[ScoredDocument(document=document, per_byte_loss=losses_a, tokenized=tokenized_a)],
+        scored_documents_b=[ScoredDocument(document=document, per_byte_loss=losses_b, tokenized=tokenized_b)],
+        output_path="/tmp/from-scores",
+        model_a_score_summary=score_report_a.build_summary(),
+        model_b_score_summary=score_report_b.build_summary(),
+    )
+
+    dataset_row = summary["datasets"][0]
+    assert dataset_row["model_a_tokens"] == 2
+    assert dataset_row["model_a_eval_seconds"] == pytest.approx(0.5)
+    assert dataset_row["model_a_tokens_per_second"] == pytest.approx(4.0)
+    assert dataset_row["model_a_bytes_per_second"] == pytest.approx(6.0)
+    assert dataset_row["model_b_tokens"] == 1
+    assert dataset_row["model_b_eval_seconds"] == pytest.approx(0.25)
+    assert dataset_row["model_b_tokens_per_second"] == pytest.approx(4.0)
+    assert dataset_row["model_b_bytes_per_second"] == pytest.approx(12.0)
+
+
 def test_render_report_markdown_escapes_table_boundaries():
     summary: dict[str, Any] = {
         "model_a": "a|model",
@@ -648,6 +807,25 @@ def test_render_report_markdown_escapes_table_boundaries():
     assert "**Model A:** a\\|model" in markdown
     assert "data\\|set" in markdown
     assert "\\|ab\\|c\\|" in markdown
+
+
+def test_document_batches_do_not_cross_dataset_boundaries():
+    documents = [
+        RawTextDocument("dataset/a", ("dataset/a",), "docs", 0, "a0"),
+        RawTextDocument("dataset/a", ("dataset/a",), "docs", 1, "a1"),
+        RawTextDocument("dataset/b", ("dataset/b",), "docs", 0, "b0"),
+    ]
+
+    batches = list(_document_batches(iter(documents), batch_size=2))
+
+    assert [[doc.dataset_name for doc in batch] for batch in batches] == [
+        ["dataset/a", "dataset/a"],
+        ["dataset/b"],
+    ]
+
+
+def test_elapsed_share_evenly_splits_zero_token_batches():
+    assert _elapsed_share(6.0, token_count=0, batch_total_tokens=0, batch_size=3) == pytest.approx(2.0)
 
 
 def test_check_finite_losses_raises_on_non_finite_values():

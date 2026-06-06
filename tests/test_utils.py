@@ -70,33 +70,59 @@ def skip_in_ci(fn_or_msg):
     return pytest.mark.skipif("CI" in os.environ, reason="skipped in CI")(fn_or_msg)
 
 
-def test_rebase_file_path_requires_new_extension_when_old_provided(tmp_path):
-    base_in = tmp_path / "input"
-    base_out = tmp_path / "out"
-    base_in.mkdir()
-    base_out.mkdir()
-    file_path = base_in / "sample.parquet"
-    file_path.write_text("data")
-
-    with pytest.raises(ValueError, match="old_extension requires new_extension"):
-        rebase_file_path(str(base_in), str(file_path), str(base_out), old_extension=".parquet")
+# rebase_file_path is pure string manipulation (os.path.relpath + string ops),
+# so these tests use string paths directly rather than materialising files via tmp_path.
+_REBASE_BASE_IN = "/in"
+_REBASE_BASE_OUT = "/out"
 
 
-def test_rebase_file_path_with_matching_extension(tmp_path):
-    base_in = tmp_path / "input"
-    base_out = tmp_path / "out"
-    base_in.mkdir()
-    base_out.mkdir()
-    file_path = base_in / "nested" / "sample.parquet"
-    file_path.parent.mkdir()
-    file_path.write_text("data")
+@pytest.mark.parametrize(
+    ("rel_path", "kwargs", "expected_rel"),
+    [
+        pytest.param(
+            "nested/sample.parquet",
+            {"new_extension": ".parquet", "old_extension": ".parquet"},
+            "nested/sample.parquet",
+            id="matching_extension",
+        ),
+        pytest.param(
+            "sample.jsonl.gz",
+            {"new_extension": ".parquet", "old_extension": ".jsonl.gz"},
+            "sample.parquet",
+            id="compound_old_extension_replaced",
+        ),
+        pytest.param(
+            "noext",
+            {"new_extension": ".txt"},
+            "noext.txt",
+            id="no_dot_appends_new_extension",
+        ),
+    ],
+)
+def test_rebase_file_path(rel_path, kwargs, expected_rel):
+    file_path = os.path.join(_REBASE_BASE_IN, rel_path)
+    rebased = rebase_file_path(_REBASE_BASE_IN, file_path, _REBASE_BASE_OUT, **kwargs)
+    assert rebased == os.path.join(_REBASE_BASE_OUT, expected_rel)
 
-    rebased = rebase_file_path(
-        str(base_in),
-        str(file_path),
-        str(base_out),
-        new_extension=".parquet",
-        old_extension=".parquet",
-    )
 
-    assert rebased == os.path.join(str(base_out), "nested", "sample.parquet")
+@pytest.mark.parametrize(
+    ("rel_path", "kwargs", "match"),
+    [
+        pytest.param(
+            "sample.parquet",
+            {"old_extension": ".parquet"},
+            "old_extension requires new_extension",
+            id="old_without_new",
+        ),
+        pytest.param(
+            "sample.jsonl",
+            {"new_extension": ".parquet", "old_extension": ".jsonl.gz"},
+            "does not end with old_extension",
+            id="mismatched_old_extension",
+        ),
+    ],
+)
+def test_rebase_file_path_raises(rel_path, kwargs, match):
+    file_path = os.path.join(_REBASE_BASE_IN, rel_path)
+    with pytest.raises(ValueError, match=match):
+        rebase_file_path(_REBASE_BASE_IN, file_path, _REBASE_BASE_OUT, **kwargs)

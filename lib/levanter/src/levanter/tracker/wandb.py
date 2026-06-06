@@ -19,7 +19,7 @@ from git import InvalidGitRepositoryError, NoSuchPathError, Repo
 from levanter.tracker import Tracker
 from levanter.tracker.background import maybe_wrap_background
 from levanter.tracker.helpers import generate_pip_freeze, infer_experiment_git_root
-from levanter.tracker.histogram import Histogram
+from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.tracker import TrackerConfig
 from levanter.utils import jax_utils
 
@@ -68,10 +68,23 @@ class WandbTracker(Tracker):
         self._suppress_logging = suppress_logging
         self._minimum_log_step = minimum_log_step
 
+    # The prepare hooks do the full wandb-side conversion (SummaryStats expansion,
+    # wandb.Histogram construction) so the background worker only uploads. They are
+    # idempotent, so re-running them on an already-prepared payload is a no-op.
+
+    def _prepare_log(self, metrics):
+        return _convert_metrics_to_wandb_loggable(metrics)
+
+    def _prepare_summary(self, metrics):
+        return _convert_value_to_loggable_rec(metrics)
+
+    def _prepare_hyperparameters(self, hparams):
+        return _convert_value_to_loggable_rec(hparams)
+
     def log_hyperparameters(self, hparams: dict[str, Any]):
         if self._suppress_logging:
             return
-        self.run.config.update(_convert_value_to_loggable_rec(hparams), allow_val_change=True)
+        self.run.config.update(self._prepare_hyperparameters(hparams), allow_val_change=True)
 
     def log(self, metrics: typing.Mapping[str, Any], *, step, commit=None):
         if step is None and not commit:
@@ -88,25 +101,7 @@ class WandbTracker(Tracker):
 
         step = int(step)
 
-        # wandb histograms are pretty limited: they log only the counts and the bin edges.
-        # Our histograms have the same set of things Tensorboard. we log those as separate values.
-        to_log = {}
-        for k, v in metrics.items():
-            if isinstance(v, Histogram):
-                # if the value is a Histogram, convert it to a wandb Histogram
-                # this will log the histogram counts and bin edges
-                import wandb
-
-                counts, limits = v.to_numpy_histogram()
-                wandb_hist = wandb.Histogram(np_histogram=(counts.tolist(), limits.tolist()))
-                to_log[f"{k}/histogram"] = wandb_hist
-                to_log[f"{k}/min"] = v.min
-                to_log[f"{k}/max"] = v.max
-                to_log[f"{k}/mean"] = v.mean
-                to_log[f"{k}/variance"] = v.variance
-            else:
-                # otherwise, just log the value normally
-                to_log[k] = _convert_value_to_loggable_rec(v)
+        to_log = self._prepare_log(metrics)
 
         if self._suppress_logging:
             return
@@ -124,7 +119,7 @@ class WandbTracker(Tracker):
     def log_summary(self, metrics: typing.Mapping[str, Any]):
         if self._suppress_logging:
             return
-        self.run.summary.update(_convert_value_to_loggable_rec(metrics))
+        self.run.summary.update(self._prepare_summary(metrics))
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
         if self._suppress_logging:
@@ -135,6 +130,22 @@ class WandbTracker(Tracker):
             name=_truncate_wandb_artifact_name(artifact_name),
             type=type,
         )
+
+    def log_html(self, key: str, html_path, *, step: Optional[int], commit: Optional[bool] = None):
+        import wandb
+
+        if step is None and not commit:
+            step = self.run.step
+        if step is not None and step < self.run.step:
+            if step - self._last_warning_step > 500:
+                logger.warning(
+                    f"Step {step} is less than the current step {self.run.step}. Cowardly refusing to log HTML."
+                )
+                self._last_warning_step = step
+            return
+
+        wandb_step = None if step is None else int(step)
+        self.run.log({key: wandb.Html(str(html_path))}, step=wandb_step, commit=commit)
 
     def finish(self):
         if self._suppress_logging:
@@ -200,6 +211,27 @@ def _set_nested(target: dict[str, Any], path: list[str], value: Any) -> None:
     cur[path[-1]] = value
 
 
+def _convert_metrics_to_wandb_loggable(metrics: typing.Mapping[str, Any]) -> dict[str, Any]:
+    """Flatten metrics into a wandb-ready dict.
+
+    Expands every :class:`SummaryStats` value into its individual loggable keys
+    (computing ``mean``/``variance``/``rms`` and building ``wandb.Histogram`` as
+    needed) and passes every other value through
+    :func:`_convert_value_to_loggable_rec`.
+
+    Pure conversion: no wandb run state is touched. Safe to call on the producer
+    thread before handing off to a :class:`BackgroundTracker` worker, and
+    idempotent when called a second time on an already-flat dict.
+    """
+    to_log: dict[str, Any] = {}
+    for k, v in metrics.items():
+        if isinstance(v, SummaryStats):
+            to_log.update(_convert_summary_stats_to_loggable(k, v))
+        else:
+            to_log[k] = _convert_value_to_loggable_rec(v)
+    return to_log
+
+
 def _convert_value_to_loggable_rec(value: Any):
     if isinstance(value, (list, tuple)):
         return [_convert_value_to_loggable_rec(v) for v in value]
@@ -217,14 +249,30 @@ def _convert_value_to_loggable_rec(value: Any):
             return value.tolist()
     elif isinstance(value, np.generic):
         return value.item()
-    elif isinstance(value, Histogram):
-        import wandb
-
-        counts, limits = value.to_numpy_histogram()
-
-        return wandb.Histogram(np_histogram=(counts.tolist(), limits.tolist()))
+    elif isinstance(value, SummaryStats):
+        return _convert_summary_stats_to_loggable("", value, include_prefix=False)
     else:
         return value
+
+
+def _convert_summary_stats_to_loggable(prefix: str, value: SummaryStats, *, include_prefix: bool = True):
+    import wandb
+
+    out: dict[str, Any] = {}
+    base = f"{prefix}/" if include_prefix and prefix else ""
+    out[f"{base}min"] = _convert_value_to_loggable_rec(value.min)
+    out[f"{base}max"] = _convert_value_to_loggable_rec(value.max)
+    out[f"{base}num"] = _convert_value_to_loggable_rec(value.num)
+    out[f"{base}nonzero_count"] = _convert_value_to_loggable_rec(value.nonzero_count)
+    out[f"{base}sum"] = _convert_value_to_loggable_rec(value.sum)
+    out[f"{base}sum_squares"] = _convert_value_to_loggable_rec(value.sum_squares)
+    out[f"{base}mean"] = _convert_value_to_loggable_rec(value.mean)
+    out[f"{base}variance"] = _convert_value_to_loggable_rec(value.variance)
+    out[f"{base}rms"] = _convert_value_to_loggable_rec(value.rms)
+    if value.histogram is not None:
+        counts, limits = value.histogram.to_numpy_histogram()
+        out[f"{base}histogram"] = wandb.Histogram(np_histogram=(counts.tolist(), limits.tolist()))
+    return out
 
 
 def is_wandb_available():
@@ -446,6 +494,94 @@ def _truncate_wandb_artifact_name(name: Optional[str]) -> Optional[str]:
         truncated,
     )
     return truncated
+
+
+_WANDB_RUN_NAME_MAX_LENGTH = 64
+_WANDB_RUN_NAME_MIN_PREFIX_LENGTH = 24
+_WANDB_RUN_NAME_AGGRESSIVE_TRUNCATION_CHARS = 16
+_WANDB_RUN_NAME_SUFFIX_MARKERS = ("_seed", "-seed", "_step", "-step")
+
+
+def _preferred_wandb_suffix_start(name: str) -> int | None:
+    """Return the preferred suffix start for a truncated W&B run name.
+
+    We prefer underscore-delimited semantic tails like ``lr7.5e-7_seed2`` or
+    ``foo_step400``. This avoids splitting on the ``-`` inside scientific
+    notation, which would corrupt names like ``lr7.5e-7``.
+    """
+    for marker in _WANDB_RUN_NAME_SUFFIX_MARKERS:
+        marker_start = name.rfind(marker)
+        if marker_start == -1:
+            continue
+
+        prior_slash = name.rfind("/", 0, marker_start)
+        prior_underscore = name.rfind("_", 0, marker_start)
+        if prior_underscore > prior_slash:
+            return prior_underscore
+        return marker_start
+
+    last_underscore = name.rfind("_")
+    if last_underscore == -1:
+        return None
+
+    prior_slash = name.rfind("/", 0, last_underscore)
+    second_last_underscore = name.rfind("_", 0, last_underscore)
+    if second_last_underscore > prior_slash:
+        return second_last_underscore
+
+    return last_underscore
+
+
+def truncate_wandb_run_name(name: str) -> str:
+    """Truncate a run name to fit within W&B's run-name length limit.
+
+    W&B rejects run names longer than 64 characters. This trims an over-long name
+    while preserving a readable prefix and the trailing semantic suffix (e.g.
+    ``lr7.5e-7_seed2``), avoiding splits inside scientific-notation tails, and logs
+    a warning so the truncation is visible. Exposed as a public helper so callers
+    (e.g. experiment configs) share one run-name policy.
+    """
+    if len(name) <= _WANDB_RUN_NAME_MAX_LENGTH:
+        return name
+
+    old_name = name
+    suffix_start = _preferred_wandb_suffix_start(name)
+
+    if suffix_start is None:
+        name = name[:_WANDB_RUN_NAME_MAX_LENGTH]
+        preserved_suffix = ""
+    else:
+        suffix = name[suffix_start:]
+        preserved_suffix = suffix
+        if len(suffix) >= _WANDB_RUN_NAME_MAX_LENGTH:
+            name = name[:_WANDB_RUN_NAME_MAX_LENGTH]
+            preserved_suffix = ""
+        else:
+            prefix_budget = _WANDB_RUN_NAME_MAX_LENGTH - len(suffix)
+            prefix = name[:prefix_budget]
+
+            # Prefer trimming at a token boundary so the retained prefix stays readable.
+            boundary = max(prefix.rfind("_"), prefix.rfind("/"))
+            if boundary >= _WANDB_RUN_NAME_MIN_PREFIX_LENGTH:
+                prefix = prefix[:boundary]
+
+            name = prefix + suffix
+
+    logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
+
+    removed_chars = len(old_name) - len(name)
+    retained_prefix_len = len(name) - len(preserved_suffix)
+    if (
+        removed_chars >= _WANDB_RUN_NAME_AGGRESSIVE_TRUNCATION_CHARS
+        or retained_prefix_len < _WANDB_RUN_NAME_MIN_PREFIX_LENGTH
+    ):
+        logger.warning(
+            "W&B run name %r required aggressive truncation to %r. Consider shortening the explicit name.",
+            old_name,
+            name,
+        )
+
+    return name
 
 
 def _default_wandb_artifact_name(artifact_path: Any) -> str:

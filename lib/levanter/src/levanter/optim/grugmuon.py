@@ -42,13 +42,6 @@ def _target_sharding(array) -> jax.sharding.Sharding | None:
     return getattr(aval, "sharding", None)
 
 
-def _partition_spec(array) -> PartitionSpec | None:
-    sharding = _target_sharding(array)
-    if sharding is None:
-        return None
-    return getattr(sharding, "spec", None)
-
-
 def _batch_sharded_stack_target_pspec(array) -> PartitionSpec | None:
     if array is None or not hasattr(array, "shape") or array.ndim != 3:
         return None
@@ -137,7 +130,11 @@ class GrugMuonConfig(MuonConfig):
                 return "adamw"
             elif hasattr(param, "ndim") and param.ndim == 2:
                 return "muon"
-            elif hasattr(param, "ndim") and param.ndim == 3 and ("w_up_gate" in path_lower or "w_down" in path_lower):
+            elif (
+                hasattr(param, "ndim")
+                and param.ndim == 3
+                and ("w_up_gate" in path_lower or "w_gate_up" in path_lower or "w_down" in path_lower)
+            ):
                 return "muon"
             else:
                 return "adamw"

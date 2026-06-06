@@ -1,6 +1,6 @@
 ---
 name: scrub-docs-code-parity
-description: Scheduled scrub: docs and code parity.
+description: "Scheduled scrub: docs and code parity."
 schedule_cron: "0 0 2 * * *"
 schedule_tz: America/New_York
 ---

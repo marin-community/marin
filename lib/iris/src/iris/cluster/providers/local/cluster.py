@@ -22,7 +22,6 @@ from pathlib import Path
 
 from rigging.timing import Duration, Timestamp
 
-from iris.cli.token_store import store_token
 from iris.cluster.config import make_local_config
 from iris.cluster.constraints import worker_attributes_from_resources
 from iris.cluster.controller import writes
@@ -38,16 +37,16 @@ from iris.cluster.controller.controller import (
     ControllerConfig,
 )
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.vm_lifecycle import ControllerStatus
 from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.types import find_free_port
+from iris.cluster.providers.vm_lifecycle import ControllerStatus
 from iris.cluster.service_mode import ServiceMode
+from iris.cluster.token_store import store_token
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
-from iris.rpc.auth import hash_token
 
 
 def create_local_autoscaler(
@@ -235,7 +234,6 @@ class LocalCluster:
             create_api_key(
                 db,
                 key_id=key_id,
-                key_hash=f"jwt:{key_id}",
                 key_prefix="jwt",
                 user_id="local-admin",
                 name="local-auto-login",
@@ -248,7 +246,6 @@ class LocalCluster:
             create_api_key(
                 db,
                 key_id=key_id,
-                key_hash=hash_token(jwt_token),
                 key_prefix=jwt_token[:8],
                 user_id="local-admin",
                 name="local-auto-login",
@@ -303,9 +300,6 @@ class LocalCluster:
                 healthy=True,
             )
         return ControllerStatus(running=False, address="", healthy=False)
-
-    def fetch_startup_logs(self, tail_lines: int = 100) -> str | None:
-        return "(local controller — no startup logs)"
 
 
 def make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:

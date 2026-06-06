@@ -16,7 +16,8 @@ import re
 
 from fray.cluster import ResourceConfig
 from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE, ChatLmDatasetFormat
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.executor import executor_main
+from marin.execution.types import ExecutorStep
 from marin.processing.tokenize import lm_mixture_data_config
 
 from experiments.defaults import default_sft, default_tokenize

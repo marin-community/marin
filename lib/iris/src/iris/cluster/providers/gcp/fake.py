@@ -25,6 +25,7 @@ from iris.cluster.providers.gcp.local import LocalSliceHandle
 from iris.cluster.providers.gcp.service import (
     KNOWN_GCP_ZONES,
     KNOWN_TPU_TYPES,
+    OperationStatus,
     QueuedResourceInfo,
     TpuCreateRequest,
     TpuInfo,
@@ -43,7 +44,7 @@ from iris.cluster.providers.types import (
 )
 from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.service_mode import ServiceMode
-from iris.cluster.types import get_tpu_topology
+from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.worker.env_probe import FixedEnvironmentProvider, HardwareProbe, build_worker_metadata
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.worker import Worker, WorkerConfig
@@ -93,6 +94,9 @@ class InMemoryGcpService:
         self._tpus: dict[tuple[str, str], TpuInfo] = {}
         self._vms: dict[tuple[str, str], VmInfo] = {}
         self._queued_resources: set[tuple[str, str]] = set()  # TPUs created via queued_resource_create
+        # Create-LRO status by operation name; defaults to done-ok, tests can
+        # override via set_operation_status to simulate a failed/pending LRO.
+        self._operation_statuses: dict[str, OperationStatus] = {}
 
         # Failure injection (DRY_RUN/LOCAL only)
         self._injected_failures: dict[str, InfraError] = {}
@@ -209,6 +213,8 @@ class InMemoryGcpService:
         seq = len(self._tpus)
         endpoints = [f"10.0.{seq}.{i}" for i in range(vm_count)]
 
+        op_name = f"projects/{self._project_id}/locations/{request.zone}/operations/{request.name}-create"
+        self._operation_statuses.setdefault(op_name, OperationStatus(done=True))
         info = TpuInfo(
             name=request.name,
             state="CREATING",
@@ -220,9 +226,18 @@ class InMemoryGcpService:
             network_endpoints=endpoints,
             external_network_endpoints=[None] * len(endpoints),
             created_at=Timestamp.now(),
+            operation_name=op_name,
         )
         self._tpus[(request.name, request.zone)] = info
         return info
+
+    def tpu_operation_status(self, operation_name: str) -> OperationStatus:
+        self._check_injected_failure("tpu_operation_status")
+        return self._operation_statuses.get(operation_name, OperationStatus(done=True))
+
+    def set_operation_status(self, operation_name: str, status: OperationStatus) -> None:
+        """Override the reported status of a create LRO (DRY_RUN/LOCAL only)."""
+        self._operation_statuses[operation_name] = status
 
     def tpu_delete(self, name: str, zone: str) -> None:
         self._check_injected_failure("tpu_delete")

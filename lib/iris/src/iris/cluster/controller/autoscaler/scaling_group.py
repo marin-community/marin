@@ -9,8 +9,6 @@ stats (per-slice idle tracking, backoff, cooldowns) and provides scaling policy
 helpers.
 """
 
-from __future__ import annotations
-
 import logging
 import math
 import threading
@@ -35,6 +33,7 @@ from iris.cluster.constraints import (
     is_cpu_device_type_constraint,
 )
 from iris.cluster.controller.autoscaler.backoff_detector import (
+    DEFAULT_SHORT_LIVED_THRESHOLD,
     BackoffDetector,
     GroupHealth,
     SliceFate,
@@ -43,11 +42,7 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import scaling_groups_table, slices_table
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import Labels, QuotaExhaustedError, SliceHandle
-from iris.cluster.types import (
-    WorkerStatusMap,
-    get_gpu_count,
-    get_tpu_count,
-)
+from iris.cluster.types import WorkerStatusMap, get_gpu_count, get_tpu_count
 from iris.rpc import config_pb2, job_pb2, time_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 
@@ -140,6 +135,14 @@ class SliceState:
     # success. Reset on a healthy response; once any worker crosses
     # PING_FAILURE_THRESHOLD the slice is terminated. Memory-only.
     ping_failures: dict[str, int] = field(default_factory=dict)
+    # Consecutive health-probe passes where the slice's cloud allocation
+    # reported zero workers (so there was nothing to /health-probe). Reset the
+    # moment any worker becomes probeable; once it crosses PING_FAILURE_THRESHOLD
+    # the slice is terminated. This catches a slice whose backing allocation
+    # vanished while it had no cached worker URLs (e.g. preempted after a
+    # controller restart), which the per-worker counters never observe.
+    # Memory-only.
+    no_worker_probes: int = 0
     error_message: str = ""
 
 
@@ -277,6 +280,7 @@ def slice_state_to_proto(state: SliceState, idle_threshold: Duration | None = No
     return vm_pb2.SliceInfo(
         slice_id=state.handle.slice_id,
         scale_group=state.handle.scale_group,
+        state=state.lifecycle.value,
         created_at=time_pb2.Timestamp(epoch_ms=created_at.epoch_ms()),
         vms=[
             vm_pb2.VmInfo(
@@ -313,6 +317,7 @@ class ScalingGroup:
         quota_timeout: Duration = DEFAULT_QUOTA_TIMEOUT,
         scale_up_rate_limit: int = DEFAULT_SCALE_UP_RATE_LIMIT,
         scale_down_rate_limit: int = DEFAULT_SCALE_DOWN_RATE_LIMIT,
+        short_lived_threshold: Duration = DEFAULT_SHORT_LIVED_THRESHOLD,
         detector: BackoffDetector | None = None,
         db: ControllerDB | None = None,
     ):
@@ -345,6 +350,7 @@ class ScalingGroup:
                 group_name=config.name,
                 scale_up_bucket=scale_up_bucket,
                 base_scale_up_per_minute=scale_up_rate_limit,
+                short_lived_threshold=short_lived_threshold,
                 quota_block_duration=quota_timeout,
             )
         )
@@ -516,7 +522,7 @@ class ScalingGroup:
         Inverts the AIMD decay: ``health = decay^n`` → ``n = log(health) / log(decay)``.
         """
         score = self._detector.health(now)
-        decay = self._detector._decay
+        decay = self._detector.decay
         if score >= 1.0 or decay >= 1.0 or decay <= 0:
             return 0
         return max(1, round(math.log(score) / math.log(decay)))
@@ -679,7 +685,7 @@ class ScalingGroup:
         """
         handle = self.detach_slice(slice_id, timestamp=timestamp)
         if handle is not None:
-            self._terminate_slice_handle(handle, context="cleaning up anyway")
+            self.terminate_slice_handle(handle, context="cleaning up anyway")
 
     def detach_slice(self, slice_id: str, timestamp: Timestamp | None = None) -> SliceHandle | None:
         """Remove a slice from tracking and persistence without terminating it."""
@@ -693,7 +699,7 @@ class ScalingGroup:
         self._db_update_group()
         return state.handle
 
-    def _terminate_slice_handle(self, handle: SliceHandle, *, context: str) -> None:
+    def terminate_slice_handle(self, handle: SliceHandle, *, context: str) -> None:
         try:
             handle.terminate()
         except QuotaExhaustedError as e:
@@ -773,11 +779,30 @@ class ScalingGroup:
             state = self._slices.get(slice_id)
             if state is None:
                 return 0
+            # Reaching here means the slice had a probeable worker, so it is not
+            # a zero-worker zombie regardless of the probe outcome.
+            state.no_worker_probes = 0
             if healthy:
                 state.ping_failures.pop(worker_id, None)
                 return 0
             state.ping_failures[worker_id] = state.ping_failures.get(worker_id, 0) + 1
             return state.ping_failures[worker_id]
+
+    def record_slice_no_workers(self, slice_id: str) -> int:
+        """Increment and return the consecutive count of probes that found no workers.
+
+        A READY slice whose cloud allocation reports zero workers cannot be
+        /health-probed at all, so the per-worker ping counters never see it.
+        Tracking the streak lets the runtime tear the slice down after
+        PING_FAILURE_THRESHOLD sustained observations -- mirroring the
+        per-worker zombie path -- while tolerating a single transient describe().
+        """
+        with self._slices_lock:
+            state = self._slices.get(slice_id)
+            if state is None:
+                return 0
+            state.no_worker_probes += 1
+            return state.no_worker_probes
 
     def get_slice(self, slice_id: str) -> SliceHandle | None:
         """Get a specific slice handle by ID."""
@@ -791,10 +816,6 @@ class ScalingGroup:
         """Update current demand."""
         self._current_demand = demand
         self._peak_demand = max(self._peak_demand, demand)
-
-    def can_fit_resources(self, resources: job_pb2.ResourceSpecProto) -> bool:
-        """Check whether a demand entry's resources fit within one VM."""
-        return self.check_resource_fit(resources) is None
 
     def check_resource_fit(self, resources: job_pb2.ResourceSpecProto) -> str | None:
         """Check whether a demand entry's resources fit within one VM.
@@ -832,20 +853,15 @@ class ScalingGroup:
         scaledown is then ``now - quiet_since >= idle_threshold``.
         """
         with self._slices_lock:
-            snapshot = list(self._slices.items())
-
-        with self._slices_lock:
-            for slice_id, state in snapshot:
-                if slice_id not in self._slices:
-                    continue
+            for state in self._slices.values():
                 if self._slice_has_active_workers(state, worker_status_map):
-                    self._slices[slice_id].quiet_since = None
-                elif self._slices[slice_id].quiet_since is None:
-                    self._slices[slice_id].quiet_since = timestamp
+                    state.quiet_since = None
+                elif state.quiet_since is None:
+                    state.quiet_since = timestamp
 
     def _slice_has_active_workers(self, state: SliceState, worker_status_map: WorkerStatusMap) -> bool:
         """Check if any worker in a slice has running tasks."""
-        for worker_id in self._get_slice_worker_ids(state):
+        for worker_id in state.worker_ids:
             status = worker_status_map.get(worker_id)
             if status is not None and not status.is_idle:
                 return True
@@ -963,10 +979,13 @@ class ScalingGroup:
 
         Requires at least one known worker to be idle. If no workers are known at all
         (none in worker_status_map), returns False -- the slice may still be booting.
-        Zombie slices where workers have disappeared are handled by worker heartbeat timeouts.
+        Zombie slices whose workers disappeared are reaped elsewhere: a dead worker
+        process trips the heartbeat timeout (if a worker row exists) or the per-worker
+        /health probe, and a slice whose backing allocation vanished entirely (no worker
+        rows, nothing to probe) trips the no-worker counter in Autoscaler.probe_health.
         """
         has_known_worker = False
-        for worker_id in self._get_slice_worker_ids(state):
+        for worker_id in state.worker_ids:
             status = worker_status_map.get(worker_id)
             if status is None:
                 continue
@@ -1151,16 +1170,12 @@ class ScalingGroup:
             GroupAvailability.REQUESTING,
         }
 
-    def _get_slice_worker_ids(self, state: SliceState) -> list[str]:
-        """Get worker IDs for a slice."""
-        return state.worker_ids
-
     def find_slice_for_worker(self, worker_id: str) -> str | None:
         """Find slice_id containing a worker with the given ID."""
         with self._slices_lock:
             snapshot = list(self._slices.items())
         for slice_id, state in snapshot:
-            if worker_id in self._get_slice_worker_ids(state):
+            if worker_id in state.worker_ids:
                 return slice_id
         return None
 
@@ -1170,7 +1185,7 @@ class ScalingGroup:
             state = self._slices.get(slice_id)
         if state is None:
             return []
-        return list(self._get_slice_worker_ids(state))
+        return list(state.worker_ids)
 
     def terminate_all(self) -> None:
         """Terminate all slices in this scale group.
@@ -1291,7 +1306,6 @@ class ScalingGroupRestoreResult:
 def restore_scaling_group(
     group_snapshot: GroupSnapshot,
     cloud_handles: list[SliceHandle],
-    label_prefix: str,
 ) -> ScalingGroupRestoreResult:
     """Reconcile checkpointed group slices against pre-fetched cloud handles."""
     cloud_by_id: dict[str, SliceHandle] = {h.slice_id: h for h in cloud_handles}

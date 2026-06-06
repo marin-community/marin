@@ -46,8 +46,6 @@ from zephyr.execution import (
     ShardTask,
     StageRunner,
     TaskResult,
-    _format_bytes,
-    _format_count,
     _shared_data_path,
     _stage_throughput,
     _worker_ctx_var,
@@ -110,19 +108,14 @@ class _InProcessWorkerContext:
 _T = TypeVar("_T")
 
 
-class _StageStatsGenerator:
-    """Wraps a generator and records item count + byte size into the worker context."""
-
-    def __init__(self, stage_name: str, ctx: _InProcessWorkerContext) -> None:
-        self._item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name)
-        self._byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name)
-        self._ctx = ctx
-
-    def wrap(self, gen: Iterator[_T]) -> Iterator[_T]:
-        for item in gen:
-            self._ctx.increment_counter(self._item_key, 1)
-            self._ctx.increment_counter(self._byte_key, sys.getsizeof(item))
-            yield item
+def _wrap_stage_stats(gen: Iterator[_T], stage_name: str, ctx: _InProcessWorkerContext) -> Iterator[_T]:
+    """Yield items from ``gen`` while recording item count and byte size into ``ctx``."""
+    item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name)
+    byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name)
+    for item in gen:
+        ctx.increment_counter(item_key, 1)
+        ctx.increment_counter(byte_key, sys.getsizeof(item))
+        yield item
 
 
 def _run_stage_with_ctx(
@@ -147,9 +140,12 @@ def _run_stage_with_ctx(
     stage_dir = f"{chunk_prefix}/{execution_id}/{output_stage_name}"
     external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
     scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
-    stats = _StageStatsGenerator(task.stage_name, ctx)
     return _write_stage_output(
-        stats.wrap(run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir)),
+        _wrap_stage_stats(
+            run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir),
+            task.stage_name,
+            ctx,
+        ),
         source_shard=task.shard_idx,
         stage_dir=stage_dir,
         shard_idx=task.shard_idx,
@@ -238,18 +234,14 @@ def _periodic_status_logger(
         throughput = _stage_throughput(ctx._counters, stage_name, elapsed)
         if throughput is None:
             continue
-        items, bytes_processed, item_rate, byte_rate = throughput
         logger.info(
-            "[%s] [%s] [%s] shard %d/%d; items=%s (%s/s), bytes_processed=%s (%s/s)",
+            "[%s] [%s] [%s] shard %d/%d; %s",
             execution_id,
             stage_name,
             threading.current_thread().name,
             shard_idx,
             total_shards,
-            _format_count(items),
-            _format_count(item_rate),
-            _format_bytes(bytes_processed),
-            _format_bytes(byte_rate),
+            throughput,
         )
 
 

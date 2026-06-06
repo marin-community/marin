@@ -15,6 +15,11 @@ both guarantees:
   keeps running so subsequent updates still go through.
 * If the queue fills up (e.g. the wrapped tracker is wedged), additional
   updates are dropped with a rate-limited warning rather than blocking.
+* Payloads are prepared on the calling thread via the wrapped tracker's
+  ``_prepare_*`` hooks before they cross the queue, so the worker only does I/O.
+  Keeping the ``jax.device_get`` there also matters for multi-host runs, where
+  that transfer is a collective that must stay in program order on the main
+  thread.
 
 Tracker initialization is *not* wrapped. If e.g. ``wandb.init()`` fails
 because of bad auth, that's a fatal configuration problem and the run
@@ -41,6 +46,7 @@ class _Shutdown:
 
 
 _SHUTDOWN = _Shutdown()
+
 
 # Number of times we log a warning when the queue is full before throttling.
 _DROP_LOG_BURST = 5
@@ -118,10 +124,31 @@ class BackgroundTracker(Tracker):
                     dropped,
                 )
 
+    def _defer(self, prepare, method, payload, **kwargs) -> None:
+        """Prepare ``payload`` on the calling thread, then enqueue ``method``.
+
+        ``prepare`` and ``method`` are bound methods of the wrapped tracker (e.g.
+        ``_prepare_log`` and ``log``). A failure to prepare drops the update
+        rather than crashing the producer.
+        """
+        if self._stopped:
+            logger.debug("Background tracker '%s' already stopped; dropping %s", self.name, method.__name__)
+            return
+        try:
+            payload = prepare(payload)
+        except Exception:
+            logger.exception(
+                "Background tracker '%s' failed to prepare payload for %s; dropping update.",
+                self.name,
+                method.__name__,
+            )
+            return
+        self._enqueue(method, payload, **kwargs)
+
     # ---- Tracker API --------------------------------------------------------
 
     def log_hyperparameters(self, hparams: dict[str, Any]) -> None:
-        self._enqueue(self.wrapped.log_hyperparameters, hparams)
+        self._defer(self.wrapped._prepare_hyperparameters, self.wrapped.log_hyperparameters, hparams)
 
     def log(
         self,
@@ -130,10 +157,10 @@ class BackgroundTracker(Tracker):
         step: Optional[int],
         commit: Optional[bool] = None,
     ) -> None:
-        self._enqueue(self.wrapped.log, metrics, step=step, commit=commit)
+        self._defer(self.wrapped._prepare_log, self.wrapped.log, metrics, step=step, commit=commit)
 
     def log_summary(self, metrics: dict[str, Any]) -> None:
-        self._enqueue(self.wrapped.log_summary, metrics)
+        self._defer(self.wrapped._prepare_summary, self.wrapped.log_summary, metrics)
 
     def log_artifact(
         self,

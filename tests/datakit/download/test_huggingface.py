@@ -46,7 +46,7 @@ def test_download_hf_basic(tmp_path):
     assert (output_path / "data" / "file2.txt").read_bytes() == b"Content 2"
     assert (output_path / "README.md").read_bytes() == b"# Test Dataset"
 
-    provenance = json.loads((output_path / "provenance.json").read_text())
+    provenance = json.loads((output_path / ".provenance.json").read_text())
     assert provenance["dataset"] == "test-org/test-dataset"
     assert provenance["version"] == "abc1234"
     assert "access_time" in provenance
@@ -73,7 +73,7 @@ def test_download_hf_appends_sha_when_configured(tmp_path):
 
     target_output = base_output_path / revision
     assert (target_output / "data" / "file1.txt").read_bytes() == b"Content 1"
-    assert (target_output / "provenance.json").exists()
+    assert (target_output / ".provenance.json").exists()
 
 
 def test_relative_path_in_source_supports_bucket_paths():

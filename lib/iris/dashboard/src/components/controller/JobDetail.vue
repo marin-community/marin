@@ -11,6 +11,8 @@ import type {
 import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
 import { getLeafJobName } from '@/utils/jobTree'
+import { batchSummarySql } from '@/utils/taskStatus'
+import { openSpeedscopeWindow } from '@/utils/speedscope'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
@@ -161,6 +163,32 @@ function taskCpuMillicores(taskId: string): number {
   return Number(taskUsageMap.value.get(taskId)?.cpu_millicores ?? 0)
 }
 
+// Batched status text query (see batchSummarySql in utils/taskStatus).
+interface StatusTextRow {
+  task_id?: string
+  status_text_summary_md?: string
+}
+
+const { data: statusTextData, refresh: fetchStatusText } = useLogServerStatsRpc<{ arrowIpc?: string }>(
+  'Query',
+  () => ({ sql: batchSummarySql(tasks.value.map(t => t.taskId)) }),
+)
+
+const statusTextMap = computed<Map<string, string>>(() => {
+  const ipc = statusTextData.value?.arrowIpc
+  const m = new Map<string, string>()
+  if (!ipc) return m
+  const rows = decodeArrowIpc(ipc).rows as StatusTextRow[]
+  for (const r of rows) {
+    if (r.task_id) m.set(r.task_id, r.status_text_summary_md ?? '')
+  }
+  return m
+})
+
+function taskStatusTextSummary(taskId: string): string {
+  return statusTextMap.value.get(taskId) ?? ''
+}
+
 // True when the task has finished with a non-zero exit code. Drives the
 // merged status column: non-zero exits get prominent display; zero exits
 // fall back to status text or the state badge.
@@ -221,6 +249,7 @@ async function fetchData() {
     // the rest of the page.
     if (tasks.value.length > 0) {
       void fetchTaskStats()
+      void fetchStatusText()
     }
 
     const parentIds = [props.jobId, ...expandedChildJobs.value]
@@ -433,6 +462,14 @@ const pageTitle = computed(() => {
   return (name && name !== props.jobId) ? name : `Job: ${props.jobId}`
 })
 
+// Child jobs link back to their parent job; root jobs link to the jobs list.
+const backTo = computed(() => {
+  const parentJobId = job.value?.parentJobId
+  return parentJobId ? `/job/${encodeURIComponent(parentJobId)}` : '/'
+})
+
+const backLabel = computed(() => (job.value?.parentJobId ? 'Back to parent job' : 'Jobs'))
+
 const subtitle = computed(() => {
   if (!job.value) return ''
   return (job.value.name && job.value.name !== props.jobId) ? `ID: ${props.jobId}` : ''
@@ -613,6 +650,9 @@ function buildProfileType(profilerType: string, format: string | null): Record<s
 
 async function handleProfile(taskId: string, profilerType: string, format: string | null) {
   profilingTaskId.value = taskId
+  // Open the viewer synchronously within the click gesture; CPU profiling takes
+  // ~10s, after which a fresh window.open would be blocked as a popup.
+  const pending = profilerType === 'cpu' && (format ?? 'SPEEDSCOPE') === 'SPEEDSCOPE' ? openSpeedscopeWindow() : null
   try {
     const body = {
       target: taskId,
@@ -621,26 +661,34 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
     }
     const resp = await controllerRpcCall<{ profileData?: string; error?: string }>('ProfileTask', body)
     if (resp.error) {
+      pending?.cancel()
       alert(`${profilerType.toUpperCase()} profile failed: ${resp.error}`)
       return
     }
-    if (resp.profileData) {
-      const bin = atob(resp.profileData)
-      const bytes = new Uint8Array(bin.length)
-      for (let i = 0; i < bin.length; i++) {
-        bytes[i] = bin.charCodeAt(i)
-      }
-      const blob = new Blob([bytes], { type: 'application/octet-stream' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      const ts = new Date().toISOString().replace(/[T]/g, '_').replace(/:/g, '-').replace(/\.\d+Z$/, '')
-      const ext = profilerType === 'memory' ? 'bin' : 'out'
-      a.download = `${ts}_profile-${taskId.replace(/\//g, '_')}.${ext}`
-      a.click()
-      URL.revokeObjectURL(url)
+    if (!resp.profileData) {
+      pending?.cancel()
+      return
     }
+    const bin = atob(resp.profileData)
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) {
+      bytes[i] = bin.charCodeAt(i)
+    }
+    if (pending) {
+      pending.show(bytes, taskId)
+      return
+    }
+    const blob = new Blob([bytes], { type: 'application/octet-stream' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const ts = new Date().toISOString().replace(/[T]/g, '_').replace(/:/g, '-').replace(/\.\d+Z$/, '')
+    const ext = profilerType === 'memory' ? 'bin' : 'out'
+    a.download = `${ts}_profile-${taskId.replace(/\//g, '_')}.${ext}`
+    a.click()
+    URL.revokeObjectURL(url)
   } catch (e) {
+    pending?.cancel()
     alert(`${profilerType.toUpperCase()} profile failed: ${e instanceof Error ? e.message : e}`)
   } finally {
     profilingTaskId.value = null
@@ -649,7 +697,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
 </script>
 
 <template>
-  <PageShell :title="pageTitle" back-to="/" back-label="Jobs">
+  <PageShell :title="pageTitle" :back-to="backTo" :back-label="backLabel">
     <template v-if="job?.name" #title-suffix>
       <button
         class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs text-text-muted hover:text-text
@@ -1126,7 +1174,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             </span>
           </div>
           <div class="mt-1 text-xs break-anywhere">
-            <MarkdownRenderer v-if="task.statusTextSummaryMd && !TERMINAL_STATES.has(stateToName(task.state))" :content="task.statusTextSummaryMd" class="text-text-secondary" />
+            <MarkdownRenderer v-if="taskStatusTextSummary(task.taskId) && !TERMINAL_STATES.has(stateToName(task.state))" :content="taskStatusTextSummary(task.taskId)" class="text-text-secondary" />
             <span v-else-if="task.error && FAILED_TERMINAL_STATES.has(stateToName(task.state))" class="text-status-danger" :title="task.error">{{ task.error.length > 160 ? task.error.slice(0, 160) + '…' : task.error }}</span>
           </div>
           <div v-if="stateToName(task.state) === 'running'" class="mt-2 flex gap-1">
@@ -1242,7 +1290,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                 <span v-if="taskExitNonZero(task)" class="text-status-danger font-mono">
                   exit {{ task.exitCode }}
                 </span>
-                <MarkdownRenderer v-else-if="task.statusTextSummaryMd && !TERMINAL_STATES.has(stateToName(task.state))" :content="task.statusTextSummaryMd" />
+                <MarkdownRenderer v-else-if="taskStatusTextSummary(task.taskId) && !TERMINAL_STATES.has(stateToName(task.state))" :content="taskStatusTextSummary(task.taskId)" />
                 <span v-else-if="task.error && FAILED_TERMINAL_STATES.has(stateToName(task.state))" class="text-status-danger break-anywhere" :title="task.error">{{ task.error.length > 160 ? task.error.slice(0, 160) + '…' : task.error }}</span>
                 <span v-else class="text-text-muted">—</span>
               </td>

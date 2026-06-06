@@ -2,6 +2,7 @@
 # Usage: uv run iris --cluster=marin cluster start
 
 log_server_config: marin
+dashboard_url: https://iris.oa.dev
 
 platform:
   label_prefix: marin
@@ -10,7 +11,7 @@ platform:
 
 defaults:
   ssh:
-    auth_mode: SSH_AUTH_MODE_METADATA
+    impersonate_service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
   autoscaler:
     evaluation_interval:
       milliseconds: 10000
@@ -46,6 +47,7 @@ controller:
 tpu_pools:
   # v5e (v5litepod) — europe-west4-b, us-west4-a
   # Per-VM: ct5lp-hightpu-4t — 112 vCPU, 192 GiB RAM
+  # max_slices capped to the v5e serving quota (us-west4-a: 128 cores).
   v5e-serving:
     family: v5e
     zones: [europe-west4-b, us-west4-a]
@@ -56,8 +58,8 @@ tpu_pools:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
     sizes:
-      4:   { buffer_slices: 2, max_slices: 1024 }
-      8:   { buffer_slices: 2, max_slices: 512 }
+      4:   { buffer_slices: 2, max_slices: 32 }
+      8:   { buffer_slices: 2, max_slices: 16 }
 
   v5e-preemptible:
     family: v5e
@@ -149,15 +151,18 @@ tpu_pools:
       gcp:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: tpu-ubuntu2204-base
+    # max_slices = 2048 / size for each entry (~2048-chip-equivalent reservation
+    # in TensorCore units; sizes >2048 omitted since they'd exceed the budget).
     sizes:
-      32:   { buffer_slices: 0, max_slices: 1 }
-      64:   { buffer_slices: 0, max_slices: 1 }
-      128:  { buffer_slices: 0, max_slices: 1 }
-      256:  { buffer_slices: 0, max_slices: 1 }
-      512:  { buffer_slices: 0, max_slices: 1 }
-      1024: { buffer_slices: 0, max_slices: 1 }
-      2048: { buffer_slices: 1, max_slices: 1 }
-      4096: { buffer_slices: 0, max_slices: 1 }
+      8:    { buffer_slices: 0, max_slices: 256 }
+      16:   { buffer_slices: 0, max_slices: 128 }
+      32:   { buffer_slices: 0, max_slices: 64 }
+      64:   { buffer_slices: 0, max_slices: 32 }
+      128:  { buffer_slices: 0, max_slices: 16 }
+      256:  { buffer_slices: 0, max_slices: 8 }
+      512:  { buffer_slices: 0, max_slices: 4 }
+      1024: { buffer_slices: 0, max_slices: 2 }
+      2048: { buffer_slices: 0, max_slices: 1 }
 
 # ---------------------------------------------------------------------------
 # Non-TPU scale groups (not part of tpu_pools)
@@ -198,7 +203,7 @@ scale_groups:
 user_budgets:
   # Admins: standard budget, may submit PRIORITY_BAND_PRODUCTION for work that
   # must not be downgraded. INTERACTIVE work still counts against the budget.
-  - user_ids: [runner, power, dlwh, rav, romain, held, larry]
+  - user_ids: [runner, power, dlwh, rav, romain, held, larry, wmoss]
     budget_limit: 75000
     max_band: PRIORITY_BAND_PRODUCTION
   # Researchers: standard budget, capped at PRIORITY_BAND_INTERACTIVE.
@@ -220,5 +225,6 @@ user_budgets:
       - kaiyue
       - ryan
       - marinazh
+      - benjaminfeuer
     budget_limit: 75000
     max_band: PRIORITY_BAND_INTERACTIVE

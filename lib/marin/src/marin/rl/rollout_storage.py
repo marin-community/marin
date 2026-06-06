@@ -212,6 +212,8 @@ class FileRolloutReader(RolloutReader):
 
             time.sleep(1.0)
 
+        return None
+
     def read_all_available(self) -> list[RolloutBatch]:
         """Read all currently available batches without blocking."""
         start_time = time.time()

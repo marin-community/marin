@@ -11,7 +11,14 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray import LocalClient, set_current_client
-from marin.datakit.decon import NGramConfig, decon_to_parquet
+from marin.datakit.decon import (
+    EvalBloom,
+    NGramConfig,
+    bloom_paths,
+    build_eval_bloom,
+    decon_to_parquet,
+    merge_eval_blooms,
+)
 from marin.datakit.normalize import NormalizedData
 
 
@@ -22,7 +29,7 @@ def flow_backend_ctx():
 
 
 def _write_input_parquet(path: Path, records: list[dict]) -> None:
-    """Write datakit-normalized-shaped Parquet (id, text, partition_id)."""
+    """Write datakit-normalized-shaped Parquet (id, text)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(pa.Table.from_pylist(records), str(path))
 
@@ -35,20 +42,25 @@ def _write_eval_jsonl(path: Path, records: list[dict]) -> None:
 
 
 def _read_attributes(output_dir: Path) -> dict[str, dict]:
-    """Concatenate every output parquet under *output_dir* and key by id."""
+    """Concatenate every output parquet under *output_dir* and key by id.
+
+    Flattens the on-disk ``attributes`` struct (datakit convention) back into
+    top-level keys so test assertions stay terse:
+    ``rows[doc_id]["contaminated"]`` instead of ``rows[doc_id]["attributes"]["contaminated"]``.
+    """
     rows: dict[str, dict] = {}
     for pf in sorted(output_dir.glob("part-*.parquet")):
         for row in pq.read_table(str(pf)).to_pylist():
-            rows[row["id"]] = row
+            attrs = row.pop("attributes", {}) or {}
+            rows[row["id"]] = {**row, **attrs}
     return rows
 
 
-def _as_source(input_dir: Path, num_partitions: int) -> NormalizedData:
+def _as_source(input_dir: Path) -> NormalizedData:
     """Wrap a flat directory of test Parquet files as a NormalizedData artifact."""
     return NormalizedData(
         main_output_dir=str(input_dir),
         dup_output_dir=str(input_dir / "_dups_unused"),
-        num_partitions=num_partitions,
         counters={},
     )
 
@@ -113,7 +125,7 @@ def fox_corpus(tmp_path: Path):
 def test_decon_ngram_flags_high_overlap_and_gates_low(fox_corpus):
     """n=3 with threshold=0.5: verbatim and high-overlap records flagged; low-overlap and unique gated out."""
     attrs = decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, stride=0, overlap_threshold=0.5),
@@ -138,7 +150,7 @@ def test_decon_ngram_flags_high_overlap_and_gates_low(fox_corpus):
 def test_decon_exact_paragraph_match(fox_corpus):
     """ngram=None: whole-paragraph match. Verbatim records flagged; near-match gated out (different bytes)."""
     decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=None,
@@ -159,7 +171,7 @@ def test_decon_exact_paragraph_match(fox_corpus):
 def test_decon_preserves_partition_filenames(fox_corpus):
     """Output partition filenames mirror input filenames 1:1 (co-partitioning invariant)."""
     decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -172,9 +184,14 @@ def test_decon_preserves_partition_filenames(fox_corpus):
 
 
 def test_decon_output_schema(fox_corpus):
-    """Output Parquet has exactly {id, partition_id, contaminated, max_overlap, matched_hashes}."""
+    """Output Parquet has exactly ``{id, partition_id, attributes: struct<contaminated, max_overlap, matched_hashes>}``.
+
+    This is the datakit attribute convention consumed by
+    :func:`marin.processing.classification.consolidate.consolidate` --
+    ``id`` joinable on top, decon facts grouped under ``attributes``.
+    """
     decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -184,20 +201,24 @@ def test_decon_output_schema(fox_corpus):
     output_files = sorted(Path(fox_corpus["output_dir"]).glob("part-*.parquet"))
     assert output_files, "expected at least one output partition"
     schema = pq.read_schema(str(output_files[0]))
-    assert set(schema.names) == {"id", "partition_id", "contaminated", "max_overlap", "matched_hashes"}
+    assert set(schema.names) == {"id", "partition_id", "attributes"}
     assert pa.types.is_string(schema.field("id").type)
     assert pa.types.is_integer(schema.field("partition_id").type)
-    assert pa.types.is_boolean(schema.field("contaminated").type)
-    assert pa.types.is_floating(schema.field("max_overlap").type)
-    matched_field = schema.field("matched_hashes")
-    assert pa.types.is_list(matched_field.type)
-    assert matched_field.type.value_type == pa.uint64()
+
+    attrs_field = schema.field("attributes")
+    assert pa.types.is_struct(attrs_field.type)
+    attrs_fields = {f.name: f for f in attrs_field.type}
+    assert set(attrs_fields) == {"contaminated", "max_overlap", "matched_hashes"}
+    assert pa.types.is_boolean(attrs_fields["contaminated"].type)
+    assert pa.types.is_floating(attrs_fields["max_overlap"].type)
+    assert pa.types.is_list(attrs_fields["matched_hashes"].type)
+    assert attrs_fields["matched_hashes"].type.value_type == pa.uint64()
 
 
 def test_decon_emits_eval_hash_index_sidecar(fox_corpus):
     """Build writes a hash → eval_id Parquet sidecar with the expected schema."""
     attrs = decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -220,7 +241,7 @@ def test_decon_emits_eval_hash_index_sidecar(fox_corpus):
 def test_decon_matched_hashes_join_recovers_eval_id(fox_corpus):
     """A contaminated record's matched_hashes joined with the sidecar attributes back to its eval."""
     attrs = decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -257,7 +278,7 @@ def test_decon_overlap_threshold_gates(fox_corpus, threshold, expect_high_flagge
     It's flagged at thresholds ≤ 0.89 and gated above; pin the gate behavior across thresholds.
     """
     decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=threshold),
@@ -280,7 +301,7 @@ def test_decon_empty_input_raises(tmp_path: Path):
 
     with pytest.raises(FileNotFoundError):
         decon_to_parquet(
-            normalized_data=_as_source(input_dir, num_partitions=1),
+            normalized_data=_as_source(input_dir),
             eval_data_sources=str(eval_dir),
             output_path=str(output_dir),
             ngram=NGramConfig(ngram_length=3),
@@ -306,7 +327,7 @@ def test_decon_eval_dir_with_sidecar_files_is_safe(tmp_path: Path):
     # Common sidecar files that would crash load_file:
     (eval_dir / "README.md").write_text("# Eval corpus\nA description.\n")
     (eval_dir / "_SUCCESS").write_text("")
-    (eval_dir / "provenance.json").write_text('{"source": "wherever"}')
+    (eval_dir / ".provenance.json").write_text('{"source": "wherever"}')
     # Hidden directory with stuff inside (.metrics/, .executor_info/, etc.)
     (eval_dir / ".metrics").mkdir()
     (eval_dir / ".metrics" / "stats.json").write_text('{"records": 1}')
@@ -318,7 +339,7 @@ def test_decon_eval_dir_with_sidecar_files_is_safe(tmp_path: Path):
 
     # Must not raise.
     decon_to_parquet(
-        normalized_data=_as_source(input_dir, num_partitions=1),
+        normalized_data=_as_source(input_dir),
         eval_data_sources=str(eval_dir),
         output_path=str(output_dir),
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -353,7 +374,7 @@ def test_decon_fallback_eval_id_uses_full_path_for_uniqueness(tmp_path: Path):
     )
 
     attrs = decon_to_parquet(
-        normalized_data=_as_source(input_dir, num_partitions=1),
+        normalized_data=_as_source(input_dir),
         eval_data_sources=str(eval_dir),
         output_path=str(output_dir),
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -371,13 +392,12 @@ def test_decon_fallback_eval_id_uses_full_path_for_uniqueness(tmp_path: Path):
     assert any("/b/" in e for e in eval_ids)
 
 
-def test_decon_v1_input_without_partition_id_column(tmp_path: Path):
-    """Legacy v1 NormalizedData (pre-partition_id) is supported via shard.shard_idx fallback.
+def test_decon_synthesizes_partition_id_from_shard_index(tmp_path: Path):
+    """Decon synthesizes partition_id from shard.shard_idx (sorted-file order).
 
-    Datasets normalized before the v2 partition_id stamp don't carry the column.
-    Decon should still produce co-partitioned output with synthesized partition_id
-    derived from the shard index (matches the input's part-NNNNN-of-MMMMM naming
-    when files are processed in sorted order).
+    Input records carry only id and text; the output's partition_id column is
+    derived at read time from the shard index, matching the input's
+    part-NNNNN-of-MMMMM naming.
     """
     eval_dir = tmp_path / "eval"
     input_dir = tmp_path / "input"
@@ -396,7 +416,7 @@ def test_decon_v1_input_without_partition_id_column(tmp_path: Path):
     )
 
     decon_to_parquet(
-        normalized_data=_as_source(input_dir, num_partitions=2),
+        normalized_data=_as_source(input_dir),
         eval_data_sources=str(eval_dir),
         output_path=str(output_dir),
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -438,7 +458,7 @@ def test_decon_short_paragraphs_below_ngram_length_contribute_nothing(tmp_path: 
     )
 
     decon_to_parquet(
-        normalized_data=_as_source(input_dir, num_partitions=1),
+        normalized_data=_as_source(input_dir),
         eval_data_sources=str(eval_dir),
         output_path=str(output_dir),
         ngram=NGramConfig(ngram_length=8, overlap_threshold=0.5),
@@ -476,7 +496,7 @@ def _run_decon_one_shot(
     _write_eval_jsonl(eval_dir / "eval.jsonl.gz", eval_records)
     _write_input_parquet(input_dir / "part-00000-of-00001.parquet", input_records)
     decon_to_parquet(
-        normalized_data=_as_source(input_dir, num_partitions=1),
+        normalized_data=_as_source(input_dir),
         eval_data_sources=str(eval_dir),
         output_path=str(output_dir),
         ngram=ngram,
@@ -696,3 +716,188 @@ def test_decon_misses_word_order_permutation(tmp_path: Path):
         ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
     )
     assert rows["doc_permuted"]["contaminated"] is True
+
+
+# --- prebuilt-bloom path (build_eval_bloom + merge_eval_blooms) ----------
+
+
+def test_build_eval_bloom_then_decon_matches_inline(fox_corpus):
+    """Building bloom separately + decon(prebuilt_bloom_dir=...) gives identical attrs to inline build."""
+    # Path A: inline build.
+    inline_output = Path(fox_corpus["output_dir"]) / "inline"
+    decon_to_parquet(
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
+        eval_data_sources=fox_corpus["eval_dir"],
+        output_path=str(inline_output),
+        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+    inline_rows = _read_attributes(inline_output)
+
+    # Path B: build_eval_bloom -> decon(prebuilt_bloom_dir=...).
+    bloom_dir = Path(fox_corpus["output_dir"]) / "bloom"
+    artifact = build_eval_bloom(
+        eval_data_sources=fox_corpus["eval_dir"],
+        output_path=str(bloom_dir),
+        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+    assert isinstance(artifact, EvalBloom)
+    bp, ip = bloom_paths(str(bloom_dir))
+    assert Path(bp).exists()
+    assert Path(ip).exists()
+    assert artifact.bloom_path == bp
+    assert artifact.eval_hash_index_path == ip
+    assert artifact.n_eval_records == 2  # fox_corpus has 2 eval records
+
+    prebuilt_output = Path(fox_corpus["output_dir"]) / "prebuilt"
+    decon_to_parquet(
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
+        prebuilt_bloom_dir=str(bloom_dir),
+        output_path=str(prebuilt_output),
+        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+    )
+    prebuilt_rows = _read_attributes(prebuilt_output)
+
+    # Same set of ids, same contamination decisions, same overlap scores.
+    assert set(inline_rows.keys()) == set(prebuilt_rows.keys())
+    for doc_id, inline in inline_rows.items():
+        pre = prebuilt_rows[doc_id]
+        assert pre["contaminated"] == inline["contaminated"]
+        assert pre["max_overlap"] == inline["max_overlap"]
+        assert sorted(pre["matched_hashes"]) == sorted(inline["matched_hashes"])
+
+
+def test_merge_eval_blooms_equals_single_build(tmp_path: Path):
+    """merge_eval_blooms over N per-eval builds detects everything a single combined build does.
+
+    Stronger than 'identical bloom bytes' (bf.update may set the same bits in different order
+    internally); we check the observable behavior end-to-end via decon.
+    """
+    eval_a_dir = tmp_path / "eval_a"
+    eval_b_dir = tmp_path / "eval_b"
+    _write_eval_jsonl(eval_a_dir / "eval.jsonl.gz", [{"id": "ea_1", "text": "alpha beta gamma delta epsilon"}])
+    _write_eval_jsonl(eval_b_dir / "eval.jsonl.gz", [{"id": "eb_1", "text": "uno dos tres cuatro cinco"}])
+
+    input_dir = tmp_path / "input"
+    _write_input_parquet(
+        input_dir / "part-00000-of-00001.parquet",
+        [
+            {"id": "doc_hits_a", "text": "alpha beta gamma delta epsilon", "partition_id": 0},
+            {"id": "doc_hits_b", "text": "uno dos tres cuatro cinco", "partition_id": 0},
+            {"id": "doc_unique", "text": "nothing in common with either eval", "partition_id": 0},
+        ],
+    )
+    src = _as_source(input_dir)
+    ngram = NGramConfig(ngram_length=3, overlap_threshold=0.5)
+
+    # Combined-build baseline.
+    baseline_out = tmp_path / "out_baseline"
+    decon_to_parquet(
+        normalized_data=src,
+        eval_data_sources=[str(eval_a_dir), str(eval_b_dir)],
+        output_path=str(baseline_out),
+        ngram=ngram,
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+    baseline_rows = _read_attributes(baseline_out)
+
+    # Per-eval builds + merge.
+    bloom_a_dir = tmp_path / "bloom_a"
+    bloom_b_dir = tmp_path / "bloom_b"
+    build_eval_bloom(
+        eval_data_sources=str(eval_a_dir),
+        output_path=str(bloom_a_dir),
+        ngram=ngram,
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+    build_eval_bloom(
+        eval_data_sources=str(eval_b_dir),
+        output_path=str(bloom_b_dir),
+        ngram=ngram,
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+    merged_dir = tmp_path / "bloom_merged"
+    merge_eval_blooms(
+        per_eval_bloom_dirs=[str(bloom_a_dir), str(bloom_b_dir)],
+        output_path=str(merged_dir),
+    )
+
+    merged_out = tmp_path / "out_merged"
+    decon_to_parquet(
+        normalized_data=src,
+        prebuilt_bloom_dir=str(merged_dir),
+        output_path=str(merged_out),
+        ngram=ngram,
+    )
+    merged_rows = _read_attributes(merged_out)
+
+    # Same contamination decisions on every record.
+    for doc_id in ("doc_hits_a", "doc_hits_b", "doc_unique"):
+        assert baseline_rows[doc_id]["contaminated"] == merged_rows[doc_id]["contaminated"], doc_id
+        assert baseline_rows[doc_id]["max_overlap"] == merged_rows[doc_id]["max_overlap"], doc_id
+
+    # And the merged hash-index sidecar contains entries for BOTH per-eval sources.
+    _, merged_index = bloom_paths(str(merged_dir))
+    eval_ids = set(pq.read_table(str(merged_index)).column("eval_id").to_pylist())
+    assert "ea_1" in eval_ids
+    assert "eb_1" in eval_ids
+
+
+def test_decon_to_parquet_requires_exactly_one_of_eval_or_prebuilt(fox_corpus):
+    """Neither / both raise ValueError before any work is done."""
+    src = _as_source(Path(fox_corpus["input_dir"]))
+    out = fox_corpus["output_dir"]
+
+    # neither
+    with pytest.raises(ValueError, match="exactly one"):
+        decon_to_parquet(normalized_data=src, output_path=out, ngram=NGramConfig(ngram_length=3))
+
+    # both
+    with pytest.raises(ValueError, match="exactly one"):
+        decon_to_parquet(
+            normalized_data=src,
+            eval_data_sources=fox_corpus["eval_dir"],
+            prebuilt_bloom_dir="/tmp/whatever",
+            output_path=out,
+            ngram=NGramConfig(ngram_length=3),
+        )
+
+
+def test_merge_eval_blooms_requires_non_empty(tmp_path: Path):
+    with pytest.raises(ValueError):
+        merge_eval_blooms(per_eval_bloom_dirs=[], output_path=str(tmp_path / "out"))
+
+
+def test_merge_eval_blooms_rejects_size_mismatch(tmp_path: Path):
+    """dupekit.Bloom.update requires identical sizing; size mismatch should raise."""
+    eval_a = tmp_path / "eval_a"
+    eval_b = tmp_path / "eval_b"
+    _write_eval_jsonl(eval_a / "e.jsonl.gz", [{"id": "a", "text": "alpha beta gamma delta epsilon zeta eta theta"}])
+    _write_eval_jsonl(eval_b / "e.jsonl.gz", [{"id": "b", "text": "uno dos tres cuatro cinco seis siete ocho"}])
+    ngram = NGramConfig(ngram_length=3)
+
+    build_eval_bloom(
+        eval_data_sources=str(eval_a),
+        output_path=str(tmp_path / "bloom_a"),
+        ngram=ngram,
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+    build_eval_bloom(
+        eval_data_sources=str(eval_b),
+        output_path=str(tmp_path / "bloom_b"),
+        ngram=ngram,
+        estimated_doc_count=100_000,  # different size -> dupekit will reject
+        false_positive_rate=1e-9,
+    )
+    with pytest.raises(ValueError, match="size and max false positive rate"):
+        merge_eval_blooms(
+            per_eval_bloom_dirs=[str(tmp_path / "bloom_a"), str(tmp_path / "bloom_b")],
+            output_path=str(tmp_path / "merged"),
+        )

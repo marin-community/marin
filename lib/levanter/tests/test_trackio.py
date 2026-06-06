@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from levanter.tracker.histogram import Histogram
+from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.trackio import TrackioTracker
 
 
@@ -31,5 +31,6 @@ def test_log(monkeypatch):
     tracker.log({"str": "test"}, step=0)
     tracker.log({"scalar_jax_array": jnp.array(3.0)}, step=0)
     tracker.log({"scalar_np_array": np.array(3.0)}, step=0)
-    tracker.log({"histogram": Histogram.from_array(jnp.array([1.0, 2.0, 3.0]))}, step=0)
+    tracker.log({"histogram": SummaryStats.from_array(jnp.array([1.0, 2.0, 3.0]))}, step=0)
+    tracker.log({"summary_only": SummaryStats.from_array(jnp.array([1.0, 2.0, 3.0]), include_histogram=False)}, step=0)
     trackio.finish()

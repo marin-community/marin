@@ -19,6 +19,7 @@ Usage: python gh_issues_from_markdown.py <markdown_file>
 
 import json
 import os
+import sys
 from datetime import datetime
 
 import requests
@@ -207,7 +208,7 @@ def create_issues_from_json(json_tasks: list[dict]):
             ok = input("Create issue? (Y/n)").strip().lower()
             if ok in ["y", "yes", "n", "no", "q", "quit", ""]:
                 if ok == "q" or ok == "quit":
-                    exit(0)
+                    sys.exit(0)
                 ok = "y" if ok in ["y", "yes", ""] else "n"
                 break
             else:
@@ -219,11 +220,9 @@ def create_issues_from_json(json_tasks: list[dict]):
 
 
 if __name__ == "__main__":
-    import sys
-
     if len(sys.argv) != 2:
         print("Usage: python create_issues.py <path_to_markdown_file>")
-        exit(1)
+        sys.exit(1)
     markdown_file_path = sys.argv[1]
     json_tasks = convert_markdown_to_json_tasks(markdown_file_path)
     create_issues_from_json(json_tasks)

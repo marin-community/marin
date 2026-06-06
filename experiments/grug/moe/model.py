@@ -25,11 +25,23 @@ try:
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Float, Int, PRNGKeyArray
-from levanter.grug.attention import AttentionMask, RotaryConfig, align_kv_heads, apply_rotary_embedding, attention
-from levanter.grug.grug_moe import MoeActivation, MoeImplementation, moe_mlp
+from levanter.grug.attention import (
+    AttentionMask,
+    GrugAttentionImplementation,
+    RotaryConfig,
+    align_kv_heads,
+    apply_rotary_embedding,
+    attention,
+)
+from levanter.grug.grug_moe import (
+    MoeActivation,
+    MoEExpertMlp,
+    MoeImplementation,
+    resolve_moe_implementation,
+)
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
-from levanter.tracker.histogram import Histogram
+from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
@@ -44,6 +56,10 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
 
 def _batch_spec() -> P:
     return P(("data", "expert"))
+
+
+def _batch_reshard(x: jax.Array) -> jax.Array:
+    return reshard(x, _batch_spec())
 
 
 @dataclass(frozen=True)
@@ -70,6 +86,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR
     """Per-expert capacity factor for the routed MoE dispatch.
@@ -97,6 +114,7 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        resolve_moe_implementation(self.moe_implementation)
 
     @property
     def inferred_head_dim(self) -> int:
@@ -149,7 +167,7 @@ class CausalSelfAttention(eqx.Module):
         k = rms_norm(k)
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         q = q * self.cfg.qk_mult
-        attn_out = attention(q, k, v, mask)
+        attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
@@ -269,14 +287,14 @@ def _routing_stats(
     }
 
 
-def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | Histogram]:
+def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
     routing_entropy = router_metrics["routing_entropy_per_layer"]
     routing_counts = router_metrics["routing_counts_per_layer"]
     load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
     router_z_loss = router_metrics["router_z_loss_per_layer"]
     num_layers = int(routing_entropy.shape[0])
 
-    out: dict[str, jax.Array | Histogram] = {
+    out: dict[str, jax.Array | SummaryStats] = {
         "train/router/routing_entropy_mean": jnp.mean(routing_entropy),
         "train/router/load_balancing_loss": jnp.mean(load_balancing_loss),
         "train/router/router_z_loss": jnp.mean(router_z_loss),
@@ -291,7 +309,7 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     return out
 
 
-def _histogram_from_expert_counts(expert_counts: jax.Array) -> Histogram:
+def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
     counts = jnp.asarray(expert_counts, dtype=jnp.float32)
     num_experts = counts.shape[0]
     expert_ids = jnp.arange(num_experts, dtype=jnp.float32)
@@ -304,14 +322,15 @@ def _histogram_from_expert_counts(expert_counts: jax.Array) -> Histogram:
     min_value = jnp.where(num > 0, min_value, 0.0)
     max_value = jnp.where(num > 0, max_value, 0.0)
     bucket_limits = jnp.arange(num_experts + 1, dtype=jnp.float32)
-    return Histogram(
+    histogram = Histogram(bucket_limits=bucket_limits, bucket_counts=counts)
+    return SummaryStats.from_reduced_values(
         min=min_value,
         max=max_value,
         num=num,
+        nonzero_count=jnp.sum(nonzero),
         sum=sum_values,
         sum_squares=sum_squares,
-        bucket_limits=bucket_limits,
-        bucket_counts=counts,
+        histogram=histogram,
     )
 
 
@@ -320,13 +339,12 @@ class MoEMLP(eqx.Module):
 
     router: jax.Array
     router_bias: jax.Array
-    w_gate_up: jax.Array
-    w_down: jax.Array
+    expert_mlp: MoEExpertMlp
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
-        k_router, k_gate, k_up, k_down = random.split(key, 4)
+        k_router, k_expert_mlp = random.split(key, 2)
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
@@ -334,18 +352,20 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e, i = cfg.hidden_dim, cfg.num_experts, cfg.intermediate_dim
-        w_gate = _init_weight(k_gate, (e, d, i), cfg.initializer_std)
-        w_up = _init_weight(k_up, (e, d, i), cfg.initializer_std)
-        # TODO: Explore whether concatenating gate/up at init (instead of keeping separate params)
-        # is (1) a meaningful MFU speedup and (2) a meaningful perf hit due to AdamH treating the
-        # concatenated tensor as a single parameter for its scale-invariant norm computation.
-        w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)
 
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
-            w_gate_up=reshard(w_gate_up, P("expert", "data", "model")),
-            w_down=reshard(_init_weight(k_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
+            expert_mlp=MoEExpertMlp.init(
+                num_experts=e,
+                hidden_dim=d,
+                intermediate_dim=i,
+                initializer_std=cfg.initializer_std,
+                key=k_expert_mlp,
+                implementation=cfg.moe_implementation,
+                activation=ActivationFunctionEnum.silu,
+                capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+            ),
             cfg=cfg,
         )
 
@@ -397,14 +417,10 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
-        routed_flat = moe_mlp(
+        routed_flat = self.expert_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
-            self.w_gate_up,
-            self.w_down,
-            activation=ActivationFunctionEnum.silu,
-            implementation=self.cfg.moe_implementation,
             mesh=get_abstract_mesh(),
             capacity_factor=self.cfg.capacity_factor,
         )
@@ -448,8 +464,8 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask)
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        x = _batch_reshard(x + self.attn(attn_in, mask))
+        mlp_in = _batch_reshard(self.mlp_gated_norm(self.rms_mlp(x)))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
@@ -540,7 +556,7 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
-    ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | Histogram]]:
+    ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         hidden, router_metrics = self(token_ids, mask=mask)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
@@ -600,5 +616,4 @@ __all__ = [
     "RMSNorm",
     "Transformer",
     "debug_mesh_and_token_pspec",
-    "moe_mlp",
 ]

@@ -27,7 +27,7 @@ approval.
   - `.agents/skills/*/SKILL.md` — prompts for common agentic workflows.
 - **Avoid rot.** Rot confuses agents and wastes context. When a doc is out of
   date with the code: update it (if recent and the change is small) or archive
-  it to `.agents/project/YYYYMMDD_filename.md` (if historical-only; date from
+  it to `.agents/projects/YYYYMMDD_filename.md` (if historical-only; date from
   the first commit via `git`). The code is the source of truth.
 - **Context quality and quantity are paramount.** Model performance degrades on
   a full context window. Agent docs should focus on:
@@ -38,4 +38,4 @@ approval.
 ## Common issues
 
 - Stale design docs that guided initial system design — move to
-  `.agents/project/YYYYMMDD_filename.md`, dated from the first commit (`git`).
+  `.agents/projects/YYYYMMDD_filename.md`, dated from the first commit (`git`).

@@ -16,21 +16,18 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import posixpath
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-from datasets import load_dataset
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
     MaterializedOutputMetadata,
     write_ingestion_metadata_json,
 )
+from marin.transform.hf_parquet_splits import load_hf_split_iterable
 from marin.utils import fsspec_mkdirs
-from rigging.filesystem import open_url, url_to_fs
-from zephyr.writers import atomic_rename
+from rigging.filesystem import atomic_rename, open_url
 
 logger = logging.getLogger(__name__)
 
@@ -334,62 +331,6 @@ SERIALIZERS: dict[str, Any] = {
 data-agnostic."""
 
 
-def _fsspec_url(fs: Any, path: str) -> str:
-    protocol = fs.protocol
-    if isinstance(protocol, (list, tuple)):
-        protocol = protocol[0]
-    if protocol in (None, "file"):
-        return path
-    if path.startswith(f"{protocol}://"):
-        return path
-    return f"{protocol}://{path}"
-
-
-def _parquet_file_matches_split(path: str, split: str) -> bool:
-    filename = os.path.basename(path)
-    if not filename.endswith(".parquet"):
-        return False
-    return filename == f"{split}.parquet" or filename.startswith(f"{split}-")
-
-
-def _find_split_parquet_files(input_path: str, split: str, subset: str | None) -> list[str]:
-    """Find downloaded HF parquet files for ``split`` under an fsspec path."""
-    fs, root = url_to_fs(input_path)
-    roots: list[str] = []
-    if subset and subset != "default":
-        subset_root = posixpath.join(root, subset)
-        if fs.exists(subset_root):
-            roots.append(subset_root)
-    roots.append(root)
-
-    matches: list[str] = []
-    for candidate_root in roots:
-        if fs.isfile(candidate_root):
-            candidates = [candidate_root]
-            selected = [path for path in candidates if path.endswith(".parquet")]
-        else:
-            candidates = list(fs.find(candidate_root, withdirs=False))
-            selected = [path for path in candidates if _parquet_file_matches_split(path, split)]
-        matches.extend(selected)
-
-    if not matches:
-        raise FileNotFoundError(f"No parquet files found for split {split!r} under {input_path}")
-
-    return [_fsspec_url(fs, path) for path in sorted(set(matches))]
-
-
-def _load_hf_iterable(input_path: str, split: str, subset: str | None) -> Iterable[dict[str, Any]]:
-    """Iterate over examples in downloaded HF parquet shards at ``input_path``.
-
-    Imported lazily so the import graph doesn't require ``datasets`` at
-    module load time (e.g. when only the pure serializer functions are
-    used in tests).
-    """
-    data_files = _find_split_parquet_files(input_path, split, subset)
-    dataset = load_dataset("parquet", data_files={split: data_files}, split=split, streaming=True)
-    return dataset
-
-
 def stage_table_record_source(cfg: TableRecordStagingConfig) -> dict[str, int | str]:
     """Run the configured serializer over an HF table dataset and write JSONL.
 
@@ -423,7 +364,7 @@ def stage_table_record_source(cfg: TableRecordStagingConfig) -> dict[str, int | 
 
     with atomic_rename(out_file) as temp_path:
         with open_url(temp_path, "wt", encoding="utf-8", compression=compression) as outfile:
-            for index, example in enumerate(_load_hf_iterable(cfg.input_path, cfg.split, cfg.subset)):
+            for index, example in enumerate(load_hf_split_iterable(cfg.input_path, cfg.split, cfg.subset)):
                 text = serializer(example)
                 if not text.strip():
                     continue

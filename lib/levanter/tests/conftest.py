@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from tokenizers import Tokenizer as HfBaseTokenizer
 
 from levanter.tokenizers import HfMarinTokenizer, load_tokenizer
 
@@ -32,9 +33,18 @@ def local_gpt2_tokenizer(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
+def local_gpt2_tokenizer_path(tmp_path_factory) -> str:
+    """Path to a local GPT-2 tokenizer directory.
+
+    Lets HF roundtrip tests build an ``HFCheckpointConverter`` with a local
+    tokenizer (and no ``reference_checkpoint``) so they never reach the Hub.
+    """
+    return str(_gpt2_tokenizer_dir(tmp_path_factory))
+
+
+@pytest.fixture(scope="session")
 def local_gpt2_marin_tokenizer(tmp_path_factory) -> HfMarinTokenizer:
     """Load a GPT2 MarinTokenizer from a local JSON file to avoid network downloads."""
-    from tokenizers import Tokenizer as HfBaseTokenizer
 
     config_src = Path(__file__).parent / "gpt2_tokenizer_config.json"
     tmpdir = tmp_path_factory.mktemp("gpt2_marin_tok")

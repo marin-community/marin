@@ -1,6 +1,6 @@
 ---
 name: scrub-experiment-issue-tldrs
-description: Scheduled scrub: TL;DR blocks on experiment issues.
+description: "Scheduled scrub: TL;DR blocks on experiment issues."
 schedule_cron: "0 8 * * *"
 schedule_tz: America/New_York
 ---

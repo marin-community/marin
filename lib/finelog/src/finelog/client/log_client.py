@@ -36,13 +36,14 @@ from finelog.errors import (
     SchemaValidationError,
     StatsError,
 )
+from finelog.policy import StoragePolicy
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 from finelog.rpc.logging_connect import LogServiceClientSync
-from finelog.store.log_namespace import LOG_REGISTERED_SCHEMA
-from finelog.store.schema import (
+from finelog.schema import (
     IMPLICIT_SEQ_COLUMN,
+    LOG_REGISTERED_SCHEMA,
     Column,
     ColumnTypeValue,
     Schema,
@@ -182,6 +183,12 @@ class Table:
     flush thread, and retry/backoff with resolver invalidation on transient
     server failures. Created via :meth:`LogClient.get_table`; closing the
     LogClient drains every Table.
+
+    Registration is deferred to the flush thread: if a ``registrar`` is given,
+    it is invoked once before the first send to register the namespace and
+    return its effective schema. A failing registration is treated like any
+    other flush failure (retried with backoff, or the batch dropped on a
+    non-retryable error) and never blocks the caller that created the Table.
     """
 
     def __init__(
@@ -191,6 +198,7 @@ class Table:
         schema: Schema,
         flusher: Callable[[str, pa.RecordBatch], None],
         querier: Callable[[str], pa.Table] | None = None,
+        registrar: Callable[[], Schema] | None = None,
         flush_interval: float = DEFAULT_FLUSH_INTERVAL,
         batch_rows: int = DEFAULT_BATCH_ROWS,
         max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
@@ -202,6 +210,12 @@ class Table:
         self._arrow_schema = schema_to_arrow(schema)
         self._flusher = flusher
         self._querier = querier
+        # When set, the flush thread calls this once before its first send to
+        # register the namespace; the returned effective schema replaces the
+        # locally-requested one for Arrow encoding. ``None`` means the
+        # namespace is already registered server-side (e.g. ``log``).
+        self._registrar = registrar
+        self._registered = registrar is None
         self._flush_interval = flush_interval
         self._batch_rows = batch_rows
         self._max_buffer_bytes = max_buffer_bytes
@@ -390,6 +404,7 @@ class Table:
             return 0, []
         rows = [item.payload for item in items]
         try:
+            self._ensure_registered()
             batch = _rows_to_record_batch(rows, self._arrow_schema, self._schema)
             self._flusher(self._namespace, batch)
         except Exception as exc:
@@ -408,6 +423,22 @@ class Table:
                 return items[-1].seq, []
             return 0, items
         return items[-1].seq, []
+
+    def _ensure_registered(self) -> None:
+        """Register the namespace on first send, adopting its effective schema.
+
+        Runs on the flush thread only, so the (re)assignment of ``_schema`` /
+        ``_arrow_schema`` does not race the Arrow encode that follows. A raised
+        exception propagates to :meth:`_send`, which treats it as a flush
+        failure.
+        """
+        if self._registered:
+            return
+        assert self._registrar is not None
+        effective = self._registrar()
+        self._schema = effective
+        self._arrow_schema = schema_to_arrow(effective)
+        self._registered = True
 
 
 class LogClient:
@@ -539,8 +570,28 @@ class LogClient:
             return FlushResult.SUCCEEDED
         return table.flush(timeout=timeout)
 
-    def get_table(self, namespace: str, schema: type | Schema) -> Table:
-        """Idempotently register ``namespace`` and return a Table handle."""
+    def get_table(
+        self,
+        namespace: str,
+        schema: type | Schema,
+        *,
+        storage_policy: StoragePolicy = StoragePolicy(),
+    ) -> Table:
+        """Return a Table handle for ``namespace``, registering it lazily.
+
+        The handle is returned immediately without contacting the server: the
+        ``register_table`` RPC is deferred to the Table's flush thread, which
+        runs it once before the first send. A connectivity or schema failure
+        there is handled as a normal flush failure (retried with backoff, or
+        the batch dropped) and never propagates to this caller, so a caller
+        that only needs to enqueue rows is never blocked by an unavailable
+        finelog server.
+
+        ``storage_policy`` is a per-namespace retention override; an
+        empty policy inherits the server defaults. A non-empty policy
+        on a re-register replaces the namespace's current policy
+        (last-write-wins).
+        """
         if namespace == LOG_NAMESPACE:
             raise InvalidNamespaceError("use write_batch/query for the privileged 'log' namespace")
         if isinstance(schema, Schema):
@@ -550,37 +601,46 @@ class LogClient:
         else:
             raise SchemaValidationError(f"schema must be a Schema or a dataclass class, got {type(schema).__name__}")
 
-        existing = self._tables.get(namespace)
-        if existing is not None:
-            return existing
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("LogClient is closed")
+            existing = self._tables.get(namespace)
+            if existing is not None:
+                return existing
+            table = Table(
+                namespace=namespace,
+                schema=requested,
+                flusher=self._stats_flush,
+                querier=self._stats_query,
+                registrar=lambda: self._register_table(namespace, requested, storage_policy),
+            )
+            self._tables[namespace] = table
+            return table
 
+    def _register_table(self, namespace: str, requested: Schema, storage_policy: StoragePolicy) -> Schema:
+        """Run the ``register_table`` RPC and return the effective schema.
+
+        Called from a Table's flush thread. Raises the underlying transport
+        error (not a translated domain error) so the caller's retryability
+        check sees the original ConnectError code.
+        """
         client = self._get_stats_client()
         try:
             response = client.register_table(
                 stats_pb2.RegisterTableRequest(
                     namespace=namespace,
                     schema=schema_to_proto(requested),
+                    storage_policy=storage_policy.to_proto(),
                 )
             )
         except ConnectError as exc:
-            raise _translate_connect_error(exc) from exc
-        effective = schema_from_proto(response.effective_schema)
-        table = Table(
-            namespace=namespace,
-            schema=effective,
-            flusher=self._stats_flush,
-            querier=self._stats_query,
-        )
-        with self._lock:
-            if self._closed:
-                table.close()
-                raise RuntimeError("LogClient is closed")
-            existing = self._tables.get(namespace)
-            if existing is not None:
-                table.close()
-                return existing
-            self._tables[namespace] = table
-        return table
+            if is_retryable_error(exc):
+                self._invalidate(_format_exc_summary(exc))
+            raise
+        except (ConnectionError, OSError, TimeoutError) as exc:
+            self._invalidate(_format_exc_summary(exc))
+            raise
+        return schema_from_proto(response.effective_schema)
 
     def drop_table(self, namespace: str) -> None:
         """Remove ``namespace`` from the registry and delete its local data."""
