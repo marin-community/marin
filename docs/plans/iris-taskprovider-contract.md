@@ -382,8 +382,8 @@ commit (the order the existing fakes make safe). Status as of this revision:
    worker-failure path are thin dispatch + wholesale state sync
    (`persist_autoscaler_state`). Construction attaches the autoscaler to the
    backend (`attach_autoscaler`); `main.py`/`Controller.__init__` simplified.
-5. ⏳ **Relocate scheduling primitives** — `scheduler.py`/`scheduling_policy.py`
-   into a `scheduling/` layer; pure import churn.
+5. ✅ **Relocate scheduling primitives** — `scheduler.py`/`scheduling_policy.py`
+   into `controller/scheduling/` (`scheduler.py` + `policy.py`); pure import churn.
 6. ⏳ **Dashboard descriptor** — capability-driven tabs; retire `has_direct_provider`.
 7. ⏳ **Docs** — AGENTS.md, coreweave.md, README, OPS.md, archived design doc.
 
@@ -516,11 +516,12 @@ its `autoscaler` param; `Controller.autoscaler` is now a read-only proxy over th
 backend for dashboard/status RPCs. `tests/cluster/controller/test_autoscaler*.py`
 green, full `tests/cluster` green, pyrefly clean.
 
-### T5 — Name the shared scheduling layer  `exec: session`  `value: medium`  `deps: T4`
+### T5 — Name the shared scheduling layer  `exec: session`  `value: medium`  `deps: T4`  ✅
 
-Group `scheduler.py` / `scheduling_policy.py` (and the autoscaler primitives, if
-clean) under a `scheduling/` package the backends compose; `constraints.py` stays.
-Import churn only.
+Grouped `scheduler.py` / `scheduling_policy.py` under `controller/scheduling/`
+(`scheduler.py` + `policy.py`) — the package the backends compose. `constraints.py`
+and `controller/autoscaler/` stay where they are. Pure import churn; full
+`tests/cluster` green, pyrefly clean.
 
 ### T6 — Capability-driven dashboard  `exec: session`  `value: medium`  `deps: T2`
 
