@@ -1763,10 +1763,11 @@ class InferenceEngine:
                 k: DecodeResult(id=rid, choice=k, token_list=[]) for k in range(expected_children[rid])
             }
 
-        def _admit_pending_prefill() -> int:
+        def _admit_pending_prefill() -> tuple[int, bool]:
             nonlocal pending_requests, prefill_admissions
             if not pending_requests:
-                return 0
+                return 0, False
+            before_request_count = len(pending_requests)
             prefill_start = time.time()
             prefill_admission = self._prefill_batch(pending_requests, apply_top_p=apply_top_p, return_logprobs=False)
             _block_until_ready_optional(
@@ -1774,12 +1775,21 @@ class InferenceEngine:
             )
             prefill_done = time.time()
             if prefill_admission is None:
-                return 0
+                return 0, False
             prefill_admissions += 1
             prefill_prompt_tokens_per_admission.append(prefill_admission.plan.prompt_tokens)
             prefill_seconds_per_admission.append(prefill_done - prefill_start)
             pending_requests = pending_requests[prefill_admission.plan.request_count :]
-            return self._ingest_outputs(prefill_admission.outputs)
+            return self._ingest_outputs(prefill_admission.outputs), len(pending_requests) < before_request_count
+
+        def _admit_all_pending_prefill() -> int:
+            new_tokens = 0
+            while pending_requests:
+                prefill_tokens, admitted_requests = _admit_pending_prefill()
+                new_tokens += prefill_tokens
+                if not admitted_requests:
+                    break
+            return new_tokens
 
         def _all_done() -> bool:
             for rid, n_kids in expected_children.items():
@@ -1796,7 +1806,7 @@ class InferenceEngine:
             if _all_done():
                 break
             iter_start = time.time()
-            iter_new_tokens = _admit_pending_prefill()
+            iter_new_tokens = _admit_all_pending_prefill()
 
             submit_start = time.time()
             future_state, decode_outputs = decode_loop(

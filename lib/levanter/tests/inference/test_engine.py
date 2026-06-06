@@ -412,6 +412,7 @@ def test_diagnostic_generation_supports_multi_prefill(method_name):
     assert len(result.decode_seconds_per_iteration) == len(result.decode_host_seconds_per_iteration)
     assert len(result.decode_seconds_per_iteration) == len(result.decode_submit_seconds_per_iteration)
     assert len(result.decode_seconds_per_iteration) == len(result.decode_extract_seconds_per_iteration)
+    assert len(result.decode_tokens_per_iteration) == 1
     assert 0 < sum(result.decode_tokens_per_iteration) <= result.total_generated
 
 
