@@ -362,6 +362,7 @@ def test_generate_admits_multiple_prefill_chunks_for_one_logical_batch():
     assert len(result.decode_seconds_per_iteration) == len(result.decode_host_seconds_per_iteration)
     assert len(result.decode_seconds_per_iteration) == len(result.decode_submit_seconds_per_iteration)
     assert len(result.decode_seconds_per_iteration) == len(result.decode_extract_seconds_per_iteration)
+    assert len(result.decode_tokens_per_iteration) == 1
     assert 0 < sum(result.decode_tokens_per_iteration) <= result.total_generated
     assert all(seconds >= 0.0 for seconds in result.decode_device_seconds_per_iteration)
 

@@ -1552,28 +1552,46 @@ class InferenceEngine:
             pending_requests = pending_requests[admission.plan.request_count :]
             return self._ingest_outputs(admission.outputs)
 
+        def _admit_pending_prefill() -> tuple[int, bool]:
+            if not pending_requests:
+                return 0, False
+
+            before_request_count = len(pending_requests)
+            prefill_start = time.time()
+            prefill_admission = self._prefill_batch(
+                pending_requests,
+                apply_top_p=apply_top_p,
+                return_logprobs=return_logprobs,
+            )
+            prefill_submit_done = time.time()
+            prefill_device_start = time.time()
+            _block_until_ready_optional(
+                (self.gen_state, None if prefill_admission is None else prefill_admission.outputs)
+            )
+            prefill_device_done = time.time()
+            new_tokens = _record_prefill(prefill_admission)
+            prefill_out = time.time()
+
+            if prefill_admission is not None:
+                prefill_seconds_per_admission.append(prefill_out - prefill_start)
+                logger.info(
+                    "Prefill admission %d: %d requests, %d seqs, %d prompt tokens, "
+                    "submit %.3fs, device %.3fs, extraction %.3fs, total %.3fs",
+                    prefill_admissions,
+                    prefill_admission.plan.request_count,
+                    prefill_admission.plan.sequence_count,
+                    prefill_admission.plan.prompt_tokens,
+                    prefill_submit_done - prefill_start,
+                    prefill_device_done - prefill_device_start,
+                    prefill_out - prefill_device_done,
+                    prefill_out - prefill_start,
+                )
+
+            return new_tokens, len(pending_requests) < before_request_count
+
         time_in = time.time()
-        # Initial admission from queue and extract prompt tokens
-        prefill_admission = self._prefill_batch(
-            pending_requests,
-            apply_top_p=apply_top_p,
-            return_logprobs=return_logprobs,
-        )
-        prefill_submit_done = time.time()
-        prefill_device_start = time.time()
-        _block_until_ready_optional((self.gen_state, None if prefill_admission is None else prefill_admission.outputs))
-        prefill_device_done = time.time()
-        _record_prefill(prefill_admission)
-        initial_prefill_out = time.time()
-        if prefill_admission is not None:
-            prefill_seconds_per_admission.append(initial_prefill_out - time_in)
-        logger.info(
-            "Initial prefill: submit %.3fs, device %.3fs, extraction %.3fs, total %.3fs",
-            prefill_submit_done - time_in,
-            prefill_device_done - prefill_device_start,
-            initial_prefill_out - prefill_device_done,
-            initial_prefill_out - time_in,
-        )
+        # Initial admission from queue and extraction of prompt outputs.
+        _admit_pending_prefill()
 
         def _all_done() -> bool:
             for rid, n_kids in expected_children.items():
@@ -1596,31 +1614,11 @@ class InferenceEngine:
             iter_start = time.time()
             iter_new_tokens = 0
 
-            if pending_requests:
-                prefill_start = time.time()
-                prefill_admission = self._prefill_batch(
-                    pending_requests,
-                    apply_top_p=apply_top_p,
-                    return_logprobs=return_logprobs,
-                )
-                prefill_submit_done = time.time()
-                _block_until_ready_optional(
-                    (self.gen_state, None if prefill_admission is None else prefill_admission.outputs)
-                )
-                prefill_device_done = time.time()
-                iter_new_tokens += _record_prefill(prefill_admission)
-                prefill_out = time.time()
-                if prefill_admission is not None:
-                    prefill_seconds_per_admission.append(prefill_out - prefill_start)
-                    logger.info(
-                        "Prefill admission %d: %d requests, %d seqs, %d prompt tokens, %.3fs",
-                        prefill_admissions,
-                        prefill_admission.plan.request_count,
-                        prefill_admission.plan.sequence_count,
-                        prefill_admission.plan.prompt_tokens,
-                        prefill_out - prefill_start,
-                    )
-                logger.debug("Prefill submit overhead %.3fs", prefill_submit_done - prefill_start)
+            while pending_requests:
+                prefill_tokens, admitted_requests = _admit_pending_prefill()
+                iter_new_tokens += prefill_tokens
+                if not admitted_requests:
+                    break
 
             fake_submit_start = time.time()
             # future_state, decode_outputs = _run_generation_loop(
