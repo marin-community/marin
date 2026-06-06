@@ -47,9 +47,9 @@ from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
+from iris.cluster.controller.scheduling.decision import apply_preemptions, compute_diagnostics
 from iris.cluster.controller.scheduling.policy import (
     GatedCandidates,
-    PreemptionCandidate,
     RunningTaskInfo,
     SchedulingOrder,
     apply_scheduling_gates,
@@ -57,7 +57,6 @@ from iris.cluster.controller.scheduling.policy import (
     inject_reservation_taints,
     inject_taint_constraints,
     preference_pass,
-    run_preemption_pass,
 )
 from iris.cluster.controller.scheduling.scheduler import JobRequirements, Scheduler, SchedulingContext
 from iris.cluster.controller.schema import ReservationClaim
@@ -210,20 +209,15 @@ class TaskTarget:
 
 @dataclass(frozen=True)
 class ScheduleInput:
-    """DB-less snapshot handed to :meth:`TaskBackend.schedule`.
-
-    Assembled by the controller from a single set of DB reads each scheduling
-    tick. The backend turns this into placement decisions without touching the
-    database.
-    """
+    """The read-only state a :class:`TaskBackend` needs to make placement
+    decisions for one scheduling tick."""
 
     context: SchedulingContext
     """Built by ``build_scheduling_context`` (un-tainted workers + raw reads)."""
     claims: dict[WorkerId, ReservationClaim]
     """Reservation claims from ``refresh_reservation_claims``."""
     running_for_preemption: list[RunningTaskInfo]
-    """Band/value of running tasks (``get_running_tasks_with_band_and_value``),
-    read against ``claims.keys()`` while building the snapshot."""
+    """Band/value of the currently-running tasks the preemption pass may evict."""
     max_tasks_per_job_per_cycle: int
     trace: bool = False
     """Whether to emit the per-phase scheduling trace logs this cycle."""
@@ -253,11 +247,8 @@ class ScheduleResult:
 
 @dataclass(frozen=True)
 class CapacityInput:
-    """DB-less snapshot handed to :meth:`TaskBackend.manage_capacity`.
-
-    The controller assembles this from its own DB reads each autoscale tick; the
-    backend evaluates scaling decisions against it without touching the database.
-    """
+    """The read-only state a :class:`TaskBackend` needs to make capacity
+    (autoscaling) decisions for one tick."""
 
     worker_status_map: WorkerStatusMap
     """Per-worker idle/running state (``_build_worker_status_map``)."""
@@ -315,9 +306,9 @@ def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> Sc
         return ScheduleResult(unschedulable=list(gated.expired_tasks), post_taint_context=ctx)
 
     order = compute_scheduling_order(ctx, gated, trace=trace)
-    all_assignments, context, tainted_jobs = _placement_pass(scheduler, order, gated, ctx, claims, trace=trace)
-    preemptions = _preemption_pass(order, tainted_jobs, all_assignments, snapshot.running_for_preemption, context)
-    diagnostics = _job_scheduling_diagnostics(scheduler, context, tainted_jobs, all_assignments, order.ordered_task_ids)
+    all_assignments, context, tainted_jobs = apply_placements(scheduler, order, gated, ctx, claims, trace=trace)
+    preemptions = apply_preemptions(order, tainted_jobs, all_assignments, snapshot.running_for_preemption, context)
+    diagnostics = compute_diagnostics(scheduler, context, tainted_jobs, all_assignments, order.ordered_task_ids)
 
     return ScheduleResult(
         assignments=[
@@ -338,7 +329,7 @@ def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> Sc
     )
 
 
-def _placement_pass(
+def apply_placements(
     scheduler: Scheduler,
     order: SchedulingOrder,
     gated: GatedCandidates,
@@ -391,64 +382,6 @@ def _placement_pass(
             len(result.assignments),
         )
     return all_assignments, context, modified_jobs
-
-
-def _preemption_pass(
-    order: SchedulingOrder,
-    jobs: dict[JobName, JobRequirements],
-    all_assignments: list[tuple[JobName, WorkerId]],
-    running_for_preemption: list[RunningTaskInfo],
-    context: SchedulingContext,
-) -> list[tuple[JobName, JobName]]:
-    """Decide which running tasks to evict for higher-priority unscheduled work."""
-    assigned_ids = {task_id for task_id, _ in all_assignments}
-    unscheduled = [
-        PreemptionCandidate(
-            job_name=tid,
-            requirements=jobs[tid.parent],
-            band=order.task_band_map.get(tid, job_pb2.PRIORITY_BAND_INTERACTIVE),
-        )
-        for tid in order.ordered_task_ids
-        if tid not in assigned_ids and tid.parent is not None and tid.parent in jobs
-    ]
-    if not unscheduled:
-        return []
-    return run_preemption_pass(unscheduled, running_for_preemption, context)
-
-
-def _job_scheduling_diagnostics(
-    scheduler: Scheduler,
-    context: SchedulingContext,
-    jobs: dict[JobName, JobRequirements],
-    assignments: list[tuple[JobName, WorkerId]],
-    schedulable_task_ids: list[JobName],
-) -> dict[str, str]:
-    """Compute per-job scheduling diagnostics for unassigned jobs."""
-    assigned_task_ids = {task_id for task_id, _ in assignments}
-
-    unscheduled: dict[JobName, tuple[JobName, int]] = {}
-    for task_id in schedulable_task_ids:
-        if task_id in assigned_task_ids or task_id.parent is None:
-            continue
-        job_id = task_id.parent
-        if job_id in unscheduled:
-            _, count = unscheduled[job_id]
-            unscheduled[job_id] = (unscheduled[job_id][0], count + 1)
-        else:
-            unscheduled[job_id] = (task_id, 1)
-
-    diagnostics: dict[str, str] = {}
-    for job_id, (representative_task, num_tasks) in unscheduled.items():
-        req = jobs.get(job_id)
-        if req is None:
-            continue
-        diagnostics[job_id.to_wire()] = scheduler.get_job_scheduling_diagnostics(
-            req,
-            context,
-            representative_task,
-            num_tasks=num_tasks,
-        )
-    return diagnostics
 
 
 class TaskBackend(Protocol):
