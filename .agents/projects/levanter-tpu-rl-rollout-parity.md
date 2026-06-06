@@ -336,6 +336,11 @@ thread. Keep background-style work narrow and explicit until the app is stable:
      task, no failures or preemptions. The pending reason is capacity-only and
      has oscillated between waiting for v5p preemptible workers and quota-pool
      tier monotonicity blocking.
+   - Latest subagent-thread check, without direct Iris polling from the main
+     thread: the same v5p job remains launched and was last known
+     `JOB_STATE_PENDING` on v5p capacity/quota-tier scheduling, with no task
+     logs yet and no non-capacity blocker. No follow-up decode-heavy v5p row has
+     been launched.
 5. Develop the RL batched-token API slice in parallel with the runtime wait.
    vLLM, Levanter, MathEnv, rollout-worker policy identity, tokenizer replay
    identity, and persisted rollout metadata now exercise the token-native
