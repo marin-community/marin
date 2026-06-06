@@ -1070,8 +1070,8 @@ def build_scheduling_context(
     """Build a ``SchedulingContext`` from a single read snapshot.
 
     All scheduling-tick DB I/O lives here. The returned context carries
-    un-tainted workers; ``_run_scheduler_pass`` applies reservation taints
-    for the assignment pass only.
+    un-tainted workers; reservation taints are applied during the assignment
+    pass only (in ``run_scheduling_decision``).
     """
     with slow_log(logger, "scheduling tick context", threshold_ms=50):
         with queries.read_snapshot() as snap:

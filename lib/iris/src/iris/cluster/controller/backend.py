@@ -293,11 +293,10 @@ class WorkersFailedResult:
 def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> ScheduleResult:
     """Run the full Iris scheduling decision pipeline over a DB-less snapshot.
 
-    Faithful move of the controller's old ``_run_scheduler_pass`` plus the
-    decision half of ``_apply_preemptions``: gates → order → reservation taints
-    → preference pass → ``find_assignments`` → preemption pass. Returns the
-    placement decisions plus the diagnostics/context the controller caches. Does
-    no I/O — every input comes from ``snapshot`` and every output is plain data.
+    Stages: gates → order → reservation taints → preference pass →
+    ``find_assignments`` → preemption pass. Returns the placement decisions plus
+    the diagnostics/context the controller caches. Does no I/O — every input
+    comes from ``snapshot`` and every output is plain data.
     """
     ctx = snapshot.context
     claims = snapshot.claims
