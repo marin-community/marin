@@ -608,3 +608,15 @@ levels, punctuation, and compacting multi-line statements into one paragraph.
 The body content and ordering are mostly shared, which is what Jaccard 0.9
 means in this scan: not byte-identical, but substantively the same extracted
 page/list.
+
+## 2026-06-06 — High-recall (r=4) val scan, all math subsets
+
+Driver `scripts/analysis/nemotron_math_val_full_scan.py` (284 perms / 71
+bands, ~99% recall at J=0.5). 4plus rescan, us-east5 (`/ahmed/val-scan-4plus-v2`):
+3.74M val buckets, 2.99B candidate pairs (vs 1.0M at 26 bands), 973M
+len-pruned, 2.24M verified J>=0.5. Val docs with train near-dup: 32,619 (0.5)
+/ 13,673 (0.7) / 10,030 (0.75) / 1,011 (0.9). Old 0.9 count confirmed
+complete; 0.5 was 56% under. Failures: verify broadcast OOM (3.3B pairs);
+4-cpu drivers unschedulable us-central1 (2-cpu pool); 1-cpu v3 ok.
+Pending: `3`, `4plus_mind` scans us-central1. Verified pairs:
+`gs://marin-us-east5/scratch/ahmed/midtrain_dedup/4plus_284x71/verified_pairs`.
