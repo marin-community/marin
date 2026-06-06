@@ -53,7 +53,9 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   measurement because vLLM never became ready within the 3600-second startup
   timeout; `/v1/models` stayed connection-refused on the local vLLM port. Treat
   this as a terminal infra/backend failure for the v5p comparison, not evidence
-  about Levanter throughput.
+  about Levanter throughput. #6185 commit `91f6ec06a` makes future vLLM startup
+  failures fail fast on subprocess exit and include bounded stdout/stderr tails
+  in the benchmark RuntimeError.
 - A prefill-heavy v6e-8 row has identified the next parity gap. For
   `prefill_b8_i2048_o128_n1`, backend `both`, dense matrix, TP=8,
   `--max-pages 512`, two warmups and one measured round, vLLM reached
@@ -95,7 +97,7 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   `104bf901e33c5f0b34d32d4f59edf27b82f66714`.
 - Multi-prefill serving fix: #6185,
   `https://github.com/marin-community/marin/pull/6185`, current head
-  `6d74fc7eac344b2cf06cdf7a98f0fd08f76d8717`.
+  `91f6ec06a93f4a2365cc5ceeb951731ce47a607a5`.
 - RL rollout tracking epic: #6227,
   `https://github.com/marin-community/marin/issues/6227`, with child issues
   #6228 for dense v6e parity, #6229 for the v6e prefill-heavy gap, #6230 for
@@ -145,6 +147,11 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   `decode_iteration_tokens_per_second` and `decode_device_tokens_per_second` in
   `summary.json` and the markdown summary table, alongside the existing
   end-to-end row throughput.
+- vLLM startup failure reporting update: #6185 commit `91f6ec06a`,
+  `Surface vLLM startup logs in parity benchmark`. Future v5p/vLLM startup
+  failures should report whether the subprocess exited before readiness and
+  include the tail of `stderr.log` and `stdout.log` in the raised error, avoiding
+  another postmortem where `/dev/shm/.../vllm_profiles` is lost with the worker.
 
 ## Acceptance Criteria
 
@@ -221,14 +228,15 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - Issue #6184 tracks engine-level multi-prefill admission for long-prompt TPU
   serving.
 - PR #6185 implements the long-prompt correctness and mixed-workload performance
-  fix. The current branch head, `6d74fc7ea`, combines engine-level
+  fix. The current branch head, `91f6ec06a`, combines engine-level
   multi-prefill admission, OpenAI service relaxation for aggregate prompt-token
   budgets, benchmark admission/timing metrics, prefill-drain scheduling before
   decode, corrected diagnostic prefill-drain behavior, decode-submit attribution
-  cleanup, and pure decode iteration/device throughput reporting. Local
-  validation for the latest focused patch passed: focused engine plus Qwen3
-  harness pytest (`61 passed`), focused `./infra/pre-commit.py --files ... --fix`,
-  and the commit hook including Pyrefly.
+  cleanup, pure decode iteration/device throughput reporting, and better vLLM
+  startup failure reporting for v5p postmortems. Local validation for the latest
+  focused patch passed: Qwen3 harness pytest (`51 passed`), focused
+  `./infra/pre-commit.py --files ... --fix`, and the commit hook including
+  Pyrefly.
 - PR #6185 final v6e-8 proof is
   `/dlwh/qwen3-mixed-v6e8-prefilldrain-i512-o512-20260606-0428`. The job
   succeeded with no failures or preemptions for `mixed_b32_i512_o512_n1`,
@@ -294,10 +302,14 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   future `summary.json` rows and markdown tables. This preserves the existing
   end-to-end decode ratio while giving reviewers a direct pure decode-loop and
   device-throughput signal for prefill-heavy rows.
-- PR #6185 current CI state after commit `6d74fc7ea`: the PR is non-draft and
+- PR #6185 v5p startup postmortem follow-up: commit `91f6ec06a` makes
+  `start_vllm_server()` poll readiness while checking whether the subprocess has
+  already exited, then includes bounded stderr/stdout tails in the startup
+  `RuntimeError`. This does not fix vLLM-on-v5p startup itself, but it should
+  turn the next terminal backend failure into an actionable log-bearing failure.
+- PR #6185 current CI state after commit `91f6ec06a`: the PR is non-draft and
   mergeable, with no visible failed checks at the latest lightweight metadata
-  check. `marin-integration`, `levanter-unit`, `levanter-torch`, and
-  `levanter-tpu-tests` were still in progress.
+  check before this commit; new CI is expected to restart on the pushed head.
 - Issue #6184 has the final proof comment:
   `https://github.com/marin-community/marin/issues/6184#issuecomment-4637412411`.
 - PR #6186 adds the first RL batched-token rollout API contracts, stacked on
@@ -481,7 +493,11 @@ thread. Keep background-style work narrow and explicit until the app is stable:
    prefill-heavy rows should compare end-to-end row throughput against
    `decode_iteration_tokens_per_second` and `decode_device_tokens_per_second`
    before assigning any residual gap to LM-head/sampling or kernels.
-6. Develop the RL batched-token API slice in parallel with the runtime wait.
+6. If rerunning the v5p mixed comparison, use #6185 head `91f6ec06a` or newer so
+   a repeated vLLM startup failure includes the actual stderr/stdout tail. Do
+   not launch the decode-heavy v5p row until the mixed v5p startup issue is
+   understood or deliberately bypassed.
+7. Develop the RL batched-token API slice in parallel with the runtime wait.
    vLLM, Levanter, MathEnv, rollout-worker policy identity, tokenizer replay
    identity, and persisted rollout metadata now exercise the token-native
    contract on #6186. The next implementation step is hardening the rollout data
@@ -797,9 +813,27 @@ implementation slice should be:
      `decode_iteration_tokens_per_second` and `decode_device_tokens_per_second`
      to future benchmark outputs so the next prefill-heavy rows can separate
      end-to-end row throughput from pure decode-loop and device throughput.
-   - #6185 current head is `6d74fc7ea`. The PR is non-draft and mergeable, with
-     no visible failed checks at the latest lightweight metadata check; the
-     Levanter lanes and `marin-integration` were still in progress.
+   - Later commits moved #6185 past `6d74fc7ea`; do not use this as the current
+     PR state.
+
+16. #6185 v5p startup failure reporting:
+   - Iris summary/log recovery for
+     `/dlwh/qwen3-mixed-v5p-prefilldrain-i512-o512-20260606-0447` confirmed the
+     benchmark timed out on `http://127.0.0.1:42361/v1/models` after 3600s with
+     connection refused, then raised `RuntimeError: vLLM failed to start`.
+   - The failure message pointed at
+     `/dev/shm/qwen3-mixed-v5p-prefilldrain-i512-o512-20260606-0447/output/vllm_profiles`
+     but did not include the vLLM stderr/stdout tail. Because that path is
+     worker-local `/dev/shm`, the detailed vLLM cause was not recoverable after
+     the task exited.
+   - Commit `91f6ec06a` makes the harness fail fast if the vLLM subprocess exits
+     before `/v1/models` is ready and includes bounded `stderr.log` and
+     `stdout.log` tails in the raised startup error. Focused validation passed:
+     `uv run --package marin-levanter --group test pytest
+     lib/levanter/tests/test_qwen3_tpu_inference_parity_bench.py -q` with 51
+     passed, focused pre-commit on the changed files, and the commit hook
+     including Pyrefly.
+   - #6185 current head is `91f6ec06a`. Use this or newer for any v5p rerun.
 
 ## RL Token Data Plane Gate
 
