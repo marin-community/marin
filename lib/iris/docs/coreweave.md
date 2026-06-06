@@ -53,9 +53,9 @@ Example config: `lib/iris/config/coreweave.yaml`
 
 Key architectural properties:
 
-- **BACKEND-placement `TaskBackend`**: When the cluster config sets
+- **TASK_BACKEND-placement `TaskBackend`**: When the cluster config sets
   `kubernetes_provider`, the controller runs `K8sTaskProvider`
-  (`src/iris/cluster/providers/k8s/tasks.py`) — a `Placement.BACKEND`
+  (`src/iris/cluster/backends/k8s/tasks.py`) — a `PlacementOwner.TASK_BACKEND`
   `TaskBackend` with `manages_capacity=True`. Kueue performs scheduling and the
   cluster autoscaler provisions nodes, so Iris runs no scheduling or autoscaler
   loop for this backend; the controller only reconciles desired vs. observed Pods

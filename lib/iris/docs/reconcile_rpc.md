@@ -50,7 +50,7 @@ rows and calls `reconcile_workers(inputs)`
 `reconcile_workers`) to produce one `WorkerReconcilePlan` per worker (the
 `ReconcileRequest` proto is built once inside the plan). The plans flow
 through `RpcTaskBackend.reconcile`
-([`providers/rpc/backend.py`](../src/iris/cluster/providers/rpc/backend.py))
+([`backends/rpc/backend.py`](../src/iris/cluster/backends/rpc/backend.py))
 which fans them out under a single `asyncio.gather` capped by
 `self.parallelism` and returns a `ReconcileResult` per worker. The apply layer
 ([`transitions.apply_reconcile_result`](../src/iris/cluster/controller/transitions.py))

@@ -8,11 +8,11 @@ Implemented design record for the TaskBackend control-plane contract
 Ground truth:
 
 - Contract: `lib/iris/src/iris/cluster/controller/backend.py`
-- IRIS backend: `lib/iris/src/iris/cluster/providers/rpc/backend.py`
-- BACKEND backend: `lib/iris/src/iris/cluster/providers/k8s/tasks.py`
+- IRIS_CONTROLLER backend: `lib/iris/src/iris/cluster/backends/rpc/backend.py`
+- TASK_BACKEND backend: `lib/iris/src/iris/cluster/backends/k8s/tasks.py`
 - Dispatch loops: `lib/iris/src/iris/cluster/controller/controller.py`
 - Apply paths: `ops/worker.py` (`apply_reconcile`), `ops/task.py`
-  (`apply_direct_provider_updates`)
+  (`apply_dispatch_updates`)
 - Autoscaler DB-less persistence:
   `controller/autoscaler/persistence.py` (`persist_autoscaler_state`),
   `controller/autoscaler/state.py` (`AutoscalerState`, `persistable_state()`)
@@ -50,8 +50,8 @@ DB.**
 Two declared capabilities select the controller's behavior, and the controller
 branches on these, never on the concrete type:
 
-- `placement: Placement` — `IRIS` (the Iris `Scheduler` assigns task→worker, then
-  the backend fans the per-worker reconcile RPC to daemons) vs `BACKEND` (the
+- `placement: PlacementOwner` — `IRIS_CONTROLLER` (the Iris `Scheduler` assigns task→worker, then
+  the backend fans the per-worker reconcile RPC to daemons) vs `TASK_BACKEND` (the
   backend places tasks itself: Kueue today, slurmctld later).
 - `manages_capacity: bool` — `True` when the backend provisions its own nodes
   (k8s cluster autoscaler), so Iris runs no autoscaler loop for it; `False` when
@@ -62,13 +62,13 @@ branches on these, never on the concrete type:
 - **Reconcile.** `reconcile(BackendReconcileInput) -> BackendReconcileResult` —
   converge the backend toward the desired state and report observed state.
 - **Schedule.** `schedule(ScheduleInput) -> ScheduleResult` — placement decisions
-  from a DB-less snapshot. IRIS runs the full Iris pipeline (gates → order →
+  from a DB-less snapshot. IRIS_CONTROLLER runs the full Iris pipeline (gates → order →
   reservation taints → preference pass → `find_assignments` → preemption, via
-  `run_scheduling_decision`); BACKEND returns an empty `ScheduleResult`.
+  `run_scheduling_decision`); TASK_BACKEND returns an empty `ScheduleResult`.
 - **Capacity.** `manage_capacity(CapacityInput) -> CapacityResult` and
-  `on_workers_failed(worker_ids) -> WorkersFailedResult`. IRIS drives the in-memory
+  `on_workers_failed(worker_ids) -> WorkersFailedResult`. IRIS_CONTROLLER drives the in-memory
   `Autoscaler` and returns its `AutoscalerState` for the controller to persist;
-  BACKEND returns empty results. `attach_autoscaler(autoscaler)` is called once
+  TASK_BACKEND returns empty results. `attach_autoscaler(autoscaler)` is called once
   after construction on `manages_capacity=False` backends only (it raises on
   `K8sTaskProvider`). `capacity() -> ClusterCapacity | None` reports aggregate
   capacity (k8s computes it from node allocatable minus pod requests; rpc returns
@@ -76,8 +76,8 @@ branches on these, never on the concrete type:
 - **On-demand ops** (request/response, not loop-driven), each addressed by a
   `TaskTarget`: `get_process_status`, `profile_task`, `exec_in_container`. Each
   raises `ProviderUnsupportedError` where N/A (e.g. K8s has no per-process
-  status). IRIS routes by worker address; BACKEND routes by task_id/attempt_id.
-- **Lifecycle / wiring.** `ping_workers` (IRIS liveness probe; K8s no-op),
+  status). IRIS_CONTROLLER routes by worker address; TASK_BACKEND routes by task_id/attempt_id.
+- **Lifecycle / wiring.** `ping_workers` (IRIS_CONTROLLER liveness probe; K8s no-op),
   `on_worker_failed` (evict cached connection state), `set_log_sink` (inject
   finelog handles for daemonless backends that write rows themselves), `close`.
 
@@ -99,17 +99,17 @@ of its snapshot.
 The reconcile results are *not* applied through one merged path — they emit
 different effects, and the controller selects the path on `placement`:
 
-- **IRIS** → `ops.worker.apply_reconcile`. Input carries pre-built, worker-bound
+- **IRIS_CONTROLLER** → `ops.worker.apply_reconcile`. Input carries pre-built, worker-bound
   `plans` (the scheduler already chose the worker) plus `worker_addresses`. The
   result carries raw `worker_results` (`ReconcileResult` per worker); the
   controller resolves attempt UIDs and interprets worker loss against its own DB
   snapshot at apply time. This path emits **worker heartbeats** and runs the
   `WORKER_RECONCILE` transition source.
-- **BACKEND** → `ops.task.apply_direct_provider_updates`. Input carries the
+- **TASK_BACKEND** → `ops.task.apply_dispatch_updates`. Input carries the
   desired `tasks_to_run` (no worker_id — the backend chooses the node) plus the
   `running_tasks` snapshot. The backend converges its own resources (applies new
   pods, deletes strays, polls running pods) and returns pre-computed
-  `TaskUpdate`s. This path runs the `DIRECT_PROVIDER` transition source and emits
+  `TaskUpdate`s. This path runs the `DISPATCH` transition source and emits
   **no heartbeats** (there is no worker daemon).
 
 Merging them would conflate the heartbeat/no-heartbeat and worker-loss
@@ -124,12 +124,12 @@ controller keeps the threads (it owns timing); the backend owns the logic.
 - **Scheduling** (`_run_scheduling`): refresh reservation claims, build the
   scheduling context + running-task band/value for preemption, hand a
   `ScheduleInput` to `backend.schedule`, then commit assignments (`ops.task`),
-  preemptions and unschedulable marks. BACKEND returns empty, so the loop is a
+  preemptions and unschedulable marks. TASK_BACKEND returns empty, so the loop is a
   no-op there.
-- **Reconcile** (`_reconcile_tick` for IRIS, `_sync_direct_provider` for
-  BACKEND): snapshot desired/observed, call `backend.reconcile`, apply through the
+- **Reconcile** (`_reconcile_tick` for IRIS_CONTROLLER, `_sync_dispatch` for
+  TASK_BACKEND): snapshot desired/observed, call `backend.reconcile`, apply through the
   placement-appropriate path above. The execution-timeout deadline scan rides the
-  IRIS tick.
+  IRIS_CONTROLLER tick.
 - **Capacity** (`_run_autoscaler_once`): read the worker status map + demand
   entries, call `backend.manage_capacity`, then `persist_autoscaler_state`. Gated
   off entirely when `manages_capacity` is True.
@@ -160,15 +160,15 @@ ever owning a DB handle.
 | Stage | Change | Lands at |
 |---|---|---|
 | T1 | `TaskBackend` contract + neutral reconcile types | `controller/backend.py` |
-| T2 | Adopt reconcile across providers + controller + service; K8s `sync`→`reconcile`; `WorkerProvider`→`RpcTaskBackend`; drive both via `reconcile`, no `isinstance`; delete `controller/provider.py` | `providers/rpc/backend.py`, `providers/k8s/tasks.py`, `controller.py`, `service.py` |
-| T3 | Move the scheduling decision into the backend (`backend.schedule`); `RpcTaskBackend` owns the stateless `Scheduler` | `controller/backend.py` (`run_scheduling_decision`), `providers/rpc/backend.py` |
-| T4 | Move autoscaling into the backend, DB-less (`manage_capacity` + `on_workers_failed`; `persistable_state()`; `persist_autoscaler_state`); `attach_autoscaler` wiring | `providers/rpc/backend.py`, `autoscaler/{state,persistence}.py`, `controller.py`, `main.py` |
+| T2 | Adopt reconcile across backends + controller + service; K8s `sync`→`reconcile`; `WorkerProvider`→`RpcTaskBackend`; drive both via `reconcile`, no `isinstance`; delete `controller/provider.py` | `backends/rpc/backend.py`, `backends/k8s/tasks.py`, `controller.py`, `service.py` |
+| T3 | Move the scheduling decision into the backend (`backend.schedule`); `RpcTaskBackend` owns the stateless `Scheduler` | `controller/backend.py` (`run_scheduling_decision`), `backends/rpc/backend.py` |
+| T4 | Move autoscaling into the backend, DB-less (`manage_capacity` + `on_workers_failed`; `persistable_state()`; `persist_autoscaler_state`); `attach_autoscaler` wiring | `backends/rpc/backend.py`, `autoscaler/{state,persistence}.py`, `controller.py`, `main.py` |
 | T5 | Group the shared scheduling layer | `controller/scheduling/{scheduler.py,policy.py}` (was `controller/scheduler.py`, `controller/scheduling_policy.py`) |
 | T6 | Capability-driven dashboard: `/auth/config` serves a `BackendDescriptor`; `App.vue` filters one tab list by capabilities | `controller/dashboard.py`, `dashboard/src/App.vue` |
 
 The dashboard descriptor (`backend_descriptor(backend)`) derives capability
-strings from the live backend: `workers` (IRIS placement → Workers/Fleet tab),
-`autoscaler` (`manages_capacity` False → Autoscaler tab), `cluster` (BACKEND
+strings from the live backend: `workers` (IRIS_CONTROLLER placement → Workers/Fleet tab),
+`autoscaler` (`manages_capacity` False → Autoscaler tab), `cluster` (TASK_BACKEND
 placement → Cluster tab). `App.vue` shows a tab only when its required capability
 is present, so the tab list is data-driven rather than keyed on a provider-kind
 binary.
@@ -183,7 +183,7 @@ binary.
   the spiral within it, each building and passing tests.
 - **Contract lives in `controller/backend.py`.** The plan floated a neutral
   `cluster/backend_types.py`; the implementation kept the contract in the
-  controller layer and lets `providers/` import it upward, because the contract
+  controller layer and lets `backends/` import it upward, because the contract
   (and the `Scheduler`/`Autoscaler`/reconcile types it names) is conceptually
   controller logic. This is the one accepted upward edge.
 - **Dashboard descriptor via `/auth/config`**, not a new `GetBackendInfo` RPC
@@ -195,7 +195,7 @@ binary.
 
 ## Follow-ups
 
-- **Slurm backend** (the motivating next step): `placement=BACKEND`,
+- **Slurm backend** (the motivating next step): `placement=TASK_BACKEND`,
   `manages_capacity=True`, `sbatch`/`squeue`/`sacct`, reusing this contract. Open
   question carried from the issue: run a worker daemon inside the allocation
   (reuse `RpcTaskBackend`) vs. direct sbatch launch (closer to k8s).

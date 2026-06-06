@@ -17,7 +17,7 @@ Archived design docs (implemented, read code instead): `.agents/projects/2026*_i
 
 - `src/iris/cli/` — CLI entry point (`main.py` has all commands including `login`, `submit`, `status`)
 - `src/iris/cluster/controller/` — controller server: `service.py` (RPC handlers), `controller.py` (main loop), `backend.py` (the `TaskBackend` contract), `scheduling/` (`scheduler.py` + `policy.py`), `autoscaler/` (capacity), `auth_setup.py` (auth config), `dashboard.py` (dashboard serving), `db.py` (SQLite), `migrations/` (schema)
-- `src/iris/cluster/providers/` — `TaskBackend` implementations (`rpc/backend.py` = `RpcTaskBackend`, `k8s/tasks.py` = `K8sTaskProvider`) plus machine-lifecycle providers (`gcp`, `k8s`, `local`, `manual`)
+- `src/iris/cluster/backends/` — `TaskBackend` implementations (`rpc/backend.py` = `RpcTaskBackend`, `k8s/tasks.py` = `K8sTaskProvider`) plus machine-lifecycle providers (`gcp`, `k8s`, `local`, `manual`)
 - `src/iris/cluster/worker/` — worker agent
 - `src/iris/rpc/` — protobuf definitions (`.proto`), generated code (`_pb2.py`), and RPC client helpers (`cluster_connect.py`, `auth.py`)
 - `dashboard/` — Vue 3 frontend (Vite + Tailwind)
@@ -115,15 +115,15 @@ out; they never touch the controller DB.
 The controller selects its path by two declared capabilities, never by
 `isinstance`:
 
-- `placement` (`Placement.IRIS` vs `Placement.BACKEND`) — who schedules
+- `placement` (`PlacementOwner.IRIS_CONTROLLER` vs `PlacementOwner.TASK_BACKEND`) — who schedules
   task→node, and which reconcile apply path runs.
 - `manages_capacity` — whether the backend provisions its own nodes (then Iris
   runs no autoscaler loop for it).
 
-Two implementations satisfy it: `RpcTaskBackend` (`providers/rpc/backend.py`,
-`placement=IRIS`, owns the `Scheduler` + `Autoscaler`) for GCP/TPU, CoreWeave
-bare-metal, manual, and local; and `K8sTaskProvider` (`providers/k8s/tasks.py`,
-`placement=BACKEND`, `manages_capacity=True`) for Kubernetes (Kueue schedules,
+Two implementations satisfy it: `RpcTaskBackend` (`backends/rpc/backend.py`,
+`placement=IRIS_CONTROLLER`, owns the `Scheduler` + `Autoscaler`) for GCP/TPU, CoreWeave
+bare-metal, manual, and local; and `K8sTaskProvider` (`backends/k8s/tasks.py`,
+`placement=TASK_BACKEND`, `manages_capacity=True`) for Kubernetes (Kueue schedules,
 the cluster autoscaler provisions). The contract type lives in
 `controller/backend.py`; see `docs/architecture.md` "The TaskBackend contract"
 and the archived record `.agents/projects/2026-06-06_iris_task_backend_contract.md`.
