@@ -3,39 +3,20 @@ name: "Ops - Claude Review"
 on:
   pull_request:
     types: [opened, ready_for_review, reopened]
-  issue_comment:
-    # NOTE: there's no PR comment specific event, so instead we need to check all comments and filter in the job.
-    # This is annoying and wasteful, but afaiu there's no better way in GH Actions.
-    types: [created]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   review:
-    # Runs on non-draft PRs by writers, or a "claude review this" comment by a
-    # writer. This job reviews via the GitHub API and never checks out / executes
-    # PR code, so the `issue_comment` trigger is safe here (unlike `lint-review`).
+    # Runs on non-draft PRs opened/reopened/marked-ready by a writer.
     if: >-
+      github.event.pull_request.draft == false &&
       (
-        github.event_name == 'pull_request' &&
-        github.event.pull_request.draft == false &&
-        (
-          github.event.pull_request.author_association == 'OWNER' ||
-          github.event.pull_request.author_association == 'MEMBER' ||
-          github.event.pull_request.author_association == 'COLLABORATOR'
-        )
-      ) ||
-      (
-        github.event_name == 'issue_comment' &&
-        github.event.issue.pull_request &&
-        contains(github.event.comment.body, 'claude review this') &&
-        (
-          github.event.comment.author_association == 'OWNER' ||
-          github.event.comment.author_association == 'MEMBER' ||
-          github.event.comment.author_association == 'COLLABORATOR'
-        )
+        github.event.pull_request.author_association == 'OWNER' ||
+        github.event.pull_request.author_association == 'MEMBER' ||
+        github.event.pull_request.author_association == 'COLLABORATOR'
       )
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -54,11 +35,9 @@ jobs:
         uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa  # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
-          track_progress: ${{ github.event_name == 'pull_request' }}
+          track_progress: true
           prompt: |
-            /review-pr --comment ${{ github.event.pull_request.number || github.event.issue.number }}
-
-            ${{ github.event_name == 'issue_comment' && format('EXTRA INSTRUCTIONS FROM COMMENT:\n{0}', github.event.comment.body) || '' }}
+            /review-pr --comment ${{ github.event.pull_request.number }}
           claude_args: |
             --model opus
             --max-turns 200
@@ -73,14 +52,13 @@ jobs:
   #
   # SECURITY: unlike `review`, this job checks out and EXECUTES the PR's code
   # (`pre-commit.py`/`linter.py` and the agents reading the tree). It must
-  # therefore never run on a privileged trigger over untrusted code. So it runs
-  # ONLY on `pull_request` (not `issue_comment`): that trigger is unprivileged
-  # (fork PRs get a read-only token and no secrets), the author-association gate
-  # blocks untrusted authors, and the checkout pins the immutable head SHA. See
-  # CodeQL actions/untrusted-checkout(-toctou).
+  # therefore never run on a privileged trigger over untrusted code, and uses the
+  # default merge-ref checkout (an explicit head ref is the untrusted-checkout
+  # sink). On the unprivileged `pull_request` trigger fork PRs get a read-only
+  # token and no secrets, and the author-association gate blocks untrusted
+  # authors. See CodeQL actions/untrusted-checkout(-toctou).
   lint-review:
     if: >-
-      github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
       (
         github.event.pull_request.author_association == 'OWNER' ||
