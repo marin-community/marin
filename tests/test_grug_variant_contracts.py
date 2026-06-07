@@ -223,6 +223,34 @@ def test_grug_moe_data_loaders_build_against_single_expert_mesh():
     assert loader is not None
 
 
+def test_grug_moe_model_init_against_single_expert_mesh():
+    """Regression: MoEMLP.init must build when the compact mesh has no "expert" axis.
+
+    See https://github.com/marin-community/marin/issues/6252 — canary configurations
+    have expert_axis_size == 1, so compact_grug_mesh drops the "expert" axis entirely.
+    MoEMLP.init must treat the absent axis as size 1 rather than raising
+    "grug/moe requires an abstract mesh with axis 'expert'" (the canary crash).
+    """
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    compact_grug_mesh = importlib.import_module("levanter.grug.sharding").compact_grug_mesh
+
+    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+    assert "expert" not in mesh.shape, "fixture must reproduce the canary single-expert layout"
+
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+
+    def build():
+        return train_module.initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh.abstract_mesh):
+        state_shape = eqx.filter_eval_shape(build)
+
+    assert state_shape.params is not None
+
+
 @pytest.mark.parametrize(
     "variant",
     _discover_grug_variants_with_model_and_train(),

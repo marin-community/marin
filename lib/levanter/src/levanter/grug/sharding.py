@@ -71,11 +71,31 @@ def _value_spec_or_default(x: jax.Array, default: PartitionSpec, *, replace_repl
     return default
 
 
+def _drop_absent_mesh_axes(mesh: Mesh | jax.sharding.AbstractMesh, spec: PartitionSpec) -> PartitionSpec:
+    """Replace mesh-absent axes in ``spec`` with ``None`` (replicated).
+
+    Compact meshes drop size-1 axes (e.g. "expert" when expert_axis_size == 1), so a
+    spec that names such an axis would raise. An absent axis has size 1, so replicating
+    along it is equivalent to sharding over it.
+    """
+
+    def keep(entry):
+        if entry is None:
+            return None
+        names = entry if isinstance(entry, tuple) else (entry,)
+        kept = tuple(name for name in names if name in mesh.shape)
+        if not kept:
+            return None
+        return kept if len(kept) > 1 else kept[0]
+
+    return P(*(keep(entry) for entry in spec))
+
+
 def _reshard_for_init(x: jax.Array, spec: PartitionSpec) -> jax.Array:
     mesh = _current_mesh()
     if mesh is None or mesh.empty:
         return x
-    return reshard(x, NamedSharding(mesh, spec))
+    return reshard(x, NamedSharding(mesh, _drop_absent_mesh_axes(mesh, spec)))
 
 
 def _reshard_for_shard_map(

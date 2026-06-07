@@ -48,8 +48,14 @@ _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
 
 
-def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
-    if mesh is None or mesh.empty or axis_name not in mesh.shape:
+def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str, *, default: int | None = None) -> int:
+    if mesh is None or mesh.empty:
+        raise ValueError("grug/moe requires a non-empty abstract mesh")
+    if axis_name not in mesh.shape:
+        # compact_grug_mesh drops size-1 axes (e.g. "expert" when expert_axis_size == 1),
+        # so an absent axis means size 1 — fall back to the caller's default when given.
+        if default is not None:
+            return default
         raise ValueError(f"grug/moe requires an abstract mesh with axis '{axis_name}'")
     return int(mesh.shape[axis_name])
 
@@ -348,7 +354,7 @@ class MoEMLP(eqx.Module):
         k_router, k_expert_mlp = random.split(key, 2)
         mesh = get_abstract_mesh()
 
-        expert_axis_size = _mesh_axis_size(mesh, "expert")
+        expert_axis_size = _mesh_axis_size(mesh, "expert", default=1)
         if cfg.num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
