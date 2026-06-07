@@ -3,8 +3,8 @@ name: "Marin - Canary Ferry - CoreWeave"
 # The canary submits a small training job to the shared `iris-ci` controller
 # and reuses the warm `iris-ci-h100-8x` NodePool. Scheduled runs use the warm
 # single H100 host; manual runs can request multiple GPU replicas on the same
-# NodePool. Before requesting multiple replicas, make sure enough GPU nodes are
-# already warm and free; cold/warm mixed starts can fail at JAX rendezvous.
+# NodePool. Manual multi-replica runs pre-scale the NodePool before submitting
+# the canary so Kueue topology-aware scheduling can admit the whole gang.
 # See https://github.com/marin-community/marin/issues/5480.
 #
 # `iris cluster start --fresh` rebuilds the controller/worker/task images from
@@ -172,6 +172,47 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: .venv/bin/iris -v --config=${{ env.IRIS_CONFIG }} cluster start --fresh
 
+      - name: Pre-scale CoreWeave H100 NodePool
+        run: |
+          export KUBECONFIG=~/.kube/coreweave-iris
+          target="${CANARY_GPU_REPLICAS:-1}"
+          if ! [[ "$target" =~ ^[0-9]+$ ]]; then
+            echo "CANARY_GPU_REPLICAS must be an integer; got $target" >&2
+            exit 1
+          fi
+          if [ "$target" -le 1 ]; then
+            echo "GPU replicas $target only needs the warm H100 node"
+            exit 0
+          fi
+
+          pool="${IRIS_NAMESPACE}-h100-8x"
+          max_nodes=$(kubectl get nodepool -n "$IRIS_NAMESPACE" "$pool" -o jsonpath='{.spec.maxNodes}')
+          if [ "$target" -gt "$max_nodes" ]; then
+            echo "Requested $target H100 nodes, but $pool maxNodes is $max_nodes" >&2
+            exit 1
+          fi
+
+          echo "Pre-scaling $pool to targetNodes=$target"
+          kubectl patch nodepool -n "$IRIS_NAMESPACE" "$pool" --type=merge \
+            -p "{\"spec\":{\"targetNodes\":$target}}"
+
+          deadline=$((SECONDS + 2400))
+          while true; do
+            current=$(kubectl get nodepool -n "$IRIS_NAMESPACE" "$pool" -o jsonpath='{.status.currentNodes}')
+            queued=$(kubectl get nodepool -n "$IRIS_NAMESPACE" "$pool" -o jsonpath='{.status.queuedNodes}')
+            in_progress=$(kubectl get nodepool -n "$IRIS_NAMESPACE" "$pool" -o jsonpath='{.status.inProgress}')
+            echo "$pool current=${current:-0} queued=${queued:-0} in_progress=${in_progress:-0} target=$target"
+            if [ "${current:-0}" -ge "$target" ]; then
+              break
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              kubectl get nodepool -n "$IRIS_NAMESPACE" "$pool" -o wide
+              echo "Timed out waiting for $pool to reach $target nodes" >&2
+              exit 1
+            fi
+            sleep 30
+          done
+
       - name: Submit canary ferry
         id: submit
         shell: bash -l {0}
@@ -290,6 +331,21 @@ jobs:
           path: /tmp/canary-diag
           if-no-files-found: ignore
           retention-days: 30
+
+      - name: Restore CoreWeave H100 NodePool target
+        if: always()
+        continue-on-error: true
+        run: |
+          export KUBECONFIG=~/.kube/coreweave-iris
+          target="${CANARY_GPU_REPLICAS:-1}"
+          if ! [[ "$target" =~ ^[0-9]+$ ]] || [ "$target" -le 1 ]; then
+            exit 0
+          fi
+          pool="${IRIS_NAMESPACE}-h100-8x"
+          echo "Restoring $pool targetNodes=1"
+          kubectl patch nodepool -n "$IRIS_NAMESPACE" "$pool" --type=merge \
+            -p '{"spec":{"targetNodes":1}}'
+          kubectl get nodepool -n "$IRIS_NAMESPACE" "$pool" -o wide
 
       - name: Claude triage
         id: claude_triage
