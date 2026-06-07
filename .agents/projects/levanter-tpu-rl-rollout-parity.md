@@ -256,7 +256,7 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   refresh on 2026-06-07: #6176 is open, non-draft, clean, and at head
   `104bf901`; #6185 is open, non-draft, clean, and at head `d63d1edf`; #6186
   is open, non-draft, clean, and at head `c4ba37b`; #6214 is open, non-draft,
-  review-required, and terminal green/skipped at head `2c43f0d91`; #6240 is
+  review-required, and terminal green/skipped at head `67e9500fc`; #6240 is
   open, non-draft, clean, and at head `32505d1ca`. All visible checks are green
   or skipped on these heads. #6176, #6185, #6186, #6214, and #6240 PR
   descriptions link back to parent epic #6227 and their child trackers where
@@ -543,19 +543,29 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 
 ## Next Sequence
 
-1. Land PR #6176 for the dense matrix plus service-layer correctness fix once a
-   maintainer is ready; CI and Claude review are clean.
-2. PR #6185 now has runtime proof for correctness, service-batch coalescing,
-   and prefill-drain scheduling. The `mixed_b32_i512_o512_n1` v6e-8 run clears
-   the issue-level 0.75 vLLM throughput target at 0.819. All visible checks are
-   green at the latest metadata check, so the next action is maintainer
-   review/merge.
-3. The next mixed-workload performance step is raising the generic benchmark
+1. Review/land PR #6176 first if maintainers want the dense matrix harness and
+   committed benchmark config independently; CI and Claude review are clean.
+2. Review/land PR #6185 as the serving/runtime correctness dependency. It now
+   has runtime proof for correctness, service-batch coalescing, and prefill-drain
+   scheduling. The `mixed_b32_i512_o512_n1` v6e-8 run clears the issue-level
+   0.75 vLLM throughput target at 0.819. All visible checks are green at the
+   latest metadata check.
+3. Review/land PR #6240 after #6185, or keep it stacked until #6185 merges. It
+   is diagnostics hardening for future v5p startup failures and is already
+   rebased on #6185 head `d63d1edf`.
+4. Review/land PR #6186 after the serving stack is accepted, unless maintainers
+   explicitly accept the current stack ordering. It carries the token-native RL
+   rollout data-plane slice and is green/skipped, but its runtime integration
+   assumptions are easier to reason about after #6185.
+5. PR #6214 is the non-draft handoff artifact at `67e9500fc`; it can merge once
+   maintainers are comfortable with the durable status record. It is not a
+   production-code dependency.
+6. The next mixed-workload performance step is raising the generic benchmark
    parity target beyond the issue bar: explain the remaining 18% gap on the
    prefill-drained row, then decide whether to optimize decode scheduling,
    cache layout, or request-side accounting. The older 0.40x failure mode is
    resolved by draining all currently admissible prefill chunks before decode.
-4. Expand the matrix to v5p and the highest-value prefill-heavy/churn cases once
+7. Expand the matrix to v5p and the highest-value prefill-heavy/churn cases once
    mixed correctness and admission accounting are stable.
    - The old v5p runtime follow-up subagent
      `019e9b3f-8ff1-79c3-9884-02f847973191` became unreachable after the app
@@ -573,7 +583,7 @@ thread. Keep background-style work narrow and explicit until the app is stable:
      This is a terminal infra/backend failure for the v5p comparison, not a
      Levanter benchmark result. No follow-up decode-heavy v5p row has been
      launched.
-5. Use the corrected benchmark attribution before changing kernels. Commit
+8. Use the corrected benchmark attribution before changing kernels. Commit
    `6d74fc7ea` reports decode iteration and device throughput for future rows,
    and commit `f55913d1` further separates prefill-drain work from
    generation-loop time/tokens. The corrected backend=both rerun
@@ -587,14 +597,14 @@ thread. Keep background-style work narrow and explicit until the app is stable:
    regime, the next useful run is one narrow v6e-8 backend=both
    `prefill_b8_i2048_o128_n1` rerun from #6185 `f55913d1` or newer with the
    same `--max-pages 512`, two warmups, and one measured round.
-6. If rerunning the v5p mixed comparison, use #6185 head `d63d1edf` or newer so
+9. If rerunning the v5p mixed comparison, use #6185 head `d63d1edf` or newer so
    a repeated vLLM startup failure includes the current serving stack and actual
    stderr/stdout tail. Prefer #6240 head `32505d1ca` if available, because it
    additionally preserves bounded runtime/package metadata and selected
    TPU/XLA/vLLM environment keys for diagnosis. Do not launch the decode-heavy
    v5p row until the mixed v5p startup issue is
    understood or deliberately bypassed.
-7. Develop the RL batched-token API slice in parallel with the runtime wait.
+10. Develop the RL batched-token API slice in parallel with the runtime wait.
    vLLM, Levanter, MathEnv, rollout-worker policy identity, tokenizer replay
    identity, and persisted rollout metadata now exercise the token-native
    contract on #6186. The next implementation step is hardening the rollout data
