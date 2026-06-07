@@ -46,6 +46,10 @@ class WhisperConfig(HFCompatConfig, ASRConfig):
 
     max_source_positions: int = 1500
     max_length: int = 448
+    # Decoder sequence length for the generic LmConfig interface. WhisperConfig overrides
+    # max_Pos to derive the position axis from max_length, so this value only feeds code
+    # that reads LmConfig.max_seq_len directly; keep it in sync with max_length.
+    max_seq_len: int = 448
 
     activation_function: ActivationFunctionEnum = ActivationFunctionEnum.gelu
     layer_norm_epsilon: float = 1e-5
@@ -352,7 +356,7 @@ class WhisperEncoder(ModuleWithStateDictSerialization):
         x = self.transformer(x, key=k_transformer)
         return x
 
-    def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "WhisperDecoder":
+    def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "WhisperEncoder":
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=key)
         return dataclasses.replace(self, embeddings=new_embeddings)
 

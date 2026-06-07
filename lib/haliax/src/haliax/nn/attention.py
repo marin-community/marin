@@ -55,7 +55,7 @@ def dot_product_attention_weights(
 
     orig_dtype = query.dtype
     if scaling_factor is None:
-        scaling_factor = 1.0 / jnp.sqrt(query.axis_size(Key))
+        scaling_factor = 1.0 / math.sqrt(query.axis_size(Key))
 
     query = query * scaling_factor
 
@@ -209,10 +209,11 @@ def forgetful_causal_mask(KPos: Axis, mask_prob: float, sample_prob: bool = True
     elif mask_prob == 1:
         return zeroth_on
     else:
+        sampled_mask_prob: float | jax.Array = mask_prob
         if sample_prob:
             key, subkey = jax.random.split(key)
-            mask_prob = jax.random.uniform(subkey, shape=(), minval=0, maxval=mask_prob)
-        base: NamedArray = hrandom.bernoulli(key, shape=(KPos,), p=1 - mask_prob)
+            sampled_mask_prob = jax.random.uniform(subkey, shape=(), minval=0, maxval=mask_prob)
+        base: NamedArray = hrandom.bernoulli(key, shape=(KPos,), p=1 - sampled_mask_prob)
         return base | zeroth_on
 
 

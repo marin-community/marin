@@ -161,7 +161,7 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
     compute_dtype: DTypeLike | None = eqx.field(static=True)
 
     @classmethod
-    def init(cls, amax_history_length: int = 1024, compute_dtype: DTypeLike = None):
+    def init(cls, amax_history_length: int = 1024, compute_dtype: DTypeLike | None = None):
         return cls(
             input_scale=jnp.ones(1, dtype=jnp.float32),
             output_grad_scale=jnp.ones(1, dtype=jnp.float32),
@@ -234,7 +234,7 @@ class QuantizationConfig:
     """
 
     amax_history_length: int = 1024
-    compute_dtype: DTypeLike = None
+    compute_dtype: DTypeLike | None = None
 
     fp8: bool = False
     int8: bool = False

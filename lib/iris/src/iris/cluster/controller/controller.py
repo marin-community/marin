@@ -7,6 +7,7 @@ import asyncio
 import atexit
 import enum
 import logging
+import socket
 import tempfile
 import threading
 import time
@@ -124,7 +125,7 @@ _RPC_HANDLER_THREADS = 1024
 def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
     """Replace ``server.run`` with a variant that pins a sized default executor."""
 
-    def run_with_executor() -> None:
+    def run_with_executor(sockets: list[socket.socket] | None = None) -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.set_default_executor(ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rpc-handler"))

@@ -235,14 +235,15 @@ def debug_mesh_and_token_pspec(num_devices: int, model_axis_size: int = 1) -> tu
         raise ValueError(f"num_devices ({num_devices}) must be divisible by model_axis_size ({model_axis_size})")
     data_axis_size = num_devices // model_axis_size
     mesh = jax.sharding.AbstractMesh(
-        axis_sizes=(data_axis_size, model_axis_size),
-        axis_names=("data", "model"),
+        axis_sizes=(1, data_axis_size, model_axis_size),
+        axis_names=("replica_dcn", "data", "model"),
         axis_types=(
+            jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
         ),
     )
-    return mesh, P(("data",), None)
+    return mesh, P(("replica_dcn", "data"), None)
 
 
 __all__ = [

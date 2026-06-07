@@ -169,6 +169,12 @@ extend-include = ["scripts/workflows/**/*.py"]
 select = [
     "A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W",
     "N805", "PLR0124", "PLR1722", "RET502", "RET503", "SIM115",
+    # Local-import hygiene (issue #6219):
+    #   TID252 -> "relative-imports" (prefer absolute over parent-relative imports)
+    #   ICN001 -> "unconventional-import-alias" (e.g. `import numpy as np`)
+    # lib/haliax and lib/levanter carry their own [tool.ruff.lint] configs; these
+    # two rules are mirrored there via extend-select so they apply repo-wide.
+    "TID252", "ICN001",
 ]
 ignore = ["F722", "B008", "UP015", "A005", "E741"]
 
@@ -222,10 +228,63 @@ search-path = [
 ]
 disable-search-path-heuristics = true
 
-# Prevent pyrefly from querying the Python interpreter for site-packages
-# which would auto-detect workspace members as site packages and exclude them
-skip-interpreter-query = true
+# Type-check against real installed third-party types. CI's marin-lint job syncs
+# this venv (uv sync --all-packages --extra=cpu --no-default-groups); locally it is
+# your worktree .venv. Relative path keeps it worktree-local.
+python-interpreter-path = ".venv/bin/python"
 use-ignore-files = false
+
+# Parse jaxtyping/native tensor shape annotations (e.g. Float[Array, "batch seq"])
+# as shape specifications instead of forward-reference type expressions. Without this,
+# Pyrefly reads the dimension tokens inside the shape string ("B", "N", "groups", ...)
+# as undefined forward references and emits ~141 false `unknown-name` errors across
+# levanter/grug and levanter/kernels. See docs/plans/pyrefly-tensor-shapes.md.
+tensor-shapes = true
+
+# Deps the cpu lint profile does not install (extras-only like vllm/lm_eval, or
+# compiled packages without stubs like resiliparse/jaxlib). Unlike
+# replace-imports-with-any, this substitutes Any only when the module is truly
+# absent on disk, so a deleted/misspelled internal module still trips missing-import.
+# HAND-MAINTAINED: a new uninstalled dep trips missing-import until added here
+# (list both `pkg` and `pkg.*`).
+ignore-missing-imports = [
+    "harbor",
+    "harbor.*",
+    "jax_triton",
+    "jax_triton.*",
+    "jaxlib",
+    "jaxlib.*",
+    "kubernetes",
+    "kubernetes.*",
+    "librosa",
+    "librosa.*",
+    "lm_eval",
+    "lm_eval.*",
+    "math_verify",
+    "math_verify.*",
+    "memray",
+    "memray.*",
+    "prompt_toolkit",
+    "prompt_toolkit.*",
+    "pylatexenc",
+    "pylatexenc.*",
+    "resiliparse",
+    "resiliparse.*",
+    "tensorboardX",
+    "tensorboardX.*",
+    "tpu_inference",
+    "tpu_inference.*",
+    "trackio",
+    "trackio.*",
+    "triton",
+    "triton.*",
+    "verifiers",
+    "verifiers.*",
+    "vllm",
+    "vllm.*",
+    "xprof",
+    "xprof.*",
+]
 
 # Exclude non-production code from type checking
 project-excludes = [
@@ -260,45 +319,24 @@ project-excludes = [
 # Disable specific error codes that are primarily noise from missing type stubs
 # These can be gradually enabled as the codebase improves
 [tool.pyrefly.errors]
-# Missing imports (824 occurrences) - third-party libs without stubs
-missing-import = false
-
-# Unexpected keyword arguments (47 occurrences) - dynamic configs from transformers, dataclasses
-unexpected-keyword = false
-
 # Missing attributes (315 occurrences) - often from untyped libraries like JAX, etc.
 # These are mostly false positives from libraries without complete type stubs
 missing-attribute = false
 
-# Additional error types with >10 occurrences that are hard to fix systematically:
-
-# Deprecated APIs (19 occurrences) - would require code changes across multiple files
-deprecated = false
-
-# Unknown name errors (17 occurrences) - often from dynamic code or missing stubs
-unknown-name = false
-
-# Not iterable errors (17 occurrences) - complex type inference issues with JAX/numpy
-not-iterable = false
+# Unknown name errors - real undefined-name bugs. The ~141 former false positives
+# came from jaxtyping shape strings and are now handled natively by tensor-shapes = true
+# above. The handful of genuine bugs that remain (e.g. a missing `import os`, a stale
+# `callbacks.` reference) are tracked in .pyrefly-baseline.json until fixed.
+unknown-name = true
 
 # No matching overload (16 occurrences) - complex overload resolution issues
 no-matching-overload = false
-
-# Bad index (12 occurrences) - complex dict/list type inference
-bad-index = false
 
 # Library/stub-related noise - disable to focus on real issues:
 
 # Bad argument type (638 occurrences) - mostly third-party library stub issues
 # Common culprits: smart_open, Flax API, JAX/numpy arrays
 bad-argument-type = false
-
-# Bad context manager (30 occurrences) - tqdm and similar libraries
-bad-context-manager = false
-
-# Missing/bad argument count (99 occurrences) - Flax API positional/keyword confusion
-missing-argument = false
-bad-argument-count = false
 
 # Unbound name (64 occurrences) - pyrefly's control flow analysis doesn't understand
 # patterns where variables are guaranteed to be initialized by program logic

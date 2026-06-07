@@ -12,13 +12,23 @@
 # ]
 # ///
 
-"""Daily aggregator for the code-health stats dashboard.
+"""Aggregator and reporter for the code-health stats dashboard.
 
-For each PR merged in the last N days:
+Two subcommands:
+  - `aggregate` (designed to run as a daily GHA cron) classifies reviewer
+    comments and appends them to the shared `review-stats` W&B run.
+  - `report` reads those accumulated tables back and renders a markdown digest
+    (summary table, by-class breakdown, weekly trend, top PRs, examples),
+    published as a gist by default.
+
+`aggregate`, for each PR merged in the last N days:
   1. Pull review/inline/issue comments via the `gh` CLI.
   2. Drop bot comments (only humans should be in the denominator).
-  3. Classify each human comment with Gemini 3.5 Flash. Two independent
-     "could automation have caught this?" signals:
+  3. Classify each human comment with a pluggable classifier (Gemini 3.5 Flash
+     by default). Comments from all PRs are pooled, batched, and the batches
+     classified in parallel so a many-PR run is not a long serial trickle of
+     one request per comment. Two independent "could automation have caught
+     this?" signals:
        - catchable_strict   — a deterministic linter / type checker / ml-*
                               catalog rule could mechanically flag it.
        - catchable_generous — a modern LLM running on the diff alone would
@@ -46,14 +56,18 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 import click
 import wandb
 from google import genai
 from google.genai import types
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
 logger = logging.getLogger("codehealth.review")
 
@@ -61,6 +75,8 @@ WANDB_PROJECT = "marin-review-stats"
 WANDB_RUN_ID = "review-stats"
 DEFAULT_REPO = "marin-community/marin"
 DEFAULT_MODEL = "gemini-3.5-flash"
+DEFAULT_BATCH_SIZE = 20
+DEFAULT_CONCURRENCY = 16
 
 HUMAN_COMMENT_COLUMNS = [
     "ts",
@@ -115,11 +131,41 @@ class CommentClassification(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+@dataclass
+class CommentToClassify:
+    """One comment handed to a classifier. `id` is a caller-assigned marker the
+    classifier echoes back so batched results can be matched to their input."""
+
+    id: int
+    file: str | None
+    line: int | None
+    body: str
+
+
+class BatchedClassification(CommentClassification):
+    """A `CommentClassification` plus the `id` marker echoed back in a batch."""
+
+    id: int
+
+
+# A classifier turns a batch of comments into classifications keyed by their
+# `id` marker. Comments it cannot classify are simply absent from the result.
+# Pluggable so the Gemini backend can be swapped (e.g. for `claude -p`) without
+# touching the batching/parallelism orchestration.
+Classifier = Callable[[list[CommentToClassify]], dict[int, CommentClassification]]
+
+
 CLASSIFIER_SYSTEM = """\
 You triage human PR review comments to measure how much reviewer effort our
-review automation is missing. For each comment, emit a single JSON object.
+review automation is missing. You receive a batch of comments, each delimited
+by a `=== COMMENT id=N ===` marker. Classify each comment independently and
+return a JSON array holding exactly one object per comment — never merge,
+split, drop, or reorder comments.
 
 Fields:
+
+  id — echo back, unchanged, the integer N from this comment's
+       `=== COMMENT id=N ===` marker so the result can be matched to its input.
 
   class — what is the comment about? Pick exactly one:
     bug       — flags a logic error, missing await, wrong type, null deref
@@ -166,6 +212,7 @@ Fields:
            a human would need.
 
 Hard rules:
+  - Return one object per input comment, each echoing the comment's `id`.
   - If catchable_strict is TRUE, catchable_generous must be TRUE.
   - approval / ack comments are never catchable.
   - When a comment is multi-issue, classify by the most material issue.
@@ -173,35 +220,81 @@ Hard rules:
 """
 
 
-def classify_comment(
-    client: genai.Client, model: str, file: str | None, line: int | None, body: str
-) -> CommentClassification | None:
-    """Return classification, or None if the API call fails."""
-    where = f"File: {file}\nLine: {line}\n" if file else "Comment scope: top-level PR comment\n"
-    prompt = f"{where}Body:\n{body.strip()}"
-    try:
-        resp = client.models.generate_content(
-            model=model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=CLASSIFIER_SYSTEM,
-                response_mime_type="application/json",
-                response_schema=CommentClassification,
-                temperature=0.0,
-            ),
-        )
-    except Exception as e:
-        logger.warning("Gemini call failed: %s", e)
-        return None
-    try:
-        c = CommentClassification.model_validate_json(resp.text)
-    except Exception as e:
-        logger.warning("Gemini returned unparseable JSON: %s | text=%r", e, resp.text[:200])
-        return None
-    # Enforce the strict ⊆ generous invariant even if the model slipped.
-    if c.catchable_strict and not c.catchable_generous:
-        c.catchable_generous = True
-    return c
+_BATCH_ADAPTER = TypeAdapter(list[BatchedClassification])
+
+
+def _format_batch(items: list[CommentToClassify]) -> str:
+    """Render a batch as marker-delimited blocks the classifier can split."""
+    blocks = []
+    for it in items:
+        where = f"File: {it.file}\nLine: {it.line}" if it.file else "Comment scope: top-level PR comment"
+        blocks.append(f"=== COMMENT id={it.id} ===\n{where}\nBody:\n{it.body.strip()}")
+    return "\n\n".join(blocks)
+
+
+def make_gemini_classifier(client: genai.Client, model: str) -> Classifier:
+    """Build a `Classifier` backed by Gemini structured output.
+
+    One API call per batch: the prompt carries every comment's `id` marker and
+    the response is a JSON array of `BatchedClassification`. A failed call (or
+    unparseable response) yields no classifications for that batch; those
+    comments are dropped from the metric, same as the previous behavior.
+    """
+
+    def classify(items: list[CommentToClassify]) -> dict[int, CommentClassification]:
+        if not items:
+            return {}
+        try:
+            resp = client.models.generate_content(
+                model=model,
+                contents=_format_batch(items),
+                config=types.GenerateContentConfig(
+                    system_instruction=CLASSIFIER_SYSTEM,
+                    response_mime_type="application/json",
+                    response_schema=list[BatchedClassification],
+                    temperature=0.0,
+                ),
+            )
+        except Exception as e:
+            logger.warning("Gemini call failed for batch of %d: %s", len(items), e)
+            return {}
+        try:
+            parsed = _BATCH_ADAPTER.validate_json(resp.text)
+        except Exception as e:
+            logger.warning("Gemini returned unparseable JSON: %s | text=%r", e, (resp.text or "")[:200])
+            return {}
+        wanted = {it.id for it in items}
+        out: dict[int, CommentClassification] = {}
+        for c in parsed:
+            if c.id not in wanted:
+                continue
+            # Enforce the strict ⊆ generous invariant even if the model slipped.
+            if c.catchable_strict and not c.catchable_generous:
+                c.catchable_generous = True
+            out[c.id] = c
+        missing = len(wanted) - len(out)
+        if missing:
+            logger.warning("Gemini omitted %d of %d comments in a batch", missing, len(items))
+        return out
+
+    return classify
+
+
+def classify_comments(
+    classifier: Classifier, items: list[CommentToClassify], batch_size: int, concurrency: int
+) -> dict[int, CommentClassification]:
+    """Classify every comment, batched into groups of `batch_size` and run
+    `concurrency` batches at a time. Returns a map from comment `id` to its
+    classification; ids absent from the map could not be classified."""
+    if not items:
+        return {}
+    batches = [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
+    results: dict[int, CommentClassification] = {}
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = [pool.submit(classifier, batch) for batch in batches]
+        for fut in as_completed(futures):
+            results.update(fut.result())
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +471,66 @@ def _load_existing_rows(wandb, log_key: str) -> list[list]:
         return []
 
 
+def _rows_to_dicts(columns: list[str], rows: list[list]) -> list[dict]:
+    """Zip the flat W&B table rows back into dicts keyed by column name."""
+    return [dict(zip(columns, r, strict=False)) for r in rows]
+
+
+def build_classification_cache(human_rows: list[list]) -> dict[tuple[str, int], tuple[str, CommentClassification]]:
+    """Index already-classified comments so unchanged comments can skip
+    re-classification. Keyed on (comment_type, comment_id) — GitHub's inline /
+    review / issue comment ids live in separate spaces, so the type disambiguates
+    them. Maps to (stored body, classification); the body is kept so an edited
+    comment (same id, new text) is re-classified rather than served stale. The
+    cache is model-agnostic — re-run with `--refresh` after changing `--model`,
+    since the table does not record it."""
+    cache: dict[tuple[str, int], tuple[str, CommentClassification]] = {}
+    for row in _rows_to_dicts(HUMAN_COMMENT_COLUMNS, human_rows):
+        cls = CommentClassification(
+            **{"class": row["class"]},
+            catchable_strict=bool(row["catchable_strict"]),
+            catchable_generous=bool(row["catchable_generous"]),
+            confidence=float(row["confidence"]),
+            reason=row["reason"] or "",
+        )
+        cache[(row["comment_type"], int(row["comment_id"]))] = (row["body"] or "", cls)
+    return cache
+
+
+def resolve_classifications(
+    comments: list[Comment],
+    cache: dict[tuple[str, int], tuple[str, CommentClassification]],
+    classifier: Classifier,
+    batch_size: int,
+    concurrency: int,
+) -> list[CommentClassification | None]:
+    """Classify `comments`, returning one verdict per comment aligned with the
+    input. A comment is reused from `cache` when the same (comment_type,
+    comment_id) was seen before with identical (truncated) text; the rest are
+    sent to `classifier` in parallel batches."""
+    final: list[CommentClassification | None] = [None] * len(comments)
+    pending: list[tuple[int, Comment]] = []
+    for i, c in enumerate(comments):
+        cached = cache.get((c.comment_type, c.comment_id))
+        if cached and cached[0] == c.body[:500]:
+            final[i] = cached[1]
+        else:
+            pending.append((i, c))
+    logger.info(
+        "%d human comments: %d cached, %d to classify in batches of %d, %d in parallel",
+        len(comments),
+        len(comments) - len(pending),
+        len(pending),
+        batch_size,
+        concurrency,
+    )
+    items = [CommentToClassify(id=j, file=c.file, line=c.line, body=c.body) for j, (_, c) in enumerate(pending)]
+    fresh = classify_comments(classifier, items, batch_size, concurrency)
+    for j, (i, _) in enumerate(pending):
+        final[i] = fresh.get(j)
+    return final
+
+
 def load_findings_for_shas(wandb, shas: set[str]) -> dict[str, list[dict]]:
     """Fetch bot findings rows for the given head_shas from the shared run.
 
@@ -414,23 +567,278 @@ def overlap_count(bot_findings: list[dict], human_comments: list[Comment], windo
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Report: render the accumulated W&B tables into a shareable markdown digest
 # ---------------------------------------------------------------------------
 
 
-@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+def _parse_ts(s: str) -> dt.datetime:
+    return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+def _pct(n: int, d: int) -> str:
+    return f"{round(100 * n / d)}%" if d else "—"
+
+
+def _cell(value: object, maxlen: int | None = None) -> str:
+    """Render a value as a single safe markdown table cell."""
+    text = " ".join(str(value).split()).replace("|", "\\|")
+    if maxlen and len(text) > maxlen:
+        text = text[: maxlen - 1] + "…"
+    return text
+
+
+def _md_table(headers: list[str], aligns: list[str], rows: list[list]) -> str:
+    lines = ["| " + " | ".join(headers) + " |", "| " + " | ".join(aligns) + " |"]
+    lines += ["| " + " | ".join(str(c) for c in r) + " |" for r in rows]
+    return "\n".join(lines)
+
+
+def _pr_link(repo: str, number: object) -> str:
+    return f"[#{number}](https://github.com/{repo}/pull/{number})"
+
+
+def _where(file: object, line: object) -> str:
+    """`file:line` for an inline comment, the file alone if unlocated, else —."""
+    if not file:
+        return "—"
+    return f"{file}:{line}" if line not in (None, "") else str(file)
+
+
+def build_report(
+    outcomes: list[dict], comments: list[dict], repo: str, start: dt.datetime, now: dt.datetime, days: int
+) -> str:
+    """Render the per-PR outcome rows and classified comments into a markdown
+    digest. Pure: takes already-loaded rows, returns markdown. Rows are filtered
+    to PRs merged on/after `start`."""
+
+    def in_window(row: dict) -> bool:
+        merged = row.get("merged_at")
+        if not merged:
+            return False
+        try:
+            return _parse_ts(merged) >= start
+        except ValueError:
+            return False
+
+    outcomes = [d for d in outcomes if in_window(d)]
+    comments = [d for d in comments if in_window(d)]
+
+    header = (
+        f"# Marin code-health review report\n\n"
+        f"**Window:** {start.date()} → {now.date()} ({days} days)  \n"
+        f"**Generated:** {now.replace(microsecond=0).isoformat()}"
+    )
+
+    if not outcomes:
+        return f"{header}\n\nNo PRs merged in the last {days} days were found in the review-stats tables."
+
+    n_prs = len(outcomes)
+    reviewed = sum(1 for d in outcomes if int(d["total_human_comments"]) > 0)
+    total = sum(int(d["total_human_comments"]) for d in outcomes)
+    strict = sum(int(d["catchable_strict_count"]) for d in outcomes)
+    generous = sum(int(d["catchable_generous_count"]) for d in outcomes)
+    bot_findings = sum(int(d["bot_findings_count"]) for d in outcomes)
+    overlap = sum(int(d["overlap_count"]) for d in outcomes)
+
+    narrative = (
+        f"Over the last {days} days, **{n_prs}** PRs merged; **{reviewed}** ({_pct(reviewed, n_prs)}) drew human "
+        f"review comments. Of **{total}** human comments, **{strict}** ({_pct(strict, total)}) were strictly "
+        f"catchable by a deterministic tool and **{generous}** ({_pct(generous, total)}) generously catchable by an "
+        f"LLM reading the diff alone. The review bot emitted **{bot_findings}** findings and independently flagged "
+        f"**{overlap}** of the spots humans commented on."
+    )
+
+    summary = "## Summary\n\n" + _md_table(
+        ["Metric", "Value"],
+        ["---", "---:"],
+        [
+            ["PRs merged", n_prs],
+            ["PRs with human review comments", f"{reviewed} ({_pct(reviewed, n_prs)})"],
+            ["Human review comments", total],
+            ["— strictly catchable", f"{strict} ({_pct(strict, total)})"],
+            ["— generously catchable", f"{generous} ({_pct(generous, total)})"],
+            ["Bot findings", bot_findings],
+            ["Human comments overlapping a bot finding", overlap],
+        ],
+    )
+
+    # By-class breakdown comes from the per-comment table, which carries the
+    # per-comment class + catchable flags the per-PR rollup does not.
+    by_class: dict[str, list[int]] = {}
+    for c in comments:
+        e = by_class.setdefault(str(c["class"]), [0, 0, 0])
+        e[0] += 1
+        e[1] += 1 if c["catchable_strict"] else 0
+        e[2] += 1 if c["catchable_generous"] else 0
+    class_rows = [
+        [cls, n, _pct(n, total), f"{s} ({_pct(s, n)})", f"{g} ({_pct(g, n)})"]
+        for cls, (n, s, g) in sorted(by_class.items(), key=lambda kv: kv[1][0], reverse=True)
+    ]
+    by_class_section = "## By comment class\n\n" + (
+        _md_table(
+            ["Class", "Comments", "% of all", "Strict", "Generous"], ["---", "---:", "---:", "---:", "---:"], class_rows
+        )
+        if class_rows
+        else "_No classified human comments in this window._"
+    )
+
+    # Weekly trend, keyed by ISO week of the merge date.
+    weeks: dict[tuple[int, int], list[int]] = {}
+    for d in outcomes:
+        try:
+            y, w, _ = _parse_ts(d["merged_at"]).isocalendar()
+        except ValueError:
+            continue
+        e = weeks.setdefault((y, w), [0, 0, 0, 0])
+        e[0] += 1
+        e[1] += int(d["total_human_comments"])
+        e[2] += int(d["catchable_strict_count"])
+        e[3] += int(d["catchable_generous_count"])
+    week_rows = [
+        [f"{y}-W{w:02d}", prs, cmts, st, gen, _pct(gen, cmts)] for (y, w), (prs, cmts, st, gen) in sorted(weeks.items())
+    ]
+    trend_section = "## Weekly trend\n\n" + _md_table(
+        ["Week", "PRs", "Comments", "Strict", "Generous", "Generous %"],
+        ["---", "---:", "---:", "---:", "---:", "---:"],
+        week_rows,
+    )
+
+    # Top PRs by how much catchable feedback they drew — where automation would
+    # have helped reviewers most.
+    top = sorted(
+        (d for d in outcomes if int(d["total_human_comments"]) > 0),
+        key=lambda d: (int(d["catchable_generous_count"]), int(d["total_human_comments"])),
+        reverse=True,
+    )[:10]
+    top_rows = [
+        [
+            _pr_link(repo, d["pr_number"]),
+            _cell(d["pr_title"], 60),
+            int(d["total_human_comments"]),
+            int(d["catchable_strict_count"]),
+            int(d["catchable_generous_count"]),
+            int(d["bot_findings_count"]),
+            int(d["overlap_count"]),
+        ]
+        for d in top
+    ]
+    top_section = "## PRs with the most catchable feedback\n\n" + (
+        _md_table(
+            ["PR", "Title", "Comments", "Strict", "Generous", "Bot findings", "Overlap"],
+            ["---", "---", "---:", "---:", "---:", "---:", "---:"],
+            top_rows,
+        )
+        if top_rows
+        else "_No human review comments in this window._"
+    )
+
+    # Every comment an automated check could have caught — the full "automation
+    # should have caught this" list, not a sample (strict ⊆ generous, so the
+    # catchable_strict/generous flags together cover all flagged comments).
+    # Volume is low (~tens/month), so it is intentionally not truncated.
+    flagged = sorted(
+        (c for c in comments if c["catchable_strict"] or c["catchable_generous"]),
+        key=lambda c: (not c["catchable_strict"], -float(c["confidence"])),
+    )
+    flagged_rows = [
+        [
+            _pr_link(repo, c["pr_number"]),
+            _cell(_where(c.get("file"), c.get("line"))),
+            "strict" if c["catchable_strict"] else "generous",
+            _cell(c["class"]),
+            f"{float(c['confidence']):.2f}",
+            _cell(c["body"], 120),
+            _cell(c["reason"], 80),
+        ]
+        for c in flagged
+    ]
+    flagged_section = f"## Catchable comments ({len(flagged_rows)})\n\n" + (
+        "Every human comment an automated check could plausibly have caught, "
+        "strict (deterministic) first. **strict** = a linter/type-check could "
+        "flag it; **generous** = an LLM reading the diff could.\n\n"
+        + _md_table(
+            ["PR", "Where", "Tier", "Class", "Conf.", "Comment", "Why catchable"],
+            ["---", "---", "---", "---", "---:", "---", "---"],
+            flagged_rows,
+        )
+        if flagged_rows
+        else "_No catchable comments in this window._"
+    )
+
+    return "\n\n".join([header, narrative, summary, by_class_section, trend_section, top_section, flagged_section])
+
+
+def publish_gist(markdown: str, desc: str, public: bool, filename: str) -> str:
+    """Write `markdown` to a temp file and create a gist via `gh`. Returns the
+    gist URL `gh` prints. Gists default to secret unless `public` is set."""
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / filename
+        path.write_text(markdown)
+        args = ["gist", "create", str(path), "--desc", desc]
+        if public:
+            args.append("--public")
+        result = subprocess.run(["gh", *args], capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+def cli() -> None:
+    """Code-health review stats: classify reviewer comments, and report on them."""
+
+
+@cli.command()
 @click.option("--repo", default=DEFAULT_REPO, show_default=True)
 @click.option("--days", type=int, default=1, show_default=True, help="Look back N days of merged PRs")
 @click.option("--limit", type=int, default=100, show_default=True, help="Max PRs to process")
 @click.option("--model", default=DEFAULT_MODEL, show_default=True)
+@click.option(
+    "--batch-size",
+    type=int,
+    default=DEFAULT_BATCH_SIZE,
+    show_default=True,
+    help="Comments classified per model request",
+)
+@click.option(
+    "--concurrency",
+    type=int,
+    default=DEFAULT_CONCURRENCY,
+    show_default=True,
+    help="Batches classified in parallel",
+)
 @click.option(
     "--bot-logins",
     default="github-actions,dependabot,claude,claude-review,renovate",
     show_default=True,
     help="Comma-separated bot logins to skip (lowercase)",
 )
+@click.option(
+    "--refresh",
+    is_flag=True,
+    help="Re-classify every comment, ignoring the cache (use after changing --model)",
+)
 @click.option("--dry-run", is_flag=True, help="Skip W&B upload; print rollup")
-def main(repo: str, days: int, limit: int, model: str, bot_logins: str, dry_run: bool) -> None:
+def aggregate(
+    repo: str,
+    days: int,
+    limit: int,
+    model: str,
+    batch_size: int,
+    concurrency: int,
+    bot_logins: str,
+    refresh: bool,
+    dry_run: bool,
+) -> None:
+    """Classify reviewer comments on recently-merged PRs and append to W&B.
+
+    Comments already classified in the W&B `human_comments` table are reused by
+    `comment_id` (unless their text changed), so a daily run over a rolling
+    window only sends genuinely-new comments to the model. Pass `--refresh` to
+    re-classify everything."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     bot_login_set = {x.strip().lower() for x in bot_logins.split(",") if x.strip()}
 
@@ -439,6 +847,7 @@ def main(repo: str, days: int, limit: int, model: str, bot_logins: str, dry_run:
         sys.exit(2)
 
     client = genai.Client()
+    classifier = make_gemini_classifier(client, model)
 
     logger.info("Listing PRs merged in last %d day(s) in %s", days, repo)
     prs = list_merged_prs(repo, days, limit)
@@ -460,9 +869,12 @@ def main(repo: str, days: int, limit: int, model: str, bot_logins: str, dry_run:
         per_pr_comments[pr["number"]] = comments
         all_shas.add(pr["headRefOid"])
 
-    # Pull bot findings for these shas from the shared run (skip in dry-run).
+    # Pull bot findings + the existing human_comments table from the shared run
+    # (skip in dry-run). The human_comments rows serve double duty: the
+    # classification cache below, and the replace-by-PR merge at the end.
     if dry_run:
         findings_by_sha = {sha: [] for sha in all_shas}
+        existing_human_rows: list[list] = []
     else:
         wandb.init(
             project=WANDB_PROJECT,
@@ -471,17 +883,35 @@ def main(repo: str, days: int, limit: int, model: str, bot_logins: str, dry_run:
             settings=wandb.Settings(silent=True, _disable_stats=True, _disable_meta=True),
         )
         findings_by_sha = load_findings_for_shas(wandb, all_shas)
+        existing_human_rows = _load_existing_rows(wandb, "human_comments")
+    cache = {} if refresh else build_classification_cache(existing_human_rows)
 
-    # Classify + build rows.
+    # Flatten every human comment across all PRs. Reuse a cached classification
+    # when the same comment_id was classified before with identical text;
+    # otherwise queue it for the model. Only the queued ones are batched and
+    # classified in parallel, so an overlapping daily window stays cheap.
+    human_by_pr = {pr["number"]: [c for c in per_pr_comments.get(pr["number"], []) if not c.is_bot] for pr in prs}
+    flat_comments = [c for pr in prs for c in human_by_pr[pr["number"]]]
+    final_cls = resolve_classifications(flat_comments, cache, classifier, batch_size, concurrency)
+
+    # Regroup by PR, preserving flat-list ordering.
+    idx = 0
+    classified_by_pr: dict[int, list[tuple[Comment, CommentClassification | None]]] = {}
+    for pr in prs:
+        pairs: list[tuple[Comment, CommentClassification | None]] = []
+        for c in human_by_pr[pr["number"]]:
+            pairs.append((c, final_cls[idx]))
+            idx += 1
+        classified_by_pr[pr["number"]] = pairs
+
+    # Build rows.
     for pr in prs:
         n = pr["number"]
-        comments = per_pr_comments.get(n, [])
-        human = [c for c in comments if not c.is_bot]
+        human = human_by_pr[n]
         by_class: dict[str, int] = {}
         strict_cnt = generous_cnt = 0
 
-        for c in human:
-            cls = classify_comment(client, model, c.file, c.line, c.body)
+        for c, cls in classified_by_pr[n]:
             if cls is None:
                 continue
             by_class[cls.klass] = by_class.get(cls.klass, 0) + 1
@@ -540,14 +970,16 @@ def main(repo: str, days: int, limit: int, model: str, bot_logins: str, dry_run:
         click.echo(json.dumps({"pr_rollups": pr_rows, "human_comments": human_rows[:20]}, default=str, indent=2))
         return
 
-    # Replace-by-PR: a daily cron over a rolling window re-classifies PRs we've
-    # seen before. Drop existing rows whose pr_number is in this batch, then
-    # append the fresh ones — the new rows are the source of truth for those PRs.
+    # Replace-by-PR: a daily cron over a rolling window re-emits rows for PRs
+    # we've seen before. Drop existing rows whose pr_number is in this batch,
+    # then append the fresh ones — the new rows are the source of truth for
+    # those PRs. (Cached comments are re-emitted with their stored verdict, so
+    # the dropped rows are reconstructed identically unless the text changed.)
     refreshed_prs = {pr["number"] for pr in prs}
     pr_col_idx = HUMAN_COMMENT_COLUMNS.index("pr_number")
     out_pr_col_idx = PR_OUTCOME_COLUMNS.index("pr_number")
 
-    existing_humans = [r for r in _load_existing_rows(wandb, "human_comments") if r[pr_col_idx] not in refreshed_prs]
+    existing_humans = [r for r in existing_human_rows if r[pr_col_idx] not in refreshed_prs]
     existing_humans.extend(human_rows)
     wandb.log({"human_comments": wandb.Table(columns=HUMAN_COMMENT_COLUMNS, data=existing_humans)})
 
@@ -567,5 +999,47 @@ def main(repo: str, days: int, limit: int, model: str, bot_logins: str, dry_run:
     )
 
 
+@cli.command()
+@click.option("--repo", default=DEFAULT_REPO, show_default=True, help="Repo used to build PR links")
+@click.option("--days", type=int, default=30, show_default=True, help="Report window: PRs merged in last N days")
+@click.option("--out", type=click.Path(dir_okay=False), default=None, help="Also write the markdown report here")
+@click.option("--public", is_flag=True, help="Create a public gist (default: secret)")
+@click.option("--no-gist", is_flag=True, help="Print the report to stdout instead of creating a gist")
+def report(repo: str, days: int, out: str | None, public: bool, no_gist: bool) -> None:
+    """Render the accumulated review stats into a markdown digest and gist it."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    now = dt.datetime.now(dt.timezone.utc)
+    start = now - dt.timedelta(days=days)
+
+    wandb.init(
+        project=WANDB_PROJECT,
+        id=WANDB_RUN_ID,
+        resume="allow",
+        settings=wandb.Settings(silent=True, _disable_stats=True, _disable_meta=True),
+    )
+    outcomes = _rows_to_dicts(PR_OUTCOME_COLUMNS, _load_existing_rows(wandb, "pr_review_outcomes"))
+    comments = _rows_to_dicts(HUMAN_COMMENT_COLUMNS, _load_existing_rows(wandb, "human_comments"))
+    wandb.finish(quiet=True)
+
+    markdown = build_report(outcomes, comments, repo=repo, start=start, now=now, days=days)
+
+    if out:
+        Path(out).write_text(markdown)
+        logger.info("Wrote report to %s", out)
+
+    if no_gist:
+        click.echo(markdown)
+        return
+
+    url = publish_gist(
+        markdown,
+        desc=f"Marin code-health review — last {days} days ({now.date()})",
+        public=public,
+        filename="marin-code-health-report.md",
+    )
+    logger.info("Published gist: %s", url)
+    click.echo(url)
+
+
 if __name__ == "__main__":
-    main()
+    cli()

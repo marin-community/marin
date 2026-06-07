@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import urllib.parse
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import TypeVar, cast
@@ -557,14 +558,13 @@ def doublecheck_paths(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
     return config
 
 
-def _add_default_env_variables(env: dict, default_env: dict | None):
+def _add_default_env_variables(env: dict, default_env: dict | None) -> dict:
+    merged: Mapping = env
     if default_env is not None:
-        default_env = deepcopy(default_env)
-        env = mergedeep.merge(default_env, env)
+        merged = mergedeep.merge(deepcopy(default_env), env)
 
     # Task environment values are serialized as strings.
-    env = {str(k): str(v) for k, v in env.items()}
-    return env
+    return {str(k): str(v) for k, v in merged.items()}
 
 
 def _check_for_wandb_key(env):

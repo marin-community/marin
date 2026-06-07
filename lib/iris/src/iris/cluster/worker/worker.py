@@ -216,7 +216,7 @@ class Worker:
         # resolver works.
         self._worker_stats_table: Table | None = None
         self._task_stats_table: Table | None = None
-        self._profile_table: Table[IrisProfile] | None = None
+        self._profile_table: Table | None = None
 
         self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(

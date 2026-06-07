@@ -126,10 +126,10 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
         logger.warning(f"{source} returning no valid messages")
         return None
 
-    transformed_row_messages = [message.model_dump() for message in transformed_row_messages]
+    messages: list[dict[str, Any]] = [message.model_dump() for message in transformed_row_messages]
 
     # Create a unique ID for the row based on the text
-    row_idx = generate_hash_from_messages(transformed_row_messages)
+    row_idx = generate_hash_from_messages(messages)
     metadata_columns = unwrap_versioned_value(cfg.metadata_columns)
     metadata_remap = adapter.metadata_remap or {}
     replacements = adapter.replacements if adapter.replacements is not None else DEFAULT_TEXT_REPLACEMENTS
@@ -146,11 +146,11 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
             extra_columns[target_column] = row[source_column]
 
     if replacements:
-        for message in transformed_row_messages:
+        for message in messages:
             content = message.get("content")
             if isinstance(content, str):
                 message["content"] = _apply_replacements(content, replacements)
-    transformed_row_messages = [_normalize_tool_structures(message) for message in transformed_row_messages]
+    messages = [_normalize_tool_structures(message) for message in messages]
     if adapter.extra_metadata_fn:
         extra_from_fn = adapter.extra_metadata_fn(row)
         if extra_from_fn:
@@ -158,7 +158,7 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
     return DolmaConversationOutput(
         id=row_idx,
         source=source,
-        messages=transformed_row_messages,
+        messages=messages,
         added=datetime.now(timezone.utc).isoformat(),
         created="",  # Not available in the dataset
         metadata=metadata,
