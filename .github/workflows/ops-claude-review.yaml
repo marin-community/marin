@@ -14,9 +14,9 @@ concurrency:
 
 jobs:
   review:
-    # Trigger gate — keep identical to the `lint-review` job below: both must run
-    # on the same events for the same authors (non-draft PRs by writers, or a
-    # "claude review this" comment by a writer). Edit the two together.
+    # Runs on non-draft PRs by writers, or a "claude review this" comment by a
+    # writer. This job reviews via the GitHub API and never checks out / executes
+    # PR code, so the `issue_comment` trigger is safe here (unlike `lint-review`).
     if: >-
       (
         github.event_name == 'pull_request' &&
@@ -70,28 +70,22 @@ jobs:
   # step 6). It posts its findings as `file:line` inline comments — separate from
   # and complementary to the high-level correctness review above, which
   # deliberately skips lint-catchable issues.
+  #
+  # SECURITY: unlike `review`, this job checks out and EXECUTES the PR's code
+  # (`pre-commit.py`/`linter.py` and the agents reading the tree). It must
+  # therefore never run on a privileged trigger over untrusted code. So it runs
+  # ONLY on `pull_request` (not `issue_comment`): that trigger is unprivileged
+  # (fork PRs get a read-only token and no secrets), the author-association gate
+  # blocks untrusted authors, and the checkout pins the immutable head SHA. See
+  # CodeQL actions/untrusted-checkout(-toctou).
   lint-review:
-    # Trigger gate — identical by design to the `review` job's gate above (same
-    # author-association + trigger policy). Keep the two in sync.
     if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
       (
-        github.event_name == 'pull_request' &&
-        github.event.pull_request.draft == false &&
-        (
-          github.event.pull_request.author_association == 'OWNER' ||
-          github.event.pull_request.author_association == 'MEMBER' ||
-          github.event.pull_request.author_association == 'COLLABORATOR'
-        )
-      ) ||
-      (
-        github.event_name == 'issue_comment' &&
-        github.event.issue.pull_request &&
-        contains(github.event.comment.body, 'claude review this') &&
-        (
-          github.event.comment.author_association == 'OWNER' ||
-          github.event.comment.author_association == 'MEMBER' ||
-          github.event.comment.author_association == 'COLLABORATOR'
-        )
+        github.event.pull_request.author_association == 'OWNER' ||
+        github.event.pull_request.author_association == 'MEMBER' ||
+        github.event.pull_request.author_association == 'COLLABORATOR'
       )
     runs-on: ubuntu-latest
     # The review fans out one headless agent per lane (each capped at 600s) plus a
@@ -103,20 +97,21 @@ jobs:
       issues: write
       id-token: write
     steps:
-      - name: Checkout repository
+      # Pin the immutable head SHA (not a mutable ref) so the executed code cannot
+      # change after the author-association check, and drop the git token from the
+      # checkout so executed PR code cannot reuse it. The lint review reads the
+      # PR's files from the working tree and diffs them against the merge base.
+      - name: Checkout PR head
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
-      # The lint review reads the PR's files from the working tree and diffs them
-      # against the merge base with origin/main, so we need the actual PR head
-      # checked out (not the pull_request merge ref) and origin/main present.
-      - name: Check out PR head and fetch main
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh pr checkout ${{ github.event.pull_request.number || github.event.issue.number }}
-          git fetch --no-tags origin main:refs/remotes/origin/main
+      # origin/main is the merge base the review diffs against. Anonymous fetch
+      # (public repo); needs no token, which is why persist-credentials can be off.
+      - name: Fetch main for the merge base
+        run: git fetch --no-tags origin main:refs/remotes/origin/main
 
       # pre-commit.py is a `uv run --script` entry point; uv must be on PATH for
       # the agent's Bash to invoke it (and for the nested per-lane claude agents).
@@ -132,9 +127,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
           prompt: |
-            /lint-review --comment ${{ github.event.pull_request.number || github.event.issue.number }}
-
-            ${{ github.event_name == 'issue_comment' && 'EXPLICIT RE-REVIEW REQUESTED: a maintainer asked for this run via comment, so do not skip on the idempotency guard even if a prior lint review exists.' || '' }}
+            /lint-review --comment ${{ github.event.pull_request.number }}
           claude_args: |
             --model claude-sonnet-4-6
             --max-turns 80

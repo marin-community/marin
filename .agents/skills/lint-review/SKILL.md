@@ -42,9 +42,7 @@ unforgivable error; so is fabricating one.
    already posted on the PR: look for the marker `<!-- marin-lint-review -->` in
    both issue comments (`gh pr view <PR> --json comments`) and inline review
    comments (`gh api repos/{owner}/{repo}/pulls/<PR>/comments --paginate`). If the
-   marker is present **and** the invocation does not carry an explicit re-review
-   request (the workflow passes one only for a manual "claude review this"
-   trigger), stop now — the PR already has a lint pass and we do not want
+   marker is present, stop now — the PR already has a lint pass and we do not want
    duplicate comments. Otherwise continue.
 
 2. **Run the review.** From the repo root:
