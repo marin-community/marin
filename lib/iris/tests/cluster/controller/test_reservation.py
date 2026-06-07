@@ -1124,9 +1124,9 @@ def test_preference_pass_deducts_capacity():
     job_id = JobName.root("test-user", "res-job")
     task_id_0 = job_id.task(0)
     task_id_1 = job_id.task(1)
-    # Each task wants 4000m CPU; w1 has 8000m, so only one fits.
+    # Each task wants 5000m CPU; w1 has 8000m, so only one fits by capacity.
     req = JobRequirements(
-        req_cpu_millicores=4000,
+        req_cpu_millicores=5000,
         req_memory_bytes=1024**3,
         req_gpu_count=0,
         req_tpu_count=0,
@@ -1146,7 +1146,7 @@ def test_preference_pass_deducts_capacity():
 
     assignments = preference_pass(context, has_reservation, claims)
 
-    # First task assigned to w1; second stays pending (w1 already scheduled this cycle)
+    # First task consumes w1's capacity; the second no longer fits and stays pending.
     assert len(assignments) == 1
     assert assignments[0] == (task_id_0, WorkerId("w1"))
     assert task_id_0 not in context.pending_tasks
