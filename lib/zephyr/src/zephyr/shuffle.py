@@ -28,6 +28,7 @@ in ``_items_to_dataframe``; ``__zephyr_shard__`` is stripped on read,
 import concurrent.futures
 import functools
 import gc
+import io
 import itertools
 import logging
 import math
@@ -41,13 +42,13 @@ import humanfriendly
 import msgspec
 import polars as pl
 import psutil
-import xxhash
 from iris.env_resources import TaskResources
-from rigging.filesystem import StoragePath, is_remote_path, open_url, url_to_fs
+from rigging.filesystem import StoragePath, open_url, url_to_fs
 from rigging.timing import RateLimiter, log_time
 
 from zephyr.external_sort import external_sort_merge
 from zephyr.shard_keys import composite_sort_key, deterministic_hash
+from zephyr.worker_context import _worker_ctx_var
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -357,12 +358,13 @@ class ScatterReader:
             # Overhead per row in the Polars DataFrame plus the deserialized Python object.
             # Future Polars-only processing would remove the Python overhead.
             overhead = _SCATTER_READ_POLARS_ROW_OVERHEAD * _SCATTER_READ_PYTHON_ROW_OVERHEAD
-            from zephyr.execution import _worker_ctx_var  # local import breaks the shuffle↔execution cycle
-
-            num_workers = _worker_ctx_var.get().num_workers
-
-            task_resources = TaskResources.from_environment()
-            memory_bytes = task_resources.memory_bytes / num_workers
+            ctx = _worker_ctx_var.get()
+            if ctx is not None and ctx.task_memory_bytes > 0:
+                memory_bytes = ctx.task_memory_bytes
+            else:
+                memory_bytes = TaskResources.from_environment().memory_bytes
+                if memory_bytes <= 0:
+                    memory_bytes = 1024 * 1024 * 1024
 
             if estimated_merge_memory_bytes * overhead > memory_bytes * _SCATTER_READ_MEMORY_FRACTION:
                 fan_in = math.ceil(math.sqrt(self.total_chunks))
@@ -494,7 +496,7 @@ class ScatterWriter:
         buffer_sorted = buffer.sort([_SHARD_COL, _SORT_KEY_COL])
         del buffer
 
-        self._total_bytes_written += buffer_sorted.estimated_size()
+        self._total_bytes_written += int(buffer_sorted.estimated_size())
         self._total_rows_written += len(buffer_sorted)
 
         # Size row groups so each target shard fits in roughly one row group,
@@ -502,7 +504,11 @@ class ScatterWriter:
         num_targets = buffer_sorted[_SHARD_COL].n_unique()
         row_group_size = max(1, len(buffer_sorted) // num_targets)
         chunk_path = f"{self._data_path}c{self._n_chunks_written:04d}.parquet"
-        buffer_sorted.write_parquet(chunk_path, compression="zstd", row_group_size=row_group_size, use_pyarrow=True)
+        # Ideally we'd call write_parquet directly with the GCS path, but it occationally fails with a generic error.
+        buf = io.BytesIO()
+        buffer_sorted.write_parquet(buf, compression="zstd", row_group_size=row_group_size)
+        with open_url(chunk_path, "wb") as f:
+            f.write(buf.getvalue())
 
         self._chunk_paths.append(chunk_path)
         self._n_chunks_written += 1
