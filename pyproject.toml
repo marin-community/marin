@@ -129,7 +129,7 @@ marin-zephyr = { workspace = true }
 # harbor lives in marin-community/harbor as a pinned git dependency.
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
 vllm = { git = "https://github.com/marin-community/vllm.git", rev = "54a6eb69daafc23b72dd1bc3c78d097b7f4cd997" }
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "22a5fcccf542cf1b77d71e1db495be4ddae01bac" }
+tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "13474e22a97739b44d795d43253e8663885aa8f7" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
