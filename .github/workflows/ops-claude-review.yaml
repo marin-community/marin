@@ -97,14 +97,15 @@ jobs:
       issues: write
       id-token: write
     steps:
-      # Pin the immutable head SHA (not a mutable ref) so the executed code cannot
-      # change after the author-association check, and drop the git token from the
-      # checkout so executed PR code cannot reuse it. The lint review reads the
-      # PR's files from the working tree and diffs them against the merge base.
-      - name: Checkout PR head
+      # Use the DEFAULT pull_request checkout (the immutable merge ref), not an
+      # explicit head ref — same pattern as the `review` job, and it reviews what
+      # would actually land. Combined with pull_request-only + the author gate
+      # (fork PRs get no secrets), this avoids the untrusted-checkout sink. Drop
+      # the git token so executed PR code cannot reuse it. fetch-depth 0 gives the
+      # history the merge-base diff needs.
+      - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
 
