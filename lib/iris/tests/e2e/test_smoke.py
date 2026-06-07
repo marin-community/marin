@@ -487,8 +487,6 @@ def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, ca
             if not worker_id:
                 time.sleep(0.5)
         assert worker_id
-        # Give the worker a few poll cycles to emit iris.task resource samples.
-        time.sleep(5)
 
         dashboard_goto(smoke_page, f"{smoke_cluster.url}/worker/{worker_id}")
         wait_for_dashboard_ready(smoke_page)
@@ -499,6 +497,19 @@ def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, ca
         smoke_page.wait_for_selector("a[href*='/task/']", timeout=10000)
         href = smoke_page.locator("a[href*='/task/']").first.get_attribute("href")
         assert href is not None and "/job/" in href and "/task/" in href
+
+        # Wait on observable state, not wall time: the "(N%)" utilization badge
+        # renders only once a live iris.task usage sample joins the allocation.
+        # The page auto-refreshes slowly, so reload to pull the latest sample;
+        # this exits as soon as the screenshot has real used-vs-alloc rather
+        # than racing a fixed delay against the first sample.
+        usage_rendered = r"() => [...document.querySelectorAll('td')].some((c) => /\(\d+%\)/.test(c.textContent || ''))"
+        deadline = time.monotonic() + 60
+        while not smoke_page.evaluate(usage_rendered) and time.monotonic() < deadline:
+            time.sleep(3)
+            dashboard_goto(smoke_page, f"{smoke_cluster.url}/worker/{worker_id}")
+            _wait_for_worker_detail_screenshot_ready(smoke_page, worker_id)
+        assert smoke_page.evaluate(usage_rendered), "live per-task usage did not render"
 
         smoke_screenshot(
             "worker-detail",

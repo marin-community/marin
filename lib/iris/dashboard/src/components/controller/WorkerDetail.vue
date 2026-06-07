@@ -166,12 +166,13 @@ const diskFreePercent = computed(() => {
 
 // --- Per-task resource usage (iris.task stats), joined to the attempts below ---
 //
-// One query for every task that ran on this worker; we reduce client-side to
-// the latest sample per (task_id, attempt_id). Avoids a window function so the
-// query keeps the same SELECT / ORDER BY / LIMIT shape the log store already
-// serves for the worker-level stats above. Combined with the static allocation
-// carried on each attempt (WorkerTaskAttempt.resources) to render used-vs-
-// reserved memory and disk per task.
+// Scoped to the task ids shown in the Task History so a busy worker's other
+// tasks can't push a displayed attempt's latest sample past the row cap; we
+// then reduce client-side to the latest sample per (task_id, attempt_id).
+// Avoids a window function so the query keeps the same SELECT / WHERE /
+// ORDER BY / LIMIT shape the log store already serves for the worker-level
+// stats above. Combined with the static allocation carried on each attempt
+// (WorkerTaskAttempt.resources) to render used-vs-reserved memory and disk.
 interface TaskUsageRow {
   task_id?: string
   attempt_id?: number
@@ -181,13 +182,22 @@ interface TaskUsageRow {
   disk_mb?: number
 }
 
-function buildTaskUsageSql(workerId: string): string {
+// Distinct task ids shown in the Task History; scopes the usage query below.
+// Empty until recentAttempts loads via its own RPC.
+const displayedTaskIds = computed(() => [...new Set(recentAttempts.value.map((a) => a.taskId))])
+
+function buildTaskUsageSql(workerId: string, taskIds: string[]): string {
   // QueryRequest has no param binding; manual DuckDB single-quote escape.
-  const escaped = workerId.replace(/'/g, "''")
+  const esc = (s: string) => s.replace(/'/g, "''")
+  // Scope to the displayed tasks so a busy worker's other tasks can't push a
+  // shown attempt's latest sample past the row cap. Worker-wide before the
+  // attempts have loaded (those rows are simply ignored downstream).
+  const taskFilter = taskIds.length ? `AND task_id IN (${taskIds.map((t) => `'${esc(t)}'`).join(', ')})` : ''
   return `
 SELECT task_id, attempt_id, cpu_millicores, memory_mb, memory_peak_mb, disk_mb
 FROM "iris.task"
-WHERE worker_id = '${escaped}'
+WHERE worker_id = '${esc(workerId)}'
+${taskFilter}
 ORDER BY ts DESC
 LIMIT 2000
 `.trim()
@@ -195,8 +205,12 @@ LIMIT 2000
 
 const { data: taskUsageData, refresh: fetchTaskUsage } = useLogServerStatsRpc<QueryResponse>(
   'Query',
-  () => ({ sql: buildTaskUsageSql(props.workerId) }),
+  () => ({ sql: buildTaskUsageSql(props.workerId, displayedTaskIds.value) }),
 )
+
+// Refetch usage when the displayed task set changes (attempts arrive via a
+// separate RPC) so the scoped query runs against the current tasks.
+watch(() => displayedTaskIds.value.join('|'), () => fetchTaskUsage())
 
 function usageKey(taskId: string, attemptId: number): string {
   return `${taskId}|${attemptId}`
