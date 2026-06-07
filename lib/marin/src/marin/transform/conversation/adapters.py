@@ -132,7 +132,7 @@ class TransformAdapter:
                 content = conv[self.content_key]
                 if role == "assistant" and self.reasoning_content_key:
                     reasoning_content = conv.get(self.reasoning_content_key)
-                    if reasoning_content:
+                    if isinstance(reasoning_content, str) and reasoning_content.strip():
                         content = f"<think>{reasoning_content}</think>\n{content}"
                 messages.append(OpenAIChatMessage(role=role, content=content))
             return messages
