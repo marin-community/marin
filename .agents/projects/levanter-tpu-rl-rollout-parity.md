@@ -58,10 +58,10 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   this as a terminal infra/backend failure for the v5p comparison, not evidence
   about Levanter throughput. #6185 commit `91f6ec06a` makes future vLLM startup
   failures fail fast on subprocess exit and include bounded stdout/stderr tails
-  in the benchmark RuntimeError. Draft PR #6240, head `2bf3c036c`, stacks on
-  #6185 and adds bounded package/runtime metadata plus selected TPU/XLA/vLLM
-  environment keys to future startup failures; after one external
-  Hugging Face/cache rerun, all visible #6240 checks are green or skipped.
+  in the benchmark RuntimeError. PR #6240, head `32505d1ca`, stacks on current
+  #6185 head `d63d1edf` and adds bounded package/runtime metadata plus selected
+  TPU/XLA/vLLM environment keys to future startup failures; post-rebase checks
+  are terminal green/skipped, including `levanter-tpu-tests`.
 - A prefill-heavy v6e-8 row has identified the next parity gap. For
   `prefill_b8_i2048_o128_n1`, backend `both`, dense matrix, TP=8,
   `--max-pages 512`, two warmups and one measured round, vLLM reached
@@ -126,7 +126,7 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   `104bf901e33c5f0b34d32d4f59edf27b82f66714`.
 - Multi-prefill serving fix: #6185,
   `https://github.com/marin-community/marin/pull/6185`, current head
-  `f55913d1a9770b7ebdfb051150972e649644526e`.
+  `d63d1edf6774d7a36476356f8bea58cdf11614ab`.
 - RL rollout tracking epic: #6227,
   `https://github.com/marin-community/marin/issues/6227`, with child issues
   #6228 for dense v6e parity, #6229 for the v6e prefill-heavy gap, #6230 for
@@ -138,7 +138,7 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   `c4ba37bda1f429700528a442e2f18e906b96d1b9`.
 - v5p startup diagnostics hardening: #6240,
   `https://github.com/marin-community/marin/pull/6240`, head
-  `2bf3c036c1c787d59dee4c7a096b5f400be96f52`, stacked on #6185.
+  `32505d1ca48c0e16838da9f56c0516dd51cacd24`, stacked on #6185.
 - Durable handoff artifact: #6214,
   `https://github.com/marin-community/marin/pull/6214`, branch
   `codex/levanter-rl-rollout-handoff`.
@@ -188,9 +188,10 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   `Record vLLM startup runtime snapshot`. Future v5p/vLLM startup failures
   should also include bounded package/runtime metadata and selected TPU/XLA/vLLM
   environment keys, without dumping the full environment or initializing JAX
-  devices while vLLM may own libtpu. #6240 is draft, mergeable, stacked on
-  #6185, and all visible checks are green or skipped after one external
-  Hugging Face/cache rerun.
+  devices while vLLM may own libtpu. This change was rebased to #6240 head
+  `32505d1ca`, stacked on #6185 head `d63d1edf`. #6240 is ready for review,
+  mergeable, and terminal green/skipped after the post-rebase checks, including
+  `levanter-tpu-tests`.
 
 ## Acceptance Criteria
 
@@ -253,14 +254,14 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   follow-up after the serving and benchmark PRs merge.
 - Merge state verified by lightweight GitHub metadata after the latest handoff
   refresh on 2026-06-07: #6176 is open, non-draft, clean, and at head
-  `104bf901`; #6185 is open, non-draft, clean, and at head `f55913d1`; #6186
+  `104bf901`; #6185 is open, non-draft, clean, and at head `d63d1edf`; #6186
   is open, non-draft, clean, and at head `c4ba37b`; #6214 is open, draft,
-  review-required, and terminal green/skipped at head `b44cdc5c`; #6240 is
-  open, draft, clean, and at head `2bf3c036c`. All visible checks are green or
-  skipped on these heads. #6176, #6185, #6186, #6214, and #6240 PR descriptions
-  link back to parent epic #6227 and their child trackers where applicable. The
-  goal is not complete until the required code paths and benchmark artifacts are
-  landed or otherwise accepted by maintainers.
+  review-required, and terminal green/skipped at head `dbc3bf595`; #6240 is
+  open, non-draft, clean, and at head `32505d1ca`. All visible checks are green
+  or skipped on these heads. #6176, #6185, #6186, #6214, and #6240 PR
+  descriptions link back to parent epic #6227 and their child trackers where
+  applicable. The goal is not complete until the required code paths and
+  benchmark artifacts are landed or otherwise accepted by maintainers.
 
 ## Active Work
 
@@ -272,18 +273,20 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - Issue #6184 tracks engine-level multi-prefill admission for long-prompt TPU
   serving.
 - PR #6185 implements the long-prompt correctness and mixed-workload performance
-  fix. The current branch head, `f55913d1`, combines engine-level
+  fix. The current branch head, `d63d1edf`, combines engine-level
   multi-prefill admission, OpenAI service relaxation for aggregate prompt-token
   budgets, benchmark admission/timing metrics, prefill-drain scheduling before
   decode, corrected diagnostic prefill-drain behavior, decode-submit attribution
   cleanup, decode iteration/device throughput reporting, prefill-drain versus
   generation-loop attribution fields, better vLLM startup failure reporting for
   v5p postmortems, and bounded inference request logging that no longer
-  serializes full long-prompt token lists. Local validation for the latest
-  focused patch passed: `test_engine.py` plus
+  serializes full long-prompt token lists. It also moves the v6e diagnostic log
+  into `.agents/ops/` as an ops artifact. Local validation for the latest
+  timing patch passed: `test_engine.py` plus
   `test_qwen3_tpu_inference_parity_bench.py` (`63 passed`), focused
   `./infra/pre-commit.py --files ... --fix`, and the commit hook including
-  Pyrefly.
+  Pyrefly; the later ops-log move passed the repo pre-commit slice and commit
+  hook.
 - PR #6185 final v6e-8 proof is
   `/dlwh/qwen3-mixed-v6e8-prefilldrain-i512-o512-20260606-0428`. The job
   succeeded with no failures or preemptions for `mixed_b32_i512_o512_n1`,
@@ -391,11 +394,12 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   already exited, then includes bounded stderr/stdout tails in the startup
   `RuntimeError`. This does not fix vLLM-on-v5p startup itself, but it should
   turn the next terminal backend failure into an actionable log-bearing failure.
-- PR #6185 current CI state after commit `f55913d1`: the PR is non-draft,
-  clean, and all visible checks are green after one failed-job rerun for the
-  known external Hugging Face/cache-miss class in `levanter-torch`. Do not rerun
-  that workflow again automatically. #6214 at `b44cdc5c` also has all visible
-  checks green or skipped and remains draft as a handoff artifact.
+- PR #6185 current CI state after head `d63d1edf`: the PR is non-draft, clean,
+  and all visible checks are green/skipped after failed-job reruns for known
+  external Hugging Face/cache classes in `marin-integration` and
+  `levanter-unit`. Do not rerun those workflows again automatically. #6214 at
+  `dbc3bf595` also has all visible checks green or skipped and remains draft as
+  a handoff artifact.
 - Issue #6184 has the final proof comment:
   `https://github.com/marin-community/marin/issues/6184#issuecomment-4637412411`.
 - PR #6186 adds the first RL batched-token rollout API contracts, stacked on
@@ -583,11 +587,12 @@ thread. Keep background-style work narrow and explicit until the app is stable:
    regime, the next useful run is one narrow v6e-8 backend=both
    `prefill_b8_i2048_o128_n1` rerun from #6185 `f55913d1` or newer with the
    same `--max-pages 512`, two warmups, and one measured round.
-6. If rerunning the v5p mixed comparison, use #6185 head `f55913d1` or newer so
-   a repeated vLLM startup failure includes the actual stderr/stdout tail. Prefer
-   #6240 if available, because it additionally preserves bounded runtime/package
-   metadata and selected TPU/XLA/vLLM environment keys for diagnosis. Do not
-   launch the decode-heavy v5p row until the mixed v5p startup issue is
+6. If rerunning the v5p mixed comparison, use #6185 head `d63d1edf` or newer so
+   a repeated vLLM startup failure includes the current serving stack and actual
+   stderr/stdout tail. Prefer #6240 head `32505d1ca` if available, because it
+   additionally preserves bounded runtime/package metadata and selected
+   TPU/XLA/vLLM environment keys for diagnosis. Do not launch the decode-heavy
+   v5p row until the mixed v5p startup issue is
    understood or deliberately bypassed.
 7. Develop the RL batched-token API slice in parallel with the runtime wait.
    vLLM, Levanter, MathEnv, rollout-worker policy identity, tokenizer replay
@@ -945,12 +950,13 @@ implementation slice should be:
      lib/levanter/tests/test_qwen3_tpu_inference_parity_bench.py -q` with 51
      passed, focused pre-commit on the changed files, and the commit hook
      including Pyrefly.
-   - #6185 current head is `f55913d1`. Use this or newer for any v5p rerun.
+   - #6185 current head is `d63d1edf`. Use this or newer for any v5p rerun.
 
 17. #6240 v5p startup runtime diagnostics:
-   - Draft PR #6240, branch `codex/v5p-vllm-startup-diagnostics`, stacks on
-     #6185 head `91f6ec06a`; commit `2bf3c036c` adds a bounded startup snapshot
-     to vLLM startup failure messages.
+   - PR #6240, branch `codex/v5p-vllm-startup-diagnostics`, is ready for review
+     and stacks on #6185 head `d63d1edf`; head `32505d1ca` adds a bounded
+     startup snapshot to vLLM startup failure messages. This is the rebased
+     version of the earlier local commit `2bf3c036c`.
    - The snapshot records package/runtime metadata from
      `_runtime_env_snapshot(include_jax_devices=False)` and an allowlist of
      TPU/XLA/vLLM environment keys such as `LIBTPU_INIT_ARGS`, `XLA_FLAGS`, and
@@ -962,8 +968,9 @@ implementation slice should be:
      unrelated existing local-import warnings, and the commit hook including
      Pyrefly.
    - GitHub CI initially hit the same external Hugging Face/cache-miss class in
-     `levanter-unit`; after one failed-job rerun, all visible #6240 checks are
-     green or skipped.
+     `levanter-unit`; after one failed-job rerun, the pre-rebase #6240 checks
+     were green/skipped. After rebase onto #6185 `d63d1edf`, post-rebase checks
+     are terminal green/skipped, including `levanter-tpu-tests`.
 
 ## RL Token Data Plane Gate
 
