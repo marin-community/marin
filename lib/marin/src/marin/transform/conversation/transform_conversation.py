@@ -51,6 +51,9 @@ class TransformSFTDatasetConfig:
         adapter (TransformAdapter): Adapter responsible for mapping raw rows into OpenAI chat format.
         subsets (list[str]): Data subsets (from HuggingFace config) to use. Empty list indicates all/default subset(s).
         splits (list[str]): Data splits (e.g., `train`, `validation`) to use. Empty list indicates all splits.
+        source_files_by_split: Optional raw JSONL files keyed by split, used when HF dataset builder schemas are not
+            reliable. Relative files are resolved as hf://datasets/{source}@{revision}/{path}.
+        raw_shard_size: Number of transformed records per output shard when reading source_files_by_split.
         max_parallelism (int | None): Maximum number of concurrent shard processing tasks.
             Set to lower values to avoid HF rate limits. Set to None for default behavior (full concurrency).
     """
@@ -62,6 +65,8 @@ class TransformSFTDatasetConfig:
     adapter: TransformAdapter
     subsets: list[str] = field(default_factory=lambda: [])  # Default behavior is to use all subsets
     splits: list[str] = field(default_factory=lambda: ["train"])  # Set to train; empty set means everything
+    source_files_by_split: dict[str, list[str]] | None = None
+    raw_shard_size: int = 50_000
     max_parallelism: int | None = None  # None means use default behavior (full concurrency)
 
 
@@ -75,6 +80,20 @@ class ShardTask:
     split: str
     shard_idx: int
     num_shards: int
+    output_path: str
+    cfg: TransformSFTDatasetConfig
+
+
+@dataclass(frozen=True)
+class RawFileTask:
+    """Task for processing one raw JSONL file for a dataset split."""
+
+    source: str
+    revision: str
+    subset: str | None
+    split: str
+    source_file: str
+    source_file_idx: int
     output_path: str
     cfg: TransformSFTDatasetConfig
 
@@ -242,6 +261,16 @@ def _streaming_dataset_kwargs(source: str, split: str, revision: str, subset: st
     return kwargs
 
 
+def _raw_shard_filename(output_path: str, source_file_idx: int, shard_idx: int) -> str:
+    return os.path.join(output_path, f"file_{source_file_idx:05d}_shard_{shard_idx:05d}.jsonl.gz")
+
+
+def _raw_source_url(source: str, revision: str, source_file: str) -> str:
+    if "://" in source_file or os.path.isabs(source_file):
+        return source_file
+    return f"hf://datasets/{source}@{revision}/{source_file.lstrip('/')}"
+
+
 def get_shard_dir(dir_name: os.PathLike, subset_name: str | None, split: str) -> os.PathLike | str:
     """Creates a new path with the subset and split names.
     e.g., create_subset_name('gs://thisserver/testfolder-a982374', 'subset', 'train') -> 'gs://thisserver/testfolder-a982374/subset/train'
@@ -261,6 +290,36 @@ def get_dataset_tasks(cfg: TransformSFTDatasetConfig):
         raise ValueError("Transform configuration must include `source` pointing to the HF dataset id.")
     revision = unwrap_versioned_value(cfg.revision)
     configured_splits = unwrap_versioned_value(cfg.splits)
+    source_files_by_split = unwrap_versioned_value(cfg.source_files_by_split) or {}
+
+    if source_files_by_split:
+        configured_subsets = unwrap_versioned_value(cfg.subsets)
+        subsets = configured_subsets or [None]
+        if len(subsets) != 1 or subsets[0] not in (None, "default"):
+            raise ValueError("source_files_by_split only supports a single default subset.")
+
+        splits = list(configured_splits) if configured_splits else sorted(source_files_by_split)
+        missing = sorted(set(splits) - set(source_files_by_split))
+        if missing:
+            raise ValueError(f"No source files configured for split(s) {missing} in dataset {source}.")
+
+        subset = subsets[0]
+        subset_name = subset or "default"
+        for split in splits:
+            subset_output_path = get_shard_dir(cfg.output_path, subset_name, split)
+            output_path = create_shard_output_directory(subset_output_path)
+            for source_file_idx, source_file in enumerate(source_files_by_split[split]):
+                yield RawFileTask(
+                    source=source,
+                    revision=revision,
+                    subset=subset,
+                    split=split,
+                    source_file=source_file,
+                    source_file_idx=source_file_idx,
+                    output_path=output_path,
+                    cfg=cfg,
+                )
+        return
 
     # 1. Get available subsets
     subsets = _get_available_subsets(cfg)
@@ -363,6 +422,69 @@ def process_shard_task(task: ShardTask) -> dict:
     }
 
 
+def process_raw_file_task(task: RawFileTask) -> dict:
+    """Process one raw JSONL source file into batched transformed shards."""
+    adapter = unwrap_versioned_value(task.cfg.adapter).copy()
+
+    subset_name = task.subset or "default"
+    source_url = _raw_source_url(task.source, task.revision, task.source_file)
+    raw_shard_size = unwrap_versioned_value(task.cfg.raw_shard_size)
+    if raw_shard_size <= 0:
+        raise ValueError("raw_shard_size must be positive.")
+
+    input_count = 0
+    output_count = 0
+    filtered_count = 0
+    shard_idx = 0
+    shard_files: list[dict[str, Any]] = []
+    batch: list[dict[str, Any]] = []
+
+    def flush_batch() -> None:
+        nonlocal batch, output_count, shard_idx
+        if not batch:
+            return
+        output_filename = _raw_shard_filename(task.output_path, task.source_file_idx, shard_idx)
+        result = write_jsonl_file(batch, output_filename)
+        shard_files.append(result)
+        output_count += result["count"]
+        shard_idx += 1
+        batch = []
+
+    for raw_row in load_jsonl(source_url):
+        input_count += 1
+        transformed_row = transform_row(raw_row, task.cfg, adapter)
+        if transformed_row is None:
+            filtered_count += 1
+            continue
+        batch.append(transformed_row.model_dump())
+        if len(batch) >= raw_shard_size:
+            flush_batch()
+    flush_batch()
+
+    logger.info(
+        f"Wrote {output_count} rows from {source_url} into {len(shard_files)} shard(s) "
+        f"for subset={subset_name} split={task.split}"
+    )
+
+    return {
+        "subset": subset_name,
+        "split": task.split,
+        "source_file": task.source_file,
+        "source_file_idx": task.source_file_idx,
+        "paths": [file_info["path"] for file_info in shard_files],
+        "count": output_count,
+        "input_count": input_count,
+        "filtered_count": filtered_count,
+        "num_output_shards": len(shard_files),
+    }
+
+
+def process_dataset_task(task: ShardTask | RawFileTask) -> dict:
+    if isinstance(task, RawFileTask):
+        return process_raw_file_task(task)
+    return process_shard_task(task)
+
+
 @draccus.wrap()
 def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     """Transform HuggingFace conversation dataset using shard-level parallelism.
@@ -386,7 +508,7 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     metrics_path = os.path.join(cfg.output_path, "metrics")
     pipeline = (
         Dataset.from_list(all_tasks)
-        .map(process_shard_task)
+        .map(process_dataset_task)
         .write_jsonl(f"{metrics_path}/{{shard:05d}}-transform.jsonl", skip_existing=True)
     )
     ctx = ZephyrContext(name="transform-conversation")
@@ -402,9 +524,17 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     for (subset, split), shard_results in sorted(by_subset_split.items()):
         total_count = sum(r["count"] for r in shard_results)
         logger.info(f"Wrote {total_count} records to {len(shard_results)} shards ({subset}/{split})")
-        for shard in sorted(shard_results, key=lambda x: x["shard_idx"]):
-            skipped_suffix = " (skipped)" if shard.get("skipped") else ""
-            logger.info(f"  - {shard['path']}: {shard['count']} records (shard {shard['shard_idx']}){skipped_suffix}")
+        for shard in sorted(shard_results, key=lambda x: (x.get("source_file_idx", -1), x.get("shard_idx", -1))):
+            if "paths" in shard:
+                logger.info(
+                    f"  - {shard['source_file']}: {shard['count']} records "
+                    f"across {shard['num_output_shards']} output shard(s)"
+                )
+            else:
+                skipped_suffix = " (skipped)" if shard.get("skipped") else ""
+                logger.info(
+                    f"  - {shard['path']}: {shard['count']} records " f"(shard {shard['shard_idx']}){skipped_suffix}"
+                )
 
     return cfg.output_path
 

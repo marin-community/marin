@@ -3,15 +3,20 @@
 
 """Tests for conversation data transformation scripts."""
 
+import json
 from pathlib import Path
 
 from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.conversation_to_dolma import transform_conversation_to_dolma
 from marin.transform.conversation.preference_data_adapters import PreferenceTransformAdapter
 from marin.transform.conversation.transform_conversation import (
+    RawFileTask,
     TransformSFTDatasetConfig,
+    create_shard_output_directory,
+    process_raw_file_task,
     transform_row,
 )
+from zephyr import load_jsonl
 
 OPENAI_FORMAT_SAMPLE = {
     "messages": [
@@ -121,6 +126,51 @@ class TestTransformAdapters:
         assert messages[0].content == "Explain quantum computing"
         assert messages[1].role == "assistant"
         assert messages[2].role == "system"
+
+    def test_multi_turn_adapter_copies_selected_message_keys(self):
+        """Test preserving opt-in extra message fields."""
+        row = {
+            "messages": [
+                {"role": "user", "content": "Solve this."},
+                {
+                    "role": "assistant",
+                    "content": "Final answer.",
+                    "reasoning_content": "Think through the cases.",
+                    "unlisted": "drop me",
+                },
+            ]
+        }
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+            message_keys_to_copy=("reasoning_content",),
+        )
+
+        messages = adapter.transform_conversation_to_openai_format(row)
+
+        assert messages is not None
+        assert "reasoning_content" not in messages[0].model_dump()
+        assistant_message = messages[1].model_dump()
+        assert assistant_message["reasoning_content"] == "Think through the cases."
+        assert "unlisted" not in assistant_message
+
+    def test_multi_turn_adapter_drops_unlisted_message_keys_by_default(self):
+        """Test current default behavior remains unchanged."""
+        row = {
+            "messages": [
+                {"role": "user", "content": "Solve this."},
+                {
+                    "role": "assistant",
+                    "content": "Final answer.",
+                    "reasoning_content": "Think through the cases.",
+                },
+            ]
+        }
+        adapter = TransformAdapter(dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN)
+
+        messages = adapter.transform_conversation_to_openai_format(row)
+
+        assert messages is not None
+        assert "reasoning_content" not in messages[1].model_dump()
 
 
 class TestTransformRow:
@@ -243,6 +293,64 @@ class TestTransformRow:
         }
 
         assert transform_row(row, cfg, adapter) is None
+
+    def test_raw_file_task_batches_jsonl_rows_and_preserves_reasoning_content(self, tmp_path):
+        """Test raw JSONL fallback processing without using the HF dataset builder."""
+        raw_file = tmp_path / "input.jsonl"
+        rows = [
+            {
+                "uuid": "row-1",
+                "messages": [
+                    {"role": "user", "content": "Write Python."},
+                    {"role": "assistant", "content": "print(1)", "reasoning_content": "Need to print one."},
+                ],
+            },
+            {
+                "uuid": "row-2",
+                "messages": [
+                    {"role": "user", "content": "Write C++."},
+                    {"role": "assistant", "content": "int main() {}", "reasoning_content": "Need a main."},
+                ],
+            },
+        ]
+        raw_file.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+            message_keys_to_copy=("reasoning_content",),
+        )
+        cfg = TransformSFTDatasetConfig(
+            source="test/raw",
+            revision="main",
+            output_path=str(tmp_path / "output"),
+            metadata_columns=["uuid"],
+            adapter=adapter,
+            splits=["train"],
+            source_files_by_split={"train": [str(raw_file)]},
+            raw_shard_size=1,
+        )
+        output_path = create_shard_output_directory(str(tmp_path / "output" / "train"))
+        task = RawFileTask(
+            source="test/raw",
+            revision="main",
+            subset=None,
+            split="train",
+            source_file=str(raw_file),
+            source_file_idx=0,
+            output_path=output_path,
+            cfg=cfg,
+        )
+
+        result = process_raw_file_task(task)
+
+        assert result["input_count"] == 2
+        assert result["count"] == 2
+        assert result["filtered_count"] == 0
+        assert result["num_output_shards"] == 2
+        records = [record for output_file in result["paths"] for record in load_jsonl(output_file)]
+        assert [record["metadata"]["uuid"] for record in records] == ["row-1", "row-2"]
+        assert records[0]["messages"][1]["reasoning_content"] == "Need to print one."
+        assert records[1]["messages"][1]["reasoning_content"] == "Need a main."
 
 
 class TestPreferenceDataTransform:
