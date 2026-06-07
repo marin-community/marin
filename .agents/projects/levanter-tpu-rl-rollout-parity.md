@@ -23,8 +23,8 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - Prefer short local file edits, short REST `gh api` checks, and written
   handoffs. Delegate new runs to subagents when useful, then monitor them with
   tightly scoped heartbeats rather than foreground polling.
-- Heartbeat `poll-rl-rollout-epic-progress` watches #6176, #6185, #6186, and
-  this handoff PR with lightweight GitHub metadata. It should update the
+- Heartbeat `poll-rl-rollout-epic-progress` watches #6176, #6185, #6186,
+  #6214, and #6240 with lightweight GitHub metadata. It should update the
   epic/child issues before notifying on terminal results, concrete failures,
   review actions, or CI failures. The old v5p side-agent thread
   `019e9b3f-8ff1-79c3-9884-02f847973191` is no longer a hard dependency after
@@ -58,7 +58,10 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   this as a terminal infra/backend failure for the v5p comparison, not evidence
   about Levanter throughput. #6185 commit `91f6ec06a` makes future vLLM startup
   failures fail fast on subprocess exit and include bounded stdout/stderr tails
-  in the benchmark RuntimeError.
+  in the benchmark RuntimeError. Draft PR #6240, head `2bf3c036c`, stacks on
+  #6185 and adds bounded package/runtime metadata plus selected TPU/XLA/vLLM
+  environment keys to future startup failures; after one external
+  Hugging Face/cache rerun, all visible #6240 checks are green or skipped.
 - A prefill-heavy v6e-8 row has identified the next parity gap. For
   `prefill_b8_i2048_o128_n1`, backend `both`, dense matrix, TP=8,
   `--max-pages 512`, two warmups and one measured round, vLLM reached
@@ -110,6 +113,9 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - RL token rollout contracts: #6186,
   `https://github.com/marin-community/marin/pull/6186`, head
   `c4ba37bda1f429700528a442e2f18e906b96d1b9`.
+- v5p startup diagnostics hardening: #6240,
+  `https://github.com/marin-community/marin/pull/6240`, head
+  `2bf3c036c1c787d59dee4c7a096b5f400be96f52`, stacked on #6185.
 - Durable handoff artifact: #6214,
   `https://github.com/marin-community/marin/pull/6214`, branch
   `codex/levanter-rl-rollout-handoff`.
@@ -155,6 +161,13 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   failures should report whether the subprocess exited before readiness and
   include the tail of `stderr.log` and `stdout.log` in the raised error, avoiding
   another postmortem where `/dev/shm/.../vllm_profiles` is lost with the worker.
+- vLLM startup runtime metadata update: #6240 commit `2bf3c036c`,
+  `Record vLLM startup runtime snapshot`. Future v5p/vLLM startup failures
+  should also include bounded package/runtime metadata and selected TPU/XLA/vLLM
+  environment keys, without dumping the full environment or initializing JAX
+  devices while vLLM may own libtpu. #6240 is draft, mergeable, stacked on
+  #6185, and all visible checks are green or skipped after one external
+  Hugging Face/cache rerun.
 
 ## Acceptance Criteria
 
@@ -218,8 +231,9 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - Merge state verified by lightweight GitHub metadata after the app restart on
   2026-06-06: #6176 is open, non-draft, mergeable, and at head `104bf901`;
   #6185 is open, non-draft, mergeable, and at head `91f6ec06a`; #6186 is open,
-  non-draft, mergeable, and at head `c4ba37b`; #6214 is open, draft, mergeable,
-  and at head `16338c3c9`. All visible checks are green on these heads. The
+  non-draft, mergeable, and at head `c4ba37b`; #6214 is open, draft, and at
+  head `0364f79da`; #6240 is open, draft, mergeable, and at head `2bf3c036c`.
+  All visible checks are green or skipped on these heads. The
   goal is not complete until the required code paths and benchmark artifacts are
   landed or otherwise accepted by maintainers.
 
@@ -497,8 +511,10 @@ thread. Keep background-style work narrow and explicit until the app is stable:
    `decode_iteration_tokens_per_second` and `decode_device_tokens_per_second`
    before assigning any residual gap to LM-head/sampling or kernels.
 6. If rerunning the v5p mixed comparison, use #6185 head `91f6ec06a` or newer so
-   a repeated vLLM startup failure includes the actual stderr/stdout tail. Do
-   not launch the decode-heavy v5p row until the mixed v5p startup issue is
+   a repeated vLLM startup failure includes the actual stderr/stdout tail. Prefer
+   #6240 if available, because it additionally preserves bounded runtime/package
+   metadata and selected TPU/XLA/vLLM environment keys for diagnosis. Do not
+   launch the decode-heavy v5p row until the mixed v5p startup issue is
    understood or deliberately bypassed.
 7. Develop the RL batched-token API slice in parallel with the runtime wait.
    vLLM, Levanter, MathEnv, rollout-worker policy identity, tokenizer replay
@@ -837,6 +853,24 @@ implementation slice should be:
      passed, focused pre-commit on the changed files, and the commit hook
      including Pyrefly.
    - #6185 current head is `91f6ec06a`. Use this or newer for any v5p rerun.
+
+17. #6240 v5p startup runtime diagnostics:
+   - Draft PR #6240, branch `codex/v5p-vllm-startup-diagnostics`, stacks on
+     #6185 head `91f6ec06a`; commit `2bf3c036c` adds a bounded startup snapshot
+     to vLLM startup failure messages.
+   - The snapshot records package/runtime metadata from
+     `_runtime_env_snapshot(include_jax_devices=False)` and an allowlist of
+     TPU/XLA/vLLM environment keys such as `LIBTPU_INIT_ARGS`, `XLA_FLAGS`, and
+     cache/log-level settings. It deliberately does not dump the full
+     environment or initialize JAX devices while vLLM may own libtpu.
+   - Local validation passed: `py_compile` for the touched benchmark/test files,
+     focused Qwen3 parity benchmark pytest with 53 tests passed,
+     `./infra/pre-commit.py --changed-files --fix`, advisory review with only
+     unrelated existing local-import warnings, and the commit hook including
+     Pyrefly.
+   - GitHub CI initially hit the same external Hugging Face/cache-miss class in
+     `levanter-unit`; after one failed-job rerun, all visible #6240 checks are
+     green or skipped.
 
 ## RL Token Data Plane Gate
 
