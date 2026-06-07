@@ -248,21 +248,22 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - RL token data plane: substantially implemented in #6186 and green on the PR
   head, but still stack-dependent and not landed. Runtime integration remains a
   follow-up after the serving and benchmark PRs merge.
-- Merge state verified by lightweight GitHub metadata after the app restart on
-  2026-06-06: #6176 is open, non-draft, mergeable, and at head `104bf901`;
-  #6185 is open, non-draft, mergeable, and at head `f55913d1`; #6186 is open,
-  non-draft, mergeable, and at head `c4ba37b`; #6214 is open, draft, and at
-  head `0364f79da`; #6240 is open, draft, mergeable, and at head `2bf3c036c`.
-  All visible checks are green or skipped on these heads. The
-  goal is not complete until the required code paths and benchmark artifacts are
-  landed or otherwise accepted by maintainers.
+- Merge state verified by lightweight GitHub metadata after the crash recovery
+  on 2026-06-07: #6176 is open, non-draft, mergeable, and at head
+  `104bf901`; #6185 is open, non-draft, mergeable, and at head `f55913d1`;
+  #6186 is open, non-draft, mergeable, and at head `c4ba37b`; #6214 is open,
+  draft, mergeable, and at head `cac28f46b`; #6240 is open, draft, mergeable,
+  and at head `2bf3c036c`. All visible checks are green or skipped on these
+  heads. The goal is not complete until the required code paths and benchmark
+  artifacts are landed or otherwise accepted by maintainers.
 
 ## Active Work
 
-- PR #6176 adds the dense Qwen3 benchmark matrix and the service-layer
-  prefill-budget correctness fix. It is ready for review, mergeable, and all
-  visible CI checks are green at commit `104bf901`. The fresh Claude review
-  completed with no issues and confirmed the prior review notes were resolved.
+- PR #6176 adds the dense Qwen3 benchmark matrix harness/config. It is ready for
+  review, mergeable, and all visible CI checks are green at commit `104bf901`.
+  The fresh Claude review completed with no issues and confirmed the prior
+  review notes were resolved. The service-layer long-prompt correctness and
+  multi-prefill admission work lives in #6185.
 - Issue #6184 tracks engine-level multi-prefill admission for long-prompt TPU
   serving.
 - PR #6185 implements the long-prompt correctness and mixed-workload performance
@@ -385,12 +386,11 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   already exited, then includes bounded stderr/stdout tails in the startup
   `RuntimeError`. This does not fix vLLM-on-v5p startup itself, but it should
   turn the next terminal backend failure into an actionable log-bearing failure.
-- PR #6185 current CI state after commit `f55913d1`: the PR is non-draft and
-  mergeable. GitHub checks restarted after the timing-split patch; at
-  the latest lightweight metadata check, early unit/change lanes were queued or
-  running with no visible failed checks.
-  check. #6214 at `16338c3c9` also has all visible checks green and remains
-  draft as a handoff artifact.
+- PR #6185 current CI state after commit `f55913d1`: the PR is non-draft,
+  mergeable, and all visible checks are green after one failed-job rerun for the
+  known external Hugging Face/cache-miss class in `levanter-torch`. Do not rerun
+  that workflow again automatically. #6214 at `cac28f46b` also has all visible
+  checks green or skipped and remains draft as a handoff artifact.
 - Issue #6184 has the final proof comment:
   `https://github.com/marin-community/marin/issues/6184#issuecomment-4637412411`.
 - PR #6186 adds the first RL batched-token rollout API contracts, stacked on
