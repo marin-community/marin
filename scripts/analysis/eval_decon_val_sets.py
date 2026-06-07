@@ -24,7 +24,7 @@ Launch (one job per run; us-east5 keeps caches + checkpoints in-region):
 
     uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
         --tpu v6e-4 --enable-extra-resources --priority interactive \
-        --preemptible --region us-east5 \
+        --extra tpu --preemptible --region us-east5 \
         --job-name decon-eval-<run> \
         -e WANDB_API_KEY <KEY> -e HF_TOKEN <TOKEN> \
         -- python scripts/analysis/eval_decon_val_sets.py --run <run-name>
@@ -58,12 +58,17 @@ EVAL_OUT_ROOT = "gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets
 DATA_SECTION = Path(__file__).parent / "p33m67_data_section.json"
 ANCHOR_COMPONENT = "nemotron_cc_math_v1/4plus"
 SEQ_LEN = 4096
+JSON_TRACKER_DIR = "metrics.jsonl"
+JSON_TRACKER_RESULTS = "eval_results.json"
 
-# Canonical p33m67 lr0.33 K=0.20 ladder, verified complete on 2026-06-07:
-# every run's final hf/step-N matches round(0.2 x base num_train_steps) from
-# the delphi registry; attempt suffixes are fresh-restart counters and the
-# listed attempt is the one with a finished export.
+# Canonical p33m67 K=0.20 ladder, all lr factors, verified complete on
+# 2026-06-07: every run's final hf/step-N matches
+# round(0.2 x base num_train_steps) from the delphi registry; attempt
+# suffixes are fresh-restart counters and the listed attempt is the one with
+# a finished export (e.g. 1e22 lr0.33 abdeba / lr0.5 91bcb9 / lr0.67 089468
+# have no exports and are excluded).
 RUNS = [
+    # lr0.33
     "delphi-3e18-p33m67-k0p20-lr33-a003",
     "delphi-9e18-p33m67-k0p20-lr33-a002",
     "delphi-2e19-p33m67-k0p20-lr33-a002",
@@ -73,6 +78,36 @@ RUNS = [
     "delphi-3e20-p33m67-k0p20-lr33-a001",
     "delphi-1e21-p33m67-9p25b-lr0.33-58ebcb",
     "delphi-1e22-p33m67-32p07b-lr0.33-e9132105",
+    # lr0.5
+    "delphi-3e18-p33m67-k0p20-lr50-a003",
+    "delphi-9e18-p33m67-k0p20-lr50-a002",
+    "delphi-2e19-p33m67-k0p20-lr50-a002",
+    "delphi-3e19-p33m67-k0p20-lr50-a002",
+    "delphi-9e19-p33m67-k0p20-lr50-a002",
+    "delphi-2e20-p33m67-k0p20-lr50-a001",
+    "delphi-3e20-p33m67-k0p20-lr50-a001",
+    "delphi-1e21-p33m67-9p25b-lr0.5-efbc63",
+    "delphi-1e22-p33m67-32p07b-lr0.5-0eeca70d",
+    # lr0.67
+    "delphi-3e18-p33m67-k0p20-lr67-a003",
+    "delphi-9e18-p33m67-k0p20-lr67-a002",
+    "delphi-2e19-p33m67-k0p20-lr67-a002",
+    "delphi-3e19-p33m67-k0p20-lr67-a002",
+    "delphi-9e19-p33m67-k0p20-lr67-a002",
+    "delphi-2e20-p33m67-k0p20-lr67-a001",
+    "delphi-3e20-p33m67-k0p20-lr67-a001",
+    "delphi-1e21-p33m67-9p25b-lr0.67-9cf8da",
+    "delphi-1e22-p33m67-32p07b-lr0.67-54770ae7",
+    # lr0.83
+    "delphi-3e18-p33m67-k0p20-lr83-a003",
+    "delphi-9e18-p33m67-k0p20-lr83-a002",
+    "delphi-2e19-p33m67-k0p20-lr83-a002",
+    "delphi-3e19-p33m67-k0p20-lr83-a002",
+    "delphi-9e19-p33m67-k0p20-lr83-a002",
+    "delphi-2e20-p33m67-k0p20-lr83-a001",
+    "delphi-3e20-p33m67-k0p20-lr83-a001",
+    "delphi-1e21-p33m67-9p25b-lr0.83-0cb048",
+    "delphi-1e22-p33m67-32p07b-lr0.83-78fd44",
 ]
 
 # LmDataConfig has no use for these midtrain-spec bookkeeping keys.
@@ -121,6 +156,47 @@ def load_model_config(run: str, step: int) -> Qwen3Config:
     return Qwen3Config.from_hf_config(hf_config)
 
 
+def eval_output_dir(run: str, step: int) -> str:
+    return f"{EVAL_OUT_ROOT}/{run}/step-{step}/{JSON_TRACKER_DIR}"
+
+
+def eval_results_path(output_dir: str) -> str:
+    return f"{output_dir}/{JSON_TRACKER_RESULTS}"
+
+
+def existing_eval_output_paths(output_dir: str) -> list[str]:
+    """Return existing tracker artifacts under output_dir.
+
+    JsonFileTracker writes eval_results.json inside output_dir. On object stores,
+    the directory marker itself may not exist, so checking only output_dir can
+    miss a completed eval.
+    """
+    existing = []
+    if fsspec_exists(output_dir):
+        existing.append(output_dir)
+
+    result_path = eval_results_path(output_dir)
+    if fsspec_exists(result_path):
+        existing.append(result_path)
+
+    existing.extend(fsspec_glob(f"{output_dir}/*"))
+    return sorted(set(existing))
+
+
+def require_unused_output(output_dir: str, *, force: bool) -> None:
+    existing = existing_eval_output_paths(output_dir)
+    if not existing:
+        return
+
+    if force:
+        logger.warning("re-running with existing eval output under %s: %s", output_dir, existing)
+        return
+
+    preview = "\n".join(f"  - {path}" for path in existing[:10])
+    suffix = "" if len(existing) <= 10 else f"\n  ... and {len(existing) - 10} more"
+    raise RuntimeError(f"eval output already exists under {output_dir}; pass --force to re-run:\n{preview}{suffix}")
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser()
@@ -131,9 +207,8 @@ def main() -> None:
     args = parser.parse_args()
 
     step = args.step if args.step is not None else final_hf_step(args.run)
-    out_path = f"{EVAL_OUT_ROOT}/{args.run}/step-{step}/metrics.jsonl"
-    if fsspec_exists(out_path) and not args.force:
-        raise RuntimeError(f"{out_path} already exists; pass --force to re-run")
+    out_path = eval_output_dir(args.run, step)
+    require_unused_output(out_path, force=args.force)
 
     model = load_model_config(args.run, step)
     assert model.max_seq_len >= SEQ_LEN, f"model max_seq_len {model.max_seq_len} < {SEQ_LEN}"
