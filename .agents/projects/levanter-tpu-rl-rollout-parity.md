@@ -68,6 +68,18 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   `1262.90` decode tok/s and `21469.31` total tok/s. Levanter reached
   `1006.83` decode tok/s and `17116.08` total tok/s, for a ratio of `0.797`;
   the generic benchmark target marked this row `fail`.
+- A corrected backend=both v6e-8 rerun from #6185 head `91f6ec06a` completed as
+  `/dlwh/qwen3-v6e8-prefillcorr-20260607-0023`. The end-to-end row is still a
+  target failure: vLLM measured `1212.15` decode tok/s and `20606.54` total
+  tok/s, while Levanter measured `898.94` decode tok/s and `15282.00` total
+  tok/s, ratio `0.742`. The corrected fields change the attribution: Levanter's
+  measured decode iteration was `0.852`s for `1022` tokens, or `1200.223`
+  decode-iteration tok/s, with `0.677`s device time (`1509.350` device tok/s),
+  `0.174`s host time, `0.002`s submit, and `0.002`s extract. The four measured
+  prefill admissions were `4096,4096,4096,4096` prompt tokens and
+  `0.060,0.055,0.055,0.055`s. The remaining gap is therefore in end-to-end
+  prefill/host/measurement wall time for this prefill-heavy row, not in the
+  measured decode device path.
 - A narrow Levanter-only v6e-8 diagnostic follow-up completed, but it exposed a
   benchmark harness artifact rather than a clean attribution split. The normal
   diagnostic row measured `907.43` decode tok/s, `15426.28` total tok/s, and a
@@ -320,6 +332,21 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   future `summary.json` rows and markdown tables. This preserves the existing
   end-to-end decode ratio while giving reviewers a direct pure decode-loop and
   device-throughput signal for prefill-heavy rows.
+- PR #6185 corrected backend=both prefill-heavy rerun:
+  `/dlwh/qwen3-v6e8-prefillcorr-20260607-0023`. The job succeeded for
+  `prefill_b8_i2048_o128_n1`, Qwen3-8B, v6e-8, TP=8, backend `both`, dense
+  matrix, `--max-pages 512`, two warmups, and one measured round from #6185 head
+  `91f6ec06a`. vLLM reached `1212.15` decode tok/s and `20606.54` total tok/s.
+  Levanter reached `898.94` decode tok/s and `15282.00` total tok/s, for ratios
+  `0.742`/`0.742`, so the generic target still failed. The corrected attribution
+  fields show a different bottleneck: Levanter's measured decode iteration was
+  `0.852`s total, `0.677`s device, `0.174`s host, `0.002`s submit, `0.002`s
+  extract, and `1022` iteration tokens, for `1200.223`
+  `decode_iteration_tokens_per_second` and `1509.350`
+  `decode_device_tokens_per_second`. Measured prefill chunks remained
+  `4096,4096,4096,4096`, with per-admission wall times
+  `0.060,0.055,0.055,0.055`s. Treat the residual target failure as an
+  end-to-end prefill/host wall-clock issue before proposing decode-kernel work.
 - PR #6185 v5p startup postmortem follow-up: commit `91f6ec06a` makes
   `start_vllm_server()` poll readiness while checking whether the subprocess has
   already exited, then includes bounded stderr/stdout tails in the startup
@@ -504,12 +531,12 @@ thread. Keep background-style work narrow and explicit until the app is stable:
      launched.
 5. Use the corrected benchmark attribution before changing kernels. Commit
    `6d74fc7ea` now reports pure decode iteration and device throughput for
-   future rows. The corrected Levanter-only diagnostic shows `no_lm_head`
-   reaches `1244.03` decode tok/s, close to the original vLLM `1262.90`, and
-   production `levanter:auto` decodes `1022` tokens in `0.813`s. Future
-   prefill-heavy rows should compare end-to-end row throughput against
-   `decode_iteration_tokens_per_second` and `decode_device_tokens_per_second`
-   before assigning any residual gap to LM-head/sampling or kernels.
+   future rows. The corrected backend=both rerun
+   `/dlwh/qwen3-v6e8-prefillcorr-20260607-0023` shows the measured Levanter row
+   still fails end-to-end at `0.742` of vLLM, but its pure decode iteration is
+   `1200.223` tok/s against vLLM's `1212.15` decode tok/s, and device throughput
+   is `1509.350` tok/s. Treat the next optimization target as end-to-end
+   prefill/host wall-clock overhead unless a future row contradicts this.
 6. If rerunning the v5p mixed comparison, use #6185 head `91f6ec06a` or newer so
    a repeated vLLM startup failure includes the actual stderr/stdout tail. Prefer
    #6240 if available, because it additionally preserves bounded runtime/package
@@ -814,6 +841,21 @@ implementation slice should be:
      as the current PR state.
 
 15. #6185 latest v6e prefill-heavy attribution and PR state:
+   - Corrected backend=both rerun
+     `/dlwh/qwen3-v6e8-prefillcorr-20260607-0023` succeeded from #6185 head
+     `91f6ec06a`. vLLM measured `1212.15` decode tok/s and `20606.54` total
+     tok/s. Levanter measured `898.94` decode tok/s and `15282.00` total tok/s,
+     ratios `0.742`/`0.742`, target `fail`.
+   - The corrected Levanter fields show measured prefill chunks
+     `4096,4096,4096,4096`, prefill admission wall times
+     `0.060,0.055,0.055,0.055`s, decode iteration `0.852`s total /
+     `0.677`s device / `0.174`s host / `0.002`s submit / `0.002`s extract,
+     `1022` decode iteration tokens, `1200.223`
+     `decode_iteration_tokens_per_second`, and `1509.350`
+     `decode_device_tokens_per_second`.
+   - This keeps #6229 open as a performance target, but it changes the likely
+     bottleneck: pure decode iteration is close to the vLLM row, while the
+     end-to-end row still loses on prefill-heavy wall-clock accounting.
    - Corrected prefill-heavy diagnostic
      `/dlwh/qwen3-v6e8-prefilldiag-drain-prefill-b8-i2048-o128-n1-20260606-1532`
      succeeded from `82bb6dbfb`. All rows used prefill chunks
