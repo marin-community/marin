@@ -30,7 +30,7 @@ from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_b
 from levanter.data.text import GrugLmExample, LmDataConfig
 from levanter.data.text.examples import grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
-from levanter.grug.sharding import compact_grug_mesh
+from levanter.grug.sharding import _batch_spec, compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
@@ -55,7 +55,6 @@ class GrugTrainerConfig:
     """Runtime knobs for grug training."""
 
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(use_explicit_mesh_axes=True))
-    train_batch_pspec: P = field(default_factory=lambda: P(("replica_dcn", "data", "expert")))
     data_seed: int | None = None
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
@@ -67,7 +66,6 @@ class GrugEvalConfig:
     """Perplexity eval settings for grug training."""
 
     eval_batch_size: int = 512
-    eval_batch_pspec: P = field(default_factory=lambda: P(("replica_dcn", "data", "expert")))
     steps_per_eval: int | None = 1000
     max_eval_batches: int | None = None
     prefix: str = "eval"
@@ -117,10 +115,11 @@ def build_train_loader(
     *,
     batch_schedule: BatchSchedule,
     mesh: Mesh,
-    batch_pspec: P = P(("replica_dcn", "data", "expert")),
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    axis_resource = batch_pspec[0]
+    # Derive from the actual mesh so we only request axes that exist (e.g. "expert" is
+    # absent when expert_axis_size == 1, see compact_grug_mesh).
+    axis_resource = _batch_spec(mesh)[0]
     return DataLoader(
         dataset,
         batch_schedule.schedule,
@@ -149,7 +148,9 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    batch_axis_resource = eval_cfg.eval_batch_pspec[0]
+    # Derive from the actual mesh so we only request axes that exist (e.g. "expert" is
+    # absent when expert_axis_size == 1, see compact_grug_mesh).
+    batch_axis_resource = _batch_spec(mesh)[0]
     eval_axis_mapping = {"batch": batch_axis_resource}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
     eval_array_sharding = NamedSharding(mesh, P(batch_axis_resource, None))
@@ -384,7 +385,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     expert_axis_size = int(mesh_axes.get("expert", 1))
     replica_axis_size = int(mesh_axes.get("replica_dcn", jax.process_count()))
     # Grug uses raw PartitionSpecs rather than Trainer's logical axis mapping.
-    # Keep the mesh compact so P(("replica_dcn", "data", "expert")) spans slices directly.
+    # Keep the mesh compact so the batch pspec derived by `_batch_spec(mesh)` spans slices directly.
     mesh = compact_grug_mesh(expert_axis_size=expert_axis_size, replica_axis_size=replica_axis_size)
     with set_mesh(mesh):
         batch_schedule = trainer.batch_schedule
@@ -399,7 +400,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             train_dataset,
             batch_schedule=batch_schedule,
             mesh=mesh,
-            batch_pspec=config.trainer.train_batch_pspec,
         )
 
         @jax.jit

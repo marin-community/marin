@@ -192,6 +192,38 @@ def test_grug_moe_variant_threads_moe_implementation_to_kernel():
     assert "ragged_all_to_all" in str(closed_jaxpr)
 
 
+def test_grug_moe_data_loaders_build_against_single_expert_mesh():
+    """Regression: build_train_loader / build_tagged_evaluator must work when the
+    compact mesh has no "expert" axis (i.e. expert_axis_size == 1).
+
+    See https://github.com/marin-community/marin/issues/6252 — canary configurations
+    always have expert_axis_size == 1, so compact_grug_mesh drops the "expert" axis
+    entirely. The batch pspec must be derived from the actual mesh.
+    """
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    compact_grug_mesh = importlib.import_module("levanter.grug.sharding").compact_grug_mesh
+
+    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+    assert "expert" not in mesh.shape, "fixture must reproduce the canary single-expert layout"
+
+    dataset = ListAsyncDataset(
+        [
+            GrugLmExample(
+                tokens=jnp.zeros((4,), dtype=jnp.int32),
+                loss_weight=jnp.ones((4,), dtype=jnp.float32),
+                attn_mask=GrugAttentionMask.causal(),
+            )
+        ]
+    )
+    from levanter.schedule import BatchSchedule
+
+    batch_schedule = BatchSchedule(max(1, len(jax.devices())))
+
+    # This used to raise: "Resource axis: expert ... is not found in mesh: (..., model)".
+    loader = train_module.build_train_loader(dataset, batch_schedule=batch_schedule, mesh=mesh)
+    assert loader is not None
+
+
 @pytest.mark.parametrize(
     "variant",
     _discover_grug_variants_with_model_and_train(),
