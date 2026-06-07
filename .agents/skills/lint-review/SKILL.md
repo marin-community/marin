@@ -1,27 +1,15 @@
 ---
 name: lint-review
-description: Run the advisory infra/lint catalog review over a PR's branch diff and post each finding as an inline review comment. Use in CI to surface lint findings during code review, alongside the high-level review.
+description: In CI, run the infra/lint catalog review over a PR.
 allowed-tools: Bash(./infra/pre-commit.py:*), Bash(gh pr comment:*), Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh api:*), Bash(git diff:*), Bash(git log:*), Bash(git show:*), Bash(git merge-base:*), Bash(git rev-parse:*), Bash(git status:*), mcp__github_inline_comment__create_inline_comment
 ---
 
 # Skill: Lint-catalog review on a PR
 
-Run the advisory `infra/lint/` catalog review (`./infra/pre-commit.py --review`)
-over a pull request's branch diff and surface every finding **during code review
-on GitHub** — as `file:line` inline review comments where the finding's line is
-in the diff, and as a single fallback comment for the rest.
-
-This is the CI counterpart to the local step 6 of the `commit` skill. It runs in
-parallel with the high-level `/review-pr` correctness review and posts its own,
-clearly-labelled comments — the two are complementary (the high-level review
-deliberately skips lint-catchable issues).
-
-## Invocation
-
-`/lint-review --comment <PR#>` — run the review and post findings to the PR.
-
-Without `--comment`, run the review and print findings to the terminal only (do
-not touch GitHub). Used for a local preview.
+Run the `infra/lint/` catalog review (`./infra/pre-commit.py --review`)
+over a pull request's branch diff and surface every finding — as `file:line` 
+inline review comments where the finding's line is available, and as a 
+single fallback comment for the rest.
 
 ## Your contract
 
@@ -51,8 +39,7 @@ unforgivable error; so is fabricating one.
    ./infra/pre-commit.py --review
    ```
 
-   The default `--agent-command` is `claude -p`, which matches this environment —
-   do not override it. The command writes its raw per-arm prompts/outputs and the
+   The command writes its raw per-arm prompts/outputs and the
    combined findings under `/tmp/marin-linter/<timestamp>/` (path printed at the
    end); read it if a run looks wrong.
 
@@ -64,8 +51,6 @@ unforgivable error; so is fabricating one.
    ```
 
    e.g. `lib/iris/src/iris/foo.py:42: ml-cruft-dead-branch (0.85) Unreachable else after early return`.
-   Take exactly the lines matching that shape as the findings; ignore every other
-   line (status notes, the log-dir path, `Lint review: no findings.`, warnings).
 
 4. **No findings vs. failed run.** Distinguish two zero-finding cases:
 
@@ -84,15 +69,14 @@ unforgivable error; so is fabricating one.
 
 5. **Post inline comments.** With `--comment` and findings present, for **each**
    finding post one inline comment with
-   `mcp__github_inline_comment__create_inline_comment`, `confirmed: true`, the
+   `mcp__github_inline_comment__create_inline_comment`, the
    finding's `path` and `line`, and a body of exactly this shape:
 
    ```
-   🤖 **Lint** `ml-<code>` · confidence <confidence>
+   `ml-<code>` · confidence <confidence>
 
    <message>
 
-   <sub>Advisory finding from the `infra/lint/` catalog — apply it when it makes the code better. Search `infra/lint/` for `ml-<code>` for the rule behind it.</sub>
    <!-- marin-lint-review -->
    ```
 
@@ -110,10 +94,10 @@ unforgivable error; so is fabricating one.
    so none are dropped. Format:
 
    ```
-   🤖 Lint review (advisory) — findings outside the diff
+   Lint review:
 
    These infra/lint findings anchor on lines not in the PR diff, so they could not
-   be attached inline. Search infra/lint/ for each ml-... code.
+   be attached inline.
 
    - <path>:<line>: ml-<code> (<confidence>) <message>
    - ...
@@ -130,7 +114,3 @@ unforgivable error; so is fabricating one.
 - The review reads the **branch diff against the merge base with `origin/main`**,
   covering committed and uncommitted work. CI checks out the PR head and fetches
   `origin/main` before invoking you, so the merge base resolves.
-- Findings are **advisory** and never block the PR; this skill only ever posts
-  comments.
-- Related: `.agents/skills/commit/` (the local pre-PR `--review` step) and
-  `.agents/skills/review-pr/` (the parallel high-level correctness review).
