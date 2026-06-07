@@ -640,7 +640,6 @@ def make_windows(
         yield window
 
 
-
 def _sorted_merge_join(
     left_stream: Iterable,
     right_stream: Iterable,

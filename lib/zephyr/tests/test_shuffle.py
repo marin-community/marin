@@ -7,20 +7,18 @@ Covers the scatter write/read roundtrip, per-shard stats, and external sort —
 without spinning up a full coordinator.
 """
 
-import io
 import itertools
 import os
 import re
 from collections import OrderedDict
 from collections.abc import Iterator
+from unittest.mock import patch
 
 import cloudpickle
-import fsspec
 import polars as pl
 import pytest
-from rigging.filesystem import filesystem
-from zephyr.execution import _worker_ctx_var
-from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
+from iris.env_resources import TaskResources
+from zephyr.external_sort import external_sort_merge
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
 from zephyr.shuffle import (
@@ -31,7 +29,6 @@ from zephyr.shuffle import (
     _dataframe_to_items,
     _items_to_dataframe,
     _write_scatter,
-    deterministic_hash,
 )
 from zephyr.worker_context import _worker_ctx_var
 
@@ -191,10 +188,6 @@ def test_scatter_with_combiner(tmp_path):
 
 def test_merge_sorted_chunks_external_trigger(tmp_path):
     """merge_sorted_chunks successfully spills to disk when budget is exceeded."""
-    from unittest.mock import patch
-
-    from iris.env_resources import TaskResources
-
     items = [{"k": i, "v": i} for i in range(10)]
     data_path = str(tmp_path / "shard-0000/scatter/")
     # Write many small chunks
