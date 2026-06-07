@@ -106,7 +106,7 @@ class TransformAdapter:
                 return None  # Do not process rows with missing data
             if self.filter_on_key:
                 best_completion = None
-                best_metric = -float("inf")  # TODO: Make this a config
+                best_metric = float("-inf")
 
                 for completion in response:
                     if completion[self.filter_on_key] > best_metric:
