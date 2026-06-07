@@ -48,6 +48,8 @@ logger = logging.getLogger(__name__)
 VAL_DOCS_EAST5 = "gs://marin-us-east5/scratch/ahmed/midtrain_dedup/val_docs"
 MIN_REPORT_JACCARD = 0.5
 _WS = re.compile(r"\s+")
+PAIR_SCHEMA = pa.schema([("val_id", pa.string()), ("other_id", pa.string())])
+VERIFIED_PAIR_SCHEMA = pa.schema([("val_id", pa.string()), ("other_id", pa.string()), ("jaccard", pa.float64())])
 
 
 @dataclass(frozen=True)
@@ -116,8 +118,12 @@ def _emit_candidate_pairs(_key: str, items: Iterator[dict]) -> Iterator[dict]:
             yield {"val_id": val_id, "other_id": other}
 
 
-def _first_item(_key: str, items: Iterator[dict]) -> Iterator[dict]:
-    yield next(iter(items))
+def _pair_key(record: dict) -> tuple[str, str]:
+    return record["val_id"], record["other_id"]
+
+
+def _first_pair(_key: tuple[str, str], items: Iterator[dict]) -> Iterator[dict]:
+    yield next(items)
 
 
 def _shingles(text: str, n: int = 5) -> set[str]:
@@ -246,7 +252,7 @@ def main() -> None:
         Dataset.from_list(join_files)
         .flat_map(lambda path, ids=val_ids, vb=val_buckets: _bucket_records(path, ids, vb))
         .group_by(lambda r: r["bucket"], reducer=_emit_candidate_pairs)
-        .write_parquet(f"{pairs_dir}/pairs-{{shard:05d}}-of-{{total:05d}}.parquet")
+        .write_parquet(f"{pairs_dir}/pairs-{{shard:05d}}-of-{{total:05d}}.parquet", schema=PAIR_SCHEMA)
     )
 
     # Dedup the (val_id, other_id) pairs once (3-4B rows -> ~10M); verify
@@ -261,8 +267,8 @@ def main() -> None:
     dedup_ctx.execute(
         Dataset.from_files(f"{pairs_dir}/*.parquet")
         .load_parquet()
-        .group_by(lambda r: f"{r['val_id']}|{r['other_id']}", reducer=_first_item)
-        .write_parquet(f"{dedup_dir}/pairs-{{shard:05d}}-of-{{total:05d}}.parquet")
+        .group_by(_pair_key, reducer=_first_pair)
+        .write_parquet(f"{dedup_dir}/pairs-{{shard:05d}}-of-{{total:05d}}.parquet", schema=PAIR_SCHEMA)
     )
     pairs_dir = dedup_dir
 
@@ -276,7 +282,10 @@ def main() -> None:
     outcome = verify_ctx.execute(
         Dataset.from_list(corpus_files)
         .flat_map(lambda path, p=pairs_dir, v=val_docs: _verify_shard(path, p, v))
-        .write_parquet(f"{scratch}/verified_pairs/verified-{{shard:05d}}-of-{{total:05d}}.parquet")
+        .write_parquet(
+            f"{scratch}/verified_pairs/verified-{{shard:05d}}-of-{{total:05d}}.parquet",
+            schema=VERIFIED_PAIR_SCHEMA,
+        )
     )
 
     stats = {
