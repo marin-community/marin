@@ -1403,3 +1403,32 @@ Per-run raw: `…/evals/<run>/step-<N>/metrics.jsonl/eval_results.json`; W&B
 Next: re-fit math scaling laws on decon_j050 (best-over-lr per scale) vs the
 original anchor to quantify how much the original isoflop fit's top-end
 curvature is contamination.
+
+### 2026-06-07 ~23:30 UTC — Pre-launch: extend decon eval to p50m50 + p67m33 (all scales × all lr)
+
+Directive: run the same decon eval over the other two mixes across the whole
+ladder, interactive priority. The eval data config is **mix-independent** —
+the math anchor component (`nemotron_cc_math_v1/4plus`, cache `4plus-2c5519`,
+`num_validation_sequences: 12500`, feistel params) is byte-identical across
+`p33m67/p50m50/p67m33.json` (sha `f1360c86` all three; the byte-identical val
+contract), and the decon caches are mix-independent. So `build_data_config()`
+is reused unchanged; only the checkpoints differ. Anchor losses are therefore
+directly comparable across mixes.
+
+Run selection verified complete vs registry (final hf step ≈
+round(0.2 × base steps)):
+
+- **p67m33: 36/36** complete.
+- **p50m50: 35/36** — `1e22 lr0.67` (`e78260`) only reached step 6112 (vs
+  7646), excluded as incomplete; no other complete attempt exists.
+- Excluded stray partial attempts throughout (e.g. p67m33 lr0.5 a003/a004/a005
+  at step 19-29 — fresh restarts that never trained).
+
+Extra sanity gates available: `delphi-1e21-p50m50-9p25b-lr0.5-973c46` and
+`delphi-1e21-p67m33-9p25b-lr0.5-114e49` are the val-set provenance runs for
+their mixes — anchor loss must reproduce their recorded final math-val loss.
+
+Launching 71 jobs (36 p67m33 + 35 p50m50), all v6e-4 (1e22 incl.),
+`--cpu 8 --memory 64/96/120GB --disk 50GB --extra tpu`, interactive,
+preemptible, us-east5. Job names `decon-eval-<run>` (mix in run name → no
+output collision; outputs keyed by run under `…/evals/<run>/`).
