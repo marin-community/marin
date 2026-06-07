@@ -57,12 +57,14 @@ of this work.
 
 - **Subject**: imperative sentence (<72 chars), optional `[scope]` prefix
   (`[iris]`, `[zephyr]`, `[docs]`, …).
-- **Body** (optional, blank-line separated): 1–3 sentences on *why*, not *what*.
+- **Body** (optional, blank-line separated): what, and why, keep it short & readable
   Include context a reviewer needs.
 - No emoji, no markdown, no bullets in the subject. Do not credit yourself.
 
 Create the commit. If a pre-commit hook fails, fix the issue and make a **new**
 commit — never amend (unless the user asks) and never force-push.
+
+Never credit yourself or add a tag line in commits "Created by Claude", "Created by Codex", etc.
 
 ## 6. Push
 
@@ -83,14 +85,15 @@ you change a branch that already has a PR.
 
 **Hard rules — violations are rejected:**
 
-- No section headers (`## Summary`, `## Test plan`, `## Changes`).
 - No "Validation" / "Testing" / "written by …" filler. The body is *what & why*,
   not *how I tested it* or *who wrote it*.
 - No checkboxes (`- [ ]`, `- [x]`), no emoji.
 - No filler openers ("This PR…", "I noticed…", "Summary of changes:").
 - Under ~500 words.
+- Don't credit yourself, no "Created by Claude" filler.
+- Only use Markdown & sections if this is a large change that requires structured description
 
-Example (follow this exactly):
+Example:
 
 ```
 Title: [RL] Fix loss: use global token normalization instead of per-example
@@ -107,9 +110,10 @@ Fixes #1234
 (auto-closes on merge) or `Part of #NNNN` (partial work). Do not invent an issue
 just to satisfy this — omit the link when none exists.
 
-**Specifications (>500 LOC).** Large PRs must carry a spec — in the issue, the
-first PR comment, or `docs/design/<topic>.md` / `.agents/projects/<topic>.md` —
-covering: **Problem** (what is broken/missing, with file/line refs), **Approach**
+**Specifications (>500 LOC).** Large PRs must carry a spec. 
+This may be in the linked issue, or part of the PR description. 
+If a design doc exists, may also link to it instead.
+Specs cover: **Problem** (what is broken/missing, with file/line refs), **Approach**
 (which modules change, what is added/removed), and **Key code** (10–30 line
 snippets for non-obvious logic).
 
@@ -124,20 +128,17 @@ gh pr create --title "<title>" --body "<plain text body>" --label agent-generate
 - Always add the `agent-generated` label.
 - Never credit yourself in commits or PR descriptions.
 - Include `Fixes #NNNN` when addressing a pre-existing issue.
-- If an automation feature is present (e.g. `codex_app.automation_update`),
-  schedule the follow-up after the PR exists: it inspects the PR, addresses
-  review comments automatically only when the fix is unobjectionable and
-  certainly correct, runs the relevant checks, and pushes a follow-up commit —
-  deferring anything that needs human judgment, design choice, or tradeoff
-  evaluation back to the user.
-
-After pushing, monitor CI with `gh pr view <number> --json statusCheckRollup` and
-fix failures before considering the PR complete.
+- You must monitor PR status after creation if you have the ability (via a monitor skill or automation update and the `gh` CLI).
+- Address CI failures, apply fixes, and repush. Continue monitoring.
+- Respond to both human and agent comments: address obvious comments directly and resolve
+  them. If you are unsure, prepare a report with your analysis of the remaining comments and
+  your proposed action and present it to the local user.
+- Continue monitoring until instructed otherwise, or the PR is merged.
 
 ## Rules
 
-- `./infra/pre-commit.py` is the only lint entry point; never `--no-verify`.
-- Never amend a commit unless the user explicitly asks; never force-push.
+- `./infra/pre-commit.py` is the only lint entry point.
+- Never amend a commit unless the user explicitly asks.
 - If there are no changes to commit, say so and stop.
 
 ## See Also
