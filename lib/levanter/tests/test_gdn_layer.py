@@ -26,10 +26,8 @@ def _np(x):
 def _init_small_hf_layer(hidden_size=128, nk=4, nv=8, dk=8, dv=8, ksz=4):
     pytest.importorskip("torch")
     pytest.importorskip("transformers")
-    from transformers.models import qwen3_next  # noqa: PLC0415  # guarded: importorskip
-
-    Qwen3NextConfig = qwen3_next.Qwen3NextConfig
-    Qwen3NextGatedDeltaNet = qwen3_next.Qwen3NextGatedDeltaNet
+    from transformers.models.qwen3_next.configuration_qwen3_next import Qwen3NextConfig  # noqa: PLC0415
+    from transformers.models.qwen3_next.modular_qwen3_next import Qwen3NextGatedDeltaNet  # noqa: PLC0415
 
     cfg = Qwen3NextConfig(
         hidden_size=hidden_size,
@@ -49,10 +47,8 @@ def _init_small_hf_layer(hidden_size=128, nk=4, nv=8, dk=8, dv=8, ksz=4):
 def _init_small_hf_layer_with_linear_only(hidden_size=128, nk=4, nv=8, dk=8, dv=8, ksz=4):
     pytest.importorskip("torch")
     pytest.importorskip("transformers")
-    from transformers.models import qwen3_next  # noqa: PLC0415  # guarded: importorskip
-
-    Qwen3NextConfig = qwen3_next.Qwen3NextConfig
-    Qwen3NextGatedDeltaNet = qwen3_next.Qwen3NextGatedDeltaNet
+    from transformers.models.qwen3_next.configuration_qwen3_next import Qwen3NextConfig  # noqa: PLC0415
+    from transformers.models.qwen3_next.modular_qwen3_next import Qwen3NextGatedDeltaNet  # noqa: PLC0415
 
     cfg = Qwen3NextConfig(
         hidden_size=hidden_size,
@@ -297,9 +293,7 @@ def test_gdn_layer_decode_matches_hf_one_step():
     Ensures conv-state length K and S-state handoff are correct and parity holds.
     """
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.qwen3_next import modular_qwen3_next  # noqa: PLC0415  # optional: torch (HF modeling)
-
-    Qwen3NextDynamicCache = modular_qwen3_next.Qwen3NextDynamicCache
+    from transformers.models.qwen3_next.modular_qwen3_next import Qwen3NextDynamicCache  # noqa: PLC0415
 
     hidden_size, nk, nv, dk, dv, ksz = 128, 4, 8, 8, 8, 4
     hf_cfg, hf_layer = _init_small_hf_layer_with_linear_only(hidden_size, nk, nv, dk, dv, ksz)

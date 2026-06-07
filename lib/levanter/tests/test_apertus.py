@@ -9,7 +9,6 @@ import pytest
 from jax import random
 from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
 from transformers import AutoModelForCausalLM
-from transformers.activations import XIELUActivation as HfXIELUActivation
 from transformers.models.apertus.configuration_apertus import ApertusConfig as HfApertusConfig
 
 from levanter.layers.attention import AttentionMask
@@ -27,6 +26,7 @@ pytestmark = skip_if_module_missing("transformers.models.apertus.modeling_apertu
 def test_xielu_vs_hf(alpha_p_init, alpha_n_init, beta):
     """Test that Levanter XIELUActivation matches HuggingFace implementation."""
     import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.activations import XIELUActivation as HfXIELUActivation  # noqa: PLC0415  # pulls torch
 
     # Create both activations with same init parameters
     hf_xielu = HfXIELUActivation(
