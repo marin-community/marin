@@ -784,6 +784,50 @@ def test_step_resources_dispatch_uses_device_extra(tmp_path: Path, fray_client):
     assert spy.requests[0].environment.extras == ["gpu"]
 
 
+def test_remote_resources_dispatch_uses_device_extra(tmp_path: Path, fray_client):
+    spy = _SubmitSpy(fray_client)
+
+    resources = ResourceConfig.with_gpu("H100", count=8)
+
+    @remote(resources=resources)
+    def my_step(output_path: str) -> PathMetadata:
+        return PathMetadata(path=output_path)
+
+    step = StepSpec(
+        name="remote_gpu_step",
+        override_output_path=tmp_path.as_posix(),
+        fn=my_step,
+    )
+
+    with set_current_client(spy):
+        StepRunner().run([step])
+
+    assert len(spy.requests) == 1
+    assert spy.requests[0].environment.extras == ["gpu"]
+
+
+def test_remote_dependency_groups_can_override_device_extra(tmp_path: Path, fray_client):
+    spy = _SubmitSpy(fray_client)
+
+    resources = ResourceConfig.with_gpu("H100", count=8)
+
+    @remote(resources=resources, pip_dependency_groups=[])
+    def my_step(output_path: str) -> PathMetadata:
+        return PathMetadata(path=output_path)
+
+    step = StepSpec(
+        name="remote_gpu_step_without_extras",
+        override_output_path=tmp_path.as_posix(),
+        fn=my_step,
+    )
+
+    with set_current_client(spy):
+        StepRunner().run([step])
+
+    assert len(spy.requests) == 1
+    assert spy.requests[0].environment.extras == []
+
+
 # ---------------------------------------------------------------------------
 # @remote decorator tests
 # ---------------------------------------------------------------------------
