@@ -57,3 +57,36 @@ future benchmark rows.
 
 - [ ] Rerun one corrected Levanter-only v6e diagnostic if clean LM-head and
       sampling attribution is still needed.
+
+## Hypothesis 3
+
+The corrected backend=both rerun exposed one more attribution ambiguity:
+`decode_seconds_per_iteration` still measures from the start of a generation
+iteration, before pending prefill admissions are drained. For
+`prefill_b8_i2048_o128_n1`, that means the reported decode iteration wall time
+can include prefill-drain work, even when `decode_submit_seconds_per_iteration`
+is correctly measured around `_run_generation_loop(...)`.
+
+## Changes to make
+
+Add per-iteration metric fields that separate prefill drain from the generation
+loop itself:
+
+- `prefill_drain_seconds_per_iteration`
+- `prefill_drain_tokens_per_iteration`
+- `generation_seconds_per_iteration`
+- `generation_host_seconds_per_iteration`
+- `generation_tokens_per_iteration`
+
+Plumb these through the OpenAI server metrics snapshot and benchmark
+`CaseResult`, and emit a derived `generation_tokens_per_second` field in
+`summary.json` and `summary.md`.
+
+## Results
+
+Focused validation passed:
+
+- `uv run --package marin-levanter --group test pytest lib/levanter/tests/inference/test_engine.py lib/levanter/tests/test_qwen3_tpu_inference_parity_bench.py -q`
+  passed with `63 passed`.
+- `./infra/pre-commit.py --files lib/levanter/src/levanter/inference/engine.py lib/levanter/src/levanter/inference/openai.py lib/levanter/scripts/bench/bench_qwen3_tpu_inference_parity.py lib/levanter/tests/inference/test_engine.py lib/levanter/tests/test_qwen3_tpu_inference_parity_bench.py --fix`
+  passed.

@@ -725,6 +725,11 @@ def _case_result(
     decode_seconds_per_iteration: list[float] | None = None,
     decode_device_seconds_per_iteration: list[float] | None = None,
     decode_tokens_per_iteration: list[int] | None = None,
+    prefill_drain_seconds_per_iteration: list[float] | None = None,
+    prefill_drain_tokens_per_iteration: list[int] | None = None,
+    generation_seconds_per_iteration: list[float] | None = None,
+    generation_host_seconds_per_iteration: list[float] | None = None,
+    generation_tokens_per_iteration: list[int] | None = None,
 ) -> bench.CaseResult:
     return bench.CaseResult(
         case_name=case_name,
@@ -749,6 +754,11 @@ def _case_result(
         decode_seconds_per_iteration=decode_seconds_per_iteration,
         decode_device_seconds_per_iteration=decode_device_seconds_per_iteration,
         decode_tokens_per_iteration=decode_tokens_per_iteration,
+        prefill_drain_seconds_per_iteration=prefill_drain_seconds_per_iteration,
+        prefill_drain_tokens_per_iteration=prefill_drain_tokens_per_iteration,
+        generation_seconds_per_iteration=generation_seconds_per_iteration,
+        generation_host_seconds_per_iteration=generation_host_seconds_per_iteration,
+        generation_tokens_per_iteration=generation_tokens_per_iteration,
     )
 
 
@@ -767,6 +777,11 @@ def test_summary_markdown_includes_vllm_ratio_columns(tmp_path):
                 decode_seconds_per_iteration=[0.5],
                 decode_device_seconds_per_iteration=[0.25],
                 decode_tokens_per_iteration=[100],
+                prefill_drain_seconds_per_iteration=[0.1],
+                prefill_drain_tokens_per_iteration=[20],
+                generation_seconds_per_iteration=[0.4],
+                generation_host_seconds_per_iteration=[0.15],
+                generation_tokens_per_iteration=[80],
             ),
         ],
         {"backend": "both"},
@@ -786,11 +801,18 @@ def test_summary_markdown_includes_vllm_ratio_columns(tmp_path):
     assert "decode device s" in summary
     assert "decode host s" in summary
     assert "decode iter toks" in summary
+    assert "prefill drain s" in summary
+    assert "prefill drain toks" in summary
+    assert "generation s" in summary
+    assert "generation host s" in summary
+    assert "generation toks" in summary
     assert "decode iter tok/s" in summary
     assert "decode device tok/s" in summary
+    assert "generation tok/s" in summary
     assert "0.900" in summary
     assert "200.000" in summary
     assert "400.000" in summary
+    assert "200.000" in summary
     assert "pass" in summary
     assert "12.346" in summary
     assert "123456" in summary
@@ -810,6 +832,8 @@ def test_summary_json_includes_machine_readable_parity_comparisons(tmp_path):
                 decode_seconds_per_iteration=[0.25, 0.25],
                 decode_device_seconds_per_iteration=[0.2, 0.2],
                 decode_tokens_per_iteration=[64, 64],
+                generation_seconds_per_iteration=[0.24, 0.24],
+                generation_tokens_per_iteration=[60, 60],
             ),
         ],
         {"backend": "both"},
@@ -830,6 +854,7 @@ def test_summary_json_includes_machine_readable_parity_comparisons(tmp_path):
     ]
     assert levanter_rows[0]["decode_iteration_tokens_per_second"] == pytest.approx(256.0)
     assert levanter_rows[0]["decode_device_tokens_per_second"] == pytest.approx(320.0)
+    assert levanter_rows[0]["generation_tokens_per_second"] == pytest.approx(120 / 0.48)
 
 
 def _stress_result() -> bench.StressResult:
@@ -1156,6 +1181,11 @@ def test_run_case_propagates_backend_static_metrics(monkeypatch):
             "decode_submit_seconds_per_iteration": [0.01],
             "decode_extract_seconds_per_iteration": [0.02],
             "decode_tokens_per_iteration": [2],
+            "prefill_drain_seconds_per_iteration": [0.03],
+            "prefill_drain_tokens_per_iteration": [1],
+            "generation_seconds_per_iteration": [0.22],
+            "generation_host_seconds_per_iteration": [0.02],
+            "generation_tokens_per_iteration": [1],
         }
 
     monkeypatch.setattr(bench, "_send_completion", send_completion)
@@ -1192,6 +1222,11 @@ def test_run_case_propagates_backend_static_metrics(monkeypatch):
     assert result.decode_submit_seconds_per_iteration == [0.01]
     assert result.decode_extract_seconds_per_iteration == [0.02]
     assert result.decode_tokens_per_iteration == [2]
+    assert result.prefill_drain_seconds_per_iteration == [0.03]
+    assert result.prefill_drain_tokens_per_iteration == [1]
+    assert result.generation_seconds_per_iteration == [0.22]
+    assert result.generation_host_seconds_per_iteration == [0.02]
+    assert result.generation_tokens_per_iteration == [1]
 
 
 def test_run_stress_case_aggregates_success_failures_and_service_metrics(monkeypatch):
@@ -1530,6 +1565,11 @@ def test_run_levanter_without_lm_head_case_preserves_warmup_flag(monkeypatch):
                 decode_submit_seconds_per_iteration = [0.01]
                 decode_extract_seconds_per_iteration = [0.02]
                 decode_tokens_per_iteration = [2]
+                prefill_drain_seconds_per_iteration = [0.03]
+                prefill_drain_tokens_per_iteration = [1]
+                generation_seconds_per_iteration = [0.22]
+                generation_host_seconds_per_iteration = [0.02]
+                generation_tokens_per_iteration = [1]
 
             return Result()
 

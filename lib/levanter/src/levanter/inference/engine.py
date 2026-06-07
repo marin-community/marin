@@ -1036,6 +1036,11 @@ class GenerationResult:
     decode_submit_seconds_per_iteration: list[float] = field(default_factory=list)
     decode_extract_seconds_per_iteration: list[float] = field(default_factory=list)
     decode_tokens_per_iteration: list[int] = field(default_factory=list)
+    prefill_drain_seconds_per_iteration: list[float] = field(default_factory=list)
+    prefill_drain_tokens_per_iteration: list[int] = field(default_factory=list)
+    generation_seconds_per_iteration: list[float] = field(default_factory=list)
+    generation_host_seconds_per_iteration: list[float] = field(default_factory=list)
+    generation_tokens_per_iteration: list[int] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -1494,6 +1499,11 @@ class InferenceEngine:
         decode_submit_seconds_per_iteration: list[float] = []
         decode_extract_seconds_per_iteration: list[float] = []
         decode_tokens_per_iteration: list[int] = []
+        prefill_drain_seconds_per_iteration: list[float] = []
+        prefill_drain_tokens_per_iteration: list[int] = []
+        generation_seconds_per_iteration: list[float] = []
+        generation_host_seconds_per_iteration: list[float] = []
+        generation_tokens_per_iteration: list[int] = []
         # Initialize fresh result buckets for this call
         for rid in call_rids:
             self.results[rid] = {
@@ -1613,6 +1623,7 @@ class InferenceEngine:
 
             iter_start = time.time()
             iter_new_tokens = 0
+            prefill_drain_start = iter_start
 
             while pending_requests:
                 prefill_tokens, admitted_requests = _admit_pending_prefill()
@@ -1620,6 +1631,8 @@ class InferenceEngine:
                 if not admitted_requests:
                     break
 
+            prefill_drain_done = time.time()
+            prefill_drain_time = prefill_drain_done - prefill_drain_start
             fake_submit_start = time.time()
             # future_state, decode_outputs = _run_generation_loop(
             jax.tree.flatten(
@@ -1661,8 +1674,10 @@ class InferenceEngine:
 
             iter_end = time.time()
             iter_time = iter_end - iter_start
+            generation_time = iter_end - prefill_drain_done
             # Host time is everything except the device execution wait
             host_time = max(iter_time - device_time, 0.0)
+            generation_host_time = max(generation_time - device_time, 0.0)
             submit_time = submit_done - submit_start
             decode_seconds_per_iteration.append(iter_time)
             decode_device_seconds_per_iteration.append(device_time)
@@ -1670,11 +1685,17 @@ class InferenceEngine:
             decode_submit_seconds_per_iteration.append(submit_time)
             decode_extract_seconds_per_iteration.append(extract_time)
             decode_tokens_per_iteration.append(new_tokens)
+            prefill_drain_seconds_per_iteration.append(prefill_drain_time)
+            prefill_drain_tokens_per_iteration.append(iter_new_tokens)
+            generation_seconds_per_iteration.append(generation_time)
+            generation_host_seconds_per_iteration.append(generation_host_time)
+            generation_tokens_per_iteration.append(decode_new_tokens)
             if iter_time > 0:
                 tps_total = new_tokens / iter_time
                 logger.info(
                     f"Decode iter: total {iter_time:.3f}s (device {device_time:.3f}s, host {host_time:.3f}s, "
-                    f"submit {submit_time:.3f}s), "
+                    f"submit {submit_time:.3f}s, prefill_drain {prefill_drain_time:.3f}s, "
+                    f"generation {generation_time:.3f}s), "
                     f"fake_submit {fake_submit_done - fake_submit_start:.3f}s, "
                     f"{tps_total:.2f} tok/s, {new_tokens} new"
                     f" (extract {extract_time:.3f}s"
@@ -1731,6 +1752,11 @@ class InferenceEngine:
             decode_submit_seconds_per_iteration=decode_submit_seconds_per_iteration,
             decode_extract_seconds_per_iteration=decode_extract_seconds_per_iteration,
             decode_tokens_per_iteration=decode_tokens_per_iteration,
+            prefill_drain_seconds_per_iteration=prefill_drain_seconds_per_iteration,
+            prefill_drain_tokens_per_iteration=prefill_drain_tokens_per_iteration,
+            generation_seconds_per_iteration=generation_seconds_per_iteration,
+            generation_host_seconds_per_iteration=generation_host_seconds_per_iteration,
+            generation_tokens_per_iteration=generation_tokens_per_iteration,
         )
 
     def _generate_diagnostic(

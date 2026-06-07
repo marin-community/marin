@@ -121,6 +121,11 @@ class CaseResult:
     decode_submit_seconds_per_iteration: list[float] | None = None
     decode_extract_seconds_per_iteration: list[float] | None = None
     decode_tokens_per_iteration: list[int] | None = None
+    prefill_drain_seconds_per_iteration: list[float] | None = None
+    prefill_drain_tokens_per_iteration: list[int] | None = None
+    generation_seconds_per_iteration: list[float] | None = None
+    generation_host_seconds_per_iteration: list[float] | None = None
+    generation_tokens_per_iteration: list[int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1146,6 +1151,11 @@ def run_case(
         decode_submit_seconds_per_iteration=runtime_metrics.decode_submit_seconds_per_iteration,
         decode_extract_seconds_per_iteration=runtime_metrics.decode_extract_seconds_per_iteration,
         decode_tokens_per_iteration=runtime_metrics.decode_tokens_per_iteration,
+        prefill_drain_seconds_per_iteration=runtime_metrics.prefill_drain_seconds_per_iteration,
+        prefill_drain_tokens_per_iteration=runtime_metrics.prefill_drain_tokens_per_iteration,
+        generation_seconds_per_iteration=runtime_metrics.generation_seconds_per_iteration,
+        generation_host_seconds_per_iteration=runtime_metrics.generation_host_seconds_per_iteration,
+        generation_tokens_per_iteration=runtime_metrics.generation_tokens_per_iteration,
     )
 
 
@@ -1189,6 +1199,11 @@ class CaseRuntimeMetrics:
     decode_submit_seconds_per_iteration: list[float] | None
     decode_extract_seconds_per_iteration: list[float] | None
     decode_tokens_per_iteration: list[int] | None
+    prefill_drain_seconds_per_iteration: list[float] | None
+    prefill_drain_tokens_per_iteration: list[int] | None
+    generation_seconds_per_iteration: list[float] | None
+    generation_host_seconds_per_iteration: list[float] | None
+    generation_tokens_per_iteration: list[int] | None
 
 
 def _optional_metric_float_list(metrics: dict[str, Any], key: str) -> list[float] | None:
@@ -1213,6 +1228,11 @@ def _case_runtime_metrics(metrics_snapshot: Callable[[], dict[str, Any]] | None)
             decode_submit_seconds_per_iteration=None,
             decode_extract_seconds_per_iteration=None,
             decode_tokens_per_iteration=None,
+            prefill_drain_seconds_per_iteration=None,
+            prefill_drain_tokens_per_iteration=None,
+            generation_seconds_per_iteration=None,
+            generation_host_seconds_per_iteration=None,
+            generation_tokens_per_iteration=None,
         )
     metrics = metrics_snapshot()
     admissions = metrics.get("prefill_admissions")
@@ -1232,6 +1252,15 @@ def _case_runtime_metrics(metrics_snapshot: Callable[[], dict[str, Any]] | None)
             metrics, "decode_extract_seconds_per_iteration"
         ),
         decode_tokens_per_iteration=_optional_metric_int_list(metrics, "decode_tokens_per_iteration"),
+        prefill_drain_seconds_per_iteration=_optional_metric_float_list(
+            metrics, "prefill_drain_seconds_per_iteration"
+        ),
+        prefill_drain_tokens_per_iteration=_optional_metric_int_list(metrics, "prefill_drain_tokens_per_iteration"),
+        generation_seconds_per_iteration=_optional_metric_float_list(metrics, "generation_seconds_per_iteration"),
+        generation_host_seconds_per_iteration=_optional_metric_float_list(
+            metrics, "generation_host_seconds_per_iteration"
+        ),
+        generation_tokens_per_iteration=_optional_metric_int_list(metrics, "generation_tokens_per_iteration"),
     )
 
 
@@ -1558,6 +1587,11 @@ def run_levanter_without_lm_head_case(
         decode_submit_seconds_per_iteration=result.decode_submit_seconds_per_iteration,
         decode_extract_seconds_per_iteration=result.decode_extract_seconds_per_iteration,
         decode_tokens_per_iteration=result.decode_tokens_per_iteration,
+        prefill_drain_seconds_per_iteration=result.prefill_drain_seconds_per_iteration,
+        prefill_drain_tokens_per_iteration=result.prefill_drain_tokens_per_iteration,
+        generation_seconds_per_iteration=result.generation_seconds_per_iteration,
+        generation_host_seconds_per_iteration=result.generation_host_seconds_per_iteration,
+        generation_tokens_per_iteration=result.generation_tokens_per_iteration,
     )
 
 
@@ -1818,6 +1852,17 @@ def start_levanter_server(
                 server.inference_context.last_decode_extract_seconds_per_iteration
             ),
             "decode_tokens_per_iteration": list(server.inference_context.last_decode_tokens_per_iteration),
+            "prefill_drain_seconds_per_iteration": list(
+                server.inference_context.last_prefill_drain_seconds_per_iteration
+            ),
+            "prefill_drain_tokens_per_iteration": list(
+                server.inference_context.last_prefill_drain_tokens_per_iteration
+            ),
+            "generation_seconds_per_iteration": list(server.inference_context.last_generation_seconds_per_iteration),
+            "generation_host_seconds_per_iteration": list(
+                server.inference_context.last_generation_host_seconds_per_iteration
+            ),
+            "generation_tokens_per_iteration": list(server.inference_context.last_generation_tokens_per_iteration),
         }
 
     logger.info("Started Levanter server at %s", base_url)
@@ -2088,6 +2133,10 @@ def write_outputs(
             result.decode_tokens_per_iteration,
             result.decode_device_seconds_per_iteration,
         )
+        result_dict["generation_tokens_per_second"] = _optional_tokens_per_second(
+            result.generation_tokens_per_iteration,
+            result.generation_seconds_per_iteration,
+        )
         result_dicts.append(result_dict)
     stress_result_dicts = [dataclasses.asdict(result) for result in stress_results or []]
     comparisons = parity_comparisons(results)
@@ -2129,8 +2178,14 @@ def write_outputs(
         "decode submit s",
         "decode extract s",
         "decode iter toks",
+        "prefill drain s",
+        "prefill drain toks",
+        "generation s",
+        "generation host s",
+        "generation toks",
         "decode iter tok/s",
         "decode device tok/s",
+        "generation tok/s",
         "decode/vllm",
         "total/vllm",
         "target",
@@ -2160,12 +2215,22 @@ def write_outputs(
             _optional_float_list(result.decode_submit_seconds_per_iteration),
             _optional_float_list(result.decode_extract_seconds_per_iteration),
             _optional_int_list(result.decode_tokens_per_iteration),
+            _optional_float_list(result.prefill_drain_seconds_per_iteration),
+            _optional_int_list(result.prefill_drain_tokens_per_iteration),
+            _optional_float_list(result.generation_seconds_per_iteration),
+            _optional_float_list(result.generation_host_seconds_per_iteration),
+            _optional_int_list(result.generation_tokens_per_iteration),
             _optional_float(
                 _optional_tokens_per_second(result.decode_tokens_per_iteration, result.decode_seconds_per_iteration)
             ),
             _optional_float(
                 _optional_tokens_per_second(
                     result.decode_tokens_per_iteration, result.decode_device_seconds_per_iteration
+                )
+            ),
+            _optional_float(
+                _optional_tokens_per_second(
+                    result.generation_tokens_per_iteration, result.generation_seconds_per_iteration
                 )
             ),
             (
