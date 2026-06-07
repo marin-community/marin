@@ -317,37 +317,29 @@ project-excludes = [
 ]
 
 # Disable specific error codes that are primarily noise from missing type stubs
-# These can be gradually enabled as the codebase improves
+# Disabled codes and the baseline burn-down are tracked in #6242.
+# Fresh counts and the recommended enable order live there; do not re-add
+# inline occurrence numbers here (they drift on every pyrefly release).
 [tool.pyrefly.errors]
-# Missing attributes (315 occurrences) - often from untyped libraries like JAX, etc.
-# These are mostly false positives from libraries without complete type stubs
+# Loose attributes on untyped libs (jax/flax/equinox). Mostly false positives.
 missing-attribute = false
 
-# Unknown name errors - real undefined-name bugs. The ~141 former false positives
-# came from jaxtyping shape strings and are now handled natively by tensor-shapes = true
-# above. The handful of genuine bugs that remain (e.g. a missing `import os`, a stale
+# Unknown name errors - real undefined-name bugs. Former jaxtyping shape-string
+# false positives are now handled natively by `tensor-shapes = true` above. The
+# handful of genuine bugs that remain (e.g. a missing `import os`, a stale
 # `callbacks.` reference) are tracked in .pyrefly-baseline.json until fixed.
 unknown-name = true
 
-# No matching overload (16 occurrences) - complex overload resolution issues
+# Complex overload resolution issues; prior sampling found ~0 real bugs.
 no-matching-overload = false
 
-# Library/stub-related noise - disable to focus on real issues:
-
-# Bad argument type (638 occurrences) - mostly third-party library stub issues
-# Common culprits: smart_open, Flax API, JAX/numpy arrays
+# Mostly third-party stub noise (smart_open, flax, jax/numpy arrays).
 bad-argument-type = false
 
-# Unbound name (64 occurrences) - pyrefly's control flow analysis doesn't understand
-# patterns where variables are guaranteed to be initialized by program logic
+# Pyrefly's control-flow analysis doesn't understand some patterns where
+# variables are guaranteed to be initialized by program logic. #6219 flagged
+# these as "often code that can be better written" -- first candidate to enable.
 unbound-name = false
-
-# Keep these enabled to catch real type errors:
-# bad-override = true (126 occurrences)
-# bad-assignment = true (94 occurrences)
-# bad-return = true (84 occurrences)
-# unsupported-operation = true (68 occurrences)
-# not-callable = true (27 occurrences)
 
 [tool.hatch.metadata]
 allow-direct-references = true
