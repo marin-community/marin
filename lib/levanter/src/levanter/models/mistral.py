@@ -68,6 +68,8 @@ class MistralConfig(LlamaConfig):
     use_bias: bool = False
     rope: RotaryEmbeddingsConfig = dataclasses.field(default_factory=DefaultRotaryEmbeddingsConfig)
 
+    reference_checkpoint: str = "mistralai/Mistral-7B-v0.1"
+
     # Axis
     @property
     def Embed(self) -> Axis:
@@ -82,13 +84,11 @@ class MistralConfig(LlamaConfig):
     def hf_checkpoint_converter(
         self, ref_checkpoint: Optional[str] = None
     ) -> HFCheckpointConverter["MistralConfig"]:  # type: ignore
-        hf_model_path = "mistralai/Mistral-7B-v0.1" if ref_checkpoint is None else ref_checkpoint
-
         return HFCheckpointConverter(
             self,
-            reference_checkpoint=hf_model_path,
+            reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
             trust_remote_code=True,
-            tokenizer=hf_model_path,
+            tokenizer=ref_checkpoint if self.tokenizer is None else self.tokenizer,
             HfConfigClass=HfMistralConfig,
         )
 
