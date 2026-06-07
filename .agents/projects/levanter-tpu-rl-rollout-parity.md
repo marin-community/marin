@@ -87,7 +87,10 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   `prefill_drain_tokens_per_iteration`, `generation_seconds_per_iteration`,
   `generation_host_seconds_per_iteration`, `generation_tokens_per_iteration`,
   and derived `generation_tokens_per_second`, so future rows no longer have to
-  treat prefill-drain-heavy iterations as pure generation-loop throughput.
+  treat prefill-drain-heavy iterations as pure generation-loop throughput. No
+  post-`f55913d1` row has been collected for this prefill-heavy shape yet, so
+  #6229 remains open as a performance target rather than a completed
+  optimization.
 - A narrow Levanter-only v6e-8 diagnostic follow-up completed, but it exposed a
   benchmark harness artifact rather than a clean attribution split. The normal
   diagnostic row measured `907.43` decode tok/s, `15426.28` total tok/s, and a
@@ -573,7 +576,11 @@ thread. Keep background-style work narrow and explicit until the app is stable:
    `1200.223` tok/s against vLLM's `1212.15` decode tok/s, and device wait
    throughput is `1509.350` tok/s. Treat the next optimization target as
    end-to-end prefill/host wall-clock overhead unless a future row with the
-   `f55913d1` generation-only split contradicts this.
+   `f55913d1` generation-only split contradicts this. Do not launch that row
+   automatically; if the team keeps prioritizing this weak prefill-heavy
+   regime, the next useful run is one narrow v6e-8 backend=both
+   `prefill_b8_i2048_o128_n1` rerun from #6185 `f55913d1` or newer with the
+   same `--max-pages 512`, two warmups, and one measured round.
 6. If rerunning the v5p mixed comparison, use #6185 head `f55913d1` or newer so
    a repeated vLLM startup failure includes the actual stderr/stdout tail. Prefer
    #6240 if available, because it additionally preserves bounded runtime/package
@@ -893,6 +900,11 @@ implementation slice should be:
    - This keeps #6229 open as a performance target, but it changes the likely
      bottleneck: iteration/device timing is close to the vLLM row, while the
      end-to-end row still loses on prefill-heavy wall-clock accounting.
+   - The corrected row predates #6185 commit `f55913d1`, so it lacks the
+     post-split `generation_*` and `prefill_drain_*` fields. #6229 should stay
+     open until either a post-`f55913d1` row is collected and acted on, or the
+     team explicitly deprioritizes this prefill-heavy regime relative to the
+     broader dense matrix.
    - Corrected prefill-heavy diagnostic
      `/dlwh/qwen3-v6e8-prefilldiag-drain-prefill-b8-i2048-o128-n1-20260606-1532`
      succeeded from `82bb6dbfb`. All rows used prefill chunks
