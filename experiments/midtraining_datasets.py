@@ -5,6 +5,10 @@ from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution import versioned
 from marin.execution.types import ExecutorStep, this_output_path
 from marin.processing.tokenize import lm_mixture_data_config
+from marin.transform.code_instruction_midtraining import (
+    CodeInstructionMidtrainingConfig,
+    transform_code_instruction_midtraining,
+)
 from marin.transform.common_pile.filter_by_extension import (
     FilterByMetadataExtensionConfig,
     filter_dataset_by_metadata_extension,
@@ -51,6 +55,74 @@ stackv2_edu_filtered_python = ExecutorStep(
 stackv2_edu_filtered_python_tokenized = default_tokenize(
     name="common_pile_stackv2_edu_filtered_python",
     dataset=stackv2_edu_filtered_python,
+    tokenizer=llama3_tokenizer,
+)
+
+OPENCODE_INSTRUCT_REVISION = "8f3ba5b"
+OPENCODE_INSTRUCT_METADATA_COLUMNS = [
+    "domain",
+    "generation_algorithm",
+    "llm_judgement",
+    "unit_tests",
+    "tests_execution_status",
+    "average_test_score",
+]
+
+opencode_instruct_high_score = ExecutorStep(
+    name="documents/opencode_instruct_high_score",
+    fn=transform_code_instruction_midtraining,
+    config=CodeInstructionMidtrainingConfig(
+        source="nvidia/OpenCodeInstruct",
+        revision=OPENCODE_INSTRUCT_REVISION,
+        output_path=this_output_path(),
+        instruction_column="input",
+        output_column="output",
+        metadata_columns=OPENCODE_INSTRUCT_METADATA_COLUMNS,
+        subsets=["train"],
+        splits=["train"],
+        average_test_score_column="average_test_score",
+        min_average_test_score=0.9,
+        max_parallelism=32,
+    ),
+)
+
+opencode_instruct_high_score_tokenized = default_tokenize(
+    name="opencode_instruct_high_score",
+    dataset=opencode_instruct_high_score,
+    tokenizer=llama3_tokenizer,
+)
+
+OPENCODE_GENETIC_REVISION = "9c95d36"
+OPENCODE_GENETIC_METADATA_COLUMNS = [
+    "generation_model",
+    "last_operation",
+]
+OPENCODE_GENETIC_SUBSETS = [
+    "mixtral-8x22b-instruct",
+    "qwen2.5-32b-instruct",
+]
+
+opencode_genetic_sample = ExecutorStep(
+    name="documents/opencode_genetic_sample",
+    fn=transform_code_instruction_midtraining,
+    config=CodeInstructionMidtrainingConfig(
+        source="nvidia/OpenCodeGeneticInstruct",
+        revision=OPENCODE_GENETIC_REVISION,
+        output_path=this_output_path(),
+        instruction_column="input",
+        solution_column="solution",
+        output_column="output",
+        metadata_columns=OPENCODE_GENETIC_METADATA_COLUMNS,
+        subsets=OPENCODE_GENETIC_SUBSETS,
+        splits=["train"],
+        sample_fraction=0.05,
+        max_parallelism=32,
+    ),
+)
+
+opencode_genetic_sample_tokenized = default_tokenize(
+    name="opencode_genetic_sample",
+    dataset=opencode_genetic_sample,
     tokenizer=llama3_tokenizer,
 )
 
