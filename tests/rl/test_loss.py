@@ -437,7 +437,6 @@ def test_ppo_objective_uses_sparse_response_masks_for_loss_and_metrics():
         loss_masks,
         clip_epsilon_low=0.2,
         clip_epsilon_high=0.2,
-        max_output_tokens=loss_masks.shape[-1],
         trainer_inference_importance_sampling_ratio=None,
     )
 

@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
 from marin.rl.decoding import DecodingConfig
-from marin.rl.environments.inference_ctx.openai_compat import OpenAICompatClient
+from marin.rl.environments.inference_ctx.openai_compat import OpenAICompatClient, OpenAICompatibleClient
 from marin.rl.types import Rollout
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice
@@ -55,7 +55,7 @@ class BaseInferenceContext:
         """Return the concrete decoding config this backend will apply."""
         return decoding
 
-    def openai_client(self) -> OpenAICompatClient:
+    def openai_client(self) -> OpenAICompatibleClient:
         """Return an AsyncOpenAI-compatible client for verifier environments."""
         return OpenAICompatClient(self)
 

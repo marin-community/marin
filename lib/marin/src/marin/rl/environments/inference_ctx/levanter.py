@@ -21,6 +21,7 @@ from levanter.models.lm_model import LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from marin.rl.decoding import DecodingConfig, DecodingStrategy, stop_strings_for_decoding
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext, PromptLike
+from marin.rl.environments.inference_ctx.openai_compat import OpenAICompatibleClient
 
 # TODO(chris): use a different weight transfer method update model, take it out from here
 from marin.rl.weight_transfer.arrow_flight import update_model
@@ -67,7 +68,7 @@ class LevanterInferenceContext(BaseInferenceContext):
         self.mesh = inference_config.mesh
         self.axis_mapping = inference_config.axis_mapping
 
-    def openai_client(self) -> AsyncOpenAI:
+    def openai_client(self) -> OpenAICompatibleClient:
         return AsyncOpenAI(
             base_url=f"http://{self._inference_server.address()}/v1",
             api_key="marin",

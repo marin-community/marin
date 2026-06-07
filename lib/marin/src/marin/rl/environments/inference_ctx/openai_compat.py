@@ -5,13 +5,31 @@
 
 import asyncio
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Protocol
 
 from marin.rl.decoding import DecodingConfig
 from openai.types.chat import ChatCompletion
 
 _SUPPORTED_EXTRA_BODY_KEYS = frozenset({"top_k", "return_tokens_as_token_ids"})
 _SUPPORTED_TOP_LOGPROBS = {None, 1}
+
+
+class OpenAICompatibleClient(Protocol):
+    """Minimal async OpenAI client surface used by verifier environments."""
+
+    @property
+    def chat(self) -> Any:
+        """Chat-completion namespace."""
+        ...
+
+    @property
+    def completions(self) -> Any:
+        """Completion namespace."""
+        ...
+
+    async def close(self) -> None:
+        """Close any client-owned resources."""
+        ...
 
 
 def _supports_logprobs(value: object) -> bool:
