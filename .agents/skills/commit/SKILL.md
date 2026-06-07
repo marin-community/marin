@@ -110,8 +110,8 @@ Fixes #1234
 (auto-closes on merge) or `Part of #NNNN` (partial work). Do not invent an issue
 just to satisfy this — omit the link when none exists.
 
-**Specifications (>500 LOC).** Large PRs must carry a spec. 
-This may be in the linked issue, or part of the PR description. 
+**Specifications (>500 LOC).** Large PRs must carry a spec.
+This may be in the linked issue, or part of the PR description.
 If a design doc exists, may also link to it instead.
 Specs cover: **Problem** (what is broken/missing, with file/line refs), **Approach**
 (which modules change, what is added/removed), and **Key code** (10–30 line
