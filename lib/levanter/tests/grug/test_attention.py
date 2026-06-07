@@ -93,6 +93,20 @@ def test_thd_segment_metadata_sharding_follows_token_stream():
     assert sharding.spec == P(("data", "expert"), None)
 
 
+def test_thd_global_prefix_sum_input_is_replicated():
+    mesh = jax.sharding.Mesh(np.asarray(jax.devices()[:1]).reshape((1, 1)), ("data", "expert"))
+    sharded = jax.device_put(
+        jnp.array([[2, 2], [3, 1]], dtype=jnp.int32),
+        NamedSharding(mesh, P(("data", "expert"), None)),
+    )
+
+    replicated = fa4_thd._replicate_for_global_prefix_sum(sharded)
+
+    sharding = replicated.sharding
+    assert isinstance(sharding, NamedSharding)
+    assert sharding.spec == P(None, None)
+
+
 def test_thd_segment_metadata_rejects_mismatched_q_kv_segments():
     if jax.default_backend() == "tpu":
         pytest.skip("TPU checkify reports the error but does not raise a Python exception.")

@@ -195,6 +195,7 @@ def _thd_cu_seqlens_from_segment_lengths(
         jnp.any((lengths <= 0) & keep),
         "THD segment metadata contains a non-positive active segment length.",
     )
+    lengths = _replicate_for_global_prefix_sum(lengths)
     cu_seqlens = jnp.concatenate(
         [
             jnp.zeros((1,), dtype=jnp.int32),
@@ -208,6 +209,13 @@ def _thd_cu_seqlens_from_segment_lengths(
         "THD segment metadata does not cover the q/k/v token count.",
     )
     return cu_seqlens
+
+
+def _replicate_for_global_prefix_sum(x: Int[Array, "..."]) -> Int[Array, "..."]:
+    sharding = _sharding_of(x)
+    if isinstance(sharding, NamedSharding):
+        return jax.lax.with_sharding_constraint(x, NamedSharding(sharding.mesh, P(*([None] * x.ndim))))
+    return x
 
 
 def _segment_lengths_sharding(
