@@ -38,6 +38,8 @@ Current datasets:
 23. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
 24. lm-provers/FineProofs-SFT
 25. lm-provers/FineProofs-SFT/proof-only
+26. nvidia/Nemotron-SFT-Instruction-Following-Chat-v2
+27. nvidia/Nemotron-SFT-Instruction-Following-Chat-v3
 """
 
 import dataclasses
@@ -122,6 +124,11 @@ NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V2_FEATURES = {
     "used_in": {"feature": {"dtype": "string", "_type": "Value"}, "_type": "List"},
     "reasoning": {"dtype": "string", "_type": "Value"},
 }
+
+NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V3_HF_ID = "nvidia/Nemotron-SFT-Instruction-Following-Chat-v3"
+NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V3_REVISION = "be3b3e04ef605ac9d3f8f35b9d5a632f4a3a3402"
+NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V3_SPLITS = ["instruction_following"]
+NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V3_METADATA_COLUMNS = ["uuid", "used_in", "metadata"]
 
 
 @dataclass(frozen=True)
@@ -267,6 +274,25 @@ class ReasoningToChatKwargs:
 
 
 reasoning_to_chat_kwargs = ReasoningToChatKwargs()
+
+
+def reasoning_content_to_chat_kwargs(row: dict[str, Any]) -> dict[str, Any]:
+    """Toggle thinking mode based on assistant messages with explicit reasoning content."""
+    messages = row.get("messages")
+    if not isinstance(messages, list):
+        return {}
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") != "assistant":
+            continue
+        reasoning_content = message.get("reasoning_content")
+        if isinstance(reasoning_content, str) and reasoning_content.strip():
+            return {"chat_template_kwargs": {"enable_thinking": True}}
+
+    return {"chat_template_kwargs": {"enable_thinking": False}}
+
 
 SYNTHETIC2_SFT_VERIFIED_HF_ID = "PrimeIntellect/SYNTHETIC-2-SFT-verified"
 SYNTHETIC2_SFT_VERIFIED_REVISION = "fce247fe48af8ff9624fb51d1de63aa1b2332cef"
@@ -632,6 +658,20 @@ for split_name in NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V2_SPLITS:
         metadata_columns=NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V2_METADATA_COLUMNS,
         splits=[split_name],
         load_dataset_features=NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V2_FEATURES,
+    )
+
+for split_name in NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V3_SPLITS:
+    dataset_key = f"{NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V3_HF_ID}/{split_name}"
+    INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_key] = InstructionDatasetConfig(
+        name=dataset_key,
+        hf_dataset_id=NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V3_HF_ID,
+        revision=NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V3_REVISION,
+        adapter=multi_turn_adapter(
+            reasoning_content_key="reasoning_content",
+            extra_metadata_fn=reasoning_content_to_chat_kwargs,
+        ),
+        metadata_columns=NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V3_METADATA_COLUMNS,
+        splits=[split_name],
     )
 
 

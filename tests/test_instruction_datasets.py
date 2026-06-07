@@ -15,6 +15,9 @@ from experiments.posttrain.instruction_datasets import (
     NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V2_HF_ID,
     NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V2_METADATA_COLUMNS,
     NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V2_REVISION,
+    NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V3_HF_ID,
+    NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V3_METADATA_COLUMNS,
+    NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V3_REVISION,
     SYNTHETIC2_SFT_VERIFIED_HF_ID,
     SYNTHETIC2_SFT_VERIFIED_METADATA_COLUMNS,
     SYNTHETIC2_SFT_VERIFIED_REVISION,
@@ -55,6 +58,27 @@ NEMOTRON_SFT_REASONING_ON_SAMPLE = {
             "role": "assistant",
             "content": "I look forward to meeting you.",
             "reasoning_content": "The phrase should use the gerund after 'look forward to'.",
+        },
+    ],
+}
+
+NEMOTRON_SFT_V3_INSTRUCTION_FOLLOWING_SAMPLE = {
+    "uuid": "4dd07659-302a-40c0-933b-7ed2b7661638",
+    "used_in": ["ultra_v3"],
+    "metadata": {
+        "seed_dataset": "allenai/tulu-3-sft-personas-instruction-following",
+        "seed_prompt_sha256": "d178cc7601e92234c0d84fbb0cafe64432e4821271bde8c1024fcf8ea44a89c3",
+        "model": "openai/GPT-OSS-120B",
+        "reward_model": None,
+        "train_turns": [False, False, True],
+    },
+    "messages": [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Explain why useHistory is unavailable in react-router-dom v6."},
+        {
+            "role": "assistant",
+            "reasoning_content": "React Router v6 removed useHistory and replaced it with useNavigate.",
+            "content": "In react-router-dom v6, useHistory was removed. Use useNavigate instead.",
         },
     ],
 }
@@ -173,6 +197,43 @@ def test_nemotron_sft_instruction_following_chat_v2_features_accept_both_message
     assert reasoning_off["messages"][2]["reasoning_content"] is None
     expected_reasoning = "The phrase should use the gerund after 'look forward to'."
     assert reasoning_on["messages"][2]["reasoning_content"] == expected_reasoning
+
+
+def test_nemotron_sft_instruction_following_chat_v3_transforms_instruction_following_rows():
+    dataset_key = f"{NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V3_HF_ID}/instruction_following"
+    step = get_instruction_dataset(dataset_key)
+    cfg = step.config
+    adapter = unwrap_versioned_value(cfg.adapter)
+
+    assert step.name == f"documents/{dataset_key}"
+    assert step.override_output_path is not None
+    assert "instruction_following" in step.override_output_path
+    assert f"{NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V3_HF_ID}/chat" not in INSTRUCTION_DATASET_NAME_TO_CONFIG
+    assert unwrap_versioned_value(cfg.source) == NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V3_HF_ID
+    assert unwrap_versioned_value(cfg.revision) == NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V3_REVISION
+    assert unwrap_versioned_value(cfg.splits) == ["instruction_following"]
+    assert unwrap_versioned_value(cfg.metadata_columns) == NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V3_METADATA_COLUMNS
+    assert unwrap_versioned_value(cfg.load_dataset_features) is None
+    assert adapter.dataset_format == InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN
+    assert adapter.reasoning_content_key == "reasoning_content"
+
+    result = transform_row(NEMOTRON_SFT_V3_INSTRUCTION_FOLLOWING_SAMPLE, cfg, adapter)
+
+    assert result is not None
+    assert result.source == NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V3_HF_ID
+    assert [message.role for message in result.messages] == ["system", "user", "assistant"]
+    assert result.messages[2].content == "\n".join(
+        [
+            "<|start_think|>React Router v6 removed useHistory and replaced it with useNavigate.<|end_think|>",
+            "In react-router-dom v6, useHistory was removed. Use useNavigate instead.",
+        ]
+    )
+    assert result.metadata == {
+        "uuid": "4dd07659-302a-40c0-933b-7ed2b7661638",
+        "used_in": ["ultra_v3"],
+        "metadata": NEMOTRON_SFT_V3_INSTRUCTION_FOLLOWING_SAMPLE["metadata"],
+    }
+    assert result.model_dump()["chat_template_kwargs"] == {"enable_thinking": True}
 
 
 def test_default_reasoning_content_key_does_not_rehash_existing_instruction_datasets():
