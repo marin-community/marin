@@ -19,29 +19,38 @@ dependencies = [
     "marin-zephyr",
     # top level deps. try to keep these small.
     "watchdog",
-    # `>= X.Y.Z.dev0` opts uv into pre-releases for these native (maturin)
-    # packages so the daily nightly wheels (`X.Y.Z.dev<YYYYMMDDhhmm>`) are
-    # picked up by `uv lock` automatically. Cut a stable tag
-    # (`dupekit-v<X.Y.Z>` / `finelog-v<X.Y.Z>`) when promoting; uv prefers the
-    # higher version, so a stable supersedes any earlier dev of the same Z.
+    # marin-dupekit and marin-finelog are native (maturin) packages shipped as
+    # pre-built platform wheels (built by their *-release-wheels.yaml workflows)
+    # rather than pure-Python workspace members. A `>= X.Y.Z.dev0` floor opts uv
+    # into the daily nightly wheels (`X.Y.Z.dev<YYYYMMDDhhmm>`); a plain
+    # `>= X.Y.Z` floor pins to a stable tag (`dupekit-v<X.Y.Z>` /
+    # `finelog-v<X.Y.Z>`). uv prefers the higher version, so a stable supersedes
+    # any earlier dev of the same Z; bump the floor to whichever is newest.
     # Published by .github/workflows/dupekit-release-wheels.yaml.
-    "marin-dupekit >= 0.1.0.dev0",
-    # Published by .github/workflows/finelog-release-wheels.yaml. marin-finelog
-    # carries a native in-process server ext (finelog._native), so it ships as
-    # a pre-built platform wheel rather than a pure-Python workspace member.
-    # `scripts/rust_mode.py dev` swaps in an editable source for local hacking.
-    "marin-finelog >= 0.2.0.dev0",
+    "marin-dupekit >= 0.1.2.dev202606060824",
+    # finelog carries an in-process server ext (finelog._native) the controller
+    # starts; `scripts/rust_mode.py dev` swaps in an editable source locally.
+    "marin-finelog >= 0.2.9",
 ]
 
 [tool.uv]
 fork-strategy = "fewest"
-# Allow pre-releases globally so `uv lock` resolves marin-dupekit to its
-# latest nightly (`X.Y.Z.dev<timestamp>` published by the dupekit release
-# workflow). uv has no per-package prerelease config; in practice almost
-# none of our other dependencies publish pre-releases on PyPI, so this
-# only affects dupekit and the already-pinned `omegaconf>=2.4.0.dev4`
-# below.
-prerelease = "allow"
+# "explicit": allow pre-releases only for packages whose declared specifier
+# names one, so our intentional pre-releases resolve while everything else stays
+# on its latest stable release. (A global "allow" would instead promote any
+# transitive dependency's newest beta/rc into the lock.) Opted in: the
+# marin-dupekit nightly (above); the omegaconf dev pin in override-dependencies
+# below; and the prerelease-only transitive deps in constraint-dependencies
+# (tfp-nightly / opentelemetry-semantic-conventions publish no stable release).
+prerelease = "explicit"
+constraint-dependencies = [
+    # Enable pre-releases for transitive deps that publish no stable release at
+    # all. A constraint intersects (rather than replaces) the upstream
+    # specifier, so the resolved version still follows whatever requires them;
+    # the pre-release component here only flips uv's per-package opt-in.
+    "tfp-nightly>=0.1.dev0",
+    "opentelemetry-semantic-conventions>=0.1b0",
+]
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
     "aiofiles>=24.1.0",
