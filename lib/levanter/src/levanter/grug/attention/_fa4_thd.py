@@ -395,11 +395,12 @@ def _upstream_fa4_thd_backward_launcher(
         )
         cluster_size = 2
         use_2cta_instrs = True
+    dq_postprocess_tile_m = _dq_postprocess_tile_m(modules.arch, tile_m)
     dq_postprocess = modules.FlashAttentionBackwardPostprocess(
         cute_dtype,
         head_dim,
         modules.arch,
-        tile_m,
+        dq_postprocess_tile_m,
         num_threads=128,
         AtomLayoutMdQ=1,
         use_2cta_instrs=use_2cta_instrs,
@@ -490,6 +491,12 @@ def _upstream_fa4_thd_backward_launcher(
         dv_postprocess(dv_accum, dv, cutlass.Float32(1.0), cu_seqlens, None, stream)
 
     return _launch_upstream_fa4_thd_backward
+
+
+def _dq_postprocess_tile_m(arch: int, backward_tile_m: int) -> int:
+    if arch // 10 == 9:
+        return 64
+    return backward_tile_m
 
 
 def fa4_thd_attention_forward(
