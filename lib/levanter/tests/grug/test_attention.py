@@ -94,7 +94,11 @@ def test_thd_segment_metadata_sharding_follows_token_stream():
 
 
 def test_thd_global_prefix_sum_input_is_replicated():
-    mesh = jax.sharding.Mesh(np.asarray(jax.devices()[:1]).reshape((1, 1)), ("data", "expert"))
+    mesh = jax.sharding.Mesh(
+        np.asarray(jax.devices()[:1]).reshape((1, 1)),
+        ("data", "expert"),
+        axis_types=(jax.sharding.AxisType.Explicit, jax.sharding.AxisType.Explicit),
+    )
     sharded = jax.device_put(
         jnp.array([[2, 2], [3, 1]], dtype=jnp.int32),
         NamedSharding(mesh, P(("data", "expert"), None)),

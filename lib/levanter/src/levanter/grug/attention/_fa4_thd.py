@@ -214,7 +214,7 @@ def _thd_cu_seqlens_from_segment_lengths(
 def _replicate_for_global_prefix_sum(x: Int[Array, "..."]) -> Int[Array, "..."]:
     sharding = _sharding_of(x)
     if isinstance(sharding, NamedSharding):
-        return jax.lax.with_sharding_constraint(x, NamedSharding(sharding.mesh, P(*([None] * x.ndim))))
+        return reshard(x, NamedSharding(sharding.mesh, P(*([None] * x.ndim))))
     return x
 
 
