@@ -175,6 +175,7 @@ def build_generation_config(
 
 
 def _coerce_to_hf_tokenizer(tokenizer: PreTrainedTokenizerBase | MarinTokenizer) -> PreTrainedTokenizerBase:
+    # pyrefly: ignore[unsafe-overlap]  # MarinTokenizer is a runtime-checkable Protocol that overlaps PreTrainedTokenizerBase via __getattr__
     if isinstance(tokenizer, MarinTokenizer):
         tokenizer = tokenizer.as_hf_tokenizer()
     return tokenizer
@@ -330,7 +331,7 @@ def _causal_lm_architecture_name(hf_config_class: type) -> Optional[str]:
     return MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.get(model_type)
 
 
-def _load_torch(path, dtype, fs: AbstractFileSystem | None = None):
+def _load_torch(path, dtype, fs: AbstractFileSystem | None = None) -> dict:
     import torch  # noqa: F401
 
     device = torch.device("cpu")
@@ -367,7 +368,7 @@ def _load_torch(path, dtype, fs: AbstractFileSystem | None = None):
     return d
 
 
-def _load_safe_tensors(path, dtype, fs: AbstractFileSystem | None = None):
+def _load_safe_tensors(path, dtype, fs: AbstractFileSystem | None = None) -> dict:
     """Stream a safetensors shard from remote storage and return JAX arrays."""
     if fs is None:
         fs, stripped = url_to_fs(path, asynchronous=True)
@@ -383,7 +384,8 @@ def _load_safe_tensors(path, dtype, fs: AbstractFileSystem | None = None):
     loop = get_loop()
     bes = functools.partial(best_effort_sharding, mesh=mesh)
 
-    return fsspec_sync(loop, read_safetensors_fsspec, path, dtype_override=dtype, sharding_fn=bes, fs=fs)
+    # fsspec.asyn.sync erases the coroutine's Dict[str, jax.Array] return into a broad type.
+    return cast(dict, fsspec_sync(loop, read_safetensors_fsspec, path, dtype_override=dtype, sharding_fn=bes, fs=fs))
 
 
 # NB: for large models this will be jitted several times (once for each unique subset of keys at least)
@@ -1364,11 +1366,18 @@ def load_processor(
     from transformers import AutoProcessor
 
     with _patch_hf_hub_download():
-        return _hf_hub_retry(
-            lambda: AutoProcessor.from_pretrained(
-                model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
+        # AutoProcessor.from_pretrained is stubbed with a broad union return; the runtime value is a ProcessorMixin.
+        return cast(
+            "ProcessorMixin",
+            _hf_hub_retry(
+                lambda: AutoProcessor.from_pretrained(
+                    model_name_or_path,
+                    revision=revision,
+                    cache_dir=local_cache_dir,
+                    trust_remote_code=trust_remote_code,
+                ),
+                action=f"load processor {model_name_or_path!r}",
             ),
-            action=f"load processor {model_name_or_path!r}",
         )
 
 

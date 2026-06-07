@@ -283,7 +283,8 @@ def _jittable_dg_einsum(
 
     contractions = tuple((a, frozenset(b), c) for a, b, c, *_ in contractions)
 
-    einsum = eqx.filter_jit(jax_einsum._einsum, inline=True)
+    # filter_jit forwards **jitkwargs (here `inline`) to jax.jit; the equinox stub omits **kwargs.
+    einsum = eqx.filter_jit(jax_einsum._einsum, inline=True)  # pyrefly: ignore[unexpected-keyword]
     if spec is not None:
         einsum = jax.named_call(einsum, name=spec)
     return einsum(operands, contractions, precision, preferred_element_type, _dot_general, out_sharding=out_sharding)  # type: ignore[operator]

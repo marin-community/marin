@@ -56,7 +56,7 @@ def maybe_fused_next_token_loss(
         NamedArray: Computed loss.
     """
     # Resolve axes
-    Pos = pred_embeddings.resolve_axis(Pos.name)
+    Pos = cast(hax.Axis, pred_embeddings.resolve_axis(Pos.name))
     Vocab = pred_lm_head.resolve_axis(Vocab)
 
     # Shift target tokens to predict the next token

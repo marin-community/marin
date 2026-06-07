@@ -4,6 +4,7 @@
 
 import functools
 from types import EllipsisType
+from typing import cast
 
 import jax.lax
 
@@ -24,7 +25,7 @@ def einsum(
     *arrays: NamedArray,
     precision: PrecisionLike = None,
     preferred_element_type: DTypeLike | None = None,
-    _dot_general: DotGeneralOp = jax.lax.dot_general,
+    _dot_general: DotGeneralOp | None = None,
     out_sharding=None,
     **axis_aliases: AxisSelector,
 ) -> NamedArray:
@@ -59,6 +60,10 @@ def einsum(
     Returns:
        The result of the einsum.
     """
+    if _dot_general is None:
+        # jax.lax.dot_general satisfies DotGeneralOp at runtime; its stub omits the **kwargs the Protocol allows.
+        _dot_general = cast(DotGeneralOp, jax.lax.dot_general)
+
     lhses, rhs = parse_einsum(equation)
 
     # we have essentially 3 cases:

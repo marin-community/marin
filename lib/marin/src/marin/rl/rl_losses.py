@@ -32,7 +32,7 @@ from marin.rl.types import Rollout, TrainingBatch
 class RLLossModule(Protocol):
     """Defines the interface used for computing RL loss & advantages."""
 
-    def build(self, reference_model: eqx.Module) -> eqx.Module:
+    def build(self, reference_model: eqx.Module) -> "RLLossModule":
         """Initialize any learned components (e.g., value heads)."""
         ...
 
@@ -462,7 +462,7 @@ class RLOOLoss(RLLossModule):
     vocab_tile_size: int | None = None
     log_policy_entropy: bool = False
 
-    def build(self, reference_model: eqx.Module) -> eqx.Module:
+    def build(self, reference_model: eqx.Module) -> RLLossModule:
         """Initialize any learned components (e.g., value heads)."""
         return self  # No learned parameters
 
