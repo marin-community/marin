@@ -128,8 +128,7 @@ results flow through `ops.worker.apply_reconcile` (emits worker heartbeats,
 `WORKER_RECONCILE` transition source); TASK_BACKEND results flow through
 `ops.task.apply_dispatch_updates` (`DISPATCH` source, no
 heartbeats). A new backend (e.g. Slurm) slots in by declaring its placement and
-`manages_capacity`. See the archived design record
-`.agents/projects/2026-06-06_iris_task_backend_contract.md`.
+`manages_capacity`.
 
 **Entry points.** `cluster/client/` is the low-level RPC client
 (`RemoteClusterClient`); `client/` is the high-level user SDK (`IrisClient`,

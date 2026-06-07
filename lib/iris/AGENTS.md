@@ -125,8 +125,7 @@ Two implementations satisfy it: `RpcTaskBackend` (`backends/rpc/backend.py`,
 bare-metal, manual, and local; and `K8sTaskProvider` (`backends/k8s/tasks.py`,
 `placement=TASK_BACKEND`, `manages_capacity=True`) for Kubernetes (Kueue schedules,
 the cluster autoscaler provisions). The contract type lives in
-`controller/backend.py`; see `docs/architecture.md` "The TaskBackend contract"
-and the archived record `.agents/projects/2026-06-06_iris_task_backend_contract.md`.
+`controller/backend.py`; see `docs/architecture.md` "The TaskBackend contract".
 
 Resource model: CPU demand is fungible and can route to any group; GPU/TPU demand is non-fungible and must match device type (and optionally variant).
 
