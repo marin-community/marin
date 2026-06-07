@@ -39,12 +39,51 @@ LINT_REVIEW_AGENT_DEFAULT = "claude -p"
 LINT_REVIEW_TIMEOUT = 600
 
 
+LINT_LANE_INSTRUCTIONS = (
+    "You are ONE lane of the review. Apply ONLY the rules in the lane catalog above "
+    'to the branch diff below. Follow the shared "Detector usage" and "Output format" '
+    "exactly: emit one finding per line in the format it specifies, and emit nothing at "
+    "all when there are no findings. Resolve overlap precedence within your lane; leave "
+    "cross-lane duplicates to the composer. Work from the diff as given; do not re-derive it."
+)
+
+# The meta lane is holistic: it reasons over the whole change, may read beyond the diff,
+# and owns only its own (meta) codes. It replaces the per-hunk framing above.
+META_LANE_INSTRUCTIONS = (
+    "You are the META lane — the holistic reviewer. Unlike the other lanes, which scan "
+    "added/modified hunks for a known local shape, you reason over the change as a UNIT: "
+    "model what this PR is trying to do, then judge whether the means are the cleanest path "
+    "to that end. Apply ONLY the meta rules in the catalog above.\n\n"
+    "Diff scope is WIDE, rule scope is NARROW. You MAY read beyond the diff — open the whole "
+    "file, follow the call graph, check a sibling module or an existing helper, grep the tree "
+    "for a symbol — to confirm a finding (several rules require it). But you OWN only the meta "
+    "ml- codes: if you notice a local smell (a bad name, one overloaded function, a swallowed "
+    "exception), stay SILENT and let its lane catch it. Fire only where a hunk-scoped pass "
+    "structurally CANNOT see the problem — it spans files, lives in an unchanged file, or is a "
+    "property of the whole change. If a single hunk would let a local lane flag it, defer.\n\n"
+    "Precision is the whole game. Honor each rule's confidence floor and its suppressors; where "
+    "a rule says so, phrase the finding as a question to confirm rather than an assertion. "
+    'Follow the shared "Output format" exactly: one finding per line, nothing at all when there '
+    "are no findings. Work from the diff as given; do not re-derive it."
+)
+
+# The holistic meta lane only runs on larger diffs — its rules need the whole change, and on a
+# small PR there is no aggregate shape to see. This is the lane's only volume gate (findings are
+# advisory and read only by agents, so there is no per-PR finding cap).
+META_LANE_MIN_DIFF_LINES = 100
+
+
 @dataclass(frozen=True)
 class LintLane:
     """One fan-out lane of the lint review: a rule file under infra/lint/."""
 
     name: str
     include_complexity_leads: bool
+    # Instruction block appended after the lane catalog; the holistic meta lane overrides the
+    # default per-hunk framing with its own wide-diff-scope framing.
+    instructions: str = LINT_LANE_INSTRUCTIONS
+    # Run this lane only when the diff has more than this many changed lines (0 = always run).
+    min_diff_lines: int = 0
 
 
 # Coarse lanes — one headless agent each. Keep this aligned with infra/lint/*.md.
@@ -54,22 +93,17 @@ LINT_LANES = (
     LintLane("robustness", False),
     LintLane("cruft", False),
     LintLane("prose", False),
-)
-
-LINT_LANE_INSTRUCTIONS = (
-    "You are ONE lane of the review. Apply ONLY the rules in the lane catalog above "
-    'to the branch diff below. Follow the shared "Detector usage" and "Output format" '
-    "exactly: emit one finding per line in the format it specifies, and emit nothing at "
-    "all when there are no findings. Resolve overlap precedence within your lane; leave "
-    "cross-lane duplicates to the composer. Work from the diff as given; do not re-derive it."
+    LintLane("meta", False, META_LANE_INSTRUCTIONS, META_LANE_MIN_DIFF_LINES),
 )
 
 # The composer merges the lanes' outputs. Authored to never silently drop a real
 # finding — it may only collapse true duplicates and drop overlap-precedence losers.
 COMPOSER_INSTRUCTIONS = (
-    "You are the COMPOSER. Five specialist lanes (complexity, interfaces, robustness, cruft, "
-    "prose) each scanned the SAME branch diff against their slice of the catalog and emitted "
-    "findings in the Output format above. Their labelled raw outputs and the diff follow below. "
+    "You are the COMPOSER. Several specialist lanes each scanned the SAME branch diff against "
+    "their slice of the catalog and emitted findings in the Output format above — including one "
+    "holistic 'meta' lane that reasons over the whole change rather than single hunks, so its "
+    "findings anchor on different lines than a local finding for the same underlying issue. "
+    "Their labelled raw outputs and the diff follow below. "
     "You are an EDITOR, not a reviewer: merge them into the single final findings list, reasoned "
     "— not a blind concat. You do NOT re-scan for new issues, re-derive the diff, or invent "
     "findings. Read the diff only to adjudicate a duplicate/precedence call or sanity-check that "
@@ -243,7 +277,7 @@ def _lane_prompt(shared_text: str, lane: LintLane, diff: str, leads: str) -> str
     parts = [shared_text, (LINT_DIR / f"{lane.name}.md").read_text()]
     if lane.include_complexity_leads and leads:
         parts.append(leads)
-    parts.append(LINT_LANE_INSTRUCTIONS)
+    parts.append(lane.instructions)
     parts.append(f"```diff\n{diff}\n```")
     return "\n\n".join(parts) + "\n"
 
@@ -426,6 +460,23 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
     if resolved is None:
         return 0
     merge_base, diff = resolved
+
+    # Drop lanes whose diff-size floor the change doesn't clear (only the holistic meta lane
+    # sets one). Do this before computing leads / running agents so neither pays for a lane
+    # that will not run.
+    _, added, removed = _diff_stats(diff)
+    changed_lines = added + removed
+    runnable = []
+    for lane in lanes:
+        if changed_lines > lane.min_diff_lines:
+            runnable.append(lane)
+        else:
+            click.echo(
+                f"  Lint review: '{lane.name}' lane skipped (diff {changed_lines} ≤ {lane.min_diff_lines}-line floor)"
+            )
+    lanes = runnable
+    if not lanes:
+        return 0
 
     shared_text = LINT_SHARED.read_text()
     leads = ""

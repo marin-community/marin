@@ -37,14 +37,24 @@ For agents running this catalog against a diff:
 pass. One headless agent runs per lane; each receives this harness, its own lane
 file, and the branch diff, and emits findings in the "Output format" below. The
 complexity lane additionally receives a `COMPLEXITY LEADS` block of advisory
-static metrics. A final **composer** agent then merges the lanes' outputs into
-one list.
+static metrics. One lane is holistic: the **meta** lane (`meta.md`) reasons over
+the whole change rather than scanning hunks, may read beyond the diff to confirm a
+finding, and runs only on larger diffs (>100 changed lines). A final **composer**
+agent then merges the lanes' outputs into one list.
 
 Consequences for a lane agent: apply only your lane's rules, and resolve
 overlap precedence *within* your lane. Cross-lane duplicates (the same line
 flagged by two lanes) and cross-lane precedence are the composer's job — do not
 second-guess other lanes. The composer never culls a finding on disagreement; it
 only collapses true duplicates and drops precedence losers.
+
+"Stay in scope" has two axes. *Rule scope* — the `ml-` codes you own — is narrow
+for **every** lane, meta included: never emit another lane's code. *Diff scope* —
+how much of the change you may read — is narrow for the five local lanes (the
+changed hunks plus enough context to judge intent) and wide for the meta lane (the
+whole diff, the call graph, sibling files). The meta lane fires only where a
+hunk-scoped pass structurally cannot see the problem; if a single hunk would let a
+local lane catch it, the meta lane defers.
 
 `--lint-lane <name>` runs a single lane; `--no-lint-compose` skips the composer
 and concatenates lanes (deduped) instead of reasoning over them.
@@ -94,6 +104,7 @@ When rules overlap on one line, pick the more specific one and emit it alone:
 - A flag-gated duplicate path → `ml-flag-gated-parallel-path` over `ml-parallel-source-impl` (the flag is the more specific shape) if that rule applies; otherwise `ml-parallel-source-impl`.
 - A `_v2` / `_legacy` suffix on a function whose contrast no longer exists → `ml-vestigial-qualifier`, not `ml-misleading-name`.
 - A function that does too much: boolean *knobs* in the signature drive the split → `ml-monolithic-function`; an ordinary signature wrapping a body that does too many distinct things → `ml-overloaded-function`. A class/module mixing unrelated responsibility clusters → `ml-god-class`.
+- A whole-diff meta finding (e.g. `ml-shotgun-surgery`, `ml-echo-across-files`) and a local finding naming one instance of the same issue cite different lines → keep both: the meta finding names the aggregate, the local names the instance. The meta lane should already have deferred anything a single hunk exposes.
 
 ### Output format
 
@@ -124,5 +135,5 @@ If the diff is empty or has no Python files, emit nothing — no "no findings" m
 
 - **Precision over recall.** A reviewer who sees a false positive once trusts the tool less. When uncertain, suppress.
 - **Calibration.** If you wouldn't bet $1 on a finding being valid, score it below 0.7.
-- **Stay in scope.** Only the rules in your lane's file. Don't moonlight as a security / perf / style reviewer for things outside the catalog, or as another lane.
+- **Stay in scope.** Only the rules in your lane's file. Don't moonlight as a security / perf / style reviewer for things outside the catalog, or as another lane. The meta lane is the one exception on *diff* scope — it may read the whole change and beyond — but it still emits only meta codes.
 - **Anchor in real shapes.** A reader at the cited line should immediately see why you flagged it. If you're reaching, suppress.

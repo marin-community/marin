@@ -911,7 +911,7 @@ def _get_check_name(check) -> str:
     "--lint-lane",
     "lint_lanes",
     multiple=True,
-    help="With --review, run only these lane(s): complexity, interfaces, robustness, cruft, prose. Repeatable.",
+    help="With --review, run only these lane(s): complexity, interfaces, robustness, cruft, prose, meta. Repeatable.",
 )
 @click.option(
     "--lint-compose/--no-lint-compose",
