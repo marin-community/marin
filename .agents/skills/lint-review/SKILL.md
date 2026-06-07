@@ -69,10 +69,17 @@ unforgivable error; so is fabricating one.
    Take exactly the lines matching that shape as the findings; ignore every other
    line (status notes, the log-dir path, `Lint review: no findings.`, warnings).
 
-4. **No findings.** If the run reported no findings (no matching lines), post
-   **nothing** — the green check on the job is the "lint pass clean" signal, and a
-   second "all clear" comment would only duplicate the high-level review. State
-   "Lint review: no findings." to the terminal and stop.
+4. **No findings vs. failed run.** Distinguish two zero-finding cases:
+
+   - **Clean** — the command exited 0 and printed `Lint review: no findings.` (or
+     emitted no finding lines). Post **nothing**: the green job check is the "lint
+     pass clean" signal, and a second "all clear" comment would only duplicate the
+     high-level review. State "Lint review: no findings." to the terminal and stop.
+   - **Failed to run** — the command exited non-zero or printed that every lane
+     failed / the agent was not found / the merge-base could not be resolved. Do
+     **not** report this as clean. State plainly in your final output that the lint
+     review could not run and why; post no comments. (A broken run is a job-log
+     signal, not a PR comment.)
 
    (Without `--comment`: just print the findings, if any, to the terminal and stop
    here regardless.)
