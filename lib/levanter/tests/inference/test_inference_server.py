@@ -1,10 +1,12 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import logging
 import queue
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any, cast
 
 import equinox as eqx
 import haliax as hax
@@ -29,6 +31,7 @@ try:
     )
     from levanter.inference.openai import (
         InferenceBatch,
+        InferenceContext,
         InferenceRequest,
         InferenceResponse,
         InferenceServer,
@@ -41,6 +44,39 @@ except ImportError:
     pytest.skip("Serving imports not installed, use --extra=serve", allow_module_level=True)
 
 logger = logging.getLogger(__name__)
+
+
+def test_submit_request_log_does_not_dump_prompt_tokens(caplog):
+    context = InferenceContext(
+        model=cast(Any, object()),
+        tokenizer=object(),
+        engine=cast(Any, object()),
+        config=InferenceServerConfig(),
+    )
+    loop = asyncio.new_event_loop()
+    try:
+        future = loop.create_future()
+        prompt_tokens = list(range(2048))
+
+        with caplog.at_level(logging.INFO, logger="levanter.inference.openai"):
+            context.submit_request(
+                prompt_tokens=prompt_tokens,
+                max_tokens=128,
+                temperature=0.0,
+                top_p=1.0,
+                top_k=None,
+                stop_tokens=None,
+                seed=7,
+                future=future,
+                n_generations=1,
+            )
+    finally:
+        loop.close()
+
+    assert "prompt_tokens=2048" in caplog.text
+    assert "prompt_tokens=[0, 1, 2" not in caplog.text
+    request = context.request_queue.get_nowait()
+    assert request.prompt_tokens == prompt_tokens
 
 
 def _inference_request(

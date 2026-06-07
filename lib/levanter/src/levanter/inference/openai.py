@@ -337,7 +337,15 @@ class InferenceContext:
             return_logprobs=return_logprobs,
         )
 
-        logger.info("Enqueuing request %s", request)
+        logger.info(
+            "Enqueuing request %s: prompt_tokens=%d max_tokens=%d n=%d return_logprobs=%s echo_logprobs_top_k=%s",
+            request_id,
+            len(prompt_tokens),
+            max_tokens,
+            n_generations,
+            return_logprobs,
+            echo_logprobs_top_k,
+        )
         self.request_queue.put(request)
         return request_id
 
