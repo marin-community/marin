@@ -35,6 +35,21 @@ class _UpstreamFa4CuteModules:
     FlashAttentionBackwardPostprocess: Any
 
 
+_SM90_BACKWARD_TILE = (64, 128)
+_SM90_BACKWARD_NUM_THREADS = 384
+_SM90_BACKWARD_PDS_STAGE = 1
+_SM90_BACKWARD_SDP_SWAP_AB = True
+_SM90_BACKWARD_ATOM_LAYOUT_N_DKV = 2
+
+
+def _sm90_backward_kernel_options() -> dict[str, Any]:
+    return {
+        "PdS_stage": _SM90_BACKWARD_PDS_STAGE,
+        "SdP_swapAB": _SM90_BACKWARD_SDP_SWAP_AB,
+        "AtomLayoutNdKV": _SM90_BACKWARD_ATOM_LAYOUT_N_DKV,
+    }
+
+
 def _import_upstream_fa4_cute() -> _UpstreamFa4CuteModules:
     try:
         arch = _gpu_compute_arch()
@@ -145,8 +160,8 @@ def _thd_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
         base = flash4_cute_kernel_config(head_dim, arch=arch)
         return Flash4CuteKernelConfig(
             forward_tile=base.forward_tile,
-            backward_tile=base.backward_tile,
-            num_threads=384,
+            backward_tile=_SM90_BACKWARD_TILE,
+            num_threads=_SM90_BACKWARD_NUM_THREADS,
         )
     return Flash4CuteKernelConfig(forward_tile=(128, 128), backward_tile=(128, 128), num_threads=384)
 
@@ -364,6 +379,7 @@ def _upstream_fa4_thd_backward_launcher(
             deterministic=False,
             tile_m=tile_m,
             tile_n=tile_n,
+            **_sm90_backward_kernel_options(),
             num_threads=kernel_config.num_threads,
             score_mod=None,
             score_mod_bwd=None,
