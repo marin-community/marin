@@ -62,7 +62,7 @@ def test_rollout_tracker_uses_explicit_name_when_provided(monkeypatch):
         @property
         def summary(self):
             class _Summary:
-                def update(self_inner, metrics):
+                def update(self, metrics):
                     summary_updates.append(metrics)
 
             return _Summary()
