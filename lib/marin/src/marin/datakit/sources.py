@@ -320,6 +320,16 @@ def all_sources() -> dict[str, DatakitSource]:
             "nemotron_specialized_v1_1/unconditional_algorithmic": 0.19,
         },
     )
+    nemotron_specialized_v1_2 = _rows_nemotron(
+        "nemotron_pretraining_specialized_v1_2",
+        "nemotron_specialized_v1_2",
+        {
+            "nemotron_specialized_v1_2/fact_seeking": 35.03,
+            "nemotron_specialized_v1_2/generative": 0.69,
+            "nemotron_specialized_v1_2/moral_scenarios": 0.02,
+            "nemotron_specialized_v1_2/multiple_choice": 6.10,
+        },
+    )
 
     # locuslab Safety Pretraining: moral_education, safeweb, and refuseweb
     # (fineweb_annotated is a score-annotated copy of FineWeb itself and is
@@ -353,6 +363,7 @@ def all_sources() -> dict[str, DatakitSource]:
         *nemotron_sft,
         *nemotron_specialized,
         *nemotron_specialized_v1_1,
+        *nemotron_specialized_v1_2,
         *safety_pretraining,
     )
 
