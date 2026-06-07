@@ -122,8 +122,8 @@ class TestTransformAdapters:
         assert messages[1].role == "assistant"
         assert messages[2].role == "system"
 
-    def test_multi_turn_adapter_preserves_requested_message_fields(self):
-        """Test explicit per-message passthrough fields."""
+    def test_multi_turn_adapter_preserves_requested_tool_trace_fields(self):
+        """Test explicit per-message passthrough fields used by tool traces."""
         adapter = TransformAdapter(
             dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
             conversation_column="messages",
@@ -132,27 +132,52 @@ class TestTransformAdapters:
             user_value="user",
             assistant_value="assistant",
             system_value="system",
-            message_passthrough_keys=("reasoning_content",),
+            message_passthrough_keys=("reasoning_content", "tool_calls", "name", "tool_call_id"),
         )
         row = {
             "messages": [
-                {"role": "user", "content": "Question", "reasoning_content": None},
+                {"role": "user", "content": "Compute 2 + 2.", "reasoning_content": None},
                 {
                     "role": "assistant",
-                    "content": "Final answer",
-                    "reasoning_content": "Hidden chain for training template.",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_calc",
+                            "type": "function",
+                            "function": {"name": "evaluate_code", "arguments": '{"source_code": "print(2 + 2)"}'},
+                        }
+                    ],
+                    "reasoning_content": "Use the calculator tool.",
+                },
+                {
+                    "role": "tool",
+                    "name": "evaluate_code",
+                    "tool_call_id": "call_calc",
+                    "content": "4",
                 },
             ]
         }
 
         messages = adapter.transform_conversation_to_openai_format(row)
 
-        assert len(messages) == 2
-        assert messages[0].model_dump(exclude_none=True) == {"role": "user", "content": "Question"}
+        assert len(messages) == 3
+        assert messages[0].model_dump(exclude_none=True) == {"role": "user", "content": "Compute 2 + 2."}
         assert messages[1].model_dump(exclude_none=True) == {
             "role": "assistant",
-            "content": "Final answer",
-            "reasoning_content": "Hidden chain for training template.",
+            "tool_calls": [
+                {
+                    "id": "call_calc",
+                    "type": "function",
+                    "function": {"name": "evaluate_code", "arguments": '{"source_code": "print(2 + 2)"}'},
+                }
+            ],
+            "reasoning_content": "Use the calculator tool.",
+        }
+        assert messages[2].model_dump(exclude_none=True) == {
+            "role": "tool",
+            "content": "4",
+            "name": "evaluate_code",
+            "tool_call_id": "call_calc",
         }
 
 

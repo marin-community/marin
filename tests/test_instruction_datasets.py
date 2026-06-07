@@ -10,10 +10,6 @@ from experiments.posttrain.instruction_datasets import (
     FINEPROOFS_SFT_METADATA_COLUMNS,
     FINEPROOFS_SFT_REVISION,
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
-    NEMOTRON_SCIENCE_V1_HF_ID,
-    NEMOTRON_SCIENCE_V1_METADATA_COLUMNS,
-    NEMOTRON_SCIENCE_V1_REVISION,
-    NEMOTRON_SCIENCE_V1_SPLITS,
     SYNTHETIC2_SFT_VERIFIED_HF_ID,
     SYNTHETIC2_SFT_VERIFIED_METADATA_COLUMNS,
     SYNTHETIC2_SFT_VERIFIED_REVISION,
@@ -33,22 +29,81 @@ SYNTHETIC2_SFT_VERIFIED_OUTPUT_PATH = (
     f"documents/PrimeIntellect--SYNTHETIC-2-SFT-verified-{SYNTHETIC2_SFT_VERIFIED_REVISION}-409fa9"
 )
 
-NEMOTRON_SCIENCE_V1_SAMPLE = {
-    "uuid": "science-row-1",
-    "license": "cc-by-4.0",
+NEMOTRON_SFT_SCIENCE_V2_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "evaluate_code",
+        "description": "Evaluates Python code.",
+        "parameters": {"type": "object", "properties": {"source_code": {"type": "string"}}},
+    },
+}
+
+NEMOTRON_SFT_SCIENCE_V2_SAMPLE = {
+    "uuid": "science-v2-row-1",
+    "license": "CC BY-SA 4.0",
     "used_in": ["nano_v3"],
+    "metadata": {
+        "topic": "Physics",
+        "subtopic": "Classical Mechanics",
+        "question_format": "MCQ",
+        "generation_model": "DeepSeek-V3.2",
+    },
     "messages": [
         {
             "role": "user",
-            "content": "Which choice best explains predictive genetic testing?",
-            "reasoning_content": None,
+            "content": "What is 2 + 2? Use the available tool and select the correct option.",
         },
         {
             "role": "assistant",
-            "content": "The Best Answer is C.",
-            "reasoning_content": "Predictive testing checks future disease risk in an asymptomatic person.",
+            "content": None,
+            "tool_calls": [
+                {
+                    "index": -1,
+                    "function": {"arguments": '{"source_code": "print(2 + 2)"}', "name": "evaluate_code"},
+                    "id": "call_calc",
+                    "type": "function",
+                }
+            ],
+            "function_call": None,
+            "reasoning_content": "I should compute the value exactly before selecting an option.",
+        },
+        {
+            "role": "tool",
+            "name": "evaluate_code",
+            "tool_call_id": "call_calc",
+            "content": "4",
+        },
+        {
+            "role": "assistant",
+            "content": "The correct option is 4.",
+            "tool_calls": None,
+            "function_call": None,
+            "reasoning_content": "The tool returned 4, so the arithmetic result is 4.",
         },
     ],
+    "tools": [NEMOTRON_SFT_SCIENCE_V2_TOOL],
+}
+
+EXPECTED_NEMOTRON_SFT_SCIENCE_V2_HF_ID = "nvidia/Nemotron-SFT-Science-v2"
+EXPECTED_NEMOTRON_SFT_SCIENCE_V2_REVISION = "6536a5021222a94126968e8c92f29ee47fc8a7df"
+EXPECTED_NEMOTRON_SFT_SCIENCE_V2_SUBSETS = ("rqa", "so", "syn_mcq", "vendor")
+EXPECTED_NEMOTRON_SFT_SCIENCE_V2_METADATA_COLUMNS = ["uuid", "license", "used_in", "metadata", "tools"]
+EXPECTED_NEMOTRON_SFT_SCIENCE_V2_MESSAGE_PASSTHROUGH_KEYS = (
+    "reasoning_content",
+    "tool_calls",
+    "function_call",
+    "tool_call_id",
+    "name",
+)
+
+EXPECTED_OPENSCIENCE_REASONING_2_HF_ID = "nvidia/OpenScienceReasoning-2"
+EXPECTED_OPENSCIENCE_REASONING_2_REVISION = "174b02c9cdf231f220765b2a1d5ece4550921894"
+EXPECTED_OPENSCIENCE_REASONING_2_METADATA_COLUMNS = ["expected_answer"]
+
+OPENSCIENCE_REASONING_2_SAMPLE = {
+    "expected_answer": "C",
+    "input": "Choose the answer. What does 2 + 2 equal?\n\nA: 3\nB: 5\nC: 4",
+    "output": "<think>\nAdd the two integers.\n</think>\nThe answer is \\boxed{C}.",
 }
 
 
@@ -135,9 +190,9 @@ def test_empty_message_passthrough_keys_preserve_existing_sft_output_path():
     assert step.override_output_path == SYNTHETIC2_SFT_VERIFIED_OUTPUT_PATH
 
 
-@pytest.mark.parametrize("split", NEMOTRON_SCIENCE_V1_SPLITS)
-def test_nemotron_science_v1_step_transforms_chat_rows(split):
-    dataset_key = f"{NEMOTRON_SCIENCE_V1_HF_ID}/{split}"
+@pytest.mark.parametrize("subset", EXPECTED_NEMOTRON_SFT_SCIENCE_V2_SUBSETS)
+def test_nemotron_sft_science_v2_lanes_are_registered(subset):
+    dataset_key = f"{EXPECTED_NEMOTRON_SFT_SCIENCE_V2_HF_ID}/{subset}"
     step = get_instruction_dataset(dataset_key)
     cfg = step.config
     adapter = unwrap_versioned_value(cfg.adapter)
@@ -145,39 +200,116 @@ def test_nemotron_science_v1_step_transforms_chat_rows(split):
     assert step.name == f"documents/{dataset_key}"
     assert step.override_output_path is not None
     assert step.override_output_path.startswith(
-        f"documents/nvidia--Nemotron-Science-v1--{split}-{NEMOTRON_SCIENCE_V1_REVISION}-"
+        f"documents/nvidia--Nemotron-SFT-Science-v2--{subset}-{EXPECTED_NEMOTRON_SFT_SCIENCE_V2_REVISION}-"
     )
-    assert unwrap_versioned_value(cfg.source) == NEMOTRON_SCIENCE_V1_HF_ID
-    assert unwrap_versioned_value(cfg.revision) == NEMOTRON_SCIENCE_V1_REVISION
-    assert unwrap_versioned_value(cfg.subsets) == ["default"]
-    assert unwrap_versioned_value(cfg.splits) == [split]
-    assert unwrap_versioned_value(cfg.metadata_columns) == NEMOTRON_SCIENCE_V1_METADATA_COLUMNS
+    assert unwrap_versioned_value(cfg.source) == EXPECTED_NEMOTRON_SFT_SCIENCE_V2_HF_ID
+    assert unwrap_versioned_value(cfg.revision) == EXPECTED_NEMOTRON_SFT_SCIENCE_V2_REVISION
+    assert unwrap_versioned_value(cfg.subsets) == [subset]
+    assert unwrap_versioned_value(cfg.splits) == ["train"]
+    assert unwrap_versioned_value(cfg.metadata_columns) == EXPECTED_NEMOTRON_SFT_SCIENCE_V2_METADATA_COLUMNS
+    assert adapter.dataset_format == InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN
+    assert adapter.message_passthrough_keys == EXPECTED_NEMOTRON_SFT_SCIENCE_V2_MESSAGE_PASSTHROUGH_KEYS
 
-    result = transform_row(NEMOTRON_SCIENCE_V1_SAMPLE, cfg, adapter)
+
+def test_nemotron_sft_science_v2_tool_trace_preserves_training_fields():
+    step = get_instruction_dataset(f"{EXPECTED_NEMOTRON_SFT_SCIENCE_V2_HF_ID}/rqa")
+    cfg = step.config
+    adapter = unwrap_versioned_value(cfg.adapter)
+
+    result = transform_row(NEMOTRON_SFT_SCIENCE_V2_SAMPLE, cfg, adapter)
 
     assert result is not None
-    assert result.source == NEMOTRON_SCIENCE_V1_HF_ID
+    assert result.source == EXPECTED_NEMOTRON_SFT_SCIENCE_V2_HF_ID
     assert result.messages[0].model_dump(exclude_none=True) == {
         "role": "user",
-        "content": "Which choice best explains predictive genetic testing?",
+        "content": "What is 2 + 2? Use the available tool and select the correct option.",
     }
     assert result.messages[1].model_dump(exclude_none=True) == {
         "role": "assistant",
-        "content": "The Best Answer is C.",
-        "reasoning_content": "Predictive testing checks future disease risk in an asymptomatic person.",
+        "tool_calls": [
+            {
+                "index": -1,
+                "function": {"arguments": {"source_code": "print(2 + 2)"}, "name": "evaluate_code"},
+                "id": "call_calc",
+                "type": "function",
+            }
+        ],
+        "reasoning_content": "I should compute the value exactly before selecting an option.",
+    }
+    assert result.messages[2].model_dump(exclude_none=True) == {
+        "role": "tool",
+        "content": "4",
+        "name": "evaluate_code",
+        "tool_call_id": "call_calc",
+    }
+    assert result.messages[3].model_dump(exclude_none=True) == {
+        "role": "assistant",
+        "content": "The correct option is 4.",
+        "reasoning_content": "The tool returned 4, so the arithmetic result is 4.",
     }
     assert result.metadata == {
-        "uuid": "science-row-1",
-        "license": "cc-by-4.0",
+        "uuid": "science-v2-row-1",
+        "license": "CC BY-SA 4.0",
         "used_in": ["nano_v3"],
+        "metadata": {
+            "topic": "Physics",
+            "subtopic": "Classical Mechanics",
+            "question_format": "MCQ",
+            "generation_model": "DeepSeek-V3.2",
+        },
+        "tools": [NEMOTRON_SFT_SCIENCE_V2_TOOL],
     }
+    assert result.model_dump()["chat_template_kwargs"] == {"tools": [NEMOTRON_SFT_SCIENCE_V2_TOOL]}
 
 
-def test_nemotron_science_v1_split_steps_have_distinct_outputs():
-    output_paths = {
-        get_instruction_dataset(f"{NEMOTRON_SCIENCE_V1_HF_ID}/{split}").override_output_path
-        for split in NEMOTRON_SCIENCE_V1_SPLITS
+def test_nemotron_sft_science_v2_string_tools_column_stays_metadata_only():
+    step = get_instruction_dataset(f"{EXPECTED_NEMOTRON_SFT_SCIENCE_V2_HF_ID}/vendor")
+    cfg = step.config
+    adapter = unwrap_versioned_value(cfg.adapter)
+    vendor_sample = {**NEMOTRON_SFT_SCIENCE_V2_SAMPLE, "tools": ""}
+
+    result = transform_row(vendor_sample, cfg, adapter)
+
+    assert result is not None
+    assert result.metadata["tools"] == ""
+    assert "chat_template_kwargs" not in result.model_dump()
+
+
+def test_nemotron_science_v1_lanes_are_replaced_by_science_v2():
+    assert all(
+        not dataset_key.startswith("nvidia/Nemotron-Science-v1/") for dataset_key in INSTRUCTION_DATASET_NAME_TO_CONFIG
+    )
+
+
+def test_openscience_reasoning_2_step_transforms_instruction_response_rows():
+    step = get_instruction_dataset(EXPECTED_OPENSCIENCE_REASONING_2_HF_ID)
+    cfg = step.config
+    adapter = unwrap_versioned_value(cfg.adapter)
+
+    assert step.name == f"documents/{EXPECTED_OPENSCIENCE_REASONING_2_HF_ID}"
+    assert step.override_output_path is not None
+    assert step.override_output_path.startswith(
+        f"documents/nvidia--OpenScienceReasoning-2-{EXPECTED_OPENSCIENCE_REASONING_2_REVISION}-"
+    )
+    assert unwrap_versioned_value(cfg.source) == EXPECTED_OPENSCIENCE_REASONING_2_HF_ID
+    assert unwrap_versioned_value(cfg.revision) == EXPECTED_OPENSCIENCE_REASONING_2_REVISION
+    assert unwrap_versioned_value(cfg.subsets) == ["default"]
+    assert unwrap_versioned_value(cfg.splits) == ["train"]
+    assert unwrap_versioned_value(cfg.metadata_columns) == EXPECTED_OPENSCIENCE_REASONING_2_METADATA_COLUMNS
+    assert adapter.dataset_format == InputDatasetFormat.INSTRUCTION_RESPONSE
+    assert adapter.instruction_column == "input"
+    assert adapter.response_column == "output"
+
+    result = transform_row(OPENSCIENCE_REASONING_2_SAMPLE, cfg, adapter)
+
+    assert result is not None
+    assert result.source == EXPECTED_OPENSCIENCE_REASONING_2_HF_ID
+    assert result.messages[0].model_dump(exclude_none=True) == {
+        "role": "user",
+        "content": "Choose the answer. What does 2 + 2 equal?\n\nA: 3\nB: 5\nC: 4",
     }
-
-    assert None not in output_paths
-    assert len(output_paths) == len(NEMOTRON_SCIENCE_V1_SPLITS)
+    assert result.messages[1].model_dump(exclude_none=True) == {
+        "role": "assistant",
+        "content": "<|start_think|>\nAdd the two integers.\n<|end_think|>\nThe answer is \\boxed{C}.",
+    }
+    assert result.metadata == {"expected_answer": "C"}
