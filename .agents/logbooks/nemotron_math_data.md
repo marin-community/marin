@@ -1254,3 +1254,40 @@ Follow-ups suggested:
   machinery (data_sections JSON) can pin it the same way.
 - Mind the short-doc bias when comparing absolute losses to the old anchor
   numbers; within-ladder comparisons on the same set are unaffected.
+
+### 2026-06-07 22:15 UTC — Session close: state of record
+
+Branch `deconamint`, commits this session:
+
+- `e3176631ca` — paranoid val set build: `build_paranoid_val_keep_ids.py`,
+  `build_decon_val_sets.py`, `tests/analysis/test_build_decon_val_sets.py`,
+  eval plan (`.agents/projects/decon_val_eval_plan.md`).
+- `bfd6331d3d` — eval sweep: `eval_decon_val_sets.py`, vendored
+  `p33m67_data_section.json`, results in this logbook.
+
+Durable artifacts:
+
+- Caches: `gs://marin-us-east5/tokenized/nemotron_math_val_decon/{j050,j075,j090}/validation/`
+  (13,947 / 28,089 / 33,196 docs; 10,282,799 / 20,782,728 / 25,346,090
+  tokens — exact-verified; llama3 tokenizer).
+- Build provenance: `gs://…/midtrain_dedup/decon_val_sets/`
+  (keep_ids/, j*/docs/, j*/manifest.json, build_intent.json, filter_stats/).
+- Eval results: `gs://…/midtrain_dedup/decon_val_sets/evals/{run}/step-{N}/metrics.jsonl/eval_results.json`
+  ×9 runs; W&B tag `decon_val_eval` (marin-community/marin).
+
+Cluster state: no jobs from this work left running (eval sweep all
+succeeded; stale keyjoin 0048/0049 stopped with children earlier; build
+jobs terminal). Total compute spent on the answer: ~9 preemptible v6e-4
+eval jobs ≈ 35 min TPU time + two ~50-min CPU build jobs.
+
+Open follow-ups (not started):
+
+1. Re-fit math scaling laws on `decon_j050`; extend sweep to other lr
+   factors / mixes (driver is ready: `eval_decon_val_sets.py --run <run>`).
+2. Canonicalize a decontaminated math val for future midtrains
+   (data-sections pinning, same byte-identical contract).
+3. Rerun `decon_val_summary.py` with corrected offsets convention (its
+   token counts treat doc-ends as starts; doc counts unaffected).
+4. Key-join verify fast path in `nemotron_math_val_full_scan.py` still
+   broken (non-generator reducer wrapper) — fix + regression test before
+   any reuse; not needed for any current numbers.
