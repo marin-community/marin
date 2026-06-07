@@ -18,16 +18,15 @@ it.** Reading top to bottom answers a chain of questions:
 └──────────────────────────────┬───────────────────────────────────────┘
 ┌─ CONTROLLER  (cluster/controller/) — the brain ──▼────────────────────┐
 │  transport/loops  controller.py · service.py · dashboard.py · main.py │
-│  imperative shell  ops/{job,task,worker} · direct_provider · pruner   │
-│  decision kernels  reconcile/ · scheduler.py · scheduling_policy.py · │
-│                    autoscaler/                                        │
+│  imperative shell  ops/{job,task,worker} · reconcile/dispatch · pruner│
+│  decision kernels  reconcile/ · scheduling/ · autoscaler/             │
 │  state predicates  task_state.py · worker_health.py · audit.py        │
 │  persistence spine schema→codec→db→reads/writes · projections/        │
 └──────────────────────────────┬───────────────────────────────────────┘
 ┌─ EXECUTION SUBSTRATE  (cluster/) ────────────────▼────────────────────┐
 │  worker/    the agent daemon that runs on each machine                │
 │  runtime/   container execution (Docker / subprocess)                 │
-│  providers/ machine lifecycle: gcp · k8s · local · manual             │
+│  backends/  machine lifecycle: gcp · k8s · local · manual             │
 └──────────────────────────────┬───────────────────────────────────────┘
 ┌─ CLUSTER VOCABULARY  (cluster/ top-level) ───────▼────────────────────┐
 │  types · constraints · config · config_serde · endpoints · bundle …   │
@@ -43,7 +42,7 @@ it.** Reading top to bottom answers a chain of questions:
 |---|---|---|
 | **Foundation** | `rpc/`, `actor/`, top-level utils | What vocabulary does everything speak? (protos, RPC middleware, threads, time) |
 | **Cluster vocabulary** | `cluster/types,constraints,config,bundle,endpoints` | What *is* a job / constraint / resource? |
-| **Execution substrate** | `cluster/providers,runtime,worker` | How do we get a machine, and run a task on it? |
+| **Execution substrate** | `cluster/backends,runtime,worker` | How do we get a machine, and run a task on it? |
 | **Controller** | `cluster/controller/**` | What is the desired state, and how do we drive toward it? |
 | **Entry points** | `cli/`, `client/`, `cluster/client/` | How does a human/program submit and observe? |
 
@@ -64,12 +63,27 @@ content-addressed bundles (`bundle.py`), endpoint URI resolution, and small
 shared concerns (`redaction`, `service_mode`, `log_keys`, `token_store`,
 `process_status`, `dashboard_common`).
 
-**Execution substrate.** `providers/` abstracts *machine lifecycle* behind two
-Protocols (`ControllerProvider`, `WorkerInfraProvider`) with four backends
-(`gcp`, `k8s`, `local`, `manual`); `vm_lifecycle.py` (controller VM
-start/stop/restart) lives here because it is provider code. `runtime/`
-abstracts *task execution* behind `ContainerRuntime` (Docker / subprocess).
-`worker/` is the agent daemon that runs on each machine.
+**Execution substrate.** `backends/` covers two distinct abstractions:
+
+- *Machine lifecycle* behind two Protocols (`ControllerProvider`,
+  `WorkerInfraProvider`) with four backends (`gcp`, `k8s`, `local`, `manual`);
+  `vm_lifecycle.py` (controller VM start/stop/restart) lives here because it is
+  provider code.
+- *The task control-plane contract* (`TaskBackend`, defined in
+  `controller/backend.py`): `backends/rpc/backend.py` (`RpcTaskBackend`) and
+  `backends/k8s/tasks.py` (`K8sTaskProvider`) each implement it. This is a
+  different axis from machine lifecycle — a `TaskBackend` drives task execution
+  and capacity for one cluster, while the lifecycle Protocols get/stop machines.
+
+`runtime/` abstracts *task execution* behind `ContainerRuntime` (Docker /
+subprocess). `worker/` is the agent daemon that runs on each machine.
+
+The `TaskBackend` contract type lives in the controller layer
+(`controller/backend.py`), and the two implementations in `backends/` import it
+upward — an intended exception to "imports go down" (see
+[Known boundary debt](#known-boundary-debt)). It is the seam by which the
+controller stays a thin, backend-agnostic dispatcher; see
+[The TaskBackend contract](#the-taskbackend-contract).
 
 **Controller** (`cluster/controller/`) — the coordination engine, itself
 sub-layered:
@@ -78,8 +92,8 @@ sub-layered:
 |---|---|---|
 | Persistence spine | `schema` → `codec` → `db` → `reads`/`writes` · `projections/` | State at rest. `reads`/`writes` are the **only** sanctioned query/mutation surface; `projections/` are write-through caches. |
 | State predicates | `task_state` · `worker_health` · `audit` | What the rows *mean*. |
-| Decision kernels | `reconcile/` (lifecycle) · `scheduler.py` (matching) · `scheduling_policy.py` (preemption/reservation/gating) · `autoscaler/` (capacity) | Compute what *should* change. Parameterized; no live I/O. |
-| Imperative shell | `ops/{job,task,worker}` · `direct_provider` · `pruner` | Load a snapshot, call a kernel, apply effects. |
+| Decision kernels | `reconcile/` (lifecycle) · `scheduling/scheduler.py` (matching) · `scheduling/policy.py` (preemption/reservation/gating) · `autoscaler/` (capacity) | Compute what *should* change. Parameterized; no live I/O. |
+| Imperative shell | `ops/{job,task,worker}` · `reconcile/dispatch` · `pruner` | Load a snapshot, call a kernel, apply effects. |
 | Transport / loops | `controller.py` (loops) · `service.py` (RPC) · `dashboard.py` · `main.py` | Drive it / expose it. |
 
 The `reconcile/` package is the lifecycle kernel: leaves
@@ -89,6 +103,33 @@ edge) → `batches` (orchestrator) → `loader` (I/O) → `ops/` shell. `reads`/
 are the canonical data layer; **one-off queries may stay in `service.py`** —
 `reads.py` is reserved for load-bearing, multiply-used queries.
 
+### The TaskBackend contract
+
+`controller/backend.py` defines `TaskBackend`: the single Protocol that drives
+task execution and capacity for one cluster. The controller owns the database
+and the loop cadences; a backend takes a plain-data snapshot in and returns
+plain-data decisions/deltas out. **Backends never read or write the controller
+DB** — every method is snapshot-in, data-out, so the controller can commit
+results on its own terms (`reconcile`, `schedule`, `manage_capacity`,
+`on_workers_failed`, plus on-demand `get_process_status`/`profile_task`/
+`exec_in_container`).
+
+Two execution models exist, distinguished by `TaskBackend.placement`:
+
+| Placement | Who schedules task→node | Capacity | Implementation |
+|---|---|---|---|
+| `PlacementOwner.IRIS_CONTROLLER` | the Iris `Scheduler` (in-controller-layer, owned by the backend); the backend fans the per-worker Reconcile RPC to worker daemons | the Iris `Autoscaler` provisions VMs (`manages_capacity=False`) | `RpcTaskBackend` (`backends/rpc/backend.py`) — GCP/TPU, CoreWeave bare-metal, manual, local |
+| `PlacementOwner.TASK_BACKEND` | the backend itself (Kueue, later slurmctld); Iris runs no scheduling loop for it | the backend provisions its own nodes (`manages_capacity=True`); `schedule`/`manage_capacity` are no-ops | `K8sTaskProvider` (`backends/k8s/tasks.py`) |
+
+The controller selects its input-build and apply path on these two declared
+capabilities, never on the concrete backend type — there are no `isinstance`
+branches. The two reconcile apply paths are *not* interchangeable: IRIS_CONTROLLER
+results flow through `ops.worker.apply_reconcile` (emits worker heartbeats,
+`WORKER_RECONCILE` transition source); TASK_BACKEND results flow through
+`ops.task.apply_dispatch_updates` (`DISPATCH` source, no
+heartbeats). A new backend (e.g. Slurm) slots in by declaring its placement and
+`manages_capacity`.
+
 **Entry points.** `cluster/client/` is the low-level RPC client
 (`RemoteClusterClient`); `client/` is the high-level user SDK (`IrisClient`,
 `IrisContext`); `cli/` is the command line. Nothing imports *into* these.
@@ -97,12 +138,18 @@ are the canonical data layer; **one-off queries may stay in `service.py`** —
 
 Honest exceptions to the layering, as of this writing:
 
-- **`controller` ↔ `providers/k8s` cycle.** `providers/k8s/tasks.py` imports up
-  into the controller, and `controller.py` carries a `TaskProvider |
-  K8sTaskProvider` union with `isinstance` branches. The `TaskProvider` Protocol
-  exists to prevent this but K8s bypasses it. (Fix: make `K8sTaskProvider`
-  satisfy the Protocol — deferred; the same move `service.py`'s
-  `ControllerProtocol` already demonstrates.)
+- **`backends` → `controller/backend.py` upward import.** Both `TaskBackend`
+  implementations (`backends/rpc/backend.py`, `backends/k8s/tasks.py`) import
+  the contract type — and the `Scheduler`/`Autoscaler`/reconcile types it
+  references — up from the controller layer. This is a deliberate, narrowed edge:
+  the controller depends only on the `TaskBackend` Protocol and dispatches by
+  `placement`/`manages_capacity` (no `isinstance`), so the old runtime
+  `TaskProvider | K8sTaskProvider` union and its `isinstance` ladder are gone
+  (the dead `controller/provider.py` was deleted). The residual coupling is now a
+  static import of one contract type rather than a behavioral branch. Fully
+  removing it would mean hoisting the contract (and the scheduler/autoscaler it
+  names) into `cluster/`; deferred, because the contract is conceptually
+  controller logic.
 - **Device introspection is split** across `types.py` (counts/devices) and
   `constraints.py` (type/variant). Consolidation is blocked because the type
   reader returns `constraints.DeviceType`, which is pinned to `constraints.py`

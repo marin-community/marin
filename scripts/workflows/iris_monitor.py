@@ -20,9 +20,9 @@ import click
 from google.protobuf import json_format
 from iris.cli.main import create_client_token_provider, resolve_cluster_name
 from iris.client import IrisClient
+from iris.cluster.backends.k8s.tasks import _sanitize_label_value
+from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import IrisConfig
-from iris.cluster.providers.k8s.tasks import _sanitize_label_value
-from iris.cluster.providers.local.cluster import LocalCluster
 from iris.cluster.token_store import cluster_name_from_url, load_any_token, load_token
 from iris.cluster.types import JobName, is_job_finished
 from iris.rpc import job_pb2

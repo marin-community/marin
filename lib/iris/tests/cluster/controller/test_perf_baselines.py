@@ -18,7 +18,7 @@ from time import perf_counter
 import pytest
 from iris.cluster.controller import db, ops, reads
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.scheduling_policy import _jobs_with_reservations
+from iris.cluster.controller.scheduling.policy import _jobs_with_reservations
 from iris.cluster.controller.schema import task_attempts_table, tasks_table
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
