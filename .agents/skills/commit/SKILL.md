@@ -177,5 +177,8 @@ gh pr create --title "<title>" --body "<plain text body>" --label agent-generate
 ## See Also
 
 - `.agents/skills/review-pr/` — multi-agent PR correctness review (separate concern).
+- `.agents/skills/lint-review/` — the CI counterpart of step 6: the `Ops - Claude
+  Review` workflow runs this same `--review` pass on the PR and posts the findings
+  as inline comments. Running it locally first lets you address them before review.
 - `.agents/skills/fix-issue/` — end-to-end issue-fix workflow.
 - `AGENTS.md` — coding guidelines.
