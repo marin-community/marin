@@ -102,6 +102,21 @@ def _small_model_config(model_config_cls, *, vocab_size: int, seq_len: int):
     return model_config_cls(**kwargs)
 
 
+def test_grug_moe_layer_masks_preserve_thd_segment_metadata():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mask = GrugAttentionMask.causal().with_segment_ids(
+        jnp.array([[0, 0, 1, 1, -1, -1]], dtype=jnp.int32),
+        max_segments=3,
+    )
+
+    short_mask, long_mask = model_module._layer_attention_masks(mask, sliding_window=12)
+
+    assert short_mask.thd_segment_metadata is mask.thd_segment_metadata
+    assert long_mask.thd_segment_metadata is mask.thd_segment_metadata
+    assert short_mask.segment_ids is mask.segment_ids
+    assert long_mask.segment_ids is mask.segment_ids
+
+
 @pytest.mark.parametrize(
     "variant",
     _discover_grug_variants_with_model_and_train(),
