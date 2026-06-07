@@ -78,7 +78,7 @@ def terminate_slices_for_workers(
         )
         group.record_slice_preempted(slice_id, timestamp)
         handle = group.detach_slice(slice_id)
-        unregister_slice_workers(slice_id, worker_ids=slice_worker_ids)
+        unregister_slice_workers(slice_id, slice_worker_ids)
         if handle is not None:
             termination_requests.append(SliceTerminationRequest(slice_id=slice_id, group=group, handle=handle))
 

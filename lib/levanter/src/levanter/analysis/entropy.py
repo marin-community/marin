@@ -18,8 +18,8 @@ from haliax.jax_utils import named_call
 import levanter.tracker
 from levanter.callbacks import StepInfo
 
-from ..data import DataLoader
-from ..tracker.histogram import SummaryStats
+from levanter.data import DataLoader
+from levanter.tracker.histogram import SummaryStats
 
 
 B = TypeVar("B")

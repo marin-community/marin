@@ -40,7 +40,6 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
 from iris.cluster.controller.scheduling.scheduler import Scheduler
-from iris.cluster.runtime.profile import IrisProfile
 from iris.cluster.types import WorkerId
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -206,7 +205,7 @@ class RpcTaskBackend:
         self,
         log_client: LogWriterProtocol,
         task_stats_table: Table,
-        profile_table: Table[IrisProfile],
+        profile_table: Table,
     ) -> None:
         """No-op: worker daemons write their own log/resource/profile rows."""
 

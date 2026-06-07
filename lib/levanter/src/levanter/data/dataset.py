@@ -324,7 +324,7 @@ class BatchMappedAsyncDataset(AsyncDataset[U]):
         *extra_args,
         **extra_kwargs,
     ):
-        self.dataset = dataset
+        self.dataset: AsyncDataset = dataset
         self.fn = fn
         self._extra_args = extra_args
         self._extra_kwargs = extra_kwargs

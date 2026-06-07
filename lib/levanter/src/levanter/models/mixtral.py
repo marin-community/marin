@@ -5,7 +5,7 @@ import dataclasses
 import inspect
 from dataclasses import dataclass
 from functools import partial
-from typing import Callable, Dict, List, Optional, Type, Union
+from typing import Callable, Dict, List, Optional, Type, Union, cast
 
 import equinox as eqx
 import jax
@@ -305,10 +305,9 @@ class MixtralMoEMlp(ModuleWithStateDictSerialization):
                 # val = state_dict[key][..., None, :, :]
                 w[j].append(val)
 
-        for j in range(3):
-            w[j] = jnp.concat(w[j], axis=1)
+        stacked: List[Array] = [jnp.concat(w[j], axis=1) for j in range(3)]
 
-        return eqx.tree_at(lambda m: [m.w1.weight.array, m.w2.weight.array, m.w3.weight.array], self, w)
+        return eqx.tree_at(lambda m: [m.w1.weight.array, m.w2.weight.array, m.w3.weight.array], self, stacked)
 
 
 class MixtralSparseMoeBlock(eqx.Module):
@@ -545,7 +544,7 @@ class MixtralTransformer(eqx.Module):
         self, x: NamedArray, attn_mask: Optional[NamedArray], *, key, pos_ids: NamedArray | None = None
     ) -> tuple[NamedArray, dict]:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x, extras = self.layers.scan(x, mask=attn_mask, key=keys)
+        x, extras = cast(tuple[NamedArray, dict], self.layers.scan(x, mask=attn_mask, key=keys))
         x = self.norm(x)
 
         # moe logging

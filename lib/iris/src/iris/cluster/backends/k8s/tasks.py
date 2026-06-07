@@ -57,7 +57,6 @@ from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_re
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
-    IrisProfile,
     build_profile_row,
     capture_cpu,
     capture_memory_attach,
@@ -1224,7 +1223,7 @@ class K8sTaskProvider:
     task_stats_table: Table | None = None
     # Pre-resolved iris.profile Table handle injected by the controller
     # alongside task_stats_table. None in test mode.
-    profile_table: Table[IrisProfile] | None = None
+    profile_table: Table | None = None
     poll_concurrency: int = 32
     log_poll_interval: float = 15.0
     name: str = "kubernetes"
@@ -1411,7 +1410,7 @@ class K8sTaskProvider:
         self,
         log_client: LogWriterProtocol,
         task_stats_table: Table,
-        profile_table: Table[IrisProfile],
+        profile_table: Table,
     ) -> None:
         """Inject the finelog handles the controller resolves after connecting.
 

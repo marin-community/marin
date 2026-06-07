@@ -12,6 +12,7 @@ from typing import (
     Concatenate,
     Generic,
     Protocol,
+    Self,
     Sequence,
     Type,
     TypeVar,
@@ -29,9 +30,9 @@ import haliax.util
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.util import is_jax_or_hax_array_like
 
-from .._src.scan import ScanCheckpointPolicy, ScanCheckpointSpec
-from .._src.state_dict import ModuleWithStateDictSerialization, StateDict, with_prefix
-from ..axis import Axis
+from haliax._src.scan import ScanCheckpointPolicy, ScanCheckpointSpec
+from haliax._src.state_dict import ModuleWithStateDictSerialization, StateDict, with_prefix
+from haliax.axis import Axis
 
 M = TypeVar("M", bound=eqx.Module)
 M_co = TypeVar("M_co", bound=eqx.Module, covariant=True)
@@ -359,7 +360,7 @@ class BlockSeq(ModuleWithStateDictSerialization, Generic[M]):
     def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"blocks": None}
 
-    def from_state_dict(self: M, state_dict: StateDict, prefix: str | None = None) -> M:
+    def from_state_dict(self, state_dict: StateDict, prefix: str | None = None) -> Self:
         out_blocks = []
         for i, block in enumerate(self.blocks):
             my_prefix = with_prefix(prefix, str(i))
@@ -740,7 +741,7 @@ class Stacked(ModuleWithStateDictSerialization, Generic[M]):
 
         return _unstack_state_dict(state_dict, prefix)
 
-    def from_state_dict(self: M, state_dict: StateDict, prefix: str | None = None) -> M:
+    def from_state_dict(self, state_dict: StateDict, prefix: str | None = None) -> Self:
         # this method needs to "vectorize" the blocks, so that we have a single block h.FOO
         # first just do the normal thing with our own dict, which we'll post-process
         stacked = _stack_state_dict(state_dict, prefix=prefix)

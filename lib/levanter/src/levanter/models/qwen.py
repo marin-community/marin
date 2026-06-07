@@ -260,7 +260,7 @@ class QwenLMHeadModel(LmHeadModel[QwenConfig], ModuleWithStateDictSerialization)
         else:
             return self.lm_head.weight
 
-    def resize_vocab(self, new_size: int, key=None) -> "LmHeadModel[LlamaConfig]":
+    def resize_vocab(self, new_size: int, key=None) -> "LmHeadModel[QwenConfig]":
         new_Vocab = self.Vocab.resize(new_size)
         k1, k2 = maybe_rng_split(key, 2)
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)

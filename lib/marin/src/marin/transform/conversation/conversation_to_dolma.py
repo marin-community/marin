@@ -50,5 +50,4 @@ convert_conversation_to_dolma = process_dataset
 
 
 if __name__ == "__main__":
-    process_dataset = draccus.wrap(process_dataset)
-    process_dataset()
+    draccus.wrap()(process_dataset)()

@@ -59,7 +59,6 @@ from iris.cluster.controller.scheduling.policy import (
 from iris.cluster.controller.scheduling.scheduler import JobRequirements, Scheduler, SchedulingContext
 from iris.cluster.controller.schema import ReservationClaim
 from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.runtime.profile import IrisProfile
 from iris.cluster.types import JobName, PendingTask, WorkerId, WorkerStatusMap
 from iris.rpc import job_pb2, worker_pb2
 
@@ -456,7 +455,7 @@ class TaskBackend(Protocol):
         self,
         log_client: LogWriterProtocol,
         task_stats_table: Table,
-        profile_table: Table[IrisProfile],
+        profile_table: Table,
     ) -> None:
         """Inject the finelog handles the controller resolves after connecting.
 
