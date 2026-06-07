@@ -252,27 +252,28 @@ def _build_options_from_proto(input_type: type[Message]) -> list[click.Option]:
     return options
 
 
-class ServiceCommands(click.MultiCommand):
+class ServiceCommands(click.Group):
     """Dynamic Click group for RPC service methods.
 
-    Lazily generates Click commands from protobuf service definitions.
+    Lazily generates Click commands from protobuf service definitions by
+    overriding ``list_commands``/``get_command`` rather than registering them.
     """
 
     def __init__(self, service_name: str, **attrs):
         super().__init__(**attrs)
         self.service_name = service_name
 
-    def list_commands(self, _ctx: click.Context) -> list[str]:
+    def list_commands(self, ctx: click.Context) -> list[str]:
         svc = get_service(self.service_name)
         if not svc:
             return []
         return [to_kebab_case(m) for m in sorted(svc.methods.keys())]
 
-    def get_command(self, ctx: click.Context, name: str) -> click.Command | None:
+    def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
         svc = get_service(self.service_name)
         if not svc:
             return None
-        pascal_name = kebab_to_pascal(name)
+        pascal_name = kebab_to_pascal(cmd_name)
         method = svc.methods.get(pascal_name)
         if not method:
             return None

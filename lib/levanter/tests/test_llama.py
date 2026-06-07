@@ -7,7 +7,6 @@ import chex
 import equinox as eqx
 import haliax as hax
 import haliax.nn as hnn
-import numpy
 import numpy as np
 import pytest
 import transformers
@@ -277,7 +276,7 @@ def test_llama_roundtrip(scan_layers, num_kv_heads):
         torch_out2 = torch_model2(input_torch)
         torch_out2 = torch_out2.logits[0].detach().cpu().numpy()
         assert torch_out2.shape == jax_out.shape, f"{torch_out2.shape} != {jax_out.shape}"
-        numpy.testing.assert_allclose(torch_out2, jax_out, rtol=1e-5, atol=1e-5)
+        np.testing.assert_allclose(torch_out2, jax_out, rtol=1e-5, atol=1e-5)
 
 
 def _get_llama_config(use_flash=False, num_kv_heads=4, seq_len=64) -> LlamaConfig:

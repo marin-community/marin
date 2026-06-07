@@ -19,6 +19,7 @@ from fray import ResourceConfig, current_client
 from fray.types import Entrypoint, JobRequest, create_environment
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
+from levanter.adaptor import AdaptorConfig, LoraAdaptorConfig, NoAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import (
     DEFAULT_LM_DATA_SHUFFLE,
@@ -28,14 +29,14 @@ from levanter.data.text import (
     TextLmDatasetFormat,
 )
 from levanter.eval_harness import LmEvalHarnessConfig
-from levanter.main.train_dpo import TrainDpoConfig
+from levanter.main.train_dpo import SeparateReferenceConfig, TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
 from levanter.optim.model_averaging import EmaModelAveragingConfig
 from levanter.schedule import BatchSchedule
-from levanter.tracker.wandb import WandbConfig
+from levanter.tracker.wandb import WandbConfig, truncate_wandb_run_name
 from levanter.trainer import TrainerConfig
 from levanter.utils import fsspec_utils
 from levanter.utils.mesh import MeshConfig
@@ -50,6 +51,7 @@ from marin.processing.tokenize import (
     TokenizerStep,
     add_validation_sets_to_mixture,
     lm_data_config,
+    lm_mixture_data_config,
     tokenize,
 )
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
@@ -85,24 +87,6 @@ def _normalize_hf_bucket_path(path: str) -> str:
     if path.startswith(HF_BUCKET_URI_PREFIX):
         return path.removeprefix("hf://")
     return path
-
-
-def _truncate_wandb_name(name: str) -> str:
-    """Truncate a run name to fit WANDB's 64-character limit, preserving the trailing suffix."""
-    if len(name) <= 64:
-        return name
-    old_name = name
-    if "-" not in name:
-        name = name[:64]
-    else:
-        prefix, suffix = name.rsplit("-", 1)
-        if len(suffix) >= 64:
-            suffix = suffix[:64]
-            name = suffix
-        else:
-            name = prefix[: 63 - len(suffix)] + "-" + suffix
-    logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
-    return name
 
 
 def _resolve_hf_export_steps(steps_per_hf_export: int | None, steps_per_export: int | None) -> int | None:
@@ -369,6 +353,7 @@ def _build_train_lm_config(
     wandb_name: str | None = None,
     wandb_group: str | None = None,
     wandb_project: str | None = None,
+    adapter: AdaptorConfig | None = None,
 ) -> tuple[str, TrainLmConfig]:
     """Build the shared ``TrainLmConfig`` body used by ``default_train`` and ``prepare_lm_train``.
 
@@ -385,7 +370,7 @@ def _build_train_lm_config(
     if wandb_project is None:
         wandb_project = os.environ.get("WANDB_PROJECT", "marin")
 
-    name = _truncate_wandb_name(name)
+    name = truncate_wandb_run_name(name)
 
     if eval_harness_tasks:
         harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(eval_harness_tasks))
@@ -492,6 +477,7 @@ def _build_train_lm_config(
         data_seed=train_config.data_seed,
         eval_harness_steps=train_config.steps_per_task_eval or 10000,
         eval_harness=harness_config,
+        adapter=adapter if adapter is not None else NoAdaptorConfig(),
     )
 
     return name, inner_config
@@ -509,6 +495,7 @@ def default_train(
     wandb_group: str | None = None,
     wandb_project: str | None = None,
     override_output_path: str | None = None,
+    adapter: AdaptorConfig | None = None,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -536,6 +523,7 @@ def default_train(
         wandb_name=wandb_name,
         wandb_group=wandb_group,
         wandb_project=wandb_project,
+        adapter=adapter,
     )
 
     pretraining_data = inner_config.data
@@ -756,6 +744,7 @@ def default_sft(
     model_config: LlamaConfig,
     sft_config: SimpleSFTConfig,
     tags: Sequence[str] = (),
+    adapter: AdaptorConfig | None = None,
 ) -> ExecutorStep:
     """
     Creates an ExecutorStep for supervised fine-tuning of a language model.
@@ -819,6 +808,7 @@ def default_sft(
         tags=tags,
         eval_harness_tasks=[],
         use_default_validation=False,
+        adapter=adapter,
     )
 
 
@@ -859,20 +849,63 @@ def default_dpo(
     preference_data = PreferenceLmDataConfig.from_lm_data_config(pretraining_data)
     preference_data = dataclasses.replace(preference_data, permutation_type="feistel")
     dpo_tokenizer_name = unwrap_versioned_value(preference_data.tokenizer)
+    lm_validation_data = lm_mixture_data_config(
+        default_validation_sets(tokenizer=dpo_tokenizer_name),
+        {},
+        missing_weights_are_validation=True,
+        include_raw_paths=False,
+    )
 
-    name = _truncate_wandb_name(name)
+    name = truncate_wandb_run_name(name)
 
     steps_per_export = dpo_config.steps_per_checkpoint
     steps_per_export_hf = _resolve_hf_export_steps(dpo_config.steps_per_hf_export, steps_per_export)
 
     train_length = _validate_train_length(dpo_config.train_seq_len, model_config)
 
-    schedule = BatchSchedule(unwrap_versioned_value(dpo_config.train_batch_size))
-    total_examples = schedule.global_data_offset_by_step(dpo_config.num_train_steps)
+    requested_num_train_steps = dpo_config.num_train_steps
+    auto_num_epochs = None
+    if requested_num_train_steps is None:
+        requested_num_train_steps = 1
+        auto_num_epochs = dpo_config.num_epochs
 
-    reference_model_path = dpo_config.reference_model_path or dpo_config.model_name_or_path
-    if reference_model_path is None:
-        raise ValueError("reference_model_path must be set for DPO training.")
+    requested_steps_per_eval = dpo_config.steps_per_eval
+    auto_validation_runs = None
+    if requested_steps_per_eval is None:
+        requested_steps_per_eval = 1
+        auto_validation_runs = 5
+
+    schedule = BatchSchedule(unwrap_versioned_value(dpo_config.train_batch_size))
+    total_examples = schedule.global_data_offset_by_step(requested_num_train_steps)
+
+    reference = dpo_config.reference
+    if isinstance(reference, SeparateReferenceConfig) and not reference.model_path:
+        reference_model_path = dpo_config.reference_model_path or dpo_config.model_name_or_path
+        if reference_model_path is None:
+            raise ValueError("reference_model_path must be set for DPO training when using a separate reference.")
+        reference = dataclasses.replace(
+            reference,
+            model_path=reference_model_path,
+            is_hf=dpo_config.reference_is_hf,
+        )
+
+    # Default DPO LoRA to the topology-stable A=0/B=Gaussian init.
+    # Standard LoRA init is fragile here; see
+    # https://github.com/marin-community/marin/issues/4755.
+    # Users who need paper init can construct TrainDpoConfig directly.
+    if isinstance(dpo_config.adapter, LoraAdaptorConfig):
+        dpo_config = dataclasses.replace(
+            dpo_config,
+            adapter=dataclasses.replace(
+                dpo_config.adapter,
+                a_init_mode="zero",
+                zero_init_b=False,
+            ),
+        )
+
+    hf_save_dtype = dpo_config.hf_save_dtype
+    if not isinstance(dpo_config.adapter, NoAdaptorConfig) and hf_save_dtype is not None:
+        raise ValueError("hf_save_dtype is not supported with adapter-based DPO exports.")
 
     inner_config = TrainDpoConfig(
         data=preference_data,
@@ -883,8 +916,8 @@ def default_dpo(
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=dpo_config.train_batch_size,
-            num_train_steps=dpo_config.num_train_steps,
-            steps_per_eval=dpo_config.steps_per_eval,
+            num_train_steps=requested_num_train_steps,
+            steps_per_eval=requested_steps_per_eval,
             checkpointer=CheckpointerConfig(
                 save_interval=timedelta(minutes=10),
                 keep=_checkpoint_keep(steps_per_export),
@@ -896,6 +929,8 @@ def default_dpo(
                     "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
                 }
             ),
+            per_device_eval_parallelism=dpo_config.per_device_eval_parallelism,
+            profiler=dpo_config.profiler,
             allow_partial_checkpoint=dpo_config.allow_partial_checkpoint,
             allow_nondivisible_batch_size=True,
             quantization=QuantizationConfig(int8=dpo_config.int8) if dpo_config.int8 else None,
@@ -905,6 +940,7 @@ def default_dpo(
         initialize_from_hf=dpo_config.model_name_or_path if initialize_from_hf else False,
         train_seq_len=train_length,
         model=model_config,
+        adapter=dpo_config.adapter,
         optimizer=AdamConfig(
             learning_rate=dpo_config.learning_rate,
             weight_decay=dpo_config.weight_decay,
@@ -914,12 +950,13 @@ def default_dpo(
             min_lr_ratio=dpo_config.min_lr_ratio,
             max_grad_norm=dpo_config.max_grad_norm,
         ),
-        reference_model_path=reference_model_path,
-        reference_is_hf=dpo_config.reference_is_hf,
+        reference=reference,
         beta=dpo_config.beta,
         validation_split_fraction=dpo_config.validation_split_fraction,
+        reference_eval_cache=dpo_config.reference_eval_cache,
+        lm_validation_data=lm_validation_data,
         hf_save_steps=steps_per_export_hf,
-        hf_save_dtype=dpo_config.hf_save_dtype,
+        hf_save_dtype=hf_save_dtype,
         hf_generation_eos_token_ids=dpo_config.hf_generation_eos_token_ids,
         data_seed=dpo_config.seed,
     )
@@ -928,6 +965,8 @@ def default_dpo(
         train_config=inner_config,
         resources=dpo_config.resources,
         output_path=this_output_path(),
+        auto_num_epochs=auto_num_epochs,
+        auto_validation_runs=auto_validation_runs,
     )
 
     model_config = unwrap_versioned_value(model_config)
@@ -935,11 +974,19 @@ def default_dpo(
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
-            f"Train a model (tokenizer={dpo_tokenizer_name}) for "
-            f"{dpo_config.num_train_steps} (steps) * "
-            f"{dpo_config.train_batch_size} (batch_size) * "
-            f"{train_length} (train_seq_len) "
-            f"= {total_examples * train_length} tokens."
+            (
+                f"Train a model (tokenizer={dpo_tokenizer_name}) for "
+                f"{requested_num_train_steps} (steps) * "
+                f"{dpo_config.train_batch_size} (batch_size) * "
+                f"{train_length} (train_seq_len) "
+                f"= {total_examples * train_length} tokens."
+            )
+            if auto_num_epochs is None
+            else (
+                f"Train a model (tokenizer={dpo_tokenizer_name}) for "
+                f"{dpo_config.num_epochs:g} epoch(s) with runtime-resolved step count "
+                f"and train_seq_len={train_length}."
+            )
         ),
         fn=run_levanter_train_dpo,
         config=config,

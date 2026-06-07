@@ -16,7 +16,8 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff, RateLimiter
 
 from iris.chaos import chaos
 from iris.cluster.bundle import BundleStore
-from iris.cluster.log_store_helpers import worker_log_key
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from iris.cluster.log_keys import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.profile import (
     PROFILE_NAMESPACE,
@@ -215,7 +216,7 @@ class Worker:
         # resolver works.
         self._worker_stats_table: Table | None = None
         self._task_stats_table: Table | None = None
-        self._profile_table: Table[IrisProfile] | None = None
+        self._profile_table: Table | None = None
 
         self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(
@@ -261,7 +262,7 @@ class Worker:
 
         if self._config.controller_address:
             self._log_client = LogClient.connect(
-                "/system/log-server",
+                LOG_SERVER_ENDPOINT_NAME,
                 interceptors=interceptors,
                 resolver=self._resolve_log_service,
             )
@@ -906,13 +907,16 @@ class Worker:
                     continue
                 observations.append(self._build_observation(task))
 
-            # Synthesize MISSING for run intents that resolved to no local
-            # attempt by either route. Carry the composite so the controller
-            # can route the observation even if the desired UID never made it
-            # to the worker (pure rollover case).
+            # Synthesize MISSING for any desired attempt that resolved to no
+            # local attempt by either route — both 'run' and 'stop' intents. A
+            # 'run' miss means the worker never received the spec; a 'stop' miss
+            # means the worker has forgotten a (e.g. controller-terminated)
+            # attempt it was asked to kill. In both cases the attempt is gone,
+            # so reporting MISSING lets the controller finalize it (stamp
+            # finished_at_ms) instead of re-polling forever. Carry the composite
+            # so the controller can route the observation even if the desired
+            # UID never made it to the worker (pure rollover case).
             for desired in request.desired:
-                if not desired.HasField("run"):
-                    continue
                 if self.resolve_attempt(AttemptUid(desired.attempt_uid), desired.task_id, desired.attempt_id) is None:
                     observations.append(
                         worker_pb2.Worker.AttemptObservation(

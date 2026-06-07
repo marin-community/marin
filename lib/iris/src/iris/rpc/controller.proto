@@ -409,32 +409,6 @@ message Controller {
     iris.job.TaskAttempt attempt = 2;
   }
 
-  // --- Provider Status (for direct-dispatch providers like KubernetesProvider) ---
-  message SchedulingEvent {
-    string task_id = 1;
-    int32 attempt_id = 2;
-    string event_type = 3;
-    string reason = 4;
-    string message = 5;
-    iris.time.Timestamp timestamp = 6;
-  }
-
-  message ClusterCapacity {
-    int32 schedulable_nodes = 1;
-    int64 total_cpu_millicores = 2;
-    int64 available_cpu_millicores = 3;
-    int64 total_memory_bytes = 4;
-    int64 available_memory_bytes = 5;
-  }
-
-  message GetProviderStatusRequest {}
-
-  message GetProviderStatusResponse {
-    bool has_direct_provider = 1;
-    repeated SchedulingEvent scheduling_events = 2;
-    ClusterCapacity capacity = 3;
-  }
-
   message GetKubernetesClusterStatusRequest {}
 
   message KubernetesPodStatus {
@@ -593,9 +567,6 @@ service ControllerService {
   rpc RevokeApiKey(iris.job.RevokeApiKeyRequest) returns (iris.job.Empty);
   rpc ListApiKeys(iris.job.ListApiKeysRequest) returns (iris.job.ListApiKeysResponse);
   rpc GetCurrentUser(iris.job.GetCurrentUserRequest) returns (iris.job.GetCurrentUserResponse);
-
-  // Provider status (direct-dispatch providers)
-  rpc GetProviderStatus(Controller.GetProviderStatusRequest) returns (Controller.GetProviderStatusResponse);
 
   // Kubernetes cluster status
   rpc GetKubernetesClusterStatus(Controller.GetKubernetesClusterStatusRequest) returns (Controller.GetKubernetesClusterStatusResponse);

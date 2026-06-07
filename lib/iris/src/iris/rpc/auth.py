@@ -12,7 +12,7 @@ Authentication is optional: when no verifier is configured, all requests
 pass through as the anonymous admin user.
 """
 
-import hashlib
+import contextlib
 import logging
 import time
 from contextvars import ContextVar
@@ -61,11 +61,6 @@ def extract_bearer_token(headers: dict) -> str | None:
     return _extract_cookie(cookie_header, SESSION_COOKIE)
 
 
-def hash_token(raw_token: str) -> str:
-    """SHA-256 hex digest of a raw API key. Used for storage and lookup."""
-    return hashlib.sha256(raw_token.encode()).hexdigest()
-
-
 # Per-request identity set by AuthInterceptor, read by service handlers.
 _verified_identity: ContextVar[VerifiedIdentity | None] = ContextVar("verified_identity", default=None)
 
@@ -79,6 +74,21 @@ def get_verified_user() -> str | None:
     """Return just the user_id for the current RPC, or None."""
     identity = _verified_identity.get()
     return identity.user_id if identity is not None else None
+
+
+@contextlib.contextmanager
+def identity_scope(identity: VerifiedIdentity | None):
+    """Bind ``identity`` as the verified identity for the duration of the block.
+
+    Mirrors the ContextVar bookkeeping AuthInterceptor performs per RPC so code
+    outside the interceptor (e.g. the dashboard's RPC dispatch) can establish
+    the same identity for service handlers reached via get_verified_identity().
+    """
+    reset_token = _verified_identity.set(identity)
+    try:
+        yield
+    finally:
+        _verified_identity.reset(reset_token)
 
 
 # ---------------------------------------------------------------------------

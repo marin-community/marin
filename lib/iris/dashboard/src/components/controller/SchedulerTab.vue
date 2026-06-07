@@ -18,6 +18,7 @@ import { timestampMs, formatRelativeTime, bandDisplayName, bandColor } from '@/u
 import { DIVERGING_COLORS } from '@/types/status'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
+import LoadingSpinner from '@/components/shared/LoadingSpinner.vue'
 
 // -- Scheduler State --
 
@@ -242,34 +243,28 @@ const hasData = computed(() => schedulerData.value || usersData.value)
   </div>
 
   <!-- Loading -->
-  <div v-if="loading" class="flex items-center justify-center py-12 text-text-muted text-sm">
-    <svg class="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-    </svg>
-    Loading...
-  </div>
+  <LoadingSpinner v-if="loading" label="Loading scheduler state…" />
 
   <div v-else-if="hasData" class="space-y-8">
     <!-- User Overview (merged Users tab + Scheduler budgets) -->
     <section>
-      <h2 class="text-lg font-semibold mb-3">Users &amp; Quotas</h2>
+      <h3 class="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">Users &amp; Quotas</h3>
       <EmptyState v-if="mergedUsers.length === 0" message="No users" />
       <div v-else class="overflow-x-auto">
         <table class="w-full border-collapse">
           <thead>
             <tr class="border-b border-surface-border">
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">User</th>
-              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Active Jobs</th>
-              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Running</th>
-              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Pending</th>
-              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Running Tasks</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary" title="Running / pending tasks per effective priority band">By Band</th>
-              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Total Tasks</th>
-              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Spent</th>
-              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Limit</th>
-              <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Utilization</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Band</th>
+              <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">User</th>
+              <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Active Jobs</th>
+              <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Running</th>
+              <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Pending</th>
+              <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Running Tasks</th>
+              <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary" title="Running / pending tasks per effective priority band">By Band</th>
+              <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Total Tasks</th>
+              <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Spent</th>
+              <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Limit</th>
+              <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Utilization</th>
+              <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Band</th>
             </tr>
           </thead>
           <tbody>
@@ -278,7 +273,14 @@ const hasData = computed(() => schedulerData.value || usersData.value)
               :key="user.userId"
               class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
             >
-              <td class="px-3 py-2 text-[13px] font-mono">{{ user.userId || '(unknown)' }}</td>
+              <td class="px-3 py-2 text-[13px] font-mono">
+                <RouterLink
+                  v-if="user.userId"
+                  :to="{ path: '/', query: { user: user.userId } }"
+                  class="text-accent hover:underline"
+                >{{ user.userId }}</RouterLink>
+                <span v-else class="text-text-muted">(unknown)</span>
+              </td>
               <td class="px-3 py-2 text-[13px] text-right tabular-nums">{{ user.activeJobs }}</td>
               <td class="px-3 py-2 text-[13px] text-right tabular-nums">
                 <span :class="user.runningJobs > 0 ? 'text-accent font-semibold' : ''">{{ user.runningJobs }}</span>
@@ -337,13 +339,14 @@ const hasData = computed(() => schedulerData.value || usersData.value)
 
     <!-- Pending Jobs -->
     <section>
-      <h2 class="text-lg font-semibold mb-3">Pending Jobs ({{ unscheduledTotal }})</h2>
+      <h3 class="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">Pending Jobs ({{ unscheduledTotal }})</h3>
       <div class="flex items-center gap-3 mb-3">
         <form class="flex items-center gap-2" @submit.prevent="applyUnscheduledSearch">
           <input
             v-model="unscheduledSearchInput"
             type="text"
             placeholder="Search by job name..."
+            aria-label="Search pending jobs by name"
             class="w-64 px-3 py-1.5 bg-surface border border-surface-border rounded
                    text-sm font-mono placeholder:text-text-muted
                    focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
@@ -372,13 +375,7 @@ const hasData = computed(() => schedulerData.value || usersData.value)
         {{ unscheduledError }}
       </div>
 
-      <div v-if="unscheduledLoading && unscheduledJobs.length === 0" class="flex items-center justify-center py-8 text-text-muted text-sm">
-        <svg class="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-        </svg>
-        Loading...
-      </div>
+      <LoadingSpinner v-if="unscheduledLoading && unscheduledJobs.length === 0" size="sm" />
 
       <EmptyState v-else-if="unscheduledJobs.length === 0" message="No pending jobs" />
 
@@ -386,12 +383,12 @@ const hasData = computed(() => schedulerData.value || usersData.value)
         <table class="w-full border-collapse">
           <thead>
             <tr class="border-b border-surface-border">
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Job</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">User</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">State</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Priority</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Pending Reason</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Submitted</th>
+              <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Job</th>
+              <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">User</th>
+              <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">State</th>
+              <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Priority</th>
+              <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Pending Reason</th>
+              <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Submitted</th>
             </tr>
           </thead>
           <tbody>

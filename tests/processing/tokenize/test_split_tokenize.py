@@ -29,7 +29,7 @@ from marin.processing.tokenize.attributes import (
 )
 from marin.processing.tokenize.store_builder import (
     BuildLevanterStoreConfig,
-    _first_nonempty_exemplar,
+    _structural_exemplar,
     build_levanter_store,
     build_levanter_store_step,
 )
@@ -272,32 +272,21 @@ def test_build_levanter_store_step_requires_at_least_one_source():
         build_levanter_store_step(name="store", tokenize_steps=[])
 
 
-def _write_attr_shard(path, ids: list[str], input_ids_lists: list[list[int]]) -> None:
-    """Write a small attribute parquet file with the canonical {id, input_ids} schema."""
-    schema = pa.schema([("id", pa.string()), ("input_ids", pa.list_(pa.int32()))])
-    table = pa.Table.from_pylist(
-        [{"id": i, "input_ids": ii} for i, ii in zip(ids, input_ids_lists, strict=True)],
-        schema=schema,
-    )
-    pq.write_table(table, str(path))
-
-
-def test_first_nonempty_exemplar_skips_empty_leading_shards(tmp_path):
-    """Empty shards must not block exemplar derivation when later shards have rows."""
-    empty = tmp_path / "part-00000-of-00002.parquet"
-    nonempty = tmp_path / "part-00001-of-00002.parquet"
-    _write_attr_shard(empty, ids=[], input_ids_lists=[])
-    _write_attr_shard(nonempty, ids=["abc"], input_ids_lists=[[1, 2, 3]])
-
-    exemplar = _first_nonempty_exemplar([str(empty), str(nonempty)])
-    assert exemplar == {"input_ids": [1, 2, 3]}
-
-
-def test_first_nonempty_exemplar_raises_when_all_empty(tmp_path):
-    p = tmp_path / "part-00000-of-00001.parquet"
-    _write_attr_shard(p, ids=[], input_ids_lists=[])
-    with pytest.raises(ValueError, match="empty"):
-        _first_nonempty_exemplar([str(p)])
+def test_structural_exemplar_slices_sequence_leaves():
+    """Sequence leaves shrink to one element; scalars/strings pass through whole."""
+    record = {
+        "input_ids": np.arange(1000, dtype=np.int32),
+        "segment_ids": [0, 0, 1, 1, 2],
+        "weights": (0.5, 0.25, 0.25),
+        "doc_id": "abc-123",
+        "length": 1000,
+    }
+    out = _structural_exemplar(record)
+    assert np.array_equal(out["input_ids"], np.array([0], dtype=np.int32))
+    assert out["segment_ids"] == [0]
+    assert out["weights"] == (0.5,)
+    assert out["doc_id"] == "abc-123"
+    assert out["length"] == 1000
 
 
 def test_build_levanter_store_step_hash_id_changes_with_batch_size():

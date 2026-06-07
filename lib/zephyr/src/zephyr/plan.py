@@ -11,7 +11,6 @@ knowledge of logical operation types.
 from __future__ import annotations
 
 import heapq
-import inspect
 import logging
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
@@ -33,6 +32,7 @@ from zephyr.dataset import (
     GlobSource,
     GroupByOp,
     JoinOp,
+    JoinType,
     LoadFileOp,
     MapOp,
     MapShardOp,
@@ -91,7 +91,7 @@ class Map:
         needs_shard_context: True if fn expects (stream, shard_info: ShardInfo).
     """
 
-    fn: Callable[[Iterator], Iterator]
+    fn: Callable[..., Iterator]
     needs_shard_context: bool = False
 
 
@@ -181,12 +181,19 @@ def _reduce_gen(
     sort_fn: Callable | None = None,
     external_sort_dir: str | None = None,
 ) -> Iterator:
-    is_gen = inspect.isgeneratorfunction(reducer_fn)
+    # The reducer contract is ``R | Iterator[R]``: it may return a single
+    # result or a stream of results. Discriminate on the actual return value,
+    # not ``inspect.isgeneratorfunction`` — that only recognises functions
+    # literally defined with ``yield`` and misses reducers that *return* an
+    # iterator (a generator expression, ``map``/``filter``, or a call to
+    # another generator function). Such a reducer would otherwise be emitted
+    # whole as one item and crash the downstream writer.
     for key, items_iter in _merge_sorted_chunks(shard, key_fn, sort_fn, external_sort_dir=external_sort_dir):
-        if is_gen:
-            yield from reducer_fn(key, items_iter)
+        result = reducer_fn(key, items_iter)
+        if isinstance(result, Iterator):
+            yield from result
         else:
-            yield reducer_fn(key, items_iter)
+            yield result
 
 
 def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
@@ -194,19 +201,10 @@ def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
         yield {k: item[k] for k in columns if k in item}
 
 
-def _load_file_batch_gen(stream: Iterator, *, include_file_paths: bool = False, file_path_column: str) -> Iterator:
+def _load_file_gen(stream: Iterator, loader: Callable, *, include_file_paths: bool, file_path_column: str) -> Iterator:
     for spec in stream:
         try:
-            yield from load_file_batch(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
-        except Exception as e:
-            e.add_note(f"While loading from {spec}")
-            raise
-
-
-def _load_file_gen(stream: Iterator, *, include_file_paths: bool = False, file_path_column: str) -> Iterator:
-    for spec in stream:
-        try:
-            yield from load_file(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
+            yield from loader(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
         except Exception as e:
             e.add_note(f"While loading from {spec}")
             raise
@@ -226,14 +224,13 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
     def pipeline(stream: Iterator, *, shard_idx: int = 0, total_shards: int = 1) -> Iterator:
         for op in operations:
             if isinstance(op, LoadFileOp):
-                if op.batch_mode:
-                    stream = _load_file_batch_gen(
-                        stream, include_file_paths=op.include_file_paths, file_path_column=op.file_path_column
-                    )
-                else:
-                    stream = _load_file_gen(
-                        stream, include_file_paths=op.include_file_paths, file_path_column=op.file_path_column
-                    )
+                loader = load_file_batch if op.batch_mode else load_file
+                stream = _load_file_gen(
+                    stream,
+                    loader,
+                    include_file_paths=op.include_file_paths,
+                    file_path_column=op.file_path_column,
+                )
             elif isinstance(op, MapOp):
                 stream = _map_gen(stream, op.fn)
             elif isinstance(op, FilterOp):
@@ -257,7 +254,7 @@ def compose_join(
     left_key_fn: Callable,
     right_key_fn: Callable,
     combiner_fn: Callable,
-    join_type: str,
+    join_type: JoinType,
 ) -> Callable[[Iterator, Iterator], Iterator]:
     """Create a join function.
 
@@ -265,7 +262,7 @@ def compose_join(
         left_key_fn: Function to extract key from left items
         right_key_fn: Function to extract key from right items
         combiner_fn: Function to combine matched items
-        join_type: "inner" or "left"
+        join_type: inner or left join semantics
 
     Returns:
         Function that takes (left_stream, right_stream) and yields joined items
@@ -645,6 +642,22 @@ def make_windows(
         yield window
 
 
+def composite_sort_key(key_fn: Callable, sort_fn: Callable | None) -> Callable:
+    """Build a merge/sort key from a grouping key and an optional secondary sort.
+
+    Returns ``key_fn`` unchanged when ``sort_fn`` is None. Otherwise returns a
+    callable producing ``(key_fn(item), sort_fn(item))`` so items order first by
+    group key and then by the secondary key; grouping should still use
+    ``key_fn`` alone. Used by both the scatter writer (pre-sort within a chunk)
+    and the reduce-side k-way merge so the two stay consistent.
+    """
+    if sort_fn is None:
+        return key_fn
+    # Bind to a non-Optional local so the closure captures a narrowed type.
+    secondary = sort_fn
+    return lambda item: (key_fn(item), secondary(item))
+
+
 def _merge_sorted_chunks(
     shard: Shard, key_fn: Callable, sort_fn: Callable | None = None, external_sort_dir: str | None = None
 ) -> Iterator[tuple[object, Iterator]]:
@@ -664,15 +677,7 @@ def _merge_sorted_chunks(
         Tuples of (key, iterator_of_items) for each unique key
     """
     # Merge by composite key when sort_fn is provided, but group by key_fn only.
-    # Rebind to captured_sort_fn so pyrefly narrows the type inside the closure.
-    if sort_fn is not None:
-        captured_sort_fn = sort_fn
-
-        def merge_key(item):
-            return (key_fn(item), captured_sort_fn(item))
-
-    else:
-        merge_key = key_fn
+    merge_key = composite_sort_key(key_fn, sort_fn)
 
     # Check if external sort is needed BEFORE materializing all iterators.
     # ScatterReader can decide using manifest stats (no file opens needed).
@@ -721,7 +726,7 @@ def _sorted_merge_join(
     left_key_fn: Callable,
     right_key_fn: Callable,
     combiner_fn: Callable,
-    join_type: str,
+    join_type: JoinType,
 ) -> Iterator:
     """Perform a sorted merge join between two streams.
 
@@ -731,7 +736,7 @@ def _sorted_merge_join(
         left_key_fn: Function to extract key from left items
         right_key_fn: Function to extract key from right items
         combiner_fn: Function to combine matched items
-        join_type: "inner" or "left"
+        join_type: inner or left join semantics
 
     Yields:
         Joined items according to join_type
@@ -750,12 +755,12 @@ def _sorted_merge_join(
         for side, _, item in group:
             (left_group if side == "left" else right_group).append(item)
 
-        if join_type == "inner":
+        if join_type == JoinType.INNER:
             if left_group and right_group:
                 for left_item in left_group:
                     for right_item in right_group:
                         yield combiner_fn(left_item, right_item)
-        elif join_type == "left":
+        elif join_type == JoinType.LEFT:
             for left_item in left_group:
                 if right_group:
                     for right_item in right_group:

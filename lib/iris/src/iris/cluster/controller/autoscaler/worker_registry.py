@@ -3,14 +3,12 @@
 
 """Tracked worker registry for the autoscaler."""
 
-from __future__ import annotations
-
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from rigging.timing import Duration
 
-from iris.cluster.providers.types import (
+from iris.cluster.backends.types import (
     CloudWorkerState,
     CommandResult,
     RemoteWorkerHandle,

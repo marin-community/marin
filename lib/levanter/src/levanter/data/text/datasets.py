@@ -58,6 +58,7 @@ from levanter.utils.logging import silence_transformer_nag
 silence_transformer_nag()  # noqa
 
 T_co = TypeVar("T_co", covariant=True)
+T = TypeVar("T")
 
 logger = logging.getLogger("levanter.data.text")
 
@@ -385,6 +386,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
                     tokens=tokens,
                     loss_weight=loss_weight,
                     segment_ids=seg_ids_raw,
+                    max_segments=max_segments_per_example + 1,
                     block_cross_document_attention=block_cross_document_attention,
                 )
                 out = jax.lax.with_sharding_constraint(out, sharding)
@@ -402,6 +404,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
                     tokens=tokens,
                     loss_weight=loss_weight,
                     segment_ids=seg_ids_raw,
+                    max_segments=max_segments_per_example + 1,
                     block_cross_document_attention=block_cross_document_attention,
                 )
                 out = jax.lax.with_sharding_constraint(out, sharding)
@@ -454,6 +457,7 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
                 tokens=tokens,
                 loss_weight=loss_weight,
                 segment_ids=seg_ids_raw,
+                max_segments=max_segments_per_example + 1,
                 block_cross_document_attention=block_cross_document_attention,
             )
             out = jax.lax.with_sharding_constraint(out, sharding)
@@ -547,8 +551,8 @@ def _component_cache_dir(name: str, component: DatasetComponent, default_root: s
 
 
 def _split_into_trainval_sets(
-    dataset: "AsyncDataset[LmExample]", num_validation_sequences: int, *, shuffle: bool = True
-) -> tuple["AsyncDataset[LmExample]", "AsyncDataset[LmExample]"]:
+    dataset: "AsyncDataset[T]", num_validation_sequences: int, *, shuffle: bool = True
+) -> tuple["AsyncDataset[T]", "AsyncDataset[T]"]:
     """Split a dataset into train/val portions, optionally shuffling first.
 
     When shuffle is True, a deterministic shuffle is applied before
@@ -1049,4 +1053,4 @@ if __name__ == "__main__":
                 metric = key.split("/")[4]
                 print(f"{name} {metric}: {value}")
 
-    main()
+    main()  # pyrefly: ignore[missing-argument]

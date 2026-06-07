@@ -214,7 +214,7 @@ class PrebuiltCacheProcessor(BatchProcessor[dict, dict]):
     def __init__(self, input_ids_key: str, loss_weights_key: str | None):
         self.input_ids_key = input_ids_key
         self.loss_weights_key = loss_weights_key
-        self._exemplar = {input_ids_key: np.zeros((0,), dtype=np.int32)}
+        self._exemplar: dict[str, np.ndarray] = {input_ids_key: np.zeros((0,), dtype=np.int32)}
         if loss_weights_key is not None:
             self._exemplar[loss_weights_key] = np.zeros((0,), dtype=np.float32)
 
@@ -223,7 +223,7 @@ class PrebuiltCacheProcessor(BatchProcessor[dict, dict]):
         for example in batch:
             if self.input_ids_key not in example:
                 raise ValueError(f"Missing required field '{self.input_ids_key}' in prebuilt example.")
-            item = {
+            item: dict[str, np.ndarray] = {
                 self.input_ids_key: np.asarray(example[self.input_ids_key], dtype=np.int32),
             }
             if self.loss_weights_key is not None:

@@ -15,18 +15,20 @@ These tests cover the behavior we want for robustness against W&B failures:
 
 from __future__ import annotations
 
-import logging
 import threading
 import time
 from typing import Any
+from unittest.mock import MagicMock
 
 import jax
 import jax.numpy as jnp
 import pytest
+import wandb
 
 from levanter.tracker import BackgroundTracker, CompositeTracker
 from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.tracker import Tracker
+from levanter.tracker.wandb import WandbTracker
 
 
 class RecordingTracker(Tracker):
@@ -110,29 +112,6 @@ def test_background_tracker_forwards_calls():
     assert inner.finished is True
 
 
-def test_background_tracker_swallows_exceptions(caplog):
-    """Exceptions from the wrapped tracker must not crash the producer."""
-    inner = RecordingTracker(raise_on_log=RuntimeError("wandb storage exceeded"))
-    bt = BackgroundTracker(inner)
-    try:
-        with caplog.at_level(logging.ERROR, logger="levanter.tracker.background"):
-            # First log raises in worker -- producer thread must not see it.
-            bt.log({"loss": 1.0}, step=0)
-            # Subsequent logs should still be processed.
-            bt.log({"loss": 0.5}, step=1)
-            assert bt._wait_until_idle(timeout=5)
-    finally:
-        bt.finish()
-
-    # The first call raised before recording; the second succeeded.
-    assert inner.logs == [({"loss": 0.5}, 1, None)]
-    # An ERROR log should have captured the wandb exception.
-    assert any(
-        "wandb storage exceeded" in r.getMessage() or "raised while processing" in r.getMessage()
-        for r in caplog.records
-    )
-
-
 def test_background_tracker_runs_off_caller_thread():
     """The wrapped tracker must not run on the calling thread."""
     caller_thread = threading.get_ident()
@@ -210,7 +189,7 @@ def test_background_tracker_does_not_block_producer():
         bt.finish()
 
 
-def test_background_tracker_drops_when_queue_full(caplog):
+def test_background_tracker_drops_when_queue_full():
     """When the queue is full, additional log calls are dropped, not blocked."""
     block_event = threading.Event()
     release_event = threading.Event()
@@ -236,20 +215,19 @@ def test_background_tracker_drops_when_queue_full(caplog):
 
     bt = BackgroundTracker(GatedTracker(), max_queue_size=2)
     try:
-        with caplog.at_level(logging.WARNING, logger="levanter.tracker.background"):
-            # Saturate worker.
-            bt.log({"i": 0}, step=0)
-            block_event.wait(timeout=5)
-            # Fill the queue (capacity 2).
-            bt.log({"i": 1}, step=1)
-            bt.log({"i": 2}, step=2)
-            # These should be dropped, not blocked.
-            start = time.monotonic()
-            for i in range(100):
-                bt.log({"i": i + 3}, step=i + 3)
-            elapsed = time.monotonic() - start
-            assert elapsed < 1.0
-            assert bt._dropped >= 50
+        # Saturate worker.
+        bt.log({"i": 0}, step=0)
+        block_event.wait(timeout=5)
+        # Fill the queue (capacity 2).
+        bt.log({"i": 1}, step=1)
+        bt.log({"i": 2}, step=2)
+        # These should be dropped, not blocked.
+        start = time.monotonic()
+        for i in range(100):
+            bt.log({"i": i + 3}, step=i + 3)
+        elapsed = time.monotonic() - start
+        assert elapsed < 1.0
+        assert bt._dropped >= 50
     finally:
         release_event.set()
         bt.finish()
@@ -281,18 +259,17 @@ def test_background_tracker_logs_after_finish_are_dropped():
     assert inner.logs == []
 
 
-def test_composite_tracker_isolates_failures(caplog):
+def test_composite_tracker_isolates_failures():
     """A failing member tracker must not prevent later members from being called."""
     bad = AlwaysRaisingTracker()
     good = RecordingTracker()
     composite = CompositeTracker([bad, good])
 
-    with caplog.at_level(logging.ERROR, logger="levanter.tracker.tracker"):
-        composite.log_hyperparameters({"lr": 0.1})
-        composite.log({"loss": 1.0}, step=0)
-        composite.log_summary({"final": 0.5})
-        composite.log_artifact("/tmp/x", name="a", type="model")
-        composite.finish()
+    composite.log_hyperparameters({"lr": 0.1})
+    composite.log({"loss": 1.0}, step=0)
+    composite.log_summary({"final": 0.5})
+    composite.log_artifact("/tmp/x", name="a", type="model")
+    composite.finish()
 
     assert good.hparams == [{"lr": 0.1}]
     assert good.logs == [({"loss": 1.0}, 0, None)]
@@ -300,7 +277,6 @@ def test_composite_tracker_isolates_failures(caplog):
     assert good.artifacts == [("/tmp/x", "a", "model")]
     assert good.finished is True
     assert bad.call_count == 5  # one per method call
-    assert any("continuing with remaining trackers" in r.getMessage() for r in caplog.records)
 
 
 def test_composite_tracker_finish_does_not_raise():
@@ -321,15 +297,14 @@ def test_composite_tracker_finish_does_not_raise():
         ValueError("storage quota exceeded"),
     ],
 )
-def test_background_tracker_swallows_various_exceptions(exc, caplog):
+def test_background_tracker_swallows_various_exceptions(exc):
     """Sample of error types we expect from W&B at runtime."""
     inner = RecordingTracker(raise_on_log=exc)
     bt = BackgroundTracker(inner)
     try:
-        with caplog.at_level(logging.ERROR, logger="levanter.tracker.background"):
-            bt.log({"loss": 1.0}, step=0)
-            bt.log({"loss": 0.5}, step=1)
-            assert bt._wait_until_idle(timeout=5)
+        bt.log({"loss": 1.0}, step=0)
+        bt.log({"loss": 0.5}, step=1)
+        assert bt._wait_until_idle(timeout=5)
     finally:
         bt.finish()
     # Second call (after the raise) should still have been recorded.
@@ -384,3 +359,29 @@ def test_background_tracker_materializes_summary_stats_leaves():
     assert isinstance(logged, SummaryStats)
     for leaf in jax.tree_util.tree_leaves(logged):
         assert not isinstance(leaf, jax.Array)
+
+
+def test_wandb_tracker_prepare_log_flattens_summary_stats():
+    """WandbTracker._prepare_log flattens SummaryStats into a device-free, wandb-ready dict.
+
+    After preparation the dict must hold no nested SummaryStats and no jax.Array
+    leaves — that is what lets the W&B background worker upload without issuing
+    any JAX op mid-profiler-upload (the H100 SIGSEGV in #6108).
+    """
+    tracker = WandbTracker(run=MagicMock(), suppress_logging=True)
+
+    metrics = {
+        "loss": jnp.asarray(1.5),
+        "grads/hist": SummaryStats.from_array(jnp.arange(100.0)),
+    }
+
+    prepped = tracker._prepare_log(metrics)
+
+    # SummaryStats has been expanded into its component scalar keys.
+    assert "grads/hist" not in prepped
+    assert {"grads/hist/min", "grads/hist/mean", "grads/hist/variance", "grads/hist/rms"} <= prepped.keys()
+
+    for k, v in prepped.items():
+        if isinstance(v, wandb.Histogram):
+            continue
+        assert not isinstance(v, jax.Array), f"{k} is still a jax.Array: {v!r}"

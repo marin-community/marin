@@ -595,7 +595,7 @@ def _maybe_attach_inferred_region_constraint(
     )
 
 
-def asdict_without_description(obj: dataclass) -> dict[str, Any]:
+def asdict_without_description(obj: Any) -> dict[str, Any]:
     """Return the dict form of a dataclass, but remove the `description` field."""
 
     def recurse(value: Any):
@@ -851,7 +851,7 @@ class ExecutorStepInfo:
     fn_name: str
     """Rendered string of `step.fn`."""
 
-    config: dataclass
+    config: Any
     """`step.config`, but concretized (no more `InputName`, `OutputName`, or `VersionedValue`)."""
 
     description: str | None
@@ -1128,7 +1128,7 @@ class Executor:
         self.executor_info_base_path = executor_info_base_path
         self.description = description
 
-        self.configs: dict[ExecutorStep, dataclass] = {}
+        self.configs: dict[ExecutorStep, Any] = {}
         self.dependencies: dict[ExecutorStep, list[ExecutorStep]] = {}
         self.versions: dict[ExecutorStep, dict[str, Any]] = {}
         # pseudo-dependencies only impact version but don't block execution of descendants

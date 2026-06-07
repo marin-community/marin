@@ -35,14 +35,17 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from collections.abc import Callable, Generator, Sequence
 from pathlib import PurePath
-from typing import Any
+from typing import Any, cast
 
 import fsspec
+from fsspec.implementations.local import LocalFileSystem
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 
 from rigging.distributed_lock import create_lock, default_worker_id
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 logger = logging.getLogger(__name__)
 
@@ -445,12 +448,22 @@ class TransferBudgetExceeded(Exception):
         self.attempted = attempted
         self.limit = limit
         self.path = path
-        super().__init__(
-            f"Cross-region transfer budget exceeded: {path} "
-            f"({attempted / (1024**2):.1f}MB) would bring total to "
-            f"{(bytes_used + attempted) / (1024**3):.2f}GB, "
-            f"exceeding the {limit / (1024**3):.0f}GB limit "
-            f"(already transferred {bytes_used / (1024**3):.2f}GB). "
+        # Pass the constructor arguments — not the rendered message — to
+        # BaseException. The default exception reduce reconstructs via
+        # ``TransferBudgetExceeded(*self.args)`` on unpickle, so ``args`` must
+        # match this signature; storing the single message string instead made
+        # the exception un-revivable (``TypeError: missing 3 required positional
+        # arguments``) whenever it crossed a process boundary. The human-readable
+        # message is rendered lazily by ``__str__``.
+        super().__init__(bytes_used, attempted, limit, path)
+
+    def __str__(self) -> str:
+        return (
+            f"Cross-region transfer budget exceeded: {self.path} "
+            f"({self.attempted / (1024**2):.1f}MB) would bring total to "
+            f"{(self.bytes_used + self.attempted) / (1024**3):.2f}GB, "
+            f"exceeding the {self.limit / (1024**3):.0f}GB limit "
+            f"(already transferred {self.bytes_used / (1024**3):.2f}GB). "
             f"Consider running in the source region instead."
         )
 
@@ -754,6 +767,13 @@ def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
     return fs, path
 
 
+def is_remote_path(path: str) -> bool:
+    """True if ``path`` resolves to a remote filesystem (e.g. ``gs://``, ``s3://``) rather than the
+    local disk. A bare path or ``file://`` URL is local; anything with a remote scheme is not."""
+    fs, _ = url_to_fs(path)
+    return not isinstance(fs, LocalFileSystem)
+
+
 def open_url(url: str, mode: str = "rb", **kwargs: Any) -> fsspec.core.OpenFile:
     """Like ``fsspec.open`` but checks the cross-region budget for GCS reads.
 
@@ -764,7 +784,7 @@ def open_url(url: str, mode: str = "rb", **kwargs: Any) -> fsspec.core.OpenFile:
         fs, path = fsspec.core.url_to_fs(url)
         guarded = CrossRegionGuardedFS(fs)
         guarded._guard_read(path)
-    return fsspec.open(url, mode, **kwargs)
+    return cast(fsspec.core.OpenFile, fsspec.open(url, mode, **kwargs))
 
 
 def filesystem(protocol: str, **kwargs: Any) -> Any:
@@ -773,6 +793,97 @@ def filesystem(protocol: str, **kwargs: Any) -> Any:
     if _is_gcs_protocol(protocol):
         fs = CrossRegionGuardedFS(fs)
     return fs
+
+
+# ---------------------------------------------------------------------------
+# Atomic write-and-rename
+
+
+def unique_temp_path(output_path: str) -> str:
+    """Return a unique temporary path derived from ``output_path``.
+
+    Appends ``.tmp.<uuid>`` to avoid collisions when multiple writers target the
+    same output path (e.g. during network-partition induced worker races).
+    """
+    return f"{output_path}.tmp.{uuid.uuid4().hex}"
+
+
+# AWS error codes that are safe to retry on a server-side multipart copy
+# (``s3fs.S3FileSystem.mv``). ``InvalidPart`` is the R2-specific symptom:
+# every ``UploadPartCopy`` returns 200 but ``CompleteMultipartUpload`` then
+# claims one or more parts are missing.
+_TRANSIENT_S3_ERROR_CODES = frozenset(
+    {
+        "InvalidPart",
+        "InternalError",
+        "ServiceUnavailable",
+        "SlowDown",
+        "RequestTimeout",
+        "RequestTimeTooSkewed",
+    }
+)
+
+# Fragments matched against ``str(exc)`` for the case where s3fs has already
+# translated the underlying ``botocore.ClientError`` into an ``OSError`` and
+# the structured error code is no longer reachable.
+_TRANSIENT_S3_MESSAGE_FRAGMENTS = (
+    "specified parts could not be found",
+    "InternalError",
+    "ServiceUnavailable",
+    "SlowDown",
+    "RequestTimeout",
+)
+
+
+def _is_transient_s3_error(exc: BaseException) -> bool:
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        code = response.get("Error", {}).get("Code")
+        if code in _TRANSIENT_S3_ERROR_CODES:
+            return True
+    msg = str(exc)
+    return any(frag in msg for frag in _TRANSIENT_S3_MESSAGE_FRAGMENTS)
+
+
+def _mv_with_retry(fs: Any, src: str, dst: str) -> None:
+    retry_with_backoff(
+        lambda: fs.mv(src, dst, recursive=True),
+        retryable=_is_transient_s3_error,
+        max_attempts=4,
+        backoff=ExponentialBackoff(initial=1.0, maximum=8.0, factor=2.0),
+        operation=f"atomic_rename fs.mv {src} -> {dst}",
+    )
+
+
+@contextlib.contextmanager
+def atomic_rename(output_path: str, fs: Any = None) -> Generator[str, None, None]:
+    """Atomic write-and-rename via a sibling temp key.
+
+    Yields ``<output_path>.tmp.<uuid>``; on clean exit, ``fs.mv`` renames the
+    temp into the final path. On exception, the temp key is best-effort
+    deleted and the original exception re-raised.
+
+    Callers may pass a pre-constructed ``fs`` to reuse a configured
+    filesystem (e.g. an ``S3FileSystem`` with ``fixed_upload_size=True``)
+    instead of letting atomic_rename build a default one from ``output_path``.
+
+    Example:
+        with atomic_rename("output.jsonl.gz") as tmp_path:
+            write_data(tmp_path)
+        # File is now at output.jsonl.gz
+    """
+    temp_path = unique_temp_path(output_path)
+    if fs is None:
+        fs = url_to_fs(output_path)[0]
+    try:
+        yield temp_path
+        _mv_with_retry(fs, temp_path, output_path)
+    except Exception:
+        # Best-effort cleanup: temp file may not exist (writer crashed before
+        # creating it) so we tolerate any rm error and re-raise the original.
+        with contextlib.suppress(Exception):
+            fs.rm(temp_path)
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -924,7 +1035,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
     # -- fsspec interface: info/ls/exists -------------------------------------
 
     def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         resolved = self._resolve_path(path)
         fs, fspath = self._get_fs_and_path(resolved)
         info = fs.info(fspath, **kwargs)
@@ -937,7 +1048,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         return bucket_prefix.rstrip("/").replace("gs://", "").replace("file://", "") + "/"
 
     def ls(self, path: str, detail: bool = True, **kwargs: Any) -> list[Any]:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         # Union listings from local + all remote prefixes so that glob()
         # discovers files that only exist in other regions.  Local entries
         # take precedence when a relative path appears in multiple buckets.
@@ -965,7 +1076,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         return [e["name"] for e in results]
 
     def exists(self, path: str, **kwargs: Any) -> bool:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         local_url = self._local_url(path)
         if self._fs_exists(local_url):
             return True
@@ -974,7 +1085,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
     # -- fsspec interface: read operations ------------------------------------
 
     def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         if "r" in mode:
             resolved = self._resolve_path(path)
             fs, fspath = self._get_fs_and_path(resolved)
@@ -988,7 +1099,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
             return fs.open(fspath, mode, **kwargs)
 
     def cat_file(self, path: str, start: int | None = None, end: int | None = None, **kwargs: Any) -> bytes:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         resolved = self._resolve_path(path)
         fs, fspath = self._get_fs_and_path(resolved)
         return fs.cat_file(fspath, start=start, end=end, **kwargs)
@@ -996,38 +1107,38 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
     # -- fsspec interface: write operations ------------------------------------
 
     def _mkdir(self, path: str, create_parents: bool = True, **kwargs: Any) -> None:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         local_url = self._local_url(path)
         fs, fspath = self._get_fs_and_path(local_url)
         fs.mkdir(fspath, create_parents=create_parents, **kwargs)
 
     def makedirs(self, path: str, exist_ok: bool = False) -> None:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         local_url = self._local_url(path)
         fs, fspath = self._get_fs_and_path(local_url)
         fs.makedirs(fspath, exist_ok=exist_ok)
 
     def put_file(self, lpath: str, rpath: str, **kwargs: Any) -> None:
-        rpath = self._strip_protocol(rpath)
+        rpath = cast(str, self._strip_protocol(rpath))
         local_url = self._local_url(rpath)
         fs, fspath = self._get_fs_and_path(local_url)
         fs.put_file(lpath, fspath, **kwargs)
 
     def rm_file(self, path: str) -> None:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         local_url = self._local_url(path)
         fs, fspath = self._get_fs_and_path(local_url)
         fs.rm_file(fspath)
 
     def rm(self, path: str, recursive: bool = False, **kwargs: Any) -> None:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         local_url = self._local_url(path)
         fs, fspath = self._get_fs_and_path(local_url)
         fs.rm(fspath, recursive=recursive, **kwargs)
 
     def copy(self, path1: str, path2: str, **kwargs: Any) -> None:
-        path1 = self._strip_protocol(path1)
-        path2 = self._strip_protocol(path2)
+        path1 = cast(str, self._strip_protocol(path1))
+        path2 = cast(str, self._strip_protocol(path2))
         resolved_src = self._resolve_path(path1)
         local_dst = self._local_url(path2)
         self._fs_copy(resolved_src, local_dst)

@@ -73,6 +73,7 @@ class GrugLmExample:
         ignore_id: int | None = None,
         eos_id: int | None = None,
         segment_ids: jax.Array | None = None,
+        max_segments: int | None = None,
         sliding_window: int | None = None,
         block_cross_document_attention: bool = True,
     ) -> "GrugLmExample":
@@ -105,9 +106,9 @@ class GrugLmExample:
                 eos_mask = jnp.roll(tokens, 1) == eos_id
                 eos_mask = eos_mask.at[0].set(False).astype(jnp.int32)
                 segment_ids = jnp.cumsum(eos_mask, axis=0)
-                attn_mask = attn_mask.with_segment_ids(segment_ids)
+                attn_mask = attn_mask.with_segment_ids(segment_ids, max_segments=max_segments)
             elif segment_ids is not None:
-                attn_mask = attn_mask.with_segment_ids(segment_ids)
+                attn_mask = attn_mask.with_segment_ids(segment_ids, max_segments=max_segments)
 
         return GrugLmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)
 

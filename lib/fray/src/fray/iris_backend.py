@@ -11,6 +11,8 @@ via submitted jobs, and deferred actor handle resolution.
 from __future__ import annotations
 
 import logging
+import os
+import sys
 import threading
 import time
 from concurrent.futures import Future
@@ -73,7 +75,9 @@ def resolve_coscheduling(device: DeviceConfig, replicas: int) -> CoschedulingCon
             return None
         return CoschedulingConfig(group_by="tpu-name")
     if isinstance(device, GpuConfig):
-        return CoschedulingConfig(group_by="pool")
+        # leafgroup = the H100 InfiniBand multi-node colocation topology level
+        # (the level the K8s provider maps for GPU gangs; "pool" no longer maps).
+        return CoschedulingConfig(group_by="leafgroup")
     return None
 
 
@@ -246,9 +250,30 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     shutdown_event.wait()
     logger.info(f"Actor {actor_name} shutting down")
     server.stop()
-    if actor_ctx._errors:
-        logger.error("Actor %s recorded %d failure(s); raising the first", actor_name, len(actor_ctx._errors))
-        raise actor_ctx._errors[0]
+
+    failed = bool(actor_ctx._errors)
+    if failed:
+        logger.error(
+            "Actor %s recorded %d failure(s); first: %r",
+            actor_name,
+            len(actor_ctx._errors),
+            actor_ctx._errors[0],
+            exc_info=actor_ctx._errors[0],
+        )
+
+    # WORKAROUND for the pyqwest interpreter-shutdown crash: CPython
+    # finalization force-unwinds pyqwest's native (tokio) threads and aborts the
+    # process (SIGABRT/SIGSEGV, exit 134/139). Best-effort drain the in-task
+    # finelog client, then hard-exit via os._exit to skip finalization entirely.
+    # Success/failure is encoded in the exit code since this bypasses the raise.
+    if ctx.client is not None:
+        try:
+            ctx.client.shutdown()
+        except Exception:
+            logger.warning("in-task client shutdown failed (ignored before os._exit)", exc_info=True)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(1 if failed else 0)
 
 
 class IrisActorHandle:
@@ -568,6 +593,7 @@ class FrayIrisClient:
                 max_task_failures=request.max_task_failures,
                 existing_job_policy=policy,
                 task_image=request.resources.image,
+                priority_band=request.priority,
             )
         except IrisJobAlreadyExists as e:
             raise FrayJobAlreadyExists(request.name) from e
@@ -615,7 +641,15 @@ class FrayIrisClient:
         actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorHandle:
-        group = self.create_actor_group(actor_class, *args, name=name, count=1, resources=resources, **kwargs)
+        group = self.create_actor_group(
+            actor_class,
+            *args,
+            name=name,
+            count=1,
+            resources=resources,
+            actor_config=actor_config,
+            **kwargs,
+        )
         return group.wait_ready()[0]
 
     def create_actor_group(
@@ -657,6 +691,7 @@ class FrayIrisClient:
             coscheduling=coscheduling,
             replicas=count,  # Create N replicas in a single job
             task_image=resources.image,
+            priority_band=actor_config.priority,
             **retry_kwargs,
         )
 

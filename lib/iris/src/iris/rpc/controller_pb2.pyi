@@ -441,46 +441,6 @@ class Controller(_message.Message):
         task_id: str
         attempt: _job_pb2.TaskAttempt
         def __init__(self, task_id: _Optional[str] = ..., attempt: _Optional[_Union[_job_pb2.TaskAttempt, _Mapping]] = ...) -> None: ...
-    class SchedulingEvent(_message.Message):
-        __slots__ = ("task_id", "attempt_id", "event_type", "reason", "message", "timestamp")
-        TASK_ID_FIELD_NUMBER: _ClassVar[int]
-        ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
-        EVENT_TYPE_FIELD_NUMBER: _ClassVar[int]
-        REASON_FIELD_NUMBER: _ClassVar[int]
-        MESSAGE_FIELD_NUMBER: _ClassVar[int]
-        TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
-        task_id: str
-        attempt_id: int
-        event_type: str
-        reason: str
-        message: str
-        timestamp: _time_pb2.Timestamp
-        def __init__(self, task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ..., event_type: _Optional[str] = ..., reason: _Optional[str] = ..., message: _Optional[str] = ..., timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...
-    class ClusterCapacity(_message.Message):
-        __slots__ = ("schedulable_nodes", "total_cpu_millicores", "available_cpu_millicores", "total_memory_bytes", "available_memory_bytes")
-        SCHEDULABLE_NODES_FIELD_NUMBER: _ClassVar[int]
-        TOTAL_CPU_MILLICORES_FIELD_NUMBER: _ClassVar[int]
-        AVAILABLE_CPU_MILLICORES_FIELD_NUMBER: _ClassVar[int]
-        TOTAL_MEMORY_BYTES_FIELD_NUMBER: _ClassVar[int]
-        AVAILABLE_MEMORY_BYTES_FIELD_NUMBER: _ClassVar[int]
-        schedulable_nodes: int
-        total_cpu_millicores: int
-        available_cpu_millicores: int
-        total_memory_bytes: int
-        available_memory_bytes: int
-        def __init__(self, schedulable_nodes: _Optional[int] = ..., total_cpu_millicores: _Optional[int] = ..., available_cpu_millicores: _Optional[int] = ..., total_memory_bytes: _Optional[int] = ..., available_memory_bytes: _Optional[int] = ...) -> None: ...
-    class GetProviderStatusRequest(_message.Message):
-        __slots__ = ()
-        def __init__(self) -> None: ...
-    class GetProviderStatusResponse(_message.Message):
-        __slots__ = ("has_direct_provider", "scheduling_events", "capacity")
-        HAS_DIRECT_PROVIDER_FIELD_NUMBER: _ClassVar[int]
-        SCHEDULING_EVENTS_FIELD_NUMBER: _ClassVar[int]
-        CAPACITY_FIELD_NUMBER: _ClassVar[int]
-        has_direct_provider: bool
-        scheduling_events: _containers.RepeatedCompositeFieldContainer[Controller.SchedulingEvent]
-        capacity: Controller.ClusterCapacity
-        def __init__(self, has_direct_provider: _Optional[bool] = ..., scheduling_events: _Optional[_Iterable[_Union[Controller.SchedulingEvent, _Mapping]]] = ..., capacity: _Optional[_Union[Controller.ClusterCapacity, _Mapping]] = ...) -> None: ...
     class GetKubernetesClusterStatusRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...

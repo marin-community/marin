@@ -1,10 +1,8 @@
-# Only lib/finelog/ and lib/rigging/ are needed in the build context.
-# Exclude everything else, then selectively re-include.
+# Only the dashboard sources and the Rust workspace are needed in the build
+# context. Exclude everything else, then selectively re-include.
 *
 
-!lib/finelog/pyproject.toml
-!lib/finelog/src/
-!lib/finelog/config/
+# Dashboard SPA sources (built by the `dashboard` stage).
 !lib/finelog/dashboard/package.json
 !lib/finelog/dashboard/package-lock.json
 !lib/finelog/dashboard/rsbuild.config.ts
@@ -14,9 +12,12 @@
 !lib/finelog/dashboard/env.d.ts
 !lib/finelog/dashboard/src/
 
-!lib/rigging/
+# Rust workspace (built by the `rustbuild` stage). Only finelog's own workspace
+# is needed now; compiled artifacts (target/) are excluded below.
+!lib/finelog/rust/
 
-# Exclude build artifacts within included paths
+# Exclude build artifacts within included paths.
+lib/finelog/rust/**/target/
 **/__pycache__
 **/*.pyc
 **/*.pyo

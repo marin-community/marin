@@ -43,7 +43,6 @@ dependencies = [
     "einops",
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
-    "kitoken>=0.10.2",
     "transformers>=4.57.1,<5.0",
     "chex>=0.1.86",
     "optax>=0.1.9,<0.2.7",
@@ -92,6 +91,11 @@ gpu = [
   # forcing an exact patch version.
   "triton>=3.6.0,<3.7; sys_platform == 'linux'",
 ]
+deepep = [
+  # DeepEP itself remains an external source checkout addressed by DEEPEP_SRC_ROOT.
+  # The Levanter wheel ships the JAX FFI shim sources; CUDA toolchain dependencies
+  # come from the host GPU environment.
+]
 tpu = ["jax==0.9.2", "jaxlib==0.9.2", "libtpu==0.0.39"]
 torch_test = [
   "torch>=2.7.0",
@@ -116,10 +120,6 @@ lm_eval = [
 
 kernels = [
     "tokamax",
-]
-
-kitoken = [
-    "kitoken>=0.10.2",
 ]
 
 gcp = [
@@ -170,9 +170,6 @@ dev = [
 
 
 [tool.uv]
-find-links = [
-  "https://github.com/marin-community/kitoken/releases/expanded_assets/kitoken-0.10.2-a3012f4",
-]
 conflicts = [
   [
     { extra = "gpu" },
@@ -186,6 +183,10 @@ target-version = "py311"
 extend-exclude = ["scripts/"]
 
 [tool.ruff.lint]
+# Local-import hygiene (issue #6219), mirrored from the root config so these
+# rules apply repo-wide: TID252 (absolute over parent-relative imports) and
+# ICN001 (conventional import aliases, e.g. `import numpy as np`).
+extend-select = ["TID252", "ICN001"]
 ignore = [
   "E203", "E501", "W605", "F821", "E266", "F722", "E731", "E741"
 ]

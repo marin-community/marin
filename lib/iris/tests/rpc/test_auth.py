@@ -10,10 +10,10 @@ from connectrpc._headers import Headers
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cli.main import create_client_token_provider
-from iris.cli.token_store import ClusterCredential
 from iris.cluster.controller import writes
 from iris.cluster.controller.auth import JwtTokenManager, create_api_key, revoke_api_key
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.token_store import ClusterCredential
 from iris.rpc.auth import (
     AuthInterceptor,
     AuthTokenInjector,
@@ -31,7 +31,6 @@ from iris.rpc.auth import (
     authorize_resource_owner,
     get_verified_identity,
     get_verified_user,
-    hash_token,
     require_identity,
 )
 from iris.rpc.config_pb2 import AuthConfig
@@ -426,22 +425,6 @@ def test_create_client_token_provider_none_when_no_provider(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# hash_token utility
-# ---------------------------------------------------------------------------
-
-
-def test_hash_token_deterministic():
-    assert hash_token("test-token") == hash_token("test-token")
-    assert hash_token("a") != hash_token("b")
-
-
-def test_hash_token_is_sha256_hex():
-    result = hash_token("test")
-    assert len(result) == 64  # SHA-256 hex digest
-    assert all(c in "0123456789abcdef" for c in result)
-
-
-# ---------------------------------------------------------------------------
 # JwtTokenManager (replaces DbTokenVerifier)
 # ---------------------------------------------------------------------------
 
@@ -491,7 +474,6 @@ def test_jwt_token_manager_load_revocations(tmp_path):
     create_api_key(
         db,
         key_id="k-revoked",
-        key_hash="jwt:k-revoked",
         key_prefix="jwt",
         user_id="alice",
         name="test-key",
@@ -503,7 +485,6 @@ def test_jwt_token_manager_load_revocations(tmp_path):
     create_api_key(
         db,
         key_id="k-active",
-        key_hash="jwt:k-active",
         key_prefix="jwt",
         user_id="alice",
         name="active-key",

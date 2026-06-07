@@ -42,10 +42,11 @@ from levanter.grug._moe.ep_common import (
     _expand_from_keep_mask as _expand_from_keep_mask,
     _shard_a2a_params as _shard_a2a_params,
 )
+from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
-from levanter.grug._moe.mesh import (
+from levanter.grug.sharding import (
     _batch_spec_from_x,
     _current_mesh,
     _mesh_axis_size,
@@ -130,7 +131,7 @@ def moe_mlp(
     *,
     activation: MoeActivation = ActivationFunctionEnum.silu,
     implementation: MoeImplementation | str | None = None,
-    mesh: jax.sharding.AbstractMesh | None = None,
+    mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
@@ -208,6 +209,8 @@ def moe_mlp(
             shard_local_fn = _moe_mlp_ep_ring_local
         elif resolved_implementation == "ragged_all_to_all":
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
+        elif resolved_implementation == "deepep":
+            shard_local_fn = _moe_mlp_ep_deepep_local
         else:
             raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
 

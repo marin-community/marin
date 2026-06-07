@@ -393,11 +393,12 @@ def normalize_to_parquet(
             tokenization. Affected records are counted via the
             ``datakit_normalize_compacted_whitespace`` Zephyr counter.
         worker_resources: Per-worker resource request for the Zephyr pipeline.
-            Defaults to 2 CPU / 16GB RAM / 10GB disk, sized for
-            ``target_partition_bytes`` of 256MB.  Scale up when increasing
-            partition size.
+            Defaults to 2 CPU / 32GB RAM / 10GB disk, sized for
+            ``target_partition_bytes`` of 256MB plus headroom for heavier
+            sources (mid-tier subsets that don't get a per-subset override).
+            Scale up when increasing partition size.
         max_workers: Maximum number of Zephyr workers for the pipeline.
-            Defaults to Zephyr's own default (128 for distributed backends).
+            Defaults to 1024.
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
             ``zephyr.readers.load_file``.
@@ -410,7 +411,9 @@ def normalize_to_parquet(
         A :class:`NormalizedData` describing the output directories and
         aggregated zephyr counters.
     """
-    resources = worker_resources or ResourceConfig(cpu=2, ram="16g", disk="10g")
+    resources = worker_resources or ResourceConfig(cpu=2, ram="32g", disk="10g")
+    if max_workers is None:
+        max_workers = 1024
 
     files = _discover_files(input_path, file_extensions=file_extensions)
     if not files:

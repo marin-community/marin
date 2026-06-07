@@ -3,8 +3,6 @@
 
 """Pure demand routing and capacity estimation for the autoscaler."""
 
-from __future__ import annotations
-
 import difflib
 import math
 import re
@@ -66,35 +64,6 @@ class VmBin:
         self.disk_remaining -= req.disk_bytes
 
 
-def first_fit_decreasing(reqs: list[AdditiveReq], vm_capacity: AdditiveReq) -> int:
-    """Pack requests into VMs using first-fit decreasing, returning VMs needed."""
-
-    if not reqs:
-        return 0
-    reqs_sorted = sorted(
-        reqs,
-        key=lambda r: (r.disk_bytes, r.memory_bytes, r.cpu_millicores),
-        reverse=True,
-    )
-    used: list[VmBin] = []
-    for req in reqs_sorted:
-        placed = False
-        for bin_state in used:
-            if bin_state.can_fit(req):
-                bin_state.place(req)
-                placed = True
-                break
-        if not placed:
-            bin_state = VmBin(
-                cpu_remaining=vm_capacity.cpu_millicores,
-                memory_remaining=vm_capacity.memory_bytes,
-                disk_remaining=vm_capacity.disk_bytes,
-            )
-            bin_state.place(req)
-            used.append(bin_state)
-    return len(used)
-
-
 def _effective_vm_capacity(group: ScalingGroup) -> AdditiveReq | None:
     """Per-VM capacity for bin packing, with 0-means-unlimited semantics."""
 
@@ -139,7 +108,7 @@ class RoutingBudget:
             return False
         if entry.invalid_reason:
             return False
-        if not self.group.can_fit_resources(entry.resources):
+        if self.group.check_resource_fit(entry.resources) is not None:
             return False
 
         if entry.coschedule_group_id:
@@ -224,7 +193,7 @@ def _make_committed_budget(group: ScalingGroup) -> RoutingBudget | None:
     )
 
 
-def _format_variants(variants: frozenset[str] | None) -> str:
+def format_variants(variants: frozenset[str] | None) -> str:
     if not variants:
         return "*"
     return ",".join(sorted(variants))
@@ -250,7 +219,7 @@ def _diagnose(
     """
     device_type = placement.device_type or DeviceType.CPU
     device_matches = [g for g in groups if g.matches_device_requirement(device_type, placement.device_variants)]
-    variants_str = _format_variants(placement.device_variants)
+    variants_str = format_variants(placement.device_variants)
 
     if not device_matches:
         available = ", ".join(g.name for g in groups)
@@ -364,14 +333,11 @@ def job_feasibility(
 
 
 def _diagnose_no_capacity(
-    entry: DemandEntry,
     matching_groups: list[ScalingGroup],
     budgets: dict[str, RoutingBudget],
     ts: Timestamp,
 ) -> str:
     """Produce a specific reason when matching groups exist but none can accept demand."""
-
-    del entry
 
     per_group: list[str] = []
     for group in matching_groups:
@@ -566,9 +532,7 @@ def route_demand(
                     break
 
         if not matched:
-            unmet.append(
-                UnmetDemand(entry=entry, reason=_diagnose_no_capacity(entry, matching_groups, full_budgets, ts))
-            )
+            unmet.append(UnmetDemand(entry=entry, reason=_diagnose_no_capacity(matching_groups, full_budgets, ts)))
 
     group_to_launch: dict[str, int] = {}
     group_required_slices: dict[str, int] = {}

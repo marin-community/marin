@@ -41,7 +41,13 @@ from fray.local_backend import LocalClient
 from fray.types import Entrypoint, JobRequest
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from rigging.filesystem import marin_temp_bucket, open_url, url_to_fs
+from rigging.filesystem import (
+    TransferBudgetExceeded,
+    marin_temp_bucket,
+    open_url,
+    unique_temp_path,
+    url_to_fs,
+)
 from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.dataset import Dataset
@@ -57,7 +63,7 @@ from zephyr.plan import (
     compute_plan,
 )
 from zephyr.shuffle import ListShard, MemChunk, _write_scatter
-from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, batchify, ensure_parent_dir, unique_temp_path
+from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, batchify, ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
@@ -414,8 +420,41 @@ class CoordinatorUnreachable(RuntimeError):
 # These are deterministic errors (bad plan, invalid config, programming bugs)
 # that would fail identically on every attempt. Infrastructure errors (OSError,
 # RuntimeError from dead actors, backend actor errors) are NOT listed here so they
-# remain retryable.
-_NON_RETRYABLE_ERRORS = (ZephyrWorkerError, ValueError, TypeError, KeyError, AttributeError, MemoryError)
+# remain retryable. TransferBudgetExceeded is deterministic: the cross-region
+# budget is global and persists for the life of the process, so every retry hits
+# the same wall while re-transferring data across regions.
+_NON_RETRYABLE_ERRORS = (
+    ZephyrWorkerError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    MemoryError,
+    TransferBudgetExceeded,
+)
+
+
+def _ensure_picklable_exception(error: BaseException) -> BaseException:
+    """Return *error*, or a picklable stand-in if it cannot survive pickling.
+
+    Exceptions cross process boundaries (shard subprocess → worker, coordinator
+    job → driver) by cloudpickle. A subclass whose ``__init__`` signature is
+    incompatible with the ``args`` the default reduce replays revives into a
+    ``TypeError`` at *unpickle* time — which would crash the process that is only
+    trying to re-raise a child's failure, and mask the real error behind an
+    unrelated ``TypeError``. We detect that here and substitute a
+    ``ZephyrWorkerError`` carrying the original type and message, preserving any
+    traceback notes. ``ZephyrWorkerError`` is non-retryable on purpose: an error
+    we cannot even deserialize must not be retried blindly.
+    """
+    try:
+        cloudpickle.loads(cloudpickle.dumps(error))
+        return error
+    except Exception:
+        wrapped = ZephyrWorkerError(f"{type(error).__module__}.{type(error).__qualname__}: {error}")
+        for note in getattr(error, "__notes__", ()):
+            wrapped.add_note(note)
+        return wrapped
 
 
 # ---------------------------------------------------------------------------
@@ -1850,11 +1889,13 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
                 f.write(cloudpickle.dumps(payload))
         except Exception as e:
             # Persist the exception so the caller can recover the original type
-            # (important for non-retryable error detection).
+            # (important for non-retryable error detection). Normalize first so a
+            # subclass that cannot round-trip through pickle does not make the
+            # caller's revival crash and mask the real failure.
             with suppress(Exception):
                 ensure_parent_dir(result_path)
                 with open_url(result_path, "wb") as f:
-                    f.write(cloudpickle.dumps(e))
+                    f.write(cloudpickle.dumps(_ensure_picklable_exception(e)))
             raise
     finally:
         # Signal coordinator shutdown first so workers receive SHUTDOWN from
@@ -1889,7 +1930,15 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
 def _read_coordinator_result(result_path: str) -> Any:
     """Read the coordinator job's result file. Returns the deserialized object."""
     with open_url(result_path, "rb") as f:
-        return cloudpickle.loads(f.read())
+        data = f.read()
+    try:
+        return cloudpickle.loads(data)
+    except Exception as e:
+        # The coordinator normalizes exceptions before persisting, so a revival
+        # failure here means a genuinely corrupt or version-incompatible payload.
+        # Surface a clear non-retryable error instead of letting an opaque
+        # unpickle error crash the driver mid-recovery.
+        raise ZephyrWorkerError(f"Could not deserialize coordinator result at {result_path}: {e!r}") from e
 
 
 def _try_read_coordinator_result(result_path: str) -> Any:

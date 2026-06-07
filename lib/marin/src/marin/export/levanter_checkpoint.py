@@ -27,7 +27,6 @@ from levanter.trainer import TrainerConfig
 from marin.execution.types import ExecutorStep, InputName, VersionedValue, ensure_versioned, this_output_path
 from marin.training.run_environment import add_run_env_variables
 from marin.training.training import _add_default_env_variables
-from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
@@ -97,10 +96,6 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
     def convert_task():
         export_lm_to_hf.main(convert_config)
 
-    def _run_with_lockfile():
-        with remove_tpu_lockfile_on_exit():
-            convert_task()
-
     if isinstance(config.resources.device, TpuConfig):
         assert config.resources.replicas == 1, "Export currently works on single slices at present."
 
@@ -113,7 +108,7 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
     client = current_client()
     job_request = JobRequest(
         name="convert-checkpoint-to-hf",
-        entrypoint=Entrypoint.from_callable(_run_with_lockfile),
+        entrypoint=Entrypoint.from_callable(convert_task),
         resources=config.resources,
         environment=create_environment(env_vars=env, extras=extras),
     )

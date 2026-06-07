@@ -54,8 +54,21 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
     return int(mesh.shape[axis_name])
 
 
+def _batch_axes(mesh: jax.sharding.AbstractMesh | None = None) -> tuple[str, ...]:
+    if mesh is None:
+        mesh = get_abstract_mesh()
+    axes = tuple(axis for axis in ("replica_dcn", "data", "expert") if mesh is not None and axis in mesh.shape)
+    if axes:
+        return axes
+    return ("data",)
+
+
 def _batch_spec() -> P:
-    return P(("data", "expert"))
+    return P(_batch_axes())
+
+
+def _batch_reshard(x: jax.Array) -> jax.Array:
+    return reshard(x, _batch_spec())
 
 
 @dataclass(frozen=True)
@@ -157,7 +170,7 @@ class CausalSelfAttention(eqx.Module):
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
-        aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
+        aligned_v = reshard(aligned_v, P(_batch_axes(), None, "model", None))
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
@@ -311,7 +324,7 @@ def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
     max_value = jnp.where(num > 0, max_value, 0.0)
     bucket_limits = jnp.arange(num_experts + 1, dtype=jnp.float32)
     histogram = Histogram(bucket_limits=bucket_limits, bucket_counts=counts)
-    return SummaryStats(
+    return SummaryStats.from_reduced_values(
         min=min_value,
         max=max_value,
         num=num,
@@ -385,7 +398,7 @@ class MoEMLP(eqx.Module):
         # Sharded QB: compute beta locally per device, then average.
         s_minus_alpha = router_logits - qb_alpha
         mesh = get_abstract_mesh()
-        batch_axes = ("data", "expert")
+        batch_axes = _batch_axes(mesh)
         num_devices = 1
         for a in batch_axes:
             if a in mesh.shape:
@@ -451,8 +464,8 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask)
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        x = _batch_reshard(x + self.attn(attn_in, mask))
+        mlp_in = _batch_reshard(self.mlp_gated_norm(self.rms_mlp(x)))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
@@ -581,15 +594,16 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
     expert = 2 if num_devices % 2 == 0 else 1
     data = max(1, num_devices // expert)
     mesh = jax.sharding.AbstractMesh(
-        axis_sizes=(data, expert, 1),
-        axis_names=("data", "expert", "model"),
+        axis_sizes=(1, data, expert, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
         axis_types=(
+            jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
         ),
     )
-    return mesh, P(("data", "expert"), None)
+    return mesh, P(("replica_dcn", "data", "expert"), None)
 
 
 __all__ = [

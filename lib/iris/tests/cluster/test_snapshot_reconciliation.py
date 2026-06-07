@@ -11,18 +11,18 @@ lost slice inventory (capacity gaps).
 
 from dataclasses import dataclass, field
 
-from iris.cluster.controller.autoscaler.scaling_group import (
-    GroupSnapshot,
-    SliceLifecycleState,
-    SliceSnapshot,
-    restore_scaling_group,
-)
-from iris.cluster.providers.types import (
+from iris.cluster.backends.types import (
     CloudSliceState,
     CloudWorkerState,
     Labels,
     SliceStatus,
     WorkerStatus,
+)
+from iris.cluster.controller.autoscaler.scaling_group import (
+    GroupSnapshot,
+    SliceLifecycleState,
+    SliceSnapshot,
+    restore_scaling_group,
 )
 from rigging.timing import Duration, Timestamp
 
@@ -166,7 +166,6 @@ def test_restore_slice_in_checkpoint_and_cloud_preserves_lifecycle():
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[slice_snap]),
         cloud_handles=[cloud_handle],
-        label_prefix="test",
     )
 
     assert len(result.slices) == 1
@@ -186,7 +185,6 @@ def test_restore_booting_slice_that_became_ready_transitions_on_refresh():
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[slice_snap]),
         cloud_handles=[cloud_handle],
-        label_prefix="test",
     )
 
     assert result.slices["slice-1"].lifecycle == SliceLifecycleState.BOOTING
@@ -201,7 +199,6 @@ def test_restore_initializing_slice_with_cloud_ready():
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[slice_snap]),
         cloud_handles=[cloud_handle],
-        label_prefix="test",
     )
 
     assert result.slices["slice-1"].lifecycle == SliceLifecycleState.INITIALIZING
@@ -220,7 +217,6 @@ def test_restore_discards_slice_missing_from_cloud():
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[slice_snap]),
         cloud_handles=[],
-        label_prefix="test",
     )
 
     assert "slice-gone" not in result.slices
@@ -234,7 +230,6 @@ def test_restore_discards_failed_slice_missing_from_cloud():
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[slice_snap]),
         cloud_handles=[],
-        label_prefix="test",
     )
 
     assert "slice-failed" not in result.slices
@@ -253,7 +248,6 @@ def test_restore_multiple_slices_some_missing():
             slices=[snap_alive, snap_gone],
         ),
         cloud_handles=[cloud_alive],
-        label_prefix="test",
     )
 
     assert "slice-alive" in result.slices
@@ -273,7 +267,6 @@ def test_restore_adopts_unknown_cloud_slice_as_booting():
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[]),
         cloud_handles=[orphan],
-        label_prefix="test",
     )
 
     assert "slice-orphan" in result.slices
@@ -289,7 +282,6 @@ def test_restore_adopts_creating_cloud_slice():
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[]),
         cloud_handles=[creating],
-        label_prefix="test",
     )
 
     assert "slice-creating" in result.slices
@@ -306,7 +298,6 @@ def test_restore_mixed_known_and_unknown_slices():
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[snap_a]),
         cloud_handles=[cloud_a, cloud_b],
-        label_prefix="test",
     )
 
     assert result.slices["slice-a"].lifecycle == SliceLifecycleState.READY
@@ -339,7 +330,6 @@ def test_restore_multiple_groups_independent_reconciliation():
             ],
         ),
         cloud_handles=[cloud_a1],
-        label_prefix=label_prefix,
     )
 
     result_b = restore_scaling_group(
@@ -348,7 +338,6 @@ def test_restore_multiple_groups_independent_reconciliation():
             slices=[_make_slice_snapshot("slice-b1", scale_group="group-b")],
         ),
         cloud_handles=[cloud_b1, cloud_b_orphan],
-        label_prefix=label_prefix,
     )
 
     assert set(result_a.slices.keys()) == {"slice-a1"}
@@ -364,7 +353,6 @@ def test_restore_empty_checkpoint_with_cloud_slices():
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[]),
         cloud_handles=[cloud_1, cloud_2],
-        label_prefix="test",
     )
 
     assert len(result.slices) == 2
@@ -376,7 +364,6 @@ def test_restore_empty_checkpoint_empty_cloud():
     result = restore_scaling_group(
         group_snapshot=GroupSnapshot(name="tpu-group", slices=[]),
         cloud_handles=[],
-        label_prefix="test",
     )
 
     assert len(result.slices) == 0
@@ -399,6 +386,5 @@ def test_restore_does_not_carry_backoff_state():
     result = restore_scaling_group(
         group_snapshot=snapshot,
         cloud_handles=[],
-        label_prefix="test",
     )
     assert result.slices == {}

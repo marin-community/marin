@@ -600,7 +600,7 @@ class Trainer:
         total_prof_steps = profiler.resolve_num_profile_steps(num_train_steps=self.config.num_train_steps)
         if profiler.is_enabled and total_prof_steps > 0:
             self.add_hook(
-                callbacks.profile(
+                levanter.callbacks.profile(
                     str(self.config.log_dir / self.run_id / "profiler"),
                     profiler.start_step,
                     total_prof_steps,
@@ -621,7 +621,7 @@ class Trainer:
                 return self.loss_fn(model, *batch, **batch_kwargs, key=None)
 
             self.add_hook(
-                callbacks.compute_validation_loss(
+                levanter.callbacks.compute_validation_loss(
                     eval_loss,
                     eval_loader,
                     max_batches=self.config.max_eval_batches,

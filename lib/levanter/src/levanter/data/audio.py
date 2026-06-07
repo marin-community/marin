@@ -8,7 +8,7 @@ import logging
 import os
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple, cast
 
 import braceexpand
 import datasets
@@ -186,6 +186,7 @@ class AudioDatasetSourceConfig:
         if self.id is not None:
             data = datasets.load_dataset(self.id, split=split, name=self.name, streaming=self.stream)
             for doc in data:
+                doc = cast(dict, doc)
                 yield (doc[self.audio_key]["array"], doc[self.audio_key]["sampling_rate"], doc[self.text_key])
         else:
             urls = self.urls_for_split(split)
@@ -249,7 +250,7 @@ class AudioTaskConfig(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def validation_sets(self) -> Mapping[str, AsyncDataset[np.ndarray]]:
+    def validation_sets(self) -> "Mapping[str, ProcessedAudioCache]":
         pass
 
 
@@ -497,7 +498,7 @@ class AudioMixtureDatasetConfig(AudioTaskConfig):
         doc_caches = self.build_caches("train")
         return doc_caches
 
-    def validation_sets(self) -> Mapping[str, AsyncDataset[np.ndarray]]:
+    def validation_sets(self) -> Mapping[str, ProcessedAudioCache]:
         doc_caches = self.build_caches("validation")
         return doc_caches
 

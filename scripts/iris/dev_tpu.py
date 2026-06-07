@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import atexit
 import getpass
+import json
 import logging
 import os
 import shlex
@@ -18,8 +19,10 @@ import threading
 import time
 from collections.abc import Iterable
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Protocol
+from urllib.parse import urlsplit
 
 import click
 import yaml
@@ -27,11 +30,156 @@ from iris.client import IrisClient, JobAlreadyExists
 from iris.cluster.config import IrisConfig
 from iris.cluster.constraints import zone_constraint
 from iris.cluster.types import Entrypoint, JobName, ResourceSpec, tpu_device
-from iris.dev_tpu import DevTpuState, DevTpuWorker, GcpNodeRef, parse_worker_host
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
 from marin.cluster import gcp
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
+
+
+class TpuNameLookup(Protocol):
+    def __call__(self, name: str, project: str, *, zone: str | None = None) -> tuple[str, str] | None: ...
+
+
+@dataclass(frozen=True)
+class GcpNodeRef:
+    """Resolved GCP node target for SSH/SCP operations."""
+
+    kind: str
+    name: str
+    zone: str
+    project: str
+    tpu_worker_id: int = 0
+
+
+@dataclass(frozen=True)
+class DevTpuWorker:
+    """One allocated worker backing a dev TPU session."""
+
+    task_id: str
+    worker_id: str
+    worker_address: str
+    host: str
+    node: GcpNodeRef
+
+
+@dataclass(frozen=True)
+class WorkerResolutionMetadata:
+    address: str
+    metadata: job_pb2.WorkerMetadata
+
+
+@dataclass(frozen=True)
+class DevTpuState:
+    """Persisted local state for an active dev TPU session."""
+
+    session_name: str
+    config_file: str
+    job_id: str
+    tpu_type: str
+    workers: list[DevTpuWorker]
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self), indent=2, sort_keys=True)
+
+    @classmethod
+    def from_json(cls, raw: str) -> DevTpuState:
+        data = json.loads(raw)
+        workers = [
+            DevTpuWorker(
+                task_id=worker["task_id"],
+                worker_id=worker["worker_id"],
+                worker_address=worker["worker_address"],
+                host=worker["host"],
+                node=GcpNodeRef(**worker["node"]),
+            )
+            for worker in data["workers"]
+        ]
+        return cls(
+            session_name=data["session_name"],
+            config_file=data["config_file"],
+            job_id=data["job_id"],
+            tpu_type=data["tpu_type"],
+            workers=workers,
+        )
+
+    @staticmethod
+    def state_file_path(base_dir: Path, session_name: str) -> Path:
+        return base_dir / f"{session_name}.json"
+
+
+def parse_worker_host(worker_address: str) -> str:
+    """Extract a host from an Iris worker address."""
+    if not worker_address:
+        raise ValueError("worker address must not be empty")
+
+    if "://" in worker_address:
+        parsed = urlsplit(worker_address)
+    else:
+        parsed = urlsplit(f"//{worker_address}")
+
+    host = parsed.hostname
+    if not host:
+        raise ValueError(f"worker address does not include a host: {worker_address}")
+
+    return host
+
+
+def parse_tpu_worker_id(raw_worker_id: str) -> int:
+    """Parse the TPU worker id stored in Iris worker metadata."""
+    if not raw_worker_id:
+        return 0
+    try:
+        return int(raw_worker_id)
+    except ValueError as exc:
+        raise ValueError(f"invalid TPU worker id in worker metadata: {raw_worker_id!r}") from exc
+
+
+def resolve_node_ref_from_worker_metadata(
+    metadata: job_pb2.WorkerMetadata,
+    project: str,
+    *,
+    find_tpu_by_name: TpuNameLookup | None = None,
+) -> GcpNodeRef | None:
+    """Resolve a GCP SSH target from Iris worker metadata."""
+    if metadata.tpu_name:
+        zone = metadata.gce_zone
+        if not zone and find_tpu_by_name is not None:
+            tpu_match = find_tpu_by_name(metadata.tpu_name, project)
+            if tpu_match:
+                _name, zone = tpu_match
+        if zone:
+            return GcpNodeRef(
+                kind="tpu",
+                name=metadata.tpu_name,
+                zone=zone,
+                project=project,
+                tpu_worker_id=parse_tpu_worker_id(metadata.tpu_worker_id),
+            )
+
+    if metadata.gce_instance_name and metadata.gce_zone:
+        return GcpNodeRef(
+            kind="vm",
+            name=metadata.gce_instance_name,
+            zone=metadata.gce_zone,
+            project=project,
+        )
+
+    return None
+
+
+def worker_address_lookup_values(worker_address: str) -> list[str]:
+    """Return worker address forms used by different Iris controller versions."""
+    if not worker_address:
+        return []
+    values = [worker_address]
+    if "://" in worker_address:
+        parsed = urlsplit(worker_address)
+    else:
+        parsed = urlsplit(f"//{worker_address}")
+    if parsed.netloc:
+        values.append(parsed.netloc)
+    return list(dict.fromkeys(values))
+
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +203,7 @@ HOLDER_COMMAND = (
 )
 
 STATE_DIR = Path.home() / ".cache" / "marin" / "dev_tpu_iris"
+WORKER_LOOKUP_LIMIT = 25
 
 
 @dataclass
@@ -181,8 +330,70 @@ def controller_client(config_file: str) -> Iterable[IrisClient]:
             client.shutdown()
 
 
-def resolve_node_ref(host: str, project: str) -> GcpNodeRef:
-    tpu_match = gcp.find_tpu_by_ip(host, project, zone="-")
+def _worker_resolution_metadata_from_workers(
+    workers: Iterable[controller_pb2.Controller.WorkerHealthStatus],
+    *,
+    worker_id: str,
+    worker_address: str,
+) -> WorkerResolutionMetadata | None:
+    address_values = set(worker_address_lookup_values(worker_address))
+    for worker in workers:
+        if worker.worker_id == worker_id or worker.address in address_values:
+            return WorkerResolutionMetadata(address=worker.address, metadata=worker.metadata)
+    return None
+
+
+def worker_resolution_metadata(
+    client: IrisClient,
+    *,
+    worker_id: str,
+    worker_address: str,
+) -> WorkerResolutionMetadata | None:
+    lookup_values = []
+    if worker_id:
+        lookup_values.append(worker_id)
+    lookup_values.extend(worker_address_lookup_values(worker_address))
+    if not lookup_values:
+        return None
+
+    for lookup_value in dict.fromkeys(lookup_values):
+        workers = client.list_workers(
+            query=controller_pb2.Controller.WorkerQuery(
+                contains=lookup_value,
+                limit=WORKER_LOOKUP_LIMIT,
+            )
+        )
+        metadata = _worker_resolution_metadata_from_workers(
+            workers,
+            worker_id=worker_id,
+            worker_address=worker_address,
+        )
+        if metadata is not None:
+            return metadata
+    return None
+
+
+def resolve_node_ref(host: str, project: str, *, alternate_hosts: Iterable[str] = ()) -> GcpNodeRef:
+    candidates = [host, *alternate_hosts]
+    seen: set[str] = set()
+    unique_candidates = []
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        unique_candidates.append(candidate)
+
+    for candidate in unique_candidates:
+        resolved = _resolve_node_ref_by_ip(candidate, project)
+        if resolved is not None:
+            return resolved
+
+    searched = ", ".join(unique_candidates) if unique_candidates else "<none>"
+    raise click.ClickException(f"Could not resolve a GCP TPU or VM for worker host(s): {searched}")
+
+
+def _resolve_node_ref_by_ip(host: str, project: str) -> GcpNodeRef | None:
+    tpu_match = gcp.find_tpu_by_ip(host, project)
     if tpu_match:
         name, zone, worker_id = tpu_match
         return GcpNodeRef(kind="tpu", name=name, zone=zone, project=project, tpu_worker_id=worker_id)
@@ -192,7 +403,7 @@ def resolve_node_ref(host: str, project: str) -> GcpNodeRef:
         name, zone = vm_match
         return GcpNodeRef(kind="vm", name=name, zone=zone, project=project)
 
-    raise click.ClickException(f"Could not resolve a GCP TPU or VM for worker host {host}")
+    return None
 
 
 def gcloud_ssh_cmd(node: GcpNodeRef, *, command: str | None = None) -> list[str]:
@@ -308,7 +519,7 @@ cd "$HOME/marin"
     return "bash -lc " + shlex.quote(script)
 
 
-def wait_for_workers(job, *, timeout: float, project: str) -> list[DevTpuWorker]:
+def wait_for_workers(job, client: IrisClient, *, timeout: float, project: str) -> list[DevTpuWorker]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         status = job.status()
@@ -330,8 +541,32 @@ def wait_for_workers(job, *, timeout: float, project: str) -> list[DevTpuWorker]
                 if task_status.state != job_pb2.TASK_STATE_RUNNING or not task_status.worker_address:
                     all_running = False
                     break
-                host = parse_worker_host(task_status.worker_address)
-                node = resolve_node_ref(host, project)
+                rpc_host = parse_worker_host(task_status.worker_address)
+                node = None
+                host = rpc_host
+                alternate_hosts: list[str] = []
+                worker_metadata = worker_resolution_metadata(
+                    client,
+                    worker_id=task_status.worker_id,
+                    worker_address=task_status.worker_address,
+                )
+                if worker_metadata is not None:
+                    metadata = worker_metadata.metadata
+                    try:
+                        node = resolve_node_ref_from_worker_metadata(
+                            metadata,
+                            project,
+                            find_tpu_by_name=gcp.find_tpu_by_name,
+                        )
+                    except ValueError as exc:
+                        raise click.ClickException(str(exc)) from exc
+                    if metadata.ip_address:
+                        host = metadata.ip_address
+                        alternate_hosts.append(metadata.ip_address)
+                    if worker_metadata.address:
+                        alternate_hosts.append(parse_worker_host(worker_metadata.address))
+                if node is None:
+                    node = resolve_node_ref(rpc_host, project, alternate_hosts=alternate_hosts)
                 resolved.append(
                     DevTpuWorker(
                         task_id=str(task.task_id),
@@ -523,7 +758,7 @@ def allocate(
         except JobAlreadyExists as exc:
             raise click.ClickException(f"Job already exists for session '{session_name}': {exc}") from exc
 
-        workers = wait_for_workers(job, timeout=timeout, project=project)
+        workers = wait_for_workers(job, client, timeout=timeout, project=project)
         for worker in workers:
             ensure_ssh_access(worker.node)
 

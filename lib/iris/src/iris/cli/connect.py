@@ -99,7 +99,7 @@ def require_controller_url(ctx: click.Context) -> str:
         ctx.obj["provider_bundle"] = bundle
 
         if iris_config.proto.controller.WhichOneof("controller") == "local":
-            from iris.cluster.providers.local.cluster import LocalCluster
+            from iris.cluster.backends.local.cluster import LocalCluster
 
             cluster = LocalCluster(iris_config.proto)
             controller_address = cluster.start()

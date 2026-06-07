@@ -16,7 +16,7 @@ import urllib.parse
 import warnings
 from dataclasses import dataclass
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, Type, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Self, Tuple, Type, TypeVar, Union, cast
 
 import draccus
 import equinox as eqx
@@ -174,6 +174,45 @@ def build_generation_config(
     return gen_config
 
 
+def _coerce_to_hf_tokenizer(tokenizer: PreTrainedTokenizerBase | MarinTokenizer) -> PreTrainedTokenizerBase:
+    if isinstance(tokenizer, MarinTokenizer):
+        tokenizer = tokenizer.as_hf_tokenizer()
+    return tokenizer
+
+
+def _embed_chat_template_in_tokenizer_config(
+    tokenizer: PreTrainedTokenizerBase,
+    local_path: str,
+) -> None:
+    chat_template = getattr(tokenizer, "chat_template", None)
+    if chat_template is None:
+        return
+
+    config_path = os.path.join(local_path, "tokenizer_config.json")
+    if not os.path.exists(config_path):
+        logger.warning("Tokenizer config missing at %s; cannot embed chat_template", config_path)
+        return
+
+    with open(config_path) as f:
+        tokenizer_config = json.load(f)
+
+    if tokenizer_config.get("chat_template") == chat_template:
+        return
+
+    tokenizer_config["chat_template"] = chat_template
+    with open(config_path, "w") as f:
+        json.dump(tokenizer_config, f)
+
+
+def _save_tokenizer_pretrained(
+    tokenizer: PreTrainedTokenizerBase | MarinTokenizer,
+    local_path: str,
+) -> None:
+    hf_tokenizer = _coerce_to_hf_tokenizer(tokenizer)
+    hf_tokenizer.save_pretrained(local_path)
+    _embed_chat_template_in_tokenizer_config(hf_tokenizer, local_path)
+
+
 @dataclass(frozen=True)
 class RepoRef:
     """Represents a reference to a model (or similar) in a remote repository or local file system, and
@@ -214,7 +253,7 @@ class HFCompatConfig(LmConfig["LmWithHfSerializationMixin"]):
 
     @classmethod
     @abc.abstractmethod
-    def from_hf_config(cls, hf_config: HfConfig):
+    def from_hf_config(cls, hf_config: HfConfig) -> Self:
         pass
 
     @abc.abstractmethod
@@ -273,6 +312,22 @@ KEYS_TO_COPY_FROM_BASE_CONFIG = {
     "architectures",
     "auto_map",
 }
+
+
+def _causal_lm_architecture_name(hf_config_class: type) -> Optional[str]:
+    """Return the HF causal-LM architecture class name for *hf_config_class*, or None.
+
+    Uses the transformers name mapping (model_type -> architecture class name), which is a plain
+    string table that does not require torch — unlike ``AutoModelForCausalLM._model_mapping``. This
+    lets us record ``architectures`` in a saved config even when the reference checkpoint can't be
+    fetched (gated repo or HF outage) and torch isn't installed.
+    """
+    from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES
+
+    model_type = getattr(hf_config_class, "model_type", None)
+    if model_type is None:
+        return None
+    return MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.get(model_type)
 
 
 def _load_torch(path, dtype, fs: AbstractFileSystem | None = None):
@@ -448,7 +503,11 @@ class HFCheckpointConverter(Generic[LevConfig]):
         # TODO: hacky hacky
         for k, v in LmConfig.get_known_choices().items():
             if issubclass(v, HFCompatConfig):
-                if v().hf_checkpoint_converter().HfConfigClass.__name__ == config_class.__name__:
+                # `v` is typed as the abstract LmConfig base (registry value), whose __init__
+                # requires max_seq_len; at runtime every registered choice is a concrete config
+                # that supplies a default, so the no-arg construction is safe.
+                instance = v()  # pyrefly: ignore[missing-argument]
+                if instance.hf_checkpoint_converter().HfConfigClass.__name__ == config_class.__name__:
                     LevConfigClass = v
                     break
         else:
@@ -527,7 +586,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
     def with_config_overrides(self, config_overrides: dict, merge: bool = True) -> "HFCheckpointConverter":
         if self.config_overrides is not None and merge:
-            config_overrides = mergedeep.merge({}, self.config_overrides, config_overrides)
+            config_overrides = cast(dict, mergedeep.merge({}, self.config_overrides, config_overrides))
         return dataclasses.replace(self, config_overrides=config_overrides)  # type: ignore
 
     @staticmethod
@@ -881,17 +940,20 @@ class HFCheckpointConverter(Generic[LevConfig]):
             # sufficient for most built-in architectures.
             base_config = None
             logger.warning("No reference checkpoint set; skipping base HF config metadata copy.")
-        except Exception as e:  # noqa: BLE001
-            if isinstance(e, GatedRepoError) or isinstance(e.__cause__, GatedRepoError):
-                warnings.warn("Could not copy keys from base config because the repo is gated. Making assumptions.")
-                dict_config["auto_map"] = {
-                    "AutoModelForCausalLM": self.HFAutoModelClass(AutoModelForCausalLM).__qualname__,
-                    "AutoConfig": self.HfConfigClass.__qualname__,
-                }
-                dict_config["architectures"] = [self.HFAutoModelClass(AutoModelForCausalLM).__name__]
-                base_config = None
-            else:
-                raise
+        except OSError as e:
+            # The reference config could not be read: the repo is gated, or the Hub is unreachable
+            # (HF outage, or HF_HUB_OFFLINE in CI). Every HF/transformers "can't fetch" error is an
+            # OSError subclass. We can still save: `to_hf_config()` already produced a complete config,
+            # so an HF outage never blocks a save. Record `architectures` from the model type (torch-free)
+            # so the checkpoint stays loadable.
+            warnings.warn(
+                f"Could not load reference HF config from {self.reference_checkpoint!r} ({type(e).__name__});"
+                " saving with architecture metadata derived from the model type."
+            )
+            base_config = None
+            architecture = _causal_lm_architecture_name(self.HfConfigClass)
+            if architecture is not None:
+                dict_config["architectures"] = [architecture]
 
         if base_config is not None:
             for k in KEYS_TO_COPY_FROM_BASE_CONFIG:
@@ -1097,10 +1159,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
             if save_tokenizer:
                 logger.info("Saving tokenizer")
-                tokenizer = self.tokenizer
-                if isinstance(tokenizer, MarinTokenizer):
-                    tokenizer = tokenizer.as_hf_tokenizer()
-                tokenizer.save_pretrained(local_path)
+                _save_tokenizer_pretrained(self.tokenizer, local_path)
 
             if save_feature_extractor and self.feature_extractor is not None:
                 logger.info("Saving feature extractor")
@@ -1391,7 +1450,7 @@ def _shard_hf_checkpoint(
     state_dict: dict[str, Array | ShapeDtypeStruct],
     max_shard_size: int = DEFAULT_MAX_SHARD_SIZE,
     weights_name: str = SAFE_TENSORS_MODEL,
-) -> tuple[dict[str, dict[str, Array]], dict | None]:
+) -> tuple[dict[str, dict[str, Array | ShapeDtypeStruct]], dict | None]:
     """
     Splits a model state dictionary in sub-checkpoints so that the final size of each sub-checkpoint does not exceed a
     given size.
@@ -1422,7 +1481,7 @@ def _shard_hf_checkpoint(
 
         The index may be None if there is only one shard.
     """
-    sharded_state_dicts: list[dict[str, Array]] = [{}]
+    sharded_state_dicts: list[dict[str, Array | ShapeDtypeStruct]] = [{}]
     last_block_size = 0
     total_size = 0
 
@@ -1445,7 +1504,7 @@ def _shard_hf_checkpoint(
 
     # Otherwise, let's build the index
     weight_map = {}
-    shards: dict[str, dict[str, Array]] = {}
+    shards: dict[str, dict[str, Array | ShapeDtypeStruct]] = {}
     for idx, shard in enumerate(sharded_state_dicts):
         # NOTE(dlwh): this is how it is in the HF code. it hurts me
         shard_file = weights_name.replace(".bin", f"-{idx + 1:05d}-of-{len(sharded_state_dicts):05d}.bin")
