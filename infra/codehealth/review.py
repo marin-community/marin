@@ -183,7 +183,7 @@ Fields:
   catchable_strict — bool. TRUE only if a deterministic tool could mechanically
                      flag this from the diff alone, with no judgment:
                      ruff, black, pyrefly/mypy, a regex/AST rule like the
-                     marin `infra/lint.md` ml-* catalog.
+                     marin `infra/lint/` ml-* catalog.
                      Examples TRUE: unused import; missing return type;
                      `_utils.py` filename; `TYPE_CHECKING:` guard; local
                      import that isn't an optional-dep guard.

@@ -60,7 +60,7 @@ Run these before pushing; do not skip any step.
   Pass the headless CLI for whichever agent you are: `--agent-command='claude
   -p'` for Claude Code, `--agent-command='codex exec'` for Codex, etc. The
   script defaults to `claude -p` if you omit the flag. Fix or acknowledge the
-  findings it reports (search `infra/lint.md` for each `ml-...` code to see the
+  findings it reports (search `infra/lint/` for each `ml-...` code to see the
   rule and when it is acceptable to ignore); re-run once to confirm.
 
 3. `uv run pytest -m 'not slow'` — relevant test directories.
