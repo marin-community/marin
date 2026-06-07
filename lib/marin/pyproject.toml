@@ -39,7 +39,7 @@ dependencies = [
     "openai",
     "pandas>=2.0",
     "plotly",
-    "pyarrow>=22",
+    "pyarrow>=23.0.0",
     "regex",
     "requests>=2.33.0",
     "resiliparse>=0.17.2",
