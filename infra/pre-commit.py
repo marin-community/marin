@@ -779,9 +779,47 @@ def _ensure_iris_protos() -> None:
         print(f"  ⚠ Proto generation failed: {result.stderr.strip()}")
 
 
+# pyrefly resolves third-party types from this interpreter (see
+# `python-interpreter-path` in pyproject.toml). `jax` is a base dependency of
+# levanter/haliax, so any lint-ready venv installs it; its absence means the
+# worktree venv is unsynced and pyrefly would emit a missing-import flood for
+# every dependency instead of a real type check. CI always syncs, so this never
+# trips there.
+PYREFLY_INTERPRETER = ROOT_DIR / ".venv" / "bin" / "python"
+PYREFLY_ENV_SENTINEL = "jax"
+PYREFLY_SYNC_HINT = "uv sync --all-packages --extra=cpu"
+
+
+def _pyrefly_env_ready() -> bool:
+    """Whether pyrefly's configured interpreter has the project dependencies installed."""
+    if not PYREFLY_INTERPRETER.exists():
+        return False
+    probe = subprocess.run(
+        [
+            str(PYREFLY_INTERPRETER),
+            "-c",
+            f"import importlib.util as u, sys; sys.exit(0 if u.find_spec({PYREFLY_ENV_SENTINEL!r}) else 1)",
+        ],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+    )
+    return probe.returncode == 0
+
+
 def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
+
+    # An unsynced .venv makes pyrefly report every dependency as missing-import.
+    # That is an environment problem, not a code problem: skip with guidance
+    # rather than drowning the user in false errors. CI's venv is always synced.
+    if not _pyrefly_env_ready():
+        print(
+            f"  ⚠ Skipping pyrefly: .venv is missing project dependencies "
+            f"(run `{PYREFLY_SYNC_HINT}`). CI type-checks regardless."
+        )
+        return _record("Pyrefly type checker (skipped: venv unsynced)", 0)
 
     _ensure_iris_protos()
 

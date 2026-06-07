@@ -241,10 +241,18 @@ use-ignore-files = false
 # levanter/grug and levanter/kernels. See docs/plans/pyrefly-tensor-shapes.md.
 tensor-shapes = true
 
-# Deps the cpu lint profile does not install (extras-only like vllm/lm_eval, or
-# compiled packages without stubs like resiliparse/jaxlib). Unlike
-# replace-imports-with-any, this substitutes Any only when the module is truly
-# absent on disk, so a deleted/misspelled internal module still trips missing-import.
+# Modules pyrefly may not find on disk, listed so it substitutes Any for them
+# instead of erroring. Unlike replace-imports-with-any (which is unconditional),
+# this substitutes Any ONLY when the module is truly absent, so a deleted or
+# misspelled internal module still trips missing-import, and a dep that *is*
+# installed is still type-checked against its real stubs. Two categories live here:
+#   1. Deps no lint profile installs: extras-only (vllm/lm_eval) or compiled
+#      packages without stubs (resiliparse/jaxlib). Always Any.
+#   2. Compute deps a worktree lacks when its venv was synced without a compute
+#      extra (torch, sympy). CI syncs `--extra=cpu`, so real types are used there;
+#      a base-only local venv degrades to Any instead of a missing-import flood.
+#      (torch is also in the tpu/gpu/vllm extras, which conflict with cpu, so the
+#      lint env can't just force-install it — graceful Any is the portable fix.)
 # HAND-MAINTAINED: a new uninstalled dep trips missing-import until added here
 # (list both `pkg` and `pkg.*`).
 ignore-missing-imports = [
@@ -270,8 +278,12 @@ ignore-missing-imports = [
     "pylatexenc.*",
     "resiliparse",
     "resiliparse.*",
+    "sympy",
+    "sympy.*",
     "tensorboardX",
     "tensorboardX.*",
+    "torch",
+    "torch.*",
     "tpu_inference",
     "tpu_inference.*",
     "trackio",
