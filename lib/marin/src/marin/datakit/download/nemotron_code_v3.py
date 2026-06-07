@@ -31,6 +31,7 @@ from rigging.filesystem import atomic_rename, open_url, url_to_fs
 from zephyr import counters
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_mkdirs
 
@@ -325,6 +326,8 @@ def materialize_nemotron_code_v3_step(
             "allowed_languages": config.allowed_languages,
             "max_rows": config.max_rows,
             "max_file_bytes": config.max_file_bytes,
+            "request_timeout_seconds": config.request_timeout_seconds,
+            "retry_attempts": config.retry_attempts,
             "raw_base_url": config.raw_base_url,
             "batch_rows": config.batch_rows,
             "record_transient_failures": config.record_transient_failures,
@@ -336,8 +339,6 @@ def nemotron_code_v3_normalize_steps(
     config: NemotronCodeV3MaterializeConfig = PILOT_CONFIG,
 ) -> tuple[StepSpec, ...]:
     """Return the metadata -> materialize -> normalize chain for one v3 view."""
-    from marin.datakit.normalize import normalize_step
-
     metadata = download_nemotron_code_v3_metadata_step()
     materialized = materialize_nemotron_code_v3_step(metadata, config=config)
     return (

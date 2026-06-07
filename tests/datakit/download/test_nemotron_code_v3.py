@@ -23,7 +23,9 @@ from marin.datakit.download.nemotron_code_v3 import (
     github_raw_url,
     materialize_blob,
     materialize_nemotron_code_v3,
+    materialize_nemotron_code_v3_step,
 )
+from marin.execution.step_spec import StepSpec
 
 
 def _config(**overrides) -> NemotronCodeV3MaterializeConfig:
@@ -283,3 +285,18 @@ def test_max_rows_caps_fetch_attempts_deterministically(tmp_path: Path, local_ra
     assert counts["fetch_attempts"] == 2
     assert len(state["requests"]) == 2
     assert [row["rel_path"] for row in _read_rows(tmp_path / "output", SUCCESS_DIR)] == ["src/one.py", "src/two.py"]
+
+
+def test_materialization_cache_key_tracks_fetch_policy():
+    metadata = StepSpec(name="raw/test-metadata")
+    fast_retries = _config(request_timeout_seconds=5.0, retry_attempts=2)
+    slow_retries = _config(request_timeout_seconds=20.0, retry_attempts=4)
+
+    fast_step = materialize_nemotron_code_v3_step(metadata, config=fast_retries)
+    slow_step = materialize_nemotron_code_v3_step(metadata, config=slow_retries)
+
+    assert fast_step.hash_attrs["request_timeout_seconds"] == 5.0
+    assert fast_step.hash_attrs["retry_attempts"] == 2
+    assert slow_step.hash_attrs["request_timeout_seconds"] == 20.0
+    assert slow_step.hash_attrs["retry_attempts"] == 4
+    assert fast_step.hash_attrs != slow_step.hash_attrs
