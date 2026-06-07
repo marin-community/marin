@@ -204,9 +204,10 @@ def test_gpu_fa4_thd_supports_hopper_kernel_config(monkeypatch):
     assert config.num_threads == 384
 
 
-def test_gpu_fa4_thd_hopper_dq_postprocess_uses_mma_compatible_tile():
-    assert fa4_thd._dq_postprocess_tile_m(90, 128) == 64
-    assert fa4_thd._dq_postprocess_tile_m(100, 128) == 128
+def test_gpu_fa4_thd_hopper_postprocess_uses_mma_compatible_tile():
+    assert fa4_thd._sm90_postprocess_tile_m(90, 128) == 64
+    assert fa4_thd._sm90_postprocess_tile_m(90, 64) == 64
+    assert fa4_thd._sm90_postprocess_tile_m(100, 128) == 128
 
 
 def test_gpu_fa4_thd_hopper_backward_uses_smem_safe_options():
