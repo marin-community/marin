@@ -169,16 +169,9 @@ gh pr create --title "<title>" --body "<plain text body>" --label agent-generate
 
 ## Rules
 
-- `./infra/pre-commit.py` is the only lint entry point.
+- `./infra/pre-commit.py` is the only pre-commit entry point.
 - Commit before you run `--review`; the review never commits, pushes, or edits.
 - Never amend a commit unless the user explicitly asks.
 - If there are no changes to commit, say so and stop.
-
-## See Also
-
-- `.agents/skills/review-pr/` — multi-agent PR correctness review (separate concern).
-- `.agents/skills/lint-review/` — the CI counterpart of step 6: the `Ops - Claude
-  Review` workflow runs this same `--review` pass on the PR and posts the findings
-  as inline comments. Running it locally first lets you address them before review.
 - `.agents/skills/fix-issue/` — end-to-end issue-fix workflow.
 - `AGENTS.md` — coding guidelines.
