@@ -41,12 +41,89 @@ LINT_REVIEW_AGENT_DEFAULT = "claude -p"
 
 LINT_REVIEW_TIMEOUT = 600
 
-# Read access the headless lanes need to probe the change themselves (we hand them a
-# `git diff --stat`, not a pasted diff). Mirrors the `--allowedTools` convention used by
-# the repo's CI Claude workflows (.github/workflows/ops-claude*.yaml). Claude-specific:
-# the flag is Claude Code's, so it is appended only when the agent binary is `claude`.
-LINT_REVIEW_ALLOWED_TOOLS = "Bash(git:*),Read,Grep,Glob"
+# The lint review runs fully-headless agents over the working tree. They are REVIEWERS:
+# the only job is to READ the change and emit advisory findings on stdout — never to modify
+# a file or touch git/PR state. That contract is enforced two ways: the prompt mandate
+# (READ_ONLY_MANDATE, stated to every agent) and, for `claude`, a hard tool lockdown
+# (_readonly_agent_flags). Claude-specific flags are appended only when the binary is `claude`.
 
+# Built-in tools the headless `claude` agent may have AT ALL. Edit/Write/NotebookEdit are
+# absent, so the agent cannot modify a file regardless of what any inherited settings.json
+# grants — a tool that does not exist cannot be permitted.
+LINT_REVIEW_BUILTIN_TOOLS = "Bash,Read,Grep,Glob"
+
+# Read-only git subcommands the lanes pre-approve to probe the change themselves (we hand
+# them a `git diff --stat`, not a pasted diff). Pre-approved via `--allowedTools`.
+LINT_REVIEW_READONLY_GIT = (
+    "git status",
+    "git diff",
+    "git show",
+    "git log",
+    "git ls-files",
+    "git rev-parse",
+    "git merge-base",
+    "git cat-file",
+    "git blame",
+    "git grep",
+)
+
+# State-changing git/gh commands explicitly DENIED via `--disallowedTools`. `deny` beats
+# `allow` at every scope, so this holds even if the developer's own settings.json broadly
+# allows `Bash(git:*)` or `Bash(gh:*)` — closing the hole that once let a lane commit, push,
+# and open a PR by itself.
+LINT_REVIEW_DENIED_COMMANDS = (
+    "git add",
+    "git commit",
+    "git push",
+    "git pull",
+    "git fetch",
+    "git reset",
+    "git rebase",
+    "git checkout",
+    "git switch",
+    "git merge",
+    "git restore",
+    "git stash",
+    "git tag",
+    "git clean",
+    "git apply",
+    "git am",
+    "git rm",
+    "git mv",
+    "git cherry-pick",
+    "git revert",
+    "git update-ref",
+    "git config",
+    "git remote",
+    "git branch",
+    "git worktree",
+    "gh",
+)
+
+# Raw per-arm and combined output from each review run is written under here for debugging a
+# slow or broken lint cycle; the run's directory is printed at the end of the review.
+LINT_REVIEW_LOG_ROOT = pathlib.Path("/tmp/marin-linter")
+
+
+# Prepended to every lane and composer prompt. The `claude` tool lockdown already makes
+# mutation impossible; this states the same contract in plain language for every agent CLI
+# (e.g. `codex exec`, which manages its own permissions) and orients the model on its job.
+READ_ONLY_MANDATE = (
+    "## Your role: READ-ONLY reviewer\n\n"
+    "You are a code REVIEWER running non-interactively. Your ONLY output is advisory lint "
+    "findings on stdout, in the Output format defined below. You are inspecting someone "
+    "else's in-progress branch and have NO mandate to change it. You MUST NOT, under any "
+    "circumstances:\n"
+    "- edit, create, move, or delete any file;\n"
+    "- run any state-changing git command (add, commit, push, pull, fetch, reset, rebase, "
+    "checkout, switch, merge, restore, stash, tag, branch, worktree, config, …) — use git "
+    "ONLY to READ the change (diff, show, log, status, ls-files, rev-parse, merge-base, "
+    "cat-file, blame, grep);\n"
+    "- run `gh`, open or comment on a pull request, or take any action beyond reading code;\n"
+    "- try to 'fix' anything. A fix is a finding to report, never an edit to make.\n\n"
+    "Committing, pushing, or opening a PR on the author's behalf is a serious error, not "
+    "helpfulness. If you cannot complete the review read-only, emit nothing and stop."
+)
 
 LINT_LANE_INSTRUCTIONS = (
     "You are ONE lane of the review. Apply ONLY the rules in the lane catalog above "
@@ -256,6 +333,42 @@ class LaneResult:
     stdout: str
     stderr: str
     returncode: int | None  # None means the lane agent timed out
+    elapsed: float  # wall-clock seconds the lane's agent ran
+    prompt: str  # the exact prompt fed to the lane (logged for debugging)
+
+
+@dataclass(frozen=True)
+class ComposerRun:
+    """The composer agent's raw run, captured for logging."""
+
+    prompt: str
+    stdout: str
+    stderr: str
+    returncode: int | None  # None means the composer timed out
+    elapsed: float
+
+
+@dataclass(frozen=True)
+class MergeOutcome:
+    """Result of merging the lanes: the final findings plus how they were produced."""
+
+    findings_text: str
+    mode: str
+    composer_rc: int
+    timed_out: bool
+    composer: ComposerRun | None  # None when lanes were concatenated (no composer ran)
+
+
+@dataclass(frozen=True)
+class ReviewRun:
+    """One review run's facts, gathered for logging (the summary and per-arm dumps)."""
+
+    lane_results: list[LaneResult]
+    outcome: MergeOutcome
+    merge_base: str
+    diff_stats: tuple[int, int, int]
+    elapsed_total: float
+    branch: str | None
 
 
 def _lint_review_env() -> dict[str, str]:
@@ -265,16 +378,38 @@ def _lint_review_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k not in LINT_REVIEW_STRIPPED_ENV}
 
 
-def _with_git_access(agent_cmd: list[str]) -> list[str]:
-    """Grant a headless `claude` agent read access to git and the tree so each lane can
-    probe the changed files itself (we hand it a `--stat`, not a pasted diff).
+def _readonly_agent_flags() -> list[str]:
+    """Flags that lock a headless `claude` agent to read-only review.
 
-    No-op for a non-`claude` agent or when `--allowedTools` is already set: the flag is
+    Three layers: `--tools` removes the edit tools entirely (no Edit/Write/NotebookEdit),
+    `--allowedTools` pre-approves only read-only git plus Read/Grep/Glob, and
+    `--disallowedTools` hard-denies every mutating git/gh command so an over-permissive
+    inherited settings.json (`Bash(git:*)`, `Bash(gh:*)`, …) cannot re-open the hole —
+    `deny` wins over `allow` at every scope.
+    """
+    allow = ["Read", "Grep", "Glob", *(f"Bash({c}:*)" for c in LINT_REVIEW_READONLY_GIT)]
+    deny = [f"Bash({c}:*)" for c in LINT_REVIEW_DENIED_COMMANDS]
+    return [
+        "--tools",
+        LINT_REVIEW_BUILTIN_TOOLS,
+        "--allowedTools",
+        ",".join(allow),
+        "--disallowedTools",
+        ",".join(deny),
+    ]
+
+
+def _with_readonly_access(agent_cmd: list[str]) -> list[str]:
+    """Lock a headless `claude` agent to read-only review (see `_readonly_agent_flags`): it
+    can probe the changed files (read-only git + Read/Grep/Glob) but cannot edit a file or
+    run any state-changing git/gh command.
+
+    No-op for a non-`claude` agent or when `--allowedTools` is already set: the flags are
     Claude Code's, and other agents (e.g. `codex exec`) manage their own permissions.
     """
     if os.path.basename(agent_cmd[0]) != "claude" or "--allowedTools" in agent_cmd:
         return agent_cmd
-    return [*agent_cmd, "--allowedTools", LINT_REVIEW_ALLOWED_TOOLS]
+    return [*agent_cmd, *_readonly_agent_flags()]
 
 
 def _run_agent(agent_cmd: list[str], env: dict[str, str], prompt: str) -> subprocess.CompletedProcess | None:
@@ -291,6 +426,15 @@ def _run_agent(agent_cmd: list[str], env: dict[str, str], prompt: str) -> subpro
         )
     except subprocess.TimeoutExpired:
         return None
+
+
+def _timed_agent(
+    agent_cmd: list[str], env: dict[str, str], prompt: str
+) -> tuple[subprocess.CompletedProcess | None, float]:
+    """`_run_agent` plus the wall-clock seconds it took (measured inside the worker thread)."""
+    start = time.time()
+    cp = _run_agent(agent_cmd, env, prompt)
+    return cp, time.time() - start
 
 
 def _changed_py_files(merge_base: str) -> list[str]:
@@ -324,7 +468,7 @@ def _change_context(merge_base: str, stat: str) -> str:
 
 
 def _lane_prompt(shared_text: str, lane: LintLane, merge_base: str, stat: str, leads: str) -> str:
-    parts = [shared_text, (LINT_DIR / f"{lane.name}.md").read_text()]
+    parts = [READ_ONLY_MANDATE, shared_text, (LINT_DIR / f"{lane.name}.md").read_text()]
     if lane.include_complexity_leads and leads:
         parts.append(leads)
     parts.append(lane.instructions)
@@ -341,19 +485,20 @@ def _run_lanes(
     agent_cmd: list[str],
     env: dict[str, str],
 ) -> list[LaneResult]:
+    prompts = {lane.name: _lane_prompt(shared_text, lane, merge_base, stat, leads) for lane in lanes}
     results: dict[str, LaneResult] = {}
     with ThreadPoolExecutor(max_workers=len(lanes)) as pool:
-        futures = {
-            pool.submit(_run_agent, agent_cmd, env, _lane_prompt(shared_text, lane, merge_base, stat, leads)): lane
-            for lane in lanes
-        }
+        futures = {pool.submit(_timed_agent, agent_cmd, env, prompts[lane.name]): lane for lane in lanes}
         for future in as_completed(futures):
             lane = futures[future]
-            cp = future.result()
+            cp, elapsed = future.result()
+            prompt = prompts[lane.name]
             if cp is None:
-                results[lane.name] = LaneResult(lane.name, "", "", None)
+                results[lane.name] = LaneResult(lane.name, "", "", None, elapsed, prompt)
             else:
-                results[lane.name] = LaneResult(lane.name, cp.stdout.strip(), cp.stderr.strip(), cp.returncode)
+                results[lane.name] = LaneResult(
+                    lane.name, cp.stdout.strip(), cp.stderr.strip(), cp.returncode, elapsed, prompt
+                )
     return [results[lane.name] for lane in lanes]
 
 
@@ -365,6 +510,12 @@ def _lane_body(result: LaneResult) -> str:
     return result.stdout or "(no findings)"
 
 
+def _composer_prompt(lane_results: list[LaneResult], shared_text: str, merge_base: str, stat: str) -> str:
+    labelled = "\n\n".join(f"=== Lane: {r.name} ===\n{_lane_body(r)}" for r in lane_results)
+    parts = [READ_ONLY_MANDATE, shared_text, COMPOSER_INSTRUCTIONS, labelled, _change_context(merge_base, stat)]
+    return "\n\n".join(parts) + "\n"
+
+
 def _compose(
     lane_results: list[LaneResult],
     shared_text: str,
@@ -372,10 +523,12 @@ def _compose(
     stat: str,
     agent_cmd: list[str],
     env: dict[str, str],
-) -> subprocess.CompletedProcess | None:
-    labelled = "\n\n".join(f"=== Lane: {r.name} ===\n{_lane_body(r)}" for r in lane_results)
-    prompt = "\n\n".join([shared_text, COMPOSER_INSTRUCTIONS, labelled, _change_context(merge_base, stat)]) + "\n"
-    return _run_agent(agent_cmd, env, prompt)
+) -> ComposerRun:
+    prompt = _composer_prompt(lane_results, shared_text, merge_base, stat)
+    cp, elapsed = _timed_agent(agent_cmd, env, prompt)
+    if cp is None:
+        return ComposerRun(prompt, "", "", None, elapsed)
+    return ComposerRun(prompt, cp.stdout.strip(), cp.stderr.strip(), cp.returncode, elapsed)
 
 
 def _concat_findings(lane_results: list[LaneResult]) -> str:
@@ -429,23 +582,88 @@ def _merge_lane_results(
     agent_cmd: list[str],
     env: dict[str, str],
     compose: bool,
-) -> tuple[str, str, int, bool]:
-    """Merge lane outputs via the composer (default) or a deterministic concat.
-
-    Returns `(findings_text, mode, composer_exit_code, timed_out)`.
-    """
+) -> MergeOutcome:
+    """Merge lane outputs via the composer (default) or a deterministic concat."""
     timed_out = any(r.returncode is None for r in lane_results)
     if compose and len(lanes) > 1:
-        cp = _compose(lane_results, shared_text, merge_base, stat, agent_cmd, env)
-        if cp is None:
+        run = _compose(lane_results, shared_text, merge_base, stat, agent_cmd, env)
+        if run.returncode is None:
             click.echo("  ⚠ Lint composer timed out; falling back to concat")
-            return _concat_findings(lane_results), "compose", -1, True
-        if cp.returncode != 0:
-            click.echo(f"  ⚠ Lint composer exited {cp.returncode}; falling back to concat")
-            return _concat_findings(lane_results), "compose", cp.returncode, timed_out
-        return cp.stdout.strip(), "compose", 0, timed_out
+            return MergeOutcome(_concat_findings(lane_results), "compose", -1, True, run)
+        if run.returncode != 0:
+            click.echo(f"  ⚠ Lint composer exited {run.returncode}; falling back to concat")
+            return MergeOutcome(_concat_findings(lane_results), "compose", run.returncode, timed_out, run)
+        return MergeOutcome(run.stdout, "compose", 0, timed_out, run)
     mode = "concat" if len(lanes) > 1 else f"lane:{lanes[0].name}"
-    return _concat_findings(lane_results), mode, 0, timed_out
+    return MergeOutcome(_concat_findings(lane_results), mode, 0, timed_out, None)
+
+
+def _write_arm_log(
+    arm_dir: pathlib.Path, prompt: str, stdout: str, stderr: str, returncode: int | None, elapsed: float
+) -> None:
+    """Write one arm's exact prompt and raw output (stdout/stderr/status) under `arm_dir`."""
+    arm_dir.mkdir(parents=True, exist_ok=True)
+    (arm_dir / "prompt.md").write_text(prompt)
+    status = "timed out" if returncode is None else f"exit {returncode}"
+    body = (
+        f"# {arm_dir.name} — lint review arm\n\n"
+        f"- status: {status}\n"
+        f"- elapsed: {elapsed:.2f}s\n\n"
+        f"## stdout\n\n{stdout}\n\n"
+        f"## stderr\n\n{stderr}\n"
+    )
+    (arm_dir / "output.md").write_text(body)
+
+
+def _summary_md(log_dir: pathlib.Path, run: ReviewRun) -> str:
+    files, added, removed = run.diff_stats
+    outcome = run.outcome
+    n_findings = len(_parse_findings(outcome.findings_text)) if outcome.findings_text else 0
+    lines = [
+        f"# Marin lint review — {log_dir.name}",
+        "",
+        f"- log dir: `{log_dir}`",
+        f"- branch: `{run.branch or '?'}`",
+        f"- merge base: `{run.merge_base}`",
+        f"- diff: {files} files, +{added} -{removed}",
+        f"- merge mode: {outcome.mode}",
+        f"- composer exit: {outcome.composer_rc}",
+        f"- timed out: {str(outcome.timed_out).lower()}",
+        f"- total elapsed: {run.elapsed_total:.2f}s",
+        f"- findings: {n_findings} (see `combined.md`)",
+        "",
+        "## Arms",
+        "",
+        "| arm | status | elapsed | stdout lines |",
+        "| --- | --- | --- | --- |",
+    ]
+    arms: list[tuple[str, int | None, float, str]] = [
+        (r.name, r.returncode, r.elapsed, r.stdout) for r in run.lane_results
+    ]
+    if outcome.composer is not None:
+        c = outcome.composer
+        arms.append(("composer", c.returncode, c.elapsed, c.stdout))
+    for name, rc, elapsed, stdout in arms:
+        status = "timed out" if rc is None else f"exit {rc}"
+        lines.append(f"| {name} | {status} | {elapsed:.2f}s | {len(stdout.splitlines())} |")
+    return "\n".join(lines) + "\n"
+
+
+def _write_review_log(log_dir: pathlib.Path, run: ReviewRun) -> None:
+    """Persist the raw per-arm prompts/outputs, the combined findings, and a run summary.
+
+    Layout under `log_dir` (one directory per review run):
+        <arm>/prompt.md, <arm>/output.md  — one per lane plus `composer/`
+        combined.md                       — the final merged findings (what is printed)
+        summary.md                        — run metadata and a per-arm status/timing table
+    """
+    for r in run.lane_results:
+        _write_arm_log(log_dir / r.name, r.prompt, r.stdout, r.stderr, r.returncode, r.elapsed)
+    if run.outcome.composer is not None:
+        c = run.outcome.composer
+        _write_arm_log(log_dir / "composer", c.prompt, c.stdout, c.stderr, c.returncode, c.elapsed)
+    (log_dir / "combined.md").write_text((run.outcome.findings_text or "") + "\n")
+    (log_dir / "summary.md").write_text(_summary_md(log_dir, run))
 
 
 def _ship_review_event(
@@ -520,7 +738,7 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
         agent_name = agent_cmd[0] if agent_cmd else "(empty)"
         click.echo(f"  ⚠ Lint review skipped: agent '{agent_name}' not found on PATH")
         return 0
-    agent_cmd = _with_git_access(agent_cmd)
+    agent_cmd = _with_readonly_access(agent_cmd)
 
     resolved = _resolve_review_stat()
     if resolved is None:
@@ -550,6 +768,7 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
         leads = complexity_leads.compute_leads(_read_worktree, _changed_py_files(merge_base))
     env = _lint_review_env()
     started = time.time()
+    log_dir = LINT_REVIEW_LOG_ROOT / time.strftime("%Y%m%dT%H%M%S", time.gmtime(started))
 
     lane_results = _run_lanes(lanes, shared_text, merge_base, stat, leads, agent_cmd, env)
     for r in lane_results:
@@ -559,20 +778,30 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
             detail = r.stderr.splitlines()[0] if r.stderr else ""
             click.echo(f"  ⚠ Lint lane '{r.name}' exited {r.returncode}: {detail}")
 
-    findings_text, mode, composer_rc, timed_out = _merge_lane_results(
-        lane_results, lanes, shared_text, merge_base, stat, agent_cmd, env, compose
+    outcome = _merge_lane_results(lane_results, lanes, shared_text, merge_base, stat, agent_cmd, env, compose)
+    parsed = _parse_findings(outcome.findings_text) if outcome.findings_text else []
+    _ship_review_event(
+        outcome.mode, agent_cmd, merge_base, diff_stats, started, outcome.composer_rc, outcome.timed_out, parsed
     )
-    parsed = _parse_findings(findings_text) if findings_text else []
-    _ship_review_event(mode, agent_cmd, merge_base, diff_stats, started, composer_rc, timed_out, parsed)
+
+    # Persist raw per-arm + combined output for debugging a slow/broken cycle. Log I/O is a
+    # side channel: a write failure (e.g. /tmp not writable) must not fail the advisory review.
+    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"])
+    run = ReviewRun(lane_results, outcome, merge_base, diff_stats, time.time() - started, branch)
+    try:
+        _write_review_log(log_dir, run)
+        click.echo(f"  Lint review logs: {log_dir}")
+    except OSError as e:
+        click.echo(f"  ⚠ Lint review: could not write logs to {log_dir}: {e}")
 
     if all(r.returncode != 0 for r in lane_results):
         click.echo("  ⚠ Lint review: every lane failed to run (is the agent CLI working?)")
         return 1
 
-    if not findings_text:
+    if not outcome.findings_text:
         click.echo("Lint review: no findings.")
         return 0
 
     click.echo("Lint review findings (advisory — search infra/lint/ for each ml-... code):\n")
-    click.echo(findings_text)
+    click.echo(outcome.findings_text)
     return 0
