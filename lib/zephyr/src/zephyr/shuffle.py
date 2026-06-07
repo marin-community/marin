@@ -30,6 +30,7 @@ from __future__ import annotations
 import concurrent.futures
 import functools
 import gc
+import io
 import itertools
 import logging
 import math
@@ -494,7 +495,7 @@ class ScatterWriter:
         buffer_sorted = buffer.sort([_SHARD_COL, _SORT_KEY_COL])
         del buffer
 
-        self._total_bytes_written += buffer_sorted.estimated_size()
+        self._total_bytes_written += int(buffer_sorted.estimated_size())
         self._total_rows_written += len(buffer_sorted)
 
         # Size row groups so each target shard fits in roughly one row group,
@@ -502,7 +503,11 @@ class ScatterWriter:
         num_targets = buffer_sorted[_SHARD_COL].n_unique()
         row_group_size = max(1, len(buffer_sorted) // num_targets)
         chunk_path = f"{self._data_path}c{self._n_chunks_written:04d}.parquet"
-        buffer_sorted.write_parquet(chunk_path, compression="zstd", row_group_size=row_group_size, use_pyarrow=True)
+        # Ideally we'd call write_parquet directly with the GCS path, but it occationally fails with a generic error.
+        buf = io.BytesIO()
+        buffer_sorted.write_parquet(buf, compression="zstd", row_group_size=row_group_size)
+        with open_url(chunk_path, "wb") as f:
+            f.write(buf.getvalue())
 
         self._chunk_paths.append(chunk_path)
         self._n_chunks_written += 1
