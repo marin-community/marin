@@ -898,3 +898,204 @@ Known counts:
 Open next step: materialize ready-to-use artifacts, e.g. per-subset and union
 `drop_val_ids_jaccard_ge_*.jsonl` plus a filtered/masked validation dataset or
 validation-window manifest.
+
+### 2026-06-07 — "Paranoid" val set: drop all train-leaking docs ∩ fuzzy-clean
+
+Question: how many val tokens survive the maximally strict filter — drop every
+val doc with *any* verbatim train exposure (window-split leakage) AND every doc
+with a fuzzy near-dup in any of the three subsets?
+
+Key structural fact (established first): the val split is window-level over a
+packed token stream, so the 57,243 "val docs" are a superset of the val token
+content. They total ~125.7M tokens of text but only 51.2M sit inside val
+windows; the other ~74.5M tokens of those same documents fall in train windows
+and were trained on. Re-tokenizing kept docs in full would therefore inject
+verbatim train text into any "clean" val set built from documents.
+
+Step 1 — docs fully contained in val windows (zero verbatim leakage), computed
+locally from `nemotron_math_doc_offsets.npy` + val window indices:
+
+- 33,790 / 57,243 docs, 25,956,642 tokens = 50.7% of the 51.2M val-window
+  tokens. Only 9 of these span two (consecutive val) windows, so in practice
+  "fully contained" = "fits in one 4096-token window": max len 3,989, mean
+  768, median 642. **Length bias caveat**: long docs are excluded by
+  construction — relative cross-scale comparison stays valid, absolute losses
+  and content mix shift.
+- Indices: `scratch/nemotron_math_val_fully_contained_doc_indices.npy`.
+
+Step 2 — intersect with the three-subset union fuzzy drop list. Pulled all 967
+`verified_pairs` parquet shards locally (~94 MB, val_id+jaccard columns, 19 s
+with 48 threads), built val_id → max-Jaccard, mapped all 34,565 ids to doc
+indices (0 unmapped; count matches `decon_val_summary.json` exactly).
+
+Paranoid val set (fully-contained ∧ max-J < cutoff):
+
+| cutoff | dropped (fuzzy, within fully-contained) | keep docs | keep tokens | % of 51.2M |
+|---|---:|---:|---:|---:|
+| 0.50 | 20,213 | 13,577 | 10,446,342 | 20.4% |
+| 0.70 | 8,299 | 25,491 | 19,568,485 | 38.2% |
+| 0.75 | 6,048 | 27,742 | 21,293,593 | 41.6% |
+| 0.80 | 4,001 | 29,789 | 22,888,290 | 44.7% |
+| 0.90 | 629 | 33,161 | 25,472,832 | 49.8% |
+
+So the fully-paranoid set at the canonical J≥0.75 cutoff keeps 27,742 short
+docs / 21.3M tokens (41.6% of the original val token budget) — large enough
+for a low-variance val loss, but a shorter-doc distribution than the original.
+
+Artifacts (local):
+
+- `scratch/nemotron_math_val_fully_contained_doc_indices.npy` — 33,790 doc
+  indices with zero train-window overlap.
+- `scratch/nemotron_math_val_doc_max_jaccard_union.npy` — structured array
+  (doc index, max Jaccard) for all 34,565 union-contaminated val docs; any
+  cutoff's drop list is a filter over this.
+- `scratch/nemotron_math_paranoid_val_matrix.json` — the table above.
+
+Open: materialize an actual tokenized val cache from a chosen cutoff (filter
+the already-extracted `gs://…/midtrain_dedup/val_docs/` by kept doc index →
+tokenize with `llama3_tokenizer` in us-east5), then re-eval checkpoints.
+
+### 2026-06-07 17:40 UTC — Building paranoid short-doc val sets (j050/j075/j090)
+
+Plan approved (with Codex critique folded in): three separate tokenized
+validation caches, one per Jaccard cutoff, paranoid filter = fully contained
+in val windows ∧ max train Jaccard < cutoff. Branch `deconamint`.
+
+Codex critique applied:
+
+- **No `skip_existing` as overwrite policy** — driver hard-fails if any target
+  exists unless `--resume` is set AND the existing `build_intent.json` matches
+  this run exactly (keep-id xxh3 hashes, sources, expected counts). Intent is
+  written before any other target; submit with `--resume` so iris preemption
+  retries continue their own build but a different build can never silently
+  reuse partials.
+- One zephyr pass filters all 231 `val_docs` shards into the three cutoff
+  dirs (no triple read); per-shard checkpointing via the stats sink written
+  after the three docs files finalize.
+- Filtered docs keep provenance columns: `id, text, shard, row, doc_index,
+  max_jaccard` (explicit parquet schema).
+- Validation-only tokenize confirmed supported (`TokenizeConfig.__post_init__`,
+  `tokenize.py:152`): `train_paths=[]`, `validation_paths=[docs glob]`. Cache
+  root is `…/j{cut}`; data lands under `<root>/validation`.
+
+Step 1 (local) — `scripts/analysis/build_paranoid_val_keep_ids.py`:
+generated keep-id JSONs from the replay artifacts; asserts passed
+(13,577 / 27,742 / 33,161 docs; 10,446,342 / 21,293,593 / 25,472,832 tokens;
+strict nesting j050 ⊂ j075 ⊂ j090; no duplicate ids). Uploaded to
+`gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/keep_ids/`.
+Verified both target prefixes (`decon_val_sets/`, `tokenized/nemotron_math_val_decon/`)
+were empty before any write.
+
+Step 2 — `scripts/analysis/build_decon_val_sets.py` (driver) +
+`tests/analysis/test_build_decon_val_sets.py` (3 tests: keep-set
+nesting/counts, resume-intent mismatch rejection, filter-shard routing with
+provenance columns) — all pass; pre-commit OK.
+
+Output layout (all distinct per cutoff, no shared writes):
+
+- docs: `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/j{050,075,090}/docs/`
+- caches: `gs://marin-us-east5/tokenized/nemotron_math_val_decon/j{050,075,090}/validation/`
+- manifests: `…/decon_val_sets/j{050,075,090}/manifest.json`
+
+Submitted 17:40 UTC: `/ahmed/decon-val-build-all` (us-east5, preemptible,
+4 cpu / 32 GB driver). Driver asserts filtered doc counts and cache
+`.stats.json` doc/token counts against expectations before writing each
+manifest — token equality is exact (expectations come from the original cache
+offsets incl. EOS; tokenization is deterministic). Babysitting.
+
+Stale-job cleanup (user approved): stopped
+`/ahmed/val-scan-4plus-mind-keyjoin-p-0048` and `-0049` **with children**
+(both parents were `running` with `verify-val-pairs` children pending on CPU).
+Confirmed zero active `val-scan-4plus-mind-keyjoin*` jobs afterwards.
+
+### 2026-06-07 17:44 UTC — Off-by-one in doc offsets caught by the exact-count gate
+
+`/ahmed/decon-val-build-all` **failed by design**: the driver's doc-count
+assert fired — filter kept 13,568 / 27,733 / 33,152 docs vs expected
+13,577 / 27,742 / 33,161 (−9 at every cutoff).
+
+Root cause: `scratch/nemotron_math_doc_offsets.npy` (and the byte-identical
+GCS copy at `…/midtrain_dedup/replay/nemotron_math_doc_offsets.npy`) is a
+**doc ENDS array**, not a boundaries array: `len == 45,096,087 == num docs`,
+`offsets[0] == 2740` (doc 0's end), `offsets[-1] == 51,482,955,946` (total
+tokens). Doc d spans `[offsets[d-1], offsets[d])` with start 0 for d=0. The
+2026-06-07 "paranoid" computation treated it as boundaries
+(`starts = offsets[:-1]`, `ends = offsets[1:]`), so every span belonged to
+doc d+1 — the fully-contained doc *indices* (and therefore ids) were shifted
+by one, while aggregate counts looked plausible. Symmetric difference vs the
+retokenization-verified original val-doc set was 12,483 docs each way.
+
+Validation of the fix: with `starts = [0] + ends[:-1]`, the recomputed
+touch-set **exactly equals** the original 57,243
+`nemotron_math_val_doc_indices.npy`. Corrected paranoid matrix:
+
+| cutoff | keep docs | keep tokens | % of 51.2M |
+|---|---:|---:|---:|
+| 0.50 | 13,947 | 10,282,799 | 20.1% |
+| 0.70 | 25,868 | 19,064,069 | 37.2% |
+| 0.75 | 28,089 | 20,782,728 | 40.6% |
+| 0.80 | 30,038 | 22,382,501 | 43.7% |
+| 0.90 | 33,196 | 25,346,090 | 49.5% |
+
+(Fully-contained baseline unchanged at 33,790 docs / 25,956,642 tokens — the
+old run described the same docs under shifted labels, so aggregates matched
+while the id lists were wrong.) Corrected artifacts overwrite the old ones:
+`scratch/nemotron_math_val_fully_contained_doc_indices.npy`,
+`scratch/nemotron_math_paranoid_val_matrix.json` (carries a correction note).
+
+**The earlier paranoid-matrix table in this logbook (13,577 / 27,742 / 33,161)
+is wrong — use the corrected table above.**
+
+Knock-on for Codex: `scripts/analysis/decon_val_summary.py:54-55` uses the
+same `offsets[d] / offsets[d+1]` convention on the replay array, so the
+dropped/clean **token** counts in `decon_val_summary.json` are computed over
+each contaminated doc's *successor* span (doc counts are unaffected — they
+come from id mapping). Should be rerun with the corrected convention if those
+token numbers get used anywhere.
+
+Hardening: `build_paranoid_val_keep_ids.py` now derives `starts` explicitly,
+asserts fully-contained ⊆ verified val docs, and pins the corrected expected
+counts. Cleanup + relaunch: deleted all failed-build artifacts
+(928 objects under `decon_val_sets/`: intent, filter_stats, 693 docs shards,
+old keep_ids; cache prefix confirmed never written), regenerated + re-uploaded
+keep ids, resubmitted as `/ahmed/decon-val-build-all-v2` (17:50 UTC).
+
+### 2026-06-07 18:55 UTC — Paranoid val sets BUILT and verified
+
+`/ahmed/decon-val-build-all-v2` **succeeded** (17:50 → 18:41 UTC, ~51 min;
+the three tokenize passes ran single-worker at ~49k tokens/s because the
+filtered sets bundle into one file group — fine at this size).
+
+All verification gates passed:
+
+| gate | result |
+|---|---|
+| filter doc counts | exact: 13,947 / 28,089 / 33,196 |
+| cache `.stats.json` docs+tokens vs expected | **exact**: 10,282,799 / 20,782,728 / 25,346,090 tokens |
+| manifests (expected==actual, all fields) | ✓ all three |
+| spot retokenization (3 docs) | ✓ — cache stores BOS + text + EOS (`append_bos: true`); span = HF-retok(with BOS) + 1 |
+| eval-loadability (`LmDataConfig.validation_sets`, Pos=4096) | ✓ loads all three; sequences 2,510 / 5,073 / 6,188 == manifest `eval_sequences`; `tagged_eval_sets` yields 3 separately-tagged datasets |
+
+The exact token equality is the strong end-to-end proof: expectations came
+from the original cache's offsets, and independent re-tokenization of the
+filtered text reproduced them bit-for-bit.
+
+Final artifacts (ready for eval):
+
+- `gs://marin-us-east5/tokenized/nemotron_math_val_decon/{j050,j075,j090}/validation/`
+  — Levanter caches, llama3 tokenizer, validation split only.
+- `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/{tag}/manifest.json`
+  + `{tag}/docs/` (filtered text with `id, text, shard, row, doc_index,
+  max_jaccard`) + `keep_ids/` + `build_intent.json` + `filter_stats/`.
+
+Definition reminder: **paranoid short-doc val sets** — val docs fully
+contained in val windows (zero verbatim train spill) ∧ max train Jaccard <
+cutoff (union of 3/4plus/4plus_mind high-recall scans). Short-doc biased by
+construction (≤3,989 tokens/doc, median 642).
+
+Next: eval-only sweep per `.agents/projects/decon_val_eval_plan.md` —
+levanter `eval_lm` with the three caches as tagged validation-only components
+plus the original 12,500-window carve-out as in-harness anchor; load midtrain
+checkpoints from `hf/step-N/` (native checkpoints cleaned; arch is Qwen3);
+`max_eval_length=4096` explicitly (levanter default 2048 is a trap); sanity
+gate = reproduce 1e21's recorded math-val loss before trusting decon numbers.
