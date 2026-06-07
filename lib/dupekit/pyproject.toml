@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "marin-dupekit"
-# Version is read from rust/dupekit/Cargo.toml by maturin so the release
+# Version is read from rust/Cargo.toml by maturin so the release
 # workflow has a single source of truth to bump.
 dynamic = ["version"]
 description = "Optimized code for text de-duplication, written in Rust"
@@ -24,18 +24,20 @@ Issues = "https://github.com/marin-community/marin/issues"
 sdist-include = ["README.md"]
 # Avoid linking libpython, making wheels portable
 features = ["pyo3/extension-module"]
-# Place the compiled _native.so inside the dupekit/ Python package
+# The Rust crate lives in the package's own rust/ subtree (no top-level rust/).
+manifest-path = "rust/Cargo.toml"
+# Place the compiled _native.so inside the dupekit/ Python package under src/.
 module-name = "dupekit._native"
-python-source = "."
+python-source = "src"
 
 [tool.uv]
 # Force rebuild if Rust sources or Cargo manifests change
 cache-keys = [
-    "Cargo.toml",
-    "Cargo.lock",
+    "rust/Cargo.toml",
+    "rust/Cargo.lock",
     "pyproject.toml",
-    "src/**/*.rs",
-    "dupekit/*.pyi"
+    "rust/src/**/*.rs",
+    "src/dupekit/*.pyi"
 ]
 
 [dependency-groups]

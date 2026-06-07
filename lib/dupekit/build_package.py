@@ -24,9 +24,9 @@ Modes:
                 identifiers, so the publish job declines to run in this mode.
 
 Usage:
-    python rust/dupekit/build_package.py --mode nightly --build linux
-    python rust/dupekit/build_package.py --mode stable --version 0.1.7 --build sdist
-    python rust/dupekit/build_package.py --mode manual --build macos
+    python lib/dupekit/build_package.py --mode nightly --build linux
+    python lib/dupekit/build_package.py --mode stable --version 0.1.7 --build sdist
+    python lib/dupekit/build_package.py --mode manual --build macos
 """
 
 import argparse
@@ -46,7 +46,9 @@ from pathlib import Path
 
 DUPEKIT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = DUPEKIT_DIR.parent.parent
-MANIFEST_PATH = DUPEKIT_DIR / "Cargo.toml"
+# maturin reads the wheel version from `[package] version` in this Cargo.toml;
+# the crate lives in the package's own rust/ subtree.
+MANIFEST_PATH = DUPEKIT_DIR / "rust" / "Cargo.toml"
 DIST_DIR = REPO_ROOT / "dist"
 TOOLS_DIR = REPO_ROOT / ".tools"
 
@@ -156,9 +158,14 @@ def _ensure_maturin() -> str:
 
 
 def _maturin(*args: str, env: dict[str, str] | None = None) -> None:
-    """Run maturin from REPO_ROOT, always pinned to dupekit's manifest."""
-    cmd = [_ensure_maturin(), *args, "--manifest-path", str(MANIFEST_PATH)]
-    subprocess.run(cmd, check=True, cwd=REPO_ROOT, env=env)
+    """Run maturin from lib/dupekit so it reads this package's pyproject.toml.
+
+    The `[tool.maturin] manifest-path` in lib/dupekit/pyproject.toml selects the
+    crate under rust/; we deliberately do NOT pass --manifest-path (that would
+    make maturin look for a sibling pyproject next to the crate).
+    """
+    cmd = [_ensure_maturin(), *args]
+    subprocess.run(cmd, check=True, cwd=DUPEKIT_DIR, env=env)
 
 
 _VERSION_RE = re.compile(r'^(version\s*=\s*)"[^"]+"', re.MULTILINE)

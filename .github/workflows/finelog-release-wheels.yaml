@@ -7,7 +7,7 @@ name: "Finelog - Release Wheels"
 #
 # marin-finelog is a native package: the wheel bundles the pure-Python
 # client/deploy/proto AND the native in-process server ext (finelog._native),
-# built by maturin from lib/finelog (manifest-path -> rust/finelog/pyext). So
+# built by maturin from lib/finelog (manifest-path -> rust/pyext). So
 # both trees gate the build.
 on:
   workflow_dispatch:
@@ -28,7 +28,6 @@ on:
   pull_request:
     paths:
       - "lib/finelog/**"
-      - "rust/finelog/**"
       - ".github/workflows/finelog-release-wheels.yaml"
 
 concurrency:
@@ -62,7 +61,7 @@ jobs:
           set -euo pipefail
           # 25h not 24h: small buffer so a cron that drifts a few minutes late
           # still sees yesterday's commits.
-          changes=$(git log --since='25 hours ago' --format=%H -- lib/finelog/ rust/finelog/ .github/workflows/finelog-release-wheels.yaml)
+          changes=$(git log --since='25 hours ago' --format=%H -- lib/finelog/ .github/workflows/finelog-release-wheels.yaml)
           if [[ -z "$changes" ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "::notice::no finelog changes in the last 25h, skipping nightly"

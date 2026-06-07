@@ -1,3 +1,29 @@
+# finelog's own Cargo workspace (no top-level rust/ tree). The root package
+# `finelog` is an implicit member; `pyext` is the PyO3 cdylib that ships in the
+# marin-finelog wheel. dupekit lives in its own workspace under lib/dupekit/rust
+# and shares nothing here.
+[workspace]
+members = ["pyext"]
+resolver = "2"
+
+# Thin LTO + parallel codegen. Within ~1% of fat-LTO runtime, but builds in a
+# fraction of the time: fat LTO + codegen-units=1 is a single-threaded
+# multi-minute link over the whole datafusion/arrow tree. Applies to every
+# workspace member — the finelog-server binary and the finelog/pyext cdylib.
+[profile.release]
+lto = "thin"
+codegen-units = 16
+strip = "symbols"
+
+# Even-faster iteration profile for dev/test deploys (e.g. marin-dev): drops LTO
+# entirely and opt-level to 2 on top of release's parallel codegen. Still
+# optimized enough to be representative. The deploy Dockerfile passes
+# `--build-arg CARGO_PROFILE=fast`.
+[profile.fast]
+inherits = "release"
+lto = false
+opt-level = 2
+
 [package]
 name = "finelog"
 version = "0.1.0"

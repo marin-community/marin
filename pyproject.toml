@@ -182,7 +182,7 @@ ignore = ["F722", "B008", "UP015", "A005", "E741"]
 "__init__.py" = ["E402", "F401"]
 # Bloom filter tests deliberately compare an object with itself to exercise its
 # reflexive comparison operators (==, <=, >=, ...), so PLR0124 is expected here.
-"rust/dupekit/tests/test_bloom.py" = ["PLR0124"]
+"lib/dupekit/tests/test_bloom.py" = ["PLR0124"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["experiments"]
