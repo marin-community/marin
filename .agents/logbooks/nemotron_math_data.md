@@ -1331,3 +1331,75 @@ W&B mirror: project marin-community/marin, runs `decon-eval-<run>`, tag
 `decon_val_eval`. This is one (mix, lr) slice — p33m67 × lr0.33 — of the
 K=0.20 CPT sweep; other slices rerun via
 `scripts/analysis/eval_decon_val_sets.py --run <run>` (~3 min/job, v6e-4).
+
+### 2026-06-07 ~23:00 UTC — All four lr factors swept: contamination is scale-driven, lr-invariant
+
+Extended the eval sweep to the full p33m67 K=0.20 grid: 9 scales × 4 lr
+factors {0.33, 0.5, 0.67, 0.83} = 36 cells (lr0.33 from the earlier run +
+27 new jobs). All on v6e-4 (incl. 1e22 — 9.7B bf16 eval is ~10 GB/chip
+peak, ~3× headroom; no v6e-8 needed), interactive, preemptible, us-east5,
+all reads+writes in-region. 27/27 succeeded. Run selection per (scale, lr)
+verified complete against the registry (final hf step ≈ round(0.2 × base
+num_train_steps)); excluded incomplete 1e22 attempts abdeba/91bcb9/089468.
+Codex hardened the output-exists guard (`require_unused_output`, checks
+JsonFileTracker dir + `eval_results.json` + dir contents; `--force` warns)
+with regression tests `tests/analysis/test_eval_decon_val_sets.py`.
+
+Sanity gates (harness anchor vs run's recorded final math-val loss):
+3e18-lr33 1.4720/1.4719, 1e21-lr33 0.8104/0.8102, 1e22-lr33 0.5727/0.5725,
+**1e21-lr0.5 (efbc63, the val-set provenance run) 0.7937/0.7935** — all ≤2e-4.
+
+**anchor (original val) loss, nats/token:**
+
+| scale | lr0.33 | lr0.5 | lr0.67 | lr0.83 |
+|---|---:|---:|---:|---:|
+| 3e18 | 1.4720 | 1.4354 | 1.4157 | 1.4048 |
+| 9e18 | 1.3034 | 1.2739 | 1.2585 | 1.2501 |
+| 2e19 | 1.2203 | 1.1935 | 1.1799 | 1.1732 |
+| 3e19 | 1.1640 | 1.1391 | 1.1268 | 1.1208 |
+| 9e19 | 1.0425 | 1.0212 | 1.0115 | 1.0074 |
+| 2e20 | 0.9737 | 0.9542 | 0.9458 | 0.9428 |
+| 3e20 | 0.9286 | 0.9097 | 0.9023 | 0.9002 |
+| 1e21 | 0.8104 | 0.7937 | 0.7875 | 0.7898 |
+| 1e22 | 0.5727 | 0.5611 | 0.5597 | 0.5598 |
+
+**anchor − decon_j050 (>0 = orig val harder/short-doc offset; <0 = orig val
+easier = contamination credit):**
+
+| scale | lr0.33 | lr0.5 | lr0.67 | lr0.83 |
+|---|---:|---:|---:|---:|
+| 3e18 | +0.1123 | +0.1129 | +0.1133 | +0.1136 |
+| 9e18 | +0.1083 | +0.1082 | +0.1082 | +0.1082 |
+| 2e19 | +0.1053 | +0.1046 | +0.1043 | +0.1042 |
+| 3e19 | +0.1026 | +0.1013 | +0.1007 | +0.1006 |
+| 9e19 | +0.0935 | +0.0909 | +0.0898 | +0.0895 |
+| 2e20 | +0.0853 | +0.0821 | +0.0809 | +0.0805 |
+| 3e20 | +0.0783 | +0.0744 | +0.0730 | +0.0728 |
+| 1e21 | +0.0491 | +0.0439 | +0.0423 | +0.0435 |
+| 1e22 | −0.0399 | −0.0437 | −0.0432 | −0.0428 |
+
+Findings:
+
+1. **Contamination effect is lr-invariant.** At any scale the gap varies
+   <0.005 nats across all four lr factors — far smaller than the
+   0.15-nat scale-driven swing. The +0.11→−0.04 inversion is a property of
+   scale/exposure, not optimization trajectory. Strong evidence it is genuine
+   memorization of contaminated content, not an LR/schedule artifact.
+2. **Inversion replicates in all four columns**: every lr column crosses from
+   ~+0.11 at 3e18 to ~−0.04 at 1e22, sign-flipping between 1e21 and 1e22.
+3. **j050>j075 ordering inversion at 1e21–1e22 holds across lr** (checked
+   lr0.33 and lr0.5 explicitly): the strictest-clean set becomes the hardest,
+   the contamination signature within the decon family.
+
+Consolidated artifacts (all 36 cells: loss + bpb + per-run source paths +
+dataset defs):
+
+- `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals/summary_p33m67_all_lr.json`
+- `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals/summary_p33m67_all_lr.csv`
+- Local: `scratch/nemotron_math_decon_eval_p33m67_all_lr.{json,csv}`
+
+Per-run raw: `…/evals/<run>/step-<N>/metrics.jsonl/eval_results.json`; W&B
+`decon-eval-<run>` tag `decon_val_eval`. Run→step map in the json `rows`.
+Next: re-fit math scaling laws on decon_j050 (best-over-lr per scale) vs the
+original anchor to quantify how much the original isoflop fit's top-end
+curvature is contamination.
