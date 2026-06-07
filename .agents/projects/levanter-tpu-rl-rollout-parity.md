@@ -82,6 +82,12 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   measured decode device path. Follow-up commit `f7275e5a` on #6185 removes one
   concrete host overhead source by logging bounded request metadata instead of
   serializing full `prompt_tokens` lists for every submitted long-prompt request.
+  Follow-up commit `f55913d1` on #6185 adds a finer attribution split:
+  `prefill_drain_seconds_per_iteration`,
+  `prefill_drain_tokens_per_iteration`, `generation_seconds_per_iteration`,
+  `generation_host_seconds_per_iteration`, `generation_tokens_per_iteration`,
+  and derived `generation_tokens_per_second`, so future rows no longer have to
+  treat prefill-drain-heavy iterations as pure generation-loop throughput.
 - A narrow Levanter-only v6e-8 diagnostic follow-up completed, but it exposed a
   benchmark harness artifact rather than a clean attribution split. The normal
   diagnostic row measured `907.43` decode tok/s, `15426.28` total tok/s, and a
@@ -117,7 +123,7 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   `104bf901e33c5f0b34d32d4f59edf27b82f66714`.
 - Multi-prefill serving fix: #6185,
   `https://github.com/marin-community/marin/pull/6185`, current head
-  `f7275e5a48eca152dd3c9eb67a62a6c9f0698644`.
+  `f55913d1a9770b7ebdfb051150972e649644526e`.
 - RL rollout tracking epic: #6227,
   `https://github.com/marin-community/marin/issues/6227`, with child issues
   #6228 for dense v6e parity, #6229 for the v6e prefill-heavy gap, #6230 for
@@ -244,7 +250,7 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   follow-up after the serving and benchmark PRs merge.
 - Merge state verified by lightweight GitHub metadata after the app restart on
   2026-06-06: #6176 is open, non-draft, mergeable, and at head `104bf901`;
-  #6185 is open, non-draft, mergeable, and at head `f7275e5a`; #6186 is open,
+  #6185 is open, non-draft, mergeable, and at head `f55913d1`; #6186 is open,
   non-draft, mergeable, and at head `c4ba37b`; #6214 is open, draft, and at
   head `0364f79da`; #6240 is open, draft, mergeable, and at head `2bf3c036c`.
   All visible checks are green or skipped on these heads. The
@@ -260,16 +266,18 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - Issue #6184 tracks engine-level multi-prefill admission for long-prompt TPU
   serving.
 - PR #6185 implements the long-prompt correctness and mixed-workload performance
-  fix. The current branch head, `f7275e5a`, combines engine-level
+  fix. The current branch head, `f55913d1`, combines engine-level
   multi-prefill admission, OpenAI service relaxation for aggregate prompt-token
   budgets, benchmark admission/timing metrics, prefill-drain scheduling before
   decode, corrected diagnostic prefill-drain behavior, decode-submit attribution
-  cleanup, pure decode iteration/device throughput reporting, better vLLM
-  startup failure reporting for v5p postmortems, and bounded inference request
-  logging that no longer serializes full long-prompt token lists. Local
-  validation for the latest focused patch passed: inference-server pytest
-  (`19 passed, 1 skipped`), focused `./infra/pre-commit.py --files ... --fix`,
-  and the commit hook including Pyrefly.
+  cleanup, decode iteration/device throughput reporting, prefill-drain versus
+  generation-loop attribution fields, better vLLM startup failure reporting for
+  v5p postmortems, and bounded inference request logging that no longer
+  serializes full long-prompt token lists. Local validation for the latest
+  focused patch passed: `test_engine.py` plus
+  `test_qwen3_tpu_inference_parity_bench.py` (`63 passed`), focused
+  `./infra/pre-commit.py --files ... --fix`, and the commit hook including
+  Pyrefly.
 - PR #6185 final v6e-8 proof is
   `/dlwh/qwen3-mixed-v6e8-prefilldrain-i512-o512-20260606-0428`. The job
   succeeded with no failures or preemptions for `mixed_b32_i512_o512_n1`,
@@ -333,7 +341,7 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - PR #6185 benchmark attribution follow-up: commit `6d74fc7ea` adds
   `decode_iteration_tokens_per_second` and `decode_device_tokens_per_second` to
   future `summary.json` rows and markdown tables. This preserves the existing
-  end-to-end decode ratio while giving reviewers a direct pure decode-loop and
+  end-to-end decode ratio while giving reviewers a direct iteration and
   device-throughput signal for prefill-heavy rows.
 - PR #6185 corrected backend=both prefill-heavy rerun:
   `/dlwh/qwen3-v6e8-prefillcorr-20260607-0023`. The job succeeded for
@@ -361,13 +369,24 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   `uv run --package marin-levanter --group test pytest lib/levanter/tests/inference/test_inference_server.py -q`
   (`19 passed, 1 skipped`) and
   `./infra/pre-commit.py --files lib/levanter/src/levanter/inference/openai.py lib/levanter/tests/inference/test_inference_server.py --fix`.
+- PR #6185 prefill-drain/generation attribution follow-up: commit `f55913d1`,
+  `Split prefill drain timing from generation`, adds
+  `prefill_drain_seconds_per_iteration`,
+  `prefill_drain_tokens_per_iteration`, `generation_seconds_per_iteration`,
+  `generation_host_seconds_per_iteration`, `generation_tokens_per_iteration`,
+  and derived `generation_tokens_per_second` to the Levanter benchmark metrics.
+  Use these fields for future #6229 rows because the older
+  `decode_iteration_*` fields can include pending prefill admissions in
+  prefill-heavy cases. Validation passed:
+  `uv run --package marin-levanter --group test pytest lib/levanter/tests/inference/test_engine.py lib/levanter/tests/test_qwen3_tpu_inference_parity_bench.py -q`
+  (`63 passed`) and focused pre-commit/Pyrefly on the touched files.
 - PR #6185 v5p startup postmortem follow-up: commit `91f6ec06a` makes
   `start_vllm_server()` poll readiness while checking whether the subprocess has
   already exited, then includes bounded stderr/stdout tails in the startup
   `RuntimeError`. This does not fix vLLM-on-v5p startup itself, but it should
   turn the next terminal backend failure into an actionable log-bearing failure.
-- PR #6185 current CI state after commit `f7275e5a`: the PR is non-draft and
-  mergeable. GitHub checks restarted after the bounded request-log patch; at
+- PR #6185 current CI state after commit `f55913d1`: the PR is non-draft and
+  mergeable. GitHub checks restarted after the timing-split patch; at
   the latest lightweight metadata check, early unit/change lanes were queued or
   running with no visible failed checks.
   check. #6214 at `16338c3c9` also has all visible checks green and remains
@@ -546,14 +565,16 @@ thread. Keep background-style work narrow and explicit until the app is stable:
      Levanter benchmark result. No follow-up decode-heavy v5p row has been
      launched.
 5. Use the corrected benchmark attribution before changing kernels. Commit
-   `6d74fc7ea` now reports pure decode iteration and device throughput for
-   future rows. The corrected backend=both rerun
+   `6d74fc7ea` reports decode iteration and device throughput for future rows,
+   and commit `f55913d1` further separates prefill-drain work from
+   generation-loop time/tokens. The corrected backend=both rerun
    `/dlwh/qwen3-v6e8-prefillcorr-20260607-0023` shows the measured Levanter row
-   still fails end-to-end at `0.742` of vLLM, but its pure decode iteration is
-   `1200.223` tok/s against vLLM's `1212.15` decode tok/s, and device throughput
-   is `1509.350` tok/s. Treat the next optimization target as end-to-end
-   prefill/host wall-clock overhead unless a future row contradicts this.
-6. If rerunning the v5p mixed comparison, use #6185 head `f7275e5a` or newer so
+   still fails end-to-end at `0.742` of vLLM, but its iteration throughput is
+   `1200.223` tok/s against vLLM's `1212.15` decode tok/s, and device wait
+   throughput is `1509.350` tok/s. Treat the next optimization target as
+   end-to-end prefill/host wall-clock overhead unless a future row with the
+   `f55913d1` generation-only split contradicts this.
+6. If rerunning the v5p mixed comparison, use #6185 head `f55913d1` or newer so
    a repeated vLLM startup failure includes the actual stderr/stdout tail. Prefer
    #6240 if available, because it additionally preserves bounded runtime/package
    metadata and selected TPU/XLA/vLLM environment keys for diagnosis. Do not
@@ -870,7 +891,7 @@ implementation slice should be:
      `decode_iteration_tokens_per_second`, and `1509.350`
      `decode_device_tokens_per_second`.
    - This keeps #6229 open as a performance target, but it changes the likely
-     bottleneck: pure decode iteration is close to the vLLM row, while the
+     bottleneck: iteration/device timing is close to the vLLM row, while the
      end-to-end row still loses on prefill-heavy wall-clock accounting.
    - Corrected prefill-heavy diagnostic
      `/dlwh/qwen3-v6e8-prefilldiag-drain-prefill-b8-i2048-o128-n1-20260606-1532`
@@ -888,10 +909,10 @@ implementation slice should be:
    - Follow-up code inspection found the production submit timer included
      prefill-drain work. Commit `6d74fc7ea` adds
      `decode_iteration_tokens_per_second` and `decode_device_tokens_per_second`
-     to future benchmark outputs so the next prefill-heavy rows can separate
-     end-to-end row throughput from pure decode-loop and device throughput.
-   - Later commits moved #6185 past `6d74fc7ea`; do not use this as the current
-     PR state.
+     to future benchmark outputs, and commit `f55913d1` adds
+     `prefill_drain_*` and `generation_*` fields so the next prefill-heavy rows
+     can separate end-to-end row throughput, pending-prefill drain, generation
+     loop, and device wait.
 
 16. #6185 v5p startup failure reporting:
    - Iris summary/log recovery for
@@ -910,7 +931,7 @@ implementation slice should be:
      lib/levanter/tests/test_qwen3_tpu_inference_parity_bench.py -q` with 51
      passed, focused pre-commit on the changed files, and the commit hook
      including Pyrefly.
-   - #6185 current head is `f7275e5a`. Use this or newer for any v5p rerun.
+   - #6185 current head is `f55913d1`. Use this or newer for any v5p rerun.
 
 17. #6240 v5p startup runtime diagnostics:
    - Draft PR #6240, branch `codex/v5p-vllm-startup-diagnostics`, stacks on
