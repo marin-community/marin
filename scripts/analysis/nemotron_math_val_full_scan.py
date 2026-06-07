@@ -116,6 +116,10 @@ def _emit_candidate_pairs(_key: str, items: Iterator[dict]) -> Iterator[dict]:
             yield {"val_id": val_id, "other_id": other}
 
 
+def _first_item(_key: str, items: Iterator[dict]) -> Iterator[dict]:
+    yield next(iter(items))
+
+
 def _shingles(text: str, n: int = 5) -> set[str]:
     cleaned = _WS.sub(" ", text.lower()).strip()
     return {cleaned[i : i + n] for i in range(max(1, len(cleaned) - n + 1))}
@@ -257,7 +261,7 @@ def main() -> None:
     dedup_ctx.execute(
         Dataset.from_files(f"{pairs_dir}/*.parquet")
         .load_parquet()
-        .group_by(lambda r: f"{r['val_id']}|{r['other_id']}", reducer=lambda _k, items: [next(iter(items))])
+        .group_by(lambda r: f"{r['val_id']}|{r['other_id']}", reducer=_first_item)
         .write_parquet(f"{dedup_dir}/pairs-{{shard:05d}}-of-{{total:05d}}.parquet")
     )
     pairs_dir = dedup_dir
