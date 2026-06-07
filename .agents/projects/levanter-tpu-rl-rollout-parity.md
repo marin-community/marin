@@ -251,14 +251,14 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - RL token data plane: substantially implemented in #6186 and green on the PR
   head, but still stack-dependent and not landed. Runtime integration remains a
   follow-up after the serving and benchmark PRs merge.
-- Merge state verified by lightweight GitHub metadata after the crash recovery
-  on 2026-06-07: #6176 is open, non-draft, mergeable, and at head
+- Merge state verified by lightweight GitHub metadata after the latest handoff
+  refresh on 2026-06-07: #6176 is open, non-draft, mergeable, and at head
   `104bf901`; #6185 is open, non-draft, mergeable, and at head `f55913d1`;
   #6186 is open, non-draft, mergeable, and at head `c4ba37b`; #6214 is open,
-  draft, mergeable, and at head `cac28f46b`; #6240 is open, draft, mergeable,
-  and at head `2bf3c036c`. All visible checks are green or skipped on these
-  heads. The goal is not complete until the required code paths and benchmark
-  artifacts are landed or otherwise accepted by maintainers.
+  draft, mergeable, and terminal green/skipped at head `0182e9334`; #6240 is
+  open, draft, mergeable, and at head `2bf3c036c`. All visible checks are green
+  or skipped on these heads. The goal is not complete until the required code
+  paths and benchmark artifacts are landed or otherwise accepted by maintainers.
 
 ## Active Work
 
@@ -392,7 +392,7 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - PR #6185 current CI state after commit `f55913d1`: the PR is non-draft,
   mergeable, and all visible checks are green after one failed-job rerun for the
   known external Hugging Face/cache-miss class in `levanter-torch`. Do not rerun
-  that workflow again automatically. #6214 at `cac28f46b` also has all visible
+  that workflow again automatically. #6214 at `0182e9334` also has all visible
   checks green or skipped and remains draft as a handoff artifact.
 - Issue #6184 has the final proof comment:
   `https://github.com/marin-community/marin/issues/6184#issuecomment-4637412411`.
