@@ -101,7 +101,8 @@ NEMOTRON_TOOL_TRACE_SAMPLE = {
         {"role": "assistant", "content": "\\boxed{4}", "reasoning_content": ""},
     ],
     "tools": [{"type": "function", "function": {"name": "python", "parameters": {}}}],
-    "tool_usage": "with Python TIR",
+    "subset": "tir",
+    "dataset": "Nemotron-SFT-Math-v4",
     "license": "cc-by-4.0",
 }
 
@@ -300,10 +301,10 @@ class TestTransformRow:
             metadata_remap={"tools": "tools"},
         )
         cfg = TransformSFTDatasetConfig(
-            source="nvidia/Nemotron-SFT-Math-v3",
-            revision="ff4439c",
+            source="nvidia/Nemotron-SFT-Math-v4",
+            revision="a94e56a",
             output_path="/tmp/output",
-            metadata_columns=["tool_usage", "license"],
+            metadata_columns=["subset", "dataset", "license"],
             adapter=adapter,
         )
 
@@ -312,21 +313,33 @@ class TestTransformRow:
         assert result is not None
         dumped = result.model_dump()
         assert dumped["tools"] == NEMOTRON_TOOL_TRACE_SAMPLE["tools"]
-        assert result.metadata == {"tool_usage": "with Python TIR", "license": "cc-by-4.0"}
+        assert result.metadata == {
+            "subset": "tir",
+            "dataset": "Nemotron-SFT-Math-v4",
+            "license": "cc-by-4.0",
+        }
         assert dumped["messages"][1]["reasoning_content"] == "I should compute the sum."
         assert dumped["messages"][1]["tool_calls"][0]["function"]["arguments"] == {"code": "2 + 2"}
         assert dumped["messages"][2]["role"] == "tool"
         assert dumped["messages"][2]["tool_call_id"] == "call_python"
 
-    def test_row_filters_support_tool_usage_and_presence_checks(self):
+    def test_row_filters_support_subset_and_presence_checks(self):
         """Test row filters used for dataset views."""
         assert row_matches_filters(
             NEMOTRON_TOOL_TRACE_SAMPLE,
-            [RowFilter("tool_usage", RowFilterOperator.EQUALS, "with Python TIR")],
+            [RowFilter("subset", RowFilterOperator.EQUALS, "tir")],
         )
         assert not row_matches_filters(
             NEMOTRON_TOOL_TRACE_SAMPLE,
-            [RowFilter("tool_usage", RowFilterOperator.EQUALS, "without Python TIR")],
+            [RowFilter("subset", RowFilterOperator.EQUALS, "cot")],
+        )
+        assert row_matches_filters(
+            NEMOTRON_TOOL_TRACE_SAMPLE,
+            [RowFilter("subset", RowFilterOperator.NOT_EQUALS, "cot")],
+        )
+        assert not row_matches_filters(
+            NEMOTRON_TOOL_TRACE_SAMPLE,
+            [RowFilter("subset", RowFilterOperator.NOT_EQUALS, "tir")],
         )
         assert row_matches_filters(NEMOTRON_TOOL_TRACE_SAMPLE, [RowFilter("tools", RowFilterOperator.NON_EMPTY)])
         assert row_matches_filters({"tools": []}, [RowFilter("tools", RowFilterOperator.EMPTY)])
@@ -336,6 +349,7 @@ class TestTransformRow:
 
         assert limits == [17, 17, 17, 17, 16, 16]
         assert sum(limit for limit in limits if limit is not None) == 100
+        assert shard_example_limit(0, 6, 0) == 0
         assert shard_example_limit(None, 6, 0) is None
 
 

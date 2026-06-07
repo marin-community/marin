@@ -282,20 +282,31 @@ FINEPROOFS_SFT_METADATA_COLUMNS = [
     "source",
 ]
 
-NEMOTRON_SFT_MATH_V3_HF_ID = "nvidia/Nemotron-SFT-Math-v3"
-NEMOTRON_SFT_MATH_V3_REVISION = "ff4439c1073c87e006ab7ee5f1e5e28c4790dab3"
-NEMOTRON_SFT_MATH_V3_METADATA_COLUMNS = [
+NEMOTRON_SFT_MATH_V4_HF_ID = "nvidia/Nemotron-SFT-Math-v4"
+NEMOTRON_SFT_MATH_V4_REVISION = "a94e56aeddcf6e75d28c8bd210f40fa62309288d"
+NEMOTRON_SFT_MATH_V4_METADATA_COLUMNS = [
     "uuid",
     "expected_answer",
     "problem",
-    "changed_answer_to_majority",
-    "data_source",
     "used_in",
+    "metadata",
+    "source",
+    "dataset",
+    "subset",
     "license",
-    "url",
-    "user_name",
-    "user_url",
-    "tool_usage",
+]
+
+NEMOTRON_MATH_PROOFS_V2_HF_ID = "nvidia/Nemotron-Math-Proofs-v2"
+NEMOTRON_MATH_PROOFS_V2_REVISION = "d857c6b46a63ad97cfbd7b4254e2edf53e9d1666"
+NEMOTRON_MATH_PROOFS_V2_METADATA_COLUMNS = [
+    "uuid",
+    "problem",
+    "used_in",
+    "metadata",
+    "source",
+    "dataset",
+    "subset",
+    "license",
 ]
 
 NEMOTRON_MATH_V2_HF_ID = "nvidia/Nemotron-Math-v2"
@@ -650,21 +661,41 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
     ),
 }
 
-for view_name, tool_usage, max_examples_per_split in [
-    ("no-tool-pilot", "without Python TIR", 100_000),
-    ("python-tir-pilot", "with Python TIR", 100_000),
-    ("no-tool", "without Python TIR", None),
-    ("python-tir", "with Python TIR", None),
+for view_name, subset, max_examples_per_split in [
+    ("cot-pilot", "cot", 100_000),
+    ("tir-pilot", "tir", 100_000),
+    ("cot", "cot", None),
+    ("tir", "tir", None),
 ]:
-    dataset_key = f"{NEMOTRON_SFT_MATH_V3_HF_ID}/{view_name}"
+    dataset_key = f"{NEMOTRON_SFT_MATH_V4_HF_ID}/{view_name}"
     INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_key] = InstructionDatasetConfig(
         name=dataset_key,
-        hf_dataset_id=NEMOTRON_SFT_MATH_V3_HF_ID,
-        revision=NEMOTRON_SFT_MATH_V3_REVISION,
+        hf_dataset_id=NEMOTRON_SFT_MATH_V4_HF_ID,
+        revision=NEMOTRON_SFT_MATH_V4_REVISION,
         adapter=structured_multi_turn_adapter(metadata_remap={"tools": "tools"}),
-        metadata_columns=NEMOTRON_SFT_MATH_V3_METADATA_COLUMNS,
+        metadata_columns=NEMOTRON_SFT_MATH_V4_METADATA_COLUMNS,
         splits=["train"],
-        row_filters=[RowFilter("tool_usage", RowFilterOperator.EQUALS, tool_usage)],
+        row_filters=[RowFilter("subset", RowFilterOperator.EQUALS, subset)],
+        max_examples_per_split=max_examples_per_split,
+    )
+
+for view_name, subset, max_examples_per_split in [
+    ("proof-pilot", "proof", 2_000),
+    ("verification-pilot", "verification", 2_000),
+    ("meta-verification-pilot", "meta-verification", 2_000),
+    ("proof", "proof", None),
+    ("verification", "verification", None),
+    ("meta-verification", "meta-verification", None),
+]:
+    dataset_key = f"{NEMOTRON_MATH_PROOFS_V2_HF_ID}/{view_name}"
+    INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_key] = InstructionDatasetConfig(
+        name=dataset_key,
+        hf_dataset_id=NEMOTRON_MATH_PROOFS_V2_HF_ID,
+        revision=NEMOTRON_MATH_PROOFS_V2_REVISION,
+        adapter=structured_multi_turn_adapter(metadata_remap={"tools": "tools"}),
+        metadata_columns=NEMOTRON_MATH_PROOFS_V2_METADATA_COLUMNS,
+        splits=["train"],
+        row_filters=[RowFilter("subset", RowFilterOperator.EQUALS, subset)],
         max_examples_per_split=max_examples_per_split,
     )
 
