@@ -27,7 +27,7 @@ from jax._src import config as jax_config
 from jax.sharding import use_abstract_mesh
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
-from levanter.data.text import DirectDatasetComponent, LmDataConfig
+from levanter.data.text import DatasetComponent, DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
@@ -115,6 +115,22 @@ def test_grug_moe_layer_masks_preserve_thd_segment_metadata():
     assert long_mask.thd_segment_metadata is mask.thd_segment_metadata
     assert short_mask.segment_ids is mask.segment_ids
     assert long_mask.segment_ids is mask.segment_ids
+
+
+def test_coreweave_thd_canary_uses_fixed_shape_training_segments(monkeypatch):
+    monkeypatch.setenv("CANARY_ACCELERATOR", "gpu")
+    monkeypatch.setenv("CANARY_ATTENTION_IMPLEMENTATION", "gpu_fa4_thd")
+    monkeypatch.setenv("CANARY_TRACKER", "json_logger")
+    monkeypatch.setenv("RUN_ID", "test-thd")
+
+    canary_ferry = importlib.import_module("experiments.ferries.canary_ferry")
+    canary_ferry = importlib.reload(canary_ferry)
+    data = canary_ferry.canary_moe_step.config.data
+
+    components = list(data.components.values())
+    assert components
+    assert all(isinstance(component, DatasetComponent) for component in components)
+    assert {component.pack for component in components} == {1}
 
 
 @pytest.mark.parametrize(

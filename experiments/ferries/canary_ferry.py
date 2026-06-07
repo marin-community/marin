@@ -31,7 +31,7 @@ from typing import cast
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
-from levanter.data.text import BlockShuffleConfig, TextLmDatasetFormat
+from levanter.data.text import BlockShuffleConfig, DatasetComponent, TextLmDatasetFormat
 from levanter.grug.attention import GrugAttentionImplementation
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -149,6 +149,16 @@ def _build_step_from_env() -> ExecutorStep:
             training_set=tokenize_step,
             shuffle=BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel"),
         )
+        if attention_implementation == "gpu_fa4_thd":
+            data = dataclasses.replace(
+                data,
+                components={
+                    name: (
+                        dataclasses.replace(component, pack=1) if isinstance(component, DatasetComponent) else component
+                    )
+                    for name, component in data.components.items()
+                },
+            )
         resources = ResourceConfig.with_gpu(
             gpu_type,
             count=gpu_count,
