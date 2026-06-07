@@ -25,7 +25,8 @@
 
 import os
 from enum import Enum
-from typing import Any, BinaryIO, Iterable, Optional, Union, final
+from typing import Any, BinaryIO, Optional, Union, final
+from collections.abc import Iterable
 
 import pyarrow as pa
 
