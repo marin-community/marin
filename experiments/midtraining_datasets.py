@@ -13,7 +13,7 @@ from marin.transform.medical.lavita_to_dolma import LavitaToDolmaConfig, convert
 
 from experiments.common_pile.tokenize_common_pile import stackv2_edu_filtered
 from experiments.llama import llama3_tokenizer
-from experiments.tokenize_helpers import default_download, default_tokenize
+from experiments.tokenization import default_download, default_tokenize
 
 finemath_commit_hash = "8f233cf"
 finemath = ExecutorStep(

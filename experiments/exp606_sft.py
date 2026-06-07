@@ -14,7 +14,7 @@ from marin.processing.tokenize import lm_data_config
 from experiments.llama import llama3_instruct_chat_format, llama3_instruct_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.simple_sft_config import SimpleSFTConfig
-from experiments.tokenize_helpers import default_tokenize
+from experiments.tokenization import default_tokenize
 
 # Get instruction dataset
 tulu_3_dataset = get_instruction_dataset("allenai/tulu-3-sft-mixture")

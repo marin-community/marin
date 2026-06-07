@@ -8,7 +8,7 @@ from experiments.llama import llama3_tokenizer
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from experiments.pretraining_datasets import tokenize_dolma
 from experiments.pretraining_datasets.simple import tokenized
-from experiments.tokenize_helpers import default_tokenize
+from experiments.tokenization import default_tokenize
 
 dolma_components = tokenize_dolma()
 

@@ -28,7 +28,7 @@ from experiments.evals.hf_log_probs import default_hf_lm_log_probs
 from experiments.llama import llama3_tokenizer
 from experiments.models import ModelConfig as HFModelConfig
 from experiments.models import download_model_step
-from experiments.tokenize_helpers import default_tokenize
+from experiments.tokenization import default_tokenize
 
 logger = logging.getLogger(__name__)
 

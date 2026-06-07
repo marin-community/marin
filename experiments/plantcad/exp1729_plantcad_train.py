@@ -16,7 +16,7 @@ from marin.execution.types import versioned
 
 from experiments.defaults import default_train
 from experiments.simple_train_config import SimpleTrainConfig
-from experiments.tokenize_helpers import default_tokenize
+from experiments.tokenization import default_tokenize
 
 logger = logging.getLogger(__name__)
 

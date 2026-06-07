@@ -51,7 +51,7 @@ The tokenized dataset is a directory containing one file per shard of the datase
 ```python
 from levanter.data.text import TextLmDatasetFormat
 from marin.execution.executor import versioned
-from experiments.tokenize_helpers import default_tokenize
+from experiments.tokenization import default_tokenize
 from experiments.marin_models import marin_tokenizer
 
 tinystories_tokenized = default_tokenize(

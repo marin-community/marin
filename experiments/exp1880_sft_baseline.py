@@ -31,7 +31,7 @@ from experiments.posttrain.instruction_datasets import (
     get_instruction_dataset,
 )
 from experiments.simple_sft_config import SimpleSFTConfig
-from experiments.tokenize_helpers import default_tokenize
+from experiments.tokenization import default_tokenize
 
 SLUGIFY_PATTERN = re.compile(r"[^a-z0-9]+")
 

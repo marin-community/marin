@@ -33,7 +33,7 @@ favour of `isinstance(x, haliax.nn.ArrayStacked)` attribute access, because
 | I1 | `iris/cluster/config.py:1144` | config↔providers.local.cluster | move `connect_cluster` → `cluster/lifecycle.py` | 1 | S | Low |
 | M1 | `marin/profiling/ingest.py:270` | ingest↔xplane | extract `profiling/trace_summary.py` engine | 1 | M | Med |
 | M2 | `marin/training/training.py:204,205` | (transitive zephyr) | hoist — already importable | 2 | S | Low |
-| E1 | `experiments/defaults.py` (4 sites) | defaults↔paloma/exp1600 | extract `experiments/tokenize_helpers.py` | 4 | M | Low (33 call sites) |
+| E1 | `experiments/defaults.py` (4 sites) | defaults↔paloma/exp1600 | extract `experiments/tokenization.py` | 4 | M | Low (33 call sites) |
 
 `*` L5 leaves one legitimately-deferred kernel import on a cold path unless the
 flash fallback is repointed (higher-risk numerics change).
@@ -112,7 +112,7 @@ Each is a self-contained refactor worth its own focused review.
   recursion is partly irreducible: either keep one cold-path local import, or
   repoint the flash VANILLA fallback to a lower primitive (numerics review).
 - **E1 `experiments/defaults.py`** — extract `default_tokenize` (+
-  `default_download`, HF-bucket helpers) into `experiments/tokenize_helpers.py`.
+  `default_download`, HF-bucket helpers) into `experiments/tokenization.py`.
   `paloma`/`exp1600` import the primitive downward; `defaults` then imports them
   top-level. ~33 files re-point their `default_tokenize` import (mechanical).
 
@@ -138,7 +138,7 @@ were eliminated structurally. Highlights:
   reorder with `# isort: skip`), levanter `tracker_fns` (package→leaf import).
 - **New leaf modules:** `zephyr/{shard_keys,worker_context,stage_io}.py`,
   `levanter/layers/attention_mask.py`, `marin/profiling/trace_summary.py`,
-  `experiments/tokenize_helpers.py`, `iris/cluster/lifecycle.py`.
+  `experiments/tokenization.py`, `iris/cluster/lifecycle.py`.
 - **Code motion:** levanter `permutation`→`dataset` (file deleted),
   `_TransformedDataset`→`_preprocessor`; marin `training` imports hoisted;
   experiments `default_tokenize` extracted (32 call sites repointed).

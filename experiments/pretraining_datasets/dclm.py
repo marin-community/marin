@@ -9,7 +9,7 @@ from marin.processing.tokenize import lm_mixture_data_config
 
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets.simple import downloads, tokenized
-from experiments.tokenize_helpers import default_tokenize
+from experiments.tokenization import default_tokenize
 
 DCLM_MIXTURE_WEIGHTS = {
     # token counts are for neox tokenizer

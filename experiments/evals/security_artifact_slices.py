@@ -31,7 +31,7 @@ from marin.transform.security_artifacts.zeek_to_dolma import (
     convert_zeek_to_dolma,
 )
 
-from experiments.tokenize_helpers import default_download
+from experiments.tokenization import default_download
 
 # Canonical Zeek conn.log field order as documented at
 # https://docs.zeek.org/en/master/logs/conn.html. Kept as a tuple so it can be

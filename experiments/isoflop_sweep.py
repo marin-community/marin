@@ -26,7 +26,7 @@ from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets.simple import downloads
 from experiments.scaling_law_sweeps import c_adamc as c_adamc_heuristic
 from experiments.scaling_law_sweeps import completed_adamh as completed_adamh_heuristic
-from experiments.tokenize_helpers import default_tokenize
+from experiments.tokenization import default_tokenize
 from experiments.tootsie.exp1295_32b import nemotron_mix
 
 logger = logging.getLogger(__name__)

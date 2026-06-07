@@ -45,7 +45,7 @@ from experiments.grug.moe.launch import (
 )
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.llama import llama3_tokenizer
-from experiments.tokenize_helpers import default_tokenize
+from experiments.tokenization import default_tokenize
 
 CANARY_OPTIMIZER = AdamConfig(
     learning_rate=3e-3,

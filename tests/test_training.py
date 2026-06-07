@@ -29,7 +29,7 @@ from marin.training.training import (
 from experiments.defaults import default_dpo
 from experiments.llama import llama_8b
 from experiments.simple_dpo_config import SimpleDPOConfig
-from experiments.tokenize_helpers import default_tokenize
+from experiments.tokenization import default_tokenize
 
 
 @pytest.fixture

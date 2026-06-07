@@ -12,7 +12,7 @@ from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.llama import LlamaConfig
 from experiments.pretraining_datasets.dclm import DCLM_BASELINE_ONLY_MIXTURE, DCLM_MIXTURE_WEIGHTS
 from experiments.pretraining_datasets.simple import downloads
-from experiments.tokenize_helpers import default_tokenize
+from experiments.tokenization import default_tokenize
 
 gpt_neox_tokenizer = "EleutherAI/gpt-neox-20b"
 

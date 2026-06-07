@@ -17,7 +17,7 @@ from experiments.marin_models import marin_tokenizer
 from experiments.models import llama_3_1_8b
 from experiments.posttrain.preference_datasets import get_preference_dataset
 from experiments.simple_dpo_config import SimpleDPOConfig
-from experiments.tokenize_helpers import default_tokenize
+from experiments.tokenization import default_tokenize
 
 DATASET_NAME = "HuggingFaceH4/ultrafeedback_binarized"
 

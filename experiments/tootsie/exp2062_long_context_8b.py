@@ -40,7 +40,7 @@ from experiments.marin_models import marin_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS
 from experiments.simple_train_config import SimpleTrainConfig
-from experiments.tokenize_helpers import default_tokenize
+from experiments.tokenization import default_tokenize
 from experiments.tootsie.exp600_tootsie import (
     PHASE_3_START,
     PHASE_4_END,

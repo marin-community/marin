@@ -26,7 +26,7 @@ from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import tokenize_nemotron
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.pretraining_datasets.dolmino import tokenize_dolmino, tokenize_dolmino_math
-from experiments.tokenize_helpers import default_tokenize
+from experiments.tokenization import default_tokenize
 
 # Stack Exchange resiliparse custom fork (inlined from deleted exp822)
 stackexchange_text_resiliparse_custom_fork = ExecutorStep(
