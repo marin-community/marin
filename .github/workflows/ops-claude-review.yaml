@@ -14,6 +14,9 @@ concurrency:
 
 jobs:
   review:
+    # Trigger gate — keep identical to the `lint-review` job below: both must run
+    # on the same events for the same authors (non-draft PRs by writers, or a
+    # "claude review this" comment by a writer). Edit the two together.
     if: >-
       (
         github.event_name == 'pull_request' &&
@@ -68,6 +71,8 @@ jobs:
   # and complementary to the high-level correctness review above, which
   # deliberately skips lint-catchable issues.
   lint-review:
+    # Trigger gate — identical by design to the `review` job's gate above (same
+    # author-association + trigger policy). Keep the two in sync.
     if: >-
       (
         github.event_name == 'pull_request' &&
