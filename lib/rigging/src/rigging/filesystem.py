@@ -448,12 +448,22 @@ class TransferBudgetExceeded(Exception):
         self.attempted = attempted
         self.limit = limit
         self.path = path
-        super().__init__(
-            f"Cross-region transfer budget exceeded: {path} "
-            f"({attempted / (1024**2):.1f}MB) would bring total to "
-            f"{(bytes_used + attempted) / (1024**3):.2f}GB, "
-            f"exceeding the {limit / (1024**3):.0f}GB limit "
-            f"(already transferred {bytes_used / (1024**3):.2f}GB). "
+        # Pass the constructor arguments — not the rendered message — to
+        # BaseException. The default exception reduce reconstructs via
+        # ``TransferBudgetExceeded(*self.args)`` on unpickle, so ``args`` must
+        # match this signature; storing the single message string instead made
+        # the exception un-revivable (``TypeError: missing 3 required positional
+        # arguments``) whenever it crossed a process boundary. The human-readable
+        # message is rendered lazily by ``__str__``.
+        super().__init__(bytes_used, attempted, limit, path)
+
+    def __str__(self) -> str:
+        return (
+            f"Cross-region transfer budget exceeded: {self.path} "
+            f"({self.attempted / (1024**2):.1f}MB) would bring total to "
+            f"{(self.bytes_used + self.attempted) / (1024**3):.2f}GB, "
+            f"exceeding the {self.limit / (1024**3):.0f}GB limit "
+            f"(already transferred {self.bytes_used / (1024**3):.2f}GB). "
             f"Consider running in the source region instead."
         )
 
