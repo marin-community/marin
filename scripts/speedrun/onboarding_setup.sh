@@ -231,11 +231,12 @@ mkdir -p "$TARGET_DIR"
 
 log_start "Configuring experiment template"
 
-TEMPLATE_PATH="experiments/hackable_transformer_starter_template.py"
+HACKABLE_TEMPLATE="experiments/hackable_transformer_starter_template.py"
+FALLBACK_TEMPLATE="experiments/tutorials/train_125m_fineweb_edu_gpu.py"
 TARGET_FILE="$TARGET_DIR/main.py"
 
-if [[ -f "$TEMPLATE_PATH" ]]; then
-    cp "$TEMPLATE_PATH" "$TARGET_FILE"
+if [[ -f "$HACKABLE_TEMPLATE" ]]; then
+    cp "$HACKABLE_TEMPLATE" "$TARGET_FILE"
 
     IMPORT_PATH="experiments.speedrun.${RUN_NAME}.main"
 
@@ -249,9 +250,15 @@ if [[ -f "$TEMPLATE_PATH" ]]; then
     fi
 
     log_end
+elif [[ -f "$FALLBACK_TEMPLATE" ]]; then
+    cp "$FALLBACK_TEMPLATE" "$TARGET_FILE"
+    log_end
+    log_warn "Hackable starter template not found; copied $FALLBACK_TEMPLATE instead."
+    log_warn "Inspect the script and run with --dry_run true before any training job."
 else
     echo "" # Break line
-    log_error "Could not find template at $TEMPLATE_PATH. Please verify repository integrity."
+    log_error "No speedrun starter found. Expected $HACKABLE_TEMPLATE or $FALLBACK_TEMPLATE."
+    log_error "Search experiments/tutorials/ and experiments/speedrun/ for a current GPU example."
     exit 1
 fi
 
@@ -273,13 +280,15 @@ echo ""
 echo -e "${BLUE}Next Steps:${NC}"
 echo "1. Activate the venv and load your WANDB_API_KEY and HF_TOKEN (if your setup does not automatically):"
 echo -e "   ${CYAN}cd $REPO_ROOT && . .venv/bin/activate && export \$(grep -v '^#' .env | xargs)${NC}"
-echo "2. Find your starter file at ${CYAN}$TARGET_FILE${NC}, fill in your author details, and start hacking."
-echo "3. Launch your training run with:"
-echo -e "   ${CYAN}python -m experiments.speedrun.${RUN_NAME}.main --force_run_failed true --prefix $REPO_ROOT/local_store${NC}"
+echo "2. Find your starter file at ${CYAN}$TARGET_FILE${NC} and inspect it before running."
+echo "3. Dry-run the executor DAG (safe; does not train):"
+echo -e "   ${CYAN}uv run experiments/speedrun/${RUN_NAME}/main.py --dry_run true --prefix $REPO_ROOT/local_store${NC}"
+echo "4. Launch training only after reviewing the script and hardware requirements:"
+echo -e "   ${CYAN}uv run experiments/speedrun/${RUN_NAME}/main.py --force_run_failed true --prefix $REPO_ROOT/local_store${NC}"
 
 # Check if origin points to the main community repo (indicating it's not a personal fork)
 if [[ "$ORIGIN_URL" == *"marin-community/marin"* ]]; then
-    echo -e "4. ${ORANGE}[Note] You are currently working on a clone of marin-community/marin${NC}"
+    echo -e "5. ${ORANGE}[Note] You are currently working on a clone of marin-community/marin${NC}"
     echo "   To submit your changes via a PR to Marin, you need to create your fork."
     echo "   Please install the GitHub CLI (https://github.com/cli/cli#installation)"
     echo -e "   and run: ${CYAN}gh repo fork${NC}"
@@ -287,8 +296,10 @@ fi
 
 echo ""
 echo -e "Tips:"
+echo "- This script requires an NVIDIA GPU (nvidia-smi). On a Mac without CUDA, use experiments/tutorials/train_tiny_model_cpu.py instead."
 echo "- The '--prefix' argument specifies the output directory of all artifacts. The env var MARIN_PREFIX can also be set to control it."
 echo "- WANDB_ENTITY and WANDB_PROJECT can be set to configure WandB logging."
-echo "- Check out https://marin.readthedocs.io/en/latest/tutorials/submitting-speedrun/ for more details."
+echo "- GPU tutorial reference: experiments/tutorials/train_125m_fineweb_edu_gpu.py"
+echo "- Executor overview: docs/tutorials/executor-101.md"
 echo ""
 echo -e "${BLUE}⚓ Happy sailing!${NC}"
