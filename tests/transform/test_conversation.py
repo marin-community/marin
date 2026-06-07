@@ -3,6 +3,7 @@
 
 """Tests for conversation data transformation scripts."""
 
+import json
 from pathlib import Path
 
 from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
@@ -78,6 +79,36 @@ FINEPROOFS_METADATA_COLUMNS = [
     "source",
 ]
 
+RICH_MESSAGES_SAMPLE = {
+    "messages": [
+        {"role": "system", "content": "Use tools when helpful."},
+        {
+            "role": "assistant",
+            "content": "I'll inspect the workspace.",
+            "reasoning_content": "Need a directory listing.",
+            "tool_calls": json.dumps(
+                [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": json.dumps({"cmd": "ls"})},
+                    }
+                ]
+            ),
+        },
+        {"role": "tool", "content": "README.md", "tool_call_id": "call_1"},
+    ],
+    "tools": [{"type": "function", "function": {"name": "bash"}}],
+    "uuid": "rich-row-1",
+}
+
+RICH_RAW_TOOL_CALLS_SAMPLE = {
+    "messages": [
+        {"role": "user", "content": "Inspect the workspace."},
+        {"role": "assistant", "content": "I tried the tool.", "tool_calls": "{not json"},
+    ],
+}
+
 
 class TestTransformAdapters:
     """Test the different adapter formats."""
@@ -101,6 +132,33 @@ class TestTransformAdapters:
         assert messages[0].content == "What is the capital of France?"
         assert messages[1].role == "assistant"
         assert messages[1].content == "The capital of France is Paris."
+
+    def test_rich_openai_format_adapter_preserves_tool_and_reasoning_fields(self):
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN_RICH,
+            conversation_column="messages",
+            role_key="role",
+            content_key="content",
+            user_value="user",
+            assistant_value="assistant",
+            system_value="system",
+        )
+
+        messages = adapter.transform_conversation_to_openai_format(RICH_MESSAGES_SAMPLE)
+
+        assert messages is not None
+        assistant_message = messages[1].model_dump()
+        assert assistant_message["role"] == "assistant"
+        assert assistant_message["reasoning_content"] == "Need a directory listing."
+        assert assistant_message["tool_calls"] == [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "bash", "arguments": '{"cmd": "ls"}'},
+            }
+        ]
+        assert messages[2].role == "tool"
+        assert messages[2].tool_call_id == "call_1"
 
     def test_sharegpt_format_adapter(self):
         """Test ShareGPT format adapter."""
@@ -218,6 +276,60 @@ class TestTransformRow:
             "qwen3-4b-thinking-reward@128": 0.75,
             "source": "aops",
         }
+
+    def test_rich_multi_turn_row_normalizes_tool_calls_and_remaps_top_level_tools(self):
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN_RICH,
+            conversation_column="messages",
+            role_key="role",
+            content_key="content",
+            user_value="user",
+            assistant_value="assistant",
+            system_value="system",
+            metadata_remap={"tools": "tools"},
+        )
+        cfg = TransformSFTDatasetConfig(
+            source="nvidia/Nemotron-SFT-CUDA-v1",
+            revision="1a06167a6e1e90d928094184173898cbb9bf42de",
+            output_path="/tmp/output",
+            metadata_columns=["uuid"],
+            adapter=adapter,
+        )
+
+        result = transform_row(RICH_MESSAGES_SAMPLE, cfg, adapter)
+
+        assert result is not None
+        output = result.model_dump()
+        assert output["metadata"] == {"uuid": "rich-row-1"}
+        assert output["tools"] == RICH_MESSAGES_SAMPLE["tools"]
+        assert output["messages"][1]["reasoning_content"] == "Need a directory listing."
+        assert output["messages"][1]["tool_calls"][0]["function"]["arguments"] == {"cmd": "ls"}
+        assert output["messages"][2]["tool_call_id"] == "call_1"
+
+    def test_rich_multi_turn_row_keeps_unparseable_tool_calls_as_raw_value(self):
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN_RICH,
+            conversation_column="messages",
+            role_key="role",
+            content_key="content",
+            user_value="user",
+            assistant_value="assistant",
+            system_value="system",
+        )
+        cfg = TransformSFTDatasetConfig(
+            source="nvidia/Nemotron-SFT-SWE-v3",
+            revision="3f73de64c1fe928a8f538fe45ccc10c228cc4c6a",
+            output_path="/tmp/output",
+            metadata_columns=[],
+            adapter=adapter,
+        )
+
+        result = transform_row(RICH_RAW_TOOL_CALLS_SAMPLE, cfg, adapter)
+
+        assert result is not None
+        assistant_message = result.messages[1].model_dump()
+        assert assistant_message["tool_calls"] is None
+        assert assistant_message["raw_tool_calls"] == "{not json"
 
     def test_instruct_msg_response_skips_misaligned_row(self):
         """A multi-message instruction is dropped (returns None), not emitted as an empty conversation."""

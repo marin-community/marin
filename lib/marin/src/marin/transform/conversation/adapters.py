@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -50,9 +51,50 @@ class InputDatasetFormat(str, Enum):
     """
 
     SINGLE_COLUMN_MULTI_TURN = "messages"
+    SINGLE_COLUMN_MULTI_TURN_RICH = "messages_rich"
     INSTRUCTION_RESPONSE = "instruction_response"
     INSTRUCT_COLUMN_RESPONSE = "instruct_column_response"
     INSTRUCT_MSG_RESPONSE = "instruct_msg_response"
+
+
+RICH_MESSAGE_EXTRA_KEYS = (
+    "name",
+    "tool_call_id",
+    "reasoning_content",
+)
+
+
+def _parse_tool_calls(value: Any) -> list[dict[str, Any]] | None:
+    if value is None:
+        return None
+
+    parsed = value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
+
+    if isinstance(parsed, dict):
+        parsed = [parsed]
+    if not isinstance(parsed, list) or not parsed:
+        return None
+    if not all(isinstance(item, dict) for item in parsed):
+        return None
+    return parsed
+
+
+def _raw_tool_calls(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return stripped
 
 
 @dataclass
@@ -129,6 +171,31 @@ class TransformAdapter:
             for conv in conversation:
                 role = role_to_openai_role[conv[self.role_key]]
                 messages.append(OpenAIChatMessage(role=role, content=conv[self.content_key]))
+            return messages
+        elif self.dataset_format == InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN_RICH:
+            messages = []
+            role_to_openai_role = {
+                self.user_value: "user",
+                self.assistant_value: "assistant",
+                self.system_value: "system",
+                self.tool_value: "tool",
+            }
+            conversation = row[self.conversation_column]
+            for conv in conversation:
+                role = role_to_openai_role[conv[self.role_key]]
+                message: dict[str, Any] = {"role": role, "content": conv[self.content_key]}
+                for key in RICH_MESSAGE_EXTRA_KEYS:
+                    value = conv.get(key)
+                    if value:
+                        message[key] = value
+
+                tool_calls = _parse_tool_calls(conv.get("tool_calls"))
+                if tool_calls is not None:
+                    message["tool_calls"] = tool_calls
+                elif raw_tool_calls := _raw_tool_calls(conv.get("tool_calls")):
+                    message["raw_tool_calls"] = raw_tool_calls
+
+                messages.append(OpenAIChatMessage(**message))
             return messages
         elif self.dataset_format == InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE:
             messages = []

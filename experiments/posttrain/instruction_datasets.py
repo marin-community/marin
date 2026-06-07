@@ -38,6 +38,10 @@ Current datasets:
 23. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
 24. lm-provers/FineProofs-SFT
 25. lm-provers/FineProofs-SFT/proof-only
+26. nvidia/Nemotron-SFT-SWE-v3
+27. nvidia/Nemotron-Cascade-SFT-SWE
+28. nvidia/Nemotron-SFT-OpenCode-v1
+29. nvidia/Nemotron-SFT-CUDA-v1
 """
 
 import dataclasses
@@ -103,6 +107,14 @@ NEMOTRON_V2_SPLITS = [
 ]
 
 NEMOTRON_V1_SPLITS = ["chat", "code", "math", "stem", "tool_calling"]
+NEMOTRON_OPENCODE_V1_SPLITS = [
+    "general",
+    "bash_only_tool",
+    "bash_only_tool_skills",
+    "question_tool",
+    "agent_skills",
+    "agent_skills_question_tool",
+]
 
 
 @dataclass(frozen=True)
@@ -149,6 +161,33 @@ def multi_turn_adapter(
         user_value=user_value,
         assistant_value=assistant_value,
         system_value=system_value,
+        content_key=content_key,
+        metadata_remap=metadata_remap or {},
+        replacements=replacements,
+        extra_metadata_fn=extra_metadata_fn,
+    )
+
+
+def rich_multi_turn_adapter(
+    conversation_column: str = "messages",
+    role_key: str = "role",
+    user_value: str = "user",
+    assistant_value: str = "assistant",
+    system_value: str = "system",
+    tool_value: str = "tool",
+    content_key: str = "content",
+    metadata_remap: dict[str, str] | None = None,
+    replacements: dict[str, str] | None = None,
+    extra_metadata_fn=None,
+) -> TransformAdapter:
+    return TransformAdapter(
+        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN_RICH,
+        conversation_column=conversation_column,
+        role_key=role_key,
+        user_value=user_value,
+        assistant_value=assistant_value,
+        system_value=system_value,
+        tool_value=tool_value,
         content_key=content_key,
         metadata_remap=metadata_remap or {},
         replacements=replacements,
@@ -247,6 +286,22 @@ reasoning_to_chat_kwargs = ReasoningToChatKwargs()
 SYNTHETIC2_SFT_VERIFIED_HF_ID = "PrimeIntellect/SYNTHETIC-2-SFT-verified"
 SYNTHETIC2_SFT_VERIFIED_REVISION = "fce247fe48af8ff9624fb51d1de63aa1b2332cef"
 SYNTHETIC2_SFT_VERIFIED_METADATA_COLUMNS = ["problem_id", "task_type", "reward"]
+
+NEMOTRON_SFT_SWE_V3_REVISION = "3f73de64c1fe928a8f538fe45ccc10c228cc4c6a"
+NEMOTRON_SFT_SWE_V3_METADATA_COLUMNS = ["uuid", "license"]
+NEMOTRON_CASCADE_SFT_SWE_REVISION = "b4ef73ff9bbcfc33d1ec7a48e53017f9ce7af7a3"
+NEMOTRON_CASCADE_SFT_SWE_METADATA_COLUMNS = ["category", "source", "generator", "thinking"]
+NEMOTRON_SFT_OPENCODE_V1_REVISION = "556d5237acff203f3e1a0be49428634c3606cda2"
+NEMOTRON_SFT_OPENCODE_V1_METADATA_COLUMNS = [
+    "question_category",
+    "complexity_level",
+    "uuid",
+    "enabled_tools",
+    "skills_path",
+    "hf_split",
+]
+NEMOTRON_SFT_CUDA_V1_REVISION = "1a06167a6e1e90d928094184173898cbb9bf42de"
+NEMOTRON_SFT_CUDA_V1_METADATA_COLUMNS = ["uuid", "license", "used_in"]
 
 FINEPROOFS_SFT_REVISION = "73661e6"
 FINEPROOFS_SFT_METADATA_COLUMNS = [
@@ -430,6 +485,36 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         subsets=["default"],
         splits=["train"],
     ),
+    "nvidia/Nemotron-SFT-SWE-v3": InstructionDatasetConfig(
+        hf_dataset_id="nvidia/Nemotron-SFT-SWE-v3",
+        revision=NEMOTRON_SFT_SWE_V3_REVISION,
+        adapter=rich_multi_turn_adapter(),
+        metadata_columns=NEMOTRON_SFT_SWE_V3_METADATA_COLUMNS,
+        name="nvidia/Nemotron-SFT-SWE-v3",
+        subsets=["default"],
+        splits=["train"],
+        max_parallelism=16,
+    ),
+    "nvidia/Nemotron-Cascade-SFT-SWE": InstructionDatasetConfig(
+        hf_dataset_id="nvidia/Nemotron-Cascade-SFT-SWE",
+        revision=NEMOTRON_CASCADE_SFT_SWE_REVISION,
+        adapter=multi_turn_adapter(),
+        metadata_columns=NEMOTRON_CASCADE_SFT_SWE_METADATA_COLUMNS,
+        name="nvidia/Nemotron-Cascade-SFT-SWE",
+        subsets=["default"],
+        splits=["train"],
+        max_parallelism=16,
+    ),
+    "nvidia/Nemotron-SFT-CUDA-v1": InstructionDatasetConfig(
+        hf_dataset_id="nvidia/Nemotron-SFT-CUDA-v1",
+        revision=NEMOTRON_SFT_CUDA_V1_REVISION,
+        adapter=rich_multi_turn_adapter(metadata_remap={"tools": "tools"}),
+        metadata_columns=NEMOTRON_SFT_CUDA_V1_METADATA_COLUMNS,
+        name="nvidia/Nemotron-SFT-CUDA-v1",
+        subsets=["default"],
+        splits=["train"],
+        max_parallelism=8,
+    ),
     "sherryy/tulu-3-sft-personas-instruction-following-expanded": InstructionDatasetConfig(
         hf_dataset_id="sherryy/tulu-3-sft-personas-instruction-following-expanded",
         revision="79ab2c4",
@@ -593,6 +678,25 @@ for split_name in NEMOTRON_V1_SPLITS:
         adapter=multi_turn_adapter(extra_metadata_fn=reasoning_to_chat_kwargs),
         metadata_columns=["category", "generator", "license", "metadata", "version"],
         splits=[split_name],
+    )
+
+for split_name in NEMOTRON_OPENCODE_V1_SPLITS:
+    dataset_key = f"nvidia/Nemotron-SFT-OpenCode-v1/{split_name}"
+    INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_key] = InstructionDatasetConfig(
+        name=dataset_key,
+        hf_dataset_id="nvidia/Nemotron-SFT-OpenCode-v1",
+        revision=NEMOTRON_SFT_OPENCODE_V1_REVISION,
+        adapter=rich_multi_turn_adapter(
+            metadata_remap={
+                "agent_prompt": "agent_prompt",
+                "metadata": "source_metadata",
+                "tools": "tools",
+            },
+        ),
+        metadata_columns=NEMOTRON_SFT_OPENCODE_V1_METADATA_COLUMNS,
+        subsets=["default"],
+        splits=[split_name],
+        max_parallelism=4,
     )
 
 
