@@ -741,6 +741,170 @@ Sharp edges from this fork-stack run:
 - Remote `uv` warned about hardlink fallback because cache and target directories are on different filesystems. This was harmless; set `UV_LINK_MODE=copy` only if the warning noise matters.
 - The installed direct-vLLM smoke logs `No module named 'vllm._C'` warnings on TPU. They did not block model load or generation in this run.
 
+## Installed Fork-Stack GrugMoE Smoke 2026-06-07
+
+Purpose: close the remaining evidence gap from the fork-stack smoke by testing
+GrugMoE through the installed/user-facing Marin dependency path rather than a
+`PYTHONPATH` source-checkout harness.
+
+Validation branch and pins:
+
+- Marin branch: `codex/grugmoe-installed-path-smoke-20260607`
+  - Worktree: `/home/romain/dev/marin-wt/grugmoe-installed-path-smoke`
+  - Base: `origin/codex/grugmoe-fork-stack-smoke-20260607`
+  - Repin commit: `31d4e0dd96a129b0d36b4c9f7a421d4ff5a053da`
+- vLLM pin: `54a6eb69daafc23b72dd1bc3c78d097b7f4cd997`
+- tpu-inference pin before this smoke: `22a5fcccf542cf1b77d71e1db495be4ddae01bac`
+- tpu-inference pin tested here: `13474e22a97739b44d795d43253e8663885aa8f7`
+
+Setup commands:
+
+```bash
+git -C /home/romain/dev/marin pull origin main
+git -C /home/romain/dev/marin worktree add \
+  /home/romain/dev/marin-wt/grugmoe-installed-path-smoke \
+  -b codex/grugmoe-installed-path-smoke-20260607 \
+  origin/codex/grugmoe-fork-stack-smoke-20260607
+cd /home/romain/dev/marin-wt/grugmoe-installed-path-smoke
+VLLM_TARGET_DEVICE=tpu uv lock
+```
+
+Local installed dependency checks:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-installed-path-smoke
+VLLM_TARGET_DEVICE=tpu uv lock --check
+VLLM_TARGET_DEVICE=tpu uv export \
+  --locked \
+  --package marin-core \
+  --extra vllm \
+  --extra eval \
+  --no-dev \
+  --no-emit-project \
+  --no-emit-workspace \
+  --output-file /tmp/marin-grug-installed-vllm-eval-requirements.txt
+rg -n "^(tpu-inference|vllm|jax|jaxlib|libtpu)(==| @)" \
+  /tmp/marin-grug-installed-vllm-eval-requirements.txt
+VLLM_TARGET_DEVICE=tpu uv run \
+  --locked \
+  --package marin-core \
+  --extra vllm \
+  python -c 'import importlib.util; import importlib.metadata as md; print(md.version("vllm")); print(importlib.util.find_spec("tpu_inference.models.jax.grugmoe"))'
+```
+
+Results:
+
+- Before the tpu-inference repin, installed `marin-core[vllm]` resolved
+  `tpu-inference==0.0.0` but `grugmoe_spec=None` and `has_JaxLmHead=False`.
+- After the repin, installed `marin-core[vllm]` resolved:
+  - `tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@13474e22a97739b44d795d43253e8663885aa8f7`
+  - `vllm @ git+https://github.com/marin-community/vllm.git@54a6eb69daafc23b72dd1bc3c78d097b7f4cd997`
+  - `jax==0.9.2`, `jaxlib==0.9.2`, and `libtpu==0.0.39`
+- The post-repin installed package exposed
+  `tpu_inference.models.jax.grugmoe` from `site-packages` and
+  `JaxLmHead` from `tpu_inference.layers.jax.linear`.
+- A local tiny Grug HF config artifact with
+  `architectures=["GrugMoeForCausalLM"]` showed the same model-resolution
+  boundary as TPU:
+  - plain `AutoConfig.from_pretrained(...)` rejects `model_type="grug_moe"`;
+  - after runtime registering a `PretrainedConfig` subclass for `grug_moe`,
+    vLLM accepts the config object;
+  - vLLM `ModelConfig` rejects the architecture because
+    `GrugMoeForCausalLM` is not in the vLLM model registry.
+
+Authoritative TPU command shape:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-installed-path-smoke
+uv run iris --cluster=marin job run \
+  --no-wait \
+  --enable-extra-resources \
+  --tpu v6e-4 \
+  --region europe-west4 \
+  --priority interactive \
+  --timeout 3600 \
+  --cpu 16 \
+  --memory 128GB \
+  --disk 200GB \
+  --job-name grugmoe-installed-vllm-path-uvrun5-20260607 \
+  -e VLLM_TARGET_DEVICE tpu \
+  -- bash -lc 'set -euo pipefail; export LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304; VLLM_TARGET_DEVICE=tpu uv run --locked --package marin-core --extra vllm --extra eval python - <<'"'"'PY'"'"'
+# Python script:
+# - print Marin, vLLM, and tpu-inference SHAs;
+# - import installed JAX/vLLM/tpu-inference on the TPU worker;
+# - print direct_url.json for tpu-inference and vLLM;
+# - write a temporary HF-style Grug config artifact;
+# - verify unregistered Transformers rejects grug_moe;
+# - runtime-register GrugMoeHfConfig with Transformers and vLLM config utils;
+# - call vllm.LLM(model=artifact_dir, runner="generate", skip_tokenizer_init=True, ...).
+PY'
+```
+
+Authoritative TPU result:
+
+- Job: `/romain/grugmoe-installed-vllm-path-uvrun5-20260607`
+- Dashboard: `https://iris.oa.dev/#/job/%2Fromain%2Fgrugmoe-installed-vllm-path-uvrun5-20260607`
+- TPU: `v6e-4`
+- Region: `europe-west4`
+- State: `succeeded`
+- Exit: `0`
+- Failures/preemptions: `0`/`0`
+- Duration: `41.63 seconds`
+- Remote printed SHAs:
+  - `marin_sha=31d4e0dd96a129b0d36b4c9f7a421d4ff5a053da`
+  - `vllm_pin=54a6eb69daafc23b72dd1bc3c78d097b7f4cd997`
+  - `tpu_inference_pin=13474e22a97739b44d795d43253e8663885aa8f7`
+- Runtime package evidence:
+  - `remote_cwd=/app`
+  - `jax_version=0.9.2`
+  - `jax_devices=[TpuDevice(...), TpuDevice(...), TpuDevice(...), TpuDevice(...)]`
+  - `vllm_version=0.20.1rc1.dev148+g54a6eb69d`
+  - `tpu_inference_version=0.0.0`
+  - `grugmoe_spec=ModuleSpec(... origin='/app/.venv/lib/python3.11/site-packages/tpu_inference/models/jax/grugmoe.py')`
+  - `has_JaxLmHead=True`
+  - `tpu-inference_direct_url` commit
+    `13474e22a97739b44d795d43253e8663885aa8f7`
+  - `vllm_direct_url` commit
+    `54a6eb69daafc23b72dd1bc3c78d097b7f4cd997`
+- Config boundary:
+  - `unregistered_autoconfig=ValueError:The checkpoint you are trying to load has model type 'grug_moe' but Transformers does not recognize this architecture.`
+  - `registered_vllm_config=GrugMoeHfConfig:['GrugMoeForCausalLM']`
+- Installed vLLM path result:
+  - `vllm.LLM(...)` reached `ModelConfig` and failed with:
+    `Value error, Model architectures ['GrugMoeForCausalLM'] are not supported for now.`
+  - Final marker:
+    `installed_path_result=blocked:vllm_registry_missing_GrugMoeForCausalLM`
+
+Conclusion:
+
+- Installed `marin-core[vllm]` can include the Grug-capable tpu-inference
+  branch if Marin's tpu-inference pin is moved to
+  `13474e22a97739b44d795d43253e8663885aa8f7`.
+- GrugMoE is not currently usable through the installed fork-stack
+  `vllm.LLM(...).generate(...)` path.
+- The exact blocker is the vLLM model registry/model-resolution gap:
+  `GrugMoeForCausalLM` is present in the artifact config and can be made known
+  to Transformers/vLLM config loading, but the installed vLLM registry does not
+  have a model implementation registered for that architecture.
+
+Sharp edges from this installed-path smoke:
+
+- Iris job-level `--extra marin-core:vllm` and `--extra vllm` syncs did not
+  materialize `jax` for the direct user command in this workflow; those early
+  jobs failed with `ModuleNotFoundError: No module named 'jax'`.
+- The reliable installed-path command was an explicit in-job
+  `VLLM_TARGET_DEVICE=tpu uv run --locked --package marin-core --extra vllm --extra eval ...`.
+- Remote `uv run` executed under `/app`; do not assume the user command is in a
+  Git checkout. Print known SHAs or package `direct_url.json` rather than
+  running `git rev-parse HEAD` inside the job.
+- This vLLM fork's `LLM` constructor uses `runner="generate"`; `task="generate"`
+  fails before model resolution.
+- `JaxLmHead` is exported from `tpu_inference.layers.jax.linear`, not from a
+  `tpu_inference.layers.jax.lm_head` module.
+- The TPU vLLM startup still logs `No module named 'vllm._C'`, Triton-driver,
+  duplicate op-registration, and `os.fork()`/JAX warnings. They did not block
+  reaching the model registry failure.
+
 ## Scope
 
 In scope:
