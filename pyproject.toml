@@ -316,38 +316,31 @@ project-excludes = [
     "**/venv/**",
 ]
 
-# Disable specific error codes that are primarily noise from missing type stubs
-# These can be gradually enabled as the codebase improves
+# Disable specific error codes that are primarily noise from missing type stubs.
+# Enable gradually as the codebase improves.
 [tool.pyrefly.errors]
-# Missing attributes (315 occurrences) - often from untyped libraries like JAX, etc.
-# These are mostly false positives from libraries without complete type stubs
+# Untyped-library attribute access (jax/flax/equinox); sampling found ~no real bugs.
 missing-attribute = false
 
-# Unknown name errors - real undefined-name bugs. The ~141 former false positives
-# came from jaxtyping shape strings and are now handled natively by tensor-shapes = true
-# above. The handful of genuine bugs that remain (e.g. a missing `import os`, a stale
-# `callbacks.` reference) are tracked in .pyrefly-baseline.json until fixed.
+# Real undefined-name bugs. The former jaxtyping shape-string false positives are now
+# handled natively by tensor-shapes = true above; residual false positives are
+# suppressed in .pyrefly-baseline.json.
 unknown-name = true
 
-# No matching overload (16 occurrences) - complex overload resolution issues
+# Complex overload resolution (stdlib/library overloads); sampling found ~no real bugs.
 no-matching-overload = false
 
-# Library/stub-related noise - disable to focus on real issues:
-
-# Bad argument type (638 occurrences) - mostly third-party library stub issues
-# Common culprits: smart_open, Flax API, JAX/numpy arrays
+# Mostly third-party stub noise (smart_open, Flax, jax/numpy arrays), with a handful of
+# real callsite mismatches buried in the volume.
 bad-argument-type = false
 
-# Unbound name (64 occurrences) - pyrefly's control flow analysis doesn't understand
-# patterns where variables are guaranteed to be initialized by program logic
+# Real "code that can be better written" bugs mixed with control-flow false positives
+# pyrefly cannot prove safe.
 unbound-name = false
 
-# Keep these enabled to catch real type errors:
-# bad-override = true (126 occurrences)
-# bad-assignment = true (94 occurrences)
-# bad-return = true (84 occurrences)
-# unsupported-operation = true (68 occurrences)
-# not-callable = true (27 occurrences)
+# Kept enabled (high signal): bad-override, bad-assignment, bad-return,
+# unsupported-operation, not-callable. Pre-existing instances are suppressed via
+# .pyrefly-baseline.json.
 
 [tool.hatch.metadata]
 allow-direct-references = true
