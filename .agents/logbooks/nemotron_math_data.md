@@ -1099,3 +1099,158 @@ plus the original 12,500-window carve-out as in-harness anchor; load midtrain
 checkpoints from `hf/step-N/` (native checkpoints cleaned; arch is Qwen3);
 `max_eval_length=4096` explicitly (levanter default 2048 is a trap); sanity
 gate = reproduce 1e21's recorded math-val loss before trusting decon numbers.
+
+### 2026-06-07 ~20:00 UTC — Decon eval sweep launched: p33m67 × lr0.33 × full ladder
+
+User directive: evaluate the p33m67 lr0.33 models across the whole scaling
+ladder; ONE job per model, with the filtered datasets logged as SEPARATE
+datasets; interactive priority.
+
+Run selection (registry-cross-checked, completion verified by final hf step ≈
+round(0.2 × base `num_train_steps`); attempt suffixes are fresh-restart
+counters, listed attempt = the one with a finished export):
+
+| scale | run | final hf step |
+|---|---|---:|
+| 3e18 | delphi-3e18-p33m67-k0p20-lr33-a003 | 7,399 |
+| 9e18 | delphi-9e18-p33m67-k0p20-lr33-a002 | 8,818 |
+| 2e19 | delphi-2e19-p33m67-k0p20-lr33-a002 | 10,982 |
+| 3e19 | delphi-3e19-p33m67-k0p20-lr33-a002 | 7,573 |
+| 9e19 | delphi-9e19-p33m67-k0p20-lr33-a002 | 8,032 |
+| 2e20 | delphi-2e20-p33m67-k0p20-lr33-a001 | 11,277 |
+| 3e20 | delphi-3e20-p33m67-k0p20-lr33-a001 | 7,081 |
+| 1e21 | delphi-1e21-p33m67-9p25b-lr0.33-58ebcb | 4,410 |
+| 1e22 | delphi-1e22-p33m67-32p07b-lr0.33-e9132105 | 7,646 |
+
+(`delphi-1e22-…-lr0.33-abdeba` is a dead attempt — zero hf exports.)
+
+Driver: `scripts/analysis/eval_decon_val_sets.py` — per job, four datasets
+evaluated as separately-tagged validation sets in ONE `eval_lm` invocation:
+`decon_j050/j075/j090` (cache components, split=validation, weight 0) +
+`nemotron_cc_math_v1/4plus` anchor (component copied verbatim from the
+vendored `scripts/analysis/p33m67_data_section.json`: same cache
+`4plus-2c5519`, `num_validation_sequences: 12500`, same feistel shuffle →
+byte-identical original val split in-harness). Model config built per run
+from `hf/step-N/config.json` via `Qwen3Config.from_hf_config` (never
+hand-picked dims). `max_eval_length=4096` explicit; mp `p=f32,c=bfloat16`
+to match training-time eval. Trackers: W&B (project marin, tag
+`decon_val_eval`) + JSON file at
+`gs://…/midtrain_dedup/decon_val_sets/evals/{run}/step-{N}/metrics.jsonl`
+(refuses to overwrite without `--force`).
+
+Incident: first batch (`decon-eval-p33m67-lr33-{scale}`) failed in ~1 min
+with `Failed to open libtpu.so` — submitted with `--tpu` (hardware) but
+without `--extra tpu` (dependency group), so jax had no TPU backend. All 9
+stopped; resubmitted as `…-v2` with `--extra tpu`. TPU shapes: v6e-4 for
+3e18→1e21, v6e-8 for 1e22 (9.7B); all preemptible interactive us-east5
+(idle ready slices observed: 14× v6e-4, 5× v6e-8 in us-east5-b).
+
+Sanity gate before trusting results: each run's anchor loss
+(`eval/nemotron_cc_math_v1/4plus/loss`) must match the run's recorded final
+math-val loss in its `tracker_metrics.jsonl` / W&B (~1e-3). Then the decon
+deltas are meaningful.
+
+Launch incidents (all infra, none in eval logic):
+
+1. v1 batch: `Failed to open libtpu.so` — `--tpu` requests hardware but the
+   TPU dependency group needs `--extra tpu`. ~1 min to fail; all stopped.
+2. v2 batch: TPU backend OK, then `Container was OOM killed by the kernel` —
+   no host resources requested (default is tiny; HF staging + data pipeline
+   need real RAM). All stopped.
+3. v3 batch: `--extra tpu --cpu 8 --memory 64GB` (96GB 1e21 / 120GB 1e22)
+   `--disk 50GB` — worked. Per-job eval runtime ≈ 2-4 min on v6e-4
+   (1,642 eval batches: 26,271 sequences = 12,500 anchor + 2,510 + 5,073 +
+   6,188 decon, ~15 it/s at 3e18).
+4. 1e22-v3 stuck pending — v6e-8 slices consumed + scale group in backoff
+   ("Insufficient TPUs (need 8, available 0)"). Stopped; resubmitted as
+   `…-1e22-v4` on **v6e-4** (9.7B bf16 = ~4.9 GB/chip of weights on 32 GB
+   HBM chips; eval-only fits fine), `--per-device-parallelism 2`.
+
+Output-path note: `JsonFileTrackerConfig(output_path=…/metrics.jsonl)`
+treats the path as a directory — actual file is
+`…/metrics.jsonl/eval_results.json`. Also weakens the driver's
+exists-check (checks the dir path as a file); fix if the script is reused.
+
+### 2026-06-07 ~21:00 UTC — RESULTS: p33m67 lr0.33 ladder, decon vs original val
+
+**Sanity gates passed at both checked scales**: harness anchor loss vs
+training-time recorded final math-val loss — 3e18: 1.4720 vs 1.4719;
+1e21: 0.8104 vs 0.8102. The harness reproduces the byte-identical val split
+to ~2e-4; decon deltas are trustworthy.
+
+All losses (nats/token), final checkpoint per run:
+
+| scale | anchor (orig val) | decon_j090 | decon_j075 | decon_j050 | anchor − j050 |
+|---|---:|---:|---:|---:|---:|
+| 3e18 | 1.4720 | 1.4266 | 1.3687 | 1.3597 | 0.1123 |
+| 9e18 | 1.3034 | 1.2621 | 1.2070 | 1.1951 | 0.1083 |
+| 2e19 | 1.2203 | 1.1813 | 1.1278 | 1.1150 | 0.1053 |
+| 3e19 | 1.1640 | 1.1264 | 1.0741 | 1.0615 | 0.1025 |
+| 9e19 | 1.0425 | 1.0090 | 0.9600 | 0.9490 | 0.0935 |
+| 2e20 | 0.9737 | 0.9432 | 0.8970 | 0.8884 | 0.0853 |
+| 3e20 | 0.9286 | 0.9001 | 0.8564 | 0.8503 | 0.0783 |
+| 1e21 | 0.8104 | 0.7887 | 0.7547 | **0.7612** | 0.0492 |
+| 1e22 | 0.5727 | 0.5630 | 0.5643 | **0.6126** | **−0.0399** |
+
+Findings so far:
+
+1. **Baseline offset**: at tiny scale the paranoid sets read ~0.11 nats
+   *easier* than the anchor — short-doc distribution shift (paranoid sets
+   exclude long docs by construction), not contamination. The signal is the
+   *trend* in the gap, not its level.
+2. **Monotone, accelerating gap shrink**: anchor−j050 falls 0.1123 → 0.0492.
+   ~−0.003/rung through 3e19, ~−0.008/rung through 3e20, then **−0.029 in
+   the single 3e20→1e21 step**. The anchor improves faster than the clean
+   sets as capacity grows = memorization credit on contaminated val content,
+   accelerating exactly where Codex's exposure replay said exposure ramps.
+3. **Ordering inversion at 1e21**: j050 (0.7612) > j075 (0.7547) — at every
+   smaller scale stricter filtering ⇒ lower loss; at 1e21 the j075 set
+   (which still contains docs with J∈[0.5,0.75) train near-dups) drops
+   *below* the strictest set. Memorization credit on moderate near-dups is
+   now visible *within* the decon family, where doc distributions are nearly
+   identical. This is the cleanest contamination signature in the data.
+
+Artifacts: per-run `eval_results.json` under
+`gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals/{run}/step-{N}/metrics.jsonl/`;
+W&B runs `decon-eval-{run}` in marin-community/marin, tag `decon_val_eval`.
+
+### 2026-06-07 ~22:00 UTC — 1e22 row landed: gap INVERTED. Verdict.
+
+1e22 (`…-1e22-v4`, ran on a **v6e-4** — 9.7B bf16 eval is ~4.9 GB/chip
+weights + ~5 GB activations/logits per chip, ~3× headroom on 32 GB HBM;
+the earlier v6e-8 ask was training-shaped reflex, not arithmetic, and cost
+~40 min of pending while that pool was in backoff. Eval sizing rule: bf16
+eval fits v6e-4 up to ~40-50B params). Sanity gate: anchor 0.5727 vs
+recorded 0.5725 ✓ (third gate, all passed).
+
+Findings, final:
+
+1. **The anchor−j050 gap fully inverts**: +0.1123 at 3e18 → −0.0399 at
+   1e22, a 0.152-nat relative swing. The original val set starts 0.11 nats
+   *harder* than the strictest clean set and ends 0.04 nats *easier* — the
+   contaminated anchor's apparent progress increasingly comes from
+   memorization credit, not capability.
+2. **Complete ordering reversal within the decon family**: at 3e18,
+   stricter filter ⇒ lower loss (j050 < j075 < j090 < anchor); at 1e22 the
+   ordering is exactly reversed (j090 < j075 < anchor < j050) — the more
+   near-dup content a set retains, the more memorization credit it
+   collects. j050, the only set with no J≥0.5 train near-dup and no
+   window-split leakage, is now the *hardest* — it is the honest signal.
+3. **Quantifying the 1e22 "too good" effect** (the original question): the
+   1e21→1e22 improvement is 0.2377 nats on the original val but only
+   0.1486 nats on j050 — **~37% of the apparent 1e21→1e22 gain on the
+   original math val is contamination-driven**. The 1e22 model is genuinely
+   better, but the original val set overstates the jump by roughly a third
+   at this rung; any scaling-law fit on the original math val loss bends
+   optimistically at the top end.
+
+Follow-ups suggested:
+
+- Re-fit the math scaling laws on decon_j050 losses (this table is one
+  lr/mix slice; sweep other lr factors/mixes as needed — driver takes any
+  run, ~3 min/job on v6e-4).
+- Adopt decon_j050 (or a doc-level-split, fuzzy-deduped successor) as the
+  canonical math val for future midtrains; the byte-identical-contract
+  machinery (data_sections JSON) can pin it the same way.
+- Mind the short-doc bias when comparing absolute losses to the old anchor
+  numbers; within-ladder comparisons on the same set are unaffected.
