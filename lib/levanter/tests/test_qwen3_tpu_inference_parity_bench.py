@@ -722,6 +722,14 @@ def _case_result(
     compile_including_seconds: float | None = None,
     hbm_used_bytes: int | None = None,
     compiled_shape_count: int | None = None,
+    decode_seconds_per_iteration: list[float] | None = None,
+    decode_device_seconds_per_iteration: list[float] | None = None,
+    decode_tokens_per_iteration: list[int] | None = None,
+    prefill_drain_seconds_per_iteration: list[float] | None = None,
+    prefill_drain_tokens_per_iteration: list[int] | None = None,
+    generation_seconds_per_iteration: list[float] | None = None,
+    generation_host_seconds_per_iteration: list[float] | None = None,
+    generation_tokens_per_iteration: list[int] | None = None,
 ) -> bench.CaseResult:
     return bench.CaseResult(
         case_name=case_name,
@@ -743,6 +751,14 @@ def _case_result(
         total_tokens_per_second=decode_tokens_per_second + 1.0,
         hbm_used_bytes=hbm_used_bytes,
         compiled_shape_count=compiled_shape_count,
+        decode_seconds_per_iteration=decode_seconds_per_iteration,
+        decode_device_seconds_per_iteration=decode_device_seconds_per_iteration,
+        decode_tokens_per_iteration=decode_tokens_per_iteration,
+        prefill_drain_seconds_per_iteration=prefill_drain_seconds_per_iteration,
+        prefill_drain_tokens_per_iteration=prefill_drain_tokens_per_iteration,
+        generation_seconds_per_iteration=generation_seconds_per_iteration,
+        generation_host_seconds_per_iteration=generation_host_seconds_per_iteration,
+        generation_tokens_per_iteration=generation_tokens_per_iteration,
     )
 
 
@@ -758,6 +774,14 @@ def test_summary_markdown_includes_vllm_ratio_columns(tmp_path):
                 compile_including_seconds=12.3456,
                 hbm_used_bytes=123456,
                 compiled_shape_count=2,
+                decode_seconds_per_iteration=[0.5],
+                decode_device_seconds_per_iteration=[0.25],
+                decode_tokens_per_iteration=[100],
+                prefill_drain_seconds_per_iteration=[0.1],
+                prefill_drain_tokens_per_iteration=[20],
+                generation_seconds_per_iteration=[0.4],
+                generation_host_seconds_per_iteration=[0.15],
+                generation_tokens_per_iteration=[80],
             ),
         ],
         {"backend": "both"},
@@ -772,7 +796,23 @@ def test_summary_markdown_includes_vllm_ratio_columns(tmp_path):
     assert "ttft p50 ms" in summary
     assert "hbm bytes" in summary
     assert "shape buckets" in summary
+    assert "prefill s" in summary
+    assert "decode iter s" in summary
+    assert "decode device s" in summary
+    assert "decode host s" in summary
+    assert "decode iter toks" in summary
+    assert "prefill drain s" in summary
+    assert "prefill drain toks" in summary
+    assert "generation s" in summary
+    assert "generation host s" in summary
+    assert "generation toks" in summary
+    assert "decode iter tok/s" in summary
+    assert "decode device tok/s" in summary
+    assert "generation tok/s" in summary
     assert "0.900" in summary
+    assert "200.000" in summary
+    assert "400.000" in summary
+    assert "200.000" in summary
     assert "pass" in summary
     assert "12.346" in summary
     assert "123456" in summary
@@ -785,7 +825,16 @@ def test_summary_json_includes_machine_readable_parity_comparisons(tmp_path):
             _case_result("decode_b8_i1_o128_n1", "vllm-tpu", 100.0),
             _case_result("decode_b8_i1_o128_n1", "levanter:auto", 90.0),
             _case_result("decode_b32_i1_o128_n1", "vllm-tpu", 100.0),
-            _case_result("decode_b32_i1_o128_n1", "levanter:auto", 70.0),
+            _case_result(
+                "decode_b32_i1_o128_n1",
+                "levanter:auto",
+                70.0,
+                decode_seconds_per_iteration=[0.25, 0.25],
+                decode_device_seconds_per_iteration=[0.2, 0.2],
+                decode_tokens_per_iteration=[64, 64],
+                generation_seconds_per_iteration=[0.24, 0.24],
+                generation_tokens_per_iteration=[60, 60],
+            ),
         ],
         {"backend": "both"},
     )
@@ -798,6 +847,14 @@ def test_summary_json_includes_machine_readable_parity_comparisons(tmp_path):
     assert comparisons["decode_b8_i1_o128_n1"]["meets_decode_ratio_target"] is True
     assert comparisons["decode_b32_i1_o128_n1"]["decode_ratio"] == 0.7
     assert comparisons["decode_b32_i1_o128_n1"]["meets_decode_ratio_target"] is False
+    levanter_rows = [
+        result
+        for result in summary["results"]
+        if result["case_name"] == "decode_b32_i1_o128_n1" and result["backend"] == "levanter:auto"
+    ]
+    assert levanter_rows[0]["decode_iteration_tokens_per_second"] == pytest.approx(256.0)
+    assert levanter_rows[0]["decode_device_tokens_per_second"] == pytest.approx(320.0)
+    assert levanter_rows[0]["generation_tokens_per_second"] == pytest.approx(120 / 0.48)
 
 
 def _stress_result() -> bench.StressResult:
@@ -951,6 +1008,36 @@ def test_start_backend_places_vllm_logs_under_output_dir(monkeypatch, tmp_path):
     assert captured["log_dir"] == tmp_path / "vllm_profiles"
 
 
+def test_vllm_startup_poll_fails_when_process_exits():
+    class ExitedProcess:
+        def poll(self):
+            return 17
+
+    with pytest.raises(RuntimeError, match="process exited with code 17"):
+        bench._poll_json_while_process_alive("http://127.0.0.1:1234/v1/models", timeout=60, process=ExitedProcess())
+
+
+def test_vllm_startup_error_includes_log_tails(tmp_path):
+    log_dir = tmp_path / "vllm_profiles"
+    log_dir.mkdir()
+    (log_dir / "stderr.log").write_text("compile failed\nbad vmem allocation\n")
+    (log_dir / "stdout.log").write_text("loading model\n")
+
+    message = bench._vllm_startup_error_message(
+        log_dir=log_dir,
+        cmd=["vllm", "serve", "Qwen/Qwen3-8B"],
+        process_return_code=1,
+        cause=TimeoutError("models endpoint timed out"),
+    )
+
+    assert "vLLM process exited with code 1" in message
+    assert "models endpoint timed out" in message
+    assert "stderr tail:" in message
+    assert "bad vmem allocation" in message
+    assert "stdout tail:" in message
+    assert "loading model" in message
+
+
 def test_main_rejects_vllm_greedy_multi_generation_cases():
     with pytest.raises(ValueError, match="n > 1 with greedy sampling"):
         bench.main(
@@ -1083,6 +1170,24 @@ def test_run_case_propagates_backend_static_metrics(monkeypatch):
     def send_completion(**kwargs):
         return {"usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}, "choices": []}, 0.1
 
+    def metrics_snapshot():
+        return {
+            "prefill_admissions": 1,
+            "prefill_prompt_tokens_per_admission": [1],
+            "prefill_seconds_per_admission": [0.5],
+            "decode_seconds_per_iteration": [0.25],
+            "decode_device_seconds_per_iteration": [0.2],
+            "decode_host_seconds_per_iteration": [0.05],
+            "decode_submit_seconds_per_iteration": [0.01],
+            "decode_extract_seconds_per_iteration": [0.02],
+            "decode_tokens_per_iteration": [2],
+            "prefill_drain_seconds_per_iteration": [0.03],
+            "prefill_drain_tokens_per_iteration": [1],
+            "generation_seconds_per_iteration": [0.22],
+            "generation_host_seconds_per_iteration": [0.02],
+            "generation_tokens_per_iteration": [1],
+        }
+
     monkeypatch.setattr(bench, "_send_completion", send_completion)
 
     result = bench.run_case(
@@ -1093,6 +1198,7 @@ def test_run_case_propagates_backend_static_metrics(monkeypatch):
             close=lambda: None,
             hbm_used_bytes=1234,
             compiled_shape_count=2,
+            metrics_snapshot=metrics_snapshot,
         ),
         case=bench.BenchmarkCase("decode_b1_i1_o2_n1", active_sequences=1, input_tokens=1, output_tokens=2),
         prompt="x",
@@ -1107,6 +1213,20 @@ def test_run_case_propagates_backend_static_metrics(monkeypatch):
 
     assert result.hbm_used_bytes == 1234
     assert result.compiled_shape_count == 2
+    assert result.prefill_admissions == 1
+    assert result.prefill_prompt_tokens_per_admission == [1]
+    assert result.prefill_seconds_per_admission == [0.5]
+    assert result.decode_seconds_per_iteration == [0.25]
+    assert result.decode_device_seconds_per_iteration == [0.2]
+    assert result.decode_host_seconds_per_iteration == [0.05]
+    assert result.decode_submit_seconds_per_iteration == [0.01]
+    assert result.decode_extract_seconds_per_iteration == [0.02]
+    assert result.decode_tokens_per_iteration == [2]
+    assert result.prefill_drain_seconds_per_iteration == [0.03]
+    assert result.prefill_drain_tokens_per_iteration == [1]
+    assert result.generation_seconds_per_iteration == [0.22]
+    assert result.generation_host_seconds_per_iteration == [0.02]
+    assert result.generation_tokens_per_iteration == [1]
 
 
 def test_run_stress_case_aggregates_success_failures_and_service_metrics(monkeypatch):
@@ -1436,6 +1556,20 @@ def test_run_levanter_without_lm_head_case_preserves_warmup_flag(monkeypatch):
 
             class Result:
                 total_generated = 2
+                prefill_admissions = 1
+                prefill_prompt_tokens_per_admission = [1]
+                prefill_seconds_per_admission = [0.5]
+                decode_seconds_per_iteration = [0.25]
+                decode_device_seconds_per_iteration = [0.2]
+                decode_host_seconds_per_iteration = [0.05]
+                decode_submit_seconds_per_iteration = [0.01]
+                decode_extract_seconds_per_iteration = [0.02]
+                decode_tokens_per_iteration = [2]
+                prefill_drain_seconds_per_iteration = [0.03]
+                prefill_drain_tokens_per_iteration = [1]
+                generation_seconds_per_iteration = [0.22]
+                generation_host_seconds_per_iteration = [0.02]
+                generation_tokens_per_iteration = [1]
 
             return Result()
 
@@ -1514,6 +1648,15 @@ def test_run_levanter_without_lm_head_case_preserves_warmup_flag(monkeypatch):
     assert lm_head_no_sampling.backend == "levanter:auto:lm_head_no_sampling"
     assert measured.hbm_used_bytes == 123
     assert measured.compiled_shape_count == 2
+    assert warmup.prefill_admissions == 1
+    assert warmup.prefill_prompt_tokens_per_admission == [1]
+    assert warmup.prefill_seconds_per_admission == [0.5]
+    assert warmup.decode_seconds_per_iteration == [0.25]
+    assert warmup.decode_device_seconds_per_iteration == [0.2]
+    assert warmup.decode_host_seconds_per_iteration == [0.05]
+    assert warmup.decode_submit_seconds_per_iteration == [0.01]
+    assert warmup.decode_extract_seconds_per_iteration == [0.02]
+    assert warmup.decode_tokens_per_iteration == [2]
     assert events == [
         "enter:mesh",
         "enter:axis_mapping",

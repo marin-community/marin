@@ -1,0 +1,114 @@
+---
+date: 2026-06-06
+system: levanter
+severity: degraded
+resolution: mitigated
+pr: https://github.com/marin-community/marin/pull/6185
+issue: https://github.com/marin-community/marin/issues/6229
+---
+
+# V6e Prefill-Heavy Diagnostic
+
+## TL;DR
+
+- The first Levanter-only diagnostic for `prefill_b8_i2048_o128_n1` was
+  confounded because diagnostic generation admitted one pending prefill per
+  outer iteration instead of draining all currently admissible prefills before
+  decode.
+- Updating `_generate_diagnostic()` to mirror production prefill-drain
+  scheduling made normal, `no_lm_head`, and `lm_head_no_sampling` rows use the
+  same `4096,4096,4096,4096` prefill chunks and `1022` decode iteration tokens.
+- Production `decode_submit_seconds_per_iteration` was also measuring from
+  before prefill drain; moving the submit timer to immediately before
+  `_run_generation_loop(...)` fixed that attribution.
+- The remaining ambiguity was that `decode_seconds_per_iteration` could still
+  include prefill-drain work in prefill-heavy cases, so #6185 now reports
+  separate `prefill_drain_*`, `generation_*`, and
+  `generation_tokens_per_second` fields.
+
+## Initial Status
+
+Iris job `/dlwh/qwen3-v6e8-prefilldiag-prefill-b8-i2048-o128-n1-20260606-1504`
+succeeded. The normal `levanter:auto` row decoded one `1022`-token iteration,
+while the diagnostic rows decoded `510,256,256` token groups. This made the
+diagnostic rows unsuitable for direct LM-head or sampling attribution.
+
+## Hypothesis 1
+
+The diagnostic generation path uses a different prefill-drain schedule than
+the production `generate()` path. In long-prompt cases split across several
+prefill admissions, that makes the diagnostic rows decode after each pending
+prefill admission instead of after all currently admissible prefill work is
+queued.
+
+## Changes To Make
+
+Update `_generate_diagnostic()` in `levanter.inference.engine` so it drains all
+pending prefill admissions before each diagnostic decode submission, matching
+the production `generate()` scheduling shape. Tighten the diagnostic
+multi-prefill engine test to require one decode-token iteration for the small
+logical batch.
+
+## Results
+
+Focused validation passed:
+
+- `uv run --package marin-levanter --group test pytest lib/levanter/tests/inference/test_engine.py -q`
+  passed with `12 passed`.
+- `./infra/pre-commit.py --files lib/levanter/src/levanter/inference/engine.py lib/levanter/tests/inference/test_engine.py .agents/ops/2026-06-06-v6e-prefill-diagnostic.md --fix`
+  passed.
+
+## Hypothesis 2
+
+The corrected diagnostic run showed production `levanter:auto` with high
+`decode submit s` while `lm_head_no_sampling` had near-zero submit time. Code
+inspection found that production `generate()` started the submit timer before
+draining pending prefills, while `_generate_diagnostic()` started it immediately
+before submitting the diagnostic decode loop. The production metric therefore
+included prefill admission work and was not directly comparable to the
+diagnostic submit field.
+
+## Changes To Make
+
+Start the production `decode_submit_seconds_per_iteration` timer immediately
+before `_run_generation_loop(...)`, after pending prefill admissions have been
+drained. This preserves serving behavior and fixes metric attribution for
+future benchmark rows.
+
+## Future Work
+
+- [ ] Rerun one corrected Levanter-only v6e diagnostic if clean LM-head and
+      sampling attribution is still needed.
+
+## Hypothesis 3
+
+The corrected backend=both rerun exposed one more attribution ambiguity:
+`decode_seconds_per_iteration` still measures from the start of a generation
+iteration, before pending prefill admissions are drained. For
+`prefill_b8_i2048_o128_n1`, that means the reported decode iteration wall time
+can include prefill-drain work, even when `decode_submit_seconds_per_iteration`
+is correctly measured around `_run_generation_loop(...)`.
+
+## Changes To Make
+
+Add per-iteration metric fields that separate prefill drain from the generation
+loop itself:
+
+- `prefill_drain_seconds_per_iteration`
+- `prefill_drain_tokens_per_iteration`
+- `generation_seconds_per_iteration`
+- `generation_host_seconds_per_iteration`
+- `generation_tokens_per_iteration`
+
+Plumb these through the OpenAI server metrics snapshot and benchmark
+`CaseResult`, and emit a derived `generation_tokens_per_second` field in
+`summary.json` and `summary.md`.
+
+## Results
+
+Focused validation passed:
+
+- `uv run --package marin-levanter --group test pytest lib/levanter/tests/inference/test_engine.py lib/levanter/tests/test_qwen3_tpu_inference_parity_bench.py -q`
+  passed with `63 passed`.
+- `./infra/pre-commit.py --files lib/levanter/src/levanter/inference/engine.py lib/levanter/src/levanter/inference/openai.py lib/levanter/scripts/bench/bench_qwen3_tpu_inference_parity.py lib/levanter/tests/inference/test_engine.py lib/levanter/tests/test_qwen3_tpu_inference_parity_bench.py --fix`
+  passed.

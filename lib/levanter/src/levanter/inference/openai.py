@@ -123,12 +123,10 @@ def _request_fits_batch(
     request: InferenceRequest,
     *,
     max_seqs: int,
-    max_prompt_tokens_per_batch: int,
     max_tokens_per_batch: int,
 ) -> bool:
     return (
         batch.num_seqs() + request.n_generations <= max_seqs
-        and batch.prompt_tokens() + len(request.prompt_tokens) <= max_prompt_tokens_per_batch
         and batch.total_tokens() + len(request.prompt_tokens) + request.max_tokens <= max_tokens_per_batch
     )
 
@@ -138,7 +136,6 @@ def _merge_ready_batches(
     ready_batches: list[InferenceBatch],
     *,
     max_seqs: int,
-    max_prompt_tokens_per_batch: int,
     max_tokens_per_batch: int,
 ) -> tuple[InferenceBatch, list[InferenceBatch]]:
     """Merge already-queued inference batches while preserving request order."""
@@ -156,7 +153,6 @@ def _merge_ready_batches(
                 merged,
                 request,
                 max_seqs=max_seqs,
-                max_prompt_tokens_per_batch=max_prompt_tokens_per_batch,
                 max_tokens_per_batch=max_tokens_per_batch,
             ):
                 merged.append(request)
@@ -168,10 +164,24 @@ def _merge_ready_batches(
     return merged, leftovers
 
 
-def _drain_ready_batches(batch_queue: queue.Queue) -> list[InferenceBatch]:
-    """Return batches already waiting behind the next executable batch."""
+def _drain_ready_batches(batch_queue: queue.Queue, *, coalesce_timeout: float = 0.0) -> list[InferenceBatch]:
+    """Return batches waiting behind the next executable batch.
+
+    If no batch is immediately ready, wait briefly for a batch that is still
+    being assembled by the request-collection thread.
+    """
 
     batches = []
+    try:
+        batches.append(batch_queue.get_nowait())
+    except queue.Empty:
+        if coalesce_timeout <= 0:
+            return batches
+        try:
+            batches.append(batch_queue.get(timeout=coalesce_timeout))
+        except queue.Empty:
+            return batches
+
     while True:
         try:
             batches.append(batch_queue.get_nowait())
@@ -238,6 +248,20 @@ class InferenceContext:
         self.inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
         self.batch_thread = threading.Thread(target=self._batch_processing_loop, daemon=True)
         self._next_request_id = 0
+        self.last_prefill_admissions: int | None = None
+        self.last_prefill_prompt_tokens_per_admission: list[int] = []
+        self.last_prefill_seconds_per_admission: list[float] = []
+        self.last_decode_seconds_per_iteration: list[float] = []
+        self.last_decode_device_seconds_per_iteration: list[float] = []
+        self.last_decode_host_seconds_per_iteration: list[float] = []
+        self.last_decode_submit_seconds_per_iteration: list[float] = []
+        self.last_decode_extract_seconds_per_iteration: list[float] = []
+        self.last_decode_tokens_per_iteration: list[int] = []
+        self.last_prefill_drain_seconds_per_iteration: list[float] = []
+        self.last_prefill_drain_tokens_per_iteration: list[int] = []
+        self.last_generation_seconds_per_iteration: list[float] = []
+        self.last_generation_host_seconds_per_iteration: list[float] = []
+        self.last_generation_tokens_per_iteration: list[int] = []
 
     def start(self):
         """Start the inference and batch processing threads"""
@@ -321,7 +345,15 @@ class InferenceContext:
             return_logprobs=return_logprobs,
         )
 
-        logger.info("Enqueuing request %s", request)
+        logger.info(
+            "Enqueuing request %s: prompt_tokens=%d max_tokens=%d n=%d return_logprobs=%s echo_logprobs_top_k=%s",
+            request_id,
+            len(prompt_tokens),
+            max_tokens,
+            n_generations,
+            return_logprobs,
+            echo_logprobs_top_k,
+        )
         self.request_queue.put(request)
         return request_id
 
@@ -379,7 +411,6 @@ class InferenceContext:
                     batch,
                     r,
                     max_seqs=self.engine.config.max_seqs,
-                    max_prompt_tokens_per_batch=max_prompt_tokens_per_batch,
                     max_tokens_per_batch=max_tokens_per_batch,
                 ):
                     batch.append(r)
@@ -400,13 +431,15 @@ class InferenceContext:
         while not self.shutdown_event.is_set():
             try:
                 batch = self.batch_queue.get(timeout=1)
-                ready_batches = _drain_ready_batches(self.batch_queue)
+                ready_batches = _drain_ready_batches(
+                    self.batch_queue,
+                    coalesce_timeout=self.config.batch_timeout,
+                )
                 if ready_batches:
                     batch, leftovers = _merge_ready_batches(
                         batch,
                         ready_batches,
                         max_seqs=self.engine.config.max_seqs,
-                        max_prompt_tokens_per_batch=_max_prompt_tokens_per_batch(self.engine),
                         max_tokens_per_batch=_max_tokens_per_batch(self.engine),
                     )
                     for leftover in leftovers:
@@ -477,8 +510,36 @@ class InferenceContext:
         # Generate responses
         start_time = time.time()
         result = self.engine.generate(service_requests)
+        self.last_prefill_admissions = result.prefill_admissions
+        self.last_prefill_prompt_tokens_per_admission = list(result.prefill_prompt_tokens_per_admission)
+        self.last_prefill_seconds_per_admission = list(result.prefill_seconds_per_admission)
+        self.last_decode_seconds_per_iteration = list(result.decode_seconds_per_iteration)
+        self.last_decode_device_seconds_per_iteration = list(result.decode_device_seconds_per_iteration)
+        self.last_decode_host_seconds_per_iteration = list(result.decode_host_seconds_per_iteration)
+        self.last_decode_submit_seconds_per_iteration = list(result.decode_submit_seconds_per_iteration)
+        self.last_decode_extract_seconds_per_iteration = list(result.decode_extract_seconds_per_iteration)
+        self.last_decode_tokens_per_iteration = list(result.decode_tokens_per_iteration)
+        self.last_prefill_drain_seconds_per_iteration = list(result.prefill_drain_seconds_per_iteration)
+        self.last_prefill_drain_tokens_per_iteration = list(result.prefill_drain_tokens_per_iteration)
+        self.last_generation_seconds_per_iteration = list(result.generation_seconds_per_iteration)
+        self.last_generation_host_seconds_per_iteration = list(result.generation_host_seconds_per_iteration)
+        self.last_generation_tokens_per_iteration = list(result.generation_tokens_per_iteration)
         duration = time.time() - start_time
-        logger.info(f"Batch completed in {duration:.2f}s, generated {result.total_generated} tokens")
+        logger.info(
+            "Batch completed in %.2fs, generated %d tokens, prefill admissions=%d chunks=%s seconds=%s "
+            "decode_seconds=%s decode_device_seconds=%s decode_tokens=%s "
+            "prefill_drain_seconds=%s generation_seconds=%s",
+            duration,
+            result.total_generated,
+            result.prefill_admissions,
+            result.prefill_prompt_tokens_per_admission,
+            result.prefill_seconds_per_admission,
+            result.decode_seconds_per_iteration,
+            result.decode_device_seconds_per_iteration,
+            result.decode_tokens_per_iteration,
+            result.prefill_drain_seconds_per_iteration,
+            result.generation_seconds_per_iteration,
+        )
 
         # Return results to futures
         output_idx = 0
