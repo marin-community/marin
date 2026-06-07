@@ -407,6 +407,11 @@ message Controller {
   message WorkerTaskAttempt {
     string task_id = 1;
     iris.job.TaskAttempt attempt = 2;
+    // Static resource allocation for this task, inherited from its parent
+    // job's ResourceSpecProto. Lets the worker page compare what the scheduler
+    // reserved against the live usage in the iris.task stats namespace. Unset
+    // when the job declared no resource request.
+    iris.job.ResourceSpecProto resources = 3;
   }
 
   message GetKubernetesClusterStatusRequest {}

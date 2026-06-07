@@ -164,21 +164,119 @@ const diskFreePercent = computed(() => {
   return Math.round((1 - used / total) * 100)
 })
 
+// --- Per-task resource usage (iris.task stats), joined to the attempts below ---
+//
+// One query for every task that ran on this worker; we reduce client-side to
+// the latest sample per (task_id, attempt_id). Avoids a window function so the
+// query keeps the same SELECT / ORDER BY / LIMIT shape the log store already
+// serves for the worker-level stats above. Combined with the static allocation
+// carried on each attempt (WorkerTaskAttempt.resources) to render used-vs-
+// reserved memory and disk per task.
+interface TaskUsageRow {
+  task_id?: string
+  attempt_id?: number
+  cpu_millicores?: number
+  memory_mb?: number
+  memory_peak_mb?: number
+  disk_mb?: number
+}
+
+function buildTaskUsageSql(workerId: string): string {
+  // QueryRequest has no param binding; manual DuckDB single-quote escape.
+  const escaped = workerId.replace(/'/g, "''")
+  return `
+SELECT task_id, attempt_id, cpu_millicores, memory_mb, memory_peak_mb, disk_mb
+FROM "iris.task"
+WHERE worker_id = '${escaped}'
+ORDER BY ts DESC
+LIMIT 2000
+`.trim()
+}
+
+const { data: taskUsageData, refresh: fetchTaskUsage } = useLogServerStatsRpc<QueryResponse>(
+  'Query',
+  () => ({ sql: buildTaskUsageSql(props.workerId) }),
+)
+
+function usageKey(taskId: string, attemptId: number): string {
+  return `${taskId}|${attemptId}`
+}
+
+// Latest usage sample per (task_id, attempt_id). Rows arrive ts DESC, so the
+// first occurrence of each key is the most recent sample.
+const taskUsageByKey = computed<Record<string, TaskUsageRow>>(() => {
+  const ipc = taskUsageData.value?.arrowIpc
+  if (!ipc) return {}
+  const rows = decodeArrowIpc(ipc).rows as TaskUsageRow[]
+  const map: Record<string, TaskUsageRow> = {}
+  for (const r of rows) {
+    if (r.task_id === undefined) continue
+    const key = usageKey(r.task_id, Number(r.attempt_id ?? 0))
+    if (!(key in map)) map[key] = r
+  }
+  return map
+})
+
+// Owning job id for a task = task id without its trailing numeric index,
+// matching JobName.parent. The task-detail route is keyed by both job and task.
+function taskJobId(taskId: string): string {
+  const i = taskId.lastIndexOf('/')
+  return i > 0 ? taskId.slice(0, i) : taskId
+}
+
+interface ResDisplay {
+  label: string
+  pct: number | null
+  // usage exceeds the reserved allocation — flags over-subscription
+  over: boolean
+}
+
+function resDisplay(used: number | null, alloc: number | null): ResDisplay {
+  const hasUsed = used !== null && used > 0
+  const hasAlloc = alloc !== null && alloc > 0
+  const usedTxt = hasUsed ? formatBytes(used as number) : '—'
+  if (!hasAlloc) return { label: usedTxt, pct: null, over: false }
+  const pct = hasUsed ? Math.round(((used as number) / (alloc as number)) * 100) : null
+  return { label: `${usedTxt} / ${formatBytes(alloc as number)}`, pct, over: pct !== null && pct > 100 }
+}
+
+interface AttemptRow extends WorkerTaskAttempt {
+  mem: ResDisplay
+  disk: ResDisplay
+}
+
+// recentAttempts joined with per-task usage + static allocation so the table
+// can render used-vs-reserved memory and disk per attempt.
+const attemptRows = computed<AttemptRow[]>(() =>
+  recentAttempts.value.map((a) => {
+    const usage = taskUsageByKey.value[usageKey(a.taskId, Number(a.attempt?.attemptId ?? 0))]
+    const memUsed = usage?.memory_mb != null ? Number(usage.memory_mb) * 1024 * 1024 : null
+    const memAlloc = a.resources?.memoryBytes ? parseInt(a.resources.memoryBytes, 10) : null
+    const diskUsed = usage?.disk_mb != null ? Number(usage.disk_mb) * 1024 * 1024 : null
+    const diskAlloc = a.resources?.diskBytes ? parseInt(a.resources.diskBytes, 10) : null
+    return { ...a, mem: resDisplay(memUsed, memAlloc), disk: resDisplay(diskUsed, diskAlloc) }
+  })
+)
+
 const taskColumns: Column[] = [
   { key: 'taskId', label: 'Task ID', mono: true },
   { key: 'attempt', label: 'Attempt', align: 'right' },
   { key: 'uid', label: 'UID', mono: true },
   { key: 'state', label: 'State' },
+  { key: 'mem', label: 'Memory (used / alloc)' },
+  { key: 'disk', label: 'Disk (used / alloc)' },
   { key: 'duration', label: 'Duration', align: 'right' },
 ]
 
 useAutoRefresh(fetchWorker, DEFAULT_REFRESH_MS)
 useAutoRefresh(fetchWorkerLogs, DEFAULT_REFRESH_MS)
 useAutoRefresh(fetchWorkerStats, DEFAULT_REFRESH_MS)
+useAutoRefresh(fetchTaskUsage, DEFAULT_REFRESH_MS)
 onMounted(() => {
   fetchWorker()
   fetchWorkerLogs()
   fetchWorkerStats()
+  fetchTaskUsage()
 })
 
 // Re-fetch when navigating between workers (Vue Router reuses the component).
@@ -187,9 +285,11 @@ watch(() => props.workerId, () => {
   data.value = null
   workerLogEntries.value = []
   statsData.value = null
+  taskUsageData.value = null
   fetchWorker()
   fetchWorkerLogs()
   fetchWorkerStats()
+  fetchTaskUsage()
 })
 
 function attributeDisplay(val: { stringValue?: string; intValue?: string; floatValue?: string }): string {
@@ -411,29 +511,50 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
         <div class="rounded-lg border border-surface-border bg-surface overflow-hidden">
           <DataTable
             :columns="taskColumns"
-            :rows="recentAttempts"
+            :rows="attemptRows"
             :page-size="25"
             empty-message="No recent tasks"
           >
             <template #cell-taskId="{ row }">
-              <span class="font-mono text-xs">{{ (row as WorkerTaskAttempt).taskId }}</span>
+              <RouterLink
+                :to="`/job/${encodeURIComponent(taskJobId((row as AttemptRow).taskId))}/task/${encodeURIComponent((row as AttemptRow).taskId)}`"
+                class="font-mono text-xs text-accent hover:underline"
+              >
+                {{ (row as AttemptRow).taskId }}
+              </RouterLink>
             </template>
             <template #cell-attempt="{ row }">
-              <span class="font-mono text-xs">{{ (row as WorkerTaskAttempt).attempt?.attemptId ?? '-' }}</span>
+              <span class="font-mono text-xs">{{ (row as AttemptRow).attempt?.attemptId ?? '-' }}</span>
             </template>
             <template #cell-uid="{ row }">
               <span class="font-mono text-xs text-text-muted">
-                {{ (row as WorkerTaskAttempt).attempt?.attemptUid?.slice(0, 8) ?? '-' }}
+                {{ (row as AttemptRow).attempt?.attemptUid?.slice(0, 8) ?? '-' }}
               </span>
             </template>
             <template #cell-state="{ row }">
-              <StatusBadge :status="(row as WorkerTaskAttempt).attempt?.state ?? 0" size="sm" />
+              <StatusBadge :status="(row as AttemptRow).attempt?.state ?? ''" size="sm" />
+            </template>
+            <template #cell-mem="{ row }">
+              <span class="font-mono text-xs" :class="(row as AttemptRow).mem.over ? 'text-status-warning' : ''">
+                {{ (row as AttemptRow).mem.label }}
+                <span v-if="(row as AttemptRow).mem.pct !== null" class="text-text-muted ml-1">
+                  ({{ (row as AttemptRow).mem.pct }}%)
+                </span>
+              </span>
+            </template>
+            <template #cell-disk="{ row }">
+              <span class="font-mono text-xs" :class="(row as AttemptRow).disk.over ? 'text-status-warning' : ''">
+                {{ (row as AttemptRow).disk.label }}
+                <span v-if="(row as AttemptRow).disk.pct !== null" class="text-text-muted ml-1">
+                  ({{ (row as AttemptRow).disk.pct }}%)
+                </span>
+              </span>
             </template>
             <template #cell-duration="{ row }">
               <span class="font-mono text-xs">
                 {{ formatDuration(
-                  timestampMs((row as WorkerTaskAttempt).attempt?.startedAt),
-                  timestampMs((row as WorkerTaskAttempt).attempt?.finishedAt) || undefined,
+                  timestampMs((row as AttemptRow).attempt?.startedAt),
+                  timestampMs((row as AttemptRow).attempt?.finishedAt) || undefined,
                 ) }}
               </span>
             </template>

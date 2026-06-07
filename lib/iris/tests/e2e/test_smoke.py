@@ -467,23 +467,44 @@ def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot, capa
 
 
 def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, capabilities):
-    """Worker detail page shows info, task history, metric cards."""
+    """Worker detail page shows info, task history with per-task resource
+    allocation/usage, and task-id links to the task-detail page.
+
+    Runs a still-RUNNING job with an explicit memory request so the Task
+    History renders both the static allocation (from the parent job's
+    ResourceSpecProto, carried on each WorkerTaskAttempt) and the live usage
+    sampled into the ``iris.task`` stats namespace.
+    """
     if not capabilities.has_workers:
         pytest.skip("No persistent workers")
-    job = smoke_cluster.submit(TestJobs.quick, "smoke-worker-detail")
-    smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
+    with smoke_cluster.launched_job(TestJobs.sleep, "smoke-worker-detail", 120.0, cpu=2, memory="2g") as job:
+        smoke_cluster.wait_for_state(job, job_pb2.JOB_STATE_RUNNING, timeout=30)
+        # Worker id is set once the attempt is dispatched.
+        worker_id = ""
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not worker_id:
+            worker_id = smoke_cluster.task_status(job).worker_id
+            if not worker_id:
+                time.sleep(0.5)
+        assert worker_id
+        # Give the worker a few poll cycles to emit iris.task resource samples.
+        time.sleep(5)
 
-    task_status = smoke_cluster.task_status(job)
-    worker_id = task_status.worker_id
-    assert worker_id
+        dashboard_goto(smoke_page, f"{smoke_cluster.url}/worker/{worker_id}")
+        wait_for_dashboard_ready(smoke_page)
+        _wait_for_worker_detail_screenshot_ready(smoke_page, worker_id)
 
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/worker/{worker_id}")
-    wait_for_dashboard_ready(smoke_page)
+        # The Task History task id links to the task-detail route — the
+        # "links to tasks" contract for this page.
+        smoke_page.wait_for_selector("a[href*='/task/']", timeout=10000)
+        href = smoke_page.locator("a[href*='/task/']").first.get_attribute("href")
+        assert href is not None and "/job/" in href and "/task/" in href
 
-    _wait_for_worker_detail_screenshot_ready(smoke_page, worker_id)
-    smoke_screenshot(
-        "worker-detail", "Worker detail page with identity info, health badge, metric sparklines, and task history"
-    )
+        smoke_screenshot(
+            "worker-detail",
+            "Worker detail page: identity, health, sparklines, and Task History with "
+            "per-task memory/disk allocation+usage columns and task-id links",
+        )
 
 
 def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
