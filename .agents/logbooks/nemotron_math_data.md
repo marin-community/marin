@@ -1291,3 +1291,43 @@ Open follow-ups (not started):
 4. Key-join verify fast path in `nemotron_math_val_full_scan.py` still
    broken (non-generator reducer wrapper) — fix + regression test before
    any reuse; not needed for any current numbers.
+
+### 2026-06-07 22:30 UTC — Download paths for the isoflop loss data (for future agents)
+
+**One-stop consolidated files** (all 9 scales × 4 datasets, loss + bpb +
+per-run source paths, with dataset definitions embedded):
+
+- `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals/summary_p33m67_lr33.json`
+- `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals/summary_p33m67_lr33.csv`
+- Local copies: `scratch/nemotron_math_decon_eval_p33m67_lr33.{json,csv}`
+
+JSON keys per row: `scale, run, step, source, anchor_orig_val, decon_j090,
+decon_j075, decon_j050` (losses, nats/token) + `*_bpb`.
+
+**Per-run raw tracker output** (full metric set incl. macro/micro/bpb), one
+per scale — note `metrics.jsonl` is a *directory* (JsonFileTracker quirk):
+
+```text
+gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals/<run>/step-<N>/metrics.jsonl/eval_results.json
+```
+
+| scale | run | step |
+|---|---|---:|
+| 3e18 | delphi-3e18-p33m67-k0p20-lr33-a003 | 7399 |
+| 9e18 | delphi-9e18-p33m67-k0p20-lr33-a002 | 8818 |
+| 2e19 | delphi-2e19-p33m67-k0p20-lr33-a002 | 10982 |
+| 3e19 | delphi-3e19-p33m67-k0p20-lr33-a002 | 7573 |
+| 9e19 | delphi-9e19-p33m67-k0p20-lr33-a002 | 8032 |
+| 2e20 | delphi-2e20-p33m67-k0p20-lr33-a001 | 11277 |
+| 3e20 | delphi-3e20-p33m67-k0p20-lr33-a001 | 7081 |
+| 1e21 | delphi-1e21-p33m67-9p25b-lr0.33-58ebcb | 4410 |
+| 1e22 | delphi-1e22-p33m67-32p07b-lr0.33-e9132105 | 7646 |
+
+Loss keys inside `eval_results.json`:
+`eval/nemotron_cc_math_v1/4plus/loss` (anchor = original val),
+`eval/decon_j050/loss`, `eval/decon_j075/loss`, `eval/decon_j090/loss`,
+plus matching `/bpb` and `eval/macro_loss` / `eval/loss` aggregates.
+W&B mirror: project marin-community/marin, runs `decon-eval-<run>`, tag
+`decon_val_eval`. This is one (mix, lr) slice — p33m67 × lr0.33 — of the
+K=0.20 CPT sweep; other slices rerun via
+`scripts/analysis/eval_decon_val_sets.py --run <run>` (~3 min/job, v6e-4).
