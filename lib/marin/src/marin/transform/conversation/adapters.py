@@ -49,10 +49,10 @@ class InputDatasetFormat(str, Enum):
     |  what's the car's speed ?" }]     |  time taken. Answer is 375/3 = 125 kmph" |
     """
 
-    SINGLE_COLUMN_MULTI_TURN: str = "messages"
-    INSTRUCTION_RESPONSE: str = "instruction_response"
-    INSTRUCT_COLUMN_RESPONSE: str = "instruct_column_response"
-    INSTRUCT_MSG_RESPONSE: str = "instruct_msg_response"
+    SINGLE_COLUMN_MULTI_TURN = "messages"
+    INSTRUCTION_RESPONSE = "instruction_response"
+    INSTRUCT_COLUMN_RESPONSE = "instruct_column_response"
+    INSTRUCT_MSG_RESPONSE = "instruct_msg_response"
 
 
 @dataclass
@@ -112,6 +112,7 @@ class TransformAdapter:
                     if completion[self.filter_on_key] > best_metric:
                         best_metric = completion[self.filter_on_key]
                         best_completion = completion
+                assert best_completion is not None, "filter_on_key requires a non-empty response list"
                 response = best_completion[self.content_key]
             messages.append(OpenAIChatMessage(role="user", content=instruction))
             messages.append(OpenAIChatMessage(role="assistant", content=response))

@@ -137,7 +137,7 @@ def deserialize_state_dict_from_rpc(serialized_state_dict: dict) -> dict:
     Inverse of serialize_state_dict_for_rpc in async_vllm.py.
     Note: RPC serialization may convert tuples to lists, so we handle both.
     """
-    state_dict = {}
+    state_dict: dict = {}
     for key, value in serialized_state_dict.items():
         if isinstance(value, (tuple, list)) and len(value) == 3:
             data_bytes, dtype_str, shape = value
@@ -216,7 +216,7 @@ class SyncVLLMWrapper:
         logger.info(f"Engine initialized: {engine}")
         return engine
 
-    def generate(self, prompts: list[str], sampling_params: SamplingParams) -> str:
+    def generate(self, prompts: list[str], sampling_params: SamplingParams) -> list[str]:
         """
         Synchronous generate method - runs async code under the hood.
 

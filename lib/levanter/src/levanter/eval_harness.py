@@ -23,6 +23,7 @@ References:
 import dataclasses
 import json
 import logging
+import os
 import random
 import tempfile
 import time
@@ -53,6 +54,7 @@ from levanter.inference.engine import InferenceEngine, InferenceEngineConfig
 from levanter.inference.engine import Request as GenRequest
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.utils import INVALID
+from levanter.layers.attention import AttentionMask
 from levanter.models.gpt2 import Gpt2Config
 from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
 from levanter.tokenizers import MarinTokenizer
@@ -392,10 +394,12 @@ def get_segment_ids_from_batch(batch: LmExample, max_segments_per_ex: int) -> li
     """
     Extract unique segment IDs from a batch (on host).
     """
-    if batch.attn_mask.segment_ids is None:
+    attn_mask = batch.attn_mask
+    assert isinstance(attn_mask, AttentionMask), "expected a structured AttentionMask with segment ids"
+    if attn_mask.segment_ids is None:
         segment_ids = []
     else:
-        segment_ids = jax.device_get(batch.attn_mask.segment_ids[0].array)
+        segment_ids = jax.device_get(attn_mask.segment_ids[0].array)
 
     unique_segs = np.unique(segment_ids).tolist()
 

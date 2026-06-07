@@ -17,7 +17,7 @@ from jax import numpy as jnp
 from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds as SplashSegmentIds
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
 
-from ..inference.utils import is_valid
+from levanter.inference.utils import is_valid
 
 try:
     from jax.experimental.pallas.ops.tpu.ragged_paged_attention import (
@@ -45,7 +45,7 @@ except Exception:
 else:
     _SPLASH_KERNEL_SUPPORTS_SINKS = "sinks" in inspect.signature(_splash_attention).parameters
 
-from ..inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from .attention_mask import AttentionMask, materialize_mask
 from .kv_cache import KvPageCache
 from .normalization import LayerNormConfigBase
@@ -369,7 +369,7 @@ def simple_attention_with_dropout(
     precision: PrecisionLike = None,
     *,
     prng: Optional[PRNGKeyArray] = None,
-    scaling_factor: float | None = None,
+    scaling_factor: float | jax.Array | None = None,
     logits_soft_cap: Optional[float] = None,
 ):
     QPos = query.resolve_axis(QPos)
@@ -2013,7 +2013,7 @@ class MultiHeadLatentAttention(eqx.Module):
     kv_b_proj: hnn.Linear
     o_proj: hnn.Linear
 
-    q_proj: hnn.Linear = None
+    q_proj: Optional[hnn.Linear] = None
     q_a_proj: Optional[hnn.Linear] = None
     q_a_norm: Optional[LayerNormBase] = None
     q_b_proj: Optional[hnn.Linear] = None
@@ -2126,6 +2126,7 @@ class MultiHeadLatentAttention(eqx.Module):
 
         # Optional step of doing LoRA on Q (as done in DeepSeek).
         if self.config.q_lora_rank is None:
+            assert self.q_proj is not None, "q_lora_rank not defined, but q_proj is missing."
             q = self.q_proj(x, key=k_q_a)
         else:
             assert (

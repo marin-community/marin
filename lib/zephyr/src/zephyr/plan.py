@@ -94,7 +94,7 @@ class Map:
         needs_shard_context: True if fn expects (stream, shard_info: ShardInfo).
     """
 
-    fn: Callable[[Iterator], Iterator]
+    fn: Callable[..., Iterator]
     needs_shard_context: bool = False
 
 

@@ -41,7 +41,7 @@ def flash_attention(
     block_size: Optional[int] = None,
     dtype: Optional[jnp.dtype] = None,
     precision: PrecisionLike = None,
-    scaling_factor: float | None = None,
+    scaling_factor: float | jax.Array | None = None,
     logits_soft_cap: float | None = None,
 ):
     """

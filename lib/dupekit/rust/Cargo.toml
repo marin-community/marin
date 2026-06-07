@@ -22,3 +22,12 @@ rand = "0.8"
 rand_pcg = "0.3"
 regex = "1.10"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+# Standalone single-crate package — no [workspace] table (dupekit shares no
+# crates with finelog). The release profile mirrors the thin-LTO settings the
+# former shared rust/ workspace applied, so wheel build characteristics are
+# unchanged: within ~1% of fat-LTO runtime but a fraction of the link time.
+[profile.release]
+lto = "thin"
+codegen-units = 16
+strip = "symbols"

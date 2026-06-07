@@ -443,8 +443,9 @@ class ReconcileState:
         rows_by_worker: dict[WorkerId, list[ActiveTaskRow]] = {wid: [] for wid in failed_worker_ids}
         for rows in self._snapshot.active_tasks_by_job.values():
             for row in rows:
-                if row.current_worker_id in failed_worker_ids:
-                    rows_by_worker[row.current_worker_id].append(row)
+                wid = row.current_worker_id
+                if wid is not None and wid in failed_worker_ids:
+                    rows_by_worker[wid].append(row)
         return rows_by_worker
 
     def _fail_one_task(

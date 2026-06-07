@@ -38,7 +38,7 @@ import urllib.request
 import uuid
 from collections.abc import Callable, Generator, Sequence
 from pathlib import PurePath
-from typing import Any
+from typing import Any, cast
 
 import fsspec
 from fsspec.implementations.local import LocalFileSystem
@@ -773,7 +773,7 @@ def open_url(url: str, mode: str = "rb", **kwargs: Any) -> fsspec.core.OpenFile:
         fs, path = fsspec.core.url_to_fs(url)
         guarded = CrossRegionGuardedFS(fs)
         guarded._guard_read(path)
-    return fsspec.open(url, mode, **kwargs)
+    return cast(fsspec.core.OpenFile, fsspec.open(url, mode, **kwargs))
 
 
 def filesystem(protocol: str, **kwargs: Any) -> Any:
@@ -1028,7 +1028,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
     # -- fsspec interface: info/ls/exists -------------------------------------
 
     def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         resolved = self._resolve_path(path)
         fs, fspath = self._get_fs_and_path(resolved)
         info = fs.info(fspath, **kwargs)
@@ -1041,7 +1041,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         return bucket_prefix.rstrip("/").replace("gs://", "").replace("file://", "") + "/"
 
     def ls(self, path: str, detail: bool = True, **kwargs: Any) -> list[Any]:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         # Union listings from local + all remote prefixes so that glob()
         # discovers files that only exist in other regions.  Local entries
         # take precedence when a relative path appears in multiple buckets.
@@ -1069,7 +1069,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         return [e["name"] for e in results]
 
     def exists(self, path: str, **kwargs: Any) -> bool:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         local_url = self._local_url(path)
         if self._fs_exists(local_url):
             return True
@@ -1078,7 +1078,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
     # -- fsspec interface: read operations ------------------------------------
 
     def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         if "r" in mode:
             resolved = self._resolve_path(path)
             fs, fspath = self._get_fs_and_path(resolved)
@@ -1092,7 +1092,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
             return fs.open(fspath, mode, **kwargs)
 
     def cat_file(self, path: str, start: int | None = None, end: int | None = None, **kwargs: Any) -> bytes:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         resolved = self._resolve_path(path)
         fs, fspath = self._get_fs_and_path(resolved)
         return fs.cat_file(fspath, start=start, end=end, **kwargs)
@@ -1100,38 +1100,38 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
     # -- fsspec interface: write operations ------------------------------------
 
     def _mkdir(self, path: str, create_parents: bool = True, **kwargs: Any) -> None:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         local_url = self._local_url(path)
         fs, fspath = self._get_fs_and_path(local_url)
         fs.mkdir(fspath, create_parents=create_parents, **kwargs)
 
     def makedirs(self, path: str, exist_ok: bool = False) -> None:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         local_url = self._local_url(path)
         fs, fspath = self._get_fs_and_path(local_url)
         fs.makedirs(fspath, exist_ok=exist_ok)
 
     def put_file(self, lpath: str, rpath: str, **kwargs: Any) -> None:
-        rpath = self._strip_protocol(rpath)
+        rpath = cast(str, self._strip_protocol(rpath))
         local_url = self._local_url(rpath)
         fs, fspath = self._get_fs_and_path(local_url)
         fs.put_file(lpath, fspath, **kwargs)
 
     def rm_file(self, path: str) -> None:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         local_url = self._local_url(path)
         fs, fspath = self._get_fs_and_path(local_url)
         fs.rm_file(fspath)
 
     def rm(self, path: str, recursive: bool = False, **kwargs: Any) -> None:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         local_url = self._local_url(path)
         fs, fspath = self._get_fs_and_path(local_url)
         fs.rm(fspath, recursive=recursive, **kwargs)
 
     def copy(self, path1: str, path2: str, **kwargs: Any) -> None:
-        path1 = self._strip_protocol(path1)
-        path2 = self._strip_protocol(path2)
+        path1 = cast(str, self._strip_protocol(path1))
+        path2 = cast(str, self._strip_protocol(path2))
         resolved_src = self._resolve_path(path1)
         local_dst = self._local_url(path2)
         self._fs_copy(resolved_src, local_dst)

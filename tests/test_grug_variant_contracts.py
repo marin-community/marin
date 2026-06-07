@@ -31,6 +31,7 @@ from levanter.data.text import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
+from levanter.grug.sharding import _compact_grug_mesh_shape
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 
@@ -54,6 +55,16 @@ def _discover_grug_variants_with_file(filename: str) -> list[str]:
 
 def _variant_module_name(variant: str, module: str) -> str:
     return f"experiments.grug.{variant}.{module}"
+
+
+def test_compact_grug_mesh_shape_allows_expert_axis_to_span_processes():
+    assert _compact_grug_mesh_shape(
+        process_count=32,
+        local_device_count=4,
+        expert_axis_size=16,
+        replica_axis_size=4,
+        model_axis_size=1,
+    ) == (4, 2, 16, 1)
 
 
 def _variant_has_noverify(variant_dir: Path) -> bool:

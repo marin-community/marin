@@ -312,7 +312,7 @@ def standardize_options(options: list | dict) -> list:
 
 
 def format_prompt_response(
-    question_text: str, options: list[str], labels: list[str], answer_idx: str, answer_text: str
+    question_text: str, options: list[str], labels: list[str], answer_idx: int, answer_text: str
 ) -> tuple[str, str]:
     """
     Produce a fully formatted input string from a question, set of options, and labels
@@ -321,7 +321,7 @@ def format_prompt_response(
         question_text (str): The text of the question
         options (list[str]): The list of options for the multiple choice question
         labels (list[str]): The list of labels
-        answer_idx (str): The index of the correct answer
+        answer_idx (int): The index of the correct answer
         answer_text (str): The text of the correct answer
 
     Returns:

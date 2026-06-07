@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import math
 import warnings
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Literal, TypeAlias, cast
 
 import jax
@@ -127,7 +127,7 @@ def ssd_intra_chunk(
 
     errors: list[Exception] = []
     for impl in impls:
-        fn = IMPLEMENTATIONS[impl]
+        fn = cast(Callable[..., Array], IMPLEMENTATIONS[impl])
         try:
             if impl == "pallas_tpu":
                 y = fn(*flat_inputs, block_sizes=block_sizes, interpret=interpret, backend=backend)

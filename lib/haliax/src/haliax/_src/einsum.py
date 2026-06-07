@@ -10,12 +10,12 @@ import jax.lax
 import haliax
 
 from .dot import _infer_out_sharding
-from ..axis import Axis, AxisSelector, axis_name, eliminate_axes, rearrange_for_partial_order, union_axes
-from ..core import NamedArray
-from ..jax_utils import _jittable_dg_einsum
-from ..quantization import DotGeneralOp
-from ..types import DTypeLike, PrecisionLike
-from ..util import ensure_tuple
+from haliax.axis import Axis, AxisSelector, axis_name, eliminate_axes, rearrange_for_partial_order, union_axes
+from haliax.core import NamedArray
+from haliax.jax_utils import _jittable_dg_einsum
+from haliax.quantization import DotGeneralOp
+from haliax.types import DTypeLike, PrecisionLike
+from haliax.util import ensure_tuple
 from .parsing import AliasTable, parse_einsum, raise_parse_error
 
 

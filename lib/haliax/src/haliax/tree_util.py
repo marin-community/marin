@@ -4,6 +4,7 @@
 
 import dataclasses
 import functools
+from typing import Any, Callable
 
 import equinox as eqx
 import jax
@@ -19,14 +20,14 @@ from .jax_utils import maybe_rng_split
 from .util import is_named_array
 
 
-def tree_map(fn, tree, *rest, is_leaf=None):
+def tree_map(fn, tree, *rest, is_leaf: Callable[[Any], bool] | None = None):
     """
     Version of [jax.tree_util.tree_map][] that automatically treats NamedArrays as leaves.
     """
-    old_is_leaf = is_leaf
     if is_leaf is None:
         is_leaf = lambda x: isinstance(x, NamedArray)
     else:
+        old_is_leaf = is_leaf
         is_leaf = lambda x: old_is_leaf(x) or is_named_array(x)
 
     return jax.tree.map(fn, tree, *rest, is_leaf=is_leaf)
@@ -43,7 +44,7 @@ def _array_stacked_in_axes(tree, num_layers: int):
     )
 
 
-def scan_aware_tree_map(fn, tree, *rest, is_leaf=None):
+def scan_aware_tree_map(fn, tree, *rest, is_leaf: Callable[[Any], bool] | None = None):
     """
     Version of [haliax.tree_util.tree_map][] that is aware of the scan-layer pattern, specifically as implemented
     in hax.nn.Stacked. This function will (implicitly) apply the transform to each layer in each stack-like module
@@ -51,10 +52,10 @@ def scan_aware_tree_map(fn, tree, *rest, is_leaf=None):
     [haliax.tree_util.tree_map][].
 
     """
-    old_is_leaf = is_leaf
     if is_leaf is None:
         is_leaf = _is_scan_stack_leaf
     else:
+        old_is_leaf = is_leaf
         is_leaf = lambda x: old_is_leaf(x) or _is_scan_stack_leaf(x)
 
     mapped_fn = functools.partial(scan_aware_tree_map, fn, is_leaf=is_leaf)

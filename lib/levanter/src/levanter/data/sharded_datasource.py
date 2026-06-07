@@ -17,7 +17,7 @@ from rigging.filesystem import open_url
 
 from levanter.utils import fsspec_utils
 
-from ..utils.fsspec_utils import expand_glob
+from levanter.utils.fsspec_utils import expand_glob
 from ._preprocessor import (
     BatchResult,
     _BatchMapTransform,
@@ -518,7 +518,7 @@ def _mk_shard_name_mapping(urls):
 class _MappedShardedDataSource(ShardedDataSource[T], _TransformedDataset):
     def __init__(self, source: ShardedDataSource[T_co], fn: Callable[[T_co], T]):
         self.source = source
-        self.fn = fn
+        self.fn: Callable[..., T] = fn
         self._transform = _MapTransform(fn)
 
     @property

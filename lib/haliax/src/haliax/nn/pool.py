@@ -10,11 +10,11 @@ import jax
 
 import haliax
 
-from ..axis import AxisSpec, axis_spec_to_shape_dict, unsize_axes
-from ..core import NamedArray
-from ..partitioning import auto_sharded
-from ..types import Scalar
-from ..util import ensure_tuple
+from haliax.axis import AxisSpec, axis_spec_to_shape_dict, unsize_axes
+from haliax.core import NamedArray
+from haliax.partitioning import auto_sharded
+from haliax.types import Scalar
+from haliax.util import ensure_tuple
 
 Padding = Literal["SAME", "VALID"] | int | tuple[tuple[int, int], ...]
 

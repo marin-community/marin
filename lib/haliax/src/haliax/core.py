@@ -374,13 +374,13 @@ class NamedArray(metaclass=NamedArrayMeta):
             return tuple(result)
 
     @overload
-    def resolve_axis(self, axis: AxisSelector) -> Axis: ...
+    def resolve_axis(self, axes: AxisSelector) -> Axis: ...
 
     @overload
-    def resolve_axis(self, axis: tuple[AxisSelector, ...]) -> tuple[Axis, ...]: ...
+    def resolve_axis(self, axes: tuple[AxisSelector, ...]) -> tuple[Axis, ...]: ...
 
     @overload
-    def resolve_axis(self, axis: PartialShapeDict) -> ShapeDict: ...
+    def resolve_axis(self, axes: PartialShapeDict) -> ShapeDict: ...
 
     @overload
     def resolve_axis(self, axes: AxisSelection) -> AxisSpec: ...
@@ -954,7 +954,7 @@ def take(array: NamedArray, axis: AxisSelector, index: int | NamedArray) -> Name
         else:
             new_axes = array.axes[:axis_index] + index.axes + array.axes[axis_index + 1 :]
             out_sharding = haliax.partitioning.get_pspec_for_manual_mesh(new_axes)
-            indexer = [py_slice(None)] * array.array.ndim
+            indexer: list[Any] = [py_slice(None)] * array.array.ndim
             indexer[axis_index] = index.array
             new_array = array.array.at[tuple(indexer)].get(out_sharding=out_sharding)
 
@@ -1061,7 +1061,7 @@ def _slice_new(
     start: Mapping[AxisSelector, int | jnp.ndarray],
     length: Mapping[AxisSelector, int | Axis],
 ) -> NamedArray:
-    array_slice_indices = [0] * len(array.axes)
+    array_slice_indices: list[Any] = [0] * len(array.axes)
     new_axes = list(array.axes)
     new_lengths = [axis.size for axis in array.axes]
 
@@ -1130,7 +1130,7 @@ def updated_slice(
             f = haliax.vmap(f, axis=axis_name)
         return f(array, start, update)
 
-    array_slice_indices = [0] * len(array.axes)
+    array_slice_indices: list[Any] = [0] * len(array.axes)
     for axis, s in start.items():
         axis_index = array.axis_indices(haliax.axis_name(axis))
         if axis_index is None:
@@ -1209,7 +1209,7 @@ def index(array: NamedArray, slices: Mapping[AxisSelector, NamedIndex]) -> Named
 
 def _compute_new_axes_and_slices_for_index(
     array, slices
-) -> tuple[AxisSpec, list[py_slice | dslice | jnp.ndarray | int | list[int]]]:
+) -> tuple[tuple[str, ...], list[py_slice | dslice | jnp.ndarray | int | list[int]]]:
     def _is_integer_like_scalar_index(value: Any) -> bool:
         if isinstance(value, (int, np.integer)):
             return True

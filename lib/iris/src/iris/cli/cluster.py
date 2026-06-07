@@ -473,7 +473,7 @@ def _require_log_server_config(ctx: click.Context) -> str:
 def log_server_up(ctx: click.Context, build: bool) -> None:
     """Provision/refresh the cluster's finelog deployment (idempotent)."""
     name = _require_log_server_config(ctx)
-    up_cmd.callback(name=name, build=build)
+    ctx.invoke(up_cmd, name=name, build=build)
 
 
 @log_server.command("down")
@@ -482,7 +482,7 @@ def log_server_up(ctx: click.Context, build: bool) -> None:
 def log_server_down(ctx: click.Context, yes: bool) -> None:
     """Tear down the cluster's finelog deployment."""
     name = _require_log_server_config(ctx)
-    down_cmd.callback(name=name, yes=yes)
+    ctx.invoke(down_cmd, name=name, yes=yes)
 
 
 @log_server.command("restart")
@@ -497,7 +497,7 @@ def log_server_down(ctx: click.Context, yes: bool) -> None:
 def log_server_restart(ctx: click.Context, build: bool) -> None:
     """Restart the cluster's finelog deployment."""
     name = _require_log_server_config(ctx)
-    restart_cmd.callback(name=name, build=build)
+    ctx.invoke(restart_cmd, name=name, build=build)
 
 
 @log_server.command("status")
@@ -505,7 +505,7 @@ def log_server_restart(ctx: click.Context, build: bool) -> None:
 def log_server_status(ctx: click.Context) -> None:
     """Show the cluster's finelog deployment status."""
     name = _require_log_server_config(ctx)
-    status_cmd.callback(name=name)
+    ctx.invoke(status_cmd, name=name)
 
 
 @log_server.command("logs")
@@ -515,7 +515,7 @@ def log_server_status(ctx: click.Context) -> None:
 def log_server_logs(ctx: click.Context, tail: int, follow: bool) -> None:
     """Tail the cluster's finelog deployment logs."""
     name = _require_log_server_config(ctx)
-    logs_cmd.callback(name=name, tail=tail, follow=follow)
+    ctx.invoke(logs_cmd, name=name, tail=tail, follow=follow)
 
 
 @cluster.command("create-slice")
