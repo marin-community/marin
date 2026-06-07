@@ -905,6 +905,218 @@ Sharp edges from this installed-path smoke:
   duplicate op-registration, and `os.fork()`/JAX warnings. They did not block
   reaching the model registry failure.
 
+## Installed GrugMoE vLLM Registry Fix 2026-06-07
+
+Purpose: fix the narrow installed-path registry gap from the previous smoke so
+`vllm.LLM(...).generate(...)` can resolve `GrugMoeForCausalLM` to the native
+tpu-inference JAX/Flax NNX implementation without restoring the removed
+PyTorch-first vLLM Grug model.
+
+Branches and commits:
+
+- tpu-inference branch: `codex/grugmoe-vllm-registry-20260607`
+  - Worktree:
+    `/home/romain/dev/marin-wt/grugmoe-vllm-registry-tpu-inference`
+  - Base: `13474e22a97739b44d795d43253e8663885aa8f7`
+  - Registry commit: `71e5f24656c413c798579f064e31119a0c9ace1a`
+  - Alias commit tested on TPU:
+    `1730991a92bbd1169ff79e3cc67321b7db281adb`
+- Marin branch: `codex/grugmoe-installed-vllm-registry-20260607`
+  - Worktree:
+    `/home/romain/dev/marin-wt/grugmoe-installed-vllm-registry`
+  - Base:
+    `origin/codex/grugmoe-installed-path-smoke-20260607` at
+    `1af6bb934704562adc927083d9c5c6ce591d189e`
+  - First pin commit:
+    `e79784123b7d5f09972a53fc445f9ccb39d8e84e6`
+  - Final tested pin commit:
+    `2d3ec227b0059210546ccedc54193dfce9537b93`
+- vLLM pin: `54a6eb69daafc23b72dd1bc3c78d097b7f4cd997`
+
+tpu-inference fix:
+
+- Added `GrugMoeHfConfig`, a small `PretrainedConfig` adapter for
+  `model_type="grug_moe"`.
+- Added TPU-gated registration in `tpu_inference.layers.vllm.register_layers`:
+  - register `grug_moe` with Transformers `AutoConfig`;
+  - register `grug_moe` with vLLM's config registry;
+  - register `GrugMoeForCausalLM` with vLLM's model registry, backed by the
+    native tpu-inference implementation.
+- Added HF/vLLM config aliases in `GrugMoeHfConfig` for fields such as
+  `hidden_size`, `intermediate_size`, `num_hidden_layers`,
+  `num_attention_heads`, `num_key_value_heads`, and
+  `max_position_embeddings`.
+
+Setup commands:
+
+```bash
+git -C /home/romain/dev/marin pull origin main
+git -C /home/romain/dev/marin worktree add \
+  /home/romain/dev/marin-wt/grugmoe-installed-vllm-registry \
+  -b codex/grugmoe-installed-vllm-registry-20260607 \
+  origin/codex/grugmoe-installed-path-smoke-20260607
+git clone https://github.com/marin-community/tpu-inference.git \
+  /home/romain/dev/marin-wt/grugmoe-vllm-registry-tpu-inference
+cd /home/romain/dev/marin-wt/grugmoe-vllm-registry-tpu-inference
+git checkout -b codex/grugmoe-vllm-registry-20260607 \
+  13474e22a97739b44d795d43253e8663885aa8f7
+```
+
+Local validation commands:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-vllm-registry-tpu-inference
+pre-commit run ruff --files \
+  tpu_inference/models/jax/grugmoe.py \
+  tests/models/common/test_model_loader.py
+pre-commit run isort --files \
+  tpu_inference/models/jax/grugmoe.py \
+  tests/models/common/test_model_loader.py
+python -m py_compile \
+  tpu_inference/models/jax/grugmoe.py \
+  tests/models/common/test_model_loader.py
+
+cd /home/romain/dev/marin-wt/grugmoe-installed-vllm-registry
+VLLM_TARGET_DEVICE=tpu uv lock
+VLLM_TARGET_DEVICE=tpu uv lock --check
+VLLM_TARGET_DEVICE=tpu uv run --locked --package marin-core --extra vllm python - <<'PY'
+# Python script:
+# - assert PYTHONPATH is absent;
+# - print direct_url.json for installed vLLM and tpu-inference;
+# - import tpu_inference.layers.vllm.register_layers from site-packages;
+# - write a tiny Grug config;
+# - verify AutoConfig returns GrugMoeHfConfig;
+# - verify vLLM ModelConfig reports hidden/head size 8;
+# - verify ModelRegistry resolves GrugMoeForCausalLM as text generation.
+PY
+./infra/pre-commit.py pyproject.toml uv.lock
+git diff --check
+```
+
+Local result:
+
+- Installed package path, no `PYTHONPATH` source checkout:
+  `/home/romain/dev/marin-wt/grugmoe-installed-vllm-registry/.venv/lib/python3.11/site-packages/tpu_inference`.
+- `tpu-inference_direct_url` commit:
+  `1730991a92bbd1169ff79e3cc67321b7db281adb`.
+- `vllm_direct_url` commit:
+  `54a6eb69daafc23b72dd1bc3c78d097b7f4cd997`.
+- `autoconfig_class=GrugMoeHfConfig`.
+- `model_config_hidden_size=8`.
+- `model_config_head_size=8`.
+- `registry_impl_name=GrugMoeForCausalLM`.
+- `registry_text_generation=True`.
+
+Authoritative TPU command shape:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-installed-vllm-registry
+uv run iris --cluster=marin job run \
+  --no-wait \
+  --enable-extra-resources \
+  --tpu v6e-4 \
+  --region europe-west4 \
+  --priority interactive \
+  --timeout 3600 \
+  --cpu 16 \
+  --memory 128GB \
+  --disk 200GB \
+  --job-name grugmoe-installed-vllm-registry-real4-20260607 \
+  -e VLLM_TARGET_DEVICE tpu \
+  -- bash -lc 'set -euo pipefail; export LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304; export PYTHONUNBUFFERED=1; VLLM_TARGET_DEVICE=tpu uv run --locked --package marin-core --extra vllm --extra eval python - <<'"'"'PY'"'"'
+# Python script:
+# - print remote cwd and direct_url.json package SHAs;
+# - import installed vLLM/tpu-inference/JAX/libtpu from site-packages;
+# - call tpu_inference.layers.vllm.register_layers();
+# - write a tiny HF-style Grug artifact with config.json and model.safetensors;
+# - use vocab_size=32 and untied lm_head.weight;
+# - verify AutoConfig, ModelConfig, and ModelRegistry resolution;
+# - call vllm.LLM(..., runner="generate", skip_tokenizer_init=True, ...);
+# - generate from prompt_token_ids=[1, 2, 3].
+PY'
+```
+
+Authoritative TPU result:
+
+- Job: `/romain/grugmoe-installed-vllm-registry-real4-20260607`
+- Dashboard:
+  `https://iris.oa.dev/#/job/%2Fromain%2Fgrugmoe-installed-vllm-registry-real4-20260607`
+- TPU: `v6e-4`
+- Region: `europe-west4`
+- State: `succeeded`
+- Exit: `0`
+- Failures/preemptions: `0`/`0`
+- Duration: `59.5 seconds`
+- Remote printed SHAs:
+  - `marin_sha=2d3ec227b0059210546ccedc54193dfce9537b93`
+  - `vllm_pin=54a6eb69daafc23b72dd1bc3c78d097b7f4cd997`
+  - `tpu_inference_pin=1730991a92bbd1169ff79e3cc67321b7db281adb`
+- Runtime package evidence:
+  - `remote_cwd=/app`
+  - `vllm_version=0.20.1rc1.dev148+g54a6eb69d.tpu`
+  - `tpu-inference_version=0.0.0`
+  - `jax_version=0.9.2`
+  - `libtpu_version=0.0.39`
+  - `grugmoe_spec=ModuleSpec(... origin='/app/.venv/lib/python3.11/site-packages/tpu_inference/models/jax/grugmoe.py')`
+  - `artifact_tensor_count=27`
+  - `artifact_bytes=43821`
+- Resolution evidence:
+  - `registered_grug_config=<class 'tpu_inference.models.jax.grugmoe.GrugMoeHfConfig'>`
+  - `autoconfig_class=GrugMoeHfConfig`
+  - `autoconfig_architectures=['GrugMoeForCausalLM']`
+  - `hidden_size_alias=8`
+  - `model_config_hidden_size=8`
+  - `model_config_head_size=8`
+  - `registry_impl_name=GrugMoeForCausalLM`
+  - `registry_text_generation=True`
+  - vLLM logged `Resolved architecture: GrugMoeForCausalLM`
+  - tpu-inference logged `Resolved MODEL_IMPL_TYPE 'auto' to 'flax_nnx'`
+- Installed generation result:
+  - `llm_initialized=True`
+  - `generated=[([1, 2, 3], [0], '')]`
+  - `installed_path_result=works:real_artifact_generate`
+
+Conclusion:
+
+- GrugMoE now works through the installed
+  `marin-core[vllm]` / `vllm.LLM(...).generate(...)` path on TPU for a tiny
+  HF-style Grug artifact.
+- The fix stays in tpu-inference ownership and does not restore a vLLM
+  PyTorch-first Grug model.
+- The Marin dependency pin that was tested successfully is
+  `tpu-inference@1730991a92bbd1169ff79e3cc67321b7db281adb` with
+  `vllm@54a6eb69daafc23b72dd1bc3c78d097b7f4cd997`.
+- No remaining registry/resolution blocker was observed in this validation.
+
+Sharp edges from this registry-fix smoke:
+
+- Do not call `jax.devices()` in the parent process before constructing
+  `vllm.LLM`; the first attempt reached engine initialization and then hung
+  around the JAX/fork boundary.
+- Tiny local artifacts need `vocab_size >= 20`; vLLM/tpu-inference
+  `gather_logprobs` precompile calls top-k with `k=20`.
+- vLLM reads HF-style config aliases such as `hidden_size` and
+  `num_attention_heads`; a Grug-only config with only `hidden_dim` and
+  `num_heads` can reach model init but fail later with hidden size `0`.
+- Keep `runner="generate"` and `skip_tokenizer_init=True` for this tokenizerless
+  smoke.
+- The expected TPU startup warnings remain: missing `vllm._C`, Triton disabled,
+  duplicate op registration, and JAX buffer-donation warnings. They did not
+  block loading or generation.
+
+Intermediate TPU attempts:
+
+- `/romain/grugmoe-installed-vllm-registry-real-20260607` was stopped after it
+  reached registry/model resolution and then hung because the script initialized
+  JAX in the parent before vLLM forked its engine.
+- `/romain/grugmoe-installed-vllm-registry-real2-20260607` failed with
+  `ValueError: k argument to top_k must be no larger than size along axis`
+  because the tiny artifact had `vocab_size=16`.
+- `/romain/grugmoe-installed-vllm-registry-real3-20260607` failed after native
+  model initialization because HF aliases were missing and vLLM-derived
+  architecture metadata reported hidden size `0`; fixed by
+  `1730991a92bbd1169ff79e3cc67321b7db281adb`.
+
 ## Scope
 
 In scope:
