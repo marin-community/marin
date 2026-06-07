@@ -3,10 +3,13 @@
 
 """Agentic lint-review runner (lanes + composer) invoked by `pre-commit.py --review`.
 
-Fans out one headless agent per "lane" (rules in infra/lint/*.md) over the branch
-diff and merges the per-lane findings with a composer agent (or a deterministic
-dedupe-and-concat). This subsystem is self-contained and used only by the
-`--review` path of pre-commit.py.
+Fans out one headless agent per "lane" (rules in infra/lint/*.md) over the branch's
+changes and merges the per-lane findings with a composer agent (or a deterministic
+dedupe-and-concat). Each lane is handed the changed-file inventory (`git diff --stat`)
+and read-only git access, and probes each file itself rather than reading a pasted
+diff — so it can follow the change into other files and skip binary/oversized files
+on its own. This subsystem is self-contained and used only by the `--review` path of
+pre-commit.py.
 """
 
 import hashlib
@@ -38,13 +41,20 @@ LINT_REVIEW_AGENT_DEFAULT = "claude -p"
 
 LINT_REVIEW_TIMEOUT = 600
 
+# Read access the headless lanes need to probe the change themselves (we hand them a
+# `git diff --stat`, not a pasted diff). Mirrors the `--allowedTools` convention used by
+# the repo's CI Claude workflows (.github/workflows/ops-claude*.yaml). Claude-specific:
+# the flag is Claude Code's, so it is appended only when the agent binary is `claude`.
+LINT_REVIEW_ALLOWED_TOOLS = "Bash(git:*),Read,Grep,Glob"
+
 
 LINT_LANE_INSTRUCTIONS = (
     "You are ONE lane of the review. Apply ONLY the rules in the lane catalog above "
-    'to the branch diff below. Follow the shared "Detector usage" and "Output format" '
+    'to the change described below. Follow the shared "Detector usage" and "Output format" '
     "exactly: emit one finding per line in the format it specifies, and emit nothing at "
     "all when there are no findings. Resolve overlap precedence within your lane; leave "
-    "cross-lane duplicates to the composer. Work from the diff as given; do not re-derive it."
+    "cross-lane duplicates to the composer. You are handed the changed-file inventory, not a "
+    "pasted diff: inspect each file yourself with read-only git and Read (see 'The change' below)."
 )
 
 # The meta lane is holistic: it reasons over the whole change, may read beyond the diff,
@@ -64,7 +74,8 @@ META_LANE_INSTRUCTIONS = (
     "Precision is the whole game. Honor each rule's confidence floor and its suppressors; where "
     "a rule says so, phrase the finding as a question to confirm rather than an assertion. "
     'Follow the shared "Output format" exactly: one finding per line, nothing at all when there '
-    "are no findings. Work from the diff as given; do not re-derive it."
+    "are no findings. You are handed only the changed-file inventory, not a pasted diff — pulling "
+    "each file's diff and reading into the surrounding code is exactly this lane's job."
 )
 
 # The holistic meta lane only runs on larger diffs — its rules need the whole change, and on a
@@ -103,11 +114,11 @@ COMPOSER_INSTRUCTIONS = (
     "their slice of the catalog and emitted findings in the Output format above — including one "
     "holistic 'meta' lane that reasons over the whole change rather than single hunks, so its "
     "findings anchor on different lines than a local finding for the same underlying issue. "
-    "Their labelled raw outputs and the diff follow below. "
+    "Their labelled raw outputs and the changed-file inventory follow below. "
     "You are an EDITOR, not a reviewer: merge them into the single final findings list, reasoned "
-    "— not a blind concat. You do NOT re-scan for new issues, re-derive the diff, or invent "
-    "findings. Read the diff only to adjudicate a duplicate/precedence call or sanity-check that "
-    "a cited line exists.\n\n"
+    "— not a blind concat. You do NOT re-scan for new issues or invent findings. Use read-only "
+    "git and Read only to adjudicate a duplicate/precedence call or sanity-check that a cited "
+    "line exists.\n\n"
     "PRIME DIRECTIVE — KEEP EVERY DISTINCT FINDING. Default to KEEP. Trust the lanes: a finding "
     "survives even if you would not have raised it, even if its confidence is low, even if its "
     'rule isn\'t "yours." The Self-evaluation / "when uncertain, suppress" guidance above governs '
@@ -167,15 +178,29 @@ def _parse_findings(stdout: str) -> list[list]:
     return rows
 
 
-def _diff_stats(diff: str) -> tuple[int, int, int]:
+def _diff_numstat(merge_base: str) -> tuple[int, int, int]:
+    """`(files, added, removed)` for the branch vs `merge_base`, from `git diff --numstat`.
+
+    Binary files (numstat renders their counts as `-`) count as one changed file with
+    zero line deltas. Used for telemetry and the meta lane's diff-size gate.
+    """
+    out = subprocess.run(
+        ["git", "diff", "--numstat", merge_base],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
     files = added = removed = 0
-    for line in diff.splitlines():
-        if line.startswith("diff --git "):
-            files += 1
-        elif line.startswith("+") and not line.startswith("+++"):
-            added += 1
-        elif line.startswith("-") and not line.startswith("---"):
-            removed += 1
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        files += 1
+        if parts[0].isdigit():
+            added += int(parts[0])
+        if parts[1].isdigit():
+            removed += int(parts[1])
     return files, added, removed
 
 
@@ -240,6 +265,18 @@ def _lint_review_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k not in LINT_REVIEW_STRIPPED_ENV}
 
 
+def _with_git_access(agent_cmd: list[str]) -> list[str]:
+    """Grant a headless `claude` agent read access to git and the tree so each lane can
+    probe the changed files itself (we hand it a `--stat`, not a pasted diff).
+
+    No-op for a non-`claude` agent or when `--allowedTools` is already set: the flag is
+    Claude Code's, and other agents (e.g. `codex exec`) manage their own permissions.
+    """
+    if os.path.basename(agent_cmd[0]) != "claude" or "--allowedTools" in agent_cmd:
+        return agent_cmd
+    return [*agent_cmd, "--allowedTools", LINT_REVIEW_ALLOWED_TOOLS]
+
+
 def _run_agent(agent_cmd: list[str], env: dict[str, str], prompt: str) -> subprocess.CompletedProcess | None:
     """Run one headless agent over `prompt`; None if it times out."""
     try:
@@ -273,22 +310,42 @@ def _read_worktree(rel_path: str) -> str | None:
         return None
 
 
-def _lane_prompt(shared_text: str, lane: LintLane, diff: str, leads: str) -> str:
+def _change_context(merge_base: str, stat: str) -> str:
+    """The concrete change handed to each lane/composer: the merge-base SHA and the
+    `git diff --stat` inventory. How to inspect it — probe per file, what to skip — lives
+    in the catalog's "Inputs" section, which is in the same prompt, so it is not repeated here.
+    """
+    return (
+        "## The change\n\n"
+        f"Merge base: `{merge_base}`. Inspect each changed file below per the catalog's "
+        '"Inputs" section (`git diff` or `Read` it; skip what it says to skip).\n\n'
+        f"```\n{stat}\n```"
+    )
+
+
+def _lane_prompt(shared_text: str, lane: LintLane, merge_base: str, stat: str, leads: str) -> str:
     parts = [shared_text, (LINT_DIR / f"{lane.name}.md").read_text()]
     if lane.include_complexity_leads and leads:
         parts.append(leads)
     parts.append(lane.instructions)
-    parts.append(f"```diff\n{diff}\n```")
+    parts.append(_change_context(merge_base, stat))
     return "\n\n".join(parts) + "\n"
 
 
 def _run_lanes(
-    lanes: list[LintLane], shared_text: str, diff: str, leads: str, agent_cmd: list[str], env: dict[str, str]
+    lanes: list[LintLane],
+    shared_text: str,
+    merge_base: str,
+    stat: str,
+    leads: str,
+    agent_cmd: list[str],
+    env: dict[str, str],
 ) -> list[LaneResult]:
     results: dict[str, LaneResult] = {}
     with ThreadPoolExecutor(max_workers=len(lanes)) as pool:
         futures = {
-            pool.submit(_run_agent, agent_cmd, env, _lane_prompt(shared_text, lane, diff, leads)): lane for lane in lanes
+            pool.submit(_run_agent, agent_cmd, env, _lane_prompt(shared_text, lane, merge_base, stat, leads)): lane
+            for lane in lanes
         }
         for future in as_completed(futures):
             lane = futures[future]
@@ -309,10 +366,15 @@ def _lane_body(result: LaneResult) -> str:
 
 
 def _compose(
-    lane_results: list[LaneResult], shared_text: str, diff: str, agent_cmd: list[str], env: dict[str, str]
+    lane_results: list[LaneResult],
+    shared_text: str,
+    merge_base: str,
+    stat: str,
+    agent_cmd: list[str],
+    env: dict[str, str],
 ) -> subprocess.CompletedProcess | None:
     labelled = "\n\n".join(f"=== Lane: {r.name} ===\n{_lane_body(r)}" for r in lane_results)
-    prompt = "\n\n".join([shared_text, COMPOSER_INSTRUCTIONS, labelled, f"```diff\n{diff}\n```"]) + "\n"
+    prompt = "\n\n".join([shared_text, COMPOSER_INSTRUCTIONS, labelled, _change_context(merge_base, stat)]) + "\n"
     return _run_agent(agent_cmd, env, prompt)
 
 
@@ -328,12 +390,13 @@ def _concat_findings(lane_results: list[LaneResult]) -> str:
     return "\n".join(f"{p}:{ln}: {code} ({conf:.2f}) {msg}" for p, ln, code, conf, msg in ordered)
 
 
-def _resolve_review_diff() -> tuple[str, str] | None:
-    """Resolve the merge-base with origin/main and the branch diff.
+def _resolve_review_stat() -> tuple[str, str] | None:
+    """Resolve the merge-base with origin/main and a `git diff --stat` of the branch.
 
-    Returns `(merge_base, diff)`, or None (after echoing the reason) when the
-    merge-base can't be resolved or there are no Python/proto changes — both
-    advisory no-ops for the caller.
+    Returns `(merge_base, stat)`, or None (after echoing the reason) when the
+    merge-base can't be resolved or the branch has no changes — both advisory
+    no-ops for the caller. Lanes get this changed-file inventory (every file, any
+    language), not a pasted diff, and probe each file themselves.
     """
     base = subprocess.run(["git", "merge-base", "origin/main", "HEAD"], cwd=ROOT_DIR, capture_output=True, text=True)
     if base.returncode != 0:
@@ -341,27 +404,28 @@ def _resolve_review_diff() -> tuple[str, str] | None:
         click.echo(f"    (run `git fetch origin main` first; git said: {base.stderr.strip()})")
         return None
     merge_base = base.stdout.strip()
-    # Diff the working tree against the merge-base: covers all branch work,
-    # committed and uncommitted, so the review runs whether or not the author
-    # has committed before reaching the pre-push checklist.
-    diff = subprocess.run(
-        ["git", "diff", merge_base, "-U15", "--", "*.py", "*.proto"],
+    # Stat the working tree against the merge-base: covers all branch work, committed and
+    # uncommitted, so the review runs whether or not the author has committed before the
+    # pre-push checklist.
+    stat = subprocess.run(
+        ["git", "diff", "--stat", merge_base],
         cwd=ROOT_DIR,
         capture_output=True,
         text=True,
         check=True,
     ).stdout
-    if not diff.strip():
-        click.echo("Lint review: no Python/proto changes on this branch.")
+    if not stat.strip():
+        click.echo("Lint review: no changes on this branch.")
         return None
-    return merge_base, diff
+    return merge_base, stat
 
 
 def _merge_lane_results(
     lane_results: list[LaneResult],
     lanes: list[LintLane],
     shared_text: str,
-    diff: str,
+    merge_base: str,
+    stat: str,
     agent_cmd: list[str],
     env: dict[str, str],
     compose: bool,
@@ -372,7 +436,7 @@ def _merge_lane_results(
     """
     timed_out = any(r.returncode is None for r in lane_results)
     if compose and len(lanes) > 1:
-        cp = _compose(lane_results, shared_text, diff, agent_cmd, env)
+        cp = _compose(lane_results, shared_text, merge_base, stat, agent_cmd, env)
         if cp is None:
             click.echo("  ⚠ Lint composer timed out; falling back to concat")
             return _concat_findings(lane_results), "compose", -1, True
@@ -388,14 +452,14 @@ def _ship_review_event(
     mode: str,
     agent_cmd: list[str],
     merge_base: str,
-    diff: str,
+    diff_stats: tuple[int, int, int],
     started: float,
     composer_rc: int,
     timed_out: bool,
     findings: list[list],
 ) -> None:
     """Assemble and ship the review's telemetry event (see infra/codehealth/log_stats.py)."""
-    diff_files, diff_added, diff_removed = _diff_stats(diff)
+    diff_files, diff_added, diff_removed = diff_stats
     _ship_review_stats(
         {
             "invocation_id": str(uuid.uuid4()),
@@ -424,10 +488,11 @@ def _ship_review_event(
 
 
 def run_lint_review(agent_command: str, lane_names: list[str] | None = None, compose: bool = True) -> int:
-    """Run the advisory `infra/lint/` catalog over the branch diff via headless agents.
+    """Run the advisory `infra/lint/` catalog over the branch's changes via headless agents.
 
-    Fans out one agent per lane (see `LINT_LANES`); the complexity lane is also
-    fed static-complexity leads. Their outputs are merged by a composer agent
+    Fans out one agent per lane (see `LINT_LANES`); each lane is handed the changed-file
+    inventory (`git diff --stat`) plus read-only git access and probes the files itself.
+    The complexity lane is also fed static-complexity leads. Their outputs are merged by a composer agent
     (`compose=True`) or a deterministic dedupe-and-concat (`compose=False`).
     `lane_names` restricts the run to a subset of lanes for debugging.
 
@@ -455,17 +520,18 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
         agent_name = agent_cmd[0] if agent_cmd else "(empty)"
         click.echo(f"  ⚠ Lint review skipped: agent '{agent_name}' not found on PATH")
         return 0
+    agent_cmd = _with_git_access(agent_cmd)
 
-    resolved = _resolve_review_diff()
+    resolved = _resolve_review_stat()
     if resolved is None:
         return 0
-    merge_base, diff = resolved
+    merge_base, stat = resolved
 
     # Drop lanes whose diff-size floor the change doesn't clear (only the holistic meta lane
     # sets one). Do this before computing leads / running agents so neither pays for a lane
     # that will not run.
-    _, added, removed = _diff_stats(diff)
-    changed_lines = added + removed
+    diff_stats = _diff_numstat(merge_base)
+    changed_lines = diff_stats[1] + diff_stats[2]
     runnable = []
     for lane in lanes:
         if changed_lines > lane.min_diff_lines:
@@ -485,7 +551,7 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
     env = _lint_review_env()
     started = time.time()
 
-    lane_results = _run_lanes(lanes, shared_text, diff, leads, agent_cmd, env)
+    lane_results = _run_lanes(lanes, shared_text, merge_base, stat, leads, agent_cmd, env)
     for r in lane_results:
         if r.returncode is None:
             click.echo(f"  ⚠ Lint lane '{r.name}' timed out after {LINT_REVIEW_TIMEOUT}s")
@@ -494,10 +560,10 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
             click.echo(f"  ⚠ Lint lane '{r.name}' exited {r.returncode}: {detail}")
 
     findings_text, mode, composer_rc, timed_out = _merge_lane_results(
-        lane_results, lanes, shared_text, diff, agent_cmd, env, compose
+        lane_results, lanes, shared_text, merge_base, stat, agent_cmd, env, compose
     )
     parsed = _parse_findings(findings_text) if findings_text else []
-    _ship_review_event(mode, agent_cmd, merge_base, diff, started, composer_rc, timed_out, parsed)
+    _ship_review_event(mode, agent_cmd, merge_base, diff_stats, started, composer_rc, timed_out, parsed)
 
     if all(r.returncode != 0 for r in lane_results):
         click.echo("  ⚠ Lint review: every lane failed to run (is the agent CLI working?)")
