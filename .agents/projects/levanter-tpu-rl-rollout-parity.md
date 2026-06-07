@@ -255,8 +255,8 @@ thread. Keep background-style work narrow and explicit until the app is stable:
 - Merge state verified by lightweight GitHub metadata after the latest handoff
   refresh on 2026-06-07: #6176 is open, non-draft, clean, and at head
   `104bf901`; #6185 is open, non-draft, clean, and at head `d63d1edf`; #6186
-  is open, non-draft, clean, and at head `c4ba37b`; #6214 is open, draft,
-  review-required, and terminal green/skipped at head `dbc3bf595`; #6240 is
+  is open, non-draft, clean, and at head `c4ba37b`; #6214 is open, non-draft,
+  review-required, and terminal green/skipped at head `2c43f0d91`; #6240 is
   open, non-draft, clean, and at head `32505d1ca`. All visible checks are green
   or skipped on these heads. #6176, #6185, #6186, #6214, and #6240 PR
   descriptions link back to parent epic #6227 and their child trackers where
@@ -398,8 +398,8 @@ thread. Keep background-style work narrow and explicit until the app is stable:
   and all visible checks are green/skipped after failed-job reruns for known
   external Hugging Face/cache classes in `marin-integration` and
   `levanter-unit`. Do not rerun those workflows again automatically. #6214 at
-  `dbc3bf595` also has all visible checks green or skipped and remains draft as
-  a handoff artifact.
+  `2c43f0d91` also has all visible checks green or skipped and is ready for
+  review.
 - Issue #6184 has the final proof comment:
   `https://github.com/marin-community/marin/issues/6184#issuecomment-4637412411`.
 - PR #6186 adds the first RL batched-token rollout API contracts, stacked on
