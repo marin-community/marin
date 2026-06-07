@@ -39,6 +39,7 @@ from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.provider import ProviderUnsupportedError
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.reconcile.worker import ReconcileResult
 from iris.cluster.controller.schema import (
     jobs_table,
     task_attempts_table,
@@ -108,8 +109,6 @@ class FakeProvider:
         return []
 
     def dispatch_reconcile_plans(self, plans, addresses):
-        from iris.cluster.controller.reconcile.worker import ReconcileResult
-
         return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]
 
     def close(self) -> None:

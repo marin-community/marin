@@ -5,20 +5,18 @@ import dataclasses
 import json
 import tempfile
 
+import haliax as hax
 import numpy as np
 from jax import random
-
-import haliax as hax
+from test_utils import skip_if_no_torch, use_test_mesh
+from transformers.models.qwen3 import Qwen3Config as HFQwen3Config
 
 from levanter.layers.attention import AttentionMask
 from levanter.models.qwen import Qwen3Config, Qwen3LMHeadModel
-from test_utils import skip_if_no_torch, use_test_mesh
 
 
 def _hf_qwen_config(vocab_size=151936):
     """Return a tiny transformers Qwen2Config tweaked for tests but with qk-norm on."""
-    from transformers.models.qwen3 import Qwen3Config
-
     cfg_dict = {
         "architectures": ["Qwen3LMHeadModel"],
         "hidden_size": 16,
@@ -33,13 +31,13 @@ def _hf_qwen_config(vocab_size=151936):
         "rope_scaling": None,
         "no_bias": True,
     }
-    return Qwen3Config(**cfg_dict)  # type: ignore
+    return HFQwen3Config(**cfg_dict)  # type: ignore
 
 
 @skip_if_no_torch
 def test_qwen3_roundtrip(local_gpt2_tokenizer_path):
-    import torch
-    from transformers.models.qwen3 import Qwen3ForCausalLM
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.qwen3 import Qwen3ForCausalLM  # noqa: PLC0415  # optional dep: torch (HF modeling class)
 
     Vocab = hax.Axis("vocab", 151936)
     hf_config = _hf_qwen_config(Vocab.size)

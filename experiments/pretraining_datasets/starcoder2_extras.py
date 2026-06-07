@@ -13,8 +13,8 @@ from marin.datakit.normalize import normalize_step
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-from experiments.defaults import default_tokenize
 from experiments.marin_models import marin_tokenizer
+from experiments.tokenize_helpers import default_tokenize
 
 
 def tokenize_starcoder2_extras(*, tokenizer: str = marin_tokenizer) -> list[TokenizerStep]:

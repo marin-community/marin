@@ -16,11 +16,12 @@ from levanter.data.text import PreferenceChatLmDatasetFormat
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_data_config
 
-from experiments.defaults import default_dpo, default_tokenize
+from experiments.defaults import default_dpo
 from experiments.llama import LLAMA3_CHAT_STOP_TOKEN_IDS, llama_8b
 from experiments.marin_models import marin_tokenizer
 from experiments.posttrain.preference_datasets import get_preference_dataset
 from experiments.simple_dpo_config import SimpleDPOConfig
+from experiments.tokenize_helpers import default_tokenize
 
 DATASET_NAME = "HuggingFaceH4/ultrafeedback_binarized"
 

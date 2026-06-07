@@ -25,7 +25,7 @@ from rigging.timing import Deadline
 
 from iris.cluster.config_serde import config_to_dict
 from iris.cluster.providers.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
-from iris.cluster.providers.k8s.service import K8sService
+from iris.cluster.providers.k8s.service import CloudK8sService, K8sService
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.providers.types import InfraError, Labels, local_queue_name
 from iris.rpc import config_pb2
@@ -98,7 +98,7 @@ def configure_client_s3(config: config_pb2.IrisClusterConfig) -> None:
     # Flush fsspec/s3fs cached instances so they pick up the new config.
     fsspec.config.set_conf_env(fsspec.config.conf)
     try:
-        import s3fs
+        import s3fs  # noqa: PLC0415  # guarded import: optional s3fs cache flush
 
         s3fs.S3FileSystem.clear_instance_cache()
     except ImportError:
@@ -234,8 +234,6 @@ class K8sControllerProvider:
         if kubectl is not None:
             self._kubectl: K8sService = kubectl
         else:
-            from iris.cluster.providers.k8s.service import CloudK8sService
-
             self._kubectl = CloudK8sService(
                 namespace=self._namespace,
                 kubeconfig_path=None if os.environ.get("KUBECONFIG") else (config.kubeconfig_path or None),

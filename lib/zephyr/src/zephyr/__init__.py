@@ -9,10 +9,8 @@ from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import (
     CounterSnapshot,
-    WorkerContext,
     ZephyrContext,
     ZephyrExecutionResult,
-    zephyr_worker_ctx,
 )
 from zephyr.expr import Expr, col, lit
 from zephyr.plan import compute_plan
@@ -25,6 +23,7 @@ from zephyr.readers import (
     load_vortex,
     load_zip_members,
 )
+from zephyr.worker_context import WorkerContext, zephyr_worker_ctx
 from zephyr.writers import write_jsonl_file, write_parquet_file, write_vortex_file
 
 logger = logging.getLogger(__name__)

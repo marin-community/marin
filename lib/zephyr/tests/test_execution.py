@@ -24,23 +24,24 @@ from zephyr.dataset import Dataset
 from zephyr.execution import (
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
-    ZEPHYR_STAGE_BYTES_PROCESSED_KEY,
-    ZEPHYR_STAGE_ITEM_COUNT_KEY,
     CoordinatorUnreachable,
-    CounterSnapshot,
-    ListShard,
-    PickleDiskChunk,
     PullStatus,
-    ShardTask,
-    TaskResult,
     WorkerState,
     ZephyrContext,
     ZephyrCoordinator,
     ZephyrWorker,
     ZephyrWorkerError,
-    zephyr_worker_ctx,
 )
 from zephyr.plan import PhysicalStage, StageType, compute_plan
+from zephyr.shuffle import ListShard
+from zephyr.stage_io import (
+    ZEPHYR_STAGE_BYTES_PROCESSED_KEY,
+    ZEPHYR_STAGE_ITEM_COUNT_KEY,
+    PickleDiskChunk,
+    ShardTask,
+    TaskResult,
+)
+from zephyr.worker_context import CounterSnapshot, zephyr_worker_ctx
 
 
 def test_simple_map(zephyr_ctx):

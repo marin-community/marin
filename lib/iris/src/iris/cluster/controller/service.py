@@ -21,7 +21,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
-from sqlalchemy import bindparam, func, select, text, tuple_
+from sqlalchemy import bindparam, case, func, select, text, tuple_
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints, validate_tpu_request
@@ -726,8 +726,6 @@ def _attempts_for_worker(
     independent state/duration per attempt rather than inheriting from the
     parent task (which produced bogus duplicate-RUNNING rows).
     """
-    from sqlalchemy import case
-
     with db.read_snapshot() as tx:
         raw_rows = tx.execute(
             select(*reads.ATTEMPT_COLS)

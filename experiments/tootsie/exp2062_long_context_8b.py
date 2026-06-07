@@ -27,7 +27,7 @@ from marin.processing.tokenize.data_configs import (
     lm_varying_mixture_data_config,
 )
 
-from experiments.defaults import default_tokenize, default_train
+from experiments.defaults import default_train
 from experiments.llama import llama_8b
 from experiments.long_context_datasets import (
     finepdfs_edu_by_language,
@@ -40,6 +40,7 @@ from experiments.marin_models import marin_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS
 from experiments.simple_train_config import SimpleTrainConfig
+from experiments.tokenize_helpers import default_tokenize
 from experiments.tootsie.exp600_tootsie import (
     PHASE_3_START,
     PHASE_4_END,

@@ -20,7 +20,7 @@ from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-from experiments.defaults import default_tokenize
+from experiments.tokenize_helpers import default_tokenize
 
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 

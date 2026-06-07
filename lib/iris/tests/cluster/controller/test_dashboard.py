@@ -11,12 +11,14 @@ from unittest.mock import Mock
 
 import pytest
 from finelog.client.proxy import LogServiceProxy
+from finelog.rpc import logging_pb2
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.cluster.controller.direct_provider import DirectProviderBatch
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.reads import healthy_active_workers_with_attributes
@@ -31,9 +33,17 @@ from iris.cluster.controller.scheduler import (
 )
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.providers.k8s.fake import InMemoryK8sService
+from iris.cluster.providers.k8s.tasks import (
+    _LABEL_MANAGED,
+    _LABEL_RUNTIME,
+    _RUNTIME_LABEL_VALUE,
+    K8sTaskProvider,
+)
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
+from iris.rpc.auth import StaticTokenVerifier
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
 from sqlalchemy import func, select
@@ -79,8 +89,6 @@ def set_job_state(
     """Directly set job state in DB for dashboard-only read-model tests."""
     values: dict = {"state": new_state}
     if started_at_ms is not None:
-        from rigging.timing import Timestamp
-
         values["started_at_ms"] = Timestamp.from_ms(started_at_ms)
     with state._db.transaction() as tx:
         tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(**values))
@@ -1142,8 +1150,6 @@ def test_fetch_logs_backward_compat_proxy(client):
 
 def test_fetch_logs_backward_compat_proxy_proto_binary(client):
     """Old clients using default Connect proto encoding hit the compat endpoint."""
-    from finelog.rpc import logging_pb2
-
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     req = logging_pb2.FetchLogsRequest(
         source=f"{task_id}:",
@@ -1311,8 +1317,6 @@ def test_auth_config_returns_disabled_by_default(client):
 
 def test_auth_config_returns_enabled_when_verifier_set(service, log_service):
     """Auth config endpoint reports auth enabled with provider name."""
-    from iris.rpc.auth import StaticTokenVerifier
-
     verifier = StaticTokenVerifier({"test-token": "test-user"})
     dashboard = ControllerDashboard(service, log_service=log_service, auth_verifier=verifier, auth_provider="gcp")
     authed_client = TestClient(dashboard.app)
@@ -1362,9 +1366,6 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path, embedd
 
 def _make_k8s_dashboard_client(state, scheduler, tmp_path, embedded_log_server, log_client):
     """Build a TestClient wired to a real K8sTaskProvider backed by InMemoryK8sService."""
-    from iris.cluster.providers.k8s.fake import InMemoryK8sService
-    from iris.cluster.providers.k8s.tasks import K8sTaskProvider
-
     k8s = InMemoryK8sService(namespace="iris")
     provider = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest")
     controller_mock = _make_controller_mock(state, scheduler)
@@ -1386,9 +1387,6 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path, embedded_log_server, 
 
 def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path, embedded_log_server, log_client):
     """GetKubernetesClusterStatus returns node capacity and pod statuses after sync."""
-    from iris.cluster.controller.direct_provider import DirectProviderBatch
-    from iris.cluster.providers.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
-
     client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path, embedded_log_server, log_client)
 
     # Seed nodes and a pod.

@@ -17,6 +17,8 @@ import os
 import re
 from typing import NamedTuple
 
+import yaml
+
 # Default oracle model. Sonnet 4.6 is the best general-purpose Claude for
 # scoring with a calibrated rubric — Haiku is cheaper but tends to bunch
 # scores at 3 and miss obvious low-quality docs.
@@ -152,8 +154,6 @@ def read_anthropic_key() -> str:
     key = os.environ.get("ANTHROPIC_API_KEY")
     if key:
         return key
-    import yaml
-
     here = os.path.dirname(os.path.abspath(__file__))
     cand = os.path.normpath(os.path.join(here, "..", "..", "..", "..", ".marin.yaml"))
     if os.path.exists(cand):

@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Tuple, Type,
 import draccus
 import equinox as eqx
 import haliax
-from rigging.filesystem import url_to_fs
 import huggingface_hub
 import humanfriendly
 import jax
@@ -38,7 +37,7 @@ from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceMapping
 from haliax.state_dict import StateDict, from_torch_compatible_state_dict, save_state_dict
-from huggingface_hub import HfApi, hf_hub_download, repo_exists, snapshot_download, ModelInfo
+from huggingface_hub import HfApi, ModelInfo, hf_hub_download, repo_exists, snapshot_download
 from huggingface_hub.errors import HfHubHTTPError
 from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
@@ -47,14 +46,15 @@ from jax._src.mesh import get_concrete_mesh
 from jax._src.partition_spec import PartitionSpec
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
+from rigging.filesystem import url_to_fs
 from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import read_safetensors_fsspec
 from levanter.models.asr_model import ASRMixin
 from levanter.models.lm_model import LmConfig, LmHeadModel
-from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.tokenizers import MarinTokenizer
+from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.jax_utils import best_effort_sharding, sync_global_devices, use_cpu_device
 from levanter.utils.logging import silence_transformer_nag
@@ -65,6 +65,7 @@ from transformers import (  # noqa: E402  # noqa: E402
     AutoConfig,
     AutoModel,
     AutoModelForCausalLM,
+    AutoProcessor,
     AutoTokenizer,
     PreTrainedTokenizerBase,
 )
@@ -315,7 +316,7 @@ KEYS_TO_COPY_FROM_BASE_CONFIG = {
 
 
 def _load_torch(path, dtype, fs: AbstractFileSystem | None = None):
-    import torch  # noqa: F401
+    import torch  # noqa: F401, PLC0415  # optional dep: torch
 
     device = torch.device("cpu")
     with contextlib.ExitStack() as stack:
@@ -1338,8 +1339,6 @@ def load_processor(
     model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True
 ) -> "ProcessorMixin":
     """Like AutoProcessor.from_pretrained, but works with gs:// paths or anything on fsspec"""
-    from transformers import AutoProcessor
-
     with _patch_hf_hub_download():
         return _hf_hub_retry(
             lambda: AutoProcessor.from_pretrained(
@@ -1370,7 +1369,7 @@ def upload_to_hub(local_path: str, repo_ref: Union[str, RepoRef], **hf_upload_kw
 
 
 def _convert_to_jnp(v, dtype):
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     # we'd rather not convert to float32 to conserve memory, so we convert direct to jax.numpy
     with use_cpu_device():

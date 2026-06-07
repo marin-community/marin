@@ -86,6 +86,8 @@ src_paths = ["src", "tests"]
 "Documentation" = "https://haliax.readthedocs.io/en/latest/"
 
 [tool.ruff.lint]
+# Mirror the root config's local-import ban on top of ruff's default E/F set.
+extend-select = ["PLC0415"]
 ignore = [ "E203", "E501", "W605", "F821", "E266", "F722", "E731", "E741" ]
 
 [tool.setuptools.package-data]

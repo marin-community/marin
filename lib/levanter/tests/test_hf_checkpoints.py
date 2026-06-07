@@ -31,7 +31,7 @@ from tests.test_utils import use_test_mesh
 
 @skip_if_no_torch
 def test_conversion_to_jnp_bfloat16():
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     x = torch.arange(10, dtype=torch.bfloat16) / 3.14
     with pytest.raises(TypeError):

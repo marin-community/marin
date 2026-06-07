@@ -9,17 +9,17 @@ from typing import Optional, cast
 
 import equinox
 import fsspec
+import haliax as hax
 import jax
 import numpy as onp
 import pytest
 from fsspec import AbstractFileSystem
 from jax.random import PRNGKey
 from numpy.testing import assert_allclose
+from test_utils import arrays_only, skip_if_hf_model_not_accessible, skip_if_no_torch
 from transformers import AutoModelForCausalLM
 from transformers import GPT2Config as HfGpt2Config
 from transformers import GPT2LMHeadModel as HfGpt2LMHeadModel
-
-import haliax as hax
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.layers.attention import AttentionMask
@@ -27,7 +27,6 @@ from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.lm_model import LmExample, LmHeadModel
 from levanter.optim import AdamConfig
 from levanter.utils.tree_utils import inference_mode
-from test_utils import arrays_only, skip_if_hf_model_not_accessible, skip_if_no_torch
 from tests.test_utils import use_test_mesh
 
 TEST_GPT2_MODEL_ID = "sshleifer/tiny-gpt2"
@@ -56,7 +55,7 @@ def test_mistral_gpt2_roundtrip():
 
 
 def _roundtrip_compare_gpt2_checkpoint(model_id, revision, config: Optional[Gpt2Config] = None):
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     if config is None:
         converter = Gpt2Config(use_flash_attention=False).hf_checkpoint_converter()
@@ -131,7 +130,7 @@ def test_hf_gradient_fa():
 
 
 def _compare_gpt2_checkpoint_gradients(model_id, revision, config: Optional[Gpt2Config] = None):
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     if config is None:
         hf_config = HfGpt2Config.from_pretrained(model_id, revision=revision)
@@ -260,7 +259,7 @@ def test_hf_save_to_gcs_roundtrip():
         with use_test_mesh():
             simple_model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
 
-            from gcsfs.retry import HttpError
+            from gcsfs.retry import HttpError  # noqa: PLC0415  # guarded import: behind pytest.importorskip("gcsfs")
 
             try:
                 converter.save_pretrained(simple_model, unique_path)

@@ -14,26 +14,22 @@ bugs where orphaned coordinators and workers consume resources indefinitely.
 from __future__ import annotations
 
 import enum
-import itertools
 import logging
 import os
-import pickle
 import sys
 import threading
 import time
 import traceback
 import uuid
 from collections import Counter, defaultdict, deque
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
-from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Any
 
 import cloudpickle
-import humanfriendly
 from fray import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig, current_actor
 from fray.client import JobHandle
 from fray.current_client import current_client, set_current_client
@@ -41,7 +37,7 @@ from fray.local_backend import LocalClient
 from fray.types import Entrypoint, JobRequest
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from rigging.filesystem import marin_temp_bucket, open_url, unique_temp_path, url_to_fs
+from rigging.filesystem import marin_temp_bucket, open_url, url_to_fs
 from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.dataset import Dataset
@@ -56,8 +52,17 @@ from zephyr.plan import (
     StageType,
     compute_plan,
 )
-from zephyr.shuffle import ListShard, MemChunk, _write_scatter
-from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, batchify, ensure_parent_dir
+from zephyr.runners import InlineRunner, SubprocessRunner
+from zephyr.shuffle import ListShard, MemChunk
+from zephyr.stage_io import (
+    ShardTask,
+    StageRunner,
+    TaskResult,
+    _shared_data_path,
+    _stage_throughput,
+)
+from zephyr.worker_context import CounterSnapshot
+from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +78,6 @@ MAX_SHARD_FAILURES = 3
 # storms for any one shard in a multi-shard pipeline.
 MAX_SHARD_INFRA_FAILURES = 20
 
-ZEPHYR_STAGE_ITEM_COUNT_KEY = "zephyr/stage/{stage_name}/item_count"
-ZEPHYR_STAGE_BYTES_PROCESSED_KEY = "zephyr/stage/{stage_name}/bytes_processed"
-
 # Typical status text for a 6-stage pipeline is ~300 chars.
 MAX_STATUS_TEXT_LENGTH = 1000
 
@@ -87,163 +89,10 @@ class ShardFailureKind(enum.StrEnum):
     INFRA = enum.auto()
 
 
-@dataclass(frozen=True)
-class PickleDiskChunk:
-    """Reference to a pickle chunk stored on disk.
-
-    Each write goes to a UUID-unique path to avoid collisions when multiple
-    workers race on the same shard.  No coordinator-side rename is needed;
-    the winning result's paths are used directly and the entire execution
-    directory is cleaned up after the pipeline completes.
-    """
-
-    path: str
-    count: int
-
-    def __iter__(self) -> Iterator:
-        return iter(self.read())
-
-    @classmethod
-    def write(cls, path: str, data: list) -> PickleDiskChunk:
-        """Write *data* to a UUID-unique path derived from *path*.
-
-        The UUID suffix avoids collisions when multiple workers race on
-        the same shard.  The resulting path is used directly for reads —
-        no rename step is required.
-        """
-        ensure_parent_dir(path)
-        data = list(data)
-        count = len(data)
-
-        unique_path = unique_temp_path(path)
-        with open_url(unique_path, "wb") as f:
-            pickle.dump(data, f)
-        return cls(path=unique_path, count=count)
-
-    def read(self) -> list:
-        """Load chunk data from disk."""
-        with open_url(self.path, "rb") as f:
-            return pickle.load(f)
-
-
-# ---------------------------------------------------------------------------
-# Task result
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class CounterSnapshot:
-    """Bundled counter values and monotonically increasing generation tag.
-
-    The generation increments on every snapshot, so each heartbeat and
-    report_result carries a unique tag.  The coordinator uses strict
-    ordering (>) to discard stale or out-of-order updates.
-    """
-
-    counters: dict[str, int]
-    generation: int
-
-    @staticmethod
-    def empty(generation: int = 0) -> CounterSnapshot:
-        return CounterSnapshot(counters={}, generation=generation)
-
-
-@dataclass
-class TaskResult:
-    """Result of a single worker task.
-
-    Always contains a ListShard. For non-scatter stages, refs are
-    PickleDiskChunks. For scatter stages, refs contain file paths
-    (the actual metadata lives in ``.scatter_meta`` sidecar files
-    read lazily by reducers).
-    """
-
-    shard: ListShard
-
-
 def _generate_execution_id() -> str:
     """Generate unique ID for this execution to avoid conflicts."""
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     return f"{ts}-{uuid.uuid4().hex[:8]}"
-
-
-def _format_count(n: float) -> str:
-    """Format a count with SI-style suffixes (K/M/B/T) once it grows past 1k."""
-    abs_n = abs(n)
-    if abs_n >= 1e12:
-        return f"{n / 1e12:.2f}T"
-    if abs_n >= 1e9:
-        return f"{n / 1e9:.2f}B"
-    if abs_n >= 1e6:
-        return f"{n / 1e6:.2f}M"
-    if abs_n >= 1e3:
-        return f"{n / 1e3:.2f}K"
-    if n == int(n):
-        return f"{int(n):,}"
-    return f"{n:.1f}"
-
-
-def _format_bytes(n: float) -> str:
-    """Format a byte count with binary (IEC) prefixes."""
-    return humanfriendly.format_size(int(n), binary=True)
-
-
-@dataclass(frozen=True, repr=False)
-class StageThroughput:
-    """Items and bytes processed by a stage with their per-second rates.
-
-    Item counts/rates use SI suffixes (K/M/B/T); byte totals/rates use binary
-    (IEC) prefixes. The default ``%s`` / ``repr`` rendering is the single
-    canonical text form, used by all coordinator, worker, and per-shard log
-    messages:
-
-        ``items=7 (3.5/s), bytes_processed=1 KiB (512 bytes/s)``
-    """
-
-    items: int
-    bytes_processed: int
-    item_rate: float
-    byte_rate: float
-
-    def __repr__(self) -> str:
-        return (
-            f"items={_format_count(self.items)} ({_format_count(self.item_rate)}/s), "
-            f"bytes_processed={_format_bytes(self.bytes_processed)} ({_format_bytes(self.byte_rate)}/s)"
-        )
-
-
-def _stage_throughput(
-    counters: Mapping[str, int],
-    stage_name: str,
-    elapsed: float,
-) -> StageThroughput | None:
-    """Return throughput stats for *stage_name*, or ``None`` if uninstrumented.
-
-    Returns ``None`` when neither the item nor the byte counter has been
-    recorded for this stage. Map-only stages and stages still in run_stage
-    setup never populate these counters; ``None`` distinguishes that case
-    from a real zero count so callers can suppress misleading "0 items"
-    status lines.
-    """
-    item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name)
-    byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name)
-    if item_key not in counters and byte_key not in counters:
-        return None
-    items = counters.get(item_key, 0)
-    bytes_processed = counters.get(byte_key, 0)
-    item_rate = items / elapsed if elapsed > 0 else 0.0
-    byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
-    return StageThroughput(
-        items=items,
-        bytes_processed=bytes_processed,
-        item_rate=item_rate,
-        byte_rate=byte_rate,
-    )
-
-
-def _shared_data_path(prefix: str, execution_id: str, name: str) -> str:
-    """Path for a shared data object: {prefix}/{execution_id}/shared/{name}.pkl"""
-    return f"{prefix}/{execution_id}/shared/{name}.pkl"
 
 
 def _format_worker_status_md(active_tasks: int, stage: str) -> tuple[str, str]:
@@ -297,74 +146,6 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
                 logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
 
 
-def _write_pickle_chunks(
-    items: Iterator,
-    source_shard: int,
-    chunk_path_fn: Callable[[int], str],
-) -> ListShard:
-    """Batch a plain item stream into pickle chunk files.
-
-    Returns a ListShard containing PickleDiskChunk references.
-    """
-    chunks: list[Iterable] = []
-    for pidx, batch in enumerate(batchify(items, n=INTERMEDIATE_CHUNK_SIZE)):
-        chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), batch)
-        chunks.append(chunk_ref)
-        written = pidx + 1
-        if written % 10 == 0:
-            logger.info(
-                "[shard %d] Wrote %d pickle chunks so far (latest: %d items)",
-                source_shard,
-                written,
-                chunk_ref.count,
-            )
-
-    return ListShard(refs=chunks)
-
-
-def _write_stage_output(
-    stage_gen: Iterator,
-    source_shard: int,
-    stage_dir: str,
-    shard_idx: int,
-    scatter_op: Scatter | None,
-    total_shards: int,
-) -> TaskResult:
-    """Write stage output to disk.
-
-    For scatter stages (``scatter_op`` is set), writes Parquet with envelope
-    wrapping and ``.scatter_meta`` sidecars. Returns TaskResult with compact
-    scatter metadata.
-
-    For non-scatter stages, batches items into pickle chunk files. Returns
-    TaskResult with a ListShard.
-    """
-    if scatter_op is not None:
-        first_item = next(stage_gen, None)
-        if first_item is None:
-            return TaskResult(shard=ListShard(refs=[]))
-
-        full_gen = itertools.chain([first_item], stage_gen)
-
-        num_output_shards = scatter_op.num_output_shards if scatter_op.num_output_shards > 0 else total_shards
-        data_path = f"{stage_dir}/shard-{shard_idx:04d}.shuffle"
-        shard = _write_scatter(
-            full_gen,
-            source_shard,
-            data_path,
-            key_fn=scatter_op.key_fn,
-            num_output_shards=num_output_shards,
-            sort_fn=scatter_op.sort_fn,
-            combiner_fn=scatter_op.combiner_fn,
-        )
-        return TaskResult(shard=shard)
-
-    def chunk_path_fn(idx: int) -> str:
-        return f"{stage_dir}/shard-{shard_idx:04d}/chunk-{idx:04d}.pkl"
-
-    return TaskResult(shard=_write_pickle_chunks(stage_gen, source_shard, chunk_path_fn))
-
-
 class WorkerState(enum.Enum):
     INIT = "init"
     READY = "ready"
@@ -390,18 +171,6 @@ class PullStatus(enum.StrEnum):
     SHUTDOWN = enum.auto()
 
 
-@dataclass
-class ShardTask:
-    """Describes a unit of work for a worker: one shard through one stage."""
-
-    shard_idx: int
-    total_shards: int
-    shard: Shard
-    operations: list[PhysicalOp]
-    stage_name: str = "output"
-    aux_shards: dict[int, Shard] | None = None
-
-
 class ZephyrWorkerError(RuntimeError):
     """Raised when a worker encounters a fatal (non-transient) error."""
 
@@ -418,40 +187,6 @@ class CoordinatorUnreachable(RuntimeError):
 _NON_RETRYABLE_ERRORS = (ZephyrWorkerError, ValueError, TypeError, KeyError, AttributeError, MemoryError)
 
 
-# ---------------------------------------------------------------------------
-# WorkerContext protocol — the public interface exposed to user task code
-# ---------------------------------------------------------------------------
-
-
-class WorkerContext(Protocol):
-    def get_shared(self, name: str) -> Any: ...
-    def increment_counter(self, name: str, value: int = 1) -> None: ...
-    def get_counter_snapshot(self) -> CounterSnapshot: ...
-
-
-_worker_ctx_var: ContextVar[WorkerContext | None] = ContextVar("zephyr_worker_ctx", default=None)
-
-
-def zephyr_worker_ctx() -> WorkerContext:
-    """Get the current worker's context. Only valid inside a worker task."""
-    ctx = _worker_ctx_var.get()
-    if ctx is None:
-        raise RuntimeError("zephyr_worker_ctx() called outside of a worker task")
-    return ctx
-
-
-class StageRunner(Protocol):
-    """Strategy a worker uses to execute a single shard. See ``zephyr.runners``."""
-
-    def execute(
-        self,
-        task: ShardTask,
-        chunk_prefix: str,
-        execution_id: str,
-    ) -> tuple[TaskResult, dict[str, int]]: ...
-    def live_counters(self) -> dict[str, int]: ...
-
-
 def _default_stage_runner_factory_for(client: Client) -> Callable[[int], StageRunner]:
     """Pick the default ``stage_runner_factory`` based on the client type.
 
@@ -463,11 +198,7 @@ def _default_stage_runner_factory_for(client: Client) -> Callable[[int], StageRu
     the other behavior pass ``stage_runner_factory=...`` explicitly.
     """
     if isinstance(client, LocalClient):
-        from zephyr.runners import InlineRunner  # circular import: runners imports execution
-
         return lambda n: InlineRunner(num_workers=n)
-
-    from zephyr.runners import SubprocessRunner  # circular import: runners imports execution
 
     return lambda n: SubprocessRunner(num_workers=n)
 
@@ -1359,8 +1090,6 @@ class ZephyrWorker:
         # ZephyrContext normally pre-resolves this via _CoordinatorJobConfig;
         # the fallback covers callers that construct a worker directly (tests).
         if stage_runner_factory is None:
-            from zephyr.runners import InlineRunner  # circular import: runners imports execution
-
             stage_runner_factory = lambda n: InlineRunner(num_workers=n)  # noqa: E731
 
         self._coordinator = coordinator_handle

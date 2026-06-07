@@ -24,11 +24,11 @@ from marin.execution.types import ExecutorStep, output_path_of
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep, mixture_for_evaluation
 
-from experiments.defaults import default_tokenize
 from experiments.evals.hf_log_probs import default_hf_lm_log_probs
 from experiments.llama import llama3_tokenizer
 from experiments.models import ModelConfig as HFModelConfig
 from experiments.models import download_model_step
+from experiments.tokenize_helpers import default_tokenize
 
 logger = logging.getLogger(__name__)
 

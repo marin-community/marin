@@ -49,6 +49,7 @@ import click
 import uvicorn
 import yaml
 from connectrpc.request import RequestContext
+from iris.cluster.controller import db as db_mod
 from iris.cluster.controller import direct_provider, reads
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
@@ -1132,8 +1133,6 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # ---- resource_usage_by_worker (NEW): full join over unfinished
     #      worker-bound attempts. Runs every scheduling tick. ----
     def _usage_new():
-        from iris.cluster.controller import db as db_mod
-
         with db_mod.read_snapshot(db.sa_read_engine) as snap:
             reads.resource_usage_by_worker(snap)
 
@@ -1158,8 +1157,6 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
     # ---- Full tick: _read_scheduling_state-style aggregate ----
     def _state_read():
-        from iris.cluster.controller import db as db_mod
-
         with db.read_snapshot() as _ptx:
             _schedulable_tasks(_ptx)
         with db.read_snapshot() as _rtx:
@@ -1290,8 +1287,6 @@ def benchmark_polling(db: ControllerDB) -> None:
         ids = worker_ids[:batch_size]
 
         def _reconcile(_ids=ids):
-            from iris.cluster.controller import db as db_mod
-
             target_ids = set(_ids)
             with db_mod.read_snapshot(db.sa_read_engine) as snap:
                 # Worker filter applied in Python to keep the partial index
@@ -1403,8 +1398,6 @@ def benchmark_polling(db: ControllerDB) -> None:
         drain_jid = drain_row.job_id
 
         def _has_unfinished():
-            from iris.cluster.controller import db as db_mod
-
             with db_mod.read_snapshot(db.sa_read_engine) as snap:
                 reads.has_unfinished_worker_attempts(snap, drain_jid)
 

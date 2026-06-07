@@ -43,6 +43,7 @@ from typing import Any
 import fsspec
 from fsspec.implementations.local import LocalFileSystem
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
+from google.cloud import storage
 
 from rigging.distributed_lock import create_lock, default_worker_id
 from rigging.timing import ExponentialBackoff, retry_with_backoff
@@ -261,8 +262,6 @@ def split_gcs_path(gs_uri: str) -> tuple[str, pathlib.Path]:
 
 def get_bucket_location(bucket_name_or_path: str) -> str:
     """Return the GCS bucket's location (lower-cased region string)."""
-    from google.cloud import storage
-
     if bucket_name_or_path.startswith("gs://"):
         bucket_name = split_gcs_path(bucket_name_or_path)[0]
     else:

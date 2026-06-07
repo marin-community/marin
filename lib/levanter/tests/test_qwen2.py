@@ -4,19 +4,17 @@
 import json
 import tempfile
 
+import haliax as hax
 import numpy as np
 from jax import random
-
-import haliax as hax
+from test_utils import skip_if_no_torch, use_test_mesh
+from transformers import Qwen2Config
 
 from levanter.layers.attention import AttentionMask
 from levanter.models.qwen import QwenConfig, QwenLMHeadModel
-from test_utils import skip_if_no_torch, use_test_mesh
 
 
 def get_config(vocab_size=1000):
-    from transformers import Qwen2Config
-
     qwen_cfg = json.loads(
         """
         {
@@ -68,8 +66,8 @@ def get_config(vocab_size=1000):
 
 @skip_if_no_torch
 def test_qwen_roundtrip(local_gpt2_tokenizer_path):
-    import torch
-    from transformers import Qwen2ForCausalLM
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers import Qwen2ForCausalLM  # noqa: PLC0415  # optional dep: torch (HF modeling class)
 
     Vocab = hax.Axis("vocab", 1000)
     hf_config = get_config(Vocab.size)

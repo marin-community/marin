@@ -39,19 +39,18 @@ import pyarrow as pa
 from rigging.filesystem import open_url
 from rigging.log_setup import configure_logging
 
-from zephyr.execution import (
+from zephyr.plan import Scatter, StageContext, run_stage
+from zephyr.stage_io import (
     ZEPHYR_STAGE_BYTES_PROCESSED_KEY,
     ZEPHYR_STAGE_ITEM_COUNT_KEY,
-    CounterSnapshot,
     ShardTask,
     StageRunner,
     TaskResult,
     _shared_data_path,
     _stage_throughput,
-    _worker_ctx_var,
     _write_stage_output,
 )
-from zephyr.plan import Scatter, StageContext, run_stage
+from zephyr.worker_context import CounterSnapshot, _worker_ctx_var
 
 logger = logging.getLogger(__name__)
 

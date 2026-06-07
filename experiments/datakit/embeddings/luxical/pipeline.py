@@ -39,6 +39,7 @@ from typing import Any
 import numpy as np
 import pyarrow as pa
 from fray import ResourceConfig
+from huggingface_hub import hf_hub_download
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import Artifact
 from marin.utils import fsspec_glob
@@ -137,7 +138,7 @@ _LUXICAL_SHARED_KEY = "luxical_npz_url"
 @cache
 def _load_embedder_from_shared() -> Any:
     """Return the native Luxical Embedder loaded via the driver-staged GCS URL."""
-    from luxical.embedder import Embedder
+    from luxical.embedder import Embedder  # noqa: PLC0415  # optional dep: luxical
 
     npz_url: str = zephyr_worker_ctx().get_shared(_LUXICAL_SHARED_KEY)
     fd, local = tempfile.mkstemp(prefix="luxical-", suffix=".npz")
@@ -153,8 +154,6 @@ def _stage_luxical_to_gcs(repo_id: str, weights_filename: str) -> str:
     GCS path. Returns the GCS URL workers will read from. Stable per
     ``(region, repo_id, weights_filename)`` so concurrent / consecutive pipeline
     runs share the staged file."""
-    from huggingface_hub import hf_hub_download
-
     sanitized_repo = repo_id.replace("/", "__")
     staged_url = f"{marin_temp_bucket(ttl_days=1, prefix='luxical-staging')}/{sanitized_repo}/{weights_filename}"
     fs, resolved = url_to_fs(staged_url)

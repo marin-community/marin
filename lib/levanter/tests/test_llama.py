@@ -20,6 +20,7 @@ from test_utils import (
     skip_if_no_torch,
     use_test_mesh,
 )
+from transformers import AutoModelForCausalLM, LlamaForCausalLM
 
 from levanter.layers.attention import AttentionBackend, AttentionMask
 from levanter.main.train_lm import TrainLmConfig
@@ -78,9 +79,13 @@ def test_llama_params():
 @pytest.mark.parametrize("use_flash", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_llama_attention(use_flash, num_kv_heads):
-    import torch
-    from transformers.models.llama.modeling_llama import LlamaAttention as HFLlamaAttention
-    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding as HFLlamaRotaryEmbedding
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+        LlamaAttention as HFLlamaAttention,
+    )
+    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+        LlamaRotaryEmbedding as HFLlamaRotaryEmbedding,
+    )
 
     config = _get_llama_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
 
@@ -120,8 +125,10 @@ def test_llama_param_counts_dont_change_with_seqlen():
 
 @skip_if_no_torch
 def test_llama_rms_norm():
-    import torch
-    from transformers.models.llama.modeling_llama import LlamaRMSNorm as HFLlamaRMSNorm
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+        LlamaRMSNorm as HFLlamaRMSNorm,
+    )
 
     config = _get_llama_config()
     ln = hnn.RmsNorm.init(config.Embed, eps=config.layer_norm_epsilon, use_bias=config.use_bias)
@@ -141,9 +148,13 @@ def test_llama_rms_norm():
 @skip_if_no_torch
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_llama_decoder_layer(num_kv_heads):
-    import torch
-    from transformers.models.llama.modeling_llama import LlamaDecoderLayer as HFLlamaDecoderLayer
-    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding as HFLlamaRotaryEmbedding
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+        LlamaDecoderLayer as HFLlamaDecoderLayer,
+    )
+    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+        LlamaRotaryEmbedding as HFLlamaRotaryEmbedding,
+    )
 
     llama_config = _get_llama_config(num_kv_heads=num_kv_heads)
     key = random.PRNGKey(0)
@@ -220,8 +231,7 @@ def test_llama_lm_head_model_bwd(use_flash, num_kv_heads):
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_llama_roundtrip(scan_layers, num_kv_heads):
-    import torch
-    from transformers import AutoModelForCausalLM, LlamaForCausalLM
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     converter = LlamaConfig().hf_checkpoint_converter()
 
@@ -329,8 +339,6 @@ def test_pass_different_length_seq(num_kv_heads):
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
 def test_state_dict_consistency(scan_layers, num_kv_heads):
-    from transformers import LlamaForCausalLM
-
     config = LlamaConfig(
         max_seq_len=128,
         hidden_dim=16,

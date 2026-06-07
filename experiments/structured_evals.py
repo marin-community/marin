@@ -58,7 +58,7 @@ from marin.transform.structured_text.web_data_commons import (
     stage_web_data_commons_source,
 )
 
-from experiments.defaults import default_tokenize
+from experiments.tokenize_helpers import default_tokenize
 
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 LONG_TAIL_PPL_EPIC_ISSUE = 5005

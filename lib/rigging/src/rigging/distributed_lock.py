@@ -28,8 +28,12 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 
+import botocore.config
+import botocore.session
 import fsspec
+from botocore.exceptions import ClientError
 from google.api_core.exceptions import NotFound
+from google.cloud import storage
 
 logger = logging.getLogger(__name__)
 
@@ -192,8 +196,6 @@ class GcsLease(DistributedLease):
         return (bucket, blob_path)
 
     def _read_with_generation(self) -> tuple[int, Lease | None]:
-        from google.cloud import storage
-
         client = storage.Client()
         bucket_name, blob_path = self._parse_gcs_path(self.lock_path)
         bucket = client.bucket(bucket_name)
@@ -209,8 +211,6 @@ class GcsLease(DistributedLease):
         return (blob.generation, Lease(**data))
 
     def _write(self, lease: Lease, if_generation_match: int) -> None:
-        from google.cloud import storage
-
         client = storage.Client()
         bucket_name, blob_path = self._parse_gcs_path(self.lock_path)
         bucket = client.bucket(bucket_name)
@@ -218,8 +218,6 @@ class GcsLease(DistributedLease):
         blob.upload_from_string(json.dumps(asdict(lease)), if_generation_match=if_generation_match)
 
     def _delete(self) -> None:
-        from google.cloud import storage
-
         client = storage.Client()
         bucket_name, blob_path = self._parse_gcs_path(self.lock_path)
         bucket = client.bucket(bucket_name)
@@ -265,9 +263,6 @@ class S3Lease(DistributedLease):
         headers and causing ``SignatureDoesNotMatch``. Keying by lock path gives
         each ``S3Lease`` instance its own client, avoiding the race.
         """
-        import botocore.config
-        import botocore.session
-
         session = botocore.session.get_session()
         endpoint_url = os.environ.get("AWS_ENDPOINT_URL_S3") or os.environ.get("AWS_ENDPOINT_URL")
         kwargs: dict = {}
@@ -281,8 +276,6 @@ class S3Lease(DistributedLease):
         return session.create_client("s3", **kwargs)
 
     def _read_with_generation(self) -> tuple[int, Lease | None]:
-        from botocore.exceptions import ClientError
-
         client = self._make_client(self.lock_path)
         bucket, key = self._parse_s3_path(self.lock_path)
         try:
@@ -297,8 +290,6 @@ class S3Lease(DistributedLease):
             raise
 
     def _write(self, lease: Lease, if_generation_match: int) -> None:
-        from botocore.exceptions import ClientError
-
         client = self._make_client(self.lock_path)
         bucket, key = self._parse_s3_path(self.lock_path)
         body = json.dumps(asdict(lease)).encode()

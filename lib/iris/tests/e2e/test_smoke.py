@@ -20,8 +20,9 @@ from connectrpc.errors import ConnectError
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client.client import IrisClient, iris_ctx
-from iris.cluster.config import connect_cluster, load_config, make_local_config
+from iris.cluster.config import load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
+from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.providers.local.cluster import LocalCluster
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ReservationEntry, ResourceSpec, gpu_device
 from iris.rpc import config_pb2, controller_pb2, job_pb2
@@ -154,7 +155,7 @@ def smoke_cluster(request):
 def smoke_page(smoke_cluster):
     """Module-scoped Playwright page for smoke dashboard tests."""
     try:
-        import playwright.sync_api as pw
+        import playwright.sync_api as pw  # noqa: PLC0415  # optional dep: playwright
 
         with pw.sync_playwright() as p:
             b = p.chromium.launch()
@@ -932,7 +933,7 @@ def test_dashboard_login_flow():
     """
 
     try:
-        import playwright.sync_api as pw
+        import playwright.sync_api as pw  # noqa: PLC0415  # optional dep: playwright
     except ImportError:
         pytest.skip("playwright not installed")
 

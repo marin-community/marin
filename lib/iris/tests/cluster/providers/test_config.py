@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 import yaml
 from iris.cluster.config import (
-    connect_cluster,
     get_ssh_config,
     load_config,
     make_local_config,
@@ -21,6 +20,7 @@ from iris.cluster.config import (
 from iris.cluster.config_serde import config_to_dict
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.autoscaler_factory import create_autoscaler
+from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.providers.factory import create_provider_bundle
 from iris.cluster.providers.gcp.service import KNOWN_GCP_ZONES
 from iris.rpc import config_pb2, controller_pb2

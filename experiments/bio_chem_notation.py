@@ -36,8 +36,8 @@ from marin.execution.types import ExecutorStep
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
+from experiments.tokenize_helpers import default_tokenize
 
 
 @dataclass(frozen=True)

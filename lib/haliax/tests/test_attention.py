@@ -4,6 +4,7 @@
 
 import numpy as np
 from jax.random import PRNGKey
+from test_utils import skip_if_no_torch
 
 import haliax as hax
 from haliax.nn.attention import (
@@ -12,7 +13,6 @@ from haliax.nn.attention import (
     dot_product_attention_weights,
     forgetful_causal_mask,
 )
-from test_utils import skip_if_no_torch
 
 
 def test_dot_product_attention_requires_axis_to_be_present():
@@ -71,8 +71,10 @@ def test_alibi_attention_bias():
 
 @skip_if_no_torch
 def test_alibi_attention_compared_to_hf():
-    import torch
-    from transformers.models.bloom.modeling_bloom import build_alibi_tensor
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.bloom.modeling_bloom import (  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+        build_alibi_tensor,
+    )
 
     L, H = hax.make_axes(L=1, H=16)
 

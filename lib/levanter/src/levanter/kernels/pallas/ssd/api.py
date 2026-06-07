@@ -3,10 +3,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import math
-from typing import Literal, TypeAlias, cast
 import warnings
+from collections.abc import Sequence
+from typing import Literal, TypeAlias, cast
 
 import jax
 from jaxtyping import Array, Float
@@ -15,13 +15,13 @@ from .config import BlockSizes
 from .reference import (
     intra_chunk_log_alpha_cumsum,
     local_log_alpha,
-    ssd_chunked_forward_reference_batched,
-    ssd_chunked_sequential_reference_batched,
     ssd_chunk_state_reference_batched,
+    ssd_chunked_forward_reference_batched,
+    ssd_chunked_from_local_blocks_reference_batched,
+    ssd_chunked_sequential_reference_batched,
     ssd_intra_chunk_reference_batched,
 )
 from .xla import ssd_chunk_state_xla_batched, ssd_chunked_forward_xla_batched, ssd_intra_chunk_xla_batched
-
 
 Implementation: TypeAlias = Literal["pallas_tpu", "xla", "reference"]
 
@@ -225,8 +225,6 @@ def ssd_chunked_forward(
             flat_b,
             flat_x,
         )
-        from .reference import ssd_chunked_from_local_blocks_reference_batched
-
         y, final_state = ssd_chunked_from_local_blocks_reference_batched(
             flat_a_log_cumsum, flat_c, local_output, chunk_state
         )

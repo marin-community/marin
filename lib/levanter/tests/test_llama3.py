@@ -4,19 +4,18 @@
 import json
 import tempfile
 
+import haliax as hax
 import numpy as np
 import pytest
 from jax import random
-
-import haliax as hax
+from test_utils import skip_if_no_torch, use_test_mesh
 
 from levanter.layers.attention import AttentionMask
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
-from test_utils import skip_if_no_torch, use_test_mesh
 
 
 def get_config(vocab_size=1000):
-    from transformers import LlamaConfig
+    from transformers import LlamaConfig  # noqa: PLC0415  # name shadow: levanter LlamaConfig imported at module top
 
     llama3_cfg = json.loads(
         """
@@ -71,8 +70,11 @@ def get_config(vocab_size=1000):
 @skip_if_no_torch
 @pytest.mark.parametrize("test_seq_len", [128, 256, 512])
 def test_llama3_roundtrip(test_seq_len):
-    import torch
-    from transformers import AutoModelForCausalLM, LlamaForCausalLM
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers import (  # noqa: PLC0415  # optional dep: torch (HF model classes)
+        AutoModelForCausalLM,
+        LlamaForCausalLM,
+    )
 
     Vocab = hax.Axis("vocab", 1000)
     hf_config = get_config(Vocab.size)
@@ -128,9 +130,11 @@ def test_llama3_roundtrip(test_seq_len):
 
 @skip_if_no_torch
 def test_llama3_rotary_embedding():
-    import torch
-    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding as HFLlamaRotaryEmbedding
-    from transformers.models.llama.modeling_llama import apply_rotary_pos_emb
+    import torch  # noqa: PLC0415  # optional dep: torch
+    import transformers.models.llama.modeling_llama as modeling_llama  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+
+    HFLlamaRotaryEmbedding = modeling_llama.LlamaRotaryEmbedding
+    apply_rotary_pos_emb = modeling_llama.apply_rotary_pos_emb
 
     llama_config = get_config()
     device = "cpu"

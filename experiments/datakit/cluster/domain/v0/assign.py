@@ -72,7 +72,7 @@ _INDEX_CACHE: dict[str, dict[str, Any]] = {}
 def _get_index(centroids_uri: str, lookup_uris: dict[int, str]) -> dict[str, Any]:
     """Build or fetch a cached FAISS index + lookups for this worker process."""
     if centroids_uri not in _INDEX_CACHE:
-        import faiss
+        import faiss  # noqa: PLC0415  # optional dep: faiss
 
         logger.info("Loading centroids from %s", centroids_uri)
         centroids = _read_npy(centroids_uri).astype(np.float32, copy=False)

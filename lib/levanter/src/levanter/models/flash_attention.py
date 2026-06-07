@@ -7,19 +7,18 @@
 from typing import Optional, Tuple
 
 import equinox
+import haliax as hax
+import haliax.nn as hnn
 import jax
 import jax.numpy as jnp
 from equinox import filter_eval_shape
-from jaxtyping import PRNGKeyArray
-
-import haliax as hax
-import haliax.nn as hnn
 from haliax import AxisSelection, AxisSpec, ds
 from haliax.jax_utils import named_call
 from haliax.types import PrecisionLike
+from jaxtyping import PRNGKeyArray
 
-from levanter.layers.attention import AttentionMask, dot_product_attention, materialize_mask
-
+from levanter.layers.attention import dot_product_attention
+from levanter.layers.attention_mask import AttentionMask, materialize_mask
 
 BLOCK_SIZE = 1024
 

@@ -7,7 +7,6 @@ from typing import Any, Callable, Dict, Generic, Iterable, Mapping, Sequence, Ty
 import numpy as np
 import pyarrow as pa
 
-
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
 T_contra = TypeVar("T_contra", contravariant=True)
@@ -96,6 +95,17 @@ class _BatchMapTransform(_DatasetTransform):
         self.output_exemplar = output_exemplar
 
 
+class _TransformedDataset:
+    """Marker mixin for datasets carrying a lazy ``_DatasetTransform``.
+
+    ``source`` is duck-typed (a ``ShardedDataSource`` at runtime) and intentionally
+    left untyped so this module stays a leaf with no dependency on sharded_datasource.
+    """
+
+    source: Any
+    _transform: _DatasetTransform
+
+
 def as_record_batch(doc: BatchResult) -> pa.RecordBatch:
     """Converts a document to an arrow-compatible record batch."""
 
@@ -129,8 +139,6 @@ def _construct_composite_batch_processor(dataset):
     """
 
     def rec(dataset):
-        from levanter.data.sharded_datasource import _TransformedDataset  # circular import
-
         if isinstance(dataset, _TransformedDataset):
             source, transforms, batch_transform = rec(dataset.source)
             match dataset._transform:

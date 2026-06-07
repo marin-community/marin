@@ -252,8 +252,11 @@ def test_mixtral_config():
 
 @skip_if_no_torch
 def test_mixtral_roundtrip(local_gpt2_tokenizer_path):
-    import torch
-    from transformers import AutoModelForCausalLM, MixtralForCausalLM
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers import (  # noqa: PLC0415  # optional dep: torch (HF model classes)
+        AutoModelForCausalLM,
+        MixtralForCausalLM,
+    )
 
     # Local tokenizer + no remote reference keeps the roundtrip off the Hub; the
     # tokenizer is incidental (random inputs, logit-equivalence only).
@@ -364,7 +367,7 @@ def test_mixtral_configs(config_file):
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
 def test_state_dict_consistency(scan_layers, num_kv_heads):
-    from transformers import MixtralForCausalLM
+    from transformers import MixtralForCausalLM  # noqa: PLC0415  # optional dep: torch (HF model class)
 
     config = MixtralConfig(
         max_seq_len=128,

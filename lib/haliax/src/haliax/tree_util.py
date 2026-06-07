@@ -11,6 +11,7 @@ import jax.tree_util as jtu
 from jaxtyping import PRNGKeyArray, PyTree
 
 import haliax.nn
+import haliax.random
 
 from .axis import AxisSelector
 from .core import NamedArray
@@ -32,9 +33,7 @@ def tree_map(fn, tree, *rest, is_leaf=None):
 
 
 def _is_scan_stack_leaf(x) -> bool:
-    from haliax.nn.array_stacked import ArrayStacked  # circular import: tree_util -> nn -> embedding -> tree_util
-
-    return isinstance(x, (haliax.nn.Stacked, ArrayStacked))
+    return isinstance(x, (haliax.nn.Stacked, haliax.nn.ArrayStacked))
 
 
 def _array_stacked_in_axes(tree, num_layers: int):
@@ -65,9 +64,7 @@ def scan_aware_tree_map(fn, tree, *rest, is_leaf=None):
             new_inner = haliax.vmap(mapped_fn, x.Block)(x.stacked, *[r.stacked for r in rest])
             return dataclasses.replace(x, stacked=new_inner)  # type: ignore
 
-        from haliax.nn.array_stacked import ArrayStacked  # circular import: tree_util -> nn -> embedding -> tree_util
-
-        if isinstance(x, ArrayStacked):
+        if isinstance(x, haliax.nn.ArrayStacked):
             num_layers = x.num_layers
             in_axes = (
                 _array_stacked_in_axes(x.stacked, num_layers),
@@ -134,7 +131,6 @@ def resize_axis(tree: PyTree[NamedArray], old_axis: AxisSelector, new_size: int,
     manually.
 
     """
-    import haliax.random  # deferred: haliax.__init__ loads random before tree_util; keep lazy to avoid init-order issue
 
     def _resize_one(x, key):
         if not is_named_array(x):

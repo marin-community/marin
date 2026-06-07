@@ -12,12 +12,11 @@ from types import ModuleType, SimpleNamespace
 import marin.profiling.cli as cli_module
 import marin.profiling.xplane as xplane_module
 import pytest
-
-# Intentional private import: exercise the truncation-cap heuristic directly.
-from marin.profiling.ingest import _trace_quality_warnings, summarize_profile_artifact, summarize_trace
+from marin.profiling.ingest import summarize_profile_artifact, summarize_trace
 from marin.profiling.query import compare_profile_summaries, query_profile_summary
 from marin.profiling.report import build_markdown_report
 from marin.profiling.schema import PROFILE_SUMMARY_SCHEMA_VERSION, profile_summary_from_dict
+from marin.profiling.trace_summary import trace_quality_warnings
 from marin.profiling.xplane import (
     XPROF_TABLE_TOOLS,
     _xspace_message_class,
@@ -317,12 +316,12 @@ def test_gap_before_marker_iota_is_attributed_to_payload_op(tmp_path: Path) -> N
 
 
 def test_trace_quality_warning_flags_suspected_truncation_cap() -> None:
-    suspected, warnings = _trace_quality_warnings(num_complete_events=1_000_000)
+    suspected, warnings = trace_quality_warnings(num_complete_events=1_000_000)
     assert suspected is True
     assert warnings
     assert "1,000,000" in warnings[0]
 
-    suspected_small, warnings_small = _trace_quality_warnings(num_complete_events=999_999)
+    suspected_small, warnings_small = trace_quality_warnings(num_complete_events=999_999)
     assert suspected_small is False
     assert warnings_small == []
 
