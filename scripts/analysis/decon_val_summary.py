@@ -46,6 +46,22 @@ def _load_npy(path: str) -> np.ndarray:
         return np.load(f)
 
 
+def _overlap_tokens_for_docs(
+    doc_indices: set[int], offsets: np.ndarray, sorted_window_starts: np.ndarray, sorted_window_ends: np.ndarray
+) -> int:
+    dropped_tokens = 0
+    for d in doc_indices:
+        doc_start = int(offsets[d])
+        doc_end = int(offsets[d + 1])
+        window_index = int(np.searchsorted(sorted_window_ends, doc_start, "right"))
+        while window_index < len(sorted_window_starts) and int(sorted_window_starts[window_index]) < doc_end:
+            dropped_tokens += min(doc_end, int(sorted_window_ends[window_index])) - max(
+                doc_start, int(sorted_window_starts[window_index])
+            )
+            window_index += 1
+    return dropped_tokens
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     files = [f for sub in SUBSETS for f in fsspec_glob(f"{SCRATCH}/{sub}/verified_pairs/*.parquet")]
@@ -77,19 +93,17 @@ def main() -> None:
     logger.info("mapped %d/%d drop ids to doc indices", len(doc_of), len(ids))
 
     # Doc-level dedupe: drop contaminated docs, keep every other val token
-    # (token-exact window∩doc overlap; no whole-window pruning).
-    win_spans = [(w * SEQ_LEN, (w + 1) * SEQ_LEN) for w in windows]
+    # (token-exact window∩doc overlap; no whole-window pruning). Only
+    # contaminated docs matter for the dropped-token count, so avoid scanning
+    # every validation-window/doc span.
+    window_starts = np.sort(windows * SEQ_LEN)
+    window_ends = window_starts + SEQ_LEN
+
     summary = {"subsets": SUBSETS, "pair_files": len(files), "val_docs_total": VAL_DOCS_TOTAL, "cutoffs": {}}
     for cut in CUTOFFS:
         drop_docs = {doc_of[i] for i, j in best.items() if j >= cut and i in doc_of}
-        dropped_tokens = 0
-        for a, b in win_spans:
-            d0 = int(np.searchsorted(offsets, a, "right") - 1)
-            d1 = int(np.searchsorted(offsets, b - 1, "right") - 1)
-            for d in range(d0, d1 + 1):
-                if d in drop_docs:
-                    dropped_tokens += min(b, int(offsets[d + 1])) - max(a, int(offsets[d]))
-        total = len(win_spans) * SEQ_LEN
+        dropped_tokens = _overlap_tokens_for_docs(drop_docs, offsets, window_starts, window_ends)
+        total = len(windows) * SEQ_LEN
         summary["cutoffs"][str(cut)] = {
             "drop_docs": len(drop_docs),
             "clean_docs": VAL_DOCS_TOTAL - len(drop_docs),

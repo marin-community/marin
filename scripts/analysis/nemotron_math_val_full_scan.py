@@ -50,6 +50,8 @@ MIN_REPORT_JACCARD = 0.5
 _WS = re.compile(r"\s+")
 PAIR_SCHEMA = pa.schema([("val_id", pa.string()), ("other_id", pa.string())])
 VERIFIED_PAIR_SCHEMA = pa.schema([("val_id", pa.string()), ("other_id", pa.string()), ("jaccard", pa.float64())])
+JOIN_SOURCE_PAIR = "pair"
+JOIN_SOURCE_CORPUS = "corpus"
 
 
 @dataclass(frozen=True)
@@ -192,13 +194,103 @@ def _verify_shard(shard_path: str, pairs_dir: str, val_docs: str) -> Iterator[di
                 yield {"val_id": val_id, "other_id": id_str, "jaccard": round(jaccard, 4)}
 
 
+def _verify_join_records(source: dict) -> Iterator[dict]:
+    path = source["path"]
+    kind = source["kind"]
+    if kind == JOIN_SOURCE_PAIR:
+        for batch in pq.ParquetFile(fsspec.open(path, "rb").open()).iter_batches(columns=["val_id", "other_id"]):
+            for val_id, other_id in zip(
+                batch.column("val_id").to_pylist(), batch.column("other_id").to_pylist(), strict=True
+            ):
+                yield {"id": other_id, "val_id": val_id, "text": None}
+        return
+
+    if kind == JOIN_SOURCE_CORPUS:
+        for batch in pq.ParquetFile(fsspec.open(path, "rb").open()).iter_batches(columns=["id", "text"]):
+            for id_str, text in zip(batch.column("id").to_pylist(), batch.column("text").to_pylist(), strict=True):
+                yield {"id": id_str, "val_id": None, "text": text}
+        return
+
+    raise ValueError(f"unknown join source kind: {kind}")
+
+
+def _join_record_key(record: dict) -> str:
+    return record["id"]
+
+
+def _verify_join_group(other_id: str, items: Iterator[dict], val_docs: str) -> Iterator[dict]:
+    val_ids: set[str] = set()
+    text: str | None = None
+    for item in items:
+        if item["text"] is not None:
+            text = item["text"]
+        if item["val_id"] is not None:
+            val_ids.add(item["val_id"])
+
+    if text is None:
+        counters.increment("verify/missing_corpus_text")
+        return
+    if not val_ids:
+        return
+
+    val_text = _load_val_text(val_docs)
+    counters.increment("verify/shard_pairs", len(val_ids))
+    other: set[str] | None = None
+    val_shingles: dict[str, set[str]] = {}
+    for val_id in sorted(val_ids):
+        la, lb = len(text), len(val_text[val_id])
+        if min(la, lb) / max(la, lb, 1) < MIN_REPORT_JACCARD:
+            counters.increment("verify/len_pruned")
+            continue
+        if other is None:
+            other = _shingles(text)
+        if val_id not in val_shingles:
+            val_shingles[val_id] = _shingles(val_text[val_id])
+        vs = val_shingles[val_id]
+        union = len(vs | other)
+        jaccard = len(vs & other) / union if union else 0.0
+        counters.increment("verify/exact")
+        if jaccard >= MIN_REPORT_JACCARD:
+            counters.increment("verify/reported")
+            yield {"val_id": val_id, "other_id": other_id, "jaccard": round(jaccard, 4)}
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument("--subset", choices=sorted(SUBSETS), required=True)
     parser.add_argument("--num-perms", type=int, default=284)
     parser.add_argument("--num-bands", type=int, default=71)
+    parser.add_argument(
+        "--output-suffix",
+        default="",
+        help="Suffix for dedup/verify outputs; reusable minhash and candidate-pair inputs stay canonical.",
+    )
+    parser.add_argument(
+        "--dedup-suffix",
+        default=None,
+        help="Suffix for val_pairs_dedup input/output; defaults to --output-suffix.",
+    )
+    parser.add_argument(
+        "--reuse-existing-dedup",
+        action="store_true",
+        help="Skip the dedup stage and use an existing val_pairs_dedup directory.",
+    )
+    parser.add_argument(
+        "--verify-mode",
+        choices=["shard-scan", "key-join"],
+        default="shard-scan",
+        help="Verification strategy. key-join reads dedup pairs once instead of once per corpus shard.",
+    )
+    parser.add_argument("--verify-workers", type=int, default=None)
+    parser.add_argument("--verify-cpu", type=int, default=2)
+    parser.add_argument("--verify-ram", default="48g")
+    parser.add_argument("--verify-disk", default="10g")
     args = parser.parse_args()
+    if "/" in args.output_suffix:
+        raise ValueError("--output-suffix must not contain '/'")
+    if args.dedup_suffix is not None and "/" in args.dedup_suffix:
+        raise ValueError("--dedup-suffix must not contain '/'")
 
     sub = SUBSETS[args.subset]
     scratch = f"gs://marin-{sub.region}/scratch/ahmed/midtrain_dedup/{args.subset}_{args.num_perms}x{args.num_bands}"
@@ -206,98 +298,153 @@ def main() -> None:
     val_ids = load_val_ids(val_docs)
     logger.info("subset=%s shards=%d val_ids=%d scratch=%s", args.subset, sub.shards, len(val_ids), scratch)
 
-    # Val buckets come from the val docs' own minhash, not the corpus minhash:
-    # for subsets other than 4plus, val ids never appear in the corpus.
-    region_scratch = f"gs://marin-{sub.region}/scratch/ahmed/midtrain_dedup"
-    val_source = NormalizedData(main_output_dir=val_docs, dup_output_dir="", counters={})
-    val_minhash = compute_minhash_attrs(
-        source=val_source,
-        output_path=f"{region_scratch}/val_docs_minhash_{args.num_perms}x{args.num_bands}",
-        num_perms=args.num_perms,
-        num_bands=args.num_bands,
-        worker_resources=ResourceConfig(cpu=2, ram="8g", disk="5g"),
-        max_workers=64,
-    )
-    bucket_set: set[str] = set()
-    for path in fsspec_glob(f"{val_minhash.attr_dir}/*.parquet"):
-        for buckets in pq.read_table(path, columns=["buckets"]).column("buckets").to_pylist():
-            bucket_set.update(buckets)
-    val_buckets = frozenset(bucket_set)
-    logger.info("collected %d val buckets", len(val_buckets))
+    dedup_suffix = args.output_suffix if args.dedup_suffix is None else args.dedup_suffix
+    dedup_dir = f"{scratch}/val_pairs_dedup{dedup_suffix}"
+    num_val_buckets: int | None = None
+    if args.reuse_existing_dedup:
+        dedup_files = fsspec_glob(f"{dedup_dir}/*.parquet")
+        if not dedup_files:
+            raise FileNotFoundError(f"--reuse-existing-dedup was set, but no parquet files exist in {dedup_dir}")
+        logger.info("reusing %d existing dedup shards from %s", len(dedup_files), dedup_dir)
+    else:
+        # Val buckets come from the val docs' own minhash, not the corpus minhash:
+        # for subsets other than 4plus, val ids never appear in the corpus.
+        region_scratch = f"gs://marin-{sub.region}/scratch/ahmed/midtrain_dedup"
+        val_source = NormalizedData(main_output_dir=val_docs, dup_output_dir="", counters={})
+        val_minhash = compute_minhash_attrs(
+            source=val_source,
+            output_path=f"{region_scratch}/val_docs_minhash_{args.num_perms}x{args.num_bands}",
+            num_perms=args.num_perms,
+            num_bands=args.num_bands,
+            worker_resources=ResourceConfig(cpu=2, ram="8g", disk="5g"),
+            max_workers=64,
+        )
+        bucket_set: set[str] = set()
+        for path in fsspec_glob(f"{val_minhash.attr_dir}/*.parquet"):
+            for buckets in pq.read_table(path, columns=["buckets"]).column("buckets").to_pylist():
+                bucket_set.update(buckets)
+        val_buckets = frozenset(bucket_set)
+        num_val_buckets = len(val_buckets)
+        logger.info("collected %d val buckets", num_val_buckets)
 
-    source = NormalizedData(main_output_dir=sub.corpus, dup_output_dir="", counters={})
-    minhash = compute_minhash_attrs(
-        source=source,
-        output_path=f"{scratch}/minhash",
-        num_perms=args.num_perms,
-        num_bands=args.num_bands,
-        worker_resources=ResourceConfig(cpu=4, ram="24g", disk="5g"),
-        max_workers=sub.shards,
-    )
-    attr_files = sorted(fsspec_glob(f"{minhash.attr_dir}/*.parquet"))
+        source = NormalizedData(main_output_dir=sub.corpus, dup_output_dir="", counters={})
+        minhash = compute_minhash_attrs(
+            source=source,
+            output_path=f"{scratch}/minhash",
+            num_perms=args.num_perms,
+            num_bands=args.num_bands,
+            worker_resources=ResourceConfig(cpu=4, ram="24g", disk="5g"),
+            max_workers=sub.shards,
+        )
+        attr_files = sorted(fsspec_glob(f"{minhash.attr_dir}/*.parquet"))
 
-    # 71 bands -> ~4.1M val bucket keys broadcast to every worker; 64g held at 1.5M.
-    join_ctx = ZephyrContext(
-        name=f"val-bucket-join-{args.subset}",
-        max_workers=sub.shards,
-        resources=ResourceConfig(cpu=2, ram="64g", disk="10g"),
-        coordinator_resources=ResourceConfig(cpu=4, ram="32g", disk="10g"),
-    )
-    # Include the val docs' minhash rows so val ids appear in every bucket
-    # group (corpus shards alone lack them outside 4plus). _emit_candidate_pairs
-    # dedups via sets, so the redundant val rows for 4plus are harmless.
-    join_files = attr_files + sorted(fsspec_glob(f"{val_minhash.attr_dir}/*.parquet"))
-    pairs_dir = f"{scratch}/val_candidate_pairs"
-    join_ctx.execute(
-        Dataset.from_list(join_files)
-        .flat_map(lambda path, ids=val_ids, vb=val_buckets: _bucket_records(path, ids, vb))
-        .group_by(lambda r: r["bucket"], reducer=_emit_candidate_pairs)
-        .write_parquet(f"{pairs_dir}/pairs-{{shard:05d}}-of-{{total:05d}}.parquet", schema=PAIR_SCHEMA)
-    )
+        # 71 bands -> ~4.1M val bucket keys broadcast to every worker; 64g held at 1.5M.
+        join_ctx = ZephyrContext(
+            name=f"val-bucket-join-{args.subset}",
+            max_workers=sub.shards,
+            resources=ResourceConfig(cpu=2, ram="64g", disk="10g"),
+            coordinator_resources=ResourceConfig(cpu=4, ram="32g", disk="10g", preemptible=False),
+        )
+        # Include the val docs' minhash rows so val ids appear in every bucket
+        # group (corpus shards alone lack them outside 4plus). _emit_candidate_pairs
+        # dedups via sets, so the redundant val rows for 4plus are harmless.
+        join_files = attr_files + sorted(fsspec_glob(f"{val_minhash.attr_dir}/*.parquet"))
+        pairs_dir = f"{scratch}/val_candidate_pairs"
+        join_ctx.execute(
+            Dataset.from_list(join_files)
+            .flat_map(lambda path, ids=val_ids, vb=val_buckets: _bucket_records(path, ids, vb))
+            .group_by(lambda r: r["bucket"], reducer=_emit_candidate_pairs)
+            .write_parquet(
+                f"{pairs_dir}/pairs-{{shard:05d}}-of-{{total:05d}}.parquet",
+                schema=PAIR_SCHEMA,
+                skip_existing=True,
+            )
+        )
 
-    # Dedup the (val_id, other_id) pairs once (3-4B rows -> ~10M); verify
-    # workers then read ~200 MB instead of re-streaming the raw pair list.
-    dedup_dir = f"{scratch}/val_pairs_dedup"
-    dedup_ctx = ZephyrContext(
-        name=f"dedup-pairs-{args.subset}",
-        max_workers=sub.shards,
-        resources=ResourceConfig(cpu=2, ram="32g", disk="10g"),
-        coordinator_resources=ResourceConfig(cpu=4, ram="32g", disk="10g"),
-    )
-    dedup_ctx.execute(
-        Dataset.from_files(f"{pairs_dir}/*.parquet")
-        .load_parquet()
-        .group_by(_pair_key, reducer=_first_pair)
-        .write_parquet(f"{dedup_dir}/pairs-{{shard:05d}}-of-{{total:05d}}.parquet", schema=PAIR_SCHEMA)
-    )
+        # Dedup the (val_id, other_id) pairs once.
+        dedup_ctx = ZephyrContext(
+            name=f"dedup-pairs-{args.subset}",
+            max_workers=sub.shards,
+            resources=ResourceConfig(cpu=2, ram="32g", disk="10g"),
+            coordinator_resources=ResourceConfig(cpu=4, ram="32g", disk="10g", preemptible=False),
+        )
+        dedup_ctx.execute(
+            Dataset.from_files(f"{pairs_dir}/*.parquet")
+            .load_parquet()
+            .group_by(_pair_key, reducer=_first_pair)
+            .write_parquet(
+                f"{dedup_dir}/pairs-{{shard:05d}}-of-{{total:05d}}.parquet",
+                schema=PAIR_SCHEMA,
+                skip_existing=True,
+            )
+        )
     pairs_dir = dedup_dir
 
     corpus_files = sorted(fsspec_glob(f"{sub.corpus}/*.parquet"))
+    verified_out = f"{scratch}/verified_pairs{args.output_suffix}"
+    verify_workers = args.verify_workers or sub.shards
     verify_ctx = ZephyrContext(
         name=f"verify-val-pairs-{args.subset}",
-        max_workers=sub.shards,
-        resources=ResourceConfig(cpu=2, ram="48g", disk="10g"),
-        coordinator_resources=ResourceConfig(cpu=4, ram="32g", disk="10g"),
+        max_workers=verify_workers,
+        resources=ResourceConfig(
+            cpu=args.verify_cpu,
+            ram=args.verify_ram,
+            disk=args.verify_disk,
+            preemptible=True,
+            regions=(sub.region,),
+        ),
+        coordinator_resources=ResourceConfig(
+            cpu=1,
+            ram="8g",
+            disk="10g",
+            preemptible=False,
+            regions=(sub.region,),
+        ),
     )
+    if args.verify_mode == "shard-scan":
+        verify_dataset = Dataset.from_list(corpus_files).flat_map(
+            lambda path, p=pairs_dir, v=val_docs: _verify_shard(path, p, v)
+        )
+    else:
+        pair_sources = [
+            {"kind": JOIN_SOURCE_PAIR, "path": path} for path in sorted(fsspec_glob(f"{pairs_dir}/*.parquet"))
+        ]
+        corpus_sources = [{"kind": JOIN_SOURCE_CORPUS, "path": path} for path in corpus_files]
+        verify_dataset = (
+            Dataset.from_list(pair_sources + corpus_sources)
+            .flat_map(_verify_join_records)
+            .group_by(
+                _join_record_key,
+                reducer=lambda key, items, v=val_docs: _verify_join_group(key, items, v),
+                num_output_shards=sub.shards,
+            )
+        )
     outcome = verify_ctx.execute(
-        Dataset.from_list(corpus_files)
-        .flat_map(lambda path, p=pairs_dir, v=val_docs: _verify_shard(path, p, v))
-        .write_parquet(
-            f"{scratch}/verified_pairs/verified-{{shard:05d}}-of-{{total:05d}}.parquet",
+        verify_dataset.write_parquet(
+            f"{verified_out}/verified-{{shard:05d}}-of-{{total:05d}}.parquet",
             schema=VERIFIED_PAIR_SCHEMA,
+            skip_existing=True,
         )
     )
 
+    stats_name = "scan_stats.json" if not args.output_suffix else f"scan_stats{args.output_suffix}.json"
     stats = {
         "subset": args.subset,
         "num_perms": args.num_perms,
         "num_bands": args.num_bands,
         "num_val_ids": len(val_ids),
-        "num_val_buckets": len(val_buckets),
+        "num_val_buckets": num_val_buckets,
+        "dedup_dir": dedup_dir,
+        "reuse_existing_dedup": args.reuse_existing_dedup,
+        "verify_mode": args.verify_mode,
+        "verify_workers": verify_workers,
+        "verify_cpu": args.verify_cpu,
+        "verify_ram": args.verify_ram,
+        "verify_disk": args.verify_disk,
         "counters": dict(outcome.counters),
-        "verified_out": f"{scratch}/verified_pairs",
+        "verified_out": verified_out,
     }
-    with fsspec.open(f"{scratch}/scan_stats.json", "w") as f:
+    with fsspec.open(f"{scratch}/{stats_name}", "w") as f:
         json.dump(stats, f, indent=2)
     logger.info("stats: %s", json.dumps(stats, indent=2))
 

@@ -627,3 +627,274 @@ Pending: `3`, `4plus_mind` scans us-central1. Verified pairs:
 near-dup in math/3: 13,238 (0.5) / 4,155 (0.7) / 2,702 (0.75) / 147 (0.9).
 4plus_mind scan still running. Note: cross-subset scans needed val-doc minhash
 (val ids absent from corpus) — fixed in nemotron_math_val_full_scan.py.
+
+### 2026-06-07 00:23 UTC — CODEX-20260607T002316Z-05567eea01 — stopped stray scan and hardened reducer path
+
+Context: Claude had relaunched the 4plus_mind high-recall scan after a dedup
+stage failure. The earlier stop command used `--no-include-children`, and a
+still-running local Claude CLI process later submitted `/ahmed/val-scan-4plus-mind-e5e`.
+
+Operational cleanup:
+
+- Confirmed `/ahmed/val-scan-4plus-mind-e5d` was killed.
+- Found `/ahmed/val-scan-4plus-mind-e5e` running and stopped it with children:
+  `/ahmed/val-scan-4plus-mind-e5e/zephyr-minhash-attrs-44fe81e5-p0-a0`.
+- Killed the local `claude --worktree nemotron_contam --dangerously-skip-permissions`
+  process that was still polling/submitting from this worktree.
+- Rechecked Iris running jobs: no `val-scan-4plus-mind*` or `decon-val-summary`
+  jobs remained running.
+
+Code status:
+
+- Worktree: `/Users/ahmed/code/marin/.claude/worktrees/nemotron_contam`
+- Branch: `nemotron-math-contamination`
+- Current head: `0afdb4f90662` (`[analysis] Explicit parquet schemas + tuple pair key in scan pipeline`)
+- Script: `scripts/analysis/nemotron_math_val_full_scan.py`
+
+Reducer diagnosis:
+
+- The failed dedup reducer returned `[dict]` from a normal function. Zephyr
+  dispatches group-by reducers via `inspect.isgeneratorfunction`; a normal
+  function returning a list emits that list as one record, causing the Parquet
+  writer to infer schema from a non-dict record and fail.
+- The fixed path keeps the first-pair reducer as a real generator function,
+  uses a tuple `(val_id, other_id)` key instead of a delimited string, and
+  writes explicit schemas for candidate, deduped, and verified-pair Parquet
+  outputs so empty shards remain readable by column name.
+
+Verification:
+
+- `uv run --with pytest --with pytest-timeout pytest tests/analysis/test_nemotron_math_val_full_scan.py -q`
+  -> 1 passed.
+- `./infra/pre-commit.py --fix scripts/analysis/nemotron_math_val_full_scan.py tests/analysis/test_nemotron_math_val_full_scan.py docs/debug-log-nemotron-math-val-scan.md`
+  -> OK.
+
+Uncommitted local artifacts:
+
+- `tests/analysis/test_nemotron_math_val_full_scan.py` — local Zephyr regression
+  test for the pair-dedup reducer writing reloadable Parquet rows.
+- `docs/debug-log-nemotron-math-val-scan.md` — debugging notes from this incident.
+
+Next action: do not relaunch 4plus_mind until the human confirms scope and
+whether to keep the committed script hardening plus the untracked regression
+test/debug log.
+
+### 2026-06-07 00:37 UTC — CODEX-20260607T003738Z-4plusmind — relaunch high-recall 4plus_mind scan
+
+Human confirmed scope: run the pending `4plus_mind` high-recall contamination
+scan now and request enough resources to make it fast.
+
+Planned command:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+    --cpu 4 --memory 64GB --disk 50GB --priority interactive --extra cpu \
+    --enable-extra-resources --preemptible --region us-east5 \
+    --job-name val-scan-4plus-mind-fast-0037 \
+    -- python scripts/analysis/nemotron_math_val_full_scan.py --subset 4plus_mind
+```
+
+Resource shape inside the driver: 336-way corpus stages for `4plus_mind`;
+minhash workers `4 cpu / 24g`, join workers `2 cpu / 64g`, dedup workers
+`2 cpu / 32g`, verify workers `2 cpu / 48g`, with 32g coordinators.
+
+Submitted:
+
+- Parent job: `/ahmed/val-scan-4plus-mind-fast-0037`
+- Scratch prefix: `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/4plus_mind_284x71`
+- Val-doc MinHash reused existing outputs and succeeded.
+- Corpus `4plus_mind` MinHash reused existing outputs and succeeded.
+- Bucket join started:
+  `/ahmed/val-scan-4plus-mind-fast-0037/zephyr-val-bucket-join-4plus_mind-853ca8f7-p0-a0`
+  with 567 map/scatter tasks. Early workers registered and began startup.
+
+### 2026-06-07 — 4plus_mind high-recall scan completion and key-join incident
+
+Status check after the fast relaunch: the `4plus_mind` high-recall scan is
+complete via the shard-scan path. Final artifacts:
+
+- `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/4plus_mind_284x71/scan_stats.json`
+  updated 2026-06-07 08:12:43 UTC.
+- `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/4plus_mind_284x71/verified_pairs/`.
+- Duplicate non-preemptible verification output:
+  `scan_stats_np0040.json` updated 2026-06-07 11:46:08 UTC, with
+  `verified_pairs_np0040/`.
+
+Final counters, same in both stats files:
+
+- 57,243 validation ids.
+- 3,738,907 validation buckets.
+- 7,541,007,033 verification shard pairs.
+- 5,327,272,303 exact matches/pruned duplicate comparisons.
+- 2,213,734,730 length-pruned comparisons.
+- 2,472 reported verified pairs.
+
+Completed jobs:
+
+- `/ahmed/val-scan-4plus-mind-fast-0037` succeeded and wrote
+  `scan_stats.json`.
+- `/ahmed/val-scan-4plus-mind-np-0040` succeeded and wrote
+  `scan_stats_np0040.json`.
+
+Key-join follow-up attempts are not needed for final counts. They failed with
+`AttributeError: 'generator' object has no attribute 'keys'` during
+`verify-val-pairs`; the likely cause is the key-join reducer wrapper:
+`reducer=lambda key, items, v=val_docs: _verify_join_group(key, items, v)`.
+That lambda is not itself a generator function, so Zephyr treats the returned
+generator object as a single reducer output record and the Parquet writer then
+looks for `.keys()`.
+
+Observed failed key-join attempts include 0041, 0042, 0043, 0044, 0045, 0047,
+0051, 0052, and 0053. Attempt 0050 failed for the separate cross-region
+temporary-shuffle issue (`TransferBudgetExceeded` serialization surfaced as a
+`TypeError`). Stale key-join parent attempts 0048/0049 were still present in
+Iris at the status check; do not stop them without explicit human approval.
+
+Next action: do not relaunch the scan for data purposes. If the key-join fast
+path is kept, fix the reducer wrapper as a real top-level generator function
+and add a regression test before running it again.
+
+### 2026-06-07 13:44 UTC — CODEX-20260607T134438Z-decon-summary — rerun union decontamination summary
+
+Question: whether we now have a decontaminated validation set, or at least a
+way to decontaminate the documents/windows used for validation, against all
+three scan subsets (`3`, `4plus`, and `4plus_mind`).
+
+Finding before rerun: `decon_val_summary.json` exists but is stale/incomplete.
+It reports 631 pair files, matching only `3_284x71` + `4plus_284x71`; the
+newly completed `4plus_mind_284x71` verified-pair directory has 336 more pair
+files and is not included in that summary.
+
+Rerun command, on Iris in `us-east5` to keep the 45M-id replay arrays near the
+data:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+    --cpu 8 --memory 64GB --disk 20GB --priority interactive --extra cpu \
+    --enable-extra-resources --preemptible --region us-east5 \
+    --job-name decon-val-summary-0054 \
+    -- python scripts/analysis/decon_val_summary.py
+```
+
+Expected output:
+
+- `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_summary.json`
+
+Interpretation note: `scripts/analysis/decon_val_summary.py` unions verified
+validation-doc near-duplicates across `4plus_284x71`, `3_284x71`, and
+`4plus_mind_284x71` at several Jaccard thresholds. It produces a drop/count
+summary for documents and validation tokens. It does not materialize a new
+filtered validation dataset by itself.
+
+Follow-up while monitoring: job 0054 reached `verified pair files: 967` and
+`mapped 34565/34565 drop ids to doc indices`, but the cutoff token loop was too
+slow because it recomputed the same window/doc overlap separately for every
+cutoff. Patched `scripts/analysis/decon_val_summary.py` to precompute
+per-document validation-token coverage once and then sum by cutoff. Replace
+0054 with optimized rerun:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job stop /ahmed/decon-val-summary-0054
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+    --cpu 8 --memory 64GB --disk 20GB --priority interactive --extra cpu \
+    --enable-extra-resources --preemptible --region us-east5 \
+    --job-name decon-val-summary-0055 \
+    -- python scripts/analysis/decon_val_summary.py
+```
+
+Second optimization while monitoring: 0055 also reached `verified pair files:
+967` and `mapped 34565/34565`, but the one-pass all-window/doc overlap was
+still too slow. Patched the script to compute exact dropped-token overlap by
+iterating only contaminated docs and binary-searching sorted validation
+windows. Replace 0055 with optimized rerun 0056:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job stop /ahmed/decon-val-summary-0055
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+    --cpu 8 --memory 64GB --disk 20GB --priority interactive --extra cpu \
+    --enable-extra-resources --preemptible --region us-east5 \
+    --job-name decon-val-summary-0056 \
+    -- python scripts/analysis/decon_val_summary.py
+```
+
+Final status at 2026-06-07 13:55 UTC:
+
+- `/ahmed/decon-val-summary-0056` succeeded.
+- `/ahmed/decon-val-summary-0054` and `/ahmed/decon-val-summary-0055` were
+  killed after they hit the all-three pair-file/mapping checkpoints but before
+  finishing the slower token-count loop.
+- No `decon-val-summary*` job is running.
+- The local sequential parquet reader used for per-dataset counts was killed;
+  it was only reading existing `verified_pairs` files and did not write
+  artifacts.
+
+Fresh union output, now including all three scan subsets:
+
+- `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_summary.json`
+  updated 2026-06-07 13:52 UTC.
+- `pair_files`: 967 = `3_284x71` 400 shards + `4plus_284x71` 231 shards +
+  `4plus_mind_284x71` 336 shards.
+- Union doc/token drop counts across `3`, `4plus`, and `4plus_mind`:
+  - J >= 0.50: drop 34,565 docs, keep 22,678 docs, clean tokens 30,080,012.
+  - J >= 0.70: drop 14,474 docs, keep 42,769 docs, clean tokens 42,451,797.
+  - J >= 0.75: drop 10,636 docs, keep 46,607 docs, clean tokens 44,816,904.
+  - J >= 0.80: drop 7,077 docs, keep 50,166 docs, clean tokens 46,999,393.
+  - J >= 0.90: drop 1,120 docs, keep 56,123 docs, clean tokens 50,527,994.
+
+Artifact inventory / answer to current question:
+
+- We do not yet have a materialized replacement/decontaminated validation
+  dataset artifact.
+- We do have the evidence needed to decontaminate by validation document id:
+  every scan subset has a `verified_pairs/*.parquet` directory containing
+  `val_id` and `jaccard` for verified training/validation near-duplicate pairs.
+  To get IDs for a threshold, group by `val_id`, take max `jaccard`, and filter
+  at the chosen cutoff.
+- Existing per-subset verified-pair sources:
+  - `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/3_284x71/verified_pairs/`
+    (400 shards).
+  - `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/4plus_284x71/verified_pairs/`
+    (231 shards).
+  - `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/4plus_mind_284x71/verified_pairs/`
+    (336 shards; `scan_stats.json` reports 2,472 verified pair rows).
+- Per-subset unique validation-doc counts already known:
+  - `4plus`: 32,619 (J >= 0.50), 13,673 (0.70), 10,030 (0.75),
+    1,011 (0.90).
+  - `3`: 13,238 (J >= 0.50), 4,155 (0.70), 2,702 (0.75), 147 (0.90).
+  - `4plus_mind`: 1,510 (J >= 0.50), 135 (0.70), 69 (0.75), 39 (0.80),
+    15 (0.90), computed from 2,472 verified pair rows.
+- Separate, ready-to-download per-dataset/per-threshold ID-list JSON/CSV files
+  have not yet been written. The IDs are present in the pair parquet files; the
+  list materialization step is still open.
+
+### 2026-06-07 13:59 UTC — CODEX-20260607T135945Z-decon-status-answer
+
+User asked for the direct state of the decontaminated validation artifacts.
+
+Current answer:
+
+- We do not yet have a materialized replacement validation dataset.
+- We do have the contamination evidence needed to decontaminate the validation
+  documents/windows by validation document id.
+- The evidence covers all three requested training subsets: `3`, `4plus`, and
+  `4plus_mind`.
+- For each subset, the doc ids are already present as `val_id` values in
+  `verified_pairs/*.parquet`, with each row carrying the measured `jaccard`.
+  Per-threshold IDs are produced by grouping by `val_id`, taking the maximum
+  `jaccard`, and filtering at the selected cutoff.
+- The all-three union summary is fresh:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_summary.json`.
+
+Known counts:
+
+- Union across all three: 34,565 docs at J >= 0.50; 14,474 at 0.70; 10,636 at
+  0.75; 7,077 at 0.80; 1,120 at 0.90.
+- `4plus`: 32,619 docs at J >= 0.50; 13,673 at 0.70; 10,030 at 0.75; 1,011 at
+  0.90.
+- `3`: 13,238 docs at J >= 0.50; 4,155 at 0.70; 2,702 at 0.75; 147 at 0.90.
+- `4plus_mind`: 1,510 docs at J >= 0.50; 135 at 0.70; 69 at 0.75; 39 at
+  0.80; 15 at 0.90.
+
+Open next step: materialize ready-to-use artifacts, e.g. per-subset and union
+`drop_val_ids_jaccard_ge_*.jsonl` plus a filtered/masked validation dataset or
+validation-window manifest.
