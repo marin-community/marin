@@ -1432,3 +1432,64 @@ Launching 71 jobs (36 p67m33 + 35 p50m50), all v6e-4 (1e22 incl.),
 `--cpu 8 --memory 64/96/120GB --disk 50GB --extra tpu`, interactive,
 preemptible, us-east5. Job names `decon-eval-<run>` (mix in run name → no
 output collision; outputs keyed by run under `…/evals/<run>/`).
+
+### 2026-06-07 ~22:15 UTC — All three mixes done: contamination is dose-dependent on math fraction
+
+p50m50 (35/36) + p67m33 (36/36) eval sweeps complete; with the earlier
+p33m67 (36/36) the full grid is **107 cells** (3 mixes × 9 scales × 4 lr).
+All v6e-4, interactive, preemptible, us-east5.
+
+Incidents:
+
+- One real failure: `delphi-1e22-p50m50-32p07b-lr0.33-c43ada` — its final
+  HF export `step-7646` is **truncated** (8 safetensors shards present but no
+  `config.json`/index; export interrupted). Audited all seven 1e22
+  p50m50/p67m33 finals: only c43ada is affected. Resubmitted against the last
+  complete export `step-7640` (6 steps back, converged) → `…-s7640`. The
+  driver's `final_hf_step` picks the max step blindly; it should skip exports
+  missing config.json — minor hardening TODO.
+- zsh word-splitting bit the launch loop twice (`for x in $RUNS` doesn't split
+  in zsh); fixed with a `while IFS= read -r` loop over a runs file. Verified
+  submission counts each time rather than trusting the loop.
+
+Sanity gates: both new provenance runs pass — p50m50 `973c46` harness 0.8311
+vs recorded 0.8310; p67m33 `114e49` harness 0.8801 vs recorded 0.8800. With
+the three p33m67 gates that is six-for-six.
+
+**anchor − decon_j050 (negative = original val artificially easier =
+contamination credit), lr-averaged per mix:**
+
+| scale | p33m67 (67% math) | p50m50 (50% math) | p67m33 (33% math) |
+|---|---:|---:|---:|
+| 3e18 | +0.1130 | +0.1122 | +0.1110 |
+| 9e18 | +0.1082 | +0.1083 | +0.1076 |
+| 2e19 | +0.1046 | +0.1054 | +0.1056 |
+| 3e19 | +0.1013 | +0.1030 | +0.1041 |
+| 9e19 | +0.0909 | +0.0949 | +0.0983 |
+| 2e20 | +0.0822 | +0.0877 | +0.0931 |
+| 3e20 | +0.0746 | +0.0818 | +0.0887 |
+| 1e21 | +0.0447 | +0.0579 | +0.0720 |
+| 1e22 | **−0.0420** | **−0.0216** | **+0.0068** |
+
+**Dose-response — the decisive evidence.** The contamination effect scales
+monotonically with the math fraction of the training mix. At small scale all
+three mixes share the same ~+0.11 short-doc baseline offset (no memorization
+yet); as scale grows the gap shrinks fastest for the most-math mix. At 1e22:
+p33m67 (67% math) fully inverts to −0.042, p50m50 (50%) barely inverts to
+−0.022, p67m33 (33%) only reaches ~0. More math training tokens ⇒ more
+exposure to the contaminated near-duplicates ⇒ more memorization credit on the
+original val. A distribution artifact would not track math fraction; this
+ordering (p33m67 > p50m50 > p67m33 at every scale ≥9e19) is the signature of
+genuine train/val contamination. Earlier within-mix findings (lr-invariance,
+j050>j075 ordering inversion at large scale) hold across all three mixes.
+
+Consolidated artifacts (all 107 cells, loss+bpb+source paths+dataset defs):
+
+- `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals/summary_all_mixes_all_lr.json`
+- `…/evals/summary_all_mixes_all_lr.csv`
+- Local: `scratch/nemotron_math_decon_eval_all_mixes_all_lr.{json,csv}`
+- Per-mix files still present: `summary_p33m67_all_lr.{json,csv}`.
+
+Per-run raw + W&B as before (tag `decon_val_eval`). Next: re-fit the math
+scaling law on decon_j050 per mix vs the anchor; the contamination correction
+is largest for p33m67 and shrinks with math fraction.
