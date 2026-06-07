@@ -53,6 +53,9 @@ class TransformSFTDatasetConfig:
         splits (list[str]): Data splits (e.g., `train`, `validation`) to use. Empty list indicates all splits.
         max_parallelism (int | None): Maximum number of concurrent shard processing tasks.
             Set to lower values to avoid HF rate limits. Set to None for default behavior (full concurrency).
+        load_dataset_features (dict[str, str] | None): Optional explicit Hugging Face feature spec for datasets
+            whose inferred JSON schema changes across rows. Supported values are "string", "json", "list[string]",
+            and "list[json]".
     """
 
     source: str
@@ -63,6 +66,7 @@ class TransformSFTDatasetConfig:
     subsets: list[str] = field(default_factory=lambda: [])  # Default behavior is to use all subsets
     splits: list[str] = field(default_factory=lambda: ["train"])  # Set to train; empty set means everything
     max_parallelism: int | None = None  # None means use default behavior (full concurrency)
+    load_dataset_features: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -221,11 +225,38 @@ def _get_available_splits(cfg: TransformSFTDatasetConfig, subset: str | None) ->
     return [split for split in split_names if split not in ("validation", "test")]
 
 
+def _load_dataset_features_from_spec(feature_spec: dict[str, str] | None) -> datasets.Features | None:
+    if feature_spec is None:
+        return None
+
+    features: dict[str, Any] = {}
+    for field_name, feature_type in feature_spec.items():
+        if feature_type == "string":
+            features[field_name] = datasets.Value("string")
+        elif feature_type == "json":
+            features[field_name] = datasets.Json(decode=True)
+        elif feature_type == "list[string]":
+            features[field_name] = datasets.List(datasets.Value("string"))
+        elif feature_type == "list[json]":
+            features[field_name] = datasets.List(datasets.Json(decode=True))
+        else:
+            raise ValueError(f"Unsupported Hugging Face feature type {feature_type!r} for field {field_name!r}.")
+
+    return datasets.Features(features)
+
+
 def _shard_filename(output_path: str, shard_idx: int) -> str:
     return os.path.join(output_path, f"shard_{shard_idx:05d}.jsonl.gz")
 
 
-def _streaming_dataset_kwargs(source: str, split: str, revision: str, subset: str | None) -> dict[str, object]:
+def _streaming_dataset_kwargs(
+    source: str,
+    split: str,
+    revision: str,
+    subset: str | None,
+    *,
+    features: datasets.Features | None = None,
+) -> dict[str, object]:
     """Build kwargs for a streaming ``datasets.load_dataset`` call.
 
     The HF config name is omitted for the default/unnamed subset so the loader
@@ -239,6 +270,8 @@ def _streaming_dataset_kwargs(source: str, split: str, revision: str, subset: st
     }
     if subset not in (None, "default"):
         kwargs["name"] = subset
+    if features is not None:
+        kwargs["features"] = features
     return kwargs
 
 
@@ -261,6 +294,7 @@ def get_dataset_tasks(cfg: TransformSFTDatasetConfig):
         raise ValueError("Transform configuration must include `source` pointing to the HF dataset id.")
     revision = unwrap_versioned_value(cfg.revision)
     configured_splits = unwrap_versioned_value(cfg.splits)
+    load_dataset_features = _load_dataset_features_from_spec(unwrap_versioned_value(cfg.load_dataset_features))
 
     # 1. Get available subsets
     subsets = _get_available_subsets(cfg)
@@ -288,7 +322,7 @@ def get_dataset_tasks(cfg: TransformSFTDatasetConfig):
 
             dataset = load_dataset_with_backoff(
                 context=f"{source} subset={subset_name} split={split}",
-                **_streaming_dataset_kwargs(source, split, revision, subset),
+                **_streaming_dataset_kwargs(source, split, revision, subset, features=load_dataset_features),
             )
             num_shards = dataset.num_shards
             if not num_shards:
@@ -334,9 +368,16 @@ def process_shard_task(task: ShardTask) -> dict:
             "skipped": True,
         }
 
+    load_dataset_features = _load_dataset_features_from_spec(unwrap_versioned_value(task.cfg.load_dataset_features))
     dataset = load_dataset_with_backoff(
         context=f"{task.source} subset={subset_name} split={task.split} shard={task.shard_idx}",
-        **_streaming_dataset_kwargs(task.source, task.split, task.revision, task.subset),
+        **_streaming_dataset_kwargs(
+            task.source,
+            task.split,
+            task.revision,
+            task.subset,
+            features=load_dataset_features,
+        ),
     )
     shard_dataset = dataset.shard(num_shards=task.num_shards, index=task.shard_idx)
 

@@ -38,7 +38,7 @@ Current datasets:
 23. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
 24. lm-provers/FineProofs-SFT
 25. lm-provers/FineProofs-SFT/proof-only
-26. nvidia/Nemotron-SFT-Safety-v1
+26. nvidia/Nemotron-SFT-Safety-v2
 """
 
 import dataclasses
@@ -120,6 +120,8 @@ class InstructionDatasetConfig:
                 Defaults to `train` only
         name: Optional friendly name for the dataset; defaults to `hf_dataset_id`.
         max_parallelism: Max number of parallel data processing tasks. Reduce if needed to avoid HF rate limits.
+        load_dataset_features: Optional explicit Hugging Face feature spec for datasets whose inferred JSON schema
+            changes across rows.
     """
 
     hf_dataset_id: str
@@ -130,6 +132,7 @@ class InstructionDatasetConfig:
     subsets: list[str] = field(default_factory=lambda: [])
     splits: list[str] = field(default_factory=lambda: ["train"])
     max_parallelism: int | None = 32  # 32 works for free users; set to None to use default behavior (full parallelism)
+    load_dataset_features: dict[str, str] | None = None
 
 
 def multi_turn_adapter(
@@ -249,9 +252,25 @@ SYNTHETIC2_SFT_VERIFIED_HF_ID = "PrimeIntellect/SYNTHETIC-2-SFT-verified"
 SYNTHETIC2_SFT_VERIFIED_REVISION = "fce247fe48af8ff9624fb51d1de63aa1b2332cef"
 SYNTHETIC2_SFT_VERIFIED_METADATA_COLUMNS = ["problem_id", "task_type", "reward"]
 
-NEMOTRON_SFT_SAFETY_V1_HF_ID = "nvidia/Nemotron-SFT-Safety-v1"
-NEMOTRON_SFT_SAFETY_V1_REVISION = "913fd7c803a9378dab0ce4fef80297ce115781f6"
-NEMOTRON_SFT_SAFETY_V1_METADATA_COLUMNS = ["uuid", "license", "used_in"]
+NEMOTRON_SFT_SAFETY_V2_HF_ID = "nvidia/Nemotron-SFT-Safety-v2"
+NEMOTRON_SFT_SAFETY_V2_REVISION = "8a40a63c9a1a340874b874f980953be53bff0a07"
+NEMOTRON_SFT_SAFETY_V2_METADATA_COLUMNS = [
+    "uuid",
+    "used_in",
+    "prompt_source",
+    "response_policy",
+    "translation_languages",
+    "metadata",
+]
+NEMOTRON_SFT_SAFETY_V2_LOAD_DATASET_FEATURES = {
+    "uuid": "string",
+    "messages": "list[json]",
+    "used_in": "list[string]",
+    "prompt_source": "string",
+    "response_policy": "string",
+    "translation_languages": "string",
+    "metadata": "json",
+}
 
 FINEPROOFS_SFT_REVISION = "73661e6"
 FINEPROOFS_SFT_METADATA_COLUMNS = [
@@ -414,14 +433,15 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         subsets=["default"],
         splits=["train"],
     ),
-    NEMOTRON_SFT_SAFETY_V1_HF_ID: InstructionDatasetConfig(
-        hf_dataset_id=NEMOTRON_SFT_SAFETY_V1_HF_ID,
-        revision=NEMOTRON_SFT_SAFETY_V1_REVISION,
+    NEMOTRON_SFT_SAFETY_V2_HF_ID: InstructionDatasetConfig(
+        hf_dataset_id=NEMOTRON_SFT_SAFETY_V2_HF_ID,
+        revision=NEMOTRON_SFT_SAFETY_V2_REVISION,
         adapter=multi_turn_adapter(),
-        metadata_columns=NEMOTRON_SFT_SAFETY_V1_METADATA_COLUMNS,
-        name=NEMOTRON_SFT_SAFETY_V1_HF_ID,
+        metadata_columns=NEMOTRON_SFT_SAFETY_V2_METADATA_COLUMNS,
+        name=NEMOTRON_SFT_SAFETY_V2_HF_ID,
         subsets=["default"],
         splits=["train"],
+        load_dataset_features=NEMOTRON_SFT_SAFETY_V2_LOAD_DATASET_FEATURES,
     ),
     "lm-provers/FineProofs-SFT": InstructionDatasetConfig(
         hf_dataset_id="lm-provers/FineProofs-SFT",
@@ -643,6 +663,9 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
         -{sorted(dataset_cfg.subsets)}\
         -{sorted(dataset_cfg.splits)}\
         -{adapter_signature_str}"
+    if dataset_cfg.load_dataset_features is not None:
+        load_features_signature = canonicalize(dataset_cfg.load_dataset_features)
+        config_str += f"-{json.dumps(load_features_signature, sort_keys=True)}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
     transform_step = ExecutorStep(
@@ -657,6 +680,9 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
             subsets=versioned(dataset_cfg.subsets),
             splits=versioned(dataset_cfg.splits),
             max_parallelism=dataset_cfg.max_parallelism,
+            load_dataset_features=(
+                versioned(dataset_cfg.load_dataset_features) if dataset_cfg.load_dataset_features is not None else None
+            ),
         ),
         override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
     )
