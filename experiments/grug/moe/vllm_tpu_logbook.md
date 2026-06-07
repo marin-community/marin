@@ -529,6 +529,218 @@ realistic-roundtrip: sharded training-state export loaded in native tpu-inferenc
 realistic-roundtrip: checkpoint_dir=/tmp/grugmoe-canary-generation-parity/checkpoints checkpoint_bytes=5762306365 artifact_dir=/tmp/grugmoe-canary-generation-parity/grugmoe-inference artifact_bytes=5762168484 shard_count=26 max_shard_size=268435456 expected_tensors=217 consumed_tensors=217 missing=[] unexpected=[] generation_tokens=3 generated_ids=[57524, 45040, 67859]
 ```
 
+## Fork Stack Smoke 2026-06-07
+
+Purpose: validate the GrugMoE native TPU path on the Marin-owned fork stack while
+Marin moves from the opaque `vllm-tpu` package path to explicit
+`marin-community/vllm` plus `marin-community/tpu-inference` git pins.
+
+Validation branch heads:
+
+- Marin smoke branch: `codex/grugmoe-fork-stack-smoke-20260607`
+  - TPU validation bundle commit, before this logbook update: `55c2d0d7ace48be373995e973d6d9b0b1dc59e71`
+  - Fork-stack base: `origin/romain/marin-vllm-tpu-deponly-20260605`
+  - Root `pyproject.toml` pins:
+    - `vllm=54a6eb69daafc23b72dd1bc3c78d097b7f4cd997`
+    - `tpu-inference=22a5fcccf542cf1b77d71e1db495be4ddae01bac`
+- vLLM smoke branch: `codex/grugmoe-fork-stack-smoke-20260607`
+  - `54a6eb69daafc23b72dd1bc3c78d097b7f4cd997`
+  - This branch is a reproducibility pointer to `origin/romain/tpu-vllm-lkg-v0.20.0-candidate`; no extra Grug code was needed in vLLM.
+- tpu-inference smoke branch: `codex/grugmoe-fork-stack-smoke-20260607`
+  - `13474e22a97739b44d795d43253e8663885aa8f7`
+  - Includes the GrugMoE native JAX commits plus a small `JaxLmHead` bridge needed by the fork-stack base.
+
+Local dependency and unit gates:
+
+- `VLLM_TARGET_DEVICE=tpu uv lock --check`: passed after repinning and lock regeneration.
+- `VLLM_TARGET_DEVICE=tpu uv export --locked --package marin-core --extra vllm --extra eval --no-dev --no-emit-project --no-emit-workspace`: passed, `3409` requirement lines.
+- `VLLM_TARGET_DEVICE=tpu uv export --locked --package marin-core --extra vllm --extra evalchemy --no-dev --no-emit-project --no-emit-workspace`: passed, `3600` requirement lines.
+- `VLLM_TARGET_DEVICE=tpu uv export --locked --package marin-core --extra gpu --no-dev --no-emit-project --no-emit-workspace`: passed, `2498` requirement lines.
+- `rg -n "^(vllm|vllm-tpu|tpu-inference)(==| @|$)" /tmp/marin-gpu-requirements.txt`: no matches, expected.
+- `VLLM_TARGET_DEVICE=tpu uv export --locked --package marin-core --extra vllm --extra tpu --no-dev --no-emit-project --no-emit-workspace`: failed as expected because `marin-core[vllm]` and `marin-core[tpu]` intentionally conflict.
+- Focused Marin dependency tests:
+  `tests/rl/test_orchestration.py`,
+  `tests/evals/test_inference_proxy.py::test_brokered_vllm_workers_use_self_contained_vllm_extra`,
+  and `tests/evals/test_tpu_vllm_dependency_groups.py`: `13 passed in 6.07s`.
+- tpu-inference Grug focused pytest with the fork-stack source checkouts:
+  `tests/models/jax/test_grugmoe.py` plus
+  `tests/models/common/test_model_loader.py::TestGetModel::test_get_model_auto_resolves_to_flax_nnx_for_grug_moe`:
+  `4 passed, 23 warnings in 6.87s`.
+- Marin Grug py_compile and ruff checks passed for
+  `experiments/grug/moe/model.py`,
+  `experiments/grug/moe/vllm_tpu_parity.py`,
+  `lib/levanter/src/levanter/compat/hf_checkpoints.py`,
+  `lib/levanter/src/levanter/main/export_lm_to_hf.py`, and
+  `lib/marin/src/marin/export/levanter_checkpoint.py`.
+- tpu-inference py_compile and ruff checks passed for
+  `tpu_inference/layers/jax/linear.py`,
+  `tpu_inference/models/jax/grugmoe.py`,
+  `tests/models/jax/test_grugmoe.py`, and
+  `tests/models/common/test_model_loader.py`.
+
+Local scaled GrugMoE roundtrip:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-fork-stack-smoke
+JAX_PLATFORMS=cpu \
+PYTHONPATH=/home/romain/dev/marin-wt/grugmoe-fork-stack-smoke-tpu-inference:/home/romain/dev/marin-wt/grugmoe-fork-stack-smoke-vllm \
+VLLM_TARGET_DEVICE=tpu \
+uv run \
+  --with-requirements /home/romain/dev/marin-wt/grugmoe-fork-stack-smoke-tpu-inference/requirements.txt \
+  --with-requirements /home/romain/dev/marin-wt/grugmoe-fork-stack-smoke-vllm/requirements/common.txt \
+  --with 'torch==2.11.0+cpu' \
+  --with 'torchvision==0.26.0+cpu' \
+  --extra-index-url https://download.pytorch.org/whl/cpu \
+  python -m experiments.grug.moe.vllm_tpu_parity \
+    --tpu-inference-root /home/romain/dev/marin-wt/grugmoe-fork-stack-smoke-tpu-inference \
+    --component-only \
+    --realistic-roundtrip \
+    --realistic-config scaled \
+    --realistic-max-shard-size 16777216 \
+    --realistic-generation-tokens 3
+```
+
+Result:
+
+- Component parity passed.
+- Config source: scaled production-structured fallback.
+- Checkpoint: `/tmp/grugmoe-realistic-roundtrip-gb0sxfx3/checkpoints`, `117,800,671` bytes.
+- HF artifact: `/tmp/grugmoe-realistic-roundtrip-gb0sxfx3/grugmoe-inference`, `117,748,760` bytes.
+- Shards: `9`, requested `max_shard_size=16,777,216`.
+- Tensor accounting: `expected_tensors=84`, `consumed_tensors=84`, `missing=[]`, `unexpected=[]`.
+- Greedy full-forward generation: `3` new tokens, generated IDs `[858, 3205, 1165]`.
+
+Final local output:
+
+```text
+component: native GrugMoeMLP matches Levanter moe_mlp
+realistic-roundtrip: manual-copy native reference matches Levanter hidden states, logits, and routed experts
+realistic-generation: manual-copy native reference full-forward greedy generation matched Levanter reference for token IDs and logits across 3 steps
+realistic-generation: prompt_ids=[1, 42, 128, 2048, 17, 3072, 5, 63] generated_ids=[858, 3205, 1165] final_token_ids=[1, 42, 128, 2048, 17, 3072, 5, 63, 858, 3205, 1165]
+realistic-generation: loaded native artifact full-forward greedy generation matched Levanter reference for token IDs and logits across 3 steps
+realistic-roundtrip: sharded training-state export loaded in native tpu-inference and matched Levanter/manual-copy hidden states, logits, and routed expert IDs
+realistic-roundtrip: checkpoint_dir=/tmp/grugmoe-realistic-roundtrip-gb0sxfx3/checkpoints checkpoint_bytes=117800671 artifact_dir=/tmp/grugmoe-realistic-roundtrip-gb0sxfx3/grugmoe-inference artifact_bytes=117748760 shard_count=9 max_shard_size=16777216 expected_tensors=84 consumed_tensors=84 missing=[] unexpected=[] generation_tokens=3 generated_ids=[858, 3205, 1165]
+```
+
+Full GrugMoE canary TPU validation:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-fork-stack-smoke
+uv run iris --cluster=marin job run \
+  --no-wait \
+  --enable-extra-resources \
+  --extra marin-core:tpu \
+  --tpu v6e-4 \
+  --region europe-west4 \
+  --priority interactive \
+  --timeout 7200 \
+  --cpu 16 \
+  --memory 128GB \
+  --disk 200GB \
+  --job-name grugmoe-fork-stack-canary-20260607 \
+  -e VLLM_TARGET_DEVICE tpu \
+  -- bash -lc 'set -euxo pipefail; echo marin_sha=55c2d0d7ace48be373995e973d6d9b0b1dc59e71; git clone --depth 1 --branch codex/grugmoe-fork-stack-smoke-20260607 https://github.com/marin-community/tpu-inference.git /tmp/grugmoe-fork-stack-tpu-inference; git clone --depth 1 --branch codex/grugmoe-fork-stack-smoke-20260607 https://github.com/marin-community/vllm.git /tmp/grugmoe-fork-stack-vllm; echo tpu_inference_sha=$(git -C /tmp/grugmoe-fork-stack-tpu-inference rev-parse HEAD); echo vllm_sha=$(git -C /tmp/grugmoe-fork-stack-vllm rev-parse HEAD); export LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304; export VLLM_TARGET_DEVICE=tpu; PYTHONPATH=/tmp/grugmoe-fork-stack-tpu-inference:/tmp/grugmoe-fork-stack-vllm uv run --with-requirements /tmp/grugmoe-fork-stack-tpu-inference/requirements.txt --with-requirements /tmp/grugmoe-fork-stack-vllm/requirements/common.txt --with "torch==2.11.0+cpu" --with "torchvision==0.26.0+cpu" --extra-index-url https://download.pytorch.org/whl/cpu python -m experiments.grug.moe.vllm_tpu_parity --tpu-inference-root /tmp/grugmoe-fork-stack-tpu-inference --component-only --realistic-roundtrip --realistic-config canary --realistic-output-dir /tmp/grugmoe-fork-stack-canary-20260607 --realistic-max-shard-size 268435456 --realistic-generation-tokens 3'
+```
+
+Result:
+
+- Job: `/romain/grugmoe-fork-stack-canary-20260607`
+- Dashboard: `https://iris.oa.dev/#/job/%2Fromain%2Fgrugmoe-fork-stack-canary-20260607`
+- TPU: `v6e-4`
+- Region: `europe-west4`
+- Worker: `marin-tpu-v6e-preemptible-4-europe-west4-20260606-1908-edbc06d1-worker-0`
+- State: `succeeded`
+- Exit: `0`
+- Failures/preemptions: `0`/`0`
+- Duration: `701,917ms`
+- Remote SHAs:
+  - `marin_sha=55c2d0d7ace48be373995e973d6d9b0b1dc59e71`
+  - `tpu_inference_sha=13474e22a97739b44d795d43253e8663885aa8f7`
+  - `vllm_sha=54a6eb69daafc23b72dd1bc3c78d097b7f4cd997`
+- Config source: `GRUG_MOE_TRIAL_MODEL`.
+- Dtype policy: `params=float32,compute=bfloat16,output=bfloat16`; native parity forward used `float32`.
+- Fixed prompt IDs: `[1, 42, 128, 2048, 17, 3072, 5, 63]`.
+- Greedy full-forward generation: `3` new tokens, no sampling, no KV cache; generated IDs `[57524, 45040, 67859]`.
+- Training-state checkpoint: `/tmp/grugmoe-fork-stack-canary-20260607/checkpoints`, `5,762,423,241` bytes.
+- HF artifact: `/tmp/grugmoe-fork-stack-canary-20260607/grugmoe-inference`, `5,762,169,526` bytes.
+- HF artifact layout: `model.safetensors.index.json` plus `26` shard files.
+- Requested `max_shard_size`: `268,435,456` bytes.
+- Actual max shard logged by Levanter: `525.34 MB`, because the embedding/lm-head tensors are individually larger than the requested shard size and HF sharding keeps individual tensors intact.
+- Tensor accounting: `expected_tensors=217`, `consumed_tensors=217`, `missing=[]`, `unexpected=[]`.
+
+Final TPU validation log lines:
+
+```text
+component: native GrugMoeMLP matches Levanter moe_mlp
+realistic-roundtrip: manual-copy native reference matches Levanter hidden states, logits, and routed experts
+realistic-generation: manual-copy native reference full-forward greedy generation matched Levanter reference for token IDs and logits across 3 steps
+realistic-generation: prompt_ids=[1, 42, 128, 2048, 17, 3072, 5, 63] generated_ids=[57524, 45040, 67859] final_token_ids=[1, 42, 128, 2048, 17, 3072, 5, 63, 57524, 45040, 67859]
+Will save 26 shards with max size 525.34 MB
+Saved a sharded checkpoint with 26 shards, max size 525.34 MB
+realistic-generation: loaded native artifact full-forward greedy generation matched Levanter reference for token IDs and logits across 3 steps
+realistic-roundtrip: sharded training-state export loaded in native tpu-inference and matched Levanter/manual-copy hidden states, logits, and routed expert IDs
+realistic-roundtrip: checkpoint_dir=/tmp/grugmoe-fork-stack-canary-20260607/checkpoints checkpoint_bytes=5762423241 artifact_dir=/tmp/grugmoe-fork-stack-canary-20260607/grugmoe-inference artifact_bytes=5762169526 shard_count=26 max_shard_size=268435456 expected_tensors=217 consumed_tensors=217 missing=[] unexpected=[] generation_tokens=3 generated_ids=[57524, 45040, 67859]
+```
+
+Companion direct vLLM TPU smoke:
+
+```bash
+cd /home/romain/dev/marin-wt/grugmoe-fork-stack-smoke
+uv run iris --cluster=marin job run \
+  --no-wait \
+  --enable-extra-resources \
+  --extra marin-core:vllm \
+  --extra marin-core:eval \
+  --tpu v6e-4 \
+  --region europe-west4 \
+  --priority interactive \
+  --timeout 3600 \
+  --cpu 16 \
+  --memory 128GB \
+  --disk 200GB \
+  --job-name vllm-fork-stack-direct-smoke-20260607 \
+  -e VLLM_TARGET_DEVICE tpu \
+  -- python -c 'import os; os.environ["LIBTPU_INIT_ARGS"] = "--xla_tpu_scoped_vmem_limit_kib=98304"; import importlib.metadata as md, json; from marin.evaluation.evaluators.evaluator import ModelConfig; from marin.inference.vllm_server import resolve_model_name_or_path; from vllm import LLM, SamplingParams; cfg = ModelConfig(name="test-llama-200m", path="gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m", engine_kwargs={"enforce_eager": True, "max_model_len": 1024, "max_num_batched_tokens": 1024}, generation_params={"max_tokens": 16}); model, cfg = resolve_model_name_or_path(cfg); print("vllm_version=" + md.version("vllm")); print("model=" + model); print("engine_kwargs=" + json.dumps(cfg.engine_kwargs, sort_keys=True)); outputs = LLM(model=model, **cfg.engine_kwargs).generate(["Write a short haiku about TPUs."], SamplingParams(max_tokens=16, temperature=0.0)); print("generated=" + repr([(o.outputs[0].token_ids, o.outputs[0].text) for o in outputs]))'
+```
+
+Result:
+
+- Job: `/romain/vllm-fork-stack-direct-smoke-20260607`
+- Dashboard: `https://iris.oa.dev/#/job/%2Fromain%2Fvllm-fork-stack-direct-smoke-20260607`
+- TPU: `v6e-4`
+- Region: `europe-west4`
+- Worker: `marin-tpu-v6e-preemptible-4-europe-west4-20260606-2003-f15d49ff-worker-0`
+- State: `succeeded`
+- Exit: `0`
+- Failures/preemptions: `0`/`0`
+- Duration: `112,478ms`
+- Installed vLLM version: `0.20.1rc1.dev148+g54a6eb69d.tpu`.
+- Model: `gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m`.
+- Engine kwargs:
+  `{"enforce_eager": true, "load_format": "runai_streamer", "max_model_len": 1024, "max_num_batched_tokens": 1024}`.
+- vLLM resolved `MODEL_IMPL_TYPE=auto` to `flax_nnx`.
+- RunAI streamer loaded `147/147` safetensors and streamed `757.1 MiB`.
+- KV cache evidence: maximum concurrency for `1,024` tokens per request was logged as `908.00x`.
+- Generated token IDs:
+  `[1102, 596, 1949, 323, 499, 649, 1005, 433, 311, 3350, 264, 33894, 922, 4205, 13, 1102]`.
+- Generated text:
+  `" It's free and you can use it to write a poem about anything. It"`
+
+Sharp edges from this fork-stack run:
+
+- Keep `VLLM_TARGET_DEVICE=tpu` set for `uv lock`, `uv export`, Iris `uv sync`, and any source-build metadata path that can see vLLM. Without it, git-source vLLM can take the CUDA metadata/build path.
+- `marin-core[vllm]` and `marin-core[tpu]` intentionally conflict. For a vLLM TPU job, request TPU hardware with Iris `--tpu v6e-4` but install the Python stack with `--extra marin-core:vllm`; do not also install `marin-core:tpu`.
+- The Grug native canary used `--extra marin-core:tpu` plus explicit `PYTHONPATH` source checkouts because the Grug model owner is native tpu-inference JAX, not vLLM's text-generation registry.
+- The fork-stack tpu-inference base did not include `JaxLmHead`; the smoke branch adds that narrow bridge instead of pulling broad upstream changes.
+- The old Grug support command's `torch==2.10.0+cpu` is stale for this fork stack. The focused Grug source-checkout commands need `torch==2.11.0+cpu` and `torchvision==0.26.0+cpu`.
+- Do not use the fork-stack vLLM `requirements/cpu.txt` alongside tpu-inference `requirements.txt` for Grug tests; it conflicts on `numba==0.65.0` versus tpu-inference's `numba==0.62.1`. Use vLLM `requirements/common.txt` for this source-checkout harness.
+- Importing vLLM from a source checkout via `PYTHONPATH` emits `No module named 'vllm._version'` and "vLLM package was not found" warnings. The installed `marin-core:vllm` direct smoke did not rely on that checkout path and reported the expected `.tpu` version.
+- `uv run --no-project` inside the tpu-inference checkout can create a tiny local `uv.lock`; remove it before committing.
+- Iris log fetching tails by default in practice. Use `iris job logs --no-tail` when the early setup/version lines matter.
+- The direct vLLM smoke used a known `us-east5` GCS model path from a `europe-west4` TPU. It is useful evidence but still a cross-region read, so prefer an `europe-west4` model artifact for future repeated validation.
+- Remote `uv` warned about hardlink fallback because cache and target directories are on different filesystems. This was harmless; set `UV_LINK_MODE=copy` only if the warning noise matters.
+- The installed direct-vLLM smoke logs `No module named 'vllm._C'` warnings on TPU. They did not block model load or generation in this run.
+
 ## Scope
 
 In scope:
