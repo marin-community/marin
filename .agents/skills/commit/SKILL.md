@@ -32,10 +32,11 @@ skip or weaken checks.
 
 Always run this before opening a PR. Pass your own headless invocation
 (`--agent-command='claude -p'` for Claude Code, `'codex exec'` for Codex;
-defaults to `claude -p`). Then fix or respond to every finding it reports —
-search `infra/lint/` for each `ml-...` code to see the rule and when ignoring is
-acceptable — and re-run once to confirm. A diff with no Python/proto changes is
-a legitimate no-op — run it anyway to confirm that, rather than assuming it.
+defaults to `claude -p`). Then fix or respond to all findings, reporting your
+actions to the user. You may search the `infra/lint` files for more information
+about each code. Treat lints as guidelines, follow them if they make the code
+_better_, but your goal is always to achieve high-quality code, not blind
+adherence.
 
 ## 3. Tests and docs checks (when relevant)
 
