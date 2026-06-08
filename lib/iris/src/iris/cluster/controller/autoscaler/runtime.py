@@ -444,6 +444,19 @@ class Autoscaler:
             group.record_create_failed(ts)
             return False
 
+    def scale_group_resources(self, name: str) -> config_pb2.ScaleGroupResources | None:
+        """Return the declared resources for a scale group, or None if unknown.
+
+        The scale-group config is the canonical declaration of what each worker
+        in the group provides for scheduling (see ``ScaleGroupResources`` in
+        config.proto). Worker registration uses this to advertise config-declared
+        capacity instead of the probed host count.
+        """
+        group = self._groups.get(name)
+        if group is None or not group.config.HasField("resources"):
+            return None
+        return group.config.resources
+
     def _per_group_worker_config(self, group: ScalingGroup) -> config_pb2.WorkerConfig | None:
         """Build per-group WorkerConfig by merging base config with scale group overrides."""
         return build_worker_config_for_group(self._base_worker_config, group.config)

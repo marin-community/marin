@@ -20,6 +20,7 @@ from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_va
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
+from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.ops.task import Assignment, finalize
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
@@ -41,19 +42,23 @@ from iris.cluster.controller.service import (
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
 from iris.cluster.types import JobName, WorkerId, tpu_device
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func
 from sqlalchemy import update as sa_update
 
+from tests.cluster.backends.conftest import make_mock_platform
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
+    make_autoscaler,
     make_job_request,
+    make_scale_group_config,
     make_test_entrypoint,
     make_worker_metadata,
+    query_worker,
 )
 from .conftest import (
     query_job as _query_job,
@@ -134,6 +139,63 @@ def _assign_and_transition(
 @pytest.fixture
 def service(controller_service):
     return controller_service
+
+
+# =============================================================================
+# Worker Registration Tests
+# =============================================================================
+
+
+def _register_worker_rpc(service, *, worker_id: str, cpu_count: int, scale_group: str = "") -> None:
+    service.register(
+        controller_pb2.Controller.RegisterRequest(
+            worker_id=worker_id,
+            address=f"{worker_id}:8080",
+            scale_group=scale_group,
+            metadata=job_pb2.WorkerMetadata(
+                hostname=worker_id,
+                ip_address="127.0.0.1",
+                cpu_count=cpu_count,
+                memory_bytes=16 * 1024**3,
+                disk_bytes=100 * 1024**3,
+            ),
+        ),
+        None,
+    )
+
+
+def _cpu_over_commit_autoscaler(name: str, cpu_millicores: int):
+    """Real autoscaler holding one scale group whose config declares ``cpu_millicores``."""
+    config = make_scale_group_config(
+        name=name,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        accelerator_variant="cpu",
+    )
+    config.resources.cpu_millicores = cpu_millicores
+    return make_autoscaler({name: ScalingGroup(config, make_mock_platform())})
+
+
+def test_register_advertises_scale_group_cpu_capacity(service, state, mock_controller):
+    """Scheduling CPU capacity comes from the scale-group config, not the probed
+    host count — so the on-demand pool can over-commit (8 cores on a 2-vCPU VM)."""
+    mock_controller.autoscaler = _cpu_over_commit_autoscaler("cpu-ondemand", 8000)
+
+    _register_worker_rpc(service, worker_id="w-cpu", cpu_count=2, scale_group="cpu-ondemand")
+
+    view = query_worker(state, WorkerId("w-cpu"))
+    assert view is not None
+    assert view.total_cpu_millicores == 8000
+
+
+def test_register_falls_back_to_probed_cpu_without_scale_group(service, state, mock_controller):
+    """A worker with no resolvable scale group advertises its probed host CPU."""
+    mock_controller.autoscaler = _cpu_over_commit_autoscaler("cpu-ondemand", 8000)
+
+    _register_worker_rpc(service, worker_id="w-adhoc", cpu_count=2, scale_group="")
+
+    view = query_worker(state, WorkerId("w-adhoc"))
+    assert view is not None
+    assert view.total_cpu_millicores == 2000
 
 
 # =============================================================================
