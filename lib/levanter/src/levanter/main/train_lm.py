@@ -4,7 +4,6 @@
 import dataclasses
 import gc
 import logging
-import os
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -20,6 +19,7 @@ import levanter.callbacks
 import levanter.eval
 import levanter.eval_harness
 from levanter import callbacks
+from levanter.callbacks.labeled_eval import LabeledLmEvalConfig, add_labeled_lm_eval_callbacks
 from levanter.adaptor import AdaptorConfig, AdaptorExportConfig, NoAdaptorConfig
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
@@ -79,6 +79,7 @@ class TrainLmConfig:
     """
     eval_harness: Optional[LmEvalHarnessConfig] = None
     eval_harness_steps: int = 10000
+    labeled_eval: LabeledLmEvalConfig | None = None
 
     # TODO: really need to add callback framework
     log_entropy: bool = False
@@ -316,6 +317,20 @@ def main(config: TrainLmConfig):
                 checkpoint_path=checkpoint_path,
             )
             trainer.add_hook(cb, every=config.trainer.steps_per_eval)
+
+        if config.labeled_eval is not None:
+            add_labeled_lm_eval_callbacks(
+                trainer,
+                labeled_eval_config=config.labeled_eval,
+                data_config=config.data,
+                trainer_config=config.trainer,
+                EvalBatch=EvalBatch,
+                Pos=Pos,
+                tokenizer=tokenizer,
+                device_mesh=trainer.device_mesh,
+                axis_mapping=compute_axis_mapping,
+                max_eval_examples_per_dataset=max_eval_examples_per_ds,
+            )
 
         flops_per_token = config.model.flops_per_token(vocab_size, Pos.size)
         flops_per_example = 3 * flops_per_token * Pos.size if flops_per_token is not None else None

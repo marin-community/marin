@@ -1212,11 +1212,11 @@ def test_worker_can_accept_new_task_after_previous_completes(state):
 
 
 def test_multiple_small_tasks_fill_worker_capacity(state):
-    """E2E: Multiple small tasks can fill a worker's capacity, blocking further assignments.
+    """E2E: cumulative resource usage across tasks fills a worker and blocks the rest.
 
-    This verifies that the scheduler correctly tracks cumulative resource usage across
-    multiple running tasks. With round-robin scheduling, each worker gets at most one
-    task per cycle, so we run multiple cycles to fill capacity.
+    Verifies the scheduler tracks committed CPU across tasks: a 4-CPU worker takes
+    two 2-CPU tasks (capacity-limited, within the per-cycle assignment cap), and the
+    third does not fit and stays pending.
     """
 
     # Worker with 4 CPUs
@@ -1228,23 +1228,15 @@ def test_multiple_small_tasks_fill_worker_capacity(state):
 
     scheduler = Scheduler()
 
-    # First scheduling cycle: 1 task assigned (round-robin: 1 per worker per cycle)
+    # One cycle fills the worker to capacity: two 2-CPU tasks on 4 CPUs.
     context = _build_scheduling_context(scheduler, state)
     result = scheduler.find_assignments(context)
-    assert len(result.assignments) == 1
+    assert len(result.assignments) == 2
     for task_id, worker_id in result.assignments:
         task = _query_task(state, task_id)
         dispatch_task(state, task, worker_id)
 
-    # Second scheduling cycle: 1 more task assigned (worker still has 2 CPUs)
-    context = _build_scheduling_context(scheduler, state)
-    result = scheduler.find_assignments(context)
-    assert len(result.assignments) == 1
-    for task_id, worker_id in result.assignments:
-        task = _query_task(state, task_id)
-        dispatch_task(state, task, worker_id)
-
-    # Third task should still be pending
+    # Third task remains pending: the worker is out of CPU.
     pending = _schedulable_tasks(state)
     assert len(pending) == 1
     assert pending[0].job_id == JobName.root("test-user", "j2")

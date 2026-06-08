@@ -241,12 +241,11 @@ use-ignore-files = false
 # levanter/grug and levanter/kernels. See docs/plans/pyrefly-tensor-shapes.md.
 tensor-shapes = true
 
-# Deps the cpu lint profile does not install (extras-only like vllm/lm_eval, or
-# compiled packages without stubs like resiliparse/jaxlib). Unlike
-# replace-imports-with-any, this substitutes Any only when the module is truly
-# absent on disk, so a deleted/misspelled internal module still trips missing-import.
-# HAND-MAINTAINED: a new uninstalled dep trips missing-import until added here
-# (list both `pkg` and `pkg.*`).
+# Modules treated as Any when absent on disk. Pyrefly still uses real stubs when
+# the dep is installed (so a deleted/misspelled internal module still trips
+# missing-import). Covers deps no lint profile installs (vllm/lm_eval, resiliparse)
+# and compute deps a local venv commonly skips (torch, sympy). List both `pkg` and
+# `pkg.*`.
 ignore-missing-imports = [
     "harbor",
     "harbor.*",
@@ -270,8 +269,12 @@ ignore-missing-imports = [
     "pylatexenc.*",
     "resiliparse",
     "resiliparse.*",
+    "sympy",
+    "sympy.*",
     "tensorboardX",
     "tensorboardX.*",
+    "torch",
+    "torch.*",
     "tpu_inference",
     "tpu_inference.*",
     "trackio",

@@ -37,9 +37,10 @@ favor of ad-hoc commands.
 uv run pyrefly
 - Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
 
-# Advisory lint review — agentic pass over the branch diff before pushing a PR
+# Lint review — agentic pass over the branch diff against the infra/lint/ catalog
 ./infra/pre-commit.py --review
-- Surfaces `infra/lint/` rule-catalog findings; advisory, never blocks.
+- Always run this before opening a PR, and always fix or respond to every
+  finding it reports (see the `commit` skill).
 ```
 
 - Python >=3.11. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.

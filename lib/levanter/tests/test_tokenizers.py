@@ -51,7 +51,6 @@ _MODEL_AVAILABLE = _can_load_model()
 
 requires_model = pytest.mark.skipif(not _MODEL_AVAILABLE, reason="HF auth or network unavailable for gated model")
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
