@@ -37,7 +37,6 @@ from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize.data_configs import lm_data_config
 
-from experiments.defaults import default_tokenize
 from experiments.grug.moe.launch import (
     GRUG_MOE_TRIAL_MODEL,
     NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
@@ -46,6 +45,7 @@ from experiments.grug.moe.launch import (
 )
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.llama import llama3_tokenizer
+from experiments.tokenization import default_tokenize
 
 CANARY_OPTIMIZER = AdamConfig(
     learning_rate=3e-3,

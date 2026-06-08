@@ -10,6 +10,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from marin.transform.evaluation.eval_to_dolma import ConvertEvalToDolmaConfig, convert_eval_to_dolma
 from marin.transform.lingoly.to_dolma import ConvertLingolyToDolmaConfig, convert_lingoly_to_dolma
 from marin.transform.medical.lavita_to_dolma import LavitaToDolmaConfig, convert_lavita_split_to_dolma
@@ -37,8 +39,6 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 def _read_parquet(path: Path) -> list[dict]:
     """Read records from a parquet file."""
-    import pyarrow.parquet as pq
-
     table = pq.read_table(path)
     return table.to_pylist()
 
@@ -156,9 +156,6 @@ def test_lavita_pubmedqa_to_dolma(tmp_path: Path, write_jsonl_gz) -> None:
     ]
 
     # Write parquet file
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
     input_file = input_dir / "data-train-0000.parquet"
     input_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -240,9 +237,6 @@ def test_lavita_medmcqa_to_dolma(tmp_path: Path) -> None:
     ]
 
     # Write parquet file
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
     input_file = input_dir / "data-train-0000.parquet"
     input_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -313,9 +307,6 @@ def test_lavita_allprocessed_to_dolma(tmp_path: Path) -> None:
     ]
 
     # Write parquet file
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
     input_file = input_dir / "data-train-0000.parquet"
     input_file.parent.mkdir(parents=True, exist_ok=True)
 

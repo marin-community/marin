@@ -8,13 +8,14 @@ from typing import Literal
 
 import equinox as eqx
 import jax
-from jax import numpy as jnp
-from jax import shard_map
-from jax.sharding import NamedSharding
-from jaxtyping import Array, Bool, Float, Int
-
 from haliax.jax_utils import named_call
 from haliax.partitioning import _get_mesh
+from jax import numpy as jnp
+from jax import shard_map
+from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds as SplashSegmentIds
+from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
+from jax.sharding import NamedSharding
+from jaxtyping import Array, Bool, Float, Int
 
 _SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
 _SHARD_MAP_CHECK_KWARGS = {_SHARD_MAP_CHECK_KWARG: False}
@@ -305,9 +306,6 @@ def _tpu_splash_attention(
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | jax.Array | None,
 ) -> Float[Array, "B Q Hq D"]:
-    from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
-    from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds as SplashSegmentIds
-
     # Splash attention expects BHSD.
     q_ = jnp.transpose(q, (0, 2, 1, 3))
     k_ = jnp.transpose(k, (0, 2, 1, 3))

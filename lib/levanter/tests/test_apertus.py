@@ -3,18 +3,18 @@
 
 import tempfile
 
+import haliax as hax
 import numpy as np
 import pytest
 from jax import random
-
-import haliax as hax
+from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
+from transformers import AutoModelForCausalLM
+from transformers.models.apertus.configuration_apertus import ApertusConfig as HfApertusConfig
 
 from levanter.layers.attention import AttentionMask
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.apertus import ApertusConfig, ApertusLMHeadModel, XIELUActivation
 from levanter.utils.activation import ActivationFunctionEnum
-from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
-
 
 pytestmark = skip_if_module_missing("transformers.models.apertus.modeling_apertus")
 
@@ -25,8 +25,8 @@ pytestmark = skip_if_module_missing("transformers.models.apertus.modeling_apertu
 @pytest.mark.parametrize("beta", [0.5, 0.3])
 def test_xielu_vs_hf(alpha_p_init, alpha_n_init, beta):
     """Test that Levanter XIELUActivation matches HuggingFace implementation."""
-    import torch
-    from transformers.activations import XIELUActivation as HfXIELUActivation
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.activations import XIELUActivation as HfXIELUActivation  # noqa: PLC0415  # optional dep: torch
 
     # Create both activations with same init parameters
     hf_xielu = HfXIELUActivation(
@@ -90,8 +90,7 @@ def _apertus_rope_scaling(max_position_embeddings: int) -> dict:
 
 
 def _make_hf_apertus_config(vocab_size: int, num_kv_heads: int):
-    from transformers.models.apertus.configuration_apertus import ApertusConfig as HfApertusConfig
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     max_position_embeddings = 256
     hidden_size = 64
@@ -152,9 +151,8 @@ def _make_levanter_apertus_config(scan_layers: bool, num_kv_heads: int, tokenize
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [2])
 def test_apertus_roundtrip(scan_layers, num_kv_heads, local_gpt2_tokenizer_path):
-    import torch
-    from transformers import AutoModelForCausalLM
-    from transformers.models.apertus.modeling_apertus import ApertusForCausalLM
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.apertus.modeling_apertus import ApertusForCausalLM  # noqa: PLC0415  # optional dep: torch
 
     Vocab = hax.Axis("vocab", 4096)
     hf_config = _make_hf_apertus_config(Vocab.size, num_kv_heads)
@@ -212,8 +210,8 @@ def test_xielu_parameters_loaded_from_checkpoint(local_gpt2_tokenizer_path):
     then verifies the loaded Levanter model has the same parameter values.
     This catches bugs where xIELU parameters might be re-initialized instead of loaded.
     """
-    import torch
-    from transformers.models.apertus.modeling_apertus import ApertusForCausalLM
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.apertus.modeling_apertus import ApertusForCausalLM  # noqa: PLC0415  # optional dep: torch
 
     Vocab = hax.Axis("vocab", 4096)
     num_kv_heads = 2

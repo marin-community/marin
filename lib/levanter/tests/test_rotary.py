@@ -7,6 +7,7 @@ import pytest
 from jax import random
 from test_llama import _get_llama_config
 from test_utils import skip_if_no_torch
+from transformers import LlamaConfig
 
 from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
 from levanter.layers.rotary import _rotate_half as levanter_rotate_half
@@ -15,10 +16,12 @@ from levanter.layers.rotary import _rotate_half as levanter_rotate_half
 @skip_if_no_torch
 @pytest.mark.parametrize("test_seq_len", [64, 128, 256])
 def test_apply_rotary_pos_emb(test_seq_len):
-    import torch
-    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
-    from transformers.models.llama.modeling_llama import apply_rotary_pos_emb as hf_apply_rotary_pos_emb
-    from transformers.models.llama.modeling_llama import rotate_half as hf_rotate_half
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.llama import modeling_llama  # noqa: PLC0415  # optional dep: torch
+
+    LlamaRotaryEmbedding = modeling_llama.LlamaRotaryEmbedding
+    hf_apply_rotary_pos_emb = modeling_llama.apply_rotary_pos_emb
+    hf_rotate_half = modeling_llama.rotate_half
 
     def assert_equal_out(hax_out, torch_out: torch.Tensor):
         assert np.isclose(
@@ -124,10 +127,11 @@ def test_yarn_rotary_embedding():
 @pytest.mark.parametrize("factor", [1.0, 2.0, 4.0, 8.0])
 def test_yarn_rotary_embedding_vs_hf(factor):
     """Test that YARN rotary embeddings match HuggingFace implementation."""
-    import torch
-    from transformers import LlamaConfig
-    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding as HFLlamaRotaryEmbedding
-    from transformers.models.llama.modeling_llama import apply_rotary_pos_emb
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.llama import modeling_llama  # noqa: PLC0415  # optional dep: torch
+
+    HFLlamaRotaryEmbedding = modeling_llama.LlamaRotaryEmbedding
+    apply_rotary_pos_emb = modeling_llama.apply_rotary_pos_emb
 
     head_dim = 64
     seq_len = 32

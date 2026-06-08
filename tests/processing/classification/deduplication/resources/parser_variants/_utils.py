@@ -169,13 +169,13 @@ def fetch_live_html(url: str) -> tuple[str, dict]:
 
 
 def parse_with_trafilatura(html: str) -> str:
-    import trafilatura
+    import trafilatura  # noqa: PLC0415  # optional dep: trafilatura
 
     return trafilatura.extract(html, include_comments=False, favor_recall=True) or ""
 
 
 def parse_with_html2text(html: str) -> str:
-    import html2text as html2text_mod
+    import html2text as html2text_mod  # noqa: PLC0415  # optional dep: html2text
 
     h = html2text_mod.HTML2Text()
     h.ignore_links = False
@@ -184,7 +184,7 @@ def parse_with_html2text(html: str) -> str:
 
 
 def parse_with_readability(html: str) -> str:
-    from readability import Document
+    from readability import Document  # noqa: PLC0415  # optional dep: readability
 
     doc = Document(html)
     summary_html = doc.summary()

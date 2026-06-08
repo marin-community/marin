@@ -32,6 +32,7 @@ from levanter.utils.logging import silence_transformer_nag
 silence_transformer_nag()
 from transformers import Gemma2Config as HfGemma2Config  # noqa: E402
 from transformers import Gemma3Config as HfGemma3Config  # noqa: E402
+from transformers import Gemma3TextConfig as _HFGemma3Config  # noqa: E402
 from transformers import GemmaConfig as HfGemmaConfig  # noqa: E402
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
 
@@ -494,10 +495,6 @@ class Gemma2Config(GemmaConfig):
         construct the Hugging-Face config explicitly so that the intent is clear.
         """
 
-        from transformers import (
-            Gemma2Config as _HFGemma2Config,  # local import (optional dependency)
-        )
-
         if config_overrides is None:
             config_overrides = {}
 
@@ -534,7 +531,7 @@ class Gemma2Config(GemmaConfig):
         )
 
         # Merge user-overrides last so callers can tweak anything.
-        cfg = _HFGemma2Config(
+        cfg = HfGemma2Config(
             **common_args,
             _attn_implementation="eager",
             **config_overrides,
@@ -822,8 +819,6 @@ class Gemma3Config(Gemma2Config):
 
     def to_hf_config(self, vocab_size: int, config_overrides: dict | None = None):  # type: ignore[override]
         """Convert to ``transformers.Gemma3Config``."""
-        from transformers import Gemma3TextConfig as _HFGemma3Config
-
         if config_overrides is None:
             config_overrides = {}
 

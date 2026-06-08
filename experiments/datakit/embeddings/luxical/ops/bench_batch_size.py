@@ -28,6 +28,8 @@ import time
 
 import numpy as np
 import pyarrow.parquet as pq
+from huggingface_hub import hf_hub_download
+from rigging.filesystem import open_url
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +64,7 @@ def _load_texts() -> list[str]:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
-    from huggingface_hub import hf_hub_download
-    from luxical.embedder import Embedder
-    from rigging.filesystem import open_url
+    from luxical.embedder import Embedder  # noqa: PLC0415  # optional dep: luxical
 
     texts = _load_texts()
     char_counts = [len(t) for t in texts]

@@ -15,10 +15,15 @@ from typing import TypeVar, cast
 import draccus
 from draccus.utils import DataclassInstance
 from fray import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
+from levanter.adaptor import NoAdaptorConfig
+from levanter.main.train_dpo import TrainDpoConfig
+from levanter.main.train_lm import TrainLmConfig
+from levanter.schedule import BatchSchedule
 from mergedeep import mergedeep
 from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket
 
 from marin.execution.executor import materialize
+from marin.processing.tokenize import read_tokenized_cache_stats
 from marin.training.run_environment import add_run_env_variables
 
 logger = logging.getLogger(__name__)
@@ -200,10 +205,6 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
 
     config = bake_output_path(pod_config.train_config, pod_config.output_path)
 
-    from levanter.adaptor import NoAdaptorConfig
-    from levanter.main.train_dpo import TrainDpoConfig
-    from levanter.main.train_lm import TrainLmConfig
-
     # Adapter LM/DPO exports PEFT by default; merged HF export is explicit.
     if isinstance(config, (TrainDpoConfig, TrainLmConfig)) and not isinstance(config.adapter, NoAdaptorConfig):
         peft_save_path = config.peft_save_path
@@ -243,8 +244,6 @@ def _dpo_training_components(config: object) -> dict[str, object]:
 
 
 def _dpo_training_dataset_size(config: object) -> int:
-    from marin.processing.tokenize import read_tokenized_cache_stats
-
     training_components = _dpo_training_components(config.data)
     if len(training_components) != 1:
         raise ValueError(
@@ -276,8 +275,6 @@ def _dpo_training_dataset_size(config: object) -> int:
 
 
 def _num_train_steps_for_examples(batch_size: object, total_examples: int) -> int:
-    from levanter.schedule import BatchSchedule
-
     if total_examples <= 0:
         raise ValueError(f"total_examples must be positive, got {total_examples}")
 

@@ -15,6 +15,8 @@ from pathlib import Path
 
 import click
 
+from iris.cluster.backends.local.cluster import LocalCluster
+from iris.cluster.config import IrisConfig
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
@@ -92,15 +94,11 @@ def require_controller_url(ctx: click.Context) -> str:
     # Lazy tunnel establishment from config
     config = ctx.obj.get("config") if ctx.obj else None
     if config:
-        from iris.cluster.config import IrisConfig
-
         iris_config = IrisConfig(config)
         bundle = iris_config.provider_bundle()
         ctx.obj["provider_bundle"] = bundle
 
         if iris_config.proto.controller.WhichOneof("controller") == "local":
-            from iris.cluster.backends.local.cluster import LocalCluster
-
             cluster = LocalCluster(iris_config.proto)
             controller_address = cluster.start()
             ctx.call_on_close(cluster.close)

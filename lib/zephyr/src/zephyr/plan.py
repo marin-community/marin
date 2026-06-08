@@ -18,12 +18,11 @@ from enum import StrEnum, auto
 from itertools import groupby, islice
 from typing import Any, Protocol
 
-import msgspec
-import xxhash
 from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
 
+from zephyr import counters
 from zephyr.dataset import (
     Dataset,
     FileEntry,
@@ -48,6 +47,9 @@ from zephyr.dataset import (
 from zephyr.expr import Expr, referenced_columns
 from zephyr.external_sort import compute_fan_in, compute_write_batch_size, external_sort_merge
 from zephyr.readers import InputFileSpec, compute_parquet_splits, load_file, load_file_batch
+from zephyr.shard_keys import composite_sort_key
+from zephyr.shuffle import ScatterReader
+from zephyr.writers import write_binary_file, write_jsonl_file, write_parquet_file, write_vortex_file
 
 logger = logging.getLogger(__name__)
 
@@ -599,12 +601,6 @@ def compute_plan(dataset: Dataset) -> PhysicalPlan:
     return PhysicalPlan(source_items=source_items, stages=stages)
 
 
-def deterministic_hash(obj: object) -> int:
-    """Compute a deterministic hash for an object."""
-    s = msgspec.msgpack.encode(obj, order="deterministic")
-    return xxhash.xxh3_64_intdigest(s)
-
-
 def make_windows(
     items: Iterable,
     folder_fn: Callable[[object, Any], tuple[bool, object]],
@@ -642,22 +638,6 @@ def make_windows(
         yield window
 
 
-def composite_sort_key(key_fn: Callable, sort_fn: Callable | None) -> Callable:
-    """Build a merge/sort key from a grouping key and an optional secondary sort.
-
-    Returns ``key_fn`` unchanged when ``sort_fn`` is None. Otherwise returns a
-    callable producing ``(key_fn(item), sort_fn(item))`` so items order first by
-    group key and then by the secondary key; grouping should still use
-    ``key_fn`` alone. Used by both the scatter writer (pre-sort within a chunk)
-    and the reduce-side k-way merge so the two stay consistent.
-    """
-    if sort_fn is None:
-        return key_fn
-    # Bind to a non-Optional local so the closure captures a narrowed type.
-    secondary = sort_fn
-    return lambda item: (key_fn(item), secondary(item))
-
-
 def _merge_sorted_chunks(
     shard: Shard, key_fn: Callable, sort_fn: Callable | None = None, external_sort_dir: str | None = None
 ) -> Iterator[tuple[object, Iterator]]:
@@ -681,8 +661,6 @@ def _merge_sorted_chunks(
 
     # Check if external sort is needed BEFORE materializing all iterators.
     # ScatterReader can decide using manifest stats (no file opens needed).
-    from zephyr.shuffle import ScatterReader  # circular import: shuffle imports plan
-
     use_external = (
         external_sort_dir is not None
         and isinstance(shard, ScatterReader)
@@ -823,14 +801,6 @@ def run_stage(
 
     configure_logging(level=logging.INFO)
 
-    from zephyr import counters  # circular import: counters → execution → plan
-    from zephyr.writers import (  # circular import: writers → counters → execution → plan
-        write_binary_file,
-        write_jsonl_file,
-        write_parquet_file,
-        write_vortex_file,
-    )
-
     stream: Iterator = iter(ctx.shard)
 
     op_index = 0
@@ -878,8 +848,6 @@ def run_stage(
         elif isinstance(op, Reduce):
             # Build ScatterReader directly from per-mapper sidecars, then
             # merge sorted chunks and reduce per key.
-            from zephyr.shuffle import ScatterReader  # circular import: shuffle imports plan
-
             shard = ctx.shard
             if not isinstance(shard, ScatterReader):
                 # Shard contains every mapper's scatter-data path — reducer

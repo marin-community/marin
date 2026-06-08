@@ -761,8 +761,6 @@ def main(parquet_dir: str, output: str | None) -> None:
     report = generate_report(conn)
     if output:
         if output.startswith("gs://"):
-            import fsspec
-
             with fsspec.open(output, "w") as f:
                 f.write(report)
         else:

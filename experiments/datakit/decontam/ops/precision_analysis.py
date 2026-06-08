@@ -330,7 +330,7 @@ def main() -> None:
     corpus_id_to_text = _corpus_id_to_text(args.source_name, sample)
 
     # Stage 3: judge.
-    from anthropic import Anthropic
+    from anthropic import Anthropic  # noqa: PLC0415  # optional dep: anthropic
 
     client = Anthropic(api_key=_read_anthropic_key())
 

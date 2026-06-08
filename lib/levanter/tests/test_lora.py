@@ -16,10 +16,6 @@ from safetensors import safe_open
 from test_utils import skip_if_hf_model_not_accessible, skip_if_module_missing, skip_if_no_torch, use_test_mesh
 from transformers import AutoModelForCausalLM
 
-from levanter.callbacks import StepInfo
-from levanter.checkpoint import Checkpointer
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from levanter.layers.attention import AttentionMask
 from levanter.adaptor.lora import (
     LoraConfig,
     LoraLinear,
@@ -29,6 +25,10 @@ from levanter.adaptor.lora import (
     save_merged_hf_model,
     save_peft_pretrained,
 )
+from levanter.callbacks import StepInfo
+from levanter.checkpoint import Checkpointer
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.layers.attention import AttentionMask
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.trainer_state import TrainerState
@@ -153,7 +153,7 @@ def test_merge_lora():
 @skip_if_module_missing("peft")
 @skip_if_no_torch
 def test_lora_load_in_peft(local_gpt2_tokenizer_path):
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     # Local tokenizer keeps converter construction off the Hub; the base model is
     # saved/reloaded from a temp dir so the tokenizer is incidental here.
@@ -170,7 +170,7 @@ def test_lora_load_in_peft(local_gpt2_tokenizer_path):
     causal_mask = AttentionMask.causal()
 
     with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
-        from peft import PeftConfig, PeftModel
+        from peft import PeftConfig, PeftModel  # noqa: PLC0415  # optional dep: peft
 
         converter.save_pretrained(model, f"{tmpdir}/model", save_tokenizer=False)
 
@@ -205,7 +205,7 @@ def test_lora_load_in_peft(local_gpt2_tokenizer_path):
 @skip_if_module_missing("peft")
 @skip_if_no_torch
 def test_lora_merged_load_in_hf(local_gpt2_tokenizer_path):
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     # Local tokenizer keeps converter construction off the Hub; the base model is
     # saved/reloaded from a temp dir so the tokenizer is incidental here.
@@ -254,7 +254,7 @@ def test_lora_merged_load_in_hf(local_gpt2_tokenizer_path):
 @skip_if_no_torch
 @skip_if_hf_model_not_accessible("NousResearch/Llama-2-7b-hf")
 def test_lora_merged_load_in_hf_llama():
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     config = LlamaConfig(
         max_seq_len=32,

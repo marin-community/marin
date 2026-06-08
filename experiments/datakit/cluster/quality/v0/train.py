@@ -39,6 +39,8 @@ import tempfile
 from collections import Counter
 from dataclasses import dataclass
 
+import fasttext
+import numpy as np
 import pyarrow.parquet as pq
 from rigging.filesystem import open_url, url_to_fs
 from rigging.log_setup import configure_logging
@@ -75,8 +77,6 @@ DEFAULT_HP: dict[str, int | float | str] = {
 # experiments.datakit.fasttext: train_supervised internally calls
 # ``np.array(..., copy=False)`` which NumPy 2 rejects. Idempotent.
 def _patch_numpy_copy_compat() -> None:
-    import numpy as np
-
     if getattr(np, "_fasttext_copy_compat", False):
         return
     _orig = np.array
@@ -171,8 +171,6 @@ def train(
     hp_overrides: dict[str, int | float | str],
 ) -> TrainedModel:
     _patch_numpy_copy_compat()
-    import fasttext
-
     rows = _read_scored(input_path)
     if not rows:
         raise RuntimeError(f"no usable scored rows in {input_path}")

@@ -57,8 +57,8 @@ from levanter.inference.utils import INVALID
 from levanter.layers.attention import AttentionMask
 from levanter.models.gpt2 import Gpt2Config
 from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
-from levanter.utils.background_iterable import BackgroundIterator
 from levanter.tokenizers import MarinTokenizer
+from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.py_utils import set_global_rng_seeds
 
 try:
@@ -1138,7 +1138,7 @@ class LmEvalHarnessConfig:
         downloading evaluation datasets.
         """
         logger.info("Loading tasks...")
-        import lm_eval.tasks as tasks
+        import lm_eval.tasks as tasks  # noqa: PLC0415  # optional dep: lm_eval
 
         manager = tasks.TaskManager()
         # we need to do it this way b/c i can't figure out how to run e.g. hellaswag 0 shot and 10 shot in a single run
@@ -1172,7 +1172,7 @@ class LmEvalHarnessConfig:
 
         Uses retry logic with exponential backoff to handle HuggingFace rate limits.
         """
-        import lm_eval.tasks as tasks
+        import lm_eval.tasks as tasks  # noqa: PLC0415  # optional dep: lm_eval
 
         task_name = task if isinstance(task, str) else task["task"]
 
@@ -1186,8 +1186,8 @@ class LmEvalHarnessConfig:
         return this_task
 
     def _rename_tasks_for_eval_harness(self, this_task, lm_eval_task_name, our_name):
-        from lm_eval.api.group import ConfigurableGroup
-        from lm_eval.api.task import ConfigurableTask
+        from lm_eval.api.group import ConfigurableGroup  # noqa: PLC0415  # optional dep: lm_eval
+        from lm_eval.api.task import ConfigurableTask  # noqa: PLC0415  # optional dep: lm_eval
 
         # hacky, but this allows us to run multiple instances of the same task with different fewshot settings
         if isinstance(this_task, dict):
@@ -1236,7 +1236,7 @@ class LmEvalHarnessConfig:
         return lm_eval_name
 
     def _get_child_tasks(self, task_group):
-        from lm_eval.api.group import ConfigurableGroup
+        from lm_eval.api.group import ConfigurableGroup  # noqa: PLC0415  # optional dep: lm_eval
 
         out = []
         for k, v in task_group.items():

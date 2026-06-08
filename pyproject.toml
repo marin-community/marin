@@ -164,11 +164,13 @@ extend-include = ["scripts/workflows/**/*.py"]
 #   RET502  -> "Explicit returns mixed with implicit returns" (bare `return` value path)
 #   RET503  -> "Explicit returns mixed with implicit returns" (missing explicit return)
 #   SIM115  -> "File is not always closed" (open() without a context manager)
+#   PLC0415 -> "import should be at the top-level of a file" (no function-local
+#              imports except to break a circular import or guard an optional dep)
 # B018 (already via "B") and F401/F841/F811 (via "F") cover the rest of the
 # actionable CodeQL maintainability set; B018 correctly ignores `...`/docstrings.
 select = [
     "A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W",
-    "N805", "PLR0124", "PLR1722", "RET502", "RET503", "SIM115",
+    "N805", "PLR0124", "PLR1722", "RET502", "RET503", "SIM115", "PLC0415",
     # Local-import hygiene (issue #6219):
     #   TID252 -> "relative-imports" (prefer absolute over parent-relative imports)
     #   ICN001 -> "unconventional-import-alias" (e.g. `import numpy as np`)
@@ -180,6 +182,9 @@ ignore = ["F722", "B008", "UP015", "A005", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
+# Notebook cells legitimately interleave imports with computation as they are
+# executed top-to-bottom; PLC0415's top-of-file rule does not apply to cells.
+"*.ipynb" = ["PLC0415"]
 # Bloom filter tests deliberately compare an object with itself to exercise its
 # reflexive comparison operators (==, <=, >=, ...), so PLR0124 is expected here.
 "lib/dupekit/tests/test_bloom.py" = ["PLR0124"]
