@@ -1153,6 +1153,39 @@ def test_preference_pass_deducts_capacity():
     assert task_id_1 in context.pending_tasks
 
 
+def test_preference_pass_advances_one_claimed_worker_per_cycle():
+    """Reservation placements spread one-per-claimed-worker, not packed onto the first.
+
+    Each claim is a reserved slot on a distinct worker. Even though both 1-CPU
+    tasks fit on a single 8-CPU worker by capacity (so the raised non-reservation
+    packing cap would allow stacking), preference_pass must advance one claimed
+    worker per cycle so reserved capacity is not anchored on one worker while
+    other claimed workers sit tainted but unused.
+    """
+    w1 = _make_worker("w1")
+    w2 = _make_worker("w2")
+    job_id = JobName.root("test-user", "res-job")
+    task_id_0 = job_id.task(0)
+    task_id_1 = job_id.task(1)
+    req = _make_job_requirements()
+    has_reservation = {job_id}
+    claims = {
+        WorkerId("w1"): ReservationClaim(job_id=job_id.to_wire(), entry_idx=0),
+        WorkerId("w2"): ReservationClaim(job_id=job_id.to_wire(), entry_idx=1),
+    }
+
+    context = _build_context_with_workers(
+        [w1, w2],
+        pending_tasks=[task_id_0, task_id_1],
+        jobs={job_id: req},
+    )
+
+    assignments = preference_pass(context, has_reservation, claims)
+
+    assert len(assignments) == 2
+    assert {wid for _, wid in assignments} == {WorkerId("w1"), WorkerId("w2")}
+
+
 # =============================================================================
 # _find_reservation_ancestor
 # =============================================================================

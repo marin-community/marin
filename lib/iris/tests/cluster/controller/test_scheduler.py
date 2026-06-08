@@ -2056,7 +2056,11 @@ def test_mixed_variant_cluster_many_jobs_all_scheduled(state):
 
 
 def test_dedup_many_tasks_of_one_job_schedule_in_one_cycle(state):
-    """One job with many replicas places one task per worker in a single cycle."""
+    """One job with many replicas places all of them in a single cycle.
+
+    Per-worker stacking may go up to the per-cycle assignment cap; the invariant
+    under test is that the dedup fast-path schedules every replica in one cycle.
+    """
     sched = Scheduler(max_building_tasks_per_worker=1000)
     num_workers = 50
 

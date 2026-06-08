@@ -85,6 +85,13 @@ logger = logging.getLogger(__name__)
 # Sentinel for dry-run scheduling with per-worker limits disabled.
 _UNLIMITED = sys.maxsize
 
+# Reservation placements advance one claimed worker per cycle, independent of
+# the (higher) non-reservation packing cap. Each claim is one reserved slot, so
+# packing several reservation tasks onto the first claimed worker would anchor
+# reserved capacity on one worker while the other claimed workers sit tainted
+# but unused.
+_MAX_RESERVATION_PLACEMENTS_PER_WORKER_PER_CYCLE = 1
+
 
 # Taint attribute injected onto claimed workers to prevent non-reservation
 # jobs from landing on them.  Non-reservation jobs get a NOT_EXISTS constraint
@@ -1025,7 +1032,7 @@ def preference_pass(
             if parent is not None:
                 claim_key = parent.to_wire()
         for wid in claimed_by_job.get(claim_key, ()):
-            if context.assignment_counts.get(wid, 0) >= context.max_assignments_per_worker:
+            if context.assignment_counts.get(wid, 0) >= _MAX_RESERVATION_PLACEMENTS_PER_WORKER_PER_CYCLE:
                 continue
             capacity = context.capacities.get(wid)
             if capacity is None:
