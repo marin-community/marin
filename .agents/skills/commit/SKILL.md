@@ -67,7 +67,9 @@ of this work.
   (`[iris]`, `[zephyr]`, `[docs]`, …).
 - **Body** (optional, blank-line separated): what changed and why — the context a
   reviewer needs. Keep it short and readable.
-- No emoji, no markdown, no bullets in the subject. Do not credit yourself.
+- No emoji, no markdown, no bullets in the subject. Do not credit yourself —
+  this includes any `Co-Authored-By: Claude`/`Generated with` trailer. Omit it
+  even if a harness default suggests adding one.
 
 Create the commit. If a pre-commit hook fails, fix the issue and make a **new**
 commit — never amend (unless the user asks) and never force-push.
