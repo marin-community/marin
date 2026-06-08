@@ -313,15 +313,11 @@ def _parse_claude_batch(stdout: str) -> list[BatchedClassification] | None:
 
 
 def make_claude_classifier(model: str, agent_command: str = "claude -p") -> Classifier:
-    """Build a `Classifier` that shells out to a headless Claude Code session.
-
-    One `claude -p` subprocess per batch — the same agent the lint review uses.
-    Each call is a fresh, isolated session (`_headless_env` strips the parent's
-    session/API-key markers so it runs on subscription auth), with tools
-    disabled and `--json-schema` forcing a structured-output array the API
-    validates against `_classification_schema`. The prompt carries every
-    comment's `id` marker on stdin. A failed or malformed call yields no
-    classifications for that batch; those comments are dropped from the metric.
+    """Build a `Classifier` that shells out to a headless Claude Code session
+    per batch — the same agent the lint review uses, run as a fresh isolated
+    session on Claude subscription auth. A failed or malformed call yields no
+    classifications for that batch; those comments are dropped from the metric,
+    the same degradation as any classifier backend.
     """
     env = _headless_env()
     cmd = [
@@ -684,6 +680,22 @@ def _in_window(row: dict, key: str, start: dt.datetime) -> bool:
         return False
 
 
+def _group_by_isoweek(rows: list[dict], ts_key: str) -> dict[tuple[int, int], list[dict]]:
+    """Bucket rows by the ISO (year, week) of `row[ts_key]`. Rows with a missing
+    or unparseable timestamp are dropped; callers sort the keys for display."""
+    weeks: dict[tuple[int, int], list[dict]] = {}
+    for row in rows:
+        ts = row.get(ts_key)
+        if not ts:
+            continue
+        try:
+            y, w, _ = _parse_ts(ts).isocalendar()
+        except ValueError:
+            continue
+        weeks.setdefault((y, w), []).append(row)
+    return weeks
+
+
 def _pct(n: int, d: int) -> str:
     return f"{round(100 * n / d)}%" if d else "—"
 
@@ -801,17 +813,11 @@ def build_automation_section(invocations: list[dict], findings: list[dict], star
     )
 
     # Weekly adoption: runs + findings keyed by ISO week of the run timestamp.
-    weeks: dict[tuple[int, int], list[int]] = {}
-    for r in runs:
-        try:
-            y, w, _ = _parse_ts(r["ts"]).isocalendar()
-        except (ValueError, KeyError):
-            continue
-        e = weeks.setdefault((y, w), [0, 0, 0])
-        e[0] += 1
-        e[1] += 1 if _to_int(r.get("finding_count")) > 0 else 0
-        e[2] += _to_int(r.get("finding_count"))
-    week_rows = [[f"{y}-W{w:02d}", n, wf, fnd] for (y, w), (n, wf, fnd) in sorted(weeks.items())]
+    week_rows = []
+    for (y, w), group in sorted(_group_by_isoweek(runs, "ts").items()):
+        found = sum(_to_int(r.get("finding_count")) for r in group)
+        with_finds = sum(1 for r in group if _to_int(r.get("finding_count")) > 0)
+        week_rows.append([f"{y}-W{w:02d}", len(group), with_finds, found])
     trend = "### Weekly trend\n\n" + _md_table(
         ["Week", "Runs", "With findings", "Findings"],
         ["---", "---:", "---:", "---:"],
@@ -917,20 +923,12 @@ def build_report(
     )
 
     # Weekly trend, keyed by ISO week of the merge date.
-    weeks: dict[tuple[int, int], list[int]] = {}
-    for d in outcomes:
-        try:
-            y, w, _ = _parse_ts(d["merged_at"]).isocalendar()
-        except ValueError:
-            continue
-        e = weeks.setdefault((y, w), [0, 0, 0, 0])
-        e[0] += 1
-        e[1] += int(d["total_human_comments"])
-        e[2] += int(d["catchable_strict_count"])
-        e[3] += int(d["catchable_generous_count"])
-    week_rows = [
-        [f"{y}-W{w:02d}", prs, cmts, st, gen, _pct(gen, cmts)] for (y, w), (prs, cmts, st, gen) in sorted(weeks.items())
-    ]
+    week_rows = []
+    for (y, w), group in sorted(_group_by_isoweek(outcomes, "merged_at").items()):
+        cmts = sum(int(d["total_human_comments"]) for d in group)
+        st = sum(int(d["catchable_strict_count"]) for d in group)
+        gen = sum(int(d["catchable_generous_count"]) for d in group)
+        week_rows.append([f"{y}-W{w:02d}", len(group), cmts, st, gen, _pct(gen, cmts)])
     trend_section = "### Weekly trend\n\n" + _md_table(
         ["Week", "PRs", "Comments", "Strict", "Generous", "Generous %"],
         ["---", "---:", "---:", "---:", "---:", "---:"],
