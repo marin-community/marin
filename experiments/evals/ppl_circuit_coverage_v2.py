@@ -36,7 +36,7 @@ LOCAL_SAMPLE_EXAMPLES_PER_CONFIG = 4
 RAW_SHARD_SUFFIX = ".jsonl.gz"
 PLAIN_TEXT_PRETRAINING_TARGET_TOKENS = 1_000_000_000
 PLAIN_TEXT_PRETRAINING_SHARDS = 256
-PLAIN_TEXT_PRETRAINING_SOURCE = "generated_ppl_circuit_coverage_v2_plain_text"
+PLAIN_TEXT_PRETRAINING_SOURCE = "generated_ppl_circuit_coverage_v2_plain_text_compact_v1"
 CHARS_PER_TOKEN_ESTIMATE = 4
 
 
@@ -1484,7 +1484,7 @@ ppl_circuit_coverage_v2_raw_executor = ExecutorStep(
 )
 
 ppl_circuit_coverage_v2_plain_text_pretraining_executor = ExecutorStep(
-    name=os.path.join("raw", "pretraining", "ppl_circuit_coverage_v2_plain_text_1b"),
+    name=os.path.join("raw", "pretraining", "ppl_circuit_coverage_v2_plain_text_1b_compact_v1"),
     fn=materialize_ppl_circuit_coverage_v2_plain_text_pretraining_from_config,
     config=PplCircuitCoverageV2PlainTextPretrainingConfig(output_path=this_output_path()),
     resources=ResourceConfig.with_cpu(cpu=16, ram="64g", disk="200g"),

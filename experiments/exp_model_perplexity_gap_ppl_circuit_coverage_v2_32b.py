@@ -19,7 +19,7 @@ from experiments.evals.ppl_circuit_coverage_v2 import (
 )
 from experiments.marin_models import marin_tokenizer
 
-RUN_KEY = "main_gap_32b_ppl_circuit_coverage_v2_issue6070_v1"
+RUN_KEY = "main_gap_32b_ppl_circuit_coverage_v2_issue6070_v2"
 RESOURCE_CONFIG = ResourceConfig.with_tpu("v5p-8", regions=["us-central1"])
 MAX_DOCS_PER_DATASET = None
 MAX_DOC_BYTES = 32_768
@@ -51,6 +51,7 @@ MARIN_SCORES = model_perplexity_scores(
         "eval=model-perplexity",
         f"dataset_bundle={DATASET_BUNDLE}",
         "model=marin-community/marin-32b-base",
+        "template=compact_v1",
         "region=us-central1",
         f"issue:{PPL_CIRCUIT_COVERAGE_V2_ISSUE}",
     ],
@@ -69,6 +70,7 @@ QWEN3_SCORES = model_perplexity_scores(
         "eval=model-perplexity",
         f"dataset_bundle={DATASET_BUNDLE}",
         "model=Qwen/Qwen3-32B",
+        "template=compact_v1",
         "region=us-central1",
         f"issue:{PPL_CIRCUIT_COVERAGE_V2_ISSUE}",
     ],
@@ -85,6 +87,7 @@ GAP = model_perplexity_gap_from_scores(
         f"dataset_bundle={DATASET_BUNDLE}",
         "model_a=marin-community/marin-32b-base",
         "model_b=Qwen/Qwen3-32B",
+        "template=compact_v1",
         "region=us-central1",
         f"issue:{PPL_CIRCUIT_COVERAGE_V2_ISSUE}",
     ],
