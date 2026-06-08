@@ -198,8 +198,14 @@ def _make_jinja_env(extensions: list[type]) -> jinja2.Environment:
         lstrip_blocks=True,
         extensions=extensions,
     )
-    env.globals["raise_exception"] = _raise_chat_template_exception
-    env.globals["strftime_now"] = lambda fmt: time.strftime(fmt)
+    # jinja2 types globals narrowly from its DEFAULT_NAMESPACE; pyrefly rejects assigning
+    # other callables. Update via the mapping interface, which accepts t.Any values.
+    env.globals.update(
+        {
+            "raise_exception": _raise_chat_template_exception,
+            "strftime_now": lambda fmt: time.strftime(fmt),
+        }
+    )
     return env
 
 

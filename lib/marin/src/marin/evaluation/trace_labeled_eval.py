@@ -431,10 +431,11 @@ def _completed_dataset_count(results: dict[str, object]) -> int:
 def _completed_dataset_metrics(results: dict[str, object]) -> dict[str, float]:
     metrics: dict[str, float] = {}
     for dataset_result in _dataset_results(results).values():
-        if not _is_completed_dataset_result(dataset_result):
+        if not isinstance(dataset_result, Mapping):
             continue
-        dataset_metrics = dataset_result["metrics"]
-        assert isinstance(dataset_metrics, Mapping)
+        dataset_metrics = dataset_result.get("metrics")
+        if not isinstance(dataset_metrics, Mapping):
+            continue
         for metric_name, metric_value in dataset_metrics.items():
             if not isinstance(metric_name, str):
                 raise ValueError(f"Trace labeled eval metric names must be strings, got {metric_name!r}")
