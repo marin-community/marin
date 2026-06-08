@@ -13,6 +13,7 @@ from haliax import Axis, NamedArray
 from haliax.jax_utils import maybe_rng_split
 from haliax.state_dict import ModuleWithStateDictSerialization
 
+from levanter.adaptor.lora import lora_or_linear_bias, lora_or_linear_weight, resize_lora_or_linear_output
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.layers.attention import AttentionBackend, AttentionConfig, AttentionMask
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
@@ -202,8 +203,8 @@ class MistralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MistralCo
         return MistralLMHeadModel(transformer, embeddings, lm_head)
 
     def get_lm_head(self) -> hax.NamedArray:
-        assert self.lm_head.bias is None
-        return self.lm_head.weight
+        assert lora_or_linear_bias(self.lm_head) is None
+        return lora_or_linear_weight(self.lm_head)
 
     def activations(
         self,
@@ -230,8 +231,7 @@ class MistralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MistralCo
         new_Vocab = self.Vocab.resize(new_size)
         k1, k2 = maybe_rng_split(key, 2)
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)
-        new_lm_matrix = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
-        new_lm_head = dataclasses.replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
+        new_lm_head = resize_lora_or_linear_output(self.lm_head, self.Vocab, new_Vocab, key=k2)
 
         return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
 

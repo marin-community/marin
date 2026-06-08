@@ -16,6 +16,7 @@ from haliax.nn.normalization import LayerNormBase
 from haliax.nn.scan import BlockFoldable, BlockSeq, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
+from levanter.adaptor.lora import lora_or_linear_weight, resize_lora_or_linear_output
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.layers.attention import Attention, AttentionBackend, AttentionConfig, AttentionMask
 from levanter.layers.normalization import LayerNormConfigBase
@@ -392,7 +393,7 @@ class GemmaLMHeadModel(LmHeadModel[GemmaConfig], ModuleWithStateDictSerializatio
         if self.lm_head is None:
             return self.embeddings.token_embeddings.weight
         else:
-            return self.lm_head.weight
+            return lora_or_linear_weight(self.lm_head)
 
     @classmethod
     def init(cls, Vocab: Axis, config: GemmaConfig, *, key) -> "GemmaLMHeadModel":
@@ -432,8 +433,7 @@ class GemmaLMHeadModel(LmHeadModel[GemmaConfig], ModuleWithStateDictSerializatio
         k1, k2 = maybe_rng_split(key, 2)
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)
         if self.lm_head is not None:
-            new_lm_matrix = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
-            new_lm_head = dataclasses.replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
+            new_lm_head = resize_lora_or_linear_output(self.lm_head, self.Vocab, new_Vocab, key=k2)
             return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
         else:
             return dataclasses.replace(self, embeddings=new_embeddings)
@@ -729,7 +729,7 @@ class Gemma2LMHeadModel(LmHeadModel[Gemma2Config], ModuleWithStateDictSerializat
         if self.lm_head is None:
             return self.embeddings.token_embeddings.weight
         else:
-            return self.lm_head.weight
+            return lora_or_linear_weight(self.lm_head)
 
     @classmethod
     def init(cls, Vocab: Axis, config: GemmaConfig, *, key):
@@ -761,8 +761,7 @@ class Gemma2LMHeadModel(LmHeadModel[Gemma2Config], ModuleWithStateDictSerializat
         k1, k2 = maybe_rng_split(key, 2)
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)
         if self.lm_head is not None:
-            new_lm_matrix = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
-            new_lm_head = dataclasses.replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
+            new_lm_head = resize_lora_or_linear_output(self.lm_head, self.Vocab, new_Vocab, key=k2)
             return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
         else:
             return dataclasses.replace(self, embeddings=new_embeddings)
@@ -952,7 +951,7 @@ class Gemma3LMHeadModel(LmHeadModel[Gemma3Config], ModuleWithStateDictSerializat
         if self.lm_head is None:
             return self.embeddings.token_embeddings.weight
         else:
-            return self.lm_head.weight
+            return lora_or_linear_weight(self.lm_head)
 
     @classmethod
     def init(cls, Vocab: Axis, config: Gemma3Config, *, key):
@@ -984,8 +983,7 @@ class Gemma3LMHeadModel(LmHeadModel[Gemma3Config], ModuleWithStateDictSerializat
         k1, k2 = maybe_rng_split(key, 2)
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)
         if self.lm_head is not None:
-            new_lm_matrix = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
-            new_lm_head = dataclasses.replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
+            new_lm_head = resize_lora_or_linear_output(self.lm_head, self.Vocab, new_Vocab, key=k2)
             return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
         else:
             return dataclasses.replace(self, embeddings=new_embeddings)

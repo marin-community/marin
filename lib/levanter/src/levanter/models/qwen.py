@@ -15,6 +15,7 @@ from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
 from haliax.nn.scan import BlockFoldable, BlockSeq, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
+from levanter.adaptor.lora import lora_or_linear_weight, resize_lora_or_linear_output
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.layers.attention import Attention, AttentionConfig, AttentionMask
 from levanter.layers.rotary import RotaryEmbeddingsConfig
@@ -263,15 +264,14 @@ class QwenLMHeadModel(LmHeadModel[QwenConfig], ModuleWithStateDictSerialization)
         if self.lm_head is None:
             return self.embeddings.token_embeddings.weight
         else:
-            return self.lm_head.weight
+            return lora_or_linear_weight(self.lm_head)
 
     def resize_vocab(self, new_size: int, key=None) -> "LmHeadModel[QwenConfig]":
         new_Vocab = self.Vocab.resize(new_size)
         k1, k2 = maybe_rng_split(key, 2)
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)
         if self.lm_head is not None:
-            new_lm_matrix = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
-            new_lm_head = dataclasses.replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
+            new_lm_head = resize_lora_or_linear_output(self.lm_head, self.Vocab, new_Vocab, key=k2)
             return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
         else:
             return dataclasses.replace(self, embeddings=new_embeddings)
