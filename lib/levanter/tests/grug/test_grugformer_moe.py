@@ -532,8 +532,10 @@ def test_moe_mlp_assigned_token_backward_matches_ring_with_ep_axis_when_availabl
         pytest.skip("assigned_token is not implemented on XLA:CPU")
 
     tokens = len(jax.devices()) * 8
-    hidden_dim = 16
-    intermediate_dim = 24
+    # TPU Pallas GMM backward lowering requires valid block multiples for the
+    # ring reference path; keep this shape small but TPU-lowerable.
+    hidden_dim = 128
+    intermediate_dim = 128
     num_experts = 4
     topk = 2
 
