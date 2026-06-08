@@ -113,7 +113,9 @@ def compute_watch_stats(
 
 @dataclass(frozen=True)
 class WatchConfig:
-    watch_targets: Union[list[Target], Target] = dataclasses.field(default_factory=lambda: ["grads", "params"])
+    watch_targets: Union[list[Target], Target] = dataclasses.field(
+        default_factory=lambda: cast(list[Target], ["grads", "params"])
+    )
     """
     What to watch during training. Can be a single target or a list of targets.
     Valid targets are: 'grads', 'params', 'opt_state', 'updates'.

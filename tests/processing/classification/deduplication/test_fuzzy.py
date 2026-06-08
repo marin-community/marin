@@ -332,7 +332,7 @@ def test_text_cap_chars_truncates_mega_docs_only(tmp_path):
 # ---------------------------------------------------------------------------
 # Char-5-gram Jaccard recall / precision tests.
 #
-# The dupekit MinHash pipeline shingles by character (rust/dupekit/src/
+# The dupekit MinHash pipeline shingles by character (lib/dupekit/rust/src/
 # minhash_ops.rs:69-76: text.chars().windows(ngram_size)), so char-Jaccard
 # directly governs LSH collision probability. We construct text from a
 # lowercase-only alphabet so dupekit's CleanText (lowercase + strip punct +

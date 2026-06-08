@@ -193,17 +193,17 @@ class ReconcileState:
         now_ms = self._snapshot.now.epoch_ms()
         # Direct providers manage their own hosts -> no build-failed reaping.
         for update in updates:
-            self._apply_update(update, now_ms, source=task.TransitionSource.DIRECT_PROVIDER)
+            self._apply_update(update, now_ms, source=task.TransitionSource.DISPATCH)
         cascaded_jobs = self._recompute_and_finalize(now_ms)
 
         if cascaded_jobs:
-            self.overlay.emit_log_event(LogEvent(action="direct_provider_updates_applied", entity_id="direct"))
+            self.overlay.emit_log_event(LogEvent(action="dispatch_updates_applied", entity_id="direct"))
             for job_id in cascaded_jobs:
                 self.overlay.emit_log_event(
                     LogEvent(
                         action="job_terminated",
                         entity_id=job_id.to_wire(),
-                        trigger="direct_provider_updates_applied",
+                        trigger="dispatch_updates_applied",
                     )
                 )
         return self.overlay.effects
@@ -443,8 +443,9 @@ class ReconcileState:
         rows_by_worker: dict[WorkerId, list[ActiveTaskRow]] = {wid: [] for wid in failed_worker_ids}
         for rows in self._snapshot.active_tasks_by_job.values():
             for row in rows:
-                if row.current_worker_id in failed_worker_ids:
-                    rows_by_worker[row.current_worker_id].append(row)
+                wid = row.current_worker_id
+                if wid is not None and wid in failed_worker_ids:
+                    rows_by_worker[wid].append(row)
         return rows_by_worker
 
     def _fail_one_task(

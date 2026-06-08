@@ -46,7 +46,7 @@ def value_at_step(schedule_or_t: Sequence[ScheduleStep[T]] | T, step: int) -> T:
 def distinct_values(schedule: Sequence[ScheduleStep[T]] | T) -> set[T]:
     if _is_scalar(schedule):
         return {schedule}  # type: ignore
-    return set(step.value for step in schedule)
+    return set(step.value for step in typing.cast("Sequence[ScheduleStep[T]]", schedule))
 
 
 @dataclass

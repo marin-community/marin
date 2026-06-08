@@ -1,6 +1,6 @@
 # finelog server image — structured-log store + push/fetch RPC server.
 #
-# The server is the Rust `finelog-server` binary (rust/finelog): it serves the
+# The server is the Rust `finelog-server` binary (lib/finelog/rust): it serves the
 # Connect/gRPC RPCs and the dashboard SPA on a single port. Python is no longer
 # in the runtime image.
 #
@@ -13,7 +13,7 @@
 # ── Stage: dashboard ─────────────────────────────────────────────────
 # Build the Vue SPA. Output is consumed by the runtime stage at
 # /app/dashboard/dist; the Rust server resolves and serves it from there (see
-# `DOCKER_VUE_DIST_DIR` in rust/finelog/src/server/spa.rs).
+# `DOCKER_VUE_DIST_DIR` in lib/finelog/rust/src/server/spa.rs).
 FROM node:22-slim AS dashboard
 
 WORKDIR /build/dashboard
@@ -27,16 +27,16 @@ RUN npm run build
 
 
 # ── Stage: rustbuild ─────────────────────────────────────────────────
-# Compile the release `finelog-server` binary. The whole `rust/` workspace is
-# copied so the workspace (`members = ["dupekit", "finelog"]`) resolves; only
-# `finelog` is built. `connectrpc-build` fetches a vendored protoc from the
-# crate registry at build time, so no system protoc is needed.
+# Compile the release `finelog-server` binary from finelog's own Rust
+# workspace at lib/finelog/rust (no top-level rust/ tree). `connectrpc-build`
+# fetches a vendored protoc from the crate registry at build time, so no
+# system protoc is needed.
 FROM rust:1-bookworm AS rustbuild
 
 # Cargo profile to build. Defaults to the fat-LTO `release` profile for
 # production images. Dev/test deploys pass `--build-arg CARGO_PROFILE=fast`
 # (no LTO, parallel codegen) for a far faster final link; see `[profile.fast]`
-# in rust/Cargo.toml. The profile name is also the target/<profile>/ subdir
+# in lib/finelog/rust/Cargo.toml. The profile name is also the target/<profile>/ subdir
 # (true for `release` and any custom profile), so the cp below resolves it.
 ARG CARGO_PROFILE=release
 
@@ -50,7 +50,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends mold \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build/rust
-COPY rust/ ./
+COPY lib/finelog/rust/ ./
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/rust/target \
     mold -run cargo build --profile ${CARGO_PROFILE} -p finelog --bin finelog-server \
@@ -102,6 +102,6 @@ USER finelog
 
 EXPOSE 10001
 
-# All server flags read from FINELOG_* envvars (see rust/finelog/src/main.rs).
+# All server flags read from FINELOG_* envvars (see lib/finelog/rust/src/main.rs).
 # Defaults set above; FINELOG_REMOTE_DIR="" (no offload) unless overridden.
 CMD ["finelog-server"]

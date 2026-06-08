@@ -326,7 +326,7 @@ def cb_tagged_lm_evaluate(
     eval_current: bool = True,
     eval_ema: bool = True,
     prefix: str = "eval",
-    mp: jmp.Policy = None,
+    mp: jmp.Policy | None = None,
     checkpoint_path: Optional[str] = None,
     loss_fn: Callable[[LmHeadModel, LmEvalExample], LossFnOutput] | None = None,
 ) -> Callable[[StepInfo], None]:
@@ -792,7 +792,7 @@ class LabeledEvaluator(Generic[Ex, M]):
         tokenizer: Optional[MarinTokenizer] = None,
         device_mesh=None,
         axis_mapping=None,
-        mp: jmp.Policy = None,
+        mp: jmp.Policy | None = None,
     ) -> "LabeledEvaluator[LabeledLmExample, LmHeadModel]":
         if isinstance(EvalBatch, int):
             EvalBatch = hax.Axis("batch", EvalBatch)
@@ -903,8 +903,8 @@ class _EvalRunningMeans(eqx.Module):
     @staticmethod
     def zeros_like(total: Float[Array, "..."], per_tag: Float[Array, "tag"]) -> "_EvalRunningMeans":
         z = RunningMean.zeros_like(total)
-        per_tag = RunningMean.zeros_like(per_tag)
-        return _EvalRunningMeans(z, per_tag, z, per_tag)
+        per_tag_mean = RunningMean.zeros_like(per_tag)
+        return _EvalRunningMeans(z, per_tag_mean, z, per_tag_mean)
 
 
 class _LabeledEvalRunningMeans(eqx.Module):

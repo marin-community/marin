@@ -27,6 +27,10 @@ from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, 
 from iris.rpc import config_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
 
+from tests.cluster.backends.conftest import (
+    make_mock_platform,
+    make_mock_slice_handle,
+)
 from tests.cluster.controller.conftest import (
     DEFAULT_RESOURCES,
     make_demand_entries,
@@ -37,10 +41,6 @@ from tests.cluster.controller.conftest import (
 )
 from tests.cluster.controller.conftest import (
     mark_discovered_ready as _mark_discovered_ready,
-)
-from tests.cluster.providers.conftest import (
-    make_mock_platform,
-    make_mock_slice_handle,
 )
 
 # ---------------------------------------------------------------------------

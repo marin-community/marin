@@ -56,13 +56,11 @@ def test_dry_run_scheduling_does_not_dispatch(dry_run_controller):
 
 def test_dry_run_autoscaler_skipped_entirely(dry_run_controller):
     controller = dry_run_controller
-    mock_autoscaler = MagicMock()
-    controller._autoscaler = mock_autoscaler
+    controller._task_backend.manage_capacity = MagicMock()
 
     controller._run_autoscaler_once()
 
-    mock_autoscaler.refresh.assert_not_called()
-    mock_autoscaler.update.assert_not_called()
+    controller._task_backend.manage_capacity.assert_not_called()
 
 
 def test_dry_run_checkpoint_returns_sentinel(dry_run_controller):

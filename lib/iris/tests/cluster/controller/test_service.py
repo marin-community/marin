@@ -17,7 +17,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
-from iris.cluster.controller import direct_provider, ops, reads, writes
+from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.codec import constraints_from_json
@@ -25,6 +25,7 @@ from iris.cluster.controller.ops.task import Assignment, finalize
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import TaskJobSummary
+from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.schema import jobs_table, task_attempts_table
@@ -271,7 +272,7 @@ def test_launch_job_externalizes_large_workdir_files(service, state):
 
     job_id = JobName.root("test-user", "big-pickle-job")
     with state._db.read_snapshot() as snap:
-        template = direct_provider.run_request_template(state._run_template_cache, snap, job_id)
+        template = dispatch.run_request_template(state._run_template_cache, snap, job_id)
     assert template is not None
     # Small file stays inline
     assert dict(template.entrypoint.workdir_files) == {"small.txt": small_file}
@@ -287,7 +288,7 @@ def test_launch_job_keeps_small_workdir_files_inline(service, state):
 
     job_id = JobName.root("test-user", "small-pickle-job")
     with state._db.read_snapshot() as snap:
-        template = direct_provider.run_request_template(state._run_template_cache, snap, job_id)
+        template = dispatch.run_request_template(state._run_template_cache, snap, job_id)
     assert template is not None
     assert dict(template.entrypoint.workdir_files) == {"_callable.pkl": small_file}
     assert "_callable.pkl" not in template.entrypoint.workdir_file_refs

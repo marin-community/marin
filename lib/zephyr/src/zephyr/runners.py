@@ -46,6 +46,7 @@ from zephyr.execution import (
     ShardTask,
     StageRunner,
     TaskResult,
+    _ensure_picklable_exception,
     _shared_data_path,
     _stage_throughput,
     _worker_ctx_var,
@@ -399,7 +400,11 @@ def _execute_shard_subprocess(task_file: str, result_file: str, num_workers: int
         # it inline when the exception eventually propagates.
         logger.exception("Subprocess shard execution failed")
         e.add_note(f"--- subprocess traceback ---\n{traceback.format_exc().rstrip()}")
-        result_or_error = e
+        # Normalize before handing the error to the parent: a subclass that
+        # cannot round-trip through pickle (e.g. an __init__ whose signature
+        # does not match its args) would otherwise revive into a TypeError when
+        # the parent loads the result file, masking the real failure.
+        result_or_error = _ensure_picklable_exception(e)
     finally:
         stop_event.set()
         if flusher is not None and flusher.is_alive():

@@ -498,6 +498,9 @@ class _NoOpPage:
     def wait_for_selector(self, selector, **kwargs):
         pass
 
+    def wait_for_timeout(self, timeout):
+        pass
+
     def locator(self, selector, **kwargs):
         return _NoOpLocator()
 
@@ -523,6 +526,15 @@ class _NoOpLocator:
 
     def count(self):
         return 0
+
+    def get_by_role(self, role, **kwargs):
+        return self
+
+    def click(self, **kwargs):
+        pass
+
+    def wait_for(self, **kwargs):
+        pass
 
 
 def _is_noop_page(page) -> bool:

@@ -7,8 +7,13 @@ name: "Finelog - Release Wheels"
 #
 # marin-finelog is a native package: the wheel bundles the pure-Python
 # client/deploy/proto AND the native in-process server ext (finelog._native),
-# built by maturin from lib/finelog (manifest-path -> rust/finelog/pyext). So
-# both trees gate the build.
+# built by maturin from lib/finelog (manifest-path -> rust/pyext). The nightly
+# and tag builds publish a wheel covering both trees, so the stale-nightly check
+# below scopes broadly to all of lib/finelog/. The pull_request leg, by
+# contrast, is only a build smoke ("does the wheel still compile?"), so its
+# paths filter is scoped to the inputs that can actually break the build (Rust
+# crate + maturin config + build driver) — not pure-Python edits under src/,
+# which the cross-compile bundles but cannot fail on.
 on:
   workflow_dispatch:
     inputs:
@@ -26,9 +31,12 @@ on:
     tags:
       - "finelog-v*"
   pull_request:
+    # Only the wheel-build inputs gate this expensive (4-target, zig-cross)
+    # smoke. See the header comment for why src/** is intentionally excluded.
     paths:
-      - "lib/finelog/**"
-      - "rust/finelog/**"
+      - "lib/finelog/rust/**"
+      - "lib/finelog/pyproject.toml"
+      - "lib/finelog/build_package.py"
       - ".github/workflows/finelog-release-wheels.yaml"
 
 concurrency:
@@ -62,7 +70,7 @@ jobs:
           set -euo pipefail
           # 25h not 24h: small buffer so a cron that drifts a few minutes late
           # still sees yesterday's commits.
-          changes=$(git log --since='25 hours ago' --format=%H -- lib/finelog/ rust/finelog/ .github/workflows/finelog-release-wheels.yaml)
+          changes=$(git log --since='25 hours ago' --format=%H -- lib/finelog/ .github/workflows/finelog-release-wheels.yaml)
           if [[ -z "$changes" ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "::notice::no finelog changes in the last 25h, skipping nightly"

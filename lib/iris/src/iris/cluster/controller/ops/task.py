@@ -6,7 +6,7 @@
 The glues here are small per-tick wrappers around the transition kernel: load
 a closed snapshot covering the affected tasks via a scoped loader, call the
 matching ``ReconcileState`` verb, drain effects through ``commit_effects``.
-``finalize`` wraps the kernel's ``finalize_tasks``; ``apply_direct_provider_updates``
+``finalize`` wraps the kernel's ``finalize_tasks``; ``apply_dispatch_updates``
 wraps ``record_updates``. ``assign`` is the only scheduler-driven write that
 doesn't go through the kernel — PENDING → ASSIGNED is a direct-write transition
 with no cascade semantics.
@@ -121,7 +121,7 @@ def assign(
     writes.mark_jobs_running(cur, jobs_to_update, now_ms)
 
 
-def apply_direct_provider_updates(
+def apply_dispatch_updates(
     cur: Tx,
     updates: list[TaskUpdate],
     *,

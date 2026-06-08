@@ -53,6 +53,16 @@ Example config: `lib/iris/config/coreweave.yaml`
 
 Key architectural properties:
 
+- **TASK_BACKEND-placement `TaskBackend`**: When the cluster config sets
+  `kubernetes_provider`, the controller runs `K8sTaskProvider`
+  (`src/iris/cluster/backends/k8s/tasks.py`) — a `PlacementOwner.TASK_BACKEND`
+  `TaskBackend` with `manages_capacity=True`. Kueue performs scheduling and the
+  cluster autoscaler provisions nodes, so Iris runs no scheduling or autoscaler
+  loop for this backend; the controller only reconciles desired vs. observed Pods
+  each tick. The dashboard reflects this via the backend descriptor served by
+  `/auth/config`: capability `cluster` shows the **Cluster** panel, and the
+  Workers/Autoscaler panels are hidden (no worker daemons, no Iris autoscaler).
+  See `docs/architecture.md` "The TaskBackend contract".
 - **Shared NodePool model**: One NodePool per scale group (not per slice). CoreWeave
   autoscaling is enabled (`autoscaling: true`). NodePool names follow
   `{label_prefix}-{scale_group_name}`. NodePools scale to zero when idle.
