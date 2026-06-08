@@ -21,10 +21,10 @@ def _to_np(x):
 def _get_hf_kernels():
     pytest.importorskip("torch")
     pytest.importorskip("transformers")
-    from transformers.models.qwen3_next.modular_qwen3_next import (  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+    from transformers.models.qwen3_next.modular_qwen3_next import (  # noqa: PLC0415  # optional dep: torch
         torch_chunk_gated_delta_rule as hf_chunk,
     )
-    from transformers.models.qwen3_next.modular_qwen3_next import (  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+    from transformers.models.qwen3_next.modular_qwen3_next import (  # noqa: PLC0415  # optional dep: torch
         torch_recurrent_gated_delta_rule as hf_recur,
     )
 

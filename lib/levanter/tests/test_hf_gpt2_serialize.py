@@ -257,7 +257,7 @@ def test_hf_save_to_gcs_roundtrip():
         with use_test_mesh():
             simple_model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
 
-            from gcsfs.retry import HttpError  # noqa: PLC0415  # guarded import: behind pytest.importorskip("gcsfs")
+            from gcsfs.retry import HttpError  # noqa: PLC0415  # guarded: behind pytest.importorskip("gcsfs")
 
             try:
                 converter.save_pretrained(simple_model, unique_path)

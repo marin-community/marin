@@ -404,7 +404,7 @@ class HfMarinTokenizer:
         return _apply_chat_template_with_masks(self, conversations, chat_template=chat_template, **kwargs)
 
     def as_hf_tokenizer(self) -> Any:
-        from transformers import AutoTokenizer  # noqa: PLC0415  # optional dep: transformers (avoid eager torch)
+        from transformers import AutoTokenizer  # noqa: PLC0415  # guarded: avoid eager torch
 
         tokenizer = AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
         if self._chat_template is not None and getattr(tokenizer, "chat_template", None) != self._chat_template:

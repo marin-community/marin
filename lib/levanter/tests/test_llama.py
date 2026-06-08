@@ -79,10 +79,10 @@ def test_llama_params():
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_llama_attention(use_flash, num_kv_heads):
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch
         LlamaAttention as HFLlamaAttention,
     )
-    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch
         LlamaRotaryEmbedding as HFLlamaRotaryEmbedding,
     )
 
@@ -125,7 +125,7 @@ def test_llama_param_counts_dont_change_with_seqlen():
 @skip_if_no_torch
 def test_llama_rms_norm():
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch
         LlamaRMSNorm as HFLlamaRMSNorm,
     )
 
@@ -148,10 +148,10 @@ def test_llama_rms_norm():
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_llama_decoder_layer(num_kv_heads):
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch
         LlamaDecoderLayer as HFLlamaDecoderLayer,
     )
-    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+    from transformers.models.llama.modeling_llama import (  # noqa: PLC0415  # optional dep: torch
         LlamaRotaryEmbedding as HFLlamaRotaryEmbedding,
     )
 

@@ -80,7 +80,7 @@ def test_olmo2_config():
 @skip_if_no_torch
 def test_olmo2_rms_norm():
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch
         Olmo2RMSNorm as HFOlmo2RMSNorm,
     )
 
@@ -119,10 +119,10 @@ def test_olmo2_mlp(num_kv_heads):
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_olmo2_attention_vs_hf(use_flash, num_kv_heads):
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch
         Olmo2Attention as HFOlmo2Attention,
     )
-    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch
         Olmo2RotaryEmbedding as HFOlmo2RotaryEmbedding,
     )
 
@@ -159,10 +159,10 @@ def test_olmo2_attention_vs_hf(use_flash, num_kv_heads):
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_olmo2_decoder_layer_vs_hf(num_kv_heads):
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch
         Olmo2DecoderLayer as HFOlmo2DecoderLayer,
     )
-    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch
         Olmo2RotaryEmbedding as HFOlmo2RotaryEmbedding,
     )
 

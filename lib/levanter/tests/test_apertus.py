@@ -26,7 +26,7 @@ pytestmark = skip_if_module_missing("transformers.models.apertus.modeling_apertu
 def test_xielu_vs_hf(alpha_p_init, alpha_n_init, beta):
     """Test that Levanter XIELUActivation matches HuggingFace implementation."""
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.activations import XIELUActivation as HfXIELUActivation  # noqa: PLC0415  # pulls torch
+    from transformers.activations import XIELUActivation as HfXIELUActivation  # noqa: PLC0415  # optional dep: torch
 
     # Create both activations with same init parameters
     hf_xielu = HfXIELUActivation(
@@ -152,7 +152,7 @@ def _make_levanter_apertus_config(scan_layers: bool, num_kv_heads: int) -> Apert
 @pytest.mark.parametrize("num_kv_heads", [2])
 def test_apertus_roundtrip(scan_layers, num_kv_heads):
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.apertus.modeling_apertus import ApertusForCausalLM  # noqa: PLC0415  # optional: torch
+    from transformers.models.apertus.modeling_apertus import ApertusForCausalLM  # noqa: PLC0415  # optional dep: torch
 
     Vocab = hax.Axis("vocab", 4096)
     hf_config = _make_hf_apertus_config(Vocab.size, num_kv_heads)
@@ -209,7 +209,7 @@ def test_xielu_parameters_loaded_from_checkpoint():
     This catches bugs where xIELU parameters might be re-initialized instead of loaded.
     """
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.apertus.modeling_apertus import ApertusForCausalLM  # noqa: PLC0415  # optional: torch
+    from transformers.models.apertus.modeling_apertus import ApertusForCausalLM  # noqa: PLC0415  # optional dep: torch
 
     Vocab = hax.Axis("vocab", 4096)
     num_kv_heads = 2

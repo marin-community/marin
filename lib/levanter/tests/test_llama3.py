@@ -15,7 +15,7 @@ from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 
 
 def get_config(vocab_size=1000):
-    from transformers import LlamaConfig  # noqa: PLC0415  # name shadow: levanter LlamaConfig imported at module top
+    from transformers import LlamaConfig  # noqa: PLC0415  # guarded: name shadow (levanter LlamaConfig at module top)
 
     llama3_cfg = json.loads(
         """
@@ -71,7 +71,7 @@ def get_config(vocab_size=1000):
 @pytest.mark.parametrize("test_seq_len", [128, 256, 512])
 def test_llama3_roundtrip(test_seq_len):
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers import (  # noqa: PLC0415  # optional dep: torch (HF model classes)
+    from transformers import (  # noqa: PLC0415  # optional dep: torch
         AutoModelForCausalLM,
         LlamaForCausalLM,
     )
@@ -131,7 +131,7 @@ def test_llama3_roundtrip(test_seq_len):
 @skip_if_no_torch
 def test_llama3_rotary_embedding():
     import torch  # noqa: PLC0415  # optional dep: torch
-    import transformers.models.llama.modeling_llama as modeling_llama  # noqa: PLC0415  # optional dep: torch (HF modeling submodule)
+    import transformers.models.llama.modeling_llama as modeling_llama  # noqa: PLC0415  # optional dep: torch
 
     HFLlamaRotaryEmbedding = modeling_llama.LlamaRotaryEmbedding
     apply_rotary_pos_emb = modeling_llama.apply_rotary_pos_emb

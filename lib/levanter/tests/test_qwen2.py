@@ -67,7 +67,7 @@ def get_config(vocab_size=1000):
 @skip_if_no_torch
 def test_qwen_roundtrip(local_gpt2_tokenizer_path):
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers import Qwen2ForCausalLM  # noqa: PLC0415  # optional dep: torch (HF modeling class)
+    from transformers import Qwen2ForCausalLM  # noqa: PLC0415  # optional dep: torch
 
     Vocab = hax.Axis("vocab", 1000)
     hf_config = get_config(Vocab.size)

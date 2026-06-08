@@ -417,10 +417,10 @@ src/iris/
 │   ├── resolver.py          # ClusterResolver
 │   └── worker_pool.py       # Task dispatch
 ├── cluster/                  # Cluster orchestration
-│   ├── manager.py           # connect_cluster() + stop_all(dry_run) free functions
+│   ├── lifecycle.py         # connect_cluster() lifecycle helper
 │   ├── controller/          # Controller service + autoscaler
 │   ├── worker/              # Worker service
-│   └── platform/            # Platform abstractions (GCP, Manual, Local, CoreWeave)
+│   └── providers/           # Provider abstractions (GCP, Manual, Local, CoreWeave)
 ├── rpc/                      # Protocol definitions + generated code
 └── cli/                      # CLI package
     ├── main.py               # Top-level iris group

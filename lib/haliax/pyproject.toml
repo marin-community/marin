@@ -93,6 +93,11 @@ src_paths = ["src", "tests"]
 extend-select = ["PLC0415", "TID252", "ICN001"]
 ignore = [ "E203", "E501", "W605", "F821", "E266", "F722", "E731", "E741" ]
 
+[tool.ruff.lint.per-file-ignores]
+# Notebook cells legitimately interleave imports with computation as they are
+# executed top-to-bottom; PLC0415's top-of-file rule does not apply to cells.
+"*.ipynb" = ["PLC0415"]
+
 [tool.setuptools.package-data]
 "haliax" = ["*.pyi"]
 

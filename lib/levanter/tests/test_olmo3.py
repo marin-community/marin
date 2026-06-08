@@ -199,7 +199,7 @@ def test_olmo3_sliding_window_config():
 def test_olmo3_attention_vs_hf(use_yarn, num_kv_heads):
     """Test attention matches HuggingFace implementation."""
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.olmo3 import modeling_olmo3  # noqa: PLC0415  # optional: torch (HF modeling)
+    from transformers.models.olmo3 import modeling_olmo3  # noqa: PLC0415  # optional dep: torch
 
     HFOlmo3Attention = modeling_olmo3.Olmo3Attention
     HFOlmo3RotaryEmbedding = modeling_olmo3.Olmo3RotaryEmbedding
@@ -264,7 +264,7 @@ def test_olmo3_attention_layer_type_detection(layer_idx):
 def test_olmo3_decoder_layer_vs_hf(num_kv_heads, layer_idx):
     """Test decoder layer matches HuggingFace implementation."""
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.olmo3 import modeling_olmo3  # noqa: PLC0415  # optional: torch (HF modeling)
+    from transformers.models.olmo3 import modeling_olmo3  # noqa: PLC0415  # optional dep: torch
 
     HFOlmo3DecoderLayer = modeling_olmo3.Olmo3DecoderLayer
     HFOlmo3RotaryEmbedding = modeling_olmo3.Olmo3RotaryEmbedding
@@ -356,7 +356,7 @@ def test_olmo3_roundtrip(scan_layers, num_kv_heads, local_gpt2_tokenizer_path):
     - tie_word_embeddings=False, attention_bias=False
     """
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers import Olmo3ForCausalLM  # noqa: PLC0415  # optional: torch (HF modeling)
+    from transformers import Olmo3ForCausalLM  # noqa: PLC0415  # optional dep: torch
 
     # Local tokenizer + no remote reference keeps the roundtrip off the Hub; the
     # tokenizer is incidental (random inputs, logit-equivalence only).
@@ -463,7 +463,7 @@ def test_olmo3_param_counts_dont_change_with_seqlen():
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
 def test_olmo3_state_dict_consistency(num_kv_heads):
     """Test state dict keys match HuggingFace."""
-    from transformers import Olmo3ForCausalLM  # noqa: PLC0415  # optional: torch (HF modeling)
+    from transformers import Olmo3ForCausalLM  # noqa: PLC0415  # optional dep: torch
 
     config = Olmo3Config(
         max_seq_len=128,

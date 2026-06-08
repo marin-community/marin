@@ -88,7 +88,7 @@ def test_mistral_lm_head_model_bwd(use_flash, num_kv_heads):
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_mistral_roundtrip(num_kv_heads):
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers import (  # noqa: PLC0415  # optional dep: torch (HF modeling classes)
+    from transformers import (  # noqa: PLC0415  # optional dep: torch
         AutoModelForCausalLM,
         MistralForCausalLM,
     )

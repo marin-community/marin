@@ -17,7 +17,7 @@ from levanter.layers.rotary import _rotate_half as levanter_rotate_half
 @pytest.mark.parametrize("test_seq_len", [64, 128, 256])
 def test_apply_rotary_pos_emb(test_seq_len):
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.llama import modeling_llama  # noqa: PLC0415  # optional: torch (HF modeling)
+    from transformers.models.llama import modeling_llama  # noqa: PLC0415  # optional dep: torch
 
     LlamaRotaryEmbedding = modeling_llama.LlamaRotaryEmbedding
     hf_apply_rotary_pos_emb = modeling_llama.apply_rotary_pos_emb
@@ -128,7 +128,7 @@ def test_yarn_rotary_embedding():
 def test_yarn_rotary_embedding_vs_hf(factor):
     """Test that YARN rotary embeddings match HuggingFace implementation."""
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.llama import modeling_llama  # noqa: PLC0415  # optional: torch (HF modeling)
+    from transformers.models.llama import modeling_llama  # noqa: PLC0415  # optional dep: torch
 
     HFLlamaRotaryEmbedding = modeling_llama.LlamaRotaryEmbedding
     apply_rotary_pos_emb = modeling_llama.apply_rotary_pos_emb

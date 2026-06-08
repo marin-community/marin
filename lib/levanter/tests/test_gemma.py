@@ -91,13 +91,13 @@ def test_gemma_rms_norm(gemma_version):
     import torch  # noqa: PLC0415  # optional dep: torch
 
     if gemma_version == 1:
-        from transformers.models.gemma.modeling_gemma import (  # noqa: PLC0415  # optional dep: torch (HF modeling module)
+        from transformers.models.gemma.modeling_gemma import (  # noqa: PLC0415  # optional dep: torch
             GemmaRMSNorm as HFGemmaRMSNorm,
         )
 
         config = _get_gemma_config()
     else:
-        from transformers.models.gemma2.modeling_gemma2 import (  # noqa: PLC0415  # optional dep: torch (HF modeling module)
+        from transformers.models.gemma2.modeling_gemma2 import (  # noqa: PLC0415  # optional dep: torch
             Gemma2RMSNorm as HFGemmaRMSNorm,
         )
 
@@ -122,10 +122,10 @@ def test_gemma_rms_norm(gemma_version):
 def test_gemma1_decoder_layer(num_kv_heads):
     """Validate Levanter Gemma-1 decoder layer against HF reference."""
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.gemma.modeling_gemma import (  # noqa: PLC0415  # optional dep: torch (HF modeling module)
+    from transformers.models.gemma.modeling_gemma import (  # noqa: PLC0415  # optional dep: torch
         GemmaDecoderLayer as HFGemmaDecoderLayer,
     )
-    from transformers.models.gemma.modeling_gemma import (  # noqa: PLC0415  # optional dep: torch (HF modeling module)
+    from transformers.models.gemma.modeling_gemma import (  # noqa: PLC0415  # optional dep: torch
         GemmaRotaryEmbedding as HFGemmaRotaryEmbedding,
     )
 
@@ -178,10 +178,10 @@ def test_gemma1_decoder_layer(num_kv_heads):
 def test_gemma2_decoder_layer(num_kv_heads):
     """Validate Levanter Gemma-2 decoder layer against HF reference."""
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.gemma2.modeling_gemma2 import (  # noqa: PLC0415  # optional dep: torch (HF modeling module)
+    from transformers.models.gemma2.modeling_gemma2 import (  # noqa: PLC0415  # optional dep: torch
         Gemma2DecoderLayer as HFGemmaDecoderLayer,
     )
-    from transformers.models.gemma2.modeling_gemma2 import (  # noqa: PLC0415  # optional dep: torch (HF modeling module)
+    from transformers.models.gemma2.modeling_gemma2 import (  # noqa: PLC0415  # optional dep: torch
         Gemma2RotaryEmbedding as HFGemmaRotaryEmbedding,
     )
 
@@ -242,19 +242,19 @@ def test_gemma_attention(use_flash, num_kv_heads, gemma_version):
     import torch  # noqa: PLC0415  # optional dep: torch
 
     if gemma_version == 1:
-        from transformers.models.gemma.modeling_gemma import (  # noqa: PLC0415  # optional dep: torch (HF modeling module)
+        from transformers.models.gemma.modeling_gemma import (  # noqa: PLC0415  # optional dep: torch
             GemmaAttention as HFGemmaAttention,
         )
-        from transformers.models.gemma.modeling_gemma import (  # noqa: PLC0415  # optional dep: torch (HF modeling module)
+        from transformers.models.gemma.modeling_gemma import (  # noqa: PLC0415  # optional dep: torch
             GemmaRotaryEmbedding as HFGemmaRotaryEmbedding,
         )
 
         config = _get_gemma_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
     else:
-        from transformers.models.gemma2.modeling_gemma2 import (  # noqa: PLC0415  # optional dep: torch (HF modeling module)
+        from transformers.models.gemma2.modeling_gemma2 import (  # noqa: PLC0415  # optional dep: torch
             Gemma2Attention as HFGemmaAttention,
         )
-        from transformers.models.gemma2.modeling_gemma2 import (  # noqa: PLC0415  # optional dep: torch (HF modeling module)
+        from transformers.models.gemma2.modeling_gemma2 import (  # noqa: PLC0415  # optional dep: torch
             Gemma2RotaryEmbedding as HFGemmaRotaryEmbedding,
         )
 
@@ -292,7 +292,7 @@ def test_gemma_attention(use_flash, num_kv_heads, gemma_version):
 @skip_if_no_torch
 def test_gemma_mlp():
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.gemma.modeling_gemma import (  # noqa: PLC0415  # optional dep: torch (HF modeling module)
+    from transformers.models.gemma.modeling_gemma import (  # noqa: PLC0415  # optional dep: torch
         GemmaMLP as HFGemmaMLP,
     )
 
@@ -316,7 +316,7 @@ def test_gemma_mlp():
 @skip_if_no_torch
 def test_gemma2_mlp():
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.gemma2.modeling_gemma2 import (  # noqa: PLC0415  # optional dep: torch (HF modeling module)
+    from transformers.models.gemma2.modeling_gemma2 import (  # noqa: PLC0415  # optional dep: torch
         Gemma2MLP as HFGemmaMLP,
     )
 
@@ -476,10 +476,10 @@ def test_gemma_configs(config_file):
 def test_gemma3_decoder_layer(num_kv_heads):
     """Validate Levanter Gemma-3 decoder layer against HF reference."""
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.gemma3.modeling_gemma3 import (  # noqa: PLC0415  # optional dep: torch (HF modeling module)
+    from transformers.models.gemma3.modeling_gemma3 import (  # noqa: PLC0415  # optional dep: torch
         Gemma3DecoderLayer as HFGemmaDecoderLayer,
     )
-    from transformers.models.gemma3.modeling_gemma3 import (  # noqa: PLC0415  # optional dep: torch (HF modeling module)
+    from transformers.models.gemma3.modeling_gemma3 import (  # noqa: PLC0415  # optional dep: torch
         Gemma3RotaryEmbedding as HFGemmaRotaryEmbedding,
     )
 
@@ -622,10 +622,10 @@ def test_gemma3_roundtrip():
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_gemma3_attention(use_flash, num_kv_heads):
     import torch  # noqa: PLC0415  # optional dep: torch
-    from transformers.models.gemma3.modeling_gemma3 import (  # noqa: PLC0415  # optional dep: torch (HF modeling module)
+    from transformers.models.gemma3.modeling_gemma3 import (  # noqa: PLC0415  # optional dep: torch
         Gemma3Attention as HFGemmaAttention,
     )
-    from transformers.models.gemma3.modeling_gemma3 import (  # noqa: PLC0415  # optional dep: torch (HF modeling module)
+    from transformers.models.gemma3.modeling_gemma3 import (  # noqa: PLC0415  # optional dep: torch
         Gemma3RotaryEmbedding as HFGemmaRotaryEmbedding,
     )
 
