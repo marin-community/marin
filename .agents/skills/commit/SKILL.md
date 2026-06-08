@@ -160,12 +160,35 @@ gh pr create --title "<title>" --body "<plain text body>" --label agent-generate
 - Always add the `agent-generated` label.
 - Never credit yourself in commits or PR descriptions.
 - Include `Fixes #NNNN` when addressing a pre-existing issue.
-- You must monitor PR status after creation if you have the ability (via a monitor skill or automation update and the `gh` CLI).
-- Address CI failures, apply fixes, and repush. Continue monitoring.
-- Respond to both human and agent comments: address obvious comments directly and resolve
-  them. If you are unsure, prepare a report with your analysis of the remaining comments and
-  your proposed action and present it to the local user.
-- Continue monitoring until instructed otherwise, or the PR is merged.
+
+### 9. Monitor the PR — mandatory, in a loop
+
+Opening the PR does not end your turn. You MUST monitor until the PR is merged or
+closed, or the user tells you to stop. A summary message to the user is NOT a
+substitute for monitoring and is NOT an exit condition.
+
+Drive the loop yourself — do not just check once. After each poll, schedule the
+next one with `ScheduleWakeup` (or the `loop` skill), picking the delay to match
+CI duration (e.g. ~120–270s while checks run, longer once green and idle). Only
+stop scheduling when an exit condition below is met.
+
+Each poll, check **both**:
+1. **CI status** — `gh pr checks <N>`. On failure, read the failing job log, fix,
+   commit, push. A failure in a file you did not touch is pre-existing — say so and
+   handle per the unrelated-changes rule; do not silently absorb it.
+2. **New comments and reviews** — `gh api repos/<owner>/<repo>/pulls/<N>/comments`
+   and `.../reviews`, plus `gh pr view <N> --json comments`. CI being green does
+   NOT mean there is nothing to do — review bots and humans comment after CI
+   passes. Never declare the PR done on CI status alone.
+
+Respond to every human and agent comment: address obvious ones directly (commit
+the fix, then reply, prefixing agent replies with `🤖`) and resolve them. For
+comments you are unsure about, report your analysis and proposed action to the
+user — but keep monitoring while you wait.
+
+Exit conditions (the only ways to stop the loop): the PR is merged or closed, or
+the user explicitly tells you to stop. Blocking on a user question pauses for the
+answer; it does not end monitoring.
 
 ## Rules
 
