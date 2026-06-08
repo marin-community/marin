@@ -6,7 +6,6 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "click>=8.0",
-#     "google-genai>=1.0",
 #     "pydantic>=2.0",
 #     "wandb>=0.18",
 # ]
@@ -27,8 +26,9 @@ Two subcommands:
 `aggregate`, for each PR merged in the last N days:
   1. Pull review/inline/issue comments via the `gh` CLI.
   2. Drop bot comments (only humans should be in the denominator).
-  3. Classify each human comment with a pluggable classifier (Gemini 3.5 Flash
-     by default). Comments from all PRs are pooled, batched, and the batches
+  3. Classify each human comment with a pluggable classifier — a headless
+     Claude Code session (`claude -p`) by default, the same agent that runs the
+     lint review. Comments from all PRs are pooled, batched, and the batches
      classified in parallel so a many-PR run is not a long serial trickle of
      one request per comment. Two independent "could automation have caught
      this?" signals:
@@ -47,8 +47,8 @@ Two subcommands:
 Same append-to-artifact pattern as `infra/codehealth/log_stats.py`. Concurrent
 writers race; loser's row is dropped (acceptable at our scale).
 
-Requires GEMINI_API_KEY and W&B auth. Invoke via `gh auth login` for the
-GitHub side. Designed to run as a daily GHA cron.
+Requires a logged-in `claude` CLI (subscription auth) and W&B auth, plus
+`gh auth login` for the GitHub side. Designed to run as a daily GHA cron.
 """
 
 from __future__ import annotations
@@ -57,6 +57,7 @@ import datetime as dt
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -64,12 +65,10 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
 import click
 import wandb
-from google import genai
-from google.genai import types
 
 # Sibling standalone script: the canonical schema for the linter-fed tables this
 # report reads back. Importing keeps the column layouts in one place rather than
@@ -82,9 +81,14 @@ logger = logging.getLogger("codehealth.review")
 WANDB_PROJECT = "marin-review-stats"
 WANDB_RUN_ID = "review-stats"
 DEFAULT_REPO = "marin-community/marin"
-DEFAULT_MODEL = "gemini-3.5-flash"
+# Classifier backend: a headless Claude Code session (`claude -p`). The model is
+# a CLI alias (`sonnet`, `opus`, `haiku`) or a full model id. `sonnet` balances
+# classification quality against cost for the per-comment judgment calls.
+DEFAULT_MODEL = "sonnet"
 DEFAULT_BATCH_SIZE = 20
-DEFAULT_CONCURRENCY = 16
+# One headless `claude` subprocess per batch, so concurrency caps simultaneous
+# processes (and subscription rate pressure) — lower than an HTTP-API backend.
+DEFAULT_CONCURRENCY = 4
 
 HUMAN_COMMENT_COLUMNS = [
     "ts",
@@ -122,7 +126,7 @@ PR_OUTCOME_COLUMNS = [
 
 
 # ---------------------------------------------------------------------------
-# Gemini classifier schema + prompt
+# Comment classifier: schema + prompt
 # ---------------------------------------------------------------------------
 
 
@@ -158,8 +162,8 @@ class BatchedClassification(CommentClassification):
 
 # A classifier turns a batch of comments into classifications keyed by their
 # `id` marker. Comments it cannot classify are simply absent from the result.
-# Pluggable so the Gemini backend can be swapped (e.g. for `claude -p`) without
-# touching the batching/parallelism orchestration.
+# Pluggable so the backend (currently a headless `claude -p` session) can be
+# swapped without touching the batching/parallelism orchestration.
 Classifier = Callable[[list[CommentToClassify]], dict[int, CommentClassification]]
 
 
@@ -240,36 +244,115 @@ def _format_batch(items: list[CommentToClassify]) -> str:
     return "\n\n".join(blocks)
 
 
-def make_gemini_classifier(client: genai.Client, model: str) -> Classifier:
-    """Build a `Classifier` backed by Gemini structured output.
+# Env markers that would bind a spawned `claude` to its parent Claude Code
+# session or to metered API billing. Stripped before exec (mirrors the lint
+# review in infra/linter.py) so each batch runs as a fresh, isolated session on
+# Claude subscription auth rather than nesting under the caller's transcript.
+CLAUDE_STRIPPED_ENV = (
+    "ANTHROPIC_API_KEY",
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_SSE_PORT",
+)
 
-    One API call per batch: the prompt carries every comment's `id` marker and
-    the response is a JSON array of `BatchedClassification`. A failed call (or
-    unparseable response) yields no classifications for that batch; those
-    comments are dropped from the metric, same as the previous behavior.
+# Per-batch wall-clock ceiling for one headless classification call.
+CLAUDE_TIMEOUT = 300
+
+
+def _headless_env() -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if k not in CLAUDE_STRIPPED_ENV}
+
+
+def _classification_schema() -> dict:
+    """Anthropic structured-output JSON schema for one batch result.
+
+    The API uses this schema as a tool `input_schema`, whose root must be an
+    object (a top-level array is rejected), so the per-comment classifications
+    are wrapped in a `results` array. Field set mirrors `BatchedClassification`.
     """
+    item = {
+        "type": "object",
+        "properties": {
+            "id": {"type": "integer"},
+            "class": {"type": "string", "enum": list(get_args(CommentClass))},
+            "catchable_strict": {"type": "boolean"},
+            "catchable_generous": {"type": "boolean"},
+            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "reason": {"type": "string"},
+        },
+        "required": ["id", "class", "catchable_strict", "catchable_generous", "confidence", "reason"],
+    }
+    return {
+        "type": "object",
+        "properties": {"results": {"type": "array", "items": item}},
+        "required": ["results"],
+    }
+
+
+def _parse_claude_batch(stdout: str) -> list[BatchedClassification] | None:
+    """Extract the classifications from a `claude -p --output-format json`
+    envelope. Schema-validated structured output lands in the top-level
+    `structured_output` field (`result` carries only the model's prose).
+    Returns None on any error so the caller drops the batch.
+    """
+    try:
+        envelope = json.loads(stdout)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(envelope, dict) or envelope.get("is_error"):
+        return None
+    structured = envelope.get("structured_output")
+    if not isinstance(structured, dict) or "results" not in structured:
+        return None
+    try:
+        return _BATCH_ADAPTER.validate_python(structured["results"])
+    except ValueError:
+        return None
+
+
+def make_claude_classifier(model: str, agent_command: str = "claude -p") -> Classifier:
+    """Build a `Classifier` that shells out to a headless Claude Code session.
+
+    One `claude -p` subprocess per batch — the same agent the lint review uses.
+    Each call is a fresh, isolated session (`_headless_env` strips the parent's
+    session/API-key markers so it runs on subscription auth), with tools
+    disabled and `--json-schema` forcing a structured-output array the API
+    validates against `_classification_schema`. The prompt carries every
+    comment's `id` marker on stdin. A failed or malformed call yields no
+    classifications for that batch; those comments are dropped from the metric.
+    """
+    env = _headless_env()
+    cmd = [
+        *agent_command.split(),
+        "--output-format",
+        "json",
+        "--tools",
+        "",
+        "--model",
+        model,
+        "--json-schema",
+        json.dumps(_classification_schema()),
+    ]
 
     def classify(items: list[CommentToClassify]) -> dict[int, CommentClassification]:
         if not items:
             return {}
+        prompt = f"{CLASSIFIER_SYSTEM}\n\n{_format_batch(items)}"
         try:
-            resp = client.models.generate_content(
-                model=model,
-                contents=_format_batch(items),
-                config=types.GenerateContentConfig(
-                    system_instruction=CLASSIFIER_SYSTEM,
-                    response_mime_type="application/json",
-                    response_schema=list[BatchedClassification],
-                    temperature=0.0,
-                ),
-            )
-        except Exception as e:
-            logger.warning("Gemini call failed for batch of %d: %s", len(items), e)
+            proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, env=env, timeout=CLAUDE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            logger.warning("claude classify timed out for batch of %d", len(items))
             return {}
-        try:
-            parsed = _BATCH_ADAPTER.validate_json(resp.text)
-        except Exception as e:
-            logger.warning("Gemini returned unparseable JSON: %s | text=%r", e, (resp.text or "")[:200])
+        parsed = _parse_claude_batch(proc.stdout)
+        if parsed is None:
+            logger.warning(
+                "claude classify failed for batch of %d (exit=%s): %s",
+                len(items),
+                proc.returncode,
+                (proc.stderr or proc.stdout or "").strip()[:200],
+            )
             return {}
         wanted = {it.id for it in items}
         out: dict[int, CommentClassification] = {}
@@ -282,7 +365,7 @@ def make_gemini_classifier(client: genai.Client, model: str) -> Classifier:
             out[c.id] = c
         missing = len(wanted) - len(out)
         if missing:
-            logger.warning("Gemini omitted %d of %d comments in a batch", missing, len(items))
+            logger.warning("claude omitted %d of %d comments in a batch", missing, len(items))
         return out
 
     return classify
@@ -761,41 +844,55 @@ def build_report(
         f"**Generated:** {now.replace(microsecond=0).isoformat()}"
     )
 
+    # Two distinct lenses, kept in separate sections below so they are not
+    # conflated: what humans flagged (and whether a bot could have), versus what
+    # the bot itself flagged.
+    overview = (
+        "Two lenses on review quality:\n\n"
+        "- **Human review feedback** — comments people left on merged PRs, each classified by "
+        "whether an automated review *could* have caught it (**strict** = a deterministic "
+        "linter/type-checker would; **generous** = an LLM reading the diff would). This is the "
+        "gap automation still leaves.\n"
+        "- **Review automation activity** — what the review bot actually flagged when it ran. "
+        "This is what automation already does."
+    )
+
     # The automation section reads its own (`invocations`/`findings`) tables and
     # filters by run timestamp, so it is independent of whether any PR merged.
     automation_section = build_automation_section(invocations, findings, start, days)
 
     if not outcomes:
         note = f"No PRs merged in the last {days} days were found in the review-stats tables."
-        return "\n\n".join([header, note, automation_section])
+        return "\n\n".join([header, overview, note, automation_section])
 
     n_prs = len(outcomes)
     reviewed = sum(1 for d in outcomes if int(d["total_human_comments"]) > 0)
     total = sum(int(d["total_human_comments"]) for d in outcomes)
     strict = sum(int(d["catchable_strict_count"]) for d in outcomes)
     generous = sum(int(d["catchable_generous_count"]) for d in outcomes)
-    bot_findings = sum(int(d["bot_findings_count"]) for d in outcomes)
     overlap = sum(int(d["overlap_count"]) for d in outcomes)
 
     narrative = (
+        "## Human review feedback\n\n"
+        "What human reviewers flagged on merged PRs, and how much of it an automated review could "
+        "have caught.\n\n"
         f"Over the last {days} days, **{n_prs}** PRs merged; **{reviewed}** ({_pct(reviewed, n_prs)}) drew human "
         f"review comments. Of **{total}** human comments, **{strict}** ({_pct(strict, total)}) were strictly "
         f"catchable by a deterministic tool and **{generous}** ({_pct(generous, total)}) generously catchable by an "
-        f"LLM reading the diff alone. The review bot emitted **{bot_findings}** findings and independently flagged "
-        f"**{overlap}** of the spots humans commented on."
+        f"LLM reading the diff alone. Our review bot independently flagged **{overlap}** of the spots humans "
+        "commented on — see *Review automation activity* below for everything it caught."
     )
 
-    summary = "## Summary\n\n" + _md_table(
+    summary = "### Summary\n\n" + _md_table(
         ["Metric", "Value"],
         ["---", "---:"],
         [
             ["PRs merged", n_prs],
             ["PRs with human review comments", f"{reviewed} ({_pct(reviewed, n_prs)})"],
             ["Human review comments", total],
-            ["— strictly catchable", f"{strict} ({_pct(strict, total)})"],
-            ["— generously catchable", f"{generous} ({_pct(generous, total)})"],
-            ["Bot findings", bot_findings],
-            ["Human comments overlapping a bot finding", overlap],
+            ["— strictly catchable (deterministic tool)", f"{strict} ({_pct(strict, total)})"],
+            ["— generously catchable (LLM on the diff)", f"{generous} ({_pct(generous, total)})"],
+            ["— independently flagged by the bot", f"{overlap} ({_pct(overlap, total)})"],
         ],
     )
 
@@ -811,7 +908,7 @@ def build_report(
         [cls, n, _pct(n, total), f"{s} ({_pct(s, n)})", f"{g} ({_pct(g, n)})"]
         for cls, (n, s, g) in sorted(by_class.items(), key=lambda kv: kv[1][0], reverse=True)
     ]
-    by_class_section = "## By comment class\n\n" + (
+    by_class_section = "### By comment class\n\n" + (
         _md_table(
             ["Class", "Comments", "% of all", "Strict", "Generous"], ["---", "---:", "---:", "---:", "---:"], class_rows
         )
@@ -834,7 +931,7 @@ def build_report(
     week_rows = [
         [f"{y}-W{w:02d}", prs, cmts, st, gen, _pct(gen, cmts)] for (y, w), (prs, cmts, st, gen) in sorted(weeks.items())
     ]
-    trend_section = "## Weekly trend\n\n" + _md_table(
+    trend_section = "### Weekly trend\n\n" + _md_table(
         ["Week", "PRs", "Comments", "Strict", "Generous", "Generous %"],
         ["---", "---:", "---:", "---:", "---:", "---:"],
         week_rows,
@@ -859,7 +956,7 @@ def build_report(
         ]
         for d in top
     ]
-    top_section = "## PRs with the most catchable feedback\n\n" + (
+    top_section = "### PRs with the most catchable feedback\n\n" + (
         _md_table(
             ["PR", "Title", "Comments", "Strict", "Generous", "Bot findings", "Overlap"],
             ["---", "---", "---:", "---:", "---:", "---:", "---:"],
@@ -889,7 +986,7 @@ def build_report(
         ]
         for c in flagged
     ]
-    flagged_section = f"## Catchable comments ({len(flagged_rows)})\n\n" + (
+    flagged_section = f"### Catchable comments ({len(flagged_rows)})\n\n" + (
         "Every human comment an automated check could plausibly have caught, "
         "strict (deterministic) first. **strict** = a linter/type-check could "
         "flag it; **generous** = an LLM reading the diff could.\n\n"
@@ -903,7 +1000,20 @@ def build_report(
     )
 
     return "\n\n".join(
-        [header, narrative, summary, automation_section, by_class_section, trend_section, top_section, flagged_section]
+        [
+            header,
+            overview,
+            # Lens 1 — human review feedback (narrative carries the "## Human
+            # review feedback" banner; the rest are its ### subsections).
+            narrative,
+            summary,
+            by_class_section,
+            trend_section,
+            top_section,
+            flagged_section,
+            # Lens 2 — what the review bot itself did.
+            automation_section,
+        ]
     )
 
 
@@ -934,7 +1044,13 @@ def cli() -> None:
 @click.option("--repo", default=DEFAULT_REPO, show_default=True)
 @click.option("--days", type=int, default=1, show_default=True, help="Look back N days of merged PRs")
 @click.option("--limit", type=int, default=100, show_default=True, help="Max PRs to process")
-@click.option("--model", default=DEFAULT_MODEL, show_default=True)
+@click.option("--model", default=DEFAULT_MODEL, show_default=True, help="Claude model alias or id for the classifier")
+@click.option(
+    "--agent-command",
+    default="claude -p",
+    show_default=True,
+    help="Headless agent invocation for classification (reads its prompt on stdin)",
+)
 @click.option(
     "--batch-size",
     type=int,
@@ -966,6 +1082,7 @@ def aggregate(
     days: int,
     limit: int,
     model: str,
+    agent_command: str,
     batch_size: int,
     concurrency: int,
     bot_logins: str,
@@ -981,12 +1098,12 @@ def aggregate(
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     bot_login_set = {x.strip().lower() for x in bot_logins.split(",") if x.strip()}
 
-    if not os.environ.get("GEMINI_API_KEY"):
-        logger.error("GEMINI_API_KEY not set")
+    agent_binary = agent_command.split()[0]
+    if not shutil.which(agent_binary):
+        logger.error("classifier agent %r not found on PATH (need a logged-in `claude` CLI)", agent_binary)
         sys.exit(2)
 
-    client = genai.Client()
-    classifier = make_gemini_classifier(client, model)
+    classifier = make_claude_classifier(model, agent_command)
 
     logger.info("Listing PRs merged in last %d day(s) in %s", days, repo)
     prs = list_merged_prs(repo, days, limit)
