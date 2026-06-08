@@ -472,6 +472,15 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         subsets=[],
         splits=["train"],
     ),
+    "fzzhang/qwen3_4b_chimera_treetopics_v1_probval_instill_n8_valredundancy5_round1": InstructionDatasetConfig(
+        hf_dataset_id="fzzhang/qwen3_4b_chimera_treetopics_v1_probval_instill_n8_valredundancy5_round1",
+        revision="2f9bbec",
+        adapter=multi_turn_adapter(),
+        metadata_columns=[],
+        name="fzzhang/qwen3_4b_chimera_treetopics_v1_probval_instill_n8_valredundancy5_round1",
+        subsets=[],
+        splits=["train"],
+    ),
     "teetone/qwen3_8b_openthoughts4_science26K_instill_n8_valredundancy5_round1": InstructionDatasetConfig(
         hf_dataset_id="teetone/qwen3_8b_openthoughts4_science26K_instill_n8_valredundancy5_round1",
         revision="546f8a8",
