@@ -56,12 +56,33 @@ pub fn parse_attempt_id(key: &str) -> i32 {
     suffix.parse::<i32>().unwrap_or(0)
 }
 
-/// The leading literal prefix of a regex `pattern`: everything up to the first
-/// regex metacharacter.
+/// The *guaranteed* literal prefix of a regex `pattern`: the run before the
+/// first metacharacter, minus its final char when that metacharacter is a
+/// quantifier that permits zero repetitions.
+///
+/// `*`, `?`, and `{…}` are postfix quantifiers binding to the *preceding* char
+/// and allowing it to be absent, so that char is not guaranteed and is dropped
+/// (`a?b` -> ``, `ab*c` -> `a`, `ab{0,3}c` -> `a`). `+` requires at least one
+/// repetition, so its char is kept (`/a+b` -> `/a`); the remaining
+/// metacharacters (`.`, `[`, `(`, `$`, `|`, `\`, …) do not bind to the char
+/// before them, so the run stands (`/job/.*` -> `/job/`). `{` is treated
+/// conservatively as zero-allowing without parsing the count — dropping a char
+/// only forfeits pruning, never matches.
 pub fn regex_literal_prefix(pattern: &str) -> &str {
-    match pattern.find(|c| REGEX_METACHARS.contains(&c)) {
-        Some(idx) => &pattern[..idx],
-        None => pattern,
+    let Some((idx, meta)) = pattern
+        .char_indices()
+        .find(|(_, c)| REGEX_METACHARS.contains(c))
+    else {
+        return pattern;
+    };
+    let literal = &pattern[..idx];
+    if !matches!(meta, '*' | '?' | '{') {
+        return literal;
+    }
+    // The quantifier makes the char it binds to optional; drop it.
+    match literal.char_indices().next_back() {
+        Some((last, _)) => &literal[..last],
+        None => literal,
     }
 }
 
@@ -286,7 +307,14 @@ mod tests {
         assert_eq!(regex_literal_prefix("/job/test/.*"), "/job/test/");
         assert_eq!(regex_literal_prefix("/job/test/0"), "/job/test/0"); // no metachar
         assert_eq!(regex_literal_prefix("^/job"), ""); // leading ^ is a metachar
-        assert_eq!(regex_literal_prefix("/a+b"), "/a");
+        assert_eq!(regex_literal_prefix("/a+b"), "/a"); // `+` requires the char -> kept
+                                                        // A zero-allowing quantifier (`*`/`?`/`{…}`) makes the char it binds to
+                                                        // optional, so it is dropped from the guaranteed prefix.
+        assert_eq!(regex_literal_prefix("a?b"), ""); // `a` optional
+        assert_eq!(regex_literal_prefix("a*b"), ""); // `a` optional
+        assert_eq!(regex_literal_prefix("ab?c"), "a"); // `b` optional, `a` kept
+        assert_eq!(regex_literal_prefix("ab*c"), "a");
+        assert_eq!(regex_literal_prefix("ab{0,3}c"), "a"); // counted -> conservative drop
     }
 
     #[test]

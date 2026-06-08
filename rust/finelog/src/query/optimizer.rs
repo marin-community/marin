@@ -148,8 +148,9 @@ fn like_prefix_literal(pattern: &str) -> Option<String> {
 }
 
 /// The guaranteed literal prefix of a `^`-anchored regex: the literal run after
-/// the `^`, up to the first metacharacter. `None` when the pattern is not
-/// `^`-anchored or has no leading literal.
+/// the `^`, per [`regex_literal_prefix`] (which drops a trailing char governed
+/// by a zero-allowing quantifier). `None` when the pattern is not `^`-anchored
+/// or has no guaranteed leading literal.
 fn anchored_regex_literal(pattern: &str) -> Option<String> {
     let rest = pattern.strip_prefix('^')?;
     non_empty(regex_literal_prefix(rest).to_string())
@@ -260,6 +261,11 @@ mod tests {
         assert_eq!(anchored_regex_literal("/job/test/.*"), None); // unanchored
         assert_eq!(anchored_regex_literal("^(a|b)"), None); // metachar right after ^
         assert_eq!(anchored_regex_literal("^"), None); // nothing after anchor
+                                                       // A zero-allowing quantifier on the sole literal char leaves no
+                                                       // guaranteed prefix: `^a?b` / `^a*c` match keys not starting with `a`.
+        assert_eq!(anchored_regex_literal("^a?b"), None);
+        assert_eq!(anchored_regex_literal("^a*c"), None);
+        assert_eq!(anchored_regex_literal("^ab?c").as_deref(), Some("a")); // `b` optional
     }
 
     // ----- rule tests --------------------------------------------------------
@@ -363,6 +369,27 @@ mod tests {
         assert!(!contains
             .iter()
             .any(|e| is_key_cmp(e, Operator::GtEq, "/a/")));
+    }
+
+    #[test]
+    fn regex_with_zero_allowing_quantifier_synthesizes_no_range() {
+        // `^a?b` matches "bzzz" (optional `a` skipped) and `^a*c` matches "czz";
+        // a `key >= 'a' AND key < 'b'`-style range would silently drop those
+        // rows. The optional leading char yields no guaranteed prefix, so the
+        // rule must add no `key` bound at all.
+        let is_key_bound = |e: &Expr| {
+            matches!(e, Expr::BinaryExpr(b)
+                if matches!(b.left.as_ref(), Expr::Column(c) if c.name == "key")
+                    && matches!(b.op, Operator::Lt | Operator::GtEq))
+        };
+        for pat in ["^a?b", "^a*c"] {
+            let conjuncts =
+                analyze_filter_conjuncts(scalar_call("regexp_matches", vec![col("key"), lit(pat)]));
+            assert!(
+                !conjuncts.iter().any(is_key_bound),
+                "{pat}: no key range may be synthesized (it would drop matching rows)"
+            );
+        }
     }
 
     #[tokio::test]
