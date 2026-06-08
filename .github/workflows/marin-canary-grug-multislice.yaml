@@ -105,7 +105,13 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           GRUG_MULTISLICE_STEPS: ${{ inputs.steps || env.GRUG_MULTISLICE_STEPS }}
 
+      # Bound the wait below the job timeout (180) so a hung ferry fails this
+      # *step* (failure(), runner stays alive for Claude triage) instead of
+      # tripping the job timeout (cancelled(), which force-kills triage). See the
+      # same note in marin-canary-ferry.yaml. Healthy runs finish in ~20m, so 135
+      # leaves 45m for diagnostics + triage.
       - name: Wait for Grug multislice smoke
+        timeout-minutes: 135
         shell: bash -l {0}
         run: |
           uv run python scripts/workflows/iris_monitor.py wait \
