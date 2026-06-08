@@ -65,13 +65,7 @@ def register(
     slice_id: str = "",
     scale_group: str = "",
 ) -> None:
-    """Register a new worker or refresh an existing one. Caller owns the transaction.
-
-    ``metadata.cpu_count`` is the worker's advertised scheduling CPU capacity: the
-    worker reports its scale-group declared CPU when configured (over-committing
-    past the physical host count), else the probed host count. See
-    ``build_worker_metadata``.
-    """
+    """Register a new worker or refresh an existing one. Caller owns the transaction."""
     attr_dict: dict[str, AttributeValue] = {}
     attr_rows: list[dict] = []
     for key, proto in metadata.attributes.items():
