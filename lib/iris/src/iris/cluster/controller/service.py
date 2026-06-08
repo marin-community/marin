@@ -740,6 +740,26 @@ def _attempts_for_worker(
             )
             .limit(limit)
         ).all()
+        # Each task inherits its resource allocation from its parent job. Batch
+        # the job_config lookup so a worker that ran many attempts across a few
+        # jobs costs one extra query rather than one per attempt.
+        job_ids = {row.task_id.parent for row in raw_rows if row.task_id.parent is not None}
+        resources_by_job: dict[JobName, job_pb2.ResourceSpecProto] = {}
+        if job_ids:
+            jc_rows = tx.execute(
+                select(
+                    job_config_table.c.job_id,
+                    job_config_table.c.res_cpu_millicores,
+                    job_config_table.c.res_memory_bytes,
+                    job_config_table.c.res_disk_bytes,
+                    job_config_table.c.res_device_json,
+                ).where(job_config_table.c.job_id.in_(list(job_ids)))
+            ).all()
+            for jc in jc_rows:
+                if jc.res_cpu_millicores or jc.res_memory_bytes or jc.res_disk_bytes or jc.res_device_json:
+                    resources_by_job[jc.job_id] = resource_spec_from_scalars(
+                        jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json
+                    )
     out: list[controller_pb2.Controller.WorkerTaskAttempt] = []
     for row in raw_rows:
         proto_attempt = job_pb2.TaskAttempt(
@@ -755,7 +775,13 @@ def _attempts_for_worker(
             proto_attempt.started_at.CopyFrom(timestamp_to_proto(row.started_at_ms))
         if row.finished_at_ms is not None:
             proto_attempt.finished_at.CopyFrom(timestamp_to_proto(row.finished_at_ms))
-        out.append(controller_pb2.Controller.WorkerTaskAttempt(task_id=row.task_id.to_wire(), attempt=proto_attempt))
+        out.append(
+            controller_pb2.Controller.WorkerTaskAttempt(
+                task_id=row.task_id.to_wire(),
+                attempt=proto_attempt,
+                resources=resources_by_job.get(row.task_id.parent),
+            )
+        )
     return out
 
 

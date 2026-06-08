@@ -435,12 +435,14 @@ class Controller(_message.Message):
         recent_attempts: _containers.RepeatedCompositeFieldContainer[Controller.WorkerTaskAttempt]
         def __init__(self, vm: _Optional[_Union[_vm_pb2.VmInfo, _Mapping]] = ..., scale_group: _Optional[str] = ..., worker: _Optional[_Union[Controller.WorkerHealthStatus, _Mapping]] = ..., bootstrap_logs: _Optional[str] = ..., recent_attempts: _Optional[_Iterable[_Union[Controller.WorkerTaskAttempt, _Mapping]]] = ...) -> None: ...
     class WorkerTaskAttempt(_message.Message):
-        __slots__ = ("task_id", "attempt")
+        __slots__ = ("task_id", "attempt", "resources")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
         ATTEMPT_FIELD_NUMBER: _ClassVar[int]
+        RESOURCES_FIELD_NUMBER: _ClassVar[int]
         task_id: str
         attempt: _job_pb2.TaskAttempt
-        def __init__(self, task_id: _Optional[str] = ..., attempt: _Optional[_Union[_job_pb2.TaskAttempt, _Mapping]] = ...) -> None: ...
+        resources: _job_pb2.ResourceSpecProto
+        def __init__(self, task_id: _Optional[str] = ..., attempt: _Optional[_Union[_job_pb2.TaskAttempt, _Mapping]] = ..., resources: _Optional[_Union[_job_pb2.ResourceSpecProto, _Mapping]] = ...) -> None: ...
     class GetKubernetesClusterStatusRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
