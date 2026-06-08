@@ -18,8 +18,11 @@ Two subcommands:
   - `aggregate` (designed to run as a daily GHA cron) classifies reviewer
     comments and appends them to the shared `review-stats` W&B run.
   - `report` reads those accumulated tables back and renders a markdown digest
-    (summary table, by-class breakdown, weekly trend, top PRs, examples),
-    published as a gist by default.
+    (summary table, by-class breakdown, weekly trend, top PRs, examples). It
+    also folds in the linter-fed `invocations`/`findings` tables (written by
+    `infra/codehealth/log_stats.py` on every review-bot run) as a "Review
+    automation activity" section — runs, runtime, and the catalog rules fired.
+    Published as a gist by default.
 
 `aggregate`, for each PR merged in the last N days:
   1. Pull review/inline/issue comments via the `gh` CLI.
@@ -67,6 +70,11 @@ import click
 import wandb
 from google import genai
 from google.genai import types
+
+# Sibling standalone script: the canonical schema for the linter-fed tables this
+# report reads back. Importing keeps the column layouts in one place rather than
+# re-declaring them here and risking drift.
+from log_stats import FINDING_COLUMNS, INVOCATION_COLUMNS
 from pydantic import BaseModel, Field, TypeAdapter
 
 logger = logging.getLogger("codehealth.review")
@@ -537,13 +545,18 @@ def load_findings_for_shas(wandb, shas: set[str]) -> dict[str, list[dict]]:
     Returns sha -> list of finding dicts (file, line, code, confidence, message).
     """
     by_sha: dict[str, list[dict]] = {sha: [] for sha in shas}
-    # FINDING_COLUMNS layout from log_stats.py:
-    #   ts, invocation_id, tool, pr_number, git_branch, head_sha, marin_user,
-    #   file, line, code, confidence, message
-    for r in _load_existing_rows(wandb, "findings"):
-        sha = r[5]
+    for r in _rows_to_dicts(FINDING_COLUMNS, _load_existing_rows(wandb, "findings")):
+        sha = r["head_sha"]
         if sha in by_sha:
-            by_sha[sha].append({"file": r[7], "line": r[8], "code": r[9], "confidence": r[10], "message": r[11]})
+            by_sha[sha].append(
+                {
+                    "file": r["file"],
+                    "line": r["line"],
+                    "code": r["code"],
+                    "confidence": r["confidence"],
+                    "message": r["message"],
+                }
+            )
     return by_sha
 
 
@@ -579,6 +592,22 @@ def _pct(n: int, d: int) -> str:
     return f"{round(100 * n / d)}%" if d else "—"
 
 
+def _ival(value: object) -> int:
+    """Coerce a possibly-null W&B cell to int; missing/garbage counts as 0."""
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
+def _fval(value: object) -> float | None:
+    """Coerce a possibly-null W&B cell to float, or None when absent/garbage."""
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
 def _cell(value: object, maxlen: int | None = None) -> str:
     """Render a value as a single safe markdown table cell."""
     text = " ".join(str(value).split()).replace("|", "\\|")
@@ -604,8 +633,116 @@ def _where(file: object, line: object) -> str:
     return f"{file}:{line}" if line not in (None, "") else str(file)
 
 
+def build_automation_section(invocations: list[dict], findings: list[dict], start: dt.datetime, days: int) -> str:
+    """Render review-automation activity from the linter-fed `invocations` and
+    `findings` tables (written by `infra/codehealth/log_stats.py` on every
+    `pre-commit.py --review` / `/code-review` / `/review-pr` run). Pure: takes
+    already-loaded rows, returns markdown, filtered to runs whose `ts` falls
+    on/after `start`.
+
+    This is what the review bot itself did — runs, runtime, and the catalog
+    rules it fired — distinct from the human-comment catchability analysis,
+    which measures what reviewers caught that the bot could have."""
+
+    def in_window(row: dict) -> bool:
+        ts = row.get("ts")
+        if not ts:
+            return False
+        try:
+            return _parse_ts(ts) >= start
+        except ValueError:
+            return False
+
+    runs = [r for r in invocations if in_window(r)]
+    finds = [f for f in findings if in_window(f)]
+
+    heading = "## Review automation activity"
+    blurb = (
+        "What the review bot itself did over the window — every "
+        "`pre-commit.py --review`, `/code-review`, and `/review-pr` run logs to "
+        "W&B. Distinct from the catchability analysis above: that measures human "
+        "comments the bot could have caught; this is the bot's own output."
+    )
+    if not runs:
+        return f"{heading}\n\n{blurb}\n\n_No review-bot runs recorded in the last {days} days._"
+
+    n_runs = len(runs)
+    with_findings = sum(1 for r in runs if _ival(r.get("finding_count")) > 0)
+    failed = sum(1 for r in runs if _ival(r.get("agent_exit_code")) != 0 or bool(r.get("timed_out")))
+    total_findings = sum(_ival(r.get("finding_count")) for r in runs)
+    elapsed = sorted(v for r in runs if (v := _fval(r.get("elapsed"))) is not None)
+    median_elapsed = elapsed[len(elapsed) // 2] if elapsed else None
+
+    summary = "### Activity\n\n" + _md_table(
+        ["Metric", "Value"],
+        ["---", "---:"],
+        [
+            ["Review runs", n_runs],
+            ["— produced findings", f"{with_findings} ({_pct(with_findings, n_runs)})"],
+            ["— silent (no findings)", f"{n_runs - with_findings} ({_pct(n_runs - with_findings, n_runs)})"],
+            ["— failed or timed out", failed],
+            ["Findings emitted", total_findings],
+            ["Findings per run (mean)", f"{total_findings / n_runs:.1f}"],
+            ["Median runtime", f"{median_elapsed:.0f}s" if median_elapsed is not None else "—"],
+        ],
+    )
+
+    # Most-fired catalog rules: the `code` on each finding (e.g.
+    # `ml-exception-swallow`). Answers "what does the reviewer flag most?"
+    by_code: dict[str, list] = {}
+    for f in finds:
+        code = str(f.get("code") or "(uncoded)")
+        e = by_code.setdefault(code, [0, 0.0, ""])
+        e[0] += 1
+        conf = _fval(f.get("confidence"))
+        if conf is not None:
+            e[1] += conf
+        if not e[2]:
+            e[2] = str(f.get("message") or "")
+    code_rows = [
+        [_cell(code), n, _pct(n, len(finds)), f"{conf_sum / n:.2f}", _cell(example, 80)]
+        for code, (n, conf_sum, example) in sorted(by_code.items(), key=lambda kv: kv[1][0], reverse=True)[:15]
+    ]
+    codes_section = "### Most frequent findings\n\n" + (
+        _md_table(
+            ["Catalog code", "Count", "% of findings", "Mean conf.", "Example"],
+            ["---", "---:", "---:", "---:", "---"],
+            code_rows,
+        )
+        if code_rows
+        else "_No findings emitted in this window._"
+    )
+
+    # Weekly adoption: runs + findings keyed by ISO week of the run timestamp.
+    weeks: dict[tuple[int, int], list[int]] = {}
+    for r in runs:
+        try:
+            y, w, _ = _parse_ts(r["ts"]).isocalendar()
+        except (ValueError, KeyError):
+            continue
+        e = weeks.setdefault((y, w), [0, 0, 0])
+        e[0] += 1
+        e[1] += 1 if _ival(r.get("finding_count")) > 0 else 0
+        e[2] += _ival(r.get("finding_count"))
+    week_rows = [[f"{y}-W{w:02d}", n, wf, fnd] for (y, w), (n, wf, fnd) in sorted(weeks.items())]
+    trend = "### Weekly trend\n\n" + _md_table(
+        ["Week", "Runs", "With findings", "Findings"],
+        ["---", "---:", "---:", "---:"],
+        week_rows,
+    )
+
+    return "\n\n".join([heading, blurb, summary, codes_section, trend])
+
+
 def build_report(
-    outcomes: list[dict], comments: list[dict], repo: str, start: dt.datetime, now: dt.datetime, days: int
+    outcomes: list[dict],
+    comments: list[dict],
+    invocations: list[dict],
+    findings: list[dict],
+    repo: str,
+    start: dt.datetime,
+    now: dt.datetime,
+    days: int,
 ) -> str:
     """Render the per-PR outcome rows and classified comments into a markdown
     digest. Pure: takes already-loaded rows, returns markdown. Rows are filtered
@@ -629,8 +766,13 @@ def build_report(
         f"**Generated:** {now.replace(microsecond=0).isoformat()}"
     )
 
+    # The automation section reads its own (`invocations`/`findings`) tables and
+    # filters by run timestamp, so it is independent of whether any PR merged.
+    automation_section = build_automation_section(invocations, findings, start, days)
+
     if not outcomes:
-        return f"{header}\n\nNo PRs merged in the last {days} days were found in the review-stats tables."
+        note = f"No PRs merged in the last {days} days were found in the review-stats tables."
+        return "\n\n".join([header, note, automation_section])
 
     n_prs = len(outcomes)
     reviewed = sum(1 for d in outcomes if int(d["total_human_comments"]) > 0)
@@ -765,7 +907,9 @@ def build_report(
         else "_No catchable comments in this window._"
     )
 
-    return "\n\n".join([header, narrative, summary, by_class_section, trend_section, top_section, flagged_section])
+    return "\n\n".join(
+        [header, narrative, summary, automation_section, by_class_section, trend_section, top_section, flagged_section]
+    )
 
 
 def publish_gist(markdown: str, desc: str, public: bool, filename: str) -> str:
@@ -1006,7 +1150,11 @@ def aggregate(
 @click.option("--public", is_flag=True, help="Create a public gist (default: secret)")
 @click.option("--no-gist", is_flag=True, help="Print the report to stdout instead of creating a gist")
 def report(repo: str, days: int, out: str | None, public: bool, no_gist: bool) -> None:
-    """Render the accumulated review stats into a markdown digest and gist it."""
+    """Render the accumulated review stats into a markdown digest and gist it.
+
+    Reads four tables from the shared `review-stats` run: `pr_review_outcomes`
+    and `human_comments` (the catchability analysis) plus the linter-fed
+    `invocations` and `findings` (the review bot's own activity)."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     now = dt.datetime.now(dt.timezone.utc)
     start = now - dt.timedelta(days=days)
@@ -1019,9 +1167,11 @@ def report(repo: str, days: int, out: str | None, public: bool, no_gist: bool) -
     )
     outcomes = _rows_to_dicts(PR_OUTCOME_COLUMNS, _load_existing_rows(wandb, "pr_review_outcomes"))
     comments = _rows_to_dicts(HUMAN_COMMENT_COLUMNS, _load_existing_rows(wandb, "human_comments"))
+    invocations = _rows_to_dicts(INVOCATION_COLUMNS, _load_existing_rows(wandb, "invocations"))
+    findings = _rows_to_dicts(FINDING_COLUMNS, _load_existing_rows(wandb, "findings"))
     wandb.finish(quiet=True)
 
-    markdown = build_report(outcomes, comments, repo=repo, start=start, now=now, days=days)
+    markdown = build_report(outcomes, comments, invocations, findings, repo=repo, start=start, now=now, days=days)
 
     if out:
         Path(out).write_text(markdown)
