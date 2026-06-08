@@ -44,12 +44,17 @@ can overwhelm the worker. This limit provides back-pressure by deferring new
 task assignments until existing tasks complete their build phase.
 """
 
-DEFAULT_MAX_ASSIGNMENTS_PER_WORKER = 1
+DEFAULT_MAX_ASSIGNMENTS_PER_WORKER = 4
 """Default limit for task assignments per worker per scheduling cycle.
 
-Set to 1 for normal scheduling (round-robin distribution). Dry-run demand
-estimation raises this to an effectively unlimited value so a big worker
-with spare CPU can absorb multiple tasks, preventing false demand signals.
+Caps how many new tasks a worker absorbs in a single cycle so load still
+spreads across fresh workers, but allows enough packing that small tasks
+co-locate instead of each triggering a new VM. A cap of 1 scattered tiny
+CPU tasks one-per-VM (a 2-vCPU VM took one 1-vCPU task per cycle, and the
+autoscaler added VMs for the rest), leaving VMs half-used and unreclaimable.
+Dry-run demand estimation raises this to an effectively unlimited value so a
+big worker with spare CPU can absorb multiple tasks, preventing false demand
+signals.
 """
 
 
