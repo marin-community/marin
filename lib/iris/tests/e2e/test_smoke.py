@@ -198,6 +198,21 @@ def smoke_screenshot(smoke_page, tmp_path_factory):
     return capture
 
 
+def _await_stable_screenshot(page, check: str, *, arg=None) -> None:
+    """Wait for a screenshot-readiness predicate, settle briefly, then re-verify.
+
+    Dashboard pages render structural content only after their first RPC resolves,
+    and an SPA route swap (lazy-imported components) can leave the previous page's
+    DOM mounted while the next chunk loads. The settle + re-verify catches a
+    predicate that passes on such a transient state and then flips back, so the
+    screenshot lands on the stable loaded page. Timing lives here so both detail
+    pages share one cadence.
+    """
+    page.wait_for_function(check, arg=arg, timeout=15000)
+    page.wait_for_timeout(250)
+    page.wait_for_function(check, arg=arg, timeout=5000)
+
+
 def _wait_for_worker_detail_screenshot_ready(page, worker_id: str) -> None:
     # WorkerDetail.vue uniquely nulls `data` in its workerId watch, so a late
     # re-fire can flip the page back to the "Loading worker..." overlay after a
@@ -217,9 +232,7 @@ def _wait_for_worker_detail_screenshot_ready(page, worker_id: str) -> None:
                 && headings.includes("task history");
         }
     """
-    page.wait_for_function(check, arg=worker_id, timeout=15000)
-    page.wait_for_timeout(250)
-    page.wait_for_function(check, arg=worker_id, timeout=5000)
+    _await_stable_screenshot(page, check, arg=worker_id)
 
 
 def _wait_for_job_detail_screenshot_ready(page, job_id: str) -> None:
@@ -496,20 +509,36 @@ def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, ca
     )
 
 
+def _wait_for_autoscaler_screenshot_ready(page) -> None:
+    # AutoscalerTab.vue shows only a "Loading autoscaler status…" spinner until its
+    # first RPC resolves. Route components are lazy-imported, so during the SPA swap
+    # the previously-viewed page (e.g. worker detail, which renders "Scale Group" +
+    # the "local-cpu" group name) is still mounted while the autoscaler chunk loads.
+    # A body-text wait keyed on those strings false-positives on that stale DOM, so
+    # the screenshot then catches the autoscaler spinner. Anchor on the route hash
+    # plus the section headings that only render in the loaded (v-else) branch so the
+    # match can't be satisfied by another page.
+    check = """
+        () => {
+            const text = document.body.textContent || "";
+            const routeReady = decodeURIComponent(window.location.hash) === "#/autoscaler";
+            const headings = Array.from(document.querySelectorAll("h3"))
+                .map((heading) => (heading.textContent || "").trim().toLowerCase());
+            return routeReady
+                && !text.includes("Loading autoscaler status")
+                && headings.includes("waterfall routing")
+                && headings.includes("recent actions")
+                && headings.includes("autoscaler logs");
+        }
+    """
+    _await_stable_screenshot(page, check)
+
+
 def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Autoscaler tab shows scale groups."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/autoscaler")
     wait_for_dashboard_ready(smoke_page)
-    # Wait for actual scale group content. The strict !Loading-autoscaler-status check
-    # blocks on the AutoscalerTab.vue placeholder so the screenshot isn't taken
-    # during a refetch cycle.
-    smoke_page.wait_for_function(
-        "() => !document.body.textContent.includes('Loading autoscaler status') && "
-        "(document.body.textContent.includes('Scale Group') || "
-        "document.body.textContent.includes('scale group') || "
-        "document.body.textContent.includes('local-cpu'))",
-        timeout=15000,
-    )
+    _wait_for_autoscaler_screenshot_ready(smoke_page)
     smoke_screenshot("autoscaler-tab", "Autoscaler tab showing scale group configuration")
 
 
