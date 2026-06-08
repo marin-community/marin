@@ -104,6 +104,27 @@ def _child_env_vars() -> dict[str, str]:
     return {key: value for key in CHILD_ENV_KEYS if (value := os.environ.get(key))}
 
 
+def _override_output_path() -> str | None:
+    """Read ``GRUG_MULTISLICE_OUTPUT_PATH`` and validate it.
+
+    If the env var is unset, returns ``None`` and the canary falls back to
+    its deterministic content-addressed path. If the env var is set, it
+    must be non-empty: an empty value would be interpreted by
+    :func:`compute_output_path` as a relative override joined with
+    ``MARIN_PREFIX``, which would point the pre-submit wipe at the prefix
+    root (e.g. ``gs://marin-us-east5``) and recursively delete it.
+    """
+    if "GRUG_MULTISLICE_OUTPUT_PATH" not in os.environ:
+        return None
+    value = os.environ["GRUG_MULTISLICE_OUTPUT_PATH"]
+    if not value:
+        raise ValueError(
+            "GRUG_MULTISLICE_OUTPUT_PATH is set but empty; "
+            "unset it to use the default canary path, or provide an absolute output path."
+        )
+    return value
+
+
 def wipe_path_if_exists(path: str) -> None:
     """Recursively delete ``path`` via fsspec if it exists; no-op otherwise."""
     fs, _, (plain_path,) = fsspec.get_fs_token_paths(path)
@@ -135,7 +156,7 @@ def _wipe_canary_output(
 
 def main() -> None:
     launch = multislice_smoke_launch()
-    override_output_path = os.environ.get("GRUG_MULTISLICE_OUTPUT_PATH")
+    override_output_path = _override_output_path()
     _wipe_canary_output(CANARY_STEP_NAME, launch, override_output_path)
     train_grug(
         CANARY_STEP_NAME,
