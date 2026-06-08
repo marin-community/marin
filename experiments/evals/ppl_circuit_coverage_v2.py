@@ -29,7 +29,7 @@ from marin.execution.types import this_output_path
 
 EPIC_5005 = 5005
 PPL_CIRCUIT_COVERAGE_V2_ISSUE = 6070
-PPL_CIRCUIT_COVERAGE_V2_SOURCE = "generated_ppl_circuit_coverage_v2"
+PPL_CIRCUIT_COVERAGE_V2_SOURCE = "generated_ppl_circuit_coverage_v2_compact_v1"
 PPL_CIRCUIT_COVERAGE_V2_SEED = 6203
 EXAMPLES_PER_CONFIG = 1000
 LOCAL_SAMPLE_EXAMPLES_PER_CONFIG = 4
@@ -1478,7 +1478,7 @@ def materialize_ppl_circuit_coverage_v2_plain_text_pretraining_from_config(
 
 
 ppl_circuit_coverage_v2_raw_executor = ExecutorStep(
-    name=os.path.join("raw", "evals", "ppl_circuit_coverage_v2"),
+    name=os.path.join("raw", "evals", "ppl_circuit_coverage_v2_compact_v1"),
     fn=materialize_ppl_circuit_coverage_v2_raw_from_config,
     config=PplCircuitCoverageV2RawConfig(output_path=this_output_path()),
 )

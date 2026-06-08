@@ -6,6 +6,7 @@ import unicodedata
 
 from experiments.evals.ppl_circuit_coverage_v2 import (
     PPL_CIRCUIT_COVERAGE_V2_SLICES,
+    PPL_CIRCUIT_COVERAGE_V2_SOURCE,
     PplCircuitCoverageV2Family,
     _generate_borrow_subtraction,
     iter_ppl_circuit_coverage_v2_plain_text_documents,
@@ -109,7 +110,7 @@ def test_ppl_circuit_coverage_v2_records_are_deterministic_supervised_examples()
         assert row["output"].endswith("\n")
         assert "loss:target_only" in row["tags"]
         assert row["metadata"]["family"]
-        assert row["metadata"]["generator"] == "generated_ppl_circuit_coverage_v2"
+        assert row["metadata"]["generator"] == PPL_CIRCUIT_COVERAGE_V2_SOURCE
 
 
 def test_new_basic_functionality_slices_use_compact_few_shot_context_without_output_leak():
