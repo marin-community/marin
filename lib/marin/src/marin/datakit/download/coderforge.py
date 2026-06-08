@@ -9,13 +9,13 @@ reward tag prefix so the model learns to distinguish successful and failed
 rollouts.
 """
 
-import hashlib
 import json
 
 from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.rollout_transforms import text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -77,13 +77,7 @@ def row_to_doc(row: dict) -> list[dict]:
     text = f"{tag}\n\n{rendered}"
 
     counters.increment("coderforge/kept")
-    return [
-        {
-            "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "text": text,
-            "source": "togethercomputer/CoderForge-Preview",
-        }
-    ]
+    return [text_document(text, "togethercomputer/CoderForge-Preview")]
 
 
 def transform(input_path: str, output_path: str) -> None:
