@@ -588,11 +588,24 @@ def _parse_ts(s: str) -> dt.datetime:
     return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
+def _in_window(row: dict, key: str, start: dt.datetime) -> bool:
+    """True when the timestamp at `row[key]` is on/after `start`. Rows with a
+    missing or unparseable timestamp fall outside the window. Shared by the
+    merged-PR tables (keyed on `merged_at`) and the automation tables (`ts`)."""
+    ts = row.get(key)
+    if not ts:
+        return False
+    try:
+        return _parse_ts(ts) >= start
+    except ValueError:
+        return False
+
+
 def _pct(n: int, d: int) -> str:
     return f"{round(100 * n / d)}%" if d else "—"
 
 
-def _ival(value: object) -> int:
+def _to_int(value: object) -> int:
     """Coerce a possibly-null W&B cell to int; missing/garbage counts as 0."""
     try:
         return int(value)  # type: ignore[arg-type]
@@ -600,7 +613,7 @@ def _ival(value: object) -> int:
         return 0
 
 
-def _fval(value: object) -> float | None:
+def _to_float(value: object) -> float | None:
     """Coerce a possibly-null W&B cell to float, or None when absent/garbage."""
     try:
         return float(value)  # type: ignore[arg-type]
@@ -644,17 +657,8 @@ def build_automation_section(invocations: list[dict], findings: list[dict], star
     rules it fired — distinct from the human-comment catchability analysis,
     which measures what reviewers caught that the bot could have."""
 
-    def in_window(row: dict) -> bool:
-        ts = row.get("ts")
-        if not ts:
-            return False
-        try:
-            return _parse_ts(ts) >= start
-        except ValueError:
-            return False
-
-    runs = [r for r in invocations if in_window(r)]
-    finds = [f for f in findings if in_window(f)]
+    runs = [r for r in invocations if _in_window(r, "ts", start)]
+    finds = [f for f in findings if _in_window(f, "ts", start)]
 
     heading = "## Review automation activity"
     blurb = (
@@ -667,10 +671,10 @@ def build_automation_section(invocations: list[dict], findings: list[dict], star
         return f"{heading}\n\n{blurb}\n\n_No review-bot runs recorded in the last {days} days._"
 
     n_runs = len(runs)
-    with_findings = sum(1 for r in runs if _ival(r.get("finding_count")) > 0)
-    failed = sum(1 for r in runs if _ival(r.get("agent_exit_code")) != 0 or bool(r.get("timed_out")))
-    total_findings = sum(_ival(r.get("finding_count")) for r in runs)
-    elapsed = sorted(v for r in runs if (v := _fval(r.get("elapsed"))) is not None)
+    with_findings = sum(1 for r in runs if _to_int(r.get("finding_count")) > 0)
+    failed = sum(1 for r in runs if _to_int(r.get("agent_exit_code")) != 0 or bool(r.get("timed_out")))
+    total_findings = sum(_to_int(r.get("finding_count")) for r in runs)
+    elapsed = sorted(v for r in runs if (v := _to_float(r.get("elapsed"))) is not None)
     median_elapsed = elapsed[len(elapsed) // 2] if elapsed else None
 
     summary = "### Activity\n\n" + _md_table(
@@ -694,7 +698,7 @@ def build_automation_section(invocations: list[dict], findings: list[dict], star
         code = str(f.get("code") or "(uncoded)")
         e = by_code.setdefault(code, [0, 0.0, ""])
         e[0] += 1
-        conf = _fval(f.get("confidence"))
+        conf = _to_float(f.get("confidence"))
         if conf is not None:
             e[1] += conf
         if not e[2]:
@@ -722,8 +726,8 @@ def build_automation_section(invocations: list[dict], findings: list[dict], star
             continue
         e = weeks.setdefault((y, w), [0, 0, 0])
         e[0] += 1
-        e[1] += 1 if _ival(r.get("finding_count")) > 0 else 0
-        e[2] += _ival(r.get("finding_count"))
+        e[1] += 1 if _to_int(r.get("finding_count")) > 0 else 0
+        e[2] += _to_int(r.get("finding_count"))
     week_rows = [[f"{y}-W{w:02d}", n, wf, fnd] for (y, w), (n, wf, fnd) in sorted(weeks.items())]
     trend = "### Weekly trend\n\n" + _md_table(
         ["Week", "Runs", "With findings", "Findings"],
@@ -748,17 +752,8 @@ def build_report(
     digest. Pure: takes already-loaded rows, returns markdown. Rows are filtered
     to PRs merged on/after `start`."""
 
-    def in_window(row: dict) -> bool:
-        merged = row.get("merged_at")
-        if not merged:
-            return False
-        try:
-            return _parse_ts(merged) >= start
-        except ValueError:
-            return False
-
-    outcomes = [d for d in outcomes if in_window(d)]
-    comments = [d for d in comments if in_window(d)]
+    outcomes = [d for d in outcomes if _in_window(d, "merged_at", start)]
+    comments = [d for d in comments if _in_window(d, "merged_at", start)]
 
     header = (
         f"# Marin code-health review report\n\n"
