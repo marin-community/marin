@@ -15,19 +15,21 @@ from __future__ import annotations
 import copy
 import logging
 import os
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import fsspec
 import yaml
 from google.protobuf.json_format import ParseDict
 from rigging.timing import Duration
 
+from iris.cluster.backends.factory import create_provider_bundle
+from iris.cluster.backends.k8s.service import CloudK8sService
+from iris.cluster.backends.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, K8sTaskProvider
+from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
+from iris.cluster.backends.types import local_queue_name
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.worker_provider import WorkerProvider
-from iris.cluster.providers.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, K8sTaskProvider
-from iris.cluster.providers.types import local_queue_name
+from iris.cluster.controller.backend import TaskBackend
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import parse_memory_string
 from iris.rpc import config_pb2, job_pb2
@@ -1098,8 +1100,6 @@ class IrisConfig:
         Returns:
             ProviderBundle with controller and optional workers
         """
-        from iris.cluster.providers.factory import create_provider_bundle
-
         return create_provider_bundle(
             platform_config=self._proto.platform,
             worker_port=self._proto.defaults.worker.port,
@@ -1129,48 +1129,15 @@ class IrisConfig:
         return ""
 
 
-@contextmanager
-def connect_cluster(config: config_pb2.IrisClusterConfig) -> Iterator[str]:
-    """Start controller, open tunnel, yield address, stop on exit.
-
-    Local mode uses LocalCluster directly (in-process controller + workers).
-    Remote modes delegate controller lifecycle to the platform (GCP, CoreWeave, etc.).
-    """
-    validate_config(config)
-    is_local = config.controller.WhichOneof("controller") == "local"
-
-    if is_local:
-        from iris.cluster.providers.local.cluster import LocalCluster
-
-        cluster = LocalCluster(config)
-        address = cluster.start()
-        try:
-            yield address
-        finally:
-            cluster.close()
-    else:
-        iris_config = IrisConfig(config)
-        bundle = iris_config.provider_bundle()
-        address = bundle.controller.start_controller(config)
-        try:
-            with bundle.controller.tunnel(address) as tunnel_url:
-                yield tunnel_url
-        finally:
-            bundle.controller.stop_controller(config)
-            bundle.controller.shutdown()
-
-
-def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvider | K8sTaskProvider:
-    """Create a TaskProvider from cluster configuration.
+def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> TaskBackend:
+    """Create a TaskBackend from cluster configuration.
 
     Returns a K8sTaskProvider when `kubernetes_provider` is configured,
-    or a WorkerProvider when `worker_provider` is configured.
+    or an RpcTaskBackend when `worker_provider` is configured.
     Raises ValueError if no provider is set.
     """
     which = cluster_config.WhichOneof("provider")
     if which == "kubernetes_provider":
-        from iris.cluster.providers.k8s.service import CloudK8sService
-
         kp = cluster_config.kubernetes_provider
         namespace = kp.namespace or "iris"
         label_prefix = cluster_config.platform.label_prefix
@@ -1205,9 +1172,7 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
             kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
         )
     if which == "worker_provider":
-        from iris.cluster.controller.worker_provider import RpcWorkerStubFactory
-
-        return WorkerProvider(stub_factory=RpcWorkerStubFactory())
+        return RpcTaskBackend(stub_factory=RpcWorkerStubFactory())
     raise ValueError(
         "IrisClusterConfig.provider must be set. Add either:\n"
         "  worker_provider: {}\n"
@@ -1221,8 +1186,6 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
 
 def clear_remote_state(remote_state_dir: str) -> None:
     """Remove all files under the remote state dir so the controller starts fresh."""
-    import fsspec
-
     fs, path = fsspec.core.url_to_fs(remote_state_dir)
     if fs.exists(path):
         fs.rm(path, recursive=True)

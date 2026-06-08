@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 from jax import random
 from test_utils import skip_if_no_torch, use_test_mesh
+from transformers import AutoModelForCausalLM, Olmo2ForCausalLM
 
 from levanter.layers.attention import AttentionMask
 from levanter.models.llama import LlamaMlp
@@ -78,8 +79,10 @@ def test_olmo2_config():
 
 @skip_if_no_torch
 def test_olmo2_rms_norm():
-    import torch
-    from transformers.models.olmo2.modeling_olmo2 import Olmo2RMSNorm as HFOlmo2RMSNorm
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch
+        Olmo2RMSNorm as HFOlmo2RMSNorm,
+    )
 
     config = _get_olmo2_config()
     ln = hnn.RmsNorm.init(config.Embed, eps=config.layer_norm_epsilon, use_weight=config.use_layer_norm_weight)
@@ -115,9 +118,13 @@ def test_olmo2_mlp(num_kv_heads):
 @pytest.mark.parametrize("use_flash", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_olmo2_attention_vs_hf(use_flash, num_kv_heads):
-    import torch
-    from transformers.models.olmo2.modeling_olmo2 import Olmo2Attention as HFOlmo2Attention
-    from transformers.models.olmo2.modeling_olmo2 import Olmo2RotaryEmbedding as HFOlmo2RotaryEmbedding
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch
+        Olmo2Attention as HFOlmo2Attention,
+    )
+    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch
+        Olmo2RotaryEmbedding as HFOlmo2RotaryEmbedding,
+    )
 
     config = _get_olmo2_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
 
@@ -151,9 +158,13 @@ def test_olmo2_attention_vs_hf(use_flash, num_kv_heads):
 @skip_if_no_torch
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_olmo2_decoder_layer_vs_hf(num_kv_heads):
-    import torch
-    from transformers.models.olmo2.modeling_olmo2 import Olmo2DecoderLayer as HFOlmo2DecoderLayer
-    from transformers.models.olmo2.modeling_olmo2 import Olmo2RotaryEmbedding as HFOlmo2RotaryEmbedding
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch
+        Olmo2DecoderLayer as HFOlmo2DecoderLayer,
+    )
+    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch
+        Olmo2RotaryEmbedding as HFOlmo2RotaryEmbedding,
+    )
 
     olmo2_config = _get_olmo2_config(num_kv_heads=num_kv_heads)
     key = random.PRNGKey(0)
@@ -263,8 +274,7 @@ def test_olmo2_lm_head_model_bwd(use_flash, num_kv_heads):
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
 def test_olmo2_roundtrip(scan_layers, num_kv_heads, local_gpt2_tokenizer_path):
-    import torch
-    from transformers import AutoModelForCausalLM, Olmo2ForCausalLM
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     # Local tokenizer + no remote reference keeps the roundtrip off the Hub; the
     # tokenizer is incidental (random inputs, logit-equivalence only).
@@ -352,8 +362,6 @@ def test_olmo2_param_counts_dont_change_with_seqlen():
 @skip_if_no_torch
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
 def test_olmo2_state_dict_consistency(num_kv_heads):
-    from transformers import Olmo2ForCausalLM
-
     config = Olmo2Config(
         max_seq_len=128,
         hidden_dim=16,

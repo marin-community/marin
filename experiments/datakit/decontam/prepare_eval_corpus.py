@@ -40,13 +40,19 @@ plumbing.
 """
 
 import dataclasses
+import io as io_mod
 import json
 import logging
+import urllib.request
+import zipfile
 from collections.abc import Callable, Iterable, Iterator
 from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from datasets import Image as DatasetsImage
+from datasets import load_dataset
+from huggingface_hub import hf_hub_download
 from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
 
@@ -268,10 +274,6 @@ def _iter_aa_rows(cfg: AAEvalConfig) -> Iterator[dict[str, Any]]:
     3. ``datasets.load_dataset`` (default) -- the normal HF Hub path.
     """
     if cfg.download_zip_url:
-        import io as io_mod
-        import urllib.request
-        import zipfile
-
         if not cfg.zip_jsonl_member:
             raise ValueError(f"aa/{cfg.subdir}: zip_jsonl_member must be set with download_zip_url")
         with urllib.request.urlopen(cfg.download_zip_url) as resp:
@@ -283,8 +285,6 @@ def _iter_aa_rows(cfg: AAEvalConfig) -> Iterator[dict[str, Any]]:
         return
 
     if cfg.hf_jsonl_files:
-        from huggingface_hub import hf_hub_download
-
         for fname in cfg.hf_jsonl_files:
             local = hf_hub_download(repo_id=cfg.hf_id, filename=fname, repo_type="dataset")
             with open(local, encoding="utf-8") as f:
@@ -292,9 +292,6 @@ def _iter_aa_rows(cfg: AAEvalConfig) -> Iterator[dict[str, Any]]:
                     if line.strip():
                         yield json.loads(line)
         return
-
-    from datasets import Image as DatasetsImage
-    from datasets import load_dataset
 
     ds = load_dataset(cfg.hf_id, name=cfg.subset, split=cfg.split)
     # Disable Image-feature decoding so iteration doesn't pull in Pillow on
@@ -378,7 +375,7 @@ def _lmh_task_names() -> list[str]:
 
 def _prepare_lmh() -> None:
     trust_remote_code_for_hf()
-    from lm_eval.tasks import get_task_dict
+    from lm_eval.tasks import get_task_dict  # noqa: PLC0415  # optional dep: lm_eval
 
     names = _lmh_task_names()
     logger.info("lmh: %d unique task names from task_configs.py", len(names))

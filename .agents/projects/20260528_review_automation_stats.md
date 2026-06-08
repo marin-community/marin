@@ -12,10 +12,10 @@ have otherwise had to flag*.
 
 | Surface | Trigger | Output | Persisted? |
 |---|---|---|---|
-| `pre-commit.py --review` | Local, advisory | Free-text findings to stdout, citing `ml-…` codes from `infra/lint.md` | No |
+| `pre-commit.py --review` | Local, advisory | Free-text findings to stdout, citing `ml-…` codes from `infra/lint/` | No |
 | `/code-review` skill (low/med/high/ultra) | Local on diff; `--comment` posts inline | Text findings; optional inline GH comments | Only if `--comment` |
 | `/review-pr` skill | Local or via GHA on PR | Multi-agent findings; `--comment` posts inline | Only if `--comment` |
-| `ops-claude-review.yaml` | GHA: PR open/ready, or "claude review this" comment | Calls `/review-pr --comment` → GH inline comments | Yes (in GH API) |
+| `ops-claude-review.yaml` | GHA: PR open/ready/reopened | Calls `/review-pr --comment` → GH inline comments | Yes (in GH API) |
 | `marin-lint.yaml` | GHA on every push/PR | pre-commit pass/fail; exit code | GHA logs only |
 | Human PR review comments | Reviewers on PRs | GH review/review-comments | Yes (in GH API) |
 

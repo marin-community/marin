@@ -4,36 +4,35 @@
 import math
 from contextlib import ExitStack
 
+import equinox
+import equinox as eqx
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
 import pytest
-import equinox as eqx
-import equinox
 from chex import assert_trees_all_close
+from haliax import Axis
+from haliax.partitioning import ResourceAxis
 from jax._src import config as jax_config
 from jax.lax import Precision
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec, use_abstract_mesh
+from test_utils import skip_if_module_missing, skip_if_no_torch, skip_if_not_enough_devices, use_test_mesh
 
-import haliax as hax
-from haliax import Axis
-from haliax.partitioning import ResourceAxis
-from levanter.utils.mesh import create_mesh_from_axis_specs
-
+from levanter.grug.attention import align_kv_heads
 from levanter.layers.attention import (
     Attention,
     AttentionBackend,
     AttentionConfig,
     AttentionMask,
+    AttentionWithSink,
     _bin_and_group_axes_by_function,
     _te_flash_attention,
     _tpu_splash_attention,
-    AttentionWithSink,
     dot_product_attention,
 )
-from levanter.grug.attention import align_kv_heads
-from test_utils import skip_if_module_missing, skip_if_no_torch, skip_if_not_enough_devices, use_test_mesh
+from levanter.utils.mesh import create_mesh_from_axis_specs
 
 
 class _reset_abstract_mesh:
@@ -683,7 +682,7 @@ def sink_attention_ref_gpt_oss(
     sliding_window: int | None = None,
     start_q=0,
 ):
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     batch_size, num_queries, num_key_value_heads, num_key_value_groups, head_dim = query.shape
     batch_size, num_keys, num_key_value_heads, head_dim = key.shape
@@ -730,7 +729,7 @@ def sink_attention(
     block_size: int | None = None,
     inference: bool = True,
 ):
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     batch_size, num_queries, num_key_value_heads, num_key_value_groups, head_dim = query.shape
     _, num_keys, _, _ = key.shape
@@ -853,7 +852,7 @@ def test_attention_equivalence(
     sliding_window,
     start_q,
 ):
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     if num_queries > num_keys:
         pytest.skip("too many queries")
@@ -916,7 +915,7 @@ def test_attention_equivalence_jax_flash(
     block_size,
 ):
     """Make sure the JAX backend is tested"""
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     if num_queries > num_keys:
         pytest.skip("too many queries")

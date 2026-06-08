@@ -3,7 +3,7 @@
 
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
-from iris.cluster.constraints import AttributeValue, Constraint, ConstraintOp
+from iris.cluster.constraints import AttributeValue, Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.budget import compute_effective_band
 from iris.cluster.controller.ops.task import Assignment, finalize
@@ -11,15 +11,14 @@ from iris.cluster.controller.reconcile.policy import RESERVATION_HOLDER_JOB_NAME
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.task import resolve_task_failure_state as _resolve_task_failure_state
-from iris.cluster.controller.scheduler import JobRequirements, WorkerCapacity
-from iris.cluster.controller.scheduling_policy import (
+from iris.cluster.controller.scheduling.policy import (
     PreemptionCandidate,
-    RunningTaskInfo,
     _pending_tasks_with_jobs,
     _sort_pending_tasks_by_resolved_band,
     get_running_tasks_with_band_and_value,
     run_preemption_pass,
 )
+from iris.cluster.controller.scheduling.scheduler import JobRequirements, RunningTaskInfo, WorkerCapacity
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
@@ -1371,8 +1370,6 @@ def test_preempt_task_requeues_coscheduled_siblings_on_retry():
     bounced to PENDING so the job re-coschedules atomically. Without this, the
     retry could land on a different slice from the still-RUNNING siblings,
     splitting the SPMD mesh."""
-    from iris.cluster.constraints import WellKnownAttribute
-
     with make_controller_state() as state:
         for i in range(2):
             meta = make_worker_metadata()
@@ -1432,8 +1429,6 @@ def test_preempt_task_cascades_coscheduled_siblings():
     rolls back to PENDING with retry budget). The job then finalizes terminal
     with no task left active on a half-gone slice.
     """
-    from iris.cluster.constraints import WellKnownAttribute
-
     with make_controller_state() as state:
         # Register 2 workers with TPU attributes for coscheduling
         for i in range(2):

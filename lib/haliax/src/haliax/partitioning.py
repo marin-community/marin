@@ -583,7 +583,7 @@ def fsdp(fn: F, parameter_mapping: ResourceMapping, compute_mapping: ResourceMap
 def fsdp(parameter_mapping: ResourceMapping, compute_mapping: ResourceMapping) -> typing.Callable[[F], F]: ...
 
 
-def fsdp(*args, **kwargs):
+def fsdp(*args, **kwargs) -> Any:
     """
     A convenience wrapper around named_jit / pjit to encode the FSDP pattern. It's basically equivalent to this:
 
@@ -775,7 +775,7 @@ def round_axis_for_partitioning(axis: Axis, mapping: ResourceMapping | None = No
         return Axis(axis.name, new_size)
 
 
-def _get_mesh() -> Mesh | None:
+def _get_mesh() -> MeshLike | None:
     # Backward-compatible helper for callers that expect a concrete or abstract mesh.
     return _resolve_mesh()
 
@@ -902,6 +902,10 @@ def shard_map(
             out_shape = eqx.filter_eval_shape(almost_shmap(out_specs=PartitionSpec()), args, kwargs)
             this_out_specs = pspec_for(out_shape, axis_mapping)
 
+        # `inner` is `def inner(args, kwargs)`, so the shard_map'd callable takes the packed
+        # (args, kwargs) tuple+dict positionally; pyrefly mis-binds jax.shard_map's ParamSpec
+        # through functools.partial.
+        # pyrefly: ignore[bad-specialization, bad-argument-count]
         out = almost_shmap(out_specs=this_out_specs)(args, kwargs)
         return out
 

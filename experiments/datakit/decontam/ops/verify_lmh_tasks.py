@@ -41,6 +41,7 @@ import ast
 import logging
 import sys
 import traceback
+from collections import Counter
 from pathlib import Path
 
 from rigging.log_setup import configure_logging
@@ -119,7 +120,7 @@ def _probe_leaf(leaf_name: str, task) -> dict:
 
 def _verify_one_name(name: str) -> list[dict]:
     """Load ``name`` (a task or group), expand to leaves, probe each. Returns 1+ rows."""
-    from lm_eval.tasks import get_task_dict
+    from lm_eval.tasks import get_task_dict  # noqa: PLC0415  # optional dep: lm_eval
 
     try:
         task_dict = get_task_dict([name])
@@ -203,8 +204,6 @@ def main() -> int:
     print(f"report: {REPORT_PATH}")
     if fail:
         print("\nfailure modes (top error patterns):")
-        from collections import Counter
-
         patterns = Counter()
         for r in fail:
             key = r["error"].split(":")[0]

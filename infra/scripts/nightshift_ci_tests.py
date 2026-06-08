@@ -40,6 +40,12 @@ MIN_SLOW_SECONDS = 60.0
 # evidence of a real perf regression.
 MIN_SLOW_RUNS = 2
 
+# Suppress Claude Code's default "Co-Authored-By: Claude" / "Generated with
+# Claude Code" trailers on the commits and PRs the agent creates. AGENTS.md
+# forbids self-credit, and a prose instruction alone does not reliably override
+# the harness default — this setting does.
+NO_SELF_CREDIT_SETTINGS = ("--settings", '{"attribution":{"commit":"","pr":""}}')
+
 DURATION_RE = re.compile(r"(?P<seconds>\d+(?:\.\d+)?)s\s+(?:setup|call|teardown)\s+(?P<test>\S+::.+)$")
 FAILURE_RE = re.compile(r"(?:FAILED|ERROR)\s+(?P<test>\S+::.+?)(?:\s+-\s|$)")
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
@@ -377,7 +383,8 @@ determine:
 Treat `unstable` as a hypothesis from log evidence, not a proven flake. Confirm
 against the code and test intent before changing behavior.
 
-Read `AGENTS.md` for project conventions.
+Read `AGENTS.md` (especially its Testing section) and
+`.agents/skills/commit/SKILL.md` for project conventions, and follow them.
 
 ## Rules of Engagement
 
@@ -393,6 +400,13 @@ Read `AGENTS.md` for project conventions.
 - Do not weaken assertions or mark a useful test `slow` just to hide a problem.
 - Do not remove a test unless you can defend why its coverage is redundant,
   invalid, or better expressed elsewhere.
+- Never write tautological, trivial, or "slop" tests. A test must fail when the
+  behavior is wrong, not merely when the implementation changes. Do not add a
+  test for a thin wrapper around a library call, for a one-off script, or just
+  to have a test. If a change does not warrant a meaningful test, add none.
+- Never credit yourself. Do not add a `Co-Authored-By: Claude` or "Generated
+  with Claude Code" trailer to commits, and do not self-attribute in the PR
+  description.
 - If you modify code or tests, run `./infra/pre-commit.py --all-files --fix`
   and run the relevant `uv run pytest ...` targets.
 
@@ -417,6 +431,7 @@ def run_agent(prompt: str, root: Path) -> None:
             "--model=opus",
             "--print",
             "--dangerously-skip-permissions",
+            *NO_SELF_CREDIT_SETTINGS,
             "--tools=Read,Write,Edit,Glob,Grep,Bash",
             "--max-turns",
             "400",

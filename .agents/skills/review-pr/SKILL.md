@@ -16,7 +16,7 @@ Follow these steps precisely:
    - The PR is closed
    - The PR is a draft
    - The PR does not need code review (e.g. automated PR, trivial obviously-correct change)
-   - Claude has already commented on this PR (check `gh pr view <PR> --comments`) AND the review was NOT explicitly requested via comment (e.g. "claude review this"). When a maintainer explicitly requests a re-review, always proceed even if a prior review exists.
+   - Claude has already commented on this PR (check `gh pr view <PR> --comments`) AND a re-review was not explicitly requested. When a maintainer explicitly requests a re-review, always proceed even if a prior review exists.
 
    If any condition is true, stop. Note: still review Claude-generated PRs.
 

@@ -8,7 +8,7 @@ import logging
 import os
 import warnings
 from collections import defaultdict
-from typing import Callable, Generic, Mapping, Optional, Sequence, TypeVar
+from typing import Callable, Generic, Optional, Sequence, TypeVar
 
 import equinox as eqx
 import fsspec
@@ -27,9 +27,9 @@ import levanter.tracker
 from levanter.callbacks import StepInfo
 from levanter.data import AsyncDataset, DataLoader
 from levanter.data.text.examples import (
-    LOSS_IGNORE_LABEL,
     GrugLmExample,
     LabeledLmExample,
+    LossLabelSpec,
     named_lm_example_from_grug,
     named_lm_example_from_labeled,
 )
@@ -53,61 +53,6 @@ LossFnOutput = tuple[jax.Array, jax.Array, jax.Array]
 LabeledLossFnOutput = tuple[jax.Array, jax.Array, jax.Array]
 TagArray = Int[Array, "tag"]
 BatchedTagArray = Int[Array, "... tag"]
-
-
-@dataclasses.dataclass(frozen=True)
-class LossLabelSpec:
-    """Names exclusive loss labels and defines metric rollups.
-
-    `id_to_name` names the leaf span types stored in `LabeledLmExample.loss_labels`.
-    `aggregates` maps metric names to one or more leaf label ids, so callers can
-    report both specific span types and rollups such as assistant = assistant
-    text plus assistant tool calls. If aggregates is omitted, each non-ignored
-    label id gets its own metric.
-    """
-
-    id_to_name: Mapping[int, str]
-    aggregates: Mapping[str, Sequence[int]] | None = None
-    dont_score_label: int = LOSS_IGNORE_LABEL
-
-    def __post_init__(self):
-        for label_id, name in self.id_to_name.items():
-            if not isinstance(label_id, int):
-                raise TypeError(f"label id must be an int, got {label_id!r}")
-            if not isinstance(name, str):
-                raise TypeError(f"label name for id {label_id} must be a str, got {name!r}")
-        if len(set(self.id_to_name.values())) != len(self.id_to_name):
-            raise ValueError("label names must be unique")
-
-        for name, label_ids in self._aggregate_mapping().items():
-            if not isinstance(name, str):
-                raise TypeError(f"aggregate name must be a str, got {name!r}")
-            if not label_ids:
-                raise ValueError(f"aggregate {name!r} must include at least one label id")
-            if self.dont_score_label in label_ids:
-                raise ValueError(f"aggregate {name!r} includes dont_score_label={self.dont_score_label}")
-            for label_id in label_ids:
-                if not isinstance(label_id, int):
-                    raise TypeError(f"aggregate {name!r} label id must be an int, got {label_id!r}")
-                if label_id not in self.id_to_name:
-                    raise ValueError(f"aggregate {name!r} references unknown label id {label_id}")
-
-    def _aggregate_mapping(self) -> Mapping[str, Sequence[int]]:
-        if self.aggregates is not None:
-            return self.aggregates
-        return {
-            label_name: (label_id,)
-            for label_id, label_name in self.id_to_name.items()
-            if label_id != self.dont_score_label
-        }
-
-    @property
-    def aggregate_names(self) -> tuple[str, ...]:
-        return tuple(self._aggregate_mapping().keys())
-
-    @property
-    def aggregate_label_ids(self) -> tuple[tuple[int, ...], ...]:
-        return tuple(tuple(label_ids) for label_ids in self._aggregate_mapping().values())
 
 
 @dataclasses.dataclass
@@ -447,42 +392,6 @@ def cb_tagged_evaluate(
 
         if eval_ema:
             log_dict = eval_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
-            levanter.tracker.log(log_dict, step=step_count)
-
-        last_eval_step = step_count
-
-    return eval_callback
-
-
-def cb_labeled_evaluate(
-    evaluator: "LabeledEvaluator[Ex, M]",
-    *,
-    prefix: str = "labeled_eval",
-    eval_current: bool = True,
-    eval_model: bool = True,
-) -> Callable[[StepInfo], None]:
-    """Build a callback that logs labeled eval metrics for current and/or eval-mode model."""
-    if not eval_current and not eval_model:
-        raise ValueError("At least one of eval_current or eval_model should be True")
-
-    last_eval_step: int | None = None
-
-    def eval_callback(step: StepInfo, force: bool = False):
-        del force
-        nonlocal last_eval_step
-
-        step_count = step.step
-        if step_count < 0:
-            return
-        if last_eval_step == step_count:
-            return
-
-        if eval_current:
-            log_dict = eval_labeled_model(evaluator, step.model, prefix=prefix)
-            levanter.tracker.log(log_dict, step=step_count)
-
-        if eval_model:
-            log_dict = eval_labeled_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "eval_model"))
             levanter.tracker.log(log_dict, step=step_count)
 
         last_eval_step = step_count

@@ -7,7 +7,7 @@ In general, you should reach for the default steps before writing your own.
 
 ## Downloading
 
-::: experiments.defaults.default_download
+::: experiments.tokenization.default_download
 
 ## Exporting and Uploading
 
@@ -15,7 +15,7 @@ In general, you should reach for the default steps before writing your own.
 
 ## Tokenization
 
-::: experiments.defaults.default_tokenize
+::: experiments.tokenization.default_tokenize
 
 ## Training
 

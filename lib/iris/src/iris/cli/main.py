@@ -14,6 +14,8 @@ from rigging.config_discovery import resolve_cluster_config
 from rigging.log_setup import configure_logging
 
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
+from iris.cluster.backends.k8s.controller import configure_client_s3
+from iris.cluster.config import IrisConfig
 from iris.cluster.token_store import cluster_name_from_url, load_any_token, load_token, store_token
 from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
@@ -68,8 +70,6 @@ def create_client_token_provider(
 
 def _configure_client_s3(config) -> None:
     """Configure S3 env vars for fsspec access. Delegates to the canonical implementation."""
-    from iris.cluster.providers.k8s.controller import configure_client_s3
-
     configure_client_s3(config)
 
 
@@ -133,8 +133,6 @@ def iris(
 
     # Load config if provided
     if config_file:
-        from iris.cluster.config import IrisConfig
-
         iris_config = IrisConfig.load(config_file)
         ctx.obj["config"] = iris_config.proto
         ctx.obj["config_file"] = config_file

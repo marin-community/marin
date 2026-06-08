@@ -61,7 +61,7 @@ def test_eval_lm():
 
 
 @skip_if_no_torch
-def test_eval_lm_from_hf():
+def test_eval_lm_from_hf(local_gpt2_tokenizer_path):
     # just testing if eval_lm has a pulse
     # save a checkpoint
     model_config = LlamaConfig(
@@ -74,7 +74,9 @@ def test_eval_lm_from_hf():
 
     with tempfile.TemporaryDirectory() as f:
         try:
-            data_config, _ = tiny_test_corpus.construct_small_data_cache(f)
+            # Local tokenizer keeps the data config off the Hub (the cache holds
+            # random ids, so the tokenizer is only used for vocab sizing).
+            data_config, _ = tiny_test_corpus.construct_small_data_cache(f, tokenizer=local_gpt2_tokenizer_path)
             tok = data_config.the_tokenizer
             Vocab = haliax.Axis("vocab", len(tok))
             model = LlamaLMHeadModel.init(Vocab, model_config, key=jax.random.PRNGKey(0))

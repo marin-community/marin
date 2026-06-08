@@ -454,7 +454,7 @@ def assign_to_worker(
 
 
 @writes_to(tasks_table, task_attempts_table)
-def promote_to_direct_provider(
+def promote_for_dispatch(
     tx: Tx,
     task_id: JobName,
     attempt_id: int,

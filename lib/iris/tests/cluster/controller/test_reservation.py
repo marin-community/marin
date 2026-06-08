@@ -33,15 +33,7 @@ from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile.policy import RESERVATION_HOLDER_JOB_NAME
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.scheduler import (
-    DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
-    DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
-    JobRequirements,
-    Scheduler,
-    SchedulingContext,
-    worker_snapshot_from_row,
-)
-from iris.cluster.controller.scheduling_policy import (
+from iris.cluster.controller.scheduling.policy import (
     RESERVATION_TAINT_KEY,
     _find_reservation_ancestor,
     _reserved_job_ids,
@@ -57,6 +49,14 @@ from iris.cluster.controller.scheduling_policy import (
     job_requirements_from_job,
     preference_pass,
     read_reservation_claims,
+)
+from iris.cluster.controller.scheduling.scheduler import (
+    DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+    DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
+    JobRequirements,
+    Scheduler,
+    SchedulingContext,
+    worker_snapshot_from_row,
 )
 from iris.cluster.controller.task_state import task_row_can_be_scheduled
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, is_job_finished
@@ -553,7 +553,7 @@ def test_gate_satisfied_when_claims_meet_entries(ctrl):
     _claim_for_reservations(ctrl)
 
     claims = ctrl.reservation_claims
-    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults)
+    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults, claims)
     gated = apply_scheduling_gates(ctx, claims, max_tasks_per_job_per_cycle=0)
     # The task_id for a 1-replica job is jid.task(0)
     assert jid.task(0) in gated.schedulable_task_ids
@@ -570,7 +570,7 @@ def test_gate_unsatisfied_when_claims_below_entries(ctrl):
 
     # Only 1 worker available for 2 entries — gate must stay closed.
     claims = ctrl.reservation_claims
-    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults)
+    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults, claims)
     gated = apply_scheduling_gates(ctx, claims, max_tasks_per_job_per_cycle=0)
     assert jid.task(0) not in gated.schedulable_task_ids
 
@@ -587,7 +587,7 @@ def test_gate_satisfied_for_jobs_without_reservation(ctrl):
     jid = _submit_job(ctrl, "no-res", req)
 
     claims: dict[WorkerId, ReservationClaim] = {}
-    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults)
+    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults, claims)
     gated = apply_scheduling_gates(ctx, claims, max_tasks_per_job_per_cycle=0)
     assert jid.task(0) in gated.schedulable_task_ids
 
@@ -623,6 +623,7 @@ def test_no_claims_fast_path_matches_evolve(ctrl):
             ctrl._health,
             ctrl._worker_attrs,
             ctrl._config.user_budget_defaults,
+            no_claims,
             max_building_tasks=scheduler.max_building_tasks_per_worker,
         )
         gated = apply_scheduling_gates(ctx, no_claims, max_tasks_per_job_per_cycle=0)
@@ -1123,9 +1124,9 @@ def test_preference_pass_deducts_capacity():
     job_id = JobName.root("test-user", "res-job")
     task_id_0 = job_id.task(0)
     task_id_1 = job_id.task(1)
-    # Each task wants 4000m CPU; w1 has 8000m, so only one fits.
+    # Each task wants 5000m CPU; w1 has 8000m, so only one fits by capacity.
     req = JobRequirements(
-        req_cpu_millicores=4000,
+        req_cpu_millicores=5000,
         req_memory_bytes=1024**3,
         req_gpu_count=0,
         req_tpu_count=0,
@@ -1145,11 +1146,44 @@ def test_preference_pass_deducts_capacity():
 
     assignments = preference_pass(context, has_reservation, claims)
 
-    # First task assigned to w1; second stays pending (w1 already scheduled this cycle)
+    # First task consumes w1's capacity; the second no longer fits and stays pending.
     assert len(assignments) == 1
     assert assignments[0] == (task_id_0, WorkerId("w1"))
     assert task_id_0 not in context.pending_tasks
     assert task_id_1 in context.pending_tasks
+
+
+def test_preference_pass_advances_one_claimed_worker_per_cycle():
+    """Reservation placements spread one-per-claimed-worker, not packed onto the first.
+
+    Each claim is a reserved slot on a distinct worker. Even though both 1-CPU
+    tasks fit on a single 8-CPU worker by capacity (so the raised non-reservation
+    packing cap would allow stacking), preference_pass must advance one claimed
+    worker per cycle so reserved capacity is not anchored on one worker while
+    other claimed workers sit tainted but unused.
+    """
+    w1 = _make_worker("w1")
+    w2 = _make_worker("w2")
+    job_id = JobName.root("test-user", "res-job")
+    task_id_0 = job_id.task(0)
+    task_id_1 = job_id.task(1)
+    req = _make_job_requirements()
+    has_reservation = {job_id}
+    claims = {
+        WorkerId("w1"): ReservationClaim(job_id=job_id.to_wire(), entry_idx=0),
+        WorkerId("w2"): ReservationClaim(job_id=job_id.to_wire(), entry_idx=1),
+    }
+
+    context = _build_context_with_workers(
+        [w1, w2],
+        pending_tasks=[task_id_0, task_id_1],
+        jobs={job_id: req},
+    )
+
+    assignments = preference_pass(context, has_reservation, claims)
+
+    assert len(assignments) == 2
+    assert {wid for _, wid in assignments} == {WorkerId("w1"), WorkerId("w2")}
 
 
 # =============================================================================

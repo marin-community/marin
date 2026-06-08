@@ -109,7 +109,7 @@ Show the user a brief summary: what you incorporated (design vs spec), what you'
 
 Two actions, can run together. After this, the skill is done.
 
-1. **Commit and PR** via the `author-pr` skill. Branch `design/<slug>`. Single commit adding the `.agents/projects/<slug>/` directory (design.md, research.md, spec.md — all three always present). PR title `[Design] <slug>`. PR body is a short summary (3–6 sentences) — the framing paragraph plus the one-line gist — with explicit links to the three sibling files and a "Discussion welcome — see Open Questions in `design.md`" footer. Use absolute branch-rooted URLs for those links (relative paths 404 from PR descriptions — see "Linking conventions"). The full 1-pager lives in `design.md` on the branch; reviewers click through. Labels `design` and `agent-generated`.
+1. **Commit and PR** via the `commit` skill. Branch `design/<slug>`. Single commit adding the `.agents/projects/<slug>/` directory (design.md, research.md, spec.md — all three always present). PR title `[Design] <slug>`. PR body is a short summary (3–6 sentences) — the framing paragraph plus the one-line gist — with explicit links to the three sibling files and a "Discussion welcome — see Open Questions in `design.md`" footer. Use absolute branch-rooted URLs for those links (relative paths 404 from PR descriptions — see "Linking conventions"). The full 1-pager lives in `design.md` on the branch; reviewers click through. Labels `design` and `agent-generated`.
 
 2. **Discord ping.** Run `python scripts/ops/discord.py --channel code-review` with a 2-line message: PR title + URL + the framing paragraph (or a one-sentence compression). Send it; no need to confirm exact text unless asked.
 
@@ -129,4 +129,4 @@ Once both happen, you're done. Feedback lives on the PR; the user starts impleme
 - **The template and canonical worked example live in `.agents/projects/design-template.md`.** Read it before drafting. Don't use other docs in `.agents/projects/` as style references — they predate this skill.
 - `design` label: create it if missing (`gh label create design --description "Design doc / 1-pager for review"`).
 - If the user wants to skip a phase ("just write it, I know what I want"), honor that — but still produce the Open Questions section in `design.md`, still write `spec.md` (Phase 5), and still run the Stress-test (Phase 6).
-- Implementation is out of scope. After Publish the skill is done — hand off to `fix-issue` or `author-pr` for the work itself only if the user asks.
+- Implementation is out of scope. After Publish the skill is done — hand off to `fix-issue` or `commit` for the work itself only if the user asks.

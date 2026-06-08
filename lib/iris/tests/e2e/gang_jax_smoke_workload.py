@@ -23,8 +23,13 @@ from __future__ import annotations
 import math
 import os
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 from iris.runtime.jax_init import initialize_jax
+from jax.experimental import multihost_utils
+from jax.sharding import Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
 
 
 def log(msg: str) -> None:
@@ -37,12 +42,6 @@ def main() -> None:
 
     # Coordinator discovery + jax.distributed.initialize via the Iris registry.
     initialize_jax()
-
-    import jax
-    import jax.numpy as jnp
-    from jax.experimental import multihost_utils
-    from jax.sharding import Mesh, NamedSharding
-    from jax.sharding import PartitionSpec as P
 
     n_dev = jax.device_count()
     log(

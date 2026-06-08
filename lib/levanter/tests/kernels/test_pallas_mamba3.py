@@ -42,7 +42,6 @@ from levanter.kernels.pallas.mamba3.xla import mamba3_mimo_chunked_forward_ranke
 from levanter.kernels.pallas.ssd import intra_chunk_log_alpha_cumsum, local_log_alpha
 from tests.test_utils import skip_if_no_torch
 
-
 MAMBA3_MIMO_RANKED_PARITY_ATOL = 1e-4
 MAMBA3_MIMO_RANKED_PARITY_RTOL = 1e-4
 MAMBA3_ATTENTIONISH_PARITY_ATOL = 1e-4
@@ -194,7 +193,7 @@ def _headed_siso_attentionish_fixture(
 
 
 def _torch_logit(x):
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     eps = torch.finfo(x.dtype).eps
     x = x.clamp(min=eps, max=1 - eps)
@@ -203,8 +202,8 @@ def _torch_logit(x):
 
 def _upstream_mamba3_siso_step_ref_torch(Q, K, V, ADT, DT, Trap, Q_bias, K_bias, Angles):
     # Ported from state-spaces/mamba tests/ops/triton/test_mamba3_siso.py at a76afbd.
-    import torch
-    import torch.nn.functional as F
+    import torch  # noqa: PLC0415  # optional dep: torch
+    import torch.nn.functional as F  # noqa: PLC0415  # optional dep: torch
 
     batch, seqlen, nheads, headdim_qk = Q.shape
     headdim_v = V.shape[-1]
@@ -252,8 +251,8 @@ def _upstream_mamba3_siso_step_ref_torch(Q, K, V, ADT, DT, Trap, Q_bias, K_bias,
 
 def _upstream_mamba3_mimo_step_ref_torch(Q, K, V, ADT, DT, Trap, Q_bias, K_bias, Angles, MIMO_V, MIMO_O, Z, MIMO_Z):
     # Ported from state-spaces/mamba tests/ops/tilelang/test_mamba3_mimo.py at a76afbd.
-    import torch
-    import torch.nn.functional as F
+    import torch  # noqa: PLC0415  # optional dep: torch
+    import torch.nn.functional as F  # noqa: PLC0415  # optional dep: torch
 
     batch, seqlen, mimo_rank, nheads, headdim_qk = Q.shape
     headdim_v = V.shape[-1]
@@ -553,7 +552,7 @@ def test_mamba3_chunked_grad_matches_reference():
 
 @skip_if_no_torch
 def test_mamba3_siso_reference_matches_upstream_torch_step_reference():
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     dt, lam, a, b, c, x = _sample_chunked_inputs(
         leading_shape=(1,),
@@ -1276,7 +1275,7 @@ def test_mamba3_mimo_grad_matches_reference():
 
 @skip_if_no_torch
 def test_mamba3_mimo_reference_matches_upstream_torch_step_reference():
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     dt, lam, a, b, c, x_base, z_base, w_x, w_z, w_o = _sample_mimo_chunked_inputs(
         leading_shape=(),

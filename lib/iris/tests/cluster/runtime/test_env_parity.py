@@ -13,7 +13,7 @@ import json
 
 import pytest
 from google.protobuf import json_format as jf
-from iris.cluster.providers.k8s.tasks import PodConfig, _build_pod_manifest
+from iris.cluster.backends.k8s.tasks import PodConfig, _build_pod_manifest
 from iris.cluster.runtime.env import (
     IRIS_SLICE_COUNT,
     IRIS_TASKS_PER_SLICE,
