@@ -27,13 +27,17 @@ from iris.rpc import job_pb2
 FAIL_WORKERS_CHUNK_SIZE = 10
 
 
-@dataclass(frozen=True, slots=True)
-class WorkerAttributeParams:
-    key: str
-    value_type: str
-    str_value: str | None
-    int_value: int | None
-    float_value: float | None
+def _attribute_value_cols(value: str | int | float) -> dict:
+    """Encode a Python attribute value into the ``worker_attributes`` value columns.
+
+    Inverse of :func:`codec.attribute_value_from_row`: exactly one of
+    ``str_value`` / ``int_value`` / ``float_value`` is set, the rest NULL.
+    """
+    if isinstance(value, int):
+        return {"value_type": "int", "str_value": None, "int_value": int(value), "float_value": None}
+    if isinstance(value, float):
+        return {"value_type": "float", "str_value": None, "int_value": None, "float_value": float(value)}
+    return {"value_type": "str", "str_value": str(value), "int_value": None, "float_value": None}
 
 
 @dataclass(frozen=True)
@@ -62,15 +66,12 @@ def register(
     scale_group: str = "",
 ) -> None:
     """Register a new worker or refresh an existing one. Caller owns the transaction."""
-    attrs: list[WorkerAttributeParams] = []
+    attr_dict: dict[str, AttributeValue] = {}
+    attr_rows: list[dict] = []
     for key, proto in metadata.attributes.items():
-        value = AttributeValue.from_proto(proto).value
-        if isinstance(value, int):
-            attrs.append(WorkerAttributeParams(key, "int", None, int(value), None))
-        elif isinstance(value, float):
-            attrs.append(WorkerAttributeParams(key, "float", None, None, float(value)))
-        else:
-            attrs.append(WorkerAttributeParams(key, "str", str(value), None, None))
+        av = AttributeValue.from_proto(proto)
+        attr_dict[key] = av
+        attr_rows.append({"worker_id": worker_id, "key": key, **_attribute_value_cols(av.value)})
     now_ms = ts.epoch_ms()
     gpu_count = get_gpu_count(metadata.device)
     tpu_count = get_tpu_count(metadata.device)
@@ -116,29 +117,8 @@ def register(
     )
     cur.register(lambda: health.register(worker_id, now_ms=now_ms))
     cur.execute(delete(worker_attributes_table).where(worker_attributes_table.c.worker_id == worker_id))
-    if attrs:
-        cur.execute(
-            insert(worker_attributes_table),
-            [
-                {
-                    "worker_id": worker_id,
-                    "key": attr.key,
-                    "value_type": attr.value_type,
-                    "str_value": attr.str_value,
-                    "int_value": attr.int_value,
-                    "float_value": attr.float_value,
-                }
-                for attr in attrs
-            ],
-        )
-    attr_dict: dict[str, AttributeValue] = {}
-    for attr in attrs:
-        if attr.value_type == "int":
-            attr_dict[attr.key] = AttributeValue(int(attr.int_value))
-        elif attr.value_type == "float":
-            attr_dict[attr.key] = AttributeValue(float(attr.float_value))
-        else:
-            attr_dict[attr.key] = AttributeValue(str(attr.str_value or ""))
+    if attr_rows:
+        cur.execute(insert(worker_attributes_table), attr_rows)
     worker_attrs.set(cur, worker_id, attr_dict)
     cur.register(
         lambda: log_event(
@@ -171,12 +151,12 @@ def fail(
     if not worker_ids:
         return WorkerFailureBatchResult(removed_workers=[])
     with db.read_snapshot() as snap:
-        _liveness = health.all()
-        _active_ids = sorted(
+        liveness = health.all()
+        active_ids = sorted(
             {
                 WorkerId(str(wid))
                 for wid in worker_ids
-                if (e := _liveness.get(WorkerId(str(wid)))) is not None and e.active
+                if (e := liveness.get(WorkerId(str(wid)))) is not None and e.active
             }
         )
         rows = (
@@ -184,9 +164,9 @@ def fail(
                 select(*reads.WORKER_DETAIL_COLS).where(
                     workers_table.c.worker_id.in_(bindparam("worker_ids", expanding=True))
                 ),
-                {"worker_ids": _active_ids},
+                {"worker_ids": active_ids},
             ).all()
-            if _active_ids
+            if active_ids
             else []
         )
     failures: list[tuple[WorkerId, str | None, str]] = [(row.worker_id, row.address, reason) for row in rows]
@@ -238,9 +218,6 @@ def _apply_worker_failures_chunk(
     Per-chunk shape: one closed snapshot, one :class:`Overlay`, then
     ``writes.remove_worker`` after ``commit_effects``.
     """
-    if not failures:
-        return
-
     worker_ids = [wid for wid, _, _ in failures]
     # Seeding by worker closes every active task on the failed workers (plus
     # their jobs' peer/descendant graph), so the batch derives its per-worker

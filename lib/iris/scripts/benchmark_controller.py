@@ -49,7 +49,7 @@ import click
 import uvicorn
 import yaml
 from connectrpc.request import RequestContext
-from iris.cluster.controller import direct_provider, reads
+from iris.cluster.controller import reads
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
     Controller,
@@ -57,6 +57,7 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.db import Tx as _Tx
+from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.managed_thread import ThreadContainer
 
@@ -64,9 +65,11 @@ from iris.managed_thread import ThreadContainer
 if not hasattr(_Tx, "fetchall"):
     _Tx.fetchall = lambda self, stmt, params=None: self.execute(stmt, params).all()
     _Tx.fetchone = lambda self, stmt, params=None: self.execute(stmt, params).first()
+from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.controller import ops
+from iris.cluster.controller.backend import BackendReconcileInput, BackendReconcileResult, PlacementOwner
 from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.ops.worker import apply_reconcile_observations as apply_reconcile
+from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
 from iris.cluster.controller.reads import SchedulableWorker, healthy_active_workers_with_attributes  # noqa: F401
 from iris.cluster.controller.reconcile.worker import (
@@ -74,13 +77,13 @@ from iris.cluster.controller.reconcile.worker import (
     ReconcileResult,
     ReconcileRow,
     WorkerReconcilePlan,
-    reconcile_workers,
+    build_reconcile_plans,
 )
-from iris.cluster.controller.scheduler import Scheduler
-from iris.cluster.controller.scheduling_policy import (
+from iris.cluster.controller.scheduling.policy import (
     _pending_tasks_with_jobs as _schedulable_tasks,
 )
-from iris.cluster.controller.scheduling_policy import compute_demand_entries
+from iris.cluster.controller.scheduling.policy import compute_demand_entries
+from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
     endpoints_table,
     job_config_table,
@@ -96,7 +99,6 @@ from iris.cluster.controller.service import (
     _worker_roster,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -145,30 +147,45 @@ def _marin_remote_state_dir() -> str:
 
 
 class _FakeProvider:
-    """Minimal TaskProvider that satisfies Controller's wiring without making
-    real cluster calls. Mirrors tests/cluster/controller/conftest.py:FakeProvider.
+    """Minimal IRIS-placement TaskBackend that satisfies Controller's wiring
+    without making real cluster calls. Mirrors
+    tests/cluster/controller/conftest.py:FakeProvider.
 
     Used in combination with ``dry_run=True`` so the polling loop's reconcile
     short-circuits before it would ever call the provider — but we still need a
     real provider object to satisfy the constructor's type contract.
     """
 
-    def get_process_status(self, worker_id, address, request):
+    name = "worker"
+    placement = PlacementOwner.IRIS_CONTROLLER
+    manages_capacity = False
+
+    def get_process_status(self, target, request):
         raise RuntimeError("fake provider")
 
     def on_worker_failed(self, worker_id, address):
         pass
 
-    def profile_task(self, address, request, timeout_ms):
+    def set_log_sink(self, *args, **kwargs):
+        pass
+
+    def capacity(self):
+        return None
+
+    def profile_task(self, target, request, timeout_ms):
         raise RuntimeError("fake provider")
 
     def ping_workers(self, workers):
         return []
 
-    def reconcile_workers(self, plans, addresses):
+    def reconcile(self, batch):
         # Same shape the test-suite FakeProvider returns. Only exercised if
         # someone disables dry_run on the harness.
-        return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]
+        return BackendReconcileResult(
+            worker_results=[
+                ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in batch.plans
+            ]
+        )
 
     def close(self):
         pass
@@ -510,8 +527,7 @@ def _build_reconcile_inputs(
 ) -> tuple[dict[WorkerId, WorkerReconcilePlan], list[ReconcileResult]]:
     """Per active worker: a plan listing its attempts as desired plus a result
     reporting each RUNNING. Drives the production reconcile-observation verb
-    (``ops.worker.apply_reconcile_observations``) instead of the retired
-    heartbeat path.
+    (``ops.worker.apply_reconcile``) instead of the retired heartbeat path.
     """
     health = WorkerHealthTracker()
     _seed_health(db, health)
@@ -1184,7 +1200,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
         min_time_s=1.0,
     )
 
-    # ---- queue_assignments WRITE path ----
+    # ---- assign WRITE path ----
     write_db = clone_db(db)
     write_txns = ControllerTestState(write_db)
     try:
@@ -1243,10 +1259,10 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
             def _do_queue():
                 with write_db.transaction() as cur:
-                    ops.task.queue_assignments(cur, sample_assignments, health=write_txns._health)
+                    ops.task.assign(cur, sample_assignments, health=write_txns._health)
 
             bench(
-                f"Scheduling: queue_assignments (n={len(sample_assignments)} tasks, WRITE)",
+                f"Scheduling: assign (n={len(sample_assignments)} tasks, WRITE)",
                 _do_queue,
                 reset=_reset,
             )
@@ -1369,19 +1385,19 @@ def benchmark_polling(db: ControllerDB) -> None:
 
         def _template_first():
             # Fresh cache to defeat the LRU cache on every call.
-            cold_cache = direct_provider.RunTemplateCache()
+            cold_cache = dispatch.RunTemplateCache()
             with db.read_snapshot() as snap:
-                direct_provider.run_request_template(cold_cache, snap, first_job)
+                dispatch.run_request_template(cold_cache, snap, first_job)
 
         bench("Polling: run_request_template (cold, per-job build)", _template_first)
 
         # Warm cache: same job repeatedly.
         with db.read_snapshot() as snap:
-            direct_provider.run_request_template(txns._run_template_cache, snap, first_job)
+            dispatch.run_request_template(txns._run_template_cache, snap, first_job)
 
         def _template_warm():
             with db.read_snapshot() as snap:
-                direct_provider.run_request_template(txns._run_template_cache, snap, first_job)
+                dispatch.run_request_template(txns._run_template_cache, snap, first_job)
 
         bench("Polling: run_request_template (cached hit)", _template_warm)
 
@@ -1672,7 +1688,7 @@ def _run_apply_under_contention(
     endpoint_threads: int = 0,
     duration_s: float = 6.0,
 ) -> None:
-    """Run apply_reconcile_observations on a victim thread while configurable
+    """Run apply_reconcile on a victim thread while configurable
     write storms hammer the same DB. Reports p50/p95/p99/max of the victim.
     """
     _active_states_contend = list(ACTIVE_TASK_STATES)
@@ -1696,7 +1712,7 @@ def _run_apply_under_contention(
             while not stop.is_set():
                 t0 = time.perf_counter()
                 with write_db.transaction() as cur:
-                    ops.worker.apply_reconcile_observations(
+                    ops.worker.apply_reconcile(
                         cur,
                         plans_by_worker,
                         results,
@@ -1734,7 +1750,7 @@ def _run_apply_under_contention(
                 base = f"bench-contend-{uuid.uuid4().hex[:8]}"
                 for i in range(register_burst):
                     with write_db.transaction() as cur:
-                        ops.worker.register_or_refresh(
+                        ops.worker.register(
                             cur,
                             worker_id=WorkerId(f"{base}-{i}"),
                             address=f"tcp://{base}-{i}:1234",
@@ -1782,7 +1798,7 @@ def _run_apply_under_contention(
 
 
 def benchmark_apply_contention(db: ControllerDB) -> None:
-    """Reproduce the production tail when apply_reconcile_observations contends
+    """Reproduce the production tail when apply_reconcile contends
     with provider-sync failure storms and other write RPCs.
     """
     plans_by_worker, results = _build_reconcile_inputs(db)
@@ -2153,9 +2169,9 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
 #
 #     1. ``_snapshot_reconcile_inputs`` (DB read + per-job RunTaskRequest
 #        template build).
-#     2. ``reconcile_workers(inputs)`` (pure-compute: copies the spec proto
+#     2. ``build_reconcile_plans(inputs)`` (pure-compute: copies the spec proto
 #        into a ``DesiredAttempt`` for every ASSIGNED row).
-#     3. ``WorkerProvider.reconcile_workers(plans, addresses)`` (async fanout
+#     3. ``RpcTaskBackend.reconcile(BackendReconcileInput(...))`` (async fanout
 #        over Connect RPC to a single in-process fake worker that echoes
 #        observations back).
 #     4. ``apply_reconcile`` (one DB transaction fanning all per-worker
@@ -2256,7 +2272,7 @@ def _build_synthetic_reconcile_state(
             for i in range(chunk_start, min(chunk_start + chunk, num_workers)):
                 wid = WorkerId(f"w-{i:05d}")
                 worker_ids.append(wid)
-                ops.worker.register_or_refresh(
+                ops.worker.register(
                     cur,
                     worker_id=wid,
                     address=worker_address,
@@ -2286,7 +2302,7 @@ def _build_synthetic_reconcile_state(
             for i, tid in enumerate(slice_tasks)
         ]
         with db.transaction() as cur:
-            ops.task.queue_assignments(cur, assignments, health=txns._health)
+            ops.task.assign(cur, assignments, health=txns._health)
 
     return SyntheticReconcileState(
         db=db, txns=txns, health=health, job_id=job_id, worker_ids=worker_ids, task_ids=task_ids, address=worker_address
@@ -2467,9 +2483,7 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
             if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
                 continue
             if row.job_id not in templates_by_job:
-                templates_by_job[row.job_id] = direct_provider.run_request_template(
-                    txns._run_template_cache, snap, row.job_id
-                )
+                templates_by_job[row.job_id] = dispatch.run_request_template(txns._run_template_cache, snap, row.job_id)
 
     rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in worker_ids}
     for row in rows:
@@ -2489,14 +2503,14 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
     return inputs, addresses
 
 
-def _one_reconcile_tick(state: SyntheticReconcileState, provider: WorkerProvider) -> tuple[float, float, float, float]:
+def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend) -> tuple[float, float, float, float]:
     """Run one full reconcile tick. Returns (snapshot, compute, rpc, apply) ms."""
     t0 = time.perf_counter()
     inputs, addresses = _snapshot_reconcile_inputs(state)
     t1 = time.perf_counter()
-    plans = reconcile_workers(inputs)
+    plans = build_reconcile_plans(inputs)
     t2 = time.perf_counter()
-    results = provider.reconcile_workers(plans, addresses)
+    results = provider.reconcile(BackendReconcileInput(plans=plans, worker_addresses=addresses)).worker_results
     t3 = time.perf_counter()
     plan_by_worker = {p.worker_id: p for p in plans}
     now = Timestamp.now()
@@ -2515,7 +2529,7 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: WorkerProvider
 
 def _measure_full_tick(
     state: SyntheticReconcileState,
-    provider: WorkerProvider,
+    provider: RpcTaskBackend,
     *,
     n_iters: int,
 ) -> tuple[_StageTimings, _StageTimings]:
@@ -2550,15 +2564,15 @@ def _measure_full_tick(
 
 
 def _measure_compute_only(state: SyntheticReconcileState, *, n_iters: int) -> tuple[list[float], int]:
-    """Time just ``reconcile_workers`` (pure compute) — no RPC, no DB transaction."""
+    """Time just ``build_reconcile_plans`` (pure compute) — no RPC, no DB transaction."""
     inputs, _addresses = _snapshot_reconcile_inputs(state)
-    plans = reconcile_workers(inputs)  # warmup
+    plans = build_reconcile_plans(inputs)  # warmup
     total_bytes = _serialized_bytes(plans)
 
     times: list[float] = []
     for _ in range(n_iters):
         t0 = time.perf_counter()
-        _plans = reconcile_workers(inputs)
+        _plans = build_reconcile_plans(inputs)
         times.append((time.perf_counter() - t0) * 1000)
     return times, total_bytes
 
@@ -2613,7 +2627,7 @@ def _run_reconcile_scenario(
             print(f"  build:                       {build_s * 1000:.0f} ms")
 
             stub_factory = RpcWorkerStubFactory()
-            provider = WorkerProvider(stub_factory=stub_factory, parallelism=parallelism)
+            provider = RpcTaskBackend(stub_factory=stub_factory, parallelism=parallelism)
             try:
                 compute_ms, total_bytes = _measure_compute_only(state, n_iters=n_iters)
                 per_worker_avg = total_bytes / max(1, len(state.worker_ids))
@@ -2621,7 +2635,7 @@ def _run_reconcile_scenario(
                     f"  ReconcileRequest payload:    total={_human_bytes(total_bytes)}  "
                     f"avg/worker={_human_bytes(int(per_worker_avg))}"
                 )
-                print("  " + _summarize_reconcile("compute (reconcile_workers)", compute_ms))
+                print("  " + _summarize_reconcile("compute (build_reconcile_plans)", compute_ms))
 
                 dispatch, steady = _measure_full_tick(state, provider, n_iters=n_iters)
                 print("  -- dispatch tick (all ASSIGNED, full spec on the wire) --")

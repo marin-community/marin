@@ -9,6 +9,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -17,6 +20,7 @@ jobs:
       pull-requests: read
     outputs:
       should_run: ${{ steps.filter.outputs.relevant }}
+      check_user_mode: ${{ steps.filter.outputs.user_mode }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4
@@ -24,13 +28,26 @@ jobs:
         with:
           filters: |
             relevant:
-              - 'rust/dupekit/**'
-              - 'uv.lock'
+              # dupekit is a standalone uv project, NOT a root workspace member
+              # (see [tool.uv.workspace] in the root pyproject.toml). Its tests
+              # run `uv run --frozen` against lib/dupekit/uv.lock — already
+              # covered by lib/dupekit/** below — so the root uv.lock does not
+              # affect this suite and must not gate it. The other unit workflows
+              # (iris/zephyr/marin/...) DO resolve against the root lock, which
+              # is why they keep 'uv.lock' here and dupekit does not.
+              - 'lib/dupekit/**'
               - '.github/workflows/dupekit-unit.yaml'
+            # The dev-mode guard below inspects the root pyproject.toml, where a
+            # leaked editable rust source (written by scripts/rust_mode.py dev)
+            # lands — it never rewrites uv.lock. Gate the guard on that file
+            # directly so it runs whenever its target changes, without dragging
+            # the expensive test/cargo jobs onto every root-pyproject edit.
+            user_mode:
+              - 'pyproject.toml'
 
   check-user-mode:
     needs: changes
-    if: needs.changes.outputs.should_run == 'true'
+    if: needs.changes.outputs.should_run == 'true' || needs.changes.outputs.check_user_mode == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
@@ -39,8 +56,10 @@ jobs:
 
       - name: Ensure pyproject.toml is in user mode
         run: |
-          if grep -q 'dupekit = { path' pyproject.toml; then
-            echo "ERROR: pyproject.toml has dev-mode dupekit source. Run 'make rust-user' before committing."
+          # The RUST-DEV SOURCES block governs both native packages (dupekit and
+          # finelog); either editable path source committed means dev mode leaked.
+          if grep -qE 'marin-(dupekit|finelog) = \{ path' pyproject.toml; then
+            echo "ERROR: pyproject.toml has a dev-mode rust source. Run 'python scripts/rust_mode.py user' before committing."
             exit 1
           fi
 
@@ -65,11 +84,11 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          cache-dependency-glob: "rust/dupekit/uv.lock"
+          cache-dependency-glob: "lib/dupekit/uv.lock"
 
       - name: Test dupekit
         run: |
-          cd rust/dupekit && uv run --frozen --group test pytest tests/ -v
+          cd lib/dupekit && uv run --frozen --group test pytest tests/ -v
 
   rust-checks:
     needs: changes
@@ -82,8 +101,8 @@ jobs:
         with:
           components: clippy, rustfmt
       - name: cargo fmt
-        run: cargo fmt --manifest-path rust/dupekit/Cargo.toml -- --check
+        run: cargo fmt --manifest-path lib/dupekit/rust/Cargo.toml -- --check
       - name: cargo clippy
-        run: cargo clippy --manifest-path rust/dupekit/Cargo.toml -- -D warnings
+        run: cargo clippy --manifest-path lib/dupekit/rust/Cargo.toml -- -D warnings
       - name: cargo test
-        run: cargo test --manifest-path rust/dupekit/Cargo.toml
+        run: cargo test --manifest-path lib/dupekit/rust/Cargo.toml

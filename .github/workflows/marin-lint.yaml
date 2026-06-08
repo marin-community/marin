@@ -9,6 +9,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   marin-lint:
     runs-on: ubuntu-latest
@@ -28,6 +31,14 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '22'
+
+    # Pyrefly type-checks against real installed third-party types
+    # (python-interpreter-path = .venv/bin/python in pyproject.toml), so the
+    # workspace must be synced first. This is the cpu profile the baseline and
+    # the ignore-missing-imports list are derived against — keep it in sync with
+    # both if you change the extras here.
+    - name: Sync workspace for type checking
+      run: uv sync --all-packages --extra=cpu --no-default-groups --frozen
 
     - name: Run pre-commit checks
       run: ./infra/pre-commit.py --all-files

@@ -4,7 +4,7 @@
 
 import pytest
 from connectrpc.errors import ConnectError
-from iris.cluster.providers.local.cluster import LocalCluster
+from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider

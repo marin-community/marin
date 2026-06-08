@@ -2,6 +2,7 @@
 # Usage: uv run iris --cluster=marin cluster start
 
 log_server_config: marin
+dashboard_url: https://iris.oa.dev
 
 platform:
   label_prefix: marin
@@ -46,6 +47,7 @@ controller:
 tpu_pools:
   # v5e (v5litepod) — europe-west4-b, us-west4-a
   # Per-VM: ct5lp-hightpu-4t — 112 vCPU, 192 GiB RAM
+  # max_slices capped to the v5e serving quota (us-west4-a: 128 cores).
   v5e-serving:
     family: v5e
     zones: [europe-west4-b, us-west4-a]
@@ -56,8 +58,8 @@ tpu_pools:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
         runtime_version: v2-alpha-tpuv5-lite
     sizes:
-      4:   { buffer_slices: 2, max_slices: 1024 }
-      8:   { buffer_slices: 2, max_slices: 512 }
+      4:   { buffer_slices: 2, max_slices: 32 }
+      8:   { buffer_slices: 2, max_slices: 16 }
 
   v5e-preemptible:
     family: v5e

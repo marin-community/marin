@@ -3,36 +3,20 @@ name: "Ops - Claude Review"
 on:
   pull_request:
     types: [opened, ready_for_review, reopened]
-  issue_comment:
-    # NOTE: there's no PR comment specific event, so instead we need to check all comments and filter in the job.
-    # This is annoying and wasteful, but afaiu there's no better way in GH Actions.
-    types: [created]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   review:
+    # Runs on non-draft PRs opened/reopened/marked-ready by a writer.
     if: >-
+      github.event.pull_request.draft == false &&
       (
-        github.event_name == 'pull_request' &&
-        github.event.pull_request.draft == false &&
-        (
-          github.event.pull_request.author_association == 'OWNER' ||
-          github.event.pull_request.author_association == 'MEMBER' ||
-          github.event.pull_request.author_association == 'COLLABORATOR'
-        )
-      ) ||
-      (
-        github.event_name == 'issue_comment' &&
-        github.event.issue.pull_request &&
-        contains(github.event.comment.body, 'claude review this') &&
-        (
-          github.event.comment.author_association == 'OWNER' ||
-          github.event.comment.author_association == 'MEMBER' ||
-          github.event.comment.author_association == 'COLLABORATOR'
-        )
+        github.event.pull_request.author_association == 'OWNER' ||
+        github.event.pull_request.author_association == 'MEMBER' ||
+        github.event.pull_request.author_association == 'COLLABORATOR'
       )
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -51,13 +35,72 @@ jobs:
         uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa  # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
-          track_progress: ${{ github.event_name == 'pull_request' }}
+          track_progress: true
           prompt: |
-            /review-pr --comment ${{ github.event.pull_request.number || github.event.issue.number }}
-
-            ${{ github.event_name == 'issue_comment' && format('EXTRA INSTRUCTIONS FROM COMMENT:\n{0}', github.event.comment.body) || '' }}
+            /review-pr --comment ${{ github.event.pull_request.number }}
           claude_args: |
             --model opus
             --max-turns 200
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh pr review:*)"
+          allowed_bots: 'claude[bot]'
+
+  # Runs in parallel with `review`: the advisory infra/lint/ catalog review
+  # (`pre-commit.py --review`, the CI counterpart of the commit skill's local
+  # step 6). It posts its findings as `file:line` inline comments — separate from
+  # and complementary to the high-level correctness review above, which
+  # deliberately skips lint-catchable issues.
+  lint-review:
+    if: >-
+      github.event.pull_request.draft == false &&
+      (
+        github.event.pull_request.author_association == 'OWNER' ||
+        github.event.pull_request.author_association == 'MEMBER' ||
+        github.event.pull_request.author_association == 'COLLABORATOR'
+      )
+    runs-on: ubuntu-latest
+    # The review fans out one headless agent per lane (each capped at 600s) plus a
+    # composer; allow generous headroom over the high-level review's budget.
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      # Use the DEFAULT pull_request checkout (the immutable merge ref), not an
+      # explicit head ref — same pattern as the `review` job, and it reviews what
+      # would actually land. Combined with pull_request-only + the author gate
+      # (fork PRs get no secrets), this avoids the untrusted-checkout sink. Drop
+      # the git token so executed PR code cannot reuse it. fetch-depth 0 gives the
+      # history the merge-base diff needs.
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # origin/main is the merge base the review diffs against. Anonymous fetch
+      # (public repo); needs no token, which is why persist-credentials can be off.
+      - name: Fetch main for the merge base
+        run: git fetch --no-tags origin main:refs/remotes/origin/main
+
+      # pre-commit.py is a `uv run --script` entry point; uv must be on PATH for
+      # the agent's Bash to invoke it (and for the nested per-lane claude agents).
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: Run Lint Review
+        uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa  # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          prompt: |
+            /lint-review --comment ${{ github.event.pull_request.number }}
+          claude_args: |
+            --model opus
+            --max-turns 150
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(./infra/pre-commit.py:*),Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git merge-base:*),Bash(git rev-parse:*),Bash(git status:*)"
           allowed_bots: 'claude[bot]'

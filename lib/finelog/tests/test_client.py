@@ -24,7 +24,7 @@ from finelog.errors import (
 )
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
-from finelog.store.schema import Column, Schema, schema_to_proto
+from finelog.schema import Column, Schema, schema_to_proto
 
 
 class FakeLogClient:
@@ -423,6 +423,19 @@ def test_get_table_registration_conflict_drops_batch(tracked_clients, monkeypatc
         client.close()
 
 
+def test_format_exc_summary_surfaces_connect_detail():
+    """A ConnectError's server detail must survive into the log summary.
+
+    A bare ``FAILED_PRECONDITION`` is undiagnosable; the schema-conflict detail
+    it carries (which column, which mismatch) is the actionable part.
+    """
+    summary = log_client_mod._format_exc_summary(
+        ConnectError(Code.FAILED_PRECONDITION, 'column "mem_bytes": type mismatch registered=int64 requested=float64')
+    )
+    assert "FAILED_PRECONDITION" in summary
+    assert 'column "mem_bytes": type mismatch registered=int64 requested=float64' in summary
+
+
 def test_get_table_retries_transient_registration_failure(tracked_clients, monkeypatch):
     """A retryable registration failure is retried on the flush thread.
 
@@ -578,7 +591,7 @@ def test_table_overflow_drops_oldest(tracked_clients, caplog):
         client.close()
 
 
-def test_schema_from_dataclass_basic():
+def test_schema_from_dataclass_all_columns_nullable():
     @dataclass
     class Stat:
         worker_id: str
@@ -590,8 +603,10 @@ def test_schema_from_dataclass_basic():
     assert s.key_column == ""
     names = [c.name for c in s.columns]
     assert names == ["worker_id", "timestamp_ms", "mem_bytes", "note"]
-    note_col = next(c for c in s.columns if c.name == "note")
-    assert note_col.nullable is True
+    # Every column is nullable regardless of whether the field is Optional:
+    # finelog adopts compacted segments as all-nullable, so a non-nullable
+    # registration would conflict with its own adopted schema and wedge writes.
+    assert all(c.nullable for c in s.columns)
 
 
 def test_schema_from_dataclass_classvar_key():

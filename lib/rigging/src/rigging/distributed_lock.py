@@ -206,6 +206,8 @@ class GcsLease(DistributedLease):
             # Blob was deleted between get_blob and download_as_string
             logger.debug("[%s] Lock blob %s disappeared during read (race)", self.worker_id, self.lock_path)
             return (0, None)
+        # get_blob loaded the resource from the server, so generation is populated.
+        assert blob.generation is not None
         return (blob.generation, Lease(**data))
 
     def _write(self, lease: Lease, if_generation_match: int) -> None:

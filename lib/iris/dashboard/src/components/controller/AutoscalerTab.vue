@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { RouterLink } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
-import { SLICE_STATE_STYLES, SLICE_BADGE_ORDER, CATEGORICAL_COLORS, vmStateToName } from '@/types/status'
+import { SLICE_STATE_STYLES, SLICE_BADGE_ORDER, CATEGORICAL_COLORS } from '@/types/status'
 import type {
   GetAutoscalerStatusResponse,
   GetSchedulerStateResponse,
@@ -11,15 +10,14 @@ import type {
   AutoscalerStatus,
   ScaleGroupStatus,
   SliceInfo,
-  VmInfo,
   GroupRoutingStatus,
   UnmetDemand,
   AutoscalerAction,
   ProtoTimestamp,
 } from '@/types/rpc'
-import { timestampMs, formatRelativeTime, formatDuration } from '@/utils/formatting'
-import StatusBadge from '@/components/shared/StatusBadge.vue'
-import MetricCard from '@/components/shared/MetricCard.vue'
+import { timestampMs, formatRelativeTime } from '@/utils/formatting'
+import type { SliceJob } from '@/utils/slices'
+import SliceList from '@/components/controller/SliceList.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import LoadingSpinner from '@/components/shared/LoadingSpinner.vue'
@@ -29,8 +27,12 @@ import LoadingSpinner from '@/components/shared/LoadingSpinner.vue'
 const { data, loading, error, refresh: refreshAutoscaler } = useControllerRpc<GetAutoscalerStatusResponse>('GetAutoscalerStatus')
 const { data: schedulerData, refresh: refreshScheduler } = useControllerRpc<GetSchedulerStateResponse>('GetSchedulerState')
 
+// Updated on every refresh so relative slice ages advance with the data.
+const nowMs = ref(Date.now())
+
 async function refresh() {
   await Promise.all([refreshAutoscaler(), refreshScheduler()])
+  nowMs.value = Date.now()
 }
 useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
 onMounted(refresh)
@@ -81,20 +83,6 @@ function taskIdToJob(taskId: string): string {
 function isReservationEntry(entry: { taskIds?: string[] }): boolean {
   const taskIds = entry.taskIds ?? []
   return taskIds.length > 0 && RESERVATION_RE.test(taskIds[0])
-}
-
-function formatIdleSince(lastActive?: ProtoTimestamp): string {
-  const ms = timestampMs(lastActive)
-  if (!ms) return 'never active'
-  const elapsed = Date.now() - ms
-  if (elapsed < 60000) return `${Math.floor(elapsed / 1000)}s`
-  if (elapsed < 3600000) return `${Math.floor(elapsed / 60000)}m`
-  return `${Math.floor(elapsed / 3600000)}h ${Math.floor((elapsed % 3600000) / 60000)}m`
-}
-
-function formatIdleThreshold(ms: number): string {
-  if (!ms) return '?'
-  return ms >= 60000 ? `${Math.floor(ms / 60000)}m` : `${Math.floor(ms / 1000)}s`
 }
 
 // Slice state badge styling and order are imported from @/types/status so the
@@ -474,10 +462,6 @@ function sliceIdShort(sliceId?: string): string {
   return sliceId.length > 24 ? `${sliceId.slice(0, 20)}...` : sliceId
 }
 
-function idleThresholdMs(groupName: string): number {
-  return parseInt(groupIndex.value[groupName]?.idleThresholdMs ?? '0', 10)
-}
-
 // -- Fleet overview --
 
 interface RegionCount {
@@ -519,28 +503,25 @@ const workerBands = computed<Map<string, Map<string, number>>>(() => {
   return map
 })
 
-/** One job's worth of tasks running on a single VM. */
-interface VmJobChip {
-  jobId: string
-  userId: string
-  count: number
-}
-
-/** Map workerId → list of (jobId, userId, count) chips, one per distinct job. */
-const workerJobs = computed<Map<string, VmJobChip[]>>(() => {
-  const map = new Map<string, VmJobChip[]>()
+/**
+ * Map worker_id → jobs running on that host (one entry per distinct job).
+ * SliceList aggregates these across a slice's hosts so a co-scheduled job that
+ * spans every host shows once, not once per host.
+ */
+const sliceWorkerJobs = computed<Map<string, SliceJob[]>>(() => {
+  const map = new Map<string, SliceJob[]>()
   for (const bucket of (schedulerData.value?.runningBuckets ?? []) as RunningTaskBucket[]) {
     if (!bucket.workerId || !bucket.jobId) continue
     if (!map.has(bucket.workerId)) map.set(bucket.workerId, [])
-    map.get(bucket.workerId)!.push({ jobId: bucket.jobId, userId: bucket.userId, count: bucket.count })
+    map.get(bucket.workerId)!.push({
+      jobId: bucket.jobId,
+      userId: bucket.userId,
+      taskCount: bucket.count,
+      hostCount: 1,
+    })
   }
   return map
 })
-
-function jobsForVm(vm: VmInfo): VmJobChip[] {
-  if (!vm.workerId) return []
-  return workerJobs.value.get(vm.workerId) ?? []
-}
 
 /** Extract chip type + size from scale group name.
  *  e.g. "TPU_V5E_PREEMPTIBLE_16_US_EAST" → "v5e-16"
@@ -1061,65 +1042,11 @@ function formatUptimeShort(ms: number | null): string {
               <!-- Slice detail (expanded) -->
               <tr v-if="expandedSlices.has(gs.group) && groupHasSlices(gs.group) && (!collapsedPools.has(section.pool))" class="bg-surface-sunken">
                 <td colspan="8" class="px-6 py-3">
-                  <div class="space-y-1.5">
-                    <div
-                      v-for="slice in groupSlices(gs.group)"
-                      :key="slice.sliceId"
-                      class="flex items-center gap-3 text-xs"
-                    >
-                      <span class="font-mono text-text-muted w-48 truncate" :title="slice.sliceId">
-                        {{ slice.sliceId }}
-                      </span>
-                      <span class="text-text-secondary w-16">
-                        {{ (slice.vms ?? []).length }} vm{{ (slice.vms ?? []).length !== 1 ? 's' : '' }}
-                      </span>
-                      <span v-if="slice.idle" class="inline-flex items-center px-1.5 py-0.5 rounded border text-xs font-semibold bg-status-warning-bg text-status-warning border-status-warning-border" :title="`Idle for ${formatIdleSince(slice.lastActive)}, threshold ${formatIdleThreshold(idleThresholdMs(gs.group))}`">
-                        idle {{ formatIdleSince(slice.lastActive) }}
-                      </span>
-                      <span
-                        v-else-if="sliceInUse(slice)"
-                        :class="[
-                          'inline-flex items-center px-1.5 py-0.5 rounded border text-xs font-semibold',
-                          SLICE_STATE_STYLES.in_use.bg,
-                          SLICE_STATE_STYLES.in_use.text,
-                          SLICE_STATE_STYLES.in_use.border,
-                        ]"
-                        :title="SLICE_STATE_STYLES.in_use.label"
-                      >
-                        in use
-                      </span>
-                      <StatusBadge
-                        v-else-if="(slice.vms ?? []).length > 0"
-                        :status="vmStateToName(slice.vms![0].state)"
-                        size="sm"
-                        :show-dot="false"
-                      />
-                      <span v-else class="text-text-muted">unknown</span>
-                      <span class="text-text-muted text-[11px]">
-                        {{ timestampMs(slice.createdAt) ? formatRelativeTime(timestampMs(slice.createdAt)) : '-' }}
-                      </span>
-                      <!-- Per-VM task counts + job links -->
-                      <span v-if="(slice.vms ?? []).length > 0" class="text-text-muted text-[11px] flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                        <template v-for="(vm, vi) in (slice.vms ?? [])" :key="vm.vmId">
-                          <span v-if="vi > 0" class="text-text-muted">·</span>
-                          <span :title="`${vm.vmId}: ${vm.runningTaskCount ?? 0} tasks`">
-                            vm{{ vi }}: {{ vm.runningTaskCount ?? 0 }}t
-                          </span>
-                          <template v-if="jobsForVm(vm).length > 0">
-                            <RouterLink
-                              v-for="chip in jobsForVm(vm)"
-                              :key="chip.jobId"
-                              :to="`/job/${encodeURIComponent(chip.jobId)}`"
-                              class="text-accent hover:underline font-mono"
-                              :title="`${chip.jobId} (user: ${chip.userId}, ${chip.count} tasks)`"
-                            >
-                              {{ chip.jobId }}<span v-if="chip.count > 1" class="text-text-muted"> ×{{ chip.count }}</span><span v-if="chip.userId" class="text-text-muted"> · {{ chip.userId }}</span>
-                            </RouterLink>
-                          </template>
-                        </template>
-                      </span>
-                    </div>
-                  </div>
+                  <SliceList
+                    :slices="groupSlices(gs.group)"
+                    :worker-jobs="sliceWorkerJobs"
+                    :now="nowMs"
+                  />
                 </td>
               </tr>
 

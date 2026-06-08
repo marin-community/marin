@@ -20,9 +20,9 @@ from connectrpc.errors import ConnectError
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client.client import IrisClient, iris_ctx
+from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
-from iris.cluster.providers.local.cluster import LocalCluster
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ReservationEntry, ResourceSpec, gpu_device
 from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
@@ -467,7 +467,8 @@ def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot, capa
 
 
 def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, capabilities):
-    """Worker detail page shows info, task history, metric cards."""
+    """Worker detail page shows info, task history, metric cards, and links each
+    task id to its task-detail page."""
     if not capabilities.has_workers:
         pytest.skip("No persistent workers")
     job = smoke_cluster.submit(TestJobs.quick, "smoke-worker-detail")
@@ -479,10 +480,18 @@ def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, ca
 
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/worker/{worker_id}")
     wait_for_dashboard_ready(smoke_page)
-
     _wait_for_worker_detail_screenshot_ready(smoke_page, worker_id)
+
+    # The Task History task id links to the task-detail route — the
+    # "links to tasks" contract for this page.
+    smoke_page.wait_for_selector("a[href*='/task/']", timeout=10000)
+    href = smoke_page.locator("a[href*='/task/']").first.get_attribute("href")
+    assert href is not None and "/job/" in href and "/task/" in href
+
     smoke_screenshot(
-        "worker-detail", "Worker detail page with identity info, health badge, metric sparklines, and task history"
+        "worker-detail",
+        "Worker detail page with identity info, health badge, metric sparklines, "
+        "and task history with per-task resource columns and task-id links",
     )
 
 

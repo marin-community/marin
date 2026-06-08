@@ -13,8 +13,6 @@ projection instance is materialized before the check runs. Without this,
 the check would silently pass on a half-loaded registry.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 # Module-level registry of every projection instance. Typed as ``Any`` because

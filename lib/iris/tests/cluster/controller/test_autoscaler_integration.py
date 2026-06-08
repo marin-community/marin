@@ -11,13 +11,13 @@ backed by in-memory fakes rather than MagicMock.
 import threading
 import unittest.mock
 
+from iris.cluster.backends.gcp.fake import InMemoryGcpService
+from iris.cluster.backends.gcp.workers import GcpWorkerProvider
+from iris.cluster.backends.types import CloudSliceState
 from iris.cluster.constraints import DeviceType, PlacementRequirements
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry, ScalingAction
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
-from iris.cluster.providers.gcp.fake import InMemoryGcpService
-from iris.cluster.providers.gcp.workers import GcpWorkerProvider
-from iris.cluster.providers.types import CloudSliceState
 from iris.cluster.service_mode import ServiceMode
 from iris.rpc import config_pb2, job_pb2
 from iris.time_proto import duration_to_proto
@@ -217,7 +217,7 @@ class TestAutoscalerWaterfallEndToEnd:
         )
         demand = [
             DemandEntry(
-                task_ids=[f"task-{i}"],
+                task_ids=(f"task-{i}",),
                 coschedule_group_id=None,
                 normalized=normalized,
                 constraints=[],
@@ -520,7 +520,10 @@ def test_marin_style_lifecycle():
             _mark_all_slices_ready(g)
 
     def routed(group_name):
-        return len(autoscaler._last_scale_plan.routing_decision.routed_entries.get(group_name, []))
+        routed_entries = autoscaler._last_routing_decision_proto.routed_entries
+        if group_name not in routed_entries:
+            return 0
+        return len(routed_entries[group_name].entries)
 
     def assert_no_load_on_last():
         assert routed("tpu-16vm") == 0, "tpu-16vm should never receive load"

@@ -27,15 +27,15 @@ from iris.cli.build import (
     get_git_sha,
 )
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
+from iris.cluster.backends.gcp.bootstrap import build_worker_bootstrap_script
+from iris.cluster.backends.gcp.workers import GcpWorkerProvider
+from iris.cluster.backends.types import Labels
 from iris.cluster.config import IrisConfig, clear_remote_state, make_local_config
 from iris.cluster.controller.autoscaler.scaling_group import (
     _zone_from_template,
     build_worker_config_for_group,
     prepare_slice_config,
 )
-from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
-from iris.cluster.providers.gcp.workers import GcpWorkerProvider
-from iris.cluster.providers.types import Labels
 from iris.rpc import config_pb2, controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
@@ -281,7 +281,7 @@ def cluster_start(ctx, local: bool, fresh: bool):
     click.echo("Starting controller...")
     try:
         if is_local:
-            from iris.cluster.providers.local.cluster import LocalCluster
+            from iris.cluster.backends.local.cluster import LocalCluster
 
             cluster = LocalCluster(config)
             address = cluster.start()
@@ -469,7 +469,7 @@ def _require_log_server_config(ctx: click.Context) -> str:
 def log_server_up(ctx: click.Context, build: bool) -> None:
     """Provision/refresh the cluster's finelog deployment (idempotent)."""
     name = _require_log_server_config(ctx)
-    up_cmd.callback(name=name, build=build)
+    ctx.invoke(up_cmd, name=name, build=build)
 
 
 @log_server.command("down")
@@ -478,7 +478,7 @@ def log_server_up(ctx: click.Context, build: bool) -> None:
 def log_server_down(ctx: click.Context, yes: bool) -> None:
     """Tear down the cluster's finelog deployment."""
     name = _require_log_server_config(ctx)
-    down_cmd.callback(name=name, yes=yes)
+    ctx.invoke(down_cmd, name=name, yes=yes)
 
 
 @log_server.command("restart")
@@ -493,7 +493,7 @@ def log_server_down(ctx: click.Context, yes: bool) -> None:
 def log_server_restart(ctx: click.Context, build: bool) -> None:
     """Restart the cluster's finelog deployment."""
     name = _require_log_server_config(ctx)
-    restart_cmd.callback(name=name, build=build)
+    ctx.invoke(restart_cmd, name=name, build=build)
 
 
 @log_server.command("status")
@@ -501,7 +501,7 @@ def log_server_restart(ctx: click.Context, build: bool) -> None:
 def log_server_status(ctx: click.Context) -> None:
     """Show the cluster's finelog deployment status."""
     name = _require_log_server_config(ctx)
-    status_cmd.callback(name=name)
+    ctx.invoke(status_cmd, name=name)
 
 
 @log_server.command("logs")
@@ -511,7 +511,7 @@ def log_server_status(ctx: click.Context) -> None:
 def log_server_logs(ctx: click.Context, tail: int, follow: bool) -> None:
     """Tail the cluster's finelog deployment logs."""
     name = _require_log_server_config(ctx)
-    logs_cmd.callback(name=name, tail=tail, follow=follow)
+    ctx.invoke(logs_cmd, name=name, tail=tail, follow=follow)
 
 
 @cluster.command("create-slice")
@@ -773,10 +773,7 @@ def vm_status(ctx, scale_group):
         if group.slices:
             click.echo("  Slices:")
             for si in group.slices:
-                all_ready = bool(si.vms) and all(vm.state == vm_pb2.VM_STATE_READY for vm in si.vms)
-                any_failed = any(vm.state in (vm_pb2.VM_STATE_FAILED, vm_pb2.VM_STATE_PREEMPTED) for vm in si.vms)
-                ss = "READY" if all_ready else ("FAILED" if any_failed else "PENDING")
-                click.echo(f"    {si.slice_id}: {ss}")
+                click.echo(f"    {si.slice_id}: {si.state.upper()}")
                 for vi in si.vms:
                     click.echo(f"      {vi.vm_id}: {vm_state_name(vi.state)} ({vi.address})")
                     if vi.init_error:

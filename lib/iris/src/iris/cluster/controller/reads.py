@@ -29,6 +29,7 @@ from iris.cluster.controller.codec import device_counts_from_json, resource_spec
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.schema import (
     USER_ROLE_DEFAULT,
+    ReservationClaim,
     job_config_table,
     job_workdir_files_table,
     jobs_table,
@@ -57,7 +58,7 @@ class PendingDispatchRow:
     / task_image / timeout) so the caller can assemble a
     ``RunTaskRequest``. Kept separate so other active-task queries don't
     pay for loading these JSON blobs. Used for both PENDING-promotion and
-    ASSIGNED-redrive paths (see `reads.tasks.list_*_for_direct_provider`).
+    ASSIGNED-redrive paths (see ``dispatch.drain_for_dispatch``).
     """
 
     task_id: JobName
@@ -113,19 +114,6 @@ class UserBudget:
     budget_limit: int
     max_band: int
     updated_at: Timestamp
-
-
-@dataclass(frozen=True)
-class ReservationClaim:
-    """A claim binding a worker to a specific reservation entry.
-
-    The controller assigns unclaimed workers to unsatisfied reservation entries
-    each scheduling cycle. Once every entry for a job is claimed, the
-    reservation gate opens and the job's tasks can be scheduled.
-    """
-
-    job_id: str
-    entry_idx: int
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +353,7 @@ def list_jobs(
         stmt = stmt.limit(limit).offset(offset)
 
     params = {"job_state_ids": list(state_ids)}
-    rows = tx.execute(stmt, params).all()
+    rows = list(tx.execute(stmt, params).all())
     total = int(tx.execute(count_stmt, params).scalar() or 0)
     return rows, total
 
@@ -433,6 +421,21 @@ def get_job_state(tx: Tx, job_id: JobName) -> int | None:
         {"job_id": job_id},
     ).first()
     return int(row.state) if row is not None else None
+
+
+def find_prunable_job(tx: Tx, terminal_states: Iterable[int], before_ts: Timestamp) -> JobName | None:
+    """Return one terminal job finished before ``before_ts``, or None."""
+    row = tx.execute(
+        select(jobs_table.c.job_id)
+        .where(
+            jobs_table.c.state.in_(bindparam("terminal_states", expanding=True)),
+            jobs_table.c.finished_at_ms.is_not(None),
+            jobs_table.c.finished_at_ms < bindparam("before_ts"),
+        )
+        .limit(1),
+        {"terminal_states": list(terminal_states), "before_ts": before_ts},
+    ).first()
+    return row.job_id if row is not None else None
 
 
 def get_job_detail(tx: Tx, job_id: JobName):
@@ -1071,17 +1074,18 @@ def get_worker_detail(tx: Tx, worker_id: WorkerId):
     ).first()
 
 
-def list_active_healthy_workers(tx: Tx, health: WorkerLivenessSource) -> dict[WorkerId, str]:
-    """Return ``{worker_id: address}`` for all active+healthy workers.
+def _healthy_active_worker_ids(health: WorkerLivenessSource) -> set[WorkerId]:
+    """Healthy+active worker ids from the in-memory tracker.
 
-    Fetches the full roster from SQL and filters by the in-memory health
-    tracker in Python. The expanding ``IN (...)`` form pays SA Core overhead
-    proportional to the IN list; since almost every persisted worker is
-    healthy, fetching the whole roster and filtering by dict lookup is
-    cheaper than the IN expansion.
+    Callers post-filter the ``workers`` table in Python against this set rather than
+    pushing a SQL ``IN`` — cheaper, since almost every persisted worker is healthy.
     """
-    liveness = health.all()
-    live_ids = {wid for wid, ent in liveness.items() if ent.healthy and ent.active}
+    return {wid for wid, ent in health.all().items() if ent.healthy and ent.active}
+
+
+def list_active_healthy_workers(tx: Tx, health: WorkerLivenessSource) -> dict[WorkerId, str]:
+    """Return ``{worker_id: address}`` for all active+healthy workers."""
+    live_ids = _healthy_active_worker_ids(health)
     if not live_ids:
         return {}
     rows = tx.execute(select(workers_table.c.worker_id, workers_table.c.address)).all()
@@ -1145,11 +1149,10 @@ def healthy_active_workers_with_attributes(
     """Return healthy + active workers with their attributes hydrated.
 
     Reads the full worker roster and post-filters with the in-memory health
-    tracker. See :func:`list_active_healthy_workers` for why we skip the
+    tracker. See :func:`_healthy_active_worker_ids` for why we skip the
     SQL-side ``IN (...)`` filter.
     """
-    liveness = health.all()
-    healthy_active = {wid for wid, ent in liveness.items() if ent.healthy and ent.active}
+    healthy_active = _healthy_active_worker_ids(health)
     if not healthy_active:
         return []
     rows = tx.execute(
@@ -1183,7 +1186,7 @@ def healthy_active_workers_with_attributes(
 
 
 # ---------------------------------------------------------------------------
-# Direct-provider dispatch helpers (used by direct_provider.py)
+# Direct-provider dispatch helpers (used by dispatch.py)
 # ---------------------------------------------------------------------------
 
 # Columns selected for every pending-dispatch / redrive query.  Covers all

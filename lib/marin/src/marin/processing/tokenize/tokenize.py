@@ -83,8 +83,7 @@ class TokenizeConfigBase(abc.ABC):
     map_workers_per_actor: int | None = None
 
     tokenizer_backend: TokenizerBackend = TokenizerBackend.HF
-    """Backend to use for tokenization. HF uses the HuggingFace tokenizers library directly.
-    KITOKEN uses the kitoken library."""
+    """Backend to use for tokenization. HF uses the HuggingFace tokenizers library directly."""
 
     num_shards: int | None = None
     """Override the number tokenize shards. When set, files are grouped to produce approximately

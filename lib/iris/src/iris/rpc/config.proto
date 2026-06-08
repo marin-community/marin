@@ -560,4 +560,8 @@ message IrisClusterConfig {
   // can manage the deployment via `iris cluster log-server` subcommands.
   // Mutually exclusive with endpoints[/system/log-server].
   string log_server_config = 20;
+
+  // Public dashboard origin for this deployment (e.g. "https://iris.oa.dev").
+  // When set, the CLI prints a clickable job URL on submit. Optional.
+  string dashboard_url = 21;
 }

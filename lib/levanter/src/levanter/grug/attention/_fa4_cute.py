@@ -47,7 +47,7 @@ def _packed_segment_start_positions(
     starts = _segment_starts(segment_ids)
     positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
     start_positions = jnp.where(starts, positions, 0)
-    current_start = jax.lax.associative_scan(jnp.maximum, start_positions, axis=1)
+    current_start: jax.Array = jax.lax.associative_scan(jnp.maximum, start_positions, axis=1)
     return jnp.where(valid, current_start, seq_len)
 
 

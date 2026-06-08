@@ -93,6 +93,15 @@ def test_job_name_roundtrip_and_hierarchy():
     assert not parsed.is_ancestor_of(JobName.root("test-user", "root"), include_self=False)
 
 
+@pytest.mark.parametrize("base", ["https://iris.oa.dev", "https://iris.oa.dev/"])
+def test_job_name_dashboard_url(base: str):
+    job = JobName.from_string("/rav/datakit-ref-smoke-20260604-135004")
+    assert job.dashboard_url(base) == "https://iris.oa.dev/#/job/%2Frav%2Fdatakit-ref-smoke-20260604-135004"
+    # Nested task names percent-encode every slash.
+    task = JobName.from_string("/rav/root/child/0")
+    assert task.dashboard_url("https://iris.oa.dev") == "https://iris.oa.dev/#/job/%2Frav%2Froot%2Fchild%2F0"
+
+
 @pytest.mark.parametrize(
     "value",
     ["", "root", "/root", "/test-user//child", "/test-user/root/ ", "/test-user/root/", "/test-user/root//0"],

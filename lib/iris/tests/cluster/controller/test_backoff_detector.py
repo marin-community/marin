@@ -283,13 +283,6 @@ def test_health_label_bands(failures: int, expected_label: GroupHealth) -> None:
     assert detector.health_label(ts(1000)) == expected_label
 
 
-def test_status_label_format() -> None:
-    detector = make_detector()
-    detector.record_create_failed(ts(1000))
-    # health == 0.7 → "suspect health=0.70"
-    assert detector.status_label(ts(1000)) == "suspect health=0.70"
-
-
 def test_continuous_recovery_drives_health_back_up() -> None:
     """Without further failures, health monotonically climbs back toward 1.0."""
     detector = make_detector(recovery_duration=Duration.from_hours(1))

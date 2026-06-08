@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _ASSIGNED_STATES: frozenset[int] = ACTIVE_TASK_STATES - EXECUTING_TASK_STATES
+# Terminal states that require a worker-directed stop (timeout, cosched
+# failure, unschedulable, failed). KILLED and PREEMPTED are excluded: each is
+# handled by its own explicit branch above.
 _TERMINAL_EXPECTED_STATES: frozenset[int] = TERMINAL_TASK_STATES - {
     job_pb2.TASK_STATE_KILLED,
     job_pb2.TASK_STATE_PREEMPTED,
@@ -261,6 +264,10 @@ def observations_to_updates(
             logger.warning("AttemptObservation uid=%s did not resolve to an attempt row; skipping", obs.attempt_uid)
             continue
         task_id, attempt_id = resolved
+        # proto3 has no presence for scalar ``exit_code``: an unset field and a
+        # genuine 0 both arrive as 0. Treat 0 as "no exit code reported" so a
+        # default-valued observation doesn't overwrite a previously recorded
+        # exit code; a real exit 0 is conveyed by the SUCCEEDED terminal state.
         exit_code: int | None = obs.exit_code if obs.exit_code != 0 else None
         error: str | None = obs.error or None
         container_id: str | None = obs.container_id or None

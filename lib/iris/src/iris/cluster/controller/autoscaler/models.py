@@ -3,8 +3,6 @@
 
 """Shared autoscaler data structures."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from enum import Enum
 
@@ -24,7 +22,6 @@ class ScalingDecision:
 
     scale_group: str
     action: ScalingAction
-    slice_id: str | None = None
     reason: str = ""
 
 
@@ -32,7 +29,7 @@ class ScalingDecision:
 class DemandEntry:
     """A demand entry specifying resource requirements and constraints."""
 
-    task_ids: list[str]
+    task_ids: tuple[str, ...]
     coschedule_group_id: str | None
     normalized: PlacementRequirements
     constraints: list[Constraint]

@@ -25,7 +25,7 @@ from iris.cluster.controller.controller import SchedulingOutcome
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import WorkerResourceUsage
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.scheduler import (
+from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     JobRequirements,
     Scheduler,
@@ -297,7 +297,7 @@ class TestPreemptionReassignment:
         Under the new contract the trigger task IS finalized via the
         heartbeat path that delivered WORKER_FAILED, but the siblings
         bounced by ``_requeue_coscheduled_siblings`` use
-        ``finalize_attempt=False``. So one worker in each slice has its
+        ``stamp_attempt_finished=False``. So one worker in each slice has its
         capacity released; the other 7 hold ``CHIPS_PER_VM`` until their
         own terminal heartbeats arrive.
         """

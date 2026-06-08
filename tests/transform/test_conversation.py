@@ -219,6 +219,31 @@ class TestTransformRow:
             "source": "aops",
         }
 
+    def test_instruct_msg_response_skips_misaligned_row(self):
+        """A multi-message instruction is dropped (returns None), not emitted as an empty conversation."""
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.INSTRUCT_MSG_RESPONSE,
+            instruction_column="instruction",
+            response_column="response",
+        )
+        cfg = TransformSFTDatasetConfig(
+            source="test/dataset",
+            revision="main",
+            output_path="/tmp/output",
+            metadata_columns=[],
+            adapter=adapter,
+        )
+        # len(instruction) > 1: instruction split across system + user prompts.
+        row = {
+            "instruction": [
+                {"role": "system", "content": "You are helpful."},
+                {"role": "user", "content": "What is 2 + 2?"},
+            ],
+            "response": "4",
+        }
+
+        assert transform_row(row, cfg, adapter) is None
+
 
 class TestPreferenceDataTransform:
     """Test preference data (DPO) transformation."""

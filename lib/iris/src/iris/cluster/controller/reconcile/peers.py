@@ -3,10 +3,10 @@
 
 """Cross-aggregate rules for coscheduled task peers."""
 
-from collections.abc import Iterable
+from collections.abc import Sequence
 
 from iris.cluster.controller.reconcile.overlay import Overlay
-from iris.cluster.controller.reconcile.task import mark_task_terminating
+from iris.cluster.controller.reconcile.task import merge_task_termination
 from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     ActiveTaskRow,
@@ -19,11 +19,12 @@ def find_coscheduled_siblings(
     state: Overlay,
     job_id: JobName,
     exclude_task_id: JobName,
-    has_coscheduling: bool,
 ) -> list[ActiveTaskRow]:
-    """Find active siblings in a coscheduled job, reading from the prospective overlay."""
-    if not has_coscheduling:
-        return []
+    """Find active siblings in a coscheduled job, reading from the prospective overlay.
+
+    Callers are responsible for gating on coscheduling: this returns every active
+    sibling regardless, so a non-coscheduled caller must avoid invoking it.
+    """
     return state.active_tasks_for_job(
         job_id,
         states=ACTIVE_TASK_STATES,
@@ -33,7 +34,7 @@ def find_coscheduled_siblings(
 
 def terminate_coscheduled_siblings(
     state: Overlay,
-    siblings: Iterable[ActiveTaskRow],
+    siblings: Sequence[ActiveTaskRow],
     failed_task_id: JobName,
     now_ms: int,
 ) -> None:
@@ -50,19 +51,20 @@ def terminate_coscheduled_siblings(
     error = f"Coscheduled sibling {failed_task_id.to_wire()} failed"
 
     for sib in siblings:
-        mark_task_terminating(
+        merge_task_termination(
             state,
             sib.task_id.to_wire(),
             sib.current_attempt_id,
             job_pb2.TASK_STATE_COSCHED_FAILED,
             error,
             now_ms,
+            stamp_attempt_finished=False,
         )
 
 
 def requeue_coscheduled_siblings(
     state: Overlay,
-    siblings: Iterable[ActiveTaskRow],
+    siblings: Sequence[ActiveTaskRow],
     failed_task_id: JobName,
     now_ms: int,
 ) -> None:
@@ -76,12 +78,13 @@ def requeue_coscheduled_siblings(
     for sib in siblings:
         if sib.is_reservation_holder:
             continue
-        mark_task_terminating(
+        merge_task_termination(
             state,
             sib.task_id.to_wire(),
             sib.current_attempt_id,
             job_pb2.TASK_STATE_PENDING,
             error,
             now_ms,
+            stamp_attempt_finished=False,
             attempt_state=job_pb2.TASK_STATE_PREEMPTED,
         )

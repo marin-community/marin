@@ -11,15 +11,14 @@ from iris.cluster.controller.reconcile.policy import RESERVATION_HOLDER_JOB_NAME
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.task import resolve_task_failure_state as _resolve_task_failure_state
-from iris.cluster.controller.scheduler import JobRequirements, WorkerCapacity
-from iris.cluster.controller.scheduling_policy import (
+from iris.cluster.controller.scheduling.policy import (
     PreemptionCandidate,
-    RunningTaskInfo,
     _pending_tasks_with_jobs,
     _sort_pending_tasks_by_resolved_band,
     get_running_tasks_with_band_and_value,
     run_preemption_pass,
 )
+from iris.cluster.controller.scheduling.scheduler import JobRequirements, RunningTaskInfo, WorkerCapacity
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
@@ -1133,8 +1132,9 @@ def test_preemption_nonexistent_task_is_noop():
 def test_preempt_then_worker_terminal_heartbeat_stamps_finished_at_ms():
     """Regression for #5918: worker's post-preempt terminal heartbeat must finalize the attempt.
 
-    ``preempt_task`` marks the attempt PREEMPTED via ``task.mark_task_terminating``,
-    which deliberately leaves ``finished_at_ms`` NULL and relies on the worker's
+    ``preempt_task`` marks the attempt PREEMPTED via
+    ``task.merge_task_termination(stamp_attempt_finished=False)``, which
+    deliberately leaves ``finished_at_ms`` NULL and relies on the worker's
     subsequent terminal-state heartbeat to stamp it. Without the stamp the row
     stays counted by ``resource_usage_by_worker`` and ghost-pins the worker's
     capacity for as long as the worker lives.
@@ -1632,7 +1632,7 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
 
         # Sanity: task went to PENDING (budget remains), attempt row is in
         # PREEMPTED reporting state. ``preempt_task`` is a producer transition
-        # (``finalize_attempt=False``), so ``finished_at_ms`` is intentionally
+        # (``stamp_attempt_finished=False``), so ``finished_at_ms`` is intentionally
         # left NULL — the worker still holds the chips until a terminal
         # heartbeat (or worker-failure synthesis) lands.
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_PENDING

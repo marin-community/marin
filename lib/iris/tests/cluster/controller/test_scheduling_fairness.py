@@ -10,7 +10,7 @@ from iris.cluster.controller.budget import UserTask, compute_effective_band, int
 from iris.cluster.controller.controller import (
     SchedulingOutcome,
 )
-from iris.cluster.controller.scheduling_policy import (
+from iris.cluster.controller.scheduling.policy import (
     _pending_tasks_with_jobs,
     _sort_pending_tasks_by_resolved_band,
 )

@@ -11,7 +11,6 @@ knowledge of logical operation types.
 from __future__ import annotations
 
 import heapq
-import inspect
 import logging
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
@@ -92,7 +91,7 @@ class Map:
         needs_shard_context: True if fn expects (stream, shard_info: ShardInfo).
     """
 
-    fn: Callable[[Iterator], Iterator]
+    fn: Callable[..., Iterator]
     needs_shard_context: bool = False
 
 
@@ -182,12 +181,19 @@ def _reduce_gen(
     sort_fn: Callable | None = None,
     external_sort_dir: str | None = None,
 ) -> Iterator:
-    is_gen = inspect.isgeneratorfunction(reducer_fn)
+    # The reducer contract is ``R | Iterator[R]``: it may return a single
+    # result or a stream of results. Discriminate on the actual return value,
+    # not ``inspect.isgeneratorfunction`` — that only recognises functions
+    # literally defined with ``yield`` and misses reducers that *return* an
+    # iterator (a generator expression, ``map``/``filter``, or a call to
+    # another generator function). Such a reducer would otherwise be emitted
+    # whole as one item and crash the downstream writer.
     for key, items_iter in _merge_sorted_chunks(shard, key_fn, sort_fn, external_sort_dir=external_sort_dir):
-        if is_gen:
-            yield from reducer_fn(key, items_iter)
+        result = reducer_fn(key, items_iter)
+        if isinstance(result, Iterator):
+            yield from result
         else:
-            yield reducer_fn(key, items_iter)
+            yield result
 
 
 def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
@@ -636,6 +642,22 @@ def make_windows(
         yield window
 
 
+def composite_sort_key(key_fn: Callable, sort_fn: Callable | None) -> Callable:
+    """Build a merge/sort key from a grouping key and an optional secondary sort.
+
+    Returns ``key_fn`` unchanged when ``sort_fn`` is None. Otherwise returns a
+    callable producing ``(key_fn(item), sort_fn(item))`` so items order first by
+    group key and then by the secondary key; grouping should still use
+    ``key_fn`` alone. Used by both the scatter writer (pre-sort within a chunk)
+    and the reduce-side k-way merge so the two stay consistent.
+    """
+    if sort_fn is None:
+        return key_fn
+    # Bind to a non-Optional local so the closure captures a narrowed type.
+    secondary = sort_fn
+    return lambda item: (key_fn(item), secondary(item))
+
+
 def _merge_sorted_chunks(
     shard: Shard, key_fn: Callable, sort_fn: Callable | None = None, external_sort_dir: str | None = None
 ) -> Iterator[tuple[object, Iterator]]:
@@ -655,15 +677,7 @@ def _merge_sorted_chunks(
         Tuples of (key, iterator_of_items) for each unique key
     """
     # Merge by composite key when sort_fn is provided, but group by key_fn only.
-    # Rebind to captured_sort_fn so pyrefly narrows the type inside the closure.
-    if sort_fn is not None:
-        captured_sort_fn = sort_fn
-
-        def merge_key(item):
-            return (key_fn(item), captured_sort_fn(item))
-
-    else:
-        merge_key = key_fn
+    merge_key = composite_sort_key(key_fn, sort_fn)
 
     # Check if external sort is needed BEFORE materializing all iterators.
     # ScatterReader can decide using manifest stats (no file opens needed).
