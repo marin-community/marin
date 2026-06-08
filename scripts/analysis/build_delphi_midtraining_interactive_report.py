@@ -103,6 +103,143 @@ def records_for_json(frame: pd.DataFrame) -> list[dict[str, Any]]:
     return [{key: finite_or_none(value) for key, value in record.items()} for record in records]
 
 
+def floor_power_model(x: np.ndarray, floor: float, amplitude: float, alpha: float) -> np.ndarray:
+    return floor + amplitude * np.power(x, -alpha)
+
+
+def fit_floor_power(xs: np.ndarray, ys: np.ndarray) -> dict[str, float] | None:
+    if xs.size < 3:
+        return None
+    xs_norm = xs / 1e18
+    floor0 = float(min(ys)) * 0.5
+    amp0 = max(float(max(ys)) - floor0, 1e-3)
+    try:
+        params, _ = curve_fit(
+            floor_power_model,
+            xs_norm,
+            ys,
+            p0=(floor0, amp0, 0.1),
+            bounds=([0.0, 0.0, 0.0], [float(min(ys)) * 0.999, np.inf, 5.0]),
+            maxfev=10000,
+        )
+    except (RuntimeError, ValueError):
+        return None
+    floor, amp, alpha = (float(value) for value in params)
+    pred = floor_power_model(xs_norm, floor, amp, alpha)
+    ss_res = float(np.sum((ys - pred) ** 2))
+    ss_tot = float(np.sum((ys - ys.mean()) ** 2))
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else None
+    rmse = math.sqrt(ss_res / xs.size)
+    return {
+        "floor": floor,
+        "amplitude": amp,
+        "alpha": alpha,
+        "r2": r2,
+        "rmse": rmse,
+        "n": int(xs.size),
+    }
+
+
+def fit_log_linear(xs: np.ndarray, ys: np.ndarray) -> dict[str, float] | None:
+    if xs.size < 2:
+        return None
+    lx = np.log(xs)
+    ly = np.log(ys)
+    slope, intercept = np.polyfit(lx, ly, 1)
+    pred_log = intercept + slope * lx
+    pred = np.exp(pred_log)
+    ss_res = float(np.sum((ys - pred) ** 2))
+    ss_tot = float(np.sum((ys - ys.mean()) ** 2))
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else None
+    rmse_log = math.sqrt(float(np.sum((ly - pred_log) ** 2)) / xs.size)
+    return {
+        "slope": float(slope),
+        "intercept": float(intercept),
+        "r2": r2,
+        "rmse_log": rmse_log,
+        "n": int(xs.size),
+    }
+
+
+def endpoint_scaling_data() -> tuple[pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]:
+    """Load endpoints + held-out targets and fit per-(mix, LR) scaling laws at each cutoff."""
+    endpoint_columns = ["run_id", "run_name", "scale", "scale_flops", "mix", "lr", "value"]
+    if ENDPOINTS_PATH.exists():
+        endpoints = pd.read_csv(ENDPOINTS_PATH, dtype={"scale": str, "lr": str})
+        endpoints = endpoints[endpoints["metric_label"].eq(METRIC_LABEL) & endpoints["complete"].astype(bool)].copy()
+        endpoints["scale_flops"] = endpoints["scale_flops"].astype(float)
+        endpoints = endpoints[endpoint_columns].sort_values(["scale_flops", "mix", "lr"])
+    else:
+        endpoints = pd.DataFrame(columns=endpoint_columns)
+    if EXTRAPOLATION_TARGETS_PATH.exists():
+        targets = pd.read_csv(EXTRAPOLATION_TARGETS_PATH, dtype={"scale": str, "lr": str})
+        targets = targets[targets["metric_label"].eq(METRIC_LABEL) & targets["complete"].astype(bool)].copy()
+        targets["scale_flops"] = targets["scale_flops"].astype(float)
+        targets = targets[endpoint_columns].sort_values(["scale_flops", "mix", "lr"])
+    else:
+        targets = pd.DataFrame(columns=endpoint_columns)
+
+    scaling_fits: list[dict[str, Any]] = []
+    if not endpoints.empty:
+        scale_flops_lookup: dict[str, float] = {}
+        for frame in (endpoints, targets):
+            for scale_str, scale_value in zip(
+                frame["scale"].astype(str),
+                frame["scale_flops"].astype(float),
+                strict=False,
+            ):
+                scale_flops_lookup.setdefault(scale_str, float(scale_value))
+        cutoff_flops_map = {scale: scale_flops_lookup.get(scale, float("inf")) for scale in CUTOFF_SCALES}
+        # Build a combined "training pool" of small-ladder endpoints + held-out endpoints
+        # (1e21 is available as a candidate training scale when the slider goes that high).
+        fit_pool = pd.concat([endpoints, targets[targets["scale"].isin(CUTOFF_SCALES)]], ignore_index=True)
+        cell_groups = fit_pool.groupby(["mix", "lr"], sort=False)
+        for (mix, lr), group in cell_groups:
+            group = group.sort_values("scale_flops")
+            for cutoff_index, cutoff_scale in enumerate(CUTOFF_SCALES):
+                cutoff_flops = cutoff_flops_map.get(cutoff_scale, float("inf"))
+                if math.isnan(cutoff_flops):
+                    continue
+                mask = group["scale_flops"] <= cutoff_flops + 1.0
+                included = group[mask]
+                if included.empty:
+                    continue
+                xs = included["scale_flops"].to_numpy(dtype=float)
+                ys = included["value"].to_numpy(dtype=float)
+                row: dict[str, Any] = {
+                    "mix": mix,
+                    "lr": str(lr),
+                    "cutoff_index": cutoff_index,
+                    "cutoff_scale": cutoff_scale,
+                    "n": int(xs.size),
+                    "min_scale": str(included["scale"].iloc[0]),
+                    "max_scale": str(included["scale"].iloc[-1]),
+                }
+                fp = fit_floor_power(xs, ys)
+                if fp:
+                    row.update(
+                        {
+                            "fp_floor": fp["floor"],
+                            "fp_amplitude": fp["amplitude"],
+                            "fp_alpha": fp["alpha"],
+                            "fp_r2": fp["r2"],
+                            "fp_rmse": fp["rmse"],
+                        }
+                    )
+                ll = fit_log_linear(xs, ys)
+                if ll:
+                    row.update(
+                        {
+                            "ll_slope": ll["slope"],
+                            "ll_intercept": ll["intercept"],
+                            "ll_r2": ll["r2"],
+                            "ll_rmse_log": ll["rmse_log"],
+                        }
+                    )
+                scaling_fits.append(row)
+    return endpoints, targets, scaling_fits
+
+
 def payload(points_path: Path, predictions_path: Path) -> dict[str, Any]:
     points = pd.read_csv(points_path, dtype={"scale": str, "lr": str})
     points = points[points["metric_label"].eq(METRIC_LABEL)].copy()
@@ -191,135 +328,7 @@ def payload(points_path: Path, predictions_path: Path) -> dict[str, Any]:
     else:
         joint_models = pd.DataFrame()
 
-    def _floor_power_model(x: np.ndarray, floor: float, amplitude: float, alpha: float) -> np.ndarray:
-        return floor + amplitude * np.power(x, -alpha)
-
-    def _fit_floor_power(xs: np.ndarray, ys: np.ndarray) -> dict[str, float] | None:
-        if xs.size < 3:
-            return None
-        xs_norm = xs / 1e18
-        floor0 = float(min(ys)) * 0.5
-        amp0 = max(float(max(ys)) - floor0, 1e-3)
-        try:
-            params, _ = curve_fit(
-                _floor_power_model,
-                xs_norm,
-                ys,
-                p0=(floor0, amp0, 0.1),
-                bounds=([0.0, 0.0, 0.0], [float(min(ys)) * 0.999, np.inf, 5.0]),
-                maxfev=10000,
-            )
-        except (RuntimeError, ValueError):
-            return None
-        floor, amp, alpha = (float(value) for value in params)
-        pred = _floor_power_model(xs_norm, floor, amp, alpha)
-        ss_res = float(np.sum((ys - pred) ** 2))
-        ss_tot = float(np.sum((ys - ys.mean()) ** 2))
-        r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else None
-        rmse = math.sqrt(ss_res / xs.size)
-        return {
-            "floor": floor,
-            "amplitude": amp,
-            "alpha": alpha,
-            "r2": r2,
-            "rmse": rmse,
-            "n": int(xs.size),
-        }
-
-    def _fit_log_linear(xs: np.ndarray, ys: np.ndarray) -> dict[str, float] | None:
-        if xs.size < 2:
-            return None
-        lx = np.log(xs)
-        ly = np.log(ys)
-        slope, intercept = np.polyfit(lx, ly, 1)
-        pred_log = intercept + slope * lx
-        pred = np.exp(pred_log)
-        ss_res = float(np.sum((ys - pred) ** 2))
-        ss_tot = float(np.sum((ys - ys.mean()) ** 2))
-        r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else None
-        rmse_log = math.sqrt(float(np.sum((ly - pred_log) ** 2)) / xs.size)
-        return {
-            "slope": float(slope),
-            "intercept": float(intercept),
-            "r2": r2,
-            "rmse_log": rmse_log,
-            "n": int(xs.size),
-        }
-
-    endpoint_columns = ["run_id", "run_name", "scale", "scale_flops", "mix", "lr", "value"]
-    if ENDPOINTS_PATH.exists():
-        endpoints = pd.read_csv(ENDPOINTS_PATH, dtype={"scale": str, "lr": str})
-        endpoints = endpoints[endpoints["metric_label"].eq(METRIC_LABEL) & endpoints["complete"].astype(bool)].copy()
-        endpoints["scale_flops"] = endpoints["scale_flops"].astype(float)
-        endpoints = endpoints[endpoint_columns].sort_values(["scale_flops", "mix", "lr"])
-    else:
-        endpoints = pd.DataFrame(columns=endpoint_columns)
-    if EXTRAPOLATION_TARGETS_PATH.exists():
-        targets = pd.read_csv(EXTRAPOLATION_TARGETS_PATH, dtype={"scale": str, "lr": str})
-        targets = targets[targets["metric_label"].eq(METRIC_LABEL) & targets["complete"].astype(bool)].copy()
-        targets["scale_flops"] = targets["scale_flops"].astype(float)
-        targets = targets[endpoint_columns].sort_values(["scale_flops", "mix", "lr"])
-    else:
-        targets = pd.DataFrame(columns=endpoint_columns)
-
-    scaling_fits: list[dict[str, Any]] = []
-    if not endpoints.empty:
-        scale_flops_lookup: dict[str, float] = {}
-        for frame in (endpoints, targets):
-            for scale_str, scale_value in zip(
-                frame["scale"].astype(str),
-                frame["scale_flops"].astype(float),
-                strict=False,
-            ):
-                scale_flops_lookup.setdefault(scale_str, float(scale_value))
-        cutoff_flops_map = {scale: scale_flops_lookup.get(scale, float("inf")) for scale in CUTOFF_SCALES}
-        # Build a combined "training pool" of small-ladder endpoints + held-out endpoints
-        # (1e21 is available as a candidate training scale when the slider goes that high).
-        fit_pool = pd.concat([endpoints, targets[targets["scale"].isin(CUTOFF_SCALES)]], ignore_index=True)
-        cell_groups = fit_pool.groupby(["mix", "lr"], sort=False)
-        for (mix, lr), group in cell_groups:
-            group = group.sort_values("scale_flops")
-            for cutoff_index, cutoff_scale in enumerate(CUTOFF_SCALES):
-                cutoff_flops = cutoff_flops_map.get(cutoff_scale, float("inf"))
-                if math.isnan(cutoff_flops):
-                    continue
-                mask = group["scale_flops"] <= cutoff_flops + 1.0
-                included = group[mask]
-                if included.empty:
-                    continue
-                xs = included["scale_flops"].to_numpy(dtype=float)
-                ys = included["value"].to_numpy(dtype=float)
-                row: dict[str, Any] = {
-                    "mix": mix,
-                    "lr": str(lr),
-                    "cutoff_index": cutoff_index,
-                    "cutoff_scale": cutoff_scale,
-                    "n": int(xs.size),
-                    "min_scale": str(included["scale"].iloc[0]),
-                    "max_scale": str(included["scale"].iloc[-1]),
-                }
-                fp = _fit_floor_power(xs, ys)
-                if fp:
-                    row.update(
-                        {
-                            "fp_floor": fp["floor"],
-                            "fp_amplitude": fp["amplitude"],
-                            "fp_alpha": fp["alpha"],
-                            "fp_r2": fp["r2"],
-                            "fp_rmse": fp["rmse"],
-                        }
-                    )
-                ll = _fit_log_linear(xs, ys)
-                if ll:
-                    row.update(
-                        {
-                            "ll_slope": ll["slope"],
-                            "ll_intercept": ll["intercept"],
-                            "ll_r2": ll["r2"],
-                            "ll_rmse_log": ll["rmse_log"],
-                        }
-                    )
-                scaling_fits.append(row)
+    endpoints, targets, scaling_fits = endpoint_scaling_data()
 
     form_comparison = (
         records_for_json(pd.read_csv(FORM_COMPARISON_PATH, dtype={"target_scale": str}))

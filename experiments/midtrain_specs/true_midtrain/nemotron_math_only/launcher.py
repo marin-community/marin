@@ -78,6 +78,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--zone", default=None, help="Optional TPU child zone constraint, e.g. us-east5-a.")
     parser.add_argument("--ram", default=DEFAULT_CONTAINER_RAM)
     parser.add_argument(
+        "--per-device-parallelism",
+        type=int,
+        default=-1,
+        help="Levanter trainer.per_device_parallelism; positive values enable gradient accumulation.",
+    )
+    parser.add_argument(
         "--temp-save-interval",
         default="10m",
         help="Temporary checkpoint save interval passed to Levanter, e.g. 5m.",
@@ -128,6 +134,7 @@ def main() -> int:
         output_region=args.output_region,
         zone=args.zone,
         ram=args.ram,
+        per_device_parallelism=args.per_device_parallelism,
         temp_save_interval=args.temp_save_interval,
         child_preemptible=args.child_preemptible,
         eval_target_points=args.eval_target_points,
@@ -192,7 +199,7 @@ def main() -> int:
 
 def _verify_final_checkpoint(spec: MidtrainSpec, num_train_steps: int) -> None:
     permanent_root = spec.run.permanent_checkpoints_uri
-    step_dirs = [entry.rstrip("/") for entry in default_gcs_list(permanent_root)]
+    step_dirs = [_with_root_scheme(entry.rstrip("/"), permanent_root) for entry in default_gcs_list(permanent_root)]
     step_pattern = re.compile(r"step-(\d+)$")
     candidates = [(int(m.group(1)), entry) for entry in step_dirs if (m := step_pattern.search(entry))]
     if not candidates:
@@ -225,6 +232,13 @@ def _verify_final_checkpoint(spec: MidtrainSpec, num_train_steps: int) -> None:
             model_type=str(model_type),
             num_layers=spec.base.num_layers,
         )
+
+
+def _with_root_scheme(entry: str, root: str) -> str:
+    if "://" in entry or "://" not in root:
+        return entry
+    scheme, _ = root.split("://", maxsplit=1)
+    return f"{scheme}://{entry.lstrip('/')}"
 
 
 def reviewed_candidate(base: str, cooldown_ratio: float) -> dict[str, Any]:
@@ -270,6 +284,7 @@ def build_spec(
     output_region: str,
     zone: str | None,
     ram: str,
+    per_device_parallelism: int,
     temp_save_interval: str,
     child_preemptible: bool,
     eval_target_points: int | None = None,
@@ -298,6 +313,7 @@ def build_spec(
             tpu_type=tpu_type,
             batch_size=base.batch_size,
             ram=ram,
+            per_device_parallelism=per_device_parallelism,
             regions=(output_region,),
             zone=zone,
             preemptible=child_preemptible,

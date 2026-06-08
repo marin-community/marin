@@ -16733,3 +16733,1216 @@ Next action after commit: resume the babysit cadence. Recheck final markers
 first, then active job states and relevant capacity groups. Do not stop or
 relaunch the nonterminal children while `failure_count=0` unless a fresh
 capacity analysis proves the scheduler state is stuck.
+
+## CODEX 2026-06-04T23:45Z - resumed babysit; 1e21 running, 1e22 HBM failed
+
+User asked to track the jobs. Fresh monitoring state written to
+`scratch/20260604-2343_monitoring_state.json`.
+
+Final-marker check:
+
+- `1e21` canonical prefix marker is still absent:
+  `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e21-prefixes-qwen3-v4c-r11-reserved32-ram256/checkpoints/step-17645/metadata.json`.
+- `1e22` canonical prefix marker is still absent:
+  `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e22-prefixes-qwen3-v4c-r10-reserved32-ram256/checkpoints/step-30588/metadata.json`.
+- `3e20` cooldown20 marker is still absent:
+  `gs://marin-us-east5/checkpoints/delphi-true-3e20-p33m67-cooldown20-a010/checkpoints/step-35510/metadata.json`.
+
+Current Iris state:
+
+- `1e21` active child
+  `/ahmedah/delphi-1e21-prefixes-qwen3-v4c-r14-i32-m16-pdp16-from16781-parent-1780607634/checkpoints-delphi-prefix-1e21-step17645-stop17646_12582791-ccadc320`
+  is `JOB_STATE_RUNNING` with 4 running tasks, `failure_count=0`,
+  `preemption_count=2`. Latest durable temp checkpoint is central2
+  `step-17001`; startup logs show the preserved output path and run id
+  `delphi-1e21-prefixes-qwen3-v4c-r11-reserved32-ram256`, and Levanter resumed
+  from `step 17002`. Recent train progress reached about `17.0kit/22.1kit`.
+  The transient `/tmp/.../config.yaml` `FileNotFoundError` line did not stop
+  the task; all four tasks continued through checkpoint error-check and resumed
+  training.
+- `1e22` active child
+  `/ahmedah/delphi-1e22-prefixes-qwen3-v4c-r16-i32-m16-pdp16-from30154-parent-1780607747/checkpoints-delphi-prefix-1e22-step30588-stop30589_ed1d00ab-e103c430`
+  is now `JOB_STATE_FAILED`, `failure_count=1`, `preemption_count=0`, with 1
+  failed task and 3 coscheduled-failed tasks. The failure is
+  `CompileTimeHbmOom` on v4-32 pdev16: XLA used `36.90G` of `30.75G` HBM and
+  exceeded capacity by `6.15G`. Latest temp checkpoint remains central2
+  `step-30154`; this failed attempt did not advance it. Do not blindly retry
+  this topology.
+- `3e20` cooldown20 child
+  `/ahmedah/aa-true-p33m67-cd20-a010-d3e20-v5p16-z5a-r1-1780599550/midtrain-delphi-true-3e20-p33m67-cooldown20-a010`
+  is still `JOB_STATE_PENDING` with 2 pending tasks, `failure_count=0`,
+  `preemption_count=0`, pending on `tpu_v5p-preemptible_16-us-east5-a` /
+  tier-blocked quota-pool monotonicity. No worker logs yet.
+
+No Iris jobs were stopped or relaunched. Next babysit action: continue polling
+`1e21` to final marker, keep `3e20` pending on the staged east5 plan, and treat
+`1e22` as blocked pending a new memory/topology plan.
+
+### 2026-06-04T23:59Z poll
+
+- `1e21` final marker is still absent and the active child remains
+  `JOB_STATE_RUNNING` with 4 running tasks, `failure_count=0`,
+  `preemption_count=2`. Latest central2 temp checkpoint advanced to
+  `step-17039`. Recent logs show continuing train progress and loss around
+  `2.7`.
+- `3e20` final marker is still absent. Child remains `JOB_STATE_PENDING` with
+  2 pending tasks, `failure_count=0`, `preemption_count=0`; pending reason is
+  back to `tier_blocked` on `tpu_v5p-preemptible_16-us-east5-a`.
+- `1e22` remains failed/blocked on the pdev16 compile HBM OOM from the previous
+  poll. No relaunch attempted.
+
+### 2026-06-05T00:10Z poll
+
+- `1e21` final marker is still absent and the active child remains
+  `JOB_STATE_RUNNING` with 4 running tasks, `failure_count=0`,
+  `preemption_count=2`. Latest central2 temp checkpoint advanced to
+  `step-17067`; recent logs still show train progress with loss around `2.7`.
+- `3e20` final marker is still absent. Child remains `JOB_STATE_PENDING` with
+  2 pending tasks, `failure_count=0`, `preemption_count=0`; current pending
+  reason says Iris is waiting for `tpu_v5p-preemptible_16-us-east5-a` workers,
+  after alternating with tier-blocked capacity state.
+- `1e22` remains failed/blocked on the pdev16 compile HBM OOM. No relaunch
+  attempted.
+
+### 2026-06-05T00:20Z poll
+
+- `1e21` final marker is still absent and the active child remains
+  `JOB_STATE_RUNNING` with 4 running tasks, `failure_count=0`,
+  `preemption_count=2`. Latest central2 temp checkpoint advanced to
+  `step-17095`; recent logs show continuing train progress and loss around
+  `2.7`.
+- `3e20` final marker is still absent. Child remains `JOB_STATE_PENDING` with
+  2 pending tasks, `failure_count=0`, `preemption_count=0`; pending reason is
+  again `tier_blocked` on `tpu_v5p-preemptible_16-us-east5-a`.
+- `1e22` remains failed/blocked on the pdev16 compile HBM OOM. No relaunch
+  attempted.
+
+### 2026-06-05T00:32Z poll
+
+- `1e21` final marker is still absent and the active child remains
+  `JOB_STATE_RUNNING` with 4 running tasks, `failure_count=0`,
+  `preemption_count=2`. Latest central2 temp checkpoint advanced to
+  `step-17123`; logs show it saved successfully and training continues with
+  loss around `2.7`.
+- `3e20` final marker is still absent. Child remains `JOB_STATE_PENDING` with
+  2 pending tasks, `failure_count=0`, `preemption_count=0`; current pending
+  reason says no workers match constraints and the autoscaler is waiting for
+  demand-routed `tpu_v5p-preemptible_16-us-east5-a` workers to become ready.
+  No worker logs yet.
+- `1e22` remains failed/blocked on the pdev16 compile HBM OOM. No relaunch
+  attempted.
+
+### 2026-06-05T00:44Z poll
+
+- `1e21` final marker is still absent and the active child remains
+  `JOB_STATE_RUNNING` with 4 running tasks, `failure_count=0`,
+  `preemption_count=2`. Latest central2 temp checkpoint advanced to
+  `step-17151`; logs show it saved successfully and training continues with
+  loss around `2.7`.
+- `3e20` final marker is still absent. Child remains `JOB_STATE_PENDING` with
+  2 pending tasks, `failure_count=0`, `preemption_count=0`; pending reason is
+  again `tier_blocked` on `tpu_v5p-preemptible_16-us-east5-a`.
+- `1e22` remains failed/blocked on the pdev16 compile HBM OOM. No relaunch
+  attempted.
+
+### 2026-06-05T00:55Z poll
+
+- `1e21` final marker is still absent and the active child remains
+  `JOB_STATE_RUNNING` with 4 running tasks, `failure_count=0`,
+  `preemption_count=2`. Latest central2 temp checkpoint advanced to
+  `step-17179`; logs show it saved successfully and training continues with
+  loss around `2.7`.
+- `3e20` final marker is still absent. Child remains `JOB_STATE_PENDING` with
+  2 pending tasks, `failure_count=0`, `preemption_count=0`; pending reason is
+  still `tier_blocked` on `tpu_v5p-preemptible_16-us-east5-a`.
+- `1e22` remains failed/blocked on the pdev16 compile HBM OOM. No relaunch
+  attempted.
+
+### 2026-06-05T01:05Z poll
+
+- `1e21` final marker is still absent. The active child remains
+  controller-state `JOB_STATE_RUNNING`, but all 4 tasks are now pending after a
+  third preemption; `failure_count=0`, `preemption_count=3`. Latest complete
+  central2 temp checkpoint remains `step-17179` because it has `metadata.json`.
+  A partial `step-17193` directory exists with `manifest.ocdbt` and `d/`, but
+  `metadata.json` is absent, and the logs only show checkpoint save start/error
+  check before the preemption. Do not relaunch; wait for Iris to reschedule the
+  child and verify resume logs.
+- `3e20` final marker is still absent. Child remains `JOB_STATE_PENDING` with
+  2 pending tasks, `failure_count=0`, `preemption_count=0`; pending reason is
+  still `tier_blocked` on `tpu_v5p-preemptible_16-us-east5-a`.
+- `1e22` remains failed/blocked on the pdev16 compile HBM OOM. No relaunch
+  attempted.
+
+### 2026-06-05T01:12Z follow-up
+
+- `1e21` final marker is still absent. The active child remains
+  controller-state `JOB_STATE_RUNNING` with all 4 tasks pending after the third
+  preemption; `failure_count=0`, `preemption_count=3`. `step-17193` is still
+  partial with no `metadata.json`; latest complete central2 temp checkpoint
+  remains `step-17179`. No relaunch attempted.
+- `3e20` final marker is still absent. Child remains `JOB_STATE_PENDING` with
+  2 pending tasks, `failure_count=0`, `preemption_count=0`; pending reason is
+  still `tier_blocked` on `tpu_v5p-preemptible_16-us-east5-a`.
+- `1e22` remains failed/blocked on the pdev16 compile HBM OOM. No relaunch
+  attempted.
+
+### 2026-06-05T01:23Z poll
+
+- `1e21` final marker is still absent. The active child remains
+  controller-state `JOB_STATE_RUNNING` with all 4 tasks pending after the third
+  preemption; `failure_count=0`, `preemption_count=3`. No new temp checkpoint
+  directory appeared beyond partial `step-17193`; `step-17193/metadata.json`
+  is still absent, and latest complete central2 temp checkpoint remains
+  `step-17179`. No relaunch attempted.
+- `3e20` final marker is still absent. Child remains `JOB_STATE_PENDING` with
+  2 pending tasks, `failure_count=0`, `preemption_count=0`; pending reason is
+  still `tier_blocked` on `tpu_v5p-preemptible_16-us-east5-a`.
+- `1e22` remains failed/blocked on the pdev16 compile HBM OOM. No relaunch
+  attempted.
+
+### 2026-06-05T01:25Z operator constraint
+
+User clarified: never use reserved capacity. Treat reserved Iris scale groups as
+read-only/informational in monitoring output, not viable placement or relaunch
+options, unless the user explicitly overrides this constraint.
+
+### 2026-06-05T01:28Z poll
+
+- `1e21` final marker is still absent. The active child remains
+  controller-state `JOB_STATE_RUNNING` with all 4 tasks pending after the third
+  preemption; `failure_count=0`, `preemption_count=3`. `step-17193` is still
+  partial with no `metadata.json`; latest complete central2 temp checkpoint
+  remains `step-17179`. No relaunch attempted.
+- `3e20` final marker is still absent. Child remains `JOB_STATE_PENDING` with
+  2 pending tasks, `failure_count=0`, `preemption_count=0`; pending reason is
+  still `tier_blocked` on `tpu_v5p-preemptible_16-us-east5-a`.
+- `1e22` remains failed/blocked on the pdev16 compile HBM OOM. No relaunch
+  attempted.
+- Reserved-capacity groups are not considered usable options for recovery or
+  placement.
+
+## claude 2026-06-05T23:14Z - killed all remaining delphi prefix jobs (user request)
+
+User asked to find and kill all currently running delphi prefix jobs. Live
+nonterminal sweep (`iris job list --prefix /ahmed/|/ahmedah/ --state
+running|pending`) found exactly two stale `1e22` prefix alternates, both under
+`/ahmed/`:
+
+- `/ahmed/delphi-1e22-prefixes-qwen3-v4c-r15-reserved64-ram256-direct-parent`
+  (running) with child
+  `.../checkpoints-delphi-prefix-1e22-step30588-stop30589_ed1d00ab-0c9a8189`
+  (running) — this was occupying reserved v4-64 capacity, violating the
+  2026-06-05T01:25Z operator no-reserved constraint, and wrote to a
+  non-canonical output root (pdp1 from step 30000).
+- `/ahmed/delphi-1e22-prefixes-qwen3-v5lp32-euw-ram96-pdp4-staged-step30015-parent`
+  (running) with child
+  `.../checkpoints-delphi-prefix-1e22-step30588-stop30589_ed1d00ab-5d1921c3`
+  (pending on europe-west4 coscheduling).
+
+All four job IDs were stopped explicitly with
+`iris job stop --no-include-children <id>` (children first, then parents) to
+avoid the busy-cluster list cap. Verified post-stop: zero nonterminal jobs
+under `/ahmed/`; under `/ahmedah/` only the `3e20` cooldown remains (see
+below). No prefix jobs are running or pending anywhere.
+
+State changes discovered since the 2026-06-05T01:28Z poll:
+
+- `1e21` prefix is COMPLETE. The pdev16 child
+  `.../delphi-1e21-prefixes-qwen3-v4c-r14-i32-m16-pdp16-from16781-parent-1780607634/checkpoints-delphi-prefix-1e21-step17645-stop17646_12582791-ccadc320`
+  and its parent both show `succeeded`, and the final marker now EXISTS at
+  `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e21-prefixes-qwen3-v4c-r11-reserved32-ram256/checkpoints/step-17645/metadata.json`.
+  Qwen3 validation (`num_layers=26`) has NOT yet been run on it.
+- `1e22` canonical prefix remains INCOMPLETE: final marker still absent at
+  `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e22-prefixes-qwen3-v4c-r10-reserved32-ram256/checkpoints/step-30588/metadata.json`.
+  With the two alternates killed, there is now NO active job advancing 1e22.
+  Latest canonical temp checkpoint remains central2 `step-30154`; the v4-32
+  pdev16 topology compile-OOMs (36.90G vs 30.75G HBM), so any relaunch needs a
+  new memory/topology plan on non-reserved capacity.
+- `3e20` cooldown20 child
+  `/ahmedah/aa-true-p33m67-cd20-a010-d3e20-v5p16-z5a-r1-1780599550/midtrain-delphi-true-3e20-p33m67-cooldown20-a010`
+  is now `running` (was pending/tier-blocked at last poll). Intentionally NOT
+  killed — it is a cooldown job, not a prefix job.
+
+Next actions: run Qwen3 completeness validation on the 1e21 step-17645
+checkpoint; decide a new plan for 1e22 (no active job); keep an eye on the
+3e20 cooldown now that it has allocated.
+
+### claude 2026-06-05T23:41Z - 3e20 cooldown status check
+
+User asked what `/ahmedah/` is running. Only the 3e20 cooldown20 pair is
+nonterminal:
+
+- Child `.../aa-true-p33m67-cd20-a010-d3e20-v5p16-z5a-r1-1780599550/midtrain-delphi-true-3e20-p33m67-cooldown20-a010`
+  is controller-state `running` with `failures=0`, `preemptions=2`, but both
+  tasks are pending again (task 1 ~8h, task 0 ~3.5h) waiting on
+  `tpu_v5p-preemptible_16-us-east5-a`.
+- It DID train after allocating: permanent checkpoint saved at east5
+  `step-31959` — exactly 50% through the cooldown (3551 of 7102 steps from
+  28408 toward 35510). Final marker at `step-35510` still absent.
+- No action taken: `failure_count=0`, durable progress banked. If a relaunch
+  ever becomes necessary, resume from permanent `step-31959`, not staged
+  `step-28408`.
+
+### claude 2026-06-06T15:13Z - 3e20 cooldown poll
+
+User asked if `/ahmedah/` is still running. Yes — only the 3e20 cooldown20
+pair remains nonterminal:
+
+- Child is controller-state `running`, `failures=0`, `preemptions=3` (was 2):
+  it reallocated overnight, trained, and was preempted again ~13:30Z; both
+  tasks pending on `tpu_v5p-preemptible_16-us-east5-a`.
+- Overnight window advanced temp checkpoints to `step-33631` (complete; logs
+  show "Saved checkpoint" then deletion of older step-33580). `step-33694` is
+  partial — no `metadata.json` — preemption hit mid-save. Progress is now
+  ~74% through cooldown (5223 of 7102 steps from 28408 toward 35510).
+- Correction to earlier entries: the east5 temp checkpoint root uses an
+  underscore-flattened path,
+  `gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-3e20-p33m67-cooldown20-a010/checkpoints/`,
+  not the nested `marin-us-east5/checkpoints/...` form — earlier "no temp
+  checkpoints" observations used the wrong path.
+- Permanent checkpoints unchanged: latest `step-31959`. Final marker at
+  `step-35510` still absent.
+- No action taken: `failures=0`, durable progress banked. If a relaunch ever
+  becomes necessary, resume from temp `step-33631` (NOT partial 33694, NOT
+  permanent 31959).
+
+## HANDOFF claude 2026-06-06T23:43Z - 3e20 pending diagnosis (partial) + full state
+
+User asked why 3e20 isn't running despite "seeing v5p-16". Investigation was
+cut short by user; findings so far:
+
+- The visible v5p-16 capacity is in the WRONG REGION:
+  `tpu_v5p-preemptible_16-us-central1-a` has ready=2, demand=0. The 3e20
+  cooldown is pinned to `tpu_v5p-preemptible_16-us-east5-a` (source checkpoint
+  and data caches staged in east5; cross-region loads are forbidden).
+- `tpu_v5p-preemptible_16-us-east5-a` shows ready=0, booting=0, demand=0.
+  Demand=0 means the autoscaler is not even routing demand there right now —
+  consistent with the recurring `tier_blocked: quota-pool tier monotonicity`
+  pending reason seen in earlier polls. Exact current blocking reason was NOT
+  confirmed before the user interrupted; scheduler-state dump shows the 2
+  tasks pending in the `PRIORITY_BAND_INTERACTIVE` bucket for `ahmedah`.
+- Also noted: east5 has heavy v6e demand (v6e-16 demand=42, v6e-8 demand=48,
+  v6e-32 demand=28, all with ~20 booting each) which may be absorbing the
+  quota pool.
+
+Current state of all delphi work (as of 2026-06-06T23:43Z):
+
+- `2e20 cooldown20`: COMPLETE + Qwen3-validated at
+  `gs://marin-us-east5/checkpoints/delphi-true-2e20-p33m67-cooldown20-a010/checkpoints/step-56470`
+  (`num_layers=21`).
+- `1e21 prefix`: COMPLETE — final marker exists at
+  `gs://marin-us-central2/checkpoints/delphi-prefix-checkpoints/delphi-1e21-prefixes-qwen3-v4c-r11-reserved32-ram256/checkpoints/step-17645/metadata.json`.
+  Qwen3 validation (`num_layers=26`) NOT yet run. TODO.
+- `1e22 prefix`: STALLED, no active job (the two stale alternates were killed
+  2026-06-05T23:14Z on user request). Final marker absent at canonical
+  `.../delphi-1e22-prefixes-qwen3-v4c-r10-reserved32-ram256/checkpoints/step-30588/metadata.json`.
+  Latest canonical temp checkpoint: central2 `step-30154`. v4-32 pdev16
+  compile-OOMs (36.90G vs 30.75G HBM); reserved capacity is forbidden
+  (2026-06-05T01:25Z constraint). Needs a new memory/topology plan before any
+  relaunch.
+- `3e20 cooldown20`: ~74% done. Active pair:
+  parent `/ahmedah/aa-true-p33m67-cd20-a010-d3e20-v5p16-z5a-r1-1780599550`,
+  child `.../midtrain-delphi-true-3e20-p33m67-cooldown20-a010`.
+  Child controller-state `running`, `failures=0`, `preemptions=3`, both tasks
+  pending since ~2026-06-06T13:30Z. Latest durable temp checkpoint:
+  `gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-3e20-p33m67-cooldown20-a010/checkpoints/step-33631`
+  (note underscore-flattened temp root). `step-33694` is partial (no
+  metadata.json). Latest permanent: `step-31959`. Target: `step-35510`
+  (final marker absent).
+
+Next-agent instructions:
+
+1. 3e20: do NOT stop/relaunch while nonterminal with `failures=0`. Finish the
+   pending diagnosis if needed: check the autoscaler/tier state for
+   `tpu_v5p-preemptible_16-us-east5-a` (why demand=0) via
+   `iris rpc controller get-scheduler-state` and cluster status. If a
+   relaunch ever becomes necessary, resume from temp `step-33631` with the
+   exact output path forced (see global resume rule), NOT partial 33694, NOT
+   permanent 31959.
+2. Do not move 3e20 cross-region; us-central1-a v5p-16 capacity is not usable
+   without restaging model+data, which has not been done.
+3. 1e21: run `assert_checkpoint_complete_for_model_type(..., model_type="qwen3",
+   num_layers=26)` on step-17645 to close it out.
+4. 1e22: needs a user decision + new topology plan (non-reserved). No job is
+   advancing it.
+5. Reserved scale groups remain read-only/informational per the
+   2026-06-05T01:25Z operator constraint.
+
+## CODEX 2026-06-07T00:05Z - user-requested 3e20 v5p-8 relaunch
+
+User requested killing the current `3e20` cooldown and relaunching on east5
+`v5p-8` with gradient accumulation.
+
+Pre-relaunch resume audit:
+
+- Old run/output identity preserved:
+  `gs://marin-us-east5/checkpoints/delphi-true-3e20-p33m67-cooldown20-a010`.
+- Final marker still absent:
+  `.../checkpoints/step-35510/metadata.json`.
+- Latest complete temp checkpoint remains:
+  `gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-3e20-p33m67-cooldown20-a010/checkpoints/step-33631/metadata.json`.
+- Partial temp checkpoint `step-33694` still has no `metadata.json`; do not use
+  it as a resume floor.
+
+Actions taken:
+
+- Added `--per-device-parallelism` to
+  `experiments/midtrain_specs/true_midtrain/nemotron_math_only/launcher.py` so
+  v5p-8 relaunch can force Levanter gradient accumulation.
+- Stopped old v5p-16 child, then parent:
+  `/ahmedah/aa-true-p33m67-cd20-a010-d3e20-v5p16-z5a-r1-1780599550/midtrain-delphi-true-3e20-p33m67-cooldown20-a010`
+  and `/ahmedah/aa-true-p33m67-cd20-a010-d3e20-v5p16-z5a-r1-1780599550`.
+  Both verified `JOB_STATE_KILLED`, `failure_count=0`.
+- Submitted replacement coordinator:
+  `/ahmed/aa-true-p33m67-cd20-a010-d3e20-v5p8-z5a-r1-1780790456`.
+- Launcher reused the already staged east5 checkpoint at step `28408`
+  (`bytes_copied=0`; no new central2 copy).
+- Rendered config now has:
+  - `trainer.id: delphi-true-3e20-p33m67-cooldown20-a010`
+  - `trainer.train_batch_size: 128`
+  - `trainer.per_device_parallelism: 16`
+  - `tpu_type: v5p-8`
+  - `zone: us-east5-a`
+  - same permanent and temp checkpoint roots as before.
+
+Current state:
+
+- New child:
+  `/ahmed/aa-true-p33m67-cd20-a010-d3e20-v5p8-z5a-r1-1780790456/midtrain-delphi-true-3e20-p33m67-cooldown20-a010`.
+- Child state at last poll: `JOB_STATE_PENDING`, `failure_count=0`,
+  `preemption_count=0`, one pending task.
+- Pending reason:
+  `tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity`
+  on `tpu_v5p-preemptible_8-us-east5-a`.
+- Resume is not yet verified because the child has not allocated. Next monitor
+  must confirm logs show the same run id/output path and `Resuming training
+  from step ...`; expected latest valid checkpoint is temp `step-33631`.
+
+## CODEX 2026-06-07T00:10Z - local 3e20 v5p-8 monitor state
+
+Started local monitor state for the user-requested 3e20 v5p-8 relaunch:
+
+- State file: `scratch/20260607-0009_monitoring_state.json`.
+- Progress note: `scratch/20260607-0009_3e20_v5p8_progress.md`.
+- Child remains `JOB_STATE_PENDING`, `failure_count=0`, `preemption_count=0`.
+- Current pending reason is east5 v5p-8 quota-pool tier monotonicity.
+- Final `step-35510/metadata.json` is still absent.
+- Valid temp resume floor is confirmed present at `step-33631/metadata.json`;
+  `step-33694/metadata.json` is absent and must not be treated as complete.
+- No trainer startup logs yet, so exact output-path/run-id resume verification
+  is still pending.
+
+## CODEX 2026-06-07T00:33Z - 3e20 v5p-8 monitor poll
+
+Second babysit cadence completed with no allocation yet:
+
+- Coordinator `/ahmed/aa-true-p33m67-cd20-a010-d3e20-v5p8-z5a-r1-1780790456`
+  remains `JOB_STATE_RUNNING` on a CPU worker.
+- Child
+  `/ahmed/aa-true-p33m67-cd20-a010-d3e20-v5p8-z5a-r1-1780790456/midtrain-delphi-true-3e20-p33m67-cooldown20-a010`
+  remains `JOB_STATE_PENDING`, `failure_count=0`, `preemption_count=0`, no
+  worker assigned.
+- Pending reason remains no matching east5 v5p-8 worker with enough resources
+  plus quota-pool tier monotonicity.
+- `tpu_v5p-preemptible_8-us-east5-a` status: booting=6, ready=2, demand=0.
+- No trainer startup/resume/W&B/loss/OOM logs yet.
+- Final marker still absent; temp `step-33631/metadata.json` present;
+  `step-33694/metadata.json` absent.
+- Resume is still unverified until trainer logs show exact run/output path and
+  `Resuming training from step ...`.
+
+## CODEX 2026-06-07T00:55Z - 3e20 v5p-8 scheduler progressing
+
+Monitor poll shows the child is still pending, but the scheduler signal changed
+from tier-blocked to active scale-up:
+
+- Child remains `JOB_STATE_PENDING`, `failure_count=0`, `preemption_count=0`,
+  no trainer worker assigned yet.
+- Pending reason now says `(scaling up) Waiting for worker scale-up in scale
+  group 'tpu_v5p-preemptible_8-us-east5-a' (38 slice(s) requested)`.
+- Cluster status for `tpu_v5p-preemptible_8-us-east5-a`: booting=24, ready=2,
+  demand=61.
+- No trainer startup/resume/W&B/loss/OOM logs yet.
+- Final marker absent; temp `step-33631/metadata.json` present;
+  `step-33694/metadata.json` absent.
+
+## CODEX 2026-06-07T01:06Z - 3e20 v5p-8 back to tier-blocked
+
+The scale-up signal did not produce allocation by the next cadence:
+
+- Child remains `JOB_STATE_PENDING`, `failure_count=0`, `preemption_count=0`,
+  no worker assigned.
+- Pending reason reverted to quota-pool tier monotonicity.
+- Cluster status for `tpu_v5p-preemptible_8-us-east5-a`: booting=0, ready=2,
+  demand=0.
+- Filtered scheduler state still has the child in
+  `PRIORITY_BAND_INTERACTIVE` for user `ahmed`, count=1.
+- `ahmed` budget is not exhausted (`budget_spent=884`,
+  `utilization_percent=1.1786667`, effective band interactive).
+- No trainer startup/resume/W&B/loss/OOM logs yet.
+- Final marker absent; temp `step-33631/metadata.json` present;
+  `step-33694/metadata.json` absent.
+
+## CODEX 2026-06-07T04:40Z - 3e20 v5p-8 active scale-up again
+
+After several scratch-only pending polls, the scheduler signal changed back to
+active east5 v5p-8 scale-up:
+
+- Child remains `JOB_STATE_PENDING`, `failure_count=0`, `preemption_count=0`,
+  no worker assigned.
+- Pending reason now says the autoscaler is scaling up
+  `tpu_v5p-preemptible_8-us-east5-a` with 66 slice(s) requested.
+- Cluster status for `tpu_v5p-preemptible_8-us-east5-a`: booting=22, ready=2,
+  demand=87.
+- Filtered scheduler state still has the child in
+  `PRIORITY_BAND_INTERACTIVE` for user `ahmed`, count=1. `ahmed` remains
+  effective interactive (`budget_spent=20116`, utilization about 26.82%).
+- No trainer startup/resume/W&B/loss/OOM logs yet.
+- Final marker absent; temp `step-33631/metadata.json` present;
+  `step-33694/metadata.json` absent.
+
+## CODEX 2026-06-07T04:51Z - 3e20 v5p-8 scale-up did not allocate
+
+The active scale-up signal did not produce a worker by the next cadence:
+
+- Child remains `JOB_STATE_PENDING`, `failure_count=0`, `preemption_count=0`,
+  no worker assigned.
+- Pending reason reverted to quota-pool tier monotonicity.
+- Cluster status for `tpu_v5p-preemptible_8-us-east5-a`: booting=0, ready=2,
+  demand=0.
+- No trainer startup/resume/W&B/loss/OOM logs yet.
+- Final marker absent; temp `step-33631/metadata.json` present;
+  `step-33694/metadata.json` absent.
+
+## CODEX 2026-06-07T05:01Z - 3e20 v5p-8 large active scale-up
+
+The child is still pending, but the autoscaler signal flipped back to active
+scale-up with much larger demand:
+
+- Child remains `JOB_STATE_PENDING`, `failure_count=0`, `preemption_count=0`,
+  no worker assigned.
+- Pending reason says east5 v5p-8 scale-up is waiting with 443 slice(s)
+  requested.
+- Cluster status for `tpu_v5p-preemptible_8-us-east5-a`: booting=16, ready=2,
+  demand=459.
+- No trainer startup/resume/W&B/loss/OOM logs yet.
+- Final marker absent; temp `step-33631/metadata.json` present;
+  `step-33694/metadata.json` absent.
+
+## CODEX 2026-06-07T05:12Z - 3e20 v5p-8 matching workers but memory unavailable
+
+The child is still pending, but the scheduler signal moved from no matching
+worker to matching east5 v5p-8 workers without enough free memory:
+
+- Child remains `JOB_STATE_PENDING`, `failure_count=0`, `preemption_count=0`,
+  no worker assigned.
+- Scheduler reports insufficient memory: need 256.0GB, available 0.8GB on
+  3 matching worker(s).
+- Autoscaler is still actively scaling east5 v5p-8 with 706 slice(s)
+  requested.
+- Cluster status for `tpu_v5p-preemptible_8-us-east5-a`: booting=58, ready=8,
+  demand=763.
+- No trainer startup/resume/W&B/loss/OOM logs yet.
+- Final marker absent; temp `step-33631/metadata.json` present;
+  `step-33694/metadata.json` absent.
+
+## CODEX 2026-06-07T05:22Z - 3e20 v5p-8 back to tier-blocked
+
+The matching-worker/active-scale-up window did not produce allocation by the
+next cadence:
+
+- Child remains `JOB_STATE_PENDING`, `failure_count=0`, `preemption_count=0`,
+  no worker assigned.
+- Pending reason reverted to quota-pool tier monotonicity.
+- Cluster status for `tpu_v5p-preemptible_8-us-east5-a`: booting=6, ready=5,
+  demand=0.
+- No trainer startup/resume/W&B/loss/OOM logs yet.
+- Final marker absent; temp `step-33631/metadata.json` present;
+  `step-33694/metadata.json` absent.
+
+## CODEX 2026-06-07T06:15Z - 3e20 v5p-8 still pending, high scale-up demand
+
+The relaunch has still not allocated a trainer worker. Scheduler state is
+oscillating between tier-blocked and active east5 v5p-8 scale-up:
+
+- Child remains `JOB_STATE_PENDING`, `failure_count=0`, `preemption_count=0`,
+  no worker assigned.
+- Current pending reason includes 1 matching worker with insufficient memory
+  (need 256.0GB, available 0.8GB) plus active east5 v5p-8 scale-up with
+  905 slice(s) requested.
+- Cluster status for `tpu_v5p-preemptible_8-us-east5-a`: booting=60, ready=6,
+  demand=965.
+- No trainer startup/resume/W&B/loss/OOM logs yet, so v5p-8 fit is still
+  untested and resume identity is still unverified.
+- Final marker absent; temp `step-33631/metadata.json` present;
+  `step-33694/metadata.json` absent.
+
+## CODEX 2026-06-07T07:06Z - 3e20 v5p-8 still waiting on east5 capacity
+
+Hourly status after the 06:15Z high-demand scale-up window:
+
+- Child remains `JOB_STATE_PENDING`, `failure_count=0`, `preemption_count=0`,
+  no worker assigned.
+- Pending reason is back to quota-pool tier monotonicity.
+- Cluster status for `tpu_v5p-preemptible_8-us-east5-a`: booting=0, ready=3,
+  demand=0.
+- No trainer startup/resume/W&B/loss/OOM logs yet, so v5p-8 fit remains
+  untested and resume identity remains unverified.
+- Final marker absent; temp `step-33631/metadata.json` present;
+  `step-33694/metadata.json` absent.
+
+## CODEX 2026-06-07T07:59Z - 3e20 v5p-8 still pending with matching workers memory-starved
+
+Hourly status:
+
+- Child remains `JOB_STATE_PENDING`, `failure_count=0`, `preemption_count=0`,
+  no worker assigned.
+- Pending reason now usually sees some matching east5 v5p-8 workers, but they
+  do not have enough free memory for the 256GB task request. Latest sample:
+  5 matching worker(s), available 16.8GB.
+- Cluster status for `tpu_v5p-preemptible_8-us-east5-a`: booting=3, ready=10,
+  demand=0.
+- No trainer startup/resume/W&B/loss/OOM logs yet, so v5p-8 fit remains
+  untested and resume identity remains unverified.
+- Final marker absent; temp `step-33631/metadata.json` present;
+  `step-33694/metadata.json` absent.
+
+## CODEX 2026-06-07T08:41Z - 3e20 v5p-8 allocated and resumed correctly
+
+The child finally allocated on east5 v5p-8 and is running:
+
+- Child
+  `/ahmed/aa-true-p33m67-cd20-a010-d3e20-v5p8-z5a-r1-1780790456/midtrain-delphi-true-3e20-p33m67-cooldown20-a010`
+  is `JOB_STATE_RUNNING`, `failure_count=0`, `preemption_count=0`.
+- W&B resumed run `delphi-true-3e20-p33m67-cooldown20-a010`:
+  <https://wandb.ai/marin-community/delphi-midtraining/runs/delphi-true-3e20-p33m67-cooldown20-a010>.
+- Resume identity is verified from logs: found temp checkpoint
+  `gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-3e20-p33m67-cooldown20-a010/checkpoints/step-33631`
+  and logged `Resuming training from step 33632`.
+- First v5p-8 train step completed at step 33632; filtered logs show no
+  `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, or OOM
+  signal so far.
+- Latest training progress in the poll window is around `33.6kit/35.5kit` with
+  loss around 1.54.
+- W&B emitted a background config-artifact `FileNotFoundError` and refused to
+  log step 33632 because the existing W&B run is already at step 33701; trainer
+  continued, so this is being tracked as a warning rather than a failed run.
+- Final marker absent; temp `step-33631/metadata.json` present;
+  `step-33694/metadata.json` absent.
+
+## CODEX 2026-06-07T08:45Z - 3e20 v5p-8 saved new temp checkpoint
+
+The v5p-8 run is still running after first-step execution:
+
+- Child remains `JOB_STATE_RUNNING`, `failure_count=0`, `preemption_count=0`.
+- Training progress is around `33.7kit/35.5kit`; rates are noisy and slow
+  around checkpointing, with recent loss around 1.5-1.6.
+- Temp checkpoint `step-33650` saved and has a valid `metadata.json`.
+- Old temp checkpoint `step-33631` was deleted after `step-33650` committed, so
+  the latest valid temp resume floor is now `step-33650`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, or OOM
+  signal in filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T08:57Z - 3e20 v5p-8 advanced to temp checkpoint 33720
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Latest progress log is still around `33.7kit/35.5kit`, with rate `8.7s/it`,
+  remaining `4:16:28`, and loss `1.6` at 2026-06-07T08:57:15Z.
+- Temp checkpoint `step-33720` saved and has a valid `metadata.json`; prior temp
+  `step-33650` has been deleted after the newer checkpoint committed, so the
+  current verified temp resume floor is `step-33720`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T09:08Z - 3e20 v5p-8 reached eval and temp checkpoint 33790
+
+The east5 v5p-8 child continues to run cleanly:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training advanced to around `33.8kit/35.5kit`; latest train log is rate
+  `8.8s/it`, remaining `4:08:54`, loss `1.64` at 2026-06-07T09:07:42Z.
+- Eval started at 2026-06-07T09:07:59Z.
+- Temp checkpoint `step-33790` saved and has a valid `metadata.json`; `step-33694`
+  remains a partial directory without metadata and is not a resume floor.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T09:19Z - 3e20 v5p-8 eval completed and temp checkpoint 33808 saved
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Eval completed at 2026-06-07T09:16:29Z with eval loss `1.955`, paloma macro
+  `3.036`, uncheatable macro `2.613`, and nemotron math macro `0.945`.
+- Training resumed after eval; latest train log is around `33.8kit/35.5kit`,
+  rate `13.5s/it`, remaining `6:21:10`, loss `1.58`.
+- Temp checkpoint `step-33808` saved and has a valid `metadata.json`; `step-33694`
+  remains a partial directory without metadata and is not a resume floor.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T09:29Z - 3e20 v5p-8 advanced to temp checkpoint 33878
+
+The east5 v5p-8 child continues to run cleanly:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training advanced to around `33.9kit/35.5kit`; latest train log shows
+  checkpoint-skewed rate `20.8s/it`, remaining `9:25:15`, loss `1.48`.
+- Temp checkpoint `step-33878` has a valid `metadata.json`; `step-33843` rotated
+  out after the newer checkpoint committed. `step-33694` remains a partial
+  directory without metadata and is not a resume floor.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T09:40Z - 3e20 v5p-8 latest verified temp checkpoint 33913
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training remains around `33.9kit/35.5kit`; latest steady train log is rate
+  `8.7s/it`, remaining `3:46:51`, loss `1.46`.
+- Temp checkpoint `step-33913` has a valid `metadata.json`.
+- Temp checkpoint `step-33948` started writing at 2026-06-07T09:39:41Z, but has
+  no metadata yet, so it is not a resume floor.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T09:50Z - 3e20 v5p-8 reached 34.0k and temp checkpoint 33983
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training reached around `34.0kit/35.5kit`.
+- Temp checkpoint `step-33983` saved and has a valid `metadata.json`.
+- A new eval pass started at 2026-06-07T09:46:22Z and was at `232it/447it` as
+  of 2026-06-07T09:50:24Z.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T10:01Z - 3e20 v5p-8 eval completed and latest verified temp checkpoint 33985
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Eval completed at 2026-06-07T09:54:41Z with eval loss `1.949`, paloma macro
+  `3.028`, uncheatable macro `2.603`, and nemotron math macro `0.939`.
+- Training is around `34.0kit/35.5kit`; latest train log shows checkpoint-skewed
+  rate `21.0s/it`, remaining `8:41:31`, loss `1.51`.
+- Temp checkpoint `step-33985` has a valid `metadata.json`.
+- Temp checkpoint `step-34020` started writing at 2026-06-07T10:00:37Z, but has
+  no metadata yet, so it is not a resume floor.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T10:12Z - 3e20 v5p-8 advanced to 34.1k and temp checkpoint 34055
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training advanced to around `34.1kit/35.5kit`; latest steady train log is rate
+  `8.7s/it`, remaining `3:26:18`, loss `1.41`.
+- Temp checkpoint `step-34055` has a valid `metadata.json`.
+- Temp checkpoint `step-34090` started writing at 2026-06-07T10:12:10Z, but has
+  no metadata yet, so it is not a resume floor.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T10:22Z - 3e20 v5p-8 latest verified temp checkpoint 34125
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training remains around `34.1kit/35.5kit`; latest steady train log is rate
+  `8.7s/it`, remaining `3:17:01`, loss `1.52`.
+- Temp checkpoint `step-34125` saved and has a valid `metadata.json`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T10:33Z - 3e20 v5p-8 reached 34.2k and latest verified temp checkpoint 34160
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training reached around `34.2kit/35.5kit`.
+- Eval completed at 2026-06-07T10:32:53Z with eval loss `1.943`, paloma macro
+  `3.022`, uncheatable macro `2.593`, and nemotron math macro `0.933`.
+- Temp checkpoint `step-34160` has a valid `metadata.json`.
+- Temp checkpoint `step-34162` started writing at 2026-06-07T10:33:02Z, but has
+  no metadata yet, so it is not a resume floor.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T10:43Z - 3e20 v5p-8 latest verified temp checkpoint 34197
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training remains around `34.2kit/35.5kit`; latest train log is rate `8.7s/it`,
+  remaining `3:05:30`, loss `1.36`.
+- Temp checkpoint `step-34197` saved and has a valid `metadata.json`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T10:54Z - 3e20 v5p-8 advanced to 34.3k and temp checkpoint 34267
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training advanced to around `34.3kit/35.5kit`; latest train log is rate
+  `8.7s/it`, remaining `2:56:31`, loss `1.39`.
+- Temp checkpoint `step-34267` saved and has a valid `metadata.json`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T11:05Z - 3e20 v5p-8 latest verified temp checkpoint 34337
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training remains around `34.3kit/35.5kit`.
+- Temp checkpoint `step-34337` saved and has a valid `metadata.json`.
+- A new eval pass started at 2026-06-07T11:02:56Z and was at `123it/447it` as of
+  2026-06-07T11:04:57Z.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T11:15Z - 3e20 v5p-8 eval completed and reached 34.4k
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Eval completed at 2026-06-07T11:11:15Z with eval loss `1.937`, paloma macro
+  `3.015`, uncheatable macro `2.587`, and nemotron math macro `0.928`.
+- Training advanced to around `34.4kit/35.5kit`; latest train log is rate
+  `8.7s/it`, remaining `2:46:52`, loss `1.43`.
+- Temp checkpoint `step-34339` saved and has a valid `metadata.json`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T11:26Z - 3e20 v5p-8 latest verified temp checkpoint 34409
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training remains around `34.4kit/35.5kit`; latest train log is rate `8.8s/it`,
+  remaining `2:38:40`, loss `1.68`.
+- Temp checkpoint `step-34409` saved and has a valid `metadata.json`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T11:36Z - 3e20 v5p-8 advanced to 34.5k and temp checkpoint 34479
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training advanced to around `34.5kit/35.5kit`; latest train log shows
+  post-checkpoint rate `9.8s/it`, remaining `2:46:42`, loss `1.59`.
+- Temp checkpoint `step-34479` saved and has a valid `metadata.json`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T11:47Z - 3e20 v5p-8 latest verified temp checkpoint 34514
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training remains around `34.5kit/35.5kit`.
+- Temp checkpoint `step-34514` saved and has a valid `metadata.json`.
+- A new eval pass started at 2026-06-07T11:41:23Z and was at `286it/447it` as of
+  2026-06-07T11:46:24Z.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T11:57Z - 3e20 v5p-8 eval completed and reached 34.6k
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Eval completed at 2026-06-07T11:49:42Z with eval loss `1.931`, paloma macro
+  `3.009`, uncheatable macro `2.580`, and nemotron math macro `0.923`.
+- Training advanced to around `34.6kit/35.5kit`; latest train log shows
+  post-checkpoint rate `9.9s/it`, remaining `2:37:11`, loss `1.42`.
+- Temp checkpoint `step-34551` saved and has a valid `metadata.json`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T12:08Z - 3e20 v5p-8 latest verified temp checkpoint 34586
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training remains around `34.6kit/35.5kit`; latest train log shows
+  checkpoint-skewed rate `22.0s/it`, remaining `5:25:45`, loss `1.46`.
+- Temp checkpoint `step-34586` has a valid `metadata.json`.
+- Temp checkpoint `step-34621` started writing at 2026-06-07T12:07:24Z, but has
+  no metadata yet, so it is not a resume floor.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T12:19Z - 3e20 v5p-8 advanced to 34.7k and latest verified temp checkpoint 34656
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training advanced to around `34.7kit/35.5kit`; latest steady train log shows
+  rate `8.7s/it`, remaining `1:59:08`, loss `1.61`.
+- Temp checkpoint `step-34656` saved and has a valid `metadata.json`.
+- Temp checkpoint `step-34691` started writing at 2026-06-07T12:19:01Z, but has
+  no metadata yet, so it is not a resume floor.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T12:31Z - 3e20 v5p-8 eval completed and temp checkpoint 34693 verified
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Eval completed at 2026-06-07T12:28:14Z with eval loss `1.925`, paloma macro
+  `3.002`, uncheatable macro `2.572`, and nemotron math macro `0.918`.
+- Training remains around `34.7kit/35.5kit`; latest train log shows
+  post-checkpoint rate `15.9s/it`, remaining `3:33:34`, loss `1.63`.
+- Temp checkpoint `step-34693` saved and has a valid `metadata.json`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T12:41Z - 3e20 v5p-8 advanced to 34.8k and temp checkpoint 34763 verified
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training advanced to around `34.8kit/35.5kit`; latest steady train log shows
+  rate `8.7s/it`, remaining `1:48:45`, loss `1.56`.
+- Latest train log is checkpoint-skewed with rate `22.2s/it`, remaining
+  `4:35:04`, loss `1.47`.
+- Temp checkpoint `step-34763` saved and has a valid `metadata.json`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T12:52Z - 3e20 v5p-8 latest verified temp checkpoint 34798
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training remains around `34.8kit/35.5kit`; latest steady train log shows rate
+  `8.7s/it`, remaining `1:38:37`, loss `1.36`.
+- Temp checkpoint `step-34798` saved and has a valid `metadata.json`.
+- Temp checkpoint `step-34833` started writing at 2026-06-07T12:51:42Z, but has
+  no metadata yet, so it is not a resume floor.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T13:03Z - 3e20 v5p-8 reached 34.9k and temp checkpoint 34868 verified
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training advanced to around `34.9kit/35.5kit`; latest steady train log shows
+  rate `8.7s/it`, remaining `1:33:36`, loss `1.49`.
+- Eval is in progress as of 2026-06-07T13:02:29Z at `232it/447it`.
+- Temp checkpoint `step-34868` saved and has a valid `metadata.json`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T13:14Z - 3e20 v5p-8 eval completed and latest verified temp checkpoint 34870
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Eval completed at 2026-06-07T13:06:46Z with eval loss `1.920`, paloma macro
+  `2.997`, uncheatable macro `2.566`, and nemotron math macro `0.914`.
+- Training remains around `34.9kit/35.5kit`; latest steady train log shows rate
+  `8.7s/it`, remaining `1:28:04`, loss `1.67`.
+- Temp checkpoint `step-34870` saved and has a valid `metadata.json`.
+- Temp checkpoint `step-34905` started writing at 2026-06-07T13:12:44Z, but has
+  no metadata yet, so it is not a resume floor.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T13:24Z - 3e20 v5p-8 reached 35.0k and temp checkpoint 34940 verified
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training advanced to around `35.0kit/35.5kit`; latest steady train log shows
+  rate `8.7s/it`, remaining `1:18:03`, loss `1.43`.
+- Temp checkpoint `step-34940` saved and has a valid `metadata.json`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T13:35Z - 3e20 v5p-8 latest verified temp checkpoint 35010
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training remains around `35.0kit/35.5kit`; latest steady train log shows rate
+  `8.7s/it`, remaining `1:09:05`, loss `1.63`.
+- Temp checkpoint `step-35010` saved and has a valid `metadata.json`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T13:45Z - 3e20 v5p-8 latest verified temp checkpoint 35045
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training remains around `35.0kit/35.5kit`; latest steady train log shows rate
+  `8.7s/it`, remaining `1:07:56`, loss `1.57`.
+- Eval reached `447it/447it` at 2026-06-07T13:45:05Z; eval metrics were not yet
+  in the filtered poll.
+- Temp checkpoint `step-35045` saved and has a valid `metadata.json`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T13:56Z - 3e20 v5p-8 reached 35.1k and temp checkpoint 35082 verified
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Eval completed at 2026-06-07T13:45:23Z with eval loss `1.916`, paloma macro
+  `2.993`, uncheatable macro `2.561`, and nemotron math macro `0.910`.
+- Training advanced to around `35.1kit/35.5kit`; latest steady train log shows
+  rate `8.7s/it`, remaining `58:40`, loss `1.47`.
+- Temp checkpoint `step-35082` saved and has a valid `metadata.json`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T14:06Z - 3e20 v5p-8 reached 35.2k and temp checkpoint 35152 verified
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training advanced to around `35.2kit/35.5kit`; latest steady train log shows
+  rate `8.8s/it`, remaining `50:06`, loss `1.39`.
+- Temp checkpoint `step-35152` saved and has a valid `metadata.json`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T14:17Z - 3e20 v5p-8 latest verified temp checkpoint 35187
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training remains around `35.2kit/35.5kit`; latest steady train log shows rate
+  `8.7s/it`, remaining `42:20`, loss `1.46`.
+- Eval is in progress as of 2026-06-07T14:16:57Z at `68it/447it`.
+- Temp checkpoint `step-35187` saved and has a valid `metadata.json`.
+- Temp checkpoint `step-35222` started writing at 2026-06-07T14:14:59Z, but has
+  no metadata yet, so it is not a resume floor.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T14:28Z - 3e20 v5p-8 eval completed and temp checkpoint 35224 verified
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Eval completed at 2026-06-07T14:24:16Z with eval loss `1.912`, paloma macro
+  `2.989`, uncheatable macro `2.556`, and nemotron math macro `0.907`.
+- Training remains around `35.2kit/35.5kit`; latest train log shows rate
+  `9.3s/it`, remaining `41:35`, loss `1.62`.
+- Temp checkpoint `step-35224` saved and has a valid `metadata.json`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T14:38Z - 3e20 v5p-8 reached 35.3k and temp checkpoint 35294 verified
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training advanced to around `35.3kit/35.5kit`; latest steady train log shows
+  rate `8.7s/it`, remaining `31:56`, loss `1.49`.
+- Latest train log is post-checkpoint with rate `9.9s/it`, remaining `34:03`,
+  loss `1.44`.
+- Temp checkpoint `step-35294` saved and has a valid `metadata.json`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T14:49Z - 3e20 v5p-8 reached 35.4k and latest verified temp checkpoint 35329
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training advanced to around `35.4kit/35.5kit`; latest steady train log shows
+  rate `8.7s/it`, remaining `21:57`, loss `1.49`.
+- Temp checkpoint `step-35329` saved and has a valid `metadata.json`.
+- Temp checkpoint `step-35364` started writing at 2026-06-07T14:47:58Z, but has
+  no metadata yet, so it is not a resume floor.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T14:59Z - 3e20 v5p-8 latest verified temp checkpoint 35399
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training remains around `35.4kit/35.5kit`; latest steady train log shows rate
+  `8.7s/it`, remaining `16:46`, loss `1.57`.
+- Eval is in progress as of 2026-06-07T14:58:48Z at `232it/447it`.
+- Temp checkpoint `step-35399` saved and has a valid `metadata.json`.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T15:10Z - 3e20 v5p-8 final stretch and latest verified temp checkpoint 35401
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Eval completed at 2026-06-07T15:03:05Z with eval loss `1.910`, paloma macro
+  `2.986`, uncheatable macro `2.553`, and nemotron math macro `0.904`.
+- Training remains around `35.4kit/35.5kit`; latest steady train log shows rate
+  `8.7s/it`, remaining `11:17`, loss `1.40`.
+- Latest train log is checkpoint-skewed with rate `23.4s/it`, remaining
+  `28:02`, loss `1.51`.
+- Temp checkpoint `step-35401` saved and has a valid `metadata.json`.
+- Temp checkpoint `step-35436` started writing at 2026-06-07T15:09:06Z, but has
+  no metadata yet, so it is not a resume floor.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T15:21Z - 3e20 v5p-8 reached final displayed bucket and temp checkpoint 35471 verified
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training reached the final displayed bucket `35.5kit/35.5kit`; latest steady
+  train log shows rate `8.7s/it`, remaining `01:18`, loss `1.59`.
+- Temp checkpoint `step-35471` saved and has a valid `metadata.json`.
+- Temp checkpoint `step-35506` started writing at 2026-06-07T15:20:50Z, but has
+  no metadata yet, so it is not a resume floor.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+- Final marker absent.
+
+## CODEX 2026-06-07T15:25Z - 3e20 v5p-8 saved permanent checkpoint 35509 and final eval is running
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Training reached the final displayed bucket `35.5kit/35.5kit`.
+- Permanent checkpoint `step-35509` saved and has a valid `metadata.json`.
+- Final eval is in progress as of 2026-06-07T15:25:24Z at `123it/447it`.
+- Expected final marker `step-35510/metadata.json` is still absent, so this is
+  not yet marked complete.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+
+## CODEX 2026-06-07T15:33Z - 3e20 v5p-8 final eval completed and HF export is running
+
+The east5 v5p-8 child remains healthy:
+
+- Coordinator and child are both `JOB_STATE_RUNNING`, `failure_count=0`,
+  `preemption_count=0`.
+- Final eval completed at 2026-06-07T15:31:42Z with eval loss `1.909`, paloma
+  macro `2.985`, uncheatable macro `2.552`, and nemotron math macro `0.904`.
+- Permanent checkpoint `step-35509` has a valid `metadata.json`.
+- HF checkpoint export for `hf/step-35509` is in progress.
+- Expected final marker `step-35510/metadata.json` is still absent, so this is
+  not yet marked complete.
+- No `RESOURCE_EXHAUSTED`, `CompileTimeHbmOom`, HBM allocation report, OOM,
+  traceback, exception, or trainer error signal in the filtered logs.
+
+## CODEX 2026-06-07T15:38Z - 3e20 v5p-8 training child succeeded, wrapper false-failed post-save schema check
+
+The east5 v5p-8 child completed successfully:
+
+- Child job
+  `/ahmed/aa-true-p33m67-cd20-a010-d3e20-v5p8-z5a-r1-1780790456/midtrain-delphi-true-3e20-p33m67-cooldown20-a010`
+  is `JOB_STATE_SUCCEEDED`, `exit_code=0`, `failure_count=0`,
+  `preemption_count=0`.
+- Final eval completed at 2026-06-07T15:31:42Z with eval loss `1.909`,
+  paloma macro `2.985`, uncheatable macro `2.552`, and nemotron math macro
+  `0.904`.
+- Final permanent checkpoint is `step-35509`, not `step-35510`:
+  `gs://marin-us-east5/checkpoints/delphi-true-3e20-p33m67-cooldown20-a010/checkpoints/step-35509/metadata.json`.
+- HF export completed at
+  `gs://marin-us-east5/checkpoints/delphi-true-3e20-p33m67-cooldown20-a010/hf/step-35509/`.
+- Coordinator wrapper
+  `/ahmed/aa-true-p33m67-cd20-a010-d3e20-v5p8-z5a-r1-1780790456` is
+  `JOB_STATE_FAILED` after the child succeeded. Root cause: the post-save
+  checkpoint schema checker used `default_gcs_list`, whose `fsspec` listing
+  returned bare paths such as `marin-us-east5/...`; tensorstore then failed
+  to open them because `gs://` was missing.
+- Patched `experiments/midtrain_specs/true_midtrain/nemotron_math_only/launcher.py`
+  to preserve the root URI scheme for listed checkpoint dirs. Added
+  `tests/midtraining/test_nemotron_launcher.py`. Focused pytest passes with
+  `uv run --with pytest python -m pytest -o addopts= tests/midtraining/test_nemotron_launcher.py`.
+- Manual patched verifier passed against permanent checkpoints `[28408, 31959,
+  35509]`.
