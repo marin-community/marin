@@ -5,7 +5,7 @@
 # Module to support torch-style "state dict" serialization via safetensors
 import dataclasses
 import typing
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import equinox as eqx
 import jax
@@ -188,13 +188,9 @@ def from_state_dict(tree: T, state_dict: StateDict, prefix: str | None = None) -
         else:
             return default_eqx_module_from_state_dict(tree, state_dict, prefix)
     elif isinstance(tree, list):
-        return [
-            from_state_dict(item, state_dict, with_prefix(prefix, str(i))) for i, item in enumerate(tree)
-        ]  # type: ignore
+        return cast(T, [from_state_dict(item, state_dict, with_prefix(prefix, str(i))) for i, item in enumerate(tree)])
     elif isinstance(tree, dict):
-        return {
-            k: from_state_dict(v, state_dict, prefix=with_prefix(prefix, k)) for k, v in tree.items()
-        }  # type: ignore
+        return cast(T, {k: from_state_dict(v, state_dict, prefix=with_prefix(prefix, k)) for k, v in tree.items()})
     elif isinstance(tree, NamedArray):
         if prefix is None:
             raise ValueError("Cannot extract a leaf value from a torch dict without a prefix")
@@ -220,7 +216,7 @@ def from_state_dict(tree: T, state_dict: StateDict, prefix: str | None = None) -
         if prefix is None:
             raise ValueError("Cannot extract a leaf value from a state dict without a prefix")
         # TODO: add "strict" flag so we can return None in cases where it's just missing
-        return jnp.array(state_dict[prefix])
+        return cast(T, jnp.array(state_dict[prefix]))
     elif tree is None:
         return None  # type: ignore
     else:

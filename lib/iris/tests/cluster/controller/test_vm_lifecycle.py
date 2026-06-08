@@ -32,13 +32,13 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 
 import pytest
-from iris.cluster.providers.types import (
+from iris.cluster.backends.types import (
     CloudWorkerState,
     CommandResult,
     SliceHandle,
     WorkerStatus,
 )
-from iris.cluster.providers.vm_lifecycle import (
+from iris.cluster.backends.vm_lifecycle import (
     _build_controller_vm_config,
     start_controller,
     stop_controller,

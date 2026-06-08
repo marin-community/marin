@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from typing import TypeVar, cast
 
 import draccus
+from draccus.utils import DataclassInstance
 from fray import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
 from levanter.adaptor import NoAdaptorConfig
 from levanter.main.train_dpo import TrainDpoConfig
@@ -311,7 +312,7 @@ def _maybe_auto_resolve_dpo_schedule(config: TrainDpoOnPodConfig) -> TrainDpoOnP
             num_train_steps,
         )
         trainer = replace(trainer, num_train_steps=num_train_steps)
-        train_config = replace(train_config, trainer=trainer)
+        train_config = replace(cast(DataclassInstance, train_config), trainer=trainer)
 
     if config.auto_validation_runs is not None:
         eval_steps = _scheduled_dpo_eval_steps(train_config.trainer.num_train_steps, config.auto_validation_runs)
@@ -320,7 +321,7 @@ def _maybe_auto_resolve_dpo_schedule(config: TrainDpoOnPodConfig) -> TrainDpoOnP
             eval_steps,
         )
         train_config = replace(
-            train_config,
+            cast(DataclassInstance, train_config),
             run_initial_eval=True,
             scheduled_eval_steps=eval_steps,
         )
@@ -337,8 +338,8 @@ def _maybe_override_auto_build_caches(config: TrainConfigT, auto_build: bool) ->
     data = config.data
     if data.auto_build_caches != auto_build:
         logger.info("Overriding auto_build_caches to %s", auto_build)
-        data = dataclasses.replace(data, auto_build_caches=auto_build)
-        config = replace(config, data=data)
+        data = dataclasses.replace(cast(DataclassInstance, data), auto_build_caches=auto_build)
+        config = cast(TrainConfigT, replace(cast(DataclassInstance, config), data=data))
     return config
 
 
@@ -470,7 +471,7 @@ def _prepare_training_run(
     # disable accelerator requirement when running without GPU/TPU resources
     if config.resources.device.kind == "cpu":
         trainer = replace(train_config.trainer, require_accelerator=False)
-        train_config = replace(train_config, trainer=trainer)
+        train_config = replace(cast(DataclassInstance, train_config), trainer=trainer)
 
     if not isinstance(config.resources.device, CpuConfig):
         doublecheck_paths(config)

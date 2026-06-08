@@ -13,6 +13,11 @@ Integration tests with real GcpWorkerProvider are in test_autoscaler_integration
 import time
 
 import pytest
+from iris.cluster.backends.types import (
+    CloudSliceState,
+    QuotaExhaustedError,
+    SliceStatus,
+)
 from iris.cluster.constraints import DeviceType, WellKnownAttribute
 from iris.cluster.controller.autoscaler import DEFAULT_UNRESOLVABLE_TIMEOUT, Autoscaler
 from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth
@@ -20,17 +25,12 @@ from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDeci
 from iris.cluster.controller.autoscaler.routing import route_demand
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
 from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
-from iris.cluster.providers.types import (
-    CloudSliceState,
-    QuotaExhaustedError,
-    SliceStatus,
-)
 from iris.cluster.types import WorkerStatus
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 
-from tests.cluster.providers.conftest import (
+from tests.cluster.backends.conftest import (
     FakeSliceHandle,
     FakeWorkerHandle,
     make_mock_platform,

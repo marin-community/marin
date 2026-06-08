@@ -14,8 +14,8 @@ from rigging.config_discovery import resolve_cluster_config
 from rigging.log_setup import configure_logging
 
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
+from iris.cluster.backends.k8s.controller import configure_client_s3
 from iris.cluster.config import IrisConfig
-from iris.cluster.providers.k8s.controller import configure_client_s3
 from iris.cluster.token_store import cluster_name_from_url, load_any_token, load_token, store_token
 from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider, TokenProvider

@@ -152,10 +152,12 @@ def test_merge_lora():
 
 @skip_if_module_missing("peft")
 @skip_if_no_torch
-def test_lora_load_in_peft():
+def test_lora_load_in_peft(local_gpt2_tokenizer_path):
     import torch  # noqa: PLC0415  # optional dep: torch
 
-    converter: HFCheckpointConverter = Gpt2Config().hf_checkpoint_converter()
+    # Local tokenizer keeps converter construction off the Hub; the base model is
+    # saved/reloaded from a temp dir so the tokenizer is incidental here.
+    converter: HFCheckpointConverter = Gpt2Config(tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter()
     config = Gpt2Config(max_seq_len=128, hidden_dim=128, num_layers=2, num_heads=2)
     Vocab = converter.Vocab
 
@@ -170,7 +172,7 @@ def test_lora_load_in_peft():
     with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
         from peft import PeftConfig, PeftModel  # noqa: PLC0415  # optional dep: peft
 
-        converter.save_pretrained(model, f"{tmpdir}/model")
+        converter.save_pretrained(model, f"{tmpdir}/model", save_tokenizer=False)
 
         lora_config = LoraConfig(r=8, target_modules=["c_attn"], a_init_mode="random")
         loraized = loraize(model, lora_config, key=jax.random.PRNGKey(0))
@@ -202,10 +204,12 @@ def test_lora_load_in_peft():
 
 @skip_if_module_missing("peft")
 @skip_if_no_torch
-def test_lora_merged_load_in_hf():
+def test_lora_merged_load_in_hf(local_gpt2_tokenizer_path):
     import torch  # noqa: PLC0415  # optional dep: torch
 
-    converter: HFCheckpointConverter = Gpt2Config().hf_checkpoint_converter()
+    # Local tokenizer keeps converter construction off the Hub; the base model is
+    # saved/reloaded from a temp dir so the tokenizer is incidental here.
+    converter: HFCheckpointConverter = Gpt2Config(tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter()
     config = Gpt2Config(max_seq_len=128, hidden_dim=128, num_layers=2, num_heads=2)
     Vocab = converter.Vocab
 
@@ -218,11 +222,11 @@ def test_lora_merged_load_in_hf():
     causal_mask = AttentionMask.causal()
 
     with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
-        converter.save_pretrained(model, f"{tmpdir}/model")
+        converter.save_pretrained(model, f"{tmpdir}/model", save_tokenizer=False)
 
         lora_config = LoraConfig(r=8, target_modules=["c_attn"], a_init_mode="random")
         loraized = loraize(model, lora_config, key=jax.random.PRNGKey(0))
-        save_merged_hf_model(loraized, converter, f"{tmpdir}/loraized")
+        save_merged_hf_model(loraized, converter, f"{tmpdir}/loraized", save_tokenizer=False)
 
         hf_model = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/model").cpu()
         hf_model.eval()

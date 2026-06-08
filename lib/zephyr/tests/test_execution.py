@@ -15,6 +15,7 @@ from concurrent.futures import Future
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import cloudpickle
 import pytest
 from fray import ResourceConfig
 from fray.actor import ActorContext
@@ -22,6 +23,7 @@ from fray.local_backend import LocalClient
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import (
+    _NON_RETRYABLE_ERRORS,
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
     CoordinatorUnreachable,
@@ -31,6 +33,7 @@ from zephyr.execution import (
     ZephyrCoordinator,
     ZephyrWorker,
     ZephyrWorkerError,
+    _ensure_picklable_exception,
 )
 from zephyr.plan import PhysicalStage, StageType, compute_plan
 from zephyr.shuffle import ListShard
@@ -42,6 +45,33 @@ from zephyr.stage_io import (
     TaskResult,
 )
 from zephyr.worker_context import CounterSnapshot, zephyr_worker_ctx
+
+
+class _UnpicklableError(Exception):
+    """Mimics rigging's old TransferBudgetExceeded: __init__ args don't match self.args."""
+
+    def __init__(self, a, b, c):
+        self.a, self.b, self.c = a, b, c
+        super().__init__(f"boom {a}/{b}/{c}")  # self.args = (message,) -> revive needs 3 args
+
+
+def test_ensure_picklable_exception_passes_through_picklable():
+    err = ValueError("plain and picklable")
+    assert _ensure_picklable_exception(err) is err
+
+
+def test_ensure_picklable_exception_wraps_unrevivable_and_preserves_message():
+    err = _UnpicklableError(1, 2, 3)
+    err.add_note("--- subprocess traceback ---\nsomewhere")
+    with pytest.raises(TypeError):
+        cloudpickle.loads(cloudpickle.dumps(err))  # confirms the hazard
+
+    safe = _ensure_picklable_exception(err)
+    revived = cloudpickle.loads(cloudpickle.dumps(safe))  # must not raise
+    assert isinstance(revived, ZephyrWorkerError)
+    assert isinstance(revived, _NON_RETRYABLE_ERRORS)  # un-revivable -> fail fast, never retry
+    assert "_UnpicklableError" in str(revived) and "boom 1/2/3" in str(revived)
+    assert any("subprocess traceback" in n for n in revived.__notes__)
 
 
 def test_simple_map(zephyr_ctx):

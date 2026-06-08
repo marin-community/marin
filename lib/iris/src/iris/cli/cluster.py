@@ -31,6 +31,10 @@ from iris.cli.build import (
     get_git_sha,
 )
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
+from iris.cluster.backends.gcp.bootstrap import build_worker_bootstrap_script
+from iris.cluster.backends.gcp.workers import GcpWorkerProvider
+from iris.cluster.backends.local.cluster import LocalCluster
+from iris.cluster.backends.types import Labels
 from iris.cluster.config import IrisConfig, clear_remote_state, make_local_config
 from iris.cluster.controller.autoscaler.scaling_group import (
     _zone_from_template,
@@ -40,10 +44,6 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 from iris.cluster.controller.dashboard import ProxyControllerDashboard
 from iris.cluster.controller.main import run_controller_serve
 from iris.cluster.dashboard_common import VUE_DIST_DIR
-from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
-from iris.cluster.providers.gcp.workers import GcpWorkerProvider
-from iris.cluster.providers.local.cluster import LocalCluster
-from iris.cluster.providers.types import Labels
 from iris.rpc import config_pb2, controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto

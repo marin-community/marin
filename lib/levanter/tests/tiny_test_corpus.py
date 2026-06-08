@@ -48,7 +48,7 @@ def tiny_asr_corpus_config(path):
 
 
 def construct_small_data_cache(
-    path, num_shards=8, chunk_size=512, doc_len=128, vocab_size=1024
+    path, num_shards=8, chunk_size=512, doc_len=128, vocab_size=1024, tokenizer="gpt2"
 ) -> tuple[LmDataConfig, dict[str, TreeCache]]:
     rng = np.random.default_rng(0)
 
@@ -67,6 +67,6 @@ def construct_small_data_cache(
         caches[split] = writer.result()
 
     component = DatasetComponent(source=None, cache_dir=f"{path}/cache")
-    config = LmDataConfig(components={"tiny": component}, vocab_size=vocab_size, tokenizer="gpt2")
+    config = LmDataConfig(components={"tiny": component}, vocab_size=vocab_size, tokenizer=tokenizer)
 
     return config, caches

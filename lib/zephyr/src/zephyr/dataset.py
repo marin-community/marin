@@ -390,6 +390,17 @@ class Dataset(Generic[T]):
         self.source = source
         self.operations = operations or []
 
+    def _derive(self, *ops: LogicalOp) -> Dataset[Any]:
+        """Build a derived dataset with additional logical ops appended.
+
+        The constructor infers the element type from ``self.source``, but a
+        transform's output element type is determined by the ops it appends.
+        Callers therefore ``cast`` the result to their declared return type;
+        this helper centralizes the construction so that cast is the only
+        type-level concession.
+        """
+        return Dataset(self.source, [*self.operations, *ops])
+
     @staticmethod
     def from_list(items: list[T]) -> Dataset[T]:
         """Create a dataset from a list."""
@@ -444,7 +455,7 @@ class Dataset(Generic[T]):
             >>> ctx.execute(ds)
             [2, 4, 6]
         """
-        return Dataset(self.source, [*self.operations, MapOp(fn)])
+        return cast("Dataset[R]", self._derive(MapOp(fn)))
 
     def filter(self, predicate: Callable[[T], bool] | Expr) -> Dataset[T]:
         """Filter dataset elements by a predicate or expression.
@@ -485,7 +496,7 @@ class Dataset(Generic[T]):
             >>> ctx.execute(ds)
             [{"id": 1, "name": "alice"}, {"id": 2, "name": "bob"}]
         """
-        return Dataset(self.source, [*self.operations, SelectOp(tuple(columns))])
+        return cast("Dataset[dict]", self._derive(SelectOp(tuple(columns))))
 
     def take_per_shard(self, n: int) -> Dataset[T]:
         """Take the first n items from each shard.
@@ -526,7 +537,7 @@ class Dataset(Generic[T]):
         def count_folder(count: int, item: T) -> tuple[bool, int]:
             return (count < size, count + 1)
 
-        return Dataset(self.source, [*self.operations, WindowOp(count_folder, 0)])
+        return cast("Dataset[list[T]]", self._derive(WindowOp(count_folder, 0)))
 
     def window_by(
         self,
@@ -554,7 +565,7 @@ class Dataset(Generic[T]):
             ...     )
             ... )
         """
-        return Dataset(self.source, [*self.operations, WindowOp(folder_fn, initial_state)])
+        return cast("Dataset[list[T]]", self._derive(WindowOp(folder_fn, initial_state)))
 
     def flat_map(self, fn: Callable[[T], Iterable[R]]) -> Dataset[R]:
         """Apply function that returns an iterable, flattening results.
@@ -575,7 +586,7 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = ctx.execute(ds).results
         """
-        return Dataset(self.source, [*self.operations, FlatMapOp(fn)])
+        return cast("Dataset[R]", self._derive(FlatMapOp(fn)))
 
     def load_file(
         self,
@@ -607,9 +618,9 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = ctx.execute(ds).results
         """
-        return Dataset(
-            self.source,
-            [*self.operations, LoadFileOp("auto", columns, approx_shard_bytes, include_file_paths, file_path_column)],
+        return cast(
+            "Dataset[dict]",
+            self._derive(LoadFileOp("auto", columns, approx_shard_bytes, include_file_paths, file_path_column)),
         )
 
     @overload
@@ -677,9 +688,9 @@ class Dataset(Generic[T]):
                 for each record.
             file_path_column: Name of the column to add when include_file_paths is True.
         """
-        return Dataset(
-            self.source,
-            [*self.operations, LoadFileOp("jsonl", None, None, include_file_paths, file_path_column)],
+        return cast(
+            "Dataset[dict]",
+            self._derive(LoadFileOp("jsonl", None, None, include_file_paths, file_path_column)),
         )
 
     def load_vortex(
@@ -696,9 +707,9 @@ class Dataset(Generic[T]):
                 for each record.
             file_path_column: Name of the column to add when include_file_paths is True.
         """
-        return Dataset(
-            self.source,
-            [*self.operations, LoadFileOp("vortex", columns, None, include_file_paths, file_path_column)],
+        return cast(
+            "Dataset[dict]",
+            self._derive(LoadFileOp("vortex", columns, None, include_file_paths, file_path_column)),
         )
 
     def map_shard(
@@ -738,7 +749,7 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = ctx.execute(ds).results
         """
-        return Dataset(self.source, [*self.operations, MapShardOp(fn)])
+        return cast("Dataset[R]", self._derive(MapShardOp(fn)))
 
     def reshard(self, num_shards: int | None) -> Dataset[T]:
         """Redistribute data across target number of shards (best-effort).
@@ -777,16 +788,15 @@ class Dataset(Generic[T]):
                            or a callable that takes (shard_idx, total_shards) and returns the output path
             skip_existing: If True, skip writing if output file already exists (for resuming pipelines)
         """
-        return Dataset(
-            self.source,
-            [
-                *self.operations,
+        return cast(
+            "Dataset[str]",
+            self._derive(
                 WriteOp(
                     _normalize_output_pattern(output_pattern),
                     writer_type="jsonl",
                     skip_existing=skip_existing,
                 ),
-            ],
+            ),
         )
 
     def write_binary(self, output_pattern: str | Callable[[int, int], str], skip_existing: bool = False) -> Dataset[str]:
@@ -800,16 +810,15 @@ class Dataset(Generic[T]):
                            or a callable that takes (shard_idx, total_shards) and returns the output path
             skip_existing: If True, skip writing if output file already exists (for resuming pipelines)
         """
-        return Dataset(
-            self.source,
-            [
-                *self.operations,
+        return cast(
+            "Dataset[str]",
+            self._derive(
                 WriteOp(
                     _normalize_output_pattern(output_pattern),
                     writer_type="binary",
                     skip_existing=skip_existing,
                 ),
-            ],
+            ),
         )
 
     def write_parquet(
@@ -828,17 +837,16 @@ class Dataset(Generic[T]):
             schema: PyArrow schema (optional, will be inferred if not provided)
             skip_existing: If True, skip writing if output file already exists (for resuming pipelines)
         """
-        return Dataset(
-            self.source,
-            [
-                *self.operations,
+        return cast(
+            "Dataset[str]",
+            self._derive(
                 WriteOp(
                     _normalize_output_pattern(output_pattern),
                     writer_type="parquet",
                     schema=schema,
                     skip_existing=skip_existing,
                 ),
-            ],
+            ),
         )
 
     def write_vortex(
@@ -848,17 +856,16 @@ class Dataset(Generic[T]):
         skip_existing: bool = False,
     ) -> Dataset[str]:
         """Write records as Vortex files."""
-        return Dataset(
-            self.source,
-            [
-                *self.operations,
+        return cast(
+            "Dataset[str]",
+            self._derive(
                 WriteOp(
                     _normalize_output_pattern(output_pattern),
                     writer_type="vortex",
                     schema=schema,
                     skip_existing=skip_existing,
                 ),
-            ],
+            ),
         )
 
     @overload
@@ -935,9 +942,9 @@ class Dataset(Generic[T]):
             ...     )
             ... )
         """
-        return Dataset(
-            self.source,
-            [*self.operations, GroupByOp(key, reducer, num_output_shards, sort_fn=sort_by, combiner_fn=combiner)],
+        return cast(
+            "Dataset[R]",
+            self._derive(GroupByOp(key, reducer, num_output_shards, sort_fn=sort_by, combiner_fn=combiner)),
         )
 
     def deduplicate(self, key: Callable[[T], object], num_output_shards: int | None = None) -> Dataset[T]:
@@ -992,7 +999,7 @@ class Dataset(Generic[T]):
         if global_reducer is None:
             global_reducer = cast(Callable[[Iterator[R]], R], local_reducer)
 
-        return Dataset(self.source, [*self.operations, ReduceOp(local_reducer, global_reducer)])
+        return cast("Dataset[R]", self._derive(ReduceOp(local_reducer, global_reducer)))
 
     def count(self) -> Dataset[int]:
         """Count the total number of items in the dataset.
@@ -1005,9 +1012,12 @@ class Dataset(Generic[T]):
             >>> count = ctx.execute(ds.count()).results[0]
             50
         """
-        return self.reduce(
-            local_reducer=lambda items: sum(1 for _ in items),
-            global_reducer=sum,
+        return cast(
+            "Dataset[int]",
+            self.reduce(
+                local_reducer=lambda items: sum(1 for _ in items),
+                global_reducer=sum,
+            ),
         )
 
     def sorted_merge_join(

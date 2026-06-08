@@ -18,18 +18,19 @@ from pathlib import Path
 import pytest
 from finelog.rpc import logging_pb2
 from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
+from iris.cluster.controller import ops, reads, writes
+from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.ops.task import Assignment, apply_dispatch_updates, finalize
+from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow
+from iris.cluster.controller.pruner import PruneResult, prune_old_data
+from iris.cluster.controller.reads import WorkerResourceUsage
 
 # =============================================================================
 # Test Helpers
 # =============================================================================
-from iris.cluster.controller import direct_provider, ops, reads, writes
-from iris.cluster.controller.autoscaler.models import DemandEntry
-from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.ops.task import Assignment, apply_direct_provider_updates, finalize
-from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow
-from iris.cluster.controller.pruner import PruneResult, prune_old_data
-from iris.cluster.controller.reads import WorkerResourceUsage
+from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.batches import _kill_non_terminal_tasks
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.effects import JobRowDelta
@@ -44,14 +45,14 @@ from iris.cluster.controller.reconcile.snapshot import (
     TransitionSnapshot,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
-from iris.cluster.controller.scheduler import (
+from iris.cluster.controller.scheduling.policy import compute_demand_entries
+from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     JobRequirements,
     Scheduler,
     SchedulingContext,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.scheduling_policy import compute_demand_entries
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table, workers_table
 from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, TaskAttempt, UserBudgetDefaults, WorkerId
@@ -1211,11 +1212,11 @@ def test_worker_can_accept_new_task_after_previous_completes(state):
 
 
 def test_multiple_small_tasks_fill_worker_capacity(state):
-    """E2E: Multiple small tasks can fill a worker's capacity, blocking further assignments.
+    """E2E: cumulative resource usage across tasks fills a worker and blocks the rest.
 
-    This verifies that the scheduler correctly tracks cumulative resource usage across
-    multiple running tasks. With round-robin scheduling, each worker gets at most one
-    task per cycle, so we run multiple cycles to fill capacity.
+    Verifies the scheduler tracks committed CPU across tasks: a 4-CPU worker takes
+    two 2-CPU tasks (capacity-limited, within the per-cycle assignment cap), and the
+    third does not fit and stays pending.
     """
 
     # Worker with 4 CPUs
@@ -1227,23 +1228,15 @@ def test_multiple_small_tasks_fill_worker_capacity(state):
 
     scheduler = Scheduler()
 
-    # First scheduling cycle: 1 task assigned (round-robin: 1 per worker per cycle)
+    # One cycle fills the worker to capacity: two 2-CPU tasks on 4 CPUs.
     context = _build_scheduling_context(scheduler, state)
     result = scheduler.find_assignments(context)
-    assert len(result.assignments) == 1
+    assert len(result.assignments) == 2
     for task_id, worker_id in result.assignments:
         task = _query_task(state, task_id)
         dispatch_task(state, task, worker_id)
 
-    # Second scheduling cycle: 1 more task assigned (worker still has 2 CPUs)
-    context = _build_scheduling_context(scheduler, state)
-    result = scheduler.find_assignments(context)
-    assert len(result.assignments) == 1
-    for task_id, worker_id in result.assignments:
-        task = _query_task(state, task_id)
-        dispatch_task(state, task, worker_id)
-
-    # Third task should still be pending
+    # Third task remains pending: the worker is out of CPU.
     pending = _schedulable_tasks(state)
     assert len(pending) == 1
     assert pending[0].job_id == JobName.root("test-user", "j2")
@@ -3898,7 +3891,7 @@ def test_dispatch_propagates_task_image(state):
     tasks = submit_job(state, "img-job", req)
     job_id = tasks[0].job_id
     with state._db.read_snapshot() as snap:
-        template = direct_provider.run_request_template(state._run_template_cache, snap, job_id)
+        template = dispatch.run_request_template(state._run_template_cache, snap, job_id)
     assert template is not None
     assert template.task_image == "custom/swetrace:dev"
 
@@ -3925,8 +3918,8 @@ def test_run_request_template_does_not_leak_workdir_files_across_jobs(state):
     tasks_b = submit_job(state, "job-b", req_b)
 
     with state._db.read_snapshot() as snap:
-        template_a = direct_provider.run_request_template(state._run_template_cache, snap, tasks_a[0].job_id)
-        template_b = direct_provider.run_request_template(state._run_template_cache, snap, tasks_b[0].job_id)
+        template_a = dispatch.run_request_template(state._run_template_cache, snap, tasks_a[0].job_id)
+        template_b = dispatch.run_request_template(state._run_template_cache, snap, tasks_b[0].job_id)
 
     assert template_a is not None
     assert template_b is not None
@@ -3998,9 +3991,9 @@ def _task_row_direct(state: ControllerTestState, task_id: JobName):
 def _run_direct_tasks(state: ControllerTestState, task_ids: list[JobName]) -> None:
     """Drain and transition tasks to RUNNING via direct provider."""
     with state._db.transaction() as cur:
-        direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids],
             health=state._health,
@@ -4010,12 +4003,12 @@ def _run_direct_tasks(state: ControllerTestState, task_ids: list[JobName]) -> No
 
 
 def test_drain_pending_creates_attempt_rows(state):
-    """drain_for_direct_provider promotes PENDING tasks to ASSIGNED with NULL worker_id."""
+    """drain_for_dispatch promotes PENDING tasks to ASSIGNED with NULL worker_id."""
     task_ids = _submit_job_direct(state, "/user/job1")
     task_id = task_ids[0]
 
     with state._db.transaction() as cur:
-        batch = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     assert len(batch.tasks_to_run) == 1
     assert batch.tasks_to_run[0].task_id == task_id.to_wire()
@@ -4054,14 +4047,14 @@ def test_drain_redrives_assigned_until_executing(state):
 
     # First drain: PENDING -> ASSIGNED, dispatched and polled.
     with state._db.transaction() as cur:
-        batch1 = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        batch1 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     assert len(batch1.tasks_to_run) == 1
     assert [(e.task_id, e.attempt_id) for e in batch1.running_tasks] == [(task_id, 0)]
 
     # Second drain (e.g. previous _apply_pod failed or controller crashed):
     # row is still ASSIGNED, redriven in tasks_to_run with same attempt_id.
     with state._db.transaction() as cur:
-        batch2 = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        batch2 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     assert len(batch2.tasks_to_run) == 1
     assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
     assert batch2.tasks_to_run[0].attempt_id == 0
@@ -4070,7 +4063,7 @@ def test_drain_redrives_assigned_until_executing(state):
     # Once the task reaches RUNNING it leaves tasks_to_run; running_tasks still
     # contains it so the next poll observes terminal transitions.
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
             health=state._health,
@@ -4078,7 +4071,7 @@ def test_drain_redrives_assigned_until_executing(state):
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        batch3 = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        batch3 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     assert len(batch3.tasks_to_run) == 0
     assert len(batch3.running_tasks) == 1
     assert batch3.running_tasks[0].task_id == task_id
@@ -4091,14 +4084,14 @@ def test_drain_caps_promotions_per_cycle(state):
     assert _count_pending(state) == 200
 
     with state._db.transaction() as cur:
-        batch1 = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache, max_promotions=128)
+        batch1 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=128)
     # All 128 dispatched are freshly promoted (no prior ASSIGNED rows).
     assert len(batch1.tasks_to_run) == 128
     assert _count_pending(state) == 72
 
     # Second drain: 72 newly promoted, 128 redriven.
     with state._db.transaction() as cur:
-        batch2 = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache, max_promotions=128)
+        batch2 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=128)
     assert len(batch2.tasks_to_run) == 200
     assert _count_pending(state) == 0
 
@@ -4109,13 +4102,13 @@ def test_drain_max_promotions_limits_batch(state):
     _submit_job_direct(state, "/user/cap-job", replicas=250)
 
     with state._db.transaction() as cur:
-        batch1 = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache, max_promotions=50)
+        batch1 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=50)
     assert len(batch1.tasks_to_run) == 50
     assert _count_pending(state) == 200
 
     # 50 newly promoted + 50 prior ASSIGNED redriven.
     with state._db.transaction() as cur:
-        batch2 = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache, max_promotions=50)
+        batch2 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=50)
     assert len(batch2.tasks_to_run) == 100
     assert _count_pending(state) == 150
 
@@ -4125,10 +4118,10 @@ def test_apply_running(state):
     task_ids = _submit_job_direct(state, "/user/job1")
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
@@ -4146,10 +4139,10 @@ def test_apply_succeeded(state):
     task_ids = _submit_job_direct(state, "/user/job1")
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
@@ -4159,7 +4152,7 @@ def test_apply_succeeded(state):
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED),
@@ -4180,10 +4173,10 @@ def test_apply_failed_with_retry(state):
     task_ids = _submit_job_direct(state, "/user/job1", max_retries_failure=1)
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
@@ -4193,7 +4186,7 @@ def test_apply_failed_with_retry(state):
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
@@ -4231,7 +4224,7 @@ def test_apply_failed_with_retry(state):
 
     # Draining again should promote it for a second attempt.
     with state._db.transaction() as cur:
-        batch = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     assert len(batch.tasks_to_run) == 1
     assert batch.tasks_to_run[0].attempt_id == 1
 
@@ -4241,10 +4234,10 @@ def test_apply_failed_no_retry(state):
     task_ids = _submit_job_direct(state, "/user/job1", max_retries_failure=0)
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
@@ -4254,7 +4247,7 @@ def test_apply_failed_no_retry(state):
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
@@ -4275,10 +4268,10 @@ def test_apply_worker_failed(state):
     task_ids = _submit_job_direct(state, "/user/job1", max_retries_preemption=1)
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
@@ -4288,7 +4281,7 @@ def test_apply_worker_failed(state):
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED, error="node died"),
@@ -4304,7 +4297,7 @@ def test_apply_worker_failed(state):
     assert task.preemption_count == 1
 
 
-def test_cancel_job_kills_direct_provider_tasks(state):
+def test_cancel_job_kills_dispatch_tasks(state):
     """cancel_job moves NULL-worker_id (direct-provider) tasks to KILLED."""
     task_ids = _submit_job_direct(state, "/user/job1", replicas=2)
     _run_direct_tasks(state, task_ids)
@@ -4322,7 +4315,7 @@ def test_cancel_job_kills_direct_provider_tasks(state):
         assert _task_state_direct(state, tid) == job_pb2.TASK_STATE_KILLED
 
 
-def test_kill_non_terminal_direct_provider_tasks(state):
+def test_kill_non_terminal_dispatch_tasks(state):
     """cancel_job kills NULL-worker_id tasks via _kill_non_terminal_tasks cascade."""
     task_ids = _submit_job_direct(state, "/user/job1")
     _run_direct_tasks(state, task_ids)
@@ -4401,7 +4394,7 @@ def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harnes
     ), "holder finalization leaked into the co-tenant's derived usage"
 
 
-def test_max_failures_kills_direct_provider_tasks(state):
+def test_max_failures_kills_dispatch_tasks(state):
     """When a task fails and triggers kill of siblings, direct-provider tasks are killed via task_mutations."""
     task_ids = _submit_job_direct(state, "/user/job1", replicas=2, max_retries_failure=0)
     _run_direct_tasks(state, task_ids)
@@ -4409,7 +4402,7 @@ def test_max_failures_kills_direct_provider_tasks(state):
     # Fail one task — with max_task_failures=0 (default) this should kill the job,
     # triggering _kill_non_terminal_tasks for the sibling.
     with state._db.transaction() as cur:
-        result = apply_direct_provider_updates(
+        result = apply_dispatch_updates(
             cur,
             [TaskUpdate(task_id=task_ids[0], attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom")],
             health=state._health,

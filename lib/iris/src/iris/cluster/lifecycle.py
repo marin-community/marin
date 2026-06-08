@@ -4,9 +4,7 @@
 """Iris cluster lifecycle orchestration.
 
 Provides high-level helpers that construct concrete provider implementations and
-drive cluster startup/shutdown. This module lives outside ``config`` so that it
-can depend on both the configuration layer and the provider implementations
-without creating an import cycle.
+drive cluster startup/shutdown.
 """
 
 from __future__ import annotations
@@ -14,8 +12,8 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import IrisConfig, validate_config
-from iris.cluster.providers.local.cluster import LocalCluster
 from iris.rpc import config_pb2
 
 

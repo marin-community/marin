@@ -286,6 +286,11 @@ message WorkerConfig {
   reserved 23;  // was: bool preemptible (replaced by capacity_type)
   CapacityType capacity_type = 24;
 
+  // Advertised scheduling CPU capacity (from ScaleGroupResources.cpu_millicores).
+  // The worker reports this as its capacity instead of the probed host count,
+  // letting operators over-commit CPU. 0 means "probe the host".
+  int32 cpu_millicores = 25;
+
   // Scheduling attributes
   map<string, string> worker_attributes = 30;
 

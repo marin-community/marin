@@ -1,11 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Deterministic hashing and sort-key helpers for Zephyr shard routing.
-
-Pure leaf module (depends only on ``msgspec`` and ``xxhash``) so it can be
-imported by both the planner and the shuffle layer without forming a cycle.
-"""
+"""Deterministic hashing and sort-key helpers for Zephyr shard routing."""
 
 from __future__ import annotations
 

@@ -1,13 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Structured attention-mask primitives.
-
-This is a leaf module: it depends only on haliax + stdlib so that both the
-attention dispatcher (:mod:`levanter.layers.attention`) and the flash-attention
-kernel (:mod:`levanter.models.flash_attention`) can import these primitives
-without forming an import cycle.
-"""
+"""Structured attention-mask primitives."""
 
 import warnings
 from numbers import Integral

@@ -775,7 +775,8 @@ class NamedArray(metaclass=NamedArrayMeta):
     def __le__(self, other) -> "NamedArray":  # pragma: no cover
         return haliax.less_equal(self, other)
 
-    def __eq__(self, other):  # pragma: no cover
+    # numpy elementwise comparison semantics: returns a NamedArray, not bool
+    def __eq__(self, other):  # pragma: no cover  # pyrefly: ignore[bad-override]
         # special case because Jax sometimes call == on
         # types when they're in PyTrees
         if self.array is None:  # pragma: no cover
@@ -786,7 +787,8 @@ class NamedArray(metaclass=NamedArrayMeta):
 
         return haliax.equal(self, other)
 
-    def __ne__(self, other):  # pragma: no cover
+    # numpy elementwise comparison semantics: returns a NamedArray, not bool
+    def __ne__(self, other):  # pragma: no cover  # pyrefly: ignore[bad-override]
         return haliax.not_equal(self, other)
 
     def __gt__(self, other) -> "NamedArray":  # pragma: no cover

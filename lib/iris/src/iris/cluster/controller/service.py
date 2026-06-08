@@ -36,6 +36,7 @@ from iris.cluster.controller.auth import (
     revoke_login_keys_for_user,
 )
 from iris.cluster.controller.autoscaler.status import PendingHint
+from iris.cluster.controller.backend import PlacementOwner, ProviderError, TaskBackend, TaskTarget
 from iris.cluster.controller.budget import (
     compute_effective_band,
     compute_user_spend,
@@ -48,7 +49,6 @@ from iris.cluster.controller.codec import (
     worker_metadata_to_proto,
 )
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.direct_provider import RunTemplateCache
 from iris.cluster.controller.projections.endpoints import (
     AddEndpointOutcome,
     EndpointQuery,
@@ -56,9 +56,9 @@ from iris.cluster.controller.projections.endpoints import (
     EndpointsProjection,
 )
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.provider import ProviderError
 from iris.cluster.controller.reads import TaskJobSummary
-from iris.cluster.controller.scheduler import SchedulingContext
+from iris.cluster.controller.run_template import RunTemplateCache
+from iris.cluster.controller.scheduling.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
     job_config_table,
     jobs_table,
@@ -738,6 +738,26 @@ def _attempts_for_worker(
             )
             .limit(limit)
         ).all()
+        # Each task inherits its resource allocation from its parent job. Batch
+        # the job_config lookup so a worker that ran many attempts across a few
+        # jobs costs one extra query rather than one per attempt.
+        job_ids = {row.task_id.parent for row in raw_rows if row.task_id.parent is not None}
+        resources_by_job: dict[JobName, job_pb2.ResourceSpecProto] = {}
+        if job_ids:
+            jc_rows = tx.execute(
+                select(
+                    job_config_table.c.job_id,
+                    job_config_table.c.res_cpu_millicores,
+                    job_config_table.c.res_memory_bytes,
+                    job_config_table.c.res_disk_bytes,
+                    job_config_table.c.res_device_json,
+                ).where(job_config_table.c.job_id.in_(list(job_ids)))
+            ).all()
+            for jc in jc_rows:
+                if jc.res_cpu_millicores or jc.res_memory_bytes or jc.res_disk_bytes or jc.res_device_json:
+                    resources_by_job[jc.job_id] = resource_spec_from_scalars(
+                        jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json
+                    )
     out: list[controller_pb2.Controller.WorkerTaskAttempt] = []
     for row in raw_rows:
         proto_attempt = job_pb2.TaskAttempt(
@@ -753,7 +773,13 @@ def _attempts_for_worker(
             proto_attempt.started_at.CopyFrom(timestamp_to_proto(row.started_at_ms))
         if row.finished_at_ms is not None:
             proto_attempt.finished_at.CopyFrom(timestamp_to_proto(row.finished_at_ms))
-        out.append(controller_pb2.Controller.WorkerTaskAttempt(task_id=row.task_id.to_wire(), attempt=proto_attempt))
+        out.append(
+            controller_pb2.Controller.WorkerTaskAttempt(
+                task_id=row.task_id.to_wire(),
+                attempt=proto_attempt,
+                resources=resources_by_job.get(row.task_id.parent),
+            )
+        )
     return out
 
 
@@ -805,16 +831,10 @@ class ControllerProtocol(Protocol):
     def provider(self) -> Any: ...
 
     @property
-    def has_direct_provider(self) -> bool: ...
+    def placement(self) -> PlacementOwner: ...
 
     @property
     def run_template_cache(self) -> RunTemplateCache: ...
-
-    @property
-    def provider_scheduling_events(self) -> list: ...
-
-    @property
-    def provider_capacity(self) -> Any: ...
 
 
 def _inject_resource_constraints(
@@ -1545,7 +1565,7 @@ class ControllerServiceImpl:
         paging (preserves CLI callers that fetch the whole roster); ``limit > 0``
         is clamped to ``MAX_LIST_WORKERS_LIMIT``.
         """
-        if self._controller.has_direct_provider:
+        if self._controller.placement is PlacementOwner.TASK_BACKEND:
             return controller_pb2.Controller.ListWorkersResponse()
 
         query = controller_pb2.Controller.WorkerQuery()
@@ -1691,9 +1711,9 @@ class ControllerServiceImpl:
         )
 
     @property
-    def has_direct_provider(self) -> bool:
-        """Whether the controller runs a direct (Kubernetes) provider."""
-        return self._controller.has_direct_provider
+    def provider(self) -> TaskBackend:
+        """The live execution backend (read-only handle for dashboard descriptors)."""
+        return self._controller.provider
 
     def resolve_endpoint(self, name: str) -> str | None:
         """Resolve an endpoint name to its address, or None. Task endpoints take priority over ``/system/`` endpoints."""
@@ -1732,7 +1752,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> controller_pb2.Controller.GetAutoscalerStatusResponse:
         """Get current autoscaler status with worker info populated."""
-        if self._controller.has_direct_provider:
+        if self._controller.placement is PlacementOwner.TASK_BACKEND:
             return controller_pb2.Controller.GetAutoscalerStatusResponse(status=vm_pb2.AutoscalerStatus())
         autoscaler = self._controller.autoscaler
         if not autoscaler:
@@ -1774,44 +1794,6 @@ class ControllerServiceImpl:
 
         return controller_pb2.Controller.GetAutoscalerStatusResponse(status=status)
 
-    # --- Provider Status ---
-
-    def get_provider_status(
-        self,
-        request: controller_pb2.Controller.GetProviderStatusRequest,
-        ctx: Any,
-    ) -> controller_pb2.Controller.GetProviderStatusResponse:
-        """Get provider status for direct-dispatch providers."""
-        if not self._controller.has_direct_provider:
-            return controller_pb2.Controller.GetProviderStatusResponse(has_direct_provider=False)
-        events = [
-            controller_pb2.Controller.SchedulingEvent(
-                task_id=e.task_id,
-                attempt_id=e.attempt_id,
-                event_type=e.event_type,
-                reason=e.reason,
-                message=e.message,
-                timestamp=timestamp_to_proto(e.timestamp),
-            )
-            for e in self._controller.provider_scheduling_events
-        ]
-        resp = controller_pb2.Controller.GetProviderStatusResponse(
-            has_direct_provider=True,
-            scheduling_events=events,
-        )
-        cap = self._controller.provider_capacity
-        if cap is not None:
-            resp.capacity.CopyFrom(
-                controller_pb2.Controller.ClusterCapacity(
-                    schedulable_nodes=cap.schedulable_nodes,
-                    total_cpu_millicores=cap.total_cpu_millicores,
-                    available_cpu_millicores=cap.available_cpu_millicores,
-                    total_memory_bytes=cap.total_memory_bytes,
-                    available_memory_bytes=cap.available_memory_bytes,
-                )
-            )
-        return resp
-
     # --- Kubernetes Cluster Status ---
 
     def get_kubernetes_cluster_status(
@@ -1820,7 +1802,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Get Kubernetes cluster status: node counts, capacity, and recent pod statuses."""
-        if not self._controller.has_direct_provider:
+        if self._controller.placement is not PlacementOwner.TASK_BACKEND:
             return controller_pb2.Controller.GetKubernetesClusterStatusResponse()
 
         # KubernetesProvider exposes get_cluster_status().
@@ -1897,7 +1879,13 @@ class ControllerServiceImpl:
                 profile_type=request.profile_type,
             )
             timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
-            resp = self._controller.provider.profile_task(worker.address, forwarded, timeout_ms)
+            worker_target = TaskTarget(
+                task_id="",
+                attempt_id=0,
+                worker_id=worker.worker_id,
+                address=worker.address,
+            )
+            resp = self._controller.provider.profile_task(worker_target, forwarded, timeout_ms)
             return job_pb2.ProfileTaskResponse(
                 profile_data=resp.profile_data,
                 error=resp.error,
@@ -1913,24 +1901,31 @@ class ControllerServiceImpl:
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.target} not found")
 
+        attempt_id = target.attempt_id if target.attempt_id is not None else task.current_attempt_id
         task_worker_id = _task_worker_id(task)
         if not task_worker_id:
-            if self._controller.has_direct_provider:
-                provider = self._controller.provider
-                attempt_id = target.attempt_id if target.attempt_id is not None else task.current_attempt_id
-                resp = provider.profile_task(task.task_id.to_wire(), attempt_id, request)
-                return job_pb2.ProfileTaskResponse(
-                    profile_data=resp.profile_data,
-                    error=resp.error,
-                )
-            raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not yet assigned to a worker")
-
-        worker = _read_worker(self._db, task_worker_id)
-        if not worker or not self._health.liveness(task_worker_id).healthy:
-            raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
+            # BACKEND placement (K8s) chooses the node itself: route by task, no worker.
+            if self._controller.placement is not PlacementOwner.TASK_BACKEND:
+                raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not yet assigned to a worker")
+            task_target = TaskTarget(
+                task_id=task.task_id.to_wire(),
+                attempt_id=attempt_id,
+                worker_id=None,
+                address=None,
+            )
+        else:
+            worker = _read_worker(self._db, task_worker_id)
+            if not worker or not self._health.liveness(task_worker_id).healthy:
+                raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
+            task_target = TaskTarget(
+                task_id=task.task_id.to_wire(),
+                attempt_id=attempt_id,
+                worker_id=task_worker_id,
+                address=worker.address,
+            )
 
         timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
-        resp = self._controller.provider.profile_task(worker.address, request, timeout_ms)
+        resp = self._controller.provider.profile_task(task_target, request, timeout_ms)
         return job_pb2.ProfileTaskResponse(
             profile_data=resp.profile_data,
             error=resp.error,
@@ -1975,7 +1970,7 @@ class ControllerServiceImpl:
         worker state (health, tasks, logs). VM status lives on the Autoscaler
         tab.
         """
-        if self._controller.has_direct_provider:
+        if self._controller.placement is PlacementOwner.TASK_BACKEND:
             raise ConnectError(Code.UNIMPLEMENTED, "Direct provider mode: no workers")
         if not request.id:
             raise ConnectError(Code.INVALID_ARGUMENT, "id is required")
@@ -2051,8 +2046,14 @@ class ControllerServiceImpl:
         if not self._health.liveness(worker.worker_id).healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
 
+        process_target = TaskTarget(
+            task_id="",
+            attempt_id=0,
+            worker_id=WorkerId(worker_id),
+            address=worker.address,
+        )
         try:
-            return self._controller.provider.get_process_status(WorkerId(worker_id), worker.address, request)
+            return self._controller.provider.get_process_status(process_target, request)
         except ProviderError as exc:
             raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
 
@@ -2228,33 +2229,37 @@ class ControllerServiceImpl:
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
 
-        task_worker_id = _task_worker_id(task)
-        if not task_worker_id:
-            if self._controller.has_direct_provider:
-                provider = self._controller.provider
-                timeout = request.timeout_seconds if request.timeout_seconds else 60
-                resp = provider.exec_in_container(
-                    task.task_id.to_wire(), task.current_attempt_id, list(request.command), timeout
-                )
-                return controller_pb2.Controller.ExecInContainerResponse(
-                    exit_code=resp.exit_code,
-                    stdout=resp.stdout,
-                    stderr=resp.stderr,
-                    error=resp.error,
-                )
-            raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
-
-        worker = _read_worker(self._db, task_worker_id)
-        if not worker or not self._health.liveness(task_worker_id).healthy:
-            raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
-
-        # Proxy to worker
         worker_request = worker_pb2.Worker.ExecInContainerRequest(
             task_id=request.task_id,
             command=request.command,
             timeout_seconds=request.timeout_seconds,
         )
-        resp = self._controller.provider.exec_in_container(worker.address, worker_request, request.timeout_seconds)
+
+        task_worker_id = _task_worker_id(task)
+        if not task_worker_id:
+            # BACKEND placement (K8s) execs directly into the pod; no worker daemon.
+            if self._controller.placement is not PlacementOwner.TASK_BACKEND:
+                raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
+            exec_target = TaskTarget(
+                task_id=task.task_id.to_wire(),
+                attempt_id=task.current_attempt_id,
+                worker_id=None,
+                address=None,
+            )
+            timeout = request.timeout_seconds if request.timeout_seconds else 60
+        else:
+            worker = _read_worker(self._db, task_worker_id)
+            if not worker or not self._health.liveness(task_worker_id).healthy:
+                raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
+            exec_target = TaskTarget(
+                task_id=task.task_id.to_wire(),
+                attempt_id=task.current_attempt_id,
+                worker_id=task_worker_id,
+                address=worker.address,
+            )
+            timeout = request.timeout_seconds
+
+        resp = self._controller.provider.exec_in_container(exec_target, worker_request, timeout)
         return controller_pb2.Controller.ExecInContainerResponse(
             exit_code=resp.exit_code,
             stdout=resp.stdout,
@@ -2373,25 +2378,10 @@ class ControllerServiceImpl:
             budget_limits: dict[str, int] = {b.user_id: b.budget_limit for b in budgets}
             user_spend = compute_user_spend(snap)
 
-            # Pending tasks: columns needed for task_row_can_be_scheduled.
-            # No ORDER BY — we aggregate, not display.
-            _TASK_ROW_COLS = (
-                tasks_table.c.task_id,
-                tasks_table.c.job_id,
-                tasks_table.c.state,
-                tasks_table.c.current_attempt_id,
-                tasks_table.c.failure_count,
-                tasks_table.c.preemption_count,
-                tasks_table.c.max_retries_failure,
-                tasks_table.c.max_retries_preemption,
-                tasks_table.c.submitted_at_ms,
-                tasks_table.c.priority_band,
-                tasks_table.c.priority_neg_depth,
-                tasks_table.c.priority_root_submitted_ms,
-                tasks_table.c.priority_insertion,
-            )
+            # Pending tasks: the scheduler's pending-task projection, reused here for
+            # task_row_can_be_scheduled + band aggregation. No ORDER BY — we aggregate, not display.
             pending_raw = snap.execute(
-                select(*_TASK_ROW_COLS).where(tasks_table.c.state == job_pb2.TASK_STATE_PENDING)
+                select(*reads.PENDING_TASK_COLS).where(tasks_table.c.state == job_pb2.TASK_STATE_PENDING)
             ).all()
             pending_rows = pending_raw
             pending_requested_bands = reads.get_priority_bands(snap, {row.job_id for row in pending_rows})

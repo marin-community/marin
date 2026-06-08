@@ -58,7 +58,7 @@ class PendingDispatchRow:
     / task_image / timeout) so the caller can assemble a
     ``RunTaskRequest``. Kept separate so other active-task queries don't
     pay for loading these JSON blobs. Used for both PENDING-promotion and
-    ASSIGNED-redrive paths (see ``direct_provider.drain_for_direct_provider``).
+    ASSIGNED-redrive paths (see ``dispatch.drain_for_dispatch``).
     """
 
     task_id: JobName
@@ -856,6 +856,26 @@ TASK_DETAIL_COLS = (
     tasks_table.c.container_id,
 )
 
+# Task columns needed to evaluate scheduling priority and retry budget. Shared by
+# the scheduler's pending-task query (policy._pending_tasks_with_jobs, which joins
+# additional job/job_config columns) and the dashboard scheduler-summary path
+# (service.GetSchedulerSummary), so the two stay aligned as priority columns evolve.
+PENDING_TASK_COLS = (
+    tasks_table.c.task_id,
+    tasks_table.c.job_id,
+    tasks_table.c.state,
+    tasks_table.c.current_attempt_id,
+    tasks_table.c.failure_count,
+    tasks_table.c.preemption_count,
+    tasks_table.c.max_retries_failure,
+    tasks_table.c.max_retries_preemption,
+    tasks_table.c.submitted_at_ms,
+    tasks_table.c.priority_band,
+    tasks_table.c.priority_neg_depth,
+    tasks_table.c.priority_root_submitted_ms,
+    tasks_table.c.priority_insertion,
+)
+
 
 def get_task_detail(tx: Tx, task_id: JobName) -> TaskDetailRow | None:
     """Return SA Row for ``task_id`` or None."""
@@ -1186,7 +1206,7 @@ def healthy_active_workers_with_attributes(
 
 
 # ---------------------------------------------------------------------------
-# Direct-provider dispatch helpers (used by direct_provider.py)
+# Direct-provider dispatch helpers (used by dispatch.py)
 # ---------------------------------------------------------------------------
 
 # Columns selected for every pending-dispatch / redrive query.  Covers all

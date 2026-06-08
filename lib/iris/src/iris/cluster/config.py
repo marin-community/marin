@@ -23,12 +23,13 @@ import yaml
 from google.protobuf.json_format import ParseDict
 from rigging.timing import Duration
 
+from iris.cluster.backends.factory import create_provider_bundle
+from iris.cluster.backends.k8s.service import CloudK8sService
+from iris.cluster.backends.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, K8sTaskProvider
+from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
+from iris.cluster.backends.types import local_queue_name
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
-from iris.cluster.providers.factory import create_provider_bundle
-from iris.cluster.providers.k8s.service import CloudK8sService
-from iris.cluster.providers.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, K8sTaskProvider
-from iris.cluster.providers.types import local_queue_name
+from iris.cluster.controller.backend import TaskBackend
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import parse_memory_string
 from iris.rpc import config_pb2, job_pb2
@@ -1128,11 +1129,11 @@ class IrisConfig:
         return ""
 
 
-def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvider | K8sTaskProvider:
-    """Create a TaskProvider from cluster configuration.
+def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> TaskBackend:
+    """Create a TaskBackend from cluster configuration.
 
     Returns a K8sTaskProvider when `kubernetes_provider` is configured,
-    or a WorkerProvider when `worker_provider` is configured.
+    or an RpcTaskBackend when `worker_provider` is configured.
     Raises ValueError if no provider is set.
     """
     which = cluster_config.WhichOneof("provider")
@@ -1171,7 +1172,7 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
             kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
         )
     if which == "worker_provider":
-        return WorkerProvider(stub_factory=RpcWorkerStubFactory())
+        return RpcTaskBackend(stub_factory=RpcWorkerStubFactory())
     raise ValueError(
         "IrisClusterConfig.provider must be set. Add either:\n"
         "  worker_provider: {}\n"

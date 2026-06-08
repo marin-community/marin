@@ -246,12 +246,11 @@ use-ignore-files = false
 # levanter/grug and levanter/kernels. See docs/plans/pyrefly-tensor-shapes.md.
 tensor-shapes = true
 
-# Deps the cpu lint profile does not install (extras-only like vllm/lm_eval, or
-# compiled packages without stubs like resiliparse/jaxlib). Unlike
-# replace-imports-with-any, this substitutes Any only when the module is truly
-# absent on disk, so a deleted/misspelled internal module still trips missing-import.
-# HAND-MAINTAINED: a new uninstalled dep trips missing-import until added here
-# (list both `pkg` and `pkg.*`).
+# Modules treated as Any when absent on disk. Pyrefly still uses real stubs when
+# the dep is installed (so a deleted/misspelled internal module still trips
+# missing-import). Covers deps no lint profile installs (vllm/lm_eval, resiliparse)
+# and compute deps a local venv commonly skips (torch, sympy). List both `pkg` and
+# `pkg.*`.
 ignore-missing-imports = [
     "harbor",
     "harbor.*",
@@ -275,8 +274,12 @@ ignore-missing-imports = [
     "pylatexenc.*",
     "resiliparse",
     "resiliparse.*",
+    "sympy",
+    "sympy.*",
     "tensorboardX",
     "tensorboardX.*",
+    "torch",
+    "torch.*",
     "tpu_inference",
     "tpu_inference.*",
     "trackio",
@@ -346,6 +349,16 @@ unbound-name = false
 # Kept enabled (high signal): bad-override, bad-assignment, bad-return,
 # unsupported-operation, not-callable. Pre-existing instances are suppressed via
 # .pyrefly-baseline.json.
+
+# jit_scheduler.py annotates eqx.Module fields with single-axis haxtyping shapes,
+# e.g. `ht.i32[NamedArray, "position"]`. tensor-shapes = true parses multi-token
+# shape strings ("seq page") correctly, but reads a lone bare-identifier axis
+# ("position", "seq") as a forward reference, yielding false unknown-name errors.
+# Scope the disable to this one file rather than scattering 17 inline ignores.
+[[tool.pyrefly.sub_config]]
+matches = "lib/levanter/src/levanter/inference/jit_scheduler.py"
+[tool.pyrefly.sub_config.errors]
+unknown-name = false
 
 [tool.hatch.metadata]
 allow-direct-references = true

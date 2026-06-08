@@ -12,18 +12,21 @@ from unittest.mock import Mock
 import pytest
 from finelog.client.proxy import LogServiceProxy
 from finelog.rpc import logging_pb2
+from iris.cluster.backends.k8s.fake import InMemoryK8sService
+from iris.cluster.backends.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE, K8sTaskProvider
+from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint
+from iris.cluster.controller.backend import BackendReconcileInput, PlacementOwner
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.direct_provider import DirectProviderBatch
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.reads import healthy_active_workers_with_attributes
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.scheduler import (
+from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
     JobRequirements,
@@ -33,14 +36,6 @@ from iris.cluster.controller.scheduler import (
 )
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.providers.k8s.fake import InMemoryK8sService
-from iris.cluster.providers.k8s.tasks import (
-    _LABEL_MANAGED,
-    _LABEL_RUNTIME,
-    _RUNTIME_LABEL_VALUE,
-    K8sTaskProvider,
-)
-from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.rpc.auth import StaticTokenVerifier
@@ -201,8 +196,9 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock.get_job_scheduling_diagnostics = _get_job_scheduling_diagnostics
     controller_mock.last_scheduling_context = None
     controller_mock.autoscaler = autoscaler
-    controller_mock.provider = Mock()
-    controller_mock.has_direct_provider = False
+    controller_mock.provider = Mock(name="worker", placement=PlacementOwner.IRIS_CONTROLLER, manages_capacity=False)
+    controller_mock.provider.name = "worker"
+    controller_mock.placement = PlacementOwner.IRIS_CONTROLLER
     return controller_mock
 
 
@@ -1328,18 +1324,25 @@ def test_auth_config_returns_enabled_when_verifier_set(service, log_service):
     assert data["provider"] == "gcp"
 
 
-def test_auth_config_worker_provider_kind(client):
-    """auth/config returns provider_kind=worker when no direct provider."""
+def test_auth_config_worker_capabilities(client):
+    """auth/config advertises worker + autoscaler capabilities for an Iris backend."""
     resp = client.get("/auth/config")
     assert resp.status_code == 200
-    data = resp.json()
-    assert data["provider_kind"] == "worker"
+    backend = resp.json()["backend"]
+    assert backend["name"] == "worker"
+    assert backend["placement"] == "iris_controller"
+    assert backend["manages_capacity"] is False
+    assert "workers" in backend["capabilities"]
+    assert "autoscaler" in backend["capabilities"]
+    assert "cluster" not in backend["capabilities"]
 
 
-def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path, embedded_log_server, log_client):
-    """auth/config returns provider_kind=kubernetes when controller has direct provider."""
+def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, embedded_log_server, log_client):
+    """auth/config advertises the cluster capability for a backend-placed (k8s) backend."""
     controller_mock = _make_controller_mock(state, scheduler)
-    controller_mock.has_direct_provider = True
+    controller_mock.placement = PlacementOwner.TASK_BACKEND
+    controller_mock.provider = Mock(placement=PlacementOwner.TASK_BACKEND, manages_capacity=True)
+    controller_mock.provider.name = "kubernetes"
     log_service = LogServiceProxy(embedded_log_server.address)
     svc = ControllerServiceImpl(
         controller=controller_mock,
@@ -1355,8 +1358,13 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path, embedd
 
     resp = k8s_client.get("/auth/config")
     assert resp.status_code == 200
-    data = resp.json()
-    assert data["provider_kind"] == "kubernetes"
+    backend = resp.json()["backend"]
+    assert backend["name"] == "kubernetes"
+    assert backend["placement"] == "task_backend"
+    assert backend["manages_capacity"] is True
+    assert "cluster" in backend["capabilities"]
+    assert "workers" not in backend["capabilities"]
+    assert "autoscaler" not in backend["capabilities"]
 
 
 # =============================================================================
@@ -1369,7 +1377,7 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path, embedded_log_server, 
     k8s = InMemoryK8sService(namespace="iris")
     provider = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest")
     controller_mock = _make_controller_mock(state, scheduler)
-    controller_mock.has_direct_provider = True
+    controller_mock.placement = PlacementOwner.TASK_BACKEND
     controller_mock.provider = provider
     log_service = LogServiceProxy(embedded_log_server.address)
     svc = ControllerServiceImpl(
@@ -1417,8 +1425,8 @@ def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path, e
         },
     )
 
-    # Sync to populate ClusterState.
-    provider.sync(DirectProviderBatch(tasks_to_run=[], running_tasks=[]))
+    # Reconcile to populate ClusterState.
+    provider.reconcile(BackendReconcileInput(tasks_to_run=[], running_tasks=[]))
 
     resp = client.post(
         "/iris.cluster.ControllerService/GetKubernetesClusterStatus",

@@ -37,7 +37,7 @@ from fray.local_backend import LocalClient
 from fray.types import Entrypoint, JobRequest
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from rigging.filesystem import marin_temp_bucket, open_url, url_to_fs
+from rigging.filesystem import TransferBudgetExceeded, marin_temp_bucket, open_url, url_to_fs
 from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.dataset import Dataset
@@ -58,6 +58,8 @@ from zephyr.stage_io import (
     ShardTask,
     StageRunner,
     TaskResult,
+    ZephyrWorkerError,
+    _ensure_picklable_exception,
     _shared_data_path,
     _stage_throughput,
 )
@@ -171,10 +173,6 @@ class PullStatus(enum.StrEnum):
     SHUTDOWN = enum.auto()
 
 
-class ZephyrWorkerError(RuntimeError):
-    """Raised when a worker encounters a fatal (non-transient) error."""
-
-
 class CoordinatorUnreachable(RuntimeError):
     """Worker lost contact with the coordinator. Retryable at the iris task level."""
 
@@ -183,8 +181,18 @@ class CoordinatorUnreachable(RuntimeError):
 # These are deterministic errors (bad plan, invalid config, programming bugs)
 # that would fail identically on every attempt. Infrastructure errors (OSError,
 # RuntimeError from dead actors, backend actor errors) are NOT listed here so they
-# remain retryable.
-_NON_RETRYABLE_ERRORS = (ZephyrWorkerError, ValueError, TypeError, KeyError, AttributeError, MemoryError)
+# remain retryable. TransferBudgetExceeded is deterministic: the cross-region
+# budget is global and persists for the life of the process, so every retry hits
+# the same wall while re-transferring data across regions.
+_NON_RETRYABLE_ERRORS = (
+    ZephyrWorkerError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    MemoryError,
+    TransferBudgetExceeded,
+)
 
 
 def _default_stage_runner_factory_for(client: Client) -> Callable[[int], StageRunner]:
@@ -1579,11 +1587,13 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
                 f.write(cloudpickle.dumps(payload))
         except Exception as e:
             # Persist the exception so the caller can recover the original type
-            # (important for non-retryable error detection).
+            # (important for non-retryable error detection). Normalize first so a
+            # subclass that cannot round-trip through pickle does not make the
+            # caller's revival crash and mask the real failure.
             with suppress(Exception):
                 ensure_parent_dir(result_path)
                 with open_url(result_path, "wb") as f:
-                    f.write(cloudpickle.dumps(e))
+                    f.write(cloudpickle.dumps(_ensure_picklable_exception(e)))
             raise
     finally:
         # Signal coordinator shutdown first so workers receive SHUTDOWN from
@@ -1618,7 +1628,15 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
 def _read_coordinator_result(result_path: str) -> Any:
     """Read the coordinator job's result file. Returns the deserialized object."""
     with open_url(result_path, "rb") as f:
-        return cloudpickle.loads(f.read())
+        data = f.read()
+    try:
+        return cloudpickle.loads(data)
+    except Exception as e:
+        # The coordinator normalizes exceptions before persisting, so a revival
+        # failure here means a genuinely corrupt or version-incompatible payload.
+        # Surface a clear non-retryable error instead of letting an opaque
+        # unpickle error crash the driver mid-recovery.
+        raise ZephyrWorkerError(f"Could not deserialize coordinator result at {result_path}: {e!r}") from e
 
 
 def _try_read_coordinator_result(result_path: str) -> Any:

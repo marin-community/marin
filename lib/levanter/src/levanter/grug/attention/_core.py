@@ -461,6 +461,7 @@ def _tpu_splash_attention(
     def wrap(q_bhsd, k_bhsd, v_bhsd, seg_ids, kernel):
         return jax.vmap(kernel, in_axes=(0, 0, 0, segment_batch_axis))(q_bhsd, k_bhsd, v_bhsd, seg_ids)
 
+    # pyrefly: ignore[bad-specialization, bad-argument-count]  # jax.shard_map decorator erases wrap's real signature
     out = wrap(q_, k_, v_, segment_ids, splash_kernel)
     return jnp.transpose(out, (0, 2, 1, 3)).astype(v.dtype)
 

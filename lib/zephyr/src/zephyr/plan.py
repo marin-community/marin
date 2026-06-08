@@ -11,7 +11,6 @@ knowledge of logical operation types.
 from __future__ import annotations
 
 import heapq
-import inspect
 import logging
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
@@ -184,12 +183,19 @@ def _reduce_gen(
     sort_fn: Callable | None = None,
     external_sort_dir: str | None = None,
 ) -> Iterator:
-    is_gen = inspect.isgeneratorfunction(reducer_fn)
+    # The reducer contract is ``R | Iterator[R]``: it may return a single
+    # result or a stream of results. Discriminate on the actual return value,
+    # not ``inspect.isgeneratorfunction`` — that only recognises functions
+    # literally defined with ``yield`` and misses reducers that *return* an
+    # iterator (a generator expression, ``map``/``filter``, or a call to
+    # another generator function). Such a reducer would otherwise be emitted
+    # whole as one item and crash the downstream writer.
     for key, items_iter in _merge_sorted_chunks(shard, key_fn, sort_fn, external_sort_dir=external_sort_dir):
-        if is_gen:
-            yield from reducer_fn(key, items_iter)
+        result = reducer_fn(key, items_iter)
+        if isinstance(result, Iterator):
+            yield from result
         else:
-            yield reducer_fn(key, items_iter)
+            yield result
 
 
 def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:

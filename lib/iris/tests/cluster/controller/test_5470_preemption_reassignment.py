@@ -25,7 +25,7 @@ from iris.cluster.controller.controller import SchedulingOutcome
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import WorkerResourceUsage
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.scheduler import (
+from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     JobRequirements,
     Scheduler,

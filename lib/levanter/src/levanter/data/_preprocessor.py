@@ -98,8 +98,7 @@ class _BatchMapTransform(_DatasetTransform):
 class _TransformedDataset:
     """Marker mixin for datasets carrying a lazy ``_DatasetTransform``.
 
-    ``source`` is duck-typed (a ``ShardedDataSource`` at runtime) and intentionally
-    left untyped so this module stays a leaf with no dependency on sharded_datasource.
+    ``source`` is a ``ShardedDataSource`` at runtime but left untyped here.
     """
 
     source: Any

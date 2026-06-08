@@ -20,10 +20,10 @@ from connectrpc.errors import ConnectError
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client.client import IrisClient, iris_ctx
+from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
 from iris.cluster.lifecycle import connect_cluster
-from iris.cluster.providers.local.cluster import LocalCluster
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ReservationEntry, ResourceSpec, gpu_device
 from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
@@ -468,7 +468,8 @@ def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot, capa
 
 
 def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, capabilities):
-    """Worker detail page shows info, task history, metric cards."""
+    """Worker detail page shows info, task history, metric cards, and links each
+    task id to its task-detail page."""
     if not capabilities.has_workers:
         pytest.skip("No persistent workers")
     job = smoke_cluster.submit(TestJobs.quick, "smoke-worker-detail")
@@ -480,10 +481,18 @@ def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, ca
 
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/worker/{worker_id}")
     wait_for_dashboard_ready(smoke_page)
-
     _wait_for_worker_detail_screenshot_ready(smoke_page, worker_id)
+
+    # The Task History task id links to the task-detail route — the
+    # "links to tasks" contract for this page.
+    smoke_page.wait_for_selector("a[href*='/task/']", timeout=10000)
+    href = smoke_page.locator("a[href*='/task/']").first.get_attribute("href")
+    assert href is not None and "/job/" in href and "/task/" in href
+
     smoke_screenshot(
-        "worker-detail", "Worker detail page with identity info, health badge, metric sparklines, and task history"
+        "worker-detail",
+        "Worker detail page with identity info, health badge, metric sparklines, "
+        "and task history with per-task resource columns and task-id links",
     )
 
 
@@ -582,10 +591,11 @@ def test_cancel_job_releases_resources(smoke_cluster):
 
     Regression test for #3553.
     """
-    # Use most of a single worker's CPU so the followup job can't schedule
-    # until the heavy job is cancelled. Local workers have 1000 cores, cloud
-    # TPU VMs have 128 — pick a value that works in both modes.
-    heavy_cpu = 8 if smoke_cluster.is_cloud else 900
+    # Use most of a single worker's CPU so the followup job can't schedule on
+    # that worker until the heavy job is cancelled. Workers now advertise their
+    # scale-group declared CPU (local-cpu: 8 cores; cloud TPU VMs: 128) rather
+    # than a probed host count — pick a value that fills most of one worker.
+    heavy_cpu = 8 if smoke_cluster.is_cloud else 7
 
     job = smoke_cluster.submit(TestJobs.sleep, "smoke-cancel-heavy", 30, cpu=heavy_cpu)
     smoke_cluster.wait_for_state(job, job_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)

@@ -7,9 +7,6 @@ These helpers run on the worker side of a Zephyr stage — describing a unit of
 work (``ShardTask``), its result (``TaskResult``), the strategy that executes it
 (``StageRunner``), and the routines that materialise a stage's item stream to
 disk (pickle chunks for map stages, scattered shuffle files for reduce stages).
-
-Extracted from ``zephyr.execution`` so both the coordinator/worker machinery and
-``zephyr.runners`` can depend on these leaf definitions without a cycle.
 """
 
 from __future__ import annotations
@@ -21,6 +18,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
+import cloudpickle
 import humanfriendly
 from rigging.filesystem import open_url, unique_temp_path
 
@@ -32,6 +30,33 @@ logger = logging.getLogger(__name__)
 
 ZEPHYR_STAGE_ITEM_COUNT_KEY = "zephyr/stage/{stage_name}/item_count"
 ZEPHYR_STAGE_BYTES_PROCESSED_KEY = "zephyr/stage/{stage_name}/bytes_processed"
+
+
+class ZephyrWorkerError(RuntimeError):
+    """Raised when a worker encounters a fatal (non-transient) error."""
+
+
+def _ensure_picklable_exception(error: BaseException) -> BaseException:
+    """Return *error*, or a picklable stand-in if it cannot survive pickling.
+
+    Exceptions cross process boundaries (shard subprocess → worker, coordinator
+    job → driver) by cloudpickle. A subclass whose ``__init__`` signature is
+    incompatible with the ``args`` the default reduce replays revives into a
+    ``TypeError`` at *unpickle* time — which would crash the process that is only
+    trying to re-raise a child's failure, and mask the real error behind an
+    unrelated ``TypeError``. We detect that here and substitute a
+    ``ZephyrWorkerError`` carrying the original type and message, preserving any
+    traceback notes. ``ZephyrWorkerError`` is non-retryable on purpose: an error
+    we cannot even deserialize must not be retried blindly.
+    """
+    try:
+        cloudpickle.loads(cloudpickle.dumps(error))
+        return error
+    except Exception:
+        wrapped = ZephyrWorkerError(f"{type(error).__module__}.{type(error).__qualname__}: {error}")
+        for note in getattr(error, "__notes__", ()):
+            wrapped.add_note(note)
+        return wrapped
 
 
 @dataclass(frozen=True)

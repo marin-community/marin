@@ -5,8 +5,7 @@
 
 This module holds the format-agnostic summarization core shared by the
 Perfetto/Chrome trace ingester (`marin.profiling.ingest`) and the XPlane
-ingester (`marin.profiling.xplane`). It depends only on the leaf schema and
-semantics modules, so both ingesters can import it without forming a cycle.
+ingester (`marin.profiling.xplane`).
 """
 
 from __future__ import annotations

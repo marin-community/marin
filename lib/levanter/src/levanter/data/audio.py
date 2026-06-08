@@ -103,6 +103,7 @@ class BatchAudioProcessor(BatchProcessor[Tuple[np.ndarray, int, str], AudioTextD
         audio_batch, sampling_rates, text_batch = list(zip(*batch))
         uniq_sampling_rates: set[int] = set(sampling_rates)
         assert len(uniq_sampling_rates) == 1, "Sampling rates should be standardized"
+        # pyrefly: ignore[not-callable]  # SequenceFeatureExtractor defines __call__ at runtime but the HF stub omits it
         audio_features: BatchFeature = self.feature_extractor(audio_batch, sampling_rate=uniq_sampling_rates.pop())
         audio_features["input_features"] = np.array(audio_features["input_features"])
         text_features: list[dict] = self.bt([{"text": text} for text in text_batch])

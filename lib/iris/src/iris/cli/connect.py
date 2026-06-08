@@ -15,8 +15,8 @@ from pathlib import Path
 
 import click
 
+from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import IrisConfig
-from iris.cluster.providers.local.cluster import LocalCluster
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync

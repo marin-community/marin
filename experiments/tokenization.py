@@ -1,14 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Leaf primitives for tokenization and dataset download.
-
-These live in a dedicated module (rather than ``experiments.defaults``) so that
-modules that build validation sets (``experiments.paloma``,
-``experiments.evals.exp1600_uncheatable_evals``) can depend on
-``default_tokenize`` without creating a circular import with
-``experiments.defaults``.
-"""
+"""Primitives for tokenization and dataset download."""
 
 import os
 from collections.abc import Sequence

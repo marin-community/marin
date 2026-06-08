@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Worker-side execution context exposed to user task code.
-
-Pure leaf module (stdlib only) so the counters API, the shuffle writer, and the
-runners can all reach the active worker context without importing the heavier
-``zephyr.execution`` coordinator/worker machinery.
-"""
+"""Worker-side execution context exposed to user task code."""
 
 from __future__ import annotations
 
