@@ -19,11 +19,60 @@ import numpy as np
 from marin.rl.rl_losses import RLLossModule
 
 from .rollout_storage import RolloutReader
-from .types import RolloutBatch, RolloutWithAdvantage
+from .types import Rollout, RolloutBatch, RolloutWithAdvantage
 
 logger = logging.getLogger(__name__)
 
 # TODO(power) - move advantage calculation and separate it from count
+
+
+@dataclass
+class SoftOverlongPenaltyConfig:
+    """Linearly penalize responses that enter the final decoding-length buffer."""
+
+    buffer_length: int
+    """Number of tokens at the end of the response budget to penalize."""
+
+    penalty_factor: float
+    """Maximum reward penalty applied at or beyond the response budget."""
+
+    def __post_init__(self):
+        if self.buffer_length <= 0:
+            raise ValueError(f"buffer_length must be positive, got {self.buffer_length}")
+        if self.penalty_factor < 0.0:
+            raise ValueError(f"penalty_factor must be non-negative, got {self.penalty_factor}")
+
+
+def soft_overlong_penalty(response_length: int, max_output_tokens: int, config: SoftOverlongPenaltyConfig) -> float:
+    """Return the DAPO soft overlong reward penalty for a response length."""
+    if config.buffer_length > max_output_tokens:
+        raise ValueError(
+            "SoftOverlongPenaltyConfig.buffer_length must be less than or equal to rollout "
+            f"max_output_tokens, got {config.buffer_length} and {max_output_tokens}"
+        )
+
+    penalty_start = max_output_tokens - config.buffer_length
+    if response_length <= penalty_start:
+        return 0.0
+
+    penalty_fraction = min((response_length - penalty_start) / config.buffer_length, 1.0)
+    return penalty_fraction * config.penalty_factor
+
+
+def apply_soft_overlong_penalty(rollout: Rollout, config: SoftOverlongPenaltyConfig | None) -> Rollout:
+    """Return a rollout with DAPO soft overlong reward shaping applied."""
+    if config is None:
+        return rollout
+
+    penalty = soft_overlong_penalty(
+        response_length=int(rollout.response_tokens.size),
+        max_output_tokens=rollout.decoding.max_output_tokens,
+        config=config,
+    )
+    if penalty == 0.0:
+        return rollout
+
+    return dataclasses.replace(rollout, episode_reward=rollout.episode_reward - penalty)
 
 
 @dataclass
@@ -47,6 +96,9 @@ class ReplayBufferConfig:
 
     filter_out_groups_with_no_variance: bool = False
     """Filter out groups with no variance in rewards."""
+
+    soft_overlong_penalty: SoftOverlongPenaltyConfig | None = None
+    """Optional DAPO soft overlong reward shaping applied before advantage computation."""
 
 
 @dataclass
@@ -76,9 +128,14 @@ class ReplayBuffer:
     filter_out_groups_with_no_variance: bool
     loss_module: RLLossModule
     seed: int
+    soft_overlong_penalty: SoftOverlongPenaltyConfig | None = None
 
     _total_batches_added: int = 0
     _total_batches_sampled: int = 0
+    _total_reward_groups_seen: int = 0
+    _total_reward_groups_dropped_no_variance: int = 0
+    _total_soft_overlong_penalty_count: int = 0
+    _total_soft_overlong_penalty_sum: float = 0.0
     _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
     _current_step: int = 0
     _rng: np.random.Generator = dataclasses.field(init=False)
@@ -117,6 +174,7 @@ class ReplayBuffer:
             max_rollout_step_delay=config.max_rollout_step_delay,
             max_rollout_timestamp_delay=config.max_rollout_timestamp_delay,
             filter_out_groups_with_no_variance=config.filter_out_groups_with_no_variance,
+            soft_overlong_penalty=config.soft_overlong_penalty,
             loss_module=loss_module,
             seed=seed,
         )
@@ -184,6 +242,10 @@ class ReplayBuffer:
         """
         env_examples: dict[str, list[RolloutWithCount]] = defaultdict(list)
         current_time = time.time()
+        reward_groups_seen = 0
+        reward_groups_dropped_no_variance = 0
+        soft_overlong_penalty_count = 0
+        soft_overlong_penalty_sum = 0.0
 
         for batch in new_batches:
             if not batch.groups or not batch.groups[0].rollouts:
@@ -206,28 +268,49 @@ class ReplayBuffer:
             self._total_batches_added += 1
 
             for group_idx, group in enumerate(batch.groups):
-                # Compute RLOO advantages for the group
-                advantages = self.loss_module.compute_advantages(group.rollouts)
+                if not group.rollouts:
+                    continue
+
+                reward_groups_seen += 1
+                shaped_rollouts = []
+                for rollout in group.rollouts:
+                    shaped_rollout = apply_soft_overlong_penalty(rollout, self.soft_overlong_penalty)
+                    penalty = rollout.episode_reward - shaped_rollout.episode_reward
+                    if penalty > 0.0:
+                        soft_overlong_penalty_count += 1
+                        soft_overlong_penalty_sum += penalty
+                    shaped_rollouts.append(shaped_rollout)
+
+                advantages = self.loss_module.compute_advantages(shaped_rollouts)
                 maybe_used_rollouts = []
-                for rollout_idx, (rollout, advantage) in enumerate(zip(group.rollouts, advantages, strict=True)):
+                for rollout_idx, (rollout, advantage) in enumerate(zip(shaped_rollouts, advantages, strict=True)):
                     individual = RolloutWithCount(
                         rollout=rollout, advantage=advantage, usage_count=0, weight_step=rollout_step
                     )
                     maybe_used_rollouts.append(individual)
                     batch_rewards[group_idx, rollout_idx] = rollout.episode_reward
 
+                env_name = shaped_rollouts[0].env_name
                 if np.std(batch_rewards[group_idx]) > 0.0:
-                    env_examples[rollout.env_name].extend(maybe_used_rollouts)
-                else:  # group has no variance in rewards
-                    if not self.filter_out_groups_with_no_variance:
-                        env_examples[rollout.env_name].extend(maybe_used_rollouts)
+                    env_examples[env_name].extend(maybe_used_rollouts)
+                    continue
 
-                    logger.info(f"Group {group_idx} has no variance in rewards")
+                if self.filter_out_groups_with_no_variance:
+                    reward_groups_dropped_no_variance += 1
+                else:
+                    env_examples[env_name].extend(maybe_used_rollouts)
+
+                logger.info(f"Group {group_idx} has no variance in rewards")
 
             logger.info(f"Reward mean across all groups: {batch_rewards.mean()}")
             logger.info(f"Reward std across all groups: {batch_rewards.std(axis=1).mean()}")
 
         with self._lock:
+            self._total_reward_groups_seen += reward_groups_seen
+            self._total_reward_groups_dropped_no_variance += reward_groups_dropped_no_variance
+            self._total_soft_overlong_penalty_count += soft_overlong_penalty_count
+            self._total_soft_overlong_penalty_sum += soft_overlong_penalty_sum
+
             for env_name, examples in env_examples.items():
                 if env_name in self.rollout_storage:
                     self.rollout_storage[env_name].extend(examples)
@@ -305,12 +388,26 @@ class ReplayBuffer:
         """Get buffer statistics for monitoring."""
         with self._lock:
             env_sizes = {env: len(rollouts) for env, rollouts in self.rollout_storage.items()}
+            reward_groups_accepted = self._total_reward_groups_seen - self._total_reward_groups_dropped_no_variance
+            reward_group_acceptance_rate = (
+                reward_groups_accepted / self._total_reward_groups_seen if self._total_reward_groups_seen > 0 else 0.0
+            )
+            soft_overlong_penalty_mean = (
+                self._total_soft_overlong_penalty_sum / self._total_soft_overlong_penalty_count
+                if self._total_soft_overlong_penalty_count > 0
+                else 0.0
+            )
             return {
                 "total_size": sum(env_sizes.values()),
                 "env_sizes": env_sizes,
                 "num_environments": len(self.rollout_storage),
                 "total_batches_added": self._total_batches_added,
                 "total_batches_sampled": self._total_batches_sampled,
+                "reward_groups_seen": self._total_reward_groups_seen,
+                "reward_groups_dropped_no_variance": self._total_reward_groups_dropped_no_variance,
+                "reward_group_acceptance_rate": reward_group_acceptance_rate,
+                "soft_overlong_penalty_count": self._total_soft_overlong_penalty_count,
+                "soft_overlong_penalty_mean": soft_overlong_penalty_mean,
             }
 
 

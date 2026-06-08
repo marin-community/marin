@@ -17,6 +17,7 @@ from marin.rl.kl_regularization import (
     masked_response_mean,
 )
 from marin.rl.rl_losses import (
+    DAPOLoss,
     DrGRPOLoss,
     GRPOLoss,
     PolicyGradientReducer,
@@ -40,6 +41,8 @@ def create_test_rollout(
     env_name: str = "test_env",
     episode_reward: float = 1.0,
     unique_id: int = 12345,
+    is_truncated: bool = False,
+    max_output_tokens: int = 512,
 ) -> Rollout:
     """Create a test rollout with predictable token values."""
     prompt_tokens = np.full(prompt_len, unique_id, dtype=np.int32)
@@ -55,8 +58,8 @@ def create_test_rollout(
         response_logprobs=response_logprobs,
         token_rewards=token_rewards,
         episode_reward=episode_reward,
-        decoding=DecodingConfig(temperature=1.0).as_trace(),
-        is_truncated=False,
+        decoding=DecodingConfig(temperature=1.0, max_output_tokens=max_output_tokens).as_trace(),
+        is_truncated=is_truncated,
     )
 
 
@@ -251,6 +254,67 @@ def test_ppo_objective_current_batch_token_normalized_matches_existing_rloo_redu
     np.testing.assert_allclose(loss, -((2.0 / 6.0) + (8.0 / 6.0)) / 2.0)
 
 
+def test_ppo_objective_active_token_mean_normalizes_by_active_response_tokens():
+    importance_sampling_ratio = jnp.ones((2, 4), dtype=jnp.float32)
+    loss_weights = jnp.array([[1.0, 1.0, 0.0, 0.0], [2.0, 2.0, 2.0, 2.0]], dtype=jnp.float32)
+    loss_masks = jnp.array([[1.0, 1.0, 0.0, 0.0], [1.0, 1.0, 1.0, 1.0]], dtype=jnp.float32)
+
+    loss, _ = compute_ppo_loss_objective(
+        importance_sampling_ratio,
+        loss_weights,
+        loss_masks,
+        clip_epsilon_low=0.2,
+        clip_epsilon_high=0.2,
+        reducer=PolicyGradientReducer.ACTIVE_TOKEN_MEAN,
+    )
+
+    np.testing.assert_allclose(loss, -(2.0 + 8.0) / 6.0)
+
+
+def test_ppo_objective_active_token_mean_excludes_hard_filtered_overlong_tokens():
+    importance_sampling_ratio = jnp.ones((2, 2), dtype=jnp.float32)
+    loss_weights = jnp.array([[10.0, 10.0], [2.0, 2.0]], dtype=jnp.float32)
+    loss_masks = jnp.ones((2, 2), dtype=jnp.float32)
+
+    loss, _ = compute_ppo_loss_objective(
+        importance_sampling_ratio,
+        loss_weights,
+        loss_masks,
+        clip_epsilon_low=0.2,
+        clip_epsilon_high=0.2,
+        reducer=PolicyGradientReducer.ACTIVE_TOKEN_MEAN,
+        response_truncated_array=jnp.array([True, False]),
+    )
+
+    np.testing.assert_allclose(loss, -(2.0 + 2.0) / 2.0)
+
+
+def test_ppo_objective_clip_high_allows_dapo_clip_higher_range():
+    importance_sampling_ratio = jnp.array([[1.25]], dtype=jnp.float32)
+    loss_weights = jnp.array([[1.0]], dtype=jnp.float32)
+    loss_masks = jnp.array([[1.0]], dtype=jnp.float32)
+
+    dapo_loss, _ = compute_ppo_loss_objective(
+        importance_sampling_ratio,
+        loss_weights,
+        loss_masks,
+        clip_epsilon_low=0.2,
+        clip_epsilon_high=0.28,
+        reducer=PolicyGradientReducer.ACTIVE_TOKEN_MEAN,
+    )
+    grpo_loss, _ = compute_ppo_loss_objective(
+        importance_sampling_ratio,
+        loss_weights,
+        loss_masks,
+        clip_epsilon_low=0.2,
+        clip_epsilon_high=0.2,
+        reducer=PolicyGradientReducer.ACTIVE_TOKEN_MEAN,
+    )
+
+    np.testing.assert_allclose(dapo_loss, -1.25)
+    np.testing.assert_allclose(grpo_loss, -1.2)
+
+
 def test_ppo_objective_fixed_response_budget_reducer():
     importance_sampling_ratio = jnp.ones((2, 4), dtype=jnp.float32)
     loss_weights = jnp.array([[1.0, 1.0, 0.0, 0.0], [2.0, 2.0, 2.0, 2.0]], dtype=jnp.float32)
@@ -316,6 +380,13 @@ def test_masked_response_mean_ignores_prompt_positions():
     loss_masks = np.array([[0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0]], dtype=np.float32)
 
     np.testing.assert_allclose(masked_response_mean(values, loss_masks), 3.0)
+
+
+def test_masked_response_mean_treats_zero_mask_rows_as_zero_contribution():
+    values = np.array([[10.0, 10.0], [2.0, 6.0]], dtype=np.float32)
+    loss_masks = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+
+    np.testing.assert_allclose(masked_response_mean(values, loss_masks), 2.0)
 
 
 def test_rloo_loss_needs_reference_model_only_when_kl_enabled():
@@ -491,6 +562,85 @@ def test_rloo_loss_policy_entropy_does_not_request_reference_entropy():
     assert calls == [(current_model, True), (reference_model, False)]
 
 
+def test_policy_gradient_loss_hard_overlong_filter_metrics_use_effective_masks():
+    batch = SimpleNamespace(
+        policy_logprobs=SimpleNamespace(array=np.zeros((2, 2), dtype=np.float32)),
+        loss_weights=SimpleNamespace(array=np.array([[0.0, 10.0], [0.0, 2.0]], dtype=np.float32)),
+        loss_masks=SimpleNamespace(array=np.array([[0.0, 1.0], [0.0, 1.0]], dtype=np.float32)),
+        temperature=SimpleNamespace(array=np.ones(2, dtype=np.float32)),
+        top_k=SimpleNamespace(array=np.full(2, 16, dtype=np.float32)),
+        truncated=np.array([True, False]),
+        max_seq_len=2,
+        max_output_tokens=1,
+    )
+
+    def compute_policy_stats_fn(_model, _batch, _key, *, compute_entropy: bool):
+        assert not compute_entropy
+        return jnp.zeros((2, 2), dtype=jnp.float32), None
+
+    loss, metrics = policy_gradient_loss_with_importance_sampling(
+        model=None,
+        reference_model=None,
+        batch=batch,
+        key=None,
+        kl=KLConfig(mode=KLMode.NONE, beta=0.0),
+        clip_epsilon_low=0.2,
+        clip_epsilon_high=0.2,
+        tis_importance_sampling_ratio_max=2.0,
+        do_overlong_filtering=True,
+        reducer=PolicyGradientReducer.ACTIVE_TOKEN_MEAN,
+        compute_policy_stats_fn=compute_policy_stats_fn,
+    )
+
+    assert loss == pytest.approx(-2.0)
+    assert metrics["response_tokens_length"].value() == pytest.approx(0.5)
+    assert metrics["mean_advantages"].value() == pytest.approx(1.0)
+    assert metrics["hard_overlong_filtered_fraction"].value() == pytest.approx(0.5)
+
+
+def test_policy_gradient_loss_hard_overlong_filter_excludes_filtered_tokens_from_kl_loss():
+    current_model = object()
+    reference_model = object()
+    current_logprobs = np.zeros((2, 2), dtype=np.float32)
+    reference_logprobs = np.array([[0.0, -2.0], [0.0, -1.0]], dtype=np.float32)
+    batch = SimpleNamespace(
+        policy_logprobs=SimpleNamespace(array=current_logprobs),
+        loss_weights=SimpleNamespace(array=np.zeros((2, 2), dtype=np.float32)),
+        loss_masks=SimpleNamespace(array=np.array([[0.0, 1.0], [0.0, 1.0]], dtype=np.float32)),
+        temperature=SimpleNamespace(array=np.ones(2, dtype=np.float32)),
+        top_k=SimpleNamespace(array=np.full(2, 16, dtype=np.float32)),
+        truncated=np.array([True, False]),
+        max_seq_len=2,
+        max_output_tokens=1,
+    )
+
+    def compute_policy_stats_fn(model, _batch, _key, *, compute_entropy: bool):
+        assert not compute_entropy
+        if model is current_model:
+            return current_logprobs, None
+        if model is reference_model:
+            return reference_logprobs, None
+        raise AssertionError("unexpected model passed to compute_policy_stats_fn")
+
+    loss, metrics = policy_gradient_loss_with_importance_sampling(
+        model=current_model,
+        reference_model=reference_model,
+        batch=batch,
+        key=None,
+        kl=KLConfig(mode=KLMode.K2_LOSS, beta=0.1),
+        clip_epsilon_low=0.2,
+        clip_epsilon_high=0.2,
+        tis_importance_sampling_ratio_max=2.0,
+        do_overlong_filtering=True,
+        reducer=PolicyGradientReducer.ACTIVE_TOKEN_MEAN,
+        compute_policy_stats_fn=compute_policy_stats_fn,
+    )
+
+    assert loss == pytest.approx(0.025)
+    assert metrics["kl_loss"].value() == pytest.approx(0.025)
+    assert metrics["kl_k2_mean"].value() == pytest.approx(0.25)
+
+
 def test_rloo_loss_rejects_missing_policy_entropy_when_metric_enabled():
     batch = create_test_training_batch()
 
@@ -559,6 +709,26 @@ def test_grpo_loss_reference_model_semantics_match_rloo():
             reference_model=None,
             train_model=None,
         )
+
+
+def test_dapo_loss_computes_std_normalized_group_advantages():
+    rewards = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    rollout_group = [
+        create_test_rollout(unique_id=0, episode_reward=float(rewards[0])),
+        create_test_rollout(unique_id=1, episode_reward=float(rewards[1])),
+        create_test_rollout(unique_id=2, episode_reward=float(rewards[2])),
+    ]
+    loss_module = DAPOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0))
+
+    advantages = loss_module.compute_advantages(rollout_group)
+    expected = (rewards - np.mean(rewards)) / (np.std(rewards, ddof=1) + 1e-6)
+
+    np.testing.assert_allclose(advantages, expected, atol=1e-6)
+
+
+def test_dapo_loss_rejects_non_higher_clip_high():
+    with pytest.raises(ValueError, match="clip_epsilon_high"):
+        DAPOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0), clip_epsilon_low=0.28, clip_epsilon_high=0.2)
 
 
 def test_dr_grpo_loss_uses_mean_centered_group_advantages_without_std_normalization():

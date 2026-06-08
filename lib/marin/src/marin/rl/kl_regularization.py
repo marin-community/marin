@@ -77,7 +77,8 @@ def k3_from_log_ratio(log_ratio: jax.Array) -> jax.Array:
 
 def masked_response_mean(values: jax.Array, loss_masks: jax.Array) -> jax.Array:
     """Average per-example masked response values across the batch."""
-    return jnp.mean(jnp.sum(values * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1))
+    response_token_counts = jnp.maximum(jnp.sum(loss_masks, axis=1), 1.0)
+    return jnp.mean(jnp.sum(values * loss_masks, axis=1) / response_token_counts)
 
 
 def kl_penalty_from_log_ratio(log_ratio: jax.Array, mode: KLMode) -> jax.Array:

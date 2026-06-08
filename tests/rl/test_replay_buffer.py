@@ -12,7 +12,7 @@ try:
     from marin.rl import train_batch
     from marin.rl.decoding import DecodingConfig
     from marin.rl.kl_regularization import KLConfig, KLMode
-    from marin.rl.replay_buffer import ReplayBuffer, ReplayDataLoader
+    from marin.rl.replay_buffer import ReplayBuffer, ReplayDataLoader, SoftOverlongPenaltyConfig, soft_overlong_penalty
     from marin.rl.rl_losses import RLOOLoss
 except ImportError:
     pytest.skip("Post training imports unavailable", allow_module_level=True)
@@ -88,6 +88,28 @@ def create_test_batch(
     return RolloutBatch(groups=[group], metadata=batch_metadata)
 
 
+def create_rollout(
+    *,
+    response_len: int,
+    episode_reward: float,
+    max_output_tokens: int,
+    unique_id: int,
+    env_name: str = "test_env",
+) -> Rollout:
+    return Rollout(
+        env_name=env_name,
+        env_example_id=f"example_{unique_id}",
+        prompt_tokens=np.array([unique_id], dtype=np.int32),
+        response_tokens=np.arange(response_len, dtype=np.int32),
+        response_logprobs=np.full(response_len, -0.5, dtype=np.float32),
+        token_rewards=np.zeros(response_len, dtype=np.float32),
+        episode_reward=episode_reward,
+        decoding=DecodingConfig(temperature=1.0, max_output_tokens=max_output_tokens).as_trace(),
+        is_truncated=response_len >= max_output_tokens,
+        metadata=RolloutMetadata(worker_id="test_worker", timestamp=time.time(), weight_step=0),
+    )
+
+
 def test_replay_buffer_ignores_empty_rollout_batches():
     replay_buffer = ReplayBuffer(
         capacity=100,
@@ -112,6 +134,93 @@ def test_replay_buffer_ignores_empty_rollout_batches():
 
     assert replay_buffer.size() == 0
     assert replay_buffer.get_stats()["total_batches_added"] == 0
+
+
+def test_soft_overlong_penalty_is_linear_inside_response_buffer():
+    config = SoftOverlongPenaltyConfig(buffer_length=4, penalty_factor=2.0)
+
+    assert soft_overlong_penalty(response_length=6, max_output_tokens=10, config=config) == pytest.approx(0.0)
+    assert soft_overlong_penalty(response_length=8, max_output_tokens=10, config=config) == pytest.approx(1.0)
+    assert soft_overlong_penalty(response_length=10, max_output_tokens=10, config=config) == pytest.approx(2.0)
+    assert soft_overlong_penalty(response_length=12, max_output_tokens=10, config=config) == pytest.approx(2.0)
+
+
+def test_replay_buffer_soft_overlong_penalty_runs_before_advantages_and_variance_filter():
+    penalty_config = SoftOverlongPenaltyConfig(buffer_length=4, penalty_factor=1.0)
+    metadata = RolloutMetadata(worker_id="test_worker", timestamp=time.time(), weight_step=0)
+    batch = RolloutBatch(
+        groups=[
+            RolloutGroup(
+                rollouts=[
+                    create_rollout(response_len=4, episode_reward=1.0, max_output_tokens=8, unique_id=0),
+                    create_rollout(response_len=8, episode_reward=1.0, max_output_tokens=8, unique_id=1),
+                ]
+            )
+        ],
+        metadata=metadata,
+    )
+    replay_buffer = ReplayBuffer(
+        capacity=100,
+        local_batch_size=2,
+        alpha=3.0,
+        total_processes=1,
+        max_samples=-1,
+        max_rollout_step_delay=1000,
+        max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=True,
+        soft_overlong_penalty=penalty_config,
+        loss_module=RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0)),
+        seed=42,
+    )
+
+    replay_buffer.add_batches([batch])
+
+    assert replay_buffer.size() == 2
+    stored_rollouts = replay_buffer.rollout_storage["test_env"]
+    rewards_and_advantages = sorted((r.rollout.episode_reward, r.advantage) for r in stored_rollouts)
+    assert rewards_and_advantages == pytest.approx([(0.0, -1.0), (1.0, 1.0)])
+    stats = replay_buffer.get_stats()
+    assert stats["reward_groups_seen"] == 1
+    assert stats["reward_groups_dropped_no_variance"] == 0
+    assert stats["reward_group_acceptance_rate"] == pytest.approx(1.0)
+    assert stats["soft_overlong_penalty_count"] == 1
+    assert stats["soft_overlong_penalty_mean"] == pytest.approx(1.0)
+
+
+def test_replay_buffer_variance_filter_drops_unshaped_zero_variance_group():
+    metadata = RolloutMetadata(worker_id="test_worker", timestamp=time.time(), weight_step=0)
+    batch = RolloutBatch(
+        groups=[
+            RolloutGroup(
+                rollouts=[
+                    create_rollout(response_len=4, episode_reward=1.0, max_output_tokens=8, unique_id=0),
+                    create_rollout(response_len=4, episode_reward=1.0, max_output_tokens=8, unique_id=1),
+                ]
+            )
+        ],
+        metadata=metadata,
+    )
+    replay_buffer = ReplayBuffer(
+        capacity=100,
+        local_batch_size=2,
+        alpha=3.0,
+        total_processes=1,
+        max_samples=-1,
+        max_rollout_step_delay=1000,
+        max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=True,
+        soft_overlong_penalty=None,
+        loss_module=RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0)),
+        seed=42,
+    )
+
+    replay_buffer.add_batches([batch])
+
+    stats = replay_buffer.get_stats()
+    assert replay_buffer.size() == 0
+    assert stats["reward_groups_seen"] == 1
+    assert stats["reward_groups_dropped_no_variance"] == 1
+    assert stats["reward_group_acceptance_rate"] == pytest.approx(0.0)
 
 
 def test_replay_buffer():
