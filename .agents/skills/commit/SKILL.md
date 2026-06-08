@@ -167,10 +167,11 @@ Opening the PR does not end your turn. You MUST monitor until the PR is merged o
 closed, or the user tells you to stop. A summary message to the user is NOT a
 substitute for monitoring and is NOT an exit condition.
 
-Drive the loop yourself — do not just check once. After each poll, schedule the
-next one with `ScheduleWakeup` (or the `loop` skill), picking the delay to match
-CI duration (e.g. ~120–270s while checks run, longer once green and idle). Only
-stop scheduling when an exit condition below is met.
+Drive the loop yourself — do not just check once. While CI runs, block on it with
+`gh pr checks <N> --watch --fail-fast` instead of re-polling. Once CI is green,
+switch to `ScheduleWakeup` polling for comments/reviews/merge with exponential
+backoff (e.g. 270s, doubling, capped at the 1h `ScheduleWakeup` max), giving up
+after ~4h idle. Only stop early when an exit condition below is met.
 
 Each poll, check **both**:
 1. **CI status** — `gh pr checks <N>`. On failure, read the failing job log and
