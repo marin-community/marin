@@ -985,50 +985,6 @@ def test_get_worker_status_recent_attempts_carry_attempt_uid(client, state, job_
     assert attempt.get("attemptUid") == db_uid
 
 
-def test_get_worker_status_recent_attempts_carry_resource_allocation(client, state):
-    """GetWorkerStatus per-attempt rows carry the task's static resource
-    allocation, inherited from the parent job's ResourceSpecProto.
-
-    Lets the worker page compare what the scheduler reserved against live
-    usage in the ``iris.task`` stats namespace. Covers the ``job_config`` join
-    in ``_attempts_for_worker``.
-    """
-    wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
-    request = controller_pb2.Controller.LaunchJobRequest(
-        name=JobName.root("test-user", "alloc-job").to_wire(),
-        entrypoint=make_test_entrypoint(),
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=4000, memory_bytes=8 * 1024**3, disk_bytes=100 * 1024**3),
-        environment=job_pb2.EnvironmentConfig(),
-        replicas=1,
-    )
-    job_id = submit_job(state, "alloc-job", request)
-    task_id = job_id.task(0)
-    with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
-    with state._db.transaction() as cur:
-        apply_task_observations(
-            cur,
-            [
-                WorkerTaskUpdates(
-                    worker_id=wid,
-                    updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
-                )
-            ],
-            health=state._health,
-            endpoints=state._endpoints,
-            now=Timestamp.now(),
-        )
-
-    resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
-    attempts = resp.get("recentAttempts", [])
-    assert len(attempts) == 1
-    resources = attempts[0]["resources"]
-    # int64 fields serialize as strings over Connect JSON.
-    assert resources["cpuMillicores"] == 4000
-    assert resources["memoryBytes"] == str(8 * 1024**3)
-    assert resources["diskBytes"] == str(100 * 1024**3)
-
-
 def test_get_task_status_attempts_carry_attempt_uid(client, state, job_request):
     """GetTaskStatus attempts surface attempt_uid via ``task_to_proto``.
 

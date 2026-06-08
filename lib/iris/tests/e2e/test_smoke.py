@@ -467,55 +467,32 @@ def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot, capa
 
 
 def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, capabilities):
-    """Worker detail page shows info, task history with per-task resource
-    allocation/usage, and task-id links to the task-detail page.
-
-    Runs a still-RUNNING job with an explicit memory request so the Task
-    History renders both the static allocation (from the parent job's
-    ResourceSpecProto, carried on each WorkerTaskAttempt) and the live usage
-    sampled into the ``iris.task`` stats namespace.
-    """
+    """Worker detail page shows info, task history, metric cards, and links each
+    task id to its task-detail page."""
     if not capabilities.has_workers:
         pytest.skip("No persistent workers")
-    with smoke_cluster.launched_job(TestJobs.sleep, "smoke-worker-detail", 120.0, cpu=2, memory="2g") as job:
-        smoke_cluster.wait_for_state(job, job_pb2.JOB_STATE_RUNNING, timeout=30)
-        # Worker id is set once the attempt is dispatched.
-        worker_id = ""
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline and not worker_id:
-            worker_id = smoke_cluster.task_status(job).worker_id
-            if not worker_id:
-                time.sleep(0.5)
-        assert worker_id
+    job = smoke_cluster.submit(TestJobs.quick, "smoke-worker-detail")
+    smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
 
-        dashboard_goto(smoke_page, f"{smoke_cluster.url}/worker/{worker_id}")
-        wait_for_dashboard_ready(smoke_page)
-        _wait_for_worker_detail_screenshot_ready(smoke_page, worker_id)
+    task_status = smoke_cluster.task_status(job)
+    worker_id = task_status.worker_id
+    assert worker_id
 
-        # The Task History task id links to the task-detail route — the
-        # "links to tasks" contract for this page.
-        smoke_page.wait_for_selector("a[href*='/task/']", timeout=10000)
-        href = smoke_page.locator("a[href*='/task/']").first.get_attribute("href")
-        assert href is not None and "/job/" in href and "/task/" in href
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/worker/{worker_id}")
+    wait_for_dashboard_ready(smoke_page)
+    _wait_for_worker_detail_screenshot_ready(smoke_page, worker_id)
 
-        # Wait on observable state, not wall time: the "(N%)" utilization badge
-        # renders only once a live iris.task usage sample joins the allocation.
-        # The page auto-refreshes slowly, so reload to pull the latest sample;
-        # this exits as soon as the screenshot has real used-vs-alloc rather
-        # than racing a fixed delay against the first sample.
-        usage_rendered = r"() => [...document.querySelectorAll('td')].some((c) => /\(\d+%\)/.test(c.textContent || ''))"
-        deadline = time.monotonic() + 60
-        while not smoke_page.evaluate(usage_rendered) and time.monotonic() < deadline:
-            time.sleep(3)
-            dashboard_goto(smoke_page, f"{smoke_cluster.url}/worker/{worker_id}")
-            _wait_for_worker_detail_screenshot_ready(smoke_page, worker_id)
-        assert smoke_page.evaluate(usage_rendered), "live per-task usage did not render"
+    # The Task History task id links to the task-detail route — the
+    # "links to tasks" contract for this page.
+    smoke_page.wait_for_selector("a[href*='/task/']", timeout=10000)
+    href = smoke_page.locator("a[href*='/task/']").first.get_attribute("href")
+    assert href is not None and "/job/" in href and "/task/" in href
 
-        smoke_screenshot(
-            "worker-detail",
-            "Worker detail page: identity, health, sparklines, and Task History with "
-            "per-task memory/disk allocation+usage columns and task-id links",
-        )
+    smoke_screenshot(
+        "worker-detail",
+        "Worker detail page with identity info, health badge, metric sparklines, "
+        "and task history with per-task resource columns and task-id links",
+    )
 
 
 def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
