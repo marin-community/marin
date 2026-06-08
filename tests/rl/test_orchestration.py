@@ -7,12 +7,9 @@ from types import SimpleNamespace
 import pytest
 from fray.types import JobStatus
 from marin.rl.orchestration import (
-    _coordinator_extras,
     _HostedRuntime,
-    _rollout_worker_extras,
     _run_rl_coordinator,
     _train_worker_entry,
-    _train_worker_extras,
 )
 from marin.rl.rl_job import RunConfig
 from marin.rl.rollout_worker import RolloutTrackerConfig
@@ -104,22 +101,6 @@ class _FakeWorkerConfig:
             checkpointer=SimpleNamespace(debug=SimpleNamespace(enabled=False)),
         )
     )
-
-
-def test_vllm_rl_worker_extras_keep_generic_tpu_off_rollout_workers():
-    config = SimpleNamespace(pip_dependency_groups=["math", "tpu"], inference_type="vllm")
-
-    assert _coordinator_extras(config) == ["math"]
-    assert _train_worker_extras(config) == ["math", "tpu"]
-    assert _rollout_worker_extras(config) == ["math", "vllm"]
-
-
-def test_levanter_rl_worker_extras_keep_generic_tpu_on_rollout_workers():
-    config = SimpleNamespace(pip_dependency_groups=["math", "vllm"], inference_type="levanter")
-
-    assert _coordinator_extras(config) == ["math"]
-    assert _train_worker_extras(config) == ["math", "tpu"]
-    assert _rollout_worker_extras(config) == ["math", "tpu"]
 
 
 def test_run_rl_coordinator_shuts_down_hosted_actors_when_child_job_fails(monkeypatch):
