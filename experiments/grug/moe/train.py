@@ -30,7 +30,7 @@ from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_b
 from levanter.data.text import GrugLmExample, LmDataConfig
 from levanter.data.text.examples import grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
-from levanter.grug.sharding import _batch_spec, compact_grug_mesh
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
@@ -110,6 +110,9 @@ def build_train_dataset(
     )
 
 
+_BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+
+
 def build_train_loader(
     dataset: AsyncDataset[GrugLmExample],
     *,
@@ -117,14 +120,13 @@ def build_train_loader(
     mesh: Mesh,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    # Derive from the actual mesh so we only request axes that exist (e.g. "expert" is
-    # absent when expert_axis_size == 1, see compact_grug_mesh).
-    axis_resource = _batch_spec(mesh)[0]
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
         batch_schedule.schedule,
         mesh=mesh,
-        axis_resources={"__BATCH__": axis_resource},
+        axis_resources={"__BATCH__": _BATCH_AXES},
         batch_axis_name="__BATCH__",
         allow_nondivisible_batch_size=False,
     )
@@ -148,12 +150,11 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    # Derive from the actual mesh so we only request axes that exist (e.g. "expert" is
-    # absent when expert_axis_size == 1, see compact_grug_mesh).
-    batch_axis_resource = _batch_spec(mesh)[0]
-    eval_axis_mapping = {"batch": batch_axis_resource}
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # are kept so we can name "expert" unconditionally.
+    eval_axis_mapping = {"batch": _BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
-    eval_array_sharding = NamedSharding(mesh, P(batch_axis_resource, None))
+    eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
 
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
         if isinstance(batch, LmExample):

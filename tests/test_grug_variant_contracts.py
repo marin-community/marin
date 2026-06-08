@@ -68,6 +68,22 @@ def test_compact_grug_mesh_shape_allows_expert_axis_to_span_processes():
     ) == (4, 2, 16, 1)
 
 
+def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
+    """Standardized contract: compact_grug_mesh always carries the expert axis.
+
+    The data-loader and model code reference "expert" unconditionally; we keep the axis at
+    size 1 instead of dropping it so size-1 cases (e.g. the GPU canary) don't fall through
+    a separate "axis absent" code path. See #6252 for the bug this contract prevents.
+    """
+    assert _compact_grug_mesh_shape(
+        process_count=1,
+        local_device_count=4,
+        expert_axis_size=1,
+        replica_axis_size=1,
+        model_axis_size=1,
+    ) == (1, 4, 1, 1)
+
+
 def _variant_has_noverify(variant_dir: Path) -> bool:
     train_file = variant_dir / "train.py"
     if not train_file.is_file():
@@ -195,17 +211,18 @@ def test_grug_moe_variant_threads_moe_implementation_to_kernel():
 
 def test_grug_moe_data_loaders_build_against_single_expert_mesh():
     """Regression: build_train_loader / build_tagged_evaluator must work when the
-    compact mesh has no "expert" axis (i.e. expert_axis_size == 1).
+    compact mesh's expert axis has size 1 (canary configuration).
 
     See https://github.com/marin-community/marin/issues/6252 — canary configurations
-    always have expert_axis_size == 1, so compact_grug_mesh drops the "expert" axis
-    entirely. The batch pspec must be derived from the actual mesh.
+    always have expert_axis_size == 1. Under the standardized
+    ``(replica_dcn, data, expert, model)`` contract the "expert" axis is kept at length 1
+    instead of being dropped, so the data-loader pspec can name it unconditionally.
     """
     train_module = importlib.import_module("experiments.grug.moe.train")
     compact_grug_mesh = importlib.import_module("levanter.grug.sharding").compact_grug_mesh
 
     mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
-    assert "expert" not in mesh.shape, "fixture must reproduce the canary single-expert layout"
+    assert mesh.shape.get("expert") == 1, "fixture must reproduce the canary single-expert layout"
 
     dataset = ListAsyncDataset(
         [
@@ -224,19 +241,20 @@ def test_grug_moe_data_loaders_build_against_single_expert_mesh():
 
 
 def test_grug_moe_model_init_against_single_expert_mesh():
-    """Regression: MoEMLP.init must build when the compact mesh has no "expert" axis.
+    """Regression: MoEMLP.init must build when the compact mesh's expert axis has size 1.
 
     See https://github.com/marin-community/marin/issues/6252 — canary configurations
-    have expert_axis_size == 1, so compact_grug_mesh drops the "expert" axis entirely.
-    MoEMLP.init must treat the absent axis as size 1 rather than raising
-    "grug/moe requires an abstract mesh with axis 'expert'" (the canary crash).
+    have expert_axis_size == 1. Under the standardized
+    ``(replica_dcn, data, expert, model)`` contract the "expert" axis is kept at length 1,
+    so MoEMLP.init reads ``mesh.shape["expert"] == 1`` rather than hitting an
+    "axis absent" branch.
     """
     train_module = importlib.import_module("experiments.grug.moe.train")
     model_module = importlib.import_module("experiments.grug.moe.model")
     compact_grug_mesh = importlib.import_module("levanter.grug.sharding").compact_grug_mesh
 
     mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
-    assert "expert" not in mesh.shape, "fixture must reproduce the canary single-expert layout"
+    assert mesh.shape.get("expert") == 1, "fixture must reproduce the canary single-expert layout"
 
     cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
     optimizer = optax.adam(1e-2)
