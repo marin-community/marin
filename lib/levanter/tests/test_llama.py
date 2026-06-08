@@ -218,11 +218,13 @@ def test_llama_lm_head_model_bwd(use_flash, num_kv_heads):
 @skip_if_no_torch
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
-def test_llama_roundtrip(scan_layers, num_kv_heads):
+def test_llama_roundtrip(scan_layers, num_kv_heads, local_gpt2_tokenizer_path):
     import torch
     from transformers import AutoModelForCausalLM, LlamaForCausalLM
 
-    converter = LlamaConfig().hf_checkpoint_converter()
+    # Local tokenizer + no remote reference keeps the roundtrip off the Hub; the
+    # tokenizer is incidental (random inputs, logit-equivalence only).
+    converter = LlamaConfig(reference_checkpoint=None, tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter()
 
     config = LlamaConfig(
         max_seq_len=128,
@@ -269,7 +271,7 @@ def test_llama_roundtrip(scan_layers, num_kv_heads):
         # now we're going to magnify the model parameters enough that differences should actualy show up
         jax_out = compute(model, input).array
 
-        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
+        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False, save_tokenizer=False)
         torch_model2 = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
         torch_model2.eval()
 

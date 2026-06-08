@@ -121,7 +121,7 @@ def _make_hf_apertus_config(vocab_size: int, num_kv_heads: int):
     return config
 
 
-def _make_levanter_apertus_config(scan_layers: bool, num_kv_heads: int) -> ApertusConfig:
+def _make_levanter_apertus_config(scan_layers: bool, num_kv_heads: int, tokenizer: str) -> ApertusConfig:
     max_position_embeddings = 256
     rope = Llama3RotaryEmbeddingsConfig(
         theta=12000000.0,
@@ -144,21 +144,23 @@ def _make_levanter_apertus_config(scan_layers: bool, num_kv_heads: int) -> Apert
         rope=rope,
         gradient_checkpointing=False,
         scan_layers=scan_layers,
-        tokenizer="swiss-ai/Apertus-8B-2509",
+        tokenizer=tokenizer,
     )
 
 
 @skip_if_no_torch
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [2])
-def test_apertus_roundtrip(scan_layers, num_kv_heads):
+def test_apertus_roundtrip(scan_layers, num_kv_heads, local_gpt2_tokenizer_path):
     import torch
     from transformers import AutoModelForCausalLM
     from transformers.models.apertus.modeling_apertus import ApertusForCausalLM
 
     Vocab = hax.Axis("vocab", 4096)
     hf_config = _make_hf_apertus_config(Vocab.size, num_kv_heads)
-    lev_config = _make_levanter_apertus_config(scan_layers, num_kv_heads)
+    # Local tokenizer keeps the converter off the Hub; the roundtrip uses random
+    # inputs and only asserts logit-equivalence, so the tokenizer is incidental.
+    lev_config = _make_levanter_apertus_config(scan_layers, num_kv_heads, tokenizer=local_gpt2_tokenizer_path)
     input_ids = hax.random.randint(random.PRNGKey(0), lev_config.max_Pos, 0, Vocab.size)
     attn_mask = AttentionMask.causal()
     input_torch = torch.from_numpy(np.array(input_ids.array)).to(torch.int32).unsqueeze(0)
@@ -194,7 +196,7 @@ def test_apertus_roundtrip(scan_layers, num_kv_heads):
 
         assert np.isclose(torch_out, np.array(jax_out), rtol=1e-4, atol=1e-4).all(), f"{torch_out} != {jax_out}"
 
-        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
+        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False, save_tokenizer=False)
 
         torch_model2 = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
         torch_model2.eval()
@@ -203,7 +205,7 @@ def test_apertus_roundtrip(scan_layers, num_kv_heads):
 
 
 @skip_if_no_torch
-def test_xielu_parameters_loaded_from_checkpoint():
+def test_xielu_parameters_loaded_from_checkpoint(local_gpt2_tokenizer_path):
     """Test that xIELU learnable parameters (alpha_p, alpha_n) are correctly loaded from HF checkpoint.
 
     This test modifies the xIELU parameters to non-default values before saving,
@@ -216,7 +218,9 @@ def test_xielu_parameters_loaded_from_checkpoint():
     Vocab = hax.Axis("vocab", 4096)
     num_kv_heads = 2
     hf_config = _make_hf_apertus_config(Vocab.size, num_kv_heads)
-    lev_config = _make_levanter_apertus_config(scan_layers=True, num_kv_heads=num_kv_heads)
+    lev_config = _make_levanter_apertus_config(
+        scan_layers=True, num_kv_heads=num_kv_heads, tokenizer=local_gpt2_tokenizer_path
+    )
 
     torch.random.manual_seed(42)
     torch_model = ApertusForCausalLM(hf_config)
