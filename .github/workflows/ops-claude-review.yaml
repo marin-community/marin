@@ -32,14 +32,14 @@ jobs:
           fetch-depth: 1
 
       - name: Run Claude Review
-        uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa  # v1
+        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
           track_progress: true
           prompt: |
             /review-pr --comment ${{ github.event.pull_request.number }}
           claude_args: |
-            --model opus
+            --model claude-opus-4-8
             --max-turns 200
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh pr review:*)"
           allowed_bots: 'claude[bot]'
@@ -94,13 +94,13 @@ jobs:
           enable-cache: true
 
       - name: Run Lint Review
-        uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa  # v1
+        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
           prompt: |
             /lint-review --comment ${{ github.event.pull_request.number }}
           claude_args: |
-            --model opus
+            --model claude-opus-4-8
             --max-turns 150
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(./infra/pre-commit.py:*),Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git merge-base:*),Bash(git rev-parse:*),Bash(git status:*)"
           allowed_bots: 'claude[bot]'
