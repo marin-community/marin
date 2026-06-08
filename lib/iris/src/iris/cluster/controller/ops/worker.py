@@ -64,16 +64,13 @@ def register(
     worker_attrs: WorkerAttrsProjection,
     slice_id: str = "",
     scale_group: str = "",
-    cpu_millicores: int | None = None,
 ) -> None:
     """Register a new worker or refresh an existing one. Caller owns the transaction.
 
-    ``cpu_millicores`` is the scheduling CPU capacity declared by the worker's
-    scale group (``ScaleGroupResources.cpu_millicores``). When provided it is the
-    canonical advertised capacity — overriding the probed host count so operators
-    can over-commit CPU via config. ``None`` (workers with no scale group) falls
-    back to the probed ``metadata.cpu_count``. The probed value is always kept in
-    ``md_cpu_count`` for diagnostics.
+    ``metadata.cpu_count`` is the worker's advertised scheduling CPU capacity: the
+    worker reports its scale-group declared CPU when configured (over-committing
+    past the physical host count), else the probed host count. See
+    ``build_worker_metadata``.
     """
     attr_dict: dict[str, AttributeValue] = {}
     attr_rows: list[dict] = []
@@ -98,7 +95,7 @@ def register(
         {
             "worker_id": worker_id,
             "address": address,
-            "total_cpu_millicores": cpu_millicores if cpu_millicores is not None else metadata.cpu_count * 1000,
+            "total_cpu_millicores": metadata.cpu_count * 1000,
             "total_memory_bytes": metadata.memory_bytes,
             "total_gpu_count": gpu_count,
             "total_tpu_count": tpu_count,

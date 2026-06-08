@@ -86,7 +86,7 @@ from iris.cluster.types import (
     WorkerId,
     is_job_finished,
 )
-from iris.rpc import config_pb2, controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
 from iris.rpc.auth import (
     AuthzAction,
     authorize,
@@ -800,10 +800,6 @@ class AutoscalerProtocol(Protocol):
         """Get info for a specific VM."""
         ...
 
-    def scale_group_resources(self, name: str) -> config_pb2.ScaleGroupResources | None:
-        """Return the canonical declared resources for a scale group, or None."""
-        ...
-
     def job_feasibility(
         self,
         constraints: list[Constraint],
@@ -914,23 +910,6 @@ class ControllerServiceImpl:
 
     def blob_data(self, blob_id: str) -> bytes:
         return self._bundle_store.get(blob_id)
-
-    def _scale_group_cpu_millicores(self, scale_group: str) -> int | None:
-        """Canonical scheduling CPU capacity for a worker's scale group.
-
-        The scale-group config declares what each worker provides; this is the
-        authoritative advertised capacity so operators can over-commit CPU (e.g.
-        report 8 cores on a 2-vCPU on-demand VM). Returns None for workers with
-        no scale group, no autoscaler, or no declared CPU, leaving registration
-        to fall back to the probed host count.
-        """
-        autoscaler = self._controller.autoscaler
-        if autoscaler is None or not scale_group:
-            return None
-        resources = autoscaler.scale_group_resources(scale_group)
-        if resources is None or resources.cpu_millicores <= 0:
-            return None
-        return resources.cpu_millicores
 
     def _get_autoscaler_pending_hints(self) -> dict[str, PendingHint]:
         """Build autoscaler-based pending hints keyed by job id."""
@@ -1555,7 +1534,6 @@ class ControllerServiceImpl:
                 accepted=False,
             )
         worker_id = WorkerId(request.worker_id)
-        cpu_millicores = self._scale_group_cpu_millicores(request.scale_group)
 
         with self._db.transaction() as cur:
             ops.worker.register(
@@ -1568,7 +1546,6 @@ class ControllerServiceImpl:
                 worker_attrs=self._worker_attrs,
                 slice_id=request.slice_id,
                 scale_group=request.scale_group,
-                cpu_millicores=cpu_millicores,
             )
         logger.info("Worker registered: %s at %s", worker_id, request.address)
         return controller_pb2.Controller.RegisterResponse(

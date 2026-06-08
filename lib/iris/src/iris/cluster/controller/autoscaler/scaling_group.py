@@ -209,6 +209,9 @@ def build_worker_config_for_group(
         if resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU and resources.device_count > 0:
             wc.gpu_count = resources.device_count
         wc.capacity_type = resources.capacity_type
+        # Advertised scheduling CPU capacity; the worker reports this instead of
+        # the probed host count so operators can over-commit CPU via config.
+        wc.cpu_millicores = resources.cpu_millicores
 
     if group_config.HasField("worker"):
         for k, v in group_config.worker.attributes.items():
