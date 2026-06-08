@@ -590,10 +590,11 @@ def test_cancel_job_releases_resources(smoke_cluster):
 
     Regression test for #3553.
     """
-    # Use most of a single worker's CPU so the followup job can't schedule
-    # until the heavy job is cancelled. Local workers have 1000 cores, cloud
-    # TPU VMs have 128 — pick a value that works in both modes.
-    heavy_cpu = 8 if smoke_cluster.is_cloud else 900
+    # Use most of a single worker's CPU so the followup job can't schedule on
+    # that worker until the heavy job is cancelled. Workers now advertise their
+    # scale-group declared CPU (local-cpu: 8 cores; cloud TPU VMs: 128) rather
+    # than a probed host count — pick a value that fills most of one worker.
+    heavy_cpu = 8 if smoke_cluster.is_cloud else 7
 
     job = smoke_cluster.submit(TestJobs.sleep, "smoke-cancel-heavy", 30, cpu=heavy_cpu)
     smoke_cluster.wait_for_state(job, job_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)

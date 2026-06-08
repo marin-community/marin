@@ -85,6 +85,7 @@ def create_local_autoscaler(
     # that InMemoryGcpService(LOCAL) can propagate them to local workers.
     worker_attributes_by_group: dict[str, dict[str, str | int | float]] = {}
     gpu_count_by_group: dict[str, int] = {}
+    cpu_millicores_by_group: dict[str, int] = {}
     for name, sg_config in config.scale_groups.items():
         attrs: dict[str, str | int | float] = {}
         if sg_config.HasField("resources"):
@@ -94,6 +95,8 @@ def create_local_autoscaler(
         worker_attributes_by_group[name] = attrs
         if sg_config.resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU and sg_config.resources.device_count > 0:
             gpu_count_by_group[name] = sg_config.resources.device_count
+        if sg_config.resources.cpu_millicores > 0:
+            cpu_millicores_by_group[name] = sg_config.resources.cpu_millicores
 
     storage_prefix = config.storage.remote_state_dir or ""
 
@@ -107,6 +110,7 @@ def create_local_autoscaler(
         threads=threads,
         worker_attributes_by_group=worker_attributes_by_group,
         gpu_count_by_group=gpu_count_by_group,
+        cpu_millicores_by_group=cpu_millicores_by_group,
         storage_prefix=storage_prefix,
         label_prefix=label_prefix,
     )

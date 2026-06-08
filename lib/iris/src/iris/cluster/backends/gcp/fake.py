@@ -76,6 +76,7 @@ class InMemoryGcpService:
         threads: ThreadContainer | None = None,
         worker_attributes_by_group: dict[str, dict[str, str | int | float]] | None = None,
         gpu_count_by_group: dict[str, int] | None = None,
+        cpu_millicores_by_group: dict[str, int] | None = None,
         storage_prefix: str = "",
         label_prefix: str = "iris",
     ) -> None:
@@ -112,6 +113,7 @@ class InMemoryGcpService:
         self._threads = threads or (ThreadContainer(name="gcp-service-local") if mode == ServiceMode.LOCAL else None)
         self._worker_attributes_by_group = worker_attributes_by_group or {}
         self._gpu_count_by_group = gpu_count_by_group or {}
+        self._cpu_millicores_by_group = cpu_millicores_by_group or {}
         self._storage_prefix = storage_prefix
         self._label_prefix = label_prefix
         self._iris_labels = Labels(label_prefix) if mode == ServiceMode.LOCAL else None
@@ -507,6 +509,7 @@ class InMemoryGcpService:
                 gpu_count_override=gpu_count,
                 capacity_type=capacity_type_val,
                 worker_attributes=extra_attrs,
+                cpu_millicores=self._cpu_millicores_by_group.get(sg_name, 0),
             )
 
             env_provider = FixedEnvironmentProvider(metadata)
