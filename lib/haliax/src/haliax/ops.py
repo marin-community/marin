@@ -61,9 +61,9 @@ def where(
 
 
 def where(
-    condition: NamedOrNumeric | bool,
-    x: NamedOrNumeric | None = None,
-    y: NamedOrNumeric | None = None,
+    condition: NamedOrNumeric | ArrayLike | bool,
+    x: NamedOrNumeric | ArrayLike | None = None,
+    y: NamedOrNumeric | ArrayLike | None = None,
     fill_value: int | None = None,
     new_axis: Axis | None = None,
 ) -> NamedArray | ArrayLike | tuple[NamedArray, ...]:

@@ -345,6 +345,16 @@ unbound-name = false
 # unsupported-operation, not-callable. Pre-existing instances are suppressed via
 # .pyrefly-baseline.json.
 
+# jit_scheduler.py annotates eqx.Module fields with single-axis haxtyping shapes,
+# e.g. `ht.i32[NamedArray, "position"]`. tensor-shapes = true parses multi-token
+# shape strings ("seq page") correctly, but reads a lone bare-identifier axis
+# ("position", "seq") as a forward reference, yielding false unknown-name errors.
+# Scope the disable to this one file rather than scattering 17 inline ignores.
+[[tool.pyrefly.sub_config]]
+matches = "lib/levanter/src/levanter/inference/jit_scheduler.py"
+[tool.pyrefly.sub_config.errors]
+unknown-name = false
+
 [tool.hatch.metadata]
 allow-direct-references = true
 
