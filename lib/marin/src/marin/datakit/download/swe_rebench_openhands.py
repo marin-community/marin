@@ -8,13 +8,11 @@ multi-turn conversation (system, assistant, user, tool roles) along with
 a resolved flag indicating whether the trajectory solved the issue.
 """
 
-import hashlib
-
 from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import load_parquet_batched, render_role_message
+from marin.datakit.download.rollout_transforms import load_parquet_batched, render_role_message, text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -41,13 +39,7 @@ def row_to_doc(row: dict) -> list[dict]:
     text = f"{tag}\n\n{rendered}" if tag else rendered
 
     counters.increment("swe_rebench_openhands/kept")
-    return [
-        {
-            "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "text": text,
-            "source": "nebius/SWE-rebench-openhands-trajectories",
-        }
-    ]
+    return [text_document(text, "nebius/SWE-rebench-openhands-trajectories")]
 
 
 def transform(input_path: str, output_path: str) -> None:

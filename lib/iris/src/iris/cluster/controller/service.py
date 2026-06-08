@@ -2380,25 +2380,10 @@ class ControllerServiceImpl:
             budget_limits: dict[str, int] = {b.user_id: b.budget_limit for b in budgets}
             user_spend = compute_user_spend(snap)
 
-            # Pending tasks: columns needed for task_row_can_be_scheduled.
-            # No ORDER BY — we aggregate, not display.
-            _TASK_ROW_COLS = (
-                tasks_table.c.task_id,
-                tasks_table.c.job_id,
-                tasks_table.c.state,
-                tasks_table.c.current_attempt_id,
-                tasks_table.c.failure_count,
-                tasks_table.c.preemption_count,
-                tasks_table.c.max_retries_failure,
-                tasks_table.c.max_retries_preemption,
-                tasks_table.c.submitted_at_ms,
-                tasks_table.c.priority_band,
-                tasks_table.c.priority_neg_depth,
-                tasks_table.c.priority_root_submitted_ms,
-                tasks_table.c.priority_insertion,
-            )
+            # Pending tasks: the scheduler's pending-task projection, reused here for
+            # task_row_can_be_scheduled + band aggregation. No ORDER BY — we aggregate, not display.
             pending_raw = snap.execute(
-                select(*_TASK_ROW_COLS).where(tasks_table.c.state == job_pb2.TASK_STATE_PENDING)
+                select(*reads.PENDING_TASK_COLS).where(tasks_table.c.state == job_pb2.TASK_STATE_PENDING)
             ).all()
             pending_rows = pending_raw
             pending_requested_bands = reads.get_priority_bands(snap, {row.job_id for row in pending_rows})

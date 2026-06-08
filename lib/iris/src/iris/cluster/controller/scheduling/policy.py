@@ -397,19 +397,7 @@ def _pending_tasks_with_jobs(tx: Tx) -> list[PendingTask]:
     """Return scheduling inputs for pending tasks, joining task + job + job_config in one query."""
     rows = tx.execute(
         select(
-            tasks_table.c.task_id,
-            tasks_table.c.job_id,
-            tasks_table.c.state,
-            tasks_table.c.current_attempt_id,
-            tasks_table.c.failure_count,
-            tasks_table.c.preemption_count,
-            tasks_table.c.max_retries_failure,
-            tasks_table.c.max_retries_preemption,
-            tasks_table.c.submitted_at_ms,
-            tasks_table.c.priority_band,
-            tasks_table.c.priority_neg_depth,
-            tasks_table.c.priority_root_submitted_ms,
-            tasks_table.c.priority_insertion,
+            *reads.PENDING_TASK_COLS,
             # job columns (label job_state to avoid clash with tasks.state)
             jobs_table.c.state.label("job_state"),
             jobs_table.c.scheduling_deadline_epoch_ms,
