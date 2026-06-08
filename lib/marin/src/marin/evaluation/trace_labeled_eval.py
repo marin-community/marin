@@ -433,6 +433,7 @@ def _completed_dataset_metrics(results: dict[str, object]) -> dict[str, float]:
     for dataset_result in _dataset_results(results).values():
         if not _is_completed_dataset_result(dataset_result):
             continue
+        assert isinstance(dataset_result, Mapping)
         dataset_metrics = dataset_result["metrics"]
         assert isinstance(dataset_metrics, Mapping)
         for metric_name, metric_value in dataset_metrics.items():

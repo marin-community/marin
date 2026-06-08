@@ -129,7 +129,7 @@ def cb_labeled_lm_evaluate(
     prefix: str = "labeled_eval",
     eval_current: bool = True,
     eval_model: bool = True,
-    mp: jmp.Policy = None,
+    mp: jmp.Policy | None = None,
 ) -> Callable[[StepInfo], None]:
     """Build a training callback for periodic labeled LM loss evaluation."""
     evaluator = LabeledEvaluator.for_labeled_examples(
