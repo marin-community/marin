@@ -7,8 +7,8 @@ allowed-tools: Bash(./infra/pre-commit.py:*), Bash(gh pr comment:*), Bash(gh pr 
 # Skill: Lint-catalog review on a PR
 
 Run the `infra/lint/` catalog review (`./infra/pre-commit.py --review`)
-over a pull request's branch diff and surface every finding — as `file:line` 
-inline review comments where the finding's line is available, and as a 
+over a pull request's branch diff and surface every finding — as `file:line`
+inline review comments where the finding's line is available, and as a
 single fallback comment for the rest.
 
 ## Your contract
