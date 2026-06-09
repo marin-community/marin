@@ -18,7 +18,8 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_GPU_REPLICAS  number of 8xH100 nodes (default 32 -> 256 GPUs)
     SCALE_EXPERT_AXIS   expert-parallel axis size, intra-node (default 8)
     SCALE_REPLICA_AXIS  cross-node replication; 1 = pure FSDP (default 1)
-    SCALE_BATCH         global batch in sequences (default 512)
+    SCALE_BATCH         global batch in sequences (default 256)
+    SCALE_SEQ_LEN       sequence length (default 2048)
     SCALE_STEPS         training steps (default 50)
     SCALE_HIDDEN_DIM / SCALE_NUM_LAYERS / SCALE_NUM_EXPERTS / SCALE_TOP_K
                         model-shape overrides (e.g. a smaller FSDP smoke test)
@@ -49,7 +50,12 @@ from experiments.tokenization import default_tokenize
 # head_dim is fixed at 128; hidden_dim must be a multiple of it.
 HEAD_DIM = 128
 VOCAB_SIZE = 128_256
-SEQ_LEN = 4096
+# Default seq for the 90B run. FSDP reshards the [batch, seq, hidden] activation
+# through a fully-replicated intermediate (an XLA SPMD limitation, pending Shardy),
+# so peak memory scales with batch*seq; at the default 89.7B model, batch 256 x
+# seq 2048 fits in 80GB while 512 x 4096 OOMs (~58GiB replicated tile).
+DEFAULT_SEQ_LEN = 2048
+DEFAULT_BATCH = 256
 
 # Modest, schedule-stable Adam for a short scale/throughput run (not trained to
 # convergence). expert weights share the schedule; the goal is to exercise the
@@ -81,6 +87,7 @@ def build_scale_model() -> GrugModelConfig:
     while num_heads % num_kv_heads != 0:
         num_kv_heads -= 1
     intermediate_dim = hidden_dim // 2  # expert FFN inner width (~d/2)
+    seq_len = _env_int("SCALE_SEQ_LEN", DEFAULT_SEQ_LEN)
     return GrugModelConfig(
         vocab_size=VOCAB_SIZE,
         hidden_dim=hidden_dim,
@@ -92,8 +99,8 @@ def build_scale_model() -> GrugModelConfig:
         shared_expert_intermediate_dim=intermediate_dim,
         num_experts=_env_int("SCALE_NUM_EXPERTS", 128),
         num_experts_per_token=_env_int("SCALE_TOP_K", 4),
-        max_seq_len=SEQ_LEN,
-        sliding_window=SEQ_LEN,
+        max_seq_len=seq_len,
+        sliding_window=seq_len,
     )
 
 
@@ -126,7 +133,7 @@ def build_scale_step() -> ExecutorStep:
     replicas = _env_int("SCALE_GPU_REPLICAS", 32)
     expert_axis = _env_int("SCALE_EXPERT_AXIS", 8)
     replica_axis = _env_int("SCALE_REPLICA_AXIS", 1)
-    batch_size = _env_int("SCALE_BATCH", 512)
+    batch_size = _env_int("SCALE_BATCH", DEFAULT_BATCH)
     steps = _env_int("SCALE_STEPS", 50)
 
     model = build_scale_model()
