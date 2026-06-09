@@ -1,11 +1,10 @@
-# CoreWeave US-EAST-02A cluster (cluster name: cw-us-east-o2a).
+# CoreWeave US-EAST-02A cluster (cluster name: cw-us-east-02a).
 #
 # These are fixed, reserved resources, so both pools are pinned ALWAYS WARM
 # rather than autoscaled: each scale group sets buffer_slices == max_slices, so
 # the backing NodePool gets minNodes == maxNodes (a static node count that never
-# scales to zero). Starting fleet: 2x CPU (Genoa) + 8x H100 (8 GPU each).
-# Account quota in this region is 4x cd-gp-a192-genoa and 32x gd-8xh100ib-i128;
-# bump buffer_slices/max_slices toward those caps to scale up.
+# scales to zero). Fleet: 4x CPU (Genoa) + 32x H100 (8 GPU each, 256 GPUs total) —
+# the full region quota of 4x cd-gp-a192-genoa and 32x gd-8xh100ib-i128.
 #
 # Architecture: KubernetesProvider dispatches task pods directly to the k8s API
 # (Pod-per-task); there are no worker daemons and no Iris autoscaler. Capacity is
@@ -19,8 +18,8 @@
 #   2. Point kubectl/iris at the region kubeconfig:
 #        export KUBECONFIG=~/.kube/coreweave-iris-gpu   # context marin-gpu_US-EAST-02A
 #   3. Start / inspect the cluster:
-#        uv run iris --cluster=cw-us-east-o2a cluster start
-#        uv run iris --cluster=cw-us-east-o2a cluster status
+#        uv run iris --cluster=cw-us-east-02a cluster start
+#        uv run iris --cluster=cw-us-east-02a cluster status
 
 platform:
   label_prefix: cw-use02a
@@ -31,7 +30,7 @@ platform:
     object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
 
 storage:
-  remote_state_dir: s3://marin-na/iris/cw-us-east-o2a/state
+  remote_state_dir: s3://marin-na/iris/cw-us-east-02a/state
 
 kubernetes_provider:
   namespace: iris
@@ -86,8 +85,8 @@ scale_groups:
     worker:
       attributes:
         pool: cpu-genoa
-    buffer_slices: 2     # pinned: 2 CPU nodes always warm (controller + CPU tasks)
-    max_slices: 2
+    buffer_slices: 4     # pinned: 4 CPU nodes always warm (controller + CPU tasks)
+    max_slices: 4
     priority: 50
     slice_template:
       num_vms: 1
@@ -108,8 +107,8 @@ scale_groups:
     worker:
       attributes:
         pool: h100-8x
-    buffer_slices: 8     # pinned: 8 H100 nodes (64 GPUs) always warm
-    max_slices: 8
+    buffer_slices: 32    # pinned: 32 H100 nodes (256 GPUs) always warm — full quota
+    max_slices: 32
     priority: 100
     slice_template:
       num_vms: 1
