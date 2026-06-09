@@ -89,21 +89,41 @@ jobs:
 
       - name: Install locked CPU torch wheel
         run: |
-          TORCH_CPU_VERSION=$(python3 - <<'PY'
-          import tomllib
+          torch_export=$(mktemp)
+          trap 'rm -f "$torch_export"' EXIT
+          uv export \
+            --package marin-levanter \
+            --dev \
+            --group test \
+            --extra torch_test \
+            --no-hashes \
+            --frozen \
+            --no-header \
+            --no-annotate \
+            > "$torch_export"
+
+          TORCH_CPU_VERSION=$(python3 - "$torch_export" <<'PY'
+          import re
+          import sys
           from pathlib import Path
 
-          lock = tomllib.loads(Path("../../uv.lock").read_text())
-          versions = {
-              package["version"]
-              for package in lock.get("package", [])
-              if package.get("name") == "torch" and package.get("version", "").endswith("+cpu")
-          }
+          versions = []
+          for line in Path(sys.argv[1]).read_text().splitlines():
+              match = re.match(r"^torch==([^ ;]+)", line.strip())
+              if not match:
+                  continue
+              version = match.group(1)
+              if "+" in version and not version.endswith("+cpu"):
+                  raise SystemExit(f"Levanter torch_test resolved non-CPU torch wheel: {version}")
+              versions.append(version if version.endswith("+cpu") else f"{version}+cpu")
+
+          versions = sorted(set(versions))
           if len(versions) != 1:
               raise SystemExit(
-                  f"Expected exactly one torch +cpu version in uv.lock, found {len(versions)}: {sorted(versions)}"
+                  "Expected exactly one torch version in Levanter torch_test export, "
+                  f"found {len(versions)}: {versions}"
               )
-          print(next(iter(versions)))
+          print(versions[0])
           PY
           )
           echo "Using torch ${TORCH_CPU_VERSION}"
