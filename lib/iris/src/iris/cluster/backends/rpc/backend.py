@@ -13,11 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import threading
 from collections.abc import Awaitable, Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field
 from typing import ClassVar, Protocol, TypeVar
 
@@ -51,20 +48,13 @@ from iris.rpc.worker_connect import WorkerServiceClient
 logger = logging.getLogger(__name__)
 
 # Per-worker RPC deadline applied to every fanned-out worker call (reconcile,
-# ping, ...). The inner asyncio.Semaphore caps how many of these run at once.
+# ping, ...). Combined with the fan-out semaphore this bounds a full reconcile
+# round at ~DEFAULT_WORKER_RPC_TIMEOUT * ceil(num_workers / parallelism), so the
+# control thread is never blocked indefinitely even if the whole fleet is hung.
 DEFAULT_WORKER_RPC_TIMEOUT = Duration.from_seconds(10.0)
 
 # Max concurrent in-flight per-worker RPCs in a fan-out (asyncio.Semaphore width).
 RECONCILE_FANOUT_PARALLELISM = 128
-
-# Threads dedicated to bounding control-path dispatches (reconcile + capacity
-# ops). A handful is enough: the control loop drives these serially, and the
-# extra slots only matter when a prior call is still hung past its watchdog.
-CONTROL_DISPATCH_POOL_SIZE = 4
-
-# Headroom added on top of the ideal fully-hung fan-out time before the watchdog
-# fires, covering event-loop startup and scheduling jitter.
-CONTROL_DISPATCH_WATCHDOG_SLACK = Duration.from_seconds(30.0)
 
 # Generous deadline for an "unlimited" exec_in_container (negative timeout). Long
 # enough for real interactive/debug commands, but not the old ~1-hour stall.
@@ -160,56 +150,24 @@ class RpcTaskBackend:
     # Stateless: holds no per-tick state, so one shared instance is reused
     # across scheduling cycles (mirrors the autoscaler's own Scheduler).
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
-    # Dedicated (per-backend, not global) pool that runs the inline control-path
-    # dispatches off the control-loop thread so a hung worker fleet surfaces as a
-    # bounded watchdog error instead of blocking the controller indefinitely.
-    _control_pool: ThreadPoolExecutor = field(
-        default_factory=lambda: ThreadPoolExecutor(
-            max_workers=CONTROL_DISPATCH_POOL_SIZE,
-            thread_name_prefix="rpc-backend-control",
-        ),
-        init=False,
-        repr=False,
-    )
 
     def attach_autoscaler(self, autoscaler: Autoscaler) -> None:
         """Attach the Iris autoscaler that provisions capacity for this backend."""
         self.autoscaler = autoscaler
 
-    def _watchdog_timeout(self, num_workers: int) -> float:
-        """Fleet-size-aware deadline (seconds) for one bounded control dispatch.
-
-        Each inner per-worker RPC caps at ``DEFAULT_WORKER_RPC_TIMEOUT`` and at
-        most ``parallelism`` run concurrently, so a fully-hung fleet needs about
-        one inner timeout per batch of ``parallelism`` workers. Slack covers
-        event-loop startup and scheduling jitter.
-        """
-        batches = max(1, math.ceil(num_workers / self.parallelism))
-        return DEFAULT_WORKER_RPC_TIMEOUT.to_seconds() * batches + CONTROL_DISPATCH_WATCHDOG_SLACK.to_seconds()
-
-    def _run_bounded(self, op: str, num_workers: int, fn: Callable[[], _R]) -> _R:
-        """Run ``fn`` on the control pool, bounded by the fleet-aware watchdog.
-
-        The caller (control-loop thread) is never blocked past the watchdog: if
-        ``fn`` overruns, the pool thread is left running but ``future.result``
-        raises, surfacing the stall as a :class:`ProviderError`.
-        """
-        timeout = self._watchdog_timeout(num_workers)
-        future = self._control_pool.submit(fn)
-        try:
-            return future.result(timeout=timeout)
-        except FutureTimeoutError as e:
-            raise ProviderError(
-                f"{self.name} backend {op} exceeded watchdog after {timeout:.0f}s ({num_workers} workers)"
-            ) from e
-
     def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
-        """Fan the Reconcile RPC out across all planned workers concurrently."""
+        """Fan the Reconcile RPC out across all planned workers concurrently.
+
+        Each per-worker RPC carries the stub factory's configured deadline
+        (``DEFAULT_WORKER_RPC_TIMEOUT``) and the fan-out caps concurrency at
+        ``parallelism``, so this returns in bounded time even when the whole
+        fleet is hung — no separate watchdog is needed on the control thread.
+        """
 
         async def _one(sem: asyncio.Semaphore, plan: WorkerReconcilePlan) -> ReconcileResult:
             return await self._reconcile_one(sem, plan, batch.worker_addresses[plan.worker_id])
 
-        results = self._run_bounded("reconcile", len(batch.plans), lambda: _fan_out(batch.plans, self.parallelism, _one))
+        results = _fan_out(batch.plans, self.parallelism, _one)
         return BackendReconcileResult(worker_results=results)
 
     def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
@@ -223,32 +181,22 @@ class RpcTaskBackend:
         handed in via ``snapshot``; this drives the in-memory autoscaler and
         returns its tracked state for the controller to persist.
         """
-        autoscaler = self.autoscaler
-        if autoscaler is None:
+        if self.autoscaler is None:
             return CapacityResult()
-
-        def _run() -> CapacityResult:
-            autoscaler.refresh(snapshot.worker_status_map)
-            autoscaler.probe_health()
-            autoscaler.update(snapshot.demand_entries)
-            return CapacityResult(state=autoscaler.persistable_state())
-
-        return self._run_bounded("manage_capacity", len(snapshot.worker_status_map), _run)
+        self.autoscaler.refresh(snapshot.worker_status_map)
+        self.autoscaler.probe_health()
+        self.autoscaler.update(snapshot.demand_entries)
+        return CapacityResult(state=self.autoscaler.persistable_state())
 
     def on_workers_failed(self, worker_ids: list[WorkerId]) -> WorkersFailedResult:
         """Terminate the failed workers' slices and return their healthy siblings."""
-        autoscaler = self.autoscaler
-        if autoscaler is None:
+        if self.autoscaler is None:
             return WorkersFailedResult()
-
-        def _run() -> WorkersFailedResult:
-            siblings = autoscaler.terminate_slices_for_workers([str(wid) for wid in worker_ids])
-            return WorkersFailedResult(
-                sibling_worker_ids=[WorkerId(wid) for wid in siblings],
-                state=autoscaler.persistable_state(),
-            )
-
-        return self._run_bounded("on_workers_failed", len(worker_ids), _run)
+        siblings = self.autoscaler.terminate_slices_for_workers([str(wid) for wid in worker_ids])
+        return WorkersFailedResult(
+            sibling_worker_ids=[WorkerId(wid) for wid in siblings],
+            state=self.autoscaler.persistable_state(),
+        )
 
     def get_process_status(
         self,
@@ -363,5 +311,3 @@ class RpcTaskBackend:
         if self.autoscaler is not None:
             self.autoscaler.shutdown()
         self.stub_factory.close()
-        # Don't wait: a watchdog-tripped call may still be hung in a pool thread.
-        self._control_pool.shutdown(wait=False, cancel_futures=True)
