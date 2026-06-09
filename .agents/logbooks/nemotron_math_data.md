@@ -1493,3 +1493,167 @@ Consolidated artifacts (all 107 cells, loss+bpb+source paths+dataset defs):
 Per-run raw + W&B as before (tag `decon_val_eval`). Next: re-fit the math
 scaling law on decon_j050 per mix vs the anchor; the contamination correction
 is largest for p33m67 and shrinks with math fraction.
+
+## 2026-06-08 — Val loss vs Jaccard decontamination threshold (fine 0.05 sweep)
+
+Filled in the 0.05-spaced Jaccard cutoff grid between the canonical
+j050/j075/j090 paranoid caches — **j055, j060, j065, j070, j080, j085** — and
+re-evaluated the **p33m67 × lr0.33** ladder on all nine decontaminated val sets
+plus the original-val anchor, to plot **math val loss vs decontamination cutoff
+τ, one curve per compute budget** (3e18 → 1e22). Question: how does the
+contamination effect resolve when τ is swept finely rather than at three points?
+
+Cutoff convention: `jXXX` = keep val docs whose max train Jaccard is `< 0.XX`
+(paranoid: also fully contained in val windows). **Lower τ = more aggressive =
+smaller, cleaner set.** j050 ⊂ j055 ⊂ … ⊂ j090.
+
+### Method
+
+- **Six new caches derived, not rescanned.** Every cutoff ≤0.90 keep-set is a
+  subset of the existing **j090 universe** (`…/decon_val_sets/keep_ids/keep_ids_j090.json`:
+  33,196 fully-contained docs + per-doc max train Jaccard). Derived all nine
+  keep-lists by thresholding that universe + the doc-offsets replay array (for
+  exact token counts) — no new MinHash scan. Self-verify reproduced all five
+  published doc anchors (0.50→13,947 … 0.90→33,196) AND the three cache-exact
+  token anchors (0.50/0.75/0.90) before building; the j070/j080 token totals
+  (19,064,069 / 22,382,501) then landed exactly on the corrected-matrix values
+  that were deliberately **not** asserted — independent confirmation of the
+  token method.
+- **Resumable + parallel build** (`scripts/analysis/build_decon_val_sweep.py`,
+  test `tests/analysis/test_build_decon_val_sweep.py`). The first attempt was a
+  single sequential job; it was preempted after finishing j055 and the
+  entrypoint retry tripped a strict "caches exist" guard (the same fragility the
+  canonical builder's `--resume` machinery exists to avoid). Rewrote to
+  skip-if-complete / clean-partial / never-touch-existing and fanned the
+  remaining five cutoffs into one job each (`--cutoffs <c> --skip-filter`; the
+  shared filter ran once, all six docs dirs already written). 5 parallel
+  us-east5 preemptible CPU jobs, **~18 min** wall (single-worker tokenize, ~22
+  docs/s — small sets bundle into one file group).
+- **Eval** (`scripts/analysis/eval_decon_val_sets.py`, extended 3→9 decon tags +
+  new `--out-root`): one v6e-4 job per scale, each evaluating the anchor + 9
+  decon sets as separately-tagged validation sets in one `eval_lm`, writing to a
+  distinct `evals_sweep9` root so the canonical 3-tag per-run files are
+  untouched. 8/9 succeeded first pass; **1e21** hit a transient GCS read failure
+  during HF-checkpoint load (None-content JSON parse; step-4410 is complete on
+  disk) and succeeded on a clean re-run (`decon-eval9-1e21-r2`).
+- **Sanity gate**: the new run's anchor + j050/j075/j090 reproduced the prior
+  3-tag values (logbook 2026-06-07 table) to **0.0000** at all nine scales — so
+  the six interpolated cutoffs are measured by the same trusted harness, and the
+  caches passed exact doc+token gates. The sweep structure below is signal, not
+  a masking/mapping bug.
+
+### Results — math val loss (nats/token)
+
+| scale | anchor | j050 | j055 | j060 | j065 | j070 | j075 | j080 | j085 | j090 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 3e18 | 1.4720 | 1.3597 | 1.3428 | **1.3389** | 1.3453 | 1.3537 | 1.3687 | 1.3868 | 1.4080 | 1.4266 |
+| 9e18 | 1.3034 | 1.1951 | 1.1802 | **1.1772** | 1.1837 | 1.1922 | 1.2070 | 1.2244 | 1.2446 | 1.2621 |
+| 2e19 | 1.2203 | 1.1150 | 1.1011 | **1.0985** | 1.1050 | 1.1134 | 1.1278 | 1.1446 | 1.1642 | 1.1813 |
+| 3e19 | 1.1640 | 1.0615 | 1.0478 | **1.0453** | 1.0517 | 1.0599 | 1.0741 | 1.0904 | 1.1096 | 1.1264 |
+| 9e19 | 1.0425 | 0.9490 | 0.9358 | **0.9331** | 0.9390 | 0.9467 | 0.9600 | 0.9751 | 0.9931 | 1.0090 |
+| 2e20 | 0.9737 | 0.8884 | 0.8752 | **0.8721** | 0.8774 | 0.8845 | 0.8970 | 0.9112 | 0.9280 | 0.9432 |
+| 3e20 | 0.9286 | 0.8503 | 0.8367 | **0.8334** | 0.8381 | 0.8445 | 0.8564 | 0.8697 | 0.8856 | 0.9001 |
+| 1e21 | 0.8104 | 0.7612 | 0.7460 | **0.7403** | 0.7425 | 0.7462 | 0.7547 | 0.7645 | 0.7768 | 0.7887 |
+| 1e22 | 0.5727 | 0.6126 | 0.5915 | 0.5785 | 0.5718 | 0.5669 | 0.5643 | 0.5628 | **0.5621** | 0.5630 |
+
+(Bold = per-row loss minimum. Anchor = the original 12,500-window val carve-out,
+a *different* short-doc-inclusive distribution; not on the paranoid curve.)
+
+Valley minimum and within-decon slope per scale:
+
+| scale | valley-min τ | j090 − j050 | anchor − j050 |
+|---|---:|---:|---:|
+| 3e18 | 0.60 | +0.0668 | +0.1123 |
+| 9e18 | 0.60 | +0.0670 | +0.1083 |
+| 2e19 | 0.60 | +0.0663 | +0.1053 |
+| 3e19 | 0.60 | +0.0649 | +0.1026 |
+| 9e19 | 0.60 | +0.0599 | +0.0935 |
+| 2e20 | 0.60 | +0.0547 | +0.0853 |
+| 3e20 | 0.60 | +0.0499 | +0.0783 |
+| 1e21 | 0.60 | **+0.0275** | +0.0491 |
+| 1e22 | **0.85** | **−0.0496** | −0.0399 |
+
+### Findings
+
+1. **The curves are non-monotonic — a valley the 3-point view hid.** The
+   minimum-loss decontaminated set is **not** the strictest (j050) but **τ≈0.60**
+   at every budget up to 1e21; dropping docs with max-J ∈ [0.5, 0.6) *raises*
+   loss. The old j050/j075/j090 sampling saw only a clean monotone rise and
+   missed this entirely. So "strictest = cleanest signal" is wrong — j050
+   over-filters relative to the loss-minimizing j060.
+2. **The contamination signature is the curve's scale-evolution, localized to
+   the 1e21→1e22 rung.** The within-decon slope **j090 − j050 flips sign**
+   between 1e21 (+0.027, strict end still easier) and 1e22 (−0.050, strict end
+   now *hardest* — removing near-dups raises loss = memorization credit
+   stripped). Simultaneously the **valley minimum jumps 0.60 → 0.85**: at 1e22
+   the high-Jaccard docs (0.85–0.90) become the *easiest*, which only happens
+   with the capacity to memorize them. Both pin the contamination "phase
+   transition" to the same rung as the anchor-gap inversion (anchor − j050:
+   +0.112 → −0.040).
+3. **1e22 stays the lowest curve at every τ — no crossover.** The curves
+   *converge* at the aggressive end as memorization credit is stripped, rather
+   than 1e22 crossing above a smaller budget. (The crossing that does invert is
+   1e22 vs its own anchor, not vs other budgets.)
+
+**Caveat (do not over-read the small-scale valley).** The *absolute* valley
+shape at small scale is a property of the doc sets, not contamination: at 3e18
+there is no memorization, yet high-Jaccard docs are intrinsically a bit harder
+(and they are *longer* on average — mean doc length rises 737→763 tokens from
+j050→j090 — so it is content-type, not a short-doc length artifact). The
+contamination conclusion rests on the **scale-evolution** (slope flip +
+valley-min jump at 1e21→1e22), which is robust to whatever sets the baseline
+shape.
+
+### Artifacts and links
+
+**Plot + consolidated data** (full precision, run→step, cache stats embedded):
+
+- Plot: `plots/decon_val_loss_vs_cutoff_p33m67_lr0.33.png` (repo) ·
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_sweep9/decon_val_loss_vs_cutoff_p33m67_lr0.33.png`
+- CSV: `plots/decon_val_loss_vs_cutoff_p33m67_lr0.33.csv` (+ GCS sibling)
+- Summary JSON: `gs://…/evals_sweep9/summary_sweep9_p33m67_lr0.33.json` ·
+  local `scratch/nemotron_math_decon_sweep_p33m67_lr0.33.json`
+
+**Decon val caches** (`gs://marin-us-east5/tokenized/nemotron_math_val_decon/<tag>/validation`):
+
+| tag | cutoff | docs | tokens | source |
+|---|---:|---:|---:|---|
+| j050 | 0.50 | 13,947 | 10,282,799 | canonical |
+| j055 | 0.55 | 17,403 | 12,797,386 | new |
+| j060 | 0.60 | 20,576 | 15,105,371 | new |
+| j065 | 0.65 | 23,388 | 17,206,832 | new |
+| j070 | 0.70 | 25,868 | 19,064,069 | new |
+| j075 | 0.75 | 28,089 | 20,782,728 | canonical |
+| j080 | 0.80 | 30,038 | 22,382,501 | new |
+| j085 | 0.85 | 31,882 | 24,060,973 | new |
+| j090 | 0.90 | 33,196 | 25,346,090 | canonical |
+
+**Sweep build provenance**: `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sweep/`
+(`keep_ids/keep_ids_j0{50..90}.json`, `<tag>/docs/`, `<tag>/manifest.json`,
+`filter_stats/`).
+
+**Per-run eval outputs** (anchor + 9 decon losses):
+`gs://…/decon_val_sets/evals_sweep9/<run>/step-<N>/metrics.jsonl/eval_results.json`
+
+| scale | run | step |
+|---|---|---:|
+| 3e18 | delphi-3e18-p33m67-k0p20-lr33-a003 | 7399 |
+| 9e18 | delphi-9e18-p33m67-k0p20-lr33-a002 | 8818 |
+| 2e19 | delphi-2e19-p33m67-k0p20-lr33-a002 | 10982 |
+| 3e19 | delphi-3e19-p33m67-k0p20-lr33-a002 | 7573 |
+| 9e19 | delphi-9e19-p33m67-k0p20-lr33-a002 | 8032 |
+| 2e20 | delphi-2e20-p33m67-k0p20-lr33-a001 | 11277 |
+| 3e20 | delphi-3e20-p33m67-k0p20-lr33-a001 | 7081 |
+| 1e21 | delphi-1e21-p33m67-9p25b-lr0.33-58ebcb | 4410 |
+| 1e22 | delphi-1e22-p33m67-32p07b-lr0.33-e9132105 | 7646 |
+
+Loss keys inside each `eval_results.json`: `eval/nemotron_cc_math_v1/4plus/loss`
+(anchor), `eval/decon_j0{50..90}/loss`. W&B mirror: project
+`marin-community/marin`, runs `decon-eval-<run>`, tag `decon_val_eval`.
+
+**Scripts** (tested, lint-clean): `scripts/analysis/build_decon_val_sweep.py`
+(resumable per-cutoff sweep build), `scripts/analysis/eval_decon_val_sets.py`
+(9 decon tags + `--out-root`), `scripts/analysis/plot_decon_val_loss_vs_cutoff.py`.
+
+Next: same sweep over p50m50 / p67m33 — does the valley-min jump track math
+fraction the way the anchor-gap inversion does (logbook 2026-06-07)?

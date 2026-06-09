@@ -5,14 +5,16 @@
 
 Runs ON a TPU iris job. Loads the run's final HF export (native levanter
 checkpoints are cleaned from the midtrain run dirs; arch is Qwen3) and
-evaluates four datasets as SEPARATE tagged validation sets in one job:
+evaluates ten datasets as SEPARATE tagged validation sets in one job:
 
-- decon_j050 / decon_j075 / decon_j090 — the paranoid short-doc caches at
-  gs://marin-us-east5/tokenized/nemotron_math_val_decon/.
+- decon_j050 … decon_j090 — the nine paranoid short-doc caches on the
+  0.05-spaced Jaccard grid at
+  gs://marin-us-east5/tokenized/nemotron_math_val_decon/. Sweeping the cutoff
+  traces val loss vs decontamination aggressiveness per checkpoint.
 - nemotron_cc_math_v1/4plus — the original 12,500-window val carve-out,
   copied verbatim from the p33m67 data section (same cache + feistel split),
-  as an in-harness anchor. Per-scale contamination effect = anchor loss
-  minus decon loss with zero harness confounds.
+  as an in-harness anchor ("no filter"). Per-scale contamination effect =
+  anchor loss minus decon loss with zero harness confounds.
 
 Losses land as eval/{tag}/loss in W&B and in the JSON tracker file under
 gs://…/midtrain_dedup/decon_val_sets/evals/{run}/step-{N}/.
@@ -55,6 +57,15 @@ logger = logging.getLogger(__name__)
 CHECKPOINT_ROOT = "gs://marin-us-east5/checkpoints"
 DECON_CACHE_ROOT = "gs://marin-us-east5/tokenized/nemotron_math_val_decon"
 EVAL_OUT_ROOT = "gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals"
+
+# Full 0.05-spaced decontamination grid (j050..j090). Each cutoff has its own
+# validation-only cache under DECON_CACHE_ROOT/<tag>; one eval_lm job evaluates
+# all of them plus the original-val anchor as separate tagged datasets, so a
+# checkpoint's val loss can be plotted against the cutoff. j050/j075/j090 are
+# the canonical paranoid caches; the rest are filled in by
+# scripts/analysis/build_decon_val_sweep.py.
+DECON_CUTOFFS = [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90]
+DECON_TAGS = [f"j{round(cutoff * 100):03d}" for cutoff in DECON_CUTOFFS]
 DATA_SECTION = Path(__file__).parent / "p33m67_data_section.json"
 ANCHOR_COMPONENT = "nemotron_cc_math_v1/4plus"
 SEQ_LEN = 4096
@@ -198,7 +209,7 @@ def build_data_config() -> LmDataConfig:
     section["num_validation_sequences"] = {ANCHOR_COMPONENT: section["num_validation_sequences"][ANCHOR_COMPONENT]}
     section["max_train_batches"] = None
 
-    for tag in ("j050", "j075", "j090"):
+    for tag in DECON_TAGS:
         name = f"decon_{tag}"
         section["components"][name] = {
             "cache_dir": f"{DECON_CACHE_ROOT}/{tag}",
@@ -229,8 +240,8 @@ def load_model_config(run: str, step: int) -> Qwen3Config:
     return Qwen3Config.from_hf_config(hf_config)
 
 
-def eval_output_dir(run: str, step: int) -> str:
-    return f"{EVAL_OUT_ROOT}/{run}/step-{step}/{JSON_TRACKER_DIR}"
+def eval_output_dir(out_root: str, run: str, step: int) -> str:
+    return f"{out_root}/{run}/step-{step}/{JSON_TRACKER_DIR}"
 
 
 def eval_results_path(output_dir: str) -> str:
@@ -276,11 +287,16 @@ def main() -> None:
     parser.add_argument("--run", required=True, choices=RUNS)
     parser.add_argument("--step", type=int, default=None, help="HF export step; default = latest.")
     parser.add_argument("--per-device-parallelism", type=int, default=4)
+    parser.add_argument(
+        "--out-root",
+        default=EVAL_OUT_ROOT,
+        help="Root for the per-run JSON tracker output; the 9-cutoff sweep writes to a distinct root.",
+    )
     parser.add_argument("--force", action="store_true", help="Re-run even if the output metrics file exists.")
     args = parser.parse_args()
 
     step = args.step if args.step is not None else final_hf_step(args.run)
-    out_path = eval_output_dir(args.run, step)
+    out_path = eval_output_dir(args.out_root, args.run, step)
     require_unused_output(out_path, force=args.force)
 
     model = load_model_config(args.run, step)
