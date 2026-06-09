@@ -47,6 +47,8 @@ from rigging.log_setup import configure_logging
 # experiments/exp1337_eval_suite.py.
 # TODO(yonromai): double-check whether all inherited TPU vLLM settings are still needed.
 VLLM_WORKER_ENV_VARS: dict[str, str] = {
+    # Build the pinned vLLM fork's TPU requirements instead of its CUDA default.
+    "VLLM_TARGET_DEVICE": "tpu",
     # Keep vLLM's API server and engine in one process so the TPU is claimed once.
     "VLLM_ENABLE_V1_MULTIPROCESSING": "0",
     # Lets overridden --max-model-len exceed model metadata; not always needed.
