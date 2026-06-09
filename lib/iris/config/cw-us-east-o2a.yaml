@@ -39,6 +39,12 @@ kubernetes_provider:
   host_network: true                # Required for NCCL/IB multi-host traffic
   cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal nodes
   controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
+  kueue:
+    # Enables Kueue gang admission for multi-host GPU jobs. The ClusterQueue
+    # (cluster-scoped) and ResourceFlavor cw-ib are created out-of-band by
+    # lib/iris/scripts/install_kueue.py --with-queues; Iris reconciles the
+    # namespaced LocalQueue (cw-use02a-lq) bound to it at controller start.
+    cluster_queue: iris-cq
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
