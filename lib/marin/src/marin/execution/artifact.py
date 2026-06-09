@@ -4,7 +4,7 @@
 import json
 import logging
 from dataclasses import asdict, dataclass, is_dataclass
-from typing import Any, TypeVar, overload
+from typing import Any, TypeVar, cast, overload
 
 from pydantic import BaseModel
 from rigging.filesystem import marin_prefix, open_url
@@ -64,7 +64,7 @@ class Artifact:
                         return json.load(fd)
                     if not issubclass(artifact_type, BaseModel):
                         raise TypeError(f"artifact_type must be a pydantic BaseModel subclass, got {artifact_type!r}")
-                    return artifact_type.model_validate_json(fd.read())
+                    return cast(T, artifact_type.model_validate_json(fd.read()))
             except FileNotFoundError:
                 continue
         return cls._from_executor_status(base_path, artifact_type)

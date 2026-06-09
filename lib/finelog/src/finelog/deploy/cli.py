@@ -112,11 +112,17 @@ def deploy() -> None:
     show_default=True,
     help="Build and push the finelog image (using cfg.image as the tag) before provisioning.",
 )
-def up_cmd(name: str, build: bool) -> None:
+@click.option(
+    "--fast",
+    is_flag=True,
+    default=False,
+    help="Build with the Rust `fast` profile (no LTO, parallel codegen) for a quicker build.",
+)
+def up_cmd(name: str, build: bool, fast: bool) -> None:
     """Provision the finelog deployment described by `<name>` (idempotent)."""
     cfg = load_finelog_config(name)
     if build:
-        build_finelog_image(image=cfg.image)
+        build_finelog_image(image=cfg.image, cargo_profile="fast" if fast else "release")
     _dispatch_up(cfg)
 
 
@@ -138,11 +144,17 @@ def down_cmd(name: str, yes: bool) -> None:
     show_default=True,
     help="Build and push the finelog image (using cfg.image as the tag) before restarting.",
 )
-def restart_cmd(name: str, build: bool) -> None:
+@click.option(
+    "--fast",
+    is_flag=True,
+    default=False,
+    help="Build with the Rust `fast` profile (no LTO, parallel codegen) for a quicker build.",
+)
+def restart_cmd(name: str, build: bool, fast: bool) -> None:
     """Restart the finelog deployment in place (refresh the container/image)."""
     cfg = load_finelog_config(name)
     if build:
-        build_finelog_image(image=cfg.image)
+        build_finelog_image(image=cfg.image, cargo_profile="fast" if fast else "release")
     _dispatch_restart(cfg)
 
 

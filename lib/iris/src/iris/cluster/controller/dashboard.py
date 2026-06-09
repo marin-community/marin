@@ -23,6 +23,7 @@ Auth model:
   route is a safe failure.
 """
 
+import functools
 import logging
 import os
 from urllib.parse import urlparse
@@ -35,7 +36,6 @@ from finelog.rpc.finelog_stats_connect import (
     StatsServiceASGIApplication as FinelogStatsServiceASGIApplication,
 )
 from finelog.rpc.logging_connect import LogServiceASGIApplication
-from finelog.server import LogServiceImpl
 from rigging.rpc import ConcurrencyLimitInterceptor
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
@@ -45,6 +45,7 @@ from starlette.routing import Match, Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from iris.cluster.controller import endpoint_proxy
+from iris.cluster.controller.backend import backend_descriptor
 from iris.cluster.controller.endpoint_proxy import EndpointProxy
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import (
@@ -157,8 +158,7 @@ class _RouteAuthMiddleware:
             if isinstance(route, Route):
                 match_result, _ = route.matches(scope)
                 if match_result == Match.FULL:
-                    endpoint = route.endpoint
-                    return getattr(endpoint, _AUTH_POLICY_ATTR, "deny")
+                    return getattr(route.endpoint, _AUTH_POLICY_ATTR, "deny")
 
         # No route matched — let Starlette handle 404.
         return "skip"
@@ -340,6 +340,7 @@ class _SubdomainProxyMiddleware:
 
 _LEGACY_FETCH_LOGS_PATH = "/iris.cluster.ControllerService/FetchLogs"
 _CANONICAL_FETCH_LOGS_PATH = "/finelog.logging.LogService/FetchLogs"
+_CANONICAL_PUSH_LOGS_PATH = "/finelog.logging.LogService/PushLogs"
 
 
 class _LegacyFetchLogsRedirect:
@@ -369,7 +370,7 @@ class ControllerDashboard:
     def __init__(
         self,
         service: ControllerServiceImpl,
-        log_service: LogServiceImpl | LogServiceProxy,
+        log_service: LogServiceProxy,
         host: str = "0.0.0.0",
         port: int = 8080,
         auth_verifier: TokenVerifier | None = None,
@@ -454,23 +455,12 @@ class ControllerDashboard:
         # a relative path. Adding relative keys lets that first lookup succeed
         # regardless of which mount handled the request. We pre-resolve so the
         # aliased dict survives lifespan/lazy resolution.
-        _LOG_FETCH_ENDPOINT = "/finelog.logging.LogService/FetchLogs"
-        _LOG_PUSH_ENDPOINT = "/finelog.logging.LogService/PushLogs"
         log_app._resolved_endpoints = dict(log_app._resolve_endpoints(self._log_service))
-        log_app._resolved_endpoints["/FetchLogs"] = log_app._resolved_endpoints[_LOG_FETCH_ENDPOINT]
-        log_app._resolved_endpoints["/PushLogs"] = log_app._resolved_endpoints[_LOG_PUSH_ENDPOINT]
+        log_app._resolved_endpoints["/FetchLogs"] = log_app._resolved_endpoints[_CANONICAL_FETCH_LOGS_PATH]
+        log_app._resolved_endpoints["/PushLogs"] = log_app._resolved_endpoints[_CANONICAL_PUSH_LOGS_PATH]
         _LEGACY_LOG_SERVICE_PATH = "/iris.logging.LogService"
 
-        def _resolve_endpoint(name: str) -> str | None:
-            # Task-registered endpoints live in the SQL store; system endpoints
-            # (``/system/...``) live in an in-memory dict on the service.
-            # Same fallback order as ListEndpoints' system-endpoint branch.
-            row = self._service._endpoints.resolve(name)
-            if row is not None:
-                return row.address
-            return self._service._system_endpoints.get(name)
-
-        self._endpoint_proxy = EndpointProxy(_resolve_endpoint)
+        self._endpoint_proxy = EndpointProxy(self._service.resolve_endpoint)
 
         @requires_auth
         async def _proxy_endpoint(request: Request) -> Response:
@@ -592,13 +582,18 @@ class ControllerDashboard:
     def _auth_config(self, request: Request) -> JSONResponse:
         """Unauthenticated endpoint telling the frontend whether auth is required."""
         has_session = SESSION_COOKIE in request.cookies
-        provider_kind = "kubernetes" if self._service._controller.has_direct_provider else "worker"
+        descriptor = backend_descriptor(self._service.provider)
         return JSONResponse(
             {
                 "auth_enabled": self._auth_provider is not None,
                 "provider": self._auth_provider,
                 "has_session": has_session,
-                "provider_kind": provider_kind,
+                "backend": {
+                    "name": descriptor.name,
+                    "placement": descriptor.placement.value,
+                    "manages_capacity": descriptor.manages_capacity,
+                    "capabilities": descriptor.capabilities,
+                },
                 "optional": self._auth_optional,
             }
         )
@@ -701,12 +696,31 @@ class ProxyControllerDashboard:
             favicon_route(),
             Route("/job/{job_id:path}", self._dashboard),
             Route("/worker/{worker_id:path}", self._dashboard),
-            Route("/bundles/{bundle_id:str}.zip", self._proxy_bundle),
-            Route("/blobs/{blob_id:str}", self._proxy_blob),
+            Route(
+                "/bundles/{bundle_id:str}.zip",
+                functools.partial(
+                    self._proxy_get, param="bundle_id", upstream="/bundles/{}.zip", media_type="application/zip"
+                ),
+            ),
+            Route(
+                "/blobs/{blob_id:str}",
+                functools.partial(
+                    self._proxy_get, param="blob_id", upstream="/blobs/{}", media_type="application/octet-stream"
+                ),
+            ),
             Route("/health", self._health),
             Route("/auth/{path:path}", self._proxy_auth),
-            Route("/iris.cluster.ControllerService/{method}", self._proxy_rpc, methods=["POST"]),
-            Route("/finelog.logging.LogService/{method}", self._proxy_log_rpc, methods=["POST"]),
+            Route(
+                "/iris.cluster.ControllerService/{method}",
+                functools.partial(self._proxy_rpc_post, service="iris.cluster.ControllerService"),
+                methods=["POST"],
+            ),
+            Route(
+                "/finelog.logging.LogService/{method}",
+                functools.partial(self._proxy_rpc_post, service="finelog.logging.LogService"),
+                methods=["POST"],
+            ),
+            Route("/proxy/{path:path}", self._proxy_endpoint, methods=list(endpoint_proxy.ALLOWED_METHODS)),
             static_files_mount(),
         ]
 
@@ -740,11 +754,12 @@ class ProxyControllerDashboard:
             media_type=upstream_resp.headers.get("content-type"),
         )
 
-    async def _proxy_rpc(self, request: Request) -> Response:
+    async def _proxy_rpc_post(self, request: Request, *, service: str) -> Response:
+        """Forward a Connect-RPC POST to ``/<service>/<method>`` on the upstream."""
         method = request.path_params["method"]
         body = await request.body()
         upstream_resp = await self._client.post(
-            f"/iris.cluster.ControllerService/{method}",
+            f"/{service}/{method}",
             content=body,
             headers={"content-type": request.headers.get("content-type", "application/json")},
         )
@@ -754,12 +769,21 @@ class ProxyControllerDashboard:
             media_type=upstream_resp.headers.get("content-type"),
         )
 
-    async def _proxy_log_rpc(self, request: Request) -> Response:
-        method = request.path_params["method"]
-        body = await request.body()
-        upstream_resp = await self._client.post(
-            f"/finelog.logging.LogService/{method}",
-            content=body,
+    async def _proxy_endpoint(self, request: Request) -> Response:
+        """Forward generic ``/proxy/<endpoint>/<sub_path>`` requests upstream.
+
+        The dashboard's stats panels (live resource usage, status text, profile
+        history) reach the bundled log server through
+        ``/proxy/system.log-server/finelog.stats.StatsService/...``. The upstream
+        controller already exposes the endpoint proxy at the same path, so we pass
+        the request through verbatim (method, body, query, content-type).
+        """
+        path = request.path_params["path"]
+        query = f"?{request.url.query}" if request.url.query else ""
+        upstream_resp = await self._client.request(
+            request.method,
+            f"/proxy/{path}{query}",
+            content=await request.body(),
             headers={"content-type": request.headers.get("content-type", "application/json")},
         )
         return Response(
@@ -768,16 +792,9 @@ class ProxyControllerDashboard:
             media_type=upstream_resp.headers.get("content-type"),
         )
 
-    async def _proxy_bundle(self, request: Request) -> Response:
-        bundle_id = request.path_params["bundle_id"]
-        upstream_resp = await self._client.get(f"/bundles/{bundle_id}.zip")
+    async def _proxy_get(self, request: Request, *, param: str, upstream: str, media_type: str) -> Response:
+        """Forward a GET for a single path param to ``upstream`` (a format string)."""
+        upstream_resp = await self._client.get(upstream.format(request.path_params[param]))
         if upstream_resp.status_code != 200:
             return Response(upstream_resp.text, status_code=upstream_resp.status_code)
-        return Response(upstream_resp.content, media_type="application/zip")
-
-    async def _proxy_blob(self, request: Request) -> Response:
-        blob_id = request.path_params["blob_id"]
-        upstream_resp = await self._client.get(f"/blobs/{blob_id}")
-        if upstream_resp.status_code != 200:
-            return Response(upstream_resp.text, status_code=upstream_resp.status_code)
-        return Response(upstream_resp.content, media_type="application/octet-stream")
+        return Response(upstream_resp.content, media_type=media_type)

@@ -36,14 +36,14 @@ from finelog.errors import (
     SchemaValidationError,
     StatsError,
 )
+from finelog.policy import StoragePolicy
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 from finelog.rpc.logging_connect import LogServiceClientSync
-from finelog.store.log_namespace import LOG_REGISTERED_SCHEMA
-from finelog.store.policy import StoragePolicy
-from finelog.store.schema import (
+from finelog.schema import (
     IMPLICIT_SEQ_COLUMN,
+    LOG_REGISTERED_SCHEMA,
     Column,
     ColumnTypeValue,
     Schema,
@@ -101,6 +101,13 @@ class FlushResult(StrEnum):
 
 def _format_exc_summary(exc: BaseException) -> str:
     if isinstance(exc, ConnectError):
+        # The server detail (e.g. "column \"ts\": nullable mismatch
+        # registered=true requested=false") is the whole point of the log —
+        # without it a FAILED_PRECONDITION is undiagnosable. Keep the code too
+        # so the retryable classification stays legible.
+        detail = exc.message.strip()
+        if detail:
+            return f"{type(exc).__name__}({exc.code.name}: {detail})"
         return f"{type(exc).__name__}({exc.code.name})"
     return f"{type(exc).__name__}: {exc}"
 
@@ -153,14 +160,20 @@ def schema_from_dataclass(cls: type) -> Schema:
                 f"dataclass {cls.__name__}: field {field.name!r} is reserved " f"(server-assigned implicit column)"
             )
         annotation = type_hints.get(field.name, field.type)
-        inner, nullable = _strip_optional(annotation)
+        # Every column is registered nullable regardless of whether the field is
+        # declared Optional. Finelog adopts compacted segments as all-nullable
+        # (DuckDB's COPY drops Arrow non-nullability), so a column registered
+        # non-nullable would conflict with its own adopted schema after a catalog
+        # rebuild and wedge all writes. _strip_optional still runs to unwrap the
+        # inner type of ``T | None`` fields and to reject unsupported unions.
+        inner, _nullable = _strip_optional(annotation)
         col_type = _PRIMITIVE_TYPE_MAP.get(inner)
         if col_type is None:
             raise SchemaValidationError(
                 f"dataclass {cls.__name__}: field {field.name!r} has unsupported "
                 f"type {annotation!r} (supported: str, int, float, bool, bytes, datetime)"
             )
-        columns.append(Column(name=field.name, type=col_type, nullable=nullable))
+        columns.append(Column(name=field.name, type=col_type, nullable=True))
     key_column = getattr(cls, "key_column", "")
     if not isinstance(key_column, str):
         raise SchemaValidationError(

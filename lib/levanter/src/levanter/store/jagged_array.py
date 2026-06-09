@@ -520,7 +520,7 @@ class JaggedArrayStore:
         offsets = [(offset[0], offset[-1]) for offset in offsets]
 
         if zero_pos is not None:
-            offsets[zero_pos] = [0, offsets[zero_pos][1]]
+            offsets[zero_pos] = (0, offsets[zero_pos][1])
 
         return offsets
 
@@ -544,7 +544,7 @@ class JaggedArrayStore:
         offsets = [(offset[0], offset[-1]) for offset in offsets]
 
         if zero_pos is not None:
-            offsets[zero_pos] = [0, offsets[zero_pos][1]]
+            offsets[zero_pos] = (0, offsets[zero_pos][1])
 
         return offsets
 

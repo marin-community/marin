@@ -997,8 +997,6 @@ def main(parquet_dir: str, output: str | None, history_dir: str | None, change_t
         print(f"Snapshot archived: {snapshot_path(history_dir, today)}", file=sys.stderr)
     if output:
         if output.startswith("gs://"):
-            import fsspec
-
             with fsspec.open(output, "w") as f:
                 f.write(report)
         else:

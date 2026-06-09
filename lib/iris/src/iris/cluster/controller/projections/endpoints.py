@@ -13,8 +13,6 @@ lock after COMMIT; a ROLLBACK suppresses them so the dicts stay in sync with
 disk.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -277,12 +275,12 @@ class EndpointsProjection:
         """Remove all endpoints owned by a task. Returns the removed endpoint_ids."""
         with self._lock:
             ids = list(self._by_task.get(task_id, ()))
-        # Issue the DELETE even if ids is empty: belt-and-suspenders for any
-        # rows the projection might not have observed yet (unlikely race with
-        # an in-flight concurrent writer).
-        cur.execute(delete(endpoints_table).where(endpoints_table.c.task_id == task_id))
+        # Empty index means no committed rows (the index mirrors committed state
+        # under the write lock), so the DELETE would be a no-op — skip it, as
+        # remove() does.
         if not ids:
             return []
+        cur.execute(delete(endpoints_table).where(endpoints_table.c.task_id == task_id))
 
         def apply() -> None:
             with self._lock:
@@ -293,16 +291,18 @@ class EndpointsProjection:
         return ids
 
     def remove_by_job_ids(self, cur: db.Tx, job_ids: Sequence[JobName]) -> list[str]:
-        """Remove all endpoints owned by any of ``job_ids``. Used by cancel_job and prune."""
+        """Remove all endpoints owned by any of ``job_ids``. Returns the removed endpoint_ids."""
         if not job_ids:
             return []
-        job_id_set = set(jid.to_wire() for jid in job_ids)
+        job_id_set = set(job_ids)
         with self._lock:
             to_remove: list[str] = []
             for row in self._by_id.values():
                 owning_job, _ = row.task_id.require_task()
-                if owning_job.to_wire() in job_id_set:
+                if owning_job in job_id_set:
                     to_remove.append(row.endpoint_id)
+        # The scan keys on the task's owning job; the DELETE keys on the persisted
+        # endpoints.job_id (the same value, written at add() time), so both select the same rows.
         cur.execute(
             delete(endpoints_table).where(endpoints_table.c.job_id.in_(bindparam("job_ids", expanding=True))),
             {"job_ids": list(job_ids)},

@@ -22,14 +22,13 @@ The HF dataset is gated (auto-approve); ``HF_TOKEN`` must be set locally
 for ``download_hf_step`` to authenticate.
 """
 
-import hashlib
 import json
 
 from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters, load_jsonl
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import load_parquet_batched
+from marin.datakit.download.rollout_transforms import load_parquet_batched, text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -105,13 +104,7 @@ def ctx_row_to_doc(row: dict) -> list[dict]:
         return []
 
     counters.increment("davinci_dev/ctx/kept")
-    return [
-        {
-            "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "text": text,
-            "source": "GAIR/daVinci-Dev/ctx-native",
-        }
-    ]
+    return [text_document(text, "GAIR/daVinci-Dev/ctx-native")]
 
 
 def transform_ctx_native(input_path: str, output_path: str) -> None:
@@ -211,13 +204,7 @@ def env_row_to_doc(row: dict) -> list[dict]:
     text = f"{tag}\n\n{rendered}" if tag else rendered
 
     counters.increment("davinci_dev/env/kept")
-    return [
-        {
-            "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "text": text,
-            "source": "GAIR/daVinci-Dev/env-native",
-        }
-    ]
+    return [text_document(text, "GAIR/daVinci-Dev/env-native")]
 
 
 def transform_env_native(input_path: str, output_path: str) -> None:

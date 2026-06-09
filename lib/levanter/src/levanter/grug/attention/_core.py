@@ -8,13 +8,14 @@ from typing import Literal
 
 import equinox as eqx
 import jax
-from jax import numpy as jnp
-from jax import shard_map
-from jax.sharding import NamedSharding
-from jaxtyping import Array, Bool, Float, Int
-
 from haliax.jax_utils import named_call
 from haliax.partitioning import _get_mesh
+from jax import numpy as jnp
+from jax import shard_map
+from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds as SplashSegmentIds
+from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
+from jax.sharding import NamedSharding
+from jaxtyping import Array, Bool, Float, Int
 
 _SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
 _SHARD_MAP_CHECK_KWARGS = {_SHARD_MAP_CHECK_KWARG: False}
@@ -22,6 +23,7 @@ GrugAttentionImplementation = Literal[
     "reference",
     "tpu_splash",
     "gpu_fa4_cute",
+    "gpu_fa4_thd",
 ]
 
 
@@ -31,6 +33,56 @@ class RotaryConfig:
 
     theta: float = 10000.0
     scaling_factor: float | None = None
+
+
+class ThdSegmentMetadata(eqx.Module):
+    """Fixed-shape segment metadata for FA4 THD attention.
+
+    `segment_lengths` stores the contiguous run lengths implied by packed
+    `segment_ids`, padded to a fixed max segment count. The runs include the
+    trailing padding run when segment id -1 is present so THD outputs still
+    reshape back to dense BSHD.
+    """
+
+    segment_lengths: Int[Array, "... M"]
+    num_segments: Int[Array, "..."]
+
+
+def thd_segment_metadata_from_segment_ids(
+    segment_ids: Int[Array, "... S"],
+    *,
+    max_segments: int,
+) -> ThdSegmentMetadata:
+    if max_segments <= 0:
+        raise ValueError(f"max_segments must be positive, got {max_segments}")
+    if segment_ids.ndim == 0:
+        raise ValueError("segment_ids must include a sequence dimension.")
+
+    seq_len = segment_ids.shape[-1]
+    flat_segment_ids = jnp.reshape(segment_ids, (-1, seq_len))
+
+    def _one_row(row_segment_ids: jax.Array) -> tuple[jax.Array, jax.Array]:
+        first = jnp.zeros((seq_len,), dtype=jnp.bool_).at[0].set(True)
+        previous = jnp.concatenate([row_segment_ids[:1], row_segment_ids[:-1]], axis=0)
+        starts = first | (row_segment_ids != previous)
+        num_segments = jnp.sum(starts, dtype=jnp.int32)
+        start_positions = jnp.nonzero(starts, size=max_segments, fill_value=seq_len)[0].astype(jnp.int32)
+        end_positions = jnp.concatenate([start_positions[1:], jnp.asarray([seq_len], dtype=jnp.int32)], axis=0)
+        lengths = jnp.maximum(end_positions - start_positions, 0)
+        lengths = jnp.where(jnp.arange(max_segments, dtype=jnp.int32) < num_segments, lengths, 0)
+        lengths = eqx.error_if(
+            lengths,
+            num_segments > max_segments,
+            "packed segment_ids contain more contiguous runs than max_segments.",
+        )
+        return lengths.astype(jnp.int32), num_segments
+
+    lengths, num_segments = jax.vmap(_one_row)(flat_segment_ids)
+    out_shape = segment_ids.shape[:-1]
+    return ThdSegmentMetadata(
+        segment_lengths=jnp.reshape(lengths, (*out_shape, max_segments)),
+        num_segments=jnp.reshape(num_segments, out_shape),
+    )
 
 
 class AttentionMask(eqx.Module):
@@ -43,6 +95,7 @@ class AttentionMask(eqx.Module):
 
     is_causal: bool = eqx.field(default=False, static=True)
     segment_ids: tuple[jax.Array, jax.Array] | None = None
+    thd_segment_metadata: ThdSegmentMetadata | None = None
     sliding_window: int | None = eqx.field(default=None, static=True)
 
     @classmethod
@@ -60,11 +113,26 @@ class AttentionMask(eqx.Module):
         self,
         q_segment_ids: Int[Array, "..."],
         kv_segment_ids: Int[Array, "..."] | None = None,
+        *,
+        max_segments: int | None = None,
     ) -> "AttentionMask":
         kv_ids = q_segment_ids if kv_segment_ids is None else kv_segment_ids
+        thd_segment_metadata = None
+        if max_segments is not None:
+            if kv_segment_ids is not None:
+                q_segment_ids = eqx.error_if(
+                    q_segment_ids,
+                    jnp.any(q_segment_ids != kv_ids),
+                    "THD segment metadata requires matching q/kv segment_ids.",
+                )
+            thd_segment_metadata = thd_segment_metadata_from_segment_ids(
+                q_segment_ids,
+                max_segments=max_segments,
+            )
         return AttentionMask(
             is_causal=self.is_causal,
             segment_ids=(q_segment_ids, kv_ids),
+            thd_segment_metadata=thd_segment_metadata,
             sliding_window=self.sliding_window,
         )
 
@@ -72,6 +140,7 @@ class AttentionMask(eqx.Module):
         return AttentionMask(
             is_causal=self.is_causal,
             segment_ids=self.segment_ids,
+            thd_segment_metadata=self.thd_segment_metadata,
             sliding_window=sliding_window,
         )
 
@@ -142,8 +211,9 @@ def apply_rotary_embedding(
     sin = sin[None, :, None, :]
 
     def _apply(x: Float[Array, "B S H D"]) -> Float[Array, "B S H D"]:
+        dtype = x.dtype
         x1, x2 = jnp.split(x, 2, axis=-1)
-        return jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1)
+        return jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1).astype(dtype)
 
     return _apply(q), _apply(k)
 
@@ -236,9 +306,6 @@ def _tpu_splash_attention(
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | jax.Array | None,
 ) -> Float[Array, "B Q Hq D"]:
-    from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
-    from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds as SplashSegmentIds
-
     # Splash attention expects BHSD.
     q_ = jnp.transpose(q, (0, 2, 1, 3))
     k_ = jnp.transpose(k, (0, 2, 1, 3))
@@ -394,6 +461,7 @@ def _tpu_splash_attention(
     def wrap(q_bhsd, k_bhsd, v_bhsd, seg_ids, kernel):
         return jax.vmap(kernel, in_axes=(0, 0, 0, segment_batch_axis))(q_bhsd, k_bhsd, v_bhsd, seg_ids)
 
+    # pyrefly: ignore[bad-specialization, bad-argument-count]  # jax.shard_map decorator erases wrap's real signature
     out = wrap(q_, k_, v_, segment_ids, splash_kernel)
     return jnp.transpose(out, (0, 2, 1, 3)).astype(v.dtype)
 
@@ -409,9 +477,13 @@ def attention(
     if implementation == "reference":
         return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
     if implementation == "gpu_fa4_cute":
-        from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention
+        from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention  # noqa: PLC0415
 
         return gpu_fa4_cute_attention(q, k, v, mask)
+    if implementation == "gpu_fa4_thd":
+        from levanter.grug.attention._fa4_thd import gpu_fa4_thd_attention  # noqa: PLC0415
+
+        return gpu_fa4_thd_attention(q, k, v, mask)
     if implementation == "tpu_splash":
         if isinstance(mask, jax.Array):
             raise NotImplementedError("Dense masks are not supported for splash attention.")

@@ -18,8 +18,8 @@ from typing import Protocol
 
 from rigging.timing import Timestamp
 
+from iris.cluster.backends.types import probe_outbound_ip
 from iris.cluster.constraints import WellKnownAttribute, accelerator_type_to_string
-from iris.cluster.providers.types import probe_outbound_ip
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import config_pb2, job_pb2
 from iris.time_proto import timestamp_to_proto
@@ -379,6 +379,7 @@ def build_worker_metadata(
     gpu_count_override: int = 0,
     capacity_type: int = 0,
     worker_attributes: dict[str, str] | None = None,
+    cpu_millicores: int = 0,
 ) -> job_pb2.WorkerMetadata:
     """Combine hardware probe results with platform-provided config.
 
@@ -389,7 +390,12 @@ def build_worker_metadata(
 
     The DeviceConfig oneof on WorkerMetadata is still built from config + probe
     data for capacity accounting (device count).
+
+    ``cpu_millicores`` is the scale-group declared CPU capacity. When > 0 it is
+    the advertised ``cpu_count`` (the canonical scheduling capacity, which may
+    over-commit the physical host); 0 falls back to the probed host count.
     """
+    advertised_cpu_count = max(1, cpu_millicores // 1000) if cpu_millicores > 0 else hardware.cpu_count
     extra_attributes = worker_attributes or {}
 
     device = job_pb2.DeviceConfig()
@@ -437,7 +443,7 @@ def build_worker_metadata(
     return job_pb2.WorkerMetadata(
         hostname=hardware.hostname,
         ip_address=hardware.ip_address,
-        cpu_count=hardware.cpu_count,
+        cpu_count=advertised_cpu_count,
         memory_bytes=hardware.memory_bytes,
         disk_bytes=hardware.disk_bytes,
         tpu_name=hardware.tpu_name,

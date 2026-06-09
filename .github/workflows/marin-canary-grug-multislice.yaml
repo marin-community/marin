@@ -1,0 +1,199 @@
+name: "Marin - Canary - Grug Multislice"
+
+on:
+  schedule:
+    - cron: '30 10 * * *'  # Daily at 10:30 AM UTC, offset from other canaries
+  workflow_dispatch:
+    inputs:
+      steps:
+        description: 'Override training steps'
+        type: number
+        required: false
+      slice_count:
+        description: 'Number of TPU slices'
+        type: number
+        default: 2
+        required: false
+
+permissions:
+  contents: read
+  issues: write    # claude triage files issues
+  id-token: write  # claude-code-action OIDC
+
+jobs:
+  grug-multislice-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    concurrency:
+      group: grug-multislice-smoke
+      cancel-in-progress: true
+    env:
+      RUN_ID: grug-multislice-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+      GRUG_MULTISLICE_BATCH_SIZE: "32"
+      GRUG_MULTISLICE_REGION: us-east5
+      GRUG_MULTISLICE_SLICE_COUNT: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.slice_count) || '2' }}
+      GRUG_MULTISLICE_STEPS: "5"
+      GRUG_MULTISLICE_TPU_TYPE: v6e-8
+      MARIN_PREFIX: gs://marin-us-east5
+      WANDB_ENTITY: marin-community
+      WANDB_PROJECT: marin
+      IRIS_CONFIG: lib/iris/config/marin.yaml
+      IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-packages --extra=cpu --no-default-groups
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Install SSH key
+        env:
+          SSH_KEY: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
+          SSH_KEY_PUB: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/google_compute_engine
+          printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
+          chmod 600 ~/.ssh/google_compute_engine
+          chmod 644 ~/.ssh/google_compute_engine.pub
+
+      - name: Submit Grug multislice smoke
+        id: submit
+        shell: bash -l {0}
+        run: |
+          JOB_ID=$(.venv/bin/iris --config="$IRIS_CONFIG" \
+            job run --no-wait \
+            --memory=2G --disk=4G --cpu=1 --extra=cpu \
+            --priority production \
+            -e RUN_ID "$RUN_ID" \
+            -e GRUG_MULTISLICE_BATCH_SIZE "$GRUG_MULTISLICE_BATCH_SIZE" \
+            -e GRUG_MULTISLICE_REGION "$GRUG_MULTISLICE_REGION" \
+            -e GRUG_MULTISLICE_SLICE_COUNT "$GRUG_MULTISLICE_SLICE_COUNT" \
+            -e GRUG_MULTISLICE_STEPS "$GRUG_MULTISLICE_STEPS" \
+            -e GRUG_MULTISLICE_TPU_TYPE "$GRUG_MULTISLICE_TPU_TYPE" \
+            -e MARIN_PREFIX "$MARIN_PREFIX" \
+            -e WANDB_ENTITY "$WANDB_ENTITY" \
+            -e WANDB_PROJECT "$WANDB_PROJECT" \
+            -e WANDB_API_KEY "$WANDB_API_KEY" \
+            -e HF_TOKEN "$HF_TOKEN" \
+            -- python -m experiments.ferries.grug_multislice_smoke)
+          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+          echo "Submitted job: $JOB_ID"
+        env:
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          GRUG_MULTISLICE_STEPS: ${{ inputs.steps || env.GRUG_MULTISLICE_STEPS }}
+
+      # Bound the wait below the job timeout (180) so a hung ferry fails this
+      # *step* (failure(), runner stays alive for Claude triage) instead of
+      # tripping the job timeout (cancelled(), which force-kills triage). See the
+      # same note in marin-canary-ferry.yaml. Healthy runs finish in ~20m, so 135
+      # leaves 45m for diagnostics + triage.
+      - name: Wait for Grug multislice smoke
+        timeout-minutes: 135
+        shell: bash -l {0}
+        run: |
+          uv run python scripts/workflows/iris_monitor.py wait \
+            --job-id "${{ steps.submit.outputs.job_id }}" \
+            --iris-config "$IRIS_CONFIG" \
+            --poll-interval 30 \
+            --child-wait-timeout 5400 \
+            --github-output
+
+      - name: Summarize Grug multislice profile
+        continue-on-error: true
+        shell: bash -l {0}
+        run: |
+          .venv/bin/python -m marin.profiling.cli summarize \
+            --run-target "$RUN_ID" \
+            --entity "$WANDB_ENTITY" \
+            --project "$WANDB_PROJECT"
+        env:
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+
+      - name: Capture failure diagnostics
+        if: failure() || cancelled()
+        continue-on-error: true
+        shell: bash -l {0}
+        env:
+          JOB_ID: ${{ steps.submit.outputs.job_id }}
+          DIAG_DIR: ${{ github.workspace }}/grug-multislice-diagnostics
+        run: |
+          mkdir -p "$DIAG_DIR"
+          uv run python scripts/workflows/iris_monitor.py collect \
+            --job-id "$JOB_ID" \
+            --iris-config "$IRIS_CONFIG" \
+            --provider gcp \
+            --output-dir "$DIAG_DIR" \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --controller-label iris-marin-controller \
+            --service-account "$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --ssh-key ~/.ssh/google_compute_engine
+
+      - name: Upload diagnostics
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: grug-multislice-diagnostics
+          path: grug-multislice-diagnostics/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Claude triage
+        id: claude_triage
+        if: (failure() || cancelled()) && github.event_name == 'schedule'
+        uses: ./.github/actions/claude-triage
+        timeout-minutes: 30
+        with:
+          oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          lane: grug-multislice
+          job-id: ${{ steps.submit.outputs.job_id }}
+          run-id: ${{ env.RUN_ID }}
+          iris-config: ${{ env.IRIS_CONFIG }}
+          wandb-entity: ${{ env.WANDB_ENTITY }}
+          wandb-project: ${{ env.WANDB_PROJECT }}
+          wandb-api-key: ${{ secrets.WANDB_API_KEY }}
+          gha-run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Upload Slack message
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slack-message
+          path: slack_message.md
+          retention-days: 1
+          if-no-files-found: ignore
+
+  notify-slack:
+    needs: grug-multislice-smoke
+    if: always() && (needs.grug-multislice-smoke.result == 'failure' || needs.grug-multislice-smoke.result == 'cancelled') && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+      - name: Notify Slack
+        uses: ./.github/actions/notify-slack
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          fallback-text: ":red_circle: *Grug multislice smoke failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

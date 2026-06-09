@@ -17,6 +17,12 @@ logger = logging.getLogger(__name__)
 
 SUBPROJECTS = ["lib/marin/src/marin", "lib/iris/src/iris", "lib/zephyr/src/zephyr", "lib/levanter/src/levanter"]
 
+# Suppress Claude Code's default "Co-Authored-By: Claude" / "Generated with
+# Claude Code" trailers on the commits and PRs the agent creates. AGENTS.md
+# forbids self-credit, and a prose instruction alone does not reliably override
+# the harness default — this setting does.
+NO_SELF_CREDIT_SETTINGS = ("--settings", '{"attribution":{"commit":"","pr":""}}')
+
 SCOUT_PROMPT = """\
 You are a Nightshift Scout Agent assigned to: {subproject}
 
@@ -38,7 +44,8 @@ lint, not renaming, but a genuine code quality win. Look for things like:
 - Test issues: tests with no assertions, `time.sleep()` in tests, mocks of
   internal functions
 
-Read `AGENTS.md` for project conventions.
+Read `AGENTS.md` (especially its Testing section) and
+`.agents/skills/commit/SKILL.md` for project conventions, and follow them.
 
 ## Rules of Engagement
 
@@ -50,6 +57,12 @@ Read `AGENTS.md` for project conventions.
 - If you find issues but the fix is non-trivial, file a GitHub issue instead
   of making a risky change.
 - Keep changes focused: one coherent improvement per subproject.
+- Never write tautological, trivial, or "slop" tests. A test must fail when the
+  behavior is wrong, not merely when the implementation changes. Do not add a
+  test for a thin wrapper around a library call, for a one-off script, or just
+  to have a test. If a change does not warrant a meaningful test, add none.
+- Never credit yourself in commit messages: no `Co-Authored-By: Claude` or
+  "Generated with Claude Code" trailer.
 
 ## Output
 
@@ -97,6 +110,12 @@ Their results:
 
 The scout worktrees with their commits are at these paths:
 {worktree_info}
+
+## Conventions
+
+Read `AGENTS.md` and `.agents/skills/commit/SKILL.md`, and follow them for the
+PR. Never credit yourself: no `Co-Authored-By: Claude` or "Generated with Claude
+Code" trailer in commits, and no self-attribution in the PR description.
 
 ## Your Mission
 
@@ -175,6 +194,7 @@ def run_scout(subproject: str, worktree_path: Path) -> tuple[str, dict, str]:
             "--model=opus",
             "--print",
             "--dangerously-skip-permissions",
+            *NO_SELF_CREDIT_SETTINGS,
             "--tools=Read,Write,Edit,Glob,Grep,Bash",
             "--max-turns",
             "400",
@@ -216,6 +236,7 @@ def run_merge(date: str, haiku_seed: str, scout_results: list[dict], worktree_in
             "--model=opus",
             "--print",
             "--dangerously-skip-permissions",
+            *NO_SELF_CREDIT_SETTINGS,
             "--tools=Read,Write,Edit,Glob,Grep,Bash",
             "--max-turns",
             "200",

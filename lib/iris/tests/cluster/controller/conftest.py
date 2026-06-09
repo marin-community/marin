@@ -3,7 +3,6 @@
 
 """Shared fixtures for controller unit tests."""
 
-import asyncio
 import shutil
 import tempfile
 from contextlib import contextmanager
@@ -13,8 +12,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
 import pytest
-from finelog.rpc import logging_pb2
-from finelog.server import LogServiceImpl
+from finelog.client.proxy import LogServiceProxy
+from iris.cluster.backends.gcp.fake import InMemoryGcpService
+from iris.cluster.backends.gcp.workers import GcpWorkerProvider
+from iris.cluster.backends.types import CloudSliceState
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
     AttributeValue,
@@ -34,13 +35,26 @@ from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
+from iris.cluster.controller.backend import (
+    BackendReconcileInput,
+    BackendReconcileResult,
+    CapacityResult,
+    PlacementOwner,
+    ProviderUnsupportedError,
+    ScheduleInput,
+    ScheduleResult,
+    TaskTarget,
+    WorkersFailedResult,
+    run_scheduling_decision,
+)
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.direct_provider import RunTemplateCache
 from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.provider import ProviderUnsupportedError
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.reconcile.worker import ReconcileResult
+from iris.cluster.controller.run_template import RunTemplateCache
+from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
     jobs_table,
     task_attempts_table,
@@ -49,9 +63,6 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
-from iris.cluster.providers.gcp.fake import InMemoryGcpService
-from iris.cluster.providers.gcp.workers import GcpWorkerProvider
-from iris.cluster.providers.types import CloudSliceState
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId, is_job_finished
 from iris.rpc import config_pb2, controller_pb2, job_pb2
@@ -60,10 +71,9 @@ from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 
-from tests.cluster.conftest import fake_log_client_from_service
+from tests.cluster.backends.conftest import make_mock_platform
 from tests.cluster.controller._test_support import ControllerTestState, set_task_state_for_test
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
-from tests.cluster.providers.conftest import make_mock_platform
 
 check_task_can_be_scheduled = task_row_can_be_scheduled
 
@@ -84,12 +94,34 @@ def check_is_job_finished(j) -> bool:
 
 
 class FakeProvider:
-    """Minimal TaskProvider for tests that only exercise transitions, not RPCs."""
+    """Minimal IRIS-placement TaskBackend for tests exercising transitions, not RPCs."""
+
+    name = "worker"
+    placement = PlacementOwner.IRIS_CONTROLLER
+    manages_capacity = False
+    autoscaler = None
+
+    def __init__(self) -> None:
+        # Real Iris scheduler: ``ctrl._run_scheduling`` routes the decision
+        # through ``schedule`` now, so the fake must run the real pipeline for
+        # scheduler/preemption/reservation tests to exercise placement.
+        self._scheduler = Scheduler()
+
+    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
+        return run_scheduling_decision(self._scheduler, snapshot)
+
+    def manage_capacity(self, snapshot) -> CapacityResult:
+        return CapacityResult()
+
+    def on_workers_failed(self, worker_ids) -> WorkersFailedResult:
+        return WorkersFailedResult()
+
+    def attach_autoscaler(self, autoscaler) -> None:
+        self.autoscaler = autoscaler
 
     def get_process_status(
         self,
-        worker_id: WorkerId,
-        address: str | None,
+        target: TaskTarget,
         request: job_pb2.GetProcessStatusRequest,
     ) -> job_pb2.GetProcessStatusResponse:
         raise ProviderUnsupportedError("fake")
@@ -97,9 +129,15 @@ class FakeProvider:
     def on_worker_failed(self, worker_id: WorkerId, address: str | None) -> None:
         pass
 
+    def set_log_sink(self, *args, **kwargs) -> None:
+        pass
+
+    def capacity(self):
+        return None
+
     def profile_task(
         self,
-        address: str,
+        target: TaskTarget,
         request: job_pb2.ProfileTaskRequest,
         timeout_ms: int,
     ) -> job_pb2.ProfileTaskResponse:
@@ -110,10 +148,12 @@ class FakeProvider:
     def ping_workers(self, workers):
         return []
 
-    def dispatch_reconcile_plans(self, plans, addresses):
-        from iris.cluster.controller.reconcile.worker import ReconcileResult
-
-        return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]
+    def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
+        return BackendReconcileResult(
+            worker_results=[
+                ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in batch.plans
+            ]
+        )
 
     def close(self) -> None:
         pass
@@ -135,8 +175,8 @@ class MockController:
         self.last_scheduling_context = None
         self.autoscaler = None
         self.provider = Mock()
-        self.has_direct_provider = False
-        self._run_template_cache: RunTemplateCache = RunTemplateCache(256)
+        self.placement = PlacementOwner.IRIS_CONTROLLER
+        self.run_template_cache: RunTemplateCache = RunTemplateCache(256)
 
 
 @pytest.fixture
@@ -145,48 +185,25 @@ def mock_controller() -> MockController:
 
 
 @pytest.fixture
-def log_service(state, tmp_path) -> LogServiceImpl:
-    """LogServiceImpl with its own internal log store.
+def log_service(embedded_log_server) -> LogServiceProxy:
+    """A LogService client (RPC proxy) against a fresh in-process finelog server.
 
-    Wraps ``push_logs`` / ``fetch_logs`` to force flush (and compact on read)
-    so push→fetch in the same test is synchronously visible. The production
-    path relies on the bg flush tick (5s default); tests can't afford that
-    wait — without the push wrapper, each push's ``await_persisted`` blocks
-    for one flush interval, making N sequential pushes take ~N*5s.
+    The native server makes pushed log entries immediately fetchable (RAM
+    buffer), so push→fetch is synchronously visible within a test without any
+    manual flush. ``LogServiceProxy`` exposes the same async
+    ``push_logs(request, ctx)`` / ``fetch_logs(request, ctx)`` surface the tests
+    drive, so callers are unchanged.
     """
-    svc = LogServiceImpl(log_dir=tmp_path / "log_service_logs")
-    original_fetch = svc.fetch_logs
-
-    async def push_logs(request, ctx):
-        # Append, then force-flush before returning. Bypasses the original
-        # ``await_persisted`` poll-wait that otherwise blocks for one bg
-        # flush tick (5s by default) on every push.
-        if not request.entries:
-            return logging_pb2.PushLogsResponse()
-        await asyncio.to_thread(svc._log_store.append, request.key, list(request.entries))
-        svc._log_store._force_flush()
-        return logging_pb2.PushLogsResponse()
-
-    def fetch_logs(request, ctx):
-        # Force a flush + compaction so just-pushed data is queryable
-        # within the same test, bypassing the production bg tick.
-        svc._log_store._force_flush()
-        svc._log_store._force_compaction()
-        return original_fetch(request, ctx)
-
-    svc.push_logs = push_logs  # type: ignore[method-assign]
-    svc.fetch_logs = fetch_logs  # type: ignore[method-assign]
-    yield svc
-    svc.close()
+    return LogServiceProxy(embedded_log_server.address)
 
 
 @pytest.fixture
-def controller_service(state, log_service, mock_controller, tmp_path) -> ControllerServiceImpl:
+def controller_service(state, log_client, mock_controller, tmp_path) -> ControllerServiceImpl:
     """ControllerServiceImpl with fresh DB, log service, and mock controller."""
     return ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_client=fake_log_client_from_service(log_service),
+        log_client=log_client,
         db=state._db,
         health=state._health,
         endpoints=state._endpoints,
@@ -282,16 +299,22 @@ def make_direct_job_request(
     name: str = "test-job",
     replicas: int = 1,
     task_image: str = "",
+    coscheduling_group_by: str = "",
+    priority_band: int = 0,
 ) -> controller_pb2.Controller.LaunchJobRequest:
     job_name = JobName.root("test-user", name)
-    return controller_pb2.Controller.LaunchJobRequest(
+    req = controller_pb2.Controller.LaunchJobRequest(
         name=job_name.to_wire(),
         entrypoint=make_test_entrypoint(),
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
         replicas=replicas,
         task_image=task_image,
+        priority_band=priority_band,
     )
+    if coscheduling_group_by:
+        req.coscheduling.group_by = coscheduling_group_by
+    return req
 
 
 def submit_direct_job(
@@ -299,9 +322,17 @@ def submit_direct_job(
     name: str,
     replicas: int = 1,
     task_image: str = "",
+    coscheduling_group_by: str = "",
+    priority_band: int = 0,
 ) -> list[JobName]:
     jid = JobName.root("test-user", name)
-    req = make_direct_job_request(name, replicas, task_image=task_image)
+    req = make_direct_job_request(
+        name,
+        replicas,
+        task_image=task_image,
+        coscheduling_group_by=coscheduling_group_by,
+        priority_band=priority_band,
+    )
     with state._db.transaction() as cur:
         ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now(), run_template_cache=state._run_template_cache)
     with state._db.read_snapshot() as tx:
@@ -928,7 +959,7 @@ def make_demand_entries(
             constraint_list.append(zone_constraint(z))
     return [
         DemandEntry(
-            task_ids=[f"{task_prefix}-{i}"],
+            task_ids=(f"{task_prefix}-{i}",),
             coschedule_group_id=None,
             normalized=normalized,
             constraints=constraint_list,
@@ -965,7 +996,7 @@ def make_big_demand_entries(
     if coschedule_group_id:
         return [
             DemandEntry(
-                task_ids=[f"{task_prefix}-{i}" for i in range(count)],
+                task_ids=tuple(f"{task_prefix}-{i}" for i in range(count)),
                 coschedule_group_id=coschedule_group_id,
                 normalized=normalized,
                 constraints=[],
@@ -974,7 +1005,7 @@ def make_big_demand_entries(
         ]
     return [
         DemandEntry(
-            task_ids=[f"{task_prefix}-{i}"],
+            task_ids=(f"{task_prefix}-{i}",),
             coschedule_group_id=None,
             normalized=normalized,
             constraints=[],

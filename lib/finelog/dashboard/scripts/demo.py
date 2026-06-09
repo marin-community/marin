@@ -2,17 +2,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stand up a finelog server, seed it with a few namespaces + log streams,
-and exercise the same JSON RPC paths the dashboard uses.
+"""Stand up an in-process finelog server, seed it with a few namespaces + log
+streams, and exercise the same JSON RPC paths the dashboard uses.
 
 Usage:
     uv run python lib/finelog/dashboard/scripts/demo.py [--keep]
 
-Without ``--keep`` the script tears the server down on exit. With ``--keep``
-the server stays up on port 10001 so the dashboard at
-http://localhost:10001/ can be inspected in a browser. The finelog server
+Boots the native ``finelog._native.EmbeddedServer`` (the same axum app the
+``finelog-server`` binary serves) on port 10001. Without ``--keep`` the script
+tears the server down on exit. With ``--keep`` the server stays up so the
+dashboard at http://localhost:10001/ can be inspected in a browser. The server
 serves the built dashboard from ``lib/finelog/dashboard/dist`` itself, so
 ``npm run build`` must have run at least once.
+
+Requires the native extension (a maturin/dev build of ``marin-finelog``).
 """
 
 from __future__ import annotations
@@ -22,10 +25,7 @@ import base64
 import dataclasses
 import json
 import logging
-import os
 import signal
-import socket
-import subprocess
 import sys
 import tempfile
 import time
@@ -36,6 +36,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.ipc as paipc
 from finelog.client.log_client import LogClient
+from finelog.embedded import require_embedded_server
 from finelog.rpc import logging_pb2
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
@@ -57,40 +58,6 @@ class WorkerMem:
     worker_id: str
     used_mb: int
     timestamp_ms: int
-
-
-def wait_port(port: int, timeout: float = 15.0) -> None:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            with socket.create_connection(("localhost", port), timeout=0.5):
-                return
-        except OSError:
-            time.sleep(0.1)
-    raise RuntimeError(f"port {port} never opened")
-
-
-def start_server(log_dir: Path) -> subprocess.Popen[bytes]:
-    log.info("starting finelog server on :%d (log_dir=%s)", PORT, log_dir)
-    proc = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "finelog.server.main",
-            "--port",
-            str(PORT),
-            "--log-dir",
-            str(log_dir),
-        ],
-        env={**os.environ, "FINELOG_LOG_LEVEL": "WARNING"},
-    )
-    try:
-        wait_port(PORT)
-    except Exception:
-        proc.terminate()
-        raise
-    log.info("server ready")
-    return proc
 
 
 def seed(client: LogClient) -> None:
@@ -181,7 +148,7 @@ def exercise() -> None:
         {"source": "/user/job-a/.*", "tail": True, "maxLines": 10},
     )
     for e in r.get("entries", []):
-        print(f"  {e.get('key')} [{e.get('level','?')}] {e.get('data')}")
+        print(f"  {e.get('key')} [{e.get('level', '?')}] {e.get('data')}")
 
 
 def main() -> int:
@@ -198,9 +165,10 @@ def main() -> int:
                 dist / "index.html",
             )
 
+    embedded_server = require_embedded_server()
     with tempfile.TemporaryDirectory(prefix="finelog-demo-") as tmpdir:
-        log_dir = Path(tmpdir)
-        proc = start_server(log_dir)
+        log.info("starting in-process finelog server on :%d (log_dir=%s)", PORT, tmpdir)
+        server = embedded_server(log_dir=tmpdir, host="127.0.0.1", port=PORT, debug_admin=True)
         try:
             client = LogClient.connect(("localhost", PORT))
             try:
@@ -212,13 +180,8 @@ def main() -> int:
                 log.info("dashboard ready at http://localhost:%d/ (Ctrl-C to stop)", PORT)
                 signal.pause()
         finally:
-            if proc.poll() is None:
-                log.info("stopping server")
-                proc.terminate()
-                try:
-                    proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+            log.info("stopping server")
+            server.stop()
     return 0
 
 

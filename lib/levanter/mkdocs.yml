@@ -111,6 +111,7 @@ nav:
   - 'Developer Guide':
       - 'dev/Port-Models.md'
       - 'dev/GPU-Docker-Dev.md'
+      - 'dev/DeepEP.md'
   - 'FAQ' : 'faq.md'
   - Other:
       - Release Announcement: 'Levanter-1.0-Release.md'

@@ -62,19 +62,20 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 #
 # Job-aggregate cascades live here (not in job.py) because they invoke
-# ``task.mark_task_terminating``, and job.py is forbidden from importing task.
+# ``task.merge_task_termination``, and job.py is forbidden from importing task.
 
 
 def _kill_non_terminal_tasks(overlay: Overlay, job_id: JobName, reason: str, now_ms: int) -> None:
     """Kill all non-terminal tasks for a single job and delete endpoints."""
     for row in overlay.active_tasks_for_job(job_id, states=NON_TERMINAL_TASK_STATES):
-        task.mark_task_terminating(
+        task.merge_task_termination(
             overlay,
             row.task_id.to_wire(),
             row.current_attempt_id,
             job_pb2.TASK_STATE_KILLED,
             reason,
             now_ms,
+            stamp_attempt_finished=False,
         )
 
 
@@ -116,7 +117,7 @@ def _cascade_to_peers(overlay: Overlay, outcome: task.TransitionOutcome, now_ms:
     """Coscheduled-sibling cascade for one transition. No job recompute."""
     if not outcome.cascade_to_peers:
         return
-    siblings = peers.find_coscheduled_siblings(overlay, outcome.job_id, outcome.task_id, True)
+    siblings = peers.find_coscheduled_siblings(overlay, outcome.job_id, outcome.task_id)
     if outcome.new_task_state in FAILURE_TASK_STATES:
         peers.terminate_coscheduled_siblings(overlay, siblings, outcome.task_id, now_ms)
     else:
@@ -192,17 +193,17 @@ class ReconcileState:
         now_ms = self._snapshot.now.epoch_ms()
         # Direct providers manage their own hosts -> no build-failed reaping.
         for update in updates:
-            self._apply_update(update, now_ms, source=task.TransitionSource.DIRECT_PROVIDER)
+            self._apply_update(update, now_ms, source=task.TransitionSource.DISPATCH)
         cascaded_jobs = self._recompute_and_finalize(now_ms)
 
         if cascaded_jobs:
-            self.overlay.emit_log_event(LogEvent(action="direct_provider_updates_applied", entity_id="direct"))
+            self.overlay.emit_log_event(LogEvent(action="dispatch_updates_applied", entity_id="direct"))
             for job_id in cascaded_jobs:
                 self.overlay.emit_log_event(
                     LogEvent(
                         action="job_terminated",
                         entity_id=job_id.to_wire(),
-                        trigger="direct_provider_updates_applied",
+                        trigger="dispatch_updates_applied",
                     )
                 )
         return self.overlay.effects
@@ -442,8 +443,9 @@ class ReconcileState:
         rows_by_worker: dict[WorkerId, list[ActiveTaskRow]] = {wid: [] for wid in failed_worker_ids}
         for rows in self._snapshot.active_tasks_by_job.values():
             for row in rows:
-                if row.current_worker_id in failed_worker_ids:
-                    rows_by_worker[row.current_worker_id].append(row)
+                wid = row.current_worker_id
+                if wid is not None and wid in failed_worker_ids:
+                    rows_by_worker[wid].append(row)
         return rows_by_worker
 
     def _fail_one_task(
@@ -481,13 +483,14 @@ class ReconcileState:
         # The worker is gone, so the attempt is truly done: finalize it (stamp
         # finished_at) rather than leaving it for a status update that will never
         # arrive.
-        task.finalize_attempt(
+        task.merge_task_termination(
             self.overlay,
             task_id.to_wire(),
             task_row.current_attempt_id,
             new_task_state,
             f"Worker {worker_id} failed: {error}",
             now_ms,
+            stamp_attempt_finished=True,
             attempt_state=job_pb2.TASK_STATE_WORKER_FAILED,
             preemption_count=holder_preemption_count,
         )
@@ -565,7 +568,9 @@ class ReconcileState:
         for row in rows:
             direct_task_wires.add(row.task_id.to_wire())
             job_id_wire = row.job_id.to_wire()
-            siblings = peers.find_coscheduled_siblings(self.overlay, row.job_id, row.task_id, row.has_coscheduling)
+            if not row.has_coscheduling:
+                continue
+            siblings = peers.find_coscheduled_siblings(self.overlay, row.job_id, row.task_id)
             if siblings:
                 siblings_by_job.setdefault(job_id_wire, []).extend(siblings)
 

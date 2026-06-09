@@ -14,6 +14,7 @@ from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
+from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -169,6 +170,61 @@ def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():
     y_default = moe_mlp(x, selected_experts, combine_weights, w_up_gate, w_down, mesh=None)
     y_ring = moe_mlp(x, selected_experts, combine_weights, w_up_gate, w_down, implementation="ring", mesh=None)
     np.testing.assert_allclose(np.asarray(y_default), np.asarray(y_ring), rtol=1e-5, atol=1e-5)
+
+
+def test_deepep_local_assignment_packing_uses_local_expert_ids():
+    recv_x = jnp.array(
+        [
+            [1.0, 2.0],
+            [3.0, 4.0],
+            [5.0, 6.0],
+        ],
+        dtype=jnp.float32,
+    )
+    recv_topk_idx = jnp.array(
+        [
+            [0, 1],
+            [1, -1],
+            [0, 0],
+        ],
+        dtype=jnp.int32,
+    )
+    recv_topk_weights = jnp.array(
+        [
+            [0.1, 0.2],
+            [0.3, 0.0],
+            [0.4, 0.5],
+        ],
+        dtype=jnp.float32,
+    )
+
+    local_assignments = _pack_deepep_local_assignments(
+        recv_x,
+        recv_topk_idx,
+        recv_topk_weights,
+        local_experts=2,
+        num_recv_tokens=jnp.array(2, dtype=jnp.int32),
+    )
+
+    np.testing.assert_array_equal(np.asarray(local_assignments.local_group_sizes), np.array([1, 2], dtype=np.int32))
+    np.testing.assert_array_equal(
+        np.asarray(local_assignments.recv_token_indices[:3]),
+        np.array([0, 0, 1], dtype=np.int32),
+    )
+    np.testing.assert_allclose(
+        np.asarray(local_assignments.x_dispatch[:3]),
+        np.array([[1.0, 2.0], [1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+        rtol=0,
+        atol=0,
+    )
+    np.testing.assert_allclose(
+        np.asarray(local_assignments.assignment_weights[:3]),
+        np.array([0.1, 0.2, 0.3], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(np.asarray(local_assignments.x_dispatch[3:]), 0, rtol=0, atol=0)
+    np.testing.assert_allclose(np.asarray(local_assignments.assignment_weights[3:]), 0, rtol=0, atol=0)
 
 
 def test_prepare_moe_dispatch_indices_match_materialized_dispatch():

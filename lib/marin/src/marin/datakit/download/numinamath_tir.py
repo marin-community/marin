@@ -10,13 +10,13 @@ renders those messages into the tagged transcript format used by Marin's
 datakit reasoning sources.
 """
 
-import hashlib
 from typing import Any
 
 from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.rollout_transforms import text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -67,13 +67,7 @@ def row_to_doc(row: dict) -> list[dict]:
         return []
 
     counters.increment("numinamath_tir/kept")
-    return [
-        {
-            "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "text": text,
-            "source": HF_DATASET_ID,
-        }
-    ]
+    return [text_document(text, HF_DATASET_ID)]
 
 
 def transform(input_path: str, output_path: str) -> None:

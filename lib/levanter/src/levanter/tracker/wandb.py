@@ -1,33 +1,32 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
+import json
 import logging
 import os
+import subprocess
 import tempfile
 import typing
 import warnings
-import json
-import hashlib
 from dataclasses import dataclass
 from typing import Any, List, Optional, Union
 
+import fsspec
 import jax
 import numpy as np
+import wandb
 from draccus import field
 from git import InvalidGitRepositoryError, NoSuchPathError, Repo
 
-from levanter.tracker import Tracker
 from levanter.tracker.background import maybe_wrap_background
 from levanter.tracker.helpers import generate_pip_freeze, infer_experiment_git_root
 from levanter.tracker.histogram import SummaryStats
-from levanter.tracker.tracker import TrackerConfig
+from levanter.tracker.tracker import Tracker, TrackerConfig
 from levanter.utils import jax_utils
-
 
 if typing.TYPE_CHECKING:
     import wandb.sdk.lib.disabled
-
-    import wandb
 
 
 logger = logging.getLogger(__name__)
@@ -49,8 +48,6 @@ class WandbTracker(Tracker):
         suppress_logging: bool = False,
         minimum_log_step: int = 0,
     ):
-        import wandb
-
         if run is None:
             if wandb.run is None:
                 logger.warning("Wandb run is not initialized. Initializing a new run.")
@@ -68,10 +65,23 @@ class WandbTracker(Tracker):
         self._suppress_logging = suppress_logging
         self._minimum_log_step = minimum_log_step
 
+    # The prepare hooks do the full wandb-side conversion (SummaryStats expansion,
+    # wandb.Histogram construction) so the background worker only uploads. They are
+    # idempotent, so re-running them on an already-prepared payload is a no-op.
+
+    def _prepare_log(self, metrics):
+        return _convert_metrics_to_wandb_loggable(metrics)
+
+    def _prepare_summary(self, metrics):
+        return _convert_value_to_loggable_rec(metrics)
+
+    def _prepare_hyperparameters(self, hparams):
+        return _convert_value_to_loggable_rec(hparams)
+
     def log_hyperparameters(self, hparams: dict[str, Any]):
         if self._suppress_logging:
             return
-        self.run.config.update(_convert_value_to_loggable_rec(hparams), allow_val_change=True)
+        self.run.config.update(self._prepare_hyperparameters(hparams), allow_val_change=True)
 
     def log(self, metrics: typing.Mapping[str, Any], *, step, commit=None):
         if step is None and not commit:
@@ -88,15 +98,7 @@ class WandbTracker(Tracker):
 
         step = int(step)
 
-        # wandb histograms are pretty limited: they log only the counts and the bin edges.
-        # Our summary stats have the same scalar fields Tensorboard understands. We log those as separate values.
-        to_log = {}
-        for k, v in metrics.items():
-            if isinstance(v, SummaryStats):
-                to_log.update(_convert_summary_stats_to_loggable(k, v))
-            else:
-                # otherwise, just log the value normally
-                to_log[k] = _convert_value_to_loggable_rec(v)
+        to_log = self._prepare_log(metrics)
 
         if self._suppress_logging:
             return
@@ -114,7 +116,7 @@ class WandbTracker(Tracker):
     def log_summary(self, metrics: typing.Mapping[str, Any]):
         if self._suppress_logging:
             return
-        self.run.summary.update(_convert_value_to_loggable_rec(metrics))
+        self.run.summary.update(self._prepare_summary(metrics))
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
         if self._suppress_logging:
@@ -127,8 +129,6 @@ class WandbTracker(Tracker):
         )
 
     def log_html(self, key: str, html_path, *, step: Optional[int], commit: Optional[bool] = None):
-        import wandb
-
         if step is None and not commit:
             step = self.run.step
         if step is not None and step < self.run.step:
@@ -155,8 +155,6 @@ class WandbTracker(Tracker):
     def _write_replicate_file(self):
         if self._replicate_path is None:
             return
-
-        import fsspec
 
         metrics_file = f"{self._replicate_path}/tracker_metrics.jsonl"
         fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
@@ -206,6 +204,27 @@ def _set_nested(target: dict[str, Any], path: list[str], value: Any) -> None:
     cur[path[-1]] = value
 
 
+def _convert_metrics_to_wandb_loggable(metrics: typing.Mapping[str, Any]) -> dict[str, Any]:
+    """Flatten metrics into a wandb-ready dict.
+
+    Expands every :class:`SummaryStats` value into its individual loggable keys
+    (computing ``mean``/``variance``/``rms`` and building ``wandb.Histogram`` as
+    needed) and passes every other value through
+    :func:`_convert_value_to_loggable_rec`.
+
+    Pure conversion: no wandb run state is touched. Safe to call on the producer
+    thread before handing off to a :class:`BackgroundTracker` worker, and
+    idempotent when called a second time on an already-flat dict.
+    """
+    to_log: dict[str, Any] = {}
+    for k, v in metrics.items():
+        if isinstance(v, SummaryStats):
+            to_log.update(_convert_summary_stats_to_loggable(k, v))
+        else:
+            to_log[k] = _convert_value_to_loggable_rec(v)
+    return to_log
+
+
 def _convert_value_to_loggable_rec(value: Any):
     if isinstance(value, (list, tuple)):
         return [_convert_value_to_loggable_rec(v) for v in value]
@@ -230,8 +249,6 @@ def _convert_value_to_loggable_rec(value: Any):
 
 
 def _convert_summary_stats_to_loggable(prefix: str, value: SummaryStats, *, include_prefix: bool = True):
-    import wandb
-
     out: dict[str, Any] = {}
     base = f"{prefix}/" if include_prefix and prefix else ""
     out[f"{base}min"] = _convert_value_to_loggable_rec(value.min)
@@ -250,11 +267,7 @@ def _convert_summary_stats_to_loggable(prefix: str, value: SummaryStats, *, incl
 
 
 def is_wandb_available():
-    try:
-        import wandb
-    except ImportError:
-        return False
-    return wandb is not None and wandb.run is not None
+    return wandb.run is not None
 
 
 @TrackerConfig.register_subclass("wandb")
@@ -303,8 +316,6 @@ class WandbConfig(TrackerConfig):
     """Maximum seconds to wait for the background thread to drain on finish()."""
 
     def init(self, run_id: Optional[str]) -> Tracker:
-        import wandb
-
         if run_id is not None and self.id is not None and run_id != self.id:
             warnings.warn(
                 f"Both trainer's id {run_id} and WandB's id {self.id} are set. WandB will use the id set in its"
@@ -436,8 +447,6 @@ class WandbConfig(TrackerConfig):
             if "SHA is empty" in str(e):
                 # we have another workaround, which is to use the git command line
                 # git --git-dir={code_dir}/.git rev-parse HEAD
-                import subprocess
-
                 try:
                     out = subprocess.run(
                         ["git", "--git-dir", f"{code_dir}/.git", "rev-parse", "HEAD"], check=True, capture_output=True

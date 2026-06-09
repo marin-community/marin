@@ -80,10 +80,10 @@ class TokenizeConfigBase(abc.ABC):
 
     max_workers: int = 4096
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
+    map_workers_per_actor: int | None = None
 
     tokenizer_backend: TokenizerBackend = TokenizerBackend.HF
-    """Backend to use for tokenization. HF uses the HuggingFace tokenizers library directly.
-    KITOKEN uses the kitoken library."""
+    """Backend to use for tokenization. HF uses the HuggingFace tokenizers library directly."""
 
     num_shards: int | None = None
     """Override the number tokenize shards. When set, files are grouped to produce approximately
@@ -250,58 +250,6 @@ def _split_already_done(cache_path: str, split_name: str) -> bool:
     return False
 
 
-def _exemplar_for(
-    file_groups: list[list[str]],
-    *,
-    config: TokenizeConfigBase,
-) -> dict:
-    """Compute a post-tokenize exemplar by running one record through the pipeline.
-
-    The exemplar still carries ``id`` (because the shared tokenize pipeline emits
-    ``{id, input_ids, ...}``); :func:`build_from_datasets` strips it before
-    writing the cache.
-
-    Scans input files in order until one yields a record. Tolerates sparse
-    inputs (e.g. filtered ``write_parquet`` output where leading shards happen
-    to be empty) instead of failing on ``results[0]``.
-    """
-    sample_path = parquet_window_hint(file_groups)
-    candidates = [path for group in file_groups for path in group]
-    if not candidates:
-        raise ValueError("_exemplar_for: file_groups is empty")
-
-    first_non_empty: str | None = None
-    for path in candidates:
-        if next(iter(load_file(path)), None) is not None:
-            first_non_empty = path
-            break
-    if first_non_empty is None:
-        raise ValueError(f"_exemplar_for: no records found across {len(candidates)} input files")
-
-    ds = Dataset.from_list([first_non_empty]).flat_map(load_file)
-    pipeline, _ = tokenize_pipeline(
-        ds,
-        data_format=config.format,
-        sample_count=1,
-        sample_parquet_path=sample_path,
-        levanter_batch_size=None,
-    )
-    ctx = ZephyrContext(
-        resources=config.worker_resources,
-        max_workers=1,
-        name="tokenize-exemplar",
-    )
-    ctx.put("tokenizer_name", config.tokenizer)
-    ctx.put("tokenizer_backend", config.tokenizer_backend)
-    return ctx.execute(pipeline, verbose=False).results[0]
-
-
-def _strip_id(record: dict) -> dict:
-    if "id" not in record:
-        return record
-    return {k: v for k, v in record.items() if k != "id"}
-
-
 def _run_split(
     *,
     config: TokenizeConfigBase,
@@ -327,19 +275,17 @@ def _run_split(
         max_workers=min(config.max_workers, len(file_groups)),
         name=f"tokenize-{split_name}",
     )
+    if config.map_workers_per_actor is not None:
+        ctx.map_workers_per_actor = config.map_workers_per_actor
     # Broadcast tokenizer config to workers. We send name + backend rather than
     # the tokenizer object because not all backends support pickling.
     ctx.put("tokenizer_name", config.tokenizer)
     ctx.put("tokenizer_backend", config.tokenizer_backend)
 
-    logger.info("Computing exemplar for cache consolidation")
-    exemplar = _strip_id(_exemplar_for(file_groups, config=config))
-
     ledger = build_from_datasets(
         ctx=ctx,
         dataset=tokenized_ds,
         output_path=prefix,
-        exemplar=exemplar,
         batch_size=batch_size,
     )
 

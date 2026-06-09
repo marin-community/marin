@@ -16,6 +16,7 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff, RateLimiter
 
 from iris.chaos import chaos
 from iris.cluster.bundle import BundleStore
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.profile import (
@@ -83,6 +84,7 @@ class WorkerConfig:
     accelerator_variant: str = ""
     gpu_count: int = 0
     capacity_type: int = 0
+    cpu_millicores: int = 0
     storage_prefix: str = ""
     auth_token: str = ""
 
@@ -130,6 +132,7 @@ def worker_config_from_proto(
         accelerator_variant=proto.accelerator_variant,
         gpu_count=proto.gpu_count,
         capacity_type=proto.capacity_type,
+        cpu_millicores=proto.cpu_millicores,
         storage_prefix=proto.storage_prefix,
         auth_token=proto.auth_token,
     )
@@ -188,6 +191,7 @@ class Worker:
                 gpu_count_override=config.gpu_count,
                 capacity_type=config.capacity_type,
                 worker_attributes=config.worker_attributes,
+                cpu_millicores=config.cpu_millicores,
             )
 
         # Task state: a flat list of TaskAttempt. Each attempt carries its
@@ -215,7 +219,7 @@ class Worker:
         # resolver works.
         self._worker_stats_table: Table | None = None
         self._task_stats_table: Table | None = None
-        self._profile_table: Table[IrisProfile] | None = None
+        self._profile_table: Table | None = None
 
         self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(
@@ -261,7 +265,7 @@ class Worker:
 
         if self._config.controller_address:
             self._log_client = LogClient.connect(
-                "/system/log-server",
+                LOG_SERVER_ENDPOINT_NAME,
                 interceptors=interceptors,
                 resolver=self._resolve_log_service,
             )
