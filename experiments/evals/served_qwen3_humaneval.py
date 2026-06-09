@@ -32,7 +32,7 @@ from iris.cluster.config import IrisConfig
 from iris.cluster.constraints import preemptible_constraint, region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
-from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, priority_band_value
+from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from marin.inference.types import RunningModel
 from marin.inference.vllm import (
     DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER,
