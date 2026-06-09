@@ -19,7 +19,7 @@ from experiments.evals.ppl_circuit_coverage_v2 import (
 )
 from experiments.marin_models import marin_tokenizer
 
-RUN_KEY = "main_gap_32b_ppl_circuit_coverage_v2_issue6070_v2"
+RUN_KEY = "main_gap_32b_ppl_circuit_coverage_v2_issue6070_v3"
 RESOURCE_CONFIG = ResourceConfig.with_tpu("v5p-8", regions=["us-central1"])
 MAX_DOCS_PER_DATASET = None
 MAX_DOC_BYTES = 32_768
