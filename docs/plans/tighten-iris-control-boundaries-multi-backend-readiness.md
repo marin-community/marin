@@ -394,9 +394,12 @@ the already-pooled one-offs bounded-in-place. Acceptance: a hung worker is surfa
 reconcile error within the cap without blocking the caller; no backend call path lacks a timeout.
 
 ### T2 — I2: single scheduler + co-located residual demand  `exec: session`  `value: high`  `deps: —`
-Compute residual demand once on the schedule snapshot with one `Scheduler`; feed the autoscaler
-off it; delete the dry-run + the separate autoscaler thread. Acceptance: golden-fixture parity
-(same demand in/out incl. reservation/holder), one `Scheduler`, one scheduling snapshot/cycle.
+Make the scheduling pass compute residual demand alongside assignments via one shared pure path
+on one `Scheduler` instance; have the autoscaler consume that same path instead of its own
+dry-run; delete `compute_demand_entries`' dry-run, the second snapshot, and the duplicate
+`Scheduler`. The autoscaler keeps its own thread for now (the thread collapse into the tick is
+T5). Acceptance: golden-fixture parity (same demand in/out incl. reservation/holder), exactly
+one `Scheduler` instance, one demand code path.
 
 ### T3 — I4: one reads.py-built ControlSnapshot  `exec: session`  `value: medium`  `deps: —`
 Build a typed per-tick snapshot via `reads.py`, with the controller attaching a health view from
