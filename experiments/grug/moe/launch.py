@@ -65,12 +65,18 @@ NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
 )
 
 
+def env_int(key: str, default: int) -> int:
+    """Read an int from ``os.environ[key]``, falling back to ``default`` when unset/empty."""
+    raw = os.environ.get(key, "")
+    return int(raw) if raw else default
+
+
 def slimpajama_6b_data() -> LmDataConfig:
     """SlimPajama-6B, llama3-tokenized with block-shuffle, re-tokenized on first run.
 
-    Small and R2-local — the lightweight corpus shared by the GPU canary and the
-    CoreWeave scale launcher (a real pretraining mixture would need its tokenized
-    cache already materialized to avoid a cross-region tokenize).
+    A small, R2-local corpus for GPU smoke/scale runs; returns a ready-to-train
+    ``LmDataConfig``. A production pretraining mixture would instead need its
+    tokenized cache already materialized to avoid a cross-region tokenize.
     """
     tokenize_step = default_tokenize(
         name="slimpajama-6b-cw",

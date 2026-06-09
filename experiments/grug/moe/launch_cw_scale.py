@@ -38,7 +38,7 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 
-from experiments.grug.moe.launch import GrugMoeLaunchConfig, run_grug_moe_trial, slimpajama_6b_data
+from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_data
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
@@ -68,14 +68,9 @@ SCALE_OPTIMIZER = AdamConfig(
 SCALE_TRAINER_DEFAULTS = dict(z_loss_weight=1e-4, ema_beta=None, log_every=1)
 
 
-def _env_int(key: str, default: int) -> int:
-    raw = os.environ.get(key, "")
-    return int(raw) if raw else default
-
-
 def build_scale_model() -> GrugModelConfig:
     """~90B-total / ~5B-active sparse MoE (overridable via SCALE_* env vars)."""
-    hidden_dim = _env_int("SCALE_HIDDEN_DIM", 3072)
+    hidden_dim = env_int("SCALE_HIDDEN_DIM", 3072)
     if hidden_dim % HEAD_DIM != 0:
         raise ValueError(f"SCALE_HIDDEN_DIM={hidden_dim} must be a multiple of head_dim={HEAD_DIM}")
     num_heads = hidden_dim // HEAD_DIM
@@ -84,18 +79,18 @@ def build_scale_model() -> GrugModelConfig:
     while num_heads % num_kv_heads != 0:
         num_kv_heads -= 1
     intermediate_dim = hidden_dim // 2  # expert FFN inner width (~d/2)
-    seq_len = _env_int("SCALE_SEQ_LEN", DEFAULT_SEQ_LEN)
+    seq_len = env_int("SCALE_SEQ_LEN", DEFAULT_SEQ_LEN)
     return GrugModelConfig(
         vocab_size=VOCAB_SIZE,
         hidden_dim=hidden_dim,
-        num_layers=_env_int("SCALE_NUM_LAYERS", 48),
+        num_layers=env_int("SCALE_NUM_LAYERS", 48),
         num_heads=num_heads,
         num_kv_heads=num_kv_heads,
         head_dim=HEAD_DIM,
         intermediate_dim=intermediate_dim,
         shared_expert_intermediate_dim=intermediate_dim,
-        num_experts=_env_int("SCALE_NUM_EXPERTS", 128),
-        num_experts_per_token=_env_int("SCALE_TOP_K", 4),
+        num_experts=env_int("SCALE_NUM_EXPERTS", 128),
+        num_experts_per_token=env_int("SCALE_TOP_K", 4),
         max_seq_len=seq_len,
         sliding_window=seq_len,
     )
@@ -104,11 +99,11 @@ def build_scale_model() -> GrugModelConfig:
 def build_scale_step() -> ExecutorStep:
     run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
 
-    replicas = _env_int("SCALE_GPU_REPLICAS", 32)
-    expert_axis = _env_int("SCALE_EXPERT_AXIS", 8)
-    replica_axis = _env_int("SCALE_REPLICA_AXIS", 1)
-    batch_size = _env_int("SCALE_BATCH", DEFAULT_BATCH)
-    steps = _env_int("SCALE_STEPS", 50)
+    replicas = env_int("SCALE_GPU_REPLICAS", 32)
+    expert_axis = env_int("SCALE_EXPERT_AXIS", 8)
+    replica_axis = env_int("SCALE_REPLICA_AXIS", 1)
+    batch_size = env_int("SCALE_BATCH", DEFAULT_BATCH)
+    steps = env_int("SCALE_STEPS", 50)
 
     model = build_scale_model()
     if model.num_experts % expert_axis != 0:
