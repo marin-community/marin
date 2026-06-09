@@ -14,6 +14,8 @@ to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
     CANARY_GPU_TYPE      gpu-only accelerator type, e.g. H100, GH200, B200
     CANARY_GPU_COUNT     gpu-only accelerator count per replica
     CANARY_GPU_REPLICAS  gpu-only replica count
+    CANARY_HIDDEN_DIM    gpu-only model hidden dim; scales the MoE via the heuristic
+                         (1024 trial default -> 2048 -> 3072 -> 4096)
     CANARY_PROFILER_ENABLED true | false
     CANARY_PROFILER_NUM_STEPS profiler duration in steps
     CANARY_PROFILER_START_STEP profiler start step
@@ -38,6 +40,7 @@ from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize.data_configs import lm_data_config
 
+from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import (
     GRUG_MOE_TRIAL_MODEL,
     NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
@@ -62,6 +65,11 @@ CANARY_TRAINER = GrugTrainerConfig(
     ema_beta=None,
     log_every=1,
 )
+
+# Compute budget passed to the heuristic when CANARY_HIDDEN_DIM scales the model.
+# Only the model *shape* (from hidden_dim) is used here; the budget-derived batch
+# size, step count, and optimizer are all overridden by CANARY_* settings below.
+_HEURISTIC_BUDGET = 1e18
 
 
 def _env_int(key: str, default: int) -> int:
@@ -100,6 +108,7 @@ def _build_step_from_env() -> ExecutorStep:
     run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
 
     if accelerator == "tpu":
+        model = GRUG_MOE_TRIAL_MODEL
         batch_size = _env_int("CANARY_BATCH_SIZE", 512)
         target_tokens = _env_int("CANARY_TARGET_TOKENS", 1_000_000_000)
         name = "canary-ferry-moe"
@@ -115,11 +124,22 @@ def _build_step_from_env() -> ExecutorStep:
         wandb_group = "canary-ferry-moe"
         wandb_tags = ["canary", "ferry", "grug", "moe"]
     else:
-        batch_size = _env_int("CANARY_BATCH_SIZE", 32)
-        target_tokens = _env_int("CANARY_TARGET_TOKENS", batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len * 50)
         gpu_type = os.environ.get("CANARY_GPU_TYPE", "H100")
         gpu_count = _env_int("CANARY_GPU_COUNT", 8)
         gpu_replicas = _env_int("CANARY_GPU_REPLICAS", 1)
+
+        # Model-size knob: scale the MoE by hidden_dim; the heuristic auto-scales
+        # depth/heads/intermediate. Defaults to the ~1.1B trial model. Step up
+        # CANARY_HIDDEN_DIM (1024 -> 2048 -> 3072 -> 4096) to grow the model across
+        # more H100 nodes (pair with CANARY_GPU_REPLICAS).
+        hidden_dim = _env_int("CANARY_HIDDEN_DIM", GRUG_MOE_TRIAL_MODEL.hidden_dim)
+        if hidden_dim == GRUG_MOE_TRIAL_MODEL.hidden_dim:
+            model = GRUG_MOE_TRIAL_MODEL
+        else:
+            model, _, _, _ = build_from_heuristic(budget=_HEURISTIC_BUDGET, hidden_dim=hidden_dim)
+
+        batch_size = _env_int("CANARY_BATCH_SIZE", 32)
+        target_tokens = _env_int("CANARY_TARGET_TOKENS", batch_size * model.max_seq_len * 50)
 
         # SlimPajama-6B with block-shuffle — small dataset, re-tokenized on first run.
         tokenize_step = default_tokenize(
@@ -148,12 +168,12 @@ def _build_step_from_env() -> ExecutorStep:
             disk="256g",
             replicas=gpu_replicas,
         )
-        name = f"canary-ferry-cw-{gpu_type.lower()}x{gpu_count}-r{gpu_replicas}"
+        name = f"canary-ferry-cw-{gpu_type.lower()}x{gpu_count}-r{gpu_replicas}-d{hidden_dim}"
         wandb_group = f"canary-ferry-moe-gpu-{gpu_type.lower()}-r{gpu_replicas}"
         wandb_tags = ["canary", "ferry", "grug", "moe", "gpu", gpu_type.lower()]
         eval_config = None
 
-    num_steps = _env_int("CANARY_STEPS", target_tokens // (batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len))
+    num_steps = _env_int("CANARY_STEPS", target_tokens // (batch_size * model.max_seq_len))
     if num_steps <= 0:
         raise ValueError(
             f"CANARY_STEPS={num_steps} invalid; set CANARY_STEPS or CANARY_TARGET_TOKENS high enough for "
@@ -180,7 +200,7 @@ def _build_step_from_env() -> ExecutorStep:
         name=f"{name}-{run_id}",
         fn=run_grug_moe_trial,
         config=GrugMoeLaunchConfig(
-            model=versioned(GRUG_MOE_TRIAL_MODEL),
+            model=versioned(model),
             data=data,
             output_path=this_output_path(),
             run_id=run_id,
