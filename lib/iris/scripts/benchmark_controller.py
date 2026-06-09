@@ -83,7 +83,7 @@ from iris.cluster.controller.reconcile.worker import (
 from iris.cluster.controller.scheduling.policy import (
     _pending_tasks_with_jobs as _schedulable_tasks,
 )
-from iris.cluster.controller.scheduling.policy import compute_demand_entries
+from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
     endpoints_table,
@@ -100,7 +100,7 @@ from iris.cluster.controller.service import (
     _worker_roster,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import AttemptUid, JobName, WorkerId
+from iris.cluster.types import AttemptUid, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
@@ -1185,10 +1185,13 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     bench("Scheduling: state read (pending+workers+usage)", _state_read)
 
     # ---- Autoscaler demand path (compute_demand_entries) ----
+    # Demand is now a pure function over the per-tick scheduling context; build it
+    # once (as the scheduling pass does) and benchmark only the demand computation.
     sched = Scheduler()
+    demand_ctx = build_scheduling_context(db, health, _NoAttrs(), UserBudgetDefaults(), {})
 
     def _demand():
-        compute_demand_entries(db, scheduler=sched, workers=workers, reservation_claims={})
+        compute_demand_entries(demand_ctx, sched, {})
 
     bench(
         f"Scheduling: compute_demand_entries (w={len(workers)}, t={len(pending_tasks)})",

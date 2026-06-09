@@ -45,7 +45,7 @@ from iris.cluster.controller.reconcile.snapshot import (
     TransitionSnapshot,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
-from iris.cluster.controller.scheduling.policy import compute_demand_entries
+from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
 from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     JobRequirements,
@@ -115,6 +115,16 @@ def _endpoints(state: ControllerTestState, query: EndpointQuery = EndpointQuery(
     rows = state._endpoints.query(query)
     # Mirror the original helper's ordering (registered_at DESC, endpoint_id ASC).
     return sorted(rows, key=lambda r: (-r.registered_at.epoch_ms(), r.endpoint_id))
+
+
+def _demand_entries(state: ControllerTestState):
+    """Compute autoscaler demand through the shared scheduling-context path.
+
+    Mirrors the production demand path: build the per-tick scheduling context
+    from the live DB and run the single demand computation over it.
+    """
+    ctx = build_scheduling_context(state._db, state._health, state._worker_attrs, UserBudgetDefaults(), {})
+    return compute_demand_entries(ctx, Scheduler(), {})
 
 
 def _build_scheduling_context(scheduler: Scheduler, state: ControllerTestState):
@@ -523,7 +533,7 @@ def test_cancelled_job_tasks_excluded_from_demand(harness):
         assert not check_task_can_be_scheduled(harness.query_task(task.task_id))
 
     assert len(_schedulable_tasks(harness.state)) == 0
-    assert len(compute_demand_entries(harness.state._db)) == 0
+    assert len(_demand_entries(harness.state)) == 0
 
 
 # =============================================================================
@@ -2094,7 +2104,7 @@ def test_compute_demand_entries_counts_coscheduled_job_once(state):
     req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     assert len(demand) == 1
     assert demand[0].normalized.device_type == DeviceType.TPU
     assert demand[0].normalized.device_variants == frozenset({"v5litepod-16"})
@@ -2118,7 +2128,7 @@ def test_compute_demand_entries_counts_non_coscheduled_tasks_individually(state)
     # No coscheduling set
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     assert len(demand) == 4
     for entry in demand:
         assert entry.normalized.device_type == DeviceType.TPU
@@ -2159,7 +2169,7 @@ def test_compute_demand_entries_mixed_coscheduled_and_regular(state):
     )
     submit_job(state, "j2", regular_req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     assert len(demand) == 3
     coscheduled = [entry for entry in demand if entry.coschedule_group_id == "/test-user/j1"]
     regular = [entry for entry in demand if entry.coschedule_group_id is None]
@@ -2216,7 +2226,7 @@ def test_compute_demand_entries_separates_by_preemptible_constraint(state):
     )
     submit_job(state, "j2", on_demand_req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     assert len(demand) == 2
 
     by_preemptible = {d.normalized.preemptible: d for d in demand}
@@ -2242,7 +2252,7 @@ def test_compute_demand_entries_no_preemptible_constraint_gives_none(state):
     )
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     assert len(demand) == 1
     assert demand[0].normalized.preemptible is None
 
@@ -2268,7 +2278,7 @@ def test_compute_demand_entries_extracts_required_region(state):
     )
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     assert len(demand) == 1
     assert demand[0].normalized.required_regions == frozenset({"us-west4"})
     assert demand[0].invalid_reason is None
@@ -2300,7 +2310,7 @@ def test_compute_demand_entries_marks_invalid_on_conflicting_region_constraints(
     )
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     assert len(demand) == 1
     assert demand[0].invalid_reason is not None
 
@@ -2385,7 +2395,7 @@ def test_demand_reservation_gates_real_tasks_until_claimed(state):
     )
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)  # reservation unclaimed
+    demand = _demand_entries(state)  # reservation unclaimed
     synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
     real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
@@ -2402,7 +2412,7 @@ def test_demand_reservation_excess_tasks(state):
     )
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
     real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
@@ -2426,7 +2436,7 @@ def test_demand_reservation_holder_uses_entry_resources(state):
     )
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
     real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
@@ -2461,7 +2471,7 @@ def test_demand_reservation_mixed_jobs(state):
     )
     submit_job(state, "a100-job", a100_req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
     real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
@@ -2490,7 +2500,7 @@ def test_demand_no_reservation_passes_all_tasks(state):
     )
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     assert len(demand) == 3
     for d in demand:
         assert not _is_synthetic_demand(state, d)
@@ -2521,7 +2531,7 @@ def test_demand_reservation_independent_per_job(state):
     )
     submit_job(state, "job-b", job_b_req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
     real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
@@ -3069,7 +3079,6 @@ def _cpu_make_worker_metadata(
 
 def test_demand_excludes_building_limited_tasks(state):
     """Worker has resources but is at building limit -> no demand emitted."""
-    scheduler = Scheduler(max_building_tasks_per_worker=2)
 
     # Register a CPU worker with plenty of capacity
     wid = register_worker(state, "w1", "10.0.0.1:8080", _cpu_make_worker_metadata(cpu=128, memory_gb=256))
@@ -3106,15 +3115,13 @@ def test_demand_excludes_building_limited_tasks(state):
 
     # Now w1 has 2 building tasks (at limit), but has plenty of CPU/memory.
     # The pending task from j1 should be building-limited, not truly unschedulable.
-    workers = healthy_active_workers(state)
-    demand = compute_demand_entries(state._db, scheduler, workers)
+    demand = _demand_entries(state)
     task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 0, "Building-limited task should not generate demand"
 
 
 def test_demand_includes_truly_unschedulable_tasks(state):
     """No worker with matching device type -> demand IS emitted."""
-    scheduler = Scheduler()
 
     # Register a CPU-only worker
     register_worker(state, "w1", "10.0.0.1:8080", _cpu_make_worker_metadata())
@@ -3133,15 +3140,13 @@ def test_demand_includes_truly_unschedulable_tasks(state):
     )
     submit_job(state, "j1", req)
 
-    workers = healthy_active_workers(state)
-    demand = compute_demand_entries(state._db, scheduler, workers)
+    demand = _demand_entries(state)
     task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 1, "Task with no matching device should generate demand"
 
 
 def test_demand_includes_resource_exhausted_tasks(state):
     """Worker has right device but insufficient CPU -> demand IS emitted."""
-    scheduler = Scheduler()
 
     # Register a GPU worker with only 1 CPU core
     register_worker(state, "w1", "10.0.0.1:8080", _gpu_make_worker_metadata(cpu=1))
@@ -3160,8 +3165,7 @@ def test_demand_includes_resource_exhausted_tasks(state):
     )
     submit_job(state, "j1", req)
 
-    workers = healthy_active_workers(state)
-    demand = compute_demand_entries(state._db, scheduler, workers)
+    demand = _demand_entries(state)
     task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 1, "Task exceeding worker CPU should generate demand"
 
@@ -3174,7 +3178,6 @@ def test_demand_holders_absorbed_by_dry_run(state):
     workers have available capacity. The job's real tasks are gated until the
     reservation is claimed, so only holder tasks contribute demand here.
     """
-    scheduler = Scheduler()
 
     # Register a large GPU worker with capacity for 1 task
     register_worker(state, "w1", "10.0.0.1:8080", _gpu_make_worker_metadata(cpu=2, memory_gb=4))
@@ -3189,15 +3192,13 @@ def test_demand_holders_absorbed_by_dry_run(state):
     )
     submit_job(state, "j1", req)
 
-    workers = healthy_active_workers(state)
-    demand = compute_demand_entries(state._db, scheduler, workers)
+    demand = _demand_entries(state)
     assert len(demand) == 1
     assert _is_synthetic_demand(state, demand[0])  # the remaining unabsorbed holder
 
 
 def test_demand_absorbs_capacity_before_emitting(state):
     """2 workers fit 1 task each, 3 pending tasks -> only 1 demand entry."""
-    scheduler = Scheduler()
 
     # Register 2 GPU workers, each with enough capacity for 1 task
     register_worker(state, "w1", "10.0.0.1:8080", _gpu_make_worker_metadata(cpu=2, memory_gb=4))
@@ -3217,8 +3218,7 @@ def test_demand_absorbs_capacity_before_emitting(state):
     )
     submit_job(state, "j1", req)
 
-    workers = healthy_active_workers(state)
-    demand = compute_demand_entries(state._db, scheduler, workers)
+    demand = _demand_entries(state)
     task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 1, "Only 1 of 3 tasks should generate demand (2 absorbed)"
 
@@ -3240,14 +3240,13 @@ def test_demand_no_workers_falls_back_to_all_pending(state):
     submit_job(state, "j1", req)
 
     # No scheduler, no workers -> all tasks become demand
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 3
 
 
 def test_demand_building_limited_with_multiple_workers(state):
     """All matching workers at building limit -> no demand, even with multiple workers."""
-    scheduler = Scheduler(max_building_tasks_per_worker=1)
 
     # Register 2 CPU workers
     wid1 = register_worker(state, "w1", "10.0.0.1:8080", _cpu_make_worker_metadata())
@@ -3283,15 +3282,13 @@ def test_demand_building_limited_with_multiple_workers(state):
     )
     submit_job(state, "pending-job", req)
 
-    workers = healthy_active_workers(state)
-    demand = compute_demand_entries(state._db, scheduler, workers)
+    demand = _demand_entries(state)
     task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 0, "All workers at building limit -> no demand"
 
 
 def test_demand_mixed_building_limited_and_unschedulable(state):
     """Some tasks building-limited, some truly unschedulable -> only unschedulable emit demand."""
-    scheduler = Scheduler(max_building_tasks_per_worker=1)
 
     # Register 1 GPU worker at building limit.
     # Use a minimal CPU task to fill the building slot so GPU capacity stays intact.
@@ -3338,8 +3335,7 @@ def test_demand_mixed_building_limited_and_unschedulable(state):
     )
     submit_job(state, "a100-job", a100_req)
 
-    workers = healthy_active_workers(state)
-    demand = compute_demand_entries(state._db, scheduler, workers)
+    demand = _demand_entries(state)
     task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
     assert len(task_demand) == 1

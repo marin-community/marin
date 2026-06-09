@@ -179,22 +179,29 @@ def _claims_by_job(claims: dict[WorkerId, ReservationClaim] | None) -> dict[str,
 
 
 def compute_demand_entries(
-    queries: ControllerDB,
-    scheduler: Scheduler | None = None,
-    workers: list[SchedulableWorker] | None = None,
-    reservation_claims: dict[WorkerId, ReservationClaim] | None = None,
+    ctx: SchedulingContext,
+    scheduler: Scheduler,
+    claims: dict[WorkerId, ReservationClaim],
 ) -> list[DemandEntry]:
-    """Compute demand entries for the autoscaler from controller state.
+    """Compute autoscaler demand entries from a single scheduling snapshot.
 
-    All pending tasks — both real and reservation holder — flow through a
-    single unified path. Every task participates in the dry-run and generates
-    demand through the same logic using its job's resource spec.
+    The one demand code path. The scheduling pass calls this alongside
+    ``find_assignments`` (see ``run_scheduling_decision``) so demand and
+    assignments derive from the same ``SchedulingContext`` and the same
+    ``Scheduler`` instance. Pure over ``ctx`` — does no DB I/O.
 
-    Holder tasks consume zero resources on workers, so they won't be absorbed
-    by the dry-run when workers have available capacity. This ensures they
-    always generate demand, keeping reserved capacity alive via the
-    autoscaler. The taint/constraint mechanism ensures only peer jobs can
-    actually use the reserved workers.
+    All pending tasks — both real and reservation holder — flow through a single
+    unified path. A limits-free capacity-fit dry-run (per-worker building and
+    assignment caps disabled) marks which tasks the existing fleet could already
+    absorb; only the unabsorbed remainder emits demand. This is deliberate work
+    distinct from the (limits-on) assignment pass: a task blocked only by the
+    per-cycle assignment cap has capacity waiting for it and must not signal
+    demand.
+
+    Holder tasks request the reserved resources, so spare capacity does not
+    absorb them and they keep reserved capacity alive via the autoscaler. The
+    taint/constraint mechanism ensures only peer jobs can use the reserved
+    workers.
 
     .. note::
 
@@ -206,39 +213,48 @@ def compute_demand_entries(
         ``max(real_pending, holders)``) should be added here.
 
     Args:
-        queries: Controller DB read surface for pending tasks and jobs.
-        scheduler: Scheduler for dry-run pass. If None, skips dry-run.
-        workers: Available workers for dry-run. If None, skips dry-run.
-        reservation_claims: Reservation claims to apply taint injection in the
-            dry-run, matching the real scheduling path. If None, no taints applied.
+        ctx: The per-tick scheduling context (workers, pending task rows,
+            reservation entry counts, reserved job ids, building counts).
+        scheduler: The single ``Scheduler`` instance, used for the dry-run pass.
+        claims: Reservation claims, applied as taint injection in the dry-run to
+            match the real scheduling path.
     """
     demand_entries: list[DemandEntry] = []
 
-    # Single combined query: each row carries task + job + job_config columns.
-    # task_row_can_be_scheduled() is already applied inside _pending_tasks_with_jobs.
+    # Recover the canonical jobs-query priority order the demand dry-run has
+    # always consumed. ``ctx.pending_task_rows`` is pre-sorted by *resolved
+    # band* for the real assignment pass; the demand residual is independent of
+    # band and keying it on the band order could change which specific task ids
+    # fall out as residual demand under capacity contention. Re-sorting on the
+    # underlying ORDER BY keys keeps the residual byte-stable.
+    pending = sorted(
+        ctx.pending_task_rows,
+        key=lambda t: (
+            t.priority_neg_depth,
+            t.priority_root_submitted_ms,
+            t.submitted_at_ms.epoch_ms(),
+            t.priority_insertion,
+        ),
+    )
+
     tasks_by_job: dict[JobName, list[PendingTask]] = defaultdict(list)
-    all_schedulable: list[PendingTask] = []
-    with queries.read_snapshot() as tx:
-        pending = _pending_tasks_with_jobs(tx)
-        reservation_entry_counts = _reservation_entry_counts_for_pending(tx, pending)
     for task in pending:
         tasks_by_job[task.job_id].append(task)
-        all_schedulable.append(task)
+
+    reservation_entry_counts = ctx.reservation_entry_counts
 
     # Index reservation claims by job so the reservation gate below can compare
     # claimed workers against required entries, exactly as apply_scheduling_gates
     # does for the real scheduling pass.
-    claims_by_job = _claims_by_job(reservation_claims)
+    claims_by_job = _claims_by_job(claims)
 
     # Build job requirements once, shared between dry-run and demand emission.
     # Also track which jobs have reservations so we can apply taint injection.
-    # Pre-fetch the reserved-job set once so the per-task ancestor walk is
-    # pure Python instead of one SQL round trip per unique pending job.
-    reserved_jobs = _reserved_job_ids(queries)
+    reserved_jobs = ctx.reserved_job_ids
     jobs: dict[JobName, JobRequirements] = {}
     has_reservation: set[JobName] = set()
     has_direct_reservation: set[JobName] = set()
-    for task in all_schedulable:
+    for task in pending:
         if task.job_id in jobs:
             continue
         jobs[task.job_id] = job_requirements_from_job(task)
@@ -251,26 +267,20 @@ def compute_demand_entries(
     # Dry-run scheduling with building/assignment limits disabled.
     # All tasks participate — holders and real tasks alike.
     absorbed_task_ids: set[JobName] = set()
-    if scheduler is not None and workers is not None and workers:
-        with queries.read_snapshot() as snap:
-            building_counts = reads.building_counts(snap, [w.worker_id for w in workers])
-            usage_by_worker = reads.resource_usage_by_worker(snap)
-        snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
-        task_ids = [t.task_id for t in all_schedulable]
-        claims = reservation_claims or {}
-        dry_run_workers = inject_reservation_taints(snapshots, claims)
+    if ctx.workers:
+        dry_run_workers = inject_reservation_taints(ctx.workers, claims)
         dry_run_jobs = inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
         # Dry-run scheduling context — only the per-(task, worker) matching loop
         # consumes capacities/jobs/pending_tasks, so the raw-read fields stay
         # empty. Building/assignment limits are disabled so big workers can
         # absorb multiple tasks (prevents false demand on idle clusters).
-        context = SchedulingContext(
+        dry_run_context = SchedulingContext(
             workers=dry_run_workers,
-            building_counts=building_counts,
+            building_counts=ctx.building_counts,
             max_building_tasks=_UNLIMITED,
             max_assignments_per_worker=_UNLIMITED,
-            pending_tasks=task_ids,
+            pending_tasks=[t.task_id for t in pending],
             jobs=dry_run_jobs,
             pending_task_rows=[],
             user_spend={},
@@ -280,7 +290,7 @@ def compute_demand_entries(
             reservation_entry_counts={},
             user_budget_defaults=UserBudgetDefaults(),
         )
-        result = scheduler.find_assignments(context)
+        result = scheduler.find_assignments(dry_run_context)
         for task_id, _ in result.assignments:
             absorbed_task_ids.add(task_id)
 

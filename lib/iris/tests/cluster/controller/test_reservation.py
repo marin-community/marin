@@ -17,6 +17,7 @@ from iris.cluster.constraints import (
     AttributeValue,
     Constraint,
     ConstraintOp,
+    DeviceType,
     WellKnownAttribute,
     device_variant_constraint,
     get_device_type,
@@ -614,7 +615,7 @@ def test_no_claims_fast_path_matches_evolve(ctrl):
     for name in ("j1", "j2"):
         _submit_job(ctrl, name, _no_reservation_request(name))
 
-    scheduler = ctrl._scheduler
+    scheduler = Scheduler()
     no_claims: dict[WorkerId, ReservationClaim] = {}
 
     def _assign(rebuild: bool) -> set[tuple[JobName, WorkerId]]:
@@ -652,6 +653,32 @@ def test_no_claims_fast_path_matches_evolve(ctrl):
 # =============================================================================
 
 
+def _demand_with_dry_run(ctrl, claims):
+    """Compute autoscaler demand through the limits-free capacity-fit dry-run.
+
+    Mirrors the production demand path: build the per-tick scheduling context from
+    the live DB (healthy workers, pending tasks, reservation entry counts) and run
+    the shared demand computation with the dry-run absorption active.
+    """
+    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, UserBudgetDefaults(), claims)
+    return compute_demand_entries(ctx, Scheduler(), claims)
+
+
+def _demand_no_dry_run(ctrl, claims):
+    """Compute demand with the capacity-fit dry-run disabled (empty worker list).
+
+    Isolates the reservation gate and emission logic from absorption, so a task
+    that passes the gate emits demand regardless of whether the fleet could
+    already run it. Mirrors the production demand path on a cluster with no
+    schedulable workers.
+    """
+    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, UserBudgetDefaults(), claims)
+    no_workers = ctx.evolve_with_workers(
+        workers=[], jobs={}, building_counts={}, max_building_tasks=DEFAULT_MAX_BUILDING_TASKS_PER_WORKER
+    )
+    return compute_demand_entries(no_workers, Scheduler(), claims)
+
+
 def _holder_demand(demand):
     return [d for d in demand if any(RESERVATION_HOLDER_JOB_NAME in t for t in d.task_ids)]
 
@@ -683,7 +710,7 @@ def test_demand_gates_real_task_until_reservation_claimed(ctrl):
     claims = read_reservation_claims(ctrl._db)
     assert claims == {}  # no GPU worker, reservation unfulfilled
 
-    demand = compute_demand_entries(ctrl._db, reservation_claims=claims)
+    demand = _demand_no_dry_run(ctrl, claims)
     # Holder provisions the reserved GPU; the parent's real task is gated.
     assert len(_holder_demand(demand)) == 1
     assert _real_demand(demand) == [], "real task must not emit demand while reservation is unclaimed"
@@ -695,9 +722,93 @@ def test_demand_gates_real_task_until_reservation_claimed(ctrl):
     claims = read_reservation_claims(ctrl._db)
     assert len(claims) == 1
 
-    demand = compute_demand_entries(ctrl._db, reservation_claims=claims)
+    demand = _demand_no_dry_run(ctrl, claims)
     real_ids = {t for d in _real_demand(demand) for t in d.task_ids}
     assert jid.task(0).to_wire() in real_ids
+
+
+def test_demand_parity_holder_and_taint_unclaimed(ctrl):
+    """Golden parity: an unclaimed GPU reservation against a CPU worker emits exactly
+    one holder demand entry; the gated real task and an absorbable plain CPU job emit
+    nothing.
+
+    Pins the limits-free dry-run + reservation-taint + holder semantics so the
+    single-scheduler refactor stays byte-identical:
+    - the GPU holder cannot be absorbed by the CPU worker, so it always emits demand;
+    - the reserved job's real CPU driver is gated (reservation unclaimed) -> no demand;
+    - a plain CPU job is absorbed by the available CPU worker -> no demand.
+    """
+    _register_worker(ctrl, "cpu1", _cpu_metadata())  # 8 vCPU, no accelerators
+    res_req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_gpu_device("H100"))])
+    jid = _submit_job(ctrl, "j1", res_req)
+
+    plain_req = controller_pb2.Controller.LaunchJobRequest(
+        name="plain",
+        entrypoint=_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    jid2 = _submit_job(ctrl, "j2", plain_req)
+
+    _claim_for_reservations(ctrl)
+    claims = read_reservation_claims(ctrl._db)
+    assert claims == {}  # no GPU worker -> reservation stays unclaimed
+
+    demand = _demand_with_dry_run(ctrl, claims)
+
+    assert len(demand) == 1
+    holder = demand[0]
+    assert RESERVATION_HOLDER_JOB_NAME in holder.task_ids[0]
+    assert holder.normalized.device_type == DeviceType.GPU
+    all_ids = {t for d in demand for t in d.task_ids}
+    assert jid.task(0).to_wire() not in all_ids  # real task gated by unclaimed reservation
+    assert jid2.task(0).to_wire() not in all_ids  # plain CPU job absorbed by cpu1
+
+
+def test_demand_parity_claimed_reservation_absorbs(ctrl):
+    """Golden parity: once a matching GPU worker is claimed, both the reserved job's
+    real CPU driver (via the EQ reservation taint) and its GPU holder fit on the
+    claimed worker, so the limits-free dry-run absorbs everything and no demand remains.
+    """
+    _register_worker(ctrl, "gpu1", _gpu_metadata("H100"))  # 32 vCPU + 8x H100
+    res_req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_gpu_device("H100"))])
+    _submit_job(ctrl, "j1", res_req)
+
+    _claim_for_reservations(ctrl)
+    claims = read_reservation_claims(ctrl._db)
+    assert len(claims) == 1  # gpu1 claimed for j1
+
+    demand = _demand_with_dry_run(ctrl, claims)
+    assert demand == []
+
+
+def test_scheduling_pass_caches_residual_demand_for_autoscaler(ctrl):
+    """The scheduling pass computes residual demand and caches it for the autoscaler.
+
+    Pins the single-path wiring: ``_run_scheduling`` populates
+    ``_last_residual_demand`` with the same DemandEntry set the shared demand
+    computation produces, so the autoscaler loop consumes it without a second
+    snapshot or a second Scheduler instance.
+    """
+    _register_worker(ctrl, "cpu1", _cpu_metadata())  # CPU-only: cannot host a GPU job
+    gpu_req = controller_pb2.Controller.LaunchJobRequest(
+        name="gpu",
+        entrypoint=_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3, device=_gpu_device("H100")),
+        environment=job_pb2.EnvironmentConfig(),
+        replicas=2,
+    )
+    jid = _submit_job(ctrl, "gpu-job", gpu_req)
+
+    # Canonical demand for this state, then drive a real scheduling tick.
+    expected = _demand_with_dry_run(ctrl, read_reservation_claims(ctrl._db))
+    ctrl._run_scheduling()
+
+    cached = ctrl._last_residual_demand
+    # The two GPU tasks cannot land on the CPU worker, so both remain as demand.
+    assert {t for d in cached for t in d.task_ids} == {jid.task(0).to_wire(), jid.task(1).to_wire()}
+    assert [d.task_ids for d in cached] == [d.task_ids for d in expected]
 
 
 # =============================================================================
