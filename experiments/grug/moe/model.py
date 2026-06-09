@@ -255,7 +255,11 @@ class DenseMLP(eqx.Module):
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
         out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
-        return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
+        # Reshard after the reshape, mirroring how MoEMLP canonicalizes the routed output
+        # (see below). Reshaping the flat [T, D] tensor straight to [B, S, D] leaks the fused
+        # ("replica_dcn", "data", "expert") token axis onto the seq dim, so the shared-expert
+        # residual add disagrees with the routed path once replica_dcn > 1 (#6296).
+        return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
 
 
 def _routing_stats(
