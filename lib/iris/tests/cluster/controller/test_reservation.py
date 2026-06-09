@@ -801,7 +801,10 @@ def test_scheduling_pass_caches_residual_demand_for_autoscaler(ctrl):
     )
     jid = _submit_job(ctrl, "gpu-job", gpu_req)
 
-    # Canonical demand for this state, then drive a real scheduling tick.
+    # Canonical demand for this state, then drive a real scheduling tick. Computing
+    # `expected` before the tick is only valid because the GPU tasks are
+    # unschedulable on a CPU worker: nothing is assigned, so DB state (and thus the
+    # demand) is identical before and after `_run_scheduling`.
     expected = _demand_with_dry_run(ctrl, read_reservation_claims(ctrl._db))
     ctrl._run_scheduling()
 
@@ -809,6 +812,32 @@ def test_scheduling_pass_caches_residual_demand_for_autoscaler(ctrl):
     # The two GPU tasks cannot land on the CPU worker, so both remain as demand.
     assert {t for d in cached for t in d.task_ids} == {jid.task(0).to_wire(), jid.task(1).to_wire()}
     assert [d.task_ids for d in cached] == [d.task_ids for d in expected]
+
+
+def test_demand_excludes_caller_supplied_task_ids(ctrl):
+    """``exclude_task_ids`` drops tasks the scheduling tick is retiring.
+
+    The scheduling pass passes its deadline-expired set so the autoscaler is
+    never asked to provision for a task the same tick marks UNSCHEDULABLE.
+    """
+    _register_worker(ctrl, "cpu1", _cpu_metadata())  # CPU-only: GPU tasks are unschedulable
+    gpu_req = controller_pb2.Controller.LaunchJobRequest(
+        name="gpu",
+        entrypoint=_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3, device=_gpu_device("H100")),
+        environment=job_pb2.EnvironmentConfig(),
+        replicas=2,
+    )
+    jid = _submit_job(ctrl, "gpu-job", gpu_req)
+    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, UserBudgetDefaults(), {})
+
+    # Without exclusion both unschedulable tasks emit demand.
+    full = compute_demand_entries(ctx, Scheduler(), {})
+    assert {t for d in full for t in d.task_ids} == {jid.task(0).to_wire(), jid.task(1).to_wire()}
+
+    # Excluding one (as the deadline gate would) drops it from the demand entirely.
+    excluded = compute_demand_entries(ctx, Scheduler(), {}, exclude_task_ids={jid.task(0)})
+    assert {t for d in excluded for t in d.task_ids} == {jid.task(1).to_wire()}
 
 
 # =============================================================================

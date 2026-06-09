@@ -267,18 +267,23 @@ def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> Sc
     claims = snapshot.claims
     trace = snapshot.trace
 
-    # Residual demand is computed alongside the assignments from the same
-    # snapshot and the same Scheduler instance. It is a limits-free capacity-fit
-    # over every pending task and is independent of the gate early-return below,
-    # so it must be computed before ``apply_placements`` mutates ``ctx``.
-    residual_demand = compute_demand_entries(ctx, scheduler, claims)
-
     gated = apply_scheduling_gates(
         ctx,
         claims,
         max_tasks_per_job_per_cycle=snapshot.max_tasks_per_job_per_cycle,
         trace=trace,
     )
+
+    # Residual demand is computed alongside the assignments from the same
+    # snapshot and the same Scheduler instance: a limits-free capacity-fit over
+    # the pending tasks. Tasks this tick retires as UNSCHEDULABLE (deadline
+    # expired) are excluded so the autoscaler is never asked to provision for a
+    # job the same tick is failing. ``apply_scheduling_gates`` above only reads
+    # ``ctx``; this still runs before ``apply_placements`` mutates it.
+    residual_demand = compute_demand_entries(
+        ctx, scheduler, claims, exclude_task_ids={t.task_id for t in gated.expired_tasks}
+    )
+
     if not gated.schedulable_task_ids:
         # No work to place. Expired tasks (if any) still flow back so the
         # controller can mark them UNSCHEDULABLE; the un-tainted context is the

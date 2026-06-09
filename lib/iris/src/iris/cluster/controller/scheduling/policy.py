@@ -182,13 +182,13 @@ def compute_demand_entries(
     ctx: SchedulingContext,
     scheduler: Scheduler,
     claims: dict[WorkerId, ReservationClaim],
+    exclude_task_ids: AbstractSet[JobName] = frozenset(),
 ) -> list[DemandEntry]:
     """Compute autoscaler demand entries from a single scheduling snapshot.
 
-    The one demand code path. The scheduling pass calls this alongside
-    ``find_assignments`` (see ``run_scheduling_decision``) so demand and
-    assignments derive from the same ``SchedulingContext`` and the same
-    ``Scheduler`` instance. Pure over ``ctx`` — does no DB I/O.
+    Pure over ``ctx`` — does no DB I/O. Returns the unmet demand the autoscaler
+    must provision: every pending task the current fleet cannot already absorb,
+    grouped into ``DemandEntry`` records.
 
     All pending tasks — both real and reservation holder — flow through a single
     unified path. A limits-free capacity-fit dry-run (per-worker building and
@@ -218,6 +218,10 @@ def compute_demand_entries(
         scheduler: The single ``Scheduler`` instance, used for the dry-run pass.
         claims: Reservation claims, applied as taint injection in the dry-run to
             match the real scheduling path.
+        exclude_task_ids: Pending tasks to drop from both the dry-run and the
+            emitted demand — used to skip tasks the caller is retiring this tick
+            (e.g. deadline-expired tasks the scheduler marks UNSCHEDULABLE), so
+            the autoscaler is never asked to provision for a failing job.
     """
     demand_entries: list[DemandEntry] = []
 
@@ -228,7 +232,7 @@ def compute_demand_entries(
     # fall out as residual demand under capacity contention. Re-sorting on the
     # underlying ORDER BY keys keeps the residual byte-stable.
     pending = sorted(
-        ctx.pending_task_rows,
+        (t for t in ctx.pending_task_rows if t.task_id not in exclude_task_ids),
         key=lambda t: (
             t.priority_neg_depth,
             t.priority_root_submitted_ms,
