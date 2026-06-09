@@ -32,7 +32,7 @@ from marin.rl.types import Rollout, TrainingBatch
 class RLLossModule(Protocol):
     """Defines the interface used for computing RL loss & advantages."""
 
-    def build(self, reference_model: eqx.Module) -> eqx.Module:
+    def build(self, reference_model: eqx.Module) -> "RLLossModule":
         """Initialize any learned components (e.g., value heads)."""
         ...
 
@@ -54,7 +54,7 @@ def compute_metadata_metrics(
     policy_logprobs_array: jax.Array,
     loss_weights_array: jax.Array,
     loss_masks_array: jax.Array,
-) -> dict[str, jax.Array]:
+) -> dict[str, Metric]:
     """Compute metadata metrics for the loss function."""
     batch_size, _ = policy_logprobs_array.shape
 
@@ -299,7 +299,7 @@ def rloo_loss_with_importance_sampling(
     do_overlong_filtering: bool = False,
     log_policy_entropy: bool = False,
     compute_policy_stats_fn: Callable = compute_logprobs_and_entropy,
-) -> tuple[jax.Array, dict[str, jax.Array]]:
+) -> tuple[jax.Array, dict[str, Metric]]:
     """Compute RLOO (Reward Leave-One-Out) loss with importance sampling for off-policy data.
 
     Args:
@@ -462,11 +462,11 @@ class RLOOLoss(RLLossModule):
     vocab_tile_size: int | None = None
     log_policy_entropy: bool = False
 
-    def build(self, reference_model: eqx.Module) -> eqx.Module:
+    def build(self, reference_model: eqx.Module) -> RLLossModule:
         """Initialize any learned components (e.g., value heads)."""
         return self  # No learned parameters
 
-    def compute_advantages(self, rollout_group: list[Rollout]) -> list[float]:
+    def compute_advantages(self, rollout_group: list[Rollout]) -> np.ndarray:
         """Compute advantages for a group of rollouts."""
         return compute_rloo_advantages(rollout_group)
 

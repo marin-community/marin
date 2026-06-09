@@ -8,7 +8,7 @@ import logging
 import os
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple, cast
 
 import braceexpand
 import datasets
@@ -103,6 +103,7 @@ class BatchAudioProcessor(BatchProcessor[Tuple[np.ndarray, int, str], AudioTextD
         audio_batch, sampling_rates, text_batch = list(zip(*batch))
         uniq_sampling_rates: set[int] = set(sampling_rates)
         assert len(uniq_sampling_rates) == 1, "Sampling rates should be standardized"
+        # pyrefly: ignore[not-callable]  # SequenceFeatureExtractor defines __call__ at runtime but the HF stub omits it
         audio_features: BatchFeature = self.feature_extractor(audio_batch, sampling_rate=uniq_sampling_rates.pop())
         audio_features["input_features"] = np.array(audio_features["input_features"])
         text_features: list[dict] = self.bt([{"text": text} for text in text_batch])
@@ -186,6 +187,7 @@ class AudioDatasetSourceConfig:
         if self.id is not None:
             data = datasets.load_dataset(self.id, split=split, name=self.name, streaming=self.stream)
             for doc in data:
+                doc = cast(dict, doc)
                 yield (doc[self.audio_key]["array"], doc[self.audio_key]["sampling_rate"], doc[self.text_key])
         else:
             urls = self.urls_for_split(split)
@@ -249,7 +251,7 @@ class AudioTaskConfig(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def validation_sets(self) -> Mapping[str, AsyncDataset[np.ndarray]]:
+    def validation_sets(self) -> "Mapping[str, ProcessedAudioCache]":
         pass
 
 
@@ -497,7 +499,7 @@ class AudioMixtureDatasetConfig(AudioTaskConfig):
         doc_caches = self.build_caches("train")
         return doc_caches
 
-    def validation_sets(self) -> Mapping[str, AsyncDataset[np.ndarray]]:
+    def validation_sets(self) -> Mapping[str, ProcessedAudioCache]:
         doc_caches = self.build_caches("validation")
         return doc_caches
 

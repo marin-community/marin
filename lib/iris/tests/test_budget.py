@@ -18,8 +18,11 @@ from iris.cluster.controller.budget import (
     resource_value,
 )
 from iris.cluster.controller.ops.task import Assignment
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import VerifiedIdentity, _verified_identity
@@ -283,10 +286,6 @@ def test_compute_user_spend_null_resources_proto(state):
 def service(state, tmp_path, log_client) -> ControllerServiceImpl:
     """ControllerServiceImpl wired with static-provider auth so that
     priority-band authorization triggers (see launch_job band check)."""
-    from iris.cluster.controller.projections.endpoints import EndpointsProjection
-    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
-
     return ControllerServiceImpl(
         controller=MockController(),
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),

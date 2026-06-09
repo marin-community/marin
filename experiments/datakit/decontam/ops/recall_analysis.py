@@ -217,7 +217,7 @@ def main() -> None:
     if args.skip_paraphrase:
         client = None
     else:
-        from anthropic import Anthropic
+        from anthropic import Anthropic  # noqa: PLC0415  # optional dep: anthropic
 
         client = Anthropic(api_key=_read_anthropic_key())
 

@@ -41,6 +41,7 @@ Expected stdin payload:
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import os
 import pathlib
@@ -51,7 +52,7 @@ import uuid
 WANDB_PROJECT = "marin-review-stats"
 WANDB_RUN_ID = "review-stats"
 ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
-LINT_CATALOG = ROOT_DIR / "infra" / "lint.md"
+LINT_DIR = ROOT_DIR / "infra" / "lint"
 
 INVOCATION_COLUMNS = [
     "ts",
@@ -144,6 +145,17 @@ def _git(args: list[str]) -> str | None:
         return None
 
 
+def _lint_catalog_sha() -> str | None:
+    """Fingerprint the multi-file lint catalog: sha1 over the sorted lane files."""
+    files = sorted(LINT_DIR.glob("*.md"))
+    if not files:
+        return None
+    h = hashlib.sha1()
+    for f in files:
+        h.update(f.read_bytes())
+    return h.hexdigest()
+
+
 def _fill_defaults(event: dict) -> dict:
     """Populate environment-derived fields the caller didn't supply.
 
@@ -157,8 +169,8 @@ def _fill_defaults(event: dict) -> dict:
     inv.setdefault("git_branch", _git(["rev-parse", "--abbrev-ref", "HEAD"]))
     inv.setdefault("head_sha", _git(["rev-parse", "HEAD"]))
     inv.setdefault("marin_user", _git(["config", "user.email"]))
-    if LINT_CATALOG.exists():
-        inv.setdefault("lint_catalog_sha", _git(["hash-object", str(LINT_CATALOG)]))
+    if LINT_DIR.is_dir():
+        inv.setdefault("lint_catalog_sha", _lint_catalog_sha())
     inv["finding_count"] = len(event.get("findings") or [])
     return event
 
@@ -172,7 +184,7 @@ def main() -> int:
         return 0
 
     try:
-        import wandb
+        import wandb  # noqa: PLC0415  # guarded: optional wandb, fire-and-forget script
     except ImportError:
         return 0
 

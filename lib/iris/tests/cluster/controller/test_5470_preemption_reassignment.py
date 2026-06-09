@@ -25,7 +25,7 @@ from iris.cluster.controller.controller import SchedulingOutcome
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import WorkerResourceUsage
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.scheduler import (
+from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     JobRequirements,
     Scheduler,
@@ -55,6 +55,9 @@ from .conftest import (
 )
 from .conftest import query_job as _query_job
 from .conftest import query_task as _query_task
+from .conftest import (
+    schedulable_tasks as _schedulable_tasks,
+)
 
 CHIPS_PER_VM = 4
 VMS_PER_SLICE = 8
@@ -154,8 +157,6 @@ def _build_context(scheduler, state):
 
 
 def _schedulable_tasks_for_test(state):
-    from .conftest import schedulable_tasks as _schedulable_tasks
-
     return _schedulable_tasks(state)
 
 

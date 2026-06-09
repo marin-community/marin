@@ -49,7 +49,8 @@ import click
 import uvicorn
 import yaml
 from connectrpc.request import RequestContext
-from iris.cluster.controller import direct_provider, reads
+from iris.cluster.controller import db as db_mod
+from iris.cluster.controller import reads
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
     Controller,
@@ -57,6 +58,7 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.db import Tx as _Tx
+from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.managed_thread import ThreadContainer
 
@@ -64,7 +66,9 @@ from iris.managed_thread import ThreadContainer
 if not hasattr(_Tx, "fetchall"):
     _Tx.fetchall = lambda self, stmt, params=None: self.execute(stmt, params).all()
     _Tx.fetchone = lambda self, stmt, params=None: self.execute(stmt, params).first()
+from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.controller import ops
+from iris.cluster.controller.backend import BackendReconcileInput, BackendReconcileResult, PlacementOwner
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
@@ -76,11 +80,11 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcilePlan,
     build_reconcile_plans,
 )
-from iris.cluster.controller.scheduler import Scheduler
-from iris.cluster.controller.scheduling_policy import (
+from iris.cluster.controller.scheduling.policy import (
     _pending_tasks_with_jobs as _schedulable_tasks,
 )
-from iris.cluster.controller.scheduling_policy import compute_demand_entries
+from iris.cluster.controller.scheduling.policy import compute_demand_entries
+from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
     endpoints_table,
     job_config_table,
@@ -96,7 +100,6 @@ from iris.cluster.controller.service import (
     _worker_roster,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -145,30 +148,45 @@ def _marin_remote_state_dir() -> str:
 
 
 class _FakeProvider:
-    """Minimal TaskProvider that satisfies Controller's wiring without making
-    real cluster calls. Mirrors tests/cluster/controller/conftest.py:FakeProvider.
+    """Minimal IRIS-placement TaskBackend that satisfies Controller's wiring
+    without making real cluster calls. Mirrors
+    tests/cluster/controller/conftest.py:FakeProvider.
 
     Used in combination with ``dry_run=True`` so the polling loop's reconcile
     short-circuits before it would ever call the provider — but we still need a
     real provider object to satisfy the constructor's type contract.
     """
 
-    def get_process_status(self, worker_id, address, request):
+    name = "worker"
+    placement = PlacementOwner.IRIS_CONTROLLER
+    manages_capacity = False
+
+    def get_process_status(self, target, request):
         raise RuntimeError("fake provider")
 
     def on_worker_failed(self, worker_id, address):
         pass
 
-    def profile_task(self, address, request, timeout_ms):
+    def set_log_sink(self, *args, **kwargs):
+        pass
+
+    def capacity(self):
+        return None
+
+    def profile_task(self, target, request, timeout_ms):
         raise RuntimeError("fake provider")
 
     def ping_workers(self, workers):
         return []
 
-    def reconcile_workers(self, plans, addresses):
+    def reconcile(self, batch):
         # Same shape the test-suite FakeProvider returns. Only exercised if
         # someone disables dry_run on the harness.
-        return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]
+        return BackendReconcileResult(
+            worker_results=[
+                ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in batch.plans
+            ]
+        )
 
     def close(self):
         pass
@@ -1132,8 +1150,6 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # ---- resource_usage_by_worker (NEW): full join over unfinished
     #      worker-bound attempts. Runs every scheduling tick. ----
     def _usage_new():
-        from iris.cluster.controller import db as db_mod
-
         with db_mod.read_snapshot(db.sa_read_engine) as snap:
             reads.resource_usage_by_worker(snap)
 
@@ -1158,8 +1174,6 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
     # ---- Full tick: _read_scheduling_state-style aggregate ----
     def _state_read():
-        from iris.cluster.controller import db as db_mod
-
         with db.read_snapshot() as _ptx:
             _schedulable_tasks(_ptx)
         with db.read_snapshot() as _rtx:
@@ -1290,8 +1304,6 @@ def benchmark_polling(db: ControllerDB) -> None:
         ids = worker_ids[:batch_size]
 
         def _reconcile(_ids=ids):
-            from iris.cluster.controller import db as db_mod
-
             target_ids = set(_ids)
             with db_mod.read_snapshot(db.sa_read_engine) as snap:
                 # Worker filter applied in Python to keep the partial index
@@ -1368,19 +1380,19 @@ def benchmark_polling(db: ControllerDB) -> None:
 
         def _template_first():
             # Fresh cache to defeat the LRU cache on every call.
-            cold_cache = direct_provider.RunTemplateCache()
+            cold_cache = dispatch.RunTemplateCache()
             with db.read_snapshot() as snap:
-                direct_provider.run_request_template(cold_cache, snap, first_job)
+                dispatch.run_request_template(cold_cache, snap, first_job)
 
         bench("Polling: run_request_template (cold, per-job build)", _template_first)
 
         # Warm cache: same job repeatedly.
         with db.read_snapshot() as snap:
-            direct_provider.run_request_template(txns._run_template_cache, snap, first_job)
+            dispatch.run_request_template(txns._run_template_cache, snap, first_job)
 
         def _template_warm():
             with db.read_snapshot() as snap:
-                direct_provider.run_request_template(txns._run_template_cache, snap, first_job)
+                dispatch.run_request_template(txns._run_template_cache, snap, first_job)
 
         bench("Polling: run_request_template (cached hit)", _template_warm)
 
@@ -1403,8 +1415,6 @@ def benchmark_polling(db: ControllerDB) -> None:
         drain_jid = drain_row.job_id
 
         def _has_unfinished():
-            from iris.cluster.controller import db as db_mod
-
             with db_mod.read_snapshot(db.sa_read_engine) as snap:
                 reads.has_unfinished_worker_attempts(snap, drain_jid)
 
@@ -2154,7 +2164,7 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
 #        template build).
 #     2. ``build_reconcile_plans(inputs)`` (pure-compute: copies the spec proto
 #        into a ``DesiredAttempt`` for every ASSIGNED row).
-#     3. ``WorkerProvider.reconcile_workers(plans, addresses)`` (async fanout
+#     3. ``RpcTaskBackend.reconcile(BackendReconcileInput(...))`` (async fanout
 #        over Connect RPC to a single in-process fake worker that echoes
 #        observations back).
 #     4. ``apply_reconcile`` (one DB transaction fanning all per-worker
@@ -2466,9 +2476,7 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
             if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
                 continue
             if row.job_id not in templates_by_job:
-                templates_by_job[row.job_id] = direct_provider.run_request_template(
-                    txns._run_template_cache, snap, row.job_id
-                )
+                templates_by_job[row.job_id] = dispatch.run_request_template(txns._run_template_cache, snap, row.job_id)
 
     rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in worker_ids}
     for row in rows:
@@ -2488,14 +2496,14 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
     return inputs, addresses
 
 
-def _one_reconcile_tick(state: SyntheticReconcileState, provider: WorkerProvider) -> tuple[float, float, float, float]:
+def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend) -> tuple[float, float, float, float]:
     """Run one full reconcile tick. Returns (snapshot, compute, rpc, apply) ms."""
     t0 = time.perf_counter()
     inputs, addresses = _snapshot_reconcile_inputs(state)
     t1 = time.perf_counter()
     plans = build_reconcile_plans(inputs)
     t2 = time.perf_counter()
-    results = provider.reconcile_workers(plans, addresses)
+    results = provider.reconcile(BackendReconcileInput(plans=plans, worker_addresses=addresses)).worker_results
     t3 = time.perf_counter()
     plan_by_worker = {p.worker_id: p for p in plans}
     now = Timestamp.now()
@@ -2514,7 +2522,7 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: WorkerProvider
 
 def _measure_full_tick(
     state: SyntheticReconcileState,
-    provider: WorkerProvider,
+    provider: RpcTaskBackend,
     *,
     n_iters: int,
 ) -> tuple[_StageTimings, _StageTimings]:
@@ -2612,7 +2620,7 @@ def _run_reconcile_scenario(
             print(f"  build:                       {build_s * 1000:.0f} ms")
 
             stub_factory = RpcWorkerStubFactory()
-            provider = WorkerProvider(stub_factory=stub_factory, parallelism=parallelism)
+            provider = RpcTaskBackend(stub_factory=stub_factory, parallelism=parallelism)
             try:
                 compute_ms, total_bytes = _measure_compute_only(state, n_iters=n_iters)
                 per_worker_avg = total_bytes / max(1, len(state.worker_ids))

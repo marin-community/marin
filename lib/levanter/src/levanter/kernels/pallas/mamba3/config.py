@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
-from ..ssd.config import BlockSizes
+from levanter.kernels.pallas.ssd.config import BlockSizes
 
 
 Mamba3Mode: TypeAlias = Literal["siso", "mimo"]

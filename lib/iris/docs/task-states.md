@@ -189,7 +189,7 @@ from hanging on collective operations.
 ### PREEMPTED
 
 Set by the controller when a higher-priority task evicts a lower-priority
-running task. The preemption loop (`_run_preemption_pass`) selects victims
+running task. The preemption pass (`apply_preemptions`) selects victims
 from lower priority bands and submits them to `apply_terminal_decisions_batch`.
 
 Retry evaluation uses `_resolve_task_failure_state` with the preemption budget:

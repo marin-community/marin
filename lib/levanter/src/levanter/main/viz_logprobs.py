@@ -106,11 +106,14 @@ def main(config: VizLmConfig):
             model_config = config.model
             converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
             converter = converter.replaced(reference_checkpoint=config.checkpoint_path, tokenizer=tokenizer)
-            model = converter.load_pretrained(
-                model_config.model_type,
-                ref=config.checkpoint_path,
-                axis_mapping=parameter_axis_mapping,
-                dtype=config.trainer.mp.compute_dtype,  # type: ignore
+            model = typing.cast(
+                LmHeadModel,
+                converter.load_pretrained(
+                    model_config.model_type,
+                    ref=config.checkpoint_path,
+                    axis_mapping=parameter_axis_mapping,
+                    dtype=config.trainer.mp.compute_dtype,  # type: ignore
+                ),
             )
         else:
             with use_cpu_device():

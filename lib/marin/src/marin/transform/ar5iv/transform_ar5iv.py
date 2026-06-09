@@ -69,54 +69,54 @@ def clean_html(html: str, remove_reference_section: bool = True) -> str:
         str: The cleaned HTML content.
     """
 
-    html = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, "html.parser")
 
     # Transform the abstract section into an h2 heading to ensure proper structure
     # This makes the abstract a section in the markdownified output
-    transform_abstract(html)
+    transform_abstract(soup)
 
     # Remove author information to reduce noise and remove PII from appearing
-    remove_authors(html)
+    remove_authors(soup)
 
     # Remove the title page elements which typically contain redundant information
     # that will be prepended elsewhere
-    remove_title_page(html)
+    remove_title_page(soup)
 
     # Clean list items to avoid duplicate numbering patterns like (1. 1.)
     # which can occur when LaTeX numbering is combined with HTML list markers
-    clean_li(html)
+    clean_li(soup)
 
     # Remove bibliography sections to remove references
-    remove_biblio(html)
+    remove_biblio(soup)
 
     # Remove footnotes
-    remove_footnotes(html)
+    remove_footnotes(soup)
 
     # Remove biblinks since we're removing the references section
-    remove_biblinks(html)
+    remove_biblinks(soup)
 
     # Convert code listing lines to proper newlines to preserve code formatting
-    linelisting_to_newline(html)
+    linelisting_to_newline(soup)
 
     # Transform equation tables into inline elements for better markdown conversion
-    deconstruct_eqn(html)
+    deconstruct_eqn(soup)
 
     # Extract mathematical notation from alt text attributes and convert to LaTeX format
-    html = unwrap_eqn(html)
+    soup = unwrap_eqn(soup)
 
     # Remove the ar5iv footer which contains boilerplate text about the conversion process
-    remove_ar5iv_footer(html)
+    remove_ar5iv_footer(soup)
 
     # Remove content before the first main section (typically metadata and preamble)
-    remove_before_section(html)
+    remove_before_section(soup)
 
     # Remove figure captions
-    remove_figure_captions(html)
+    remove_figure_captions(soup)
 
     if remove_reference_section:
-        remove_references(html)
+        remove_references(soup)
 
-    return str(html)
+    return str(soup)
 
 
 def process_record(

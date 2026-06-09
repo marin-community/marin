@@ -84,6 +84,7 @@ class WorkerConfig:
     accelerator_variant: str = ""
     gpu_count: int = 0
     capacity_type: int = 0
+    cpu_millicores: int = 0
     storage_prefix: str = ""
     auth_token: str = ""
 
@@ -131,6 +132,7 @@ def worker_config_from_proto(
         accelerator_variant=proto.accelerator_variant,
         gpu_count=proto.gpu_count,
         capacity_type=proto.capacity_type,
+        cpu_millicores=proto.cpu_millicores,
         storage_prefix=proto.storage_prefix,
         auth_token=proto.auth_token,
     )
@@ -189,6 +191,7 @@ class Worker:
                 gpu_count_override=config.gpu_count,
                 capacity_type=config.capacity_type,
                 worker_attributes=config.worker_attributes,
+                cpu_millicores=config.cpu_millicores,
             )
 
         # Task state: a flat list of TaskAttempt. Each attempt carries its
@@ -216,7 +219,7 @@ class Worker:
         # resolver works.
         self._worker_stats_table: Table | None = None
         self._task_stats_table: Table | None = None
-        self._profile_table: Table[IrisProfile] | None = None
+        self._profile_table: Table | None = None
 
         self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(

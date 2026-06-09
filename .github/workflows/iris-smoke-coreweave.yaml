@@ -7,15 +7,12 @@ on:
       - "lib/iris/**"
       - ".github/workflows/iris-smoke-coreweave.yaml"
       - "scripts/workflows/iris_monitor.py"
-  issue_comment:
-    types: [created]
   workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
-  pull-requests: read   # needed for issue_comment to access PR metadata
-  statuses: write       # post commit status from issue_comment trigger
+  statuses: write       # post commit status from workflow_dispatch trigger
 
 # Shared concurrency group with marin-canary-ferry-coreweave.yaml — both rebuild/roll
 # the shared iris-ci controller and submit against the shared H100 in
@@ -29,17 +26,7 @@ jobs:
   cw-ci-test:
     if: >-
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
-      github.event_name == 'workflow_dispatch' ||
-      (
-        github.event_name == 'issue_comment' &&
-        github.event.issue.pull_request &&
-        contains(github.event.comment.body, '/iris-ci-cw') &&
-        (
-          github.event.comment.author_association == 'MEMBER' ||
-          github.event.comment.author_association == 'COLLABORATOR' ||
-          github.event.comment.author_association == 'OWNER'
-        )
-      )
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -49,11 +36,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
 
       - name: Set commit status to pending
-        if: github.event_name == 'issue_comment' || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -191,7 +176,7 @@ jobs:
           pkill -f "kubectl.*port-forward.*$IRIS_NAMESPACE.*pod/iris-controller" 2>/dev/null || true
 
       - name: Set commit status to result
-        if: always() && (github.event_name == 'issue_comment' || github.event_name == 'workflow_dispatch')
+        if: always() && github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

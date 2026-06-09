@@ -8,10 +8,10 @@ import equinox as eqx
 import jax
 from jaxtyping import PRNGKeyArray
 
-from ..axis import Axis, AxisSpec
-from ..core import NamedArray
-from ..jax_utils import maybe_rng_split
-from ..quantization import DotGeneralOp
+from haliax.axis import Axis, AxisSpec
+from haliax.core import NamedArray
+from haliax.jax_utils import maybe_rng_split
+from haliax.quantization import DotGeneralOp
 from .activations import relu
 from .linear import Linear
 

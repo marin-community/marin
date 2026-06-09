@@ -18,6 +18,7 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_EXPERT_HIDDEN,
 )
 from levanter.grug._moe.ep_common import _prefix_cap_counts
+from levanter.grug.sharding import _batch_axes
 
 
 def _moe_mlp_ep_ring_local(
@@ -57,7 +58,7 @@ def _moe_mlp_ep_ring_local(
 
         expert_axis = jax.lax.axis_index("expert")
         expert_start = expert_axis * local_experts
-        local_expert = expert_flat - expert_start
+        local_expert: jax.Array = expert_flat - expert_start
         local_mask = jnp.logical_and(local_expert >= 0, local_expert < local_experts)
 
         # Keep only the assignments this shard will execute, ordered by
@@ -111,5 +112,5 @@ def _moe_mlp_ep_ring_local(
         # #2710 ring EP strategy: collect only this shard's token slice after
         # reducing contributions from experts across the EP mesh.
         out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
-        dropped_total = jax.lax.psum(dropped_local, ("data", "expert"))
+        dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     return out_local, dropped_total
