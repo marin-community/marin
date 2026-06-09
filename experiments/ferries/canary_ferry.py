@@ -26,19 +26,16 @@ to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
     RUN_ID               unique run identifier
 """
 
-import dataclasses
 import datetime
 import os
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
-from levanter.data.text import BlockShuffleConfig, TextLmDatasetFormat
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
-from marin.processing.tokenize.data_configs import lm_data_config
 
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import (
@@ -46,10 +43,9 @@ from experiments.grug.moe.launch import (
     NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
     GrugMoeLaunchConfig,
     run_grug_moe_trial,
+    slimpajama_6b_data,
 )
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
-from experiments.llama import llama3_tokenizer
-from experiments.tokenization import default_tokenize
 
 CANARY_OPTIMIZER = AdamConfig(
     learning_rate=3e-3,
@@ -141,25 +137,7 @@ def _build_step_from_env() -> ExecutorStep:
         batch_size = _env_int("CANARY_BATCH_SIZE", 32)
         target_tokens = _env_int("CANARY_TARGET_TOKENS", batch_size * model.max_seq_len * 50)
 
-        # SlimPajama-6B with block-shuffle — small dataset, re-tokenized on first run.
-        tokenize_step = default_tokenize(
-            name="slimpajama-6b-cw",
-            dataset="DKYoon/SlimPajama-6B",
-            tokenizer=llama3_tokenizer,
-            format=TextLmDatasetFormat(),
-        )
-        tokenize_step = dataclasses.replace(
-            tokenize_step,
-            config=dataclasses.replace(
-                tokenize_step.config,
-                # SlimPajama-6B tokenization OOMs at the default 10g worker_resources.
-                worker_resources=ResourceConfig(ram="64g", disk="64g"),
-            ),
-        )
-        data = lm_data_config(
-            training_set=tokenize_step,
-            shuffle=BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel"),
-        )
+        data = slimpajama_6b_data()
         resources = ResourceConfig.with_gpu(
             gpu_type,
             count=gpu_count,

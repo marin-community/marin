@@ -27,29 +27,26 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     RUN_ID              unique run identifier
 """
 
-import dataclasses
 import datetime
 import os
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
-from levanter.data.text import BlockShuffleConfig, TextLmDatasetFormat
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
-from marin.processing.tokenize.data_configs import lm_data_config
 
-from experiments.grug.moe.launch import GrugMoeLaunchConfig, run_grug_moe_trial
+from experiments.grug.moe.launch import GrugMoeLaunchConfig, run_grug_moe_trial, slimpajama_6b_data
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugTrainerConfig
-from experiments.llama import llama3_tokenizer
-from experiments.tokenization import default_tokenize
+from experiments.llama import llama3_tokenizer_vocab_size
 
 # head_dim is fixed at 128; hidden_dim must be a multiple of it.
 HEAD_DIM = 128
-VOCAB_SIZE = 128_256
+VOCAB_SIZE = llama3_tokenizer_vocab_size
+GPUS_PER_NODE = 8  # H100s per gd-8xh100ib node; the batch-shard math and with_gpu(count=...) must track
 # Default seq for the 90B run. FSDP reshards the [batch, seq, hidden] activation
 # through a fully-replicated intermediate (an XLA SPMD limitation, pending Shardy),
 # so peak memory scales with batch*seq; at the default 89.7B model, batch 256 x
@@ -104,29 +101,6 @@ def build_scale_model() -> GrugModelConfig:
     )
 
 
-def _slimpajama_data():
-    # SlimPajama-6B with block-shuffle, re-tokenized on first run. Small and
-    # R2-local; a real pretraining mixture (Nemotron) would require its tokenized
-    # cache to already exist on marin-na to avoid a cross-region tokenize.
-    tokenize_step = default_tokenize(
-        name="slimpajama-6b-cw",
-        dataset="DKYoon/SlimPajama-6B",
-        tokenizer=llama3_tokenizer,
-        format=TextLmDatasetFormat(),
-    )
-    tokenize_step = dataclasses.replace(
-        tokenize_step,
-        config=dataclasses.replace(
-            tokenize_step.config,
-            worker_resources=ResourceConfig(ram="64g", disk="64g"),
-        ),
-    )
-    return lm_data_config(
-        training_set=tokenize_step,
-        shuffle=BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel"),
-    )
-
-
 def build_scale_step() -> ExecutorStep:
     run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
 
@@ -142,12 +116,12 @@ def build_scale_step() -> ExecutorStep:
 
     # Batch is sharded over the (replica_dcn, data, expert) axes; data absorbs the
     # rest of the 8*replicas devices. Require the global batch to cover every shard.
-    data_axis = (replicas * 8) // (replica_axis * expert_axis)
+    data_axis = (replicas * GPUS_PER_NODE) // (replica_axis * expert_axis)
     batch_shards = replica_axis * data_axis * expert_axis
     if batch_size % batch_shards != 0:
         raise ValueError(f"SCALE_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
 
-    resources = ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="256g", disk="256g", replicas=replicas)
+    resources = ResourceConfig.with_gpu("H100", count=GPUS_PER_NODE, cpu=32, ram="256g", disk="256g", replicas=replicas)
 
     if os.environ.get("SCALE_TRACKER", "json_logger").lower() == "wandb":
         tracker = WandbConfig(
@@ -173,7 +147,7 @@ def build_scale_step() -> ExecutorStep:
         fn=run_grug_moe_trial,
         config=GrugMoeLaunchConfig(
             model=versioned(model),
-            data=_slimpajama_data(),
+            data=slimpajama_6b_data(),
             output_path=this_output_path(),
             run_id=run_id,
             resources=versioned(resources),
