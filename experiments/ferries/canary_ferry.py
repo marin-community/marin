@@ -8,6 +8,7 @@ Config is driven by env vars set in the GH Actions workflow env: block and forwa
 to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
 
     CANARY_ACCELERATOR   tpu | gpu
+    CANARY_TPU_TYPE      tpu-only comma-separated slice types, primary first (default v5p-8,v4-8)
     CANARY_BATCH_SIZE    per-device batch size
     CANARY_CACHE_COPY_MAX_WORKERS gpu-only cache-copy worker cap
     CANARY_GPU_TYPE      gpu-only accelerator type, e.g. H100, GH200, B200
@@ -75,6 +76,22 @@ def _env_bool(key: str, default: bool) -> bool:
     return raw.lower() in ("1", "true")
 
 
+# Primary first; the run lands on whichever pool has capacity. v5p has only two
+# zones (us-central1-a, us-east5-a) and is preemptible-only, so a single-pool
+# stockout otherwise strands the canary indefinitely. v4-8 is a topology-compatible
+# fallback (both are single-VM 4-chip slices, so training shape is unchanged) and
+# adds us-central2-b plus the v4 reserved pool, which is not subject to preemptible
+# capacity churn. All entries must share vm_count and chips_per_vm (ResourceConfig
+# enforces this).
+_DEFAULT_CANARY_TPU_TYPES = ("v5p-8", "v4-8")
+
+
+def _tpu_types_from_env() -> list[str]:
+    raw = os.environ.get("CANARY_TPU_TYPE", "")
+    types = [t.strip() for t in raw.split(",") if t.strip()]
+    return types or list(_DEFAULT_CANARY_TPU_TYPES)
+
+
 def _build_step_from_env() -> ExecutorStep:
     accelerator = os.environ.get("CANARY_ACCELERATOR", "tpu")
     if accelerator not in ("tpu", "gpu"):
@@ -87,7 +104,7 @@ def _build_step_from_env() -> ExecutorStep:
         target_tokens = _env_int("CANARY_TARGET_TOKENS", 1_000_000_000)
         name = "canary-ferry-moe"
         data = NEMOTRON_MIX_WITH_DEFAULT_VALIDATION
-        resources = ResourceConfig.with_tpu("v5p-8")
+        resources = ResourceConfig.with_tpu(_tpu_types_from_env())
         eval_config: GrugEvalConfig | None = GrugEvalConfig(
             eval_batch_size=batch_size,
             steps_per_eval=240,
