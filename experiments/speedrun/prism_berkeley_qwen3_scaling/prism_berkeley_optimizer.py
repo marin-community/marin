@@ -68,12 +68,16 @@ def _grid_search_quartic_argmin(
 
 
 def _trace_sketch_powers(residual: jax.Array, sketch: jax.Array, max_power: int) -> dict[int, jax.Array]:
-    sketch_t = sketch.T.astype(jnp.float32)
-    current = sketch_t
+    sketch = sketch.astype(residual.dtype)
+    sketches= {}
+    sketches[1] = residual @ sketch
+    for power in range(2, max_power + 1):
+        sketches[power] = residual @ sketches[power - 1]
     traces = {}
-    for power in range(1, max_power + 1):
-        current = residual @ current
-        traces[power] = jnp.sum(sketch_t * current)
+    for power in range(2, 2*max_power + 1):
+        i = power // 2
+        j = power // 2 + power % 2
+        traces[power] = jnp.sum(sketches[i] * sketches[j])
     return traces
 
 
@@ -84,7 +88,7 @@ def _prism_berkeley_alpha(
     order: PrismBerkeleyOrder,
     alpha_grid_points: int,
 ) -> jax.Array:
-    traces = _trace_sketch_powers(residual, sketch, 6 if order == 3 else 10)
+    traces = _trace_sketch_powers(residual, sketch, 3 if order == 3 else 5)
 
     if order == 3:
         c1 = 4.0 * traces[3] - 4.0 * traces[2]
@@ -109,7 +113,7 @@ def _prism_berkeley_alpha(
         alpha_min=alpha_min,
         alpha_max=alpha_max,
         grid_points=alpha_grid_points,
-    )
+    ).astype(residual.dtype)
 
 
 def _make_default_sketch(weight_shape: tuple[int, ...], sketch_size: int, key: jax.Array) -> jax.Array:
@@ -118,8 +122,8 @@ def _make_default_sketch(weight_shape: tuple[int, ...], sketch_size: int, key: j
 
     min_dim = min(weight_shape[-2:])
     effective_sketch = min(sketch_size, min_dim)
-    sketch_shape = (*weight_shape[:-2], effective_sketch, min_dim)
-    return jax.random.normal(key, sketch_shape, dtype=jnp.float32) / jnp.sqrt(effective_sketch)
+    sketch_shape = (*weight_shape[:-2], min_dim, effective_sketch)
+    return jax.random.normal(key, sketch_shape, dtype=jnp.bfloat16) / jnp.sqrt(effective_sketch)
 
 
 def _init_sketch_cache(params, *, sketch_size: int, seed: int):
@@ -139,6 +143,22 @@ def _init_sketch_cache(params, *, sketch_size: int, seed: int):
     return jax.tree_util.tree_unflatten(treedef, sketches)
 
 
+def _estimate_spectral_norm(
+    matrix: jax.Array,
+    sketch: jax.Array,
+    steps: int = 5
+) -> jax.Array:
+    """
+    Uses power iteration to estimate the spectral norm 
+    """
+    y = sketch[:,0]
+    for _ in range(steps):
+        y = matrix.T @ (matrix @ y)
+        y /= jnp.linalg.norm(y)
+    z = matrix @ y
+    return jnp.linalg.norm(z)
+    
+
 def _prism_berkeley_polar(
     matrix: jax.Array,
     sketch: jax.Array | None,
@@ -148,39 +168,45 @@ def _prism_berkeley_polar(
     eps: float,
     alpha_grid_points: int,
     fixed_alpha_steps: int,
+    use_spectral_norm: bool,
 ) -> jax.Array:
     chex.assert_rank(matrix, 2)
 
-    working = matrix.astype(jnp.float32)
-    working = working / (jnp.linalg.norm(working) + eps)
+    nrm1 = jnp.linalg.norm(matrix) + eps
+    working = matrix / nrm1
 
     transposed = False
     if working.shape[0] < working.shape[1]:
         working = working.T
         transposed = True
 
+    if use_spectral_norm:
+        nrm2 = _estimate_spectral_norm(working, sketch)
+        working = jnp.where(nrm2 < 0.66, working / (1.5 * nrm2), working)
+
     min_dim = working.shape[1]
     if sketch is None:
         raise ValueError("PRISM-Berkeley expected a cached sketch for a linear layer, but received None.")
     if sketch.ndim != 2:
         raise ValueError(f"PRISM-Berkeley expected a rank-2 sketch, got shape {sketch.shape}.")
-    if sketch.shape[1] != min_dim:
+    if sketch.shape[0] != min_dim:
         raise ValueError(f"PRISM-Berkeley sketch shape {sketch.shape} is incompatible with min_dim={min_dim}.")
-    sketch = sketch.astype(jnp.float32)
+    sketch = sketch.astype(working.dtype)
 
-    identity = jnp.eye(min_dim, dtype=jnp.float32)
+    identity = jnp.eye(min_dim, dtype=working.dtype)
     fixed_alpha = 1.0 if order == 3 else 29.0 / 20.0
 
     for step_idx in range(steps):
         residual = identity - working.T @ working
-        alpha = lax_cond_fixed_or_adaptive(
-            step_idx < fixed_alpha_steps,
-            fixed_alpha,
-            residual,
-            sketch,
-            order,
-            alpha_grid_points,
-        )
+        if step_idx < fixed_alpha_steps:
+            alpha = fixed_alpha
+        else:
+            alpha = _prism_berkeley_alpha(
+                residual,
+                sketch,
+                order=order,
+                alpha_grid_points=alpha_grid_points,
+            )
         if order == 3:
             transform = identity + alpha * residual
         else:
@@ -191,7 +217,7 @@ def _prism_berkeley_polar(
     if transposed:
         working = working.T
 
-    return working.astype(matrix.dtype)
+    return working
 
 
 def lax_cond_fixed_or_adaptive(
@@ -204,7 +230,7 @@ def lax_cond_fixed_or_adaptive(
 ) -> jax.Array:
     return jax.lax.cond(
         jnp.asarray(use_fixed),
-        lambda _: jnp.asarray(fixed_alpha, dtype=jnp.float32),
+        lambda _: jnp.asarray(fixed_alpha, dtype=residual.dtype),
         lambda _: _prism_berkeley_alpha(
             residual,
             sketch,
@@ -226,10 +252,11 @@ def scale_with_prism_berkeley(
     steps=5,
     muon_eps=1e-8,
     use_kimi_scaling=False,
-    order: PrismBerkeleyOrder = 3,
+    order: PrismBerkeleyOrder = 5,
     alpha_grid_points: int = 65,
     fixed_alpha_steps: int = 0,
-    sketch_size: int = 5,
+    use_spectral_norm: bool = True,
+    sketch_size: int = 8,
     sketch_seed: int = 0,
 ):
     steps = int(steps)
@@ -280,6 +307,7 @@ def scale_with_prism_berkeley(
                 eps=muon_eps,
                 alpha_grid_points=alpha_grid_points,
                 fixed_alpha_steps=fixed_alpha_steps,
+                use_spectral_norm=use_spectral_norm,
             )
             transformed_weight_array = normalize_2d_update_fro_norm(transformed_weight_array)
 
@@ -322,10 +350,11 @@ class PrismBerkeleyConfig(OptimizerConfig):
     adamc_weight_decay: bool = False
     max_grad_norm: float = 1.0
     use_kimi_scaling: bool = False
-    order: PrismBerkeleyOrder = 3
+    order: PrismBerkeleyOrder = 5
     alpha_grid_points: int = 65
     fixed_alpha_steps: int = 0
-    sketch_size: int = 5
+    use_spectral_norm: bool = True
+    sketch_size: int = 8
     sketch_seed: int = 0
 
     def build(self, num_train_steps):
