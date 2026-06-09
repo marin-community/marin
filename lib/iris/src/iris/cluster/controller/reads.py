@@ -3,18 +3,21 @@
 
 """Read-side helpers: module-level functions taking ``tx: db.Tx`` as first argument.
 
-All public functions return SA ``Row`` objects (or ``Sequence[Row]`` / dicts of
-them).  Return shapes are documented per-function.
+Return shapes vary and are documented per-function: some return raw SA ``Row``
+objects (or ``Sequence[Row]`` / dicts of them), others return typed dataclasses
+(``ControlSnapshot``, ``RowCounts``, ``PendingTask``, ``ReconcileRow``, …) or
+plain sets/dicts of ids.
 
 Areas covered:
-  budgets        — user budgets and roles
-  dashboard      — job listing, task summaries, parent-child helpers
-  jobs           — job/job_config lookups and CTEs
-  reservations   — reservation_claims reads
-  scheduler      — per-worker resource usage, running-tasks map
-  task_attempts  — bulk attempt lookups
-  tasks          — task detail and active-task projections
-  workers        — worker detail, liveness helpers, schedulable workers
+  budgets         — user budgets and roles
+  dashboard       — job listing, task summaries, parent-child helpers
+  jobs            — job/job_config lookups and CTEs
+  reservations    — reservation_claims reads
+  scheduling      — pending tasks, reservations, running tasks, per-user spend
+  task_attempts   — bulk attempt lookups
+  tasks           — task detail and active-task projections
+  workers         — worker detail, liveness helpers, schedulable workers
+  control-cycle   — the per-tick ControlSnapshot built via load_control_snapshot
 """
 
 from collections.abc import Iterable, Sequence
