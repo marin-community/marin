@@ -255,7 +255,13 @@ class DenseMLP(eqx.Module):
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
         out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
-        return rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
+        # Reshard after the reshape so the shared-expert output carries the same
+        # canonical batch sharding as the routed MoE output (MoEMLP reshards its
+        # routed result identically). Splitting the fused
+        # ("replica_dcn", "data", "expert") token axis back into (b, s) otherwise
+        # leaks the `expert` mesh axis onto the seq dim, so the shared+routed
+        # residual add fails with a ShardingTypeError on a multi-node mesh.
+        return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
 
 
 def _routing_stats(
