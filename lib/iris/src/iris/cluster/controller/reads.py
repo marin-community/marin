@@ -776,7 +776,7 @@ PENDING_TASK_COLS = (
 )
 
 
-def _row_to_pending_task(row) -> PendingTask:
+def _row_to_pending_task(row: Row) -> PendingTask:
     return PendingTask(
         task_id=row.task_id,
         job_id=row.job_id,
@@ -859,8 +859,7 @@ def reserved_job_ids(tx: Tx) -> set[JobName]:
 def reservation_entry_counts(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, int]:
     """Return ``{job_id: reservation entry count}`` for the requested jobs.
 
-    Jobs with no reservation JSON are omitted. Drives both the scheduling gate
-    and the demand path so they agree on how many workers a reservation needs.
+    Jobs with no reservation JSON are omitted.
     """
     ids = list(job_ids)
     if not ids:
@@ -880,11 +879,7 @@ def reservation_entry_counts(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName
 
 
 def jobs_with_reservations(tx: Tx, states: Iterable[int]) -> Sequence[Row]:
-    """Fetch ``(job_id, reservation_json)`` for non-finished jobs that hold a reservation.
-
-    Filters via ``jobs.has_reservation`` (no scan of ``job_config``) and joins
-    ``job_config`` solely to pull ``reservation_json``.
-    """
+    """Return ``(job_id, reservation_json)`` rows for jobs in ``states`` that hold a reservation."""
     return tx.execute(
         select(jobs_table.c.job_id, job_config_table.c.reservation_json)
         .select_from(jobs_table.join(job_config_table, jobs_table.c.job_id == job_config_table.c.job_id))
@@ -897,11 +892,7 @@ def jobs_with_reservations(tx: Tx, states: Iterable[int]) -> Sequence[Row]:
 
 
 def job_states_by_id(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, int]:
-    """Fetch only ``jobs.state`` for the given job IDs.
-
-    Intentionally narrow: callers that need just the job state (not resources or
-    config) use this to avoid over-fetching.
-    """
+    """Return ``{job_id: state}`` for the given job IDs (no resource or config columns)."""
     ids = list(job_ids)
     if not ids:
         return {}
@@ -934,10 +925,10 @@ _RUNNING_TASK_BAND_STMT = (
 
 
 def running_task_band_rows(tx: Tx) -> Sequence[Row]:
-    """Return RUNNING worker-bound tasks with band + worker + resource columns.
+    """Return RUNNING worker-bound tasks with band, worker, and resource columns.
 
-    The reported band is ``tasks.priority_band`` (stamped at assignment time);
-    callers derive resource value and skip reservation-claimed workers.
+    The band is ``tasks.priority_band`` (stamped at assignment time), not the
+    immutable requested band in ``job_config``.
     """
     return tx.execute(_RUNNING_TASK_BAND_STMT, {"state": job_pb2.TASK_STATE_RUNNING}).all()
 
@@ -1495,7 +1486,7 @@ def row_counts(tx: Tx) -> RowCounts:
 
 
 def all_worker_ids(tx: Tx) -> list[WorkerId]:
-    """Return every persisted worker id (used to seed the liveness tracker)."""
+    """Return every persisted worker id."""
     rows = tx.execute(select(workers_table.c.worker_id)).all()
     return [WorkerId(str(row.worker_id)) for row in rows]
 
@@ -1527,8 +1518,8 @@ _EXECUTION_TIMEOUT_STMT = (
 def scan_execution_timeout_rows(tx: Tx) -> Sequence[Row]:
     """Return ``(task_id, started_at_ms, timeout_ms)`` for executing tasks that declare a timeout.
 
-    Pure read: the caller compares ``started_at_ms + timeout_ms`` against the
-    tick's clock to decide which tasks have actually exceeded their deadline.
+    Whether a task has actually exceeded its deadline is left to the caller,
+    which holds the tick clock; this only returns the candidates.
     """
     return tx.execute(_EXECUTION_TIMEOUT_STMT, {"executing_states": list(_EXECUTING_TASK_STATES)}).all()
 
@@ -1625,9 +1616,7 @@ def load_control_snapshot(
 
     ``health`` selects the live worker set (see :func:`list_active_healthy_workers`)
     and is attached verbatim to the result as the snapshot's non-DB health view.
-    When ``scan_timeouts`` is set, the execution-timeout deadline scan is folded
-    into the same snapshot so the sweep adds one query rather than opening a
-    fresh snapshot.
+    ``scan_timeouts`` includes the execution-timeout rows in the same snapshot.
     """
     worker_addresses = list_active_healthy_workers(tx, health)
     reconcile_rows = load_reconcile_rows(tx, worker_addresses.keys()) if worker_addresses else []

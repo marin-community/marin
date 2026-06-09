@@ -910,8 +910,7 @@ class Controller:
         """Turn execution-timeout rows from the snapshot into TIMEOUT decisions.
 
         A row becomes a decision only once its attempt's
-        ``started_at_ms + timeout_ms`` is already in the past. Returned decisions
-        are applied inside the same write transaction as the reconcile results.
+        ``started_at_ms + timeout_ms`` is already in the past.
         """
         decisions: list[TerminalDecision] = []
         for row in timeout_rows:
@@ -981,8 +980,7 @@ class Controller:
         """Build per-job ``RunTaskRequest`` templates for the ASSIGNED reconcile rows.
 
         ``run_request_template`` can return ``None`` for jobs the scheduler hasn't
-        cached yet (e.g. reservation holders); those are dropped so the spec map
-        stays tight (``build_reconcile_plans`` skips a row whose job is absent).
+        cached yet (e.g. reservation holders); those are dropped from the map.
         """
         templates_by_job: dict[JobName, job_pb2.RunTaskRequest | None] = {}
         for row in reconcile_rows:
