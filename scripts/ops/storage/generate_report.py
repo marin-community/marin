@@ -2,41 +2,47 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end storage report: scan all marin-* buckets, aggregate, push public gist.
+"""End-to-end storage report: scan all marin-* buckets, aggregate, and publish.
 
-Four stages, all driven from one command on the operator's laptop. The
-orchestrator opens a tunnel to the named Iris cluster and submits each stage
-as an Iris job using the Python client (no subprocess into the iris CLI).
+Driven from one command on the operator's laptop (or a CI runner). The
+orchestrator opens a tunnel to the named Iris cluster and submits each compute
+stage as an Iris job using the Python client (no subprocess into the iris CLI),
+then publishes the result locally.
 
   1. Scan stage    — Iris coordinator + N worker replicas walk every GCS
                      prefix and write consolidated parquet segments to
                      STAGING_DIR (delegates to ``run_distributed`` in
-                     ``distributed_scan.py``).
+                     ``scan_gcs.py``).
   2. Dedup stage   — Iris coordinator job runs a Zephyr ``group_by`` to
                      collapse the raw parquets into one row per (bucket, name)
                      under STAGING_DIR/deduped. Pipeline construction lives
                      in this file (see ``_dedup_stage``).
-  3. Report stage  — Iris coordinator job reads the deduped parquets, builds
-                     a DuckDB rollup, and writes ``report.md`` back into
-                     STAGING_DIR.
-  4. Gist          — Local: fetch ``report.md`` from STAGING_DIR and push as
-                     a public gist via the operator's ``gh`` auth.
+  3. Report stage  — Iris coordinator job reads the deduped parquets, builds a
+                     DuckDB rollup + week-over-week diff (see ``render_report``)
+                     and writes ``report.md`` back into STAGING_DIR.
+  4. Publish       — Local: fetch ``report.md``, optionally push a gist
+                     (``--gist public|secret|none``) and/or post a summary with
+                     the biggest increases/decreases to Discord (``--discord``).
 
-Prereqs (local):
-    - ``gh`` authenticated as the user who should own the gist
-    - GCS read access (default ADC) to read ``report.md`` back
-    - The named cluster's controller is reachable (uses the same tunnel
-      machinery as ``iris --cluster=<name> ...``)
+Prereqs (local / CI runner):
+    - ``gh`` authenticated as the gist owner (for ``--gist``)
+    - ``gcloud`` with GCS read access to fetch ``report.md`` back
+    - The named cluster's controller is reachable (same tunnel machinery as
+      ``iris --cluster=<name> ...``)
+    - For ``--discord``, the channel webhook resolvable by ``scripts/ops/discord.py``
 
 Usage:
-    ./scripts/ops/storage/build_report.py
-    ./scripts/ops/storage/build_report.py --workers 64
-    ./scripts/ops/storage/build_report.py --skip-scan          # reuse existing parquets
-    ./scripts/ops/storage/build_report.py --skip-scan --skip-report  # just re-push the gist
+    ./scripts/ops/storage/generate_report.py
+    ./scripts/ops/storage/generate_report.py --workers 64
+    ./scripts/ops/storage/generate_report.py --skip-scan          # reuse existing parquets
+    ./scripts/ops/storage/generate_report.py --skip-scan --skip-dedup --skip-report  # just re-publish
+    # Weekly automation (see .github/workflows/ops-storage-report.yaml):
+    ./scripts/ops/storage/generate_report.py --gist secret --discord internal-discuss
 """
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -54,8 +60,7 @@ from rigging.config_discovery import resolve_cluster_config
 from zephyr import Dataset, ZephyrContext
 
 from scripts.ops.storage.constants import MARIN_BUCKETS
-from scripts.ops.storage.distributed_scan import run_distributed
-from scripts.ops.storage.report import (
+from scripts.ops.storage.render_report import (
     DEFAULT_CHANGE_THRESHOLD_BYTES,
     compute_changes,
     find_latest_snapshot,
@@ -67,12 +72,18 @@ from scripts.ops.storage.report import (
     snapshot_path,
     write_snapshot,
 )
+from scripts.ops.storage.scan_gcs import run_distributed
 
 DEFAULT_STAGING_DIR = "gs://marin-us-central2/tmp/storage-scan"
 # Stable location for week-over-week snapshots, independent of the (often
 # date-stamped or truncated) staging dir so history accumulates across runs.
 DEFAULT_HISTORY_DIR = "gs://marin-us-central2/storage-report-history"
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+# Discord summary: rows to show per Increases/Decreases section (full detail is
+# in the gist) and the Overview rows lifted from report.md for the headline.
+MAX_CHANGES_IN_MESSAGE = 5
+_OVERVIEW_LABELS = ("Total Objects", "Total Size", "Est. Monthly Cost")
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +196,89 @@ def _push_gist(content: str, description: str, filename: str, *, public: bool) -
     return result.stdout.strip()
 
 
+def _fetch_report(report_path: str) -> str:
+    """Read report.md with gcloud — avoids the Python TLS/cert maze for gs://."""
+    return subprocess.run(["gcloud", "storage", "cat", report_path], check=True, text=True, capture_output=True).stdout
+
+
+def _post_to_discord(channel: str, message: str) -> None:
+    subprocess.run(
+        ["uv", "run", "python", str(REPO_ROOT / "scripts" / "ops" / "discord.py"), "-c", channel],
+        input=message,
+        text=True,
+        check=True,
+        cwd=REPO_ROOT,
+    )
+
+
+def _extract_overview(report_md: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for label in _OVERVIEW_LABELS:
+        match = re.search(rf"\|\s*{re.escape(label)}\s*\|\s*([^|]+?)\s*\|", report_md)
+        if match:
+            out[label] = match.group(1).strip()
+    return out
+
+
+def _extract_changes(report_md: str) -> tuple[str | None, list[str], list[str]]:
+    """Return (since_date, increase_lines, decrease_lines) from the changes section.
+
+    Rows are classified by the sign of the Δ Size cell. ``since_date`` is None
+    on a baseline run; each list preserves the report's (magnitude-sorted) order.
+    """
+    section = re.search(r"## Week-over-Week Changes\n(.*?)(?:\n## |\Z)", report_md, re.S)
+    if not section:
+        return None, [], []
+    body = section.group(1)
+    since_match = re.search(r"since (\d{4}-\d{2}-\d{2})", body)
+    since = since_match.group(1) if since_match else None
+
+    increases: list[str] = []
+    decreases: list[str] = []
+    for line in body.splitlines():
+        if not line.startswith("|") or "---" in line or "Δ Size" in line:
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) != 6:
+            continue
+        bucket, prefix, delta, _now, _was, status = cells
+        rendered = f"`{bucket}/{prefix}` {delta} ({status})"
+        (increases if delta.startswith("+") else decreases).append(rendered)
+    return since, increases, decreases
+
+
+def _change_block(title: str, lines: list[str]) -> str:
+    if not lines:
+        return f"**{title}:** _none above threshold_"
+    shown = lines[:MAX_CHANGES_IN_MESSAGE]
+    block = f"**{title}:**\n" + "\n".join(f"- {line}" for line in shown)
+    if len(lines) > MAX_CHANGES_IN_MESSAGE:
+        block += f"\n- _(+{len(lines) - MAX_CHANGES_IN_MESSAGE} more in the report)_"
+    return block
+
+
+def _compose_discord_message(report_md: str, *, date: str, gist_url: str | None) -> str:
+    """Two-section summary (increases first — growth is the alarming signal)."""
+    overview = _extract_overview(report_md)
+    since, increases, decreases = _extract_changes(report_md)
+
+    headline = " · ".join(overview.values()) if overview else "(totals unavailable)"
+    if since is None:
+        change_section = "_Baseline run — week-over-week diffs start next run._"
+    elif not increases and not decreases:
+        change_section = f"_No prefix changes above threshold since {since}._"
+    else:
+        change_section = (
+            f"_Changes since {since}:_\n\n"
+            + _change_block("Biggest increases", increases)
+            + "\n\n"
+            + _change_block("Biggest decreases", decreases)
+        )
+
+    report_line = f"- report: {gist_url}\n" if gist_url else ""
+    return f"**Weekly storage report** (UTC {date})\n- totals: {headline}\n{report_line}\n{change_section}"
+
+
 def _open_iris_client(cluster: str) -> tuple[IrisClient, object]:
     """Resolve the named cluster, open a controller tunnel, and return a client.
 
@@ -276,6 +370,17 @@ def _submit_callable(
     help="Suffix for Iris job names so re-runs don't collide with prior jobs "
     "of the same name (defaults to today's UTC date).",
 )
+@click.option(
+    "--discord",
+    "discord_channel",
+    default=None,
+    help="Discord channel to post a summary to (e.g. 'internal-discuss'). Omit to skip.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Compose and print what would be published; skip gist creation and the Discord post.",
+)
 def main(
     cluster: str,
     staging_dir: str,
@@ -287,6 +392,8 @@ def main(
     history_dir: str,
     gist_visibility: str,
     run_id: str | None,
+    discord_channel: str | None,
+    dry_run: bool,
 ) -> None:
     staging_dir = staging_dir.rstrip("/")
     history_dir = history_dir.rstrip("/")
@@ -350,19 +457,31 @@ def main(
     finally:
         tunnel_cm.__exit__(None, None, None)
 
-    if gist_visibility == "none":
-        print(f"=== Done. Report at {report_path} (gist skipped) ===", file=sys.stderr)
+    if gist_visibility == "none" and not discord_channel:
+        print(f"=== Done. Report at {report_path} (nothing published) ===", file=sys.stderr)
         print(report_path)
         return
 
-    print(f"=== Stage 4: fetch {report_path} and push {gist_visibility} gist ===", file=sys.stderr)
-    with fsspec.open(report_path, "r") as f:
-        content = f.read()
+    print(f"=== Stage 4: publish (gist={gist_visibility}, discord={discord_channel or 'off'}) ===", file=sys.stderr)
+    content = _fetch_report(report_path)
 
-    ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
-    desc = f"Marin storage report — {ts}"
-    url = _push_gist(content, desc, "marin-storage-report.md", public=gist_visibility == "public")
-    print(url)
+    desc = f"Marin storage report — {today}"
+    message = _compose_discord_message(content, date=today, gist_url="<gist URL>") if discord_channel else None
+
+    if dry_run:
+        print("=== Dry run — not creating a gist or posting to Discord ===", file=sys.stderr)
+        if message is not None:
+            print(message)
+        return
+
+    gist_url = None
+    if gist_visibility != "none":
+        gist_url = _push_gist(content, desc, "marin-storage-report.md", public=gist_visibility == "public")
+        print(gist_url)
+
+    if discord_channel:
+        _post_to_discord(discord_channel, _compose_discord_message(content, date=today, gist_url=gist_url))
+        print(f"Posted summary to #{discord_channel}", file=sys.stderr)
 
 
 if __name__ == "__main__":

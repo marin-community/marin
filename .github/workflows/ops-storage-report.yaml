@@ -32,7 +32,9 @@ concurrency:
 jobs:
   report:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # The scan alone can run up to MAX_SCAN_SECONDS (90 min); leave room for
+    # dedup, aggregation, gist, and the Discord post on top of that.
+    timeout-minutes: 150
     env:
       IRIS_CONFIG: lib/iris/config/marin.yaml
     steps:
@@ -75,13 +77,15 @@ jobs:
           chmod 600 ~/.ssh/google_compute_engine
           chmod 644 ~/.ssh/google_compute_engine.pub
 
-      - name: Run storage report digest
+      - name: Generate and publish storage report
         shell: bash -l {0}
         env:
           GH_TOKEN: ${{ secrets.GIST_PAT }}
           DISCORD_WEBHOOK_INTERNAL_DISCUSS: ${{ secrets.DISCORD_WEBHOOK_INTERNAL_DISCUSS }}
         run: |
-          uv run python scripts/ops/storage/storage_report_digest.py \
+          uv run python scripts/ops/storage/generate_report.py \
             --cluster marin \
+            --gist secret \
+            --discord internal-discuss \
             ${{ inputs.workers && format('--workers {0}', inputs.workers) || '' }} \
             ${{ inputs.dry_run && '--dry-run' || '' }}
