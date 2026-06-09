@@ -209,6 +209,63 @@ def test_grug_moe_variant_threads_moe_implementation_to_kernel():
     assert "ragged_all_to_all" in str(closed_jaxpr)
 
 
+def _multi_host_mesh_and_token_pspec():
+    """A mesh that spans more than one host (replica_dcn > 1) with a batch that exactly
+    fills the non-expert part of the fused (replica_dcn, data, expert) token axis.
+
+    This is the canary regime (expert axis size 1, two GPU replicas; see #6252) and the
+    only one where the shared-expert residual bug (#6296) surfaces: reshaping the fused
+    token sharding back to (batch, seq) leaves the routed path naming `expert` on the
+    batch dim but lets the shared path leak `expert` onto the seq dim. On a single host
+    (replica_dcn == 1) the two layouts coincide and the add succeeds.
+    """
+    mesh = jax.sharding.AbstractMesh(
+        axis_sizes=(2, 2, 1, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(jax.sharding.AxisType.Explicit,) * 4,
+    )
+    return mesh, jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None)
+
+
+def test_grug_moe_shared_expert_residual_lowers_multi_host():
+    """Regression for #6296: the shared-expert residual add must lower when the model
+    spans more than one host. `DenseMLP` (shared) and `MoEMLP` (routed) must canonicalize
+    their output sharding the same way, otherwise the add at model.py:467 raises a
+    ShardingTypeError once replica_dcn > 1.
+    """
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    make_train_step = train_module._make_train_step
+    initial_state = train_module.initial_state
+
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
+    assert cfg.shared_expert_intermediate_dim > 0, "fixture must enable the shared expert"
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+    train_step = make_train_step(optimizer, mp, z_loss_weight=0.0, ema_beta=None)
+    mesh, token_pspec = _multi_host_mesh_and_token_pspec()
+    batch = GrugLmExample(
+        tokens=jnp.zeros((4, 4), dtype=jnp.int32),
+        loss_weight=jnp.ones((4, 4), dtype=jnp.float32),
+        attn_mask=GrugAttentionMask.causal(),
+    )
+
+    def one_step():
+        sharded_batch = dataclasses.replace(
+            batch,
+            tokens=jax.sharding.reshard(batch.tokens, token_pspec),
+            loss_weight=jax.sharding.reshard(batch.loss_weight, token_pspec),
+        )
+        state = initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
+        return train_step(state, sharded_batch, compute_watch=False)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        out_state_shape, out_metrics_shape, _ = eqx.filter_eval_shape(one_step)
+
+    assert out_state_shape.step.shape == ()
+    assert out_metrics_shape["train/loss"].shape == ()
+
+
 def test_grug_moe_data_loaders_build_against_single_expert_mesh():
     """Regression: build_train_loader / build_tagged_evaluator must work when the
     compact mesh's expert axis has size 1 (canary configuration).
