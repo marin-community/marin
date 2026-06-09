@@ -5,15 +5,20 @@ status: draft
 
 # Tighten Iris control boundaries (multi-backend readiness)
 
-> Revised three times. The decisive simplification (this round): **worker health is a
-> backend concern.** The backend tracks health from its own I/O (RPC backend: reconcile-RPC
-> + build failures; K8s: pod status) and returns per-worker verdicts in `BackendResult`; the
-> controller just **stores** them. That deletes `on_workers_failed` / `on_worker_failed` /
-> `ping_workers`, the ping loop, and the controller-side `WorkerHealthTracker` logic — and
-> removes the last place backend-specific data flowed through the controller. Phase order is
-> **schedule → reconcile → autoscale** (each as-needed). `cluster=` is a **hard** constraint;
-> the single-tick model is the target; the `BackendResult` name stays (the `*Result` swarm
-> collapses, so the earlier naming concern is moot).
+> Revised through several rounds. The settled model: **worker health is observed by the
+> backend but owned by the controller.** Each backend tracks health from its own I/O (RPC
+> backend: reconcile-RPC + build failures; K8s: pod status) and returns generic per-worker
+> **health events** in `BackendResult`; the controller folds them into its **in-memory**
+> `WorkerHealthTracker`, applies the thresholds, and serializes **only the hard decision** —
+> a worker crossing the threshold and being torn down. Health is **not** persisted (the
+> tracker is reseeded from worker rows at startup, as today). That still deletes
+> `on_workers_failed` / `on_worker_failed` / `ping_workers`, the ping loop, and the scattered
+> in-reconcile tracker mutations — and removes the last place backend-specific data flowed
+> through the controller (the dead set is now controller-derived and passed via the uniform
+> `autoscale(...)`). Phase order is **schedule → reconcile → autoscale**, committed **once at
+> end of tick**. `cluster=` is a **hard** constraint; the single-tick model is the target; the
+> `BackendResult` name stays (the `*Result` swarm collapses, so the earlier naming concern is
+> moot).
 
 ## Problem & goal
 
@@ -61,10 +66,13 @@ with concrete code shapes + an honest feasibility analysis. Implementation = the
   `mark_unhealthy` on the fail cascade `batches.py:226`). Read by scheduling-context filtering
   (`policy.py:1063` → `reads.py:1097`) and the read-only RPCs (`ListWorkers` `service.py:1578`,
   `GetWorkerStatus` `:1985`, `GetAutoscalerStatus` `:1766`). **Health is not in the scheduling
-  snapshot today** — it's a separate post-filter.
+  snapshot today** — it's a separate post-filter. We **keep** this in-memory model; we change
+  only *what feeds it* (one stream of backend health events instead of a ping loop + scattered
+  in-reconcile mutations).
 - **K8s has no daemon-ping health model** — workers are pods, health is pod status
   (`backends/k8s/tasks.py`); it stubs `on_workers_failed`/`ping_workers`. This asymmetry is the
-  reason health belongs *in* the backend, not in one controller-side tracker.
+  reason health must be *observed in* the backend (each backend knows its own liveness source),
+  even though the threshold decision stays controller-side.
 - The reconcile *kernel* (`reconcile/overlay|task|job|worker|effects`) is a **pure state
   machine**; `loader → snapshot → kernel → commit` is clean; `writes.validate()` enforces
   projection-table ownership.
@@ -89,7 +97,7 @@ flowchart TB
     end
 
     DB[("Controller DB")]:::store
-    HT["WorkerHealthTracker (in-memory, lost on restart)"]:::problem
+    HT["WorkerHealthTracker (in-memory; reseeded from worker rows at startup)"]
 
     subgraph PURE["DB-free decision components"]
         SCH["Scheduler.find_assignments (PURE) — TWO instances"]:::pure
@@ -129,14 +137,15 @@ flowchart TB
     classDef good fill:#e1ffe1,stroke:#27ae60,color:#000;
     classDef store fill:#f5f0d8,stroke:#7f8c8d,color:#000;
 
-    subgraph TICK["Control tick — ONE thread, ONE snapshot/tick"]
+    subgraph TICK["Control tick — ONE thread, ONE snapshot, ONE end-of-tick commit"]
         direction TB
-        S0["build ControlSnapshot (reads.py, one read txn) — incl. stored worker health"]
+        S0["build ControlSnapshot — reads.py (DB state) + health view from in-memory tracker"]
         S1["schedule (due ~10s / on wake): DECISION → assignments + residual_demand"]
-        S2["reconcile (every tick): OPERATION → task observations + WORKER-HEALTH VERDICTS"]
-        S3["autoscale (due): OPERATION → provision + tear down dead slices/siblings → AutoscalerState + verdicts"]
-        S4["commit BackendResult (one write txn): pure kernel applies observations+health → store"]
-        S0 --> S1 --> S2 --> S3 --> S4
+        S2["reconcile (every tick): OPERATION → task observations + per-worker HEALTH EVENTS"]
+        SH["controller folds health events → in-memory tracker, applies thresholds → newly_dead"]
+        S3["autoscale (due): OPERATION → provision + tear down newly_dead slices/siblings → AutoscalerState + removed_workers"]
+        S4["commit BackendResult (one write txn): pure kernel applies observations → task state; serialize hard decisions (worker removal, slices)"]
+        S0 --> S1 --> S2 --> SH --> S3 --> S4
     end
 
     subgraph HK["Housekeeping threads"]
@@ -144,70 +153,84 @@ flowchart TB
         C["checkpoint"]
     end
 
-    DB[("Controller DB — stores task state, worker health, slices")]:::store
+    DB[("Controller DB — stores task state + slices; worker removal is the only health-driven write")]:::store
+    HT["WorkerHealthTracker (in-memory, controller-owned)"]
 
     subgraph BD["per-backend bounded dispatch (threadpool + generous timeout) — I/O calls only"]
         D["submit(io_call, deadline)"]
     end
 
-    subgraph BK["Backends — UNIFORM interface; OWN placement, capacity, AND health"]
-        RPCB["RpcTaskBackend — 1 Scheduler + Autoscaler + health from reconcile-RPC/build"]:::good
-        K8S["K8sTaskProvider — Kueue places; health from pod status"]:::good
+    subgraph BK["Backends — UNIFORM interface; OWN placement, capacity, AND health OBSERVATION"]
+        RPCB["RpcTaskBackend — 1 Scheduler + Autoscaler + health events from reconcile-RPC/build"]:::good
+        K8S["K8sTaskProvider — Kueue places; health events from pod status"]:::good
     end
 
     S0 --> DB
+    S0 -.->|"health view"| HT
     S1 -->|"in-process decision"| RPCB
     S2 --> BD
+    SH --> HT
     S3 --> BD
     BD --> RPCB
     BD --> K8S
-    RPCB -->|"BackendResult"| S4
-    K8S -->|"BackendResult"| S4
+    RPCB -->|"BackendResult"| S2
+    RPCB -->|"BackendResult"| S3
+    K8S -->|"BackendResult"| S2
+    S3 --> S4
     S4 --> DB
     P --> DB
     C --> DB
 ```
 
-Net threads: **7 → 3**. No ping loop, no `on_workers_failed`, no controller-side health
-tracker. The controller builds a snapshot (incl. stored health), calls one interface, and
-persists `BackendResult` through one pure-kernel apply path — dispatching on result shape,
-never backend type. `schedule` is an in-process decision; only the actual **I/O** (reconcile,
-autoscale ops, one-offs) goes through the bounded dispatch.
+Net threads: **7 → 3**. No ping loop, no `on_workers_failed`, no scattered tracker mutations.
+The controller builds a snapshot (DB state + in-memory health view), calls one interface, folds
+the returned health events into its tracker, and persists `BackendResult` through one pure-kernel
+apply path — dispatching on result shape, never backend type. `schedule` is an in-process
+decision; only the actual **I/O** (reconcile, autoscale ops, one-offs) goes through the bounded
+dispatch. Health stays in-memory; only worker **removal** is serialized.
 
 ## The five targeted improvements
 
-### I1 — One phased control tick (schedule → reconcile → autoscale); drop the ping, dispatch & autoscaler loops
+### I1 — One phased control tick (schedule → reconcile → autoscale), one end-of-tick commit; drop the ping, dispatch & autoscaler loops
 
 **Problem.** Five fast loops re-snapshot/commit independently; the dispatch loop is "reconcile
 for TASK_BACKEND"; the autoscaler loop re-snapshots; the ping loop derives liveness and
 couriers failures into the backend.
 
-**Change.** One driver thread, one snapshot per tick, fixed order:
+**Change.** One driver thread, one snapshot per tick, fixed order, **one write txn at the end
+of the tick**:
 
 ```
 control_tick(now):
-    snap = build_control_snapshot(db)              # ONE read txn via reads.py (I4); incl. stored health
+    snap = build_control_snapshot(db, health_tracker)   # ONE read txn via reads.py (I4) + in-memory health view
     r = BackendResult()
+    newly_dead = []
     if schedule_phase.due(now) or woken:
-        r += backend.schedule(snap)                # pure decision: assignments + residual_demand
+        r += backend.schedule(snap)                      # pure decision: assignments + residual_demand
     if reconcile_phase.due(now):
-        r += backend.reconcile(snap)               # bounded I/O (I5): observations + health verdicts
+        r += backend.reconcile(snap)                     # bounded I/O (I5): observations + health events
+        newly_dead = health_tracker.apply(r.health_events)   # in-memory; PING/BUILD thresholds → who crossed
     if autoscale_phase.due(now):
-        r += backend.autoscale(snap, r.residual_demand, r.health)  # bounded I/O: scale + dead-slice teardown
-    with db.transaction() as tx:                   # ONE write txn, one apply path
-        commit(tx, r)                              # pure kernel: observations+health → task state; store health/slices
+        r += backend.autoscale(snap, r.residual_demand, newly_dead)  # bounded I/O: scale + dead-slice/sibling teardown
+    with db.transaction() as tx:                         # ONE end-of-tick write txn (decided)
+        commit(tx, r)                                    # pure kernel: observations → task state; serialize removals/slices
 ```
 
+- **Commit boundary (decided):** a **single end-of-tick write** covering schedule + reconcile +
+  autoscale. A mid-tick crash leaves no partial commit; the next tick's reconcile self-heals
+  from observed state. No commit-after-schedule.
 - **Drop the ping loop.** Reconcile already reaches every active worker (idle ones get an
-  empty-rows heartbeat); liveness now comes from the backend tracking its own reconcile-RPC
-  outcomes (I3). Keep the reconcile cadence ≈ the old ping interval so detection isn't slower.
+  empty-rows heartbeat); liveness now comes from the backend reporting its own reconcile-RPC
+  outcomes as health events (I3), folded into the in-memory tracker. Keep the reconcile cadence
+  ≈ the old ping interval so detection isn't slower.
 - **Drop the dispatch loop** (it is reconcile for TASK_BACKEND placement; uniform after I3).
-- **Drop the autoscaler loop** (now the autoscale phase, off `residual_demand` + reconcile's
-  health verdicts).
+- **Drop the autoscaler loop** (now the autoscale phase, off `residual_demand` + the
+  controller-derived `newly_dead` set).
 - **Scheduling latency:** an RPC wake triggers a **schedule-only mini-tick** (reconcile/
   autoscale skipped unless due), so submit→assign = schedule time, not gated on in-flight
   reconcile.
-- **Keep** prune + checkpoint as separate housekeeping threads.
+- **Keep** prune + checkpoint as separate housekeeping threads, and the in-memory
+  `WorkerHealthTracker` (now mutated in exactly one place: `apply(health_events)`).
 
 **Serves:** poll over loose threading (#3); one snapshot fans out to DB-free abstractions (#1);
 strong scheduler↔autoscaler sync (#6).
@@ -238,22 +261,23 @@ parity test is load-bearing** (same demand entries in/out, incl. reservation/hol
 removes a snapshot + the unlocked dual-scheduler access (#1).
 **Risk:** medium-high — reproduce reservation-taint / holder-task demand semantics exactly.
 
-### I3 — One uniform backend interface; the backend owns placement, capacity, AND health; controller stores `BackendResult`
+### I3 — One uniform backend interface; the backend observes placement, capacity, AND health; the controller owns health state and stores `BackendResult`
 
 **Problem.** The controller orchestrates backend specifics: branches on `placement`/
-`manages_capacity`; derives health itself; couriers failures via `on_workers_failed`; reads
-type-specific result fields; K8s stubs methods.
+`manages_capacity`; derives health itself via a ping loop; couriers failures via
+`on_workers_failed`; reads type-specific result fields; K8s stubs methods.
 
 **Change.** One uniform interface every backend implements; the Iris scheduler, autoscaler,
-**and worker-health tracking** live inside `RpcTaskBackend`; the controller persists the
-returned `BackendResult` through one pure-kernel apply path, dispatching on result shape only:
+**and worker-health observation** live inside `RpcTaskBackend`; the controller keeps the
+in-memory health *state* and persists the returned `BackendResult` through one pure-kernel
+apply path, dispatching on result shape only:
 
 ```python
 class TaskBackend(Protocol):
     name: str
-    def schedule(self, snap: ControlSnapshot) -> BackendResult: ...        # DECISION: assignments + residual_demand
-    def reconcile(self, snap: ControlSnapshot) -> BackendResult: ...       # OPERATION: observations + worker-health verdicts
-    def autoscale(self, snap, residual_demand, health) -> BackendResult: ...# OPERATION: scale + dead-slice/sibling teardown
+    def schedule(self, snap: ControlSnapshot) -> BackendResult: ...          # DECISION: assignments + residual_demand (filters on snap health view)
+    def reconcile(self, snap: ControlSnapshot) -> BackendResult: ...         # OPERATION: observations + per-worker health events
+    def autoscale(self, snap, residual_demand, dead_workers) -> BackendResult: ...# OPERATION: scale + tear down dead slices/siblings
     def set_log_sink(self, ...) -> None: ...
     def close(self) -> None: ...
 
@@ -264,28 +288,36 @@ class BackendResult:
     assignments: list[Assignment] = field(default_factory=list)
     residual_demand: list[DemandEntry] = field(default_factory=list)
     observations: list[ReconcileObservation] = field(default_factory=list)   # task-state observed
-    worker_health: list[WorkerHealthVerdict] = field(default_factory=list)   # healthy/active + counts, per worker
+    health_events: list[WorkerHealthEvent] = field(default_factory=list)     # generic per-worker: reached / unreachable / build-failed
+    removed_workers: list[WorkerId] = field(default_factory=list)            # autoscale teardown result (dead slices + siblings)
     autoscaler_state: AutoscalerState | None = None
     ...
 ```
 
-**Worker health moves into the backend (the heart of this revision):**
-- `RpcTaskBackend` owns the health tracker; `reconcile` counts its own reconcile-RPC outcomes
-  (success → heartbeat; error → `consecutive_failures`++) plus build failures, applies the
-  threshold, and returns per-worker `WorkerHealthVerdict`s. When it deems a worker dead it
-  evicts its own cached stub (today's `on_worker_failed`) internally — no controller call.
-- `autoscale`, given the dead-worker verdicts, tears down their slices **and** their healthy
-  siblings (logic already in `autoscaler/operations.py`) and returns the siblings as further
-  dead verdicts — so the controller never couriers IDs back in.
-- `K8sTaskProvider.reconcile` derives verdicts from pod status — its native health source.
-- The controller **stores** verdicts on the worker rows (persist + restore on restart, like
-  autoscaler state — fixing the in-memory-only gap) and feeds them back via the next
-  `ControlSnapshot` (so `schedule` can filter on health, and read-only RPCs serve stored
-  health). The pure reconcile kernel still runs in `commit`, consuming
-  `observations + dead-worker set` to compute task transitions (WORKER_FAILED cascades).
+**Worker health — observed in the backend, owned by the controller (the heart of this revision):**
+- `RpcTaskBackend.reconcile` counts its own reconcile-RPC outcomes (reached → heartbeat event;
+  RPC error/timeout → unreachable event) plus build failures, and returns generic per-worker
+  **health events**. It may evict its own cached stub on an RPC failure (I/O hygiene) — but it
+  does **not** decide dead/alive.
+- The **controller** keeps the in-memory `WorkerHealthTracker` (unchanged, reseeded from worker
+  rows at startup) and folds the events in via a single `apply(health_events)` — accumulating
+  `consecutive_failures`/`build_failures` and applying `PING_FAILURE_THRESHOLD`/
+  `BUILD_FAILURE_THRESHOLD`. Crossing the threshold yields the `newly_dead` set.
+- `autoscale(snap, residual_demand, dead_workers)` receives that controller-derived `newly_dead`
+  set (db values — worker ids, not backend-specific data), tears down their slices **and** their
+  healthy siblings (logic already in `autoscaler/operations.py`), and returns the full set as
+  `removed_workers` — so the controller never couriers IDs back in via a dedicated RPC.
+- `K8sTaskProvider.reconcile` derives health events from pod status — its native liveness source.
+- **Health is not persisted.** The tracker stays in-memory; the snapshot's health view is read
+  from it (I4). The pure reconcile kernel still runs in `commit`, consuming
+  `observations + newly_dead` to compute task transitions (WORKER_FAILED cascades). **Only the
+  hard decision** — a removed worker — is serialized (worker row + slice teardown), exactly as
+  today.
 
-**Deleted:** `on_workers_failed`, `on_worker_failed`, `ping_workers`, the controller
-`WorkerHealthTracker` mutation logic, and `placement`/`manages_capacity` + every branch.
+**Deleted:** `on_workers_failed`, `on_worker_failed`, `ping_workers`, the ping loop, the
+scattered in-reconcile tracker mutations (`batches.py:182/226`, `task.py:441` → one
+`apply(health_events)` site), and `placement`/`manages_capacity` + every branch. **Kept:** the
+controller's in-memory `WorkerHealthTracker` and its threshold logic.
 
 Also in scope: reconcile the two `Scheduler` instances → one (backend-owned; building cap
 sources from it); keep autoscaler startup-restore controller-driven so the backend stays
@@ -299,7 +331,7 @@ backend-internal — so there is no remaining collision.
 **Serves:** controller = state/storage, backend = operation, **no backend-specific data in the
 controller** (#2); one interface + one result shape + one apply path (#5); the multi-backend
 keystone (`BackendRegistry` over N backends, routed by the hard `cluster=` constraint).
-**Risk:** largest churn; the genuine sub-projects are health-into-backend, autoscaler
+**Risk:** largest churn; the genuine sub-projects are health-events-into-backend, autoscaler
 DB-decoupling, and the dual-scheduler merge.
 
 ### I4 — `reads.py` is the single DB fan-out point feeding the typed `ControlSnapshot`
@@ -307,10 +339,11 @@ DB-decoupling, and the dual-scheduler merge.
 **Problem.** `_snapshot_reconcile_inputs`' raw join (`controller.py:1038-1059`) bypasses
 `reads.py`; same in `policy.py`/`budget.py`/`checkpoint.py`.
 
-**Change.** Build one typed `ControlSnapshot` per tick via `reads.py` (reuse
-`reconcile/loader.load_closed_snapshot` where it fits), **including stored worker health** so
-the backend can filter/track from it; move the raw selects behind `reads.py`. `reads.py`/
-`writes.py`/projections become the only modules issuing schema queries.
+**Change.** Build one typed `ControlSnapshot` per tick: `reads.py` fans out the DB state (reuse
+`reconcile/loader.load_closed_snapshot` where it fits) and the controller attaches a **health
+view from the in-memory tracker** so the backend can filter/observe from a uniform input. Move
+the raw selects behind `reads.py`. `reads.py`/`writes.py`/projections become the only modules
+issuing schema queries; the health view is the one non-DB field, composed in by the controller.
 
 **Serves:** central DB queries fan out to DB-free abstractions from one chokepoint (#1).
 **Risk:** medium; independent; the `ControlSnapshot` is the backends' uniform input.
@@ -343,7 +376,7 @@ dispatch policy (#5).
 | Constraint | Addressed by |
 |---|---|
 | Central DB queries fan out to DB-free abstractions | I4 (one `reads.py` snapshot), I3 (snapshot in → `BackendResult` out), I2 (single demand artifact) |
-| Controller handles state, backends handle operation | I3 (backend owns placement/capacity/**health**; controller only stores; **no backend-specific data in the controller**) |
+| Controller handles state, backends handle operation | I3 (backend observes placement/capacity/**health**; controller owns the in-memory health model + applies thresholds; **no backend-specific data in the controller**; only worker removal serialized) |
 | Prefer poll workflows vs loose threading | I1 (one control tick; drop ping/dispatch/autoscaler loops) |
 | Any controller→backend call is threadpool-dispatched + bounded | I5 (per-backend pool + generous deadline; fix the 1h exec) |
 | Only one way to do something | I3 (one interface + one result shape; delete `on_workers_failed`/`ping_workers`), I2 (one demand path) |
@@ -366,38 +399,43 @@ off it; delete the dry-run + the separate autoscaler thread. Acceptance: golden-
 (same demand in/out incl. reservation/holder), one `Scheduler`, one scheduling snapshot/cycle.
 
 ### T3 — I4: one reads.py-built ControlSnapshot  `exec: session`  `value: medium`  `deps: —`
-Build a typed per-tick snapshot via `reads.py`, carrying stored worker health; move the
-reconcile-input join + policy/budget/checkpoint raw selects behind `reads.py`. Acceptance: no
-schema query outside `reads.py`/`writes.py`/projections; snapshot includes health.
+Build a typed per-tick snapshot via `reads.py`, with the controller attaching a health view from
+the in-memory tracker; move the reconcile-input join + policy/budget/checkpoint raw selects
+behind `reads.py`. Acceptance: no schema query outside `reads.py`/`writes.py`/projections;
+snapshot carries the health view.
 
-### T4 — I3: uniform backend interface + backend-owned health  `exec: session`  `value: high`  `deps: T2, T3`
+### T4 — I3: uniform backend interface + backend-observed health  `exec: session`  `value: high`  `deps: T2, T3`
 Define `BackendResult` + the uniform `schedule`/`reconcile`/`autoscale(snapshot)` interface;
-**move worker-health tracking into the backend** (RPC: reconcile-RPC + build failures + threshold;
-K8s: pod status), returning per-worker verdicts; **persist health to worker rows** (+ restore on
-restart) and feed it back via the snapshot; **delete `on_workers_failed`/`on_worker_failed`/
-`ping_workers` + the controller health tracker**; backend tears down dead slices + siblings in
-`autoscale`, returning sibling verdicts; reconcile the two `Scheduler` instances → one; keep
-autoscaler startup-restore controller-driven; collapse the result fields via a shared resolver;
-delete `placement`/`manages_capacity` + branches. Acceptance: `grep` finds no
-`placement ==`/`manages_capacity` branch and no `on_workers_failed`/`ping_workers`; backend
-imports no `db`/`reads`/`schema` on the per-tick path; a worker whose reconcile RPC fails the
-threshold is failed and its slice torn down with no ping loop.
+**move worker-health observation into the backend** (RPC: reconcile-RPC + build failures emitted
+as generic events; K8s: pod status), returning per-worker health events; **keep the in-memory
+`WorkerHealthTracker` controller-side**, folding events in via one `apply(...)` that applies the
+thresholds (no persistence, no new columns); **delete `on_workers_failed`/`on_worker_failed`/
+`ping_workers` + the ping loop + the scattered in-reconcile mutations**; backend tears down dead
+slices + siblings in `autoscale` off the controller-derived `newly_dead` set, returning
+`removed_workers`; reconcile the two `Scheduler` instances → one; keep autoscaler startup-restore
+controller-driven; collapse the result fields via a shared resolver; delete `placement`/
+`manages_capacity` + branches. Acceptance: `grep` finds no `placement ==`/`manages_capacity`
+branch and no `on_workers_failed`/`ping_workers`; backend imports no `db`/`reads`/`schema` on the
+per-tick path; the health tracker is mutated in exactly one place; a worker whose reconcile RPC
+fails the threshold is failed and its slice torn down with no ping loop.
 
 ### T5 — I1: collapse the fast loops into one phased control tick  `exec: session`  `value: high`  `deps: T1, T2, T4`
-One driver: snapshot → schedule → reconcile(+health) → autoscale → commit; per-phase `due()`;
-wake → schedule-only mini-tick; drop ping/dispatch/autoscaler loops; keep prune/checkpoint.
-Acceptance: one control thread; one read snapshot + one write txn per tick (counter/test);
-submit→assign latency = schedule time; reconcile cadence ≈ old ping interval (no liveness
-regression); chaos/integration suite green; behind a fallback flag.
+One driver: snapshot → schedule → reconcile(+health events) → apply-thresholds → autoscale →
+**single end-of-tick commit**; per-phase `due()`; wake → schedule-only mini-tick; drop
+ping/dispatch/autoscaler loops; keep prune/checkpoint + the in-memory tracker. Acceptance: one
+control thread; one read snapshot + one write txn per tick (counter/test); submit→assign latency
+= schedule time; reconcile cadence ≈ old ping interval (no liveness regression); chaos/integration
+suite green; behind a fallback flag.
 
 ## Feasibility analysis
 
-**Overall: feasible, incremental, and now genuinely simplifying.** Moving health into the
-backend *removes* code (ping loop, `on_workers_failed`/`on_worker_failed`/`ping_workers`,
-controller `WorkerHealthTracker` mutation logic, the courier-and-loop sibling dance) rather than
-adding it, and the sibling/slice logic it relies on already lives in the autoscaler. No
-data-model change except adding stored health to the worker rows (a small, beneficial migration
-that also fixes restart durability). End state: 3 threads, one interface, one apply path.
+**Overall: feasible, incremental, and genuinely simplifying.** Observing health in the backend
+while keeping the tracker controller-side *removes* code (ping loop, `on_workers_failed`/
+`on_worker_failed`/`ping_workers`, the scattered tracker-mutation sites, the courier-and-loop
+sibling dance) rather than adding it, and the sibling/slice logic it relies on already lives in
+the autoscaler. **No data-model change at all** — health stays in-memory (reseeded at startup as
+today); only worker removal is serialized, as today. End state: 3 threads, one interface, one
+apply path.
 
 **Recommended landing sequence:**
 
@@ -405,28 +443,28 @@ that also fixes restart durability). End state: 3 threads, one interface, one ap
    reconcile. Prereq for a safe single tick.
 2. **T2 (I2)** — independent; deletes the duplicate scheduling pass, the second snapshot, the
    second `Scheduler`. Care item: demand parity.
-3. **T3 (I4)** — independent; produces the `ControlSnapshot` (with health) T4 consumes.
-4. **T4 (I3)** — after T2 + T3; largest churn (uniform interface, health-into-backend, autoscaler
-   restore decoupling, dual-scheduler merge, flag deletion). Land health-into-backend with the
-   ping loop still present as belt-and-suspenders, then remove ping in the same task once the
-   backend verdicts are proven.
+3. **T3 (I4)** — independent; produces the `ControlSnapshot` (with health view) T4 consumes.
+4. **T4 (I3)** — after T2 + T3; largest churn (uniform interface, health-events-into-backend,
+   autoscaler restore decoupling, dual-scheduler merge, flag deletion). Land
+   health-events-into-backend with the ping loop still present as belt-and-suspenders, then
+   remove ping in the same task once the backend events match the ping-derived liveness.
 5. **T5 (I1)** — last; after T1, T2, T4. The tick is then an ordering shell over functions that
    already exist. Fallback flag; `marin-dev` bake.
 
 **Risk register:**
 
-- *T4 (health-into-backend)* — health is mutated from several sites today (ping + reconcile +
-  build + cascade); consolidating onto the backend's reconcile must preserve the threshold
-  semantics (`PING_FAILURE_THRESHOLD`/`BUILD_FAILURE_THRESHOLD`). Mitigation: keep ping running
-  until backend verdicts match it on `marin-dev`, then delete.
+- *T4 (health-events-into-backend)* — health is mutated from several sites today (ping +
+  reconcile + build + cascade); consolidating onto one `apply(health_events)` must preserve the
+  threshold semantics (`PING_FAILURE_THRESHOLD`/`BUILD_FAILURE_THRESHOLD`). Mitigation: keep ping
+  running until backend events match its liveness on `marin-dev`, then delete.
 - *T5 (single tick)* — phase starvation/latency. Mitigation: per-phase `due()`; wake →
-  schedule-only mini-tick; bounded reconcile (T1); fallback flag. Never bounce the live
-  controller without explicit OK.
+  schedule-only mini-tick; bounded reconcile (T1); single end-of-tick commit + reconcile
+  self-heal; fallback flag. Never bounce the live controller without explicit OK.
 - *T2 (demand parity)* — golden-fixture test gates the dry-run deletion.
 - *T4 (autoscaler DB-decoupling)* — `restore_from_db`/`recovery`/`persistence` touch the DB;
   keep restore controller-driven, off the per-tick path.
-- *K8s health* — verdicts must come from pod status, not a daemon ping; verify the pod-diff
-  reconcile already exposes enough to mark a pod-worker dead.
+- *K8s health* — events must come from pod status, not a daemon ping; verify the pod-diff
+  reconcile already exposes enough to emit a pod-worker-unreachable event.
 - *Cross-region / cost* — none; pure control-plane code.
 - *Multi-backend itself is out of scope* — these five make it tractable; `BackendRegistry` +
   `cluster=` routing is a follow-on once T4 + T5 land.
@@ -434,16 +472,18 @@ that also fixes restart durability). End state: 3 threads, one interface, one ap
 **Independently shippable now:** T1, T2, T3. **Sequenced:** T4 (after T2+T3) → T5 (after T1, T2,
 T4). Estimated ~6–7 focused sessions.
 
-## Open questions
+## Decisions & open questions
 
-- **Health persistence shape:** add `healthy`/`active`/`consecutive_failures`/`build_failures`/
-  `last_heartbeat_ms` columns to the worker rows, or a small dedicated health table? Either way
-  it feeds the snapshot and survives restart.
-- **Commit boundary in the tick (I1):** single end-of-tick write (schedule+reconcile+autoscale
-  commit together; relies on reconcile self-heal after a crash) vs commit-after-schedule.
-  Recommend single commit + self-heal; confirm.
+**Decided:**
+- **Commit boundary (I1):** single end-of-tick write (schedule+reconcile+autoscale commit
+  together; relies on reconcile self-heal after a crash). Not commit-after-schedule.
+- **Health persistence (I3):** none. The `WorkerHealthTracker` stays in-memory and
+  controller-owned, fed by backend health events; only worker removal is serialized (as today).
+- **`cluster=`:** a hard constraint.
+
+**Open:**
 - **Observation resolution (I3):** backend returns raw observations and the controller resolves
-  (recommended), vs backend pre-resolves against the in-memory snapshot.
+  in the pure kernel (recommended), vs backend pre-resolves against the in-memory snapshot.
 - **I5 caps:** the reconcile/autoscale watchdog caps and the exec/profile caps (values?).
 - **`cluster=` routing (follow-on):** hard constraint resolved by a pre-scheduler dispatcher
   that partitions tasks per backend, or inside each backend's eligibility filter?
