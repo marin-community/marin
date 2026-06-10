@@ -3,6 +3,7 @@
 
 # NOTE: Do not explicitly import wandb/other trackers here, as this will cause the tests to trivially pass.
 import dataclasses
+import io
 import logging
 import re
 import warnings
@@ -16,7 +17,7 @@ import levanter.tracker
 import levanter.tracker.tracker_fns as tracker_fns
 import levanter.tracker.wandb as wandb_tracker_mod
 from levanter.tracker import CompositeTracker, NoopTracker, TrackerConfig
-from levanter.tracker.tracker import NoopConfig
+from levanter.tracker.tracker import DictTracker, NoopConfig
 from levanter.tracker.wandb import WandbTracker, _truncate_wandb_artifact_name, truncate_wandb_run_name
 
 
@@ -208,3 +209,44 @@ def test_truncate_wandb_run_name_logs_warning(caplog):
         truncate_wandb_run_name(name)
 
     assert any(record.levelno >= logging.WARNING for record in caplog.records)
+
+
+@dataclasses.dataclass
+class _StringizedInner:
+    x: int = 1
+    name: str = "hi"
+
+
+@dataclasses.dataclass
+class _StringizedConfig:
+    # A quoted annotation reproduces what `from __future__ import annotations` does to every
+    # field: `field.type` is the string "_StringizedInner", which draccus's encoder used to
+    # choke on with "cannot create weak reference to 'str' object".
+    model: "_StringizedInner" = dataclasses.field(default_factory=_StringizedInner)
+    lr: float = 3e-4
+
+
+class _ArtifactCapturingTracker(DictTracker):
+    """Reads the artifact file before the temp dir is torn down so the test can round-trip it."""
+
+    def log_artifact(self, artifact_path, *, name=None, type=None):
+        with open(artifact_path) as f:
+            self.metrics["artifact_content"] = f.read()
+        super().log_artifact(artifact_path, name=name, type=type)
+
+
+def test_log_configuration_dumps_config_with_stringized_annotations(monkeypatch):
+    # Regression for draccus failing to encode configs whose modules use PEP 563
+    # (`from __future__ import annotations`), where `field.type` is a string.
+    assert isinstance(_StringizedConfig.__annotations__["model"], str), "test must exercise a stringized annotation"
+
+    tracker = _ArtifactCapturingTracker()
+    monkeypatch.setattr(tracker_fns, "_global_tracker", tracker)
+
+    config = _StringizedConfig()
+    tracker_fns.log_configuration(config, "config.yaml")
+
+    # The artifact is only logged if draccus.dump succeeded, and the dump must round-trip.
+    assert tracker.metrics["artifact"]["type"] == "config"
+    reloaded = draccus.load(_StringizedConfig, io.StringIO(tracker.metrics["artifact_content"]))
+    assert reloaded == config
