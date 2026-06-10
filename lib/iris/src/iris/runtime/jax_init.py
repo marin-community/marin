@@ -123,6 +123,17 @@ def initialize_jax(
     """
     import jax  # noqa: PLC0415  # optional dep: jax (iris does not depend on jax)
 
+    # Idempotent: if the caller already initialized jax.distributed (either by
+    # calling us explicitly first, or because user code touched JAX before our
+    # call site — JAX 0.9+ raises on a second `jax.distributed.initialize()`
+    # via the `xla_bridge.backends_are_initialized()` check), just return.
+    # Callers that touch JAX before levanter.initialize (e.g. via `hax.named`
+    # → `jnp.asarray` building loss-config args) can call `initialize_jax()`
+    # themselves first; levanter's later call lands here and is a no-op.
+    if jax.distributed.is_initialized():
+        logger.info("jax.distributed already initialized; skipping")
+        return
+
     # TPU has its own coordinator discovery via the TPU runtime, so avoid the
     # Iris endpoint dance. We still call JAX distributed initialization to
     # create the host-side distributed client used by Levanter multihost
