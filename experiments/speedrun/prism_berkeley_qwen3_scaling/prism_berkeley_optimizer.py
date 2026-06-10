@@ -393,6 +393,7 @@ class PrismBerkeleyConfig(OptimizerConfig):
                         self.order,
                         self.alpha_grid_points,
                         self.fixed_alpha_steps,
+                        self.use_spectral_norm,
                         self.sketch_size,
                         self.sketch_seed,
                     ),
