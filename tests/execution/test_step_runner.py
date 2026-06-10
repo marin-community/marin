@@ -828,6 +828,38 @@ def test_remote_dependency_groups_can_override_device_extra(tmp_path: Path, fray
     assert spy.requests[0].environment.extras == []
 
 
+def test_remote_direct_call_uses_device_extra(fray_client):
+    spy = _SubmitSpy(fray_client)
+
+    resources = ResourceConfig.with_gpu("H100", count=8)
+
+    @remote(resources=resources)
+    def my_step() -> None:
+        return None
+
+    with set_current_client(spy):
+        my_step()
+
+    assert len(spy.requests) == 1
+    assert spy.requests[0].environment.extras == ["gpu"]
+
+
+def test_remote_direct_call_dependency_groups_can_override_device_extra(fray_client):
+    spy = _SubmitSpy(fray_client)
+
+    resources = ResourceConfig.with_gpu("H100", count=8)
+
+    @remote(resources=resources, pip_dependency_groups=[])
+    def my_step() -> None:
+        return None
+
+    with set_current_client(spy):
+        my_step()
+
+    assert len(spy.requests) == 1
+    assert spy.requests[0].environment.extras == []
+
+
 # ---------------------------------------------------------------------------
 # @remote decorator tests
 # ---------------------------------------------------------------------------

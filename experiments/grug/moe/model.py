@@ -69,24 +69,8 @@ def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
 
 
-def _layer_attention_masks(
-    mask: AttentionMask | jax.Array, *, sliding_window: int
-) -> tuple[AttentionMask, AttentionMask]:
-    segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-    thd_segment_metadata = mask.thd_segment_metadata if isinstance(mask, AttentionMask) else None
-    short_mask = AttentionMask(
-        is_causal=True,
-        sliding_window=sliding_window // 2,
-        segment_ids=segment_ids,
-        thd_segment_metadata=thd_segment_metadata,
-    )
-    long_mask = AttentionMask(
-        is_causal=True,
-        sliding_window=sliding_window,
-        segment_ids=segment_ids,
-        thd_segment_metadata=thd_segment_metadata,
-    )
-    return short_mask, long_mask
+def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
+    return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
 
 
 @dataclass(frozen=True)
@@ -538,6 +522,8 @@ class Transformer(eqx.Module):
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
+        if not isinstance(mask, AttentionMask):
+            mask = AttentionMask.causal()
         short_mask, long_mask = _layer_attention_masks(mask, sliding_window=cfg.sliding_window)
 
         moe_router_stats: list[dict[str, jax.Array]] = []

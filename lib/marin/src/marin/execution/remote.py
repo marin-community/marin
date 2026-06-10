@@ -24,8 +24,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Generic, ParamSpec, TypeVar, overload
 
-from fray import client as fray_client
+from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+
+from marin.training.run_environment import extras_for_resources
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -70,14 +72,18 @@ class RemoteCallable(Generic[P, R]):
         else:
             fn_name = getattr(self.fn, "__name__", None) or DEFAULT_JOB_NAME
             name = f"{fn_name}-{uuid.uuid4().hex[:8]}"
-        c = fray_client.current_client()
+        c = current_client()
+        if self.pip_dependency_groups is None:
+            extras = extras_for_resources(self.resources)
+        else:
+            extras = self.pip_dependency_groups
         handle = c.submit(
             JobRequest(
                 name=_sanitize_job_name(name),
                 entrypoint=Entrypoint.from_callable(lambda: self.fn(*args, **kwargs)),
                 resources=self.resources,
                 environment=create_environment(
-                    extras=self.pip_dependency_groups,
+                    extras=extras,
                     env_vars=self.env_vars,
                 ),
             )

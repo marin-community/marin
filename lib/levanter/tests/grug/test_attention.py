@@ -210,12 +210,69 @@ def test_gpu_fa4_thd_hopper_postprocess_uses_mma_compatible_tile():
     assert fa4_thd._sm90_postprocess_tile_m(100, 128) == 128
 
 
-def test_gpu_fa4_thd_hopper_backward_uses_smem_safe_options():
-    assert fa4_thd._sm90_backward_kernel_options() == {
-        "PdS_stage": 1,
-        "SdP_swapAB": True,
-        "AtomLayoutNdKV": 2,
-    }
+def test_gpu_fa4_thd_hopper_backward_passes_smem_safe_options_to_kernel():
+    captured_kwargs: dict[str, object] = {}
+
+    class FakeCutlass:
+        BFloat16 = object()
+        Float16 = object()
+        Float32 = object()
+
+    class FakeCute:
+        Tensor = object()
+
+        @staticmethod
+        def jit(fn):
+            return fn
+
+        @staticmethod
+        def kernel(fn):
+            return fn
+
+    class FakeCuda:
+        CUstream = object()
+
+    class FakePreprocess:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class FakeBackward:
+        def __init__(self, *args, **kwargs):
+            captured_kwargs.update(kwargs)
+
+    class FakePostprocess:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    modules = fa4_thd._UpstreamFa4CuteModules(
+        arch=90,
+        cutlass=FakeCutlass,
+        cute=FakeCute,
+        cjax=object(),
+        cuda=FakeCuda,
+        FlashAttentionForward=object(),
+        FlashAttentionBackward=FakeBackward,
+        FlashAttentionBackwardPreprocess=FakePreprocess,
+        FlashAttentionBackwardPostprocess=FakePostprocess,
+    )
+
+    fa4_thd._upstream_fa4_thd_backward_launcher(
+        modules,
+        dtype=jnp.dtype(jnp.bfloat16),
+        head_dim=128,
+        head_dim_v=128,
+        qhead_per_kvhead=2,
+        kernel_config=fa4_thd.Flash4CuteKernelConfig(
+            forward_tile=(128, 64),
+            backward_tile=(64, 128),
+            num_threads=384,
+        ),
+    )
+
+    assert captured_kwargs["PdS_stage"] == 1
+    assert captured_kwargs["SdP_swapAB"] is True
+    assert captured_kwargs["AtomLayoutNdKV"] == 2
+    assert captured_kwargs["num_threads"] == 384
 
 
 def test_attention_rejects_unknown_implementation():

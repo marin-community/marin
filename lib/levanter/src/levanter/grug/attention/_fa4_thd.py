@@ -42,7 +42,7 @@ _SM90_BACKWARD_SDP_SWAP_AB = True
 _SM90_BACKWARD_ATOM_LAYOUT_N_DKV = 2
 
 
-def _sm90_backward_kernel_options() -> dict[str, Any]:
+def _sm90_backward_kernel_options() -> dict[str, int | bool]:
     return {
         "PdS_stage": _SM90_BACKWARD_PDS_STAGE,
         "SdP_swapAB": _SM90_BACKWARD_SDP_SWAP_AB,
