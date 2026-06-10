@@ -161,33 +161,30 @@ happy-path call, required vs default parameters, and where artifacts land.
 
 {input_description}
 
-Produce a markdown document with EXACTLY these sections:
+This sub-project contains MANY packages and tasks; an agent may need any of \
+them, so prioritize BREADTH of coverage over a single deep example. Produce a \
+markdown document with EXACTLY these sections:
 
-## Entry points
-The 1-3 functions/CLIs/classes a user actually calls, one line each with the \
-full import path. Lead with the single most common one.
+## Entry point index
+The 12-20 most important callable entry points across the WHOLE sub-project — \
+the functions/classes/CLIs an agent is most likely to need for real tasks. \
+Span the sub-project's major areas (do not over-cover one area). One line each:
+
+`full.import.path.symbol(key_arg=default, required_arg)` — one-line purpose.
+
+Include the few load-bearing arguments inline with their default VALUES; mark \
+required args. Cover the long tail tersely rather than omitting whole areas.
 
 ## Happy path
-ONE fenced Python (or shell) code block showing the minimal correct call from \
-import to result. Show full import paths from the top-level package and the \
-complete call with real argument names.
+ONE short fenced code block for the single most common end-to-end workflow, with \
+full import paths and real argument names.
 
-```python
-from {project_name}.module import entry_point
-
-entry_point(
-    required_arg=...,        # REQUIRED — no default
-    tuned_default=286,       # default shown so the agent keeps it
-)
-```
-
-## Parameters that matter
-Bullet list. For each: name, whether it is REQUIRED or has a default, the \
-default VALUE, and one phrase on why that default was chosen. Weak models drop \
-defaults unless the value and its rationale are stated explicitly.
+## Critical defaults
+Only the handful of non-obvious required params or tuned defaults (with exact \
+values) that an agent would otherwise get wrong. Skip the obvious ones.
 
 ## Where artifacts land
-1-3 lines: output paths / return values — does the call return data, a path, or \
+1-3 lines: output paths / return values — does a call return data, a path, or \
 write files? Name the path-construction convention if there is one.
 
 Rules:

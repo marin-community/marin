@@ -37,3 +37,54 @@ Combined V3 prose (explains WHY defaults matter) with V4 code blocks (exact impo
 | Combined prose + code blocks | R5: prose fixes defaults, code blocks fix imports |
 | Haiku for file summaries, sonnet for aggregation | File summaries are structured extraction; aggregation needs judgment |
 | Ground truth in review rubric | Sonnet reviewer hallucinated API judgments without it |
+
+---
+
+# Experiment v2: budgeted two-axis taxonomy, 10-probe suite
+
+Replaces the single fuzzy-dedup probe with 10 probes mined from real `~/.claude`
+usage (4 iris, 3 finelog, 2 marin, 1 levanter; use vs understand). Docs are a
+budgeted two-axis taxonomy: per sub-project `overview`/`ops`/`architecture` +
+top-level `MAP`, each ≤1000 tokens, generated from a signatures-only tree-sitter
+digest. Coder = haiku with NO tools (docs only); judge = sonnet, scores anchors
+(0/1) + holistic quality (1-5) + high-precision hallucination.
+
+## R7: First end-to-end run — harness bugs dominate (mean rubric 0.09, q 1.3)
+
+Two harness bugs, not doc signal:
+- **Digest omitted dataclass fields.** Dataclasses have no explicit `__init__`,
+  so the digest rendered them as `Foo()`; the generator then invented fields
+  (`ResourceSpec(cpu_millicores=...)` vs real `cpu/memory/device`). Fixed: digest
+  extracts class-body `name: type = default` fields.
+- **Judge treated anchors as an allowlist.** Any API not among the ~5 anchors
+  (even the real `IrisClient.remote`) was flagged as a hallucination → quality
+  pinned at 1, nothing passes. Fixed: hallucination = forbidden-list terms or
+  direct contradictions of an anchor only.
+- Also discovered the merge to main had refactored several probed APIs; all 48
+  anchors re-grounded against current source (notably P8: dedup is now a two-stage
+  `compute_minhash_attrs` → `compute_fuzzy_dups_attrs` pipeline).
+
+## R8: After harness fixes — real doc-capacity ceiling (mean rubric 0.07, q 1.3)
+
+Harness now validated (P9's coder honestly refused: "the documentation does not
+contain the distributed configuration class" — exactly the right behavior; the
+judge correctly caught P7 fabricating `ExecutorStep.__init__`). Scores stay near
+zero because the docs genuinely lack the needed APIs:
+- **Use probes:** a 1000-token whole-sub-project `ops.md` covers only the 2-3 most
+  prominent entry points. `marin/ops.md` documents `datakit`, omits fuzzy dedup
+  (P8); `levanter/ops.md` covers training-config basics, omits `DistributedConfig`
+  (P9). The budget can't hold a 48-package sub-project's API surface.
+- **Understand probes:** several anchors are internal symbols (`_reconcile_tick`,
+  `seg_filename`, `LogClient._invalidate`) that a doc legitimately would not name,
+  so those probes under-measure doc quality and need re-scoping to public concepts.
+
+Echoes the v1 R5 finding (module-level too broad) and R6 win (sub-package
+granularity). Suggests the per-sub-project budget is orientation-grade, not
+task-completion-grade, for narrow deep-API tasks.
+
+## R9: Breadth-first ops doc (in progress)
+
+Lever test within the 1000-token budget: replace `ops.md`'s "1-3 entry points +
+happy path" with an "entry-point index" of 12-20 of the most important callables
+across the whole sub-project. Tests whether breadth (vs depth) recovers the use
+probes under the fixed budget.
