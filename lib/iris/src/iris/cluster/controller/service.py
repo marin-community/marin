@@ -2493,16 +2493,3 @@ class ControllerServiceImpl:
             pending_buckets=pending_buckets,
             running_buckets=running_buckets,
         )
-
-    def set_task_status_text(
-        self,
-        _request: job_pb2.SetTaskStatusTextRequest,
-        _ctx: Any,
-    ) -> job_pb2.SetTaskStatusTextResponse:
-        """Deprecated no-op kept so pre-cutover clients don't crash.
-
-        Status text now flows through the iris.task_status finelog namespace
-        via RemoteClusterClient.report_task_status_text. Remove this handler
-        and its RPC/messages on the date in the iris-status-cleanup cron.
-        """
-        return job_pb2.SetTaskStatusTextResponse()
