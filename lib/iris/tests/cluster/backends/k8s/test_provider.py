@@ -13,6 +13,7 @@ import pytest
 from finelog.client.proxy import LogServiceProxy
 from finelog.rpc import logging_pb2
 from iris.cluster.backends.k8s.tasks import (
+    _GANG_GC_MAX_AGE_SECONDS,
     _GC_MAX_AGE_SECONDS,
     _KUEUE_MANAGED_FINALIZER,
     _KUEUE_POD_GROUP_NAME,
@@ -1222,57 +1223,132 @@ def test_gang_teardown_deletes_kueue_workload(kueue_provider, k8s):
     assert k8s.get_json(K8sResource.WORKLOADS, group_name) is None, "stray-pod teardown must release the Kueue Workload"
 
 
-def test_stray_gang_teardown_strips_kueue_finalizer(kueue_provider, k8s):
-    """A stray gang pod held by Kueue's managed finalizer must be drained, not
-    left terminating. Without stripping the finalizer the pod lingers, Kueue
-    rebuilds the Workload from it, and the TAS reservation leaks."""
+def test_gang_teardown_strips_kueue_finalizer(kueue_provider, k8s):
+    """Tearing down a gang whose pods hold the Kueue pod finalizer removes the
+    finalizer so the pod objects actually disappear.
+
+    The fake honors finalizers: a plain delete leaves a finalizer-held pod
+    parked with a deletionTimestamp. The pods being fully gone after teardown
+    proves the provider stripped the finalizer; without that, Kueue rebuilds
+    the pod-group Workload from the surviving labeled pods and re-holds the
+    quota/TAS reservation.
+    """
     reqs = [
         make_run_req(f"/gang/task/{i}", attempt_id=0, num_tasks=2, coscheduling_group_by="leafgroup") for i in range(2)
     ]
     kueue_provider.reconcile(make_batch(tasks_to_run=reqs))
 
     pods = k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS)
+    assert len(pods) == 2
+    pod_names = [p["metadata"]["name"] for p in pods]
     group_name = pods[0]["metadata"]["labels"][_KUEUE_POD_GROUP_NAME]
-    # Kueue admits the gang: it stamps the managed finalizer on every pod and
-    # creates the backing Workload.
+    # Kueue's webhook stamps its finalizer on every admitted gang pod.
     for pod in pods:
         pod["metadata"]["finalizers"] = [_KUEUE_MANAGED_FINALIZER]
     k8s.seed_resource(K8sResource.WORKLOADS, group_name, {"kind": "Workload", "metadata": {"name": group_name}})
 
-    # Empty desired set: the whole gang is now stray and gets torn down.
+    # Empty desired set: the whole gang is stray.
     kueue_provider.reconcile(make_batch())
 
-    assert k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS) == [], "finalizer-held gang pods must drain"
+    for name in pod_names:
+        assert k8s.get_json(K8sResource.PODS, name) is None, "finalizer-held pod must be fully removed"
     assert k8s.get_json(K8sResource.WORKLOADS, group_name) is None
 
 
-def test_gc_drains_wedged_terminal_gang_pod(kueue_provider, k8s):
-    """GC re-drives a gang pod that wedged Failed under the managed finalizer
-    after a delete request: strip the finalizer, delete it, and re-delete the
-    Workload. The active-pod field selector hides such pods from the stray-pod
-    teardown, so GC is the only path that retries — promptly, not after 1h."""
-    group_name = "gang-wedged-grp"
-    recent = (datetime.now(timezone.utc) - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    pod = {
+def _seed_gang_pod(
+    k8s,
+    name: str,
+    pod_group: str,
+    created: str,
+    *,
+    task_hash: str = "feedfacecafebeef",
+    finalizers: list[str] | None = None,
+    deletion_timestamp: str | None = None,
+) -> None:
+    """Insert a Failed gang pod (Kueue pod-group label) into the fake k8s store."""
+    metadata: dict = {
+        "name": name,
+        "creationTimestamp": created,
+        "labels": {
+            _LABEL_MANAGED: "true",
+            _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+            _LABEL_TASK_HASH: task_hash,
+            _KUEUE_POD_GROUP_NAME: pod_group,
+        },
+    }
+    if finalizers:
+        metadata["finalizers"] = finalizers
+    if deletion_timestamp:
+        metadata["deletionTimestamp"] = deletion_timestamp
+    k8s.seed_resource(K8sResource.PODS, name, {"kind": "Pod", "metadata": metadata, "status": {"phase": "Failed"}})
+
+
+def test_gc_sweeps_finalizer_wedged_gang_pod(provider, k8s):
+    """A Failed gang pod wedged in deletion on the Kueue finalizer is swept by GC
+    (finalizer stripped, pod removed, Workload deleted) regardless of age."""
+    now = datetime.now(timezone.utc)
+    recent_ts = (now - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    group = "wedged-gang-group"
+    _seed_gang_pod(
+        k8s,
+        "wedged-gang-pod",
+        group,
+        recent_ts,
+        finalizers=[_KUEUE_MANAGED_FINALIZER],
+        deletion_timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
+    k8s.seed_resource(K8sResource.WORKLOADS, group, {"kind": "Workload", "metadata": {"name": group}})
+
+    provider._last_gc_time = 0.0
+    provider._maybe_gc_terminal_resources(active_pods=[])
+
+    assert k8s.get_json(K8sResource.PODS, "wedged-gang-pod") is None
+    assert k8s.get_json(K8sResource.WORKLOADS, group) is None
+
+
+def test_gc_sweeps_crashed_gang_pods_on_short_retention(provider, k8s):
+    """A Failed gang pod older than the gang retention (but younger than the 1h
+    plain-pod retention) is swept along with its Workload; a non-gang Failed pod
+    of the same age keeps the 1h debugging window."""
+    now = datetime.now(timezone.utc)
+    age_ts = (now - timedelta(seconds=_GANG_GC_MAX_AGE_SECONDS + 60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    group = "crashed-gang-group"
+    _seed_gang_pod(k8s, "crashed-gang-pod", group, age_ts)
+    k8s.seed_resource(K8sResource.WORKLOADS, group, {"kind": "Workload", "metadata": {"name": group}})
+    _seed_terminal_pod(k8s, "plain-failed-pod", "Failed", "1122334455667788", age_ts)
+
+    provider._gc_terminal_resources(active_pods=[])
+
+    assert k8s.get_json(K8sResource.PODS, "crashed-gang-pod") is None
+    assert k8s.get_json(K8sResource.WORKLOADS, group) is None
+    assert k8s.get_json(K8sResource.PODS, "plain-failed-pod") is not None, "1h retention for plain pods must hold"
+
+
+def test_gc_skips_gang_with_active_sibling(provider, k8s):
+    """A terminal gang pod past the gang retention is NOT swept while a
+    Pending/Running sibling of the same pod group exists: releasing the shared
+    Workload would evict the live siblings. Once the gang has no live members,
+    the next GC pass sweeps it."""
+    now = datetime.now(timezone.utc)
+    age_ts = (now - timedelta(seconds=_GANG_GC_MAX_AGE_SECONDS + 60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    group = "skewed-gang-group"
+    _seed_gang_pod(k8s, "early-failed-gang-pod", group, age_ts, finalizers=[_KUEUE_MANAGED_FINALIZER])
+    k8s.seed_resource(K8sResource.WORKLOADS, group, {"kind": "Workload", "metadata": {"name": group}})
+    running_sibling = {
         "kind": "Pod",
         "metadata": {
-            "name": "iris-wedged-pod",
-            "creationTimestamp": recent,
-            "deletionTimestamp": recent,  # delete already requested, finalizer holds it
-            "finalizers": [_KUEUE_MANAGED_FINALIZER],
-            "labels": {
-                _LABEL_MANAGED: "true",
-                _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
-                _LABEL_TASK_HASH: "deadbeefdeadbeef",
-                _KUEUE_POD_GROUP_NAME: group_name,
-            },
+            "name": "running-gang-pod",
+            "labels": {_LABEL_TASK_HASH: "feedfacecafebeef", _KUEUE_POD_GROUP_NAME: group},
         },
-        "status": {"phase": "Failed"},
+        "status": {"phase": "Running"},
     }
-    k8s.seed_resource(K8sResource.PODS, "iris-wedged-pod", pod)
-    k8s.seed_resource(K8sResource.WORKLOADS, group_name, {"kind": "Workload", "metadata": {"name": group_name}})
 
-    kueue_provider._gc_terminal_resources(active_pods=[])
+    provider._gc_terminal_resources(active_pods=[running_sibling])
 
-    assert k8s.get_json(K8sResource.PODS, "iris-wedged-pod") is None, "wedged gang pod must be drained promptly"
-    assert k8s.get_json(K8sResource.WORKLOADS, group_name) is None, "wedged gang Workload must be re-deleted"
+    assert k8s.get_json(K8sResource.PODS, "early-failed-gang-pod") is not None, "gang with live sibling must be kept"
+    assert k8s.get_json(K8sResource.WORKLOADS, group) is not None, "shared Workload must survive while gang is live"
+
+    provider._gc_terminal_resources(active_pods=[])
+
+    assert k8s.get_json(K8sResource.PODS, "early-failed-gang-pod") is None
+    assert k8s.get_json(K8sResource.WORKLOADS, group) is None

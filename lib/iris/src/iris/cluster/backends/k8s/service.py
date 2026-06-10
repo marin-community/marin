@@ -82,7 +82,7 @@ class K8sService(Protocol):
 
     def delete(self, resource: K8sResource, name: str, *, force: bool = False, wait: bool = True) -> None: ...
 
-    def delete_many(self, resource: K8sResource, names: list[str], *, wait: bool = False) -> None:
+    def delete_many(self, resource: K8sResource, names: list[str], *, force: bool = False, wait: bool = False) -> None:
         """Delete multiple resources by name."""
         ...
 
@@ -332,14 +332,14 @@ class CloudK8sService:
             except ApiException as e:
                 raise KubectlError(f"delete {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
 
-    def delete_many(self, resource: K8sResource, names: list[str], *, wait: bool = False) -> None:
+    def delete_many(self, resource: K8sResource, names: list[str], *, force: bool = False, wait: bool = False) -> None:
         """Delete multiple resources by name."""
         if not names:
             return
-        logger.info("k8s: DELETE_MANY %s count=%d", resource.plural, len(names))
+        logger.info("k8s: DELETE_MANY %s count=%d force=%s", resource.plural, len(names), force)
         with slow_log(logger, f"delete_many {resource.plural} ({len(names)})", threshold_ms=_SLOW_THRESHOLD_MS):
             for name in names:
-                self.delete(resource, name, wait=wait)
+                self.delete(resource, name, force=force, wait=wait)
 
     def delete_by_labels(self, resource: K8sResource, labels: dict[str, str], *, wait: bool = False) -> None:
         """Delete all resources matching the given label selector."""
