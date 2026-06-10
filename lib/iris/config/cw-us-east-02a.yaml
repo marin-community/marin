@@ -44,6 +44,11 @@ kubernetes_provider:
     # lib/iris/scripts/install_kueue.py --with-queues; Iris reconciles the
     # namespaced LocalQueue (cw-use02a-lq) bound to it at controller start.
     cluster_queue: iris-cq
+  # CoreWeave's node health checker runs preemptible (priority -1) GPU
+  # verification pods on idle nodes. Kueue TAS counts them as fixed node usage
+  # and cannot preempt non-Kueue pods, so gangs queue behind every NHC sweep;
+  # Iris evicts them itself when it has gang work.
+  preempt_namespaces: ["cw-hpc-verification"]
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
