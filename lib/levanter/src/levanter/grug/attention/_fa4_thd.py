@@ -40,6 +40,10 @@ _SM90_BACKWARD_NUM_THREADS = 384
 _SM90_BACKWARD_PDS_STAGE = 1
 _SM90_BACKWARD_SDP_SWAP_AB = True
 _SM90_BACKWARD_ATOM_LAYOUT_N_DKV = 2
+_HOPPER_ARCH_FAMILY = 9
+_BLACKWELL_ARCH_FAMILY = 10
+_BLACKWELL_NEXT_ARCH_FAMILY = 11
+_SUPPORTED_ARCH_FAMILIES = (_HOPPER_ARCH_FAMILY, _BLACKWELL_ARCH_FAMILY, _BLACKWELL_NEXT_ARCH_FAMILY)
 
 
 def _sm90_backward_kernel_options() -> dict[str, int | bool]:
@@ -58,12 +62,12 @@ def _import_upstream_fa4_cute() -> _UpstreamFa4CuteModules:
         cute = importlib.import_module("cutlass.cute")
         cjax = importlib.import_module("cutlass.jax")
         cuda = importlib.import_module("cuda.bindings.driver")
-        if arch_family == 9:
+        if arch_family == _HOPPER_ARCH_FAMILY:
             flash_fwd = importlib.import_module("flash_attn.cute.flash_fwd_sm90")
             flash_bwd = importlib.import_module("flash_attn.cute.flash_bwd_sm90")
             flash_fwd_cls = flash_fwd.FlashAttentionForwardSm90
             flash_bwd_cls = flash_bwd.FlashAttentionBackwardSm90
-        elif arch_family in (10, 11):
+        elif arch_family in (_BLACKWELL_ARCH_FAMILY, _BLACKWELL_NEXT_ARCH_FAMILY):
             flash_fwd = importlib.import_module("flash_attn.cute.flash_fwd_sm100")
             flash_bwd = importlib.import_module("flash_attn.cute.flash_bwd_sm100")
             flash_fwd_cls = flash_fwd.FlashAttentionForwardSm100
@@ -152,11 +156,11 @@ def _validate_simple_causal_self_attention(
 def _thd_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
     arch = _gpu_compute_arch()
     arch_family = arch // 10
-    if arch_family not in (9, 10, 11):
+    if arch_family not in _SUPPORTED_ARCH_FAMILIES:
         raise NotImplementedError(f"gpu_fa4_thd_attention currently supports only SM90/SM100/SM110, got SM{arch}.")
     if head_dim != 128:
         raise NotImplementedError(f"gpu_fa4_thd_attention is only wired for head_dim=128, got {head_dim}.")
-    if arch_family == 9:
+    if arch_family == _HOPPER_ARCH_FAMILY:
         base = flash4_cute_kernel_config(head_dim, arch=arch)
         return Flash4CuteKernelConfig(
             forward_tile=base.forward_tile,
@@ -276,7 +280,7 @@ def _upstream_fa4_thd_forward_launcher(
     cute = modules.cute
     cuda = modules.cuda
     cute_dtype = _cutlass_dtype(cutlass, dtype)
-    if modules.arch // 10 == 9:
+    if modules.arch // 10 == _HOPPER_ARCH_FAMILY:
         flash_fwd = modules.FlashAttentionForward(
             cute_dtype,
             head_dim,
@@ -368,7 +372,7 @@ def _upstream_fa4_thd_backward_launcher(
         num_threads=128,
         use_padded_offsets=False,
     )
-    if modules.arch // 10 == 9:
+    if modules.arch // 10 == _HOPPER_ARCH_FAMILY:
         backward = modules.FlashAttentionBackward(
             cute_dtype,
             head_dim,
@@ -511,7 +515,7 @@ def _upstream_fa4_thd_backward_launcher(
 
 
 def _sm90_postprocess_tile_m(arch: int, tile_m: int) -> int:
-    if arch // 10 == 9:
+    if arch // 10 == _HOPPER_ARCH_FAMILY:
         return 64
     return tile_m
 

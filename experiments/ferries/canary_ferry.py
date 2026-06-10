@@ -67,10 +67,11 @@ CANARY_TRAINER = GrugTrainerConfig(
     ema_beta=None,
     log_every=1,
 )
+_GPU_FA4_THD_ATTENTION: GrugAttentionImplementation = "gpu_fa4_thd"
 _GPU_ATTENTION_IMPLEMENTATIONS: tuple[GrugAttentionImplementation, ...] = (
     "reference",
     "gpu_fa4_cute",
-    "gpu_fa4_thd",
+    _GPU_FA4_THD_ATTENTION,
 )
 
 # Compute budget passed to the heuristic when CANARY_HIDDEN_DIM scales the model.
@@ -153,7 +154,7 @@ def _build_step_from_env() -> ExecutorStep:
             # The THD backend only handles full causal windows. Setting the model
             # window to 2x seq_len makes Grug's short-window mask a full window.
             sliding_window=(
-                model.max_seq_len * 2 if attention_implementation == "gpu_fa4_thd" else model.sliding_window
+                model.max_seq_len * 2 if attention_implementation == _GPU_FA4_THD_ATTENTION else model.sliding_window
             ),
         )
 
@@ -161,7 +162,7 @@ def _build_step_from_env() -> ExecutorStep:
         target_tokens = env_int("CANARY_TARGET_TOKENS", batch_size * model.max_seq_len * 50)
 
         data = slimpajama_6b_data()
-        if attention_implementation == "gpu_fa4_thd":
+        if attention_implementation == _GPU_FA4_THD_ATTENTION:
             data = dataclasses.replace(
                 data,
                 components={
