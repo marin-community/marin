@@ -141,17 +141,17 @@ PROBES: tuple[Probe, ...] = (
             ),
             Anchor(
                 "_find_coscheduled_assignments",
-                "lib/iris/src/iris/cluster/controller/scheduler.py",
+                "lib/iris/src/iris/cluster/controller/scheduling/scheduler.py",
                 "Scheduler routine that finds an all-or-nothing assignment for a coscheduled group.",
             ),
             Anchor(
                 "JobRequirements.is_coscheduled",
-                "lib/iris/src/iris/cluster/controller/scheduler.py",
+                "lib/iris/src/iris/cluster/controller/scheduling/scheduler.py",
                 "Flag the scheduler keys gang admission on.",
             ),
             Anchor(
                 "K8sTaskProvider",
-                "lib/iris/src/iris/cluster/providers/k8s/tasks.py",
+                "lib/iris/src/iris/cluster/backends/k8s/tasks.py",
                 "The direct/k8s task provider that launches the placed tasks.",
             ),
         ),
@@ -212,24 +212,24 @@ PROBES: tuple[Probe, ...] = (
         doc_bundle=("iris/architecture.md",),
         anchors=(
             Anchor(
-                "_run_provider_loop",
+                "_run_polling_loop",
                 "lib/iris/src/iris/cluster/controller/controller.py",
-                "Periodic poll loop driving reconciliation on the heartbeat interval.",
+                "Periodic poll loop; calls _reconcile_tick each tick on the heartbeat interval.",
             ),
             Anchor(
-                "_sync_all_execution_units",
+                "_reconcile_tick",
                 "lib/iris/src/iris/cluster/controller/controller.py",
-                "Reconciliation step: polls provider/worker state and applies the result.",
+                "Reconciliation step: snapshot -> reconcile RPCs -> apply (build_reconcile_plans).",
             ),
             Anchor(
-                "_reap_stale_workers",
+                "_run_ping_loop",
                 "lib/iris/src/iris/cluster/controller/controller.py",
-                "Fails workers whose last heartbeat exceeds the staleness threshold.",
+                "Reaps stale workers via WorkerHealthTracker.workers_over_threshold -> _terminate_workers.",
             ),
             Anchor(
                 "WorkerStatus",
                 "lib/iris/src/iris/cluster/types.py",
-                "Worker state model derived from polling (worker_id, running task ids).",
+                "Worker state model derived from polling (worker_id, running_task_ids).",
             ),
         ),
     ),
@@ -339,7 +339,7 @@ PROBES: tuple[Probe, ...] = (
         anchors=(
             Anchor(
                 "ExecutorStep",
-                "lib/marin/src/marin/execution/executor.py",
+                "lib/marin/src/marin/execution/types.py",
                 "Frozen step (name, fn, config); name + versioned config fields determine identity.",
             ),
             Anchor(
@@ -354,7 +354,7 @@ PROBES: tuple[Probe, ...] = (
             ),
             Anchor(
                 "InputName",
-                "lib/marin/src/marin/execution/executor.py",
+                "lib/marin/src/marin/execution/types.py",
                 "Wires an upstream step's output path into a downstream step's config.",
             ),
         ),
@@ -364,50 +364,55 @@ PROBES: tuple[Probe, ...] = (
         subproject=Subproject.MARIN,
         intent=Intent.USE,
         prompt=_prompt(
-            "Write a complete, runnable Python script that runs Marin's fuzzy "
-            "document deduplication over a set of Parquet files. Take two CLI "
-            "arguments (input glob pattern and output path) via argparse, use "
-            "Marin's built-in fuzzy dedup entry point with the correct default "
-            "MinHash parameters, pass arguments as keyword arguments, provide the "
-            'required max_parallelism, and include `if __name__ == "__main__"`. '
+            "Write a complete, runnable Python script that runs Marin's two-stage "
+            "fuzzy document deduplication pipeline. Stage 1: call the MinHash "
+            "attribute step with the correct default MinHash parameters. Stage 2: "
+            "feed its output into the fuzzy-duplicates step, providing the required "
+            "max_parallelism. Pass all arguments as keyword arguments, wire stage 1's "
+            'output into stage 2, and include `if __name__ == "__main__"` with argparse. '
             "Output the script contents only."
         ),
         doc_bundle=("marin/ops.md",),
         anchors=(
             Anchor(
-                "dedup_fuzzy_document",
-                "lib/marin/src/marin/processing/classification/deduplication/fuzzy.py",
-                "Entry point for fuzzy document dedup; all-keyword-only signature.",
+                "compute_minhash_attrs",
+                "lib/marin/src/marin/processing/classification/deduplication/fuzzy_minhash.py",
+                "Stage 1: read NormalizedData parquet, run dupekit MinHash+LSH, write MinHashAttrData; keyword-only.",
             ),
             Anchor(
-                "fuzzy_minhash_num_perms",
-                "lib/marin/src/marin/processing/classification/deduplication/fuzzy.py",
-                "MinHash permutations; default 286 (must be 286 or omitted).",
+                "num_perms",
+                "lib/marin/src/marin/processing/classification/deduplication/fuzzy_minhash.py",
+                "MinHash permutations on compute_minhash_attrs; default 286.",
             ),
             Anchor(
-                "fuzzy_minhash_num_bands",
-                "lib/marin/src/marin/processing/classification/deduplication/fuzzy.py",
-                "LSH bands; default 26 (must be 26 or omitted).",
+                "num_bands",
+                "lib/marin/src/marin/processing/classification/deduplication/fuzzy_minhash.py",
+                "LSH bands on compute_minhash_attrs; default 26.",
             ),
             Anchor(
-                "fuzzy_minhash_ngram_size",
-                "lib/marin/src/marin/processing/classification/deduplication/fuzzy.py",
-                "Shingle n-gram size; default 5 (must be 5 or omitted).",
+                "ngram_size",
+                "lib/marin/src/marin/processing/classification/deduplication/fuzzy_minhash.py",
+                "Shingle n-gram size on compute_minhash_attrs; default 5.",
             ),
             Anchor(
-                "fuzzy_minhash_seed",
-                "lib/marin/src/marin/processing/classification/deduplication/fuzzy.py",
-                "MinHash seed; default 42 (must be 42 or omitted).",
+                "seed",
+                "lib/marin/src/marin/processing/classification/deduplication/fuzzy_minhash.py",
+                "MinHash seed on compute_minhash_attrs; default 42.",
+            ),
+            Anchor(
+                "compute_fuzzy_dups_attrs",
+                "lib/marin/src/marin/processing/classification/deduplication/fuzzy_dups.py",
+                "Stage 2: consume MinHashAttrData inputs, run connected components, emit dup markers.",
             ),
             Anchor(
                 "max_parallelism",
-                "lib/marin/src/marin/processing/classification/deduplication/fuzzy.py",
-                "REQUIRED keyword argument (no default) on dedup_fuzzy_document.",
+                "lib/marin/src/marin/processing/classification/deduplication/fuzzy_dups.py",
+                "REQUIRED keyword arg (no default) on compute_fuzzy_dups_attrs.",
             ),
         ),
         forbidden=(
-            "MinHashLSH",
             "datasketch",
+            "dedup_fuzzy_document",
         ),
     ),
     Probe(
@@ -442,7 +447,7 @@ PROBES: tuple[Probe, ...] = (
             Anchor(
                 "initialize_jax_distributed",
                 "lib/levanter/src/levanter/distributed.py",
-                "DistributedConfig flag that toggles whether jax.distributed.initialize runs.",
+                "DistributedConfig bool field (default True); when False, initialize() skips jax.distributed init.",
             ),
         ),
     ),
