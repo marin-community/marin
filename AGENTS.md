@@ -6,8 +6,13 @@ Start with the shared practices below. Consult subproject manuals for directory-
 - `lib/marin/AGENTS.md` — Marin (pipeline framework)
 - `lib/iris/AGENTS.md` — Iris (job orchestration)
 
-For API reference, read package docs on demand: `@docs/agent/packages/<package>.md`.
-Run `uv run --script scripts/agent_docs/main.py --stats` to list all available packages.
+For agent-oriented reference, the autodoc pipeline generates a budgeted doc tree
+under `docs/agent/` (read on demand). Start at `docs/agent/MAP.md` (the monorepo
+index), then per sub-project read `docs/agent/<project>/overview.md` to orient,
+`<project>/ops.md` for how to *use* it, or `<project>/architecture.md` for how to
+*understand and change* it. Each doc is capped at ~1000 tokens. Regenerate via the
+`autodoc` skill; `uv run --script scripts/agent_docs/main.py --stats` lists the
+discovered packages.
 
 ## Workflow Playbooks
 

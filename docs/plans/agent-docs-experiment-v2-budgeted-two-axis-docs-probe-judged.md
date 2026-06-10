@@ -266,6 +266,30 @@ harness; `agent-generated` label; summary of what's ready vs gated.
   (10 doc generations + 200 coder/judge calls). Harness is built and
   smoke-tested in this session; running the full sweep is gated on explicit
   approval. *Default: do not auto-run the sweep.*
-- **OQ3 — probe balance.** History is iris/finelog-heavy, so P7–P10
-  (marin/levanter/rigging) are included for coverage rather than frequency.
-  Confirm the 10 are the right mix or swap in others from the candidate list.
+- **OQ3 — probe balance.** History is iris/finelog-heavy, so the final mix is
+  4 iris, 3 finelog, 2 marin, 1 levanter (no rigging — the `maybe_proxy`/resolver
+  concept from history turned out to live in finelog's client, not rigging, so
+  P10 was retagged finelog with `maybe_proxy`/`iris://` listed as hallucination
+  markers). Confirm this mix or swap in others from the candidate list.
+- **OQ4 — branch must contain `lib/finelog/` before the sweep.** finelog landed
+  on `main` *after* this branch forked, so P5/P6/P10 (3 of 10 probes) reference
+  source/docs that do not exist in this worktree. The generator will produce no
+  finelog docs and those probes auto-fail until the branch is rebased on / merged
+  with `main`. Do that before running the generator or the sweep. *Default:
+  rebase on main before T4's emit loop runs.*
+
+## Built in this session vs remaining
+
+**Built & committed:** T1 (deletions), the loom plan, T2 (`probes.py`), T3
+(`eval.py` + `claude_cli.disable_tools`), the T4 prompt layer
+(`OVERVIEW`/`OPS`/`ARCHITECTURE`/`CODER`/`JUDGE` templates + `tokens.py`), T6
+(AGENTS.md + autodoc skill). All lint-clean; validated structurally (no API
+spend): `eval.py --list`, prompt-format integrity, missing-doc handling.
+
+**Remaining (cost-gated / deferred):** T4's generator *emit loop* — wire
+`main.py`/`generate_package.py`/`generate_index.py` to write the
+`<project>/{overview,ops,architecture}.md` + budgeted `MAP.md` taxonomy using the
+new prompts + `tokens.py` budget enforcement (the old per-package emit path is
+left intact until then). T5 — the 10-round iteration runner + `experiments.md`
+changelog. Running the generator and the sweep both spend API budget (OQ2) and
+need finelog present (OQ4), so they are left for an approved follow-up.
