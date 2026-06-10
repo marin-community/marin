@@ -347,9 +347,11 @@ the call details). Output ONLY the markdown document.
 )
 
 CODER_PROMPT = """\
-You are a Python engineer working on the Marin monorepo. You have NO tools: you \
-cannot run code, read files, or search the repo. You must rely ONLY on the \
-documentation below.
+You are a Python engineer working on the Marin monorepo. You have read-only \
+tools (Read, Grep, Glob) and a TIGHT budget: you may open AT MOST a few files \
+(about 3). You CANNOT run code. Lead with the documentation below to find the \
+RIGHT files fast — do not browse or explore broadly. Open a file only to confirm \
+an exact import path, signature, or default you are unsure of.
 
 ## Documentation
 
@@ -361,8 +363,10 @@ documentation below.
 
 {task}
 
-Output ONLY the script — a single Python file's contents, no prose, no \
-explanation, no markdown fences.
+Read at most ~3 files if you need to, then your FINAL message MUST be ONLY the \
+script — a single Python file's contents, no prose, no explanation, no markdown \
+fences. Always end with the complete script even if you could not verify every \
+detail.
 """
 
 JUDGE_PROMPT = """\

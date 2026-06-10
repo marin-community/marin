@@ -181,6 +181,37 @@ _AGENTIC_SYSTEM_PROMPT = (
 )
 
 
+def run_agent_json(
+    prompt: str,
+    *,
+    model: str,
+    allowed_tools: list[str],
+    cwd: str,
+    system_prompt: str,
+    max_budget_usd: float,
+    timeout_seconds: int = 1200,
+) -> dict[str, Any]:
+    """Run claude as a tool-using agent in ``cwd``; return the parsed JSON envelope.
+
+    The agent gets only ``allowed_tools`` (e.g. read-only Read/Grep/Glob) and is
+    bounded by ``max_budget_usd`` — the CLI halts it after a turn once the spend
+    would exceed, which is how we cap exploration (there is no --max-turns flag).
+    The envelope has at least ``result`` (final text), ``usage``, and
+    ``total_cost_usd``.
+    """
+    result = _run_claude(
+        prompt,
+        model=model,
+        system_prompt=system_prompt,
+        max_budget_usd=max_budget_usd,
+        timeout_seconds=timeout_seconds,
+        output_format="json",
+        allowed_tools=allowed_tools,
+        cwd=cwd,
+    )
+    return json.loads(result.stdout)
+
+
 def generate_with_tools(
     prompt: str,
     *,
@@ -198,17 +229,15 @@ def generate_with_tools(
     Returns ``(doc_text, cost_usd)``; cost is the CLI's API-equivalent figure,
     used to enforce the experiment's spend cap.
     """
-    result = _run_claude(
+    data = run_agent_json(
         prompt,
         model=model,
+        allowed_tools=allowed_tools,
+        cwd=cwd,
         system_prompt=system_prompt,
         max_budget_usd=max_budget_usd,
         timeout_seconds=timeout_seconds,
-        output_format="json",
-        allowed_tools=allowed_tools,
-        cwd=cwd,
     )
-    data = json.loads(result.stdout)
     return strip_markdown_fences(data.get("result", "")), float(data.get("total_cost_usd", 0.0))
 
 

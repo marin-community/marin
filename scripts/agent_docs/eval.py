@@ -8,10 +8,13 @@
 """Score a generated agent-doc set against the 10-probe suite.
 
 For each probe: assemble the doc bundle (the doc(s) a well-organized agent should
-consult, plus MAP.md), have a weak coder model write a script with NO execution
-privileges (docs only), then have a judge model review the script against the
-probe's source-verified anchors plus a holistic quality rubric. The coder cannot
-explore the repo, so the score measures DOC quality, not model resourcefulness.
+consult, plus MAP.md), have a coder model write a script, then have a judge model
+review the script against the probe's source-verified anchors plus a holistic
+quality rubric. The coder is a realistic agent: it leads with the docs but may
+open a FEW files (read-only Read/Grep/Glob, NO execution) under a tight spend
+cap. So the score measures how well the docs ROUTE a capable, budget-limited
+agent to the right source — good docs point it at the right files fast; bad docs
+make it waste its budget or read the wrong things.
 
 Generalizes the former single-probe validation.py; P8 carries the fuzzy-dedup
 regression anchors verbatim.
@@ -34,7 +37,7 @@ import click
 # Add scripts/ to path so agent_docs package is importable as a standalone script.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from agent_docs.claude_cli import generate_json, strip_markdown_fences
+from agent_docs.claude_cli import generate_json, run_agent_json, strip_markdown_fences
 from agent_docs.probes import PROBES, Probe
 from agent_docs.prompts import CODER_PROMPT, JUDGE_PROMPT
 
@@ -46,7 +49,19 @@ MAP_FILENAME = "MAP.md"
 # gate — it was flat (~1.3) across rounds and did not discriminate.
 RUBRIC_PASS_THRESHOLD = 0.8
 
-CODER_SYSTEM_PROMPT = "You are writing Python scripts for the Marin monorepo. Output only code."
+# The coder is a realistic, budget-limited agent: read-only tools (no execution)
+# and a tight spend cap that, with no --max-turns flag available, bounds it to a
+# few file reads before it must write the script. Run from the repo root so its
+# reads resolve.
+CODER_ALLOWED_TOOLS = ["Read", "Grep", "Glob"]
+CODER_MAX_BUDGET_USD = 0.30
+REPO_ROOT = Path(__file__).parent.parent.parent
+
+CODER_SYSTEM_PROMPT = (
+    "You are a Python engineer on the Marin monorepo with read-only tools and a tight budget. "
+    "Lead with the provided docs; open at most a few files only to confirm details. "
+    "Your final message must be only the script."
+)
 JUDGE_SYSTEM_PROMPT = "You are a senior engineer reviewing code. Output only the requested JSON."
 
 PROBES_BY_ID = {p.id: p for p in PROBES}
@@ -120,13 +135,20 @@ def build_bundle(probe: Probe, docs_dir: Path) -> str:
 
 
 def run_coder(bundle: str, probe: Probe, model: str) -> CoderResult:
-    """Ask the tool-disabled coder to write the probe's script from the bundle."""
+    """Ask the budget-limited coder to write the probe's script.
+
+    The coder leads with the doc bundle but may open a few files (read-only)
+    under CODER_MAX_BUDGET_USD; it cannot execute anything. This measures how
+    well the docs route a capable agent to the right source within a tight budget.
+    """
     prompt = CODER_PROMPT.format(bundle=bundle, task=probe.prompt)
-    data = generate_json(
+    data = run_agent_json(
         prompt,
         model=model,
+        allowed_tools=CODER_ALLOWED_TOOLS,
+        cwd=str(REPO_ROOT),
         system_prompt=CODER_SYSTEM_PROMPT,
-        disable_tools=True,
+        max_budget_usd=CODER_MAX_BUDGET_USD,
     )
     script = strip_markdown_fences(data.get("result", ""))
     usage = data.get("usage", {})
@@ -298,7 +320,7 @@ def print_probe_list() -> None:
 @click.option("--docs-dir", default="docs/agent", type=click.Path(), help="Root of the doc taxonomy to evaluate.")
 @click.option("--probe", "probe_ids", multiple=True, help="Run only these probe ids (repeatable). Default: all.")
 @click.option("--list", "list_probes", is_flag=True, help="List the 10 probes and exit (no API calls).")
-@click.option("--gen-model", default="haiku", help="Coder model (writes scripts, no execution).")
+@click.option("--gen-model", default="sonnet", help="Coder model (writes scripts; reads a few files, no execution).")
 @click.option("--review-model", default="sonnet", help="Judge model (reviews scripts).")
 @click.option("--output-dir", type=click.Path(), default=None, help="Where artifacts go (required unless --list).")
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging.")

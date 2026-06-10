@@ -106,7 +106,7 @@ def _print_round(row: dict, prev: dict | None) -> None:
 )
 @click.option("--gen-model", default="sonnet", help="Doc generation model.")
 @click.option("--review-model", default="sonnet", help="Judge model.")
-@click.option("--coder-model", default="haiku", help="Coder model (writes scripts, no tools).")
+@click.option("--coder-model", default="sonnet", help="Coder model (writes scripts; reads a few files, no execution).")
 @click.option("--gen-budget-usd", default=10.0, type=float, help="Agentic generation spend cap (API-equivalent).")
 @click.option("--expdir", type=click.Path(), default=str(DEFAULT_EXPDIR), help="Experiment root dir.")
 @click.option("-v", "--verbose", is_flag=True)
