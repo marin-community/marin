@@ -205,7 +205,7 @@ class LocalCluster:
         )
 
         # The backend owns the autoscaler; the controller drives it via
-        # manage_capacity and persists the returned state each tick.
+        # backend.autoscale and persists the returned state each tick.
         provider = RpcTaskBackend(stub_factory=RpcWorkerStubFactory())
         provider.attach_autoscaler(self._autoscaler)
 

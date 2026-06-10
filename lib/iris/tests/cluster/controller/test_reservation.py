@@ -519,7 +519,7 @@ def test_cleanup_removes_finished_job_claims(ctrl):
 
     # Kill the job to mark it as finished.
     with ctrl._db.transaction() as cur:
-        ops.job.cancel(cur, job_id=jid, reason="test", endpoints=ctrl._endpoints, health=ctrl._health)
+        ops.job.cancel(cur, job_id=jid, reason="test", endpoints=ctrl._endpoints)
 
     job = _query_job(ctrl, jid)
     assert is_job_finished(job.state)
@@ -1786,9 +1786,7 @@ def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already
     # skips them. Only the explicit _cancel_child_jobs call at the end of
     # _on_job_cancelled can clean up the holder.
     with state._db.transaction() as cur:
-        ops.job.cancel(
-            cur, job_id=parent_job_id, reason="manual cancel", endpoints=state._endpoints, health=state._health
-        )
+        ops.job.cancel(cur, job_id=parent_job_id, reason="manual cancel", endpoints=state._endpoints)
 
     holder_task = _query_task(state, holder_task.task_id)
     assert holder_task is not None

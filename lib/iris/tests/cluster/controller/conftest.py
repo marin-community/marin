@@ -36,23 +36,19 @@ from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.backend import (
-    BackendReconcileInput,
-    BackendReconcileResult,
-    CapacityResult,
-    PlacementOwner,
+    BackendCapability,
+    BackendResult,
     ProviderUnsupportedError,
     ScheduleInput,
-    ScheduleResult,
     TaskTarget,
-    WorkersFailedResult,
     run_scheduling_decision,
 )
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.reads import SchedulableWorker
+from iris.cluster.controller.reads import ControlSnapshot, SchedulableWorker
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.reconcile.worker import ReconcileResult
+from iris.cluster.controller.reconcile.worker import ReconcileInputs, ReconcileResult, build_reconcile_plans
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
@@ -63,6 +59,7 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
+from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId, is_job_finished
 from iris.rpc import config_pb2, controller_pb2, job_pb2
@@ -94,11 +91,10 @@ def check_is_job_finished(j) -> bool:
 
 
 class FakeProvider:
-    """Minimal IRIS-placement TaskBackend for tests exercising transitions, not RPCs."""
+    """Minimal worker-daemon TaskBackend for tests exercising transitions, not RPCs."""
 
     name = "worker"
-    placement = PlacementOwner.IRIS_CONTROLLER
-    manages_capacity = False
+    capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
     autoscaler = None
 
     def __init__(self) -> None:
@@ -107,14 +103,29 @@ class FakeProvider:
         # scheduler/preemption/reservation tests to exercise placement.
         self._scheduler = Scheduler()
 
-    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
+    def schedule(self, snapshot: ScheduleInput) -> BackendResult:
         return run_scheduling_decision(self._scheduler, snapshot)
 
-    def manage_capacity(self, snapshot) -> CapacityResult:
-        return CapacityResult()
+    def reconcile(self, snapshot: ControlSnapshot) -> BackendResult:
+        # Mirror RpcTaskBackend: build plans from the snapshot, report every
+        # reached worker healthy with no observations (these tests drive task
+        # transitions directly via the transition driver, not through RPCs).
+        rows_by_worker: dict[WorkerId, list] = {wid: [] for wid in snapshot.worker_addresses}
+        for row in snapshot.reconcile_rows:
+            rows_by_worker[row.worker_id].append(row)
+        plans = build_reconcile_plans(
+            ReconcileInputs(
+                job_specs=snapshot.job_specs,
+                worker_ids=list(snapshot.worker_addresses),
+                rows_by_worker=rows_by_worker,
+            )
+        )
+        worker_results = [(p, ReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans]
+        events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
+        return BackendResult(worker_results=worker_results, health_events=events)
 
-    def on_workers_failed(self, worker_ids) -> WorkersFailedResult:
-        return WorkersFailedResult()
+    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> BackendResult:
+        return BackendResult()
 
     def attach_autoscaler(self, autoscaler) -> None:
         self.autoscaler = autoscaler
@@ -126,14 +137,8 @@ class FakeProvider:
     ) -> job_pb2.GetProcessStatusResponse:
         raise ProviderUnsupportedError("fake")
 
-    def on_worker_failed(self, worker_id: WorkerId, address: str | None) -> None:
-        pass
-
     def set_log_sink(self, *args, **kwargs) -> None:
         pass
-
-    def capacity(self):
-        return None
 
     def profile_task(
         self,
@@ -142,18 +147,6 @@ class FakeProvider:
         timeout_ms: int,
     ) -> job_pb2.ProfileTaskResponse:
         raise ProviderUnsupportedError("fake")
-
-    # --- Split heartbeat surface (no-op stubs so split-mode tests can run) ---
-
-    def ping_workers(self, workers):
-        return []
-
-    def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
-        return BackendReconcileResult(
-            worker_results=[
-                ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in batch.plans
-            ]
-        )
 
     def close(self) -> None:
         pass
@@ -175,7 +168,7 @@ class MockController:
         self.last_scheduling_context = None
         self.autoscaler = None
         self.provider = Mock()
-        self.placement = PlacementOwner.IRIS_CONTROLLER
+        self.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
         self.run_template_cache: RunTemplateCache = RunTemplateCache(256)
 
 

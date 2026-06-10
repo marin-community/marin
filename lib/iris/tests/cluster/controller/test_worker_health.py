@@ -15,7 +15,11 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import healthy_active_workers_with_attributes
 from iris.cluster.controller.schema import workers_table
-from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.controller.worker_health import (
+    WorkerHealthEvent,
+    WorkerHealthEventKind,
+    WorkerHealthTracker,
+)
 from iris.cluster.types import WorkerId
 from rigging.timing import Timestamp
 from sqlalchemy import insert, select
@@ -26,83 +30,96 @@ def tracker() -> WorkerHealthTracker:
     return WorkerHealthTracker(ping_threshold=10, build_threshold=10)
 
 
+def _unreachable(tracker: WorkerHealthTracker, wid: WorkerId, *, now_ms: int = 0) -> list[WorkerId]:
+    return tracker.apply([WorkerHealthEvent(wid, WorkerHealthEventKind.UNREACHABLE)], now_ms=now_ms)
+
+
+def _reached(tracker: WorkerHealthTracker, wid: WorkerId, *, now_ms: int = 0) -> list[WorkerId]:
+    return tracker.apply([WorkerHealthEvent(wid, WorkerHealthEventKind.REACHED)], now_ms=now_ms)
+
+
+def _build_failed(tracker: WorkerHealthTracker, wid: WorkerId, *, now_ms: int = 0) -> list[WorkerId]:
+    return tracker.apply([WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED)], now_ms=now_ms)
+
+
 def test_ping_failure_threshold_boundary(tracker: WorkerHealthTracker) -> None:
     """9 consecutive failures are not enough; 10th trips; a healthy ping resets and requires 10 more."""
     wid = WorkerId("w-1")
+    over: list[WorkerId] = []
     for _ in range(9):
-        tracker.ping(wid, healthy=False)
-    assert tracker.workers_over_threshold() == []
-    tracker.ping(wid, healthy=False)
-    assert tracker.workers_over_threshold() == [wid]
+        over = _unreachable(tracker, wid)
+    assert over == []
+    assert _unreachable(tracker, wid) == [wid]
 
     tracker.forget(wid)
     for _ in range(9):
-        tracker.ping(wid, healthy=False)
-    tracker.ping(wid, healthy=True)  # reset
+        _unreachable(tracker, wid)
+    _reached(tracker, wid)  # reset consecutive failures
     for _ in range(9):
-        tracker.ping(wid, healthy=False)
-    assert tracker.workers_over_threshold() == []
-    tracker.ping(wid, healthy=False)
-    assert tracker.workers_over_threshold() == [wid]
+        over = _unreachable(tracker, wid)
+    assert over == []
+    assert _unreachable(tracker, wid) == [wid]
 
 
 def test_build_failure_threshold_boundary(tracker: WorkerHealthTracker) -> None:
-    """9 build failures are not enough; 10th trips; healthy pings do not reset the counter."""
+    """9 build failures are not enough; 10th trips; a healthy ping does not reset the counter."""
     wid = WorkerId("w-1")
+    over: list[WorkerId] = []
     for _ in range(9):
-        tracker.build_failed(wid)
-    assert tracker.workers_over_threshold() == []
-    tracker.build_failed(wid)
-    assert tracker.workers_over_threshold() == [wid]
+        over = _build_failed(tracker, wid)
+    assert over == []
+    assert _build_failed(tracker, wid) == [wid]
 
-    tracker.ping(wid, healthy=True)
-    assert tracker.workers_over_threshold() == [wid]  # not reset by healthy ping
+    # A REACHED event resets consecutive ping failures but NOT build failures.
+    assert _reached(tracker, wid) == [wid]
 
 
 def test_ping_and_build_failures_are_independent(tracker: WorkerHealthTracker) -> None:
     """A worker can trip via either path; tripping one does not affect the other counter."""
     wid = WorkerId("w-1")
     for _ in range(5):
-        tracker.ping(wid, healthy=False)
+        _unreachable(tracker, wid)
     for _ in range(5):
-        tracker.build_failed(wid)
-    assert tracker.workers_over_threshold() == []
-    tracker.ping(wid, healthy=False)  # 6 ping failures, still < 10
-    assert tracker.workers_over_threshold() == []
+        _build_failed(tracker, wid)
+    assert tracker.apply([], now_ms=0) == []
+    # 6 ping failures, still < 10; build still at 5.
+    assert _unreachable(tracker, wid) == []
 
 
 def test_forget_removes_worker(tracker: WorkerHealthTracker) -> None:
     wid = WorkerId("w-1")
+    over: list[WorkerId] = []
     for _ in range(10):
-        tracker.ping(wid, healthy=False)
-    assert tracker.workers_over_threshold()
+        over = _unreachable(tracker, wid)
+    assert over == [wid]
     tracker.forget(wid)
-    assert tracker.workers_over_threshold() == []
+    assert tracker.apply([], now_ms=0) == []
 
 
 def test_forget_many_drops_only_listed_workers(tracker: WorkerHealthTracker) -> None:
     a, b, c = WorkerId("a"), WorkerId("b"), WorkerId("c")
     for wid in (a, b, c):
         for _ in range(10):
-            tracker.ping(wid, healthy=False)
+            _unreachable(tracker, wid)
     tracker.forget_many([a, c])
-    assert tracker.workers_over_threshold() == [b]
+    assert tracker.apply([], now_ms=0) == [b]
 
 
 def test_per_worker_counters_are_independent(tracker: WorkerHealthTracker) -> None:
     a, b = WorkerId("a"), WorkerId("b")
+    over: list[WorkerId] = []
     for _ in range(10):
-        tracker.ping(a, healthy=False)
-    assert tracker.workers_over_threshold() == [a]
-    assert b not in tracker.workers_over_threshold()
+        over = _unreachable(tracker, a)
+    assert over == [a]
+    assert b not in over
 
 
 def test_snapshot_reports_both_counters(tracker: WorkerHealthTracker) -> None:
     wid = WorkerId("w-1")
     for _ in range(3):
-        tracker.ping(wid, healthy=False)
+        _unreachable(tracker, wid)
     for _ in range(2):
-        tracker.build_failed(wid)
+        _build_failed(tracker, wid)
     assert tracker.snapshot() == {wid: (3, 2)}
 
 

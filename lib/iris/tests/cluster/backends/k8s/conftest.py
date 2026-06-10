@@ -14,7 +14,8 @@ from iris.cluster.backends.k8s.tasks import (
     PodConfig,
 )
 from iris.cluster.backends.k8s.types import K8sResource
-from iris.cluster.controller.backend import BackendReconcileInput
+from iris.cluster.controller.reads import ControlSnapshot
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.rpc import job_pb2
 
@@ -112,8 +113,12 @@ def make_kueue_provider(k8s, *, local_queue: str = "iris-lq", **kwargs) -> K8sTa
 def make_batch(
     tasks_to_run=None,
     running_tasks=None,
-) -> BackendReconcileInput:
-    return BackendReconcileInput(
+) -> ControlSnapshot:
+    return ControlSnapshot(
+        worker_addresses={},
+        reconcile_rows=[],
+        timeout_rows=[],
+        health=WorkerHealthTracker(),
         running_tasks=running_tasks or [],
         tasks_to_run=tasks_to_run or [],
     )

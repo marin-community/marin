@@ -258,8 +258,8 @@ class Controller:
     Args:
         config: Controller configuration
         provider: TaskBackend for communicating with the execution backend. When
-            it does not manage its own capacity (``manages_capacity`` is False),
-            the controller drives its ``manage_capacity`` in a background loop.
+            it declares the ``IRIS_AUTOSCALER`` capability, the controller drives
+            its ``autoscale`` in a background loop and persists the returned state.
     """
 
     def __init__(
@@ -925,7 +925,7 @@ class Controller:
         return self._last_scheduling_context
 
     # =========================================================================
-    # Worker lifecycle RPC dispatch (Reconcile / Ping)
+    # Worker reconcile pass (snapshot → backend.reconcile → apply + health)
     # =========================================================================
 
     def _build_run_templates(

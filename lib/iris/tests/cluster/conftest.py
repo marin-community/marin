@@ -15,11 +15,12 @@ from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller import ops
-from iris.cluster.controller.backend import PlacementOwner
+from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.ops.task import Assignment, apply_dispatch_updates
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
@@ -122,7 +123,7 @@ class _HarnessController:
         self.last_scheduling_context = None
         self.autoscaler = None
         self.provider: object = Mock()
-        self.placement = PlacementOwner.IRIS_CONTROLLER
+        self.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
         self.run_template_cache: RunTemplateCache = new_run_template_cache()
 
 
@@ -219,12 +220,19 @@ class ServiceTestHarness:
         assert self.k8s_provider is not None, "sync_k8s requires K8s harness"
         with self.db.transaction() as cur:
             batch = dispatch.drain_for_dispatch(cur, cache=self.state._run_template_cache)
-        result = self.k8s_provider.reconcile(batch)
+        snapshot = ControlSnapshot(
+            worker_addresses={},
+            reconcile_rows=[],
+            timeout_rows=[],
+            health=self.state._health,
+            tasks_to_run=batch.tasks_to_run,
+            running_tasks=batch.running_tasks,
+        )
+        result = self.k8s_provider.reconcile(snapshot)
         with self.db.transaction() as cur:
             apply_dispatch_updates(
                 cur,
                 result.updates,
-                health=self.state._health,
                 endpoints=self.state._endpoints,
                 now=Timestamp.now(),
             )
@@ -437,7 +445,7 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     )
 
     ctrl = _HarnessController()
-    ctrl.placement = PlacementOwner.TASK_BACKEND
+    ctrl.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
     ctrl.provider = k8s_provider
 
     service = ControllerServiceImpl(
@@ -468,7 +476,7 @@ def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     state = ControllerTestState(db, health=health, endpoints=endpoints, worker_attrs=worker_attrs)
 
     ctrl = _HarnessController()
-    ctrl.placement = PlacementOwner.IRIS_CONTROLLER
+    ctrl.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
 
     service = ControllerServiceImpl(
         controller=ctrl,
