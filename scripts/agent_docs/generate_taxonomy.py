@@ -79,6 +79,9 @@ def discover_subprojects(packages: dict[str, PackageInfo]) -> dict[str, list[str
 
 _FIELD_RE = re.compile(r"^\s+[A-Za-z_]\w*\s*:\s*.+$")
 MAX_CLASS_FIELDS = 30
+# Per-class cap on private methods surfaced in the architecture digest. The
+# output budget forces selection anyway; this just bounds digest bloat.
+MAX_PRIVATE_METHODS = 25
 
 
 def _class_fields(cls: ClassInfo) -> list[str]:
@@ -117,36 +120,57 @@ def _class_fields(cls: ClassInfo) -> list[str]:
     return fields
 
 
-def _format_class(cls: ClassInfo) -> str:
-    """One compact digest entry for a class: name, ctor/fields, public methods."""
+def _format_class(cls: ClassInfo, *, include_internals: bool = False) -> str:
+    """One compact digest entry for a class: name, ctor/fields, public methods.
+
+    With ``include_internals`` (the architecture axis), also list private methods
+    — the internal seams where behavior is actually implemented and edited —
+    capped per class and marked ``internal``. This lets the generator cite the
+    real edit site (e.g. ``Controller._reconcile_tick``) in "where to change
+    things" instead of stopping at the public entry point.
+    """
     ctor = next((m for m in cls.methods if m.name == "__init__"), None)
     head = f"- class `{cls.qualified_name}{ctor.signature if ctor else '()'}`  ({cls.file_path}:{cls.line_number})"
     lines = [head]
     if ctor is None:
         lines += [f"    - field `{f}`" for f in _class_fields(cls)]
     lines += [f"    - `{m.name}{m.signature}`" for m in cls.methods if m.is_public]
+    if include_internals:
+        private = [m for m in cls.methods if not m.is_public and m.name != "__init__"]
+        lines += [f"    - internal `{m.name}{m.signature}`" for m in private[:MAX_PRIVATE_METHODS]]
     return "\n".join(lines)
 
 
-def build_digest(packages: dict[str, PackageInfo], package_names: list[str]) -> tuple[str, bool]:
+def build_digest(
+    packages: dict[str, PackageInfo], package_names: list[str], *, include_internals: bool = False
+) -> tuple[str, bool]:
     """Build a signatures-only digest for a sub-project's packages.
 
     Returns (digest, truncated). The digest lists, per package, its public
     function signatures and classes (constructor + public methods) with
     ``file:line`` anchors — no source bodies. Capped at MAX_DIGEST_CHARS.
+
+    With ``include_internals`` (architecture axis), also surface private
+    module-level functions and private methods on public classes — the internal
+    seams an architecture doc must name to answer "where would I change this".
     """
     parts: list[str] = []
     for name in package_names:
         pkg = packages[name]
         funcs = [f for f in pkg.functions if f.is_public]
         classes = [c for c in pkg.classes if c.is_public]
-        if not funcs and not classes:
+        internal_funcs = (
+            [f for f in pkg.functions if not f.is_public and not f.name.startswith("__")] if include_internals else []
+        )
+        if not funcs and not classes and not internal_funcs:
             continue
         section = [f"### package `{name}` ({pkg.language})"]
         for f in funcs:
             section.append(f"- `{f.qualified_name}{f.signature}`  ({f.file_path}:{f.line_number})")
+        for f in internal_funcs:
+            section.append(f"- internal `{f.qualified_name}{f.signature}`  ({f.file_path}:{f.line_number})")
         for c in classes:
-            section.append(_format_class(c))
+            section.append(_format_class(c, include_internals=include_internals))
         parts.append("\n".join(section))
 
     digest = "\n\n".join(parts)
@@ -211,11 +235,13 @@ def generate_taxonomy(
             continue
 
         digest, truncated = build_digest(packages, names)
+        arch_digest, _ = build_digest(packages, names, include_internals=True)
         logger.info(
-            "%s: %d packages, digest %d chars%s",
+            "%s: %d packages, digest %d chars (arch %d chars)%s",
             project,
             len(names),
             len(digest),
+            len(arch_digest),
             " (truncated)" if truncated else "",
         )
         if dry_run:
@@ -225,7 +251,10 @@ def generate_taxonomy(
         project_dir.mkdir(parents=True, exist_ok=True)
         for axis, template in AXES:
             t0 = time.monotonic()
-            doc = _generate_axis(axis, template, project, digest, model)
+            # The architecture axis answers "where would I change this", so it
+            # gets the internals-inclusive digest; ops/overview stay public-only.
+            axis_digest = arch_digest if axis == "architecture" else digest
+            doc = _generate_axis(axis, template, project, axis_digest, model)
             (project_dir / f"{axis}.md").write_text(doc.rstrip() + "\n")
             logger.info("  %s/%s.md: %d tokens (%.1fs)", project, axis, count_tokens(doc), time.monotonic() - t0)
             if axis == "overview":

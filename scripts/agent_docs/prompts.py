@@ -222,14 +222,21 @@ the model.
 State the invariant and, in one phrase, where it is enforced.
 
 ## Where to change things
-The load-bearing section. For 3-6 likely changes, give a file-path-level \
-pointer: "To change X, edit `path/to/file.py` (function/class `name`)." These \
-must be real paths and symbols from the sources.
+The load-bearing section — the one agents rely on most. For 5-8 likely changes, \
+give a precise pointer that NAMES THE EXACT SYMBOL to edit: "To change X, edit \
+`path/to/file.py` — `Class.method` / `function`." Name the specific function, \
+method, or class at the real edit site, INCLUDING internal seams (items marked \
+`internal` in the digest) when that is where the behavior actually lives — the \
+public entry point is rarely the edit site (e.g. a reconcile loop, a scheduler's \
+assignment search, a cache invalidation). Prefer naming the concrete symbol over \
+describing the area.
 
 Rules:
 - Total output MUST be under ~1000 tokens (~4000 characters).
 - The "Where to change things" pointers MUST cite real `path:symbol` from the \
 sources; do not invent.
+- Items marked `internal` in the digest are REAL private symbols — cite them \
+freely as edit sites; they are the whole point of this doc.
 - Use ONLY names that appear VERBATIM in the digest; never invent symbols, \
 parameters, or fields. Omit a detail rather than guess.
 - Prefer the mental model over an API dump — `ops.md` carries the call details.
