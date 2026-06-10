@@ -16,6 +16,17 @@ Two-phase architecture for large packages:
 - FILE_SUMMARY_PROMPT: per-file structured summary (phase 1)
 - PACKAGE_PROMPT: aggregation from file summaries OR direct from source (phase 2)
 - MERGE_PROMPT: merging partial docs (fallback for very large aggregations)
+
+Budgeted two-axis taxonomy (experiment v2):
+- OVERVIEW_PROMPT: per sub-project 30-second orientation + intent router.
+- OPS_PROMPT: "how to USE project X" — entry points and the happy-path call.
+- ARCHITECTURE_PROMPT: "how to UNDERSTAND and CHANGE project X" — mental model
+  plus file-level "where would I change this" pointers.
+Each is budgeted to ~1000 tokens.
+
+Eval harness prompts:
+- CODER_PROMPT: the weak, tool-disabled coder writing a script from a doc bundle.
+- JUDGE_PROMPT: the judge scoring that script against embedded ground truth.
 """
 
 FILE_SUMMARY_PROMPT = """\
@@ -108,6 +119,183 @@ Rules:
 ## {input_section_header}
 
 {sources}
+"""
+
+OVERVIEW_PROMPT = """\
+You are generating the 30-second orientation card for sub-project \
+`{project_name}` in the Marin monorepo. An AI coding agent reads this FIRST to \
+decide which deeper doc to open next. It is a router, not a reference.
+
+{input_description}
+
+Produce a markdown document with EXACTLY these sections:
+
+## What it is
+1-2 sentences: what `{project_name}` is and the one problem it solves.
+
+## Files that matter
+The 3-5 files or modules an agent must know to be productive here, one line \
+each: `path/to/file.py` — what lives there. Pick load-bearing entry points, \
+not every file.
+
+## Where to go next
+Two lines that route by intent:
+- USE / "how do I run or call it?" -> `{project_name}/ops.md`
+- UNDERSTAND or CHANGE / "how does it work, where do I edit?" -> \
+`{project_name}/architecture.md`
+
+Rules:
+- Total output MUST be under ~1000 tokens (~4000 characters).
+- No code blocks, no API dumps — this only orients and routes.
+- Name real files from the sources; do not invent paths.
+
+## Sources:
+
+{sources}
+"""
+
+OPS_PROMPT = """\
+You are generating the "how to USE `{project_name}`" doc for an AI coding agent \
+on the Marin monorepo. It answers "how do I run/call this?" — entry points, the \
+happy-path call, required vs default parameters, and where artifacts land.
+
+{input_description}
+
+Produce a markdown document with EXACTLY these sections:
+
+## Entry points
+The 1-3 functions/CLIs/classes a user actually calls, one line each with the \
+full import path. Lead with the single most common one.
+
+## Happy path
+ONE fenced Python (or shell) code block showing the minimal correct call from \
+import to result. Show full import paths from the top-level package and the \
+complete call with real argument names.
+
+```python
+from {project_name}.module import entry_point
+
+entry_point(
+    required_arg=...,        # REQUIRED — no default
+    tuned_default=286,       # default shown so the agent keeps it
+)
+```
+
+## Parameters that matter
+Bullet list. For each: name, whether it is REQUIRED or has a default, the \
+default VALUE, and one phrase on why that default was chosen. Weak models drop \
+defaults unless the value and its rationale are stated explicitly.
+
+## Where artifacts land
+1-3 lines: output paths / return values — does the call return data, a path, or \
+write files? Name the path-construction convention if there is one.
+
+Rules:
+- Total output MUST be under ~1000 tokens (~4000 characters).
+- Code blocks MUST show full import paths from the top-level package.
+- Every required parameter and every non-obvious default MUST appear with its \
+exact value. Do not invent parameters.
+
+## Sources:
+
+{sources}
+"""
+
+ARCHITECTURE_PROMPT = """\
+You are generating the "how to UNDERSTAND and CHANGE `{project_name}`" doc for \
+an AI coding agent on the Marin monorepo. It answers "how does this work, and \
+where would I make a given change?" — the mental model plus file-level pointers.
+
+{input_description}
+
+Produce a markdown document with EXACTLY these sections:
+
+## Mental model
+1-2 prose paragraphs: the components, how data flows between them, and WHY the \
+design is the way it is. Prose, not bullets — the point is to convey reasoning \
+that signatures alone cannot. Source code is always available; give the model \
+the model.
+
+## Key invariants
+2-5 bullets: properties the code relies on that an editor must not break \
+(determinism, ordering, all-or-nothing admission, state-machine transitions). \
+State the invariant and, in one phrase, where it is enforced.
+
+## Where to change things
+The load-bearing section. For 3-6 likely changes, give a file-path-level \
+pointer: "To change X, edit `path/to/file.py` (function/class `name`)." These \
+must be real paths and symbols from the sources.
+
+Rules:
+- Total output MUST be under ~1000 tokens (~4000 characters).
+- The "Where to change things" pointers MUST cite real `path:symbol` from the \
+sources; do not invent.
+- Prefer the mental model over an API dump — `ops.md` carries the call details.
+
+## Sources:
+
+{sources}
+"""
+
+CODER_PROMPT = """\
+You are a Python engineer working on the Marin monorepo. You have NO tools: you \
+cannot run code, read files, or search the repo. You must rely ONLY on the \
+documentation below.
+
+## Documentation
+
+{bundle}
+
+---
+
+## Task
+
+{task}
+
+Output ONLY the script — a single Python file's contents, no prose, no \
+explanation, no markdown fences.
+"""
+
+JUDGE_PROMPT = """\
+You are a senior engineer reviewing a script written by a weaker model that had \
+ONLY documentation to work from. Judge the script against the ground truth \
+below. You are reviewing the TEXT of the script — do not execute it.
+
+## Task the script was meant to accomplish
+
+{task}
+
+## Ground truth (authoritative — do NOT guess about APIs)
+
+These are the real symbols and file paths a correct answer must use. If the \
+script uses an API NOT listed here and not obviously standard-library, treat it \
+as a likely hallucination.
+
+{anchors}
+
+{forbidden_block}
+## How to score each anchor
+
+For each anchor SYMBOL, score 1 if the script uses it correctly (right name, \
+right import path where applicable, right required params / defaults), else 0. \
+A symbol the task did not require the script to call directly scores 1 if the \
+script is consistent with it and 0 only if the script contradicts it.
+
+## Output
+
+Output ONLY a JSON object, no other text, with EXACTLY these keys:
+- "anchors": object mapping each anchor symbol (exact string) to 0 or 1.
+- "hallucinated": array of strings — APIs/params the script invented or that \
+appear in the forbidden list. Empty array if none.
+- "quality": integer 1-5 — holistic: would this actually work, is it idiomatic, \
+does it use the right entry points? (5 = ship it; 1 = wrong approach).
+- "notes": one-paragraph justification of the quality score.
+
+## Script to review
+
+```python
+{script}
+```
 """
 
 MAP_PROMPT = """\

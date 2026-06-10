@@ -24,10 +24,15 @@ def _run_claude(
     max_budget_usd: float,
     timeout_seconds: int,
     output_format: str = "text",
+    disable_tools: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run the claude CLI with retries on transient failures.
 
     Returns the successful CompletedProcess, or raises on persistent failure.
+
+    When ``disable_tools`` is true, the model is given an empty allowed-tools
+    set: no bash, no file reads, no grep. The eval harness uses this for the
+    coder so its output is attributable to the documentation alone.
     """
     cmd = [
         "claude",
@@ -41,6 +46,9 @@ def _run_claude(
         "--system-prompt",
         system_prompt,
     ]
+    if disable_tools:
+        # Empty allowed-tools value -> the model gets no tools at all.
+        cmd += ["--allowed-tools", ""]
 
     for attempt in range(1, MAX_RETRIES + 2):
         t0 = time.monotonic()
@@ -112,11 +120,16 @@ def generate_json(
     system_prompt: str = "You are a precise documentation generator. Output only what is requested.",
     max_budget_usd: float = 0.50,
     timeout_seconds: int = 600,
+    disable_tools: bool = False,
 ) -> dict[str, Any]:
     """Call claude CLI with --output-format json and return the parsed response.
 
     The returned dict has at minimum a "result" key with the model's text,
     plus "total_cost_usd" and "usage" metadata from the CLI.
+
+    Pass ``disable_tools=True`` to run the model with no tools (no bash, file
+    reads, or grep) — used by the eval coder so its output depends only on the
+    documentation in the prompt.
     """
     result = _run_claude(
         prompt,
@@ -125,6 +138,7 @@ def generate_json(
         max_budget_usd=max_budget_usd,
         timeout_seconds=timeout_seconds,
         output_format="json",
+        disable_tools=disable_tools,
     )
     return json.loads(result.stdout)
 
