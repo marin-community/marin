@@ -160,11 +160,18 @@ class ControllerConfig:
     """Reconcile cadence — the sole reconcile + liveness channel. The polling
     thread wakes every ``poll_interval`` (or sooner if ``_polling_wake`` is set)
     and runs ``_reconcile_tick`` against every active worker. The reconcile RPC
-    outcome is the only liveness signal, so each unreachable pass counts toward
-    the failure threshold at this cadence: a worker is detected dead after
-    roughly ``poll_interval * RECONCILE failure threshold``. The Reconcile RPC is
-    also the sole channel that dispatches new ASSIGNED rows and observes worker
+    outcome is the only liveness signal; ``worker_unreachable_grace`` sets how
+    long a worker may stay unreachable before teardown. The Reconcile RPC is also
+    the sole channel that dispatches new ASSIGNED rows and observes worker
     state."""
+
+    worker_unreachable_grace: Duration = field(default_factory=lambda: Duration.from_seconds(50.0))
+    """How long a worker may be continuously unreachable (or self-report
+    unhealthy) before the controller fails and tears it down. Realized as a count
+    of consecutive failed reconcile passes — ``round(grace / poll_interval)`` —
+    so detection latency stays fixed regardless of the reconcile cadence. ~50s
+    tolerates brief network blips without reaping a multi-VM slice; tests shorten
+    it for fast deterministic teardown."""
 
     max_tasks_per_job_per_cycle: int = 4
     """Maximum tasks from a single non-coscheduled job to consider per scheduling
@@ -295,7 +302,13 @@ class Controller:
             self._db = db
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
-        self._health = WorkerHealthTracker()
+        # Detection latency is fixed in wall-clock by worker_unreachable_grace and
+        # converted to a consecutive-failure count for the reconcile cadence, so it
+        # is unaffected by poll_interval.
+        reconcile_failure_threshold = max(
+            1, round(config.worker_unreachable_grace.to_seconds() / config.poll_interval.to_seconds())
+        )
+        self._health = WorkerHealthTracker(reconcile_failure_threshold=reconcile_failure_threshold)
         self._endpoints = EndpointsProjection(self._db)
         self._worker_attrs = WorkerAttrsProjection(self._db)
         writes.validate()
@@ -996,7 +1009,13 @@ class Controller:
         scan_timeouts = self._timeout_rate_limiter.should_run()
         snapshot = self._build_reconcile_snapshot(scan_timeouts)
         timeout_decisions = self._timeout_decisions(snapshot.timeout_rows, now.epoch_ms())
-        if not (snapshot.worker_addresses or snapshot.tasks_to_run or snapshot.running_tasks or timeout_decisions):
+        # A cluster-view backend always reconciles: its reconcile does cluster-wide
+        # GC (stray-pod deletion, terminal-resource cleanup, node refresh) that must
+        # run even on an idle DB. Worker-daemon backends skip a tick with no work.
+        has_work = bool(
+            snapshot.worker_addresses or snapshot.tasks_to_run or snapshot.running_tasks or timeout_decisions
+        )
+        if not self._backend_drains_dispatch and not has_work:
             return
 
         result = self._task_backend.reconcile(snapshot)
@@ -1061,6 +1080,13 @@ class Controller:
             worker_attrs=self._worker_attrs,
         )
         removed_ids = [wid for wid, _ in failure_result.removed_workers]
+        if not removed_ids:
+            # A concurrent reaper already failed every candidate (or they had no
+            # address). Nothing was removed, so skip backend.autoscale entirely:
+            # calling it here with no dead workers would run a full provisioning
+            # cycle on the polling thread (probe_health + update_slice_activity)
+            # racing the autoscaler thread.
+            return
         auto = self._task_backend.autoscale(snapshot, [], dead_workers=removed_ids)
         if auto.autoscaler_state is not None:
             persist_autoscaler_state(self._db, auto.autoscaler_state)

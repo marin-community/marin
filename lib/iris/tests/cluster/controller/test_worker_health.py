@@ -27,7 +27,7 @@ from sqlalchemy import insert, select
 
 @pytest.fixture
 def tracker() -> WorkerHealthTracker:
-    return WorkerHealthTracker(ping_threshold=10, build_threshold=10)
+    return WorkerHealthTracker(reconcile_failure_threshold=10, build_threshold=10)
 
 
 def _unreachable(tracker: WorkerHealthTracker, wid: WorkerId, *, now_ms: int = 0) -> list[WorkerId]:

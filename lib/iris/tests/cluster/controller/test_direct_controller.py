@@ -6,10 +6,12 @@
 from finelog.rpc import logging_pb2
 from iris.cluster.controller import ops
 from iris.cluster.controller.backend import (
+    AutoscaleResult,
     BackendCapability,
-    BackendResult,
     ProviderUnsupportedError,
+    ReconcileResult,
     ScheduleInput,
+    ScheduleResult,
     TaskTarget,
 )
 from iris.cluster.controller.ops.task import apply_dispatch_updates
@@ -39,18 +41,18 @@ class FakeDirectProvider:
 
     def __init__(self):
         self.sync_calls: list[ControlSnapshot] = []
-        self.sync_result = BackendResult()
+        self.sync_result = ReconcileResult()
         self.closed = False
 
-    def reconcile(self, snapshot: ControlSnapshot) -> BackendResult:
+    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
         self.sync_calls.append(snapshot)
         return self.sync_result
 
-    def schedule(self, snapshot: ScheduleInput) -> BackendResult:
-        return BackendResult()
+    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
+        return ScheduleResult()
 
-    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> BackendResult:
-        return BackendResult()
+    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
+        return AutoscaleResult()
 
     def get_process_status(self, target: TaskTarget, request):
         raise ProviderUnsupportedError("fake k8s")

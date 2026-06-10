@@ -1377,7 +1377,7 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, embedde
 def _make_k8s_dashboard_client(state, scheduler, tmp_path, embedded_log_server, log_client):
     """Build a TestClient wired to a real K8sTaskProvider backed by InMemoryK8sService."""
     k8s = InMemoryK8sService(namespace="iris")
-    provider = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest")
+    provider = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest", cluster_scan_interval=0.0)
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
     controller_mock.provider = provider

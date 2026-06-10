@@ -68,13 +68,6 @@ message Worker {
 
   // --- Worker lifecycle / task RPCs ---
 
-  message PingRequest {}
-  message PingResponse {
-    reserved 1;  // was: WorkerResourceSnapshot resource_snapshot (now in iris.worker stats)
-    bool healthy = 2;
-    string health_error = 3;
-  }
-
   // ============================================================
   // RECONCILE RPC (controller -> worker, unary)
   // ============================================================
@@ -167,9 +160,9 @@ service WorkerService {
   rpc ExecInContainer(Worker.ExecInContainerRequest) returns (Worker.ExecInContainerResponse);
 
   // --- Worker lifecycle / task RPCs (controller -> worker) ---
-  rpc Ping(Worker.PingRequest) returns (Worker.PingResponse);
-  // Reconcile RPC: controller -> worker, unary. One request carries the
-  // controller's complete desired attempt set for this worker; one response
-  // carries the complete observed set plus a WorkerHealth block.
+  // Reconcile RPC: controller -> worker, unary. The sole controller->worker
+  // channel and the worker's keep-alive. One request carries the controller's
+  // complete desired attempt set for this worker; one response carries the
+  // complete observed set plus a WorkerHealth block (the worker's self-health).
   rpc Reconcile(Worker.ReconcileRequest) returns (Worker.ReconcileResponse);
 }

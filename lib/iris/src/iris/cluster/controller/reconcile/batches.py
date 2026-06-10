@@ -162,7 +162,7 @@ class ReconcileState:
 
     def reconcile(
         self,
-        plan_results: list[tuple[worker.WorkerReconcilePlan, worker.ReconcileResult]],
+        plan_results: list[tuple[worker.WorkerReconcilePlan, worker.WorkerReconcileResult]],
         now: Timestamp,
     ) -> ControllerEffects:
         """Apply many workers' reconcile outcomes against the shared overlay.
@@ -381,7 +381,7 @@ class ReconcileState:
     def _reconcile_updates_for_plan(
         self,
         plan: worker.WorkerReconcilePlan,
-        result: worker.ReconcileResult,
+        result: worker.WorkerReconcileResult,
     ) -> list[TaskUpdate]:
         """Derive the task updates one worker's reconcile result contributes."""
         worker_id = plan.worker_id

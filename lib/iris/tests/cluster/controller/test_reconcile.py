@@ -8,7 +8,7 @@ Three layers, exercised in order:
 1. **Pure compute** — ``build_reconcile_plans`` builds one ``ReconcileRequest``
    proto per worker from a ``ReconcileInputs`` snapshot. No DB.
 2. **Wire & dispatch** — ``RpcTaskBackend.reconcile`` fans out via a
-   fake stub factory and synthesizes ``ReconcileResult.observations``.
+   fake stub factory and synthesizes ``WorkerReconcileResult.observations``.
 3. **Apply + e2e** — ``apply_reconcile`` against real SQLite DB state, plus a
    handful of end-to-end convergence ticks driven through
    ``Controller._reconcile_tick``.
@@ -23,9 +23,11 @@ import pytest
 from iris.cluster.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.controller import ops, writes
 from iris.cluster.controller.backend import (
+    AutoscaleResult,
     BackendCapability,
-    BackendResult,
+    ReconcileResult,
     ScheduleInput,
+    ScheduleResult,
     plans_from_snapshot,
     run_scheduling_decision,
 )
@@ -36,9 +38,9 @@ from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
-    ReconcileResult,
     ReconcileRow,
     WorkerReconcilePlan,
+    WorkerReconcileResult,
     build_reconcile_plans,
 )
 from iris.cluster.controller.reconcile.worker import (
@@ -47,13 +49,12 @@ from iris.cluster.controller.reconcile.worker import (
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.controller.worker_health import (
-    PING_FAILURE_THRESHOLD,
     WorkerHealthEvent,
     WorkerHealthEventKind,
 )
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2, worker_pb2
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -671,7 +672,7 @@ def _apply_observations(
             if obs.attempt_uid
         ]
         plan = _make_plan(worker_id, desired=desired)
-    result = ReconcileResult(worker_id=WorkerId(worker_id), observations=observations, error=None)
+    result = WorkerReconcileResult(worker_id=WorkerId(worker_id), observations=observations, error=None)
     with state._db.transaction() as cur:
         return apply_reconcile(
             cur,
@@ -687,7 +688,7 @@ def _apply_failure(
     plan: WorkerReconcilePlan,
     error: str,
 ):
-    result = ReconcileResult(worker_id=WorkerId(worker_id), observations=[], error=error)
+    result = WorkerReconcileResult(worker_id=WorkerId(worker_id), observations=[], error=error)
     with state._db.transaction() as cur:
         return apply_reconcile(
             cur,
@@ -1079,7 +1080,7 @@ class _ScriptedProvider:
     )
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
 
-    def schedule(self, snapshot: ScheduleInput) -> BackendResult:
+    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
         return run_scheduling_decision(self._scheduler, snapshot)
 
     def get_process_status(self, *_args, **_kwargs):
@@ -1094,19 +1095,19 @@ class _ScriptedProvider:
     def profile_task(self, *_args, **_kwargs):
         raise NotImplementedError
 
-    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> BackendResult:
-        return BackendResult()
+    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
+        return AutoscaleResult()
 
-    def reconcile(self, snapshot: ControlSnapshot) -> BackendResult:
+    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
         plans = plans_from_snapshot(snapshot)
         self.calls.append((plans, dict(snapshot.worker_addresses)))
         tick = len(self.calls) - 1
         responder = self.script[tick] if tick < len(self.script) else (lambda plan: [])
         worker_results = [
-            (p, ReconcileResult(worker_id=p.worker_id, observations=responder(p), error=None)) for p in plans
+            (p, WorkerReconcileResult(worker_id=p.worker_id, observations=responder(p), error=None)) for p in plans
         ]
         events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
-        return BackendResult(worker_results=worker_results, health_events=events)
+        return ReconcileResult(worker_results=worker_results, health_events=events)
 
     def close(self):
         pass
@@ -1222,7 +1223,8 @@ class _UnreachableProvider:
     reconcile pass rather than any separate ping channel.
     """
 
-    unreachable: set[str]
+    unreachable: set[str] = field(default_factory=set)
+    unhealthy: set[str] = field(default_factory=set)
     siblings: dict[str, list[str]] = field(default_factory=dict)
     autoscale_calls: list[list[WorkerId]] = field(default_factory=list)
     name: str = "worker"
@@ -1231,27 +1233,44 @@ class _UnreachableProvider:
     )
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
 
-    def schedule(self, snapshot: ScheduleInput) -> BackendResult:
+    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
         return run_scheduling_decision(self._scheduler, snapshot)
 
-    def reconcile(self, snapshot: ControlSnapshot) -> BackendResult:
+    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
         plans = plans_from_snapshot(snapshot)
-        worker_results: list[tuple[WorkerReconcilePlan, ReconcileResult]] = []
+        worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = []
         events: list[WorkerHealthEvent] = []
         for plan in plans:
-            down = str(plan.worker_id) in self.unreachable
-            error = "rpc unreachable" if down else None
-            worker_results.append((plan, ReconcileResult(worker_id=plan.worker_id, observations=[], error=error)))
-            kind = WorkerHealthEventKind.UNREACHABLE if down else WorkerHealthEventKind.REACHED
-            events.append(WorkerHealthEvent(plan.worker_id, kind))
-        return BackendResult(worker_results=worker_results, health_events=events)
+            wid = str(plan.worker_id)
+            if wid in self.unreachable:
+                # RPC failed outright: error set, no observations.
+                worker_results.append(
+                    (plan, WorkerReconcileResult(worker_id=plan.worker_id, observations=[], error="rpc unreachable"))
+                )
+                events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
+            elif wid in self.unhealthy:
+                # RPC succeeded but the worker self-reported unhealthy. Mirror
+                # RpcTaskBackend: error=None + self_healthy=False ⇒ UNREACHABLE.
+                worker_results.append(
+                    (
+                        plan,
+                        WorkerReconcileResult(worker_id=plan.worker_id, observations=[], error=None, self_healthy=False),
+                    )
+                )
+                events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
+            else:
+                worker_results.append(
+                    (plan, WorkerReconcileResult(worker_id=plan.worker_id, observations=[], error=None))
+                )
+                events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
+        return ReconcileResult(worker_results=worker_results, health_events=events)
 
-    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> BackendResult:
+    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
         self.autoscale_calls.append(list(dead_workers))
         removed: list[WorkerId] = list(dead_workers)
         for dead in dead_workers:
             removed.extend(WorkerId(sib) for sib in self.siblings.get(str(dead), []))
-        return BackendResult(removed_workers=removed)
+        return AutoscaleResult(removed_workers=removed)
 
     def attach_autoscaler(self, autoscaler) -> None:
         pass
@@ -1269,17 +1288,33 @@ class _UnreachableProvider:
         pass
 
 
-def test_reconcile_failure_tears_down_worker_without_ping_loop(make_controller):
-    """A worker whose reconcile RPCs keep failing is failed and torn down by the
-    reconcile pass alone — no ping loop, no separate liveness channel.
+# The controller derives the consecutive-failure threshold from
+# round(worker_unreachable_grace / poll_interval). With grace=4s and the default
+# 1s poll, a worker is torn down on the 4th consecutive failed reconcile pass.
+_THRESHOLD = 4
+_SHORT_GRACE = Duration.from_seconds(4)
 
-    Detection is the reconcile tick folding UNREACHABLE health events through the
-    single ``WorkerHealthTracker.apply`` site; once ``PING_FAILURE_THRESHOLD``
-    consecutive failures accrue, the controller fails the worker, drives
+
+@pytest.mark.parametrize(
+    "provider_kwargs",
+    [
+        pytest.param({"unreachable": {_W1}}, id="rpc_unreachable"),
+        pytest.param({"unhealthy": {_W1}}, id="responded_but_unhealthy"),
+    ],
+)
+def test_reconcile_failure_tears_down_worker_without_ping_loop(make_controller, provider_kwargs):
+    """A worker the backend can't keep alive is torn down by the reconcile pass
+    alone — no ping loop, no separate liveness channel.
+
+    Two failure modes fold to the same UNREACHABLE signal: the reconcile RPC
+    fails outright (``rpc_unreachable``), or it succeeds but the worker
+    self-reports unhealthy — e.g. failed disk (``responded_but_unhealthy``,
+    ``error=None`` + ``self_healthy=False``). In both, once the derived threshold
+    of consecutive failures accrues, the controller fails the worker, drives
     ``backend.autoscale(dead_workers=...)`` to reap the slice, and forgets it.
     """
-    provider = _UnreachableProvider(unreachable={_W1})
-    ctrl = make_controller(provider=provider)
+    provider = _UnreachableProvider(**provider_kwargs)
+    ctrl = make_controller(provider=provider, worker_unreachable_grace=_SHORT_GRACE)
     state = ControllerTestState(
         ctrl._db,
         health=ctrl._health,
@@ -1291,10 +1326,10 @@ def test_reconcile_failure_tears_down_worker_without_ping_loop(make_controller):
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
 
     # One failure short of the threshold: still present, still tracked, no teardown.
-    for _ in range(PING_FAILURE_THRESHOLD - 1):
+    for _ in range(_THRESHOLD - 1):
         ctrl._reconcile_tick()
     assert query_worker(state, wid) is not None
-    assert ctrl._health.liveness(wid).consecutive_failures == PING_FAILURE_THRESHOLD - 1
+    assert ctrl._health.liveness(wid).consecutive_failures == _THRESHOLD - 1
     assert provider.autoscale_calls == []
 
     # The threshold-crossing tick fails and tears the worker down.
@@ -1312,7 +1347,7 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     whole slice, even though the siblings were reachable every tick.
     """
     provider = _UnreachableProvider(unreachable={_W1}, siblings={_W1: [_W2]})
-    ctrl = make_controller(provider=provider)
+    ctrl = make_controller(provider=provider, worker_unreachable_grace=_SHORT_GRACE)
     state = ControllerTestState(
         ctrl._db,
         health=ctrl._health,
@@ -1324,7 +1359,7 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     dead = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
     sibling = register_worker(state, _W2, f"{_W2}:8080", make_worker_metadata())
 
-    for _ in range(PING_FAILURE_THRESHOLD):
+    for _ in range(_THRESHOLD):
         ctrl._reconcile_tick()
 
     assert provider.autoscale_calls == [[dead]]
@@ -1436,7 +1471,7 @@ def _run_plan(worker_id: str, task_id: JobName, attempt_id: int, attempt_uid: st
 def _apply_batch(
     state: ControllerTestState,
     plans: dict[WorkerId, WorkerReconcilePlan],
-    results: list[ReconcileResult],
+    results: list[WorkerReconcileResult],
 ):
     """Apply a multi-worker reconcile batch through the production verb.
 
@@ -1470,10 +1505,10 @@ def test_coscheduled_running_repoll_does_not_revive_after_sibling_requeue():
         }
         # Process A (the FAILED trigger) FIRST, then B's RUNNING re-poll.
         results = [
-            ReconcileResult(
+            WorkerReconcileResult(
                 worker_id=WorkerId(_W1), observations=[_obs(pair.u0, job_pb2.TASK_STATE_FAILED)], error=None
             ),
-            ReconcileResult(
+            WorkerReconcileResult(
                 worker_id=WorkerId(_W2), observations=[_obs(pair.u1, job_pb2.TASK_STATE_RUNNING)], error=None
             ),
         ]
@@ -1512,10 +1547,10 @@ def test_coscheduled_rpc_failure_does_not_split_slice():
         # W0's WORKER_FAILED requeues sibling t1 to PENDING in the overlay; W1's
         # RPC failure then runs while t1's raw snapshot still reads ASSIGNED.
         results = [
-            ReconcileResult(
+            WorkerReconcileResult(
                 worker_id=WorkerId(_W1), observations=[_obs(pair.u0, job_pb2.TASK_STATE_WORKER_FAILED)], error=None
             ),
-            ReconcileResult(worker_id=WorkerId(_W2), observations=[], error="rpc boom"),
+            WorkerReconcileResult(worker_id=WorkerId(_W2), observations=[], error="rpc boom"),
         ]
         _apply_batch(state, plans, results)
 
@@ -1545,10 +1580,10 @@ def test_reconcile_batch_order_independent_coscheduled_failure(trigger_first):
                 WorkerId(_W1): _run_plan(_W1, pair.t0, pair.a0, pair.u0),
                 WorkerId(_W2): _run_plan(_W2, pair.t1, pair.a1, pair.u1),
             }
-            trigger = ReconcileResult(
+            trigger = WorkerReconcileResult(
                 worker_id=WorkerId(_W1), observations=[_obs(pair.u0, job_pb2.TASK_STATE_FAILED)], error=None
             )
-            repoll = ReconcileResult(
+            repoll = WorkerReconcileResult(
                 worker_id=WorkerId(_W2), observations=[_obs(pair.u1, job_pb2.TASK_STATE_RUNNING)], error=None
             )
             results = [trigger, repoll] if trigger_first_order else [repoll, trigger]

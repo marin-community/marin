@@ -573,8 +573,8 @@ class Worker:
         """Wait for RPCs from controller. Returns when the controller-contact timeout expires.
 
         This method blocks in a loop, checking the time since the last
-        controller RPC (Ping / Reconcile). When the timeout expires it
-        returns, triggering a reset and re-registration.
+        controller Reconcile RPC. When the timeout expires it returns,
+        triggering a reset and re-registration.
         """
         self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
         logger.info("Serving (waiting for controller RPCs)")
@@ -817,31 +817,11 @@ class Worker:
         snapshot.total_process_count = total_processes
         return snapshot
 
-    def handle_ping(self, request: worker_pb2.Worker.PingRequest) -> worker_pb2.Worker.PingResponse:
-        """Liveness check. Resets heartbeat deadline; emits host metrics to stats."""
-        if rule := chaos("worker.ping"):
-            if rule.delay_seconds > 0:
-                time.sleep(rule.delay_seconds)
-            if rule.error:
-                raise rule.error
-            if not rule.delay_seconds:
-                raise RuntimeError("chaos: worker.ping")
-        self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
-        resource_snapshot = self._collect_resource_metrics()
-        health = check_worker_health(disk_path=str(self._cache_dir))
-        if not health.healthy:
-            logger.warning("Worker health check failed: %s", health.error)
-        self._emit_worker_stat(resource_snapshot)
-        return worker_pb2.Worker.PingResponse(
-            healthy=health.healthy,
-            health_error=health.error,
-        )
-
     def _emit_worker_stat(self, snapshot: job_pb2.WorkerResourceSnapshot) -> None:
         """Append one heartbeat row to the ``iris.worker`` stats namespace.
 
         Non-blocking: ``Table.write`` queues for the bg flush thread, so the
-        ping path never waits on the stats service. Schema-validation
+        reconcile path never waits on the stats service. Schema-validation
         ``TypeError`` bugs from the row encoder deliberately propagate.
         """
         table = self._worker_stats_table
@@ -860,11 +840,20 @@ class Worker:
     def handle_reconcile(self, request: worker_pb2.Worker.ReconcileRequest) -> worker_pb2.Worker.ReconcileResponse:
         """Process desired state from the controller and return observed state.
 
+        Reconcile is the sole controller→worker channel, so it is also the
+        worker's keep-alive: every reconcile resets the heartbeat deadline (the
+        worker self-resets only after ``heartbeat_timeout`` with no contact) and
+        emits a host-metrics stat row. The response carries the worker's
+        self-health bit so the controller can reap a responsive-but-unhealthy
+        worker (e.g. failed disk).
+
         Routing prefers ``attempt_uid``; a ``(task_id, attempt_id)`` composite
         fallback covers label-less adopted attempts that haven't been stamped
         with a UID yet. The fallback is a rollover compatibility shim
         scheduled for removal once pre-UID-label containers have aged out.
         """
+        self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
+
         for desired in request.desired:
             attempt_uid = AttemptUid(desired.attempt_uid)
             if desired.HasField("run"):
@@ -931,6 +920,7 @@ class Worker:
                     )
 
         resource_snapshot = self._collect_resource_metrics()
+        self._emit_worker_stat(resource_snapshot)
         health = check_worker_health(disk_path=str(self._cache_dir))
         if not health.healthy:
             logger.warning("Reconcile: worker health check failed: %s", health.error)

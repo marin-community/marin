@@ -36,10 +36,12 @@ from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.backend import (
+    AutoscaleResult,
     BackendCapability,
-    BackendResult,
     ProviderUnsupportedError,
+    ReconcileResult,
     ScheduleInput,
+    ScheduleResult,
     TaskTarget,
     plans_from_snapshot,
     run_scheduling_decision,
@@ -49,7 +51,7 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import ControlSnapshot, SchedulableWorker
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.reconcile.worker import ReconcileResult
+from iris.cluster.controller.reconcile.worker import WorkerReconcileResult
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
@@ -104,20 +106,20 @@ class FakeProvider:
         # scheduler/preemption/reservation tests to exercise placement.
         self._scheduler = Scheduler()
 
-    def schedule(self, snapshot: ScheduleInput) -> BackendResult:
+    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
         return run_scheduling_decision(self._scheduler, snapshot)
 
-    def reconcile(self, snapshot: ControlSnapshot) -> BackendResult:
+    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
         # Mirror RpcTaskBackend: build plans from the snapshot, report every
         # reached worker healthy with no observations (these tests drive task
         # transitions directly via the transition driver, not through RPCs).
         plans = plans_from_snapshot(snapshot)
-        worker_results = [(p, ReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans]
+        worker_results = [(p, WorkerReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans]
         events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
-        return BackendResult(worker_results=worker_results, health_events=events)
+        return ReconcileResult(worker_results=worker_results, health_events=events)
 
-    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> BackendResult:
-        return BackendResult()
+    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
+        return AutoscaleResult()
 
     def attach_autoscaler(self, autoscaler) -> None:
         self.autoscaler = autoscaler

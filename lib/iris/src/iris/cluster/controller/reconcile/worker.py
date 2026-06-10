@@ -76,17 +76,22 @@ class WorkerReconcilePlan:
 
 
 @dataclass(frozen=True)
-class ReconcileResult:
+class WorkerReconcileResult:
     """Unified per-worker reconcile outcome.
 
     ``observations`` is the (possibly empty) list of proto observations the
     apply layer should consume. ``error`` is set when the reconcile RPC
-    outright failed; ``observations`` is then empty.
+    outright failed; ``observations`` is then empty. ``self_healthy`` is the
+    worker's own health verdict from the Reconcile response (always ``True`` on
+    an RPC error, where it is meaningless): a worker that responds but reports
+    unhealthy — e.g. a failed disk — is still counted as a liveness failure so
+    it is eventually reaped.
     """
 
     worker_id: WorkerId
     observations: list[worker_pb2.Worker.AttemptObservation]
     error: str | None = None
+    self_healthy: bool = True
 
 
 # ---------------------------------------------------------------------------

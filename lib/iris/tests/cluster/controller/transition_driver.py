@@ -17,7 +17,7 @@ from iris.cluster.controller.ops.worker import apply_reconcile as apply_reconcil
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.reconcile.effects import ControllerEffects
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
+from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.controller.worker_health import (
     WorkerHealthEvent,
@@ -73,13 +73,13 @@ def apply_task_observations(
 ) -> ControllerEffects:
     """Land ``requests`` through the production reconcile-observation verb.
 
-    Builds one ``(WorkerReconcilePlan, ReconcileResult)`` pair per worker: the
+    Builds one ``(WorkerReconcilePlan, WorkerReconcileResult)`` pair per worker: the
     plan lists each touched attempt's uid as desired (so the production filter
     accepts the observation) and the result reports the observed state. The
     kernel-derived build failures ride back on the effects; this helper folds
     them into ``health`` the way ``Controller._fold_health`` does in production.
     """
-    plan_results: list[tuple[WorkerReconcilePlan, ReconcileResult]] = []
+    plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = []
     for req in requests:
         observations: list[worker_pb2.Worker.AttemptObservation] = []
         desired: list[worker_pb2.Worker.DesiredAttempt] = []
@@ -91,7 +91,7 @@ def apply_task_observations(
             worker_id=req.worker_id,
             request=worker_pb2.Worker.ReconcileRequest(worker_id=str(req.worker_id), desired=desired),
         )
-        result = ReconcileResult(worker_id=req.worker_id, observations=observations, error=None)
+        result = WorkerReconcileResult(worker_id=req.worker_id, observations=observations, error=None)
         plan_results.append((plan, result))
 
     effects = apply_reconcile_observations(cur, plan_results, endpoints=endpoints, now=now)

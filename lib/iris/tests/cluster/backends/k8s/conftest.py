@@ -54,6 +54,7 @@ def provider(k8s, log_client, task_stats_table):
         log_client=log_client,
         task_stats_table=task_stats_table,
         log_poll_interval=1.0,
+        cluster_scan_interval=0.0,
     )
     yield p
     p.close()
@@ -99,6 +100,7 @@ def make_run_req(
 
 def make_kueue_provider(k8s, *, local_queue: str = "iris-lq", **kwargs) -> K8sTaskProvider:
     """K8sTaskProvider with Kueue gang admission enabled (a configured LocalQueue)."""
+    kwargs.setdefault("cluster_scan_interval", 0.0)
     return K8sTaskProvider(
         kubectl=k8s,
         namespace="iris",

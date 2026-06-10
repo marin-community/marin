@@ -37,7 +37,7 @@ from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ThreadContainer
 from iris.rpc import job_pb2, worker_pb2
 from iris.test_util import wait_for_condition
-from rigging.timing import Duration
+from rigging.timing import Deadline, Duration
 
 from tests.cluster.worker.conftest import (
     FakeContainerHandle,
@@ -831,7 +831,7 @@ def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runti
 
 
 # ============================================================================
-# Stats emission tests (iris.worker via handle_ping)
+# Stats emission tests (iris.worker via handle_reconcile)
 # ============================================================================
 
 
@@ -849,17 +849,13 @@ class _FakeStatsTable:
             raise self._raise_on_write
 
 
-def _ping_request() -> worker_pb2.Worker.PingRequest:
-    return worker_pb2.Worker.PingRequest()
-
-
-def test_handle_ping_emits_worker_stat(mock_worker):
-    """One handle_ping call produces one row on the iris.worker table."""
+def test_handle_reconcile_emits_worker_stat(mock_worker):
+    """One handle_reconcile call produces one row on the iris.worker table."""
     table = _FakeStatsTable()
     mock_worker._worker_stats_table = table
     mock_worker._worker_id = "w-test"
 
-    mock_worker.handle_ping(_ping_request())
+    mock_worker.handle_reconcile(worker_pb2.Worker.ReconcileRequest())
 
     assert len(table.writes) == 1
     rows = table.writes[0]
@@ -872,21 +868,33 @@ def test_handle_ping_emits_worker_stat(mock_worker):
     assert stat.cpu_pct >= 0.0
 
 
-def test_handle_ping_propagates_schema_error(mock_worker):
+def test_handle_reconcile_propagates_schema_error(mock_worker):
     """TypeError from schema validation must propagate (fail fast in tests)."""
     table = _FakeStatsTable(raise_on_write=TypeError("schema mismatch"))
     mock_worker._worker_stats_table = table
     mock_worker._worker_id = "w-test"
 
     with pytest.raises(TypeError, match="schema mismatch"):
-        mock_worker.handle_ping(_ping_request())
+        mock_worker.handle_reconcile(worker_pb2.Worker.ReconcileRequest())
 
 
-def test_handle_ping_no_table_is_noop(mock_worker):
-    """Worker with no stats table (no controller) must still answer pings."""
+def test_handle_reconcile_no_table_is_noop(mock_worker):
+    """Worker with no stats table (no controller) must still answer reconciles."""
     assert mock_worker._worker_stats_table is None
-    response = mock_worker.handle_ping(_ping_request())
+    response = mock_worker.handle_reconcile(worker_pb2.Worker.ReconcileRequest())
     assert response is not None
+
+
+def test_handle_reconcile_resets_heartbeat_deadline(mock_worker):
+    """Reconcile is the sole keep-alive: a worker receiving only Reconcile
+    traffic does not self-reset. An already-expired heartbeat deadline is pushed
+    out by ``heartbeat_timeout`` on every reconcile."""
+    mock_worker._heartbeat_deadline = Deadline.from_seconds(0.0)
+    assert mock_worker._heartbeat_deadline.expired()
+
+    mock_worker.handle_reconcile(worker_pb2.Worker.ReconcileRequest())
+
+    assert not mock_worker._heartbeat_deadline.expired()
 
 
 # ============================================================================

@@ -7,22 +7,28 @@ The controller owns the database. Each tick it composes a DB-less
 :class:`~iris.cluster.controller.reads.ControlSnapshot` (and, for scheduling, a
 :class:`ScheduleInput`) and drives the backend through three uniform methods —
 :meth:`TaskBackend.schedule`, :meth:`TaskBackend.reconcile`,
-:meth:`TaskBackend.autoscale` — each returning ONE :class:`BackendResult`.
+:meth:`TaskBackend.autoscale` — each returning its own method-specific result
+(:class:`ScheduleResult` / :class:`ReconcileResult` / :class:`AutoscaleResult`).
 Backends perform backend-specific I/O (worker-daemon RPC fan-out, ``kubectl
 apply``) but never read or write the controller database — plain data in, plain
 data out.
 
-The controller never branches on backend type or a capability binary in the
-per-tick path: it calls all three methods unconditionally and a backend no-ops
-where a phase doesn't apply (the worker-daemon backend's ``schedule`` runs the
-Iris scheduler while a cluster backend returns empty; the cluster backend's
-``reconcile`` reconciles pods while it owns its own capacity, so its
-``autoscale`` returns empty). The apply path dispatches on which
-:class:`BackendResult` field is populated, not on the backend.
+The controller calls all three methods uniformly across backends and never
+branches on backend type: a backend no-ops where a phase doesn't apply (the
+worker-daemon backend's ``schedule`` runs the Iris scheduler while a cluster
+backend returns empty; the cluster backend's ``reconcile`` reconciles pods while
+it owns its own capacity, so its ``autoscale`` returns empty). Within a method,
+the apply path dispatches on which result field is populated — e.g. a
+worker-daemon ``reconcile`` returns ``worker_results`` + ``health_events`` while
+a cluster ``reconcile`` returns ``updates``.
 
-:attr:`TaskBackend.capabilities` is a pure descriptor: it drives the dashboard
-tab list and on-demand service-RPC routing (worker-daemon vs direct-pod exec),
-never the per-tick control flow.
+:attr:`TaskBackend.capabilities` is a pure descriptor for the dashboard tab list
+and on-demand service-RPC routing (worker-daemon vs direct-pod exec). One narrow
+exception gates the per-tick path: a ``CLUSTER_VIEW`` backend owns placement, so
+the controller drains the dispatch queue (a DB write it owns) into the reconcile
+snapshot for it. Worker liveness is OBSERVED by worker-daemon backends and
+folded by the controller; cluster backends have no Iris workers, so they emit no
+health events.
 """
 
 from __future__ import annotations
@@ -44,9 +50,9 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
-    ReconcileResult,
     ReconcileRow,
     WorkerReconcilePlan,
+    WorkerReconcileResult,
     build_reconcile_plans,
 )
 from iris.cluster.controller.scheduling.decision import apply_preemptions, compute_diagnostics
@@ -80,8 +86,10 @@ class ProviderUnsupportedError(ProviderError):
 class BackendCapability(StrEnum):
     """A descriptor flag the dashboard and on-demand RPC routing key on.
 
-    Pure metadata — it never gates the per-tick control loops, which call
-    ``schedule``/``reconcile``/``autoscale`` uniformly.
+    Mostly metadata: the controller calls ``schedule``/``reconcile``/``autoscale``
+    uniformly regardless of these flags. The one per-tick exception is
+    ``CLUSTER_VIEW``, which tells the controller to drain the dispatch queue into
+    the reconcile snapshot (a DB write the placement-owning backend can't do).
     """
 
     WORKER_DAEMON = "workers"
@@ -162,16 +170,13 @@ class ScheduleInput:
 
 
 @dataclass(frozen=True)
-class BackendResult:
-    """The single DB-shaped write-back the controller commits after any phase.
+class ScheduleResult:
+    """What :meth:`TaskBackend.schedule` decides for one scheduling tick.
 
-    One result type for ``schedule`` / ``reconcile`` / ``autoscale``: each phase
-    populates only its fields, and the controller's apply path dispatches on
-    which fields are non-empty — never on the backend type. An empty field means
-    the backend has nothing for it this tick.
+    Pure decision, no I/O. A backend that doesn't run the Iris scheduler (e.g. a
+    cluster backend where Kueue owns placement) returns an empty instance.
     """
 
-    # -- schedule outputs ---------------------------------------------------
     assignments: list[Assignment] = field(default_factory=list)
     """task→worker placements to commit (``ops.task.assign``)."""
     preemptions: list[TerminalDecision] = field(default_factory=list)
@@ -185,8 +190,18 @@ class BackendResult:
     post_taint_context: SchedulingContext | None = None
     """Post-taint (or un-tainted) context cached for dashboard diagnostics."""
 
-    # -- reconcile outputs (dispatch on FIELD CONTENT, not backend type) ----
-    worker_results: list[tuple[WorkerReconcilePlan, ReconcileResult]] = field(default_factory=list)
+
+@dataclass(frozen=True)
+class ReconcileResult:
+    """What :meth:`TaskBackend.reconcile` observed this tick.
+
+    The two carriers reflect the backend kind, not different methods: a
+    worker-daemon backend populates ``worker_results`` + ``health_events``; a
+    cluster (pod) backend populates ``updates``. The controller's reconcile apply
+    path dispatches on which is non-empty.
+    """
+
+    worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = field(default_factory=list)
     """Worker-daemon reconcile outcomes. The apply path runs the overlay-aware
     ``ReconcileState.reconcile`` (cross-worker same-batch cascades + worker-loss
     synthesis), so each result rides back paired with the plan that produced it
@@ -197,16 +212,26 @@ class BackendResult:
     """Per-worker liveness the backend OBSERVED (REACHED / UNREACHABLE). The
     controller folds these through the single ``WorkerHealthTracker.apply``."""
 
-    # -- autoscale outputs --------------------------------------------------
+
+@dataclass(frozen=True)
+class AutoscaleResult:
+    """What :meth:`TaskBackend.autoscale` did this tick.
+
+    A provisioning cycle returns the updated ``autoscaler_state`` to persist; a
+    dead-worker teardown returns the full set of ``removed_workers`` (the dead
+    workers plus their healthy slice siblings). A backend that owns its own
+    capacity (e.g. Kubernetes) returns an empty instance.
+    """
+
     removed_workers: list[WorkerId] = field(default_factory=list)
     """Workers torn down this tick — dead workers plus their healthy slice
     siblings. The controller serializes their removal and forgets them."""
     autoscaler_state: AutoscalerState | None = None
     """The autoscaler's tracked state for the controller to persist; None when
-    the backend manages its own capacity."""
+    the backend manages its own capacity or did not provision this tick."""
 
 
-def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> BackendResult:
+def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> ScheduleResult:
     """Run the full Iris scheduling decision pipeline over a DB-less snapshot.
 
     Stages: gates → order → reservation taints → preference pass →
@@ -239,7 +264,7 @@ def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> Ba
         # No work to place. Expired tasks (if any) still flow back so the
         # controller can mark them UNSCHEDULABLE; the un-tainted context is the
         # diagnostics snapshot for this tick.
-        return BackendResult(
+        return ScheduleResult(
             unschedulable=list(gated.expired_tasks),
             post_taint_context=ctx,
             residual_demand=residual_demand,
@@ -250,7 +275,7 @@ def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> Ba
     preemptions = apply_preemptions(order, tainted_jobs, all_assignments, ctx.running_for_preemption, context)
     diagnostics = compute_diagnostics(scheduler, context, tainted_jobs, all_assignments, order.ordered_task_ids)
 
-    return BackendResult(
+    return ScheduleResult(
         assignments=[
             Assignment(task_id=task_id, worker_id=worker_id, priority_band=order.task_band_map.get(task_id))
             for task_id, worker_id in all_assignments
@@ -336,9 +361,10 @@ class TaskBackend(Protocol):
     """Stable identifier, e.g. ``"gcp"``, ``"coreweave"``, later ``"slurm-stanford"``."""
 
     capabilities: ClassVar[frozenset[BackendCapability]]
-    """Pure descriptor for the dashboard + on-demand RPC routing. Never gates the
-    per-tick control loops, which call ``schedule``/``reconcile``/``autoscale``
-    uniformly."""
+    """Descriptor for the dashboard + on-demand RPC routing. The controller calls
+    ``schedule``/``reconcile``/``autoscale`` uniformly regardless; the sole
+    per-tick exception is ``CLUSTER_VIEW`` (drives dispatch-drain into the
+    reconcile snapshot)."""
 
     autoscaler: Autoscaler | None
     """The Iris :class:`Autoscaler` driving capacity, or None for backends that
@@ -346,7 +372,7 @@ class TaskBackend(Protocol):
     controller exposes for dashboard/status RPCs; capacity is driven through
     :meth:`autoscale`, never this attribute."""
 
-    def schedule(self, snapshot: ScheduleInput) -> BackendResult:
+    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
         """Decide task→worker placement from a DB-less snapshot (pure decision).
 
         Worker-daemon backends run the full Iris scheduling pipeline; cluster
@@ -355,7 +381,7 @@ class TaskBackend(Protocol):
         """
         ...
 
-    def reconcile(self, snapshot: ControlSnapshot) -> BackendResult:
+    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
         """Converge the backend toward the desired state and report observations.
 
         Bounded I/O. Worker-daemon backends fan the reconcile RPC out and return
@@ -371,7 +397,7 @@ class TaskBackend(Protocol):
         snapshot: ControlSnapshot,
         residual_demand: list[DemandEntry],
         dead_workers: list[WorkerId],
-    ) -> BackendResult:
+    ) -> AutoscaleResult:
         """Provision capacity for unmet demand, OR tear down dead workers.
 
         Bounded I/O. With ``dead_workers`` set, the backend terminates those

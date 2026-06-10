@@ -69,9 +69,11 @@ if not hasattr(_Tx, "fetchall"):
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.controller import ops
 from iris.cluster.controller.backend import (
+    AutoscaleResult,
     BackendCapability,
-    BackendResult,
+    ReconcileResult,
     ScheduleInput,
+    ScheduleResult,
     plans_from_snapshot,
     run_scheduling_decision,
 )
@@ -85,9 +87,9 @@ from iris.cluster.controller.reads import (  # noqa: F401
 )
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
-    ReconcileResult,
     ReconcileRow,
     WorkerReconcilePlan,
+    WorkerReconcileResult,
     build_reconcile_plans,
 )
 from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
@@ -171,7 +173,7 @@ class _FakeProvider:
     def __init__(self) -> None:
         self._scheduler = Scheduler()
 
-    def schedule(self, snapshot: ScheduleInput) -> BackendResult:
+    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
         return run_scheduling_decision(self._scheduler, snapshot)
 
     def get_process_status(self, target, request):
@@ -186,17 +188,19 @@ class _FakeProvider:
     def profile_task(self, target, request, timeout_ms):
         raise RuntimeError("fake provider")
 
-    def reconcile(self, snapshot: ControlSnapshot) -> BackendResult:
+    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
         # Same shape the test-suite FakeProvider returns. Only exercised if
         # someone disables dry_run on the harness.
         plans = plans_from_snapshot(snapshot)
-        return BackendResult(
-            worker_results=[(p, ReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans],
+        return ReconcileResult(
+            worker_results=[
+                (p, WorkerReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans
+            ],
             health_events=[WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans],
         )
 
-    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> BackendResult:
-        return BackendResult()
+    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
+        return AutoscaleResult()
 
     def close(self):
         pass
@@ -535,18 +539,17 @@ def clone_db(source: ControllerDB) -> ControllerDB:
 
 def _build_reconcile_inputs(
     db: ControllerDB,
-) -> tuple[dict[WorkerId, WorkerReconcilePlan], list[ReconcileResult]]:
-    """Per active worker: a plan listing its attempts as desired plus a result
-    reporting each RUNNING. Drives the production reconcile-observation verb
-    (``ops.worker.apply_reconcile``) instead of the retired heartbeat path.
+) -> list[tuple[WorkerReconcilePlan, WorkerReconcileResult]]:
+    """Per active worker: a (plan, result) pair where the plan lists the worker's
+    attempts as desired and the result reports each RUNNING. Drives the
+    production reconcile-observation verb (``ops.worker.apply_reconcile``).
     """
     health = WorkerHealthTracker()
     _seed_health(db, health)
     with db.read_snapshot() as tx:
         workers = reads.healthy_active_workers_with_attributes(tx, health, _NoAttrs())
     active_states = list(ACTIVE_TASK_STATES)
-    plans_by_worker: dict[WorkerId, WorkerReconcilePlan] = {}
-    results: list[ReconcileResult] = []
+    plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = []
     for w in workers:
         with db.read_snapshot() as tx:
             rows = tx.execute(
@@ -570,12 +573,13 @@ def _build_reconcile_inputs(
         observations = [
             worker_pb2.Worker.AttemptObservation(attempt_uid=uid, state=job_pb2.TASK_STATE_RUNNING) for uid in uids
         ]
-        plans_by_worker[w.worker_id] = WorkerReconcilePlan(
+        plan = WorkerReconcilePlan(
             worker_id=w.worker_id,
             request=worker_pb2.Worker.ReconcileRequest(worker_id=str(w.worker_id), desired=desired),
         )
-        results.append(ReconcileResult(worker_id=w.worker_id, observations=observations, error=None))
-    return plans_by_worker, results
+        result = WorkerReconcileResult(worker_id=w.worker_id, observations=observations, error=None)
+        plan_results.append((plan, result))
+    return plan_results
 
 
 class _NoAttrs:
@@ -1683,8 +1687,7 @@ def _run_apply_under_contention(
     name: str,
     write_db: ControllerDB,
     write_txns: ControllerTestState,
-    plans_by_worker: dict[WorkerId, WorkerReconcilePlan],
-    results: list[ReconcileResult],
+    plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]],
     fail_threads: int = 0,
     fail_n: int = 50,
     fail_chunk: int = 50,
@@ -1720,9 +1723,7 @@ def _run_apply_under_contention(
                 with write_db.transaction() as cur:
                     ops.worker.apply_reconcile(
                         cur,
-                        plans_by_worker,
-                        results,
-                        health=write_txns._health,
+                        plan_results,
                         endpoints=write_txns._endpoints,
                         now=Timestamp.now(),
                     )
@@ -1807,11 +1808,11 @@ def benchmark_apply_contention(db: ControllerDB) -> None:
     """Reproduce the production tail when apply_reconcile contends
     with provider-sync failure storms and other write RPCs.
     """
-    plans_by_worker, results = _build_reconcile_inputs(db)
-    total_tasks = sum(len(r.observations) for r in results)
-    print(f"  (victim reconcile batch: {len(plans_by_worker)} workers, {total_tasks} tasks)")
+    plan_results = _build_reconcile_inputs(db)
+    total_tasks = sum(len(result.observations) for _plan, result in plan_results)
+    print(f"  (victim reconcile batch: {len(plan_results)} workers, {total_tasks} tasks)")
 
-    if not plans_by_worker:
+    if not plan_results:
         print("  (skipped, no workers)")
         return
 
@@ -1845,8 +1846,7 @@ def benchmark_apply_contention(db: ControllerDB) -> None:
             _run_apply_under_contention(
                 write_db=write_db,
                 write_txns=write_txns,
-                plans_by_worker=plans_by_worker,
-                results=results,
+                plan_results=plan_results,
                 **scenario,
             )
     finally:
@@ -2369,9 +2369,6 @@ class _EchoWorker:
     async def exec_in_container(self, request, ctx):
         raise NotImplementedError
 
-    async def ping(self, request, ctx):
-        return worker_pb2.Worker.PingResponse(healthy=True)
-
     async def start_tasks(self, request, ctx):
         raise NotImplementedError
 
@@ -2523,15 +2520,11 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
     t2 = time.perf_counter()
     worker_results = provider.reconcile(snapshot).worker_results
     t3 = time.perf_counter()
-    plan_by_worker = {plan.worker_id: plan for plan, _ in worker_results}
-    results = [result for _, result in worker_results]
     now = Timestamp.now()
     with state.db.transaction() as cur:
         apply_reconcile(
             cur,
-            plan_by_worker,
-            results,
-            health=state.health,
+            worker_results,
             endpoints=state.txns._endpoints,
             now=now,
         )

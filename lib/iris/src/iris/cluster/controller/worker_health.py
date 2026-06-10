@@ -17,7 +17,8 @@ Per-worker signals:
 - ``healthy`` / ``active``: liveness verdict; set true on REACHED, dropped on
   removal.
 - ``consecutive_failures``: incremented per UNREACHABLE event, reset on REACHED.
-  ``PING_FAILURE_THRESHOLD`` consecutive failures trip termination.
+  ``reconcile_failure_threshold`` consecutive failures trip termination (the
+  controller derives it from ``worker_unreachable_grace / poll_interval``).
 - ``build_failures``: monotonic counter incremented per BUILD_FAILED event.
   ``BUILD_FAILURE_THRESHOLD`` build failures trip termination independently.
 
@@ -82,12 +83,12 @@ class WorkerHealthTracker:
     def __init__(
         self,
         *,
-        ping_threshold: int = PING_FAILURE_THRESHOLD,
+        reconcile_failure_threshold: int = PING_FAILURE_THRESHOLD,
         build_threshold: int = BUILD_FAILURE_THRESHOLD,
     ) -> None:
-        assert ping_threshold > 0
+        assert reconcile_failure_threshold > 0
         assert build_threshold > 0
-        self._ping_threshold = ping_threshold
+        self._reconcile_failure_threshold = reconcile_failure_threshold
         self._build_threshold = build_threshold
         self._lock = threading.Lock()
         self._states: dict[WorkerId, WorkerLiveness] = {}
@@ -142,7 +143,10 @@ class WorkerHealthTracker:
         return over
 
     def _over_threshold(self, state: WorkerLiveness) -> bool:
-        return state.consecutive_failures >= self._ping_threshold or state.build_failures >= self._build_threshold
+        return (
+            state.consecutive_failures >= self._reconcile_failure_threshold
+            or state.build_failures >= self._build_threshold
+        )
 
     # -- Reads --------------------------------------------------------------
 

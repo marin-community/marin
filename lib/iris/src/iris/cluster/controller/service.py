@@ -120,10 +120,10 @@ WORKDIR_FILE_OFFLOAD_THRESHOLD = 10 * 1024  # 10KB — externalize large workdir
 # Soft cap on how long launch_job waits for a replaced job's worker-bound
 # attempts to finalize before force-reaping them. Sized to exceed the worst-
 # case worker-death detection window so a vanished worker's attempts can be
-# self-finalized by the reconcile-driven health path: poll_interval (1s) *
-# PING_FAILURE_THRESHOLD (10) plus the per-RPC deadline ≈ within ~100s worst
-# case, plus slack. Past this point we log a warning, CASCADE-delete the rows,
-# and proceed with the replacement — a stuck heartbeat must not block the
+# self-finalized by the reconcile-driven health path: the default
+# worker_unreachable_grace (~50s) plus the per-RPC reconcile deadline and
+# teardown, with slack. Past this point we log a warning, CASCADE-delete the
+# rows, and proceed with the replacement — a vanished worker must not block the
 # new submission indefinitely.
 _JOB_REPLACEMENT_DRAIN_WAIT = Duration.from_seconds(120)
 

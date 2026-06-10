@@ -390,7 +390,7 @@ def test_get_cluster_status_basic(k8s):
     pod = k8s.get_json(K8sResource.PODS, "iris-task-0")
     pod["status"]["conditions"] = []
 
-    p = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest")
+    p = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest", cluster_scan_interval=0.0)
     try:
         p.reconcile(make_batch())
         resp = p.get_cluster_status()
@@ -410,7 +410,7 @@ def test_get_cluster_status_basic(k8s):
 def test_get_cluster_status_node_failure(k8s):
     """Node list failure during sync is handled gracefully; status reports 0 nodes."""
     k8s.inject_failure("list_json:node", RuntimeError("kubectl error"))
-    p = K8sTaskProvider(kubectl=k8s, namespace="test-ns", default_image="img:latest")
+    p = K8sTaskProvider(kubectl=k8s, namespace="test-ns", default_image="img:latest", cluster_scan_interval=0.0)
     try:
         p.reconcile(make_batch())
         resp = p.get_cluster_status()
@@ -428,7 +428,7 @@ def test_get_cluster_status_excludes_terminal_pods(k8s):
     populate_pod(k8s, "iris-succeeded", "Succeeded")
     populate_pod(k8s, "iris-failed", "Failed")
 
-    p = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest")
+    p = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest", cluster_scan_interval=0.0)
     try:
         p.reconcile(make_batch())
         resp = p.get_cluster_status()

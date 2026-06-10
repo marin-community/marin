@@ -27,16 +27,18 @@ from iris.chaos import chaos
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.backend import (
+    AutoscaleResult,
     BackendCapability,
-    BackendResult,
     ProviderError,
+    ReconcileResult,
     ScheduleInput,
+    ScheduleResult,
     TaskTarget,
     plans_from_snapshot,
     run_scheduling_decision,
 )
 from iris.cluster.controller.reads import ControlSnapshot
-from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
+from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind
 from iris.cluster.types import WorkerId
@@ -155,63 +157,76 @@ class RpcTaskBackend:
         """Attach the Iris autoscaler that provisions capacity for this backend."""
         self.autoscaler = autoscaler
 
-    def schedule(self, snapshot: ScheduleInput) -> BackendResult:
+    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
         """Run the Iris scheduling decision pipeline over the snapshot."""
         return run_scheduling_decision(self._scheduler, snapshot)
 
-    def reconcile(self, snapshot: ControlSnapshot) -> BackendResult:
+    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
         """Build per-worker plans, fan the Reconcile RPC out, observe liveness.
 
         Plans are built here (worker-daemon-specific protos) from the snapshot's
         reconcile rows + job specs. Each per-worker RPC carries the stub
         factory's deadline and the fan-out caps concurrency at ``parallelism``,
         so this returns in bounded time even when the whole fleet is hung. Each
-        outcome yields a health event the controller folds: a response is
-        REACHED, an RPC error/timeout is UNREACHABLE (and the worker's stub is
-        evicted as I/O hygiene). The backend never decides a worker is dead.
+        outcome yields a health event the controller folds:
+
+        * a healthy response is REACHED;
+        * an RPC error/timeout is UNREACHABLE, and the (likely broken) stub is
+          evicted as I/O hygiene;
+        * a response that self-reports unhealthy (e.g. failed disk) is also
+          UNREACHABLE so the worker is eventually reaped, but the connection is
+          fine so the stub is kept.
+
+        The backend never decides a worker is dead — it only observes.
         """
         plans = plans_from_snapshot(snapshot)
 
-        async def _one(sem: asyncio.Semaphore, plan: WorkerReconcilePlan) -> ReconcileResult:
+        async def _one(sem: asyncio.Semaphore, plan: WorkerReconcilePlan) -> WorkerReconcileResult:
             return await self._reconcile_one(sem, plan, snapshot.worker_addresses[plan.worker_id])
 
         results = _fan_out(plans, self.parallelism, _one)
 
-        worker_results: list[tuple[WorkerReconcilePlan, ReconcileResult]] = list(zip(plans, results, strict=True))
+        worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = list(zip(plans, results, strict=True))
         health_events: list[WorkerHealthEvent] = []
         for plan, result in worker_results:
-            if result.error is None:
-                health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
-            else:
+            if result.error is not None:
                 health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
                 self.stub_factory.evict(snapshot.worker_addresses[plan.worker_id])
-        return BackendResult(worker_results=worker_results, health_events=health_events)
+            elif not result.self_healthy:
+                health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
+            else:
+                health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
+        return ReconcileResult(worker_results=worker_results, health_events=health_events)
 
     def autoscale(
         self,
         snapshot: ControlSnapshot,
         residual_demand: list[DemandEntry],
         dead_workers: list[WorkerId],
-    ) -> BackendResult:
+    ) -> AutoscaleResult:
         """Tear down dead workers' slices, or run one provisioning cycle.
 
         With ``dead_workers`` set the autoscaler terminates their slices and
         returns the dead workers plus their healthy siblings as
-        ``removed_workers`` (no provisioning this call). Otherwise it runs a
-        refresh + probe_health + update cycle against ``residual_demand``. The
-        DB reads (worker status, demand) are done by the controller and handed
-        in; this only drives the in-memory autoscaler.
+        ``removed_workers`` (no provisioning this call); the cached stub for
+        every torn-down worker is evicted, since none will be reconciled again.
+        Otherwise it runs a refresh + probe_health + update cycle against
+        ``residual_demand``. The DB reads (worker status, demand) are done by the
+        controller and handed in; this only drives the in-memory autoscaler.
         """
         if self.autoscaler is None:
-            return BackendResult()
+            return AutoscaleResult()
         if dead_workers:
             siblings = self.autoscaler.terminate_slices_for_workers([str(wid) for wid in dead_workers])
             removed = list(dead_workers) + [WorkerId(wid) for wid in siblings]
-            return BackendResult(removed_workers=removed, autoscaler_state=self.autoscaler.persistable_state())
+            for wid in removed:
+                if address := snapshot.worker_addresses.get(wid):
+                    self.stub_factory.evict(address)
+            return AutoscaleResult(removed_workers=removed, autoscaler_state=self.autoscaler.persistable_state())
         self.autoscaler.refresh(snapshot.worker_status_map)
         self.autoscaler.probe_health()
         self.autoscaler.update(residual_demand)
-        return BackendResult(autoscaler_state=self.autoscaler.persistable_state())
+        return AutoscaleResult(autoscaler_state=self.autoscaler.persistable_state())
 
     def get_process_status(
         self,
@@ -270,7 +285,7 @@ class RpcTaskBackend:
         sem: asyncio.Semaphore,
         plan: WorkerReconcilePlan,
         address: str,
-    ) -> ReconcileResult:
+    ) -> WorkerReconcileResult:
         """Issue a single Reconcile RPC to one worker under the shared semaphore."""
         async with sem:
             try:
@@ -279,13 +294,14 @@ class RpcTaskBackend:
                     raise ProviderError("chaos: controller.reconcile")
                 stub = self.stub_factory.get_stub(address)
                 response = await stub.reconcile(plan.request)
-                return ReconcileResult(
+                return WorkerReconcileResult(
                     worker_id=plan.worker_id,
                     observations=list(response.observed),
                     error=None,
+                    self_healthy=response.health.healthy,
                 )
             except Exception as e:
-                return ReconcileResult(worker_id=plan.worker_id, observations=[], error=str(e))
+                return WorkerReconcileResult(worker_id=plan.worker_id, observations=[], error=str(e))
 
     def close(self) -> None:
         if self.autoscaler is not None:

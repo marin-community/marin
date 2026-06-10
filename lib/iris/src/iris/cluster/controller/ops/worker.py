@@ -18,7 +18,7 @@ from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjecti
 from iris.cluster.controller.reconcile import ControllerEffects, ReconcileState
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
-from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
+from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.schema import worker_attributes_table, workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import AttemptUid, JobName, WorkerId, get_gpu_count, get_tpu_count
@@ -234,7 +234,7 @@ def _apply_worker_failures_chunk(
 
 def apply_reconcile(
     cur: Tx,
-    plan_results: list[tuple[WorkerReconcilePlan, ReconcileResult]],
+    plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]],
     *,
     endpoints: EndpointsProjection,
     now: Timestamp,

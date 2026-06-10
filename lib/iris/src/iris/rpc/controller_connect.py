@@ -113,7 +113,6 @@ class ControllerService(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
-
 class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]):
     def __init__(self, service: ControllerService | AsyncGenerator[ControllerService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None) -> None:
         super().__init__(
@@ -429,7 +428,6 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                     ),
                     function=svc.get_scheduler_state,
                 ),
-
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
@@ -1064,7 +1062,6 @@ class ControllerServiceClient(ConnectClient):
         )
 
 
-
 class ControllerServiceSync(Protocol):
     def launch_job(self, request: controller__pb2.Controller.LaunchJobRequest, ctx: RequestContext) -> controller__pb2.Controller.LaunchJobResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -1444,7 +1441,6 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                     ),
                     function=service.get_scheduler_state,
                 ),
-
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
@@ -2077,4 +2073,3 @@ class ControllerServiceClientSync(ConnectClientSync):
             headers=headers,
             timeout_ms=timeout_ms,
         )
-

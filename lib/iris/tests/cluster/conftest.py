@@ -441,6 +441,7 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
         namespace="default",
         default_image="iris:test",
         controller_address="http://localhost:0",
+        cluster_scan_interval=0.0,
     )
 
     ctrl = _HarnessController()

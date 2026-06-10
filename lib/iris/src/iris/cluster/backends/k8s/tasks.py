@@ -39,10 +39,12 @@ from iris.cluster.backends.k8s.types import K8sResource, KubectlError, KubectlLo
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.backend import (
+    AutoscaleResult,
     BackendCapability,
-    BackendResult,
     ProviderUnsupportedError,
+    ReconcileResult,
     ScheduleInput,
+    ScheduleResult,
     TaskTarget,
 )
 from iris.cluster.controller.reads import ControlSnapshot
@@ -1237,6 +1239,12 @@ class K8sTaskProvider:
     profile_table: Table | None = None
     poll_concurrency: int = 32
     log_poll_interval: float = 15.0
+    # Cluster-wide kubectl scans (pod list, stray-pod GC, pod poll, node refresh)
+    # are coarse-grained: the controller ticks reconcile at poll_interval (1s),
+    # but these LISTs run at most once per cluster_scan_interval to bound kubectl
+    # load. New-pod application (dispatch) is NOT gated — it runs every tick.
+    # Tests set this to 0.0 so every reconcile scans.
+    cluster_scan_interval: float = 5.0
     name: str = "kubernetes"
     # K8s provisions its own capacity (cluster autoscaler + Kueue); no Iris autoscaler.
     autoscaler: Autoscaler | None = field(default=None, init=False, repr=False)
@@ -1245,6 +1253,7 @@ class K8sTaskProvider:
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
     _last_gc_time: float = field(default=0.0, init=False, repr=False)
+    _last_cluster_scan: float = field(default=0.0, init=False, repr=False)
     _pending_gc_hashes: set[str] = field(default_factory=set, init=False, repr=False)
 
     def _ensure_resource_collector(self) -> ResourceCollector | None:
@@ -1263,25 +1272,25 @@ class K8sTaskProvider:
             )
         return self._log_collector
 
-    def schedule(self, snapshot: ScheduleInput) -> BackendResult:
+    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
         """No-op: Kueue owns placement, so Iris makes no scheduling decisions."""
-        return BackendResult()
+        return ScheduleResult()
 
     def autoscale(
         self,
         snapshot: ControlSnapshot,
         residual_demand: list[DemandEntry],
         dead_workers: list[WorkerId],
-    ) -> BackendResult:
+    ) -> AutoscaleResult:
         """No-op: the cluster autoscaler + Kueue provision nodes; K8s has no
         Iris-managed slices to tear down."""
-        return BackendResult()
+        return AutoscaleResult()
 
     def attach_autoscaler(self, autoscaler: Autoscaler) -> None:
         """Never called: K8s provisions its own capacity, so no autoscaler is attached."""
         raise AssertionError("K8sTaskProvider manages its own capacity; no autoscaler should be attached")
 
-    def reconcile(self, snapshot: ControlSnapshot) -> BackendResult:
+    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
         """Sync task state: apply new pods, delete strays, poll running pods.
 
         Kill targets are derived here, not buffered in the controller: any
@@ -1289,6 +1298,12 @@ class K8sTaskProvider:
         set (``tasks_to_run`` union ``running_tasks``) is deleted on this tick.
         Producing transitions only need to update ``tasks.state``; the next
         sync sees the diff.
+
+        New-pod application runs every tick so dispatch stays responsive; the
+        cluster-wide kubectl scans (pod list, stray-pod GC, pod poll, node
+        refresh, terminal GC) run at most once per ``cluster_scan_interval``,
+        and continue to run on an idle cluster (the controller never gates a
+        cluster backend's reconcile on having work) so orphaned pods are reaped.
         """
         apply_failures: list[TaskUpdate] = []
         for run_req in snapshot.tasks_to_run:
@@ -1309,6 +1324,11 @@ class K8sTaskProvider:
                         error=str(exc),
                     )
                 )
+
+        now = time.time()
+        if now - self._last_cluster_scan < self.cluster_scan_interval:
+            return ReconcileResult(updates=apply_failures)
+        self._last_cluster_scan = now
 
         # Single pod list for the entire cycle — excludes terminal pods via field selector.
         managed_pods = self.kubectl.list_json(
@@ -1336,7 +1356,7 @@ class K8sTaskProvider:
 
         self._maybe_gc_terminal_resources(managed_pods)
 
-        return BackendResult(updates=updates)
+        return ReconcileResult(updates=updates)
 
     def profile_task(
         self,

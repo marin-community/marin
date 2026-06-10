@@ -20,7 +20,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
 
 from iris.cluster.backends.gcp.fake import InMemoryGcpService
 from iris.cluster.backends.gcp.workers import GcpWorkerProvider
@@ -219,6 +219,11 @@ class LocalCluster:
                 auth_provider=auth.provider,
                 auth=auth,
                 autoscaler_evaluation_interval=duration_from_proto(self._config.defaults.autoscaler.evaluation_interval),
+                # Fast worker-failure detection for local/e2e runs: ~10 unreachable
+                # reconcile passes (poll_interval default 1s) instead of the ~50s
+                # production grace. Mirrors the old fast ping tuning; the e2e chaos
+                # suite's RECONCILE_FAILURE_THRESHOLD must match round(grace / poll).
+                worker_unreachable_grace=Duration.from_seconds(10.0),
             ),
             provider=provider,
             threads=controller_threads,

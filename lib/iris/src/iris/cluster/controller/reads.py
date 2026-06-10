@@ -1254,6 +1254,7 @@ class _LivenessEntry(Protocol):
     healthy: bool
     active: bool
     last_heartbeat_ms: int
+    consecutive_failures: int
 
 
 class WorkerAttrsSource(Protocol):
@@ -1299,12 +1300,28 @@ def get_worker_detail(tx: Tx, worker_id: WorkerId):
 
 
 def _healthy_active_worker_ids(health: WorkerLivenessSource) -> set[WorkerId]:
-    """Healthy+active worker ids from the in-memory tracker.
+    """Reconcile-target worker ids: every healthy+active worker.
+
+    The reconcile pass must keep probing a worker that is mid-failure (so its
+    liveness can recover or cross the teardown threshold), so it targets all
+    active workers — a climbing ``consecutive_failures`` does NOT drop a worker
+    here. Scheduling placement uses the stricter :func:`_schedulable_worker_ids`.
 
     Callers post-filter the ``workers`` table in Python against this set rather than
     pushing a SQL ``IN`` — cheaper, since almost every persisted worker is healthy.
     """
     return {wid for wid, ent in health.all().items() if ent.healthy and ent.active}
+
+
+def _schedulable_worker_ids(health: WorkerLivenessSource) -> set[WorkerId]:
+    """Scheduling-placement worker ids: healthy+active AND not currently failing.
+
+    Excludes workers with any consecutive reconcile failures so new tasks stop
+    landing on an unreachable worker immediately, rather than for the whole
+    detection window before teardown. Reconcile keeps probing them
+    (:func:`_healthy_active_worker_ids`); only placement is gated.
+    """
+    return {wid for wid, ent in health.all().items() if ent.healthy and ent.active and ent.consecutive_failures == 0}
 
 
 def list_active_healthy_workers(tx: Tx, health: WorkerLivenessSource) -> dict[WorkerId, str]:
@@ -1370,13 +1387,14 @@ def healthy_active_workers_with_attributes(
     health: WorkerLivenessSource,
     attrs: WorkerAttrsSource,
 ) -> list[SchedulableWorker]:
-    """Return healthy + active workers with their attributes hydrated.
+    """Return schedulable workers (healthy, active, not failing) with attributes.
 
     Reads the full worker roster and post-filters with the in-memory health
-    tracker. See :func:`_healthy_active_worker_ids` for why we skip the
-    SQL-side ``IN (...)`` filter.
+    tracker via :func:`_schedulable_worker_ids` — a worker mid-failure is still
+    reconciled but is not a placement target. See :func:`_healthy_active_worker_ids`
+    for why we skip the SQL-side ``IN (...)`` filter.
     """
-    healthy_active = _healthy_active_worker_ids(health)
+    healthy_active = _schedulable_worker_ids(health)
     if not healthy_active:
         return []
     rows = tx.execute(
