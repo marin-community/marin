@@ -60,6 +60,16 @@ class GrugTrainerConfig:
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
 
+    # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
+    # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
+    # Defaults reproduce the historical layout: no expert parallelism and full replication
+    # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
+    # replicated per slice and sharded only over the intra-slice `data` axis. For a model
+    # too large to replicate within one slice, set replica_axis_size=1 (FSDP across every
+    # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
+    expert_axis_size: int = 1
+    replica_axis_size: int | None = None
+
 
 @dataclass(frozen=True)
 class GrugEvalConfig:
@@ -382,12 +392,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     if config.trainer.data_seed is not None:
         data_key = jax.random.PRNGKey(config.trainer.data_seed)
 
-    mesh_axes = config.trainer.trainer.mesh.axes
-    expert_axis_size = int(mesh_axes.get("expert", 1))
-    replica_axis_size = int(mesh_axes.get("replica_dcn", jax.process_count()))
     # Grug uses raw PartitionSpecs rather than Trainer's logical axis mapping.
     # Keep the mesh compact so the batch pspec derived by `_batch_spec(mesh)` spans slices directly.
-    mesh = compact_grug_mesh(expert_axis_size=expert_axis_size, replica_axis_size=replica_axis_size)
+    # replica_axis_size=None lets compact_grug_mesh default to jax.process_count() (full
+    # cross-slice replication); set it to 1 on GrugTrainerConfig for cross-slice FSDP.
+    mesh = compact_grug_mesh(
+        expert_axis_size=config.trainer.expert_axis_size,
+        replica_axis_size=config.trainer.replica_axis_size,
+    )
     with set_mesh(mesh):
         batch_schedule = trainer.batch_schedule
 
