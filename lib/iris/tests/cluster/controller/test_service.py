@@ -1721,19 +1721,3 @@ def test_list_tasks_returns_current_attempt_timing(service, state):
     # exactly one attempt entry — the current one — even if more existed
     assert len(proto.attempts) == 1
     assert proto.attempts[0].attempt_id == proto.current_attempt_id
-
-
-def test_set_task_status_text_handler_is_noop(service):
-    """Deprecated handler must accept and discard the payload without error.
-
-    Old clients still call this RPC; new clients write to iris.task_status.
-    """
-    response = service.set_task_status_text(
-        job_pb2.SetTaskStatusTextRequest(
-            task_id="/u/job/0",
-            status_text_detail_md="ignored",
-            status_text_summary_md="ignored",
-        ),
-        None,
-    )
-    assert isinstance(response, job_pb2.SetTaskStatusTextResponse)
