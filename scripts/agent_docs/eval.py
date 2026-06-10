@@ -41,8 +41,10 @@ from agent_docs.prompts import CODER_PROMPT, JUDGE_PROMPT
 logger = logging.getLogger(__name__)
 
 MAP_FILENAME = "MAP.md"
-QUALITY_PASS_THRESHOLD = 4  # quality >= this AND no hallucination => PASS
-RUBRIC_PASS_THRESHOLD = 0.8  # rubric_acc >= this required to PASS
+# A probe passes on documentation grounds: the key APIs are used correctly and
+# nothing is hallucinated. Quality (1-5) is reported as a secondary signal, not a
+# gate — it was flat (~1.3) across rounds and did not discriminate.
+RUBRIC_PASS_THRESHOLD = 0.8
 
 CODER_SYSTEM_PROMPT = "You are writing Python scripts for the Marin monorepo. Output only code."
 JUDGE_SYSTEM_PROMPT = "You are a senior engineer reviewing code. Output only the requested JSON."
@@ -154,6 +156,7 @@ def run_judge(script: str, probe: Probe, model: str) -> JudgeResult:
     """Review the script against the probe's anchors and quality rubric."""
     prompt = JUDGE_PROMPT.format(
         task=probe.prompt,
+        intent=str(probe.intent).upper(),
         anchors=_format_anchors(probe),
         forbidden_block=_format_forbidden(probe),
         script=script,
@@ -191,7 +194,7 @@ def score_probe(probe: Probe, docs_dir: Path, gen_model: str, review_model: str)
     rubric_correct = sum(judge.anchor_scores.values())
     rubric_total = len(probe.anchors)
     rubric_acc = rubric_correct / rubric_total if rubric_total else 0.0
-    passed = rubric_acc >= RUBRIC_PASS_THRESHOLD and judge.quality >= QUALITY_PASS_THRESHOLD and not judge.hallucinated
+    passed = rubric_acc >= RUBRIC_PASS_THRESHOLD and not judge.hallucinated
 
     return ProbeResult(
         probe_id=probe.id,

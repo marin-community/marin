@@ -16,11 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import tree_sitter
-
 from agent_docs.parsing import (
     KNOWN_LIBS,
-    PYTHON_LIBS,
     PY_LANGUAGE,
+    PYTHON_LIBS,
     RS_LANGUAGE,
     RUST_CRATES,
     ClassInfo,

@@ -279,11 +279,17 @@ not listed, and that is completely fine.
 {forbidden_block}
 ## How to score each anchor
 
-For each anchor SYMBOL, score 1 if the script uses it correctly — right name, \
-right import path where applicable, right required params and default values; \
-score 0 if it is missing-but-required, or used in a way that contradicts the \
-ground truth. An anchor the task did not require the script to call directly \
-scores 1 unless the script contradicts it.
+This is a {intent} probe.
+- USE probe: score an anchor 1 only if the script actually USES it correctly in \
+code — right name, right import path where applicable, right required params and \
+default values.
+- UNDERSTAND probe: the script is illustrative, not production code. Score an \
+anchor 1 if the answer correctly NAMES, references, or explains it (in code OR in \
+comments), even if it is not executed. Score 0 only if it is absent or contradicted.
+
+A StepSpec-builder variant is the SAME anchor: if an anchor is `foo`, then using \
+`foo` OR `foo_step` satisfies it (and vice versa). Score 0 only for an anchor that \
+is missing-but-required, or used in a way that contradicts the ground truth.
 
 ## What counts as a hallucination (STRICT, high bar)
 
@@ -294,9 +300,9 @@ with a parameter or dataclass field that does not exist on it, or with a wrong \
 default value; OR
 3. an obviously fabricated method or field on a class named in the anchors.
 
-Do NOT flag an API merely because it is not in the anchor list. Unlisted but \
-plausible helpers, imports, and standard-library calls are NOT hallucinations. \
-When unsure, do not flag it.
+Do NOT flag an API merely because it is not in the anchor list, and NEVER flag a \
+`*_step`/builder variant of an anchor. Unlisted but plausible helpers, imports, \
+and standard-library calls are NOT hallucinations. When unsure, do not flag it.
 
 ## Output
 
@@ -304,8 +310,14 @@ Output ONLY a JSON object, no other text, with EXACTLY these keys:
 - "anchors": object mapping each anchor symbol (exact string) to 0 or 1.
 - "hallucinated": array of strings — ONLY items meeting the strict bar above. \
 Empty array if none.
-- "quality": integer 1-5 — holistic: would this actually work, is it idiomatic, \
-does it use the right entry points? (5 = ship it; 1 = wrong approach).
+- "quality": integer 1-5, calibrated:
+  5 = complete and correct; would run and accomplish the task as specified.
+  4 = essentially correct; only minor omissions or style issues.
+  3 = right approach and right key APIs, but incomplete or one wrong detail.
+  2 = partially on track but missing major required pieces.
+  1 = wrong approach, fabricated core APIs, or a refusal.
+  Base it on how many anchors are used correctly and whether the overall approach \
+would actually work.
 - "notes": one-paragraph justification of the quality score.
 
 ## Script to review

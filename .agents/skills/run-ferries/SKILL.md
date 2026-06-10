@@ -201,5 +201,4 @@ When promoting: open a follow-up PR updating `experiments/ferries/daily.py` and 
 ## See Also
 - `docs/experiments/daily-ferry-log.md`
 - `.agents/skills/babysit-job/SKILL.md`
-- `.agents/projects/ferry_framework.md`
 - `.agents/skills/run-research/`
