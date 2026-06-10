@@ -27,6 +27,10 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_PROFILER_STEPS  >0 enables a jax_profile capture window of N steps
                           (use SCALE_TRACKER=wandb so the artifact uploads)
     SCALE_PROFILER_START  profiler start step (default 8, past compile/warmup)
+    SCALE_CHECKPOINTS   s3 (default) | local. local writes checkpoints to
+                        node-local disk with no periodic saves -- for throughput
+                        experiments where the checkpoint is disposable and a
+                        slow S3 commit must not wedge the end-of-run barrier
     RUN_ID              unique run identifier
 """
 
@@ -35,6 +39,7 @@ import os
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.checkpoint import CheckpointerConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
@@ -116,6 +121,19 @@ def build_scale_step() -> ExecutorStep:
         num_steps=profiler_steps,
     )
 
+    checkpoint_mode = os.environ.get("SCALE_CHECKPOINTS", "s3").lower()
+    if checkpoint_mode == "local":
+        checkpointer = CheckpointerConfig(
+            base_path=f"/tmp/grug-scale-ckpt/{run_id}",
+            append_run_id_to_base_path=False,
+            save_interval=None,
+            keep=None,
+        )
+    elif checkpoint_mode == "s3":
+        checkpointer = None
+    else:
+        raise ValueError(f"SCALE_CHECKPOINTS={checkpoint_mode!r} must be 's3' or 'local'")
+
     model = build_scale_model()
     if model.num_experts % expert_axis != 0:
         raise ValueError(f"num_experts={model.num_experts} must be divisible by SCALE_EXPERT_AXIS={expert_axis}")
@@ -166,6 +184,7 @@ def build_scale_step() -> ExecutorStep:
             grug_trainer=versioned(grug_trainer),
             eval=None,
             profiler=profiler,
+            checkpointer=checkpointer,
         ),
     )
 

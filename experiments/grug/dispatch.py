@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections.abc import Callable
 from typing import TypeVar
@@ -15,6 +16,20 @@ from fray.types import Entrypoint, GpuConfig, JobRequest, TpuConfig, create_envi
 logger = logging.getLogger(__name__)
 
 ConfigT = TypeVar("ConfigT")
+
+# Runtime-tuning env vars forwarded from the dispatcher to the train tasks.
+# Iris tasks don't inherit the submitter's shell, so anything the launcher was
+# given (e.g. `iris job run -e XLA_FLAGS ...`) must be re-exported explicitly.
+# JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
+# not leak onto accelerator tasks.
+_FORWARDED_ENV_PREFIXES = ("XLA_FLAGS", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")
+_FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
+
+
+def _forwarded_env_vars() -> dict[str, str]:
+    return {
+        k: v for k, v in os.environ.items() if k.startswith(_FORWARDED_ENV_PREFIXES) and k not in _FORWARDED_ENV_EXCLUDE
+    }
 
 
 def _safe_job_suffix(run_id: str) -> str:
@@ -45,7 +60,7 @@ def dispatch_grug_training_run(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
         resources=resources,
-        environment=create_environment(extras=extras),
+        environment=create_environment(extras=extras, env_vars=_forwarded_env_vars()),
         max_retries_failure=max_retries_failure,
     )
     logger.info("Dispatching grug training via Fray: %s", request.name)
