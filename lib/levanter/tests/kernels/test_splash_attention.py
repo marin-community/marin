@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_mask
 from jax.sharding import PartitionSpec as P
@@ -23,11 +24,11 @@ def test_lower_splash_attention_mask_builds_multi_head_mask():
         q_seq_shards=1,
     )
 
-    assert lowering.base_mask.shape == (256, 256)
-    assert isinstance(lowering.base_mask, splash_attention_mask.LogicalAnd)
     assert len(lowering.kernel_mask.masks) == 3
-    assert all(mask.shape == (256, 256) for mask in lowering.kernel_mask.masks)
-    assert all(isinstance(mask, splash_attention_mask.LogicalAnd) for mask in lowering.kernel_mask.masks)
+    expected = np.tril(np.ones((256, 256), dtype=bool))
+    expected &= np.arange(256)[None, :] >= np.arange(256)[:, None] - 127
+    np.testing.assert_array_equal(_materialize_splash_mask(lowering.kernel_mask.masks[0]), expected)
+    np.testing.assert_array_equal(_materialize_splash_mask(lowering.kernel_mask.masks[1]), expected)
 
 
 def test_lower_splash_attention_mask_rejects_unsupported_structured_fields():
@@ -83,3 +84,12 @@ def test_splash_attention_block_sizes_match_existing_defaults():
     assert block_sizes.block_q == 512
     assert block_sizes.block_kv == 512
     assert block_sizes.block_kv_compute == 512
+
+
+def _materialize_splash_mask(mask):
+    if isinstance(mask, splash_attention_mask.LogicalAnd):
+        return _materialize_splash_mask(mask.left) & _materialize_splash_mask(mask.right)
+
+    q_indices = jnp.arange(mask.shape[0])[:, None]
+    kv_indices = jnp.arange(mask.shape[1])[None, :]
+    return np.asarray(mask.mask_function(q_indices, kv_indices))
