@@ -55,3 +55,13 @@ def extras_for_resources(resources: ResourceConfig) -> list[str]:
     if isinstance(device, GpuConfig):
         return ["gpu"]
     return []
+
+
+def dependency_groups_for_resources(
+    resources: ResourceConfig,
+    dependency_groups: list[str] | None,
+) -> list[str]:
+    """Return explicit dependency groups, or infer accelerator extras from resources."""
+    if dependency_groups is not None:
+        return dependency_groups
+    return extras_for_resources(resources)
