@@ -23,7 +23,7 @@ from iris.cluster.constraints import (
     get_device_variant,
     preemptible_constraint,
 )
-from iris.cluster.controller import ops, writes
+from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.controller import (
     Controller,
@@ -36,7 +36,6 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.scheduling.policy import (
     RESERVATION_TAINT_KEY,
     _find_reservation_ancestor,
-    _reserved_job_ids,
     _worker_matches_reservation_entry,
     apply_scheduling_gates,
     build_scheduling_context,
@@ -96,6 +95,12 @@ from tests.cluster.controller.conftest import (
     worker_running_tasks as _worker_running_tasks,
 )
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
+
+
+def _reserved_job_ids(db) -> set[JobName]:
+    """Test helper: read the reserved-job set through reads in a fresh snapshot."""
+    with db.read_snapshot() as tx:
+        return reads.reserved_job_ids(tx)
 
 
 def _cpu_device() -> job_pb2.DeviceConfig:

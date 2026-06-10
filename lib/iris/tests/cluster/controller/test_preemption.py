@@ -13,7 +13,6 @@ from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKin
 from iris.cluster.controller.reconcile.task import resolve_task_failure_state as _resolve_task_failure_state
 from iris.cluster.controller.scheduling.policy import (
     PreemptionCandidate,
-    _pending_tasks_with_jobs,
     _sort_pending_tasks_by_resolved_band,
     get_running_tasks_with_band_and_value,
     run_preemption_pass,
@@ -935,7 +934,7 @@ def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
         assert child_task.priority_band == job_pb2.PRIORITY_BAND_INTERACTIVE
 
         with state._db.read_snapshot() as tx:
-            pending = _pending_tasks_with_jobs(tx)
+            pending = reads.pending_tasks_with_jobs(tx)
             bands = reads.get_priority_bands(tx, {t.job_id for t in pending})
         ordered = _sort_pending_tasks_by_resolved_band(pending, bands)
         ordered_ids = [task.task_id for task in ordered]
