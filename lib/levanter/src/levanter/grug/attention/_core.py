@@ -362,14 +362,7 @@ def _tpu_splash_attention(
 
     if mask is None:
         mask_spec = None
-        segment_id_lowering = lower_splash_segment_ids(
-            q_segment_ids=None,
-            kv_segment_ids=None,
-            q_segment_ids_axes=None,
-            kv_segment_ids_axes=None,
-            q_segment_batch_axis=None,
-            kv_segment_batch_axis=None,
-        )
+        segment_id_lowering = lower_splash_segment_ids()
     elif isinstance(mask, AttentionMask):
         if mask.sliding_window is not None:
             if mask.sliding_window <= 0:
@@ -393,14 +386,7 @@ def _tpu_splash_attention(
                 kv_segment_batch_axis=0 if kv_segment_ids.ndim == 2 else None,
             )
         else:
-            segment_id_lowering = lower_splash_segment_ids(
-                q_segment_ids=None,
-                kv_segment_ids=None,
-                q_segment_ids_axes=None,
-                kv_segment_ids_axes=None,
-                q_segment_batch_axis=None,
-                kv_segment_batch_axis=None,
-            )
+            segment_id_lowering = lower_splash_segment_ids()
     else:
         raise NotImplementedError("Dense masks are not supported for splash attention.")
 

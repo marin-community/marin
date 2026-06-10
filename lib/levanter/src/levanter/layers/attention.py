@@ -1024,14 +1024,7 @@ def _tpu_splash_attention(
             kv_segment_batch_axis=kv_segment_batch_axis,
         )
     else:
-        segment_id_lowering = lower_splash_segment_ids(
-            q_segment_ids=None,
-            kv_segment_ids=None,
-            q_segment_ids_axes=None,
-            kv_segment_ids_axes=None,
-            q_segment_batch_axis=None,
-            kv_segment_batch_axis=None,
-        )
+        segment_id_lowering = lower_splash_segment_ids()
 
     # MaxText uses a block size of 512
     block_size = block_size or DEFAULT_SPLASH_BLOCK_SIZE

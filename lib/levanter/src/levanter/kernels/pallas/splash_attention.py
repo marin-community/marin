@@ -3,24 +3,26 @@
 
 """Shared lowering helpers for JAX Splash Attention."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
 
 import jax
 from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds as SplashSegmentIds
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
-from jax.sharding import PartitionSpec
+from jax.sharding import Mesh, PartitionSpec
 
 
+SPLASH_BLOCK_GRANULARITY = 128
 DEFAULT_SPLASH_BLOCK_SIZE = 512
+PartitionSpecEntry = str | Sequence[str | None] | None
 
 
 @dataclass(frozen=True)
 class SplashAttentionMaskSpec:
-    """Static mask fields supported by Splash Attention lowering."""
+    """Static mask fields consumed by Splash Attention lowering."""
 
     is_causal: bool = False
-    causal_offset: Any | None = None
+    causal_offset: int | None = None
     sliding_window: int | None = None
     has_explicit_mask: bool = False
 
@@ -29,8 +31,8 @@ class SplashAttentionMaskSpec:
 class SplashAttentionMaskLowering:
     """JAX Splash masks lowered from a structured mask spec."""
 
-    base_mask: Any
-    kernel_mask: Any
+    base_mask: splash_attention_mask.Mask
+    kernel_mask: splash_attention_mask.MultiHeadMask
 
 
 @dataclass(frozen=True)
@@ -85,12 +87,12 @@ def lower_splash_attention_mask(
 
 def lower_splash_segment_ids(
     *,
-    q_segment_ids: jax.Array | None,
-    kv_segment_ids: jax.Array | None,
-    q_segment_ids_axes: Any | None,
-    kv_segment_ids_axes: Any | None,
-    q_segment_batch_axis: int | None,
-    kv_segment_batch_axis: int | None,
+    q_segment_ids: jax.Array | None = None,
+    kv_segment_ids: jax.Array | None = None,
+    q_segment_ids_axes: PartitionSpec | None = None,
+    kv_segment_ids_axes: PartitionSpec | None = None,
+    q_segment_batch_axis: int | None = None,
+    kv_segment_batch_axis: int | None = None,
 ) -> SplashSegmentIdsLowering:
     """Package segment ID arrays, input specs, and vmap axes for Splash."""
     if q_segment_ids is None and kv_segment_ids is None:
@@ -132,7 +134,7 @@ def splash_attention_block_sizes(
     )
 
 
-def splash_partition_spec_shard_factor(entry: Any, mesh: Any) -> int:
+def splash_partition_spec_shard_factor(entry: PartitionSpecEntry, mesh: Mesh | None) -> int:
     """Compute product of mesh axis sizes referenced by a PartitionSpec entry."""
     if mesh is None:
         return 1
@@ -150,11 +152,11 @@ def splash_partition_spec_shard_factor(entry: Any, mesh: Any) -> int:
 
 
 def _compatible_splash_block(shard_len: int, max_block: int) -> int:
-    """Pick largest block <= max_block that divides shard_len; prefer multiples of 128."""
+    """Pick largest block <= max_block that divides shard_len; prefer Splash's granularity."""
     if shard_len <= 0:
         return max_block
     cap = min(max_block, shard_len)
-    for step in (128, 1):
+    for step in (SPLASH_BLOCK_GRANULARITY, 1):
         candidate = cap - (cap % step)
         while candidate >= step:
             if shard_len % candidate == 0:

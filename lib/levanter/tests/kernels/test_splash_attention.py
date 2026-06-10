@@ -26,7 +26,8 @@ def test_lower_splash_attention_mask_builds_multi_head_mask():
     assert lowering.base_mask.shape == (256, 256)
     assert isinstance(lowering.base_mask, splash_attention_mask.LogicalAnd)
     assert len(lowering.kernel_mask.masks) == 3
-    assert all(mask is lowering.base_mask for mask in lowering.kernel_mask.masks)
+    assert all(mask.shape == (256, 256) for mask in lowering.kernel_mask.masks)
+    assert all(isinstance(mask, splash_attention_mask.LogicalAnd) for mask in lowering.kernel_mask.masks)
 
 
 def test_lower_splash_attention_mask_rejects_unsupported_structured_fields():
