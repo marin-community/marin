@@ -289,10 +289,10 @@ class Worker:
         if adopted == 0:
             self._cleanup_all_iris_containers()
 
-        # Bring the HTTP server up last so the worker is ready to serve
-        # controller pings the moment registration completes.
-        # timeout_keep_alive=120: default 5s races with controller heartbeat intervals,
-        # causing TCP resets on idle connections.
+        # Bring the HTTP server up last so the worker is ready to serve the
+        # controller's Reconcile RPC the moment registration completes.
+        # timeout_keep_alive=120: default 5s races with the controller's reconcile
+        # cadence, causing TCP resets on idle connections.
         self._server = uvicorn.Server(
             uvicorn.Config(
                 self._dashboard.app,

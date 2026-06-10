@@ -26,6 +26,7 @@ from iris.cluster.controller.backend import (
     BackendCapability,
     BackendResult,
     ScheduleInput,
+    plans_from_snapshot,
     run_scheduling_decision,
 )
 from iris.cluster.controller.ops.task import Assignment
@@ -49,7 +50,6 @@ from iris.cluster.controller.worker_health import (
     PING_FAILURE_THRESHOLD,
     WorkerHealthEvent,
     WorkerHealthEventKind,
-    WorkerHealthTracker,
 )
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2, worker_pb2
@@ -549,7 +549,6 @@ def _reconcile_snapshot(worker_addresses: dict[WorkerId, str]) -> ControlSnapsho
         worker_addresses=worker_addresses,
         reconcile_rows=[],
         timeout_rows=[],
-        health=WorkerHealthTracker(),
     )
 
 
@@ -1099,16 +1098,7 @@ class _ScriptedProvider:
         return BackendResult()
 
     def reconcile(self, snapshot: ControlSnapshot) -> BackendResult:
-        rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in snapshot.worker_addresses}
-        for row in snapshot.reconcile_rows:
-            rows_by_worker[row.worker_id].append(row)
-        plans = build_reconcile_plans(
-            ReconcileInputs(
-                job_specs=snapshot.job_specs,
-                worker_ids=list(snapshot.worker_addresses),
-                rows_by_worker=rows_by_worker,
-            )
-        )
+        plans = plans_from_snapshot(snapshot)
         self.calls.append((plans, dict(snapshot.worker_addresses)))
         tick = len(self.calls) - 1
         responder = self.script[tick] if tick < len(self.script) else (lambda plan: [])
@@ -1245,16 +1235,7 @@ class _UnreachableProvider:
         return run_scheduling_decision(self._scheduler, snapshot)
 
     def reconcile(self, snapshot: ControlSnapshot) -> BackendResult:
-        rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in snapshot.worker_addresses}
-        for row in snapshot.reconcile_rows:
-            rows_by_worker[row.worker_id].append(row)
-        plans = build_reconcile_plans(
-            ReconcileInputs(
-                job_specs=snapshot.job_specs,
-                worker_ids=list(snapshot.worker_addresses),
-                rows_by_worker=rows_by_worker,
-            )
-        )
+        plans = plans_from_snapshot(snapshot)
         worker_results: list[tuple[WorkerReconcilePlan, ReconcileResult]] = []
         events: list[WorkerHealthEvent] = []
         for plan in plans:

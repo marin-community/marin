@@ -159,10 +159,12 @@ class ControllerConfig:
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(1.0))
     """Reconcile cadence — the sole reconcile + liveness channel. The polling
     thread wakes every ``poll_interval`` (or sooner if ``_polling_wake`` is set)
-    and runs ``_reconcile_tick`` against every active worker. Set at or below the
-    old ping cadence (5s) so worker-failure detection is no slower now that the
-    reconcile RPC outcome is the only liveness signal. The Reconcile RPC is the
-    sole channel that dispatches new ASSIGNED rows and observes worker state."""
+    and runs ``_reconcile_tick`` against every active worker. The reconcile RPC
+    outcome is the only liveness signal, so each unreachable pass counts toward
+    the failure threshold at this cadence: a worker is detected dead after
+    roughly ``poll_interval * RECONCILE failure threshold``. The Reconcile RPC is
+    also the sole channel that dispatches new ASSIGNED rows and observes worker
+    state."""
 
     max_tasks_per_job_per_cycle: int = 4
     """Maximum tasks from a single non-coscheduled job to consider per scheduling
@@ -437,11 +439,13 @@ class Controller:
         self._polling_wake.set()
 
     def _seed_liveness_from_workers(self) -> None:
-        """Mark every persisted worker healthy so the scheduler sees them before they ping back.
+        """Seed every persisted worker as healthy so the scheduler sees them at startup.
 
-        Workers that fail to ping within the heartbeat window are timed out
-        by the ping loop. ``find_prunable`` relies on this seed to maintain
-        the invariant that every ``workers`` row has a tracker entry.
+        Liveness is in-memory and reseeded from the worker rows on restart;
+        workers that then go unreachable accrue failures through the reconcile
+        health-event fold and are torn down once over threshold. ``find_prunable``
+        relies on this seed to maintain the invariant that every ``workers`` row
+        has a tracker entry.
         """
         now_ms = Timestamp.now().epoch_ms()
         with self._db.read_snapshot() as q:
@@ -965,7 +969,6 @@ class Controller:
                 worker_addresses={},
                 reconcile_rows=[],
                 timeout_rows=[],
-                health=self._health,
                 tasks_to_run=batch.tasks_to_run,
                 running_tasks=batch.running_tasks,
             )
@@ -1039,11 +1042,11 @@ class Controller:
     def _fail_and_teardown(self, dead_workers: list[WorkerId], snapshot: reads.ControlSnapshot) -> None:
         """Serialize worker failure, tear down slices + siblings, forget the lot.
 
-        Replaces the old ping-loop choreography: fail the dead workers
-        (``ops.worker.fail``), hand them to ``backend.autoscale`` which terminates
-        their slices AND healthy siblings and returns the full ``removed_workers``
-        set, fail those siblings, persist the autoscaler state, and forget every
-        removed worker from the tracker. The only health-driven write is removal.
+        Fail the dead workers (``ops.worker.fail``), hand them to
+        ``backend.autoscale`` which terminates their slices AND healthy siblings
+        and returns the full ``removed_workers`` set, fail those siblings, persist
+        the autoscaler state, and forget every removed worker from the tracker.
+        The only health-driven write is removal.
         """
         reason = "worker reconcile failure threshold exceeded"
         sibling_reason = "unhealthy worker failed, slice terminated"
@@ -1094,7 +1097,6 @@ class Controller:
             worker_addresses={},
             reconcile_rows=[],
             timeout_rows=[],
-            health=self._health,
             worker_status_map=self._build_worker_status_map(),
         )
         result = self._task_backend.autoscale(snapshot, self._last_residual_demand, dead_workers=[])
@@ -1210,7 +1212,7 @@ class Controller:
         """The Iris autoscaler driving capacity for this backend, if any.
 
         Read-only handle for dashboard/status RPCs (VM info, feasibility,
-        pending hints). Capacity is driven through ``backend.manage_capacity``,
-        not this handle.
+        pending hints). Capacity is driven through ``backend.autoscale``, not
+        this handle.
         """
         return self._task_backend.autoscaler

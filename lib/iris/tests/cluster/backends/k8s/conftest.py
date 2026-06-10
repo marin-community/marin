@@ -15,7 +15,6 @@ from iris.cluster.backends.k8s.tasks import (
 )
 from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.controller.reads import ControlSnapshot
-from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.rpc import job_pb2
 
@@ -118,7 +117,6 @@ def make_batch(
         worker_addresses={},
         reconcile_rows=[],
         timeout_rows=[],
-        health=WorkerHealthTracker(),
         running_tasks=running_tasks or [],
         tasks_to_run=tasks_to_run or [],
     )

@@ -41,6 +41,7 @@ from iris.cluster.controller.backend import (
     ProviderUnsupportedError,
     ScheduleInput,
     TaskTarget,
+    plans_from_snapshot,
     run_scheduling_decision,
 )
 from iris.cluster.controller.controller import Controller, ControllerConfig
@@ -48,7 +49,7 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import ControlSnapshot, SchedulableWorker
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.reconcile.worker import ReconcileInputs, ReconcileResult, build_reconcile_plans
+from iris.cluster.controller.reconcile.worker import ReconcileResult
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
@@ -110,16 +111,7 @@ class FakeProvider:
         # Mirror RpcTaskBackend: build plans from the snapshot, report every
         # reached worker healthy with no observations (these tests drive task
         # transitions directly via the transition driver, not through RPCs).
-        rows_by_worker: dict[WorkerId, list] = {wid: [] for wid in snapshot.worker_addresses}
-        for row in snapshot.reconcile_rows:
-            rows_by_worker[row.worker_id].append(row)
-        plans = build_reconcile_plans(
-            ReconcileInputs(
-                job_specs=snapshot.job_specs,
-                worker_ids=list(snapshot.worker_addresses),
-                rows_by_worker=rows_by_worker,
-            )
-        )
+        plans = plans_from_snapshot(snapshot)
         worker_results = [(p, ReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans]
         events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
         return BackendResult(worker_results=worker_results, health_events=events)

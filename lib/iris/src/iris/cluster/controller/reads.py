@@ -1606,16 +1606,15 @@ class ControlSnapshot:
     * ``tasks_to_run`` / ``running_tasks`` — the dispatch drain for a cluster
       backend that owns placement (built only when that backend reconciles).
 
-    ``health`` is the one non-DB field: the controller's in-memory
-    :class:`WorkerHealthTracker`. Worker liveness is never persisted, so the
-    controller supplies its tracker — which the loader also uses to select the
-    live worker set — and it rides along on the snapshot.
+    Worker liveness is never persisted and never read off the snapshot: the
+    controller owns its in-memory :class:`WorkerHealthTracker` directly and folds
+    backend-observed health events into it. The tracker is passed to
+    :func:`load_control_snapshot` only to select the live worker set.
     """
 
     worker_addresses: dict[WorkerId, str]
     reconcile_rows: list[ReconcileRow]
     timeout_rows: Sequence[Row]
-    health: WorkerHealthTracker
     job_specs: dict[JobName, job_pb2.RunTaskRequest] = field(default_factory=dict)
     worker_status_map: WorkerStatusMap = field(default_factory=dict)
     tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
@@ -1630,9 +1629,9 @@ def load_control_snapshot(
 ) -> ControlSnapshot:
     """Build the per-cycle :class:`ControlSnapshot` in one read transaction.
 
-    ``health`` selects the live worker set (see :func:`list_active_healthy_workers`)
-    and is attached verbatim to the result as the snapshot's non-DB health view.
-    ``scan_timeouts`` includes the execution-timeout rows in the same snapshot.
+    ``health`` selects the live worker set (see :func:`list_active_healthy_workers`);
+    it is not stored on the snapshot. ``scan_timeouts`` includes the
+    execution-timeout rows in the same snapshot.
     """
     worker_addresses = list_active_healthy_workers(tx, health)
     reconcile_rows = load_reconcile_rows(tx, worker_addresses.keys()) if worker_addresses else []
@@ -1641,5 +1640,4 @@ def load_control_snapshot(
         worker_addresses=worker_addresses,
         reconcile_rows=reconcile_rows,
         timeout_rows=timeout_rows,
-        health=health,
     )

@@ -53,13 +53,14 @@ Example config: `lib/iris/config/coreweave.yaml`
 
 Key architectural properties:
 
-- **TASK_BACKEND-placement `TaskBackend`**: When the cluster config sets
+- **`CLUSTER_VIEW` `TaskBackend`**: When the cluster config sets
   `kubernetes_provider`, the controller runs `K8sTaskProvider`
-  (`src/iris/cluster/backends/k8s/tasks.py`) — a `PlacementOwner.TASK_BACKEND`
-  `TaskBackend` with `manages_capacity=True`. Kueue performs scheduling and the
-  cluster autoscaler provisions nodes, so Iris runs no scheduling or autoscaler
-  loop for this backend; the controller only reconciles desired vs. observed Pods
-  each tick. The dashboard reflects this via the backend descriptor served by
+  (`src/iris/cluster/backends/k8s/tasks.py`) — a `TaskBackend` whose
+  `capabilities` is `{CLUSTER_VIEW}`. Kueue performs scheduling and the cluster
+  autoscaler provisions nodes, so its `schedule`/`autoscale` are effectively
+  no-ops and `reconcile` only reconciles desired vs. observed Pods each tick. The
+  controller calls the same three uniform phase methods regardless. The dashboard
+  reflects this via the backend descriptor served by
   `/auth/config`: capability `cluster` shows the **Cluster** panel, and the
   Workers/Autoscaler panels are hidden (no worker daemons, no Iris autoscaler).
   See `docs/architecture.md` "The TaskBackend contract".

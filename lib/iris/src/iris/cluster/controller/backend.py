@@ -42,7 +42,13 @@ from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
-from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
+from iris.cluster.controller.reconcile.worker import (
+    ReconcileInputs,
+    ReconcileResult,
+    ReconcileRow,
+    WorkerReconcilePlan,
+    build_reconcile_plans,
+)
 from iris.cluster.controller.scheduling.decision import apply_preemptions, compute_diagnostics
 from iris.cluster.controller.scheduling.policy import (
     GatedCandidates,
@@ -105,6 +111,24 @@ def backend_descriptor(backend: TaskBackend) -> BackendDescriptor:
     return BackendDescriptor(
         name=backend.name,
         capabilities=sorted(c.value for c in backend.capabilities),
+    )
+
+
+def plans_from_snapshot(snapshot: ControlSnapshot) -> list[WorkerReconcilePlan]:
+    """Group a snapshot's reconcile rows by worker and build per-worker plans.
+
+    The worker-daemon reconcile prologue: every active worker gets a plan (idle
+    workers an empty one), so a single reconcile pass reaches the whole fleet.
+    """
+    rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in snapshot.worker_addresses}
+    for row in snapshot.reconcile_rows:
+        rows_by_worker[row.worker_id].append(row)
+    return build_reconcile_plans(
+        ReconcileInputs(
+            job_specs=snapshot.job_specs,
+            worker_ids=list(snapshot.worker_addresses),
+            rows_by_worker=rows_by_worker,
+        )
     )
 
 

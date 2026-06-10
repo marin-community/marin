@@ -68,11 +68,21 @@ if not hasattr(_Tx, "fetchall"):
     _Tx.fetchone = lambda self, stmt, params=None: self.execute(stmt, params).first()
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.controller import ops
-from iris.cluster.controller.backend import BackendReconcileInput, BackendReconcileResult, PlacementOwner
+from iris.cluster.controller.backend import (
+    BackendCapability,
+    BackendResult,
+    ScheduleInput,
+    plans_from_snapshot,
+    run_scheduling_decision,
+)
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
-from iris.cluster.controller.reads import SchedulableWorker, healthy_active_workers_with_attributes  # noqa: F401
+from iris.cluster.controller.reads import (  # noqa: F401
+    ControlSnapshot,
+    SchedulableWorker,
+    healthy_active_workers_with_attributes,
+)
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
     ReconcileResult,
@@ -96,7 +106,7 @@ from iris.cluster.controller.service import (
     _tasks_for_listing,
     _worker_roster,
 )
-from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
 from iris.cluster.types import AttemptUid, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -155,35 +165,38 @@ class _FakeProvider:
     """
 
     name = "worker"
-    placement = PlacementOwner.IRIS_CONTROLLER
-    manages_capacity = False
+    capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
+    autoscaler = None
+
+    def __init__(self) -> None:
+        self._scheduler = Scheduler()
+
+    def schedule(self, snapshot: ScheduleInput) -> BackendResult:
+        return run_scheduling_decision(self._scheduler, snapshot)
 
     def get_process_status(self, target, request):
         raise RuntimeError("fake provider")
 
-    def on_worker_failed(self, worker_id, address):
+    def attach_autoscaler(self, autoscaler) -> None:
         pass
 
     def set_log_sink(self, *args, **kwargs):
         pass
 
-    def capacity(self):
-        return None
-
     def profile_task(self, target, request, timeout_ms):
         raise RuntimeError("fake provider")
 
-    def ping_workers(self, workers):
-        return []
-
-    def reconcile(self, batch):
+    def reconcile(self, snapshot: ControlSnapshot) -> BackendResult:
         # Same shape the test-suite FakeProvider returns. Only exercised if
         # someone disables dry_run on the harness.
-        return BackendReconcileResult(
-            worker_results=[
-                ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in batch.plans
-            ]
+        plans = plans_from_snapshot(snapshot)
+        return BackendResult(
+            worker_results=[(p, ReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans],
+            health_events=[WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans],
         )
+
+    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> BackendResult:
+        return BackendResult()
 
     def close(self):
         pass
@@ -2162,11 +2175,11 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
 #
 #     1. ``_snapshot_reconcile_inputs`` (DB read + per-job RunTaskRequest
 #        template build).
-#     2. ``build_reconcile_plans(inputs)`` (pure-compute: copies the spec proto
-#        into a ``DesiredAttempt`` for every ASSIGNED row).
-#     3. ``RpcTaskBackend.reconcile(BackendReconcileInput(...))`` (async fanout
-#        over Connect RPC to a single in-process fake worker that echoes
-#        observations back).
+#     2. building the ``ControlSnapshot`` the backend reconciles against
+#        (flattening per-worker rows + job specs).
+#     3. ``RpcTaskBackend.reconcile(ControlSnapshot)`` (builds the per-worker
+#        plans via ``plans_from_snapshot``, then async fanout over Connect RPC
+#        to a single in-process fake worker that echoes observations back).
 #     4. ``apply_reconcile`` (one DB transaction fanning all per-worker
 #        results in as a single batched apply).
 #
@@ -2501,11 +2514,17 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
     t0 = time.perf_counter()
     inputs, addresses = _snapshot_reconcile_inputs(state)
     t1 = time.perf_counter()
-    plans = build_reconcile_plans(inputs)
+    snapshot = ControlSnapshot(
+        worker_addresses=addresses,
+        reconcile_rows=[row for rows in inputs.rows_by_worker.values() for row in rows],
+        timeout_rows=[],
+        job_specs=inputs.job_specs,
+    )
     t2 = time.perf_counter()
-    results = provider.reconcile(BackendReconcileInput(plans=plans, worker_addresses=addresses)).worker_results
+    worker_results = provider.reconcile(snapshot).worker_results
     t3 = time.perf_counter()
-    plan_by_worker = {p.worker_id: p for p in plans}
+    plan_by_worker = {plan.worker_id: plan for plan, _ in worker_results}
+    results = [result for _, result in worker_results]
     now = Timestamp.now()
     with state.db.transaction() as cur:
         apply_reconcile(

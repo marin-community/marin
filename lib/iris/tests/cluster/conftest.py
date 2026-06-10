@@ -224,7 +224,6 @@ class ServiceTestHarness:
             worker_addresses={},
             reconcile_rows=[],
             timeout_rows=[],
-            health=self.state._health,
             tasks_to_run=batch.tasks_to_run,
             running_tasks=batch.running_tasks,
         )

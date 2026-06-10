@@ -105,30 +105,44 @@ are the canonical data layer; **one-off queries may stay in `service.py`** —
 
 ### The TaskBackend contract
 
-`controller/backend.py` defines `TaskBackend`: the single Protocol that drives
-task execution and capacity for one cluster. The controller owns the database
-and the loop cadences; a backend takes a plain-data snapshot in and returns
-plain-data decisions/deltas out. **Backends never read or write the controller
-DB** — every method is snapshot-in, data-out, so the controller can commit
-results on its own terms (`reconcile`, `schedule`, `manage_capacity`,
-`on_workers_failed`, plus on-demand `get_process_status`/`profile_task`/
-`exec_in_container`).
+`controller/backend.py` defines `TaskBackend`: the single uniform Protocol that
+drives task execution and capacity for one cluster. The controller owns the
+database and the loop cadences; a backend takes a plain-data snapshot in and
+returns a single plain-data `BackendResult` out. **Backends never read or write
+the controller DB** — every method is snapshot-in, data-out, so the controller
+can commit results on its own terms. Every backend implements the same three
+phase methods (plus on-demand `get_process_status`/`profile_task`/
+`exec_in_container`):
 
-Two execution models exist, distinguished by `TaskBackend.placement`:
+- `schedule(ScheduleInput) -> BackendResult` — a pure placement decision (no I/O).
+- `reconcile(ControlSnapshot) -> BackendResult` — I/O: task observations plus
+  per-worker health events the backend *observed*.
+- `autoscale(ControlSnapshot, residual_demand, dead_workers) -> BackendResult` —
+  provision capacity, or tear down dead workers' slices (and their healthy
+  siblings). Worker teardown rides this call's `dead_workers` argument.
 
-| Placement | Who schedules task→node | Capacity | Implementation |
-|---|---|---|---|
-| `PlacementOwner.IRIS_CONTROLLER` | the Iris `Scheduler` (in-controller-layer, owned by the backend); the backend fans the per-worker Reconcile RPC to worker daemons | the Iris `Autoscaler` provisions VMs (`manages_capacity=False`) | `RpcTaskBackend` (`backends/rpc/backend.py`) — GCP/TPU, CoreWeave bare-metal, manual, local |
-| `PlacementOwner.TASK_BACKEND` | the backend itself (Kueue, later slurmctld); Iris runs no scheduling loop for it | the backend provisions its own nodes (`manages_capacity=True`); `schedule`/`manage_capacity` are no-ops | `K8sTaskProvider` (`backends/k8s/tasks.py`) |
+One `BackendResult` carries every phase's output; the controller's apply path
+dispatches on which fields are non-empty, never on the concrete backend type —
+there are no `isinstance` branches.
 
-The controller selects its input-build and apply path on these two declared
-capabilities, never on the concrete backend type — there are no `isinstance`
-branches. The two reconcile apply paths are *not* interchangeable: IRIS_CONTROLLER
-results flow through `ops.worker.apply_reconcile` (emits worker heartbeats,
-`WORKER_RECONCILE` transition source); TASK_BACKEND results flow through
-`ops.task.apply_dispatch_updates` (`DISPATCH` source, no
-heartbeats). A new backend (e.g. Slurm) slots in by declaring its placement and
-`manages_capacity`.
+A backend declares `capabilities: frozenset[BackendCapability]`, pure metadata
+the dashboard and on-demand RPC routing key on (it never gates the per-tick
+loops):
+
+| Capability | Meaning |
+|---|---|
+| `WORKER_DAEMON` (`"workers"`) | Iris tracks worker daemons; the backend fans the per-worker Reconcile RPC out (`RpcTaskBackend`, `backends/rpc/backend.py` — GCP/TPU, CoreWeave bare-metal, manual, local). |
+| `IRIS_AUTOSCALER` (`"autoscaler"`) | the Iris `Autoscaler` provisions capacity for this backend. |
+| `CLUSTER_VIEW` (`"cluster"`) | the backend places tasks on its own cluster (`K8sTaskProvider`, `backends/k8s/tasks.py` — Kueue schedules and provisions; `schedule`/`autoscale` are effectively no-ops). |
+
+Worker health is **observed by the backend** and **owned by the controller**:
+`reconcile` returns `health_events` (REACHED / UNREACHABLE / BUILD_FAILED), the
+controller folds them through the single `WorkerHealthTracker.apply` site, and a
+worker over the failure threshold is failed and reaped via
+`autoscale(dead_workers=...)`. There is no ping loop and no separate liveness
+channel — the reconcile RPC outcome is the only liveness signal. A new backend
+(e.g. Slurm) slots in by implementing the three phases and declaring its
+capabilities.
 
 **Entry points.** `cluster/client/` is the low-level RPC client
 (`RemoteClusterClient`); `client/` is the high-level user SDK (`IrisClient`,
@@ -142,8 +156,8 @@ Honest exceptions to the layering, as of this writing:
   implementations (`backends/rpc/backend.py`, `backends/k8s/tasks.py`) import
   the contract type — and the `Scheduler`/`Autoscaler`/reconcile types it
   references — up from the controller layer. This is a deliberate, narrowed edge:
-  the controller depends only on the `TaskBackend` Protocol and dispatches by
-  `placement`/`manages_capacity` (no `isinstance`), so the old runtime
+  the controller depends only on the `TaskBackend` Protocol and dispatches on
+  `BackendResult` field content (no `isinstance`), so the old runtime
   `TaskProvider | K8sTaskProvider` union and its `isinstance` ladder are gone
   (the dead `controller/provider.py` was deleted). The residual coupling is now a
   static import of one contract type rather than a behavioral branch. Fully

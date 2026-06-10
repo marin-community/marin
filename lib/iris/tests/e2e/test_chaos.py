@@ -222,7 +222,11 @@ def test_ping_permanent_failure(cluster):
 
 
 # ---------------------------------------------------------------------------
-# Ping threshold (drives worker-failure path in split-heartbeat mode)
+# Reconcile-RPC threshold: a worker whose Reconcile RPCs keep failing accrues
+# UNREACHABLE health events and is torn down once consecutive failures reach
+# PING_FAILURE_THRESHOLD. The reconcile RPC outcome is the only liveness signal
+# (no ping loop), so worker-failure detection is chaos-tested via
+# "controller.reconcile".
 # ---------------------------------------------------------------------------
 
 
@@ -234,36 +238,36 @@ def test_ping_survives_transient_delay(cluster):
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
-def test_ping_below_threshold_recovers(cluster):
-    """Ping failures below threshold don't kill the worker."""
+def test_reconcile_below_threshold_recovers(cluster):
+    """Reconcile-RPC failures below threshold don't kill the worker."""
     enable_chaos(
-        "controller.ping",
+        "controller.reconcile",
         failure_rate=1.0,
         max_failures=PING_FAILURE_THRESHOLD - 2,
         delay_seconds=0.01,
     )
-    job = cluster.submit(TestJobs.quick, "transient-ping-fail")
+    job = cluster.submit(TestJobs.quick, "transient-reconcile-fail")
     status = cluster.wait(job, timeout=30)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
-def test_ping_at_threshold_kills_worker(cluster):
-    """Consecutive Ping failures at threshold mark worker failed, task retried."""
+def test_reconcile_at_threshold_kills_worker(cluster):
+    """Consecutive Reconcile-RPC failures at threshold mark worker failed, task retried."""
     enable_chaos(
-        "controller.ping",
+        "controller.reconcile",
         failure_rate=1.0,
         max_failures=PING_FAILURE_THRESHOLD,
         delay_seconds=0.01,
     )
-    job = cluster.submit(TestJobs.sleep, "threshold-ping-fail", 2, max_retries_preemption=10)
+    job = cluster.submit(TestJobs.sleep, "threshold-reconcile-fail", 2, max_retries_preemption=10)
     status = cluster.wait(job, timeout=60)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_dispatch_cleared_on_worker_failure(cluster):
-    """Dispatch queue cleared when worker hits ping failure threshold."""
+    """Dispatch queue cleared when worker hits the reconcile-failure threshold."""
     enable_chaos(
-        "controller.ping",
+        "controller.reconcile",
         failure_rate=1.0,
         max_failures=PING_FAILURE_THRESHOLD + 2,
         delay_seconds=0.01,
@@ -276,7 +280,7 @@ def test_dispatch_cleared_on_worker_failure(cluster):
 def test_multiple_workers_one_fails(cluster):
     """One worker fails while others remain healthy; task rescheduled."""
     enable_chaos(
-        "controller.ping",
+        "controller.reconcile",
         failure_rate=1.0,
         max_failures=PING_FAILURE_THRESHOLD,
         delay_seconds=0.01,
@@ -286,10 +290,10 @@ def test_multiple_workers_one_fails(cluster):
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
-def test_ping_failure_with_pending_kills(cluster):
-    """Kill requests not orphaned when worker fails via ping threshold."""
+def test_reconcile_failure_with_pending_kills(cluster):
+    """Kill requests not orphaned when worker fails via the reconcile-failure threshold."""
     enable_chaos(
-        "controller.ping",
+        "controller.reconcile",
         failure_rate=1.0,
         max_failures=PING_FAILURE_THRESHOLD,
         delay_seconds=0.01,
@@ -315,14 +319,14 @@ def test_checkpoint_returns_metadata(cluster):
 
 
 def test_checkpoint_with_worker_death(cluster):
-    """Worker dies after checkpoint; task retried via ping failure."""
+    """Worker dies after checkpoint; task retried via reconcile-RPC failure."""
     job = cluster.submit(TestJobs.sleep, "worker-death-retry", 5, max_retries_preemption=10)
     cluster.wait_for_state(job, job_pb2.JOB_STATE_RUNNING, timeout=15)
 
     ckpt_resp = cluster.controller_client.begin_checkpoint(controller_pb2.Controller.BeginCheckpointRequest())
     assert ckpt_resp.job_count >= 1
 
-    enable_chaos("controller.ping", failure_rate=1.0, max_failures=4, delay_seconds=0.01)
+    enable_chaos("controller.reconcile", failure_rate=1.0, max_failures=4, delay_seconds=0.01)
     status = cluster.wait(job, timeout=45)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 

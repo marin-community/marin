@@ -1433,7 +1433,6 @@ def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path, e
             worker_addresses={},
             reconcile_rows=[],
             timeout_rows=[],
-            health=state._health,
         )
     )
 

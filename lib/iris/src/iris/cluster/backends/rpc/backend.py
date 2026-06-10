@@ -32,16 +32,11 @@ from iris.cluster.controller.backend import (
     ProviderError,
     ScheduleInput,
     TaskTarget,
+    plans_from_snapshot,
     run_scheduling_decision,
 )
 from iris.cluster.controller.reads import ControlSnapshot
-from iris.cluster.controller.reconcile.worker import (
-    ReconcileInputs,
-    ReconcileResult,
-    ReconcileRow,
-    WorkerReconcilePlan,
-    build_reconcile_plans,
-)
+from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind
 from iris.cluster.types import WorkerId
@@ -51,10 +46,10 @@ from iris.rpc.worker_connect import WorkerServiceClient
 
 logger = logging.getLogger(__name__)
 
-# Per-worker RPC deadline applied to every fanned-out worker call (reconcile,
-# ping, ...). Combined with the fan-out semaphore this bounds a full reconcile
-# round at ~DEFAULT_WORKER_RPC_TIMEOUT * ceil(num_workers / parallelism), so the
-# control thread is never blocked indefinitely even if the whole fleet is hung.
+# Per-worker RPC deadline applied to every fanned-out worker reconcile call.
+# Combined with the fan-out semaphore this bounds a full reconcile round at
+# ~DEFAULT_WORKER_RPC_TIMEOUT * ceil(num_workers / parallelism), so the control
+# thread is never blocked indefinitely even if the whole fleet is hung.
 DEFAULT_WORKER_RPC_TIMEOUT = Duration.from_seconds(10.0)
 
 # Max concurrent in-flight per-worker RPCs in a fan-out (asyncio.Semaphore width).
@@ -175,16 +170,7 @@ class RpcTaskBackend:
         REACHED, an RPC error/timeout is UNREACHABLE (and the worker's stub is
         evicted as I/O hygiene). The backend never decides a worker is dead.
         """
-        rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in snapshot.worker_addresses}
-        for row in snapshot.reconcile_rows:
-            rows_by_worker[row.worker_id].append(row)
-        plans = build_reconcile_plans(
-            ReconcileInputs(
-                job_specs=snapshot.job_specs,
-                worker_ids=list(snapshot.worker_addresses),
-                rows_by_worker=rows_by_worker,
-            )
-        )
+        plans = plans_from_snapshot(snapshot)
 
         async def _one(sem: asyncio.Semaphore, plan: WorkerReconcilePlan) -> ReconcileResult:
             return await self._reconcile_one(sem, plan, snapshot.worker_addresses[plan.worker_id])
