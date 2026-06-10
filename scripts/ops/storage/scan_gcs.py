@@ -16,7 +16,7 @@ Architecture:
 Usage:
     uv run iris --cluster=marin job run \\
         --cpu 2 --memory 30GB --enable-extra-resources -- \\
-        uv run python scripts/ops/storage/distributed_scan.py \\
+        uv run python scripts/ops/storage/scan_gcs.py \\
         --staging-dir gs://marin-us-central2/tmp/storage-scan \\
         --workers 128
 """
@@ -707,7 +707,7 @@ def main(
 
         uv run iris --cluster=marin job run \\
             --cpu 2 --memory 30GB --enable-extra-resources -- \\
-            uv run python scripts/ops/storage/distributed_scan.py \\
+            uv run python scripts/ops/storage/scan_gcs.py \\
             --staging-dir gs://marin-us-central2/tmp/storage-scan \\
             --workers 128
     """
