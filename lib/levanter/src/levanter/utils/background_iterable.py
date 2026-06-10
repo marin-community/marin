@@ -49,14 +49,28 @@ class BackgroundIterator(Iterator[Ex]):
         else:
             self._producer_fn = producer_fn
         self._stop_event = threading.Event()
-        # Capture the parent thread's ContextVars so the prefetch thread runs
-        # under the same JAX mesh / sharding context. threading.Thread does NOT
-        # propagate ContextVars by default; without this, jits traced inside
-        # _fill_queue_with_batches see an empty mesh context and fall back to
-        # CPU, causing "Received incompatible devices" when the resulting array
-        # meets TPU-resident data downstream. See tomat
-        # specs/done/31-tz11-postmortem.md for the full debugging story.
+        # Capture the parent thread's ContextVars + JAX mesh stack so the
+        # prefetch thread runs under the same JAX mesh / sharding context.
+        # threading.Thread does NOT propagate either by default; without
+        # this, jits traced inside _fill_queue_with_batches see an empty
+        # mesh and fall back to CPU, causing "Received incompatible devices"
+        # when the resulting array meets TPU-resident data downstream.
+        #
+        # JAX stores its active-mesh stack in a `threading.local` subclass
+        # (`jax._src.mesh.thread_resources`), NOT a ContextVar — so
+        # `copy_context()` alone is insufficient. Snapshot the mesh stack
+        # manually here and restore it inside the prefetch thread.
         self._captured_ctx = contextvars.copy_context()
+        self._captured_jax_mesh_stack: Optional[list] = None
+        self._captured_jax_mesh_env = None
+        try:
+            # Lazy import of a JAX private internal; guarded for version drift.
+            from jax._src.mesh import thread_resources as _jax_thread_resources  # noqa: PLC0415
+
+            self._captured_jax_mesh_stack = list(_jax_thread_resources.stack)
+            self._captured_jax_mesh_env = _jax_thread_resources.env
+        except Exception:
+            pass
 
         if self.max_capacity is None or self.max_capacity >= 0:
             self.q: queue.Queue = queue.Queue(self.max_capacity or 0)
@@ -105,6 +119,21 @@ class BackgroundIterator(Iterator[Ex]):
             self.thread.join()
 
     def _fill_queue_with_batches(self):
+        # Restore JAX's thread-local mesh stack in this producer thread,
+        # since `threading.Thread` doesn't carry it across. This is the
+        # actual fix for the eval-mesh ValueError; `copy_context` below
+        # is belt-and-suspenders for any non-mesh ContextVars.
+        mesh_stack = getattr(self, "_captured_jax_mesh_stack", None)
+        mesh_env = getattr(self, "_captured_jax_mesh_env", None)
+        if mesh_stack is not None:
+            try:
+                from jax._src.mesh import thread_resources as _jax_thread_resources  # noqa: PLC0415
+
+                _jax_thread_resources.stack = list(mesh_stack)
+                if mesh_env is not None:
+                    _jax_thread_resources.env = mesh_env
+            except Exception:
+                pass
         ctx = getattr(self, "_captured_ctx", None)
         if ctx is None:
             self._fill_queue_with_batches_inner()
