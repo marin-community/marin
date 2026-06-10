@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import contextvars
 import queue
 import sys
 import threading
@@ -48,6 +49,14 @@ class BackgroundIterator(Iterator[Ex]):
         else:
             self._producer_fn = producer_fn
         self._stop_event = threading.Event()
+        # Capture the parent thread's ContextVars so the prefetch thread runs
+        # under the same JAX mesh / sharding context. threading.Thread does NOT
+        # propagate ContextVars by default; without this, jits traced inside
+        # _fill_queue_with_batches see an empty mesh context and fall back to
+        # CPU, causing "Received incompatible devices" when the resulting array
+        # meets TPU-resident data downstream. See tomat
+        # specs/done/31-tz11-postmortem.md for the full debugging story.
+        self._captured_ctx = contextvars.copy_context()
 
         if self.max_capacity is None or self.max_capacity >= 0:
             self.q: queue.Queue = queue.Queue(self.max_capacity or 0)
@@ -96,6 +105,13 @@ class BackgroundIterator(Iterator[Ex]):
             self.thread.join()
 
     def _fill_queue_with_batches(self):
+        ctx = getattr(self, "_captured_ctx", None)
+        if ctx is None:
+            self._fill_queue_with_batches_inner()
+        else:
+            ctx.run(self._fill_queue_with_batches_inner)
+
+    def _fill_queue_with_batches_inner(self):
         try:
             iterator = self._producer_fn()
         except Exception:
