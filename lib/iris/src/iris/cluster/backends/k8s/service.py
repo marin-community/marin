@@ -90,6 +90,10 @@ class K8sService(Protocol):
         """Delete all resources matching the given label selector."""
         ...
 
+    def remove_finalizer(self, resource: K8sResource, name: str, finalizer: str) -> None:
+        """Strip a single finalizer from a resource so it can be reclaimed."""
+        ...
+
     def logs(self, pod_name: str, *, container: str | None = None, tail: int = 50, previous: bool = False) -> str: ...
 
     def stream_logs(
@@ -360,6 +364,38 @@ class CloudK8sService:
                 raise KubectlError(
                     f"delete_by_labels {resource.plural} -l {selector} failed ({e.status}): {e.reason}"
                 ) from e
+
+    # -- remove_finalizer ----------------------------------------------------
+
+    def remove_finalizer(self, resource: K8sResource, name: str, finalizer: str) -> None:
+        """Strip a single finalizer from a resource via JSON merge patch.
+
+        Reads the object, drops ``finalizer`` from ``metadata.finalizers``, and
+        patches the full list back. No-op when the resource is gone or does not
+        carry the finalizer. A merge patch replaces the array wholesale, so the
+        recomputed list (possibly empty) is the authoritative new value.
+        """
+        obj = self.get_json(resource, name)
+        if obj is None:
+            return
+        finalizers = obj.get("metadata", {}).get("finalizers") or []
+        if finalizer not in finalizers:
+            return
+        remaining = [f for f in finalizers if f != finalizer]
+        logger.info("k8s: PATCH remove finalizer %s from %s/%s", finalizer, resource.plural, name)
+        with slow_log(logger, f"remove_finalizer {resource.plural}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+            try:
+                self._resource_api(resource).patch(
+                    body={"metadata": {"finalizers": remaining}},
+                    name=name,
+                    content_type="application/merge-patch+json",
+                    **self._request_timeout_kwargs(),
+                    **self._ns_kwargs(resource),
+                )
+            except NotFoundError:
+                return
+            except ApiException as e:
+                raise KubectlError(f"remove_finalizer {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
 
     # -- set_image -----------------------------------------------------------
 

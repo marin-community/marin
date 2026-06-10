@@ -14,6 +14,7 @@ from finelog.client.proxy import LogServiceProxy
 from finelog.rpc import logging_pb2
 from iris.cluster.backends.k8s.tasks import (
     _GC_MAX_AGE_SECONDS,
+    _KUEUE_MANAGED_FINALIZER,
     _KUEUE_POD_GROUP_NAME,
     _KUEUE_POD_GROUP_TOTAL,
     _LABEL_ATTEMPT_ID,
@@ -1219,3 +1220,59 @@ def test_gang_teardown_deletes_kueue_workload(kueue_provider, k8s):
 
     assert k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS) == []
     assert k8s.get_json(K8sResource.WORKLOADS, group_name) is None, "stray-pod teardown must release the Kueue Workload"
+
+
+def test_stray_gang_teardown_strips_kueue_finalizer(kueue_provider, k8s):
+    """A stray gang pod held by Kueue's managed finalizer must be drained, not
+    left terminating. Without stripping the finalizer the pod lingers, Kueue
+    rebuilds the Workload from it, and the TAS reservation leaks."""
+    reqs = [
+        make_run_req(f"/gang/task/{i}", attempt_id=0, num_tasks=2, coscheduling_group_by="leafgroup") for i in range(2)
+    ]
+    kueue_provider.reconcile(make_batch(tasks_to_run=reqs))
+
+    pods = k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS)
+    group_name = pods[0]["metadata"]["labels"][_KUEUE_POD_GROUP_NAME]
+    # Kueue admits the gang: it stamps the managed finalizer on every pod and
+    # creates the backing Workload.
+    for pod in pods:
+        pod["metadata"]["finalizers"] = [_KUEUE_MANAGED_FINALIZER]
+    k8s.seed_resource(K8sResource.WORKLOADS, group_name, {"kind": "Workload", "metadata": {"name": group_name}})
+
+    # Empty desired set: the whole gang is now stray and gets torn down.
+    kueue_provider.reconcile(make_batch())
+
+    assert k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS) == [], "finalizer-held gang pods must drain"
+    assert k8s.get_json(K8sResource.WORKLOADS, group_name) is None
+
+
+def test_gc_drains_wedged_terminal_gang_pod(kueue_provider, k8s):
+    """GC re-drives a gang pod that wedged Failed under the managed finalizer
+    after a delete request: strip the finalizer, delete it, and re-delete the
+    Workload. The active-pod field selector hides such pods from the stray-pod
+    teardown, so GC is the only path that retries — promptly, not after 1h."""
+    group_name = "gang-wedged-grp"
+    recent = (datetime.now(timezone.utc) - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    pod = {
+        "kind": "Pod",
+        "metadata": {
+            "name": "iris-wedged-pod",
+            "creationTimestamp": recent,
+            "deletionTimestamp": recent,  # delete already requested, finalizer holds it
+            "finalizers": [_KUEUE_MANAGED_FINALIZER],
+            "labels": {
+                _LABEL_MANAGED: "true",
+                _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+                _LABEL_TASK_HASH: "deadbeefdeadbeef",
+                _KUEUE_POD_GROUP_NAME: group_name,
+            },
+        },
+        "status": {"phase": "Failed"},
+    }
+    k8s.seed_resource(K8sResource.PODS, "iris-wedged-pod", pod)
+    k8s.seed_resource(K8sResource.WORKLOADS, group_name, {"kind": "Workload", "metadata": {"name": group_name}})
+
+    kueue_provider._gc_terminal_resources(active_pods=[])
+
+    assert k8s.get_json(K8sResource.PODS, "iris-wedged-pod") is None, "wedged gang pod must be drained promptly"
+    assert k8s.get_json(K8sResource.WORKLOADS, group_name) is None, "wedged gang Workload must be re-deleted"
