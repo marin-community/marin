@@ -301,7 +301,6 @@ project-excludes = [
     "scripts/datakit/**",
     "scripts/debug/**",
     "scripts/ferries/**",
-    "scripts/gcp-ssh/**",
     "scripts/gcs-reorganization/**",
     "scripts/gpu_eval/**",
     "scripts/iris/**",
