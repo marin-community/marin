@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import time
 from typing import Any
@@ -14,6 +15,26 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 2
+
+# Env keys stripped before launching the CLI. Removing the API key makes claude
+# authenticate via OAuth (the flat-rate subscription plan) instead of metered
+# per-token API billing; dropping CLAUDE_CODE_* starts a clean session rather
+# than inheriting the calling agent's. Without this, nested calls would bill
+# against whatever the parent process has set — potentially the expensive API.
+_STRIPPED_ENV_KEYS = frozenset({"ANTHROPIC_API_KEY"})
+_STRIPPED_ENV_PREFIXES = ("CLAUDE_CODE_",)
+
+
+def _subscription_env() -> dict[str, str]:
+    """Return ``os.environ`` minus the API token and CLAUDE_CODE_* session vars.
+
+    The generator and eval call claude in a tight loop, so they must run on the
+    subscription plan, not the API. Stripping ANTHROPIC_API_KEY forces OAuth;
+    the CLI then authenticates from ``~/.claude`` credentials.
+    """
+    return {
+        k: v for k, v in os.environ.items() if k not in _STRIPPED_ENV_KEYS and not k.startswith(_STRIPPED_ENV_PREFIXES)
+    }
 
 
 def _run_claude(
@@ -58,6 +79,7 @@ def _run_claude(
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
+            env=_subscription_env(),
         )
         elapsed = time.monotonic() - t0
 
