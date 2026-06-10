@@ -487,6 +487,10 @@ class K8sControllerProvider:
                     "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
                 },
                 {
+                    # Bound via ClusterRoleBinding, so this grants pod access in
+                    # ALL namespaces — required for blocker eviction in
+                    # kubernetes_provider.preempt_namespaces, not just the Iris
+                    # namespace.
                     "apiGroups": [""],
                     "resources": ["pods", "pods/exec", "pods/log"],
                     "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
