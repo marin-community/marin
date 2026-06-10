@@ -7,9 +7,11 @@ import asyncio
 import atexit
 import enum
 import logging
+import socket
 import tempfile
 import threading
 import time
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,14 +21,24 @@ import uvicorn
 from finelog.client import LogClient, RemoteLogHandler
 from finelog.client.proxy import LogServiceProxy, StatsServiceProxy
 from finelog.embedded import require_embedded_server
-from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp, TokenBucket
-from sqlalchemy import bindparam, select
+from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
+from sqlalchemy import Row
 
+from iris.cluster.backends.types import resolve_external_host
 from iris.cluster.bundle import BundleStore
-from iris.cluster.controller import direct_provider, ops, reads, writes
+from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
+from iris.cluster.controller.backend import (
+    BackendReconcileInput,
+    CapacityInput,
+    PlacementOwner,
+    ScheduleInput,
+    TaskBackend,
+)
 from iris.cluster.controller.checkpoint import (
     CheckpointResult,
     backup_databases,
@@ -34,17 +46,10 @@ from iris.cluster.controller.checkpoint import (
     write_checkpoint,
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.direct_provider import (
-    DIRECT_PROVIDER_PROMOTION_RATE,
-    ClusterCapacity,
-    RunTemplateCache,
-    SchedulingEvent,
-    new_run_template_cache,
-)
+from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.ops.task import (
     Assignment,
-    apply_direct_provider_updates,
+    apply_dispatch_updates,
     finalize,
 )
 from iris.cluster.controller.ops.worker import (
@@ -52,8 +57,11 @@ from iris.cluster.controller.ops.worker import (
 )
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.pruner import prune_old_data
+from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.reconcile.dispatch import (
+    DISPATCH_PROMOTION_RATE,
+)
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
@@ -61,40 +69,19 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcilePlan,
     build_reconcile_plans,
 )
-from iris.cluster.controller.scheduler import (
-    JobRequirements,
-    Scheduler,
-    SchedulingContext,
-)
-from iris.cluster.controller.scheduling_policy import (
-    GatedCandidates,
-    PreemptionCandidate,
-    SchedulingOrder,
-    apply_scheduling_gates,
+from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
+from iris.cluster.controller.scheduling.policy import (
     build_scheduling_context,
-    compute_demand_entries,
-    compute_scheduling_order,
-    get_running_tasks_with_band_and_value,
-    inject_reservation_taints,
-    inject_taint_constraints,
-    preference_pass,
     read_reservation_claims,
     refresh_reservation_claims,
-    run_preemption_pass,
 )
-from iris.cluster.controller.schema import (
-    ReservationClaim,
-    hint_rare_state,
-    job_config_table,
-    task_attempts_table,
-    tasks_table,
-    workers_table,
+from iris.cluster.controller.scheduling.scheduler import (
+    SchedulingContext,
 )
+from iris.cluster.controller.schema import ReservationClaim
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
-from iris.cluster.providers.k8s.tasks import K8sTaskProvider
-from iris.cluster.providers.types import resolve_external_host
 from iris.cluster.runtime.profile import PROFILE_NAMESPACE, IrisProfile
 from iris.cluster.types import (
     JobName,
@@ -124,7 +111,7 @@ _RPC_HANDLER_THREADS = 1024
 def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
     """Replace ``server.run`` with a variant that pins a sized default executor."""
 
-    def run_with_executor() -> None:
+    def run_with_executor(sockets: list[socket.socket] | None = None) -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.set_default_executor(ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rpc-handler"))
@@ -173,6 +160,10 @@ class ControllerConfig:
 
     heartbeat_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     """How often to send heartbeats to workers."""
+
+    autoscaler_evaluation_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
+    """How often the controller runs an autoscale cycle (backend ``manage_capacity``).
+    Only used when the backend does not manage its own capacity."""
 
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(1.0))
     """Polling reconcile cadence. The polling thread wakes every ``poll_interval``
@@ -250,7 +241,7 @@ class Controller:
 
     Runs three background loops:
     - Scheduling loop: finds task assignments, checks worker timeouts
-    - Provider loop: syncs task state with the execution backend via TaskProvider
+    - Provider loop: syncs task state with the execution backend via TaskBackend
     - Autoscaler loop: evaluates scaling decisions, manages slice lifecycle
 
     Each loop runs on its own thread so blocking operations in one don't
@@ -261,7 +252,7 @@ class Controller:
         config = ControllerConfig(port=8080)
         controller = Controller(
             config=config,
-            provider=WorkerProvider(stub_factory=RpcWorkerStubFactory()),
+            provider=RpcTaskBackend(stub_factory=RpcWorkerStubFactory()),
         )
         controller.start()
         try:
@@ -273,16 +264,15 @@ class Controller:
 
     Args:
         config: Controller configuration
-        provider: TaskProvider for communicating with the execution backend
-        autoscaler: Optional Autoscaler for managing VM slices. If provided,
-                   the controller will run it in a background thread.
+        provider: TaskBackend for communicating with the execution backend. When
+            it does not manage its own capacity (``manages_capacity`` is False),
+            the controller drives its ``manage_capacity`` in a background loop.
     """
 
     def __init__(
         self,
         config: ControllerConfig,
-        provider: TaskProvider | K8sTaskProvider,
-        autoscaler: "Autoscaler | None" = None,
+        provider: TaskBackend,
         threads: ThreadContainer | None = None,
         db: ControllerDB | None = None,
     ):
@@ -294,11 +284,9 @@ class Controller:
 
         self._config = config
         self._stopped = False
-        self._provider: TaskProvider | K8sTaskProvider = provider
-        self._provider_scheduling_events: list[SchedulingEvent] = []
-        self._provider_capacity: ClusterCapacity | None = None
+        self._task_backend: TaskBackend = provider
         self._promotion_bucket = TokenBucket(
-            capacity=DIRECT_PROVIDER_PROMOTION_RATE,
+            capacity=DISPATCH_PROMOTION_RATE,
             refill_period=Duration.from_minutes(1),
         )
 
@@ -333,18 +321,18 @@ class Controller:
         self._remote_log_service = LogServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
         self._remote_stats_service = StatsServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
 
-        # Providers that collect logs outside the worker process push directly
-        # to the log server via RPC. K8s pods have no worker daemon, so the
-        # provider also writes per-pod resource samples to iris.task itself —
-        # mirroring what the worker daemon does on the GCE/TPU path.
-        if isinstance(self._provider, K8sTaskProvider):
-            k8s_log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
-            self._provider.log_client = k8s_log_client
-            self._provider.task_stats_table = k8s_log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)
-            self._provider.profile_table = k8s_log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
-
-        # Controller process logs ship to the log server via RemoteLogHandler.
+        # A single log client serves both the controller's own logs and any backend
+        # that collects logs out-of-process.
         self._log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
+
+        # Backends without a worker daemon push per-task resource/profile samples to the
+        # log server directly; daemon-backed backends (RPC) ignore the sink.
+        self._task_backend.set_log_sink(
+            self._log_client,
+            self._log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat),
+            self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile),
+        )
+
         self._log_handler = RemoteLogHandler(self._log_client, key=CONTROLLER_LOG_KEY)
 
         self._log_handler.setLevel(logging.DEBUG)
@@ -352,7 +340,6 @@ class Controller:
         logging.getLogger("iris").addHandler(self._log_handler)
 
         self._run_template_cache: RunTemplateCache = new_run_template_cache()
-        self._scheduler = Scheduler()
 
         self._bundle_store = BundleStore(storage_dir=f"{config.remote_state_dir.rstrip('/')}/bundles")
 
@@ -394,13 +381,11 @@ class Controller:
         self._server: uvicorn.Server | None = None
         self._scheduling_thread: ManagedThread | None = None
         self._polling_thread: ManagedThread | None = None
-        self._direct_provider_thread: ManagedThread | None = None
+        self._dispatch_thread: ManagedThread | None = None
         self._autoscaler_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
         self._ping_thread: ManagedThread | None = None
         self._checkpoint_thread: ManagedThread | None = None
-
-        self._autoscaler: Autoscaler | None = autoscaler
 
         # Throttles the execution-timeout deadline scan in _reconcile_tick.
         # The reconcile tick runs frequently (poll cadence); the timeout query
@@ -419,6 +404,11 @@ class Controller:
         # the DB. This is the only ``| None`` attribute on Controller: it is
         # genuinely None before the first scheduling tick has run.
         self._last_scheduling_context: SchedulingContext | None = None
+
+        # Residual demand from the most recent scheduling tick, computed by the
+        # scheduling pass alongside assignments and read by the autoscaler loop.
+        # Empty until the first tick with pending work runs.
+        self._last_residual_demand: list[DemandEntry] = []
 
         # Set to True once start() is called. Used to gate operations that
         # are only valid before the controller loops begin (e.g. LoadCheckpoint).
@@ -459,8 +449,7 @@ class Controller:
         """
         now_ms = Timestamp.now().epoch_ms()
         with self._db.read_snapshot() as q:
-            rows = q.execute(select(workers_table.c.worker_id)).all()
-        worker_ids = [WorkerId(str(row.worker_id)) for row in rows]
+            worker_ids = reads.all_worker_ids(q)
         if worker_ids:
             self._health.heartbeat(worker_ids, now_ms)
 
@@ -492,19 +481,21 @@ class Controller:
         return address
 
     def start(self) -> None:
-        """Start main controller loop, dashboard server, and optionally autoscaler."""
+        """Start the dashboard server and all loop threads uniformly.
+
+        Every backend gets the same thread set; each tick no-ops for the
+        placements it does not serve.
+        """
         self._started = True
         if self._config.dry_run:
             logger.info("[DRY-RUN] Controller started in dry-run mode — all side effects suppressed")
 
-        if isinstance(self._provider, K8sTaskProvider):
-            self._direct_provider_thread = self._threads.spawn(self._run_direct_provider_loop, name="provider-loop")
-        else:
-            self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
-            self._polling_thread = self._threads.spawn(self._run_polling_loop, name="polling-loop")
-            self._ping_thread = self._threads.spawn(self._run_ping_loop, name="ping-loop")
-            if not self._config.dry_run:
-                self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
+        self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
+        self._polling_thread = self._threads.spawn(self._run_polling_loop, name="polling-loop")
+        self._ping_thread = self._threads.spawn(self._run_ping_loop, name="ping-loop")
+        self._dispatch_thread = self._threads.spawn(self._run_dispatch_loop, name="dispatch-loop")
+        if not self._config.dry_run:
+            self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
 
         # Create and start uvicorn server via spawn_server, which bridges the
         # ManagedThread stop_event to server.should_exit automatically.
@@ -543,8 +534,7 @@ class Controller:
             logger.info("Registered system endpoint %s -> %s", name, url)
         self._service._system_endpoints["/system/log-server"] = self._log_service_address
 
-        if self._autoscaler:
-            logger.info("Autoscaler configured with %d scale groups", len(self._autoscaler.groups))
+        if not self._config.dry_run:
             self._autoscaler_thread = self._threads.spawn(self._run_autoscaler_loop, name="autoscaler-loop")
 
         if self._periodic_checkpoint_limiter is not None and not self._config.dry_run:
@@ -586,9 +576,9 @@ class Controller:
         if self._polling_thread:
             self._polling_thread.stop()
             self._polling_thread.join(timeout=join_timeout)
-        if self._direct_provider_thread:
-            self._direct_provider_thread.stop()
-            self._direct_provider_thread.join(timeout=join_timeout)
+        if self._dispatch_thread:
+            self._dispatch_thread.stop()
+            self._dispatch_thread.join(timeout=join_timeout)
         if self._ping_thread:
             self._ping_thread.stop()
             self._ping_thread.join(timeout=join_timeout)
@@ -602,11 +592,10 @@ class Controller:
             self._checkpoint_thread.stop()
             self._checkpoint_thread.join(timeout=join_timeout)
 
-        if self._autoscaler:
-            self._autoscaler.shutdown()
-
         self._threads.stop()
-        self._provider.close()
+        # The backend owns the autoscaler now; close() shuts it down (terminates
+        # VMs, stops the platform) and releases the backend's own resources.
+        self._task_backend.close()
 
         # Remove log handler before closing log resources to avoid errors
         # from late log records hitting a closed store or connection.
@@ -731,7 +720,7 @@ class Controller:
     def _run_autoscaler_loop(self, stop_event: threading.Event) -> None:
         """Autoscaler loop: runs on its own thread so blocking cloud API calls
         don't stall scheduling or heartbeats."""
-        limiter = RateLimiter(interval_seconds=self._autoscaler.evaluation_interval.to_seconds())
+        limiter = RateLimiter(interval_seconds=self._config.autoscaler_evaluation_interval.to_seconds())
         while not stop_event.is_set():
             if not limiter.wait(cancel=stop_event):
                 break
@@ -753,64 +742,54 @@ class Controller:
             except Exception:
                 logger.exception("Periodic checkpoint failed")
 
-    def _run_direct_provider_loop(self, stop_event: threading.Event) -> None:
-        """Provider sync loop for K8sTaskProvider: no scheduling, no workers."""
+    def _run_dispatch_loop(self, stop_event: threading.Event) -> None:
+        """Dispatch loop spawned for all backends; ``_sync_dispatch`` no-ops unless placement is TASK_BACKEND."""
         limiter = RateLimiter(interval_seconds=self._config.heartbeat_interval.to_seconds())
         while not stop_event.is_set():
             if not limiter.wait(cancel=stop_event):
                 break
             try:
-                self._sync_direct_provider()
+                self._sync_dispatch()
             except Exception:
-                logger.exception("Direct provider sync round failed, will retry next interval")
+                logger.exception("Dispatch sync round failed, will retry next interval")
 
-    def _sync_direct_provider(self) -> None:
+    def _sync_dispatch(self) -> None:
+        if self._task_backend.placement is not PlacementOwner.TASK_BACKEND:
+            return
         if self._config.dry_run:
             return
-        assert isinstance(self._provider, K8sTaskProvider)
-        provider = self._provider
         max_promotions = self._promotion_bucket.available
         with self._db.transaction() as cur:
-            batch = direct_provider.drain_for_direct_provider(
+            batch = dispatch.drain_for_dispatch(
                 cur,
                 cache=self._run_template_cache,
                 max_promotions=max_promotions,
             )
         if batch.tasks_to_run:
             self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
-        result = provider.sync(batch)
+        result = self._task_backend.reconcile(batch)
         with self._db.transaction() as cur:
-            apply_direct_provider_updates(
+            apply_dispatch_updates(
                 cur,
                 result.updates,
                 health=self._health,
                 endpoints=self._endpoints,
                 now=Timestamp.now(),
             )
-        self._provider_scheduling_events = list(result.scheduling_events) if result.scheduling_events else []
-        self._provider_capacity = result.capacity
         # Worker-side kills are surfaced through the next K8s pod-diff sync;
         # no immediate RPC fan-out here.
 
     def _run_scheduling(self) -> SchedulingOutcome:
         """Run one scheduling cycle.
 
-        Six-phase scheduling:
-        1. Reservation claims: clean up stale claims and claim workers for
-           reservation jobs.
-        2. State reads: fetch pending tasks and workers, filter by deadlines,
-           reservation gates, and per-job cap.
-        3. Budget/band interleaving: compute user spend, map tasks to effective
-           priority bands (down-weighting over-budget users), round-robin users
-           within each band.
-        4. Preference pass: steer reservation tasks toward their claimed workers
-           (skips coscheduled jobs which need atomic assignment).
-        5. Normal scheduling: run find_assignments for all remaining tasks.
-        6. Preemption pass: evict lower-priority running tasks to free capacity
-           for higher-priority unscheduled work.
-
-        Phases 4-6 share a single SchedulingContext so capacity deductions
-        are visible across passes.
+        The controller owns only the I/O: it refreshes reservation claims and
+        builds the scheduling context in a single DB snapshot (which folds in the
+        running-task band/value the preemption pass may evict), hands the
+        resulting DB-less snapshot to ``backend.schedule`` for the pure placement
+        decision, then commits the returned assignments, preemptions, and
+        unschedulable marks. The backend (IRIS placement) runs the full
+        gates → order → taints → preference → find_assignments → preemption
+        pipeline; BACKEND placement returns an empty result (Kueue schedules).
 
         No lock is needed since only one scheduling thread exists. Every DB
         access is serialized by ControllerDB._lock with multi-statement
@@ -820,17 +799,12 @@ class Controller:
         trace = self._scheduling_round % _SCHEDULING_TRACE_INTERVAL == 0
 
         claims = self._refresh_reservation_claims()
-
-        timer = Timer()
-        # Source max_building_tasks from the scheduler so the no-claims fast path
-        # (reusing ctx) and the claims path (rebuilding via evolve_with_workers)
-        # use one cap, not two independently-defaulted ones.
         ctx = build_scheduling_context(
             self._db,
             self._health,
             self._worker_attrs,
             self._config.user_budget_defaults,
-            max_building_tasks=self._scheduler.max_building_tasks_per_worker,
+            claims,
         )
 
         if trace:
@@ -845,41 +819,36 @@ class Controller:
         if not ctx.pending_task_rows:
             self._scheduling_diagnostics = {}
             self._last_scheduling_context = ctx
+            self._last_residual_demand = []
             return SchedulingOutcome.NO_PENDING_TASKS
 
-        gated = apply_scheduling_gates(
-            ctx,
-            claims,
-            max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
-            trace=trace,
+        result = self._task_backend.schedule(
+            ScheduleInput(
+                context=ctx,
+                claims=claims,
+                max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
+                trace=trace,
+            )
         )
-        # Mark deadline-expired tasks UNSCHEDULABLE — kept out of the pure
-        # gate evaluation so the gate stays free of DB writes.
-        if gated.expired_tasks:
-            self._mark_tasks_unschedulable(list(gated.expired_tasks))
 
-        if not gated.schedulable_task_ids:
-            self._scheduling_diagnostics = {}
-            self._last_scheduling_context = ctx
-            return SchedulingOutcome.NO_PENDING_TASKS
+        # Commit the decisions. Expired/deadline tasks are marked UNSCHEDULABLE;
+        # assignments stamp ASSIGNED; preemption finalizes victims.
+        if result.unschedulable:
+            self._mark_tasks_unschedulable(result.unschedulable)
+        if result.assignments:
+            self._commit_assignments(result.assignments)
+        self._apply_preemptions(result.preemptions)
 
-        order = compute_scheduling_order(ctx, gated, trace=trace)
+        self._scheduling_diagnostics = result.diagnostics
+        self._last_scheduling_context = result.post_taint_context
+        self._last_residual_demand = result.residual_demand
 
-        all_assignments, context, tainted_jobs = self._run_scheduler_pass(order, gated, ctx, claims, timer, trace=trace)
-
-        preemptions = self._apply_preemptions(order, tainted_jobs, all_assignments, claims, context)
-
-        self._cache_scheduling_diagnostics(context, tainted_jobs, all_assignments, order.ordered_task_ids)
-        # Post-taint context (or the un-tainted ctx when no claims were active)
-        # — exposed via ``last_scheduling_context`` for dashboard diagnostics.
-        self._last_scheduling_context = context
-
-        if all_assignments or preemptions:
+        if result.assignments or result.preemptions:
             log_event(
                 "scheduling_pass_completed",
                 "scheduler",
-                assignments=len(all_assignments),
-                preempted=len(preemptions),
+                assignments=len(result.assignments),
+                preempted=len(result.preemptions),
                 pending=len(ctx.pending_task_rows),
                 workers=len(ctx.workers),
             )
@@ -895,226 +864,58 @@ class Controller:
             persist=not self._config.dry_run,
         )
 
-    def _run_scheduler_pass(
-        self,
-        order: SchedulingOrder,
-        gated: GatedCandidates,
-        ctx: SchedulingContext,
-        claims: dict[WorkerId, ReservationClaim],
-        timer: Timer,
-        trace: bool = False,
-    ) -> tuple[list[tuple[JobName, WorkerId]], SchedulingContext, dict[JobName, JobRequirements]]:
-        """Inject reservation taints, then run the preference + assignment passes."""
-        modified_jobs = inject_taint_constraints(gated.jobs, gated.has_reservation, gated.has_direct_reservation)
-
-        if claims:
-            # Taints reorder/relabel workers, so rebuild the capacity/constraint
-            # indexes over the tainted set.
-            modified_workers = inject_reservation_taints(list(ctx.workers), claims)
-            building_counts = {wid: cap.building_task_count for wid, cap in ctx.capacities.items()}
-            ctx.pending_tasks = list(order.ordered_task_ids)
-            context = ctx.evolve_with_workers(
-                workers=modified_workers,
-                jobs=modified_jobs,
-                building_counts=building_counts,
-                max_building_tasks=self._scheduler.max_building_tasks_per_worker,
-            )
-        else:
-            # No claims: taint injection is a no-op and ctx's per-pass state is
-            # still empty, so a rebuild would reproduce ctx exactly — reuse it and
-            # skip the index rebuild.
-            ctx.pending_tasks = list(order.ordered_task_ids)
-            ctx.jobs = modified_jobs
-            context = ctx
-
-        if trace:
-            logger.info(
-                "[TRACE] Phase 4 context: %d workers, %d pending tasks, %d jobs",
-                len(context.capacities),
-                len(context.pending_tasks),
-                len(context.jobs),
-            )
-
-        # Soft preference — steer reservation tasks toward claimed workers.
-        # Skips coscheduled jobs (they need atomic all-or-nothing via find_assignments).
-        preference_assignments = preference_pass(context, gated.has_reservation, claims)
-
-        result = self._scheduler.find_assignments(context)
-
-        all_assignments = preference_assignments + result.assignments
-        if trace:
-            logger.info(
-                "[TRACE] Phase 5 assignments: %d total (%d preferred, %d normal)",
-                len(all_assignments),
-                len(preference_assignments),
-                len(result.assignments),
-            )
-        if all_assignments:
-            self._commit_assignments(all_assignments, order.task_band_map)
-            logger.debug(
-                "Scheduling cycle: %d assignments (%d preferred, %d normal), %dms",
-                len(all_assignments),
-                len(preference_assignments),
-                len(result.assignments),
-                timer.elapsed_ms(),
-            )
-        return all_assignments, context, modified_jobs
-
-    def _commit_assignments(
-        self,
-        assignments: list[tuple[JobName, WorkerId]],
-        task_band_map: dict[JobName, int],
-    ) -> None:
+    def _commit_assignments(self, assignments: list[Assignment]) -> None:
         """Persist scheduler decisions to ``tasks.state = ASSIGNED`` rows.
 
-        Each assignment carries the effective priority band from
-        ``task_band_map`` (computed against the snapshot's user spend) so
-        ``assign_task`` can stamp it onto ``tasks.priority_band``. The
-        preemption pass then trusts that stamped value instead of
-        recomputing from current spend on every tick.
+        Each :class:`Assignment` carries the effective priority band the backend
+        computed against the snapshot's user spend, so ``assign_task`` stamps it
+        onto ``tasks.priority_band``. The preemption pass then trusts that
+        stamped value instead of recomputing from current spend every tick.
 
         The polling reconcile thread reads ASSIGNED rows on its next tick
         (woken via ``_polling_wake``) and fans out the Reconcile RPCs.
         """
         if self._config.dry_run:
-            for task_id, worker_id in assignments:
-                logger.info("[DRY-RUN] Would assign task %s to worker %s", task_id, worker_id)
+            for assignment in assignments:
+                logger.info("[DRY-RUN] Would assign task %s to worker %s", assignment.task_id, assignment.worker_id)
             return
-        command = [
-            Assignment(
-                task_id=task_id,
-                worker_id=worker_id,
-                priority_band=task_band_map.get(task_id),
-            )
-            for task_id, worker_id in assignments
-        ]
         with self._db.transaction() as cur:
-            ops.task.assign(cur, command, health=self._health)
+            ops.task.assign(cur, assignments, health=self._health)
         # Wake the polling thread; every tick reconciles every healthy worker,
         # so the new ASSIGNED rows turn into Reconcile RPCs on the next tick.
         self._polling_wake.set()
 
-    def _apply_preemptions(
-        self,
-        order: SchedulingOrder,
-        jobs: dict[JobName, JobRequirements],
-        all_assignments: list[tuple[JobName, WorkerId]],
-        claims: dict[WorkerId, ReservationClaim],
-        context: SchedulingContext,
-    ) -> list[tuple[JobName, JobName]]:
-        """Evict lower-priority running tasks for higher-priority unscheduled work."""
-        assigned_ids = {task_id for task_id, _ in all_assignments}
-        unscheduled = [
-            PreemptionCandidate(
-                job_name=tid,
-                requirements=jobs[tid.parent],
-                band=order.task_band_map.get(tid, job_pb2.PRIORITY_BAND_INTERACTIVE),
+    def _apply_preemptions(self, preemptions: list[TerminalDecision]) -> None:
+        """Finalize the backend's PREEMPT decisions.
+
+        Slice evictions for a coscheduled preemptor's N siblings are
+        all-or-nothing. Victims stop on the next reconcile tick: the planner
+        drops them from the worker's desired set.
+        """
+        if not preemptions:
+            return
+        with self._db.transaction() as cur:
+            finalize(
+                cur,
+                preemptions,
+                health=self._health,
+                endpoints=self._endpoints,
+                now=Timestamp.now(),
             )
-            for tid in order.ordered_task_ids
-            if tid not in assigned_ids and tid.parent is not None and tid.parent in jobs
-        ]
-        preemptions: list[tuple[JobName, JobName]] = []
-        if unscheduled:
-            claimed_workers = set(claims.keys())
-            running_info = get_running_tasks_with_band_and_value(self._db, claimed_workers)
-            preemptions = run_preemption_pass(unscheduled, running_info, context)
-            # Apply all preemptions in one transaction so slice evictions
-            # (N siblings of a coscheduled preemptor) are all-or-nothing.
-            if preemptions:
-                with self._db.transaction() as cur:
-                    now = Timestamp.now()
-                    finalize(
-                        cur,
-                        [
-                            TerminalDecision(
-                                kind=TerminalKind.PREEMPT,
-                                task_id=victim_id,
-                                reason=f"Preempted by {preemptor_name}",
-                            )
-                            for preemptor_name, victim_id in preemptions
-                        ],
-                        health=self._health,
-                        endpoints=self._endpoints,
-                        now=now,
-                    )
-                # Victims stop on the next reconcile tick: the planner marks
-                # them 'stop' (or drops them) from the worker's desired set.
-                logger.info("Preemption pass: %d tasks preempted", len(preemptions))
-        return preemptions
-
-    def _cache_scheduling_diagnostics(
-        self,
-        context: SchedulingContext,
-        jobs: dict[JobName, JobRequirements],
-        assignments: list[tuple[JobName, WorkerId]],
-        schedulable_task_ids: list[JobName],
-    ) -> None:
-        """Compute and cache scheduling diagnostics for unassigned jobs."""
-        assigned_task_ids = {task_id for task_id, _ in assignments}
-
-        # Find unassigned jobs with a representative task
-        unscheduled: dict[JobName, tuple[JobName, int]] = {}
-        for task_id in schedulable_task_ids:
-            if task_id in assigned_task_ids or task_id.parent is None:
-                continue
-            job_id = task_id.parent
-            if job_id in unscheduled:
-                _, count = unscheduled[job_id]
-                unscheduled[job_id] = (unscheduled[job_id][0], count + 1)
-            else:
-                unscheduled[job_id] = (task_id, 1)
-
-        diagnostics: dict[str, str] = {}
-        for job_id, (representative_task, num_tasks) in unscheduled.items():
-            req = jobs.get(job_id)
-            if req is None:
-                continue
-            reason = self._scheduler.get_job_scheduling_diagnostics(
-                req,
-                context,
-                representative_task,
-                num_tasks=num_tasks,
-            )
-            diagnostics[job_id.to_wire()] = reason
-
-        # Atomic replacement — safe for concurrent reads under the GIL.
-        self._scheduling_diagnostics = diagnostics
+        logger.info("Preemption pass: %d tasks preempted", len(preemptions))
 
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None:
         """Return cached scheduling diagnostic for a job, or None if unavailable."""
         return self._scheduling_diagnostics.get(job_wire_id)
 
-    def _scan_execution_timeouts(self, snap: Any, now_ms: int) -> list[TerminalDecision]:
-        """Find executing tasks past their deadline within an existing read snapshot.
+    def _timeout_decisions(self, timeout_rows: Sequence[Row], now_ms: int) -> list[TerminalDecision]:
+        """Turn execution-timeout rows from the snapshot into TIMEOUT decisions.
 
-        Issued inline with the reconcile snapshot so the timeout sweep adds one
-        query (not a fresh snapshot open) per reconcile tick where the limiter
-        fires. Returned decisions are applied by the caller inside the same
-        write transaction as the reconcile results.
+        A row becomes a decision only once its attempt's
+        ``started_at_ms + timeout_ms`` is already in the past.
         """
-        rows = snap.execute(
-            select(
-                tasks_table.c.task_id,
-                task_attempts_table.c.started_at_ms,
-                job_config_table.c.timeout_ms,
-            )
-            .select_from(
-                tasks_table.join(job_config_table, job_config_table.c.job_id == tasks_table.c.job_id).join(
-                    task_attempts_table,
-                    (task_attempts_table.c.task_id == tasks_table.c.task_id)
-                    & (task_attempts_table.c.attempt_id == tasks_table.c.current_attempt_id),
-                )
-            )
-            .where(
-                hint_rare_state(tasks_table.c.state.in_(bindparam("executing_states", expanding=True))),
-                job_config_table.c.timeout_ms.is_not(None),
-                job_config_table.c.timeout_ms > 0,
-                task_attempts_table.c.started_at_ms.is_not(None),
-            ),
-            {"executing_states": [int(job_pb2.TASK_STATE_BUILDING), int(job_pb2.TASK_STATE_RUNNING)]},
-        ).all()
         decisions: list[TerminalDecision] = []
-        for row in rows:
+        for row in timeout_rows:
             if row.started_at_ms.epoch_ms() + int(row.timeout_ms) > now_ms:
                 continue
             logger.warning("Task %s exceeded execution timeout, killing", row.task_id)
@@ -1130,7 +931,7 @@ class Controller:
     def _mark_tasks_unschedulable(self, tasks: list[Any]) -> None:
         """Mark a batch of tasks as unschedulable due to scheduling timeout.
 
-        Each entry must be a row from ``_pending_tasks_with_jobs``; it carries
+        Each entry must be a row from ``reads.pending_tasks_with_jobs``; it carries
         ``scheduling_timeout_ms`` so no secondary DB fetch is needed.
         """
         if not tasks:
@@ -1175,80 +976,45 @@ class Controller:
     # Worker lifecycle RPC dispatch (Reconcile / Ping)
     # =========================================================================
 
-    def _snapshot_reconcile_inputs(
-        self, scan_timeouts: bool, now_ms: int
-    ) -> tuple[ReconcileInputs, dict[WorkerId, str], list[TerminalDecision]]:
-        """Snapshot the DB and assemble the reconcile inputs for one tick.
+    def _build_run_templates(
+        self, snap: Tx, reconcile_rows: list[ReconcileRow]
+    ) -> dict[JobName, job_pb2.RunTaskRequest]:
+        """Build per-job ``RunTaskRequest`` templates for the ASSIGNED reconcile rows.
 
-        When ``scan_timeouts`` is True, also issues the execution-timeout
-        deadline scan inside the same read snapshot so the sweep adds one
-        query (not a fresh snapshot open) per limiter tick.
+        ``run_request_template`` can return ``None`` for jobs the scheduler hasn't
+        cached yet (e.g. reservation holders); those are dropped from the map.
+        """
+        templates_by_job: dict[JobName, job_pb2.RunTaskRequest | None] = {}
+        for row in reconcile_rows:
+            if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
+                continue
+            if row.job_id not in templates_by_job:
+                templates_by_job[row.job_id] = dispatch.run_request_template(self._run_template_cache, snap, row.job_id)
+        return {jid: spec for jid, spec in templates_by_job.items() if spec is not None}
+
+    def _snapshot_reconcile_inputs(self, scan_timeouts: bool) -> tuple[reads.ControlSnapshot, ReconcileInputs]:
+        """Build the per-cycle :class:`ControlSnapshot` and derive reconcile inputs.
+
+        The control snapshot — live worker set, worker-bound attempt rows, and
+        (when ``scan_timeouts``) the execution-timeout rows — is assembled by
+        ``reads.load_control_snapshot`` in one read transaction. The per-job run
+        templates need the same open snapshot, so they are built before it
+        closes. The returned ``ReconcileInputs`` is the backend call shape; the
+        snapshot carries worker addresses, timeout rows, and the health view.
         """
         with self._db.read_snapshot() as snap:
-            addresses = reads.list_active_healthy_workers(snap, self._health)
-            if not addresses:
-                timeout_decisions = self._scan_execution_timeouts(snap, now_ms) if scan_timeouts else []
-                return ReconcileInputs(job_specs={}, worker_ids=[], rows_by_worker={}), {}, timeout_decisions
-            worker_ids = list(addresses)
-            # Snapshot current attempts for ``worker_ids``. Workers not in
-            # ``worker_ids`` are filtered in Python so the partial index
-            # ``idx_task_attempts_live_workerbound`` remains active rather
-            # than falling back to a scan on a long IN list. We deliberately
-            # do NOT filter on task state: active rows (ASSIGNED/BUILDING/
-            # RUNNING) drive normal reconciliation; rows whose task has
-            # already moved to a terminal state but whose attempt is still
-            # worker-bound (worker_id set, finished_at_ms NULL) are stranded
-            # attempts whose terminal Reconcile observation was lost.
-            # Including them in the desired set gives the worker a second
-            # chance to report -- either with the real terminal status or
-            # via the MISSING synthesis in ``handle_reconcile`` -- so the
-            # reconcile-observation path can stamp finished_at_ms. Without this, a single
-            # lost RPC strands the attempt forever, since no other code path
-            # polls about it.
-            target_ids: set[WorkerId] = set(worker_ids)
-            raw_rows = snap.execute(
-                select(
-                    task_attempts_table.c.worker_id,
-                    tasks_table.c.task_id,
-                    task_attempts_table.c.attempt_id,
-                    tasks_table.c.state.label("task_state"),
-                    task_attempts_table.c.state.label("attempt_state"),
-                    tasks_table.c.job_id,
-                    task_attempts_table.c.attempt_uid,
-                )
-                .select_from(
-                    task_attempts_table.join(
-                        tasks_table,
-                        (tasks_table.c.task_id == task_attempts_table.c.task_id)
-                        & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
-                    )
-                )
-                .where(
-                    task_attempts_table.c.worker_id.is_not(None),
-                    task_attempts_table.c.finished_at_ms.is_(None),
-                ),
-            ).all()
-            rows = [row for row in raw_rows if row.worker_id in target_ids]
-            templates_by_job: dict[JobName, job_pb2.RunTaskRequest | None] = {}
-            for row in rows:
-                if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
-                    continue
-                if row.job_id not in templates_by_job:
-                    templates_by_job[row.job_id] = direct_provider.run_request_template(
-                        self._run_template_cache, snap, row.job_id
-                    )
-            timeout_decisions = self._scan_execution_timeouts(snap, now_ms) if scan_timeouts else []
+            control = reads.load_control_snapshot(snap, self._health, scan_timeouts=scan_timeouts)
+            job_specs = self._build_run_templates(snap, control.reconcile_rows)
 
-        rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in worker_ids}
-        for row in rows:
+        rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in control.worker_addresses}
+        for row in control.reconcile_rows:
             rows_by_worker[row.worker_id].append(row)
-
-        # ``templates_by_job`` can carry ``None`` for jobs the scheduler hasn't
-        # cached yet; reconcile_worker checks the dict membership so feeding it
-        # the raw map is harmless. Filter Nones to keep the type tight.
-        job_specs = {jid: spec for jid, spec in templates_by_job.items() if spec is not None}
-        inputs = ReconcileInputs(job_specs=job_specs, worker_ids=worker_ids, rows_by_worker=rows_by_worker)
-        return inputs, addresses, timeout_decisions
+        inputs = ReconcileInputs(
+            job_specs=job_specs,
+            worker_ids=list(control.worker_addresses),
+            rows_by_worker=rows_by_worker,
+        )
+        return control, inputs
 
     def _reconcile_tick(self) -> None:
         """One polling-tick reconcile pass: snapshot, fan out, apply.
@@ -1260,15 +1026,22 @@ class Controller:
         """
         if self._config.dry_run:
             return
+        if self._task_backend.placement is PlacementOwner.TASK_BACKEND:
+            return
 
         now = Timestamp.now()
         scan_timeouts = self._timeout_rate_limiter.should_run()
-        inputs, addresses, timeout_decisions = self._snapshot_reconcile_inputs(scan_timeouts, now.epoch_ms())
+        snapshot, inputs = self._snapshot_reconcile_inputs(scan_timeouts)
+        timeout_decisions = self._timeout_decisions(snapshot.timeout_rows, now.epoch_ms())
         if not inputs.worker_ids and not timeout_decisions:
             return
 
         plans = build_reconcile_plans(inputs) if inputs.worker_ids else []
-        results = self._provider.dispatch_reconcile_plans(plans, addresses) if plans else []
+        if plans:
+            reconcile_input = BackendReconcileInput(plans=plans, worker_addresses=snapshot.worker_addresses)
+            results = self._task_backend.reconcile(reconcile_input).worker_results
+        else:
+            results = []
 
         plan_by_worker: dict[WorkerId, WorkerReconcilePlan] = {p.worker_id: p for p in plans}
         for result in results:
@@ -1280,7 +1053,7 @@ class Controller:
                     cur,
                     plan_by_worker,
                     results,
-                    health=self._health,
+                    health=snapshot.health,
                     endpoints=self._endpoints,
                     now=now,
                 )
@@ -1288,7 +1061,7 @@ class Controller:
                 finalize(
                     cur,
                     timeout_decisions,
-                    health=self._health,
+                    health=snapshot.health,
                     endpoints=self._endpoints,
                     now=now,
                 )
@@ -1314,7 +1087,7 @@ class Controller:
                 break
             try:
                 workers = self._get_active_worker_addresses()
-                results = self._provider.ping_workers(workers)
+                results = self._task_backend.ping_workers(workers)
 
                 live_worker_ids: list[WorkerId] = []
                 for result in results:
@@ -1362,24 +1135,23 @@ class Controller:
         )
         removed: list[WorkerId] = []
         for wid, addr in failure_result.removed_workers:
-            self._provider.on_worker_failed(wid, addr)
+            self._task_backend.on_worker_failed(wid, addr)
             removed.append(wid)
-        if self._autoscaler:
-            sibling_worker_ids = self._autoscaler.terminate_slices_for_workers(
-                [str(wid) for wid, _ in failure_result.removed_workers]
-            )
-            for wid in sibling_worker_ids:
+        failed_result = self._task_backend.on_workers_failed([wid for wid, _ in failure_result.removed_workers])
+        persist_autoscaler_state(self._db, failed_result.state)
+        if failed_result.sibling_worker_ids:
+            for wid in failed_result.sibling_worker_ids:
                 log_event("worker_failing", str(wid), trigger=sibling_reason)
             sibling_failures = ops.worker.fail(
                 self._db,
-                worker_ids=sibling_worker_ids,
+                worker_ids=failed_result.sibling_worker_ids,
                 reason=sibling_reason,
                 health=self._health,
                 endpoints=self._endpoints,
                 worker_attrs=self._worker_attrs,
             )
             for wid, addr in sibling_failures.removed_workers:
-                self._provider.on_worker_failed(wid, addr)
+                self._task_backend.on_worker_failed(wid, addr)
                 removed.append(wid)
         # Surviving-slice siblings stop on the next reconcile tick: the
         # planner drops them from the worker's desired set (or marks them
@@ -1388,29 +1160,25 @@ class Controller:
         return removed
 
     def _run_autoscaler_once(self) -> None:
-        """Run one autoscaler cycle: refresh (I/O) then update (CPU).
+        """Run one autoscale cycle: build the worker-status snapshot, drive the
+        backend's ``manage_capacity`` with the cached residual demand, then
+        persist the returned state.
 
-        Called from the autoscaler loop thread.
+        Called from the autoscaler loop thread. Demand comes from the scheduling
+        pass via ``_last_residual_demand``. The controller owns every DB read and
+        write; the backend never touches the database.
         """
-        if not self._autoscaler:
-            return
-
         if self._config.dry_run:
-            logger.info("[DRY-RUN] Skipping autoscaler cycle (refresh + update)")
+            logger.info("[DRY-RUN] Skipping autoscaler cycle (manage_capacity)")
+            return
+        if self._task_backend.manages_capacity:
             return
 
         worker_status_map = self._build_worker_status_map()
-        self._autoscaler.refresh(worker_status_map)
-        self._autoscaler.probe_health()
-        with self._db.read_snapshot() as tx:
-            workers = reads.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
-        demand_entries = compute_demand_entries(
-            self._db,
-            self._scheduler,
-            workers,
-            reservation_claims=read_reservation_claims(self._db),
+        result = self._task_backend.manage_capacity(
+            CapacityInput(worker_status_map=worker_status_map, demand_entries=self._last_residual_demand)
         )
-        self._autoscaler.update(demand_entries)
+        persist_autoscaler_state(self._db, result.state)
 
     def _build_worker_status_map(self) -> WorkerStatusMap:
         """Build a map of worker_id to worker status for autoscaler idle tracking."""
@@ -1478,25 +1246,17 @@ class Controller:
     # Properties
 
     @property
-    def provider(self) -> TaskProvider | K8sTaskProvider:
-        return self._provider
+    def provider(self) -> TaskBackend:
+        return self._task_backend
 
     @property
-    def has_direct_provider(self) -> bool:
-        return isinstance(self._provider, K8sTaskProvider)
+    def placement(self) -> PlacementOwner:
+        return self._task_backend.placement
 
     @property
     def run_template_cache(self) -> RunTemplateCache:
         """Per-job RunTaskRequest template cache, shared with the dispatch path."""
         return self._run_template_cache
-
-    @property
-    def provider_scheduling_events(self) -> list[SchedulingEvent]:
-        return self._provider_scheduling_events
-
-    @property
-    def provider_capacity(self) -> ClusterCapacity | None:
-        return self._provider_capacity
 
     @property
     def port(self) -> int:
@@ -1525,6 +1285,11 @@ class Controller:
         return read_reservation_claims(self._db)
 
     @property
-    def autoscaler(self) -> "Autoscaler | None":
-        """The autoscaler instance, if autoscaling is enabled."""
-        return self._autoscaler
+    def autoscaler(self) -> Autoscaler | None:
+        """The Iris autoscaler driving capacity for this backend, if any.
+
+        Read-only handle for dashboard/status RPCs (VM info, feasibility,
+        pending hints). Capacity is driven through ``backend.manage_capacity``,
+        not this handle.
+        """
+        return self._task_backend.autoscaler

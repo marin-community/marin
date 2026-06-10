@@ -98,7 +98,7 @@ def _inspect_aa() -> None:
 
 
 def _inspect_lmh_sample() -> None:
-    from lm_eval.tasks import get_task_dict
+    from lm_eval.tasks import get_task_dict  # noqa: PLC0415  # optional dep: lm_eval
 
     available_names = set(_lmh_task_names())
     names = [n for n in LMH_SAMPLE_TASKS if n in available_names]

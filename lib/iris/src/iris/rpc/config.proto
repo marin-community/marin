@@ -286,6 +286,11 @@ message WorkerConfig {
   reserved 23;  // was: bool preemptible (replaced by capacity_type)
   CapacityType capacity_type = 24;
 
+  // Advertised scheduling CPU capacity (from ScaleGroupResources.cpu_millicores).
+  // The worker reports this as its capacity instead of the probed host count,
+  // letting operators over-commit CPU. 0 means "probe the host".
+  int32 cpu_millicores = 25;
+
   // Scheduling attributes
   map<string, string> worker_attributes = 30;
 
@@ -482,6 +487,15 @@ message KubernetesProviderConfig {
   string cache_dir = 7;          // hostPath base for cache mounts (default: "/cache")
   string controller_address = 8; // Controller URL injected into task pods
   KueueConfig kueue = 9;  // Kueue gang admission; empty kueue.cluster_queue disables it
+  // Namespaces whose preemptible pods Iris may evict to unblock gang
+  // admission. Kueue's topology-aware scheduling counts non-Kueue pods' GPU
+  // requests as fixed node usage and only preempts Kueue Workloads, so
+  // scheduler-preemptible filler pods (e.g. node health-check verification
+  // pods) starve gang admission instead of being displaced. When Iris has
+  // gang work it deletes such pods itself — but only pods that have negative
+  // priority AND request GPUs AND live in one of these namespaces (never in
+  // Iris's own namespace). Empty list disables the feature.
+  repeated string preempt_namespaces = 10;
 }
 
 // ============================================================================

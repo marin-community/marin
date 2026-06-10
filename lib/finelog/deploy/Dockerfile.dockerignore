@@ -12,16 +12,12 @@
 !lib/finelog/dashboard/env.d.ts
 !lib/finelog/dashboard/src/
 
-# Rust workspace (built by the `rustbuild` stage). The whole workspace is
-# copied so `members = ["dupekit", "finelog"]` resolves; compiled artifacts
-# (target/) are excluded below.
-!rust/Cargo.toml
-!rust/Cargo.lock
-!rust/finelog/
-!rust/dupekit/
+# Rust workspace (built by the `rustbuild` stage). Only finelog's own workspace
+# is needed now; compiled artifacts (target/) are excluded below.
+!lib/finelog/rust/
 
 # Exclude build artifacts within included paths.
-rust/**/target/
+lib/finelog/rust/**/target/
 **/__pycache__
 **/*.pyc
 **/*.pyo

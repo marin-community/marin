@@ -6,7 +6,7 @@ from typing import cast
 
 import jax
 import jax.numpy as jnp
-import numpy as onp
+import numpy as np
 import pytest
 from datasets import load_dataset
 from jax.random import PRNGKey
@@ -183,7 +183,7 @@ def test_hf_roundtrip():
     jax_out = compute(na, inp).array[0]
 
     assert torch_out.shape == jax_out.shape, f"{torch_out.shape} != {jax_out.shape}"
-    assert onp.isclose(torch_out, onp.array(jax_out), rtol=1e-2, atol=1e-2).all(), f"{torch_out} != {jax_out}"
+    assert np.isclose(torch_out, np.array(jax_out), rtol=1e-2, atol=1e-2).all(), f"{torch_out} != {jax_out}"
 
     with tempfile.TemporaryDirectory() as tmpdir:
         converter.save_pretrained(model, tmpdir)
@@ -194,4 +194,4 @@ def test_hf_roundtrip():
         torch_out2 = torch_model2(input_features, decoder_input_ids=decoder_input_ids)
         torch_out2 = torch_out2.logits[0].detach().cpu().numpy()
         torch_out2 = jax.nn.softmax(torch_out2, axis=-1)
-        assert onp.isclose(torch_out2, onp.array(jax_out), rtol=1e-2, atol=1e-2).all(), f"{torch_out2} != {jax_out}"
+        assert np.isclose(torch_out2, np.array(jax_out), rtol=1e-2, atol=1e-2).all(), f"{torch_out2} != {jax_out}"

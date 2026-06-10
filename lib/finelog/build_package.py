@@ -5,11 +5,11 @@
 """Build (and let CI publish) marin-finelog wheels.
 
 Driven by .github/workflows/finelog-release-wheels.yaml. Mirrors
-rust/dupekit/build_package.py: same nightly/stable/manual mode split and the
+lib/dupekit/build_package.py: same nightly/stable/manual mode split and the
 same zig-cross-compiled manylinux + native macOS wheel matrix.
 
 marin-finelog is a native package: lib/finelog/pyproject.toml is a maturin
-project whose `[tool.maturin] manifest-path` points at the rust/finelog/pyext
+project whose `[tool.maturin] manifest-path` points at the rust/pyext
 cdylib crate (the in-process `finelog._native` server). maturin therefore reads
 the wheel version from `[project] version` in lib/finelog/pyproject.toml and
 bundles the pure-Python client/deploy/proto alongside the native extension.
@@ -166,7 +166,7 @@ def _maturin(*args: str, env: dict[str, str] | None = None) -> None:
     """Run maturin from lib/finelog so it reads this package's pyproject.toml.
 
     The `[tool.maturin] manifest-path` in lib/finelog/pyproject.toml selects the
-    rust/finelog/pyext cdylib crate; we deliberately do NOT pass --manifest-path
+    rust/pyext cdylib crate; we deliberately do NOT pass --manifest-path
     (that would make maturin look for a sibling pyproject next to the crate).
     """
     cmd = [_ensure_maturin(), *args]

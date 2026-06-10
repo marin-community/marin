@@ -9,11 +9,14 @@ to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
 
     CANARY_ACCELERATOR   tpu | gpu
     CANARY_ATTENTION_IMPLEMENTATION gpu-only attention backend, e.g. gpu_fa4_cute
+    CANARY_TPU_TYPE      tpu-only comma-separated slice types, primary first (default v5p-8,v4-8)
     CANARY_BATCH_SIZE    per-device batch size
     CANARY_CACHE_COPY_MAX_WORKERS gpu-only cache-copy worker cap
     CANARY_GPU_TYPE      gpu-only accelerator type, e.g. H100, GH200, B200
     CANARY_GPU_COUNT     gpu-only accelerator count per replica
     CANARY_GPU_REPLICAS  gpu-only replica count
+    CANARY_HIDDEN_DIM    gpu-only model hidden dim; scales the MoE via the heuristic
+                         (1024 trial default -> 2048 -> 3072 -> 4096)
     CANARY_PROFILER_ENABLED true | false
     CANARY_PROFILER_NUM_STEPS profiler duration in steps
     CANARY_PROFILER_START_STEP profiler start step
@@ -31,24 +34,24 @@ from typing import cast
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
-from levanter.data.text import BlockShuffleConfig, DatasetComponent, TextLmDatasetFormat
+from levanter.data.text import DatasetComponent
 from levanter.grug.attention import GrugAttentionImplementation
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
-from marin.processing.tokenize.data_configs import lm_data_config
 
-from experiments.defaults import default_tokenize
+from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import (
     GRUG_MOE_TRIAL_MODEL,
     NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
     GrugMoeLaunchConfig,
+    env_int,
     run_grug_moe_trial,
+    slimpajama_6b_data,
 )
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
-from experiments.llama import llama3_tokenizer
 
 CANARY_OPTIMIZER = AdamConfig(
     learning_rate=3e-3,
@@ -70,10 +73,10 @@ _GPU_ATTENTION_IMPLEMENTATIONS: tuple[GrugAttentionImplementation, ...] = (
     "gpu_fa4_thd",
 )
 
-
-def _env_int(key: str, default: int) -> int:
-    raw = os.environ.get(key, "")
-    return int(raw) if raw else default
+# Compute budget passed to the heuristic when CANARY_HIDDEN_DIM scales the model.
+# Only the model *shape* (from hidden_dim) is used here; the budget-derived batch
+# size, step count, and optimizer are all overridden by CANARY_* settings below.
+_HEURISTIC_BUDGET = 1e18
 
 
 def _env_bool(key: str, default: bool) -> bool:
@@ -81,6 +84,22 @@ def _env_bool(key: str, default: bool) -> bool:
     if not raw:
         return default
     return raw.lower() in ("1", "true")
+
+
+# Primary first; the run lands on whichever pool has capacity. v5p has only two
+# zones (us-central1-a, us-east5-a) and is preemptible-only, so a single-pool
+# stockout otherwise strands the canary indefinitely. v4-8 is a topology-compatible
+# fallback (both are single-VM 4-chip slices, so training shape is unchanged) and
+# adds us-central2-b plus the v4 reserved pool, which is not subject to preemptible
+# capacity churn. All entries must share vm_count and chips_per_vm (ResourceConfig
+# enforces this).
+_DEFAULT_CANARY_TPU_TYPES = ("v5p-8", "v4-8")
+
+
+def _tpu_types_from_env() -> list[str]:
+    raw = os.environ.get("CANARY_TPU_TYPE", "")
+    types = [t.strip() for t in raw.split(",") if t.strip()]
+    return types or list(_DEFAULT_CANARY_TPU_TYPES)
 
 
 def _build_step_from_env() -> ExecutorStep:
@@ -91,11 +110,12 @@ def _build_step_from_env() -> ExecutorStep:
     run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
 
     if accelerator == "tpu":
-        batch_size = _env_int("CANARY_BATCH_SIZE", 512)
-        target_tokens = _env_int("CANARY_TARGET_TOKENS", 1_000_000_000)
+        model = GRUG_MOE_TRIAL_MODEL
+        batch_size = env_int("CANARY_BATCH_SIZE", 512)
+        target_tokens = env_int("CANARY_TARGET_TOKENS", 1_000_000_000)
         name = "canary-ferry-moe"
         data = NEMOTRON_MIX_WITH_DEFAULT_VALIDATION
-        resources = ResourceConfig.with_tpu("v5p-8")
+        resources = ResourceConfig.with_tpu(_tpu_types_from_env())
         eval_config: GrugEvalConfig | None = GrugEvalConfig(
             eval_batch_size=batch_size,
             steps_per_eval=240,
@@ -106,8 +126,20 @@ def _build_step_from_env() -> ExecutorStep:
         wandb_group = "canary-ferry-moe"
         wandb_tags = ["canary", "ferry", "grug", "moe"]
     else:
-        batch_size = _env_int("CANARY_BATCH_SIZE", 32)
-        target_tokens = _env_int("CANARY_TARGET_TOKENS", batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len * 50)
+        gpu_type = os.environ.get("CANARY_GPU_TYPE", "H100")
+        gpu_count = env_int("CANARY_GPU_COUNT", 8)
+        gpu_replicas = env_int("CANARY_GPU_REPLICAS", 1)
+
+        # Model-size knob: scale the MoE by hidden_dim; the heuristic auto-scales
+        # depth/heads/intermediate. Defaults to the ~1.1B trial model. Step up
+        # CANARY_HIDDEN_DIM (1024 -> 2048 -> 3072 -> 4096) to grow the model across
+        # more H100 nodes (pair with CANARY_GPU_REPLICAS).
+        hidden_dim = env_int("CANARY_HIDDEN_DIM", GRUG_MOE_TRIAL_MODEL.hidden_dim)
+        if hidden_dim == GRUG_MOE_TRIAL_MODEL.hidden_dim:
+            model = GRUG_MOE_TRIAL_MODEL
+        else:
+            model, _, _, _ = build_from_heuristic(budget=_HEURISTIC_BUDGET, hidden_dim=hidden_dim)
+
         attention_implementation = os.environ.get("CANARY_ATTENTION_IMPLEMENTATION", "gpu_fa4_cute")
         if attention_implementation not in _GPU_ATTENTION_IMPLEMENTATIONS:
             raise ValueError(
@@ -116,39 +148,19 @@ def _build_step_from_env() -> ExecutorStep:
             )
         attention_implementation = cast(GrugAttentionImplementation, attention_implementation)
         model = dataclasses.replace(
-            GRUG_MOE_TRIAL_MODEL,
+            model,
             attention_implementation=attention_implementation,
             # The THD backend only handles full causal windows. Setting the model
             # window to 2x seq_len makes Grug's short-window mask a full window.
             sliding_window=(
-                GRUG_MOE_TRIAL_MODEL.max_seq_len * 2
-                if attention_implementation == "gpu_fa4_thd"
-                else GRUG_MOE_TRIAL_MODEL.sliding_window
+                model.max_seq_len * 2 if attention_implementation == "gpu_fa4_thd" else model.sliding_window
             ),
         )
-        gpu_type = os.environ.get("CANARY_GPU_TYPE", "H100")
-        gpu_count = _env_int("CANARY_GPU_COUNT", 8)
-        gpu_replicas = _env_int("CANARY_GPU_REPLICAS", 1)
 
-        # SlimPajama-6B with block-shuffle — small dataset, re-tokenized on first run.
-        tokenize_step = default_tokenize(
-            name="slimpajama-6b-cw",
-            dataset="DKYoon/SlimPajama-6B",
-            tokenizer=llama3_tokenizer,
-            format=TextLmDatasetFormat(),
-        )
-        tokenize_step = dataclasses.replace(
-            tokenize_step,
-            config=dataclasses.replace(
-                tokenize_step.config,
-                # SlimPajama-6B tokenization OOMs at the default 10g worker_resources.
-                worker_resources=ResourceConfig(ram="64g", disk="64g"),
-            ),
-        )
-        data = lm_data_config(
-            training_set=tokenize_step,
-            shuffle=BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel"),
-        )
+        batch_size = env_int("CANARY_BATCH_SIZE", 32)
+        target_tokens = env_int("CANARY_TARGET_TOKENS", batch_size * model.max_seq_len * 50)
+
+        data = slimpajama_6b_data()
         if attention_implementation == "gpu_fa4_thd":
             data = dataclasses.replace(
                 data,
@@ -168,18 +180,16 @@ def _build_step_from_env() -> ExecutorStep:
             replicas=gpu_replicas,
         )
         attention_tag = attention_implementation.removeprefix("gpu_")
-        name = f"canary-ferry-cw-{gpu_type.lower()}x{gpu_count}-r{gpu_replicas}-{attention_tag}"
+        name = f"canary-ferry-cw-{gpu_type.lower()}x{gpu_count}-r{gpu_replicas}-d{hidden_dim}-{attention_tag}"
         wandb_group = f"canary-ferry-moe-gpu-{gpu_type.lower()}-r{gpu_replicas}-{attention_tag}"
-        wandb_tags = ["canary", "ferry", "grug", "moe", "gpu", gpu_type.lower(), attention_tag]
+        wandb_tags = ["canary", "ferry", "grug", "moe", "gpu", gpu_type.lower(), f"d{hidden_dim}", attention_tag]
         eval_config = None
-    if accelerator == "tpu":
-        model = GRUG_MOE_TRIAL_MODEL
 
-    num_steps = _env_int("CANARY_STEPS", target_tokens // (batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len))
+    num_steps = env_int("CANARY_STEPS", target_tokens // (batch_size * model.max_seq_len))
     if num_steps <= 0:
         raise ValueError(
             f"CANARY_STEPS={num_steps} invalid; set CANARY_STEPS or CANARY_TARGET_TOKENS high enough for "
-            f"batch_size={batch_size} x seq_len={GRUG_MOE_TRIAL_MODEL.max_seq_len}"
+            f"batch_size={batch_size} x seq_len={model.max_seq_len}"
         )
     if os.environ.get("CANARY_TRACKER", "wandb").lower() == "json_logger":
         tracker = JsonLoggerConfig(logger_name=os.environ.get("CANARY_JSON_LOGGER", "canary_ferry.metrics"))
@@ -195,8 +205,8 @@ def _build_step_from_env() -> ExecutorStep:
         )
 
     profiler_enabled = _env_bool("CANARY_PROFILER_ENABLED", True)
-    profiler_start_step = _env_int("CANARY_PROFILER_START_STEP", 5)
-    profiler_num_steps = _env_int("CANARY_PROFILER_NUM_STEPS", 25)
+    profiler_start_step = env_int("CANARY_PROFILER_START_STEP", 5)
+    profiler_num_steps = env_int("CANARY_PROFILER_NUM_STEPS", 25)
 
     return ExecutorStep(
         name=f"{name}-{run_id}",

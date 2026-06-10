@@ -17,7 +17,6 @@ from iris.cluster.controller.codec import (
     reservation_to_json,
 )
 from iris.cluster.controller.db import Tx
-from iris.cluster.controller.direct_provider import RunTemplateCache
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.reconcile import ReconcileState
 from iris.cluster.controller.reconcile.commit import commit_effects
@@ -27,6 +26,7 @@ from iris.cluster.controller.reconcile.policy import (
     MAX_REPLICAS_PER_JOB,
     RESERVATION_HOLDER_JOB_NAME,
 )
+from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.schema import (
     job_workdir_files_table,
     jobs_table,

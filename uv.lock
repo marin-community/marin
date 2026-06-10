@@ -233,7 +233,7 @@ conflicts = [[
 ]]
 
 [options]
-prerelease-mode = "allow"
+prerelease-mode = "explicit"
 fork-strategy = "fewest"
 
 [manifest]
@@ -246,6 +246,10 @@ members = [
     "marin-rigging",
     "marin-root",
     "marin-zephyr",
+]
+constraints = [
+    { name = "opentelemetry-semantic-conventions", specifier = ">=0.1b0" },
+    { name = "tfp-nightly", specifier = ">=0.1.dev0" },
 ]
 overrides = [
     { name = "aiofiles", specifier = ">=24.1.0" },
@@ -4674,7 +4678,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.88.0rc2"
+version = "1.88.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -4690,9 +4694,9 @@ dependencies = [
     { name = "tiktoken" },
     { name = "tokenizers" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5c/f0/698792052dab9edb04092aedb161d4bafd013367c94043d0e5a4978ce8f9/litellm-1.88.0rc2.tar.gz", hash = "sha256:ecd5782c0d61a17de40551991ab1bda7bcc04a66c0f4475daad1d3d52da75388", size = 13886603, upload-time = "2026-06-04T16:24:03.357Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/16/ea/f99ececb7f22703fe120f1d8be9ffb749ec9453fbbbbbebc0d6a6b4d7864/litellm-1.88.1.tar.gz", hash = "sha256:89c6b74cc7912d6365793006ff951c0450fe847625008dfe49de8a7dc4529aa5", size = 13885969, upload-time = "2026-06-09T01:06:25.192Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b8/a7/d23e5b57b19966c20a264d29c38305f71f4867f6bbd7c1f7cd848d994a0e/litellm-1.88.0rc2-py3-none-any.whl", hash = "sha256:590f28c22c91109ea541f5c9bc31887015520dc70d2582eb8084a8f570c43ee8", size = 15276213, upload-time = "2026-06-04T16:24:00.118Z" },
+    { url = "https://files.pythonhosted.org/packages/42/9a/8f8909201b4bebaf96498c09226f6baa8540086a4c4188ad57d7dfbd97c1/litellm-1.88.1-py3-none-any.whl", hash = "sha256:369b84e57d9426582ddc35e731956ddb6618cda97cc44e4e4d2dfa75982a6e3a", size = 15276206, upload-time = "2026-06-09T01:06:16.72Z" },
 ]
 
 [[package]]
@@ -5263,7 +5267,7 @@ requires-dist = [
     { name = "luxical", marker = "extra == 'datakit'" },
     { name = "lxml", extras = ["html-clean"] },
     { name = "lxml-html-clean", specifier = ">=0.4.4" },
-    { name = "marin-dupekit", marker = "extra == 'dedup'" },
+    { name = "marin-dupekit", marker = "extra == 'dedup'", specifier = ">=0.1.2.dev202606060824" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
     { name = "marin-iris", editable = "lib/iris" },
@@ -5281,7 +5285,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.0" },
     { name = "plotly" },
     { name = "prime", marker = "extra == 'rl'" },
-    { name = "pyarrow", specifier = ">=22" },
+    { name = "pyarrow", specifier = ">=23.0.0" },
     { name = "pylatexenc", marker = "extra == 'math'" },
     { name = "regex" },
     { name = "requests", specifier = ">=2.33.0" },
@@ -5391,14 +5395,14 @@ test = [
 
 [[package]]
 name = "marin-dupekit"
-version = "0.1.2.dev202605072146"
+version = "0.1.2.dev202606081019"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/0e/f1/8dd874b3f375bc7971a4eba1d05b4e6a572f85db2a8e5ebe7f08b0d9317a/marin_dupekit-0.1.2.dev202605072146.tar.gz", hash = "sha256:56bd14bfac37383ba80b94cd814591ab076af7a4309693a29110d171bcdfc70d", size = 73876, upload-time = "2026-05-07T21:54:30.29Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/dc/9d/3c2bea3f8a557649e8da8371f43b8a7e14d1a42a156c54d153d439ffacab/marin_dupekit-0.1.2.dev202606081019.tar.gz", hash = "sha256:449f3bb30f6b353d2541011de483b71dd40b796ed6f032b71568d3f3494a202d", size = 29869, upload-time = "2026-06-08T10:25:06.543Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f2/56/610956d7c31908eb74f8619700f06c56d391190937377231500dc9863a2e/marin_dupekit-0.1.2.dev202605072146-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:88bca14468ab261de0b767ceb2957ec7358f4f6abc8a044c7d2c9cb09ce3a52e", size = 4418891, upload-time = "2026-05-07T21:54:23.047Z" },
-    { url = "https://files.pythonhosted.org/packages/1d/96/f62c8ff69d683a6dbe39f17a70c044dd32228374d1f850b70fc19dd79eed/marin_dupekit-0.1.2.dev202605072146-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:0861edad24a6d45a4c25948dd3bee08e9a5a4572ae5c96318a35898c25641d38", size = 3981191, upload-time = "2026-05-07T21:54:25.025Z" },
-    { url = "https://files.pythonhosted.org/packages/7a/0c/a8fa099e67b00a8019b009eaf74d984b0daf829e666e8c7483d68fd1fba4/marin_dupekit-0.1.2.dev202605072146-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:4d1215d14088729970610bfb93fdf6c81457df0746e06ca49046753133c73d12", size = 4141330, upload-time = "2026-05-07T21:54:26.595Z" },
-    { url = "https://files.pythonhosted.org/packages/74/42/da86b0d9082be3aa5874c4feb127620d5458457c3707518bfde6855e9605/marin_dupekit-0.1.2.dev202605072146-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:d4cd069bc39ec596c0053e4dc592c86559fc73c3dd9ecd8426c1e509d9c03e4f", size = 4520400, upload-time = "2026-05-07T21:54:28.378Z" },
+    { url = "https://files.pythonhosted.org/packages/e9/ea/175c8dc37b21616b10658e62de9aa3873832e2c9b86c8353b043d6d11daa/marin_dupekit-0.1.2.dev202606081019-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:6fe8ee488f722e0193f247f6b8cf7c7b969ab7a4a8a7e04e519eb73e6ff77663", size = 4579143, upload-time = "2026-06-08T10:24:59.62Z" },
+    { url = "https://files.pythonhosted.org/packages/81/17/3eba4e92be4af8ae826fdda5f048df01c9a8082a58cf79f6df73ce665df3/marin_dupekit-0.1.2.dev202606081019-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:1d8b7cf825739bbe26d6f561073ca0291114d0e80790de172272c4704892c707", size = 4197445, upload-time = "2026-06-08T10:25:01.44Z" },
+    { url = "https://files.pythonhosted.org/packages/01/66/a6b4807f96b6b0d12afbe9996273c598651bfe30423810605289fcd7a4e5/marin_dupekit-0.1.2.dev202606081019-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:0a05b48f495a509fdda39f6d7e5384e34c5972950981c4197e81c2bf3b41c8a3", size = 4416473, upload-time = "2026-06-08T10:25:03.457Z" },
+    { url = "https://files.pythonhosted.org/packages/ab/5a/99b44b1d6abc07af2ad3df953cfb4161d934e56643a5a812ba253e5d175d/marin_dupekit-0.1.2.dev202606081019-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:397cf89721d4b22274f8ab309fbc557d304aa0ecb965f413662f62c8d7d14ec3", size = 4758217, upload-time = "2026-06-08T10:25:04.956Z" },
 ]
 
 [[package]]
@@ -5640,9 +5644,9 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "humanfriendly", specifier = ">=10.0" },
     { name = "kubernetes", marker = "extra == 'controller'", specifier = ">=31.0.0,<36" },
-    { name = "marin-finelog", specifier = ">=0.2.0.dev0" },
+    { name = "marin-finelog", specifier = ">=0.2.9" },
     { name = "marin-rigging", editable = "lib/rigging" },
-    { name = "pyarrow", marker = "extra == 'controller'", specifier = ">=19.0.0" },
+    { name = "pyarrow", marker = "extra == 'controller'", specifier = ">=23.0.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyjwt", specifier = ">=2.12.0" },
     { name = "pyyaml", specifier = ">=6.0" },
@@ -5666,7 +5670,7 @@ dev = [
     { name = "nbformat", specifier = ">=5.10.4" },
     { name = "pillow", specifier = ">=10.0.0" },
     { name = "playwright", specifier = ">=1.49.0" },
-    { name = "pyarrow", specifier = ">=19.0.0" },
+    { name = "pyarrow", specifier = ">=23.0.0" },
     { name = "pytest", specifier = ">=8.4" },
     { name = "pytest-asyncio" },
     { name = "pytest-flakefinder", specifier = ">=1.1.0" },
@@ -5850,7 +5854,7 @@ requires-dist = [
     { name = "optax", specifier = ">=0.1.9,<0.2.7" },
     { name = "peft", marker = "extra == 'torch-test'", specifier = ">=0.12.0" },
     { name = "protobuf", specifier = ">=6" },
-    { name = "pyarrow", specifier = ">=11.0.0" },
+    { name = "pyarrow", specifier = ">=23.0.0" },
     { name = "pydantic", specifier = "<3" },
     { name = "pytimeparse", specifier = ">=1.1.8" },
     { name = "safetensors", extras = ["numpy"], specifier = ">=0.4.2,<0.7.0" },
@@ -5958,8 +5962,8 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "marin-core", editable = "lib/marin" },
-    { name = "marin-dupekit", specifier = ">=0.1.0.dev0" },
-    { name = "marin-finelog", specifier = ">=0.2.0.dev0" },
+    { name = "marin-dupekit", specifier = ">=0.1.2.dev202606060824" },
+    { name = "marin-finelog", specifier = ">=0.2.9" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
     { name = "marin-iris", editable = "lib/iris" },

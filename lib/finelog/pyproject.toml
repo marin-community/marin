@@ -17,7 +17,7 @@ dependencies = [
     "fsspec>=2024.0.0",
     "gcsfs>=2024.0.0",
     "protobuf>=5.0",
-    "pyarrow>=19.0.0",
+    "pyarrow>=23.0.0",
     "pyyaml>=6.0",
     "zstandard>=0.22",
 ]
@@ -34,11 +34,11 @@ dev = [
 
 [tool.maturin]
 # The native in-process server (`finelog._native`) is built from the cdylib
-# crate that lives alongside the Rust server source (`rust/finelog/pyext`).
-# `marin-finelog` ships BOTH the pure-Python client/deploy/proto AND the native
-# server ext in one wheel. Users install the pre-built wheel (no Rust
-# toolchain); source builds happen only in dev mode (`scripts/rust_mode.py dev`).
-manifest-path = "../../rust/finelog/pyext/Cargo.toml"
+# crate in this package's own Rust subtree (`rust/pyext`). `marin-finelog`
+# ships BOTH the pure-Python client/deploy/proto AND the native server ext in
+# one wheel. Users install the pre-built wheel (no Rust toolchain); source
+# builds happen only in dev mode (`scripts/rust_mode.py dev`).
+manifest-path = "rust/pyext/Cargo.toml"
 module-name = "finelog._native"
 python-source = "src"
 features = ["pyo3/extension-module"]

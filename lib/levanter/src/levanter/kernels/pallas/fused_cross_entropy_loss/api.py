@@ -735,6 +735,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             loss = loss + logsumexp_weight * (lse**2)
         reduced_loss = _apply_reduction(loss, reduction, weight)
         if return_argmax:
+            assert argmax is not None
             return reduced_loss, argmax
         return reduced_loss
 

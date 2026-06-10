@@ -93,9 +93,9 @@ def train_centroids(
     seed: int = 42,
 ) -> None:
     """Train K=k_train spherical K-means, then agglomerative-merge to each k in k_views."""
-    import faiss
-    from scipy.cluster.hierarchy import fcluster, linkage
-    from scipy.spatial.distance import squareform
+    import faiss  # noqa: PLC0415  # optional dep: faiss
+    from scipy.cluster.hierarchy import fcluster, linkage  # noqa: PLC0415  # optional dep: scipy
+    from scipy.spatial.distance import squareform  # noqa: PLC0415  # optional dep: scipy
 
     embeddings = _load_sample_parquet(sample_path)
     logger.info("Running K-means K=%d on %d x %d sample", k_train, *embeddings.shape)

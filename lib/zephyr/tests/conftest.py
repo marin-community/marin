@@ -18,7 +18,10 @@ from fray import ResourceConfig
 from fray.actor import ActorContext, _reset_current_actor, _set_current_actor
 from fray.iris_backend import FrayIrisClient
 from fray.local_backend import LocalClient
-from iris.cluster.config import connect_cluster, load_config, make_local_config
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
+from iris.cluster.config import load_config, make_local_config
+from iris.cluster.lifecycle import connect_cluster
+from iris.cluster.types import Entrypoint, ResourceSpec
 from rigging.timing import ExponentialBackoff
 from zephyr import load_file
 from zephyr.execution import ZephyrContext
@@ -93,9 +96,6 @@ def integration_client(request):
         yield client
         client.shutdown(wait=True)
     elif request.param == "iris":
-        from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
-        from iris.cluster.types import Entrypoint, ResourceSpec
-
         iris_cluster = request.getfixturevalue("iris_cluster")
         iris_client = IrisClient.remote(iris_cluster, workspace=ZEPHYR_ROOT)
         client = FrayIrisClient.from_iris_client(iris_client)

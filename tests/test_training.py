@@ -26,9 +26,10 @@ from marin.training.training import (
     temporary_checkpoint_base_path,
 )
 
-from experiments.defaults import default_dpo, default_tokenize
+from experiments.defaults import default_dpo
 from experiments.llama import llama_8b
 from experiments.simple_dpo_config import SimpleDPOConfig
+from experiments.tokenization import default_tokenize
 
 
 @pytest.fixture

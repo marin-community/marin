@@ -246,7 +246,7 @@ def score(
     if oracle_model not in PRICING_PER_MTOK:
         raise ValueError(f"unknown oracle model {oracle_model!r}; add it to rubric.PRICING_PER_MTOK")
 
-    from anthropic import Anthropic
+    from anthropic import Anthropic  # noqa: PLC0415  # optional dep: anthropic
 
     client = Anthropic(api_key=read_anthropic_key())
 

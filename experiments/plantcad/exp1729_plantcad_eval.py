@@ -379,7 +379,7 @@ def score_eval_dataset(
 
 def evaluate_conservation_scores(scores: ConservationResult) -> dict[str, float]:
     """Calculate ROC AUC and other metrics from scores."""
-    from sklearn.metrics import roc_auc_score
+    from sklearn.metrics import roc_auc_score  # noqa: PLC0415  # optional dep: sklearn
 
     if len(scores.scores) == 0:
         raise ValueError("No valid conservation scores found")

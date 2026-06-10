@@ -16,6 +16,8 @@ import os
 import re
 from typing import TYPE_CHECKING, Any
 
+from github import Github
+
 if TYPE_CHECKING:
     from github.Issue import Issue
     from github.Repository import Repository
@@ -175,8 +177,6 @@ def serialize_issue(issue: Issue) -> dict[str, object]:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     args = parse_args()
-
-    from github import Github
 
     github_token = ensure_env("GITHUB_TOKEN")
     github = Github(github_token)

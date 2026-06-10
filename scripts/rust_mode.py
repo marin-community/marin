@@ -24,13 +24,13 @@ import sys
 BEGIN = "# ### BEGIN RUST-DEV SOURCES ###"
 END = "# ### END RUST-DEV SOURCES ###"
 
-# Editable path sources injected in dev mode. marin-finelog's wheel is built by
-# maturin from lib/finelog (its [tool.maturin] manifest-path points at the
-# rust/finelog/pyext cdylib crate), so an editable install builds the native
-# extension from source.
+# Editable path sources injected in dev mode. Each native package's wheel is
+# built by maturin from its own lib/{pkg} dir (the [tool.maturin] manifest-path
+# points at the package's rust/ crate), so an editable install builds the
+# native extension from source.
 DEV_SOURCES = "\n".join(
     [
-        'marin-dupekit = { path = "rust/dupekit", editable = true }',
+        'marin-dupekit = { path = "lib/dupekit", editable = true }',
         'marin-finelog = { path = "lib/finelog", editable = true }',
     ]
 )
@@ -70,7 +70,7 @@ def main() -> None:
         current = _current_mode(txt)
         print(f"Rust build mode: {current}")
         if current == "dev":
-            print("  dupekit/finelog are built from source (rust/dupekit, lib/finelog)")
+            print("  dupekit/finelog are built from source (lib/dupekit, lib/finelog)")
         else:
             print("  dupekit/finelog are installed from pre-built wheels")
         return

@@ -7,16 +7,23 @@ import logging
 import math
 import os
 import urllib.parse
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import TypeVar, cast
 
 import draccus
+from draccus.utils import DataclassInstance
 from fray import CpuConfig, ResourceConfig, TpuConfig
+from levanter.adaptor import NoAdaptorConfig
+from levanter.main.train_dpo import TrainDpoConfig
+from levanter.main.train_lm import TrainLmConfig
+from levanter.schedule import BatchSchedule
 from mergedeep import mergedeep
 from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket
 
 from marin.execution.executor import materialize
+from marin.processing.tokenize import read_tokenized_cache_stats
 from marin.training.run_environment import add_run_env_variables
 
 logger = logging.getLogger(__name__)
@@ -198,10 +205,6 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
 
     config = bake_output_path(pod_config.train_config, pod_config.output_path)
 
-    from levanter.adaptor import NoAdaptorConfig
-    from levanter.main.train_dpo import TrainDpoConfig
-    from levanter.main.train_lm import TrainLmConfig
-
     # Adapter LM/DPO exports PEFT by default; merged HF export is explicit.
     if isinstance(config, (TrainDpoConfig, TrainLmConfig)) and not isinstance(config.adapter, NoAdaptorConfig):
         peft_save_path = config.peft_save_path
@@ -241,8 +244,6 @@ def _dpo_training_components(config: object) -> dict[str, object]:
 
 
 def _dpo_training_dataset_size(config: object) -> int:
-    from marin.processing.tokenize import read_tokenized_cache_stats
-
     training_components = _dpo_training_components(config.data)
     if len(training_components) != 1:
         raise ValueError(
@@ -274,8 +275,6 @@ def _dpo_training_dataset_size(config: object) -> int:
 
 
 def _num_train_steps_for_examples(batch_size: object, total_examples: int) -> int:
-    from levanter.schedule import BatchSchedule
-
     if total_examples <= 0:
         raise ValueError(f"total_examples must be positive, got {total_examples}")
 
@@ -313,7 +312,7 @@ def _maybe_auto_resolve_dpo_schedule(config: TrainDpoOnPodConfig) -> TrainDpoOnP
             num_train_steps,
         )
         trainer = replace(trainer, num_train_steps=num_train_steps)
-        train_config = replace(train_config, trainer=trainer)
+        train_config = replace(cast(DataclassInstance, train_config), trainer=trainer)
 
     if config.auto_validation_runs is not None:
         eval_steps = _scheduled_dpo_eval_steps(train_config.trainer.num_train_steps, config.auto_validation_runs)
@@ -322,7 +321,7 @@ def _maybe_auto_resolve_dpo_schedule(config: TrainDpoOnPodConfig) -> TrainDpoOnP
             eval_steps,
         )
         train_config = replace(
-            train_config,
+            cast(DataclassInstance, train_config),
             run_initial_eval=True,
             scheduled_eval_steps=eval_steps,
         )
@@ -339,8 +338,8 @@ def _maybe_override_auto_build_caches(config: TrainConfigT, auto_build: bool) ->
     data = config.data
     if data.auto_build_caches != auto_build:
         logger.info("Overriding auto_build_caches to %s", auto_build)
-        data = dataclasses.replace(data, auto_build_caches=auto_build)
-        config = replace(config, data=data)
+        data = dataclasses.replace(cast(DataclassInstance, data), auto_build_caches=auto_build)
+        config = cast(TrainConfigT, replace(cast(DataclassInstance, config), data=data))
     return config
 
 
@@ -458,7 +457,7 @@ def _prepare_training_run(
     # disable accelerator requirement when running without GPU/TPU resources
     if config.resources.device.kind == "cpu":
         trainer = replace(train_config.trainer, require_accelerator=False)
-        train_config = replace(train_config, trainer=trainer)
+        train_config = replace(cast(DataclassInstance, train_config), trainer=trainer)
 
     if not isinstance(config.resources.device, CpuConfig):
         doublecheck_paths(config)
@@ -543,14 +542,13 @@ def doublecheck_paths(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
     return config
 
 
-def _add_default_env_variables(env: dict, default_env: dict | None):
+def _add_default_env_variables(env: dict, default_env: dict | None) -> dict:
+    merged: Mapping = env
     if default_env is not None:
-        default_env = deepcopy(default_env)
-        env = mergedeep.merge(default_env, env)
+        merged = mergedeep.merge(deepcopy(default_env), env)
 
     # Task environment values are serialized as strings.
-    env = {str(k): str(v) for k, v in env.items()}
-    return env
+    return {str(k): str(v) for k, v in merged.items()}
 
 
 def _check_for_wandb_key(env):

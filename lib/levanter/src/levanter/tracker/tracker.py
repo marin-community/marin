@@ -85,7 +85,10 @@ class Tracker(abc.ABC):
         pass
 
     def __enter__(self):
-        import levanter.tracker.tracker_fns as tracker_fns  # circular import: tracker_fns imports tracker
+        # Deferred: tracker_fns eagerly imports the wandb/trackio backends, which import
+        # `background`, which imports this module -> a genuine cycle. __enter__ only needs
+        # the global-tracker accessor at call time, so import it lazily here.
+        import levanter.tracker.tracker_fns as tracker_fns  # noqa: PLC0415
 
         if hasattr(self, "_tracker_cm"):
             raise RuntimeError("This tracker is already set as the global tracker")

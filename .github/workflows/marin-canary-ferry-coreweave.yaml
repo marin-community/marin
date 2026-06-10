@@ -155,14 +155,21 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           CANARY_TARGET_TOKENS: ${{ inputs.target_tokens || env.CANARY_TARGET_TOKENS }}
 
+      # Keep the wait below the job timeout (180) so a hung ferry fails this
+      # *step* (failure(), runner stays alive for Claude triage) rather than
+      # tripping the job timeout (cancelled(), which force-kills triage after
+      # GitHub's short grace — exit 143). The monitor --timeout (120m) exits
+      # gracefully; timeout-minutes is a hard backstop if the monitor wedges
+      # between polls. Healthy runs finish in ~35m, leaving ~55m for triage.
       - name: Wait for canary ferry
+        timeout-minutes: 125
         shell: bash -l {0}
         run: |
           uv run python scripts/workflows/iris_monitor.py wait \
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "$IRIS_CONFIG" \
             --poll-interval 30 \
-            --timeout 10500 \
+            --timeout 7200 \
             --github-output
 
       - name: Validate canary metrics

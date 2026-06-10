@@ -6,8 +6,7 @@
 - ``iris.worker`` / ``iris.task`` — worker-emitted host and per-attempt
   resource rows. Replace the controller's old in-memory history tables.
 - ``iris.task_status`` — markdown status text pushed from inside a running
-  task via ``RemoteClusterClient.report_task_status_text``. Replaces the
-  in-memory dict that previously backed ``ControllerService.SetTaskStatusText``.
+  task via ``RemoteClusterClient.report_task_status_text``.
 
 The ``iris.profile`` schema lives in ``iris.cluster.runtime.profile`` next to
 the capture machinery — see ``IrisProfile`` and ``PROFILE_NAMESPACE`` there.
