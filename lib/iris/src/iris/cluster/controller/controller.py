@@ -30,6 +30,7 @@ from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
 from iris.cluster.controller.backend import (
     BackendReconcileInput,
@@ -71,12 +72,10 @@ from iris.cluster.controller.reconcile.worker import (
 from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.scheduling.policy import (
     build_scheduling_context,
-    compute_demand_entries,
     read_reservation_claims,
     refresh_reservation_claims,
 )
 from iris.cluster.controller.scheduling.scheduler import (
-    Scheduler,
     SchedulingContext,
 )
 from iris.cluster.controller.schema import ReservationClaim
@@ -341,7 +340,6 @@ class Controller:
         logging.getLogger("iris").addHandler(self._log_handler)
 
         self._run_template_cache: RunTemplateCache = new_run_template_cache()
-        self._scheduler = Scheduler()
 
         self._bundle_store = BundleStore(storage_dir=f"{config.remote_state_dir.rstrip('/')}/bundles")
 
@@ -406,6 +404,11 @@ class Controller:
         # the DB. This is the only ``| None`` attribute on Controller: it is
         # genuinely None before the first scheduling tick has run.
         self._last_scheduling_context: SchedulingContext | None = None
+
+        # Residual demand from the most recent scheduling tick, computed by the
+        # scheduling pass alongside assignments and read by the autoscaler loop.
+        # Empty until the first tick with pending work runs.
+        self._last_residual_demand: list[DemandEntry] = []
 
         # Set to True once start() is called. Used to gate operations that
         # are only valid before the controller loops begin (e.g. LoadCheckpoint).
@@ -796,15 +799,12 @@ class Controller:
         trace = self._scheduling_round % _SCHEDULING_TRACE_INTERVAL == 0
 
         claims = self._refresh_reservation_claims()
-        # Source the building-task cap from the scheduler so its configured value,
-        # not the policy default, governs build_scheduling_context.
         ctx = build_scheduling_context(
             self._db,
             self._health,
             self._worker_attrs,
             self._config.user_budget_defaults,
             claims,
-            max_building_tasks=self._scheduler.max_building_tasks_per_worker,
         )
 
         if trace:
@@ -819,6 +819,7 @@ class Controller:
         if not ctx.pending_task_rows:
             self._scheduling_diagnostics = {}
             self._last_scheduling_context = ctx
+            self._last_residual_demand = []
             return SchedulingOutcome.NO_PENDING_TASKS
 
         result = self._task_backend.schedule(
@@ -840,6 +841,7 @@ class Controller:
 
         self._scheduling_diagnostics = result.diagnostics
         self._last_scheduling_context = result.post_taint_context
+        self._last_residual_demand = result.residual_demand
 
         if result.assignments or result.preemptions:
             log_event(
@@ -1158,11 +1160,13 @@ class Controller:
         return removed
 
     def _run_autoscaler_once(self) -> None:
-        """Run one autoscale cycle: read the snapshot (DB), drive the backend's
-        ``manage_capacity``, then persist the returned state.
+        """Run one autoscale cycle: build the worker-status snapshot, drive the
+        backend's ``manage_capacity`` with the cached residual demand, then
+        persist the returned state.
 
-        Called from the autoscaler loop thread. The controller owns every DB
-        read and write; the backend never touches the database.
+        Called from the autoscaler loop thread. Demand comes from the scheduling
+        pass via ``_last_residual_demand``. The controller owns every DB read and
+        write; the backend never touches the database.
         """
         if self._config.dry_run:
             logger.info("[DRY-RUN] Skipping autoscaler cycle (manage_capacity)")
@@ -1171,16 +1175,8 @@ class Controller:
             return
 
         worker_status_map = self._build_worker_status_map()
-        with self._db.read_snapshot() as tx:
-            workers = reads.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
-        demand_entries = compute_demand_entries(
-            self._db,
-            self._scheduler,
-            workers,
-            reservation_claims=read_reservation_claims(self._db),
-        )
         result = self._task_backend.manage_capacity(
-            CapacityInput(worker_status_map=worker_status_map, demand_entries=demand_entries)
+            CapacityInput(worker_status_map=worker_status_map, demand_entries=self._last_residual_demand)
         )
         persist_autoscaler_state(self._db, result.state)
 
