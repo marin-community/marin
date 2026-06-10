@@ -27,6 +27,7 @@ lets each iteration vary only the prompts.
 """
 
 import logging
+import re
 import sys
 import time
 from pathlib import Path
@@ -45,7 +46,7 @@ from agent_docs.tokens import count_tokens
 logger = logging.getLogger(__name__)
 
 DOC_TOKEN_BUDGET = 1000
-MAX_DIGEST_CHARS = 400_000
+MAX_DIGEST_CHARS = 600_000
 
 # Package-name head -> sub-project. The finelog Rust crate is keyed separately
 # from the finelog Python package to avoid a name collision; both are one project.
@@ -76,15 +77,55 @@ def discover_subprojects(packages: dict[str, PackageInfo]) -> dict[str, list[str
     return by_project
 
 
+_FIELD_RE = re.compile(r"^\s+[A-Za-z_]\w*\s*:\s*.+$")
+MAX_CLASS_FIELDS = 30
+
+
+def _class_fields(cls: ClassInfo) -> list[str]:
+    """Extract dataclass-style field declarations from a class's source.
+
+    Dataclasses (pervasive in this codebase for configs) have no explicit
+    ``__init__``, so their fields live as class-body annotated assignments
+    (``name: type = default``). Without these the digest shows ``Foo()`` and the
+    generator invents field names. Collect the annotated assignments that appear
+    before the first method, skipping the docstring.
+    """
+    lines = cls.source.splitlines()
+    start = next((i + 1 for i, line in enumerate(lines) if line.strip().startswith("class ")), 0)
+    fields: list[str] = []
+    in_doc = False
+    doc_delim = ""
+    for line in lines[start:]:
+        s = line.strip()
+        if in_doc:
+            if doc_delim in s:
+                in_doc = False
+            continue
+        if s.startswith(('"""', "'''")):
+            doc_delim = s[:3]
+            if not (len(s) > 3 and s.endswith(doc_delim)):
+                in_doc = True
+            continue
+        if s.startswith(("def ", "async def ", "@")):
+            break
+        if not s or s.startswith("#"):
+            continue
+        if _FIELD_RE.match(line):
+            fields.append(s)
+        if len(fields) >= MAX_CLASS_FIELDS:
+            break
+    return fields
+
+
 def _format_class(cls: ClassInfo) -> str:
-    """One compact digest entry for a class: name, ctor, public methods."""
+    """One compact digest entry for a class: name, ctor/fields, public methods."""
     ctor = next((m for m in cls.methods if m.name == "__init__"), None)
     head = f"- class `{cls.qualified_name}{ctor.signature if ctor else '()'}`  ({cls.file_path}:{cls.line_number})"
-    public_methods = [m for m in cls.methods if m.is_public]
-    if not public_methods:
-        return head
-    method_lines = [f"    - `{m.name}{m.signature}`" for m in public_methods]
-    return head + "\n" + "\n".join(method_lines)
+    lines = [head]
+    if ctor is None:
+        lines += [f"    - field `{f}`" for f in _class_fields(cls)]
+    lines += [f"    - `{m.name}{m.signature}`" for m in cls.methods if m.is_public]
+    return "\n".join(lines)
 
 
 def build_digest(packages: dict[str, PackageInfo], package_names: list[str]) -> tuple[str, bool]:

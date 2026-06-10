@@ -147,7 +147,7 @@ Two lines that route by intent:
 Rules:
 - Total output MUST be under ~1000 tokens (~4000 characters).
 - No code blocks, no API dumps — this only orients and routes.
-- Name real files from the sources; do not invent paths.
+- Name real files from the sources; do not invent paths or symbols.
 
 ## Sources:
 
@@ -194,7 +194,10 @@ Rules:
 - Total output MUST be under ~1000 tokens (~4000 characters).
 - Code blocks MUST show full import paths from the top-level package.
 - Every required parameter and every non-obvious default MUST appear with its \
-exact value. Do not invent parameters.
+exact value.
+- Use ONLY names — functions, classes, parameters, and dataclass fields — that \
+appear VERBATIM in the digest below. NEVER invent a parameter or field name. If \
+a detail is not in the digest, omit it rather than guessing.
 
 ## Sources:
 
@@ -230,6 +233,8 @@ Rules:
 - Total output MUST be under ~1000 tokens (~4000 characters).
 - The "Where to change things" pointers MUST cite real `path:symbol` from the \
 sources; do not invent.
+- Use ONLY names that appear VERBATIM in the digest; never invent symbols, \
+parameters, or fields. Omit a detail rather than guess.
 - Prefer the mental model over an API dump — `ops.md` carries the call details.
 
 ## Sources:
@@ -265,28 +270,43 @@ below. You are reviewing the TEXT of the script — do not execute it.
 
 {task}
 
-## Ground truth (authoritative — do NOT guess about APIs)
+## Ground truth: anchors (the KEY APIs a correct answer must use)
 
-These are the real symbols and file paths a correct answer must use. If the \
-script uses an API NOT listed here and not obviously standard-library, treat it \
-as a likely hallucination.
+These are the load-bearing symbols for THIS task, with their real file paths. \
+They are checkpoints, NOT an exhaustive list of every allowed API — a correct \
+script will also use many other real helper and standard-library APIs that are \
+not listed, and that is completely fine.
 
 {anchors}
 
 {forbidden_block}
 ## How to score each anchor
 
-For each anchor SYMBOL, score 1 if the script uses it correctly (right name, \
-right import path where applicable, right required params / defaults), else 0. \
-A symbol the task did not require the script to call directly scores 1 if the \
-script is consistent with it and 0 only if the script contradicts it.
+For each anchor SYMBOL, score 1 if the script uses it correctly — right name, \
+right import path where applicable, right required params and default values; \
+score 0 if it is missing-but-required, or used in a way that contradicts the \
+ground truth. An anchor the task did not require the script to call directly \
+scores 1 unless the script contradicts it.
+
+## What counts as a hallucination (STRICT, high bar)
+
+Put something in "hallucinated" ONLY if it is one of:
+1. a term in the forbidden list above; OR
+2. a use that DIRECTLY CONTRADICTS an anchor — e.g. calling an anchor function \
+with a parameter or dataclass field that does not exist on it, or with a wrong \
+default value; OR
+3. an obviously fabricated method or field on a class named in the anchors.
+
+Do NOT flag an API merely because it is not in the anchor list. Unlisted but \
+plausible helpers, imports, and standard-library calls are NOT hallucinations. \
+When unsure, do not flag it.
 
 ## Output
 
 Output ONLY a JSON object, no other text, with EXACTLY these keys:
 - "anchors": object mapping each anchor symbol (exact string) to 0 or 1.
-- "hallucinated": array of strings — APIs/params the script invented or that \
-appear in the forbidden list. Empty array if none.
+- "hallucinated": array of strings — ONLY items meeting the strict bar above. \
+Empty array if none.
 - "quality": integer 1-5 — holistic: would this actually work, is it idiomatic, \
 does it use the right entry points? (5 = ship it; 1 = wrong approach).
 - "notes": one-paragraph justification of the quality score.
