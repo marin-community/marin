@@ -32,10 +32,15 @@ PYTHON_LIBS: dict[str, str] = {
     "rigging": "lib/rigging/src/rigging",
     "iris": "lib/iris/src/iris",
     "zephyr": "lib/zephyr/src/zephyr",
+    "finelog": "lib/finelog/src/finelog",
 }
 
+# Rust crate name -> src dir. finelog_rust is keyed separately from the finelog
+# Python package to avoid a package-name collision; both group under the
+# "finelog" sub-project in the doc taxonomy.
 RUST_CRATES: dict[str, str] = {
-    "dupekit": "rust/dupekit/src",
+    "dupekit": "lib/dupekit/rust/src",
+    "finelog_rust": "lib/finelog/rust/src",
 }
 
 KNOWN_LIBS = set(PYTHON_LIBS.keys()) | set(RUST_CRATES.keys()) | {"draccus"}

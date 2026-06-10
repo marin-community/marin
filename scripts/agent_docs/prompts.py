@@ -298,6 +298,49 @@ does it use the right entry points? (5 = ship it; 1 = wrong approach).
 ```
 """
 
+SHORTEN_PROMPT = """\
+The markdown document below is {tokens} tokens but MUST be at most {budget} \
+tokens. Shorten it to fit while preserving the highest-value content for an AI \
+coding agent: exact import paths, required parameters and their default VALUES, \
+and `file:symbol` pointers. Cut prose, redundancy, and the least-critical \
+entries first. Keep the same section headings. Output ONLY the shortened \
+markdown — no commentary.
+
+## Document
+
+{document}
+"""
+
+TAXONOMY_MAP_PROMPT = """\
+You are generating the top-level map for the Marin monorepo's agent docs. This \
+file is loaded into EVERY agent conversation, so it must be tiny and scannable: \
+the agent reads it to decide which sub-project doc to open next.
+
+Given the per sub-project overviews below, produce a markdown document with \
+EXACTLY these sections:
+
+## Sub-project Index
+One line per sub-project, in this exact format:
+`project` — one-sentence purpose. → `docs/agent/<project>/overview.md`
+
+## Dependency Edges
+Cross-sub-project edges only, one per line: `A -> B` (A depends on B). Skip \
+intra-project edges.
+
+## Where to look
+Two lines reminding the agent of the two-axis split:
+- "How do I use X?" -> `docs/agent/<project>/ops.md`
+- "How does X work / where do I change it?" -> `docs/agent/<project>/architecture.md`
+
+Rules:
+- Total output MUST be under ~1000 tokens (~4000 characters).
+- No code blocks, no prose paragraphs.
+
+## Sub-project overviews:
+
+{overviews}
+"""
+
 MAP_PROMPT = """\
 You are generating a package map for an AI coding agent working on the Marin \
 monorepo. This file is loaded into EVERY agent conversation. It must be small \
