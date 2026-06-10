@@ -26,6 +26,8 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_REMAT         recompute_all (default) | save_moe -- save_moe keeps the
                         tagged MoE dispatch tensors for backward so the EP
                         collectives are not re-run during recompute
+    SCALE_MP            jmp policy (default params=float32,compute=bfloat16,
+                        output=bfloat16); params=bfloat16 halves FSDP gather bytes
     SCALE_TRACKER       wandb | json_logger (default json_logger)
     SCALE_PROFILER_STEPS  >0 enables a jax_profile capture window of N steps
                           (use SCALE_TRACKER=wandb so the artifact uploads)
@@ -186,7 +188,7 @@ def build_scale_step() -> ExecutorStep:
             steps=versioned(steps),
             batch_size=versioned(batch_size),
             seed=versioned(0),
-            mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+            mp=versioned(os.environ.get("SCALE_MP", "params=float32,compute=bfloat16,output=bfloat16")),
             tracker=tracker,
             optimizer=versioned(SCALE_OPTIMIZER),
             grug_trainer=versioned(grug_trainer),
