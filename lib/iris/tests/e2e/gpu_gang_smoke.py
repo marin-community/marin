@@ -248,16 +248,28 @@ class ControllerTarget:
         logger.info("controller ready (in-cluster: %s)", addr)
         return addr
 
-    def open_tunnel(self, local_port: int = 10000) -> str:
+    def open_tunnel(self, local_port: int = 0) -> str:
         port = self.cfg.controller.coreweave.port or 10000
         svc = self.cfg.controller.coreweave.service_name or "iris-controller-svc"
+        # Random free port, pinned to 127.0.0.1. A fixed port silently
+        # cross-wires the client: with something else (e.g. a production
+        # controller tunnel) on 127.0.0.1:<port>, kubectl binds only [::1] and
+        # "localhost" resolves to the OTHER listener — the smoke then submits
+        # its gang to that cluster. --address makes a genuine conflict fail
+        # loudly instead.
+        if local_port == 0:
+            with socket.socket() as s:
+                s.bind(("127.0.0.1", 0))
+                local_port = s.getsockname()[1]
         self._tunnel = subprocess.Popen(
-            self._kc("port-forward", "-n", self.namespace, f"svc/{svc}", f"{local_port}:{port}"),
+            self._kc(
+                "port-forward", "--address", "127.0.0.1", "-n", self.namespace, f"svc/{svc}", f"{local_port}:{port}"
+            ),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        _wait_port("localhost", local_port, timeout=60)
-        url = f"http://localhost:{local_port}"
+        _wait_port("127.0.0.1", local_port, timeout=60)
+        url = f"http://127.0.0.1:{local_port}"
         logger.info("controller tunnel open: %s", url)
         return url
 

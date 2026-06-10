@@ -701,10 +701,10 @@ class InMemoryK8sService:
         if resource is K8sResource.PODS:
             self._release_pod_resources(name)
 
-    def delete_many(self, resource: K8sResource, names: list[str], *, wait: bool = False) -> None:
+    def delete_many(self, resource: K8sResource, names: list[str], *, force: bool = False, wait: bool = False) -> None:
         """Delete multiple resources by name."""
         for name in names:
-            self.delete(resource, name)
+            self.delete(resource, name, force=force)
 
     def delete_by_labels(self, resource: K8sResource, labels: dict[str, str], *, wait: bool = False) -> None:
         """Delete all resources matching the given label selector."""

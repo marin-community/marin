@@ -129,11 +129,10 @@ _KUEUE_PREFERRED_TOPOLOGY = "kueue.x-k8s.io/podset-preferred-topology"
 # but stamping it is harmless and required once a podset-topology annotation is
 # present. Sourced from the task ordinal (JobName.task_index).
 _KUEUE_POD_GROUP_POD_INDEX = "kueue.x-k8s.io/pod-group-pod-index"
-# Finalizer Kueue's pod integration stamps on admitted gang pods. It blocks pod
-# removal until Kueue reconciles the Workload; if a gang is torn down while pods
-# are wedged (containers exited, deletionTimestamp set), the finalizer keeps the
-# labeled pods alive, Kueue recreates the Workload from them, and the TAS
-# reservation leaks. Teardown and GC strip it to let the pods actually drain.
+# Pod finalizer Kueue's webhook stamps on admitted gang pods. Kueue only
+# strips it for pods it considers accounted for; on teardown Iris removes it
+# itself so the pod objects actually disappear instead of pinning the
+# pod-group Workload (Kueue rebuilds it from surviving labeled pods).
 _KUEUE_MANAGED_FINALIZER = "kueue.x-k8s.io/managed"
 
 # CoreWeave-convention fallback for KueueConfig.topologies: group_by -> (node
@@ -782,10 +781,21 @@ _ACTIVE_PODS_FIELD_SELECTOR = "status.phase!=Succeeded,status.phase!=Failed"
 _MANAGED_POD_LABELS = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE}
 
 # Garbage collection: how often to run the terminal-pod cleanup pass (seconds).
-_GC_INTERVAL_SECONDS = 300  # 5 minutes
+# 1 minute bounds how long a wedged gang can pin idle GPU nodes (the pass is two
+# field-selector list calls, so the cadence is cheap).
+_GC_INTERVAL_SECONDS = 60
 
 # Garbage collection: delete terminal pods and orphaned configmaps/PDBs older than this (seconds).
 _GC_MAX_AGE_SECONDS = 3600  # 1 hour
+
+# Garbage collection: shorter retention for terminal gang (Kueue pod-group)
+# pods. Gang pods pin Kueue quota and the TAS topology reservation for as long
+# as they exist — Kueue rebuilds the pod-group Workload from surviving labeled
+# pods — so they cannot get the 1h debugging window plain pods do: every held
+# slot is an idle GPU node. 1 minute is still far above pod-status poll
+# latency (the reconcile loop runs every few seconds), so prompt deletion
+# cannot race exit-status collection.
+_GANG_GC_MAX_AGE_SECONDS = 60
 
 
 def _build_pod_statuses(pods: list[dict]) -> list[controller_pb2.Controller.KubernetesPodStatus]:
@@ -1558,19 +1568,9 @@ class K8sTaskProvider:
         if not stray_pod_names:
             return
 
-        # Strip Kueue's managed finalizer first so the delete actually drains the
-        # pod. Otherwise a wedged pod lingers, Kueue rebuilds the Workload from
-        # the still-labeled pod, and the TAS reservation never frees.
-        for pod_name in stray_gang_pod_names:
-            self.kubectl.remove_finalizer(K8sResource.PODS, pod_name, _KUEUE_MANAGED_FINALIZER)
         self.kubectl.delete_many(K8sResource.PODS, stray_pod_names, wait=False)
-        # Release the Kueue gang reservation for every torn-down generation.
-        # Kueue parks a coscheduled Workload in WaitingForReplacementPods when
-        # its pods are deleted, holding the quota until the Workload itself is
-        # removed; without this, a gang requeue (which bumps to a new
-        # pod-group generation) would deadlock behind the old generation's
-        # still-reserved quota.
-        self._delete_kueue_workloads(stray_pod_groups)
+        # The GC pass re-drives any gang pods that survive this teardown.
+        self._release_gang_reservations(stray_gang_pod_names, stray_pod_groups)
         # Enqueue task hashes for deferred configmap/PDB cleanup by the GC pass.
         self._pending_gc_hashes.update(stray_hashes)
 
@@ -1580,6 +1580,21 @@ class K8sTaskProvider:
             len(stray_hashes),
             len(stray_pod_groups),
         )
+
+    def _release_gang_reservations(self, gang_pod_names: list[str], pod_groups: set[str]) -> None:
+        """Release the Kueue gang reservation for torn-down pod-group generations.
+
+        Kueue parks a coscheduled Workload in WaitingForReplacementPods when its
+        pods are deleted, holding the quota until the Workload itself is removed;
+        a gang requeue (which bumps to a new pod-group generation) would deadlock
+        behind the old generation's still-reserved quota. Stripping Kueue's pod
+        finalizer is what guarantees the labeled pods actually disappear —
+        otherwise Kueue rebuilds the Workload from the surviving pods and
+        re-holds the quota/TAS slots.
+        """
+        for pod_name in gang_pod_names:
+            self.kubectl.remove_finalizer(K8sResource.PODS, pod_name, _KUEUE_MANAGED_FINALIZER)
+        self._delete_kueue_workloads(pod_groups)
 
     def _delete_kueue_workloads(self, pod_group_names: set[str]) -> None:
         """Delete the Kueue Workload backing each coscheduled pod-group generation.
@@ -1594,7 +1609,8 @@ class K8sTaskProvider:
 
     def _maybe_gc_terminal_resources(self, active_pods: list[dict]) -> None:
         """Periodically delete terminal (Succeeded/Failed) pods and their associated
-        configmaps/PDBs that are older than _GC_MAX_AGE_SECONDS.
+        configmaps/PDBs that are older than _GC_MAX_AGE_SECONDS, and sweep terminal
+        gang pods (with their Kueue Workloads) on the shorter gang retention.
 
         Without this, completed pods and their configmaps accumulate in etcd indefinitely
         since the sync loop's field selector excludes terminal pods from its queries.
@@ -1613,16 +1629,30 @@ class K8sTaskProvider:
             logger.exception("GC pass failed; will retry next interval")
 
     def _gc_terminal_resources(self, active_pods: list[dict]) -> None:
-        cutoff = datetime.now(timezone.utc).timestamp() - _GC_MAX_AGE_SECONDS
+        """One GC pass: deferred CM/PDB cleanup, the 1h terminal-pod sweep, and a
+        short-retention sweep of terminal gang pods that strips the Kueue pod
+        finalizer and deletes the pod-group Workloads they would otherwise pin.
+        """
+        now = datetime.now(timezone.utc).timestamp()
+        cutoff = now - _GC_MAX_AGE_SECONDS
+        gang_cutoff = now - _GANG_GC_MAX_AGE_SECONDS
 
         # Collect task hashes that still have active (Pending/Running) pods.
         # These must NOT have their configmaps/PDBs deleted, even if an older
         # attempt of the same task is terminal — task_hash is shared across attempts.
         active_hashes: set[str] = set()
+        # Pod-groups with live (Pending/Running) members share one Kueue
+        # Workload across the gang; releasing it would evict the running
+        # siblings, so the gang sweep must skip those groups entirely.
+        active_gang_groups: set[str] = set()
         for pod in active_pods:
-            h = pod.get("metadata", {}).get("labels", {}).get(_LABEL_TASK_HASH)
+            labels = pod.get("metadata", {}).get("labels", {})
+            h = labels.get(_LABEL_TASK_HASH)
             if h:
                 active_hashes.add(h)
+            g = labels.get(_KUEUE_POD_GROUP_NAME)
+            if g:
+                active_gang_groups.add(g)
 
         # 1. Targeted cleanup: delete configmaps/PDBs for tasks that were killed
         #    since last GC. Uses label-selector deletes (one kubectl call per hash)
@@ -1643,13 +1673,9 @@ class K8sTaskProvider:
         #    Skip hashes that still have active pods to avoid deleting live resources.
         old_pod_names: list[str] = []
         old_task_hashes: set[str] = set()
-        # Wedged gang pods: terminal, already deletion-requested, but held alive
-        # by Kueue's managed finalizer. The active-pod field selector hides them
-        # from _delete_stray_pods, so GC is the only place that re-drives them.
-        # Strip the finalizer, delete promptly (no age gate), and re-delete the
-        # Workload — once the labeled pods drain, Kueue stops rebuilding it.
-        wedged_gang_pod_names: list[str] = []
-        wedged_pod_groups: set[str] = set()
+        gang_pod_names: list[str] = []
+        gang_pod_groups: set[str] = set()
+        gang_task_hashes: set[str] = set()
         for phase in ("Succeeded", "Failed"):
             pods = self.kubectl.list_json(
                 K8sResource.PODS,
@@ -1658,30 +1684,45 @@ class K8sTaskProvider:
             )
             for pod in pods:
                 meta = pod.get("metadata", {})
-                labels = meta.get("labels", {})
-                pod_group = labels.get(_KUEUE_POD_GROUP_NAME)
-                if pod_group and meta.get("deletionTimestamp"):
-                    self.kubectl.remove_finalizer(K8sResource.PODS, meta["name"], _KUEUE_MANAGED_FINALIZER)
-                    wedged_gang_pod_names.append(meta["name"])
-                    wedged_pod_groups.add(pod_group)
-                    continue
                 created = meta.get("creationTimestamp", "")
                 if not created:
                     continue
                 ts = datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
+                task_hash = meta.get("labels", {}).get(_LABEL_TASK_HASH)
+                pod_group = meta.get("labels", {}).get(_KUEUE_POD_GROUP_NAME)
+                # Gang sweep: a deletionTimestamp means a prior delete is
+                # wedged on the Kueue finalizer; otherwise the shorter gang
+                # retention applies. Handled pods are excluded from the 1h
+                # sweep below. Pods whose group still has live members are
+                # deferred wholesale (not even age-swept): a partial delete
+                # would wedge on the finalizer, and releasing the shared
+                # Workload would evict the running siblings.
+                if pod_group and pod_group in active_gang_groups:
+                    continue
+                if pod_group and (meta.get("deletionTimestamp") or ts < gang_cutoff):
+                    gang_pod_names.append(meta["name"])
+                    gang_pod_groups.add(pod_group)
+                    if task_hash:
+                        gang_task_hashes.add(task_hash)
+                    continue
                 if ts < cutoff:
                     old_pod_names.append(meta["name"])
-                    task_hash = labels.get(_LABEL_TASK_HASH)
                     if task_hash:
                         old_task_hashes.add(task_hash)
 
-        if wedged_gang_pod_names:
-            self.kubectl.delete_many(K8sResource.PODS, wedged_gang_pod_names, wait=False)
-            self._delete_kueue_workloads(wedged_pod_groups)
+        if gang_pod_names:
+            # force (gracePeriodSeconds=0): these pods are already terminal, so
+            # there is nothing to terminate gracefully, and force unsticks
+            # deletion when the node's kubelet is gone (node failure).
+            self.kubectl.delete_many(K8sResource.PODS, gang_pod_names, force=True, wait=False)
+            self._release_gang_reservations(gang_pod_names, gang_pod_groups)
+            # CM/PDB cleanup follows the deferred path so active retry
+            # attempts sharing the task hash keep their resources.
+            self._pending_gc_hashes.update(gang_task_hashes)
             logger.info(
-                "GC: drained %d wedged gang pods (%d Kueue workloads re-deleted)",
-                len(wedged_gang_pod_names),
-                len(wedged_pod_groups),
+                "GC: swept %d terminal gang pods, released %d Kueue workloads",
+                len(gang_pod_names),
+                len(gang_pod_groups),
             )
 
         if old_pod_names:
