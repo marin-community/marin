@@ -7,13 +7,15 @@ These tests need real job execution to verify log content from actual
 callable output and chaos injection behavior.
 """
 
+import logging
 import uuid
 
 import pytest
 from iris.chaos import enable_chaos
-from iris.rpc import cluster_pb2
+from iris.cluster.client import get_job_info
+from iris.rpc import job_pb2
 
-pytestmark = [pytest.mark.e2e, pytest.mark.timeout(60)]
+pytestmark = [pytest.mark.requires_cluster, pytest.mark.timeout(60)]
 
 
 def _fail_then_succeed(attempt_marker: str):
@@ -22,7 +24,6 @@ def _fail_then_succeed(attempt_marker: str):
     Uses the attempt_id from JobInfo to determine whether to fail.
     Prints attempt-specific output for log verification.
     """
-    from iris.cluster.client import get_job_info
 
     info = get_job_info()
     if info is None:
@@ -43,7 +44,6 @@ def test_multiple_attempts_preserve_logs(cluster, caplog):
     2. Verify final state is SUCCEEDED
     3. Verify logs contain output from both attempts (via attempt_id field)
     """
-    import logging
 
     run_id = uuid.uuid4().hex[:8]
     marker = f"test-{run_id}"
@@ -57,7 +57,7 @@ def test_multiple_attempts_preserve_logs(cluster, caplog):
         )
 
         status = cluster.wait(job, timeout=60)
-        assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED, f"Job should succeed after retry: {status}"
+        assert status.state == job_pb2.JOB_STATE_SUCCEEDED, f"Job should succeed after retry: {status}"
 
         # Fetch logs for all attempts
         task_id = job.job_id.task(0)
@@ -100,7 +100,7 @@ def test_superseding_attempt_logs_info(cluster):
     )
 
     status = cluster.wait(job, timeout=60)
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED, f"Job should succeed after retry: {status}"
+    assert status.state == job_pb2.JOB_STATE_SUCCEEDED, f"Job should succeed after retry: {status}"
 
 
 def test_attempt_specific_log_fetch(cluster):
@@ -122,7 +122,7 @@ def test_attempt_specific_log_fetch(cluster):
     )
 
     status = cluster.wait(job, timeout=60)
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
     # Fetch logs for attempt 0 only
     task_id = job.job_id.task(0)

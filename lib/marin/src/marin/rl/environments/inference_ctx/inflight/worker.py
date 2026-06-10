@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import logging
 
 import numpy as np
 from marin.rl.environments.inference_ctx.inflight.async_bridge import AsyncBridge
-from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
+from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +35,11 @@ def _apply_worker_extension_mro_fix():
     See: https://github.com/vllm-project/vllm/issues/XXXX (TODO: file upstream issue)
     """
     try:
-        from vllm.v1.worker.worker_base import WorkerWrapperBase
-        from vllm.config import set_current_vllm_config
-        from vllm.utils.import_utils import resolve_obj_by_qualname
-        from vllm.multimodal import MULTIMODAL_REGISTRY
-        from vllm.multimodal.cache import worker_receiver_cache_from_config
+        from vllm.config import set_current_vllm_config  # noqa: PLC0415  # optional dep: vllm
+        from vllm.multimodal import MULTIMODAL_REGISTRY  # noqa: PLC0415  # optional dep: vllm
+        from vllm.multimodal.cache import worker_receiver_cache_from_config  # noqa: PLC0415  # optional dep: vllm
+        from vllm.utils.import_utils import resolve_obj_by_qualname  # noqa: PLC0415  # optional dep: vllm
+        from vllm.v1.worker.worker_base import WorkerWrapperBase  # noqa: PLC0415  # optional dep: vllm
     except ImportError:
         logger.warning("Could not import vLLM V1 worker modules for MRO fix")
         return
@@ -50,7 +51,7 @@ def _apply_worker_extension_mro_fix():
         assert self.vllm_config is not None, "vllm_config is required to initialize the worker"
         self.vllm_config.enable_trace_function_call_for_thread()
 
-        from vllm.plugins import load_general_plugins
+        from vllm.plugins import load_general_plugins  # noqa: PLC0415  # optional dep: vllm
 
         load_general_plugins()
 
@@ -136,7 +137,7 @@ def deserialize_state_dict_from_rpc(serialized_state_dict: dict) -> dict:
     Inverse of serialize_state_dict_for_rpc in async_vllm.py.
     Note: RPC serialization may convert tuples to lists, so we handle both.
     """
-    state_dict = {}
+    state_dict: dict = {}
     for key, value in serialized_state_dict.items():
         if isinstance(value, (tuple, list)) and len(value) == 3:
             data_bytes, dtype_str, shape = value
@@ -162,11 +163,11 @@ class WorkerExtension:
         # Deserialize from (bytes, dtype, shape) tuples back to numpy arrays
         deserialized_state_dict = deserialize_state_dict_from_rpc(new_state_dict)
         new_state = levanter_state_dict_to_nnx_state_on_cpu(deserialized_state_dict)
-        self.model_runner._sync_weights(
+        self.sync_weights(
             new_state,
-            MODEL_MAPPINGS[model_name],
-            MODEL_TRANSPOSE_KEYS[model_name],
-            None,
+            mappings=MODEL_MAPPINGS[model_name],
+            transpose_keys=MODEL_TRANSPOSE_KEYS[model_name],
+            reshard_fn=None,
         )
 
 
@@ -184,6 +185,8 @@ class SyncVLLMWrapper:
         gpu_memory_utilization: float = 0.95,
         load_format: str = "auto",
         enforce_eager: bool = True,
+        kv_cache_metrics: bool = False,
+        seed: int = 0,
     ):
         if AsyncEngineArgs is None:
             raise RuntimeError("vLLM async engine is not available. Please install vLLM v1 with: pip install vllm")
@@ -192,15 +195,18 @@ class SyncVLLMWrapper:
         self.bridge.start()
 
         # Initialize async engine from sync code
-        engine_args = AsyncEngineArgs(
-            model=model,
-            max_model_len=max_model_len,
-            worker_extension_cls="marin.rl.environments.inference_ctx.inflight.worker.WorkerExtension",
-            tensor_parallel_size=tensor_parallel_size,
-            gpu_memory_utilization=gpu_memory_utilization,
-            load_format=load_format,
-            enforce_eager=enforce_eager,
-        )
+        engine_kwargs = {
+            "model": model,
+            "max_model_len": max_model_len,
+            "worker_extension_cls": "marin.rl.environments.inference_ctx.inflight.worker.WorkerExtension",
+            "tensor_parallel_size": tensor_parallel_size,
+            "gpu_memory_utilization": gpu_memory_utilization,
+            "load_format": load_format,
+            "enforce_eager": enforce_eager,
+            "kv_cache_metrics": kv_cache_metrics,
+            "seed": seed,
+        }
+        engine_args = AsyncEngineArgs(**engine_kwargs)
 
         self.engine = self.bridge.run(self._init_engine(engine_args))
 
@@ -210,7 +216,7 @@ class SyncVLLMWrapper:
         logger.info(f"Engine initialized: {engine}")
         return engine
 
-    def generate(self, prompts: list[str], sampling_params: SamplingParams) -> str:
+    def generate(self, prompts: list[str], sampling_params: SamplingParams) -> list[str]:
         """
         Synchronous generate method - runs async code under the hood.
 
@@ -228,7 +234,6 @@ class SyncVLLMWrapper:
         Generate for multiple prompts concurrently.
         Each prompt gets its own request_id and runs in parallel.
         """
-        import asyncio
 
         # Create a task for each prompt
         tasks = []

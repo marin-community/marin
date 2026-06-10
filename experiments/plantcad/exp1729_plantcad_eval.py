@@ -14,19 +14,21 @@ from dataclasses import dataclass
 
 import fsspec
 import haliax as hax
-from rigging.filesystem import open_url
 import haliax.haxtyping as ht
 import jax.numpy as jnp
 import numpy as np
 import torch
 from datasets import Dataset, load_dataset
 from huggingface_hub import HfApi
+from marin.execution.executor import executor_main
+from marin.execution.types import ExecutorStep, this_output_path, versioned
+from marin.utilities.json_encoder import CustomJsonEncoder
+from rigging.filesystem import open_url
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.utilities.json_encoder import CustomJsonEncoder
-
 logger = logging.getLogger(__name__)
+
+# nodryrun
 
 
 # -----------------------------------------------------------------------------
@@ -377,7 +379,7 @@ def score_eval_dataset(
 
 def evaluate_conservation_scores(scores: ConservationResult) -> dict[str, float]:
     """Calculate ROC AUC and other metrics from scores."""
-    from sklearn.metrics import roc_auc_score
+    from sklearn.metrics import roc_auc_score  # noqa: PLC0415  # optional dep: sklearn
 
     if len(scores.scores) == 0:
         raise ValueError("No valid conservation scores found")

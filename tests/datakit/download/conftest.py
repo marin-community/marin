@@ -4,20 +4,13 @@
 """Shared fixtures for download tests."""
 
 import gzip
+import io
 import json
 import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
 import pytest
-from fray.v1.job import create_job_ctx, fray_default_job_ctx
-
-
-@pytest.fixture(autouse=True)
-def flow_backend_ctx():
-    """Set up sync backend for all download tests."""
-    with fray_default_job_ctx(create_job_ctx("sync")):
-        yield
 
 
 @pytest.fixture
@@ -163,8 +156,6 @@ def mock_hf_filesystem():
 
         def mock_open(path, mode="rb"):
             if path in files:
-                import io
-
                 return io.BytesIO(files[path])
             raise FileNotFoundError(f"File not found: {path}")
 

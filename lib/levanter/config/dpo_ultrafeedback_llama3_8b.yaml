@@ -3,8 +3,10 @@
 # python infra/launch.py --zone us-central1-a --tpu_name debug --tpu_type v5p-8 -- python src/levanter/main/train_dpo.py --config_path config/dpo_ultrafeedback_llama3_8b.yaml
 data:
   tokenizer: marin-community/marin-tokenizer
-  shuffle: true
-  permutation_type: feistel
+  shuffle:
+    io_block_size: 256
+    window_blocks: 512
+    perm_type: feistel
   components:
     ultrafeedback_train_prefs:
       source:
@@ -72,8 +74,13 @@ optimizer:
   warmup: 0.1
   max_grad_norm: 1.0
 
-reference_model_path: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B--main
-reference_is_hf: true
+adapter:
+  type: none
+
+reference:
+  type: separate
+  model_path: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B--main
+  is_hf: true
 beta: 0.01
 validation_split_fraction: null
 

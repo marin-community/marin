@@ -9,15 +9,14 @@ import pytest
 import requests  # For requests.exceptions.RequestException
 from huggingface_hub.utils import HfHubHTTPError
 from levanter.store import TreeCache
-from transformers import AutoTokenizer
-
+from levanter.tokenizers import load_tokenizer
 from marin.processing.tokenize.download_pretokenized import (
     PretokenizedCacheDownloadConfig,
     _actually_download_pretokenized_cache,
 )
 
 HF_REPO_ID = "marin-community/fineweb-edu-pretokenized-10K"
-TOKENIZER_NAME = "stanford-crfm/marin-tokenizer"
+TOKENIZER_NAME = "marin-community/marin-tokenizer"
 
 
 def test_download_and_load_cache():
@@ -28,7 +27,7 @@ def test_download_and_load_cache():
     try:
         # Attempt to load tokenizer first, as it's a quick check for connectivity/access
         # and needed for creating a more realistic exemplar if desired, though not strictly for this test.
-        AutoTokenizer.from_pretrained(TOKENIZER_NAME)
+        load_tokenizer(TOKENIZER_NAME)
     except (HfHubHTTPError, requests.exceptions.RequestException, OSError, ValueError) as e:
         pytest.skip(
             f"Skipping test: Could not load tokenizer '{TOKENIZER_NAME}'. "

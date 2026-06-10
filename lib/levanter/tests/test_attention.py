@@ -2,36 +2,63 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from contextlib import ExitStack
 
 import equinox
+import equinox as eqx
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
 import pytest
-import equinox as eqx
 from chex import assert_trees_all_close
-from jax.lax import Precision
-from jax.sharding import NamedSharding, PartitionSpec
-from contextlib import ExitStack
-
-import haliax as hax
 from haliax import Axis
 from haliax.partitioning import ResourceAxis
-from levanter.utils.mesh import create_mesh_from_axis_specs
+from jax._src import config as jax_config
+from jax.lax import Precision
+from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec, use_abstract_mesh
+from test_utils import skip_if_module_missing, skip_if_no_torch, skip_if_not_enough_devices, use_test_mesh
 
+from levanter.grug.attention import align_kv_heads
 from levanter.layers.attention import (
     Attention,
     AttentionBackend,
     AttentionConfig,
     AttentionMask,
+    AttentionWithSink,
     _bin_and_group_axes_by_function,
     _te_flash_attention,
     _tpu_splash_attention,
-    AttentionWithSink,
     dot_product_attention,
 )
-from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
+from levanter.utils.mesh import create_mesh_from_axis_specs
+
+
+class _reset_abstract_mesh:
+    def __enter__(self):
+        self._prev = jax_config.abstract_mesh_context_manager.swap_local(jax_config.config_ext.unset)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        jax_config.abstract_mesh_context_manager.set_local(self._prev)
+        return False
+
+
+def _make_explicit_mesh() -> Mesh:
+    return Mesh(
+        np.array(jax.devices()[:8]).reshape(4, 2),
+        axis_names=("data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
+    )
+
+
+def _make_explicit_abstract_mesh() -> AbstractMesh:
+    return AbstractMesh(
+        axis_sizes=(4, 2),
+        axis_names=("data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
+    )
 
 
 @pytest.mark.skip
@@ -203,6 +230,32 @@ def test_attention_with_headwise_gating_module():
 
     expected = np.full((2, 1), 0.5)
     assert_trees_all_close(out.array, expected)
+
+
+def test_align_kv_heads_repeats_grouped_query_heads():
+    kv = jnp.arange(2 * 3 * 2 * 4, dtype=jnp.float32).reshape(2, 3, 2, 4)
+
+    aligned = align_kv_heads(kv, num_q_heads=4)
+
+    assert aligned.shape == (2, 3, 4, 4)
+    assert jnp.array_equal(aligned[:, :, 0], kv[:, :, 0])
+    assert jnp.array_equal(aligned[:, :, 1], kv[:, :, 0])
+    assert jnp.array_equal(aligned[:, :, 2], kv[:, :, 1])
+    assert jnp.array_equal(aligned[:, :, 3], kv[:, :, 1])
+
+
+@skip_if_not_enough_devices(8)
+def test_align_kv_heads_lowers_with_explicit_mesh_axes():
+    mesh = _make_explicit_mesh()
+    abstract_mesh = _make_explicit_abstract_mesh()
+    sharding = NamedSharding(mesh, PartitionSpec("data", None, "model", None))
+    kv = jax.ShapeDtypeStruct((8, 3, 2, 4), jnp.float32, sharding=sharding)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(abstract_mesh):
+        aligned = eqx.filter_eval_shape(lambda: align_kv_heads(kv, num_q_heads=4))
+
+    assert aligned.shape == (8, 3, 4, 4)
+    assert aligned.sharding == NamedSharding(abstract_mesh, PartitionSpec("data", None, "model", None))
 
 
 def test_te_bin_and_group_axes_by_function():
@@ -629,7 +682,7 @@ def sink_attention_ref_gpt_oss(
     sliding_window: int | None = None,
     start_q=0,
 ):
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     batch_size, num_queries, num_key_value_heads, num_key_value_groups, head_dim = query.shape
     batch_size, num_keys, num_key_value_heads, head_dim = key.shape
@@ -676,7 +729,7 @@ def sink_attention(
     block_size: int | None = None,
     inference: bool = True,
 ):
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     batch_size, num_queries, num_key_value_heads, num_key_value_groups, head_dim = query.shape
     _, num_keys, _, _ = key.shape
@@ -799,7 +852,7 @@ def test_attention_equivalence(
     sliding_window,
     start_q,
 ):
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     if num_queries > num_keys:
         pytest.skip("too many queries")
@@ -862,7 +915,7 @@ def test_attention_equivalence_jax_flash(
     block_size,
 ):
     """Make sure the JAX backend is tested"""
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     if num_queries > num_keys:
         pytest.skip("too many queries")

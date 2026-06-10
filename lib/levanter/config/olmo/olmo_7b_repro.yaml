@@ -2,7 +2,10 @@ data:
   cache_dir: gs://marin-data/tokenized/OLMo-1B/dolma-v1.7
   tokenizer: allenai/OLMo-1B
   stop_strategy: restart
-  shuffle_buffer_size: 100000
+  shuffle:
+    io_block_size: 256
+    window_blocks: 512
+    perm_type: feistel
   train_weights:
     dolma-algebraic-stack: 12.6
     dolma-arxiv: 28.0

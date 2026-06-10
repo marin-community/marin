@@ -61,11 +61,13 @@ The headline that an “ingredient in hundreds of household products ‘causes h
 
 **Analysis by** **Bazian****. Edited by** **NHS Choices****. Follow** **Behind the Headlines on twitter****.**
 
-Tweets by @lisburnstar                          
+Tweets by @lisburnstar
 
 Back to the top of the page
 
-Lipstick chemical 'may damage muscles' - Ulster Star                * Jump to Content
+Lipstick chemical 'may damage muscles' - Ulster Star                
+
+* Jump to Content
 * Jump to First Navigation
 * Jump to Second Navigation
 
@@ -126,11 +128,13 @@ The headline that an “ingredient in hundreds of household products ‘causes h
 
 **Analysis by** **Bazian****. Edited by** **NHS Choices****. Follow** **Behind the Headlines on twitter****.**
 
-Tweets by @lisburnstar                          
+Tweets by @lisburnstar
 
 Back to the top of the page
 
-Lipstick chemical 'may damage muscles' - Ulster Star                * Jump to Content
+Lipstick chemical 'may damage muscles' - Ulster Star                
+
+* Jump to Content
 * Jump to First Navigation
 * Jump to Second Navigation
 
@@ -191,6 +195,6 @@ The headline that an “ingredient in hundreds of household products ‘causes h
 
 **Analysis by** **Bazian****. Edited by** **NHS Choices****. Follow** **Behind the Headlines on twitter****.**
 
-Tweets by @lisburnstar                          
+Tweets by @lisburnstar
 
 Back to the top of the page

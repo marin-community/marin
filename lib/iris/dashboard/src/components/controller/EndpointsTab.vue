@@ -2,7 +2,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
-import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import type { EndpointInfo, ListEndpointsResponse } from '@/types/rpc'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import CopyButton from '@/components/shared/CopyButton.vue'
@@ -27,7 +27,7 @@ const endpoints = computed(() => listResponse.value?.endpoints ?? [])
 watch(listResponse, () => { showAll.value = false })
 
 onMounted(fetchEndpoints)
-useAutoRefresh(fetchEndpoints, 30_000)
+useAutoRefresh(fetchEndpoints, DEFAULT_REFRESH_MS)
 
 function handleFilterSubmit() {
   prefix.value = localPrefix.value

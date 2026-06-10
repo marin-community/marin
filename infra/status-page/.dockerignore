@@ -1,0 +1,5 @@
+node_modules
+server/dist
+web/dist
+.git
+*.log

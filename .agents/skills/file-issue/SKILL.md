@@ -1,6 +1,6 @@
 ---
 name: file-issue
-description: File a GitHub issue from the current conversation. Use when bugs, regressions, or improvements are identified during a session and need to be captured as a tracked issue.
+description: File a GitHub issue for a bug or improvement found this session.
 ---
 
 # Skill: File GitHub Issue
@@ -14,21 +14,18 @@ Read first:
 
 @AGENTS.md
 
-## Issue Templates
+## Issue Kinds and Body Structure
 
-This repo has issue templates in `.github/ISSUE_TEMPLATE/`. Choose the right
-one based on what was identified:
+Pick the kind, then use the matching body structure below. There are no GitHub
+issue templates — these structures live here.
 
-| Template | When to use | Labels |
+| Kind | When to use | Labels |
 |---|---|---|
-| **bug-report** | A bug or regression was found | `bug`, `agent-generated` |
+| **bug** | A bug or regression was found | `bug`, `agent-generated` |
 | **task** | An improvement, refactor, or feature request | `agent-generated` + priority if known |
-| **experiment** | An experiment needs tracking | `experiment`, `agent-generated` |
+| **experiment** | An experiment needs tracking | `experiment`, `agent-generated` (use `.agents/skills/run-research/SKILL.md` for the body) |
 
-Always match the section structure of the chosen template. The templates are
-the source of truth for issue format in this repo.
-
-### Bug Report format (`.github/ISSUE_TEMPLATE/bug-report.md`)
+### Bug body
 
 ```markdown
 **Describe the bug**
@@ -45,7 +42,7 @@ the source of truth for issue format in this repo.
 <root cause analysis, file:line references, suggested fix if known>
 ```
 
-### Task format (`.github/ISSUE_TEMPLATE/task.md`)
+### Task body
 
 ```markdown
 ## Description
@@ -55,66 +52,51 @@ the source of truth for issue format in this repo.
 <specific, testable completion criteria>
 ```
 
-### Experiment format (`.github/ISSUE_TEMPLATE/experiment.md`)
+### Experiment body
 
-```markdown
-## Description
-<what is being investigated and why>
-
-## Hypothesis or Goal
-<what you expect to learn or achieve>
-
-### Links
-* WandB Report: <link>
-* <other relevant links>
-
-## Results
-<leave empty for new issues>
-```
+Use the "Experiment Issue Template" in `.agents/skills/run-research/SKILL.md`.
 
 ## Workflow
 
 ### 1. Gather Context from Conversation
 
-Review the current conversation to extract:
+Extract from the conversation:
 
 - **What is broken or missing** -- concrete symptoms, error messages, failing test output.
 - **Where it happens** -- file paths, line numbers, module names.
-- **How to reproduce** -- steps, commands, or minimal config that triggers the problem.
-- **Root cause** (if known) -- what the investigation revealed.
-- **Severity** -- does it block work, cause data loss, or is it cosmetic?
+- **How to reproduce** -- steps, commands, or minimal config that triggers it.
+- **Root cause** (if known).
+- **Severity** -- blocks work, causes data loss, or cosmetic?
 
-If the conversation is ambiguous about what to file, ask the user to clarify
-before proceeding.
+If it's ambiguous what to file, ask the user before proceeding.
 
 ### 2. Classify the Issue
 
-Pick the template (bug-report, task, or experiment) that best fits the
-identified problem. If unsure, ask the user.
+Pick the kind (bug, task, or experiment). If unsure, ask the user.
 
 ### 3. Duplicate Check
 
-Before creating a new issue, search for existing ones:
+Search for existing issues first:
 
 ```bash
 gh issue list --repo marin-community/marin --state open --search "<keyword>"
 ```
 
-If a matching issue exists, tell the user and offer to comment on it instead.
+If a match exists, tell the user and offer to comment on it instead.
 
 ### 4. Draft the Issue
 
-**Title**: Short imperative sentence, optionally prefixed with a scope tag
-(e.g. `[levanter] Fix gradient accumulation off-by-one`). Under 80 characters.
+**Title**: Short imperative sentence under 80 characters, optionally prefixed
+with a scope tag (e.g. `[levanter] Fix gradient accumulation off-by-one`).
 
-**Body**: Use the section structure from the chosen template (see above).
+**Body**: Use the section structure for the chosen kind (see above).
 
 **Rules for the body:**
 
 - No filler ("I noticed...", "During our conversation...").
 - No markdown images or tables.
 - Reference code with `file:line` links, not inline dumps.
-- Keep it under ~200 words. A reader should absorb it in under a minute.
+- Keep it under ~200 words; readable in under a minute.
 - Include error messages or stack traces in code blocks, trimmed to the
   relevant frames.
 - For task issues: include a concrete Definition of Done.
@@ -122,21 +104,17 @@ If a matching issue exists, tell the user and offer to comment on it instead.
 
 ### 5. Confirm or File Directly
 
-If the user explicitly asked to file an issue, skip the draft preview — file it
-and share the GitHub link. They can review and edit directly on GitHub.
-
-If the issue was surfaced by the agent (not explicitly requested), show the
-drafted title and body before filing. Wait for approval or edits.
+If the user explicitly asked to file an issue, skip the preview — file it and
+share the link. If the agent surfaced the issue (not explicitly requested),
+show the drafted title and body and wait for approval or edits.
 
 ### 6. File the Issue
 
-Write the body to a uniquely named temporary file first, then pass it with
-`--body-file`.
-Do not inline the body with shell substitution such as `--body "$(cat <<'EOF' ...)"`
-because multiline issue text can be corrupted by pasted command output or shell
-escaping mistakes. Do not reuse a fixed path such as `/tmp/issue-body.md`,
-because concurrent agent runs can overwrite each other's drafts on shared
-hosts.
+Write the body to a uniquely named temp file, then pass it with `--body-file`.
+Do not inline the body with shell substitution (`--body "$(cat <<'EOF' ...)"`)
+— multiline text can be corrupted by pasted output or escaping mistakes. Do not
+reuse a fixed path like `/tmp/issue-body.md`; concurrent agent runs can
+overwrite each other's drafts on shared hosts.
 
 ```bash
 body_file="$(mktemp "${TMPDIR:-/tmp}/issue-body.XXXXXX.md")"
@@ -152,37 +130,30 @@ gh issue create --repo marin-community/marin \
   --body-file "$body_file"
 ```
 
-Add the template-appropriate labels (e.g. `bug` for bug reports, `experiment`
-for experiments). If a relevant label does not exist, skip it rather than
-creating new labels.
+Add kind-appropriate labels (`bug`, `experiment`). If a relevant label does not
+exist, skip it rather than creating new labels. For task issues, add a priority
+label (`p1`, `p2`, `p3`) if the user specifies one or severity is clear.
 
-For task issues, add a priority label (`p1`, `p2`, `p3`) if the user specifies
-one or severity is clear from context.
-
-Before creating the issue, re-open the body file once and verify it does not
-contain unrelated shell output (for example pre-commit logs, pytest session
-headers, or prompt transcripts). If it does, stop and clean the draft before
-posting.
+Before creating the issue, re-open the body file and verify it contains no
+unrelated shell output (pre-commit logs, pytest session headers, prompt
+transcripts). If it does, clean the draft before posting.
 
 ### 7. Report Back
 
-Print the issue URL so the user can see it.
+Print the issue URL.
 
 ## Writing Style
 
-Follow the same terse style from `fix-issue`:
-
-- Every sentence must convey new information.
-- No preamble, no editorializing.
-- No restating what code does when a link suffices.
-- Annotate code links, don't narrate them.
+Follow the terse style from `fix-issue`: every sentence conveys new
+information; no preamble or editorializing; no restating code a link covers;
+annotate code links, don't narrate them.
 
 ## Tasks
 
 - [ ] Extract bug/issue details from conversation
-- [ ] Classify as bug-report, task, or experiment
+- [ ] Classify as bug, task, or experiment
 - [ ] Run duplicate check against open issues
-- [ ] Draft issue title and body using the matching template format
+- [ ] Draft issue title and body using the matching kind structure
 - [ ] Show draft to user for confirmation
 - [ ] File issue with `gh issue create`
 - [ ] Report issue URL to user
@@ -195,5 +166,5 @@ Follow the same terse style from `fix-issue`:
    (not when the user explicitly asked to file).
 3. If the conversation does not contain a clear bug or actionable improvement,
    say so and ask the user what they want to file.
-4. Always use the section structure from the matching `.github/ISSUE_TEMPLATE/`
-   template.
+4. Always use the section structure for the matching kind (see "Issue Kinds
+   and Body Structure" above).

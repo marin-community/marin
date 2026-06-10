@@ -4,26 +4,25 @@
 """
 Transform ar5iv HTML to markdown in two stages: clean_html and markdownify.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=600 --memory=512MB \
-    lib/marin/src/marin/transform/ar5iv/transform.py \
-    --input_path gs://bucket/ar5iv/ \
-    --output_path gs://bucket/ar5iv-processed/ \
-    --file_size 256
 """
 
 import datetime
+import logging
 from dataclasses import dataclass
+from html import escape, unescape
 
 import draccus
 from bs4 import BeautifulSoup
 from marin import markdown
+from marin.schemas.web.convert import HtmlToMarkdownConfig
 from zephyr import Dataset, ZephyrContext, load_jsonl
+
+logger = logging.getLogger(__name__)
 
 
 def transform_abstract(html: BeautifulSoup):
     # Transform the abstract from h6 to h2
-    abstract = html.findAll("h6", {"class": "ltx_title_abstract"})
+    abstract = html.find_all("h6", {"class": "ltx_title_abstract"})
     for ab in abstract:
         ab.name = "h2"
     return html
@@ -31,7 +30,7 @@ def transform_abstract(html: BeautifulSoup):
 
 def remove_authors(html: BeautifulSoup):
     # Remove authors since we only care about information after first section
-    authors = html.findAll("div", {"class": "ltx_authors"})
+    authors = html.find_all("div", {"class": "ltx_authors"})
     for author in authors:
         author.decompose()
         section = author.previous_sibling
@@ -44,38 +43,38 @@ def remove_authors(html: BeautifulSoup):
 
 def remove_title_page(html: BeautifulSoup):
     # Remove title page since we only care about information after first section
-    title_page = html.findAll("div", {"class": "ltx_titlepage"})
+    title_page = html.find_all("div", {"class": "ltx_titlepage"})
     for tp in title_page:
         tp.decompose()
 
 
 def clean_li(html: BeautifulSoup):
     # Remove the li tags since they repeat the same information (eg 1. 1.)
-    tags = html.findAll("span", {"class": "ltx_tag_item"})
+    tags = html.find_all("span", {"class": "ltx_tag_item"})
     for tag in tags:
         tag.decompose()
-    tags = html.findAll("span", {"class": "ltx_tag_listingline"})
+    tags = html.find_all("span", {"class": "ltx_tag_listingline"})
     for tag in tags:
         tag.decompose()
 
 
 def remove_biblio(html: BeautifulSoup):
     # Remove the biblio since there is a lot of noise
-    biblio = html.findAll("section", {"id": "bib"})
+    biblio = html.find_all("section", {"id": "bib"})
     for bib in biblio:
         bib.decompose()
 
 
 def remove_footnotes(html: BeautifulSoup):
     # Remove footnotes since they are plopped in the middle of the text
-    footnotes = html.findAll("div", {"class": "ltx_role_footnote"})
+    footnotes = html.find_all("div", {"class": "ltx_role_footnote"})
     for fn in footnotes:
         fn.decompose()
 
 
 def remove_biblinks(html: BeautifulSoup):
     # Remove the biblinks since we are removing the biblio
-    biblinks = html.findAll("a", {"class": "ltx_ref"})
+    biblinks = html.find_all("a", {"class": "ltx_ref"})
     for biblink in biblinks:
         # Removes reference links
         # biblink.decompose()
@@ -85,19 +84,19 @@ def remove_biblinks(html: BeautifulSoup):
 
 def remove_references(html: BeautifulSoup):
     # Remove the reference section
-    references = html.findAll("section", {"id": "ltx_bibliography"})
+    references = html.find_all("section", {"id": "ltx_bibliography"})
     for ref in references:
         ref.decompose()
 
     # Remove the references section
-    references = html.findAll("ul", {"class": "ltx_biblist"})
+    references = html.find_all("ul", {"class": "ltx_biblist"})
     for ref in references:
         ref.decompose()
 
 
 def linelisting_to_newline(html: BeautifulSoup):
     # Turn new line listings into new lines
-    linelisting = html.findAll("div", {"class": "ltx_listingline"})
+    linelisting = html.find_all("div", {"class": "ltx_listingline"})
     for fn in linelisting:
         fn.append(BeautifulSoup("<br>", "html.parser"))
 
@@ -107,15 +106,13 @@ def unwrap_eqn(page: BeautifulSoup) -> BeautifulSoup:
     Extract alttext from math element and convert to LaTeX format.
     Returns BeautifulSoup object with the formatted equation.
     """
-    from html import escape, unescape
-
     math_elements = page.find_all("math")
 
     for math_elem in math_elements:
         if not math_elem or "alttext" not in math_elem.attrs:
             continue
 
-        equation = math_elem["alttext"]
+        equation = str(math_elem["alttext"])
         equation = unescape(equation)
         equation = equation.replace("\\", "\\\\")
         equation = equation.replace("<", r"\<")
@@ -140,23 +137,23 @@ def unwrap_eqn(page: BeautifulSoup) -> BeautifulSoup:
 
 def deconstruct_eqn(html: BeautifulSoup):
     # Unwrap equation tables to ensure math mode is not in a table
-    eqntables = html.findAll("table", {"class": "ltx_eqn_table"})
+    eqntables = html.find_all("table", {"class": "ltx_eqn_table"})
     for eqn in eqntables:
         eqn.append(BeautifulSoup("<br>", "html.parser"))
         eqn.unwrap()
-    eqnrows = html.findAll("tr", {"class": "ltx_eqn_row"})
+    eqnrows = html.find_all("tr", {"class": "ltx_eqn_row"})
     for eqn in eqnrows:
         eqn.append(BeautifulSoup("<br>", "html.parser"))
         eqn.unwrap()
 
-    eqncell = html.findAll("td", {"class": "ltx_eqn_cell"})
+    eqncell = html.find_all("td", {"class": "ltx_eqn_cell"})
     for eqn in eqncell:
         eqn.unwrap()
 
 
 def remove_ar5iv_footer(html: BeautifulSoup):
     # This is the ar5iv footer generated on xyz date
-    footer = html.findAll("footer")
+    footer = html.find_all("footer")
     for fn in footer:
         fn.decompose()
 
@@ -181,7 +178,7 @@ def remove_title(html: BeautifulSoup):
 
 def remove_figure_captions(html: BeautifulSoup):
     # Remove the figure captions since they are not needed
-    captions = html.findAll("figcaption", {"class": "ltx_caption"})
+    captions = html.find_all("figcaption", {"class": "ltx_caption"})
     for caption in captions:
         caption.decompose()
 
@@ -232,11 +229,10 @@ def markdownify_ar5iv_record(html_blob: dict) -> dict:
     """
     content = BeautifulSoup(html_blob["text"], "html.parser")
     try:
-        content = markdown.MyMarkdownConverter().convert_soup(content)
-    except Exception as e:
-        print(f"Error converting to markdown: {e}")
-        print("content: ", content)
-        raise e
+        content = markdown.MyMarkdownConverter(HtmlToMarkdownConfig()).convert_soup(content)
+    except Exception:
+        logger.exception("Error converting to markdown; content was: %s", content)
+        raise
     # cleanup: replace nbsp as space
     # this isn't quite right if we preserve html in places, but we currently are not doing that
     content = content.replace("\xa0", " ").strip()
@@ -265,7 +261,7 @@ def main(cfg: Config) -> None:
     """Convert ar5iv HTML to markdown in two stages."""
     ctx = ZephyrContext(name="transform-ar5iv")
     # Stage 1: Clean HTML
-    print("Stage 1: Cleaning HTML...")
+    logger.info("Stage 1: Cleaning HTML...")
     clean_pipeline = (
         Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
         .flat_map(load_jsonl)
@@ -275,7 +271,7 @@ def main(cfg: Config) -> None:
     ctx.execute(clean_pipeline)
 
     # Stage 2: Convert to Markdown
-    print("Stage 2: Converting to markdown...")
+    logger.info("Stage 2: Converting to markdown...")
     markdown_pipeline = (
         Dataset.from_files(f"{cfg.output_path}/html_clean/**/*.jsonl.gz")
         .flat_map(load_jsonl)
@@ -284,4 +280,4 @@ def main(cfg: Config) -> None:
     )
     ctx.execute(markdown_pipeline)
 
-    print("Transformation complete!")
+    logger.info("Transformation complete!")

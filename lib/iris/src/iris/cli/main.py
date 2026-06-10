@@ -6,17 +6,22 @@
 Defines the ``iris`` Click group and registers all subcommands.
 """
 
-import logging as _logging_module
+import logging
 import sys
 
 import click
-
-from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token, store_token
+from rigging.config_discovery import resolve_cluster_config
 from rigging.log_setup import configure_logging
-from iris.rpc import config_pb2
-from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
 
-logger = _logging_module.getLogger(__name__)
+from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
+from iris.cluster.backends.k8s.controller import configure_client_s3
+from iris.cluster.config import IrisConfig
+from iris.cluster.token_store import cluster_name_from_url, load_any_token, load_token, store_token
+from iris.rpc import config_pb2, controller_pb2, job_pb2
+from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
+from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_cluster_name(
@@ -65,69 +70,25 @@ def create_client_token_provider(
 
 def _configure_client_s3(config) -> None:
     """Configure S3 env vars for fsspec access. Delegates to the canonical implementation."""
-    from iris.cluster.providers.k8s.controller import configure_client_s3
-
     configure_client_s3(config)
-
-
-def require_controller_url(ctx: click.Context) -> str:
-    """Get controller_url from context, establishing a tunnel lazily if needed.
-
-    On first call with a --config, this establishes the tunnel to the controller
-    and caches the result. Subsequent calls return the cached URL.
-    Commands that don't call this (e.g. ``cluster start``) never pay tunnel cost.
-    """
-    controller_url = ctx.obj.get("controller_url") if ctx.obj else None
-    if controller_url:
-        return controller_url
-
-    # Lazy tunnel establishment from config
-    config = ctx.obj.get("config") if ctx.obj else None
-    if config:
-        from iris.cluster.config import IrisConfig
-
-        iris_config = IrisConfig(config)
-        bundle = iris_config.provider_bundle()
-        ctx.obj["provider_bundle"] = bundle
-
-        if iris_config.proto.controller.WhichOneof("controller") == "local":
-            from iris.cluster.providers.local.cluster import LocalCluster
-
-            cluster = LocalCluster(iris_config.proto)
-            controller_address = cluster.start()
-            ctx.call_on_close(cluster.close)
-        else:
-            controller_address = iris_config.controller_address()
-            if not controller_address:
-                controller_address = bundle.controller.discover_controller(iris_config.proto.controller)
-
-        # Establish tunnel and keep it alive for command duration
-        try:
-            logger.info("Establishing tunnel to controller...")
-            tunnel_cm = bundle.controller.tunnel(address=controller_address)
-            tunnel_url = tunnel_cm.__enter__()
-            ctx.obj["controller_url"] = tunnel_url
-            # Clean up tunnel when context closes
-            ctx.call_on_close(lambda: tunnel_cm.__exit__(None, None, None))
-            return tunnel_url
-        except Exception as e:
-            raise click.ClickException(f"Could not connect to controller: {e}") from e
-
-    config_file = ctx.obj.get("config_file") if ctx.obj else None
-    if config_file:
-        raise click.ClickException(
-            f"Could not connect to controller (config: {config_file}). "
-            "Check that the controller is running and reachable."
-        )
-    raise click.ClickException("Either --controller-url or --config is required")
 
 
 @click.group()
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
 @click.option("--traceback", "show_traceback", is_flag=True, help="Show full stack traces on errors")
 @click.option("--controller-url", help="Controller URL (e.g., http://localhost:10000)")
-@click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config file")
-@click.option("--cluster", "cluster_name", default=None, help="Cluster name for token lookup")
+@click.option(
+    "--config",
+    "config_file",
+    type=click.Path(exists=True),
+    help="Exact cluster config YAML path; use for custom configs or pinned files",
+)
+@click.option(
+    "--cluster",
+    "cluster_name",
+    default=None,
+    help="Named cluster to resolve from config search paths; preferred for known clusters",
+)
 @click.pass_context
 def iris(
     ctx,
@@ -144,9 +105,20 @@ def iris(
     ctx.obj["cluster_name"] = cluster_name
 
     if verbose:
-        configure_logging(level=_logging_module.DEBUG)
+        configure_logging(level=logging.DEBUG)
     else:
-        configure_logging(level=_logging_module.INFO)
+        configure_logging(level=logging.INFO)
+
+    # Resolve cluster name to config file if no explicit config or URL given
+    if cluster_name and not config_file and not controller_url:
+        try:
+            resolved = resolve_cluster_config(cluster_name, dirs=IRIS_CLUSTER_CONFIG_DIRS)
+            logger.info("Resolved cluster %r to config: %s", cluster_name, resolved)
+            config_file = str(resolved)
+        except FileNotFoundError:
+            raise click.UsageError(
+                f"Unknown cluster {cluster_name!r}. Run `iris cluster list` to see available clusters."
+            ) from None
 
     # Validate mutually exclusive options
     if controller_url and config_file:
@@ -161,8 +133,6 @@ def iris(
 
     # Load config if provided
     if config_file:
-        from iris.cluster.config import IrisConfig
-
         iris_config = IrisConfig.load(config_file)
         ctx.obj["config"] = iris_config.proto
         ctx.obj["config_file"] = config_file
@@ -197,19 +167,14 @@ def login(ctx):
     controller_url = require_controller_url(ctx)
     config = ctx.obj.get("config")
 
-    from iris.rpc import cluster_pb2
-    from iris.rpc.cluster_connect import ControllerServiceClientSync
-
     if config and config.HasField("auth"):
         provider = config.auth.WhichOneof("provider")
     else:
-        client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
-        try:
-            auth_info = client.get_auth_info(cluster_pb2.GetAuthInfoRequest())
-        except Exception as e:
-            raise click.ClickException(f"Failed to discover auth method: {e}") from e
-        finally:
-            client.close()
+        with rpc_client(controller_url) as client:
+            try:
+                auth_info = client.get_auth_info(job_pb2.GetAuthInfoRequest())
+            except Exception as e:
+                raise click.ClickException(f"Failed to discover auth method: {e}") from e
         provider = auth_info.provider or None
         if not provider:
             raise click.ClickException("Controller has no authentication configured")
@@ -231,13 +196,11 @@ def login(ctx):
         raise click.ClickException(f"Unsupported auth provider: {provider}")
 
     # All providers converge: exchange identity_token for JWT via Login RPC
-    client = ControllerServiceClientSync(address=controller_url, timeout_ms=30000)
-    try:
-        response = client.login(cluster_pb2.LoginRequest(identity_token=identity_token))
-    except Exception as e:
-        raise click.ClickException(f"Login failed: {e}") from e
-    finally:
-        client.close()
+    with rpc_client(controller_url) as client:
+        try:
+            response = client.login(job_pb2.LoginRequest(identity_token=identity_token))
+        except Exception as e:
+            raise click.ClickException(f"Login failed: {e}") from e
 
     cluster_name = ctx.obj.get("cluster_name", "default")
     store_token(cluster_name, controller_url, response.token)
@@ -246,15 +209,6 @@ def login(ctx):
     # Token in URL is visible in browser history/logs — acceptable for internal clusters
     click.echo(f"Dashboard: {controller_url}/auth/session_bootstrap?token={response.token}")
     click.echo(f"Token stored for cluster '{cluster_name}'")
-
-
-def _make_authenticated_client(controller_url: str, token_provider: TokenProvider | None):
-    """Create a ControllerServiceClientSync with auth interceptor if available."""
-    from iris.rpc.auth import AuthTokenInjector
-    from iris.rpc.cluster_connect import ControllerServiceClientSync
-
-    interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
-    return ControllerServiceClientSync(address=controller_url, timeout_ms=30000, interceptors=interceptors)
 
 
 @iris.group()
@@ -274,13 +228,8 @@ def key_create(ctx, name: str, user_id: str, ttl_ms: int):
     controller_url = require_controller_url(ctx)
     token_provider = ctx.obj.get("token_provider")
 
-    from iris.rpc import cluster_pb2
-
-    client = _make_authenticated_client(controller_url, token_provider)
-    try:
-        response = client.create_api_key(cluster_pb2.CreateApiKeyRequest(user_id=user_id, name=name, ttl_ms=ttl_ms))
-    finally:
-        client.close()
+    with rpc_client(controller_url, token_provider) as client:
+        response = client.create_api_key(job_pb2.CreateApiKeyRequest(user_id=user_id, name=name, ttl_ms=ttl_ms))
 
     click.echo(f"Key ID:  {response.key_id}")
     click.echo(f"Token:   {response.token}")
@@ -296,13 +245,8 @@ def key_list(ctx, user_id: str):
     controller_url = require_controller_url(ctx)
     token_provider = ctx.obj.get("token_provider")
 
-    from iris.rpc import cluster_pb2
-
-    client = _make_authenticated_client(controller_url, token_provider)
-    try:
-        response = client.list_api_keys(cluster_pb2.ListApiKeysRequest(user_id=user_id))
-    finally:
-        client.close()
+    with rpc_client(controller_url, token_provider) as client:
+        response = client.list_api_keys(job_pb2.ListApiKeysRequest(user_id=user_id))
 
     if not response.keys:
         click.echo("No API keys found.")
@@ -321,23 +265,100 @@ def key_revoke(ctx, key_id: str):
     controller_url = require_controller_url(ctx)
     token_provider = ctx.obj.get("token_provider")
 
-    from iris.rpc import cluster_pb2
-
-    client = _make_authenticated_client(controller_url, token_provider)
-    try:
-        client.revoke_api_key(cluster_pb2.RevokeApiKeyRequest(key_id=key_id))
-    finally:
-        client.close()
+    with rpc_client(controller_url, token_provider) as client:
+        client.revoke_api_key(job_pb2.RevokeApiKeyRequest(key_id=key_id))
 
     click.echo(f"Revoked key: {key_id}")
 
 
+# ---------------------------------------------------------------------------
+# User budget management
+# ---------------------------------------------------------------------------
+
+
+@iris.group()
+@click.pass_context
+def user(ctx):
+    """User management commands."""
+    pass
+
+
+@user.group()
+@click.pass_context
+def budget(ctx):
+    """Manage user budgets."""
+    pass
+
+
+@budget.command("set")
+@click.argument("user_id")
+@click.option("--limit", "budget_limit", required=True, type=int, help="Budget limit (0 = unlimited)")
+@click.option(
+    "--max-band",
+    required=True,
+    type=click.Choice(PRIORITY_BAND_NAMES),
+    help="Highest priority band this user can submit to",
+)
+@click.pass_context
+def budget_set(ctx, user_id: str, budget_limit: int, max_band: str):
+    """Set budget limit and max band for a user."""
+    controller_url = require_controller_url(ctx)
+    token_provider = ctx.obj.get("token_provider")
+
+    with rpc_client(controller_url, token_provider) as client:
+        client.set_user_budget(
+            controller_pb2.Controller.SetUserBudgetRequest(
+                user_id=user_id,
+                budget_limit=budget_limit,
+                max_band=priority_band_value(max_band),
+            )
+        )
+
+    click.echo(f"Budget set for {user_id}: limit={budget_limit}, max_band={max_band}")
+
+
+@budget.command("get")
+@click.argument("user_id")
+@click.pass_context
+def budget_get(ctx, user_id: str):
+    """Get budget config and current spend for a user."""
+    controller_url = require_controller_url(ctx)
+    token_provider = ctx.obj.get("token_provider")
+
+    with rpc_client(controller_url, token_provider) as client:
+        resp = client.get_user_budget(controller_pb2.Controller.GetUserBudgetRequest(user_id=user_id))
+
+    click.echo(f"User:      {resp.user_id}")
+    click.echo(f"Limit:     {resp.budget_limit}")
+    click.echo(f"Spent:     {resp.budget_spent}")
+    click.echo(f"Max band:  {priority_band_name(resp.max_band)}")
+
+
+@budget.command("list")
+@click.pass_context
+def budget_list(ctx):
+    """List all user budgets with current spend."""
+    controller_url = require_controller_url(ctx)
+    token_provider = ctx.obj.get("token_provider")
+
+    with rpc_client(controller_url, token_provider) as client:
+        resp = client.list_user_budgets(controller_pb2.Controller.ListUserBudgetsRequest())
+
+    if not resp.users:
+        click.echo("No user budgets found.")
+        return
+
+    click.echo(f"{'USER':<30s} {'LIMIT':>10s} {'SPENT':>10s} {'MAX BAND':<15s}")
+    for u in resp.users:
+        click.echo(f"{u.user_id:<30s} {u.budget_limit:>10d} {u.budget_spent:>10d} {priority_band_name(u.max_band):<15s}")
+
+
 # Register subcommand groups — imported at module level to ensure they are
 # always available when the ``iris`` group is used.
+from iris.cli.actor import actor as actor_cmd  # noqa: E402
 from iris.cli.build import build  # noqa: E402
 from iris.cli.cluster import cluster  # noqa: E402
 from iris.cli.job import job  # noqa: E402
-from iris.cli.actor import actor as actor_cmd  # noqa: E402
 from iris.cli.process_status import register_process_status_commands  # noqa: E402
 from iris.cli.query import query_cmd  # noqa: E402
 from iris.cli.rpc import register_rpc_commands  # noqa: E402

@@ -79,10 +79,6 @@ trainer:
     num_steps: 100
     perfetto_link: false
     start_step: 5
-  ray:
-    address: null
-    auto_start_cluster: false
-    start_workers: false
   require_accelerator: true
   seed: 0
   shutdown_at_exit: false

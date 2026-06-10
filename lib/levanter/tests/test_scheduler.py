@@ -3,7 +3,7 @@
 
 import pytest
 
-from levanter.schedule import BatchSchedule, ScheduleStep
+from levanter.schedule import BatchSchedule, ScheduleStep, value_at_step
 
 
 @pytest.fixture
@@ -59,3 +59,36 @@ def test_batch_scheduler(scheduler, step, expected_bs, expected_offset, expected
     assert bs == expected_bs, f"Unexpected batch size at step {step}"
     assert offset == expected_offset, f"Unexpected data offset at step {step}"
     # assert indices == expected_indices, f"Unexpected batch indices at step {step}"
+
+
+def test_value_at_step_scalar():
+    assert value_at_step(42, 0) == 42
+    assert value_at_step(42, 1000) == 42
+
+
+@pytest.mark.parametrize(
+    "step, expected",
+    [
+        (0, 32),
+        (500, 32),
+        (999, 32),
+        (1000, 64),
+        (50000, 64),
+        (99999, 64),
+        (100000, 128),
+        (250000, 128),
+    ],
+)
+def test_value_at_step_schedule(step, expected):
+    schedule = [
+        ScheduleStep(start=0, value=32),
+        ScheduleStep(start=1000, value=64),
+        ScheduleStep(start=100000, value=128),
+    ]
+    assert value_at_step(schedule, step) == expected
+
+
+def test_value_at_step_before_first_segment_raises():
+    schedule = [ScheduleStep(start=100, value="a")]
+    with pytest.raises(ValueError):
+        value_at_step(schedule, 50)

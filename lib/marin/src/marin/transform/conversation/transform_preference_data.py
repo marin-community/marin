@@ -8,12 +8,6 @@ Usage:
 - Register your adapter in preference_data_adapters.py
 - Run this script with TransformPreferenceDatasetConfig.
 
-Example:
-uv run zephyr --backend=ray --max-parallelism=100 --memory=8GB \
-    lib/marin/src/marin/transform/conversation/transform_preference_data.py \
-    --input_path gs://bucket/path/to/dataset \
-    --output_path gs://bucket/output/path \
-    --source HuggingFaceH4/ultrafeedback_binarized
 """
 
 import hashlib
@@ -23,12 +17,10 @@ from dataclasses import dataclass, field
 
 import datasets
 import draccus
-import fsspec
 from datasets import get_dataset_config_info
+from marin.utils import fsspec_url, is_path_like
 from rigging.filesystem import url_to_fs
 from zephyr import Dataset, ZephyrContext, write_jsonl_file
-
-from marin.utils import is_path_like
 
 from .preference_data_adapters import PreferenceTransformAdapter, get_preference_adapter
 
@@ -70,22 +62,6 @@ def generate_hash_from_pair(chosen, rejected) -> str:
     return hashlib.sha256((str(chosen) + str(rejected)).encode()).hexdigest()
 
 
-def _get_fsspec_protocol(fs: fsspec.AbstractFileSystem) -> str | None:
-    protocol = fs.protocol
-    if isinstance(protocol, (list, tuple)):
-        protocol = protocol[0]
-    if protocol == "file":
-        return None
-    return protocol
-
-
-def _to_fsspec_url(fs: fsspec.AbstractFileSystem, path: str) -> str:
-    protocol = _get_fsspec_protocol(fs)
-    if protocol:
-        return f"{protocol}://{path}"
-    return path
-
-
 def _find_split_files(input_path: str, subset: str | None, split: str, filetype: str) -> list[str]:
     """Find split shard files under an fsspec path."""
     fs, base_path = url_to_fs(input_path)
@@ -103,7 +79,7 @@ def _find_split_files(input_path: str, subset: str | None, split: str, filetype:
         raise FileNotFoundError(
             f"No {filetype} files found for split '{split}' under {input_path}. " f"Tried patterns: {patterns}"
         )
-    return [_to_fsspec_url(fs, path) for path in sorted(set(matches))]
+    return [fsspec_url(fs, path) for path in sorted(set(matches))]
 
 
 def _infer_splits_from_files(input_path: str, subsets: list[str | None], filetype: str) -> list[str]:
@@ -129,8 +105,8 @@ def transform_row(row: dict, task: SplitTask, adapter: PreferenceTransformAdapte
     example = adapter.extract_preference_example(row)
     if example is None:
         return None
-    chosen_dicts = [msg.__dict__ for msg in example["chosen"]]
-    rejected_dicts = [msg.__dict__ for msg in example["rejected"]]
+    chosen_dicts = [msg.model_dump() for msg in example["chosen"]]
+    rejected_dicts = [msg.model_dump() for msg in example["rejected"]]
     result = {
         "chosen": chosen_dicts,
         "rejected": rejected_dicts,
@@ -145,9 +121,6 @@ def transform_row(row: dict, task: SplitTask, adapter: PreferenceTransformAdapte
 def get_shard_dir(dir_name: str, subset_name: str | None, split: str) -> str:
     if (subset_name == "default") or (subset_name is None):
         return os.path.join(dir_name, split)
-
-    logger.info(f"Getting shard dir for {dir_name} {subset_name} {split}")
-    logger.info(f"shard dir (os.path.join(dir_name, subset_name, split)): {os.path.join(dir_name, subset_name, split)}")
     return os.path.join(dir_name, subset_name, split)
 
 
@@ -294,7 +267,7 @@ def transform_hf_preference_dataset(cfg: TransformPreferenceDatasetConfig):
     # Process all tasks in parallel
     pipeline = Dataset.from_list(tasks).map(process_split_task)
     ctx = ZephyrContext(name="transform-preference")
-    results = ctx.execute(pipeline)
+    results = ctx.execute(pipeline).results
 
     # Log summary
     for result in results:

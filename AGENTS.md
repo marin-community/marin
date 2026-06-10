@@ -5,6 +5,17 @@ Start with the shared practices below. Consult subproject manuals for directory-
 - `lib/levanter/AGENTS.md` — Levanter (JAX training library)
 - `lib/marin/AGENTS.md` — Marin (pipeline framework)
 - `lib/iris/AGENTS.md` — Iris (job orchestration)
+- `lib/zephyr/AGENTS.md` — Zephyr (dataset processing)
+- `lib/fray/AGENTS.md` — Fray (distributed execution)
+
+## Operational Guides
+
+For debugging and operating live infrastructure, read the relevant OPS.md:
+
+- `lib/iris/OPS.md` — cluster lifecycle, job/task management, profiling, SQL queries, GCP/CoreWeave operations
+- `lib/zephyr/OPS.md` — pipeline debugging, straggler diagnosis, coordinator queries, diagnostic patterns
+
+Zephyr OPS.md references Iris OPS.md for shared infrastructure commands — read Iris first when debugging zephyr jobs on Iris.
 
 For agent-oriented reference, the autodoc pipeline generates a budgeted doc tree
 under `docs/agent/` (read on demand). Start at `docs/agent/MAP.md` (the monorepo
@@ -33,10 +44,15 @@ favor of ad-hoc commands.
 # Type checking (also done by pre-commit.py)
 uv run pyrefly
 - Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
+
+# Lint review — agentic pass over the branch diff against the infra/lint/ catalog
+./infra/pre-commit.py --review
+- Always run this before opening a PR, and always fix or respond to every
+  finding it reports (see the `commit` skill).
 ```
 
 - Python >=3.11. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
-- NEVER stop, restart, or bounce a Ray or Iris cluster unless the user gives express permission.
+- NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission.
 - In general, never read or write large amounts of data across GCS regions or to the open internet; storage and bandwidth are major cost drivers for this project.
 - do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
 
@@ -143,6 +159,14 @@ Dependency direction: {`iris`, `haliax`} → {`levanter`, `zephyr`} → `marin`.
 - Always fix tests you broke. Do not relax tolerances or hack around failures.
 - Prefer integration-style tests that validate externally-observable behavior.
 - Do not write tautological tests: tests must fail if behavior is wrong, not just if implementation changes.
+- Do not write "slop" tests that assert on incidental strings — the exact text of a log
+  message, or that a constructed command line contains a particular word or flag. These
+  couple the test to copy and to how a command is assembled, not to behavior: they break
+  on a harmless reword or flag-form change while a real regression slips through. They are
+  pure maintenance burden. Assert on the structured output or the effect instead. Assert on
+  a string only when that string *is* the contract (machine-readable output, a wire format,
+  a log line a downstream tool parses) — and then assert on the structured field, not the
+  rendered text.
 - Use pytest fixtures and parameterization to avoid duplication.
 - Prefer top-level `def test_*` with fixtures over test classes.
 - Search for existing test files before creating new ones. Extend existing files first.

@@ -122,7 +122,8 @@ According to Eq. (9), the concurrence of the pair is
 
 $$C=\\frac{2}{5}\\big{|}{a}\_{13}^{\*}a\_{14}+{a}\_{14}^{\*}a\_{24}\\big{|}.$$  
 
-(15)   
+(15)
+
 Continuing with this example—$n=5$ and $p=2$—let us find out what values we should choose for $a\_{13}$, $a\_{14}$, and $a\_{24}$ in order to maximize $C$. First, it is clear that we cannot go wrong by taking each $a\_{ij}$ to be real and non-negative—any complex phases could only reduce the absolute value in Eq. (15)—so let us restrict our attention to such values. To take into account the normalization condition, we use a Lagrange multiplier $\\gamma/2$ and extremize the quantity
 
 $$a\_{13}a\_{14}+a\_{14}a\_{24}-(\\gamma/2)(a\_{13}^{2}+a\_{14}^{2}+a\_{24}^{2}).$$  
@@ -177,7 +178,8 @@ where $|k\_{1},\\ldots,k\_{p}\\rangle$ is the state of a lattice of length $n^{\
 
 $$y=\\sum\_{q=1}^{p}\\sum\_{k\_{1}\\\<\\cdots\\\<k\_{p}}\\sum\_{k\_{1}^{\\prime}\\\<\\cdots\\\<k\_{p}^{\\prime}}\\bigg{\[}{b}^{\*}\_{k\_{1},\\ldots,k\_{p}}b\_{k\_{1}^{\\prime},\\ldots,k\_{p}^{\\prime}}\\delta\_{k\_{q}^{\\prime},k\_{q}+1}\\prod\_{r\\neq q}\\delta\_{k\_{r}^{\\prime},k\_{r}}\\bigg{\]}.$$  
 
-(24)   
+(24)
+
 We can express $y$ more simply by introducing creation and annihilation operators for each site. We associate with site $k$ the operators
 
 $$c\_{k}=\\left(\\begin{array}\[\]{cc}0&1\\\\ 0&0\\end{array}\\right)\\\,\\\,{\\rm and}\\\,\\\,\\\,c^{\\dagger}\_{k}=\\left(\\begin{array}\[\]{cc}0&0\\\\ 1&0\\end{array}\\right),$$  
@@ -187,7 +189,8 @@ which are represented here in the basis $\\\{|0\\rangle,|1\\rangle\\\}$. In term
 
 $$y=\\langle\\zeta|\\sum\_{k=1}^{n^{\\prime}-2}c^{\\dagger}\_{k}c\_{k+1}|\\zeta\\rangle.$$  
 
-(26)   
+(26)
+
 Our problem is beginning to resemble the nearest-neighbor tight-binding model for electrons in a one-dimensional lattice. The Hamiltonian for the latter problem—assuming that the spins of the electrons are all in the same state and can therefore be ignored—can be written as<sup>3</sup><sup>3</sup>3In Eq. (27) the operators $c$ and $c^{\\dagger}$ are fermionic, whereas those defined in Eq. (25) are not, because they do not anticommute when they are associated with different sites. We could, however, use our $c$’s to define genuinely fermionic operators in terms of which the extremization problem has exactly the same form.
 
 $$H=-\\sum\_{k=1}^{n^{\\prime}-2}(c\_{k}^{\\dagger}c\_{k+1}+c\_{k+1}^{\\dagger}c\_{k}),$$  

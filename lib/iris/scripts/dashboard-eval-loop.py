@@ -20,6 +20,7 @@ Usage:
     uvx dashboard-eval-loop.py --screenshot-dir logs/dashboard-eval-20260128
 """
 
+import argparse
 import asyncio
 import os
 import subprocess
@@ -29,7 +30,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from claude_agent_sdk import query, ClaudeAgentOptions, TextBlock
+from claude_agent_sdk import ClaudeAgentOptions, TextBlock, query
 
 
 @dataclass
@@ -253,7 +254,6 @@ async def run_fixer_agent(
 
 async def main_async():
     """Run the evaluation loop."""
-    import argparse
 
     parser = argparse.ArgumentParser(description="Dashboard evaluation and improvement loop")
     parser.add_argument(

@@ -1,9 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from experiments.evals.evals import default_key_evals
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
+
+from experiments.evals.evals import default_key_evals
 
 # Insert your model path here
 # model_path = "gs://marin-us-central2/checkpoints/llama-8b-control-00f31b/hf/step-210388"

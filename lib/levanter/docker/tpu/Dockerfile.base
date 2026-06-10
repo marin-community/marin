@@ -15,7 +15,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=lib/haliax/pyproject.toml,target=lib/haliax/pyproject.toml \
     --mount=type=bind,source=lib/fray/pyproject.toml,target=lib/fray/pyproject.toml \
     --mount=type=bind,source=lib/zephyr/pyproject.toml,target=lib/zephyr/pyproject.toml \
-    uv sync --frozen --no-install-workspace --package levanter --extra serve --extra tpu
+    uv sync --frozen --no-install-workspace --package marin-levanter --extra serve --extra tpu
 
 FROM python:3.11
 

@@ -7,11 +7,10 @@ import threading
 
 import pytest
 from connectrpc.errors import ConnectError
-
 from iris.actor import ActorClient, ActorPool
-from rigging.timing import ExponentialBackoff
 from iris.actor.resolver import FixedResolver, ResolveResult
 from iris.actor.server import ActorServer
+from rigging.timing import ExponentialBackoff
 
 
 class Counter:

@@ -11,7 +11,7 @@ Reader DM notes Jacques Chirac's objections to using the NATO Response Force (NR
 One of the reasons that the NRF was created was to provide "global reach" to enable the alliance to operate out of the traditional European area. Although its mission is "yet to be determined" officially, Chirac has determined it for himself, at least in the negative when he said, "The NRF is not designed for this. It shouldn't be used just for any old matter." The Afghan elections are arguably the most important milestone since the campaign to topple the Taliban, in which NATO was also absent. What then would constitute sufficient matter to engage Chirac? Patrick Belton of Oxblog argues that if NATO's role in Afghanistan got any lighter, it would evaporate.
 
 > 'ISAF (the International Security Assistance Force) however, was never resourced to move outside of Kabul in a more than symbolic way, and when it finally did, has focused more on its own security than that of Afghans. Despite Afghanistan being widely proclaimed as Nato's highest priority, the unwillingness of Nato member states to adequately resource ISAF with troops and equipment has seriously undermined the ability of ISAF commanders to do their job effectively.'
-> 
+>
 > 'Prime Minister Tony Blair's 2003 declaration that the international community 'will not walk away from' Afghanistan missed the real question: When will the international community really walk into Afghanistan, and make the necessary commitments and investments that will give the Afghan people a reasonable chance at building a peaceful and stable country?'
 
 This goes to the real heart of the alliance problem in War on Terror. France and its allies must convert every campaign against terrorists into a diplomatic demarche because such solutions are the only ones available to them, absent a credible military capability. If American power consists of "hard" and "soft" components, France's claim to great nation status relies almost entirely on its membership in "soft" institutions of diplomacy which compels it to torture problems into these venues even when confronted by situations like providing security in the lofty Central Asian mountains. Yet far from welcoming an effort to provide Europe with a nascent expeditionary capability, Chirac may misgive it. For if once the NRF, with an eventual projected size at divisional strength exists, it may be used by a America to suck Europe into overseas commitments. After all, the only sure way to avoid drawing a sword is to cast it away.
@@ -21,7 +21,7 @@ Yet Afghanistan, is if anything, the best indicator of what those who feel so de
 Nor is the problem confined to land. The Economist talks about the challenges of combating seaborne terrorism which is threatening something more immediately valuable than Afghanistan: world trade.
 
 > A quarter of the world’s entire maritime trade, including about half of all seaborne oil shipments, passes through the Malacca strait in South-East Asia, which at one point narrows to as little as one-and-a-half nautical miles. The strait and the seas around it are infested with well-organised, armed and ruthless pirates (see map) who hijack ships and kill or maroon their crews before repainting the vessels at sea and sailing into port under a new, “phantom” identity. If pirates can do this so easily, why not terrorists? Imagine the devastation to world trade if one or more giant tankers were captured and used to block the straits. Or the possible casualties if a hijacked phantom ship were used to carry a nuclear “dirty bomb” into one of the world’s main ports or to launch missiles at a coastal city? These are nightmare scenarios worthy of a Hollywood disaster movie. But they are also the sort of threats that are being taken seriously by the world’s governments. On Monday June 28th, leaders of the NATO military alliance, meeting in Istanbul, Turkey, agreed a package of anti-terrorism measures including new defences against attacks on ports and shipping.
-> 
+>
 > The United States Coast Guard says it intends to board every ship that does not comply with the rules on its first entry to an American port from July 1st. This will be quite some task, given that there are 60,000 calls at American ports each year by ocean-going ships. Nevertheless, the American authorities are confident that this will not cause serious hold-ups to trade.
 
 Well and good, but here again the question of bearing the cost enters the picture.
@@ -30,7 +30,7 @@ Well and good, but here again the question of bearing the cost enters the pictur
 
 The Americans too may experience a disruption to trade but are committed to enduring it. The question will be whether Europe is prepared to accept the cost and inconvenience as part of the price of meeting the terrorist threat. The debate over the War on Terror has been grotesquely distorted to focus on Iraq; on Abu Ghraib; on President Bush's underwear, creating a mutant public policy map drawn according to some lunatic projection. The real major fronts on the War on Terror are generational problems: nuclear containment, homeland security, dealing with failed states, combating terrorist organizations and their state sponsors and providing maritime security. In Afghanistan, France has basically told America to go it alone. As Chirac said, "We are friends and allies but we are not servants." Perhaps France will help in the Straits of Malacca.
 
-*posted by Ticker at 1:01 PM*  
+*posted by Ticker at 1:01 PM*
 
 ## Correction
 
@@ -40,7 +40,7 @@ I'd like to take this opportunity to correct certain factual errors in past post
 
 This paints a much more detailed picture, with more actors than my bumbling charcterization. I sincerely regret the error and will be more careful with my research next time.
 
-*posted by Ticker at 11:03 AM*  
+*posted by Ticker at 11:03 AM*
 
 ## Tuesday, June 29, 2004
 
@@ -56,7 +56,7 @@ Tucker came back again and again to Iraq for reasons he himself doesn't quite ex
 
 Tucker describes himself as being left of center, but that is irrelevant to his central question. Have we given the troops a job they can finish and the means to finish it? Or do we send them out again, on another day, with divided orders from a divided nation?
 
-*posted by Ticker at 11:59 AM*  
+*posted by Ticker at 11:59 AM*
 
 ## Monday, June 28, 2004
 
@@ -65,9 +65,9 @@ Tucker describes himself as being left of center, but that is irrelevant to his 
 Patrick Belton at Oxblog has a long post on the issues NATO will examine in Istanbul. The US wants the alliance to face problems outside of Europe, notably in Iraq, Afghanistan and the Middle East. But it is largely locked in place, a hostage to Continental politics and a lack of means.
 
 > the basic problem of the alliance ... is cash. While the US contributes 3.3% of its GDP to national defence, 12 of the 19 pre-2004 Nato allies contribute less than 2% of theirs. To look at it another way, the US picks up the tab for 64% of Nato military expenditures ($348.5 million, 2002), while all other allies together contribute only 36% ($196.0 million). For their part, European governments are facing budget shortfalls and budget pressure from ballooning pension costs.
-> 
+>
 > What comes out of this is a capabilities gap. Of 1.4 million soldiers under NATO arms in October 2003, allies other than the US contributed all of 55,000. Nearly all allies lack forces which can be projected away from the European theatre. SACEUR General James Jones testified before Congress in March 2004 that only 3-4% of European forces were deployable for expeditions. ... Allies other than the U.S. have next to no precision strike capabilities, although these are slowly improving. The US is generally the sole provider of electronic warfare (jamming and electronic intelligence) aircraft, as well as aircraft for surveillance and C3 (command, control, and communications). The US is also capable of much greater sortie rates than its allies.
-> 
+>
 > The other problem is political will, which is most in evidence on the issue of terrorism. There's been progress (beginning with the 2002 Prague Summit) toward the creation of a NATO Response Force capable of sophisticated counterterror missions. There's also been progress toward the drafting (which has been done) and implementation (which hasn't) of a military concept for counterterrorism. But allies still strongly disagree about whether counterterrorism should even be one of NATO 's primary missions - so the principal task of the US at the moment lies in the area of creating political will among allies to adopt counterterrorism as a NATO responsibility. That we have not done so is at least in part our fault - Allies felt rebuffed after they gave the US unprecedented political support through invoking Article 5, and then were not consulted in the prosecution of the war in Afghanistan. For their part, the civilian leadership of the Pentagon believed Kosovo had been an unacceptable example of 'war by committee', and political interference from allies would prevent a quick and decisive Afghanistan campaign. Perhaps it might have, but now at NATO the United States is facing the consequences in the form of less enthusiasm for counterterror missions.
 
 It's hard to say which expectation is more unrealistic: the American hope that Europe will reverse decades of military atrophy or the European idea that America will share command with a Continent that can project only two battalion's worth of troops. Thomas Barnett of the Naval War College in his article The Pentagon's New Map believes that most future terrorist threats will spring from "areas of disconnectness" -- chaotic parts of the Third World, the very places where Europe's forces cannot or refuse to go. Meanwhile, the US has been moving its forces steadily south and east, into Central and SouthWest Asia as well as the Middle East. Perhaps more tellingly, US forces are being restructured from divisional-sized building blocks to independent commands can centered around brigades. The breakup of the old triangular divisions (each division traditionally consists of three brigades) into notional units containing four smaller brigades each will increase the number of usable units by a third. This is in part based on the perception that US units have become so powerful in conventional warfare that they can safely be used in smaller packages. But it also arises from the need to use the Army in more places throughout the troubled and chaotic world. A TRADOC article says:
@@ -90,7 +90,7 @@ The crux of the problem, of course, is that the immediate post-World War 2 world
 
 Some have derided the US coalition against terror, comprised of nontraditional names like Korea, Japan, Singapore, the Czech Republic, Hungary and Kazakhstan as a kind of pickup team fielded by a desperate America only because it couldn't get first-string Germany, France and Belgium to play. But this is unjust; it is not a temporary condition but a harbinger of a new state of the world. It's not that NATO has gotten smaller, just that the world has gotten bigger.
 
-*posted by Ticker at 11:36 AM*  
+*posted by Ticker at 11:36 AM*
 
 ## Saturday, June 26, 2004
 
@@ -99,7 +99,7 @@ Some have derided the US coalition against terror, comprised of nontraditional n
 The Washington Post has an account of the victory -- yes the victory -- that the First Armored Division won over Moqtada Al-Sadr's militia. Scott Wilson describes how US Forces fought around politically constituted sanctuaries, an admission of how the mighty US Army might rule the battlefield, yet bow to the almighty media.
 
 > Over the next 60 days, more than 5,000 troops from the division engaged in the most sustained urban combat operation of the now 15-month occupation. In desert cities that once welcomed American troops, they battled a Shiite uprising that threatened to upset the June 30 transition to an Iraqi interim government. Their orders were stark: Smash the uprising, and capture or kill its leader, the radical cleric Moqtada Sadr.
-> 
+>
 > By the time the uprising was over, silenced in a cease-fire June 4, the U.S. military success appeared decisive. While 19 U.S. soldiers had been killed in combat and scores wounded, military officials estimate that 1,500 insurgents were killed. Sadr's militiamen had been driven from positions many had died defending.
 
 At Karbala, for example, Americans fought to retake positions from Sadr simply because rules of engagement governing other Coalition Partners prohibited them from participating in their own designated areas of operation. "Karbala had been the responsibility of a brigade of Polish soldiers. Like Spain, Ukraine and other U.S. partners responsible for security in the Shiite south, the Polish government had prohibited its soldiers from conducting offensive operations. The rules rendered them useless when Sadr's militia rose up." At Najaf Americans took hundreds of mortar rounds and thousands in small arms from two sites without being able to fire a shot in retaliation.
@@ -110,7 +110,7 @@ In what was probably the most psychologically revealing moment of the battle, in
 
 Ted Koppel was determined to read the names of 700 American servicemen who have died in Iraq to remind us how serious was their loss. Michael Moore has dedicated his film Farenheit 9/11 to the Americans who died in Afghanistan. And they did a land office business. But at least they didn't get to show Sadr's miliamen dancing around a battered Humvee. The men of the First Armored paid the price to stop that screening and those concerned can keep the change.
 
-*posted by Ticker at 12:39 PM*  
+*posted by Ticker at 12:39 PM*
 
 ## The Grand Bumblers
 
@@ -136,7 +136,7 @@ Saddam Hussein, many people now forget was captured using **operations research*
 
 The Strategy Page thinks Zarqawi's offensive is already failing. Despite the importation of fighters from all over the world and the use of weapons in numbers orders of magnitude greater than those directed at the Russian ***Maikiop*** brigade, the *Jihadis* have been unable to keep the inept Americans from creeping to within a hairsbreadth of installing a new government in the heart of Arabia.
 
-*posted by Ticker at 11:30 AM*  
+*posted by Ticker at 11:30 AM*
 
 ## Thursday, June 24, 2004
 
@@ -170,7 +170,7 @@ The answer to that question will not be revealed until after the November Presid
 
 The week leading up to the formal transfer of power to the Iraqi interim government will be punctuated by heavy yet pointless violence. The event is as unstoppable as the Overlord invasion, Zarqawi or no. The enemy had better prepare his fallback position and prepare for the next phase of the campaign.
 
-*posted by Ticker at 12:43 PM*  
+*posted by Ticker at 12:43 PM*
 
 ## Tuesday, June 22, 2004
 
@@ -207,7 +207,7 @@ From a practical standpoint, the Liberal project will not die overnight. It is t
 
 But the last strains have sounded: the golden children have aged; night has fallen and the Morlocks have come. At their peril, for a flame still burns in the West.
 
-*posted by Ticker at 11:54 AM*  
+*posted by Ticker at 11:54 AM*
 
 ## Monday, June 21, 2004
 
@@ -215,7 +215,7 @@ But the last strains have sounded: the golden children have aged; night has fall
 
 SpaceShipOne has successfully carried a man into outer space. Sixty two years-old old test pilot Mike Melvill has become the first person to win his astronaut's wings on a private aircraft. He will be old enough to remember this message from Centauri (.wav file). The stars were never made for those who refuse to look up; nor are they vouchsafed to those enslaved by ancient hatreds. Well done.
 
-*posted by Ticker at 3:50 PM*  
+*posted by Ticker at 3:50 PM*
 
 ## The Enemy Offensive Begins
 
@@ -227,7 +227,7 @@ If the British sailors are not forthwith released it suggests that the Mullahs s
 
 Although the Iranians may try to dominate the agenda with the usual television parade of hostages and prisoners, just as their terrorist counterparts in Iraq and Saudi Arabia do with their captives, the only real question should be how to humiliate the Mullahs. Tables were made to be turned. They should be made to remember this day so that if their miserable theocracy lasts another ten years they can never bring themselves to look at a calendar opened to the month of June without trembling. The British Tories are subject to periodic and nagging bouts of patriotism, a feeling the Democrats have conditioned Teheran to believe is extinct in the Western political opposition and whose consequences may now surprise them. The Mullahs have rolled the dice and the only answer should be to insert them, one by one, between their bearded lips.
 
-*posted by Ticker at 3:33 PM*  
+*posted by Ticker at 3:33 PM*
 
 ## You Talkin' to Me?
 
@@ -249,7 +249,7 @@ Yet perhaps that is not entirely accurate. Although the process began in the Rea
 
 The Al Qaeda may now understand that it cannot topple America -- let us not say the West -- by a coup de main. It has now settled into a war of civilizations. It is consolidating its own forces in a final bid to impose Islam on humanity. And by it's actions it is forcing populations long asleep to reinvent themselves.
 
-*posted by Ticker at 10:05 AM*  
+*posted by Ticker at 10:05 AM*
 
 ## Sunday, June 20, 2004
 
@@ -260,13 +260,13 @@ Reader DL asks whether the simultaneous upsurge of attacks in Saudi Arabia, Iraq
 Walid Phares seems to believe that the polarizing effects of America's War on Terror has lent the Al Qaeda new strength in Saudi Arabia. Al Qaeda's ideology, he argues, is not only shared by a large section of the general Saudi citizenry but also by influential factions of the Saudi power structure. While Osama's direct challenge to America met with miserable failure, it had the unintended effect of making the second route to Islamic fundamentalist triumph -- the seizure of power in Islamic countries -- apparently more feasible.
 
 > One more time most of the press run headlines such as "Killing Arabs signals chaos within al Qaeda." One more time, the authors of these analyses fail miserably to comprehend what’s really going on. ... The Monarchy is shaken, its emirs promise punishment, but its Achilles’ heel is now revealed. ...Early in 2004, Abdul Aziz al Maqri, al Qaeda's regional commander, launched his Spring offensive. With al Zarqawi pounding Iraq and threatening Jordan, the Jihad in Saudi Arabia crossed one line after another. Al Maqri's men attacked Saudi security headquarters and finally landed in Khubar, the capital of Saudi oil. With high ideological precision, the terrorists struck twice: first against the nerve sensitive web of Petro-dollars and then against the "infidels." In a sinister reminder of the Nazi onslaught against the Jews during WWII, the armed men applied the teachings of Wahabism: "The world is divided in two: Muslims and Infidels." Ethnicity and language cannot help any more. During the killings, a Jordanian Christian and a family of Lebanese Christians had to lie about their religions to avoid execution.
-> 
+>
 > The Arab world unanimously criticized these operations and stood firmly by the Saudi regime. But in the underworld of the radical clerics and the Jihadists, the "amalya" (operation) was a success. Some Imams-on-line (or so they define themselves) called for more and more, till the monarchy comes back to “the rule of Allah.” It is difficult for Americans, and many others in the international community, to fathom the nuances of the Wahabi paradigm. I was asked one day in the classroom: "If the Wahabis want a fundamentalist state, what do the neo-Wahabis want?" I answered without hesitation: The neo-Wahabis want it now and at any cost.
 
 The truce between the Pakistani ruling classes and the Islamists may also be ending. The Washington Post reports on how the Islamists are now directly challenging the hand that used to feed them.
 
 > ISLAMABAD, Pakistan -- Recent high-profile attacks by Islamic militants on government targets, including a nearly successful assassination attempt on a senior army general last week, are pushing security forces into an escalating confrontation with extremist groups they once embraced as instruments of state policy, according to diplomats and analysts.Until recently, Pakistani militants have avoided direct confrontation with the army, whose Inter-Services Intelligence agency, or ISI, has a long history of association with radical groups. The militants have seemed to distinguish between security forces and President Pervez Musharraf, an army general and supporter of the U.S.-led war on terrorism whom they twice tried to kill last December. 
-> 
+>
 > Over the past few months, however, some Islamic extremists now are seen to be broadening their anti-government campaign, according to the sources, staging frequent ambushes of army troops in the rugged borderlands near Afghanistan. In one high-profile attack on the morning of June 10, assailants sprayed automatic-weapons fire at the motorcade of Lt. Gen. Ahsan Saleem Hayat as he commuted to his office in downtown Karachi. Ten Pakistanis, including the alleged ringleader, have been arrested in connection with that attempt, which was described by a Western diplomat as a "qualitative step up" in the nature of extremist violence in Pakistan.
 
 From this point of view, the Islamists can regard the new Iraqi regime represents as precisely the kind of "moderate", nominally American ally they can subvert in the same way as Saudi Arabia and Pakistan. Where better to generate hate for America, whether in the Middle East or in Europe, than within an "allied" nation? Yet from another perspective, this strategy constitutes a transformation from direct confrontation between Muslim and non-Muslim into a struggle within the fundamentalist heartland itself; it marks a tacit admission that America cannot be tipped into defeat by one or two spectacular blows. Whatever their shortcomings, the US campaigns in Afghanistan and Iraq have returned the battleground to its native soil. After all, terrorism was never going to be finally defeated in Iraq or Afghanistan for as long as its roots remained untouched in the KSA and Pakistan. It is there and Iran where the final conflict will be waged.
@@ -281,7 +281,7 @@ The big battles in the War on Terror involving large regular formations may be o
 > It is not even the beginning of the end.  
 > But it is, perhaps, the end of the beginning.
 
-*posted by Ticker at 8:53 PM*  
+*posted by Ticker at 8:53 PM*
 
 ## Friday, June 18, 2004
 
@@ -298,9 +298,9 @@ The "big impact" was later spelled out as amounting to $200M in lost revenues ov
 Global oil supplies, which America thanklessly protects, may be the new strategic target of terrorists. According to Bloomberg:
 
 > Iraqi militants this week attacked pipelines that supply the nation's Persian Gulf oil terminals, halting shipments from facilities that handle 90 percent of Iraq's exports and costing the country $50 million a day. Sabotage also has curtailed exports through a pipeline to the Turkish port of Ceyhan. Attacks on Iraq's oil industry are increasing as the U.S. prepares to hand over power to an interim government on June 30, hampering efforts to increase production and fund reconstruction. Any decline in Iraqi output, 2.6 percent of global supply last month, undermines the Organization of Petroleum Exporting Countries' ability to reduce near-record oil prices.
-> 
+>
 > 'There is no capacity in OPEC to make up for the absence of Iraq oil,' said Fadhil al-Chalabi, executive director of the London-based Centre for Global Energy Studies and a one-time undersecretary at Iraq's Oil Ministry. 'The sabotage now has been coordinated to hit the north and the south, cutting them off. It has the double effect of weakening the Iraqi government and tightening oil markets.'
-> 
+>
 > Concern that terrorists will disrupt Middle East oil supplies has added as much as $10 a barrel to the price of crude, ministers from OPEC's estimated this month. Oil prices in New York closed at a record $42.33 a barrel on June 1, the first trading day after an attack on oil company offices in Saudi Arabia killed 22 people.
 
 The dynamics here are complex. The damage to oil facilities will be partially offset by higher prices from the product which reaches the market. Terrorist activity has the same economic effect as a cartel-mandated reduction in production. It means that oil exporting countries can charge more for less. For so long as terrorist damage is restricted to fairly cheap sections of pipe through "Iraq's deserts" -- in the BBC's phrase -- or to expatriate Filipino cooks, Indian janitors or Australian chefs, the oil exporting countries can actually be net gainers from terrorist activity.
@@ -310,14 +310,14 @@ The **Belmont Club** pointed out in an earlier post that the STRATFOR consulting
 In particular, America bears a disproportionate share in keeping "oil chokepoints" open. World oil flows, on which Europe, Japan and the Third World are heavily dependent, go through the Bab el-Mandab, Bosporus, Hormuz and Malacca Straits, not to mention the Suez canal. Reader MT links to the case of the Straits of Malacca described in the Economist's article Going for the Jugular. 
 
 > Facing west from Singapore's shores, it is hard to make out the Strait of Malacca, thanks to all the boats and islands scattered across the water. An endless procession of tankers, container ships, tugs, fishing boats, ferries and cruise-liners sails between tiny islets, through a shipping lane that narrows to as little as one and a half nautical miles at one point. Some 50,000 vessels, carrying roughly a quarter of the world's maritime trade, pass through the strait every year. So do about half of all seaborne oil shipments, on which the economies of Japan, China and South Korea depend. If terrorists were determined to devastate the world economy, it would be hard to find a better target.
-> 
+>
 > So, at any rate, reasoned many of the participants at the Shangri-La Dialogue, a regional security conference organised by the London-based International Institute for Strategic Studies in Singapore last week. Tony Tan, Singapore's deputy prime minister, pointed out that a ship sunk in the right spot, where the sea lane is only 25m deep, “would cripple world trade”. He also raised the possibility of hijacked ships being turned into “floating bombs” and crashed into critical infrastructure such as oil refineries or ports. Donald Rumsfeld, America's secretary of defence, stopped in at the conference to push the “regional maritime security initiative”, whereby America would help South-East Asian countries defend against such attacks.
-> 
+>
 > At the moment, the strait is relatively poorly monitored, especially north of Port Klang, where the sea lanes widen. The cash-strapped Indonesian navy has perhaps 20 seaworthy patrol boats, to guard an archipelago of 17,000 islands. Singapore and Malaysia are richer and better equipped, but have no right to pursue ships into Indonesian waters. Singaporean sailors say that when they pass information to their Indonesian counterparts, it disappears into a black hole. Malaysia and Indonesia have already rejected the idea of American patrols in the strait or rapid-response units at the ready, both out of prickliness about sovereignty and for fear of inflaming anti-American feelings among their citizens. **But they say they would accept American help in the form of advice, equipment and training.**
 
 In other words, Indonesia and Malaysia, peace be unto them, would accept American money; money for which America would get no thanks, to secure oil supplies through a Strait not a drop of which is used in America but by Japan, Korea and China. The War on Terror may prove to be "all about oil" but not in the way the Peace Lobby means it. International energy security, to which the Europeans contribute industrial action, is premised on the "commons" of American-provided maritime security. It is being turned into a money machine through which the most atrocious regimes on earth can extort ever increasing amounts of political influence and wealth through a glorified protection racket by proxy. Ask not for whom the bell tolls; it tolls for thee. Ask not for whom the cash register rings; it rings for he.
 
-*posted by Ticker at 11:37 AM*  
+*posted by Ticker at 11:37 AM*
 
 ## Thursday, June 17, 2004
 
@@ -327,43 +327,43 @@ On June 21, 2004, Burt Rutan is going to attempt to put the privately-funded Spa
 
 In an age when bravery itself is suspect and achievement considered a kind of oppression; when every new technology is hedged around with anticipatory restrictions it is wonderful to know that some men at least would like nothing better than to rise on a column of fire toward the beckoning stars. For every successful flight of this nature slips not only the "surly bonds of earth" but also breaks hidebound modes of thinking. It departs not just from a place but from a time. It takes us not from where we ought to be, but to where we belong.
 
-*posted by Ticker at 1:45 PM*  
+*posted by Ticker at 1:45 PM*
 
 ## Choices
 
 Iraqi blogger Hammorabi (hat tip: MW) has more details on the possible alliance between the Al Qaeda's Abu Musab al Zarqawi and the Ba'athist stragglers. They've set up headquarters in Fallujah.
 
 > "There is news from Falluja talking about a special meeting recently took place in one area in the centre of Falluja in which the (Mujaheeden) has pledged allegiance to appoint Al-Zarqawi as the Ameer (Prince or Governor) of the City of Falluja! Zarqawi was in the meeting which was attended by top leader of Mujaheeden including Arabs from Jordan, Saudis, Syrian and Palestinians.
-> 
+>
 > They divided the city into various areas and called it Emarat El-Falluja (Emirate) with Zarqawi as the Ameer (Prince). They appointed a leader for each one of these areas among the Mujaheeden with one group under his leadership. They gave Zarqawi an Oath to set out the Islamic state of Caliphate in Falluja and from there they will spread it into the rest of Iraq and the region. They now try desperately to gather lot of youths and young people enthusiastic for that to join them. They also tried to get themselves extended well beyond that area to Baghdad and other regions. Among them are many Saudi Wahabis and Syrian with other Arabs."
 
 The **Belmont Club** earlier linked to an article from the Site Institute which reported that Izzat Ibrahim, once vice president of Iraq and one of Saddam's high ranking security henchmen had transferred his allegiance to Zarqawi, presumably because the Saddam well has run dry. Hammorabi also alleges that Zarqawi and his goons have their hooks right into the Iraqi Police in Fallujah. He counsels: don't run to the station house for help. The expletives are his.
 
 > In a news report distributed by Iraqi demonstrators in Baghdad, the IP in Falluja with the Wahabi terrorists captured and killed 6 Shia Iraqi youths. The demostrators seen in the above picture was during the funeral of the 6 men in Baghdad Today. The incident happened on 5th June 2004 when these men hired by a person from Falluja to transport goods there. Once they transported the goods they have been captured by the Group called Mujaheeden (Wahabist) with the help of the local IP in Falluja!
-> 
+>
 > During their return to Baghdad the 6 Shia men have been stopped by gun men terrorists who introduced themselves as the Mujaheeden who fought against the US Marine in April 2003! The 6 men managed to escape and seek refuge with the IP station in the city. The IP then handed them to one of the Wahabi extremist Mullah who handed them to the thugs. The thugs (some Arabs terrorists among them) asked for a ransom of 3000 US Dollar for each one alive! Among the captured was Mohammad Khodier a 12 years old boy who was released later. He told that the Mullah handed them to the terrorists who speak with non-Iraqi different Arab axons. They then decapitated and mutilated them and among them were his older brother and his uncle! Another man called Alaa Marai said that he went to negotiate with the terrorist to give them alive and most of them were Syrian who refused unless the money paid! Shamran Mohammad Dawood one of the relative who went to negotiate their release told France Press that Mullah Al-Janabi (Wahabi) told him to come back after 2 days to get them! When they returned back the terrorist told them to go to Al Ramadi hospital Mortuary. There the thugs asked the relative to pay 700 US Dollars for each body to be given! The relatives then have to give the money to Al-Janabi (Wahabi Mullah) to receive the mutilated bodies of their beloved ones! Janabi with an interview with the Fucking Al-Arabyiah TV said he have nothing to do with their blood and he denied his involvement.
-> 
+>
 > After tortured and abused; two Mullahs from the Wahabi sects called Abdullah Aljanabi and Thafer Al-Dilaimi ordered their execution and mutilation of their bodies and confiscating their belongings including their clothes! Just to remind that the Saudi thugs who killed the American engineer in Riyadh in the most barbaric way and filmed it and those kidnapped another one called themselves the Falluja Brigade! I feel sorry for the wife, the son, the daughter and family of the engineer when they saw him kicked and shout down in that film as I feel sorry for the Iraqi Shia youth's families whose bodies mutilated then given back to their beloved ones. The well known fucking Arab media which works as a mouthpiece for the terrorists propaganda with the hypocritical Red Cross concentrated and sympathized with the mass killer Saddam yet haven't mentioned any sympathy with victims of the above mentioned attacks. The only thing they showed is the film of the killing of the engineer in Riyadh which I am sure is very agonizing for his family to watch!
 
 Apparently, Fallujah has cops who hand you over to the perps and imams who consider mutilation their ministry. This is part of the community which Iraqi political leaders sought to spare when the Marines were storming across the city. This transcript from a June 13 "Meet the Press" interview between Tim Russert and Iraqi interim President Ghazi al-Yawar illustrates the point:
 
 > MR. RUSSERT: Thus far the United States has lost 827 soldiers, airmen, military servicemen in Iraq; more than 5,000 injured and wounded. And yet you recently said the United States was guilty of genocide. Do you think that's appropriate gratitude for what the United States did for Iraq?
-> 
+>
 > PRES. AL-YAWAR: I never said that, my friend.
-> 
+>
 > MR. RUSSERT: You said the United States in Fallujah...
-> 
+>
 > PRES. AL-YAWAR: No.
-> 
+>
 > MR. RUSSERT: ...was committing genocide.
-> 
+>
 > PRES. AL-YAWAR: Yes. Yes. That was in the Fallujah case when a massive army besieges a city. Yes, we are against the bad elements in Fallujah, but the best way to get rid of them--by separating them from the rest of the people. When you besiege a city with an army and you start shelling it with jet fighters, definitely you are turning the law-abiding citizens of Fallujah to be comrades in a struggle with the bad elements. We don't want that to happen.
 
 Mr. Russert may be shocked to learn that bad elements in Fallujah have transformed six simple law-abiding citizens into men of many parts. Mr. Russert's indignation about Marine heavy-handedness is not shared by a Washington Post reporter whose vehicle was reduced to junk by gunmen who pursued it all over Fallujah. Daniel Williams of the Washington Post took his bullet riddled vehicle to Abu Ghraib, of all places, for safety. "Despite damage to the vehicle, it eventually limped to Abu Ghraib prison, about 20 miles west of Baghdad, where U.S. military police gave us refuge. Few residents of the notorious facility probably ever entered the compound as happily as we did." When Williams asked Marine Colonel Larry Brown why they didn't **do something**, the Colonel answered, "inevitably, if we went in, there would be a lot of collateral damage. People would defend their homes. We would only go as a last resort". The Colonel might have added, but tactfully refrained from saying, that the Post would be the first to pillory him if they did.
 
 The June 30 transfer of power is less than a fortnight away and the Iraqis will have to start deciding whether their country is worth fighting for or not. It is the Iraqi half of a coin whose American face will be stamped in November, when the voters will signal whether they want to defeat the terrorist enemy or attempt to coexist with them. It is a transaction with no return, no exchange.
 
-*posted by Ticker at 11:23 AM*  
+*posted by Ticker at 11:23 AM*
 
 ## Wednesday, June 16, 2004
 
@@ -411,7 +411,7 @@ The Command Post links to an article which somewhat alarmingly claims that Iran 
 Of course the cool heads at the Command Post understand that four battalions of Iranian regulars could hardly be contemplating engaging even a single US battalion. If the report is true at all the Iranian regulars are probably providing cover against Coalition Special Forces who may be engaging in "over the fence" operations. Still, reader M links to an article which alleges that six Shi'ites were horribly murdered by Sunnis in the resort town of Fallujah, a reminder of what a powderkeg the region remains.
 
 > BAGHDAD (AFP) -- Armed men and police in the Sunni stronghold of Fallujah arrested six young Shiites and executed them on the orders of two religious figures in the town, representatives of Shiite tribes in southern Iraq said on Tuesday. During a protest to which the remains of the six men were taken, some 200 southern Shiites handed out photographs of the bodies which they said had also been mutilated by the Fallujah Sunnis.
-> 
+>
 > In a statement also handed out in Fardus Square, Baghdad, on Tuesday, the protestors said the six went to Fallujah, 50 kilometers (30 miles) west of Baghdad, to deliver goods for one of the town's residents. "After having delivered the goods for the Fallujah resident, they were arrested by members of a group calling itself "Mujahideen", in collaboration with the police," the members of the Rabiya and other southern Shiite tribes said. The men were arrested on June 5 and, according to the statement, their execution was ordered some time later by Abdallah Janabi, imam (preacher) of the Saad ibn Abi Wakkas mosque, and Dhafer Dulaimi, imam of the Hadra Muhammadia mosque.
 
 The pot is boiling, with no shortage of cooks to stir the soup, nor is there any lack of gentle preachers willing and able to mete out mutilation. Kurdistan too, has seen recent attacks, with an Iraqi oil company security chief being assassinated and a pipeline being blown up. It seems only reasonable to expect a flare up in violence before the June 30 handover, and though it hasn't happened yet, the storm clouds are gathering. And yet in in this uncertain hour, no one -- not even French Polynesia -- looks to France or the United Nations to steer them through stormy seas. Roger Simon describes a fascinating interview of Hamid Karzai, the Afghan President and Ghazi al-Yawar, the new Iraqi President, both of whom are in the US to meet with American officials. Their presence is a reminder of how the power realities of the world really stand and how the unwanted cup that has come at last to the only place it could -- "the last best, hope of earth".

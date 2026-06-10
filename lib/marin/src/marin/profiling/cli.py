@@ -9,6 +9,7 @@ import argparse
 import json
 from pathlib import Path
 
+from marin.profiling.compare_bundle import run_profile_comparison_bundle
 from marin.profiling.ingest import (
     DEFAULT_ARTIFACT_ALIAS,
     download_latest_profile_artifact_for_run,
@@ -16,7 +17,6 @@ from marin.profiling.ingest import (
     summarize_profile_artifact,
     summarize_trace,
 )
-from marin.profiling.compare_bundle import run_profile_comparison_bundle
 from marin.profiling.publish import publish_profile_summary_artifact
 from marin.profiling.query import compare_profile_summaries, query_profile_summary
 from marin.profiling.report import build_markdown_report
@@ -28,6 +28,7 @@ from marin.profiling.tracking import (
     make_regression_record,
     summarize_regression_history,
 )
+from marin.profiling.xplane import summarize_xplane
 
 _BREAKDOWN_MODES = ("exclusive_per_track", "exclusive_global")
 
@@ -58,6 +59,21 @@ def parse_args() -> argparse.Namespace:
     summarize.add_argument("--download-root", type=Path, help="Optional root directory for downloaded artifacts.")
     summarize.add_argument("--profile-dir", type=Path, help="Path to a downloaded jax_profile artifact directory.")
     summarize.add_argument("--trace-file", type=Path, help="Path to an explicit trace JSON(.gz) file.")
+    summarize.add_argument(
+        "--xplane-file",
+        type=Path,
+        help="Path to an explicit *.xplane.pb protobuf profile. Parsed directly; xprof tables augment when available.",
+    )
+    summarize.add_argument(
+        "--xplane-output-dir",
+        type=Path,
+        help="Optional directory for xprof table JSON exported while summarizing --xplane-file. Requires xprof.",
+    )
+    summarize.add_argument(
+        "--xplane-count-trace-events",
+        action="store_true",
+        help="Ask xprof for trace_viewer event count while summarizing --xplane-file. This can be slower.",
+    )
     summarize.add_argument("--warmup-steps", type=int, default=5, help="Initial steps ignored for steady-state stats.")
     summarize.add_argument("--hot-op-limit", type=int, default=25, help="Maximum number of hot ops in the summary.")
     summarize.add_argument(
@@ -374,8 +390,18 @@ def _handle_summarize(args: argparse.Namespace):
             breakdown_mode=args.breakdown_mode,
         )
 
+    if args.xplane_file:
+        return summarize_xplane(
+            args.xplane_file,
+            output_dir=args.xplane_output_dir,
+            warmup_steps=args.warmup_steps,
+            hot_op_limit=args.hot_op_limit,
+            count_trace_events=args.xplane_count_trace_events,
+            breakdown_mode=args.breakdown_mode,
+        )
+
     if args.artifact:
-        downloaded = download_wandb_profile_artifact(args.artifact)
+        downloaded = download_wandb_profile_artifact(args.artifact, download_root=args.download_root)
         return summarize_profile_artifact(
             downloaded.artifact_dir,
             run_metadata=downloaded.run_metadata,
@@ -408,7 +434,7 @@ def _handle_summarize(args: argparse.Namespace):
             breakdown_mode=args.breakdown_mode,
         )
 
-    raise ValueError("Specify one of --trace-file, --profile-dir, --artifact, or --run-target.")
+    raise ValueError("Specify one of --trace-file, --xplane-file, --profile-dir, --artifact, or --run-target.")
 
 
 def _load_summary(path: Path):

@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import tempfile
 
 import equinox as eqx
@@ -11,14 +12,11 @@ import numpy as np
 import optax
 from chex import assert_trees_all_close
 from haliax.quantization import DefaultDotGeneralOp, DotGeneralOp
-from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
+from safetensors import safe_open
+from test_utils import skip_if_hf_model_not_accessible, skip_if_module_missing, skip_if_no_torch, use_test_mesh
 from transformers import AutoModelForCausalLM
 
-from levanter.callbacks import StepInfo
-from levanter.checkpoint import Checkpointer
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from levanter.layers.attention import AttentionMask
-from levanter.lora import (
+from levanter.adaptor.lora import (
     LoraConfig,
     LoraLinear,
     lora_trainable_params_filter,
@@ -27,7 +25,12 @@ from levanter.lora import (
     save_merged_hf_model,
     save_peft_pretrained,
 )
+from levanter.callbacks import StepInfo
+from levanter.checkpoint import Checkpointer
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.layers.attention import AttentionMask
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
+from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.trainer_state import TrainerState
 from levanter.utils.tree_utils import inference_mode
 
@@ -49,11 +52,11 @@ def test_loraize_simple():
 
     module = Module(first=hnn.Linear.init(In, Mid, key=k0), second=hnn.Linear.init(Mid, Out, key=k1))
 
-    loraized = loraize(module, LoraConfig(r=8, target_modules=["first"]), key=k0)
+    loraized = loraize(module, LoraConfig(r=8, target_modules=["first"], a_init_mode="random"), key=k0)
     assert isinstance(loraized.first, LoraLinear)
     assert isinstance(loraized.second, hnn.Linear)
 
-    loraized = loraize(module, LoraConfig(r=8, target_modules=["second"]), key=k0)
+    loraized = loraize(module, LoraConfig(r=8, target_modules=["second"], a_init_mode="random"), key=k0)
     assert isinstance(loraized.first, hnn.Linear)
     assert isinstance(loraized.second, LoraLinear)
 
@@ -81,7 +84,7 @@ def test_lora_scan_layers():
     k0 = jax.random.PRNGKey(0)
     module: hnn.Stacked[Module] = hnn.Stacked.init(Layers, Module)(key=jax.random.split(k0, 3))
 
-    loraized = loraize(module, LoraConfig(r=8, target_modules=["first"]), key=k0)
+    loraized = loraize(module, LoraConfig(r=8, target_modules=["first"], a_init_mode="random"), key=k0)
     assert isinstance(loraized, hnn.Stacked)
     assert isinstance(loraized.stacked.first, LoraLinear)
     assert isinstance(loraized.stacked.second, hnn.Linear)
@@ -126,12 +129,13 @@ def test_merge_lora():
     k0 = jax.random.PRNGKey(0)
     module: hnn.Stacked[Module] = hnn.Stacked.init(Layers, Module)(key=jax.random.split(k0, Layers.size))
 
-    loraized = loraize(module, LoraConfig(r=8, target_modules=["second"]), key=k0)
+    loraized = loraize(module, LoraConfig(r=8, target_modules=["second"], a_init_mode="random"), key=k0)
     assert isinstance(loraized, hnn.Stacked)
 
     merged = merge_lora_modules(loraized)
 
     assert isinstance(merged, hnn.Stacked)
+    assert merged.stacked.second.weight.axes == module.stacked.second.weight.axes
 
     def replace_dot_general(x):
         if isinstance(x, DefaultDotGeneralOp):
@@ -148,10 +152,12 @@ def test_merge_lora():
 
 @skip_if_module_missing("peft")
 @skip_if_no_torch
-def test_lora_load_in_peft():
-    import torch
+def test_lora_load_in_peft(local_gpt2_tokenizer_path):
+    import torch  # noqa: PLC0415  # optional dep: torch
 
-    converter: HFCheckpointConverter = Gpt2Config().hf_checkpoint_converter()
+    # Local tokenizer keeps converter construction off the Hub; the base model is
+    # saved/reloaded from a temp dir so the tokenizer is incidental here.
+    converter: HFCheckpointConverter = Gpt2Config(tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter()
     config = Gpt2Config(max_seq_len=128, hidden_dim=128, num_layers=2, num_heads=2)
     Vocab = converter.Vocab
 
@@ -164,11 +170,11 @@ def test_lora_load_in_peft():
     causal_mask = AttentionMask.causal()
 
     with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
-        from peft import PeftConfig, PeftModel
+        from peft import PeftConfig, PeftModel  # noqa: PLC0415  # optional dep: peft
 
-        converter.save_pretrained(model, f"{tmpdir}/model")
+        converter.save_pretrained(model, f"{tmpdir}/model", save_tokenizer=False)
 
-        lora_config = LoraConfig(r=8, target_modules=["c_attn"])
+        lora_config = LoraConfig(r=8, target_modules=["c_attn"], a_init_mode="random")
         loraized = loraize(model, lora_config, key=jax.random.PRNGKey(0))
         save_peft_pretrained(loraized, lora_config, f"{tmpdir}/model", f"{tmpdir}/loraized")
         peft_config = PeftConfig.from_pretrained(f"{tmpdir}/loraized")
@@ -198,10 +204,12 @@ def test_lora_load_in_peft():
 
 @skip_if_module_missing("peft")
 @skip_if_no_torch
-def test_lora_merged_load_in_hf():
-    import torch
+def test_lora_merged_load_in_hf(local_gpt2_tokenizer_path):
+    import torch  # noqa: PLC0415  # optional dep: torch
 
-    converter: HFCheckpointConverter = Gpt2Config().hf_checkpoint_converter()
+    # Local tokenizer keeps converter construction off the Hub; the base model is
+    # saved/reloaded from a temp dir so the tokenizer is incidental here.
+    converter: HFCheckpointConverter = Gpt2Config(tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter()
     config = Gpt2Config(max_seq_len=128, hidden_dim=128, num_layers=2, num_heads=2)
     Vocab = converter.Vocab
 
@@ -214,11 +222,11 @@ def test_lora_merged_load_in_hf():
     causal_mask = AttentionMask.causal()
 
     with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
-        converter.save_pretrained(model, f"{tmpdir}/model")
+        converter.save_pretrained(model, f"{tmpdir}/model", save_tokenizer=False)
 
-        lora_config = LoraConfig(r=8, target_modules=["c_attn"])
+        lora_config = LoraConfig(r=8, target_modules=["c_attn"], a_init_mode="random")
         loraized = loraize(model, lora_config, key=jax.random.PRNGKey(0))
-        save_merged_hf_model(loraized, converter, f"{tmpdir}/loraized")
+        save_merged_hf_model(loraized, converter, f"{tmpdir}/loraized", save_tokenizer=False)
 
         hf_model = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/model").cpu()
         hf_model.eval()
@@ -243,6 +251,125 @@ def test_lora_merged_load_in_hf():
         assert not np.allclose(lev_lora_out, hf_out, atol=1e-4)
 
 
+@skip_if_no_torch
+@skip_if_hf_model_not_accessible("NousResearch/Llama-2-7b-hf")
+def test_lora_merged_load_in_hf_llama():
+    import torch  # noqa: PLC0415  # optional dep: torch
+
+    config = LlamaConfig(
+        max_seq_len=32,
+        hidden_dim=32,
+        intermediate_dim=64,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        gradient_checkpointing=False,
+        scan_layers=False,
+    )
+    converter: HFCheckpointConverter = config.hf_checkpoint_converter()
+    vocab = hax.Axis("vocab", 128)
+
+    model = LlamaLMHeadModel.init(vocab, config=config, key=jax.random.PRNGKey(0))
+    model = inference_mode(model, True)
+    lora_config = LoraConfig(
+        r=8,
+        alpha=8,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        a_init_mode="random",
+    )
+
+    input_ids = hax.random.randint(jax.random.PRNGKey(1), config.max_Pos.resize(16), 0, vocab.size)
+    torch_input = torch.tensor(np.array(input_ids.array), dtype=torch.long).reshape((1, -1))
+    attn_mask = AttentionMask.causal()
+
+    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
+        loraized = loraize(model, lora_config, key=jax.random.PRNGKey(2))
+        merged = merge_lora_modules(loraized)
+
+        lev_lora_out = np.array(loraized(input_ids, attn_mask=attn_mask).array)
+        lev_merged_out = np.array(merged(input_ids, attn_mask=attn_mask).array)
+        np.testing.assert_allclose(lev_lora_out, lev_merged_out, rtol=1e-4, atol=1e-4)
+
+        save_merged_hf_model(
+            loraized,
+            converter,
+            f"{tmpdir}/loraized",
+            save_reference_code=False,
+            save_tokenizer=False,
+        )
+
+        hf_lora_model = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/loraized").cpu()
+        hf_lora_model.eval()
+        hf_lora_out = hf_lora_model(torch_input).logits[0].detach().numpy()
+
+        np.testing.assert_allclose(lev_lora_out, hf_lora_out, rtol=1e-4, atol=1e-4)
+
+
+def test_lora_peft_export_uses_hf_llama_keys_and_target_modules(tmp_path):
+    config = LlamaConfig(
+        max_seq_len=32,
+        hidden_dim=32,
+        intermediate_dim=64,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        gradient_checkpointing=False,
+        scan_layers=False,
+    )
+    vocab = hax.Axis("vocab", 128)
+    model = LlamaLMHeadModel.init(vocab, config=config, key=jax.random.PRNGKey(0))
+    lora_config = LoraConfig(r=8)
+
+    loraized = loraize(model, lora_config, key=jax.random.PRNGKey(1))
+    save_peft_pretrained(loraized, lora_config, "marin-community/marin-8b-base", str(tmp_path))
+
+    with open(tmp_path / "adapter_config.json") as f:
+        adapter_config = json.load(f)
+
+    assert adapter_config["target_modules"] == [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj",
+    ]
+
+    with safe_open(tmp_path / "adapter_model.safetensors", framework="numpy") as tensors:
+        keys = list(tensors.keys())
+
+    assert "base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight" in keys
+    assert all("base_model.model.transformer." not in key for key in keys)
+
+
+def test_lora_peft_export_does_not_use_generic_numpy_state_dict(tmp_path, monkeypatch):
+    config = LlamaConfig(
+        max_seq_len=32,
+        hidden_dim=32,
+        intermediate_dim=64,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        gradient_checkpointing=False,
+        scan_layers=False,
+    )
+    vocab = hax.Axis("vocab", 128)
+    model = LlamaLMHeadModel.init(vocab, config=config, key=jax.random.PRNGKey(0))
+    lora_config = LoraConfig(r=8)
+
+    loraized = loraize(model, lora_config, key=jax.random.PRNGKey(1))
+
+    def fail_generic_helper(*args, **kwargs):
+        raise AssertionError("PEFT export should use its mesh-aware state-dict path")
+
+    monkeypatch.setattr("haliax.state_dict.to_numpy_state_dict", fail_generic_helper)
+    save_peft_pretrained(loraized, lora_config, "marin-community/marin-8b-base", str(tmp_path))
+
+    with safe_open(tmp_path / "adapter_model.safetensors", framework="numpy") as tensors:
+        assert tensors.keys()
+
+
 def test_lora_works_with_checkpointer():
     with tempfile.TemporaryDirectory() as tempdir:
         k0 = jax.random.PRNGKey(0)
@@ -257,7 +384,7 @@ def test_lora_works_with_checkpointer():
 
         module = Module(first=hnn.Linear.init(In, Mid, key=k0), second=hnn.Linear.init(Mid, Out, key=k1))
 
-        loraized = loraize(module, LoraConfig(r=8, target_modules=["first"]), key=k0)
+        loraized = loraize(module, LoraConfig(r=8, target_modules=["first"], a_init_mode="random"), key=k0)
         lora_filter = lora_trainable_params_filter(loraized)
 
         optimizer = optax.adam(1e-3)
@@ -272,3 +399,52 @@ def test_lora_works_with_checkpointer():
             destination="loraized",
         )
         checkpointer.wait_until_finished()
+
+
+def test_loraize_a_init_mode_zero():
+    """A=0 init: lora_A all zeros, lora_B has non-zero entries from default Linear.init."""
+    k0 = jax.random.PRNGKey(0)
+    k1 = jax.random.PRNGKey(1)
+
+    class Module(eqx.Module):
+        first: hnn.Linear
+        second: hnn.Linear
+
+        def __call__(self, x):
+            return self.second(self.first(x))
+
+    module = Module(first=hnn.Linear.init(In, Mid, key=k0), second=hnn.Linear.init(Mid, Out, key=k1))
+
+    loraized = loraize(module, LoraConfig(r=8, target_modules=["first"], a_init_mode="zero"), key=k0)
+    assert isinstance(loraized.first, LoraLinear)
+    assert hax.all(loraized.first.lora.lora_A.weight == 0.0)
+    assert not hax.all(loraized.first.lora.lora_B.weight == 0.0)
+
+    # B @ A = 0 at init, so the loraized output matches the base output.
+    input = hax.random.normal(k0, (In,))
+    base_first_out = module.first(input)
+    loraized_first_out = loraized.first(input)
+    assert hax.all(hax.isclose(base_first_out, loraized_first_out))
+
+
+def test_loraize_a_zero_and_b_zero_degenerate():
+    """A=0 and B=0 together: degenerate identity init (no learning), but must not crash."""
+    k0 = jax.random.PRNGKey(0)
+    k1 = jax.random.PRNGKey(1)
+
+    class Module(eqx.Module):
+        first: hnn.Linear
+        second: hnn.Linear
+
+        def __call__(self, x):
+            return self.second(self.first(x))
+
+    module = Module(first=hnn.Linear.init(In, Mid, key=k0), second=hnn.Linear.init(Mid, Out, key=k1))
+
+    loraized = loraize(
+        module,
+        LoraConfig(r=8, target_modules=["first"], a_init_mode="zero", zero_init_b=True),
+        key=k0,
+    )
+    assert hax.all(loraized.first.lora.lora_A.weight == 0.0)
+    assert hax.all(loraized.first.lora.lora_B.weight == 0.0)

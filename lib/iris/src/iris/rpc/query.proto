@@ -14,7 +14,7 @@
 
 edition = "2023";
 
-package iris.cluster;
+package iris.query;
 
 // ============================================================================
 // RAW QUERY API

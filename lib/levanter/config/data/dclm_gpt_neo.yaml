@@ -3,7 +3,10 @@ tokenizer: EleutherAI/gpt-neox-20b
 cache_options:
   batch_size: 256
 stop_strategy: restart
-shuffle: 100000
+shuffle:
+  io_block_size: 256
+  window_blocks: 512
+  perm_type: feistel
 train_weights:
   dclm: 1.0
   paloma/4chan: 0.0

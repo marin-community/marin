@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 from tensorboardX import SummaryWriter
 
-from levanter.tracker.histogram import Histogram
+from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.tensorboard import TensorboardTracker
 
 
@@ -29,4 +29,7 @@ def test_log():
             tracker.log({"str": "test"}, step=0)
             tracker.log({"scalar_jax_array": jnp.array(3.0)}, step=0)
             tracker.log({"scalar_np_array": np.array(3.0)}, step=0)
-            tracker.log({"histogram": Histogram.from_array(jnp.array([1.0, 2.0, 3.0]))}, step=0)
+            tracker.log({"histogram": SummaryStats.from_array(jnp.array([1.0, 2.0, 3.0]))}, step=0)
+            tracker.log(
+                {"summary_only": SummaryStats.from_array(jnp.array([1.0, 2.0, 3.0]), include_histogram=False)}, step=0
+            )

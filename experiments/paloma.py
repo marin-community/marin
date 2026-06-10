@@ -9,13 +9,18 @@ https://huggingface.co/datasets/allenai/paloma
 
 import os.path
 
-from marin.datakit.download.huggingface import DownloadConfig as HfDownloadConfig, download_hf
+from marin.datakit.download.huggingface import DownloadConfig as HfDownloadConfig
+from marin.datakit.download.huggingface import download_hf
+from marin.evaluation.perplexity_gap import raw_text_dataset
 
 # cyclic dependency
 # from experiments.llama import llama3_tokenizer
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import executor_main
+from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
+
+from experiments.tokenization import default_tokenize
 
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 
@@ -65,7 +70,6 @@ def paloma_tokenized(
     Returns a dictionary of steps to tokenize the Paloma eval sets. Keys are the subset names (with `paloma/` prefix)
     """
     # avoid cyclic dependency
-    from experiments.defaults import default_tokenize
 
     paloma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset, path_part in PALOMA_DATASETS_TO_DIR.items():
@@ -77,6 +81,13 @@ def paloma_tokenized(
         )
 
     return paloma_steps
+
+
+def paloma_raw_validation_sets(*, paloma_raw: ExecutorStep = paloma):
+    return {
+        os.path.join("paloma", dataset): raw_text_dataset(paloma_raw.cd(f"{path_part}/val/val*.jsonl.gz"))
+        for dataset, path_part in PALOMA_DATASETS_TO_DIR.items()
+    }
 
 
 if __name__ == "__main__":

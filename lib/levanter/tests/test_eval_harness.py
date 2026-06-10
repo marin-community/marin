@@ -1,20 +1,20 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from test_utils import skip_if_module_missing
 from transformers import AutoTokenizer
 
 from levanter.data.packing import PromptCompletion
 from levanter.eval_harness import LmEvalHarnessConfig, TaskConfig, _iterate_tokenized_requests
-from test_utils import skip_if_module_missing
 
 
 @skip_if_module_missing("lm_eval")
 def test_iterate_tokenized_requests_with_chat_template():
     """Test the chat template functionality in _iterate_tokenized_requests"""
-    from lm_eval.api.instance import Instance
+    from lm_eval.api.instance import Instance  # noqa: PLC0415  # optional dep: lm_eval
 
     # Load a tokenizer with chat template - Llama 3 has one
-    hf_tokenizer = AutoTokenizer.from_pretrained("stanford-crfm/marin-tokenizer")
+    hf_tokenizer = AutoTokenizer.from_pretrained("marin-community/marin-tokenizer")
     if hf_tokenizer.pad_token is None:
         hf_tokenizer.pad_token = hf_tokenizer.eos_token
 
@@ -96,9 +96,9 @@ def test_iterate_tokenized_requests_with_chat_template():
 
 @skip_if_module_missing("lm_eval")
 def test_iterate_tokenized_requests():
-    from lm_eval.api.instance import Instance
+    from lm_eval.api.instance import Instance  # noqa: PLC0415  # optional dep: lm_eval
 
-    hf_tokenizer = AutoTokenizer.from_pretrained("stanford-crfm/marin-tokenizer")
+    hf_tokenizer = AutoTokenizer.from_pretrained("marin-community/marin-tokenizer")
     if hf_tokenizer.pad_token is None:
         hf_tokenizer.pad_token = hf_tokenizer.eos_token
 

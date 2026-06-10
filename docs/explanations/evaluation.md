@@ -4,6 +4,7 @@ This document explains how Marin evaluates models and where to find runnable wor
 
 For step-by-step usage, start with:
 - [Running Evaluations with Marin](../tutorials/run-lm-evals.md) for multiple-choice, generation, and key eval suites.
+- [Perplexity Gap Analysis Workflow](../references/perplexity-gap-analysis.md) for raw-text bpb comparisons, dashboard refreshes, and heatmaps.
 - [Harbor Framework Integration](../harbor-integration.md) for Harbor-backed agent and benchmark evaluation.
 
 ## Evaluation modes
@@ -34,7 +35,7 @@ Task sets are configured in [`task_configs.py`](https://github.com/marin-communi
 !!! note
 
     See [`levanter_lm_eval_evaluator.py`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/evaluation/evaluators/levanter_lm_eval_evaluator.py) for the default evaluator implementation.
-    Additional evaluators (including HELM, Alpaca, and other backends) live in [`lib/marin/src/marin/evaluation/evaluators`](https://github.com/marin-community/marin/tree/main/lib/marin/src/marin/evaluation/evaluators).
+    Additional evaluators live in [`lib/marin/src/marin/evaluation/evaluators`](https://github.com/marin-community/marin/tree/main/lib/marin/src/marin/evaluation/evaluators).
 
 ### Reported metrics
 
@@ -54,7 +55,7 @@ Generation tasks (for example AlpacaEval, HumanEval, GSM8K, and MATH) use a fast
 - A common entrypoint is [`run_key_evals.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/run_key_evals.py).
 - Current generation-eval setup is documented in [Running Evaluations with Marin](../tutorials/run-lm-evals.md).
 
-In current Marin workflows, generation evals are commonly run with `Dockerfile.vllm` or on a dedicated vLLM Ray cluster (for example [`marin-us-east5-b-vllm.yaml`](https://github.com/marin-community/marin/blob/main/infra/marin-us-east5-b-vllm.yaml)).
+In current Marin workflows, generation evals are commonly run with `Dockerfile.vllm` or as dedicated vLLM jobs submitted through Iris.
 
 ## Harbor-based evaluation
 
@@ -67,6 +68,7 @@ Harbor tasks use [`evaluate_harbor`](https://github.com/marin-community/marin/bl
 ## Where to go next
 
 - [Running Evaluations with Marin](../tutorials/run-lm-evals.md)
+- [Perplexity Gap Analysis Workflow](../references/perplexity-gap-analysis.md)
 - [Harbor Framework Integration](../harbor-integration.md)
 - [`experiments/evals/evals.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/evals.py)
 - [`experiments/evals/task_configs.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/task_configs.py)

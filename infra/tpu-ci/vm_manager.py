@@ -24,7 +24,9 @@ Continuously monitors and ensures the desired number of VMs are running:
 
 import json
 import logging
+import random
 import shlex
+import string
 import subprocess
 import sys
 import threading
@@ -72,8 +74,6 @@ NOUNS = [
 
 def generate_random_id() -> str:
     """Generate a short random ID (4 alphanumeric characters)."""
-    import random
-    import string
 
     chars = string.ascii_lowercase + string.digits
     return "".join(random.choices(chars, k=4))
@@ -86,7 +86,6 @@ def generate_fun_name(zone: str) -> str:
     Format: {verb}-{noun}-{zone}-{random_id}
     Example: running-tiger-us-west4-a-7x3k
     """
-    import random
 
     verb = random.choice(VERBS)
     noun = random.choice(NOUNS)
@@ -770,7 +769,8 @@ def debug_tpu(name: str, test_path: str, pytest_args: str, timeout: int, env_var
     for env_var in env_vars:
         env_var_flags += f"  -e {env_var} \\\n"
 
-    # Use the same script structure as GitHub Actions workflow
+    # Match the GitHub Actions TPU path and keep pytest single-process because
+    # some levanter tests call jax.devices() during collection.
     test_script = f"""
 sudo rm -f /tmp/libtpu_lockfile || true
 sudo lsof -t /dev/vfio/* 2>/dev/null | xargs -r sudo kill -9 || true
@@ -791,7 +791,7 @@ sudo docker run --rm \\
   --tmpfs /workspace/.pytest_cache:rw \\
   -w /workspace \\
   ghcr.io/{config.GITHUB_REPOSITORY}/{config.DOCKER_IMAGE_NAME}:{config.DOCKER_IMAGE_TAG} \\
-  timeout --kill-after=5 --signal=TERM {timeout} uv run pytest {test_path} {pytest_args}
+  timeout --kill-after=5 --signal=TERM {timeout} uv run pytest -n 0 {test_path} {pytest_args}
 """
 
     ssh_cmd = [

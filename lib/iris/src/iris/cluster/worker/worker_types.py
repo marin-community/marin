@@ -6,12 +6,12 @@
 from datetime import datetime, timezone
 from typing import Protocol
 
+from finelog.rpc import logging_pb2
 from pydantic import BaseModel
-
-from iris.rpc import cluster_pb2, logging_pb2
-from iris.rpc.cluster_pb2 import TaskState
-from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
+
+from iris.rpc import job_pb2
+from iris.rpc.job_pb2 import TaskState
 
 
 class LogLine(BaseModel):
@@ -37,7 +37,8 @@ class LogLine(BaseModel):
             source=self.source,
             data=self.data,
         )
-        proto.timestamp.CopyFrom(timestamp_to_proto(Timestamp.from_seconds(self.timestamp.timestamp())))
+        # finelog.logging.LogEntry uses finelog.logging.Timestamp; assign directly.
+        proto.timestamp.epoch_ms = Timestamp.from_seconds(self.timestamp.timestamp()).epoch_ms()
         return proto
 
 
@@ -52,11 +53,12 @@ class TaskLogs(BaseModel):
 
 
 class TaskInfo(Protocol):
-    """Read-only view of task state for RPC handlers.
+    """Read-only view of task state used by RPC handlers and the reconcile path.
 
-    This protocol decouples the service layer from TaskAttempt's execution internals
-    (thread, runtime, providers, etc.) while providing access to state needed for
-    RPC responses.
+    Decouples the service layer from TaskAttempt's execution internals (thread,
+    runtime, providers, etc.) while exposing the state the worker needs to
+    report back to the controller (status, exit_code, error,
+    platform_container_id, finished_at).
     """
 
     @property
@@ -64,6 +66,26 @@ class TaskInfo(Protocol):
         """Current task state (PENDING, RUNNING, SUCCEEDED, etc.)."""
         ...
 
-    def to_proto(self) -> cluster_pb2.TaskStatus:
+    @property
+    def exit_code(self) -> int | None:
+        """Process exit code once the container has stopped, else ``None``."""
+        ...
+
+    @property
+    def error(self) -> str | None:
+        """Human-readable error string for failed/worker-failed attempts."""
+        ...
+
+    @property
+    def platform_container_id(self) -> str | None:
+        """Platform-specific container ID (docker hash, k8s pod name, etc.)."""
+        ...
+
+    @property
+    def finished_at(self) -> Timestamp | None:
+        """Terminal-state timestamp; ``None`` while the attempt is still active."""
+        ...
+
+    def to_proto(self) -> job_pb2.TaskStatus:
         """Convert to protobuf TaskStatus message."""
         ...

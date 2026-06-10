@@ -5,7 +5,7 @@ I was aware of this and this stackexchange post discuss the same. There is no *p
 # Answer
 > 28 votes
 > Our meeting has been brought forward.
-> 
+>
 > Our meeting has been rescheduled for an earlier time.
 
 I wouldn't worry too much. English is my first language and I liked the word when I first heard it.

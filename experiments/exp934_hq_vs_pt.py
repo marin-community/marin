@@ -10,8 +10,9 @@ datasets used by various training experiments.
 
 from marin.datakit.download.ar5iv import ar5iv_step
 from marin.datakit.download.wikipedia import download_wikipedia_step
-from marin.execution.executor import ExecutorStep, mirrored, this_output_path, versioned
+from marin.execution.executor import mirrored
 from marin.execution.step_spec import StepSpec
+from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
 from marin.schemas.web.selectors import ARXIV_BLACKLISTED_SELECTORS, WIKI_BLACKLISTED_SELECTORS
 from marin.transform.ar5iv.transform_ar5iv import Ar5ivExtractionConfig, process_ar5iv_dump
@@ -21,11 +22,11 @@ from marin.transform.stackexchange.transform_stackexchange import (
 )
 from marin.transform.wikipedia.transform_wikipedia import WikiExtractionConfig, process_wiki_dump
 
-from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import tokenize_nemotron
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.pretraining_datasets.dolmino import tokenize_dolmino, tokenize_dolmino_math
+from experiments.tokenization import default_tokenize
 
 # Stack Exchange resiliparse custom fork (inlined from deleted exp822)
 stackexchange_text_resiliparse_custom_fork = ExecutorStep(

@@ -27,7 +27,6 @@ class RunningMean(eqx.Module):
         new_total = self.total + total
         ratio = hax.where(new_total, total / new_total, 0.0)
         new_mean = self.mean + delta * ratio
-        new_total = self.total + total
         return RunningMean(new_mean, new_total)
 
     def __add__(self, other: "RunningMean"):

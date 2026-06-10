@@ -9,12 +9,14 @@ as well as methods for tokenization and logprob extraction from an OpenAI ChatCo
 """
 
 import logging
+from typing import Any
+
 import numpy as np
+from levanter.models.lm_model import LmHeadModel
+from marin.rl.decoding import DecodingConfig
+from marin.rl.types import Rollout
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice
-from marin.rl.types import Rollout
-
-from levanter.models.lm_model import LmHeadModel
 
 logger = logging.getLogger(__name__)
 
@@ -28,14 +30,19 @@ class BaseInferenceContext:
     def shutdown(self) -> None:
         raise NotImplementedError
 
+    def get_metrics(self) -> dict[str, Any]:
+        """Return implementation-specific metrics for tracker logging."""
+        return {}
+
+    def resolve_decoding(self, decoding: DecodingConfig) -> DecodingConfig:
+        """Return the concrete decoding config this backend will apply."""
+        return decoding
+
     def batch_completions(
         self,
         prompts: list[str] | list[list[dict]],
-        temperature: float,
         n: int,
-        max_tokens: int | None = None,
-        top_k: int | None = None,
-        stop: list[str] | None = None,
+        decoding: DecodingConfig,
         system_prompt: str | None = None,
     ) -> list[ChatCompletion]:
         """Batch completions from the inference server."""
@@ -60,11 +67,12 @@ class BaseInferenceContext:
         if not choice.logprobs or not choice.logprobs.content:
             raise ValueError("Choice missing logprobs. Use logprobs=True in API call.")
 
+        vocab = self.tokenizer.get_vocab()
         tokens = []
         for t in choice.logprobs.content:
-            # Use convert_tokens_to_ids for correct BPE round-trip
-            # The server uses convert_ids_to_tokens which preserves BPE format (e.g., Ġ for spaces)
-            token_id = self.tokenizer.convert_tokens_to_ids(t.token)
+            token_id = vocab.get(t.token)
+            if token_id is None:
+                raise ValueError(f"Token {t.token!r} not found in vocabulary")
             tokens.append(token_id)
 
         if not tokens:
@@ -91,12 +99,12 @@ class BaseInferenceContext:
         env_name: str,
         env_example_id: str,
         reward: float,
-        temperature: float,
-        top_k: int | None = None,
+        decoding: DecodingConfig,
         system_prompt: str | None = None,
         correctness_reward: float | None = None,
     ) -> Rollout:
         """Construct Rollout from a choice with validation."""
+        decoding = self.resolve_decoding(decoding)
 
         prompt_tokens = self.tokenize_prompt(prompt, choice, system_prompt)
         response_tokens = self.response_tokens_from_choice(choice)
@@ -122,7 +130,6 @@ class BaseInferenceContext:
             token_rewards=token_rewards,
             episode_reward=float(reward),
             correctness_reward=correctness_reward,
-            temperature=temperature,
-            top_k=top_k,
+            decoding=decoding.as_trace(),
             is_truncated=is_truncated,
         )

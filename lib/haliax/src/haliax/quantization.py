@@ -7,6 +7,7 @@
 # https://github.com/google/flax/blob/main/flax/linen/fp8_ops.py
 import dataclasses
 import functools
+import re
 import warnings
 from dataclasses import dataclass
 from typing import Protocol, TypeVar
@@ -160,7 +161,7 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
     compute_dtype: DTypeLike | None = eqx.field(static=True)
 
     @classmethod
-    def init(cls, amax_history_length: int = 1024, compute_dtype: DTypeLike = None):
+    def init(cls, amax_history_length: int = 1024, compute_dtype: DTypeLike | None = None):
         return cls(
             input_scale=jnp.ones(1, dtype=jnp.float32),
             output_grad_scale=jnp.ones(1, dtype=jnp.float32),
@@ -233,7 +234,7 @@ class QuantizationConfig:
     """
 
     amax_history_length: int = 1024
-    compute_dtype: DTypeLike = None
+    compute_dtype: DTypeLike | None = None
 
     fp8: bool = False
     int8: bool = False
@@ -304,8 +305,6 @@ def _matches_target(key_path, config: QuantizationConfig) -> bool:
         return True
     if isinstance(config.targets, list):
         return key in config.targets
-
-    import re
 
     key_path_str = _key_path_to_str(key_path)
     return re.match(config.targets, key_path_str) is not None

@@ -15,7 +15,7 @@ from typing import Generic, TypeVar
 
 import haliax.partitioning
 import jax
-import numpy
+import numpy as np
 from jax import Array
 from jax import numpy as jnp
 from jax import tree_util as jtu
@@ -256,29 +256,16 @@ class DataLoaderIterator(Iterator[Ex]):
     def __next__(self):
         time_start = time.time()
         batch = next(self._batches)
-        time_mid = time.time()
-
-        time_end = time.time()
-        time_batch = time_end - time_mid
-        if (time_end - time_start) > 0.5:
+        elapsed = time.time() - time_start
+        if elapsed > 0.5:
             qsize = self._batches.qsize() if isinstance(self._batches, BackgroundIterator) else "N/A"
-            if time_batch > 0.1:
-                logger.warning(
-                    "Data loader stalled %.3fs (%.3fs in batchify). queue_size=%s prefetch_size=%d max_buffered=%s",
-                    time_end - time_start,
-                    time_batch,
-                    qsize,
-                    self.dl.prefetch_size,
-                    self.dl.max_buffered_batches,
-                )
-            else:
-                logger.warning(
-                    "Data loader stalled %.3fs. queue_size=%s prefetch_size=%d max_buffered=%s",
-                    time_end - time_start,
-                    qsize,
-                    self.dl.prefetch_size,
-                    self.dl.max_buffered_batches,
-                )
+            logger.warning(
+                "Data loader stalled %.3fs. queue_size=%s prefetch_size=%d max_buffered=%s",
+                elapsed,
+                qsize,
+                self.dl.prefetch_size,
+                self.dl.max_buffered_batches,
+            )
         return batch
 
     def __del__(self):
@@ -629,7 +616,7 @@ def check_sharded_consistency(tree: PyTree, check_disjoint_indices_are_different
             replica_0_array = replica_0_arrays[_to_tuple(shard.index)]
             assert shard.data is not None
 
-            if not numpy.array_equal(shard.data, replica_0_array, equal_nan=True):
+            if not np.array_equal(shard.data, replica_0_array, equal_nan=True):
                 raise ValueError("Shard data does not match replica 0 data", shard, replica_0_array)
 
             if check_disjoint_indices_are_different:

@@ -1,11 +1,11 @@
 ---
 name: writing-style
-description: Write in Marin's house style for public and internal text. Use when drafting or revising blog posts, technical reports, documentation, GitHub issues, experiment issues, Discord updates, or other Marin-authored writing.
+description: Marin house writing style. Use when drafting or revising Marin-authored prose.
 ---
 
 # Marin House Style
 
-Start here for any non-trivial Marin-authored text. Keep this file as the common layer, then read the medium-specific file that matches the deliverable.
+Start here for any non-trivial Marin-authored text. This file is the common layer; then read the medium-specific file that matches the deliverable.
 
 ## Read The Right File
 
@@ -15,6 +15,7 @@ Start here for any non-trivial Marin-authored text. Keep this file as the common
 - Read [reference-docs.md](reference-docs.md) for precise usage docs aimed at readers who already know Marin.
 - Read [issues.md](issues.md) for standard OSS issues and experiment issues.
 - Read [discord.md](discord.md) for Discord summaries and tactical replies.
+- Read [ai-writing-donts.md](ai-writing-donts.md) for the final prose-only review pass that strips generic AI-writing patterns.
 - Apply this file first, then apply the medium-specific file. If a piece spans multiple media, keep the stricter rule.
 
 ## Hold The Marin Positioning
@@ -37,12 +38,11 @@ Start here for any non-trivial Marin-authored text. Keep this file as the common
 
 ## On Voice
 
-The above guidelines define the default voice. In practice, we allow some flexibility depending on the author. These guidelines are stricter for agent-written text than for human-written text.
+The above defines the default voice; we allow some flexibility by author. These rules are stricter for agent-written text than for human-written text.
 
-Researchers do not need to suppress their own voice. Some personality is fine, especially in retrospectives, blog posts, and narrative writeups, as long as the writing remains concrete, honest, and technically disciplined.
+Researchers need not suppress their own voice. Some personality is fine, especially in retrospectives, blog posts, and narrative writeups, as long as the writing stays concrete, honest, and technically disciplined.
 
-Agents should err on the side of more discipline. When reviewing human prose, allow
-deviations and flourishes that do not conflict with the core Marin values.
+Agents should err toward more discipline. When reviewing human prose, allow deviations and flourishes that do not conflict with core Marin values.
 
 ## Enforce Hard Rules
 
@@ -85,12 +85,17 @@ deviations and flourishes that do not conflict with the core Marin values.
 - Prefer phrases like `we found`, `this suggests`, `in practice`, and `one limitation is`.
 - Avoid phrases like `clearly`, `obviously`, `groundbreaking`, and `state-of-the-art` unless you define and defend them.
 
+## Review For AI-Writing Tells
+
+Do one editing pass that looks only for generic, over-smoothed, LLM-sounding prose. Then apply [ai-writing-donts.md](ai-writing-donts.md) as the detailed checklist for what to remove or rewrite.
+
 ## Run A Quick Self-Check
 
 - Did you include concrete evidence?
 - Did you remove hype language?
 - Would this sound normal spoken aloud to a colleague?
 - Did you overstate certainty or scope?
+- Did you remove generic AI-writing templates and filler?
 
 ## Keep The One-Line Summary
 

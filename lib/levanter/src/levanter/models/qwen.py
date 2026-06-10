@@ -12,7 +12,7 @@ import haliax as hax
 import haliax.nn as hnn
 from haliax import Axis, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
-from haliax.nn.scan import Stacked
+from haliax.nn.scan import BlockFoldable, BlockSeq, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
@@ -23,7 +23,6 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
-from levanter.utils.types import BlockFoldable
 
 
 silence_transformer_nag()
@@ -77,7 +76,10 @@ class QwenConfig(LlamaConfig):
             use_bias=not getattr(hf_config, "no_bias", True),
         )
 
-    def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfQwenConfig:
+    # config-reuse subclass narrows to its own HF config/model type (LSP narrowing; mypy flags the same)
+    def to_hf_config(  # pyrefly: ignore[bad-override]
+        self, vocab_size: int, config_overrides: Optional[Dict] = None
+    ) -> HfQwenConfig:
         if config_overrides is None:
             config_overrides = {}
 
@@ -105,7 +107,7 @@ class QwenConfig(LlamaConfig):
         )
 
     @property
-    def model_type(self) -> Type["QwenLMHeadModel"]:
+    def model_type(self) -> Type["QwenLMHeadModel"]:  # pyrefly: ignore[bad-override]
         return QwenLMHeadModel
 
     def flops_per_token(self, vocab_size: int, context_length: int):
@@ -188,16 +190,16 @@ class QwenDecoderLayer(eqx.Module):
 
 # Modified transformer for Qwen
 class QwenTransformer(LlamaTransformer):
-    config: QwenConfig = eqx.field(static=True)
-    layers: BlockFoldable[QwenDecoderLayer]
+    # config-reuse: QwenTransformer reuses LlamaTransformer but narrows config/layers to its own
+    # Qwen types (LSP narrowing; mypy flags the same)
+    config: QwenConfig = eqx.field(static=True)  # pyrefly: ignore[bad-override-mutable-attribute]
+    layers: BlockFoldable[QwenDecoderLayer]  # pyrefly: ignore[bad-override-mutable-attribute]
     norm: hnn.RmsNorm
 
     @staticmethod
-    def init(config: QwenConfig, *, key) -> "QwenTransformer":
+    def init(config: QwenConfig, *, key) -> "QwenTransformer":  # pyrefly: ignore[bad-override]
         S = Stacked
         if not config.scan_layers:
-            from haliax.nn.scan import BlockSeq
-
             S = BlockSeq
 
         # Initialize layers with their indices
@@ -263,7 +265,7 @@ class QwenLMHeadModel(LmHeadModel[QwenConfig], ModuleWithStateDictSerialization)
         else:
             return self.lm_head.weight
 
-    def resize_vocab(self, new_size: int, key=None) -> "LmHeadModel[LlamaConfig]":
+    def resize_vocab(self, new_size: int, key=None) -> "LmHeadModel[QwenConfig]":
         new_Vocab = self.Vocab.resize(new_size)
         k1, k2 = maybe_rng_split(key, 2)
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)
@@ -301,6 +303,7 @@ class Qwen3Config(LlamaConfig):
     """Qwen-3 configuration (Llama architecture + QK-norm + Sliding Window)."""
 
     # TODO: add sliding window attention implementation
+    reference_checkpoint: str = "Qwen/Qwen3-0.6B"
     use_sliding_window: bool = False
     sliding_window: int = 4096  # Qwen-3 uses sliding window by default
 
@@ -317,7 +320,9 @@ class Qwen3Config(LlamaConfig):
             HfConfigClass=HfQwen3Config,
         )
 
-    def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfQwen3Config:
+    def to_hf_config(  # pyrefly: ignore[bad-override]
+        self, vocab_size: int, config_overrides: Optional[Dict] = None
+    ) -> HfQwen3Config:
         if config_overrides is None:
             config_overrides = {}
 

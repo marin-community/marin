@@ -1,12 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import logging
+import os
+from dataclasses import replace
 
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
-
 from marin.rl.environments.inference_ctx.vllm import InferenceMode, vLLMInferenceContext, vLLMInferenceContextConfig
 
 logger = logging.getLogger(__name__)
@@ -36,14 +36,13 @@ class AsyncvLLMInferenceContext(vLLMInferenceContext):
     """Inference context for async vLLM."""
 
     def __init__(self, inference_config: vLLMInferenceContextConfig):
-        inference_config.mode = InferenceMode.ASYNC
-        super().__init__(inference_config)
+        super().__init__(replace(inference_config, engine=replace(inference_config.engine, mode=InferenceMode.ASYNC)))
 
     def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> None:
         # Serialize numpy arrays to (bytes, dtype, shape) tuples to survive RPC serialization.
         # vLLM's collective_rpc can corrupt numpy arrays during pickling.
         serialized_state_dict = serialize_state_dict_for_rpc(state_dict)
-        self.llm.update_weights(serialized_state_dict, self.model_name)
+        self.llm.update_weights(serialized_state_dict, self.canonical_model_name)
         self.llm.reset_prefix_cache()  # Reset prefix cache because of new weights
 
     def shutdown(self):

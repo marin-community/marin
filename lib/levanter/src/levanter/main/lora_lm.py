@@ -15,7 +15,7 @@ import levanter.eval
 from levanter import callbacks
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data.text import LmDataConfig
-from levanter.lora import (
+from levanter.adaptor.lora import (
     LoraConfig,
     lora_trainable_params_filter,
     loraize,

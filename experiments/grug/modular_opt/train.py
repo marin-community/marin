@@ -12,16 +12,16 @@ from dataclasses import dataclass, field
 import jax
 import jax.numpy as jnp
 import jmp
+import levanter.callbacks as callbacks
+import levanter.tracker
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
+from haliax.partitioning import set_mesh
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
-
-import levanter.callbacks as callbacks
-import levanter.tracker
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.data import AsyncDataset, DataLoader
@@ -29,6 +29,7 @@ from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_b
 from levanter.data.text import GrugLmExample, LmDataConfig
 from levanter.data.text.examples import grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
@@ -49,7 +50,7 @@ class GrugTrainerConfig:
     """Runtime knobs for grug training."""
 
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(use_explicit_mesh_axes=True))
-    train_batch_pspec: P = field(default_factory=lambda: P(("data",)))
+    train_batch_pspec: P = field(default_factory=lambda: P(("replica_dcn", "data")))
     data_seed: int | None = None
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
@@ -61,7 +62,7 @@ class GrugEvalConfig:
     """Perplexity eval settings for grug training."""
 
     eval_batch_size: int = 512
-    eval_batch_pspec: P = field(default_factory=lambda: P(("data",)))
+    eval_batch_pspec: P = field(default_factory=lambda: P(("replica_dcn", "data")))
     steps_per_eval: int | None = 1000
     max_eval_batches: int | None = None
     prefix: str = "eval"
@@ -111,7 +112,7 @@ def build_train_loader(
     *,
     batch_schedule: BatchSchedule,
     mesh: Mesh,
-    batch_pspec: P = P(("data",)),
+    batch_pspec: P = P(("replica_dcn", "data")),
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
     axis_resource = batch_pspec[0]
@@ -341,9 +342,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     if config.trainer.data_seed is not None:
         data_key = jax.random.PRNGKey(config.trainer.data_seed)
 
-    # Build data/model state under the trainer mesh so all arrays are sharded consistently.
-    with trainer.use_device_mesh():
-        mesh = trainer.device_mesh
+    # Grug uses raw PartitionSpecs rather than Trainer's logical axis mapping.
+    # Keep the mesh compact so P(("replica_dcn", "data")) spans slices directly.
+    mesh = compact_grug_mesh()
+    with set_mesh(mesh):
         batch_schedule = trainer.batch_schedule
 
         train_dataset = build_train_dataset(
@@ -372,12 +374,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state = _init_state(model_key)
 
         checkpointer = trainer.checkpointer.create(run_id)
-        checkpoint_path = trainer.load_checkpoint_path
-        if checkpoint_path is None and checkpointer is not None:
-            checkpoint_path = trainer.checkpointer.expanded_path(run_id)
         state = restore_grug_state_from_checkpoint(
             state,
-            checkpoint_path=checkpoint_path,
+            checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
             load_checkpoint_setting=trainer.load_checkpoint,
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,

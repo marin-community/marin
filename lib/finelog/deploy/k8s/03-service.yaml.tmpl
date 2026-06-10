@@ -1,0 +1,24 @@
+# finelog ClusterIP Service.
+#
+# Iris references this service from its endpoints config as
+# `k8s://<name>.<namespace>`, which resolves to
+# <name>.<namespace>.svc.cluster.local:<port>.
+#
+# Security: the server is unauthenticated by design. Restrict access via
+# NetworkPolicy / firewall — do NOT add an Ingress or LoadBalancer.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ name }}
+  namespace: {{ namespace }}
+  labels:
+    app: {{ name }}
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ name }}
+  ports:
+    - name: rpc
+      port: {{ port }}
+      targetPort: {{ port }}
+      protocol: TCP

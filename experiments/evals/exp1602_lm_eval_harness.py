@@ -6,6 +6,9 @@ Comprehensive LM Evaluation Harness Testing
 Reference: https://github.com/EleutherAI/lm-evaluation-harness
 """
 
+from fray.cluster import ResourceConfig
+from marin.execution.executor import executor_main
+
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import (
     ACTION_TASKS,
@@ -20,9 +23,6 @@ from experiments.evals.task_configs import (
     TRUTHFULNESS_TASKS,
 )
 from experiments.models import qwen3_32b
-from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
-
 from experiments.tootsie.exp1529_32b_mantis_cooldown import tootsie_32b_cooldown_mantis as marin_32b
 
 # List of models to evaluate

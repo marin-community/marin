@@ -23,14 +23,22 @@ import asyncio
 import json
 import logging
 import socket
+import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
-from levanter.compat.hf_checkpoints import RepoRef
+import equinox as eqx
+import jax.random as jrandom
+from haliax import Axis
+from haliax.partitioning import round_axis_for_partitioning
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.llama import LlamaConfig
+from levanter.models.lm_model import LmHeadModel
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from levanter.trainer import TrainerConfig
 from openai import AsyncOpenAI
 from rigging.log_setup import configure_logging
@@ -84,40 +92,70 @@ def load_requests(requests_file: str) -> list[dict[str, Any]]:
     return requests
 
 
+def _load_model_and_tokenizer(config: ReplayConfig) -> tuple[LmHeadModel, MarinTokenizer]:
+    """Load the inference model and tokenizer from the configured checkpoint.
+
+    Mirrors levanter's inference REPL loader: HF repos are materialized through the
+    HF checkpoint converter, while local Levanter checkpoints are restored with
+    ``load_checkpoint``. The tokenizer is always loaded so the server receives a
+    concrete tokenizer regardless of checkpoint kind.
+    """
+    if not config.checkpoint:
+        raise ValueError("Must specify --checkpoint to load a model")
+
+    tokenizer = load_tokenizer(config.tokenizer or config.checkpoint)
+    is_hf_model = "/" in config.checkpoint and not config.checkpoint.startswith(("/", "./"))
+
+    with config.trainer.use_device_mesh():
+        if is_hf_model:
+            converter = HFCheckpointConverter(
+                type(config.model),
+                reference_checkpoint=config.checkpoint,
+                tokenizer=tokenizer,
+            )
+            model = converter.load_pretrained(
+                config.model.model_type,
+                ref=config.checkpoint,
+                dtype=config.trainer.mp.compute_dtype,
+                axis_mapping=config.trainer.parameter_axis_mapping,
+            )
+        else:
+            Vocab = round_axis_for_partitioning(Axis("vocab", tokenizer.vocab_size), config.trainer.compute_axis_mapping)
+            model = eqx.filter_eval_shape(config.model.build, Vocab, key=jrandom.PRNGKey(0))
+            model = load_checkpoint(
+                model,
+                latest_checkpoint_path(config.checkpoint),
+                subpath="model",
+                axis_mapping=config.trainer.parameter_axis_mapping,
+            )
+            model = config.trainer.mp.cast_to_compute(model)
+
+    # `load_pretrained` is typed as returning the broad `ModelWithHfSerializationMixin`,
+    # but loading a config's `model_type` always yields an `LmHeadModel` at runtime.
+    return cast(LmHeadModel, model), tokenizer
+
+
 def create_inference_server(config: ReplayConfig) -> tuple[InferenceServer, AsyncOpenAI, int]:
     """Create and start inference server with client."""
     logger.info(f"Starting inference server with checkpoint: {config.checkpoint}")
 
-    # Determine tokenizer
-    tokenizer_path = config.tokenizer or config.checkpoint
-    if not tokenizer_path:
-        raise ValueError("Must specify either --checkpoint or --tokenizer")
+    model, tokenizer = _load_model_and_tokenizer(config)
 
     # Configure server
     port = find_open_port()
     server_config = InferenceServerConfig(
         host="localhost",
         port=port,
-        tokenizer=tokenizer_path,
-        model=config.model,
+        tokenizer=config.tokenizer or config.checkpoint,
         trainer=config.trainer,
         service=config.service,
     )
 
-    # Set checkpoint path
-    if config.checkpoint:
-        if "/" in config.checkpoint and not config.checkpoint.startswith(("/", "./")):
-            # Looks like an HF model
-            server_config.hf_checkpoint = RepoRef.from_string(config.checkpoint)
-        else:
-            server_config.checkpoint_path = config.checkpoint
-
     # Create and start server
-    server = InferenceServer.create(server_config)
+    with config.trainer.use_device_mesh():
+        server = InferenceServer.create(server_config, model=model, tokenizer=tokenizer)
 
     # run serving in background
-    import threading
-
     threading.Thread(target=server.serve, daemon=True).start()
 
     # Create client
@@ -172,7 +210,7 @@ async def send_batch_requests(
             "failing_requests": [],
         }
 
-    except (asyncio.TimeoutError, Exception):
+    except Exception:
         logger.error(f"Failing batch contained {len(requests)} requests, writing to /tmp/failing_batch.json")
         # write bad batch to disk
         with open("/tmp/failing_batch.json", "w") as f:
@@ -200,6 +238,8 @@ async def replay_all_with_warmup(
     logger.info(f"Processing {len(requests)} requests in {total_batches} batches of " f"size {config.batch_size}")
 
     current_start = 0
+    results: list[dict[str, Any]] = []
+    start_time = time.time()
 
     # First batch without timeout for warm-up
     if requests:
@@ -212,9 +252,19 @@ async def replay_all_with_warmup(
     while current_start < len(requests):
         end_idx = min(current_start + config.batch_size, len(requests))
         batch = requests[current_start:end_idx]
-        await send_batch_requests(client, batch, batch_idx, timeout=config.timeout)
+        results.append(await send_batch_requests(client, batch, batch_idx, timeout=config.timeout))
         current_start = end_idx
         batch_idx += 1
+
+    # send_batch_requests raises on any failure, so every collected result succeeded.
+    return {
+        "total_requests": len(requests),
+        "total_batches": total_batches,
+        "completed_batches": len(results),
+        "failed_batches": [],
+        "total_time": time.time() - start_time,
+        "results": results,
+    }
 
 
 class CompletionReplayer:

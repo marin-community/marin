@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
+import math
 from dataclasses import dataclass
-from typing import Tuple
 
 import draccus
 import equinox as eqx
@@ -188,8 +188,6 @@ class YarnRotaryEmbeddings(RotaryEmbeddings):
     config: "YarnRotaryEmbeddingsConfig" = eqx.field(static=True)
 
     def __call__(self, q: NamedArray, position_ids: NamedArray) -> NamedArray:
-        import math
-
         with jax.ensure_compile_time_eval():
             half_dim = self.HeadDim.size // 2
             head_dim = self.HeadDim.size
@@ -271,22 +269,3 @@ class YarnRotaryEmbeddingsConfig(RotaryEmbeddingsConfig):
 
 
 RotaryEmbeddingsConfig.register_subclass("yarn", YarnRotaryEmbeddingsConfig)
-
-
-def rotary_pos_emb(
-    HeadSize: Axis, Pos: Axis, theta: float = 10000, scale: float = 1.0
-) -> Tuple[NamedArray, NamedArray]:
-    with jax.ensure_compile_time_eval():
-        HeadHalfSize = HeadSize.resize(HeadSize.size // 2)
-        inv_freq: NamedArray = 1.0 / (theta ** (hax.arange(HeadHalfSize, step=2) / HeadSize.size)) / scale
-
-        position_ids: NamedArray = hax.arange(Pos)
-
-        freqs = position_ids * inv_freq.broadcast_axis(Pos)
-        # This is different from the paper but aligns with HF implementation:
-        # It uses a different permutation in order to obtain the same calculation
-        emb = hax.concatenate(HeadSize, (freqs, freqs))
-        cos = hax.cos(emb)
-        sin = hax.sin(emb)
-        # This is different from the paper but aligns with HF implementation:
-        return cos, sin

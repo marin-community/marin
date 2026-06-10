@@ -4,7 +4,7 @@
 import jax.random
 import pytest
 
-from levanter.data import BlockShufflingDataset, EraShufflingDataset, PermutationDataset
+from levanter.data import BlockShufflingDataset, PermutationDataset
 from levanter.data.dataset import ListAsyncDataset
 
 
@@ -42,50 +42,6 @@ async def test_permutation_dataset_is_at_least_sometimes_permuted():
             ok += 1
 
     assert ok > 5, "Permutation dataset is not actually permuting"
-
-
-@pytest.mark.asyncio
-async def test_era_shuffling_dataset_returns_correct_length():
-    data = list(range(100))
-    dataset = ListAsyncDataset(data)
-    era_length = 10
-    key = jax.random.PRNGKey(0)
-    shuffling_dataset = EraShufflingDataset(dataset, era_length, key=key)
-    assert shuffling_dataset.is_finite()
-    assert await shuffling_dataset.async_len() == 100
-
-
-@pytest.mark.asyncio
-async def test_era_shuffling_dataset_get_batch_returns_shuffled_batch():
-    data = list(range(20))
-    dataset = ListAsyncDataset(data)
-    era_length = 5
-    key = jax.random.PRNGKey(0)
-    shuffling_dataset = EraShufflingDataset(dataset, era_length, key=key)
-    batch_indices = [0, 1, 2, 3, 4]
-    batch = await shuffling_dataset.get_batch(batch_indices)
-    assert set(batch) == set([0, 1, 2, 3, 4])  # Ensures all elements are from the first era but does not assume order
-    assert batch != [0, 1, 2, 3, 4]  # Ensures the batch is shuffled
-
-
-@pytest.mark.asyncio
-async def test_era_shuffling_returns_full_finite_length():
-    data = list(range(16))
-    dataset = ListAsyncDataset(data)
-    era_length = 5
-    key = jax.random.PRNGKey(0)
-    shuffling_dataset = EraShufflingDataset(dataset, era_length, key=key)
-    assert await shuffling_dataset.async_len() == 16
-    batch = await shuffling_dataset.get_batch(list(range(16)))
-    assert set(batch) == set(range(16))
-
-
-@pytest.mark.asyncio
-async def test_era_shuffling_raises_on_out_of_bounds_index():
-    dataset = ListAsyncDataset(list(range(16)))
-    shuffling_dataset = EraShufflingDataset(dataset, era_length=5, key=jax.random.PRNGKey(0))
-    with pytest.raises(IndexError, match="out of bounds"):
-        await shuffling_dataset.getitem_async(16)
 
 
 @pytest.mark.asyncio

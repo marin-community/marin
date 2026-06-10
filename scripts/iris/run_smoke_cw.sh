@@ -72,7 +72,7 @@ uv run pytest tests/integration/iris/ \
 
 if [ "${1:-}" = "--full" ]; then
     echo "=== Running full integration pipeline ==="
-    timeout 600 uv run tests/integration/iris/run_iris_full_integration.py \
+    timeout 600 uv run tests/integration_test.py \
         --controller-url "$CONTROLLER_URL"
 fi
 

@@ -16,8 +16,6 @@ checkpoint_path: meta-llama/Meta-Llama-3.1-8B-Instruct
 checkpoint_is_hf: true
 trainer:
   mp: p=bfloat16,c=bfloat16
-  ray:
-    auto_start_cluster: false
   mesh:
     axes:
       model: 4

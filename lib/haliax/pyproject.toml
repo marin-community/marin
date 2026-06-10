@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "haliax"
+name = "marin-haliax"
 # Set for release builds
 #version = "1.3"
 authors = [
@@ -53,6 +53,11 @@ dev = [
 [tool.hatch.version]
 path = "src/haliax/__about__.py"
 
+# Explicit package dir because the dist name (marin-haliax) no longer matches
+# the import name (haliax), so hatchling's auto-detection won't find src/haliax.
+[tool.hatch.build.targets.wheel]
+packages = ["src/haliax"]
+
 [options]
 packages = ["haliax", "haliax.*"]
 
@@ -81,7 +86,17 @@ src_paths = ["src", "tests"]
 "Documentation" = "https://haliax.readthedocs.io/en/latest/"
 
 [tool.ruff.lint]
+# Mirror the root config's extra rules on top of ruff's default E/F set so they
+# apply repo-wide: PLC0415 (no function-local imports), and the issue #6219
+# local-import hygiene pair TID252 (absolute over parent-relative imports) and
+# ICN001 (conventional import aliases, e.g. `import numpy as np`).
+extend-select = ["PLC0415", "TID252", "ICN001"]
 ignore = [ "E203", "E501", "W605", "F821", "E266", "F722", "E731", "E741" ]
+
+[tool.ruff.lint.per-file-ignores]
+# Notebook cells legitimately interleave imports with computation as they are
+# executed top-to-bottom; PLC0415's top-of-file rule does not apply to cells.
+"*.ipynb" = ["PLC0415"]
 
 [tool.setuptools.package-data]
 "haliax" = ["*.pyi"]

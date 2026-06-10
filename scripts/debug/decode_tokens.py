@@ -5,6 +5,7 @@
 """Repl for examining Hugging Face tokenizers."""
 
 import ast
+import os
 import shlex
 
 import click
@@ -12,8 +13,8 @@ from prompt_toolkit import prompt
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import InMemoryHistory
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
+from rich.table import Table
 from transformers import AutoTokenizer
 
 console = Console()
@@ -211,7 +212,6 @@ def info_cmd():
 @cli.command("clear")
 def clear_cmd():
     """Clear the screen."""
-    import os
 
     os.system("clear" if os.name == "posix" else "cls")
 

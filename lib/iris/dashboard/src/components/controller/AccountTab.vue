@@ -18,7 +18,7 @@ const userSummary = computed<UserSummary | null>(() => {
   return usersData.value.users.find(u => u.user === currentUser.value!.userId) ?? null
 })
 
-const TERMINAL_JOB_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed'])
+const TERMINAL_JOB_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'preempted'])
 
 function activeJobCount(summary: UserSummary): number {
   if (!summary.jobStateCounts) return 0

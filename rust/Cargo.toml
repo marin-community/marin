@@ -1,8 +1,0 @@
-[workspace]
-members = ["dupekit"]
-resolver = "2"
-
-[profile.release]
-lto = "fat"
-codegen-units = 1
-strip = "symbols"

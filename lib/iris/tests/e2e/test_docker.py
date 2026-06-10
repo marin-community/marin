@@ -8,17 +8,18 @@ Workers with a DockerRuntime. They validate behavior that only manifests inside
 real containers (cgroup OOM kills, JAX coordinator env vars).
 """
 
+import os
 import uuid
 from pathlib import Path
 
 import pytest
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.cluster.worker.env_probe import FixedEnvironmentProvider, HardwareProbe, build_worker_metadata
-from iris.rpc import cluster_pb2, config_pb2
+from iris.rpc import config_pb2, job_pb2
 
 from tests.e2e._docker_cluster import E2ECluster
 
-pytestmark = [pytest.mark.e2e, pytest.mark.docker]
+pytestmark = [pytest.mark.requires_cluster, pytest.mark.docker]
 
 
 def unique_name(prefix: str) -> str:
@@ -118,8 +119,6 @@ def test_jax_coordinator_address_format(tpu_sim_cluster):
     """
 
     def validate_jax_env_format():
-        import os
-
         addr = os.environ.get("JAX_COORDINATOR_ADDRESS", "")
         proc_id = os.environ.get("JAX_PROCESS_ID", "")
         num_procs = os.environ.get("JAX_NUM_PROCESSES", "")
@@ -165,8 +164,8 @@ def test_jax_coordinator_address_format(tpu_sim_cluster):
             "num_processes": num_procs,
         }
 
-    tpu_device = cluster_pb2.DeviceConfig()
-    tpu_device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v4-8-sim", count=4))
+    tpu_device = job_pb2.DeviceConfig()
+    tpu_device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4-8-sim", count=4))
 
     entrypoint = Entrypoint.from_callable(validate_jax_env_format)
     environment = EnvironmentSpec()

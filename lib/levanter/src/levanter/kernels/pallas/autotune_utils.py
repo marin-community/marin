@@ -9,7 +9,7 @@ from typing import Any, cast
 import jax
 from jax import core as jax_core
 from jax._src import mesh as mesh_lib
-from jax.sharding import NamedSharding
+from jax.sharding import AxisType, NamedSharding
 
 
 _AUTOTUNE_THREAD_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pallas_autotune")
@@ -53,8 +53,15 @@ def hlo_sharding_of(value: jax.Array):
         return None
 
 
+def _named_sharding_uses_manual_axes(sharding: NamedSharding) -> bool:
+    return any(axis_type is AxisType.Manual for axis_type in sharding.mesh.axis_types)
+
+
 def value_uses_manual_sharding(value: jax.Array) -> bool:
     """Detect shard_map-local tracer values that carry manual sharding."""
+    sharding = sharding_of(value)
+    if isinstance(sharding, NamedSharding) and _named_sharding_uses_manual_axes(sharding):
+        return True
     hlo_sharding = hlo_sharding_of(value)
     return hlo_sharding is not None and hlo_sharding.is_manual()
 

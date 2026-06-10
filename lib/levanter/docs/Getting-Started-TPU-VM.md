@@ -11,8 +11,7 @@ and you can't just set up one machine, but a whole cluster. We have some scripts
 
 Our approach is to use Docker to package up the code and run it on the workers. TPU VMs already have Docker installed,
 so we just need to build the image and run it. We use a combination of `gcloud` and `docker` to do this, and it's
-mostly wrapped up in a script called `launch.py`. For handling preemptible compute and other failures, we have a
-new script called `launch_on_ray.py` that uses Ray to automatically spin up TPUs, run jobs, and restart them if they fail.
+mostly wrapped up in a script called `launch.py`.
 
 We also have a legacy script called `spin-up-vm.sh` that can be used to create a TPU VM instance without any of the Docker stuff.
 
@@ -20,12 +19,10 @@ We also have a legacy script called `spin-up-vm.sh` that can be used to create a
 
 Since much of our compute is preemptible, we have to account for the fact that TPU VMs can be preempted at any time.
 Levanter is designed to be robust to this, but we still have to actually restart the job when it happens.
-We refer to this as "babysitting" the job. We have two options for "babysitting" training jobs.
-
-1. `launch_on_ray.py` is a new, experimental script that uses Ray to manage the job and restart it if it fails.
-   This script is still in development, but it seems to basically work.
-2. `launch.py` has a `--retries` flag that will automatically restart the job if it fails.  To use this,
- `launch.py` must be running in foreground mode and must maintain a connection to the TPU VM instance.
+We refer to this as "babysitting" the job. `launch.py` has a `--retries` flag that will automatically restart the job if
+it fails. To use this, `launch.py` must be running in foreground mode and must maintain a connection to the TPU VM
+instance. On Marin's shared infrastructure, Iris handles preemption/restart automatically; see
+[`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md).
 
 ## Installation
 
@@ -43,7 +40,7 @@ pip install -e .
 
 Docker is a tool that allows you to package up code and run it in a container. You should install Docker
 on your local machine. Here are some instructions for [installing Docker](https://docs.docker.com/engine/install/)
-if you don't already have it. If you're not planning on using `launch.py` or `launch_on_ray.py`, you don't need Docker.
+if you don't already have it. If you're not planning on using `launch.py`, you don't need Docker.
 
 ### Google Cloud setup
 
@@ -200,67 +197,6 @@ Also you should always use `--foregrouund` with `babysit-tpu-vm`, as the
 background mode will always return immediately.
 
 
-## Using the Ray Autoscaler
-
-We use Ray's autoscaler to manage the TPU VM instances. This is a more robust way to manage the instances, as it will
-automatically restart them if they fail. It also allows you to easily scale up the number of instances if you need more
-compute.
-
-### Configuration
-
-Since Levanter already uses Ray, you don't need to install anything new. You just need to set up your configuration file.
-We have a template configuration file in `infra/cluster/job-cluster.yaml`. You can modify this file to suit your needs.
-In particular, you should set the GCP project, zone, and which TPU slice types you want to use. The default configuration
-enables v4 slices of various sizes.
-
-**Note that the default configuration uses an n2-standard-2 instance as the head node. This costs about $70/month.**
-This is considerably smaller than [Ray's guidance for the head node](https://docs.ray.io/en/latest/cluster/vms/user-guides/large-cluster-best-practices.html#configuring-the-head-node).
-If you need to save money, you can also look into committing to a year of usage to save money, or potentially you could
-use a non-preemptible TPU VM instance as the head node if you have non-preemptible TRC TPUs.
-
-### Launching the Cluster
-
-To launch the cluster, you can run the following command:
-
-```bash
-ray up infra/cluster/job-cluster.yaml
-```
-
-This will create the head node and the minimum number of workers. You can then submit jobs to the cluster. First,
-you should establish a connection to the Ray dashboard:
-
-```bash
-ray dashboard infra/cluster/job-cluster.yaml
-```
-
-Then, **in a separate terminal**, you can submit a job to the cluster. To replicate the previous example, you can run:
-
-```bash
-export RAY_ADDRESS=http://localhost:8265  # tell ray where the cluster is
-python infra/launch_on_ray.py --tpu_type v4-32 --foreground -- python src/levanter/main/train_lm.py --config_path config/gpt2_small.yaml --trainer.checkpointer.base_path gs://<somewhere>'
-```
-
-Even without `--foreground`, the job will be restarted if it fails. The `--tpu_type` flag is required, and should be
-one of the TPU types you enabled in the cluster configuration.
-
-This command will print various options for monitoring the job. You can use the Ray dashboard to monitor the job, or you can
-stop the job with:
-
-```bash
-ray job stop <job_id>
-```
-
-If `--foreground` is present, the script will tail the logs of the job.
-
-### Monitoring the Cluster
-
-If you've launched the cluster, you can look at the Ray dashboard to see the status of the cluster by
-navigating to `http://localhost:8265` in your browser. You can also monitor the autoscaler logs with the following command:
-
-```bash
-ray exec infra/cluster/job-cluster.yaml "tail -n 100 -f /tmp/ray/session_latest/logs/monitor*"
-```
-
 ## Common Issues
 
 ### Can't find TPUs
@@ -319,7 +255,7 @@ This will show you a list of files and directories in the repo, sorted by size, 
 ### Automatic Setup
 
 !!! warning
-    This approach is deprecated and will be removed in the future. Please use `launch.py` or `launch_on_ray.py` instead.
+    This approach is deprecated and will be removed in the future. Please use `launch.py` instead.
 
 You can use `infra/spin-up-vm.sh` to create a TPU VM instance. In addition to creating the instance, it will set up
 the venv on each worker, and it will clone the repo to `~/levanter/`.

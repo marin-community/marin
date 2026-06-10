@@ -1,8 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import enum
 import typing
+from enum import StrEnum
 from functools import partial
 
 import jax
@@ -25,7 +25,7 @@ def _relu2_jax(x: jax.Array) -> jax.Array:
     return jnp.square(jax.nn.relu(x))
 
 
-class ActivationFunctionEnum(str, enum.Enum):
+class ActivationFunctionEnum(StrEnum):
     relu = "relu"
     relu2 = "relu2"
     silu = "silu"

@@ -19,6 +19,9 @@ class DTypeCategory:
 
 
 if TYPE_CHECKING:
+    # TYPE_CHECKING guard is intentional here: type checkers see plain jaxtyping aliases
+    # (Float32, Int32, etc.) while at runtime we provide custom _make_dtype_wrapper wrappers
+    # for NamedArray support. This is a dual-implementation pattern, not a cycle-breaker.
     # ── STATIC ONLY: re‑export jaxtyping’s aliases so mypy/Pyright/PyCharm see them
     from jaxtyping import (
         Float32 as f32,

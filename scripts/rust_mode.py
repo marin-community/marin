@@ -2,16 +2,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Switch dupekit between dev mode (source build) and user mode (pre-built wheel).
+"""Switch the native (maturin) packages between dev mode (source build) and
+user mode (pre-built wheel).
 
-Operates on pyproject.toml by replacing the block between RUST-DEV markers:
+Covers marin-dupekit and marin-finelog. Operates on pyproject.toml by replacing
+the block between RUST-DEV markers:
     # ### BEGIN RUST-DEV SOURCES ###
     ...
     # ### END RUST-DEV SOURCES ###
 
 Usage:
-    python scripts/rust_mode.py dev    # insert editable path source
-    python scripts/rust_mode.py user   # clear the block (use pre-built wheel)
+    python scripts/rust_mode.py dev    # insert editable path sources
+    python scripts/rust_mode.py user   # clear the block (use pre-built wheels)
     python scripts/rust_mode.py status # print current mode
 """
 
@@ -22,7 +24,16 @@ import sys
 BEGIN = "# ### BEGIN RUST-DEV SOURCES ###"
 END = "# ### END RUST-DEV SOURCES ###"
 
-DEV_SOURCES = 'dupekit = { path = "rust/dupekit", editable = true }'
+# Editable path sources injected in dev mode. Each native package's wheel is
+# built by maturin from its own lib/{pkg} dir (the [tool.maturin] manifest-path
+# points at the package's rust/ crate), so an editable install builds the
+# native extension from source.
+DEV_SOURCES = "\n".join(
+    [
+        'marin-dupekit = { path = "lib/dupekit", editable = true }',
+        'marin-finelog = { path = "lib/finelog", editable = true }',
+    ]
+)
 
 PYPROJECT = pathlib.Path("pyproject.toml")
 
@@ -59,9 +70,9 @@ def main() -> None:
         current = _current_mode(txt)
         print(f"Rust build mode: {current}")
         if current == "dev":
-            print("  dupekit is built from source (rust/dupekit)")
+            print("  dupekit/finelog are built from source (lib/dupekit, lib/finelog)")
         else:
-            print("  dupekit is installed from pre-built wheel")
+            print("  dupekit/finelog are installed from pre-built wheels")
         return
 
     if mode == "dev":
@@ -70,12 +81,12 @@ def main() -> None:
             return
         new = _replace_block(txt, DEV_SOURCES)
         PYPROJECT.write_text(new)
-        print("Switched to dev mode: dupekit will build from source.")
+        print("Switched to dev mode: dupekit/finelog will build from source.")
         print("Do NOT commit pyproject.toml in this state.")
     else:
         new = _replace_block(txt, "")
         PYPROJECT.write_text(new)
-        print("Switched to user mode: dupekit from pre-built wheel.")
+        print("Switched to user mode: dupekit/finelog from pre-built wheels.")
 
 
 if __name__ == "__main__":

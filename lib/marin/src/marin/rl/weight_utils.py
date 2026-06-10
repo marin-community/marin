@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import jax
-from flax import nnx
 import jax.numpy as jnp
+from flax import nnx
 from levanter.models.lm_model import LmHeadModel
 
 
@@ -19,7 +19,7 @@ def _get_nnx_key_name(split_key: list[str]) -> str:
     return key_name
 
 
-def levanter_to_nnx_state(levanter_model: LmHeadModel) -> dict:
+def levanter_to_nnx_state(levanter_model: LmHeadModel) -> nnx.State:
     # The format of this state dict is flat like:
     # model.layers.0.self_attn.q_proj.weight -> jax array
     # We are creating a new state dict that is nested because
@@ -72,7 +72,7 @@ def levanter_to_nnx_state(levanter_model: LmHeadModel) -> dict:
     return nnx.State(nested_state_dict)
 
 
-def levanter_state_dict_to_nnx_state_on_cpu(state_dict: dict) -> dict:
+def levanter_state_dict_to_nnx_state_on_cpu(state_dict: dict) -> nnx.State:
     with jax.default_device(jax.devices("cpu")[0]):
         nested_state_dict = {}
         for key, value in state_dict.items():

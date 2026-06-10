@@ -4,20 +4,14 @@
 """Shared fixtures for transform tests."""
 
 import gzip
+import io
 import json
 import tarfile
+import tarfile as tf
 import zipfile
 from pathlib import Path
 
 import pytest
-from fray.v1.job import create_job_ctx, fray_default_job_ctx
-
-
-@pytest.fixture(autouse=True)
-def flow_backend_ctx():
-    """Set up sync backend for all transform tests."""
-    with fray_default_job_ctx(create_job_ctx("sync")):
-        yield
 
 
 @pytest.fixture
@@ -85,9 +79,6 @@ def create_tar_gz():
             for filename, records in records_by_filename.items():
                 json_content = "\n".join(json.dumps(r) for r in records)
                 json_bytes = json_content.encode("utf-8")
-
-                import io
-                import tarfile as tf
 
                 tarinfo = tf.TarInfo(name=filename)
                 tarinfo.size = len(json_bytes)

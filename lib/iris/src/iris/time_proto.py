@@ -7,8 +7,9 @@ These functions bridge rigging's Duration/Timestamp (which have no proto
 dependency) with iris's time_pb2 proto messages.
 """
 
-from iris.rpc import time_pb2
 from rigging.timing import Duration, Timestamp
+
+from iris.rpc import time_pb2
 
 
 def duration_to_proto(d: Duration) -> time_pb2.Duration:

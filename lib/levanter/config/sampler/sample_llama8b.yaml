@@ -6,8 +6,6 @@ trainer:
   tracker:
     type: wandb
     project: levanter-inference-bench
-  ray:
-    auto_start_cluster: false
   mp: p=bfloat16,c=bfloat16
   mesh:
     axes:

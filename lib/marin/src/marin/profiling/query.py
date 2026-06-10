@@ -9,7 +9,6 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from marin.profiling.semantics import classify_semantic_family, estimate_flop_proxy
 from marin.profiling.schema import (
     GapBeforeOp,
     GapRegionContext,
@@ -19,6 +18,7 @@ from marin.profiling.schema import (
     SemanticFamilyAggregate,
     StepClassSummary,
 )
+from marin.profiling.semantics import classify_semantic_family, estimate_flop_proxy
 
 
 @dataclass(frozen=True)

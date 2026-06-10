@@ -9,19 +9,20 @@ import logging
 import time
 from dataclasses import dataclass, field
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import levanter.callbacks as callbacks
+import levanter.tracker
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
+from haliax.partitioning import set_mesh
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
-
-import levanter.callbacks as callbacks
-import levanter.tracker
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.data import AsyncDataset, DataLoader
@@ -29,6 +30,7 @@ from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_b
 from levanter.data.text import GrugLmExample, LmDataConfig
 from levanter.data.text.examples import grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
@@ -37,7 +39,6 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-import equinox as eqx
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import GrugModelConfig, Transformer
@@ -54,11 +55,20 @@ class GrugTrainerConfig:
     """Runtime knobs for grug training."""
 
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(use_explicit_mesh_axes=True))
-    train_batch_pspec: P = field(default_factory=lambda: P(("data", "expert")))
     data_seed: int | None = None
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
+
+    # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
+    # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
+    # Defaults reproduce the historical layout: no expert parallelism and full replication
+    # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
+    # replicated per slice and sharded only over the intra-slice `data` axis. For a model
+    # too large to replicate within one slice, set replica_axis_size=1 (FSDP across every
+    # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
+    expert_axis_size: int = 1
+    replica_axis_size: int | None = None
 
 
 @dataclass(frozen=True)
@@ -66,7 +76,6 @@ class GrugEvalConfig:
     """Perplexity eval settings for grug training."""
 
     eval_batch_size: int = 512
-    eval_batch_pspec: P = field(default_factory=lambda: P(("data", "expert")))
     steps_per_eval: int | None = 1000
     max_eval_batches: int | None = None
     prefix: str = "eval"
@@ -111,20 +120,23 @@ def build_train_dataset(
     )
 
 
+_BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+
+
 def build_train_loader(
     dataset: AsyncDataset[GrugLmExample],
     *,
     batch_schedule: BatchSchedule,
     mesh: Mesh,
-    batch_pspec: P = P(("data", "expert")),
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    axis_resource = batch_pspec[0]
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
         batch_schedule.schedule,
         mesh=mesh,
-        axis_resources={"__BATCH__": axis_resource},
+        axis_resources={"__BATCH__": _BATCH_AXES},
         batch_axis_name="__BATCH__",
         allow_nondivisible_batch_size=False,
     )
@@ -148,10 +160,11 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    batch_axis_resource = eval_cfg.eval_batch_pspec[0]
-    eval_axis_mapping = {"batch": batch_axis_resource}
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # are kept so we can name "expert" unconditionally.
+    eval_axis_mapping = {"batch": _BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
-    eval_array_sharding = NamedSharding(mesh, P(batch_axis_resource, None))
+    eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
 
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
         if isinstance(batch, LmExample):
@@ -234,10 +247,11 @@ class GrugTrainState:
     params: Transformer
     opt_state: optax.OptState
     ema_params: Transformer | None
+    pending_qb_betas: jax.Array
 
 
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
-    """Set router biases from QB betas (computed on previous step, applied on host)."""
+    """Set router biases from QB betas (computed on previous step)."""
     new_blocks = list(model.blocks)
     moe_idx = 0
     for i, block in enumerate(model.blocks):
@@ -260,11 +274,13 @@ def initial_state(
     ema_beta: float | None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
         opt_state=optimizer.init(params),
         ema_params=params if ema_beta is not None else None,
+        pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
     )
 
 
@@ -288,6 +304,14 @@ def _make_train_step(
 
     @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
+        # Apply pending QB betas to router biases inside JIT (avoids eager
+        # host-side TPU kernel launches that can cause SPMD sync issues).
+        qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
+        if ema_beta is not None:
+            qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas)
+        else:
+            qb_ema_params = None
+
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
             return compute_params.next_token_loss(
@@ -299,19 +323,19 @@ def _make_train_step(
                 return_router_metrics=True,
             )
 
-        (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+        (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss, **summarized_metrics}
-        updates, opt_state = optimizer.update(grads, state.opt_state, state.params)
-        params = optax.apply_updates(state.params, updates)
+        updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
+        params = optax.apply_updates(qb_params, updates)
 
         if ema_beta is None:
             ema_params = None
         else:
-            if state.ema_params is None:
+            if qb_ema_params is None:
                 raise ValueError("ema_params must be initialized when ema_beta is set.")
             ema_params = jax.tree_util.tree_map(
                 lambda old, new: ema_beta * old + (1.0 - ema_beta) * new,
-                state.ema_params,
+                qb_ema_params,
                 params,
             )
 
@@ -323,7 +347,7 @@ def _make_train_step(
                 include_per_parameter_norms=watch_config.include_per_parameter_norms,
                 include_histogram=watch_config.include_histograms,
                 split_scan_layers=watch_config.split_scan_layers,
-                params=state.params,
+                params=qb_params,
                 grads=grads,
                 updates=updates,
                 opt_state=state.opt_state,
@@ -336,6 +360,7 @@ def _make_train_step(
             params=params,
             opt_state=opt_state,
             ema_params=ema_params,
+            pending_qb_betas=metrics["qb_beta_per_layer"],
         )
 
         return next_state, metrics, watch_stats
@@ -367,9 +392,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     if config.trainer.data_seed is not None:
         data_key = jax.random.PRNGKey(config.trainer.data_seed)
 
-    # Build data/model state under the trainer mesh so all arrays are sharded consistently.
-    with trainer.use_device_mesh():
-        mesh = trainer.device_mesh
+    # Grug uses raw PartitionSpecs rather than Trainer's logical axis mapping.
+    # Keep the mesh compact so the batch pspec derived by `_batch_spec(mesh)` spans slices directly.
+    # replica_axis_size=None lets compact_grug_mesh default to jax.process_count() (full
+    # cross-slice replication); set it to 1 on GrugTrainerConfig for cross-slice FSDP.
+    mesh = compact_grug_mesh(
+        expert_axis_size=config.trainer.expert_axis_size,
+        replica_axis_size=config.trainer.replica_axis_size,
+    )
+    with set_mesh(mesh):
         batch_schedule = trainer.batch_schedule
 
         train_dataset = build_train_dataset(
@@ -382,7 +413,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             train_dataset,
             batch_schedule=batch_schedule,
             mesh=mesh,
-            batch_pspec=config.trainer.train_batch_pspec,
         )
 
         @jax.jit
@@ -398,12 +428,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state = _init_state(model_key)
 
         checkpointer = trainer.checkpointer.create(run_id)
-        checkpoint_path = trainer.load_checkpoint_path
-        if checkpoint_path is None and checkpointer is not None:
-            checkpoint_path = trainer.checkpointer.expanded_path(run_id)
         state = restore_grug_state_from_checkpoint(
             state,
-            checkpoint_path=checkpoint_path,
+            checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
             load_checkpoint_setting=trainer.load_checkpoint,
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
@@ -470,22 +497,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
-        pending_qb_betas: jax.Array | None = None
 
         # Main optimization loop.
         try:
             while int(state.step) < trainer.num_train_steps:
-                # QB: apply router bias updates from previous step (on host).
-                if pending_qb_betas is not None:
-                    state = dataclasses.replace(
-                        state,
-                        params=_apply_qb_betas(state.params, pending_qb_betas),
-                        ema_params=(
-                            _apply_qb_betas(state.ema_params, pending_qb_betas) if state.ema_params is not None else None
-                        ),
-                    )
-                    pending_qb_betas = None
-
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
                 step_start = time.perf_counter()
@@ -498,7 +513,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
-                pending_qb_betas = metrics["qb_beta_per_layer"]
 
                 if jnp.isnan(metrics["train/loss"]):
                     logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")

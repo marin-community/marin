@@ -7,7 +7,6 @@ from typing import Any, Callable, Dict, Generic, Iterable, Mapping, Sequence, Ty
 import numpy as np
 import pyarrow as pa
 
-
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
 T_contra = TypeVar("T_contra", contravariant=True)
@@ -48,7 +47,7 @@ class BatchProcessor(Generic[T_contra, U_co], ABC):
 
     @property
     def resources(self) -> Dict[str, float]:
-        """Any resources that this processor needs to run. Ray uses this to schedule tasks."""
+        """Any resources that this processor needs to run."""
         return {}
 
     @property
@@ -96,6 +95,16 @@ class _BatchMapTransform(_DatasetTransform):
         self.output_exemplar = output_exemplar
 
 
+class _TransformedDataset:
+    """Marker mixin for datasets carrying a lazy ``_DatasetTransform``.
+
+    ``source`` is a ``ShardedDataSource`` at runtime but left untyped here.
+    """
+
+    source: Any
+    _transform: _DatasetTransform
+
+
 def as_record_batch(doc: BatchResult) -> pa.RecordBatch:
     """Converts a document to an arrow-compatible record batch."""
 
@@ -129,8 +138,6 @@ def _construct_composite_batch_processor(dataset):
     """
 
     def rec(dataset):
-        from levanter.data.sharded_datasource import _TransformedDataset
-
         if isinstance(dataset, _TransformedDataset):
             source, transforms, batch_transform = rec(dataset.source)
             match dataset._transform:
@@ -149,7 +156,6 @@ def _construct_composite_batch_processor(dataset):
 
     source, transforms, batch_transform = rec(dataset)
 
-    # batch_size = batch_transform.batch_size if batch_transform is not None else 1024
     cpus = batch_transform.num_cpus if batch_transform is not None else 1
     gpus = batch_transform.num_gpus if batch_transform is not None else 0
     resources = batch_transform.resources if batch_transform is not None else {}
@@ -163,10 +169,6 @@ class _CompositeBatchProcessor(BatchProcessor):
         self._num_cpus = num_cpus
         self._num_gpus = num_gpus
         self._resources = resources
-
-    @property
-    def batch_size(self):
-        return self._batch_size
 
     @property
     def num_cpus(self):

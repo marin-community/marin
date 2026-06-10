@@ -1,0 +1,44 @@
+name: "Marin - Lint"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  marin-lint:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+
+    - name: Install uv and Python
+      uses: astral-sh/setup-uv@v6
+      with:
+        version: "0.7.20"
+        python-version: "3.11"
+        enable-cache: true
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    # Pyrefly type-checks against real installed third-party types
+    # (python-interpreter-path = .venv/bin/python in pyproject.toml), so the
+    # workspace must be synced first. This is the cpu profile the baseline and
+    # the ignore-missing-imports list are derived against — keep it in sync with
+    # both if you change the extras here.
+    - name: Sync workspace for type checking
+      run: uv sync --all-packages --extra=cpu --no-default-groups --frozen
+
+    - name: Run pre-commit checks
+      run: ./infra/pre-commit.py --all-files

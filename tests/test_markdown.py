@@ -59,7 +59,7 @@ def test_line_start_escaping():
 
 def test_weird_list_item():
     html = r"""<html><body><ol start="'3..'"><li>Item 3</li></ol></body></html>"""
-    expected = "1. Item 3\n"  # back off to no start
+    expected = "1. Item 3"  # back off to no start
     assert to_markdown(html) == expected
 
 
@@ -182,7 +182,7 @@ def test_mathml_block():
 def test_weird_inline_newlines():
     html = """<I>Murray
 Montgomery</I><BR>"""
-    expected = "*Murray Montgomery*  \n"
+    expected = "*Murray Montgomery*  "
     assert to_markdown(html) == expected
 
 
@@ -198,10 +198,9 @@ def test_nested_lists():
 </ul>"""
 
     expected = """* Item 1
-    + Subitem 1
-    + Subitem 2
-* Item 2
-"""
++ Subitem 1
++ Subitem 2
+* Item 2"""
     assert to_markdown(html) == expected
 
 

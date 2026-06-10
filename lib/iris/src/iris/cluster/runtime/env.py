@@ -16,9 +16,13 @@ from pathlib import Path
 from google.protobuf import json_format
 
 from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
-from iris.rpc import cluster_pb2
+from iris.cluster.tpu_topology import get_tpu_topology
+from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
+
+IRIS_SLICE_COUNT = "IRIS_SLICE_COUNT"
+IRIS_TASKS_PER_SLICE = "IRIS_TASKS_PER_SLICE"
 
 
 def normalize_workdir_relative_path(path: str) -> str:
@@ -43,6 +47,48 @@ def write_workdir_files(dest: Path, files: dict[str, bytes]) -> None:
         path.write_bytes(data)
 
 
+def slice_topology_env(resources: job_pb2.ResourceSpecProto | None, num_tasks: int) -> dict[str, str]:
+    if num_tasks <= 1 or resources is None or not resources.HasField("device") or not resources.device.HasField("tpu"):
+        return {}
+
+    tpu = resources.device.tpu
+    if not tpu.variant:
+        return {}
+
+    try:
+        tasks_per_slice = get_tpu_topology(tpu.variant).vm_count
+    except ValueError:
+        return {}
+
+    if tasks_per_slice <= 0:
+        return {}
+    if num_tasks % tasks_per_slice != 0:
+        raise ValueError(
+            f"TPU task count ({num_tasks}) must be divisible by TPU VM count ({tasks_per_slice}) "
+            f"for variant {tpu.variant!r}"
+        )
+
+    num_slices = num_tasks // tasks_per_slice
+    if num_slices <= 1:
+        return {}
+
+    return {IRIS_SLICE_COUNT: str(num_slices), IRIS_TASKS_PER_SLICE: str(tasks_per_slice)}
+
+
+def with_slice_topology_env(
+    environment: job_pb2.EnvironmentConfig,
+    resources: job_pb2.ResourceSpecProto | None,
+    num_tasks: int,
+) -> job_pb2.EnvironmentConfig:
+    """Return ``environment`` with Iris TPU slice topology vars derived from resources."""
+    result = job_pb2.EnvironmentConfig()
+    result.CopyFrom(environment)
+    result.env_vars.pop(IRIS_SLICE_COUNT, None)
+    result.env_vars.pop(IRIS_TASKS_PER_SLICE, None)
+    result.env_vars.update(slice_topology_env(resources, num_tasks))
+    return result
+
+
 def build_common_iris_env(
     *,
     task_id: str,
@@ -50,16 +96,16 @@ def build_common_iris_env(
     num_tasks: int,
     bundle_id: str,
     controller_address: str | None,
-    environment: cluster_pb2.EnvironmentConfig,
-    constraints: Sequence[cluster_pb2.Constraint],
+    environment: job_pb2.EnvironmentConfig,
+    constraints: Sequence[job_pb2.Constraint],
     ports: Sequence[str],
-    resources: cluster_pb2.ResourceSpecProto | None,
+    resources: job_pb2.ResourceSpecProto | None,
 ) -> dict[str, str]:
     """Build the Iris system env vars shared by both worker and k8s paths.
 
     This is the single source of truth for env vars derived from a
-    RunTaskRequest. Path-specific additions (IRIS_WORKER_ID, IRIS_ADVERTISE_HOST,
-    IRIS_WORKER_REGION) are layered on by each caller.
+    RunTaskRequest. Path-specific additions (IRIS_WORKER_ID, IRIS_ADVERTISE_HOST)
+    are layered on by each caller.
 
     All arguments are keyword-only primitives extracted from the proto so that
     callers from both paths can supply them without importing the full request.
@@ -118,6 +164,7 @@ def build_common_iris_env(
             env["JAX_PLATFORMS"] = "tpu,cpu"
             env["PJRT_DEVICE"] = "TPU"
             env["JAX_FORCE_TPU_INIT"] = "1"
+            env.update(slice_topology_env(resources, num_tasks))
 
     # Expose the task's resource limits so user code can query them via
     # iris.env_resources.TaskResources.from_environment() without relying

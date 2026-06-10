@@ -3,10 +3,11 @@
 
 import enum
 import functools
-from typing import Callable, Optional, ParamSpec, TypeVar
+from typing import Any, Callable, Optional, ParamSpec, TypeVar, cast
 
 import equinox as eqx
 import haliax as hax
+import haliax.quantization as hq
 import jax
 import jax.numpy as jnp
 from haliax import Axis
@@ -124,7 +125,7 @@ def microbatched(
                 microbatch_kwargs = microbatch_kwargs.copy()
                 if key is not None:
                     microbatch_kwargs[patch_in_rng_key] = key
-                this_r = fn(*microbatch, **microbatch_kwargs)
+                this_r = cast(tuple[tuple[Any, Any], Any], fn(*microbatch, **microbatch_kwargs))
 
             with jax.named_scope("accum"):
                 # Unpack structure: ((loss, metrics_dict), grads)
@@ -142,8 +143,6 @@ def microbatched(
                 )
 
                 # Accumulate gradients with quantization
-                import haliax.quantization as hq
-
                 # TODO: this uses the latest value for the scale for fp8, which seems not ideal but probably ok?
                 overwrites, updates = hq.partition_for_grad_overwrite(this_grads)
                 new_grads = hq.apply_updates(acc_grads, updates, overwrites)

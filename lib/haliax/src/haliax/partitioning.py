@@ -16,6 +16,8 @@ import equinox as eqx
 import jax
 from equinox import is_array, module_update_wrapper
 from jax import shard_map as jax_shard_map
+from jax._src.mesh import get_concrete_mesh
+from jax.interpreters.pxla import thread_resources
 from jax.sharding import reshard
 from jax.lax import with_sharding_constraint
 from jax.sharding import AbstractMesh, NamedSharding, Mesh, PartitionSpec, get_abstract_mesh, AxisType
@@ -100,8 +102,6 @@ def current_thread_local_mapping():
 def _resolve_mesh(mesh: MeshLike | None = None) -> MeshLike | None:
     """Inside jit, prefer an abstract mesh, outside jit prefer a concrete mesh."""
 
-    from jax._src.mesh import get_concrete_mesh
-
     if mesh is not None:
         if is_in_jit() and isinstance(mesh, Mesh):
             return mesh.abstract_mesh
@@ -114,8 +114,6 @@ def _resolve_mesh(mesh: MeshLike | None = None) -> MeshLike | None:
             if concrete is not None and not concrete.empty:
                 return concrete.abstract_mesh
 
-        from jax.interpreters.pxla import thread_resources
-
         old_mesh = thread_resources.env.physical_mesh
         if old_mesh is not None and not old_mesh.empty:
             return old_mesh.abstract_mesh
@@ -125,8 +123,6 @@ def _resolve_mesh(mesh: MeshLike | None = None) -> MeshLike | None:
         mesh = get_concrete_mesh() or get_abstract_mesh()
         if mesh is not None and not mesh.empty:
             return mesh
-
-        from jax.interpreters.pxla import thread_resources
 
         old_mesh = thread_resources.env.physical_mesh
         if old_mesh is not None and not old_mesh.empty:
@@ -587,7 +583,7 @@ def fsdp(fn: F, parameter_mapping: ResourceMapping, compute_mapping: ResourceMap
 def fsdp(parameter_mapping: ResourceMapping, compute_mapping: ResourceMapping) -> typing.Callable[[F], F]: ...
 
 
-def fsdp(*args, **kwargs):
+def fsdp(*args, **kwargs) -> Any:
     """
     A convenience wrapper around named_jit / pjit to encode the FSDP pattern. It's basically equivalent to this:
 
@@ -779,7 +775,7 @@ def round_axis_for_partitioning(axis: Axis, mapping: ResourceMapping | None = No
         return Axis(axis.name, new_size)
 
 
-def _get_mesh() -> Mesh | None:
+def _get_mesh() -> MeshLike | None:
     # Backward-compatible helper for callers that expect a concrete or abstract mesh.
     return _resolve_mesh()
 
@@ -906,6 +902,10 @@ def shard_map(
             out_shape = eqx.filter_eval_shape(almost_shmap(out_specs=PartitionSpec()), args, kwargs)
             this_out_specs = pspec_for(out_shape, axis_mapping)
 
+        # `inner` is `def inner(args, kwargs)`, so the shard_map'd callable takes the packed
+        # (args, kwargs) tuple+dict positionally; pyrefly mis-binds jax.shard_map's ParamSpec
+        # through functools.partial.
+        # pyrefly: ignore[bad-specialization, bad-argument-count]
         out = almost_shmap(out_specs=this_out_specs)(args, kwargs)
         return out
 

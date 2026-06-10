@@ -5,19 +5,17 @@ import os
 import tempfile
 
 import jax
-import pytest
 
 import haliax
 
 import levanter.main.viz_logprobs as viz_logprobs
 import tiny_test_corpus
 from levanter.checkpoint import save_checkpoint
-from levanter.distributed import DistributedConfig, RayConfig
+from levanter.distributed import DistributedConfig
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.tracker import NoopConfig
 
 
-@pytest.mark.entry
 def test_viz_lm():
     # just testing if eval_lm has a pulse
     # save a checkpoint
@@ -47,7 +45,6 @@ def test_viz_lm():
                     tracker=NoopConfig(),
                     require_accelerator=False,
                     distributed=DistributedConfig(initialize_jax_distributed=False),
-                    ray=RayConfig(auto_start_cluster=False),
                 ),
                 checkpoint_path=f"{f}/ckpt",
                 num_docs=len(jax.devices()),

@@ -14,5 +14,3 @@ trainer:
     enabled: true
   per_device_parallelism: -1
   train_batch_size: 512
-  ray:
-    auto_start_cluster: false

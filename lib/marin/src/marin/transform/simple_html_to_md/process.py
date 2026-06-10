@@ -5,16 +5,13 @@
 This scripts performs a simple html to md conversion using marin. Given an input directory with some jsonl.gz files
 containing html content, it will convert them to markdown and save them in a new directory.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=1000 --memory=1GB --num-cpus=1 --cluster=us-central2 \
-    lib/marin/src/marin/transform/simple_html_to_md/process.py \
-    --input_path gs://... --output_path gs://...
 """
 
 import logging
 from dataclasses import dataclass, field
 
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
+from marin.web.convert import convert_page
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
 logger = logging.getLogger(__name__)
@@ -31,8 +28,6 @@ def _html_to_md(data: dict, extract_method: str, config: ExtractionConfig):
     Returns:
         Transformed record with markdown content
     """
-    from marin.web.convert import convert_page
-
     data_id = data["id"]
     html = data["text"]
     source = data["source"]
@@ -46,7 +41,7 @@ def _html_to_md(data: dict, extract_method: str, config: ExtractionConfig):
         logger.debug(f"Converting {data_id} {url}")
         md = convert_page(html, url, extract_method, config)["content"]
         error = None
-    except (ModuleNotFoundError, ImportError):
+    except ImportError:
         # Configuration errors should fail the job, not be caught
         raise
     except Exception as e:
@@ -86,4 +81,4 @@ def html_to_md(cfg: SimpleHtmlToMdConfig):
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
     ctx = ZephyrContext(name="html-to-md")
-    list(ctx.execute(pipeline))
+    ctx.execute(pipeline)

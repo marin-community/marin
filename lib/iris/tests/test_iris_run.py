@@ -6,7 +6,7 @@
 import sys
 
 import pytest
-
+from click.testing import CliRunner
 from iris.cli.job import (
     build_resources,
     load_env_vars,
@@ -14,8 +14,11 @@ from iris.cli.job import (
     parse_reservation_spec,
     run_iris_job,
 )
+from iris.cli.job import run as run_cmd
 from iris.cluster.config import IrisConfig
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute
+from iris.cluster.types import JobName
+from iris.rpc import job_pb2
 
 
 def test_load_env_vars_single_key():
@@ -145,7 +148,7 @@ def test_run_iris_job_adds_zone_constraint(monkeypatch):
     zone_constraints = [c for c in constraints if c.key == WellKnownAttribute.ZONE]
     assert len(zone_constraints) == 1
     assert zone_constraints[0].op == ConstraintOp.EQ
-    assert zone_constraints[0].value == "us-central2-b"
+    assert zone_constraints[0].values[0].value == "us-central2-b"
 
 
 def test_run_iris_job_passes_reservation(monkeypatch):
@@ -201,19 +204,61 @@ def test_run_iris_job_adds_region_and_zone_constraints(monkeypatch):
     region_constraints = [c for c in constraints if c.key == WellKnownAttribute.REGION]
     assert len(region_constraints) == 1
     assert region_constraints[0].op == ConstraintOp.EQ
-    assert region_constraints[0].value == "us-central2"
+    assert region_constraints[0].values[0].value == "us-central2"
 
     zone_constraints = [c for c in constraints if c.key == WellKnownAttribute.ZONE]
     assert len(zone_constraints) == 1
     assert zone_constraints[0].op == ConstraintOp.EQ
-    assert zone_constraints[0].value == "us-central2-b"
+    assert zone_constraints[0].values[0].value == "us-central2-b"
+
+
+def test_run_iris_job_passes_priority_band(monkeypatch):
+    """run_iris_job converts a priority name to its proto value."""
+
+    captured: dict[str, object] = {}
+
+    def _fake_submit_and_wait_job(**kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("iris.cli.job._submit_and_wait_job", _fake_submit_and_wait_job)
+
+    exit_code = run_iris_job(
+        controller_url="http://controller:10000",
+        command=[sys.executable, "-c", "print('ok')"],
+        env_vars={},
+        wait=False,
+        priority="batch",
+    )
+
+    assert exit_code == 0
+    assert captured["priority_band"] == job_pb2.PRIORITY_BAND_BATCH
+
+
+def test_run_iris_job_default_priority_unspecified(monkeypatch):
+    """run_iris_job defaults to PRIORITY_BAND_UNSPECIFIED when --priority is omitted."""
+
+    captured: dict[str, object] = {}
+
+    def _fake_submit_and_wait_job(**kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("iris.cli.job._submit_and_wait_job", _fake_submit_and_wait_job)
+
+    exit_code = run_iris_job(
+        controller_url="http://controller:10000",
+        command=[sys.executable, "-c", "print('ok')"],
+        env_vars={},
+        wait=False,
+    )
+
+    assert exit_code == 0
+    assert captured["priority_band"] == job_pb2.PRIORITY_BAND_UNSPECIFIED
 
 
 def test_no_wait_prints_job_id(monkeypatch):
     """--no-wait prints the job ID to stdout."""
-    from click.testing import CliRunner
-    from iris.cli.job import run as run_cmd
-    from iris.cluster.types import JobName
 
     class FakeJob:
         job_id = JobName.from_wire("/test-user/test-job")

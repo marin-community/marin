@@ -4,18 +4,17 @@
 """Tests for entrypoint construction and bash script generation."""
 
 import pytest
-
-from iris.cluster.types import Entrypoint
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint, runtime_entrypoint_to_bash_script
-from iris.rpc import cluster_pb2
+from iris.cluster.types import Entrypoint
+from iris.rpc import job_pb2
 
 
 def _make_env_config(
     extras: list[str] | None = None,
     pip_packages: list[str] | None = None,
     python_version: str = "",
-) -> cluster_pb2.EnvironmentConfig:
-    cfg = cluster_pb2.EnvironmentConfig()
+) -> job_pb2.EnvironmentConfig:
+    cfg = job_pb2.EnvironmentConfig()
     if extras:
         cfg.extras[:] = extras
     if pip_packages:
@@ -73,7 +72,7 @@ def test_build_runtime_entrypoint_no_python_version():
 
 
 def test_runtime_entrypoint_to_bash_script_structure():
-    rt = cluster_pb2.RuntimeEntrypoint()
+    rt = job_pb2.RuntimeEntrypoint()
     rt.setup_commands[:] = ["cd /app", "echo hello"]
     rt.run_command.argv[:] = ["python", "train.py", "--lr", "0.001"]
 
@@ -84,6 +83,16 @@ def test_runtime_entrypoint_to_bash_script_structure():
     assert "cd /app" in script
     assert "echo hello" in script
     assert "exec python train.py --lr 0.001" in script
+
+
+def test_build_runtime_entrypoint_propagates_workdir_file_refs():
+    refs = {"_callable.pkl": "sha256abc", "weights.bin": "sha256def"}
+    ep = Entrypoint(command=["python", "run.py"], workdir_files={"small.txt": b"hi"}, workdir_file_refs=refs)
+    env = _make_env_config()
+    rt = build_runtime_entrypoint(ep, env)
+
+    assert dict(rt.workdir_files) == {"small.txt": b"hi"}
+    assert dict(rt.workdir_file_refs) == refs
 
 
 @pytest.mark.parametrize(

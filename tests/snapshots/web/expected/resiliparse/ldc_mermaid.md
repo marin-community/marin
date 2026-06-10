@@ -102,7 +102,7 @@ I will close by stating that, when I went to Ukraine in the summer of 2002 (?) â
 * "[Where did the PIEs come from; when was that?](https://languagelog.ldc.upenn.edu/nll/?p=59908 "Permanent link to Where did the PIEs come from; when was that?")" (7/28/23)
 
 * + C. Scott Littleton, "Were Some of the Xinjiang Mummies 'Epi-Scythians'? An Excursus in Trans-Eurasian Folklore and Mythology." In Victor H. Mair, *The Bronze Age and Early Iron Age Peoples of Eastern Central Asia* (Washington D.C. and Philadelphia: Institute for the Study of Man and the University of Pennsylvania Museum, 1998), vol. 2, pp. 746-766.
-    + C. Scott Littleton and Linda A. Malcor, *From Scythia to Camelot: A Radical Reassessment of the Legends of King Arthur, the Knights of the Round Table, and the Holy Grail* (New York and London: Garland, 1994; rev. pb. 2000). In the British journal, Religion, 28.3 (July, 1998), 294-300, I \[VHM\] wrote a review in which I pointed out that the celebrated motif of a mighty arm rising up out of the water holding aloft the hero's sword can also be found in a medieval Chinese tale from Dunhuang. That review is available electronically from ScienceDirect, if your library subscribes to it. Otherwise, I think [this version](http://www.heroicage.org/issues/2/ha2tf.htm "") on the Web is a fairly faithful copy.
++ C. Scott Littleton and Linda A. Malcor, *From Scythia to Camelot: A Radical Reassessment of the Legends of King Arthur, the Knights of the Round Table, and the Holy Grail* (New York and London: Garland, 1994; rev. pb. 2000). In the British journal, Religion, 28.3 (July, 1998), 294-300, I \[VHM\] wrote a review in which I pointed out that the celebrated motif of a mighty arm rising up out of the water holding aloft the hero's sword can also be found in a medieval Chinese tale from Dunhuang. That review is available electronically from ScienceDirect, if your library subscribes to it. Otherwise, I think [this version](http://www.heroicage.org/issues/2/ha2tf.htm "") on the Web is a fairly faithful copy.
 
 * Miriam Robbins Dexter and Victor H. Mair, *Sacred Display: Divine and Magical Female Figures of Eurasia* (Amherst, NY: Cambria, 2010)
 * Miriam Robbins Dexter and Victor H. Mair, "*Sacred Display*: New Findings", Sino-Platonic Papers, 240 (Sept. 2013), 122 pages
@@ -110,7 +110,7 @@ I will close by stating that, when I went to Ukraine in the summer of 2002 (?) â
 
 \[h.t. Wang Chiu-kuei\]
 
-March 23, 2024 @ 9:49 pm Â· Filed by under [Language and culture](https://languagelog.ldc.upenn.edu/nll/?cat=39 ""), [Language and ethnicity](https://languagelog.ldc.upenn.edu/nll/?cat=323 ""), [Language and history](https://languagelog.ldc.upenn.edu/nll/?cat=312 "") 
+March 23, 2024 @ 9:49 pm Â· Filed by under [Language and culture](https://languagelog.ldc.upenn.edu/nll/?cat=39 ""), [Language and ethnicity](https://languagelog.ldc.upenn.edu/nll/?cat=323 ""), [Language and history](https://languagelog.ldc.upenn.edu/nll/?cat=312 "")
 
 ---
 

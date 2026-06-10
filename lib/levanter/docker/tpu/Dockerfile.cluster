@@ -1,4 +1,4 @@
-# This dockerfile is used to build the docker image for using Ray to manage TPU slices.
+# This dockerfile builds the cluster image used on TPU worker VMs.
 ARG IMAGE=ghcr.io/marin-community/levanter-base
 ARG TAG=latest
 
@@ -9,7 +9,6 @@ RUN apt-get update && apt-get install -y docker.io
 
 ENV TENSORSTORE_CURL_LOW_SPEED_TIME_SECONDS=60\
     TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES=1024\
-    RAY_USAGE_STATS_ENABLED=0\
     PATH=/opt/levanter/.venv/bin:$PATH\
     PYTHONPATH=/opt/levanter:/opt/levanter/src:/opt/levanter/examples:/opt/levanter/tests:src:.\
     HOME=/home/levanter
@@ -64,11 +63,5 @@ RUN adduser levanter docker
 RUN chown -R levanter /opt/levanter
 
 USER levanter
-
-# HACK until https://github.com/ray-project/ray/issues/47769 is resolved
-RUN pip install 'ray[default,gcp]==2.34.0'
-RUN git clone https://github.com/dlwh/ray.git ~/ray --branch tpu_docker_2.34 --depth 1
-RUN cp ~/ray/python/ray/autoscaler/_private/gcp/tpu_command_runner.py /opt/levanter/.venv/lib/python3.11/site-packages/ray/autoscaler/_private/gcp/tpu_command_runner.py
-
 
 WORKDIR /opt/levanter

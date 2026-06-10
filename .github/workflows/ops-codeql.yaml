@@ -1,0 +1,69 @@
+name: "Ops - CodeQL"
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+  schedule:
+    - cron: '45 17 * * 2'
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ${{ (matrix.language == 'swift' && 'macos-latest') || 'ubuntu-latest' }}
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # analysis-kinds selects which CodeQL products run for each language:
+        #   code-scanning  -> security alerts (Security > Code scanning)
+        #   code-quality   -> maintainability/reliability alerts (Security > Code quality)
+        # Security and quality share one path scope per language, configured in
+        # the matching .github/codeql/<language>.yml file.
+        include:
+        - language: actions
+          build-mode: none
+          analysis-kinds: code-scanning
+        - language: python
+          build-mode: none
+          analysis-kinds: code-scanning,code-quality
+        - language: javascript-typescript
+          build-mode: none
+          analysis-kinds: code-scanning,code-quality
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: ${{ matrix.language }}
+        build-mode: ${{ matrix.build-mode }}
+        # analysis-kinds turns on GitHub's "Code quality" analysis alongside the
+        # security ("code-scanning") analysis. This advanced-setup workflow is the
+        # source of both the Code scanning and Code quality alerts, replacing the
+        # managed Code Quality default setup (which offers no per-query control).
+        # NOTE: GitHub currently documents `analysis-kinds` as an internal input
+        # that is subject to change. It is the only way to feed the Code quality
+        # tab from an advanced workflow today. If GitHub drops it, the input is
+        # ignored and analysis falls back to security-only — a soft failure, not
+        # a broken run. Per-language scope and query suppressions live in the
+        # referenced config file.
+        analysis-kinds: ${{ matrix.analysis-kinds }}
+        config-file: ./.github/codeql/${{ matrix.language }}.yml
+
+    - name: Run manual build steps
+      if: matrix.build-mode == 'manual'
+      shell: bash
+      run: |
+        echo 'If you are using a "manual" build mode for one or more of the' \
+          'languages you are analyzing, replace this with the commands to build' \
+          'your code, for example:'
+        echo '  make bootstrap'
+        echo '  make release'
+        exit 1
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v4
+      with:
+        category: "/language:${{matrix.language}}"

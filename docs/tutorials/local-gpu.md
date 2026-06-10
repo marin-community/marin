@@ -1,55 +1,39 @@
 # Setting up a Local GPU Environment
 
 This guide will walk you through the steps to set up a local GPU environment for Marin.
-By "local", we mean a machine that you run jobs on directly, as opposed to using Ray's autoscaler to launch a cluster of GPU nodes.
-Similar steps will let you run Marin on a cloud GPU environment using Ray's autoscaler, but we defer that to a future guide.
+By "local", we mean a machine that you run jobs on directly, as opposed to dispatching them to a shared cluster via [Iris](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md).
+Similar steps will let you run Marin on a cloud GPU environment under Iris (the Marin team runs production GPU workloads on CoreWeave), but we defer that to a future guide.
 
 ## Prerequisites
 
 Make sure you've followed the [installation guide](installation.md) to do the basic installation.
 
-In addition to the prerequisites from the basic installation, we have GPU-specific dependencies:
+In addition to the prerequisites from the basic installation, we have one GPU-specific system dependency:
 
-- CUDA Toolkit (version 12.1 or higher)
-- cuDNN (version 9.1 or higher)
+- NVIDIA driver 580 or newer
 
 We assume you are running Ubuntu 24.04.
 
-## CUDA installation
+## NVIDIA driver and runtime
 
-Install CUDA 12.9.0:
-
-```bash
-wget https://developer.download.nvidia.com/compute/cuda/12.9.0/local_installers/cuda_12.9.0_575.51.03_linux.run
-sudo sh cuda_12.9.0_575.51.03_linux.run
-```
-
-Install cuDNN 9.9.0 (Instructions from [NVIDIA's cuDNN download page](https://developer.nvidia.com/cudnn-downloads?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=24.04&target_type=deb_local)):
+Install an NVIDIA driver that supports CUDA 13. Verify that the driver is at least 580 and that
+`nvidia-smi` reports CUDA 13.x:
 
 ```bash
-wget https://developer.download.nvidia.com/compute/cudnn/9.10.0/local_installers/cudnn-local-repo-ubuntu2404-9.10.0_1.0-1_amd64.deb
-sudo dpkg -i cudnn-local-repo-ubuntu2404-9.10.0_1.0-1_amd64.deb
-sudo cp /var/cudnn-local-repo-ubuntu2404-9.10.0/cudnn-*-keyring.gpg /usr/share/keyrings/
-sudo apt-get update
-sudo apt-get -y install cudnn
-sudo apt-get -y install cudnn-cuda-12
-sudo apt-get -y install nvidia-cuda-toolkit
+nvidia-smi
 ```
 
-Verify your setup by checking the CUDA version:
-
-```bash
-nvcc --version
-```
-
-Marin uses [JAX](https://jax.readthedocs.io/en/latest/index.html) as a core library.
-Install Python dependencies for CUDA 12.x via uv:
+Marin uses [JAX](https://docs.jax.dev/en/latest/index.html) as a core library. The `gpu`
+extra installs the CUDA 13 JAX runtime, including CUDA, cuDNN, and NCCL Python wheels:
 
 ```bash
 uv sync --extra=gpu
 ```
 
-See [JAX's installation guide](https://jax.readthedocs.io/en/latest/installation.html) for more options.
+If you install a local CUDA toolkit for custom kernels, use CUDA 13 and keep older CUDA libraries
+out of `LD_LIBRARY_PATH` so they do not override the JAX wheel libraries.
+
+See [JAX's installation guide](https://docs.jax.dev/en/latest/installation.html) for more options.
 
 !!! tip
 If you are using a DGX Spark or similar machine with unified memory, you may need to dramatically reduce the memory that XLA preallocates for itself. You can do this by setting the `XLA_PYTHON_CLIENT_MEM_FRACTION` variable, to something like 0.5:
@@ -98,5 +82,5 @@ nano_train_config = SimpleTrainConfig(
 )
 ```
 
-To scale up, you can use Ray's autoscaler to launch a cluster of GPU nodes. We defer that to a future guide,
-but you can see Ray's [autoscaler documentation](https://docs.ray.io/en/latest/cluster/vms/user-guides/launching-clusters/) for more information.
+To scale up, submit to Marin's shared [Iris](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md) cluster
+via `uv run iris --cluster=marin job run ...` (see `lib/iris/OPS.md` for the CLI reference).

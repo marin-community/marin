@@ -4,20 +4,22 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import jax
 import numpy as np
-
+from marin.rl.decoding import DecodingConfig
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.tinker_environments.math_env import (
     MathEnv as TinkerMathEnvBase,
+)
+from marin.rl.environments.tinker_environments.math_env import (
     _get_hendrycks_math_test,
     _get_hendrycks_math_train,
 )
 from marin.rl.environments.tinker_environments.math_grading import extract_boxed, grade_answer, normalize_answer
-from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.math_utils import last_boxed_only_string
 from marin.rl.types import Rollout, RolloutGroup
 
@@ -127,12 +129,9 @@ class MathEnv(MarinEnv):
         inference_ctx: BaseInferenceContext,
         n_examples: int,
         n_generations: int,
-        temperature: float,
+        decoding: DecodingConfig,
         prng_key,
         mode: str = "train",
-        max_tokens: int | None = None,
-        top_k: int | None = None,
-        stop: list[str] | None = None,
         system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample prompts, evaluate responses, and create rollouts."""
@@ -159,11 +158,8 @@ class MathEnv(MarinEnv):
         ]
         completions = inference_ctx.batch_completions(
             prompts=prompts,
-            temperature=temperature,
             n=n_generations,
-            max_tokens=max_tokens,
-            top_k=top_k,
-            stop=stop,
+            decoding=decoding,
             system_prompt=None,  # No system prompt - use few-shot examples instead
         )
 
@@ -193,8 +189,7 @@ class MathEnv(MarinEnv):
                     env_example_id=example.example_id,
                     reward=reward,
                     correctness_reward=correct_score,
-                    temperature=temperature,
-                    top_k=top_k,
+                    decoding=decoding,
                     system_prompt=system_prompt,
                 )
 
@@ -288,7 +283,7 @@ class MathEnv(MarinEnv):
     def training_data(self) -> Iterator[DataExample]:
         train_dataset = _get_hendrycks_math_train()
 
-        for idx, item in enumerate(train_dataset):
+        for idx, item in enumerate(cast(Iterable[dict[str, Any]], train_dataset)):
             raw_prompt = item["problem"]
             raw_answer = item["solution"]
             example_id = f"train_{idx}"
@@ -298,7 +293,7 @@ class MathEnv(MarinEnv):
     def eval_data(self) -> Iterator[DataExample]:
         test_dataset = _get_hendrycks_math_test()
 
-        for idx, item in enumerate(test_dataset):
+        for idx, item in enumerate(cast(Iterable[dict[str, Any]], test_dataset)):
             raw_prompt = item["problem"]
             raw_answer = item["solution"]
             example_id = f"test_{idx}"

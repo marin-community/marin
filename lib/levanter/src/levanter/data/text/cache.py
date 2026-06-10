@@ -8,7 +8,7 @@ import numpy as np
 
 from levanter.data.sharded_datasource import ShardedDataSource
 from levanter.store.cache import CacheMetadata, CacheOptions, TreeCache, build_or_load_cache
-from levanter.utils.hf_utils import HfTokenizer
+from levanter.tokenizers import MarinTokenizer
 
 from .formats import LmDatasetFormatBase, preprocessor_for_format
 
@@ -19,7 +19,7 @@ def build_lm_dataset_cache(
     cache_dir: str,
     source: ShardedDataSource[dict],
     format: LmDatasetFormatBase,
-    tokenizer: HfTokenizer,
+    tokenizer: MarinTokenizer,
     options: CacheOptions = CacheOptions.default(),
     enforce_eos: bool = True,
 ) -> TreeCache[dict]:
@@ -44,7 +44,7 @@ def build_lm_dataset_cache(
 def load_lm_dataset_cache(
     cache_dir: str,
     format: LmDatasetFormatBase,
-    tokenizer: HfTokenizer,
+    tokenizer: MarinTokenizer,
     enforce_eos: bool = True,
 ) -> TreeCache[dict]:
     """Load an existing cache, raising if not present."""
@@ -60,4 +60,4 @@ def load_lm_dataset_cache(
 def cached_token_count(cache_path: str, field: str = "input_ids") -> int:
     """Return the total number of tokens stored in a finished TreeCache."""
     cache = TreeCache.load(cache_path, {field: np.zeros((0,), dtype=np.int32)})
-    return cache.store.tree[field].data_size
+    return cache.flat_field_length(field)

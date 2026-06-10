@@ -2,42 +2,157 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from typing import TypeVar, overload, Any
+import logging
 from dataclasses import asdict, dataclass, is_dataclass
-from marin.execution.step_spec import StepSpec
+from typing import Any, TypeVar, cast, overload
 
-from rigging.filesystem import open_url
 from pydantic import BaseModel
+from rigging.filesystem import marin_prefix, open_url
+
+from marin.execution.artifact_registry import ArtifactRegistry, get_default_registry
+from marin.execution.executor_step_status import STATUS_SUCCESS, get_status_path
+from marin.execution.step_spec import StepSpec, _is_relative_path
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
 
 class Artifact:
-    __artifact_file_name = ".artifact"
+    # Dot-prefix keeps the sidecar out of data-discovery passes that match by
+    # extension (e.g. ``normalize._discover_files`` would otherwise read
+    # ``artifact.json`` as JSONL — see #5864).
+    __artifact_file_name = ".artifact.json"
+    # Legacy filenames written before the rename; read-only fallbacks so historical
+    # GCS outputs remain loadable. ``artifact.json`` was the short-lived form from
+    # #5843; ``.artifact`` predates the JSON-extension convention. Safe to remove
+    # once those prefixes are gone.
+    __legacy_artifact_file_names = ("artifact.json", ".artifact")
 
     @overload
     @classmethod
-    def load(cls, base_path: str | StepSpec, artifact_type: type[T]) -> T: ...
+    def from_path(cls, base_path: str | StepSpec, artifact_type: type[T]) -> T: ...
 
     @overload
     @classmethod
-    def load(cls, base_path: str | StepSpec) -> dict[str, Any]: ...
+    def from_path(cls, base_path: str | StepSpec) -> "PathMetadata | dict[str, Any]": ...
 
     @classmethod
-    def load(cls, base_path: str | StepSpec, artifact_type: type[T] | None = None) -> T | dict[str, Any]:
-        """Loads an Artifact instance from the specified output base path"""
+    def from_path(
+        cls, base_path: str | StepSpec, artifact_type: type[T] | None = None
+    ) -> "T | PathMetadata | dict[str, Any]":
+        """Load an Artifact instance from the specified output base path.
+
+        If ``base_path`` is a relative path (no URL scheme, doesn't start with ``/``),
+        it is resolved against ``marin_prefix()``.
+
+        If ``base_path`` has no ``.artifact.json`` (or legacy ``artifact.json`` /
+        ``.artifact``) file but its ``.executor_status`` file contains ``SUCCESS``,
+        returns a :class:`PathMetadata` pointing at ``base_path`` — provided the
+        caller asked for no specific type or for ``PathMetadata``.
+        """
 
         if isinstance(base_path, StepSpec):
             base_path = base_path.output_path
+        elif _is_relative_path(base_path):
+            base_path = f"{marin_prefix()}/{base_path}"
 
-        with open_url(f"{base_path}/{cls.__artifact_file_name}", "rb") as fd:
-            if artifact_type is None:
-                return json.load(fd)
-            if issubclass(artifact_type, BaseModel):
-                return artifact_type.model_validate_json(fd.read())
-            if is_dataclass(artifact_type):
-                return artifact_type(**json.load(fd))  # type: ignore[not-callable]
-            raise ValueError(f"Unsupported artifact type: {artifact_type!r}")
+        for file_name in (cls.__artifact_file_name, *cls.__legacy_artifact_file_names):
+            try:
+                with open_url(f"{base_path}/{file_name}", "rb") as fd:
+                    if artifact_type is None:
+                        return json.load(fd)
+                    if not issubclass(artifact_type, BaseModel):
+                        raise TypeError(f"artifact_type must be a pydantic BaseModel subclass, got {artifact_type!r}")
+                    return cast(T, artifact_type.model_validate_json(fd.read()))
+            except FileNotFoundError:
+                continue
+        return cls._from_executor_status(base_path, artifact_type)
+
+    @overload
+    @classmethod
+    def from_id(
+        cls, artifact_id: str, version: str, /, artifact_type: type[T], *, registry: ArtifactRegistry | None = None
+    ) -> T: ...
+
+    @overload
+    @classmethod
+    def from_id(
+        cls, artifact_id: str, version: str, /, *, registry: ArtifactRegistry | None = None
+    ) -> "PathMetadata | dict[str, Any]": ...
+
+    @classmethod
+    def from_id(
+        cls,
+        artifact_id: str,
+        version: str,
+        /,
+        artifact_type: type[T] | None = None,
+        *,
+        registry: ArtifactRegistry | None = None,
+    ) -> "T | PathMetadata | dict[str, Any]":
+        """Load an artifact by registry id + version.
+
+        Resolves ``(artifact_id, version)`` against ``registry`` (or the module-level default when
+        ``registry is None``) to an :class:`ArtifactEntry`, then delegates to :meth:`from_path` —
+        so the return value, the ``PathMetadata`` fallback, and the ``artifact_type``
+        deserialization semantics are identical to the path-based loader.
+
+        Region-aware resolution: when the entry recorded a ``relative_path`` (its uri was under
+        ``marin_prefix()`` at registration), this resolves that path against THIS process's
+        ``marin_prefix()`` first, so a reader loads the region-local replica instead of reading
+        across regions. If no region-local copy exists, it falls back to the absolute
+        ``entry.uri`` — logging a warning when that fallback crosses regions (the absolute uri is
+        under a different ``marin_prefix()``).
+
+        ``artifact_id`` and ``version`` are positional-only. ``artifact_type``, if provided, MUST be
+        a pydantic ``BaseModel`` subclass (the existing :meth:`from_path` contract). The registry
+        does not record the type; the caller asserts it on read.
+
+        Raises whatever :meth:`ArtifactRegistry.lookup` raises (``ArtifactNotFoundError``,
+        ``InvalidArtifactIdError``, ``ArtifactRegistryError``), plus whatever :meth:`from_path`
+        raises on the resolved uri.
+        """
+        reg = registry or get_default_registry()
+        entry = reg.lookup(artifact_id, version)
+
+        if entry.relative_path is not None:
+            try:
+                return cls.from_path(entry.relative_path, artifact_type)
+            except FileNotFoundError:
+                # No region-local replica under this process's marin_prefix(); fall through to the
+                # absolute uri, warning if that means reading from another region.
+                if not entry.uri.startswith(marin_prefix().rstrip("/")):
+                    logger.warning(
+                        "artifact %s@%s has no region-local replica under %s; falling back to cross-region uri %s",
+                        artifact_id,
+                        version,
+                        marin_prefix(),
+                        entry.uri,
+                    )
+        return cls.from_path(entry.uri, artifact_type)
+
+    @classmethod
+    def _from_executor_status(cls, base_path: str, artifact_type: type[T] | None) -> "T | PathMetadata":
+        """Fallback when no artifact file is present: synthesize a :class:`PathMetadata`
+        if the step published ``.executor_status = SUCCESS``.
+
+        Only valid when the caller wants no type or ``PathMetadata`` — other types
+        cannot be reconstructed from a bare path.
+        """
+        if artifact_type is not None and artifact_type is not PathMetadata:
+            raise FileNotFoundError(
+                f"No {cls.__artifact_file_name} at {base_path}; cannot synthesize "
+                f"{artifact_type!r} from {get_status_path(base_path)!r}"
+            )
+        with open_url(get_status_path(base_path), "r") as fd:
+            status = fd.read().strip()
+        if status != STATUS_SUCCESS:
+            raise FileNotFoundError(
+                f"No {cls.__artifact_file_name} at {base_path} and "
+                f"{get_status_path(base_path)!r} is {status!r} (not {STATUS_SUCCESS!r})"
+            )
+        return PathMetadata(path=base_path)
 
     @classmethod
     def save(cls, artifact: T, base_path: str) -> None:
@@ -54,9 +169,12 @@ class Artifact:
                 fd.write(json.dumps(artifact).encode("utf-8"))
 
 
-@dataclass
-class PathMetadata:
-    """Represents a single output path"""
+class PathMetadata(BaseModel):
+    """Represents a single output path.
+
+    Also used as the synthetic return type of :meth:`Artifact.from_path` when the
+    step published a ``.executor_status = SUCCESS`` marker but no ``.artifact``.
+    """
 
     path: str
 

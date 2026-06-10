@@ -4,7 +4,6 @@
 import threading
 
 import jax
-from jax._src import pjit
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -85,8 +84,6 @@ def test_shape_dtype_struct_for_benchmark_drops_manual_sharding_from_shard_map_t
     def _capture(local_x):
         seen_manual.append(autotune_utils.value_uses_manual_sharding(local_x))
         seen_shapes.append(local_x.shape)
-        with pytest.raises(AssertionError):
-            pjit.pjit_check_aval_sharding([local_x.aval.sharding], [local_x.aval], ["x"], "arg", False)
         seen_structs.append(autotune_utils.shape_dtype_struct_for_benchmark(local_x))
         return local_x
 

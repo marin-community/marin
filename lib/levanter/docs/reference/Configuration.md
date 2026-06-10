@@ -281,20 +281,6 @@ trainer:
       logdir: logs
 ```
 
-## Ray Config
-
-Levanter does not automatically start a Ray cluster by default. You can enable
-this behavior using `auto_start_cluster: true`, which will start a Ray cluster
-with all the machines being used for training for distributed preprocessing.
-
-
-| Parameter            | Description                                                             | Default |
-|----------------------|-------------------------------------------------------------------------|---------|
-| `address`            | The address of the Ray cluster to connect to.                           | `None`  |
-| `start_workers`      | Whether to start Ray workers. If `False`, you must start them yourself. | `True`  |
-| `auto_start_cluster` | Whether to start a Ray cluster automatically.                           | `False` |
-
-
 ## Distributed Config
 
 JAX can automatically sniff out clusters in SLURM and TPU environments.
@@ -308,8 +294,6 @@ If you're not using SLURM or TPUs, you can specify the cluster manually using th
 | `num_processes`       | The number of processes in the cluster.                                   | `None`                  |
 | `process_id`          | The process id of this process.                                           | `None`                  |
 | `local_device_ids`    | The local device ids of this process.                                     | ${CUDA_VISIBLE_DEVICES} |
-
-
 
 ## Optimizer
 
@@ -463,11 +447,9 @@ trainer:
 
 
 
-### Distributed and Ray
+### Distributed
 
 ::: levanter.distributed.DistributedConfig
-
-::: levanter.distributed.RayConfig
 
 ### Model Averaging
 

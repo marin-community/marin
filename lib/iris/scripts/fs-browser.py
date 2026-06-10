@@ -32,7 +32,7 @@ import s3fs
 import yaml
 from tabulate import tabulate
 
-DEFAULT_CONFIG = str(pathlib.Path(__file__).parent.parent / "examples" / "coreweave.yaml")
+DEFAULT_CONFIG = str(pathlib.Path(__file__).parent.parent / "config" / "coreweave.yaml")
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB — refuse to download files larger than this
 

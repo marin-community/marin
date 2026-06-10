@@ -7,39 +7,28 @@ import logging
 import os
 
 import jmp
-from rigging.filesystem import filesystem as marin_filesystem
 import levanter
 import levanter.eval_harness as eval_harness
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from levanter.distributed import RayConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from rigging.filesystem import filesystem as marin_filesystem
 
-from experiments.evals.task_configs import convert_to_levanter_task_config
-from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.evaluation.evaluators.levanter_tpu_evaluator import LevanterTpuEvaluator
-from fray.v1.cluster.ray.deps import build_runtime_env_for_packages
+from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 
 logger = logging.getLogger(__name__)
 
 
-class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
-    """For `Evaluator`s that runs inference with Levanter's Lm Eval Harness on TPUs."""
+class LevanterLmEvalEvaluator(Evaluator):
+    """Runs inference with Levanter's Lm Eval Harness on TPUs."""
 
-    def get_runtime_env(self) -> dict:
-        """
-        Returns the runtime environment to run the evaluator on the Ray cluster.
-        """
-        return build_runtime_env_for_packages(
-            extra=["eval", "tpu"],
-            pip_packages=["statsmodels==0.14.4"],
-            env_vars={
-                "TOKENIZERS_PARALLELISM": "false",
-                "HF_DATASETS_TRUST_REMOTE_CODE": "1",
-                "HF_ALLOW_CODE_EVAL": "1",
-            },
-        )
+    @staticmethod
+    def model_name_or_path(model: ModelConfig) -> str:
+        """Return a reference Levanter can read without staging to local disk."""
+        if model.path is None:
+            return model.name
+        return model.path
 
     def evaluate(
         self,
@@ -61,80 +50,55 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         """
         # Eval Harness code: https://github.com/stanford-crfm/levanter/blob/main/src/levanter/eval_harness.py
         # Run the harness with the model and the specified evals
+        model_name_or_path: str = self.model_name_or_path(model)
+        name = model.name + "_lmeval_" + "-".join([eval_task.name for eval_task in evals])
+        logger.info(f"Running eval harness on model: {model_name_or_path}, wandb run name: {name}")
 
+        # NOTE(chris): Before, the batch size was 16, but this is too large for the 8B model.
+        # In the future, we should make this user-configurable.
+        trainer_config = TrainerConfig(
+            tracker=WandbConfig(project="marin", tags=wandb_tags, name=name),
+            mp=jmp.get_policy("p=f32,c=bfloat16"),
+            per_device_eval_parallelism=1,
+        )
+
+        model_config = HFCheckpointConverter.from_hf(model_name_or_path).LevConfigClass()
+
+        # convert to the config that Levanter's eval_harness expects
+        tasks = convert_to_levanter_task_config(evals)
+        logger.info(f"Tasks: {tasks}")
+
+        eval_config = eval_harness.EvalHarnessMainConfig(
+            eval_harness=eval_harness.LmEvalHarnessConfig(
+                task_spec=tasks,
+                max_examples=max_eval_instances,
+                log_samples=False,
+                max_length=4096,
+                apply_chat_template=model.apply_chat_template,
+                confirm_run_unsafe_code=True,
+                sample_logging=eval_harness.SampleLoggingConfig(max_samples_per_benchmark=20),
+            ),
+            tokenizer=model_name_or_path,  # levanter picks up the tokenizer from the model path
+            checkpoint_path=model_name_or_path,
+            checkpoint_is_hf=True,
+            trainer=trainer_config,
+            model=model_config,
+        )
+
+        results = eval_harness.run_eval_harness_main(eval_config)
+
+        # Upload is best-effort: a transient GCS failure should not throw away an
+        # otherwise successful (and very expensive) eval run.
+        results_path = os.path.join(output_path, "results.json")
+        logger.info(f"Uploading results to GCS: {results_path}")
         try:
-            model_name_or_path: str = self.model_name_or_path(model)
-            name = model.name + "_lmeval_" + "-".join([eval_task.name for eval_task in evals])
-            logger.info(f"WandB Run Name: {name}")
-            logger.info(f"Running eval harness on model: {model_name_or_path}")
-            print("after wandb log")
-            # NOTE(chris): Before, the batch size was 16, but this is too large for the 8B model.
-            # In the future, we should make this user-configurable.
-            trainer_config = TrainerConfig(
-                tracker=WandbConfig(project="marin", tags=wandb_tags, name=name),
-                mp=jmp.get_policy("p=f32,c=bfloat16"),
-                per_device_eval_parallelism=1,
-                ray=RayConfig(auto_start_cluster=False),
-            )
-            print("after trainer?")
-
-            model_config = HFCheckpointConverter.from_hf(model_name_or_path).LevConfigClass()
-
-            # convert to the config that Levanter's eval_harness expects
-            tasks = convert_to_levanter_task_config(evals)
-            logger.info(f"Tasks: {tasks}")
-
-            model_path = model_name_or_path
-
-            logger.info(f"Model path: {model_path}")
-            logger.info(f"Model name: {model.name}")
-            logger.info(f"model_name_or_path: {model_name_or_path}")
-
-            print("starting harness")
-            eval_config = eval_harness.EvalHarnessMainConfig(
-                eval_harness=eval_harness.LmEvalHarnessConfig(
-                    task_spec=tasks,
-                    max_examples=max_eval_instances,
-                    log_samples=False,
-                    max_length=4096,
-                    apply_chat_template=model.apply_chat_template,
-                    confirm_run_unsafe_code=True,
-                    sample_logging=eval_harness.SampleLoggingConfig(max_samples_per_benchmark=20),
-                ),
-                tokenizer=model_path,  # levanter picks up the tokenizer from the model path
-                checkpoint_path=model_path,
-                checkpoint_is_hf=True,
-                trainer=trainer_config,
-                model=model_config,
-            )
-
-            results = eval_harness.run_eval_harness_main(eval_config)
-            print("finished harness")
-
-            try:
-                # add a results.json to output path
-                output_path = os.path.join(output_path, "results.json")
-
-                logger.info(f"Uploading results to GCS: {output_path}")
-
-                # write output JSON directly to output_path on GCS
-                fs = marin_filesystem("gcs")
-                with fs.open(output_path, "w") as f:
-                    json.dump(results, f, indent=2, default=_json_default)
-
-                levanter.tracker.current_tracker().finish()
-                logger.info("Upload completed successfully.")
-
-            except Exception as upload_error:
-                logger.info(f"Failed to upload results to GCS: {upload_error}")
-
-        except Exception as e:
-            logger.error(f"Error running eval harness: {e}")
-            raise e
-
-        finally:
-            # Clean up resources
-            self.cleanup(model)
+            fs = marin_filesystem("gcs")
+            with fs.open(results_path, "w") as f:
+                json.dump(results, f, indent=2, default=_json_default)
+            levanter.tracker.current_tracker().finish()
+            logger.info("Upload completed successfully.")
+        except Exception:
+            logger.warning("Failed to upload results to GCS: %s", results_path, exc_info=True)
 
 
 def _json_default(value):

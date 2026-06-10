@@ -13,7 +13,6 @@ from jax import random
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
-
 from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pbatch, Pembed_vocab, Plm_head, Plogits, unshard
@@ -236,14 +235,15 @@ def debug_mesh_and_token_pspec(num_devices: int, model_axis_size: int = 1) -> tu
         raise ValueError(f"num_devices ({num_devices}) must be divisible by model_axis_size ({model_axis_size})")
     data_axis_size = num_devices // model_axis_size
     mesh = jax.sharding.AbstractMesh(
-        axis_sizes=(data_axis_size, model_axis_size),
-        axis_names=("data", "model"),
+        axis_sizes=(1, data_axis_size, model_axis_size),
+        axis_names=("replica_dcn", "data", "model"),
         axis_types=(
+            jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
         ),
     )
-    return mesh, P(("data",), None)
+    return mesh, P(("replica_dcn", "data"), None)
 
 
 __all__ = [

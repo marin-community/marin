@@ -4,26 +4,18 @@ import os
 import tempfile
 
 import pytest
-from fray.v1.cluster import create_cluster, set_current_cluster
-from fray.v1.job.context import _job_context
+from fray import LocalClient, set_current_client
+from marin.execution.artifact_registry import FilesystemArtifactRegistry, use_default_registry
 
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
 
 
 @pytest.fixture(autouse=True)
-def reset_fray_context():
-    """Reset fray context between tests for isolation."""
-    _job_context.set(None)
-    yield
-    _job_context.set(None)
-
-
-@pytest.fixture(autouse=True)
-def fray_cluster():
-    set_current_cluster(create_cluster("local"))
-    yield
-    set_current_cluster(None)
+def fray_client():
+    """Set up a v2 LocalClient for all tests."""
+    with set_current_client(LocalClient()) as client:
+        yield client
 
 
 @pytest.fixture(autouse=True)
@@ -43,3 +35,17 @@ def _configure_marin_prefix():
         os.environ["MARIN_PREFIX"] = temp_dir
         yield
         del os.environ["MARIN_PREFIX"]
+
+
+@pytest.fixture(autouse=True)
+def _isolate_artifact_registry(tmp_path_factory):
+    """Keep tests off the real ``gs://marin-artifact-registry`` registry.
+
+    ``get_default_registry`` defaults to the production root, so without this an unconfigured test
+    would read/write live GCS. Install a temp-dir registry as the context-local default for the
+    duration of each test; ``use_default_registry`` restores the previous default on exit so the
+    production default is never reachable and nothing leaks between tests.
+    """
+    temp_root = str(tmp_path_factory.mktemp("artifact_registry"))
+    with use_default_registry(FilesystemArtifactRegistry(temp_root)):
+        yield

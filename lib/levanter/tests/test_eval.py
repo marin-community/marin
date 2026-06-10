@@ -13,8 +13,22 @@ from haliax import Axis
 from haliax.partitioning import ResourceAxis
 
 from levanter.data.dataset import ListAsyncDataset
-from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
-from levanter.eval import EvalResult, LossFnOutput, TaggedEvaluator, cb_tagged_evaluate
+from levanter.data.text.examples import (
+    GrugLmExample,
+    LabeledLmExample,
+    LossLabelSpan,
+    loss_labels_from_spans,
+    named_lm_example_from_grug,
+)
+from levanter.eval import (
+    EvalResult,
+    LabeledEvaluator,
+    LabeledLossFnOutput,
+    LossFnOutput,
+    LossLabelSpec,
+    TaggedEvaluator,
+    cb_tagged_evaluate,
+)
 from levanter.models.lm_model import LmExample
 from levanter.tracker import current_tracker
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -169,6 +183,119 @@ def test_tagged_evaluator_accepts_grug_loss_protocol():
 
     assert np.isfinite(result.micro_avg_loss)
     assert "grug" in result.tag_micro_losses
+
+
+def test_labeled_evaluator_aggregates_exclusive_loss_labels():
+    EvalBatch = Axis("batch", len(jax.devices()))
+
+    examples = []
+    for _ in range(EvalBatch.size):
+        examples.append(
+            LabeledLmExample(
+                tokens=jnp.array([1, 2, 4, 8], dtype=jnp.int32),
+                loss_labels=loss_labels_from_spans(
+                    4,
+                    [
+                        LossLabelSpan(start=0, end=1, label=1),
+                        LossLabelSpan(start=1, end=2, label=2),
+                        LossLabelSpan(start=2, end=3, label=3),
+                    ],
+                ),
+            )
+        )
+
+    label_spec = LossLabelSpec(
+        id_to_name={
+            0: "dont_score",
+            1: "assistant_text",
+            2: "assistant_tool_call",
+            3: "tool_observation",
+        },
+        aggregates={
+            "assistant": [1, 2],
+            "assistant_text": [1],
+            "tool_observation": [3],
+        },
+    )
+
+    def loss_fn(_model, batch: LabeledLmExample) -> LabeledLossFnOutput:
+        return batch.tokens.astype(jnp.float32), batch.loss_labels, jnp.roll(batch.tokens, -1, axis=-1)
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        evaluator = LabeledEvaluator(
+            EvalBatch=EvalBatch,
+            eval_set=ListAsyncDataset(examples),
+            label_spec=label_spec,
+            loss_fn=loss_fn,
+            tokenizer=None,
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+        )
+        result = evaluator.evaluate(None)
+
+    np.testing.assert_allclose(result.label_losses["assistant"], 1.5)
+    np.testing.assert_allclose(result.label_losses["assistant_text"], 1.0)
+    np.testing.assert_allclose(result.label_losses["tool_observation"], 4.0)
+    np.testing.assert_allclose(result.label_token_counts["assistant"], EvalBatch.size * 2)
+    assert "dont_score" not in result.label_losses
+
+
+def test_labeled_lm_evaluator_accepts_labeled_lm_examples():
+    cfg = ToyLmConfig(max_seq_len=8, embed_dim=16)
+    Vocab = Axis("vocab", 32)
+    model = ToyLmHeadModel.init(Vocab, cfg, key=jax.random.PRNGKey(0))
+
+    EvalBatch = Axis("batch", len(jax.devices()))
+    examples = []
+    for i in range(EvalBatch.size):
+        tokens = jnp.mod(jnp.arange(cfg.max_seq_len, dtype=jnp.int32) + i, Vocab.size)
+        loss_labels = jnp.ones_like(tokens)
+        loss_labels = loss_labels.at[-1].set(0)
+        examples.append(LabeledLmExample(tokens=tokens, loss_labels=loss_labels))
+
+    label_spec = LossLabelSpec(id_to_name={0: "dont_score", 1: "assistant"})
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        evaluator = LabeledEvaluator.for_labeled_examples(
+            EvalBatch=EvalBatch,
+            eval_set=ListAsyncDataset(examples),
+            label_spec=label_spec,
+            tokenizer=None,
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+        )
+        result = evaluator.evaluate(model)
+
+    assert np.isfinite(result.label_losses["assistant"])
+    np.testing.assert_allclose(result.label_token_counts["assistant"], EvalBatch.size * (cfg.max_seq_len - 1))
+
+
+def test_loss_label_spec_validates_aggregates():
+    label_spec = LossLabelSpec(id_to_name={1: "assistant"})
+    assert label_spec.aggregate_names == ("assistant",)
+
+    with np.testing.assert_raises_regex(ValueError, "unknown label id"):
+        LossLabelSpec(
+            id_to_name={0: "dont_score", 1: "assistant"},
+            aggregates={"assistant": [2]},
+        )
+
+    with np.testing.assert_raises_regex(ValueError, "dont_score_label"):
+        LossLabelSpec(
+            id_to_name={0: "dont_score", 1: "assistant"},
+            aggregates={"assistant": [0, 1]},
+        )
+
+
+def test_loss_labels_from_spans_rejects_overlapping_spans():
+    with np.testing.assert_raises_regex(ValueError, "overlaps"):
+        loss_labels_from_spans(
+            4,
+            [
+                LossLabelSpan(start=0, end=2, label=1),
+                LossLabelSpan(start=1, end=3, label=2),
+            ],
+        )
 
 
 def test_cb_tagged_evaluate_dedupes_force_and_logs_ema(caplog):

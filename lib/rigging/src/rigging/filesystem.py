@@ -5,8 +5,8 @@
 and cross-region read guards.
 
 Provides a unified API for resolving the marin storage prefix and building
-GCS paths with lifecycle-managed TTL prefixes. The canonical temp-bucket
-definitions live in ``infra/configure_temp_buckets.py``.
+GCS paths with lifecycle-managed TTL prefixes. Lifecycle rules on the
+``marin-{region}`` buckets are managed by ``infra/configure_buckets.py``.
 
 Resolution chain for the storage prefix:
   1. ``MARIN_PREFIX`` environment variable
@@ -35,31 +35,25 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from collections.abc import Callable, Generator, Sequence
 from pathlib import PurePath
-from typing import Any
+from typing import Any, cast
 
 import fsspec
+from fsspec.callbacks import DEFAULT_CALLBACK, Callback
+from fsspec.implementations.local import LocalFileSystem
+from google.api_core.exceptions import Forbidden as GcpForbiddenException
+from google.cloud import storage
 
 from rigging.distributed_lock import create_lock, default_worker_id
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 logger = logging.getLogger(__name__)
 
 _GCP_METADATA_ZONE_URL = "http://metadata.google.internal/computeMetadata/v1/instance/zone"
 
 _DEFAULT_LOCAL_PREFIX = "/tmp/marin"
-
-# Canonical mapping from GCP region to marin-tmp bucket name.
-# Must stay in sync with infra/configure_temp_buckets.py BUCKETS dict.
-REGION_TO_TMP_BUCKET: dict[str, str] = {
-    "us-central1": "marin-tmp-us-central1",
-    "us-central2": "marin-tmp-us-central2",
-    "europe-west4": "marin-tmp-eu-west4",
-    "eu-west4": "marin-tmp-eu-west4",
-    "us-west4": "marin-tmp-us-west4",
-    "us-east1": "marin-tmp-us-east1",
-    "us-east5": "marin-tmp-us-east5",
-}
 
 # Special-case overrides for primary Marin buckets that do not follow the
 # default `marin-{region}` naming convention.
@@ -68,7 +62,8 @@ _REGION_TO_MARIN_BUCKET_OVERRIDES: dict[str, str] = {
 }
 
 # All known primary marin data buckets, keyed by region.
-# Used by the mirror filesystem to scan for files across regions.
+# Used by the mirror filesystem to scan for files across regions, and by
+# `marin_temp_bucket` to address the region-local TTL-managed scratch area.
 REGION_TO_DATA_BUCKET: dict[str, str] = {
     "us-central1": "marin-us-central1",
     "us-central2": "marin-us-central2",
@@ -77,6 +72,21 @@ REGION_TO_DATA_BUCKET: dict[str, str] = {
     "us-west4": "marin-us-west4",
     "europe-west4": "marin-eu-west4",
 }
+
+# Region aliases that resolve to the same physical region (e.g. the "eu-west4"
+# label that some legacy paths and metadata tools surface).
+_REGION_ALIASES: dict[str, str] = {
+    "eu-west4": "europe-west4",
+}
+
+# Allowed TTL-day values. Each value N corresponds to a lifecycle rule on every
+# ``marin-{region}`` bucket that deletes objects under ``tmp/ttl=Nd/`` after N
+# days. Keep in sync with ``infra/configure_buckets.py``.
+ALLOWED_TTL_DAYS: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 30)
+
+# Path prefix under each ``marin-{region}`` bucket where TTL-managed scratch
+# data lives. Lifecycle rules live under ``{TEMP_PATH_PREFIX}/ttl=Nd/``.
+TEMP_PATH_PREFIX: str = "tmp"
 
 # Reverse lookup: bucket name → canonical GCP region.
 # Derived from REGION_TO_DATA_BUCKET so that region_from_prefix can return
@@ -157,45 +167,79 @@ def marin_region() -> str | None:
     return region_from_metadata() or region_from_prefix(os.environ.get("MARIN_PREFIX", ""))
 
 
-def marin_temp_bucket(ttl_days: int, prefix: str = "") -> str:
+def _append_path_prefix(path: str, prefix: str) -> str:
+    if prefix:
+        return f"{path}/{prefix.strip('/')}"
+    return path
+
+
+def _resolve_ttl_days(ttl_days: int) -> int:
+    """Map *ttl_days* to the smallest configured value that is ``>= ttl_days``.
+
+    Requests above the largest configured value clamp to that maximum (with
+    a warning) — temp data is by definition disposable, so capping the TTL
+    is preferable to forcing the caller to handle an exception. Logs a
+    warning whenever the requested value is rounded.
+    """
+    if ttl_days <= 0:
+        raise ValueError(f"ttl_days={ttl_days} must be positive. Allowed values: {ALLOWED_TTL_DAYS}.")
+    if ttl_days in ALLOWED_TTL_DAYS:
+        return ttl_days
+    for n in ALLOWED_TTL_DAYS:
+        if n > ttl_days:
+            logger.warning("ttl_days=%d not configured; rounding up to %d", ttl_days, n)
+            return n
+    capped = max(ALLOWED_TTL_DAYS)
+    logger.warning("ttl_days=%d exceeds the configured maximum; clamping to %d", ttl_days, capped)
+    return capped
+
+
+def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | None = None) -> str:
     """Return a path on region-local temp storage. Never returns ``None``.
 
-    For a GCS marin prefix with a known region, returns a path on the
-    dedicated temp bucket::
+    For a GCS marin prefix with a known region, or an explicitly provided
+    ``source_prefix`` with a known region, returns a path under the
+    region-local marin bucket::
 
-        gs://marin-tmp-{region}/ttl={N}d/{prefix}
+        gs://marin-{region}/tmp/ttl={N}d/{prefix}
 
     Otherwise falls back to a flat path under the marin prefix::
 
         {marin_prefix}/tmp/{prefix}
 
-    The temp buckets are provisioned by ``infra/configure_temp_buckets.py``
-    with lifecycle rules that auto-delete objects under ``ttl=Nd/`` after
-    *N* days.
+    Lifecycle rules on each ``marin-{region}`` bucket — managed by
+    ``infra/configure_buckets.py`` — auto-delete objects under
+    ``tmp/ttl=Nd/`` after *N* days.
 
     Args:
-        ttl_days: Lifecycle TTL in days.  Should match one of the configured
-            values (1-7, 14, 30) in ``infra/configure_temp_buckets.py``.
+        ttl_days: Lifecycle TTL in days.  Values not in
+            :data:`ALLOWED_TTL_DAYS` are rounded up to the nearest configured
+            value (with a warning); values above the maximum clamp to it.
+            Non-positive values raise :class:`ValueError`.
         prefix: Optional sub-path appended after the TTL directory.
+        source_prefix: Optional path used to choose the temp bucket region.
+            Useful when configuring a remote job from a launcher that may be in
+            a different region than the job output path.
     """
+    ttl_days = _resolve_ttl_days(ttl_days)
+
     mp = marin_prefix()
 
-    if mp.startswith("gs://"):
+    region = region_from_prefix(source_prefix) if source_prefix is not None else None
+    if region is None and mp.startswith("gs://"):
         region = marin_region()
-        if region:
-            bucket = REGION_TO_TMP_BUCKET.get(region)
-            if bucket:
-                path = f"gs://{bucket}/ttl={ttl_days}d"
-                if prefix:
-                    path = f"{path}/{prefix.strip('/')}"
-                return path
+
+    if region:
+        canonical = _REGION_ALIASES.get(region, region)
+        bucket = REGION_TO_DATA_BUCKET.get(canonical)
+        if bucket:
+            path = f"gs://{bucket}/{TEMP_PATH_PREFIX}/ttl={ttl_days}d"
+            return _append_path_prefix(path, prefix)
 
     if "://" not in mp:
         mp = f"file://{mp}"
-    path = f"{mp}/tmp"
-    if prefix:
-        path = f"{path}/{prefix.strip('/')}"
-    return path
+    path = f"{mp}/{TEMP_PATH_PREFIX}"
+    return _append_path_prefix(path, prefix)
 
 
 # ---------------------------------------------------------------------------
@@ -219,8 +263,6 @@ def split_gcs_path(gs_uri: str) -> tuple[str, pathlib.Path]:
 
 def get_bucket_location(bucket_name_or_path: str) -> str:
     """Return the GCS bucket's location (lower-cased region string)."""
-    from google.cloud import storage
-
     if bucket_name_or_path.startswith("gs://"):
         bucket_name = split_gcs_path(bucket_name_or_path)[0]
     else:
@@ -239,7 +281,6 @@ def check_path_in_region(key: str, path: str, region: str, local_ok: bool = Fals
     (instead of raising) when the bucket's region can't be checked due
     to permission errors.
     """
-    from google.api_core.exceptions import Forbidden as GcpForbiddenException
 
     if not path.startswith("gs://"):
         if local_ok:
@@ -407,12 +448,22 @@ class TransferBudgetExceeded(Exception):
         self.attempted = attempted
         self.limit = limit
         self.path = path
-        super().__init__(
-            f"Cross-region transfer budget exceeded: {path} "
-            f"({attempted / (1024**2):.1f}MB) would bring total to "
-            f"{(bytes_used + attempted) / (1024**3):.2f}GB, "
-            f"exceeding the {limit / (1024**3):.0f}GB limit "
-            f"(already transferred {bytes_used / (1024**3):.2f}GB). "
+        # Pass the constructor arguments — not the rendered message — to
+        # BaseException. The default exception reduce reconstructs via
+        # ``TransferBudgetExceeded(*self.args)`` on unpickle, so ``args`` must
+        # match this signature; storing the single message string instead made
+        # the exception un-revivable (``TypeError: missing 3 required positional
+        # arguments``) whenever it crossed a process boundary. The human-readable
+        # message is rendered lazily by ``__str__``.
+        super().__init__(bytes_used, attempted, limit, path)
+
+    def __str__(self) -> str:
+        return (
+            f"Cross-region transfer budget exceeded: {self.path} "
+            f"({self.attempted / (1024**2):.1f}MB) would bring total to "
+            f"{(self.bytes_used + self.attempted) / (1024**3):.2f}GB, "
+            f"exceeding the {self.limit / (1024**3):.0f}GB limit "
+            f"(already transferred {self.bytes_used / (1024**3):.2f}GB). "
             f"Consider running in the source region instead."
         )
 
@@ -540,6 +591,57 @@ def _is_gcs_protocol(protocol: str) -> bool:
     return protocol in ("gs", "gcs")
 
 
+def _bucket_from_gcs_url(url: str) -> str | None:
+    """Return the bucket name from a ``gs://``/``gcs://`` URL, or ``None``."""
+    for scheme in ("gs://", "gcs://"):
+        if url.startswith(scheme):
+            return url[len(scheme) :].split("/", 1)[0]
+    return None
+
+
+def _is_cross_region_url(url: str) -> bool:
+    """Return True if *url* points to a GCS bucket in a different region than the VM."""
+    if os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
+        return False
+    bucket = _bucket_from_gcs_url(url)
+    if bucket is None:
+        return False
+    vm_region = _cached_marin_region()
+    if vm_region is None:
+        return False
+    bucket_location = _cached_bucket_location(bucket)
+    if bucket_location is None:
+        return False
+    return not _regions_match(vm_region, bucket_location)
+
+
+def record_transfer(size: int, url: str, *, budget: TransferBudget | None = None) -> None:
+    """Charge *size* bytes against the cross-region transfer budget.
+
+    Always safe to call: no-op for non-GCS URLs, same-region buckets, when the
+    VM region is unknown, or when the override env var is set.  Raises
+    :class:`TransferBudgetExceeded` if the recorded transfer would push the
+    cumulative total past the budget.
+
+    Used by callers (e.g. tensorstore-based code) that bypass fsspec but still
+    want to charge against the shared cross-region transfer budget.
+
+    Args:
+        size: Number of bytes to charge.
+        url: GCS URL (``gs://bucket/key``) being read or written.  Used both
+            to decide whether the transfer is cross-region and as the path
+            string in any raised :class:`TransferBudgetExceeded`.
+        budget: Budget to charge against.  Defaults to the process-global
+            singleton shared with :class:`CrossRegionGuardedFS` and
+            :class:`MirrorFileSystem`.
+    """
+    if size <= 0:
+        return
+    if not _is_cross_region_url(url):
+        return
+    (budget if budget is not None else _global_transfer_budget).record(size, url)
+
+
 class CrossRegionGuardedFS:
     """Wrapper around a GCS fsspec filesystem that enforces a cross-region transfer budget.
 
@@ -665,6 +767,13 @@ def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
     return fs, path
 
 
+def is_remote_path(path: str) -> bool:
+    """True if ``path`` resolves to a remote filesystem (e.g. ``gs://``, ``s3://``) rather than the
+    local disk. A bare path or ``file://`` URL is local; anything with a remote scheme is not."""
+    fs, _ = url_to_fs(path)
+    return not isinstance(fs, LocalFileSystem)
+
+
 def open_url(url: str, mode: str = "rb", **kwargs: Any) -> fsspec.core.OpenFile:
     """Like ``fsspec.open`` but checks the cross-region budget for GCS reads.
 
@@ -675,7 +784,7 @@ def open_url(url: str, mode: str = "rb", **kwargs: Any) -> fsspec.core.OpenFile:
         fs, path = fsspec.core.url_to_fs(url)
         guarded = CrossRegionGuardedFS(fs)
         guarded._guard_read(path)
-    return fsspec.open(url, mode, **kwargs)
+    return cast(fsspec.core.OpenFile, fsspec.open(url, mode, **kwargs))
 
 
 def filesystem(protocol: str, **kwargs: Any) -> Any:
@@ -684,6 +793,97 @@ def filesystem(protocol: str, **kwargs: Any) -> Any:
     if _is_gcs_protocol(protocol):
         fs = CrossRegionGuardedFS(fs)
     return fs
+
+
+# ---------------------------------------------------------------------------
+# Atomic write-and-rename
+
+
+def unique_temp_path(output_path: str) -> str:
+    """Return a unique temporary path derived from ``output_path``.
+
+    Appends ``.tmp.<uuid>`` to avoid collisions when multiple writers target the
+    same output path (e.g. during network-partition induced worker races).
+    """
+    return f"{output_path}.tmp.{uuid.uuid4().hex}"
+
+
+# AWS error codes that are safe to retry on a server-side multipart copy
+# (``s3fs.S3FileSystem.mv``). ``InvalidPart`` is the R2-specific symptom:
+# every ``UploadPartCopy`` returns 200 but ``CompleteMultipartUpload`` then
+# claims one or more parts are missing.
+_TRANSIENT_S3_ERROR_CODES = frozenset(
+    {
+        "InvalidPart",
+        "InternalError",
+        "ServiceUnavailable",
+        "SlowDown",
+        "RequestTimeout",
+        "RequestTimeTooSkewed",
+    }
+)
+
+# Fragments matched against ``str(exc)`` for the case where s3fs has already
+# translated the underlying ``botocore.ClientError`` into an ``OSError`` and
+# the structured error code is no longer reachable.
+_TRANSIENT_S3_MESSAGE_FRAGMENTS = (
+    "specified parts could not be found",
+    "InternalError",
+    "ServiceUnavailable",
+    "SlowDown",
+    "RequestTimeout",
+)
+
+
+def _is_transient_s3_error(exc: BaseException) -> bool:
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        code = response.get("Error", {}).get("Code")
+        if code in _TRANSIENT_S3_ERROR_CODES:
+            return True
+    msg = str(exc)
+    return any(frag in msg for frag in _TRANSIENT_S3_MESSAGE_FRAGMENTS)
+
+
+def _mv_with_retry(fs: Any, src: str, dst: str) -> None:
+    retry_with_backoff(
+        lambda: fs.mv(src, dst, recursive=True),
+        retryable=_is_transient_s3_error,
+        max_attempts=4,
+        backoff=ExponentialBackoff(initial=1.0, maximum=8.0, factor=2.0),
+        operation=f"atomic_rename fs.mv {src} -> {dst}",
+    )
+
+
+@contextlib.contextmanager
+def atomic_rename(output_path: str, fs: Any = None) -> Generator[str, None, None]:
+    """Atomic write-and-rename via a sibling temp key.
+
+    Yields ``<output_path>.tmp.<uuid>``; on clean exit, ``fs.mv`` renames the
+    temp into the final path. On exception, the temp key is best-effort
+    deleted and the original exception re-raised.
+
+    Callers may pass a pre-constructed ``fs`` to reuse a configured
+    filesystem (e.g. an ``S3FileSystem`` with ``fixed_upload_size=True``)
+    instead of letting atomic_rename build a default one from ``output_path``.
+
+    Example:
+        with atomic_rename("output.jsonl.gz") as tmp_path:
+            write_data(tmp_path)
+        # File is now at output.jsonl.gz
+    """
+    temp_path = unique_temp_path(output_path)
+    if fs is None:
+        fs = url_to_fs(output_path)[0]
+    try:
+        yield temp_path
+        _mv_with_retry(fs, temp_path, output_path)
+    except Exception:
+        # Best-effort cleanup: temp file may not exist (writer crashed before
+        # creating it) so we tolerate any rm error and re-raise the original.
+        with contextlib.suppress(Exception):
+            fs.rm(temp_path)
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -697,6 +897,19 @@ def filesystem(protocol: str, **kwargs: Any) -> Any:
 def _all_data_bucket_prefixes() -> list[str]:
     """Return gs:// prefixes for all known marin data buckets."""
     return [f"gs://{bucket}" for bucket in REGION_TO_DATA_BUCKET.values()]
+
+
+def _mirror_remote_prefixes(local_prefix: str) -> list[str]:
+    """Remote marin buckets to scan for mirror reads.
+
+    The cross-region mirror only exists on GCS, and scanning GCS buckets
+    requires GCP credentials.  Return an empty list unless the local prefix
+    is itself a ``gs://`` URL — otherwise non-GCP runs (CoreWeave S3, local
+    dev) would emit anonymous-caller 401s from gcsfs on every mirror read.
+    """
+    if not local_prefix.startswith("gs://"):
+        return []
+    return [p for p in _all_data_bucket_prefixes() if not local_prefix.startswith(p)]
 
 
 class MirrorFileSystem(fsspec.AbstractFileSystem):
@@ -719,7 +932,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
     ):
         super().__init__(*args, **kwargs)
         self._local_prefix = marin_prefix().rstrip("/")
-        self._remote_prefixes = [p for p in _all_data_bucket_prefixes() if not self._local_prefix.startswith(p)]
+        self._remote_prefixes = _mirror_remote_prefixes(self._local_prefix)
         self._budget = budget if budget is not None else _global_transfer_budget
         self._worker_id = default_worker_id()
 
@@ -826,7 +1039,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
     # -- fsspec interface: info/ls/exists -------------------------------------
 
     def _info(self, path: str, **kwargs: Any) -> dict[str, Any]:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         resolved = self._resolve_path(path)
         fs, fspath = self._get_fs_and_path(resolved)
         info = fs.info(fspath, **kwargs)
@@ -839,7 +1052,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         return bucket_prefix.rstrip("/").replace("gs://", "").replace("file://", "") + "/"
 
     def ls(self, path: str, detail: bool = True, **kwargs: Any) -> list[Any]:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         # Union listings from local + all remote prefixes so that glob()
         # discovers files that only exist in other regions.  Local entries
         # take precedence when a relative path appears in multiple buckets.
@@ -867,7 +1080,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         return [e["name"] for e in results]
 
     def exists(self, path: str, **kwargs: Any) -> bool:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         local_url = self._local_url(path)
         if self._fs_exists(local_url):
             return True
@@ -875,8 +1088,22 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
 
     # -- fsspec interface: read operations ------------------------------------
 
-    def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
-        path = self._strip_protocol(path)
+    def _open(
+        self,
+        path: str,
+        mode: str = "rb",
+        block_size: int | None = None,
+        autocommit: bool = True,
+        cache_options: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        path = cast(str, self._strip_protocol(path))
+        kwargs = {
+            **kwargs,
+            "block_size": block_size,
+            "autocommit": autocommit,
+            "cache_options": cache_options,
+        }
         if "r" in mode:
             resolved = self._resolve_path(path)
             fs, fspath = self._get_fs_and_path(resolved)
@@ -890,7 +1117,7 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
             return fs.open(fspath, mode, **kwargs)
 
     def cat_file(self, path: str, start: int | None = None, end: int | None = None, **kwargs: Any) -> bytes:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         resolved = self._resolve_path(path)
         fs, fspath = self._get_fs_and_path(resolved)
         return fs.cat_file(fspath, start=start, end=end, **kwargs)
@@ -898,38 +1125,59 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
     # -- fsspec interface: write operations ------------------------------------
 
     def _mkdir(self, path: str, create_parents: bool = True, **kwargs: Any) -> None:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         local_url = self._local_url(path)
         fs, fspath = self._get_fs_and_path(local_url)
         fs.mkdir(fspath, create_parents=create_parents, **kwargs)
 
     def makedirs(self, path: str, exist_ok: bool = False) -> None:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         local_url = self._local_url(path)
         fs, fspath = self._get_fs_and_path(local_url)
         fs.makedirs(fspath, exist_ok=exist_ok)
 
-    def put_file(self, lpath: str, rpath: str, **kwargs: Any) -> None:
-        rpath = self._strip_protocol(rpath)
+    def put_file(
+        self,
+        lpath: str,
+        rpath: str,
+        callback: Callback = DEFAULT_CALLBACK,
+        mode: str = "overwrite",
+        **kwargs: Any,
+    ) -> None:
+        rpath = cast(str, self._strip_protocol(rpath))
         local_url = self._local_url(rpath)
         fs, fspath = self._get_fs_and_path(local_url)
-        fs.put_file(lpath, fspath, **kwargs)
+        fs.put_file(lpath, fspath, callback=callback, mode=mode, **kwargs)
 
+    # fsspec's AbstractFileSystem.rm_file is typed as returning Never (its body
+    # delegates to the unimplemented _rm), so a real None-returning override is
+    # flagged. Parameters already match the base.
+    # pyrefly: ignore[bad-override]
     def rm_file(self, path: str) -> None:
-        path = self._strip_protocol(path)
+        path = cast(str, self._strip_protocol(path))
         local_url = self._local_url(path)
         fs, fspath = self._get_fs_and_path(local_url)
         fs.rm_file(fspath)
 
-    def rm(self, path: str, recursive: bool = False, **kwargs: Any) -> None:
-        path = self._strip_protocol(path)
+    def rm(self, path: str, recursive: bool = False, maxdepth: int | None = None, **kwargs: Any) -> None:
+        path = cast(str, self._strip_protocol(path))
         local_url = self._local_url(path)
         fs, fspath = self._get_fs_and_path(local_url)
-        fs.rm(fspath, recursive=recursive, **kwargs)
+        fs.rm(fspath, recursive=recursive, maxdepth=maxdepth, **kwargs)
 
-    def copy(self, path1: str, path2: str, **kwargs: Any) -> None:
-        path1 = self._strip_protocol(path1)
-        path2 = self._strip_protocol(path2)
+    def copy(
+        self,
+        path1: str,
+        path2: str,
+        recursive: bool = False,
+        maxdepth: int | None = None,
+        on_error: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        # recursive/maxdepth/on_error are accepted for fsspec API compatibility;
+        # the mirror only supports single-file copies via _fs_copy.
+        path1 = cast(str, self._strip_protocol(path1))
+        path2 = cast(str, self._strip_protocol(path2))
         resolved_src = self._resolve_path(path1)
         local_dst = self._local_url(path2)
         self._fs_copy(resolved_src, local_dst)

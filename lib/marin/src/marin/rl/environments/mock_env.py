@@ -10,8 +10,8 @@ from typing import Any, ClassVar, Protocol
 
 import jax
 import numpy as np
-from transformers import PreTrainedTokenizer
-
+from levanter.tokenizers import MarinTokenizer
+from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import RolloutGroup
 
@@ -206,7 +206,7 @@ class SequentialDigitsTask:
 
         return examples
 
-    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer: PreTrainedTokenizer) -> float:
+    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer: MarinTokenizer) -> float:
         """Compute reward based on sequential digit quality.
 
         Reward structure:
@@ -276,12 +276,9 @@ class MockEnv(MarinEnv):
         inference_ctx: BaseInferenceContext,
         n_examples: int,
         n_generations: int,
-        temperature: float,
+        decoding: DecodingConfig,
         prng_key,
         mode: str = "train",
-        max_tokens: int | None = None,
-        top_k: int | None = None,
-        stop: list[str] | None = None,
         system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample examples, generate responses, and create rollouts."""
@@ -306,10 +303,9 @@ class MockEnv(MarinEnv):
         prompts = list(sampled_examples.keys())
         completions = inference_ctx.batch_completions(
             prompts=prompts,
-            temperature=temperature,
             n=n_generations,
-            max_tokens=max_tokens,
-            stop=stop,
+            decoding=decoding,
+            system_prompt=system_prompt,
         )
 
         # Evaluate and create rollouts
@@ -323,7 +319,12 @@ class MockEnv(MarinEnv):
                 reward = self.task.compute_reward(true_answer, choice.message.content, tokenizer=inference_ctx.tokenizer)
 
                 rollout = inference_ctx.create_rollout_from_choice(
-                    prompt, choice, env_name=f"mock_env:{self.task_type}", env_example_id=hash(prompt), reward=reward
+                    prompt,
+                    choice,
+                    env_name=f"mock_env:{self.task_type}",
+                    env_example_id=hash(prompt),
+                    reward=reward,
+                    decoding=decoding,
                 )
 
                 group.append(rollout)
