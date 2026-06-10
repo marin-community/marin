@@ -1,6 +1,6 @@
 ---
 plan: tighten-iris-control-boundaries-multi-backend-readiness
-status: draft
+status: in-progress
 ---
 
 # Tighten Iris control boundaries (multi-backend readiness)
@@ -19,6 +19,47 @@ status: draft
 > end of tick**. `cluster=` is a **hard** constraint; the single-tick model is the target; the
 > `BackendResult` name stays (the `*Result` swarm collapses, so the earlier naming concern is
 > moot).
+
+## Status — independent layer landed (2026-06-10)
+
+T1–T3 are merged to `main`; T4/T5 are the remaining sequenced work, plus one new task (T6)
+from the post-merge audit.
+
+| Task | PR | Outcome |
+|---|---|---|
+| T1 / I5 | #6291 | **Scope reduced in review** — see I5 below. exec deadline 1 h → 15 min; fan-out bounds documented as named constants. The watchdog pool was rolled back: reconcile/ping fan-outs were *already* bounded (10 s/RPC × 128-way semaphore), and a tripped watchdog would leave a hung pool thread still mutating the shared `Autoscaler` while the next cycle dispatched — two unsynchronized writers. |
+| T2 / I2 | #6295 | As specced. One `Scheduler` (backend-owned, `rpc/backend.py:152`); residual demand computed in the scheduling pass (`backend.py:283`) and returned on `ScheduleResult`; autoscaler loop consumes the cached `_last_residual_demand`; dry-run + second snapshot + controller `Scheduler` deleted. Demand-parity tests pin holder/taint/absorption semantics. Validated live on `marin-dev` (fineweb 10BT dedup end-to-end). |
+| T3 / I4 | #6294 | As specced. `reads.py` is the DB fan-out point; `ControlSnapshot{worker_addresses, reconcile_rows, timeout_rows, health}` built by `load_control_snapshot` in one read txn (`reads.py:1612`), health tracker attached by the controller. |
+
+**Verified post-merge state (audit of `main`):**
+
+- **Still 7 `ManagedThread` loops** + uvicorn (`controller.py:493-541`): scheduling, polling/
+  reconcile, ping, dispatch, prune, autoscaler, checkpoint. T4 deletes ping; T5 collapses
+  scheduling/polling/dispatch/autoscaler into the tick.
+- **Health is mutated from two loops**: the ping loop (`ping`/`bump_heartbeat`/
+  `workers_over_threshold` → `_terminate_workers`, `controller.py:1075-1160`) and the reconcile
+  commit path (`heartbeat`/`build_failed`/`mark_unhealthy` via effects, `reconcile/commit.py:236-240`).
+  Ping and reconcile are two RPCs probing the same liveness fact — T4's deletion target stands.
+- **The uniform interface is closer than the plan assumed**: `K8sTaskProvider.schedule()`,
+  `manage_capacity()`, and `on_workers_failed()` are already no-ops returning empty results
+  (`k8s/tasks.py:1271-1283`), so the controller's three `placement`/`manages_capacity` branches
+  (`controller.py:757, 1029, 1174`) are largely redundant guards. The real remaining asymmetry
+  is the **input shape**: the controller builds dispatch-drain inputs for TASK_BACKEND and
+  reconcile-plan inputs for IRIS placement. T4's churn is mostly input/result unification, not
+  behavior change — risk lower than originally estimated.
+- **New finding — the autoscaler trades boundedness for loose threading** (violates
+  constraint #3): `Autoscaler.update()` spawns detached threads for scale-up
+  (`platform.create_slice()` blocks up to the 600 s GCP operation timeout inside the spawned
+  thread) and `terminate_slices_for_workers` spawns a thread per slice handle. The control
+  thread never blocks, but the work is untracked fire-and-forget. → **T6**.
+- **Cross-thread handoff without a sync boundary**: `_last_residual_demand` is written by the
+  scheduling loop (`controller.py:822, 844`) and read by the autoscaler loop
+  (`controller.py:1179`) with no ordering guarantee — benign under the GIL, but exactly the
+  skew constraint #6 targets. Resolved structurally by T5 (autoscale phase consumes the same
+  tick's result).
+- **Three snapshot builders remain on control paths**: `load_control_snapshot` (reconcile),
+  `build_scheduling_context` (`policy.py:932`), `refresh_reservation_claims` (`policy.py:661`).
+  Each is internally consistent; T5's "one snapshot per tick" folds them.
 
 ## Problem & goal
 
@@ -100,9 +141,8 @@ flowchart TB
     HT["WorkerHealthTracker (in-memory; reseeded from worker rows at startup)"]
 
     subgraph PURE["DB-free decision components"]
-        SCH["Scheduler.find_assignments (PURE) — TWO instances"]:::pure
-        DEM["compute_demand_entries — DRY-RUN on a 2nd snapshot"]:::problem
-        ASP["Autoscaler — owns slices + sibling logic"]
+        SCH["Scheduler.find_assignments (PURE) — one instance, backend-owned (T2 ✅)"]:::pure
+        ASP["Autoscaler — owns slices + sibling logic; spawns detached threads for cloud ops"]:::problem
     end
 
     subgraph BK["TaskBackend — 13-method contract; controller branches on type"]
@@ -112,8 +152,7 @@ flowchart TB
 
     L1 --> SCH
     L1 -->|"snapshot/commit"| DB
-    L5 -->|"2nd snapshot"| DB
-    L5 --> DEM -.->|"dry-run"| SCH
+    L1 -.->|"residual_demand via _last_residual_demand (no sync boundary)"| L5
     L5 --> ASP --> DB
     L2 -->|"snapshot/commit"| DB
     L2 -->|"reconcile"| RPCB
@@ -126,7 +165,6 @@ flowchart TB
     L6 --> DB
     L7 --> DB
 
-    L1 -.->|"⚠ demand skew"| L5
     L4 -.->|"⚠ backend-specific data through controller"| RPCB
 ```
 
@@ -371,6 +409,18 @@ reconcile to take ~5 s; no constant-time target, no global pool.
 dispatch policy (#5).
 **Risk:** low. Care item: choosing the reconcile/autoscale watchdog caps and the exec/profile caps.
 
+**Outcome (#6291, merged):** item 1 landed (exec deadline 1 h → 15 min via
+`EXEC_IN_CONTAINER_MAX_TIMEOUT`); item 2 — the watchdog pool — was **rolled back in review**.
+Two reasons: (a) the fan-outs are already bounded without it — every per-worker RPC carries
+`DEFAULT_WORKER_RPC_TIMEOUT` (10 s) under a 128-way semaphore, so a full reconcile completes in
+~`10s × ceil(workers/128)` even with the whole fleet hung; (b) a tripped watchdog abandons a
+pool thread that may still be mutating the shared `Autoscaler` while the next cycle dispatches
+a fresh call — two unsynchronized writers on `refresh`/`update` state, strictly worse than
+blocking. The constants and bound documentation were kept. **Residual gap:** the autoscaler's
+cloud operations are "bounded" only by being fire-and-forget in detached threads — that is
+constraint #3's loose threading, now tracked as **T6** (polled operations), which supersedes
+the watchdog idea for the capacity path.
+
 ## Constraint → improvement coverage
 
 | Constraint | Addressed by |
@@ -388,24 +438,20 @@ dispatch policy (#5).
 recommended landing sequence.
 
 ### T1 — I5: bound controller→backend RPCs  `exec: session`  `value: high`  `deps: —`
-Give the backend a small pool; run `reconcile`/`autoscale` ops under a fleet-size-aware
-watchdog deadline; replace the ~1-hour `exec` deadline with an explicit generous cap; leave
-the already-pooled one-offs bounded-in-place. Acceptance: a hung worker is surfaced as a
-reconcile error within the cap without blocking the caller; no backend call path lacks a timeout.
+**Done — #6291** (scope reduced in review; see I5 outcome). exec deadline 1 h → 15 min; fan-out
+bounds named + documented; watchdog pool rolled back (fan-outs already bounded; tripped watchdog
+risks overlapping autoscaler writers). Capacity-path boundedness moved to T6.
 
 ### T2 — I2: single scheduler + co-located residual demand  `exec: session`  `value: high`  `deps: —`
-Make the scheduling pass compute residual demand alongside assignments via one shared pure path
-on one `Scheduler` instance; have the autoscaler consume that same path instead of its own
-dry-run; delete `compute_demand_entries`' dry-run, the second snapshot, and the duplicate
-`Scheduler`. The autoscaler keeps its own thread for now (the thread collapse into the tick is
-T5). Acceptance: golden-fixture parity (same demand in/out incl. reservation/holder), exactly
-one `Scheduler` instance, one demand code path.
+**Done — #6295.** One backend-owned `Scheduler`; residual demand computed in the scheduling
+pass and returned on `ScheduleResult`; dry-run/second-snapshot/duplicate-`Scheduler` deleted;
+demand-parity tests pin reservation/holder/taint semantics; validated live on `marin-dev`.
 
 ### T3 — I4: one reads.py-built ControlSnapshot  `exec: session`  `value: medium`  `deps: —`
-Build a typed per-tick snapshot via `reads.py`, with the controller attaching a health view from
-the in-memory tracker; move the reconcile-input join + policy/budget/checkpoint raw selects
-behind `reads.py`. Acceptance: no schema query outside `reads.py`/`writes.py`/projections;
-snapshot carries the health view.
+**Done — #6294.** `ControlSnapshot` built by `load_control_snapshot` in one read txn; health
+tracker attached by the controller; reconcile-input join + policy/budget/checkpoint selects
+moved behind `reads.py`. (Remaining acceptable locals: `dispatch.py:_dispatch_query` — dissolves
+when T4 unifies dispatch into reconcile — and service-RPC detail-view queries.)
 
 ### T4 — I3: uniform backend interface + backend-observed health  `exec: session`  `value: high`  `deps: T2, T3`
 Define `BackendResult` + the uniform `schedule`/`reconcile`/`autoscale(snapshot)` interface;
@@ -422,13 +468,37 @@ branch and no `on_workers_failed`/`ping_workers`; backend imports no `db`/`reads
 per-tick path; the health tracker is mutated in exactly one place; a worker whose reconcile RPC
 fails the threshold is failed and its slice torn down with no ping loop.
 
+Post-merge audit notes (lowers risk): K8s `schedule`/`manage_capacity`/`on_workers_failed` are
+already no-ops, so the controller's capability branches are redundant guards — the real work is
+unifying the **input shape** (dispatch-drain vs reconcile-plan inputs both become
+`ControlSnapshot`) and the health-event flow. The Scheduler merge is already done (T2); strike
+it from this task's scope.
+
 ### T5 — I1: collapse the fast loops into one phased control tick  `exec: session`  `value: high`  `deps: T1, T2, T4`
 One driver: snapshot → schedule → reconcile(+health events) → apply-thresholds → autoscale →
 **single end-of-tick commit**; per-phase `due()`; wake → schedule-only mini-tick; drop
 ping/dispatch/autoscaler loops; keep prune/checkpoint + the in-memory tracker. Acceptance: one
 control thread; one read snapshot + one write txn per tick (counter/test); submit→assign latency
 = schedule time; reconcile cadence ≈ old ping interval (no liveness regression); chaos/integration
-suite green; behind a fallback flag.
+suite green; behind a fallback flag. Also fold the remaining control-path snapshot builders
+(`build_scheduling_context`, `refresh_reservation_claims`) into the per-tick snapshot, and
+replace the `_last_residual_demand` cross-thread field with same-tick dataflow.
+
+### T6 — autoscaler cloud ops become polled operations  `exec: session`  `value: medium`  `deps: T4`
+Today `Autoscaler.update()` and `terminate_slices_for_workers` spawn detached fire-and-forget
+threads that block inside cloud calls (GCP `create_slice`/`terminate` wait up to the 600 s
+operation timeout). Replace with the poll workflow: the autoscale phase *issues* the cloud
+request and records an operation handle in `AutoscalerState`; subsequent autoscale phases poll
+operation status (a fast bounded call) and fold completion/failure into state. No detached
+threads; every autoscale phase completes in bounded time; in-flight operations survive in
+`AutoscalerState` and are re-adopted after a controller restart the same way slices are.
+Acceptance: no `threading.Thread`/executor spawn inside the autoscaler runtime; an autoscale
+phase with a slow cloud API returns within its poll budget; an operation outcome lands in state
+within one poll interval of completion; restart with an in-flight create adopts or reconciles it.
+
+**Why this supersedes T1's watchdog for the capacity path:** the watchdog bounded the *wait*
+but left the work untracked on a hung thread; polled operations make the work itself a
+state-machine entry — bounded, observable, restart-safe, and aligned with constraint #3.
 
 ## Feasibility analysis
 
@@ -440,19 +510,20 @@ the autoscaler. **No data-model change at all** — health stays in-memory (rese
 today); only worker removal is serialized, as today. End state: 3 threads, one interface, one
 apply path.
 
-**Recommended landing sequence:**
+**Landing sequence (T1–T3 merged 2026-06-09):**
 
-1. **T1 (I5)** — independent; removes the 1-hour `exec` foot-gun and the inline-blocking
-   reconcile. Prereq for a safe single tick.
-2. **T2 (I2)** — independent; deletes the duplicate scheduling pass, the second snapshot, the
-   second `Scheduler`. Care item: demand parity.
-3. **T3 (I4)** — independent; produces the `ControlSnapshot` (with health view) T4 consumes.
-4. **T4 (I3)** — after T2 + T3; largest churn (uniform interface, health-events-into-backend,
-   autoscaler restore decoupling, dual-scheduler merge, flag deletion). Land
-   health-events-into-backend with the ping loop still present as belt-and-suspenders, then
+1. ~~**T1 (I5)**~~ — done (#6291, reduced scope; capacity-path boundedness → T6).
+2. ~~**T2 (I2)**~~ — done (#6295; demand parity pinned by tests, validated on `marin-dev`).
+3. ~~**T3 (I4)**~~ — done (#6294; `ControlSnapshot` with health view is now T4's input).
+4. **T4 (I3)** — next; largest churn (uniform interface, health-events-into-backend, autoscaler
+   restore decoupling, input-shape unification). The Scheduler merge already happened in T2.
+   Land health-events-into-backend with the ping loop still present as belt-and-suspenders, then
    remove ping in the same task once the backend events match the ping-derived liveness.
-5. **T5 (I1)** — last; after T1, T2, T4. The tick is then an ordering shell over functions that
-   already exist. Fallback flag; `marin-dev` bake.
+5. **T5 (I1)** — after T1, T2, T4. The tick is then an ordering shell over functions that
+   already exist; also folds the remaining snapshot builders and kills the
+   `_last_residual_demand` cross-thread handoff. Fallback flag; `marin-dev` bake.
+6. **T6** — after T4 (the autoscale phase is the natural home for issue-then-poll); independent
+   of T5 and can land in parallel with it.
 
 **Risk register:**
 
@@ -463,17 +534,20 @@ apply path.
 - *T5 (single tick)* — phase starvation/latency. Mitigation: per-phase `due()`; wake →
   schedule-only mini-tick; bounded reconcile (T1); single end-of-tick commit + reconcile
   self-heal; fallback flag. Never bounce the live controller without explicit OK.
-- *T2 (demand parity)* — golden-fixture test gates the dry-run deletion.
+- *T2 (demand parity)* — ~~golden-fixture test gates the dry-run deletion~~ landed; parity tests
+  in `test_reservation.py` are the regression gate.
 - *T4 (autoscaler DB-decoupling)* — `restore_from_db`/`recovery`/`persistence` touch the DB;
   keep restore controller-driven, off the per-tick path.
+- *T6 (operation adoption)* — an in-flight cloud operation must survive controller restart;
+  reuse the slice-adoption pattern rather than inventing a second recovery mechanism.
 - *K8s health* — events must come from pod status, not a daemon ping; verify the pod-diff
   reconcile already exposes enough to emit a pod-worker-unreachable event.
 - *Cross-region / cost* — none; pure control-plane code.
 - *Multi-backend itself is out of scope* — these five make it tractable; `BackendRegistry` +
   `cluster=` routing is a follow-on once T4 + T5 land.
 
-**Independently shippable now:** T1, T2, T3. **Sequenced:** T4 (after T2+T3) → T5 (after T1, T2,
-T4). Estimated ~6–7 focused sessions.
+**Shipped:** T1, T2, T3. **Sequenced:** T4 (after T2+T3) → T5 (after T1, T2, T4) ∥ T6 (after
+T4). Estimated ~3–4 remaining focused sessions.
 
 ## Decisions & open questions
 
@@ -484,9 +558,15 @@ T4). Estimated ~6–7 focused sessions.
   controller-owned, fed by backend health events; only worker removal is serialized (as today).
 - **`cluster=`:** a hard constraint.
 
+**Decided since (T1 review):**
+- **No watchdog pool over backend calls.** Fan-outs are bounded by per-RPC deadline × semaphore;
+  abandoning a hung pool thread that mutates shared autoscaler state is worse than blocking.
+  Capacity-path boundedness comes from T6's polled operations instead.
+
 **Open:**
 - **Observation resolution (I3):** backend returns raw observations and the controller resolves
   in the pure kernel (recommended), vs backend pre-resolves against the in-memory snapshot.
-- **I5 caps:** the reconcile/autoscale watchdog caps and the exec/profile caps (values?).
 - **`cluster=` routing (follow-on):** hard constraint resolved by a pre-scheduler dispatcher
   that partitions tasks per backend, or inside each backend's eligibility filter?
+- **T6 poll budget:** the per-phase cap on operation-status polls (the issue call itself can be
+  bounded at the HTTP layer, e.g. GCP's 30 s POST timeout).
