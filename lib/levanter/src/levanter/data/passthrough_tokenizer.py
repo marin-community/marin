@@ -48,7 +48,19 @@ class PassthroughTokenizer:
     def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
         if not text.strip():
             return []
-        return [int(t) for t in text.split()]
+        tokens: list[int] = []
+        for t in text.split():
+            try:
+                tokens.append(int(t))
+            except ValueError:
+                # Non-integer input (e.g. ".", probes from
+                # levanter.utils.hf_utils.byte_length_of_token). Return a
+                # vocab-id-0 placeholder so callers like
+                # `_calculate_bytes_per_token_type` don't crash; the resulting
+                # bytes-per-token estimate is a 1-byte fallback, which is
+                # fine for pre-tokenized integer corpora.
+                tokens.append(0)
+        return tokens
 
     def decode(self, ids: list[int], *, skip_special_tokens: bool = False) -> str:
         return " ".join(str(i) for i in ids)
