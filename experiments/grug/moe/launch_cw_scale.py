@@ -24,6 +24,9 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_HIDDEN_DIM / SCALE_NUM_LAYERS / SCALE_NUM_EXPERTS / SCALE_TOP_K
                         model-shape overrides (e.g. a smaller FSDP smoke test)
     SCALE_TRACKER       wandb | json_logger (default json_logger)
+    SCALE_PROFILER_STEPS  >0 enables a jax_profile capture window of N steps
+                          (use SCALE_TRACKER=wandb so the artifact uploads)
+    SCALE_PROFILER_START  profiler start step (default 8, past compile/warmup)
     RUN_ID              unique run identifier
 """
 
@@ -104,6 +107,14 @@ def build_scale_step() -> ExecutorStep:
     replica_axis = env_int("SCALE_REPLICA_AXIS", 1)
     batch_size = env_int("SCALE_BATCH", DEFAULT_BATCH)
     steps = env_int("SCALE_STEPS", 50)
+    # SCALE_PROFILER_STEPS > 0 captures a jax_profile window of that many steps
+    # (uploaded via the tracker, so pair with SCALE_TRACKER=wandb to retrieve it).
+    profiler_steps = env_int("SCALE_PROFILER_STEPS", 0)
+    profiler = ProfilerConfig(
+        enabled=profiler_steps > 0,
+        start_step=env_int("SCALE_PROFILER_START", 8),
+        num_steps=profiler_steps,
+    )
 
     model = build_scale_model()
     if model.num_experts % expert_axis != 0:
@@ -154,7 +165,7 @@ def build_scale_step() -> ExecutorStep:
             optimizer=versioned(SCALE_OPTIMIZER),
             grug_trainer=versioned(grug_trainer),
             eval=None,
-            profiler=ProfilerConfig(enabled=False),
+            profiler=profiler,
         ),
     )
 
