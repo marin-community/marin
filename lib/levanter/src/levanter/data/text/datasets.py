@@ -24,7 +24,12 @@ from rigging.timing import log_time
 import levanter
 from levanter.data import AsyncDataset
 from levanter.data.dataset import MappedAsyncDataset
-from levanter.data.mixture import MixtureDataset, StopStrategy, rescale_mixture_schedule_for_batch_schedule
+from levanter.data.mixture import (
+    ConcatDataset,
+    MixtureDataset,
+    StopStrategy,
+    rescale_mixture_schedule_for_batch_schedule,
+)
 from levanter.data.packing import GreedyPrepackedDataset
 from levanter.data.passthrough_tokenizer import PassthroughTokenizer
 from levanter.data.sharded_datasource import (
@@ -330,6 +335,11 @@ class DatasetComponent(DatasetComponentBase):
     pack: bool | int | Literal["pad"] | None = None
     tags: list[str] | None = None
     split: str = "validation"
+    flat_cache: bool = False
+    """If True, treat ``cache_dir`` as the cache root directly (no ``/<split>``
+    suffix appended) and as train-only (no validation cache produced). Use for
+    pre-built TreeCaches whose layout doesn't follow Levanter's ``<root>/train``
+    convention — e.g., shard-ledger-consolidated stores."""
 
 
 @DatasetComponentBase.register_subclass("direct")
@@ -338,6 +348,27 @@ class DirectDatasetComponent(DatasetComponentBase):
     """A programmatic dataset component that supplies AsyncDataset examples directly."""
 
     datasets: Mapping[str, AsyncDataset[GrugLmExample]]
+    tags: list[str] | None = None
+
+
+@DatasetComponentBase.register_subclass("concat")
+@dataclass(frozen=True)
+class ConcatDatasetComponent(DatasetComponentBase):
+    """A logical mixture component formed by concatenating cache-backed children.
+
+    Children are loaded from their own ``cache_dir``s on the worker (same as a
+    regular ``DatasetComponent``) and combined via :class:`ConcatDataset` into
+    a single AsyncDataset. The parent ``LmDataConfig.shuffle`` setting still
+    applies on top of the concatenated result, so global shuffling works
+    without an internal ``PermutationDataset``.
+
+    Use this for hierarchical loading where multiple per-partition caches
+    should behave as one logical mixture component without re-tokenizing into
+    a single merged cache (PR #4133 introduced the ``ConcatDataset`` primitive
+    that backs this).
+    """
+
+    children: dict[str, DatasetComponent]
     tags: list[str] | None = None
 
 
@@ -702,6 +733,27 @@ class LmDataConfig:
                 datasets[name] = direct
                 continue
 
+            if isinstance(component, ConcatDatasetComponent):
+                child_datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
+                for child_name, child in component.children.items():
+                    child_key = f"{name}/{child_name}"
+                    cache = caches.get(child_key)
+                    if cache is None:
+                        if split == "train":
+                            raise ValueError(f"No cache available for concat child {child_key} in {split} split")
+                        continue
+                    child_datasets[child_name] = dataset_for_component(
+                        child,
+                        Pos,
+                        cache,
+                        eos_id=self.the_tokenizer.eos_token_id,
+                        block_cross_document_attention=self.block_cross_document_attention,
+                    )
+                if not child_datasets:
+                    continue
+                datasets[name] = ConcatDataset(child_datasets)
+                continue
+
             if not isinstance(component, DatasetComponent):
                 raise ValueError(f"Unsupported component type for {name}: {type(component)}")
 
@@ -865,6 +917,13 @@ class LmDataConfig:
                 continue
             if isinstance(component, DirectDatasetComponent):
                 continue
+            if isinstance(component, ConcatDatasetComponent):
+                # Hierarchical groups expose each child as a regular cache entry
+                # keyed `<parent>/<child>`; `build_token_datasets` looks them up
+                # under those names and wraps them in `ConcatDataset`.
+                for child_name, child in component.children.items():
+                    items.append((f"{name}/{child_name}", child))
+                continue
             if not isinstance(component, DatasetComponent):
                 raise ValueError(f"Unsupported component type for {name}: {type(component)}")
             items.append((name, component))
@@ -883,7 +942,15 @@ class LmDataConfig:
         ) -> tuple[str, TreeCache[dict] | None, tuple[str, ShardedDataSource, LmDatasetFormatBase] | None]:
             name, component = item
             cache_root = _component_cache_dir(name, component, self.cache_dir)
-            cache_path = os.path.join(cache_root, split)
+            # flat_cache components are train-only TreeCaches at cache_root with
+            # no per-split subdir; skip them for non-train splits and load
+            # cache_root directly for train.
+            if getattr(component, "flat_cache", False):
+                if split != "train":
+                    return name, None, None
+                cache_path = cache_root
+            else:
+                cache_path = os.path.join(cache_root, split)
             source = component.source
 
             if source is None:
