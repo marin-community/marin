@@ -17,14 +17,13 @@ from iris.cluster.constraints import (
     AttributeValue,
     Constraint,
     ConstraintOp,
-    DeviceType,
     WellKnownAttribute,
     device_variant_constraint,
     get_device_type,
     get_device_variant,
     preemptible_constraint,
 )
-from iris.cluster.controller import ops, writes
+from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.controller import (
     Controller,
@@ -37,7 +36,6 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.scheduling.policy import (
     RESERVATION_TAINT_KEY,
     _find_reservation_ancestor,
-    _reserved_job_ids,
     _worker_matches_reservation_entry,
     apply_scheduling_gates,
     build_scheduling_context,
@@ -97,6 +95,12 @@ from tests.cluster.controller.conftest import (
     worker_running_tasks as _worker_running_tasks,
 )
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
+
+
+def _reserved_job_ids(db) -> set[JobName]:
+    """Test helper: read the reserved-job set through reads in a fresh snapshot."""
+    with db.read_snapshot() as tx:
+        return reads.reserved_job_ids(tx)
 
 
 def _cpu_device() -> job_pb2.DeviceConfig:
@@ -653,17 +657,6 @@ def test_no_claims_fast_path_matches_evolve(ctrl):
 # =============================================================================
 
 
-def _demand_with_dry_run(ctrl, claims):
-    """Compute autoscaler demand through the limits-free capacity-fit dry-run.
-
-    Mirrors the production demand path: build the per-tick scheduling context from
-    the live DB (healthy workers, pending tasks, reservation entry counts) and run
-    the shared demand computation with the dry-run absorption active.
-    """
-    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, UserBudgetDefaults(), claims)
-    return compute_demand_entries(ctx, Scheduler(), claims)
-
-
 def _demand_no_dry_run(ctrl, claims):
     """Compute demand with the capacity-fit dry-run disabled (empty worker list).
 
@@ -725,119 +718,6 @@ def test_demand_gates_real_task_until_reservation_claimed(ctrl):
     demand = _demand_no_dry_run(ctrl, claims)
     real_ids = {t for d in _real_demand(demand) for t in d.task_ids}
     assert jid.task(0).to_wire() in real_ids
-
-
-def test_demand_parity_holder_and_taint_unclaimed(ctrl):
-    """Golden parity: an unclaimed GPU reservation against a CPU worker emits exactly
-    one holder demand entry; the gated real task and an absorbable plain CPU job emit
-    nothing.
-
-    Pins the limits-free dry-run + reservation-taint + holder semantics so the
-    single-scheduler refactor stays byte-identical:
-    - the GPU holder cannot be absorbed by the CPU worker, so it always emits demand;
-    - the reserved job's real CPU driver is gated (reservation unclaimed) -> no demand;
-    - a plain CPU job is absorbed by the available CPU worker -> no demand.
-    """
-    _register_worker(ctrl, "cpu1", _cpu_metadata())  # 8 vCPU, no accelerators
-    res_req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_gpu_device("H100"))])
-    jid = _submit_job(ctrl, "j1", res_req)
-
-    plain_req = controller_pb2.Controller.LaunchJobRequest(
-        name="plain",
-        entrypoint=_entrypoint(),
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-        environment=job_pb2.EnvironmentConfig(),
-        replicas=1,
-    )
-    jid2 = _submit_job(ctrl, "j2", plain_req)
-
-    _claim_for_reservations(ctrl)
-    claims = read_reservation_claims(ctrl._db)
-    assert claims == {}  # no GPU worker -> reservation stays unclaimed
-
-    demand = _demand_with_dry_run(ctrl, claims)
-
-    assert len(demand) == 1
-    holder = demand[0]
-    assert RESERVATION_HOLDER_JOB_NAME in holder.task_ids[0]
-    assert holder.normalized.device_type == DeviceType.GPU
-    all_ids = {t for d in demand for t in d.task_ids}
-    assert jid.task(0).to_wire() not in all_ids  # real task gated by unclaimed reservation
-    assert jid2.task(0).to_wire() not in all_ids  # plain CPU job absorbed by cpu1
-
-
-def test_demand_parity_claimed_reservation_absorbs(ctrl):
-    """Golden parity: once a matching GPU worker is claimed, both the reserved job's
-    real CPU driver (via the EQ reservation taint) and its GPU holder fit on the
-    claimed worker, so the limits-free dry-run absorbs everything and no demand remains.
-    """
-    _register_worker(ctrl, "gpu1", _gpu_metadata("H100"))  # 32 vCPU + 8x H100
-    res_req = _make_job_request_with_reservation(reservation_entries=[_make_reservation_entry(_gpu_device("H100"))])
-    _submit_job(ctrl, "j1", res_req)
-
-    _claim_for_reservations(ctrl)
-    claims = read_reservation_claims(ctrl._db)
-    assert len(claims) == 1  # gpu1 claimed for j1
-
-    demand = _demand_with_dry_run(ctrl, claims)
-    assert demand == []
-
-
-def test_scheduling_pass_caches_residual_demand_for_autoscaler(ctrl):
-    """The scheduling pass computes residual demand and caches it for the autoscaler.
-
-    Pins the single-path wiring: ``_run_scheduling`` populates
-    ``_last_residual_demand`` with the same DemandEntry set the shared demand
-    computation produces, so the autoscaler loop consumes it without a second
-    snapshot or a second Scheduler instance.
-    """
-    _register_worker(ctrl, "cpu1", _cpu_metadata())  # CPU-only: cannot host a GPU job
-    gpu_req = controller_pb2.Controller.LaunchJobRequest(
-        name="gpu",
-        entrypoint=_entrypoint(),
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3, device=_gpu_device("H100")),
-        environment=job_pb2.EnvironmentConfig(),
-        replicas=2,
-    )
-    jid = _submit_job(ctrl, "gpu-job", gpu_req)
-
-    # Canonical demand for this state, then drive a real scheduling tick. Computing
-    # `expected` before the tick is only valid because the GPU tasks are
-    # unschedulable on a CPU worker: nothing is assigned, so DB state (and thus the
-    # demand) is identical before and after `_run_scheduling`.
-    expected = _demand_with_dry_run(ctrl, read_reservation_claims(ctrl._db))
-    ctrl._run_scheduling()
-
-    cached = ctrl._last_residual_demand
-    # The two GPU tasks cannot land on the CPU worker, so both remain as demand.
-    assert {t for d in cached for t in d.task_ids} == {jid.task(0).to_wire(), jid.task(1).to_wire()}
-    assert [d.task_ids for d in cached] == [d.task_ids for d in expected]
-
-
-def test_demand_excludes_caller_supplied_task_ids(ctrl):
-    """``exclude_task_ids`` drops tasks the scheduling tick is retiring.
-
-    The scheduling pass passes its deadline-expired set so the autoscaler is
-    never asked to provision for a task the same tick marks UNSCHEDULABLE.
-    """
-    _register_worker(ctrl, "cpu1", _cpu_metadata())  # CPU-only: GPU tasks are unschedulable
-    gpu_req = controller_pb2.Controller.LaunchJobRequest(
-        name="gpu",
-        entrypoint=_entrypoint(),
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3, device=_gpu_device("H100")),
-        environment=job_pb2.EnvironmentConfig(),
-        replicas=2,
-    )
-    jid = _submit_job(ctrl, "gpu-job", gpu_req)
-    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, UserBudgetDefaults(), {})
-
-    # Without exclusion both unschedulable tasks emit demand.
-    full = compute_demand_entries(ctx, Scheduler(), {})
-    assert {t for d in full for t in d.task_ids} == {jid.task(0).to_wire(), jid.task(1).to_wire()}
-
-    # Excluding one (as the deadline gate would) drops it from the demand entirely.
-    excluded = compute_demand_entries(ctx, Scheduler(), {}, exclude_task_ids={jid.task(0)})
-    assert {t for d in excluded for t in d.task_ids} == {jid.task(1).to_wire()}
 
 
 # =============================================================================

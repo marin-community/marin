@@ -11,6 +11,7 @@ import socket
 import tempfile
 import threading
 import time
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,7 +22,7 @@ from finelog.client import LogClient, RemoteLogHandler
 from finelog.client.proxy import LogServiceProxy, StatsServiceProxy
 from finelog.embedded import require_embedded_server
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
-from sqlalchemy import bindparam, select
+from sqlalchemy import Row
 
 from iris.cluster.backends.types import resolve_external_host
 from iris.cluster.bundle import BundleStore
@@ -45,7 +46,7 @@ from iris.cluster.controller.checkpoint import (
     write_checkpoint,
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.ops.task import (
     Assignment,
     apply_dispatch_updates,
@@ -77,14 +78,7 @@ from iris.cluster.controller.scheduling.policy import (
 from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
-from iris.cluster.controller.schema import (
-    ReservationClaim,
-    hint_rare_state,
-    job_config_table,
-    task_attempts_table,
-    tasks_table,
-    workers_table,
-)
+from iris.cluster.controller.schema import ReservationClaim
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
@@ -411,9 +405,8 @@ class Controller:
         # genuinely None before the first scheduling tick has run.
         self._last_scheduling_context: SchedulingContext | None = None
 
-        # Residual demand from the most recent scheduling tick. The scheduling
-        # pass computes it alongside assignments (one Scheduler, one snapshot);
-        # the autoscaler loop reads it instead of running its own demand pass.
+        # Residual demand from the most recent scheduling tick, computed by the
+        # scheduling pass alongside assignments and read by the autoscaler loop.
         # Empty until the first tick with pending work runs.
         self._last_residual_demand: list[DemandEntry] = []
 
@@ -456,8 +449,7 @@ class Controller:
         """
         now_ms = Timestamp.now().epoch_ms()
         with self._db.read_snapshot() as q:
-            rows = q.execute(select(workers_table.c.worker_id)).all()
-        worker_ids = [WorkerId(str(row.worker_id)) for row in rows]
+            worker_ids = reads.all_worker_ids(q)
         if worker_ids:
             self._health.heartbeat(worker_ids, now_ms)
 
@@ -916,37 +908,14 @@ class Controller:
         """Return cached scheduling diagnostic for a job, or None if unavailable."""
         return self._scheduling_diagnostics.get(job_wire_id)
 
-    def _scan_execution_timeouts(self, snap: Any, now_ms: int) -> list[TerminalDecision]:
-        """Find executing tasks past their deadline within an existing read snapshot.
+    def _timeout_decisions(self, timeout_rows: Sequence[Row], now_ms: int) -> list[TerminalDecision]:
+        """Turn execution-timeout rows from the snapshot into TIMEOUT decisions.
 
-        Issued inline with the reconcile snapshot so the timeout sweep adds one
-        query (not a fresh snapshot open) per reconcile tick where the limiter
-        fires. Returned decisions are applied by the caller inside the same
-        write transaction as the reconcile results.
+        A row becomes a decision only once its attempt's
+        ``started_at_ms + timeout_ms`` is already in the past.
         """
-        rows = snap.execute(
-            select(
-                tasks_table.c.task_id,
-                task_attempts_table.c.started_at_ms,
-                job_config_table.c.timeout_ms,
-            )
-            .select_from(
-                tasks_table.join(job_config_table, job_config_table.c.job_id == tasks_table.c.job_id).join(
-                    task_attempts_table,
-                    (task_attempts_table.c.task_id == tasks_table.c.task_id)
-                    & (task_attempts_table.c.attempt_id == tasks_table.c.current_attempt_id),
-                )
-            )
-            .where(
-                hint_rare_state(tasks_table.c.state.in_(bindparam("executing_states", expanding=True))),
-                job_config_table.c.timeout_ms.is_not(None),
-                job_config_table.c.timeout_ms > 0,
-                task_attempts_table.c.started_at_ms.is_not(None),
-            ),
-            {"executing_states": [int(job_pb2.TASK_STATE_BUILDING), int(job_pb2.TASK_STATE_RUNNING)]},
-        ).all()
         decisions: list[TerminalDecision] = []
-        for row in rows:
+        for row in timeout_rows:
             if row.started_at_ms.epoch_ms() + int(row.timeout_ms) > now_ms:
                 continue
             logger.warning("Task %s exceeded execution timeout, killing", row.task_id)
@@ -962,7 +931,7 @@ class Controller:
     def _mark_tasks_unschedulable(self, tasks: list[Any]) -> None:
         """Mark a batch of tasks as unschedulable due to scheduling timeout.
 
-        Each entry must be a row from ``_pending_tasks_with_jobs``; it carries
+        Each entry must be a row from ``reads.pending_tasks_with_jobs``; it carries
         ``scheduling_timeout_ms`` so no secondary DB fetch is needed.
         """
         if not tasks:
@@ -1007,80 +976,45 @@ class Controller:
     # Worker lifecycle RPC dispatch (Reconcile / Ping)
     # =========================================================================
 
-    def _snapshot_reconcile_inputs(
-        self, scan_timeouts: bool, now_ms: int
-    ) -> tuple[ReconcileInputs, dict[WorkerId, str], list[TerminalDecision]]:
-        """Snapshot the DB and assemble the reconcile inputs for one tick.
+    def _build_run_templates(
+        self, snap: Tx, reconcile_rows: list[ReconcileRow]
+    ) -> dict[JobName, job_pb2.RunTaskRequest]:
+        """Build per-job ``RunTaskRequest`` templates for the ASSIGNED reconcile rows.
 
-        When ``scan_timeouts`` is True, also issues the execution-timeout
-        deadline scan inside the same read snapshot so the sweep adds one
-        query (not a fresh snapshot open) per limiter tick.
+        ``run_request_template`` can return ``None`` for jobs the scheduler hasn't
+        cached yet (e.g. reservation holders); those are dropped from the map.
+        """
+        templates_by_job: dict[JobName, job_pb2.RunTaskRequest | None] = {}
+        for row in reconcile_rows:
+            if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
+                continue
+            if row.job_id not in templates_by_job:
+                templates_by_job[row.job_id] = dispatch.run_request_template(self._run_template_cache, snap, row.job_id)
+        return {jid: spec for jid, spec in templates_by_job.items() if spec is not None}
+
+    def _snapshot_reconcile_inputs(self, scan_timeouts: bool) -> tuple[reads.ControlSnapshot, ReconcileInputs]:
+        """Build the per-cycle :class:`ControlSnapshot` and derive reconcile inputs.
+
+        The control snapshot — live worker set, worker-bound attempt rows, and
+        (when ``scan_timeouts``) the execution-timeout rows — is assembled by
+        ``reads.load_control_snapshot`` in one read transaction. The per-job run
+        templates need the same open snapshot, so they are built before it
+        closes. The returned ``ReconcileInputs`` is the backend call shape; the
+        snapshot carries worker addresses, timeout rows, and the health view.
         """
         with self._db.read_snapshot() as snap:
-            addresses = reads.list_active_healthy_workers(snap, self._health)
-            if not addresses:
-                timeout_decisions = self._scan_execution_timeouts(snap, now_ms) if scan_timeouts else []
-                return ReconcileInputs(job_specs={}, worker_ids=[], rows_by_worker={}), {}, timeout_decisions
-            worker_ids = list(addresses)
-            # Snapshot current attempts for ``worker_ids``. Workers not in
-            # ``worker_ids`` are filtered in Python so the partial index
-            # ``idx_task_attempts_live_workerbound`` remains active rather
-            # than falling back to a scan on a long IN list. We deliberately
-            # do NOT filter on task state: active rows (ASSIGNED/BUILDING/
-            # RUNNING) drive normal reconciliation; rows whose task has
-            # already moved to a terminal state but whose attempt is still
-            # worker-bound (worker_id set, finished_at_ms NULL) are stranded
-            # attempts whose terminal Reconcile observation was lost.
-            # Including them in the desired set gives the worker a second
-            # chance to report -- either with the real terminal status or
-            # via the MISSING synthesis in ``handle_reconcile`` -- so the
-            # reconcile-observation path can stamp finished_at_ms. Without this, a single
-            # lost RPC strands the attempt forever, since no other code path
-            # polls about it.
-            target_ids: set[WorkerId] = set(worker_ids)
-            raw_rows = snap.execute(
-                select(
-                    task_attempts_table.c.worker_id,
-                    tasks_table.c.task_id,
-                    task_attempts_table.c.attempt_id,
-                    tasks_table.c.state.label("task_state"),
-                    task_attempts_table.c.state.label("attempt_state"),
-                    tasks_table.c.job_id,
-                    task_attempts_table.c.attempt_uid,
-                )
-                .select_from(
-                    task_attempts_table.join(
-                        tasks_table,
-                        (tasks_table.c.task_id == task_attempts_table.c.task_id)
-                        & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
-                    )
-                )
-                .where(
-                    task_attempts_table.c.worker_id.is_not(None),
-                    task_attempts_table.c.finished_at_ms.is_(None),
-                ),
-            ).all()
-            rows = [row for row in raw_rows if row.worker_id in target_ids]
-            templates_by_job: dict[JobName, job_pb2.RunTaskRequest | None] = {}
-            for row in rows:
-                if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
-                    continue
-                if row.job_id not in templates_by_job:
-                    templates_by_job[row.job_id] = dispatch.run_request_template(
-                        self._run_template_cache, snap, row.job_id
-                    )
-            timeout_decisions = self._scan_execution_timeouts(snap, now_ms) if scan_timeouts else []
+            control = reads.load_control_snapshot(snap, self._health, scan_timeouts=scan_timeouts)
+            job_specs = self._build_run_templates(snap, control.reconcile_rows)
 
-        rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in worker_ids}
-        for row in rows:
+        rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in control.worker_addresses}
+        for row in control.reconcile_rows:
             rows_by_worker[row.worker_id].append(row)
-
-        # ``templates_by_job`` can carry ``None`` for jobs the scheduler hasn't
-        # cached yet; reconcile_worker checks the dict membership so feeding it
-        # the raw map is harmless. Filter Nones to keep the type tight.
-        job_specs = {jid: spec for jid, spec in templates_by_job.items() if spec is not None}
-        inputs = ReconcileInputs(job_specs=job_specs, worker_ids=worker_ids, rows_by_worker=rows_by_worker)
-        return inputs, addresses, timeout_decisions
+        inputs = ReconcileInputs(
+            job_specs=job_specs,
+            worker_ids=list(control.worker_addresses),
+            rows_by_worker=rows_by_worker,
+        )
+        return control, inputs
 
     def _reconcile_tick(self) -> None:
         """One polling-tick reconcile pass: snapshot, fan out, apply.
@@ -1097,13 +1031,14 @@ class Controller:
 
         now = Timestamp.now()
         scan_timeouts = self._timeout_rate_limiter.should_run()
-        inputs, addresses, timeout_decisions = self._snapshot_reconcile_inputs(scan_timeouts, now.epoch_ms())
+        snapshot, inputs = self._snapshot_reconcile_inputs(scan_timeouts)
+        timeout_decisions = self._timeout_decisions(snapshot.timeout_rows, now.epoch_ms())
         if not inputs.worker_ids and not timeout_decisions:
             return
 
         plans = build_reconcile_plans(inputs) if inputs.worker_ids else []
         if plans:
-            reconcile_input = BackendReconcileInput(plans=plans, worker_addresses=addresses)
+            reconcile_input = BackendReconcileInput(plans=plans, worker_addresses=snapshot.worker_addresses)
             results = self._task_backend.reconcile(reconcile_input).worker_results
         else:
             results = []
@@ -1118,7 +1053,7 @@ class Controller:
                     cur,
                     plan_by_worker,
                     results,
-                    health=self._health,
+                    health=snapshot.health,
                     endpoints=self._endpoints,
                     now=now,
                 )
@@ -1126,7 +1061,7 @@ class Controller:
                 finalize(
                     cur,
                     timeout_decisions,
-                    health=self._health,
+                    health=snapshot.health,
                     endpoints=self._endpoints,
                     now=now,
                 )
@@ -1230,9 +1165,8 @@ class Controller:
         persist the returned state.
 
         Called from the autoscaler loop thread. Demand comes from the scheduling
-        pass (cached in ``_last_residual_demand``), so this loop does not run its
-        own demand computation. The controller owns every DB read and write; the
-        backend never touches the database.
+        pass via ``_last_residual_demand``. The controller owns every DB read and
+        write; the backend never touches the database.
         """
         if self._config.dry_run:
             logger.info("[DRY-RUN] Skipping autoscaler cycle (manage_capacity)")
@@ -1241,9 +1175,6 @@ class Controller:
             return
 
         worker_status_map = self._build_worker_status_map()
-        # Demand is computed by the scheduling pass (one Scheduler, one snapshot)
-        # and cached here; the autoscaler consumes it rather than running its own
-        # dry-run on a second snapshot.
         result = self._task_backend.manage_capacity(
             CapacityInput(worker_status_map=worker_status_map, demand_entries=self._last_residual_demand)
         )

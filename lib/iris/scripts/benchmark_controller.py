@@ -80,9 +80,6 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcilePlan,
     build_reconcile_plans,
 )
-from iris.cluster.controller.scheduling.policy import (
-    _pending_tasks_with_jobs as _schedulable_tasks,
-)
 from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
@@ -1139,7 +1136,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
             )
             pending_count += int(_tx.execute(text("SELECT changes() AS c")).scalar() or 0)
     with db.read_snapshot() as _ptx:
-        pending_tasks = _schedulable_tasks(_ptx)
+        pending_tasks = reads.pending_tasks_with_jobs(_ptx)
     with db.read_snapshot() as _wtx:
         workers = reads.healthy_active_workers_with_attributes(_wtx, health, _NoAttrs())
     print(
@@ -1175,7 +1172,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # ---- Full tick: _read_scheduling_state-style aggregate ----
     def _state_read():
         with db.read_snapshot() as _ptx:
-            _schedulable_tasks(_ptx)
+            reads.pending_tasks_with_jobs(_ptx)
         with db.read_snapshot() as _rtx:
             ws = reads.healthy_active_workers_with_attributes(_rtx, health, _NoAttrs())
         with db_mod.read_snapshot(db.sa_read_engine) as snap:

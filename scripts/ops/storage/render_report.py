@@ -16,7 +16,7 @@ This keeps the working set in the low millions of rows regardless of how
 many billions of objects the scan produced.
 
 Usage (standalone):
-    uv run scripts/ops/storage/report.py [PARQUET_DIR]
+    uv run scripts/ops/storage/render_report.py [PARQUET_DIR]
 
 The default parquet directory is scripts/ops/storage/purge/objects_parquet/.
 """
@@ -24,6 +24,7 @@ The default parquet directory is scripts/ops/storage/purge/objects_parquet/.
 from __future__ import annotations
 
 import hashlib
+import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,12 +32,15 @@ from pathlib import Path
 import click
 import duckdb
 import fsspec
+import pyarrow as pa
+import pyarrow.parquet as pq
 from tqdm import tqdm
 
 from scripts.ops.storage.constants import (
     BUCKET_LOCATIONS,
     DISCOUNT_FACTOR,
     STORAGE_CLASS_PRICING,
+    human_bytes,
 )
 
 
@@ -213,8 +217,8 @@ def _build_summaries(
         total_bytes += tb or 0
         pbar.set_postfix(
             cached=cache_hits,
-            objects=f"{total_objects/1e6:.1f}M",
-            size=f"{total_bytes/1e12:.2f}TB",
+            objects=f"{total_objects / 1e6:.1f}M",
+            size=f"{total_bytes / 1e12:.2f}TB",
             refresh=False,
         )
 
@@ -232,7 +236,7 @@ def _build_summaries(
     conn.execute(f"CREATE VIEW dir_summary AS SELECT * FROM read_parquet([{dir_list}])")
     conn.execute(f"CREATE VIEW time_summary AS SELECT * FROM read_parquet([{time_list}])")
     print(
-        f"views registered: dir_summary over {len(dir_files)} leaves, " f"time_summary over {len(time_files)} leaves",
+        f"views registered: dir_summary over {len(dir_files)} leaves, time_summary over {len(time_files)} leaves",
         file=sys.stderr,
     )
 
@@ -582,12 +586,211 @@ def _md_table(headers: list[str], rows: list[list[str]], align: list[str] | None
 
 
 # ---------------------------------------------------------------------------
+# Week-over-week snapshots + diff
+#
+# Each run archives a compact per-(bucket, dir_prefix) snapshot to a stable
+# history directory. The next run loads the most recent prior snapshot and
+# flags prefixes whose size moved by more than a threshold. The snapshot only
+# keeps prefixes above SNAPSHOT_MIN_BYTES so it stays a few thousand rows (KB),
+# cheap to archive weekly and diff — small churn below the floor is noise.
+# ---------------------------------------------------------------------------
+
+# Prefixes smaller than this are not archived (keeps snapshots tiny). A prefix
+# that grows from below the floor to above the change threshold still shows up
+# as "new" because its prior bytes are treated as zero.
+SNAPSHOT_MIN_BYTES = 1 * 1024**3  # 1 GiB
+
+# A prefix whose size moves by at least this much between runs is flagged.
+DEFAULT_CHANGE_THRESHOLD_BYTES = 100 * 1024**3  # 100 GiB
+
+_SNAPSHOT_SCHEMA = pa.schema(
+    [
+        ("bucket", pa.string()),
+        ("dir_prefix", pa.string()),
+        ("object_count", pa.int64()),
+        ("total_bytes", pa.int64()),
+        ("monthly_cost", pa.float64()),
+    ]
+)
+
+_SNAPSHOT_NAME_RE = re.compile(r"dir_summary-(\d{4}-\d{2}-\d{2})\.parquet$")
+
+
+def snapshot_dir_summary(conn: duckdb.DuckDBPyConnection) -> list[dict]:
+    """Per-(bucket, dir_prefix) rollup (>= SNAPSHOT_MIN_BYTES) for diffing."""
+    rows = conn.execute(
+        f"""
+        SELECT
+            s.bucket,
+            s.dir_prefix,
+            SUM(s.object_count) AS object_count,
+            SUM(s.total_bytes) AS total_bytes,
+            SUM({_ROW_COST}) AS monthly_cost
+        FROM dir_summary s
+        JOIN storage_classes sc ON s.storage_class_id = sc.id
+        GROUP BY s.bucket, s.dir_prefix
+        HAVING SUM(s.total_bytes) >= {SNAPSHOT_MIN_BYTES}
+        """
+    ).fetchall()
+    return [
+        {
+            "bucket": r[0],
+            "dir_prefix": r[1],
+            "object_count": int(r[2]),
+            "total_bytes": int(r[3]),
+            "monthly_cost": float(r[4]),
+        }
+        for r in rows
+    ]
+
+
+def snapshot_path(history_dir: str, date_str: str) -> str:
+    return f"{history_dir.rstrip('/')}/dir_summary-{date_str}.parquet"
+
+
+def write_snapshot(rows: list[dict], path: str) -> None:
+    table = pa.Table.from_pylist(rows, schema=_SNAPSHOT_SCHEMA)
+    with fsspec.open(path, "wb") as f:
+        pq.write_table(table, f)
+
+
+def read_snapshot(path: str) -> list[dict]:
+    with fsspec.open(path, "rb") as f:
+        return pq.read_table(f).to_pylist()
+
+
+def find_latest_snapshot(history_dir: str, *, before_date: str | None = None) -> tuple[str, str] | None:
+    """Return (full_path, date) of the most recent snapshot, or None.
+
+    ``before_date`` (YYYY-MM-DD) excludes snapshots on or after that date so a
+    run never diffs against itself when re-run on the same day.
+    """
+    fs, _ = fsspec.core.url_to_fs(history_dir)
+    try:
+        candidates = fs.glob(f"{history_dir.rstrip('/')}/dir_summary-*.parquet")
+    except FileNotFoundError:
+        return None
+    dated: list[tuple[str, str]] = []
+    for path in candidates:
+        match = _SNAPSHOT_NAME_RE.search(path)
+        if not match:
+            continue
+        date = match.group(1)
+        if before_date is not None and date >= before_date:
+            continue
+        dated.append((date, path))
+    if not dated:
+        return None
+    date, path = max(dated)
+    return fs.unstrip_protocol(path), date
+
+
+def compute_changes(current: list[dict], previous: list[dict], *, threshold_bytes: int) -> list[dict]:
+    """Flag (bucket, dir_prefix) prefixes whose byte size moved >= threshold."""
+    cur_by_key = {(r["bucket"], r["dir_prefix"]): r for r in current}
+    prev_by_key = {(r["bucket"], r["dir_prefix"]): r for r in previous}
+
+    changes: list[dict] = []
+    for key in set(cur_by_key) | set(prev_by_key):
+        cur = cur_by_key.get(key)
+        prev = prev_by_key.get(key)
+        now_bytes = cur["total_bytes"] if cur else 0
+        was_bytes = prev["total_bytes"] if prev else 0
+        delta = now_bytes - was_bytes
+        if abs(delta) < threshold_bytes:
+            continue
+        if prev is None:
+            status = "new"
+        elif cur is None:
+            status = "gone"
+        elif delta > 0:
+            status = "grew"
+        else:
+            status = "shrank"
+        changes.append(
+            {
+                "bucket": key[0],
+                "dir_prefix": key[1],
+                "delta_bytes": delta,
+                "now_bytes": now_bytes,
+                "was_bytes": was_bytes,
+                "status": status,
+            }
+        )
+    changes.sort(key=lambda c: abs(c["delta_bytes"]), reverse=True)
+    return changes
+
+
+def _fmt_delta(num_bytes: int) -> str:
+    sign = "+" if num_bytes >= 0 else "-"
+    return f"{sign}{human_bytes(abs(num_bytes))}"
+
+
+def _changes_table(changes: list[dict], *, limit: int) -> str:
+    shown = changes[:limit]
+    rows = [
+        [
+            c["bucket"],
+            c["dir_prefix"],
+            _fmt_delta(c["delta_bytes"]),
+            _fmt_tb(c["now_bytes"]),
+            _fmt_tb(c["was_bytes"]),
+            c["status"],
+        ]
+        for c in shown
+    ]
+    table = _md_table(
+        ["Bucket", "Prefix", "Δ Size", "Now (TB)", "Was (TB)", "Status"],
+        rows,
+        align=["l", "l", "r", "r", "r", "l"],
+    )
+    if len(changes) > limit:
+        table += f"\n_(+{len(changes) - limit} more above threshold)_\n"
+    return table
+
+
+def render_changes_section(
+    changes: list[dict],
+    *,
+    previous_date: str | None,
+    threshold_bytes: int,
+    limit: int = 30,
+) -> str:
+    """Markdown for the week-over-week section. ``previous_date=None`` = baseline.
+
+    Splits into Increases (growth — more alarming, shown first) and Decreases
+    (cleanup), each sorted by magnitude.
+    """
+    if previous_date is None:
+        return "## Week-over-Week Changes\n\n_No prior snapshot — baseline established for next run._\n"
+
+    threshold_human = human_bytes(threshold_bytes)
+    header = f"## Week-over-Week Changes\n\n_Prefixes whose size moved by ≥ {threshold_human} since {previous_date}._\n"
+    if not changes:
+        return header + "\n_No changes above threshold._\n"
+
+    increases = sorted((c for c in changes if c["delta_bytes"] > 0), key=lambda c: c["delta_bytes"], reverse=True)
+    decreases = sorted((c for c in changes if c["delta_bytes"] < 0), key=lambda c: c["delta_bytes"])
+
+    parts = [header]
+    parts.append("\n### Increases\n")
+    parts.append("\n" + (_changes_table(increases, limit=limit) if increases else "_None above threshold._\n"))
+    parts.append("\n### Decreases\n")
+    parts.append("\n" + (_changes_table(decreases, limit=limit) if decreases else "_None above threshold._\n"))
+    return "".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Report generation
 # ---------------------------------------------------------------------------
 
 
-def generate_report(conn: duckdb.DuckDBPyConnection) -> str:
-    """Generate a full storage usage report as markdown."""
+def generate_report(conn: duckdb.DuckDBPyConnection, *, changes_section: str | None = None) -> str:
+    """Generate a full storage usage report as markdown.
+
+    ``changes_section`` is the pre-rendered week-over-week block (see
+    ``render_changes_section``); when provided it is inserted after Overview.
+    """
     overview = _query_overview(conn)
     by_bucket = _query_by_bucket(conn)
     by_class = _query_by_storage_class(conn)
@@ -615,6 +818,9 @@ def generate_report(conn: duckdb.DuckDBPyConnection) -> str:
             align=["l", "r"],
         )
     )
+
+    if changes_section is not None:
+        parts.append(changes_section)
 
     parts.append("## By Bucket\n")
     parts.append(
@@ -747,18 +953,48 @@ def generate_report(conn: duckdb.DuckDBPyConnection) -> str:
     "-o",
     help="Write markdown report to file (local path or gs:// URL; default: stdout).",
 )
-def main(parquet_dir: str, output: str | None) -> None:
+@click.option(
+    "--history-dir",
+    help="Directory (local or gs://) of dated snapshots. When set, the report "
+    "archives this run's snapshot and adds a week-over-week changes section "
+    "diffing against the most recent prior snapshot.",
+)
+@click.option(
+    "--change-threshold-gib",
+    default=DEFAULT_CHANGE_THRESHOLD_BYTES / 1024**3,
+    show_default=True,
+    type=float,
+    help="Flag prefixes whose size moved by at least this many GiB.",
+)
+def main(parquet_dir: str, output: str | None, history_dir: str | None, change_threshold_gib: float) -> None:
     """Generate a storage usage report from parquet output of a scan.
 
     PARQUET_DIR may be a local directory or a gs:// path (auto-downloaded
     to /tmp/storage-scan-cache via fsspec).
 
     Examples:
-        uv run scripts/ops/storage/report.py gs://marin-us-central2/tmp/storage-scan-v7
-        uv run scripts/ops/storage/report.py ./local_parquet -o report.md
+        uv run scripts/ops/storage/render_report.py gs://marin-us-central2/tmp/storage-scan-v7
+        uv run scripts/ops/storage/render_report.py ./local_parquet -o report.md
     """
     conn = load_parquet_db(parquet_dir)
-    report = generate_report(conn)
+    changes_section = None
+    current_snapshot = None
+    if history_dir:
+        threshold_bytes = int(change_threshold_gib * 1024**3)
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        current_snapshot = snapshot_dir_summary(conn)
+        prior = find_latest_snapshot(history_dir, before_date=today)
+        if prior is None:
+            changes_section = render_changes_section([], previous_date=None, threshold_bytes=threshold_bytes)
+        else:
+            prev_path, prev_date = prior
+            changes = compute_changes(current_snapshot, read_snapshot(prev_path), threshold_bytes=threshold_bytes)
+            changes_section = render_changes_section(changes, previous_date=prev_date, threshold_bytes=threshold_bytes)
+    report = generate_report(conn, changes_section=changes_section)
+    if history_dir and current_snapshot is not None:
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        write_snapshot(current_snapshot, snapshot_path(history_dir, today))
+        print(f"Snapshot archived: {snapshot_path(history_dir, today)}", file=sys.stderr)
     if output:
         if output.startswith("gs://"):
             with fsspec.open(output, "w") as f:
