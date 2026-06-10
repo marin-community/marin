@@ -18,18 +18,19 @@ from pathlib import Path
 import pytest
 from finelog.rpc import logging_pb2
 from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
+from iris.cluster.controller import ops, reads, writes
+from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.ops.task import Assignment, apply_dispatch_updates, finalize
+from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow
+from iris.cluster.controller.pruner import PruneResult, prune_old_data
+from iris.cluster.controller.reads import WorkerResourceUsage
 
 # =============================================================================
 # Test Helpers
 # =============================================================================
-from iris.cluster.controller import direct_provider, ops, reads, writes
-from iris.cluster.controller.autoscaler.models import DemandEntry
-from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.ops.task import Assignment, apply_direct_provider_updates, finalize
-from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow
-from iris.cluster.controller.pruner import PruneResult, prune_old_data
-from iris.cluster.controller.reads import WorkerResourceUsage
+from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.batches import _kill_non_terminal_tasks
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.effects import JobRowDelta
@@ -44,14 +45,14 @@ from iris.cluster.controller.reconcile.snapshot import (
     TransitionSnapshot,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
-from iris.cluster.controller.scheduler import (
+from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
+from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     JobRequirements,
     Scheduler,
     SchedulingContext,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.scheduling_policy import compute_demand_entries
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table, workers_table
 from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, TaskAttempt, UserBudgetDefaults, WorkerId
@@ -114,6 +115,16 @@ def _endpoints(state: ControllerTestState, query: EndpointQuery = EndpointQuery(
     rows = state._endpoints.query(query)
     # Mirror the original helper's ordering (registered_at DESC, endpoint_id ASC).
     return sorted(rows, key=lambda r: (-r.registered_at.epoch_ms(), r.endpoint_id))
+
+
+def _demand_entries(state: ControllerTestState):
+    """Compute autoscaler demand through the shared scheduling-context path.
+
+    Mirrors the production demand path: build the per-tick scheduling context
+    from the live DB and run the single demand computation over it.
+    """
+    ctx = build_scheduling_context(state._db, state._health, state._worker_attrs, UserBudgetDefaults(), {})
+    return compute_demand_entries(ctx, Scheduler(), {})
 
 
 def _build_scheduling_context(scheduler: Scheduler, state: ControllerTestState):
@@ -522,7 +533,7 @@ def test_cancelled_job_tasks_excluded_from_demand(harness):
         assert not check_task_can_be_scheduled(harness.query_task(task.task_id))
 
     assert len(_schedulable_tasks(harness.state)) == 0
-    assert len(compute_demand_entries(harness.state._db)) == 0
+    assert len(_demand_entries(harness.state)) == 0
 
 
 # =============================================================================
@@ -1211,11 +1222,11 @@ def test_worker_can_accept_new_task_after_previous_completes(state):
 
 
 def test_multiple_small_tasks_fill_worker_capacity(state):
-    """E2E: Multiple small tasks can fill a worker's capacity, blocking further assignments.
+    """E2E: cumulative resource usage across tasks fills a worker and blocks the rest.
 
-    This verifies that the scheduler correctly tracks cumulative resource usage across
-    multiple running tasks. With round-robin scheduling, each worker gets at most one
-    task per cycle, so we run multiple cycles to fill capacity.
+    Verifies the scheduler tracks committed CPU across tasks: a 4-CPU worker takes
+    two 2-CPU tasks (capacity-limited, within the per-cycle assignment cap), and the
+    third does not fit and stays pending.
     """
 
     # Worker with 4 CPUs
@@ -1227,23 +1238,15 @@ def test_multiple_small_tasks_fill_worker_capacity(state):
 
     scheduler = Scheduler()
 
-    # First scheduling cycle: 1 task assigned (round-robin: 1 per worker per cycle)
+    # One cycle fills the worker to capacity: two 2-CPU tasks on 4 CPUs.
     context = _build_scheduling_context(scheduler, state)
     result = scheduler.find_assignments(context)
-    assert len(result.assignments) == 1
+    assert len(result.assignments) == 2
     for task_id, worker_id in result.assignments:
         task = _query_task(state, task_id)
         dispatch_task(state, task, worker_id)
 
-    # Second scheduling cycle: 1 more task assigned (worker still has 2 CPUs)
-    context = _build_scheduling_context(scheduler, state)
-    result = scheduler.find_assignments(context)
-    assert len(result.assignments) == 1
-    for task_id, worker_id in result.assignments:
-        task = _query_task(state, task_id)
-        dispatch_task(state, task, worker_id)
-
-    # Third task should still be pending
+    # Third task remains pending: the worker is out of CPU.
     pending = _schedulable_tasks(state)
     assert len(pending) == 1
     assert pending[0].job_id == JobName.root("test-user", "j2")
@@ -2101,7 +2104,7 @@ def test_compute_demand_entries_counts_coscheduled_job_once(state):
     req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     assert len(demand) == 1
     assert demand[0].normalized.device_type == DeviceType.TPU
     assert demand[0].normalized.device_variants == frozenset({"v5litepod-16"})
@@ -2125,7 +2128,7 @@ def test_compute_demand_entries_counts_non_coscheduled_tasks_individually(state)
     # No coscheduling set
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     assert len(demand) == 4
     for entry in demand:
         assert entry.normalized.device_type == DeviceType.TPU
@@ -2166,7 +2169,7 @@ def test_compute_demand_entries_mixed_coscheduled_and_regular(state):
     )
     submit_job(state, "j2", regular_req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     assert len(demand) == 3
     coscheduled = [entry for entry in demand if entry.coschedule_group_id == "/test-user/j1"]
     regular = [entry for entry in demand if entry.coschedule_group_id is None]
@@ -2223,7 +2226,7 @@ def test_compute_demand_entries_separates_by_preemptible_constraint(state):
     )
     submit_job(state, "j2", on_demand_req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     assert len(demand) == 2
 
     by_preemptible = {d.normalized.preemptible: d for d in demand}
@@ -2249,7 +2252,7 @@ def test_compute_demand_entries_no_preemptible_constraint_gives_none(state):
     )
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     assert len(demand) == 1
     assert demand[0].normalized.preemptible is None
 
@@ -2275,7 +2278,7 @@ def test_compute_demand_entries_extracts_required_region(state):
     )
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     assert len(demand) == 1
     assert demand[0].normalized.required_regions == frozenset({"us-west4"})
     assert demand[0].invalid_reason is None
@@ -2307,7 +2310,7 @@ def test_compute_demand_entries_marks_invalid_on_conflicting_region_constraints(
     )
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     assert len(demand) == 1
     assert demand[0].invalid_reason is not None
 
@@ -2392,7 +2395,7 @@ def test_demand_reservation_gates_real_tasks_until_claimed(state):
     )
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)  # reservation unclaimed
+    demand = _demand_entries(state)  # reservation unclaimed
     synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
     real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
@@ -2409,7 +2412,7 @@ def test_demand_reservation_excess_tasks(state):
     )
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
     real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
@@ -2433,7 +2436,7 @@ def test_demand_reservation_holder_uses_entry_resources(state):
     )
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
     real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
@@ -2468,7 +2471,7 @@ def test_demand_reservation_mixed_jobs(state):
     )
     submit_job(state, "a100-job", a100_req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
     real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
@@ -2497,7 +2500,7 @@ def test_demand_no_reservation_passes_all_tasks(state):
     )
     submit_job(state, "j1", req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     assert len(demand) == 3
     for d in demand:
         assert not _is_synthetic_demand(state, d)
@@ -2528,7 +2531,7 @@ def test_demand_reservation_independent_per_job(state):
     )
     submit_job(state, "job-b", job_b_req)
 
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     synthetic_demand = [d for d in demand if _is_synthetic_demand(state, d)]
     real_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
@@ -3076,7 +3079,6 @@ def _cpu_make_worker_metadata(
 
 def test_demand_excludes_building_limited_tasks(state):
     """Worker has resources but is at building limit -> no demand emitted."""
-    scheduler = Scheduler(max_building_tasks_per_worker=2)
 
     # Register a CPU worker with plenty of capacity
     wid = register_worker(state, "w1", "10.0.0.1:8080", _cpu_make_worker_metadata(cpu=128, memory_gb=256))
@@ -3113,15 +3115,13 @@ def test_demand_excludes_building_limited_tasks(state):
 
     # Now w1 has 2 building tasks (at limit), but has plenty of CPU/memory.
     # The pending task from j1 should be building-limited, not truly unschedulable.
-    workers = healthy_active_workers(state)
-    demand = compute_demand_entries(state._db, scheduler, workers)
+    demand = _demand_entries(state)
     task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 0, "Building-limited task should not generate demand"
 
 
 def test_demand_includes_truly_unschedulable_tasks(state):
     """No worker with matching device type -> demand IS emitted."""
-    scheduler = Scheduler()
 
     # Register a CPU-only worker
     register_worker(state, "w1", "10.0.0.1:8080", _cpu_make_worker_metadata())
@@ -3140,15 +3140,13 @@ def test_demand_includes_truly_unschedulable_tasks(state):
     )
     submit_job(state, "j1", req)
 
-    workers = healthy_active_workers(state)
-    demand = compute_demand_entries(state._db, scheduler, workers)
+    demand = _demand_entries(state)
     task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 1, "Task with no matching device should generate demand"
 
 
 def test_demand_includes_resource_exhausted_tasks(state):
     """Worker has right device but insufficient CPU -> demand IS emitted."""
-    scheduler = Scheduler()
 
     # Register a GPU worker with only 1 CPU core
     register_worker(state, "w1", "10.0.0.1:8080", _gpu_make_worker_metadata(cpu=1))
@@ -3167,8 +3165,7 @@ def test_demand_includes_resource_exhausted_tasks(state):
     )
     submit_job(state, "j1", req)
 
-    workers = healthy_active_workers(state)
-    demand = compute_demand_entries(state._db, scheduler, workers)
+    demand = _demand_entries(state)
     task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 1, "Task exceeding worker CPU should generate demand"
 
@@ -3181,7 +3178,6 @@ def test_demand_holders_absorbed_by_dry_run(state):
     workers have available capacity. The job's real tasks are gated until the
     reservation is claimed, so only holder tasks contribute demand here.
     """
-    scheduler = Scheduler()
 
     # Register a large GPU worker with capacity for 1 task
     register_worker(state, "w1", "10.0.0.1:8080", _gpu_make_worker_metadata(cpu=2, memory_gb=4))
@@ -3196,15 +3192,13 @@ def test_demand_holders_absorbed_by_dry_run(state):
     )
     submit_job(state, "j1", req)
 
-    workers = healthy_active_workers(state)
-    demand = compute_demand_entries(state._db, scheduler, workers)
+    demand = _demand_entries(state)
     assert len(demand) == 1
     assert _is_synthetic_demand(state, demand[0])  # the remaining unabsorbed holder
 
 
 def test_demand_absorbs_capacity_before_emitting(state):
     """2 workers fit 1 task each, 3 pending tasks -> only 1 demand entry."""
-    scheduler = Scheduler()
 
     # Register 2 GPU workers, each with enough capacity for 1 task
     register_worker(state, "w1", "10.0.0.1:8080", _gpu_make_worker_metadata(cpu=2, memory_gb=4))
@@ -3224,8 +3218,7 @@ def test_demand_absorbs_capacity_before_emitting(state):
     )
     submit_job(state, "j1", req)
 
-    workers = healthy_active_workers(state)
-    demand = compute_demand_entries(state._db, scheduler, workers)
+    demand = _demand_entries(state)
     task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 1, "Only 1 of 3 tasks should generate demand (2 absorbed)"
 
@@ -3247,14 +3240,13 @@ def test_demand_no_workers_falls_back_to_all_pending(state):
     submit_job(state, "j1", req)
 
     # No scheduler, no workers -> all tasks become demand
-    demand = compute_demand_entries(state._db)
+    demand = _demand_entries(state)
     task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 3
 
 
 def test_demand_building_limited_with_multiple_workers(state):
     """All matching workers at building limit -> no demand, even with multiple workers."""
-    scheduler = Scheduler(max_building_tasks_per_worker=1)
 
     # Register 2 CPU workers
     wid1 = register_worker(state, "w1", "10.0.0.1:8080", _cpu_make_worker_metadata())
@@ -3290,15 +3282,13 @@ def test_demand_building_limited_with_multiple_workers(state):
     )
     submit_job(state, "pending-job", req)
 
-    workers = healthy_active_workers(state)
-    demand = compute_demand_entries(state._db, scheduler, workers)
+    demand = _demand_entries(state)
     task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
     assert len(task_demand) == 0, "All workers at building limit -> no demand"
 
 
 def test_demand_mixed_building_limited_and_unschedulable(state):
     """Some tasks building-limited, some truly unschedulable -> only unschedulable emit demand."""
-    scheduler = Scheduler(max_building_tasks_per_worker=1)
 
     # Register 1 GPU worker at building limit.
     # Use a minimal CPU task to fill the building slot so GPU capacity stays intact.
@@ -3345,8 +3335,7 @@ def test_demand_mixed_building_limited_and_unschedulable(state):
     )
     submit_job(state, "a100-job", a100_req)
 
-    workers = healthy_active_workers(state)
-    demand = compute_demand_entries(state._db, scheduler, workers)
+    demand = _demand_entries(state)
     task_demand = [d for d in demand if not _is_synthetic_demand(state, d)]
 
     assert len(task_demand) == 1
@@ -3898,7 +3887,7 @@ def test_dispatch_propagates_task_image(state):
     tasks = submit_job(state, "img-job", req)
     job_id = tasks[0].job_id
     with state._db.read_snapshot() as snap:
-        template = direct_provider.run_request_template(state._run_template_cache, snap, job_id)
+        template = dispatch.run_request_template(state._run_template_cache, snap, job_id)
     assert template is not None
     assert template.task_image == "custom/swetrace:dev"
 
@@ -3925,8 +3914,8 @@ def test_run_request_template_does_not_leak_workdir_files_across_jobs(state):
     tasks_b = submit_job(state, "job-b", req_b)
 
     with state._db.read_snapshot() as snap:
-        template_a = direct_provider.run_request_template(state._run_template_cache, snap, tasks_a[0].job_id)
-        template_b = direct_provider.run_request_template(state._run_template_cache, snap, tasks_b[0].job_id)
+        template_a = dispatch.run_request_template(state._run_template_cache, snap, tasks_a[0].job_id)
+        template_b = dispatch.run_request_template(state._run_template_cache, snap, tasks_b[0].job_id)
 
     assert template_a is not None
     assert template_b is not None
@@ -3998,9 +3987,9 @@ def _task_row_direct(state: ControllerTestState, task_id: JobName):
 def _run_direct_tasks(state: ControllerTestState, task_ids: list[JobName]) -> None:
     """Drain and transition tasks to RUNNING via direct provider."""
     with state._db.transaction() as cur:
-        direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids],
             health=state._health,
@@ -4010,12 +3999,12 @@ def _run_direct_tasks(state: ControllerTestState, task_ids: list[JobName]) -> No
 
 
 def test_drain_pending_creates_attempt_rows(state):
-    """drain_for_direct_provider promotes PENDING tasks to ASSIGNED with NULL worker_id."""
+    """drain_for_dispatch promotes PENDING tasks to ASSIGNED with NULL worker_id."""
     task_ids = _submit_job_direct(state, "/user/job1")
     task_id = task_ids[0]
 
     with state._db.transaction() as cur:
-        batch = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     assert len(batch.tasks_to_run) == 1
     assert batch.tasks_to_run[0].task_id == task_id.to_wire()
@@ -4054,14 +4043,14 @@ def test_drain_redrives_assigned_until_executing(state):
 
     # First drain: PENDING -> ASSIGNED, dispatched and polled.
     with state._db.transaction() as cur:
-        batch1 = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        batch1 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     assert len(batch1.tasks_to_run) == 1
     assert [(e.task_id, e.attempt_id) for e in batch1.running_tasks] == [(task_id, 0)]
 
     # Second drain (e.g. previous _apply_pod failed or controller crashed):
     # row is still ASSIGNED, redriven in tasks_to_run with same attempt_id.
     with state._db.transaction() as cur:
-        batch2 = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        batch2 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     assert len(batch2.tasks_to_run) == 1
     assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
     assert batch2.tasks_to_run[0].attempt_id == 0
@@ -4070,7 +4059,7 @@ def test_drain_redrives_assigned_until_executing(state):
     # Once the task reaches RUNNING it leaves tasks_to_run; running_tasks still
     # contains it so the next poll observes terminal transitions.
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
             health=state._health,
@@ -4078,7 +4067,7 @@ def test_drain_redrives_assigned_until_executing(state):
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        batch3 = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        batch3 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     assert len(batch3.tasks_to_run) == 0
     assert len(batch3.running_tasks) == 1
     assert batch3.running_tasks[0].task_id == task_id
@@ -4091,14 +4080,14 @@ def test_drain_caps_promotions_per_cycle(state):
     assert _count_pending(state) == 200
 
     with state._db.transaction() as cur:
-        batch1 = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache, max_promotions=128)
+        batch1 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=128)
     # All 128 dispatched are freshly promoted (no prior ASSIGNED rows).
     assert len(batch1.tasks_to_run) == 128
     assert _count_pending(state) == 72
 
     # Second drain: 72 newly promoted, 128 redriven.
     with state._db.transaction() as cur:
-        batch2 = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache, max_promotions=128)
+        batch2 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=128)
     assert len(batch2.tasks_to_run) == 200
     assert _count_pending(state) == 0
 
@@ -4109,13 +4098,13 @@ def test_drain_max_promotions_limits_batch(state):
     _submit_job_direct(state, "/user/cap-job", replicas=250)
 
     with state._db.transaction() as cur:
-        batch1 = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache, max_promotions=50)
+        batch1 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=50)
     assert len(batch1.tasks_to_run) == 50
     assert _count_pending(state) == 200
 
     # 50 newly promoted + 50 prior ASSIGNED redriven.
     with state._db.transaction() as cur:
-        batch2 = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache, max_promotions=50)
+        batch2 = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, max_promotions=50)
     assert len(batch2.tasks_to_run) == 100
     assert _count_pending(state) == 150
 
@@ -4125,10 +4114,10 @@ def test_apply_running(state):
     task_ids = _submit_job_direct(state, "/user/job1")
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
@@ -4146,10 +4135,10 @@ def test_apply_succeeded(state):
     task_ids = _submit_job_direct(state, "/user/job1")
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
@@ -4159,7 +4148,7 @@ def test_apply_succeeded(state):
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED),
@@ -4180,10 +4169,10 @@ def test_apply_failed_with_retry(state):
     task_ids = _submit_job_direct(state, "/user/job1", max_retries_failure=1)
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
@@ -4193,7 +4182,7 @@ def test_apply_failed_with_retry(state):
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
@@ -4231,7 +4220,7 @@ def test_apply_failed_with_retry(state):
 
     # Draining again should promote it for a second attempt.
     with state._db.transaction() as cur:
-        batch = direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
     assert len(batch.tasks_to_run) == 1
     assert batch.tasks_to_run[0].attempt_id == 1
 
@@ -4241,10 +4230,10 @@ def test_apply_failed_no_retry(state):
     task_ids = _submit_job_direct(state, "/user/job1", max_retries_failure=0)
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
@@ -4254,7 +4243,7 @@ def test_apply_failed_no_retry(state):
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
@@ -4275,10 +4264,10 @@ def test_apply_worker_failed(state):
     task_ids = _submit_job_direct(state, "/user/job1", max_retries_preemption=1)
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        direct_provider.drain_for_direct_provider(cur, cache=state._run_template_cache)
+        dispatch.drain_for_dispatch(cur, cache=state._run_template_cache)
 
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
@@ -4288,7 +4277,7 @@ def test_apply_worker_failed(state):
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        apply_direct_provider_updates(
+        apply_dispatch_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED, error="node died"),
@@ -4304,7 +4293,7 @@ def test_apply_worker_failed(state):
     assert task.preemption_count == 1
 
 
-def test_cancel_job_kills_direct_provider_tasks(state):
+def test_cancel_job_kills_dispatch_tasks(state):
     """cancel_job moves NULL-worker_id (direct-provider) tasks to KILLED."""
     task_ids = _submit_job_direct(state, "/user/job1", replicas=2)
     _run_direct_tasks(state, task_ids)
@@ -4322,7 +4311,7 @@ def test_cancel_job_kills_direct_provider_tasks(state):
         assert _task_state_direct(state, tid) == job_pb2.TASK_STATE_KILLED
 
 
-def test_kill_non_terminal_direct_provider_tasks(state):
+def test_kill_non_terminal_dispatch_tasks(state):
     """cancel_job kills NULL-worker_id tasks via _kill_non_terminal_tasks cascade."""
     task_ids = _submit_job_direct(state, "/user/job1")
     _run_direct_tasks(state, task_ids)
@@ -4401,7 +4390,7 @@ def test_kill_non_terminal_reservation_holder_does_not_decommit_co_tenant(harnes
     ), "holder finalization leaked into the co-tenant's derived usage"
 
 
-def test_max_failures_kills_direct_provider_tasks(state):
+def test_max_failures_kills_dispatch_tasks(state):
     """When a task fails and triggers kill of siblings, direct-provider tasks are killed via task_mutations."""
     task_ids = _submit_job_direct(state, "/user/job1", replicas=2, max_retries_failure=0)
     _run_direct_tasks(state, task_ids)
@@ -4409,7 +4398,7 @@ def test_max_failures_kills_direct_provider_tasks(state):
     # Fail one task — with max_task_failures=0 (default) this should kill the job,
     # triggering _kill_non_terminal_tasks for the sibling.
     with state._db.transaction() as cur:
-        result = apply_direct_provider_updates(
+        result = apply_dispatch_updates(
             cur,
             [TaskUpdate(task_id=task_ids[0], attempt_id=0, new_state=job_pb2.TASK_STATE_FAILED, error="boom")],
             health=state._health,

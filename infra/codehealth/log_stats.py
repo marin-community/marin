@@ -184,7 +184,7 @@ def main() -> int:
         return 0
 
     try:
-        import wandb
+        import wandb  # noqa: PLC0415  # guarded: optional wandb, fire-and-forget script
     except ImportError:
         return 0
 

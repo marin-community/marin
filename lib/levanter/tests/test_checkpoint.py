@@ -14,6 +14,7 @@ import equinox as eqx
 import fsspec
 import haliax as hax
 import jax
+import jax.experimental.array_serialization.serialization as array_ser
 import jax.tree_util as jtu
 import numpy as np
 import optax
@@ -26,8 +27,8 @@ from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import (
-    CheckpointDebugConfig,
     CheckpointCandidate,
+    CheckpointDebugConfig,
     Checkpointer,
     CheckpointerConfig,
     CheckpointInterval,
@@ -883,8 +884,6 @@ def test_ocdbt_merges_files():
 
 def test_backward_compatibility_with_ocdbt():
     """Test that we can load old non-OCDBT checkpoints with new OCDBT-enabled code."""
-    import jax.experimental.array_serialization.serialization as array_ser
-
     key0 = jax.random.PRNGKey(0)
     key1 = jax.random.PRNGKey(1)
 

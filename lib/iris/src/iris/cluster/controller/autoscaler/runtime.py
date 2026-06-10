@@ -26,6 +26,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 from rigging.timing import Duration, Timestamp, TokenBucket
 
+from iris.cluster.backends.protocols import WorkerInfraProvider
+from iris.cluster.backends.types import (
+    CloudSliceState,
+    QuotaExhaustedError,
+    RemoteWorkerHandle,
+    SliceHandle,
+)
 from iris.cluster.constraints import Constraint
 from iris.cluster.controller.autoscaler.models import (
     DemandEntry,
@@ -42,17 +49,11 @@ from iris.cluster.controller.autoscaler.recovery import (
 )
 from iris.cluster.controller.autoscaler.routing import job_feasibility, route_demand
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, build_worker_config_for_group
+from iris.cluster.controller.autoscaler.state import AutoscalerState, GroupPersist, SlicePersist
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
-from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.providers.types import (
-    CloudSliceState,
-    QuotaExhaustedError,
-    RemoteWorkerHandle,
-    SliceHandle,
-)
 from iris.cluster.types import WorkerStatusMap
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2, vm_pb2
@@ -116,7 +117,6 @@ class Autoscaler:
         platform: WorkerInfraProvider,
         threads: ThreadContainer | None = None,
         base_worker_config: config_pb2.WorkerConfig | None = None,
-        db: ControllerDB | None = None,
         unresolvable_timeout: Duration = DEFAULT_UNRESOLVABLE_TIMEOUT,
         create_rate_limit: int = DEFAULT_CREATE_RATE_LIMIT,
     ):
@@ -129,14 +129,12 @@ class Autoscaler:
             threads: Optional thread container for testing
             base_worker_config: Base worker config merged with per-group overrides
                 and passed to platform.create_slice(). None disables bootstrap (test/local mode).
-            db: Optional DB handle for write-through persistence of tracked workers.
             unresolvable_timeout: How long a slice can remain UNKNOWN before being treated as FAILED.
             create_rate_limit: Project-wide ceiling on slice-creation requests per minute,
                 shared across all scale groups. See ``DEFAULT_CREATE_RATE_LIMIT``.
         """
         self._groups = scale_groups
         self._platform = platform
-        self._db = db
         self.evaluation_interval = evaluation_interval
         self._base_worker_config = base_worker_config
         self._unresolvable_timeout = unresolvable_timeout
@@ -171,7 +169,6 @@ class Autoscaler:
         platform: WorkerInfraProvider,
         threads: ThreadContainer | None = None,
         base_worker_config: config_pb2.WorkerConfig | None = None,
-        db: ControllerDB | None = None,
     ) -> "Autoscaler":
         """Create autoscaler from proto config.
 
@@ -181,7 +178,6 @@ class Autoscaler:
             platform: WorkerInfraProvider instance for shutdown lifecycle
             threads: Optional thread container for testing
             base_worker_config: Base worker config merged with per-group overrides
-            db: Optional DB handle for write-through persistence.
 
         Returns:
             Configured Autoscaler instance
@@ -192,7 +188,6 @@ class Autoscaler:
             platform=platform,
             threads=threads,
             base_worker_config=base_worker_config,
-            db=db,
         )
 
     def _wait_for_inflight(self) -> None:
@@ -695,6 +690,22 @@ class Autoscaler:
         restored_workers = restore_autoscaler_state(self._groups, checkpoint, platform)
         self.restore_tracked_workers(restored_workers)
         logger.info("Restored %d tracked workers", len(restored_workers))
+
+    def persistable_state(self) -> AutoscalerState:
+        """Snapshot all tracked slices and groups for the controller to persist.
+
+        The in-memory ``ScalingGroup`` state is authoritative during operation;
+        the controller mirrors this snapshot into the ``slices`` /
+        ``scaling_groups`` tables after each capacity call so a restarted
+        controller can recover.
+        """
+        all_slices: list[SlicePersist] = []
+        groups: list[GroupPersist] = []
+        for group in self._groups.values():
+            group_slices, group_row = group.persistable_state()
+            all_slices.extend(group_slices)
+            groups.append(group_row)
+        return AutoscalerState(slices=all_slices, groups=groups)
 
     def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
         """Get VM info by platform worker ID from the centralized worker registry."""

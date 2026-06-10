@@ -66,7 +66,7 @@ def set_global_rng_seeds(seed):
     random.seed(seed)
 
     try:
-        import torch
+        import torch  # noqa: PLC0415  # optional dep: torch
 
         current_torch_seed = torch.random.get_rng_state()
         torch.manual_seed(seed)

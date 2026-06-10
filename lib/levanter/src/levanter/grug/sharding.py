@@ -71,11 +71,31 @@ def _value_spec_or_default(x: jax.Array, default: PartitionSpec, *, replace_repl
     return default
 
 
+def _drop_absent_mesh_axes(mesh: Mesh | jax.sharding.AbstractMesh, spec: PartitionSpec) -> PartitionSpec:
+    """Replace mesh-absent axes in ``spec`` with ``None`` (replicated).
+
+    Compact meshes drop size-1 axes (e.g. "expert" when expert_axis_size == 1), so a
+    spec that names such an axis would raise. An absent axis has size 1, so replicating
+    along it is equivalent to sharding over it.
+    """
+
+    def keep(entry):
+        if entry is None:
+            return None
+        names = entry if isinstance(entry, tuple) else (entry,)
+        kept = tuple(name for name in names if name in mesh.shape)
+        if not kept:
+            return None
+        return kept if len(kept) > 1 else kept[0]
+
+    return P(*(keep(entry) for entry in spec))
+
+
 def _reshard_for_init(x: jax.Array, spec: PartitionSpec) -> jax.Array:
     mesh = _current_mesh()
     if mesh is None or mesh.empty:
         return x
-    return reshard(x, NamedSharding(mesh, spec))
+    return reshard(x, NamedSharding(mesh, _drop_absent_mesh_axes(mesh, spec)))
 
 
 def _reshard_for_shard_map(
@@ -84,6 +104,9 @@ def _reshard_for_shard_map(
     if mesh is not None and not mesh.empty:
         return reshard(x, NamedSharding(mesh, spec))
     return x
+
+
+_GRUG_MESH_AXIS_NAMES: tuple[str, ...] = ("replica_dcn", "data", "expert", "model")
 
 
 def _compact_grug_mesh_shape(
@@ -115,8 +138,6 @@ def _compact_grug_mesh_shape(
         )
 
     data_axis_size = global_device_count // fixed_axes
-    if expert_axis_size == 1:
-        return (replica_axis_size, data_axis_size, model_axis_size)
     return (replica_axis_size, data_axis_size, expert_axis_size, model_axis_size)
 
 
@@ -128,9 +149,11 @@ def compact_grug_mesh(
 ) -> Mesh:
     """Return the compact explicit mesh used by raw Grug PartitionSpecs.
 
-    The expert axis is third when present. Unlike the old local-only layout,
-    ``expert_axis_size`` may span multiple processes, e.g. a 32-process job
-    with 4 local devices can build an effective ``(4, 2, 16)`` Grug mesh.
+    The mesh is always ``(replica_dcn, data, expert, model)``; length-1 axes are
+    kept so downstream PartitionSpecs can name "expert" unconditionally. Unlike
+    the old local-only layout, ``expert_axis_size`` may span multiple processes,
+    e.g. a 32-process job with 4 local devices can build an effective
+    ``(4, 2, 16, 1)`` Grug mesh.
     """
     if replica_axis_size is None:
         replica_axis_size = jax.process_count()
@@ -143,10 +166,5 @@ def compact_grug_mesh(
         model_axis_size=model_axis_size,
     )
     devices = np.array(jax.devices(), dtype=object).reshape(shape)
-    axis_names = ("replica_dcn", "data", "model")
-    axis_types = (AxisType.Explicit, AxisType.Explicit, AxisType.Explicit)
-    if expert_axis_size != 1:
-        axis_names = ("replica_dcn", "data", "expert", "model")
-        axis_types = (AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit)
-
-    return Mesh(devices, axis_names, axis_types=axis_types)
+    axis_types = tuple(AxisType.Explicit for _ in _GRUG_MESH_AXIS_NAMES)
+    return Mesh(devices, _GRUG_MESH_AXIS_NAMES, axis_types=axis_types)

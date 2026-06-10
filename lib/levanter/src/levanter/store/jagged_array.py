@@ -210,7 +210,6 @@ class JaggedArrayStore:
 
     @property
     def data_size(self):
-        # return int(self.offsets[self.num_rows].read().result())
         if self._cached_data_size is not None:
             return self._cached_data_size
         result = int(self.offsets[self.num_rows].read().result())
@@ -291,7 +290,7 @@ class JaggedArrayStore:
         data_fut = self.data[new_max:old_data_size].write(np.zeros((), dtype=self.data.dtype.name))
 
         f1.result()
-        offsets_fut = self.offsets[size + 1 : old_data_size + 1].write(0)
+        offsets_fut = self.offsets[size + 1 : old_len + 1].write(0)
 
         data_fut.result()
         offsets_fut.result()

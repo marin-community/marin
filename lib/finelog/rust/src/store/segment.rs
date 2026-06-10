@@ -189,6 +189,15 @@ pub fn segment_bounds(
     Some((num_rows, lo, hi))
 }
 
+/// Footer-only row-group count for the parquet file at `path`, or `None` on an
+/// unreadable footer. Used by the trigram prune to confirm a sidecar's
+/// per-row-group entries align with the segment before attaching an access plan.
+pub fn segment_row_group_count(path: &Path) -> Option<usize> {
+    let file = std::fs::File::open(path).ok()?;
+    let reader = SerializedFileReader::new(file).ok()?;
+    Some(reader.metadata().num_row_groups())
+}
+
 /// All `seg_L*_*.parquet` files in `dir`, sorted by filename (== by min_seq for
 /// a fixed level width). Returns an empty list if the dir does not exist.
 pub fn discover_segments(dir: &Path) -> Vec<PathBuf> {

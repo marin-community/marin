@@ -35,9 +35,10 @@ For agents running this catalog against a diff:
 
 `./infra/pre-commit.py --review` runs the catalog as a fan-out, not a single
 pass. One headless agent runs per lane; each receives this harness, its own lane
-file, and the branch diff, and emits findings in the "Output format" below. The
-complexity lane additionally receives a `COMPLEXITY LEADS` block of advisory
-static metrics. One lane is holistic: the **meta** lane (`meta.md`) reasons over
+file, and the changed-file inventory (`git diff --stat`), and emits findings in
+the "Output format" below. Lanes are given read-only git, not a pasted diff: they
+inspect each changed file themselves (see "Inputs"). The complexity lane
+additionally receives a `COMPLEXITY LEADS` block of advisory static metrics. One lane is holistic: the **meta** lane (`meta.md`) reasons over
 the whole change rather than scanning hunks, may read beyond the diff to confirm a
 finding, and runs only on larger diffs (>100 changed lines). A final **composer**
 agent then merges the lanes' outputs into one list.
@@ -61,16 +62,11 @@ and concatenates lanes (deduped) instead of reasoning over them.
 
 ### Inputs
 
-Pick the diff that applies, typically the current code versus the merge base with `main`, unless the user explicitly requests a tighter set.
+Review every changed file on the branch versus the merge base with `main`, regardless of language — Python, proto, Rust, TOML, YAML, shell, config. You are handed the changed-file inventory (`git diff --stat`) and the merge-base SHA, and you inspect each file yourself: `git diff <merge-base> -- <path>` for its hunks (add `-U30` for more context), or open it with `Read`, and follow the change into other files with git/grep when you need context. Running standalone, get the inventory with `git diff main...HEAD --name-only` (or `--cached`, or `gh pr diff <number> --name-only`); read a named file or two in full.
 
-- Feature branch: `git diff main...HEAD -- '*.py' '*.proto'`.
-- Pre-commit / pre-push: `git diff --cached -- '*.py' '*.proto'`.
-- A specific PR: `gh pr diff <number> -- '*.py' '*.proto'`.
-- A named file or two: read the file in full.
+Skip files you can't usefully review — emit nothing for them: binary, lock files (`uv.lock`, `*.lock`), generated stubs (`*_pb2.py`, `*_pb2_grpc.py`, `*_connect.py`), and oversized vendored/generated files. If nothing reviewable changed, emit nothing and stop.
 
-If the diff is empty, emit nothing and stop. If it is larger than one pass, drive a second pass file-by-file via `git diff main...HEAD --name-only -- '*.py' '*.proto'`. Do not sample or truncate.
-
-Scan added/modified hunks plus enough surrounding context to judge intent (usually the enclosing function/class). Do not flag pre-existing code in unchanged regions. Migrations, `__init__.py` exports, proto definitions, and test fixtures all count. Generated stubs (e.g. `*_pb2.py`, `*_pb2_grpc.py`) are out of scope — skip them.
+Scan added/modified hunks plus enough surrounding context to judge intent (usually the enclosing function/class). Do not flag pre-existing code in unchanged regions. Migrations, `__init__.py` exports, proto definitions, and test fixtures all count.
 
 Security findings (auth, injection, secrets) are out of scope — they belong in `/security-review`.
 
@@ -129,7 +125,7 @@ lib/marin/src/marin/processing/tokenize/tokenize_utils.py:1: ml-utils-module (0.
 lib/iris/src/iris/cluster/worker/task_attempt.py:107: ml-speculative-abstraction (0.80) sentinel exists only to satisfy one import
 ```
 
-If the diff is empty or has no Python files, emit nothing — no "no findings" message, no preamble, no summary, no JSON, no Markdown, no fenced code blocks. One finding per line, no blank lines between them. Do not echo the input.
+If the diff is empty or has nothing reviewable, emit nothing — no "no findings" message, no preamble, no summary, no JSON, no Markdown, no fenced code blocks. One finding per line, no blank lines between them. Do not echo the input.
 
 ### Self-evaluation
 

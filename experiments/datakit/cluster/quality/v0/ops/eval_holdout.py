@@ -49,6 +49,8 @@ import tempfile
 from collections import defaultdict
 from dataclasses import dataclass
 
+import fasttext
+import numpy as np
 import pyarrow.parquet as pq
 from rigging.filesystem import open_url, url_to_fs
 from rigging.log_setup import configure_logging
@@ -62,8 +64,6 @@ MAX_TEXT_CHARS = 100_000
 
 def _patch_numpy_copy_compat() -> None:
     """Same shim as in experiments.datakit.fasttext: NumPy 2 vs fasttext-wheel 0.9.2."""
-    import numpy as np
-
     if getattr(np, "_fasttext_copy_compat", False):
         return
     _orig = np.array
@@ -87,8 +87,6 @@ def _load_model_local(model_bin_path: str):
             if not chunk:
                 break
             tmp.write(chunk)
-    import fasttext
-
     return fasttext.load_model(local_path), local_path
 
 

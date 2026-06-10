@@ -54,7 +54,7 @@ from typing import Callable, Dict, List, Literal, Optional, Tuple, TypeVar, Unio
 import equinox as eqx
 import jax
 import numpy as np
-from jaxtyping import PyTree
+from jaxtyping import PRNGKeyArray, PyTree
 
 import haliax
 import haliax as hax
@@ -155,7 +155,7 @@ class LoraConfig:
             return any(key_path.endswith(target) for target in self.target_modules)
 
 
-def loraize(model: M, config: LoraConfig, key: jax.random.PRNGKey) -> M:
+def loraize(model: M, config: LoraConfig, key: PRNGKeyArray) -> M:
     """
     Applies LoRA transform to the given model by replacing Linear layers that match the given pattern with LoraLinear layers.
     """
@@ -342,7 +342,7 @@ def lora_trainable_params_filter(model: M) -> M:
     return haliax.tree_util.tree_map(is_lora_param, model, is_leaf=is_lora_param)
 
 
-def _loraize(model: M, config: LoraConfig, key: jax.random.PRNGKey, prefix: str, batch_dims: Tuple[Axis, ...]) -> M:
+def _loraize(model: M, config: LoraConfig, key: PRNGKeyArray, prefix: str, batch_dims: Tuple[Axis, ...]) -> M:
     """
     This implementation is mostly straightforward, with one major wrinkle: scan layers like Stacked, which
     add an extra batch dimension and thus require vmap, and thus require a vmap'ed LoRA transform.

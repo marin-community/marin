@@ -3,6 +3,8 @@
 
 """Tests for operation fusion optimization via compute_plan."""
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from zephyr import Dataset, compute_plan
 from zephyr.dataset import FilterOp, MapOp, ReshardOp, TakePerShardOp
 from zephyr.execution import ZephyrContext
@@ -129,9 +131,6 @@ def test_stage_name_truncation():
 def test_lambda_filter_blocks_select_pushdown(tmp_path):
     """A lambda filter prevents SelectOp pushdown — otherwise the projection
     would drop columns the lambda reads, KeyError-ing the user code."""
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
     path = str(tmp_path / "data.parquet")
     pq.write_table(
         pa.Table.from_pylist([{"a": 1, "b": 10, "c": 100}, {"a": 2, "b": 20, "c": 200}]),

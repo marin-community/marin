@@ -8,7 +8,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import equinox as eqx
 import haliax as hax
@@ -129,7 +129,8 @@ def dpo_loss_from_logps(
 
 def logp_sum(model: LmHeadModel, example, *, key=None) -> hax.NamedArray:
     nll = model.compute_next_token_loss(example, reduction=hax.sum, reduction_axis="position", key=key)
-    return -nll
+    # NamedArray.__neg__ is typed with a broad Array | NamedArray overload; negating a NamedArray stays a NamedArray.
+    return cast(hax.NamedArray, -nll)
 
 
 def _logp_sum(model: LmHeadModel, example, *, key=None) -> hax.NamedArray:

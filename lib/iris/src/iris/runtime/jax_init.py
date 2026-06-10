@@ -121,7 +121,7 @@ def initialize_jax(
         poll_timeout: Maximum seconds for non-coordinator tasks to wait.
         poll_interval: Initial backoff delay for polling (seconds).
     """
-    import jax  # heavy import; lazy by design
+    import jax  # noqa: PLC0415  # optional dep: jax (iris does not depend on jax)
 
     # TPU has its own coordinator discovery via the TPU runtime, so avoid the
     # Iris endpoint dance. We still call JAX distributed initialization to

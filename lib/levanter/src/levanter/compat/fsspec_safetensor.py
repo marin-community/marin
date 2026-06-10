@@ -8,7 +8,7 @@ import logging
 import os
 import struct
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple, Iterable
+from typing import Callable, Dict, Iterable, List, Optional, Tuple, cast
 
 import fsspec
 import humanfriendly
@@ -65,9 +65,13 @@ class _AsyncifyingFileSystemWrapper(AsyncFileSystem):
 
     async def _cat_file(self, path: str, start: int | None = None, end: int | None = None, **kwargs) -> bytes:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            self._executor,
-            lambda: self._fs.cat_file(path, start=start, end=end, **kwargs),
+        # fsspec's cat_file is stubbed with a broad bytes | str return; a byte-range read always yields bytes.
+        return cast(
+            bytes,
+            await loop.run_in_executor(
+                self._executor,
+                lambda: self._fs.cat_file(path, start=start, end=end, **kwargs),
+            ),
         )
 
     async def _info(self, path, **kwargs):

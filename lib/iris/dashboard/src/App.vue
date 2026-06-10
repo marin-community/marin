@@ -11,30 +11,24 @@ const router = useRouter()
 const { isDark, toggle: toggleDark } = useDarkMode()
 
 const authEnabled = ref(false)
-const providerKind = ref<'worker' | 'kubernetes'>('worker')
+const capabilities = ref<string[]>([])
 const legendOpen = ref(false)
 
-const WORKER_TABS: Tab[] = [
+// Tabs always shown have no `requires`; conditional tabs name the capability
+// the backend must advertise (see backend_descriptor in backend.py).
+const ALL_TABS: (Tab & { requires?: string })[] = [
   { key: 'jobs', label: 'Jobs', to: '/' },
   { key: 'scheduler', label: 'Scheduler', to: '/scheduler' },
-  { key: 'fleet', label: 'Workers', to: '/fleet' },
+  { key: 'fleet', label: 'Workers', to: '/fleet', requires: 'workers' },
+  { key: 'cluster', label: 'Cluster', to: '/cluster', requires: 'cluster' },
   { key: 'endpoints', label: 'Endpoints', to: '/endpoints' },
-  { key: 'autoscaler', label: 'Autoscaler', to: '/autoscaler' },
-  { key: 'account', label: 'Account', to: '/account' },
-  { key: 'status', label: 'Status', to: '/status' },
-]
-
-const KUBERNETES_TABS: Tab[] = [
-  { key: 'jobs', label: 'Jobs', to: '/' },
-  { key: 'scheduler', label: 'Scheduler', to: '/scheduler' },
-  { key: 'cluster', label: 'Cluster', to: '/cluster' },
-  { key: 'endpoints', label: 'Endpoints', to: '/endpoints' },
+  { key: 'autoscaler', label: 'Autoscaler', to: '/autoscaler', requires: 'autoscaler' },
   { key: 'account', label: 'Account', to: '/account' },
   { key: 'status', label: 'Status', to: '/status' },
 ]
 
 const TABS = computed<Tab[]>(() =>
-  providerKind.value === 'kubernetes' ? KUBERNETES_TABS : WORKER_TABS
+  ALL_TABS.filter(t => !t.requires || capabilities.value.includes(t.requires))
 )
 
 const PATH_TO_TAB: Record<string, string> = {
@@ -84,7 +78,7 @@ onMounted(async () => {
       authEnabled.value = config.auth_enabled ?? false
       hasSession = config.has_session ?? false
       authOptional = config.optional ?? false
-      providerKind.value = config.provider_kind === 'kubernetes' ? 'kubernetes' : 'worker'
+      capabilities.value = config.backend?.capabilities ?? []
     }
   } catch {
     // Auth config endpoint unavailable — assume no auth

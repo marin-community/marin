@@ -244,6 +244,8 @@ export interface ListWorkersResponse {
 export interface WorkerTaskAttempt {
   taskId: string
   attempt?: TaskAttempt
+  // Static allocation inherited from the parent job; unset when no request.
+  resources?: ResourceSpecProto
 }
 
 export interface GetWorkerStatusResponse {

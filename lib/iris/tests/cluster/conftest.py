@@ -9,26 +9,30 @@ from unittest.mock import Mock
 
 import pytest
 from finelog.client import LogClient
+from iris.cluster.backends.k8s.fake import FakeNodeResources, InMemoryK8sService
+from iris.cluster.backends.k8s.tasks import K8sTaskProvider
+from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
-from iris.cluster.controller import direct_provider, ops
+from iris.cluster.controller import ops
+from iris.cluster.controller.backend import PlacementOwner
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.direct_provider import RunTemplateCache, new_run_template_cache
-from iris.cluster.controller.ops.task import Assignment, apply_direct_provider_updates
+from iris.cluster.controller.ops.task import Assignment, apply_dispatch_updates
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.schema import task_attempts_table, tasks_table, workers_table
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
-from iris.cluster.providers.k8s.tasks import K8sTaskProvider
-from iris.cluster.providers.k8s.types import K8sResource
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select
 
 from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller.conftest import make_test_entrypoint
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 # ---------------------------------------------------------------------------
@@ -118,7 +122,7 @@ class _HarnessController:
         self.last_scheduling_context = None
         self.autoscaler = None
         self.provider: object = Mock()
-        self.has_direct_provider = False
+        self.placement = PlacementOwner.IRIS_CONTROLLER
         self.run_template_cache: RunTemplateCache = new_run_template_cache()
 
 
@@ -152,8 +156,6 @@ class ServiceTestHarness:
         resources: job_pb2.ResourceSpecProto | None = None,
     ) -> JobName:
         """Submit a job via the RPC layer. Returns job_id."""
-        from tests.cluster.controller.conftest import make_test_entrypoint
-
         job_id = JobName.root(user, name)
         request = controller_pb2.Controller.LaunchJobRequest(
             name=job_id.to_wire(),
@@ -216,10 +218,10 @@ class ServiceTestHarness:
         """Run one K8s direct provider sync cycle."""
         assert self.k8s_provider is not None, "sync_k8s requires K8s harness"
         with self.db.transaction() as cur:
-            batch = direct_provider.drain_for_direct_provider(cur, cache=self.state._run_template_cache)
-        result = self.k8s_provider.sync(batch)
+            batch = dispatch.drain_for_dispatch(cur, cache=self.state._run_template_cache)
+        result = self.k8s_provider.reconcile(batch)
         with self.db.transaction() as cur:
-            apply_direct_provider_updates(
+            apply_dispatch_updates(
                 cur,
                 result.updates,
                 health=self.state._health,
@@ -414,8 +416,6 @@ class ServiceTestHarness:
 
 
 def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
-
     db = ControllerDB(db_dir=tmp_path / "k8s_db")
     health = WorkerHealthTracker()
     endpoints = EndpointsProjection(db)
@@ -437,7 +437,7 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     )
 
     ctrl = _HarnessController()
-    ctrl.has_direct_provider = True
+    ctrl.placement = PlacementOwner.TASK_BACKEND
     ctrl.provider = k8s_provider
 
     service = ControllerServiceImpl(
@@ -461,8 +461,6 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
 
 
 def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
-
     db = ControllerDB(db_dir=tmp_path / "gcp_db")
     health = WorkerHealthTracker()
     endpoints = EndpointsProjection(db)
@@ -470,7 +468,7 @@ def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     state = ControllerTestState(db, health=health, endpoints=endpoints, worker_attrs=worker_attrs)
 
     ctrl = _HarnessController()
-    ctrl.has_direct_provider = False
+    ctrl.placement = PlacementOwner.IRIS_CONTROLLER
 
     service = ControllerServiceImpl(
         controller=ctrl,

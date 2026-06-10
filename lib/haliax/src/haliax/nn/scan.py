@@ -114,9 +114,7 @@ class BlockFoldable(Protocol[M]):
         self, fn: Callable[[M, CarryT], CarryT], *, unroll: int | bool | None = None
     ) -> Callable[[CarryT], CarryT]: ...
 
-    def fold_via(
-        self, fn: Callable[..., CarryT], *, unroll: int | bool | None = None
-    ) -> Callable[Concatenate[CarryT, P], CarryT]: ...
+    def fold_via(self, fn: Callable[..., CarryT], *, unroll: int | bool | None = None) -> Callable[..., CarryT]: ...
 
     @overload
     def scan_via(
@@ -133,7 +131,7 @@ class BlockFoldable(Protocol[M]):
 
     def scan_via(
         self, fn: Callable[..., tuple[CarryT, OutputT_co]], *, unroll: int | bool | None = None
-    ) -> Callable[P, tuple[CarryT, OutputT_co]]: ...
+    ) -> Callable[..., tuple[CarryT, OutputT_co]]: ...
 
     @overload
     def vmap_via(self, fn: VmapFunction[M, P, OutputT_co]) -> Callable[P, OutputT_co]: ...
@@ -173,13 +171,13 @@ class BlockSeq(ModuleWithStateDictSerialization, Generic[M]):
 
     @classmethod
     def init(
-        cls: Type[S],
+        cls,
         Block: Axis,
         module: Type[M],
         *,
         gradient_checkpointing: ScanCheckpointSpec = False,
         prevent_cse: bool | None = None,
-    ) -> ModuleInit[S]:
+    ) -> ModuleInit["BlockSeq[M]"]:
         """
         This is a curried init method that takes the Block and module and returns a function that takes
         the arguments to the module's init method. Any NamedArrays in the arguments will be sliced along the
@@ -224,7 +222,8 @@ class BlockSeq(ModuleWithStateDictSerialization, Generic[M]):
                     (extra_args, extra_kwargs),
                 )
 
-                block_result = block(carry, *block_args, **block_kwargs)
+                # eqx.Module defines __call__ on subclasses but not on the base, so M is not seen as callable.
+                block_result = block(carry, *block_args, **block_kwargs)  # pyrefly: ignore[not-callable]
 
                 if not isinstance(block_result, (tuple, list)) or len(block_result) != 2:
                     raise ValueError(
@@ -250,7 +249,8 @@ class BlockSeq(ModuleWithStateDictSerialization, Generic[M]):
                     functools.partial(BlockSeq._slice_out, self.Block, i),
                     (args, kwargs),
                 )
-                carry = block(carry, *block_args, **block_kwargs)
+                # eqx.Module defines __call__ on subclasses but not on the base, so M is not seen as callable.
+                carry = block(carry, *block_args, **block_kwargs)  # pyrefly: ignore[not-callable]
                 carry = tree_checkpoint_name(carry, self._carry_ckpt_name)
             return carry
 
