@@ -390,6 +390,11 @@ def build_controller_image(
 @click.option("--push", is_flag=True, help="Push image to registry after building")
 @click.option("--platform", default="linux/amd64", help="Target platform")
 @click.option("--ghcr-org", default=GHCR_DEFAULT_ORG, help="GHCR organization")
+@click.option(
+    "--cuda-devel",
+    is_flag=True,
+    help="Build the CUDA devel task image target for GPU jobs that compile CUDA extensions.",
+)
 @click.pass_context
 def build_task_image(
     ctx,
@@ -397,21 +402,25 @@ def build_task_image(
     push: bool,
     platform: str,
     ghcr_org: str,
+    cuda_devel: bool,
 ):
-    """Build base task image with system deps and pre-synced marin core deps.
+    """Build base task image with system deps.
 
     The build context is the marin repo root so that pyproject.toml and uv.lock
-    are available for COPY. Uses the ``task`` target in ``lib/iris/Dockerfile``.
+    are available for COPY. Uses the ``task`` target in ``lib/iris/Dockerfile``,
+    or ``task-cuda-devel`` with ``--cuda-devel``.
     """
     marin_root = find_marin_root()
 
     verbose = _is_verbose(ctx)
     git_sha = get_git_sha()
     _ensure_protos()
-    resolved_tag = tag or _versioned_tag("iris-task", git_sha)
+    image_type = "task-cuda-devel" if cuda_devel else "task"
+    image_base = "iris-task-cuda-devel" if cuda_devel else "iris-task"
+    resolved_tag = tag or _versioned_tag(image_base, git_sha)
 
     build_image(
-        "task",
+        image_type,
         resolved_tag,
         push,
         str(marin_root),

@@ -4,6 +4,7 @@
 #   docker buildx build --target controller -f lib/iris/Dockerfile -t iris-controller:latest .
 #   docker buildx build --target worker     -f lib/iris/Dockerfile -t iris-worker:latest .
 #   docker buildx build --target task       -f lib/iris/Dockerfile -t iris-task:latest .
+#   docker buildx build --target task-cuda-devel -f lib/iris/Dockerfile -t iris-task-cuda-devel:latest .
 #
 # The controller and worker share all layers up to and including Python
 # dependencies. The worker adds only the Docker CLI on top.
@@ -185,6 +186,50 @@ ENV CARGO_TARGET_DIR=/root/.cargo/target
 # Only disable bytecode during build to keep image layers clean.
 # At runtime, bytecode compilation is re-enabled so .pyc files accumulate
 # in the persistent uv cache, speeding up repeated imports across pods.
+ARG PYTHONDONTWRITEBYTECODE=1
+
+ARG IRIS_GIT_HASH=unknown
+ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
+
+WORKDIR /app
+
+
+# ── Stage: task-cuda-devel ───────────────────────────────────────────
+# GPU task image for CUDA-extension workloads. Keep this target source-free:
+# Iris stages the worktree at runtime and runs uv sync inside /app.
+FROM nvidia/cuda:13.0.2-devel-ubuntu24.04 AS task-cuda-devel
+
+LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
+LABEL org.opencontainers.image.description="Iris CUDA devel task base image"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    unzip \
+    ca-certificates \
+    openssh-client \
+    git \
+    build-essential \
+    lldb \
+    libibverbs1 \
+    ibverbs-providers \
+    rdma-core \
+    python3.12 \
+    python3.12-dev \
+    python3.12-venv \
+    python-is-python3 \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --default-toolchain stable --profile minimal
+ENV PATH="/root/.cargo/bin:/usr/local/cuda/bin:$PATH"
+ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/nvidia/lib:/usr/local/nvidia/lib64"
+
+ENV UV_CACHE_DIR=/uv/cache
+ENV CARGO_TARGET_DIR=/root/.cargo/target
 ARG PYTHONDONTWRITEBYTECODE=1
 
 ARG IRIS_GIT_HASH=unknown
