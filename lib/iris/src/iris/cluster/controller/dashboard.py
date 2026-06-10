@@ -604,8 +604,6 @@ class ControllerDashboard:
                 "has_session": has_session,
                 "backend": {
                     "name": descriptor.name,
-                    "placement": descriptor.placement.value,
-                    "manages_capacity": descriptor.manages_capacity,
                     "capabilities": descriptor.capabilities,
                 },
                 "optional": self._auth_optional,

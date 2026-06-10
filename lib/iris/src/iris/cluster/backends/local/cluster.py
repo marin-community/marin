@@ -20,7 +20,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Timestamp
 
 from iris.cluster.backends.gcp.fake import InMemoryGcpService
 from iris.cluster.backends.gcp.workers import GcpWorkerProvider
@@ -214,7 +214,6 @@ class LocalCluster:
                 host="127.0.0.1",
                 port=port,
                 remote_state_dir=self._config.storage.remote_state_dir or f"file://{state_dir}",
-                heartbeat_interval=Duration.from_seconds(0.5),
                 local_state_dir=Path(self._db_dir.name),
                 auth_verifier=auth.verifier,
                 auth_provider=auth.provider,

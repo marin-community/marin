@@ -3,30 +3,26 @@
 
 """TaskBackend: the contract every Iris execution backend implements.
 
-The controller owns the database. Each tick it builds a placement-appropriate
-:class:`BackendReconcileInput` from the DB, calls :meth:`TaskBackend.reconcile`,
-and applies the returned :class:`BackendReconcileResult`. Backends perform
-backend-specific I/O (worker-daemon RPC fan-out, ``kubectl apply``) but never
-read or write the controller database — the interface is plain data in, plain
+The controller owns the database. Each tick it composes a DB-less
+:class:`~iris.cluster.controller.reads.ControlSnapshot` (and, for scheduling, a
+:class:`ScheduleInput`) and drives the backend through three uniform methods —
+:meth:`TaskBackend.schedule`, :meth:`TaskBackend.reconcile`,
+:meth:`TaskBackend.autoscale` — each returning ONE :class:`BackendResult`.
+Backends perform backend-specific I/O (worker-daemon RPC fan-out, ``kubectl
+apply``) but never read or write the controller database — plain data in, plain
 data out.
 
-Two execution models exist, distinguished by :attr:`TaskBackend.placement`:
+The controller never branches on backend type or a capability binary in the
+per-tick path: it calls all three methods unconditionally and a backend no-ops
+where a phase doesn't apply (the worker-daemon backend's ``schedule`` runs the
+Iris scheduler while a cluster backend returns empty; the cluster backend's
+``reconcile`` reconciles pods while it owns its own capacity, so its
+``autoscale`` returns empty). The apply path dispatches on which
+:class:`BackendResult` field is populated, not on the backend.
 
-* ``PlacementOwner.IRIS_CONTROLLER`` — the Iris :class:`~iris.cluster.controller.scheduling.scheduler.Scheduler`
-  assigns task→worker, then the backend fans the per-worker reconcile RPC out
-  to worker daemons. The controller passes pre-built ``plans`` and applies the
-  raw ``worker_results`` through ``ops.worker.apply_reconcile`` (which emits
-  worker heartbeats and runs the ``WORKER_RECONCILE`` transition source).
-* ``PlacementOwner.TASK_BACKEND`` — the backend (Kueue, and later slurmctld) owns
-  placement. The controller passes the desired ``tasks_to_run`` plus the
-  ``running_tasks`` snapshot; the backend converges its own resources and
-  returns pre-computed ``updates`` applied through
-  ``ops.task.apply_dispatch_updates`` (``DISPATCH`` source).
-
-The two apply paths are NOT interchangeable — they emit different effects — so
-the controller selects between them on the declared ``placement`` capability
-rather than on the concrete backend type. A new backend slots in by declaring
-its capabilities, with no ``isinstance`` branches in the controller.
+:attr:`TaskBackend.capabilities` is a pure descriptor: it drives the dashboard
+tab list and on-demand service-RPC routing (worker-daemon vs direct-pod exec),
+never the per-tick control flow.
 """
 
 from __future__ import annotations
@@ -43,6 +39,7 @@ from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.state import AutoscalerState
 from iris.cluster.controller.ops.task import Assignment
+from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
@@ -59,8 +56,8 @@ from iris.cluster.controller.scheduling.policy import (
 )
 from iris.cluster.controller.scheduling.scheduler import JobRequirements, Scheduler, SchedulingContext
 from iris.cluster.controller.schema import ReservationClaim
-from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.types import JobName, PendingTask, WorkerId, WorkerStatusMap
+from iris.cluster.controller.worker_health import WorkerHealthEvent
+from iris.cluster.types import JobName, PendingTask, WorkerId
 from iris.rpc import job_pb2, worker_pb2
 
 logger = logging.getLogger(__name__)
@@ -74,14 +71,21 @@ class ProviderUnsupportedError(ProviderError):
     """Operation not supported by this backend implementation."""
 
 
-class PlacementOwner(StrEnum):
-    """Who decides which node a task runs on."""
+class BackendCapability(StrEnum):
+    """A descriptor flag the dashboard and on-demand RPC routing key on.
 
-    IRIS_CONTROLLER = "iris_controller"
-    """Iris schedules task→worker; the backend fans reconcile RPCs to daemons."""
+    Pure metadata — it never gates the per-tick control loops, which call
+    ``schedule``/``reconcile``/``autoscale`` uniformly.
+    """
 
-    TASK_BACKEND = "task_backend"
-    """The backend places tasks itself (Kueue, slurmctld); Iris does not schedule."""
+    WORKER_DAEMON = "workers"
+    """Iris tracks worker daemons (Fleet tab; exec/profile route by worker)."""
+
+    IRIS_AUTOSCALER = "autoscaler"
+    """The Iris autoscaler provisions capacity for this backend (Autoscaler tab)."""
+
+    CLUSTER_VIEW = "cluster"
+    """The backend places tasks on its own cluster (Cluster tab; exec by task/pod)."""
 
 
 @dataclass(frozen=True)
@@ -89,79 +93,19 @@ class BackendDescriptor:
     """Capabilities the dashboard uses to choose which panels to show.
 
     Derived from the live :class:`TaskBackend`; served (as JSON) by ``/auth/config``
-    so the frontend tab list is data-driven rather than keyed on a provider-kind
-    binary.
+    so the frontend tab list is data-driven.
     """
 
     name: str
-    placement: PlacementOwner
-    manages_capacity: bool
     capabilities: list[str]
 
 
 def backend_descriptor(backend: TaskBackend) -> BackendDescriptor:
-    """Build the dashboard capability descriptor from a live backend.
-
-    Capability strings drive which conditional dashboard tabs render:
-    ``workers`` (Iris tracks worker daemons), ``autoscaler`` (Iris provisions
-    capacity), ``cluster`` (the backend places tasks on its own cluster).
-    """
-    capabilities: list[str] = []
-    if backend.placement is PlacementOwner.IRIS_CONTROLLER:
-        capabilities.append("workers")  # Iris tracks worker daemons -> Workers (Fleet) tab
-    if not backend.manages_capacity:
-        capabilities.append("autoscaler")  # Iris autoscaler -> Autoscaler tab
-    if backend.placement is PlacementOwner.TASK_BACKEND:
-        capabilities.append("cluster")  # underlying cluster view -> Cluster tab
+    """Build the dashboard capability descriptor from a live backend."""
     return BackendDescriptor(
         name=backend.name,
-        placement=backend.placement,
-        manages_capacity=backend.manages_capacity,
-        capabilities=capabilities,
+        capabilities=sorted(c.value for c in backend.capabilities),
     )
-
-
-@dataclass(frozen=True)
-class BackendReconcileInput:
-    """Desired + observed task state handed to :meth:`TaskBackend.reconcile`.
-
-    Each backend reads the subset matching its :attr:`TaskBackend.placement`;
-    the controller leaves the other fields empty. No ``worker_id`` is attached
-    to ``tasks_to_run`` (BACKEND placement chooses the node itself); ``plans``
-    are already worker-bound (IRIS placement scheduled them).
-    """
-
-    # BACKEND placement: tasks to ensure running + the snapshot of running ones.
-    tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
-    running_tasks: list[RunningTaskEntry] = field(default_factory=list)
-    # IRIS placement: pre-built per-worker reconcile plans + their addresses.
-    plans: list[WorkerReconcilePlan] = field(default_factory=list)
-    worker_addresses: dict[WorkerId, str] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class BackendReconcileResult:
-    """Observed outcome returned by :meth:`TaskBackend.reconcile`.
-
-    BACKEND placement returns pre-computed ``updates`` (the backend mapped its
-    own observations to task states). IRIS placement returns raw
-    ``worker_results``; the controller converts them against its DB snapshot at
-    apply time (uid resolution + worker-loss interpretation).
-    """
-
-    updates: list[TaskUpdate] = field(default_factory=list)
-    worker_results: list[ReconcileResult] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class PingResult:
-    """Result of a liveness Ping to a single worker (IRIS placement)."""
-
-    worker_id: WorkerId
-    worker_address: str | None
-    healthy: bool = True
-    health_error: str = ""
-    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -194,68 +138,51 @@ class ScheduleInput:
 
 
 @dataclass(frozen=True)
-class ScheduleResult:
-    """PlacementOwner decisions returned by :meth:`TaskBackend.schedule`.
+class BackendResult:
+    """The single DB-shaped write-back the controller commits after any phase.
 
-    Pure data: the controller commits ``assignments`` (``ops.task.assign``),
-    ``preemptions`` (``finalize`` PREEMPT), and ``unschedulable`` (``finalize``
-    UNSCHEDULABLE). ``diagnostics`` and ``post_taint_context`` carry the cached
-    dashboard state the controller exposes via ``get_job_scheduling_diagnostics``
-    / ``last_scheduling_context``.
+    One result type for ``schedule`` / ``reconcile`` / ``autoscale``: each phase
+    populates only its fields, and the controller's apply path dispatches on
+    which fields are non-empty — never on the backend type. An empty field means
+    the backend has nothing for it this tick.
     """
 
+    # -- schedule outputs ---------------------------------------------------
     assignments: list[Assignment] = field(default_factory=list)
+    """task→worker placements to commit (``ops.task.assign``)."""
     preemptions: list[TerminalDecision] = field(default_factory=list)
-    # Expired/deadline-exceeded pending-task rows; the controller marks them
-    # UNSCHEDULABLE (each row carries ``scheduling_timeout_ms``).
+    """Victims to finalize PREEMPT (``ops.task.finalize``)."""
     unschedulable: list[PendingTask] = field(default_factory=list)
-    diagnostics: dict[str, str] = field(default_factory=dict)
-    # Post-taint context (or the un-tainted context when no claims were active),
-    # surfaced for dashboard diagnostics. None only for the empty K8s result.
-    post_taint_context: SchedulingContext | None = None
-    # Limits-free capacity-fit residual: the unmet demand the autoscaler must
-    # provision, computed in the same pass and from the same Scheduler instance
-    # as the assignments. The controller caches it for the autoscaler loop.
+    """Expired/deadline pending rows to mark UNSCHEDULABLE."""
     residual_demand: list[DemandEntry] = field(default_factory=list)
+    """Limits-free capacity-fit residual; cached for the autoscaler loop."""
+    diagnostics: dict[str, str] = field(default_factory=dict)
+    """Per-job scheduling diagnostics surfaced on the dashboard."""
+    post_taint_context: SchedulingContext | None = None
+    """Post-taint (or un-tainted) context cached for dashboard diagnostics."""
+
+    # -- reconcile outputs (dispatch on FIELD CONTENT, not backend type) ----
+    worker_results: list[tuple[WorkerReconcilePlan, ReconcileResult]] = field(default_factory=list)
+    """Worker-daemon reconcile outcomes. The apply path runs the overlay-aware
+    ``ReconcileState.reconcile`` (cross-worker same-batch cascades + worker-loss
+    synthesis), so each result rides back paired with the plan that produced it
+    — it cannot be pre-converted to neutral ``updates`` without the DB/overlay."""
+    updates: list[TaskUpdate] = field(default_factory=list)
+    """Neutral task-state updates from a direct (e.g. Kubernetes) provider."""
+    health_events: list[WorkerHealthEvent] = field(default_factory=list)
+    """Per-worker liveness the backend OBSERVED (REACHED / UNREACHABLE). The
+    controller folds these through the single ``WorkerHealthTracker.apply``."""
+
+    # -- autoscale outputs --------------------------------------------------
+    removed_workers: list[WorkerId] = field(default_factory=list)
+    """Workers torn down this tick — dead workers plus their healthy slice
+    siblings. The controller serializes their removal and forgets them."""
+    autoscaler_state: AutoscalerState | None = None
+    """The autoscaler's tracked state for the controller to persist; None when
+    the backend manages its own capacity."""
 
 
-@dataclass(frozen=True)
-class CapacityInput:
-    """The read-only state a :class:`TaskBackend` needs to make capacity
-    (autoscaling) decisions for one tick."""
-
-    worker_status_map: WorkerStatusMap
-    """Per-worker idle/running state (``_build_worker_status_map``)."""
-    demand_entries: list[DemandEntry]
-    """Unmet demand grouped by requirement (``compute_demand_entries``)."""
-
-
-@dataclass(frozen=True)
-class CapacityResult:
-    """Outcome of :meth:`TaskBackend.manage_capacity`.
-
-    Carries the autoscaler's current tracked state for the controller to mirror
-    into the ``slices`` / ``scaling_groups`` tables. Empty for backends that
-    provision their own capacity (k8s).
-    """
-
-    state: AutoscalerState = field(default_factory=AutoscalerState)
-
-
-@dataclass(frozen=True)
-class WorkersFailedResult:
-    """Outcome of :meth:`TaskBackend.on_workers_failed`.
-
-    The Iris autoscaler tears down the failed workers' slices, so their healthy
-    siblings must be failed too. ``state`` carries the post-teardown autoscaler
-    state for the controller to persist.
-    """
-
-    sibling_worker_ids: list[WorkerId] = field(default_factory=list)
-    state: AutoscalerState = field(default_factory=AutoscalerState)
-
-
-def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> ScheduleResult:
+def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> BackendResult:
     """Run the full Iris scheduling decision pipeline over a DB-less snapshot.
 
     Stages: gates → order → reservation taints → preference pass →
@@ -288,7 +215,7 @@ def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> Sc
         # No work to place. Expired tasks (if any) still flow back so the
         # controller can mark them UNSCHEDULABLE; the un-tainted context is the
         # diagnostics snapshot for this tick.
-        return ScheduleResult(
+        return BackendResult(
             unschedulable=list(gated.expired_tasks),
             post_taint_context=ctx,
             residual_demand=residual_demand,
@@ -299,7 +226,7 @@ def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> Sc
     preemptions = apply_preemptions(order, tainted_jobs, all_assignments, ctx.running_for_preemption, context)
     diagnostics = compute_diagnostics(scheduler, context, tainted_jobs, all_assignments, order.ordered_task_ids)
 
-    return ScheduleResult(
+    return BackendResult(
         assignments=[
             Assignment(task_id=task_id, worker_id=worker_id, priority_band=order.task_band_map.get(task_id))
             for task_id, worker_id in all_assignments
@@ -384,47 +311,51 @@ class TaskBackend(Protocol):
     name: str
     """Stable identifier, e.g. ``"gcp"``, ``"coreweave"``, later ``"slurm-stanford"``."""
 
-    placement: ClassVar[PlacementOwner]
-    """Who schedules task→node (selects the controller's input-build + apply path)."""
-
-    manages_capacity: ClassVar[bool]
-    """True when the backend provisions its own nodes (k8s cluster autoscaler);
-    False when the Iris :class:`Autoscaler` provisions capacity for it."""
+    capabilities: ClassVar[frozenset[BackendCapability]]
+    """Pure descriptor for the dashboard + on-demand RPC routing. Never gates the
+    per-tick control loops, which call ``schedule``/``reconcile``/``autoscale``
+    uniformly."""
 
     autoscaler: Autoscaler | None
     """The Iris :class:`Autoscaler` driving capacity, or None for backends that
-    manage their own (k8s) or have no scale groups. Read-only handle the
+    manage their own capacity or have no scale groups. Read-only handle the
     controller exposes for dashboard/status RPCs; capacity is driven through
-    :meth:`manage_capacity`, never this attribute."""
+    :meth:`autoscale`, never this attribute."""
 
-    def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
-        """Converge the backend toward ``batch`` and report observed state."""
-        ...
+    def schedule(self, snapshot: ScheduleInput) -> BackendResult:
+        """Decide task→worker placement from a DB-less snapshot (pure decision).
 
-    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
-        """Decide task→worker placement from a DB-less snapshot.
-
-        IRIS placement runs the full Iris scheduling pipeline; BACKEND placement
-        (Kueue, slurmctld) returns an empty result — the backend places tasks
-        itself. No database access: snapshot in, decisions out.
+        Worker-daemon backends run the full Iris scheduling pipeline; cluster
+        backends (Kueue, slurmctld) return an empty result — they place tasks
+        themselves. No database access: snapshot in, decisions out.
         """
         ...
 
-    def manage_capacity(self, snapshot: CapacityInput) -> CapacityResult:
-        """Evaluate scaling decisions from a DB-less snapshot.
+    def reconcile(self, snapshot: ControlSnapshot) -> BackendResult:
+        """Converge the backend toward the desired state and report observations.
 
-        IRIS placement drives the Iris :class:`Autoscaler`; BACKEND placement
-        returns an empty result (the cluster autoscaler / Kueue handle capacity).
-        Returns the autoscaler state for the controller to persist — no DB access.
+        Bounded I/O. Worker-daemon backends fan the reconcile RPC out and return
+        ``worker_results`` plus the per-worker liveness they OBSERVED
+        (``health_events``); cluster backends apply/poll pods and return neutral
+        ``updates``. The backend never decides a worker dead — the controller
+        folds ``health_events`` through ``WorkerHealthTracker.apply``.
         """
         ...
 
-    def on_workers_failed(self, worker_ids: list[WorkerId]) -> WorkersFailedResult:
-        """Tear down slices for definitively-failed workers and return siblings.
+    def autoscale(
+        self,
+        snapshot: ControlSnapshot,
+        residual_demand: list[DemandEntry],
+        dead_workers: list[WorkerId],
+    ) -> BackendResult:
+        """Provision capacity for unmet demand, OR tear down dead workers.
 
-        IRIS placement terminates the failed workers' slices via the autoscaler
-        and returns the sibling worker ids the controller must fail plus the
-        post-teardown state to persist. BACKEND placement returns an empty result.
+        Bounded I/O. With ``dead_workers`` set, the backend terminates those
+        workers' slices AND their healthy siblings and returns the full set as
+        ``removed_workers`` (no provisioning this call). Otherwise it runs one
+        scaling cycle against ``residual_demand``. Either way it returns its
+        tracked ``autoscaler_state`` for the controller to persist. Backends that
+        manage their own capacity (k8s) return an empty result.
         """
         ...
 
@@ -432,14 +363,10 @@ class TaskBackend(Protocol):
         """Attach the Iris autoscaler that provisions capacity for this backend.
 
         Called once by the controller's main() after construction (mirrors
-        :meth:`set_log_sink`). Only invoked on backends with
-        ``manages_capacity`` False; capacity-managing backends (k8s) never
-        receive one.
+        :meth:`set_log_sink`). Only invoked on backends carrying
+        :attr:`BackendCapability.IRIS_AUTOSCALER`; capacity-managing backends
+        (k8s) never receive one.
         """
-        ...
-
-    def ping_workers(self, workers: list[tuple[WorkerId, str | None]]) -> list[PingResult]:
-        """Liveness-probe worker daemons (IRIS placement). May be a no-op."""
         ...
 
     def get_process_status(
@@ -468,10 +395,6 @@ class TaskBackend(Protocol):
         """Exec a command in a task's container. Raises ProviderUnsupportedError if N/A."""
         ...
 
-    def on_worker_failed(self, worker_id: WorkerId, address: str | None) -> None:
-        """Evict cached connection state for a definitively-failed worker."""
-        ...
-
     def set_log_sink(
         self,
         log_client: LogWriterProtocol,
@@ -480,9 +403,9 @@ class TaskBackend(Protocol):
     ) -> None:
         """Inject the finelog handles the controller resolves after connecting.
 
-        Backends without a worker daemon (BACKEND placement) collect logs and
-        write resource/profile samples directly to finelog. Daemon-backed
-        backends ignore these — the worker writes its own rows.
+        Backends without a worker daemon collect logs and write resource/profile
+        samples directly to finelog. Daemon-backed backends ignore these — the
+        worker writes its own rows.
         """
         ...
 

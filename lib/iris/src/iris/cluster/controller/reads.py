@@ -52,11 +52,12 @@ from iris.cluster.controller.schema import (
 from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     ActiveTaskRow,
+    RunningTaskEntry,
     TaskDetailRow,
     task_row_can_be_scheduled,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import AttemptUid, JobName, PendingTask, WorkerId
+from iris.cluster.types import AttemptUid, JobName, PendingTask, WorkerId, WorkerStatusMap
 from iris.rpc import controller_pb2, job_pb2
 
 # ---------------------------------------------------------------------------
@@ -1586,27 +1587,39 @@ def load_reconcile_rows(tx: Tx, worker_ids: Iterable[WorkerId]) -> list[Reconcil
 
 @dataclass(frozen=True, slots=True)
 class ControlSnapshot:
-    """Per-cycle control-path state, built once via :func:`load_control_snapshot`.
+    """The DB-less per-tick input the controller hands to a :class:`TaskBackend`.
 
-    Carries the DB-sourced inputs the reconcile control tick consumes:
+    One snapshot type feeds all three uniform backend methods; each control loop
+    populates the section its phase needs and leaves the rest empty (the
+    ``scan_timeouts`` flag is the pattern). The backend reads its section and
+    never touches the database.
 
     * ``worker_addresses`` — ``{worker_id: address}`` for active + healthy workers.
     * ``reconcile_rows`` — live ``(task, attempt, worker)`` tuples across those
       workers (see :func:`load_reconcile_rows`).
     * ``timeout_rows`` — executing tasks past their declared deadline; empty
       unless the caller requested the timeout sweep this tick.
+    * ``job_specs`` — per-job ``RunTaskRequest`` templates for ASSIGNED reconcile
+      rows, so a worker-daemon backend can build its per-worker reconcile plans.
+    * ``worker_status_map`` — per-worker idle/running state for the autoscale
+      phase (built only on the autoscaler tick).
+    * ``tasks_to_run`` / ``running_tasks`` — the dispatch drain for a cluster
+      backend that owns placement (built only when that backend reconciles).
 
     ``health`` is the one non-DB field: the controller's in-memory
     :class:`WorkerHealthTracker`. Worker liveness is never persisted, so the
     controller supplies its tracker — which the loader also uses to select the
-    live worker set — and it rides along on the snapshot so the reconcile apply
-    path consumes the same liveness view that scoped the snapshot.
+    live worker set — and it rides along on the snapshot.
     """
 
     worker_addresses: dict[WorkerId, str]
     reconcile_rows: list[ReconcileRow]
     timeout_rows: Sequence[Row]
     health: WorkerHealthTracker
+    job_specs: dict[JobName, job_pb2.RunTaskRequest] = field(default_factory=dict)
+    worker_status_map: WorkerStatusMap = field(default_factory=dict)
+    tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
+    running_tasks: list[RunningTaskEntry] = field(default_factory=list)
 
 
 def load_control_snapshot(

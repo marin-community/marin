@@ -5,6 +5,7 @@
 
 import asyncio
 import atexit
+import dataclasses
 import enum
 import logging
 import socket
@@ -33,9 +34,7 @@ from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
 from iris.cluster.controller.backend import (
-    BackendReconcileInput,
-    CapacityInput,
-    PlacementOwner,
+    BackendCapability,
     ScheduleInput,
     TaskBackend,
 )
@@ -58,17 +57,12 @@ from iris.cluster.controller.ops.worker import (
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.pruner import prune_old_data
-from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.reconcile import ControllerEffects, dispatch
 from iris.cluster.controller.reconcile.dispatch import (
     DISPATCH_PROMOTION_RATE,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
-from iris.cluster.controller.reconcile.worker import (
-    ReconcileInputs,
-    ReconcileRow,
-    WorkerReconcilePlan,
-    build_reconcile_plans,
-)
+from iris.cluster.controller.reconcile.worker import ReconcileRow
 from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.scheduling.policy import (
     build_scheduling_context,
@@ -80,7 +74,7 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.schema import ReservationClaim
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.runtime.profile import PROFILE_NAMESPACE, IrisProfile
 from iris.cluster.types import (
@@ -158,18 +152,17 @@ class ControllerConfig:
     scheduler_max_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
     """Maximum scheduling loop interval (reached via exponential backoff when idle)."""
 
-    heartbeat_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
-    """How often to send heartbeats to workers."""
-
     autoscaler_evaluation_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
-    """How often the controller runs an autoscale cycle (backend ``manage_capacity``).
-    Only used when the backend does not manage its own capacity."""
+    """How often the controller runs an autoscale provisioning cycle
+    (``backend.autoscale``). A capacity-managing backend (k8s) no-ops."""
 
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(1.0))
-    """Polling reconcile cadence. The polling thread wakes every ``poll_interval``
-    (or sooner if ``_polling_wake`` is set) and runs ``_reconcile_tick``
-    against every healthy worker. The Reconcile RPC is the sole channel that
-    dispatches new ASSIGNED rows and observes worker-side state changes."""
+    """Reconcile cadence — the sole reconcile + liveness channel. The polling
+    thread wakes every ``poll_interval`` (or sooner if ``_polling_wake`` is set)
+    and runs ``_reconcile_tick`` against every active worker. Set at or below the
+    old ping cadence (5s) so worker-failure detection is no slower now that the
+    reconcile RPC outcome is the only liveness signal. The Reconcile RPC is the
+    sole channel that dispatches new ASSIGNED rows and observes worker state."""
 
     max_tasks_per_job_per_cycle: int = 4
     """Maximum tasks from a single non-coscheduled job to consider per scheduling
@@ -285,6 +278,11 @@ class Controller:
         self._config = config
         self._stopped = False
         self._task_backend: TaskBackend = provider
+        # A cluster backend that owns placement (no Iris scheduler) needs the
+        # reconcile tick to drain pending dispatch (promote PENDING→ASSIGNED) and
+        # ride it on the snapshot; a worker-daemon backend reconciles the
+        # already-scheduled worker-bound rows. Resolved once from capability.
+        self._backend_drains_dispatch = BackendCapability.CLUSTER_VIEW in provider.capabilities
         self._promotion_bucket = TokenBucket(
             capacity=DISPATCH_PROMOTION_RATE,
             refill_period=Duration.from_minutes(1),
@@ -381,10 +379,8 @@ class Controller:
         self._server: uvicorn.Server | None = None
         self._scheduling_thread: ManagedThread | None = None
         self._polling_thread: ManagedThread | None = None
-        self._dispatch_thread: ManagedThread | None = None
         self._autoscaler_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
-        self._ping_thread: ManagedThread | None = None
         self._checkpoint_thread: ManagedThread | None = None
 
         # Throttles the execution-timeout deadline scan in _reconcile_tick.
@@ -483,8 +479,11 @@ class Controller:
     def start(self) -> None:
         """Start the dashboard server and all loop threads uniformly.
 
-        Every backend gets the same thread set; each tick no-ops for the
-        placements it does not serve.
+        Every backend gets the same thread set; each tick no-ops for the phases
+        it does not serve. The polling loop is the sole reconcile + liveness
+        channel: it reconciles every active worker (worker-daemon backends) or
+        drains + syncs pods (cluster backends), folds the backend's observed
+        health events, and tears down workers that cross the failure threshold.
         """
         self._started = True
         if self._config.dry_run:
@@ -492,8 +491,6 @@ class Controller:
 
         self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
         self._polling_thread = self._threads.spawn(self._run_polling_loop, name="polling-loop")
-        self._ping_thread = self._threads.spawn(self._run_ping_loop, name="ping-loop")
-        self._dispatch_thread = self._threads.spawn(self._run_dispatch_loop, name="dispatch-loop")
         if not self._config.dry_run:
             self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
 
@@ -576,12 +573,6 @@ class Controller:
         if self._polling_thread:
             self._polling_thread.stop()
             self._polling_thread.join(timeout=join_timeout)
-        if self._dispatch_thread:
-            self._dispatch_thread.stop()
-            self._dispatch_thread.join(timeout=join_timeout)
-        if self._ping_thread:
-            self._ping_thread.stop()
-            self._ping_thread.join(timeout=join_timeout)
         if self._prune_thread:
             self._prune_thread.stop()
             self._prune_thread.join(timeout=join_timeout)
@@ -742,43 +733,6 @@ class Controller:
             except Exception:
                 logger.exception("Periodic checkpoint failed")
 
-    def _run_dispatch_loop(self, stop_event: threading.Event) -> None:
-        """Dispatch loop spawned for all backends; ``_sync_dispatch`` no-ops unless placement is TASK_BACKEND."""
-        limiter = RateLimiter(interval_seconds=self._config.heartbeat_interval.to_seconds())
-        while not stop_event.is_set():
-            if not limiter.wait(cancel=stop_event):
-                break
-            try:
-                self._sync_dispatch()
-            except Exception:
-                logger.exception("Dispatch sync round failed, will retry next interval")
-
-    def _sync_dispatch(self) -> None:
-        if self._task_backend.placement is not PlacementOwner.TASK_BACKEND:
-            return
-        if self._config.dry_run:
-            return
-        max_promotions = self._promotion_bucket.available
-        with self._db.transaction() as cur:
-            batch = dispatch.drain_for_dispatch(
-                cur,
-                cache=self._run_template_cache,
-                max_promotions=max_promotions,
-            )
-        if batch.tasks_to_run:
-            self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
-        result = self._task_backend.reconcile(batch)
-        with self._db.transaction() as cur:
-            apply_dispatch_updates(
-                cur,
-                result.updates,
-                health=self._health,
-                endpoints=self._endpoints,
-                now=Timestamp.now(),
-            )
-        # Worker-side kills are surfaced through the next K8s pod-diff sync;
-        # no immediate RPC fan-out here.
-
     def _run_scheduling(self) -> SchedulingOutcome:
         """Run one scheduling cycle.
 
@@ -787,9 +741,9 @@ class Controller:
         running-task band/value the preemption pass may evict), hands the
         resulting DB-less snapshot to ``backend.schedule`` for the pure placement
         decision, then commits the returned assignments, preemptions, and
-        unschedulable marks. The backend (IRIS placement) runs the full
+        unschedulable marks. A worker-daemon backend runs the full
         gates → order → taints → preference → find_assignments → preemption
-        pipeline; BACKEND placement returns an empty result (Kueue schedules).
+        pipeline; a cluster backend returns an empty result (Kueue schedules).
 
         No lock is needed since only one scheduling thread exists. Every DB
         access is serialized by ControllerDB._lock with multi-statement
@@ -898,7 +852,6 @@ class Controller:
             finalize(
                 cur,
                 preemptions,
-                health=self._health,
                 endpoints=self._endpoints,
                 now=Timestamp.now(),
             )
@@ -956,7 +909,6 @@ class Controller:
             finalize(
                 cur,
                 decisions,
-                health=self._health,
                 endpoints=self._endpoints,
                 now=Timestamp.now(),
             )
@@ -992,193 +944,162 @@ class Controller:
                 templates_by_job[row.job_id] = dispatch.run_request_template(self._run_template_cache, snap, row.job_id)
         return {jid: spec for jid, spec in templates_by_job.items() if spec is not None}
 
-    def _snapshot_reconcile_inputs(self, scan_timeouts: bool) -> tuple[reads.ControlSnapshot, ReconcileInputs]:
-        """Build the per-cycle :class:`ControlSnapshot` and derive reconcile inputs.
+    def _build_reconcile_snapshot(self, scan_timeouts: bool) -> reads.ControlSnapshot:
+        """Compose the DB-less :class:`ControlSnapshot` the backend reconciles against.
 
-        The control snapshot — live worker set, worker-bound attempt rows, and
-        (when ``scan_timeouts``) the execution-timeout rows — is assembled by
-        ``reads.load_control_snapshot`` in one read transaction. The per-job run
-        templates need the same open snapshot, so they are built before it
-        closes. The returned ``ReconcileInputs`` is the backend call shape; the
-        snapshot carries worker addresses, timeout rows, and the health view.
+        Worker-daemon backends get the live worker set, their worker-bound
+        attempt rows, the per-job run templates (so the backend builds its own
+        plans), and — when ``scan_timeouts`` — the execution-timeout rows, all
+        from one read transaction. A cluster backend that owns placement instead
+        gets the dispatch drain (``tasks_to_run`` / ``running_tasks``): the
+        controller promotes PENDING→ASSIGNED in a write transaction (the drain is
+        the only write here) and rides the result on the snapshot.
         """
+        if self._backend_drains_dispatch:
+            max_promotions = self._promotion_bucket.available
+            with self._db.transaction() as cur:
+                batch = dispatch.drain_for_dispatch(cur, cache=self._run_template_cache, max_promotions=max_promotions)
+            if batch.tasks_to_run:
+                self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
+            return reads.ControlSnapshot(
+                worker_addresses={},
+                reconcile_rows=[],
+                timeout_rows=[],
+                health=self._health,
+                tasks_to_run=batch.tasks_to_run,
+                running_tasks=batch.running_tasks,
+            )
+
         with self._db.read_snapshot() as snap:
             control = reads.load_control_snapshot(snap, self._health, scan_timeouts=scan_timeouts)
             job_specs = self._build_run_templates(snap, control.reconcile_rows)
-
-        rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in control.worker_addresses}
-        for row in control.reconcile_rows:
-            rows_by_worker[row.worker_id].append(row)
-        inputs = ReconcileInputs(
-            job_specs=job_specs,
-            worker_ids=list(control.worker_addresses),
-            rows_by_worker=rows_by_worker,
-        )
-        return control, inputs
+        return dataclasses.replace(control, job_specs=job_specs)
 
     def _reconcile_tick(self) -> None:
-        """One polling-tick reconcile pass: snapshot, fan out, apply.
+        """One polling-tick reconcile pass: snapshot, drive the backend, apply.
 
-        The execution-timeout deadline scan is folded into this tick (gated by
-        ``_timeout_rate_limiter`` so it fires at most once per minute). When it
-        fires, timeout-driven terminal decisions ride the same write txn as
-        the reconcile results.
+        The sole reconcile + liveness channel. It composes the snapshot, calls
+        ``backend.reconcile`` (uniform across backends), commits the observed
+        task-state changes, folds the backend's observed health events plus any
+        kernel-derived build failures through the single ``health.apply`` site,
+        and tears down workers that crossed the failure threshold. The
+        execution-timeout deadline scan is folded in (gated by
+        ``_timeout_rate_limiter``) for worker-daemon backends.
         """
         if self._config.dry_run:
-            return
-        if self._task_backend.placement is PlacementOwner.TASK_BACKEND:
             return
 
         now = Timestamp.now()
         scan_timeouts = self._timeout_rate_limiter.should_run()
-        snapshot, inputs = self._snapshot_reconcile_inputs(scan_timeouts)
+        snapshot = self._build_reconcile_snapshot(scan_timeouts)
         timeout_decisions = self._timeout_decisions(snapshot.timeout_rows, now.epoch_ms())
-        if not inputs.worker_ids and not timeout_decisions:
+        if not (snapshot.worker_addresses or snapshot.tasks_to_run or snapshot.running_tasks or timeout_decisions):
             return
 
-        plans = build_reconcile_plans(inputs) if inputs.worker_ids else []
-        if plans:
-            reconcile_input = BackendReconcileInput(plans=plans, worker_addresses=snapshot.worker_addresses)
-            results = self._task_backend.reconcile(reconcile_input).worker_results
-        else:
-            results = []
+        result = self._task_backend.reconcile(snapshot)
 
-        plan_by_worker: dict[WorkerId, WorkerReconcilePlan] = {p.worker_id: p for p in plans}
-        for result in results:
-            if result.error is not None:
-                logger.debug("Reconcile failed for worker %s: %s", result.worker_id, result.error)
+        reconcile_effects: ControllerEffects | None = None
         with self._db.transaction() as cur:
-            if plans:
-                apply_reconcile(
-                    cur,
-                    plan_by_worker,
-                    results,
-                    health=snapshot.health,
-                    endpoints=self._endpoints,
-                    now=now,
-                )
+            if result.worker_results:
+                reconcile_effects = apply_reconcile(cur, result.worker_results, endpoints=self._endpoints, now=now)
+            if result.updates:
+                apply_dispatch_updates(cur, result.updates, endpoints=self._endpoints, now=now)
             if timeout_decisions:
-                finalize(
-                    cur,
-                    timeout_decisions,
-                    health=snapshot.health,
-                    endpoints=self._endpoints,
-                    now=now,
-                )
+                finalize(cur, timeout_decisions, endpoints=self._endpoints, now=now)
 
-    def _get_active_worker_addresses(self) -> list[tuple[WorkerId, str | None]]:
-        """Get healthy active workers as (worker_id, address) tuples for ping."""
-        with self._db.read_snapshot() as tx:
-            workers = reads.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
-        return [(w.worker_id, w.address) for w in workers]
+        self._fold_health(result.health_events, reconcile_effects, snapshot, now)
 
-    def _run_ping_loop(self, stop_event: threading.Event) -> None:
-        """Fast ping loop for liveness detection and prompt worker termination.
+    def _fold_health(
+        self,
+        observed: list[WorkerHealthEvent],
+        reconcile_effects: ControllerEffects | None,
+        snapshot: reads.ControlSnapshot,
+        now: Timestamp,
+    ) -> None:
+        """Fold backend-observed + kernel-derived health through the one apply site.
 
-        Sends Ping RPCs to all healthy workers every heartbeat_interval,
-        bumps the WorkerHealthTracker on failures, and immediately terminates
-        workers that cross the ping threshold.
+        The backend reports the per-worker liveness it observed
+        (REACHED/UNREACHABLE); the reconcile kernel derives build failures
+        (BUILDING/ASSIGNED→FAILED on the worker path). Both feed the single
+        ``WorkerHealthTracker.apply``, which returns the workers over a
+        termination threshold for ``_fail_and_teardown``.
         """
-        ping_interval_s = self._config.heartbeat_interval.to_seconds()
-        limiter = RateLimiter(interval_seconds=ping_interval_s)
+        events = list(observed)
+        if reconcile_effects is not None:
+            events.extend(
+                WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED)
+                for wid in reconcile_effects.health.build_failed
+            )
+        if not events:
+            return
+        dead_workers = self._health.apply(events, now_ms=now.epoch_ms())
+        if dead_workers:
+            self._fail_and_teardown(dead_workers, snapshot)
 
-        while not stop_event.is_set():
-            if not limiter.wait(cancel=stop_event):
-                break
-            try:
-                workers = self._get_active_worker_addresses()
-                results = self._task_backend.ping_workers(workers)
+    def _fail_and_teardown(self, dead_workers: list[WorkerId], snapshot: reads.ControlSnapshot) -> None:
+        """Serialize worker failure, tear down slices + siblings, forget the lot.
 
-                live_worker_ids: list[WorkerId] = []
-                for result in results:
-                    if result.error is not None:
-                        self._health.ping(result.worker_id, healthy=False)
-                    else:
-                        self._health.ping(result.worker_id, healthy=True)
-                        live_worker_ids.append(result.worker_id)
-
-                if live_worker_ids:
-                    self._health.bump_heartbeat(live_worker_ids, Timestamp.now().epoch_ms())
-
-                unhealthy = self._health.workers_over_threshold()
-                if unhealthy:
-                    logger.warning(
-                        "Ping loop: failing %d workers over ping threshold: %s",
-                        len(unhealthy),
-                        [str(wid) for wid in unhealthy[:10]],
-                    )
-                    removed = self._terminate_workers(
-                        [str(wid) for wid in unhealthy],
-                        reason="worker ping threshold exceeded",
-                        sibling_reason="unhealthy worker failed, slice terminated",
-                    )
-                    self._health.forget_many(removed)
-
-            except Exception:
-                logger.exception("Ping loop iteration failed")
-
-    def _terminate_workers(self, worker_ids: list[str], reason: str, sibling_reason: str) -> list[WorkerId]:
-        """Fail the given workers, terminate their slice siblings, and kill running tasks.
-
-        Returns the set of worker_ids that were actually removed (primary + siblings),
-        so callers can drop them from in-memory state like the health tracker.
+        Replaces the old ping-loop choreography: fail the dead workers
+        (``ops.worker.fail``), hand them to ``backend.autoscale`` which terminates
+        their slices AND healthy siblings and returns the full ``removed_workers``
+        set, fail those siblings, persist the autoscaler state, and forget every
+        removed worker from the tracker. The only health-driven write is removal.
         """
-        for wid in worker_ids:
-            log_event("worker_failing", wid, trigger=reason)
+        reason = "worker reconcile failure threshold exceeded"
+        sibling_reason = "unhealthy worker failed, slice terminated"
+        for wid in dead_workers:
+            log_event("worker_failing", str(wid), trigger=reason)
         failure_result = ops.worker.fail(
             self._db,
-            worker_ids=worker_ids,
+            worker_ids=[str(wid) for wid in dead_workers],
             reason=reason,
             health=self._health,
             endpoints=self._endpoints,
             worker_attrs=self._worker_attrs,
         )
-        removed: list[WorkerId] = []
-        for wid, addr in failure_result.removed_workers:
-            self._task_backend.on_worker_failed(wid, addr)
-            removed.append(wid)
-        failed_result = self._task_backend.on_workers_failed([wid for wid, _ in failure_result.removed_workers])
-        persist_autoscaler_state(self._db, failed_result.state)
-        if failed_result.sibling_worker_ids:
-            for wid in failed_result.sibling_worker_ids:
+        removed_ids = [wid for wid, _ in failure_result.removed_workers]
+        auto = self._task_backend.autoscale(snapshot, [], dead_workers=removed_ids)
+        if auto.autoscaler_state is not None:
+            persist_autoscaler_state(self._db, auto.autoscaler_state)
+
+        siblings = [wid for wid in auto.removed_workers if wid not in set(removed_ids)]
+        if siblings:
+            for wid in siblings:
                 log_event("worker_failing", str(wid), trigger=sibling_reason)
-            sibling_failures = ops.worker.fail(
+            ops.worker.fail(
                 self._db,
-                worker_ids=failed_result.sibling_worker_ids,
+                worker_ids=[str(wid) for wid in siblings],
                 reason=sibling_reason,
                 health=self._health,
                 endpoints=self._endpoints,
                 worker_attrs=self._worker_attrs,
             )
-            for wid, addr in sibling_failures.removed_workers:
-                self._task_backend.on_worker_failed(wid, addr)
-                removed.append(wid)
-        # Surviving-slice siblings stop on the next reconcile tick: the
-        # planner drops them from the worker's desired set (or marks them
-        # 'stop'); the failed workers themselves are already gone from the
-        # worker table.
-        return removed
+        self._health.forget_many(set(removed_ids) | set(auto.removed_workers))
 
     def _run_autoscaler_once(self) -> None:
-        """Run one autoscale cycle: build the worker-status snapshot, drive the
-        backend's ``manage_capacity`` with the cached residual demand, then
-        persist the returned state.
+        """Run one provisioning cycle: build the worker-status snapshot, drive
+        ``backend.autoscale`` with the cached residual demand, persist the state.
 
-        Called from the autoscaler loop thread. Demand comes from the scheduling
-        pass via ``_last_residual_demand``. The controller owns every DB read and
+        Called from the autoscaler loop thread with no ``dead_workers`` (teardown
+        rides the reconcile tick's health detection). Demand comes from the
+        scheduling pass via ``_last_residual_demand``. A capacity-managing backend
+        (k8s) no-ops and returns no state. The controller owns every DB read and
         write; the backend never touches the database.
         """
         if self._config.dry_run:
-            logger.info("[DRY-RUN] Skipping autoscaler cycle (manage_capacity)")
-            return
-        if self._task_backend.manages_capacity:
+            logger.info("[DRY-RUN] Skipping autoscaler cycle")
             return
 
-        worker_status_map = self._build_worker_status_map()
-        result = self._task_backend.manage_capacity(
-            CapacityInput(worker_status_map=worker_status_map, demand_entries=self._last_residual_demand)
+        snapshot = reads.ControlSnapshot(
+            worker_addresses={},
+            reconcile_rows=[],
+            timeout_rows=[],
+            health=self._health,
+            worker_status_map=self._build_worker_status_map(),
         )
-        persist_autoscaler_state(self._db, result.state)
+        result = self._task_backend.autoscale(snapshot, self._last_residual_demand, dead_workers=[])
+        if result.autoscaler_state is not None:
+            persist_autoscaler_state(self._db, result.autoscaler_state)
 
     def _build_worker_status_map(self) -> WorkerStatusMap:
         """Build a map of worker_id to worker status for autoscaler idle tracking."""
@@ -1250,8 +1171,8 @@ class Controller:
         return self._task_backend
 
     @property
-    def placement(self) -> PlacementOwner:
-        return self._task_backend.placement
+    def capabilities(self) -> frozenset[BackendCapability]:
+        return self._task_backend.capabilities
 
     @property
     def run_template_cache(self) -> RunTemplateCache:

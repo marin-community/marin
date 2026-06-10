@@ -173,14 +173,9 @@ class ReconcileState:
         then recomputes/finalizes every touched job once for the whole batch.
         """
         now_ms = now.epoch_ms()
-        heartbeat_workers = tuple(
-            plan.worker_id
-            for plan, result in plan_results
-            if result.error is None and plan.worker_id in self._snapshot.active_workers
-        )
-        if heartbeat_workers:
-            self.overlay.emit_worker_heartbeat(heartbeat_workers)
-
+        # Liveness (REACHED/UNREACHABLE) is observed by the backend from its own
+        # RPC outcomes and folded by the controller through
+        # ``WorkerHealthTracker.apply``; the kernel only derives build failures.
         for plan, result in plan_results:
             for update in self._reconcile_updates_for_plan(plan, result):
                 self._apply_update(update, now_ms, source=task.TransitionSource.WORKER_RECONCILE)
@@ -223,7 +218,8 @@ class ReconcileState:
                 outcome = self._fail_one_task(task_row, worker_id, error, now_ms)
                 if outcome is not None:
                     self._fan_out(outcome, child_reason="Parent task preempted", now_ms=now_ms)
-            self.overlay.emit_worker_make_unhealthy(worker_id)
+            # No health mutation here: the controller has already decided this
+            # worker is dead and forgets it once removal commits.
             self.overlay.emit_log_event(
                 LogEvent(
                     action="worker_failed",
