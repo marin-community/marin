@@ -88,3 +88,27 @@ Lever test within the 1000-token budget: replace `ops.md`'s "1-3 entry points +
 happy path" with an "entry-point index" of 12-20 of the most important callables
 across the whole sub-project. Tests whether breadth (vs depth) recovers the use
 probes under the fixed budget.
+
+**R9 result: breadth-first ops worked — mean rubric 0.07 → 0.23 (3x).** The
+breadth-first `ops.md` surfaced the previously-missing APIs (`marin/ops.md` now
+lists `compute_minhash_attrs_step(num_perms=286, num_bands=26, ngram_size=5)`;
+`levanter/ops.md` lists `levanter.initialize`). Per-probe gains: P1 0→3/5, P3
+0→2/5, P7 0→2/4, P9 0→1/4. So the per-sub-project 1000-token budget CAN carry
+useful API coverage when prompted for breadth over depth.
+
+Trajectory (mean rubric / mean quality):
+- R7 (harness-buggy):   0.09 / 1.3
+- R8 (harness fixed):   0.07 / 1.3
+- R9 (breadth-first):   0.23 / 1.3
+
+Remaining limiters (next levers):
+- **Anchor precision.** P8 surfaced `compute_minhash_attrs_step` (a real StepSpec
+  builder) but the anchor is `compute_minhash_attrs`; the judge flagged the
+  variant as a hallucination. Anchors should accept `<name>` and `<name>_step`.
+- **Quality scale is flat (~1.3 every round).** The judge rates any incomplete
+  script low, so PASS (quality ≥ 4) is ~unreachable and doesn't discriminate.
+  Either recalibrate the 1-5 rubric with explicit anchors, or make rubric
+  accuracy the primary metric and treat quality as secondary.
+- **Internal-symbol understand-probes.** P4/P5/P10 anchor on private internals
+  (`_reconcile_tick`, Rust store fns, `_invalidate`) that a doc would not name;
+  they under-measure doc quality and should be re-scoped to public concepts.
