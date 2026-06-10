@@ -67,10 +67,11 @@ CANARY_TRAINER = GrugTrainerConfig(
     ema_beta=None,
     log_every=1,
 )
+_GPU_FA4_CUTE_ATTENTION: GrugAttentionImplementation = "gpu_fa4_cute"
 _GPU_FA4_THD_ATTENTION: GrugAttentionImplementation = "gpu_fa4_thd"
 _GPU_ATTENTION_IMPLEMENTATIONS: tuple[GrugAttentionImplementation, ...] = (
     "reference",
-    "gpu_fa4_cute",
+    _GPU_FA4_CUTE_ATTENTION,
     _GPU_FA4_THD_ATTENTION,
 )
 
@@ -141,7 +142,7 @@ def _build_step_from_env() -> ExecutorStep:
         else:
             model, _, _, _ = build_from_heuristic(budget=_HEURISTIC_BUDGET, hidden_dim=hidden_dim)
 
-        attention_implementation = os.environ.get("CANARY_ATTENTION_IMPLEMENTATION", "gpu_fa4_cute")
+        attention_implementation = os.environ.get("CANARY_ATTENTION_IMPLEMENTATION", _GPU_FA4_CUTE_ATTENTION)
         if attention_implementation not in _GPU_ATTENTION_IMPLEMENTATIONS:
             raise ValueError(
                 f"Unknown CANARY_ATTENTION_IMPLEMENTATION={attention_implementation!r}, expected one of "

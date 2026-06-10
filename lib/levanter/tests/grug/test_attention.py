@@ -213,6 +213,8 @@ def test_gpu_fa4_thd_hopper_postprocess_uses_mma_compatible_tile():
 def test_gpu_fa4_thd_hopper_backward_passes_smem_safe_options_to_kernel():
     captured_kwargs: dict[str, object] = {}
 
+    # The upstream CUDA kernels are optional in unit tests; exercise the launcher
+    # boundary where Marin passes SM90-safe options into flash-attn-4.
     class FakeCutlass:
         BFloat16 = object()
         Float16 = object()
