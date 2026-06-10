@@ -684,8 +684,19 @@ class InMemoryK8sService:
 
     def delete(self, resource: K8sResource, name: str, *, force: bool = False, wait: bool = True) -> None:
         self._check_failure("delete")
-        self._resources.pop((resource.plural, name), None)
+        key = (resource.plural, name)
+        manifest = self._resources.get(key)
+        if manifest is None:
+            return
 
+        # Model finalizers: a resource that still carries finalizers is not
+        # removed on delete — k8s marks it terminating (deletionTimestamp set)
+        # and waits for the finalizers to clear. force/grace does not bypass them.
+        if manifest.get("metadata", {}).get("finalizers"):
+            manifest.setdefault("metadata", {})["deletionTimestamp"] = "2024-01-01T00:00:00Z"
+            return
+
+        self._resources.pop(key, None)
         # Release resources when deleting a pod
         if resource is K8sResource.PODS:
             self._release_pod_resources(name)
@@ -709,6 +720,21 @@ class InMemoryK8sService:
             if all(res_labels.get(k) == v for k, v in labels.items()):
                 to_delete.append(name)
         for name in to_delete:
+            self.delete(resource, name)
+
+    def remove_finalizer(self, resource: K8sResource, name: str, finalizer: str) -> None:
+        """Strip a single finalizer from a stored resource (no-op if absent)."""
+        self._check_failure("remove_finalizer")
+        manifest = self._resources.get((resource.plural, name))
+        if manifest is None:
+            return
+        finalizers = manifest.get("metadata", {}).get("finalizers") or []
+        if finalizer not in finalizers:
+            return
+        remaining = [f for f in finalizers if f != finalizer]
+        manifest["metadata"]["finalizers"] = remaining
+        # A terminating object whose last finalizer just cleared is reclaimed.
+        if not remaining and manifest["metadata"].get("deletionTimestamp"):
             self.delete(resource, name)
 
     def logs(self, pod_name: str, *, container: str | None = None, tail: int = 50, previous: bool = False) -> str:
