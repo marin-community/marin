@@ -63,7 +63,7 @@ from iris.cluster.backends.k8s.coreweave_topology import (
     CW_LABEL_SUPERPOD,
 )
 from iris.cluster.backends.k8s.service import CloudK8sService
-from iris.cluster.backends.types import Labels
+from iris.cluster.backends.types import Labels, find_free_port
 from iris.cluster.config import load_config
 from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
 from iris.rpc import config_pb2, job_pb2
@@ -258,9 +258,7 @@ class ControllerTarget:
         # its gang to that cluster. --address makes a genuine conflict fail
         # loudly instead.
         if local_port == 0:
-            with socket.socket() as s:
-                s.bind(("127.0.0.1", 0))
-                local_port = s.getsockname()[1]
+            local_port = find_free_port()
         self._tunnel = subprocess.Popen(
             self._kc(
                 "port-forward", "--address", "127.0.0.1", "-n", self.namespace, f"svc/{svc}", f"{local_port}:{port}"
