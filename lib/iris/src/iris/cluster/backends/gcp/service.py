@@ -326,26 +326,16 @@ def _extract_node_name(resource_name: str) -> str:
     return resource_name
 
 
-def _parse_tpu_created_at(tpu_data: dict) -> Timestamp:
-    create_time = tpu_data.get("createTime", "")
+def _parse_gcp_created_at(create_time: str) -> Timestamp:
+    """Parse a GCP RFC3339 creation timestamp, falling back to now() when absent or invalid.
+
+    TPU nodes expose this as ``createTime`` while Compute VMs use ``creationTimestamp``.
+    """
     if not create_time:
         return Timestamp.now()
     try:
         dt = datetime.fromisoformat(create_time.replace("Z", "+00:00"))
-        epoch_ms = int(dt.timestamp() * 1000)
-        return Timestamp.from_ms(epoch_ms)
-    except (ValueError, AttributeError):
-        return Timestamp.now()
-
-
-def _parse_vm_created_at(vm_data: dict) -> Timestamp:
-    create_time = vm_data.get("creationTimestamp", "")
-    if not create_time:
-        return Timestamp.now()
-    try:
-        dt = datetime.fromisoformat(create_time.replace("Z", "+00:00"))
-        epoch_ms = int(dt.timestamp() * 1000)
-        return Timestamp.from_ms(epoch_ms)
+        return Timestamp.from_ms(int(dt.timestamp() * 1000))
     except (ValueError, AttributeError):
         return Timestamp.now()
 
@@ -372,7 +362,7 @@ def _parse_tpu_info(tpu_data: dict, zone: str) -> TpuInfo:
         service_account=(tpu_data.get("serviceAccount", {}) or {}).get("email"),
         network_endpoints=ips,
         external_network_endpoints=external_ips,
-        created_at=_parse_tpu_created_at(tpu_data),
+        created_at=_parse_gcp_created_at(tpu_data.get("createTime", "")),
     )
 
 
@@ -410,7 +400,7 @@ def _parse_vm_info(vm_data: dict, fallback_zone: str = "") -> VmInfo:
         labels=vm_data.get("labels", {}),
         metadata=metadata,
         service_account=service_account_email,
-        created_at=_parse_vm_created_at(vm_data),
+        created_at=_parse_gcp_created_at(vm_data.get("creationTimestamp", "")),
     )
 
 
