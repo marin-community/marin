@@ -23,6 +23,9 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_STEPS         training steps (default 50)
     SCALE_HIDDEN_DIM / SCALE_NUM_LAYERS / SCALE_NUM_EXPERTS / SCALE_TOP_K
                         model-shape overrides (e.g. a smaller FSDP smoke test)
+    SCALE_REMAT         recompute_all (default) | save_moe -- save_moe keeps the
+                        tagged MoE dispatch tensors for backward so the EP
+                        collectives are not re-run during recompute
     SCALE_TRACKER       wandb | json_logger (default json_logger)
     SCALE_PROFILER_STEPS  >0 enables a jax_profile capture window of N steps
                           (use SCALE_TRACKER=wandb so the artifact uploads)
@@ -36,6 +39,7 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
 
 import datetime
 import os
+from typing import cast
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
@@ -47,7 +51,7 @@ from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_data
-from experiments.grug.moe.model import GrugModelConfig
+from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.train import GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
 
@@ -88,6 +92,9 @@ def build_scale_model() -> GrugModelConfig:
         num_kv_heads -= 1
     intermediate_dim = hidden_dim // 2  # expert FFN inner width (~d/2)
     seq_len = env_int("SCALE_SEQ_LEN", DEFAULT_SEQ_LEN)
+    remat_mode = os.environ.get("SCALE_REMAT", "recompute_all")
+    if remat_mode not in ("recompute_all", "save_moe"):
+        raise ValueError(f"SCALE_REMAT={remat_mode!r} must be 'recompute_all' or 'save_moe'")
     return GrugModelConfig(
         vocab_size=VOCAB_SIZE,
         hidden_dim=hidden_dim,
@@ -101,6 +108,7 @@ def build_scale_model() -> GrugModelConfig:
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
         max_seq_len=seq_len,
         sliding_window=seq_len,
+        remat_mode=cast(RematMode, remat_mode),
     )
 
 
