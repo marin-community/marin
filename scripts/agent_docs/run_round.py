@@ -40,6 +40,7 @@ import click
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agent_docs.eval import score_probe, write_probe_artifacts, write_summary
+from agent_docs.generate_agentic import generate_taxonomy_agentic
 from agent_docs.generate_taxonomy import generate_taxonomy
 from agent_docs.packages import discover_packages
 from agent_docs.probes import PROBES
@@ -65,7 +66,8 @@ def _append_ledger(expdir: Path, row: dict) -> list[dict]:
 def _print_round(row: dict, prev: dict | None) -> None:
     """Print the round scoreboard with a per-probe table and a delta vs prev."""
     sep = "=" * 84
-    print(f"\n{sep}\n  ROUND {row['label']}  (gen={row['gen_model']} judge={row['review_model']})\n{sep}")
+    head = f"  ROUND {row['label']}  (mode={row.get('mode', '?')} gen={row['gen_model']} judge={row['review_model']})"
+    print(f"\n{sep}\n{head}\n{sep}")
     print(f"  {'ID':<4}{'SUBPROJ':<9}{'INTENT':<11}{'RUBRIC':<8}{'QUAL':<5}{'PASS':<5}HALLUC")
     print("-" * 84)
     for p in row["probes"]:
@@ -75,9 +77,11 @@ def _print_round(row: dict, prev: dict | None) -> None:
         cols = f"{p['id']:<4}{p['subproject']:<9}{p['intent']:<11}{rub:<8}{p['quality']:<5}{passed:<5}"
         print(f"  {cols}{hall}")
     print("-" * 84)
+    gen_cost = row.get("gen_cost_usd", 0.0)
     line = (
         f"  mean rubric {row['mean_rubric_acc']:.2f}   mean quality {row['mean_quality']:.2f}   "
-        f"passed {row['num_passed']}/{row['num_probes']}   cost(API-equiv) ${row['eval_cost_usd']:.2f}"
+        f"passed {row['num_passed']}/{row['num_probes']}   "
+        f"cost(API-equiv) gen ${gen_cost:.2f} + eval ${row['eval_cost_usd']:.2f}"
     )
     if prev:
         d_r = row["mean_rubric_acc"] - prev["mean_rubric_acc"]
@@ -94,9 +98,16 @@ def _print_round(row: dict, prev: dict | None) -> None:
 )
 @click.option("--subproject", "subprojects", multiple=True, help="Sub-projects to generate (default: probe-targeted).")
 @click.option("--probe", "probe_ids", multiple=True, help="Probe ids to run (default: all).")
+@click.option(
+    "--mode",
+    type=click.Choice(["mechanical", "agentic"]),
+    default="mechanical",
+    help="Generation track: mechanical (digest->doc) or agentic (tool-using agent explores source).",
+)
 @click.option("--gen-model", default="sonnet", help="Doc generation model.")
 @click.option("--review-model", default="sonnet", help="Judge model.")
 @click.option("--coder-model", default="haiku", help="Coder model (writes scripts, no tools).")
+@click.option("--gen-budget-usd", default=10.0, type=float, help="Agentic generation spend cap (API-equivalent).")
 @click.option("--expdir", type=click.Path(), default=str(DEFAULT_EXPDIR), help="Experiment root dir.")
 @click.option("-v", "--verbose", is_flag=True)
 def main(
@@ -104,9 +115,11 @@ def main(
     reuse_docs: str | None,
     subprojects: tuple[str, ...],
     probe_ids: tuple[str, ...],
+    mode: str,
     gen_model: str,
     review_model: str,
     coder_model: str,
+    gen_budget_usd: float,
     expdir: str,
     verbose: bool,
 ) -> None:
@@ -120,15 +133,21 @@ def main(
     round_dir = exp / label
     round_dir.mkdir(parents=True, exist_ok=True)
 
+    gen_cost = 0.0
     if reuse_docs:
         docs_dir = Path(reuse_docs)
         logger.info("[%s] reusing docs from %s (skip generation)", label, docs_dir)
     else:
         docs_dir = round_dir / "docs"
         targets = list(subprojects) if subprojects else list(PROBE_SUBPROJECTS)
-        logger.info("[%s] generating docs for %s -> %s", label, ", ".join(targets), docs_dir)
-        packages = discover_packages(Path(__file__).parent.parent.parent)
-        generate_taxonomy(packages, targets, docs_dir, model=gen_model, dry_run=False)
+        logger.info("[%s] generating docs (%s) for %s -> %s", label, mode, ", ".join(targets), docs_dir)
+        if mode == "agentic":
+            gen_cost = generate_taxonomy_agentic(
+                targets, docs_dir, model=gen_model, budget_usd=gen_budget_usd, dry_run=False
+            )
+        else:
+            packages = discover_packages(Path(__file__).parent.parent.parent)
+            generate_taxonomy(packages, targets, docs_dir, model=gen_model, dry_run=False)
 
     selected = [PROBES_BY_ID[p] for p in probe_ids] if probe_ids else list(PROBES)
     eval_dir = round_dir / "eval"
@@ -143,6 +162,7 @@ def main(
 
     row = {
         "label": label,
+        "mode": "reused" if reuse_docs else mode,
         "gen_model": "(reused)" if reuse_docs else gen_model,
         "review_model": review_model,
         "coder_model": coder_model,
@@ -151,6 +171,7 @@ def main(
         "mean_quality": summary["mean_quality"],
         "num_passed": summary["num_passed"],
         "num_probes": summary["num_probes"],
+        "gen_cost_usd": gen_cost,
         "eval_cost_usd": summary["total_cost_usd"],
         "probes": summary["probes"],
     }

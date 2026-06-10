@@ -46,14 +46,21 @@ def _run_claude(
     timeout_seconds: int,
     output_format: str = "text",
     disable_tools: bool = False,
+    allowed_tools: list[str] | None = None,
+    cwd: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run the claude CLI with retries on transient failures.
 
     Returns the successful CompletedProcess, or raises on persistent failure.
 
-    When ``disable_tools`` is true, the model is given an empty allowed-tools
-    set: no bash, no file reads, no grep. The eval harness uses this for the
-    coder so its output is attributable to the documentation alone.
+    Tool access (mutually exclusive, in priority order):
+    - ``disable_tools=True``: empty allowed-tools set — no bash, file reads, or
+      grep. The eval coder uses this so its output is attributable to the docs.
+    - ``allowed_tools=[...]``: only these tools (e.g. ``["Read", "Grep",
+      "Glob"]``) — used by the agentic generator to explore real source read-only.
+    - neither: the CLI default toolset.
+
+    ``cwd`` sets the working directory, so a tool-using agent reads the repo.
     """
     cmd = [
         "claude",
@@ -70,6 +77,8 @@ def _run_claude(
     if disable_tools:
         # Empty allowed-tools value -> the model gets no tools at all.
         cmd += ["--allowed-tools", ""]
+    elif allowed_tools is not None:
+        cmd += ["--allowed-tools", " ".join(allowed_tools)]
 
     for attempt in range(1, MAX_RETRIES + 2):
         t0 = time.monotonic()
@@ -80,6 +89,7 @@ def _run_claude(
             text=True,
             timeout=timeout_seconds,
             env=_subscription_env(),
+            cwd=cwd,
         )
         elapsed = time.monotonic() - t0
 
@@ -163,6 +173,43 @@ def generate_json(
         disable_tools=disable_tools,
     )
     return json.loads(result.stdout)
+
+
+_AGENTIC_SYSTEM_PROMPT = (
+    "You are a precise documentation generator. Explore the source as needed, "
+    "then output only the requested document."
+)
+
+
+def generate_with_tools(
+    prompt: str,
+    *,
+    model: str,
+    allowed_tools: list[str],
+    cwd: str,
+    system_prompt: str = _AGENTIC_SYSTEM_PROMPT,
+    max_budget_usd: float = 2.0,
+    timeout_seconds: int = 1200,
+) -> tuple[str, float]:
+    """Run claude with a restricted read-only toolset in ``cwd``.
+
+    The agentic doc generator uses this: the agent explores real source with
+    ``allowed_tools`` (e.g. Read/Grep/Glob) instead of being handed a digest.
+    Returns ``(doc_text, cost_usd)``; cost is the CLI's API-equivalent figure,
+    used to enforce the experiment's spend cap.
+    """
+    result = _run_claude(
+        prompt,
+        model=model,
+        system_prompt=system_prompt,
+        max_budget_usd=max_budget_usd,
+        timeout_seconds=timeout_seconds,
+        output_format="json",
+        allowed_tools=allowed_tools,
+        cwd=cwd,
+    )
+    data = json.loads(result.stdout)
+    return strip_markdown_fences(data.get("result", "")), float(data.get("total_cost_usd", 0.0))
 
 
 def strip_markdown_fences(text: str) -> str:

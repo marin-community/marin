@@ -246,6 +246,106 @@ parameters, or fields. Omit a detail rather than guess.
 {sources}
 """
 
+# --- Agentic generation variants -------------------------------------------
+# These drive a tool-using agent (Read/Grep/Glob) that explores real source
+# instead of reading a pre-built digest. They request the SAME sections as the
+# mechanical prompts above so the two tracks are head-to-head comparable on the
+# probe suite. The agent must GROUND every symbol in source it actually read.
+
+AGENTIC_PREAMBLE = """\
+You are generating one agent-doc for sub-project `{project_name}` in the Marin \
+monorepo. You have read-only tools (Read, Grep, Glob) and are running at the \
+repo root. The sub-project's source lives under:
+
+{source_roots}
+
+Explore that source as much as you need. EVERY symbol, path, parameter, and \
+default you write MUST be verified against source you actually read with your \
+tools — never guess a name or a default. If you cannot verify something, omit \
+it. Cite real `file_path:line` anchors.
+"""
+
+AGENTIC_OVERVIEW_PROMPT = (
+    AGENTIC_PREAMBLE
+    + """
+Produce the 30-second ORIENTATION card — a router an agent reads first to decide
+which deeper doc to open. Markdown with EXACTLY these sections:
+
+## What it is
+1-2 sentences: what `{project_name}` is and the one problem it solves.
+
+## Files that matter
+The 3-5 load-bearing files/modules, one line each: `path/to/file.py` — what
+lives there. Pick real entry points you verified, not every file.
+
+## Where to go next
+- USE / "how do I run or call it?" -> `{project_name}/ops.md`
+- UNDERSTAND or CHANGE / "how does it work, where do I edit?" -> `{project_name}/architecture.md`
+
+Rules: under ~1000 tokens (~4000 chars). No code blocks. Only real paths.
+Output ONLY the markdown document.
+"""
+)
+
+AGENTIC_OPS_PROMPT = (
+    AGENTIC_PREAMBLE
+    + """
+Produce the "how to USE `{project_name}`" doc — entry points and the happy-path
+call. Prioritize BREADTH: an agent may need any area of the sub-project.
+Markdown with EXACTLY these sections:
+
+## Entry point index
+The 12-20 most important callable entry points across the WHOLE sub-project,
+spanning its major areas. One line each:
+`full.import.path.symbol(key_arg=default, required_arg)` — one-line purpose.
+Include load-bearing args inline with their real default VALUES; mark required
+args. For multi-step pipelines, list ALL stages (do not surface only the first).
+
+## Happy path
+ONE short fenced code block for the single most common end-to-end workflow, with
+full import paths and real argument names.
+
+## Critical defaults
+Only the handful of non-obvious required params or tuned defaults (exact values)
+an agent would otherwise get wrong.
+
+## Where artifacts land
+1-3 lines: output paths / return values — data, a path, or written files?
+
+Rules: under ~1000 tokens (~4000 chars). Full import paths. Every required param
+and non-obvious default with its exact value. Verify every symbol in source.
+Output ONLY the markdown document.
+"""
+)
+
+AGENTIC_ARCHITECTURE_PROMPT = (
+    AGENTIC_PREAMBLE
+    + """
+Produce the "how to UNDERSTAND and CHANGE `{project_name}`" doc — the mental
+model plus the exact edit sites. Markdown with EXACTLY these sections:
+
+## Mental model
+1-2 prose paragraphs: the components, how data flows, and WHY the design is the
+way it is. Convey reasoning signatures alone cannot.
+
+## Key invariants
+2-5 bullets: properties the code relies on that an editor must not break, each
+with where it is enforced (name the function/method).
+
+## Where to change things
+The load-bearing section. For 5-8 likely changes, give a precise pointer that
+NAMES THE EXACT SYMBOL to edit: "To change X, edit `path/to/file.py` —
+`Class.method` / `function`." Name the real edit site INCLUDING private/internal
+methods and helpers (e.g. a reconcile loop, a scheduler's assignment search, a
+cache invalidation) — the public entry point is rarely where the change goes.
+You can read private symbols directly with your tools; use that.
+
+Rules: under ~1000 tokens (~4000 chars). Cite real `path:symbol` you verified.
+Prefer the mental model and concrete edit sites over an API dump (`ops.md` has
+the call details). Output ONLY the markdown document.
+"""
+)
+
 CODER_PROMPT = """\
 You are a Python engineer working on the Marin monorepo. You have NO tools: you \
 cannot run code, read files, or search the repo. You must rely ONLY on the \
