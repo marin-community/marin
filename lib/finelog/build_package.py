@@ -2,28 +2,34 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build (and let CI publish) marin-finelog wheels.
+"""Build (and let CI publish) the marin-finelog dists.
 
 Driven by .github/workflows/finelog-release-wheels.yaml. Mirrors
 lib/dupekit/build_package.py: same nightly/stable/manual mode split and the
 same zig-cross-compiled manylinux + native macOS wheel matrix.
 
-marin-finelog is a native package: lib/finelog/pyproject.toml is a maturin
-project whose `[tool.maturin] manifest-path` points at the rust/pyext
-cdylib crate (the in-process `finelog._native` server). maturin therefore reads
-the wheel version from `[project] version` in lib/finelog/pyproject.toml and
-bundles the pure-Python client/deploy/proto alongside the native extension.
+finelog ships as TWO dists, released in lockstep at one resolved version:
+  - marin-finelog-server: the native package. lib/finelog/rust/pyproject.toml
+    is a maturin project whose `[tool.maturin] manifest-path` points at the
+    pyext cdylib crate (the in-process server, importable as `finelog_server`).
+    Platform wheels are built per-target by the CI matrix.
+  - marin-finelog: pure Python (hatchling) — client/deploy/proto — depending on
+    `marin-finelog-server >= 0.2.0.dev0`. One py3-none-any wheel, built on the
+    linux matrix leg only so artifacts never collide across legs.
 
 Modes:
     nightly  -- `<bumped_patch>-dev.<YYYYMMDDhhmm>` (UTC), where
                 `<bumped_patch>` is one patch above max(pyproject version,
-                latest stable on PyPI). Sorting above the current stable is
-                what lets `marin-finelog >= 0.2.0.dev0` in root pyproject.toml
-                resolve to the latest dev. pyproject never needs to be
-                re-bumped after a stable cut.
+                latest marin-finelog stable on PyPI; the server dist follows
+                the same value). Sorting above the current stable is what lets
+                `marin-finelog >= 0.2.0.dev0`-style floors resolve to the
+                latest dev. pyproject never needs to be re-bumped after a
+                stable cut.
     stable   -- version supplied via --version (extracted from the tag in CI).
-                pyproject.toml is rewritten on disk so maturin builds with that
-                version; the change is not committed.
+                Both pyprojects are rewritten on disk so the builds carry that
+                version; the change is not committed. A stable tag therefore
+                cuts a stable PAIR, so stable-only consumers never need a
+                prerelease opt-in for the server dist.
     manual   -- `<pyproject>+<sha>` (PEP 440 local version). Build-only smoke
                 for PRs and ad-hoc dev; PyPI rejects local-version identifiers,
                 so the publish job declines to run in this mode.
@@ -50,10 +56,12 @@ import urllib.request
 from pathlib import Path
 
 FINELOG_DIR = Path(__file__).resolve().parent
+SERVER_DIR = FINELOG_DIR / "rust"
 REPO_ROOT = FINELOG_DIR.parent.parent
-# maturin reads the wheel version from `[project] version` here, and the
-# `[tool.maturin] manifest-path` (relative to this file) selects the cdylib.
+# The pure dist's pyproject is the canonical version source; the resolved
+# version is stamped into both files so the wheels agree.
 PYPROJECT_PATH = FINELOG_DIR / "pyproject.toml"
+SERVER_PYPROJECT_PATH = SERVER_DIR / "pyproject.toml"
 DIST_DIR = REPO_ROOT / "dist"
 TOOLS_DIR = REPO_ROOT / ".tools"
 
@@ -163,18 +171,19 @@ def _ensure_maturin() -> str:
 
 
 def _maturin(*args: str, env: dict[str, str] | None = None) -> None:
-    """Run maturin from lib/finelog so it reads this package's pyproject.toml.
+    """Run maturin from lib/finelog/rust so it reads the server pyproject.toml.
 
-    The `[tool.maturin] manifest-path` in lib/finelog/pyproject.toml selects the
-    rust/pyext cdylib crate; we deliberately do NOT pass --manifest-path
+    The `[tool.maturin] manifest-path` in lib/finelog/rust/pyproject.toml
+    selects the pyext cdylib crate; we deliberately do NOT pass --manifest-path
     (that would make maturin look for a sibling pyproject next to the crate).
     """
     cmd = [_ensure_maturin(), *args]
-    subprocess.run(cmd, check=True, cwd=FINELOG_DIR, env=env)
+    subprocess.run(cmd, check=True, cwd=SERVER_DIR, env=env)
 
 
-# Match the `[project]` table's `version = "..."` — the first version key in
-# lib/finelog/pyproject.toml (the build-system table above it has none).
+# Match the `[project]` table's `version = "..."` — the first line-anchored
+# version key in each pyproject (the build-system table above it has none, and
+# dependency strings are indented so the anchor skips them).
 _VERSION_RE = re.compile(r'^(version\s*=\s*)"[^"]+"', re.MULTILINE)
 
 
@@ -188,12 +197,13 @@ def _read_project_version() -> str:
 
 
 def _write_project_version(new_version: str) -> None:
-    text = PYPROJECT_PATH.read_text()
-    new_text, n = _VERSION_RE.subn(rf'\1"{new_version}"', text, count=1)
-    if n != 1:
-        print(f"ERROR: Failed to rewrite version in {PYPROJECT_PATH}", file=sys.stderr)
-        sys.exit(1)
-    PYPROJECT_PATH.write_text(new_text)
+    for path in (PYPROJECT_PATH, SERVER_PYPROJECT_PATH):
+        text = path.read_text()
+        new_text, n = _VERSION_RE.subn(rf'\1"{new_version}"', text, count=1)
+        if n != 1:
+            print(f"ERROR: Failed to rewrite version in {path}", file=sys.stderr)
+            sys.exit(1)
+        path.write_text(new_text)
 
 
 def _parse_semver(version: str) -> tuple[int, int, int]:
@@ -301,11 +311,18 @@ def _build_wheels(targets: list[tuple[str, str | None]], use_zig: bool) -> None:
             args.append("--zig")
         _maturin(*args, env=env)
 
-    _list_dist_artifacts("wheel(s)")
+
+def _build_pure_wheel() -> None:
+    print("\n--- Building marin-finelog (pure) wheel ---")
+    subprocess.run(["uv", "build", "--wheel", "--out-dir", str(DIST_DIR)], check=True, cwd=FINELOG_DIR)
 
 
 def build_linux_wheels() -> None:
     _build_wheels(LINUX_TARGETS, use_zig=True)
+    # The pure wheel is platform-independent; build it on this leg only so the
+    # merged artifacts never contain two copies of the same filename.
+    _build_pure_wheel()
+    _list_dist_artifacts("wheel(s)")
 
 
 def build_macos_wheels() -> None:
@@ -313,22 +330,25 @@ def build_macos_wheels() -> None:
         print("ERROR: macOS wheels require a macOS host (zig can't cross-compile to macOS)", file=sys.stderr)
         sys.exit(1)
     _build_wheels(MAC_TARGETS, use_zig=False)
+    _list_dist_artifacts("wheel(s)")
 
 
-def build_sdist() -> None:
+def build_sdists() -> None:
     # Adds to dist/ rather than resetting it: the release job downloads wheels
     # via download-artifact before invoking us, and we want them in the same
     # directory so `pypa/gh-action-pypi-publish` uploads everything together.
     DIST_DIR.mkdir(exist_ok=True)
-    print("\n--- Building sdist ---")
+    print("\n--- Building marin-finelog-server sdist ---")
     _maturin("sdist", "--out", str(DIST_DIR))
+    print("\n--- Building marin-finelog sdist ---")
+    subprocess.run(["uv", "build", "--sdist", "--out-dir", str(DIST_DIR)], check=True, cwd=FINELOG_DIR)
     _list_dist_artifacts("sdist(s)")
 
 
 _BUILDERS = {
     "linux": build_linux_wheels,
     "macos": build_macos_wheels,
-    "sdist": build_sdist,
+    "sdist": build_sdists,
 }
 
 
@@ -360,14 +380,15 @@ def main() -> None:
         parser.error("--build is required unless --resolve-only is set")
 
     version = args.version if args.version else resolve_version(args.mode, args.version)
-    print(f"marin-finelog version: {version} (mode={args.mode})")
+    print(f"marin-finelog / marin-finelog-server version: {version} (mode={args.mode})")
     _emit_github_output("version", version)
 
     if args.resolve_only:
         return
 
-    # maturin reads version from [project] version in pyproject.toml. Stamp it
-    # for the duration of this build; we never commit the change back.
+    # Both builds read [project] version from their pyproject.toml. Stamp the
+    # resolved version into both for the duration of this build; we never
+    # commit the change back.
     _write_project_version(version)
     _BUILDERS[args.build]()
 

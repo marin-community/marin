@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Smoke test for the in-process native server (``finelog._native.EmbeddedServer``).
+"""Smoke test for the in-process native server (``finelog_server.EmbeddedServer``).
 
 Boots the same axum app the ``finelog-server`` binary serves and exercises the
 real wire contract end to end via ``LogClient``. Skips when the native extension
@@ -21,7 +21,7 @@ from finelog.rpc import logging_pb2
 @pytest.fixture
 def embedded_server(tmp_path):
     if not is_available():
-        pytest.skip("finelog native extension (finelog._native) not available")
+        pytest.skip("finelog native server extension (finelog_server) not available")
     server = require_embedded_server()(log_dir=str(tmp_path / "log-server"))
     try:
         yield server

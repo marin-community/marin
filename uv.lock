@@ -248,6 +248,7 @@ members = [
     "marin-zephyr",
 ]
 constraints = [
+    { name = "marin-finelog-server", specifier = ">=0.2.0.dev0" },
     { name = "opentelemetry-semantic-conventions", specifier = ">=0.1b0" },
     { name = "tfp-nightly", specifier = ">=0.1.dev0" },
 ]

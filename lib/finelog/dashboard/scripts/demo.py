@@ -8,14 +8,15 @@ streams, and exercise the same JSON RPC paths the dashboard uses.
 Usage:
     uv run python lib/finelog/dashboard/scripts/demo.py [--keep]
 
-Boots the native ``finelog._native.EmbeddedServer`` (the same axum app the
+Boots the native ``finelog_server.EmbeddedServer`` (the same axum app the
 ``finelog-server`` binary serves) on port 10001. Without ``--keep`` the script
 tears the server down on exit. With ``--keep`` the server stays up so the
 dashboard at http://localhost:10001/ can be inspected in a browser. The server
 serves the built dashboard from ``lib/finelog/dashboard/dist`` itself, so
 ``npm run build`` must have run at least once.
 
-Requires the native extension (a maturin/dev build of ``marin-finelog``).
+Requires the native extension (the marin-finelog-server wheel, or a
+rust_mode.py dev build).
 """
 
 from __future__ import annotations

@@ -5,15 +5,22 @@ name: "Finelog - Release Wheels"
 # There is intentionally no `push: branches: [main]` trigger - that would let an
 # auto-pin chore PR recursively re-trigger this workflow on every merge.
 #
-# marin-finelog is a native package: the wheel bundles the pure-Python
-# client/deploy/proto AND the native in-process server ext (finelog._native),
-# built by maturin from lib/finelog (manifest-path -> rust/pyext). The nightly
-# and tag builds publish a wheel covering both trees, so the stale-nightly check
+# finelog ships as TWO dists, published in lockstep at one resolved version:
+#   - marin-finelog-server: the native in-process server ext (importable as
+#     `finelog_server`), built by maturin from lib/finelog/rust (manifest-path
+#     -> pyext). Platform wheels come from the build matrix below.
+#   - marin-finelog: the pure-Python client/deploy/proto (hatchling), depending
+#     on marin-finelog-server. Its single py3-none-any wheel is built on the
+#     linux matrix leg only, so merged artifacts never collide.
+# PyPI trusted publishing must be configured for BOTH projects against this
+# workflow + the pypi-publish environment.
+#
+# The nightly and tag builds publish both dists, so the stale-nightly check
 # below scopes broadly to all of lib/finelog/. The pull_request leg, by
-# contrast, is only a build smoke ("does the wheel still compile?"), so its
-# paths filter is scoped to the inputs that can actually break the build (Rust
-# crate + maturin config + build driver) — not pure-Python edits under src/,
-# which the cross-compile bundles but cannot fail on.
+# contrast, is only a build smoke ("do the wheels still build?"), so its
+# paths filter is scoped to the inputs that can actually break the builds (Rust
+# crate + maturin/hatchling config + build driver) — not pure-Python edits
+# under src/, which the pure wheel bundles but cannot fail on.
 on:
   workflow_dispatch:
     inputs:
@@ -171,9 +178,10 @@ jobs:
           path: dist
           merge-multiple: true
 
-      # Build sdist into the same dist/ directory the wheels were downloaded
-      # into so gh-action-pypi-publish uploads everything as one release.
-      - name: Build sdist
+      # Build both sdists into the same dist/ directory the wheels were
+      # downloaded into so gh-action-pypi-publish uploads everything as one
+      # release.
+      - name: Build sdists
         run: |
           python lib/finelog/build_package.py \
             --mode "${{ needs.resolve.outputs.mode }}" \

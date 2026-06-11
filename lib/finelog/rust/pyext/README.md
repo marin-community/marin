@@ -1,15 +1,17 @@
-# marin-finelog-native
+# marin-finelog-server (pyext)
 
-In-process [finelog](../../lib/finelog) server, exposed to Python via PyO3.
+In-process [finelog](../..) server, exposed to Python via PyO3 and shipped as
+the `marin-finelog-server` wheel — a dependency of the pure-Python
+`marin-finelog`.
 
-`finelog_native.EmbeddedServer` boots the same axum app the `finelog-server`
+`finelog_server.EmbeddedServer` boots the same axum app the `finelog-server`
 binary serves, on an owned tokio runtime bound to a local port. Callers talk to
 it over the normal RPC contract (`finelog.client.LogClient` / proxies), so there
 is exactly one server implementation. Iris's controller uses it as the local
 log-server fallback when no external `/system/log-server` endpoint is set.
 
 ```python
-from finelog_native import EmbeddedServer
+from finelog_server import EmbeddedServer
 
 with EmbeddedServer(log_dir="/tmp/logs") as server:
     print(server.address)  # http://127.0.0.1:<ephemeral>

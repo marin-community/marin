@@ -28,8 +28,11 @@ dependencies = [
     # any earlier dev of the same Z; bump the floor to whichever is newest.
     # Published by .github/workflows/dupekit-release-wheels.yaml.
     "marin-dupekit >= 0.1.2.dev202606060824",
-    # finelog carries an in-process server ext (finelog._native) the controller
-    # starts; `scripts/rust_mode.py dev` swaps in an editable source locally.
+    # marin-finelog is pure Python; its native in-process server ext (module
+    # `finelog_server`, started by the iris controller) comes transitively via
+    # its marin-finelog-server dependency — a maturin dist built from
+    # lib/finelog/rust and released in lockstep by finelog-release-wheels.yaml.
+    # `scripts/rust_mode.py dev` swaps both to path sources locally.
     "marin-finelog >= 0.2.9",
 ]
 
@@ -50,6 +53,10 @@ constraint-dependencies = [
     # the pre-release component here only flips uv's per-package opt-in.
     "tfp-nightly>=0.1.dev0",
     "opentelemetry-semantic-conventions>=0.1b0",
+    # Transitive via marin-finelog; needed whenever the marin-finelog floor
+    # above points at a nightly (stable tags cut a stable pair, so a stable
+    # floor never needs this — but it is inert in that case, not harmful).
+    "marin-finelog-server>=0.2.0.dev0",
 ]
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
@@ -113,9 +120,10 @@ conflicts = [
 ]
 
 [tool.uv.workspace]
-# marin-finelog is intentionally NOT a member: it is a native (maturin) package
-# consumed as a pre-built platform wheel (see [project] dependencies and the
-# RUST-DEV SOURCES block below), mirroring marin-dupekit.
+# lib/finelog is intentionally NOT a member: marin-finelog and its native
+# companion marin-finelog-server (maturin, lib/finelog/rust) are consumed as
+# published wheels (see [project] dependencies and the RUST-DEV SOURCES block
+# below), mirroring marin-dupekit.
 members = [
     "lib/iris",
     "lib/fray",

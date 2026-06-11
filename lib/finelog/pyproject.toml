@@ -1,6 +1,6 @@
 [build-system]
-requires = ["maturin>=1.5,<2.0"]
-build-backend = "maturin"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "marin-finelog"
@@ -10,6 +10,12 @@ requires-python = ">=3.11,<3.13"
 # duckdb is used by the deploy CLI to query pulled parquet segments in-process
 # (`finelog inspect`), not by a storage engine — the Rust server owns storage.
 dependencies = [
+    # The native in-process server ext (module `finelog_server`) ships in the
+    # companion dist, built by maturin from this package's rust/ subtree and
+    # released in lockstep by finelog-release-wheels.yaml. The dev floor opts
+    # uv into its nightlies; `scripts/rust_mode.py dev` swaps in a path source
+    # to build it from source instead.
+    "marin-finelog-server >= 0.2.0.dev0",
     "marin-rigging",
     "click>=8.3.1",
     "connect-python>=0.9.0",
@@ -32,18 +38,24 @@ dev = [
     "pytest-xdist",
 ]
 
-[tool.maturin]
-# The native in-process server (`finelog._native`) is built from the cdylib
-# crate in this package's own Rust subtree (`rust/pyext`). `marin-finelog`
-# ships BOTH the pure-Python client/deploy/proto AND the native server ext in
-# one wheel. Users install the pre-built wheel (no Rust toolchain); source
-# builds happen only in dev mode (`scripts/rust_mode.py dev`).
-manifest-path = "rust/pyext/Cargo.toml"
-module-name = "finelog._native"
-python-source = "src"
-features = ["pyo3/extension-module"]
-# Deploy configs shipped in the wheel (was a hatch force-include).
-include = ["config/**/*"]
+# Without an explicit list the sdist sweeps the whole directory — including
+# dashboard/node_modules and the rust/ tree, which ship separately.
+[tool.hatch.build.targets.sdist]
+only-include = ["src/finelog", "config", "tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/finelog"]
+
+# Deploy configs shipped at the wheel root (same layout maturin `include`d).
+[tool.hatch.build.targets.wheel.force-include]
+"config" = "config"
+
+[tool.uv.sources]
+# `scripts/rust_mode.py dev` points marin-finelog-server at ./rust here (and at
+# lib/finelog/rust in the root pyproject) so the extension builds from source;
+# `user` mode clears the block and the pre-built wheel comes from PyPI.
+# ### BEGIN RUST-DEV SOURCES ###
+# ### END RUST-DEV SOURCES ###
 
 [tool.pytest.ini_options]
 timeout = 10
