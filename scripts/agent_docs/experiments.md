@@ -187,3 +187,108 @@ Key reads:
    UNDERSTAND prompts leak some anchor vocabulary; the eval rewards recovering
    source symbols, which structurally favors file-reading agents; Rust non-`pub`
    internals (P5) aren't in the digest (parser only captures `pub`).
+
+---
+
+# v3: hybrid split-docs (agentic narrative + mechanical reference)
+
+A third pass (R18–R27) testing a new doc architecture: each doc gets a **1500-token
+split budget** — an agentic NARRATIVE half (sonnet with read-only Read/Grep/Glob
+explores source and writes concepts/data-flow/why) followed by a deterministic
+MECHANICAL reference half (tree-sitter, no LLM: important files / entry-point
+signatures / internal edit seams, per axis). The narrative half is cached per
+(project, axis), so iterating the free mechanical half costs $0. **sonnet
+generates, opus judges** (v2 judged with sonnet, so the absolute numbers shift —
+hence the opus-judged re-baselines below). All on the subscription plan.
+
+## The opus-judged frame (docs-only coder)
+
+| round | docs | rubric | qual | pass | hallucinated probes |
+|---|---|:---:|:---:|:---:|:---:|
+| R20 | none (floor) | 0.28 | 1.80 | 2/10 | — |
+| R19 | agentic | 0.38 | 2.10 | 3/10 | — |
+| R18 | mechanical (v2 winner) | 0.53 | 2.60 | 3/10 | 1 |
+| R21 | hybrid v1 (raw dump) | 0.39 | 2.30 | 2/10 | — |
+| R22 | hybrid v2 (ranked reference) | **0.56** | 2.80 | 4/10 | — |
+| R23 | hybrid v3 (ranked + sharpened narrative) | **0.58** | 3.00 | 3/10 | 4 |
+| R27 | deterministic reference only ($0, no LLM) | 0.56 | 2.70 | 1/10 | 6 |
+
+Opus judges more generously than the v2 sonnet judge (mechanical 0.53 vs 0.43)
+but preserves the ordering: mechanical > agentic > floor.
+
+### What moved
+- **R21 → R22 (0.39 → 0.56): selection, not density.** The raw hybrid dump
+  *underperformed* mechanical (0.39 < 0.53): a breadth-first/source-order dump
+  buried the load-bearing symbols (it surfaced `Controller._run_scheduling_loop`
+  but dropped the real reconcile loop `_run_polling_loop`) and handed the
+  docs-only coder near-misses it grabbed wrong. Ranking the *deterministic*
+  reference — control-flow/lifecycle method names for the architecture edit
+  sites, an importance heuristic (submit/run/connect verbs, Config/Client
+  suffixes, shallow paths) for the ops index — took it to **0.56**, past the
+  mechanical bar. Biggest gains: P8 marin-use 3/7→7/7, P9 levanter-use 1/4→4/4.
+- **R22 → R23 (0.56 → 0.58): sharpened narrative.** Making the narrative *name
+  the exact* load-bearing symbol (the reconcile loop `_reconcile_tick`, the right
+  entry point per task) added a noisy +0.02. The honest read: rubric is within
+  noise of R22, and the same change that lifted iris/finelog understand probes
+  *regressed* one marin use probe 7/7→2/7 — narrative content is high-variance.
+
+### The $0-doc ablation (R27)
+The ranked deterministic reference **alone** (no narrative, no LLM at all) scores
+**0.56 rubric** docs-only — matching the full hybrid and beating the v2 mechanical
+LLM doc (0.53). But it is **hallucination-prone**: 6/10 probes flagged (vs hybrid
+4, mechanical 1), so only **1/10 pass**. A bare signature list gives a docs-only
+coder rope to fabricate plausible near-misses; the narrative contextualizes which
+symbol to use, and the mechanical LLM doc's curation simply lists fewer.
+
+## The practical (file-reading coder) frame
+
+A coder that may read ~3 files under a tight budget, opus judge:
+
+| round | docs | rubric | pass |
+|---|---|:---:|:---:|
+| R26 | none (floor) | 0.74 | 5/10 |
+| R25 | mechanical | 0.70 | 5/10 |
+| R24 | hybrid (best) | **0.82** | 6/10 |
+
+**This reverses v2's "docs are neutral once the agent can read source."** Under
+the opus judge, the hybrid clearly helps a file-reading agent (**0.82 vs 0.74
+no-docs**), while a plain signature doc does not (mechanical 0.70 ≈ no-docs). The
+differentiator is *routing*: the narrative orients and the ranked reference points
+at exact files, so the budget-limited coder reads the *right* source. The win
+concentrates on the finelog probes (P5 0.0→1.0, P6 0.5→1.0). Caveat unchanged from
+v2: on the hardest probe (P4, iris reconcile loop) docs still mislead — mechanical
+0.00, hybrid 0.25, but no-docs 0.75 (the coder read `controller.py` directly).
+
+## Conclusions (v3)
+
+1. **Selection is the lever, and it is free.** Ranking a deterministic tree-sitter
+   reference (control-flow seams + importance-ranked entry points) beats both the
+   v2 mechanical LLM doc (0.56 vs 0.53 docs-only) and the unranked dump (0.56 vs
+   0.39) — at $0 and zero hallucination risk *in the generator*. Density without
+   ranking is actively harmful.
+2. **The narrative earns its keep on orientation and hallucination control, not
+   raw rubric.** It adds only ~+0.02 docs-only rubric over the bare reference, but
+   it raises the pass rate (fewer fabricated near-misses) and is *decisive* in the
+   realistic file-reading regime (0.82 vs 0.70 mechanical, 0.74 no-docs).
+3. **The hybrid is the best doc in both regimes** — docs-only 0.58 and
+   file-reading 0.82 — and updates v2's "ship mechanical, skip agentic": the
+   agentic narrative *does* help when paired with a ranked mechanical reference.
+4. **Cost.** Reference half: $0 (deterministic), regenerates instantly. Narrative
+   half: ~$0.3/doc agentic, cached → free to re-render; a 12-doc set is ~$2.4–3.9
+   to generate once (v2 agentic generation total was $6.2 here). Ship the hybrid:
+   the free ranked reference carries the rubric, the cached narrative buys the
+   orientation that matters to a realistic file-reading agent.
+5. **Harness hardening this pass:** the file-reading coder's spend cap (an
+   *intended* bound) was crashing rounds as a hard CLI error — now its partial
+   result envelope is used; and a transient judge 529 is retried instead of
+   aborting a 50-minute round.
+
+### Caveats
+- Single-run variance ~±0.05–0.08; R22↔R23 (0.56↔0.58) and the file-reading
+  mechanical↔no-docs (0.70↔0.74) gaps are within it. The robust signals are the
+  ranked-vs-dump jump (0.39→0.56), the hybrid file-reading win (0.82 vs ~0.72),
+  and the detonly hallucination rate (6/10).
+- The narrative is high-variance (a re-roll swung one probe 7/7→2/7); the ranked
+  reference is deterministic and stable.
+- Heuristic name lists (`_OPS_VERB_HINTS`, `_CONTROL_FLOW_HINTS`) are tuned to
+  this monorepo's conventions; they generalize as priors, not guarantees.
