@@ -404,8 +404,8 @@ class MoEMLP(eqx.Module):
             num_experts_per_token=self.cfg.num_experts_per_token,
         )
         # Sharded QB: compute beta locally per device, then average.
-        s_minus_alpha = router_logits - qb_alpha
         mesh = get_abstract_mesh()
+        s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
         num_devices = 1
         for a in _BATCH_AXES:
             num_devices *= mesh.shape[a]
