@@ -9,6 +9,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 
 import dataclasses
 from dataclasses import dataclass
+from typing import Literal
 
 import equinox as eqx
 import jax
@@ -34,6 +35,7 @@ from levanter.grug.attention import (
     attention,
 )
 from levanter.grug.grug_moe import (
+    MOE_REMAT_SAVE_NAMES,
     MoeActivation,
     MoEExpertMlp,
     MoeImplementation,
@@ -59,6 +61,9 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
         # axes kept, so any missing axis is a caller bug rather than a "size 1" shortcut.
         raise ValueError(f"grug/moe requires an abstract mesh with axis '{axis_name}'")
     return int(mesh.shape[axis_name])
+
+
+RematMode = Literal["recompute_all", "save_moe"]
 
 
 def _batch_spec() -> P:
@@ -99,6 +104,10 @@ class GrugModelConfig:
     router_z_loss_coef: float = 0.001
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    remat_mode: RematMode = "recompute_all"
+    """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
+    backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
+    backward skips re-running expert dispatch and its EP collectives."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -526,10 +535,15 @@ class Transformer(eqx.Module):
             mask = AttentionMask.causal()
         short_mask, long_mask = _layer_attention_masks(mask, sliding_window=cfg.sliding_window)
 
+        if cfg.remat_mode == "save_moe":
+            remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+        else:
+            remat_policy = None
+
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
             layer_mask = long_mask if i % 4 == 3 else short_mask
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask)
+            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, layer_mask)
             moe_router_stats.append(router_stats)
 
         router_metrics = {

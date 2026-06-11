@@ -23,15 +23,29 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_STEPS         training steps (default 50)
     SCALE_HIDDEN_DIM / SCALE_NUM_LAYERS / SCALE_NUM_EXPERTS / SCALE_TOP_K
                         model-shape overrides (e.g. a smaller FSDP smoke test)
+    SCALE_REMAT         recompute_all (default) | save_moe -- save_moe keeps the
+                        tagged MoE dispatch tensors for backward so the EP
+                        collectives are not re-run during recompute
+    SCALE_MP            jmp policy (default params=float32,compute=bfloat16,
+                        output=bfloat16); params=bfloat16 halves FSDP gather bytes
     SCALE_TRACKER       wandb | json_logger (default json_logger)
+    SCALE_PROFILER_STEPS  >0 enables a jax_profile capture window of N steps
+                          (use SCALE_TRACKER=wandb so the artifact uploads)
+    SCALE_PROFILER_START  profiler start step (default 8, past compile/warmup)
+    SCALE_CHECKPOINTS   s3 (default) | local. local writes checkpoints to
+                        node-local disk with no periodic saves -- for throughput
+                        experiments where the checkpoint is disposable and a
+                        slow S3 commit must not wedge the end-of-run barrier
     RUN_ID              unique run identifier
 """
 
 import datetime
 import os
+from typing import cast
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.checkpoint import CheckpointerConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
@@ -39,7 +53,7 @@ from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_data
-from experiments.grug.moe.model import GrugModelConfig
+from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.train import GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
 
@@ -80,6 +94,9 @@ def build_scale_model() -> GrugModelConfig:
         num_kv_heads -= 1
     intermediate_dim = hidden_dim // 2  # expert FFN inner width (~d/2)
     seq_len = env_int("SCALE_SEQ_LEN", DEFAULT_SEQ_LEN)
+    remat_mode = os.environ.get("SCALE_REMAT", "recompute_all")
+    if remat_mode not in ("recompute_all", "save_moe"):
+        raise ValueError(f"SCALE_REMAT={remat_mode!r} must be 'recompute_all' or 'save_moe'")
     return GrugModelConfig(
         vocab_size=VOCAB_SIZE,
         hidden_dim=hidden_dim,
@@ -93,6 +110,7 @@ def build_scale_model() -> GrugModelConfig:
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
         max_seq_len=seq_len,
         sliding_window=seq_len,
+        remat_mode=cast(RematMode, remat_mode),
     )
 
 
@@ -104,6 +122,27 @@ def build_scale_step() -> ExecutorStep:
     replica_axis = env_int("SCALE_REPLICA_AXIS", 1)
     batch_size = env_int("SCALE_BATCH", DEFAULT_BATCH)
     steps = env_int("SCALE_STEPS", 50)
+    # SCALE_PROFILER_STEPS > 0 captures a jax_profile window of that many steps
+    # (uploaded via the tracker, so pair with SCALE_TRACKER=wandb to retrieve it).
+    profiler_steps = env_int("SCALE_PROFILER_STEPS", 0)
+    profiler = ProfilerConfig(
+        enabled=profiler_steps > 0,
+        start_step=env_int("SCALE_PROFILER_START", 8),
+        num_steps=profiler_steps,
+    )
+
+    checkpoint_mode = os.environ.get("SCALE_CHECKPOINTS", "s3").lower()
+    if checkpoint_mode == "local":
+        checkpointer = CheckpointerConfig(
+            base_path=f"/tmp/grug-scale-ckpt/{run_id}",
+            append_run_id_to_base_path=False,
+            save_interval=None,
+            keep=None,
+        )
+    elif checkpoint_mode == "s3":
+        checkpointer = None
+    else:
+        raise ValueError(f"SCALE_CHECKPOINTS={checkpoint_mode!r} must be 's3' or 'local'")
 
     model = build_scale_model()
     if model.num_experts % expert_axis != 0:
@@ -149,12 +188,13 @@ def build_scale_step() -> ExecutorStep:
             steps=versioned(steps),
             batch_size=versioned(batch_size),
             seed=versioned(0),
-            mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+            mp=versioned(os.environ.get("SCALE_MP", "params=float32,compute=bfloat16,output=bfloat16")),
             tracker=tracker,
             optimizer=versioned(SCALE_OPTIMIZER),
             grug_trainer=versioned(grug_trainer),
             eval=None,
-            profiler=ProfilerConfig(enabled=False),
+            profiler=profiler,
+            checkpointer=checkpointer,
         ),
     )
 

@@ -435,7 +435,6 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
             read_max_bytes=read_max_bytes,
             compressions=compressions,
         )
-
     @property
     def path(self) -> str:
         """Returns the URL path to mount the application to when serving multiple applications."""
@@ -2077,4 +2076,3 @@ class ControllerServiceClientSync(ConnectClientSync):
             headers=headers,
             timeout_ms=timeout_ms,
         )
-

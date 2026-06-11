@@ -41,6 +41,17 @@ _CHECKPOINT_EXPERT_HIDDEN = "grug_moe_expert_hidden"
 _CHECKPOINT_DISPATCH_OUTPUT = "grug_moe_dispatch_output"
 _CHECKPOINT_MOE_OUTPUT = "grug_moe_output"
 
+# Checkpoint names every MoE backend tags on its dispatch tensors. A remat
+# policy of jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+# keeps these alive for backward instead of re-running expert dispatch —
+# including the EP collectives — during the recompute.
+MOE_REMAT_SAVE_NAMES = (
+    _CHECKPOINT_DISPATCH_INPUT,
+    _CHECKPOINT_EXPERT_HIDDEN,
+    _CHECKPOINT_DISPATCH_OUTPUT,
+    _CHECKPOINT_MOE_OUTPUT,
+)
+
 
 @dataclass(frozen=True)
 class MoEExpertMlpPspecs:

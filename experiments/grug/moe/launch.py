@@ -57,6 +57,10 @@ class GrugMoeLaunchConfig:
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
+    checkpointer: CheckpointerConfig | None = None
+    """Override the checkpointer. None builds the default (periodic + final saves
+    under output_path). Throughput experiments point this at node-local disk so a
+    slow object-store commit can't wedge the end-of-run barrier."""
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
@@ -126,7 +130,8 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         use_explicit_mesh_axes=True,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
-        checkpointer=CheckpointerConfig(
+        checkpointer=config.checkpointer
+        or CheckpointerConfig(
             base_path=os.path.join(config.output_path, "checkpoints"),
             temporary_base_path=temporary_checkpoint_base_path(config.output_path),
             append_run_id_to_base_path=False,
