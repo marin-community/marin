@@ -197,6 +197,10 @@ def _resolve_stringized_annotations(
     (and later reload) the config. The rewrite matches what ``get_type_hints`` already reports,
     so it is idempotent and a no-op for configs that never used stringized annotations. We walk
     field *values* so concrete subclasses of polymorphic choice fields are resolved too.
+
+    ``Field`` objects are class-level, so this intentionally rewrites the annotation metadata on
+    the config classes themselves, not just this instance. That is a benign, idempotent
+    normalization (it only ever replaces a string with the type it already denotes).
     """
     _seen_types = set() if _seen_types is None else _seen_types
     _seen_ids = set() if _seen_ids is None else _seen_ids
