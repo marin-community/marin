@@ -29,6 +29,7 @@ import json
 import logging
 import re
 import sys
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -191,8 +192,16 @@ def _format_forbidden(probe: Probe) -> str:
     )
 
 
+JUDGE_MAX_ATTEMPTS = 3
+
+
 def run_judge(script: str, probe: Probe, model: str) -> JudgeResult:
-    """Review the script against the probe's anchors and quality rubric."""
+    """Review the script against the probe's anchors and quality rubric.
+
+    Retries when the judge returns no JSON object — that is usually a transient
+    API condition (e.g. a 529 Overloaded surfaced as the result text), and one
+    bad judge call should not abort a long round.
+    """
     prompt = JUDGE_PROMPT.format(
         task=probe.prompt,
         intent=str(probe.intent).upper(),
@@ -200,14 +209,25 @@ def run_judge(script: str, probe: Probe, model: str) -> JudgeResult:
         forbidden_block=_format_forbidden(probe),
         script=script,
     )
-    data = generate_json(prompt, model=model, system_prompt=JUDGE_SYSTEM_PROMPT)
-    raw = data.get("result", "")
-    cost = data.get("total_cost_usd", 0.0)
-
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if not match:
-        raise ValueError(f"Probe {probe.id}: judge returned no JSON object:\n{raw[:500]}")
-    parsed = json.loads(match.group())
+    raw = ""
+    cost = 0.0
+    parsed = None
+    for attempt in range(1, JUDGE_MAX_ATTEMPTS + 1):
+        data = generate_json(prompt, model=model, system_prompt=JUDGE_SYSTEM_PROMPT)
+        raw = data.get("result", "")
+        cost = data.get("total_cost_usd", 0.0)
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if match:
+            parsed = json.loads(match.group())
+            break
+        logger.warning(
+            "Probe %s: judge returned no JSON (attempt %d/%d): %s", probe.id, attempt, JUDGE_MAX_ATTEMPTS, raw[:120]
+        )
+        time.sleep(3 * attempt)
+    if parsed is None:
+        raise ValueError(
+            f"Probe {probe.id}: judge returned no JSON object after {JUDGE_MAX_ATTEMPTS} attempts:\n{raw[:500]}"
+        )
 
     raw_anchor_scores = parsed.get("anchors", {})
     anchor_scores = {a.symbol: int(raw_anchor_scores.get(a.symbol, 0)) for a in probe.anchors}
