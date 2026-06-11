@@ -312,9 +312,17 @@ def _build_wheels(targets: list[tuple[str, str | None]], use_zig: bool) -> None:
         _maturin(*args, env=env)
 
 
+def _uv_build(*args: str) -> None:
+    """Build the pure dist with uv, dropping the .gitignore uv writes into the
+    output dir — pypi-publish rejects non-distribution files in packages-dir,
+    and both the artifact upload and the publish step glob all of dist/."""
+    subprocess.run(["uv", "build", *args, "--out-dir", str(DIST_DIR)], check=True, cwd=FINELOG_DIR)
+    (DIST_DIR / ".gitignore").unlink(missing_ok=True)
+
+
 def _build_pure_wheel() -> None:
     print("\n--- Building marin-finelog (pure) wheel ---")
-    subprocess.run(["uv", "build", "--wheel", "--out-dir", str(DIST_DIR)], check=True, cwd=FINELOG_DIR)
+    _uv_build("--wheel")
 
 
 def build_linux_wheels() -> None:
@@ -341,7 +349,7 @@ def build_sdists() -> None:
     print("\n--- Building marin-finelog-server sdist ---")
     _maturin("sdist", "--out", str(DIST_DIR))
     print("\n--- Building marin-finelog sdist ---")
-    subprocess.run(["uv", "build", "--sdist", "--out-dir", str(DIST_DIR)], check=True, cwd=FINELOG_DIR)
+    _uv_build("--sdist")
     _list_dist_artifacts("sdist(s)")
 
 
