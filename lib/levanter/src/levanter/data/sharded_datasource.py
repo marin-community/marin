@@ -12,19 +12,17 @@ from typing import Any, Callable, Generic, Iterable, Iterator, List, Sequence, S
 
 import datasets
 import numpy as np
-from rigging.filesystem import open_url
 import pyarrow.parquet as pq
+from rigging.filesystem import open_url
 
 from levanter.utils import fsspec_utils
 
-from levanter.data import AsyncDataset
 from levanter.utils.fsspec_utils import expand_glob
 from ._preprocessor import (
     BatchResult,
     _BatchMapTransform,
-    _construct_composite_batch_processor,
-    _DatasetTransform,
     _MapTransform,
+    _TransformedDataset,
 )
 from .utils import batched
 
@@ -67,35 +65,6 @@ class ShardedDataSource(Generic[T_co]):
         for shard_name in self.shard_names:
             for doc in self.open_shard(shard_name):
                 yield doc
-
-    def build_or_load_cache(
-        self,
-        path: str,
-    ) -> AsyncDataset[T]:
-        """
-        Constructs a shard cache version of this dataset.
-
-        Levanter's preprocessing pipeline offers the following features/guarantees:
-        * distributed, sharded preprocessing using Zephyr
-        * deterministic ordering of data
-        * interruptible and resumable
-        * streaming results (no need to wait for everything to finish)
-
-        Note that this is an experimental API and is subject to change.
-
-        Returns:
-            A new AsyncDataset that is backed by the cache.
-        """
-
-        source, processor = _construct_composite_batch_processor(self)
-        from levanter.store.cache import build_or_load_cache  # lazy: store.cache imports levanter.data modules
-
-        cache = build_or_load_cache(
-            path,
-            source,
-            processor,
-        )
-        return cache
 
     def map(self, fn: Callable[[T_co], U]) -> "ShardedDataSource[U]":
         return _MappedShardedDataSource(self, fn)
@@ -574,11 +543,6 @@ def _mk_shard_name_mapping(urls):
         warnings.warn("Some shard URLs do not exist yet; they will fail when accessed:\n  - " + missing_urls_str)
 
     return _shard_name_to_url_mapping
-
-
-class _TransformedDataset:
-    source: ShardedDataSource
-    _transform: _DatasetTransform
 
 
 class _MappedShardedDataSource(ShardedDataSource[T], _TransformedDataset):

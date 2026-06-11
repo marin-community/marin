@@ -41,8 +41,10 @@ from pathlib import PurePath
 from typing import Any, cast
 
 import fsspec
+from fsspec.callbacks import DEFAULT_CALLBACK, Callback
 from fsspec.implementations.local import LocalFileSystem
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
+from google.cloud import storage
 
 from rigging.distributed_lock import create_lock, default_worker_id
 from rigging.timing import ExponentialBackoff, retry_with_backoff
@@ -261,8 +263,6 @@ def split_gcs_path(gs_uri: str) -> tuple[str, pathlib.Path]:
 
 def get_bucket_location(bucket_name_or_path: str) -> str:
     """Return the GCS bucket's location (lower-cased region string)."""
-    from google.cloud import storage
-
     if bucket_name_or_path.startswith("gs://"):
         bucket_name = split_gcs_path(bucket_name_or_path)[0]
     else:
@@ -1088,8 +1088,22 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
 
     # -- fsspec interface: read operations ------------------------------------
 
-    def _open(self, path: str, mode: str = "rb", **kwargs: Any) -> Any:
+    def _open(
+        self,
+        path: str,
+        mode: str = "rb",
+        block_size: int | None = None,
+        autocommit: bool = True,
+        cache_options: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
         path = cast(str, self._strip_protocol(path))
+        kwargs = {
+            **kwargs,
+            "block_size": block_size,
+            "autocommit": autocommit,
+            "cache_options": cache_options,
+        }
         if "r" in mode:
             resolved = self._resolve_path(path)
             fs, fspath = self._get_fs_and_path(resolved)
@@ -1122,25 +1136,46 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         fs, fspath = self._get_fs_and_path(local_url)
         fs.makedirs(fspath, exist_ok=exist_ok)
 
-    def put_file(self, lpath: str, rpath: str, **kwargs: Any) -> None:
+    def put_file(
+        self,
+        lpath: str,
+        rpath: str,
+        callback: Callback = DEFAULT_CALLBACK,
+        mode: str = "overwrite",
+        **kwargs: Any,
+    ) -> None:
         rpath = cast(str, self._strip_protocol(rpath))
         local_url = self._local_url(rpath)
         fs, fspath = self._get_fs_and_path(local_url)
-        fs.put_file(lpath, fspath, **kwargs)
+        fs.put_file(lpath, fspath, callback=callback, mode=mode, **kwargs)
 
+    # fsspec's AbstractFileSystem.rm_file is typed as returning Never (its body
+    # delegates to the unimplemented _rm), so a real None-returning override is
+    # flagged. Parameters already match the base.
+    # pyrefly: ignore[bad-override]
     def rm_file(self, path: str) -> None:
         path = cast(str, self._strip_protocol(path))
         local_url = self._local_url(path)
         fs, fspath = self._get_fs_and_path(local_url)
         fs.rm_file(fspath)
 
-    def rm(self, path: str, recursive: bool = False, **kwargs: Any) -> None:
+    def rm(self, path: str, recursive: bool = False, maxdepth: int | None = None, **kwargs: Any) -> None:
         path = cast(str, self._strip_protocol(path))
         local_url = self._local_url(path)
         fs, fspath = self._get_fs_and_path(local_url)
-        fs.rm(fspath, recursive=recursive, **kwargs)
+        fs.rm(fspath, recursive=recursive, maxdepth=maxdepth, **kwargs)
 
-    def copy(self, path1: str, path2: str, **kwargs: Any) -> None:
+    def copy(
+        self,
+        path1: str,
+        path2: str,
+        recursive: bool = False,
+        maxdepth: int | None = None,
+        on_error: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        # recursive/maxdepth/on_error are accepted for fsspec API compatibility;
+        # the mirror only supports single-file copies via _fs_copy.
         path1 = cast(str, self._strip_protocol(path1))
         path2 = cast(str, self._strip_protocol(path2))
         resolved_src = self._resolve_path(path1)

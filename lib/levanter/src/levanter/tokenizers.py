@@ -25,7 +25,7 @@ import shutil
 import tempfile
 import time
 from enum import StrEnum
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import fsspec
 import jinja2
@@ -198,9 +198,14 @@ def _make_jinja_env(extensions: list[type]) -> jinja2.Environment:
         lstrip_blocks=True,
         extensions=extensions,
     )
-    globals_dict = cast(dict[str, Any], env.globals)
-    globals_dict["raise_exception"] = _raise_chat_template_exception
-    globals_dict["strftime_now"] = lambda fmt: time.strftime(fmt)
+    # jinja2 types globals narrowly from its DEFAULT_NAMESPACE; pyrefly rejects assigning
+    # other callables. Update via the mapping interface, which accepts t.Any values.
+    env.globals.update(
+        {
+            "raise_exception": _raise_chat_template_exception,
+            "strftime_now": lambda fmt: time.strftime(fmt),
+        }
+    )
     return env
 
 
@@ -599,7 +604,7 @@ class HfMarinTokenizer:
         return _apply_chat_template_with_masks(self, conversations, chat_template=chat_template, **kwargs)
 
     def as_hf_tokenizer(self) -> Any:
-        from transformers import AutoTokenizer
+        from transformers import AutoTokenizer  # noqa: PLC0415  # guarded: avoid eager torch
 
         tokenizer = AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
         if self._chat_template is not None and getattr(tokenizer, "chat_template", None) != self._chat_template:

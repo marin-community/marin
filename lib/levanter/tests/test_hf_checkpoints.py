@@ -13,11 +13,13 @@ import jax.numpy as jnp
 import jmp
 import pytest
 import safetensors
+import transformers
 from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax import Axis
 from haliax.state_dict import ModuleWithStateDictSerialization, to_torch_compatible_state_dict
 from jax.random import PRNGKey
 from test_utils import skip_if_no_torch
+from transformers import GPT2Config as HfGpt2Config
 
 from levanter.compat.hf_checkpoints import (
     SAFE_TENSORS_INDEX_NAME,
@@ -32,7 +34,7 @@ from tests.test_utils import use_test_mesh
 
 @skip_if_no_torch
 def test_conversion_to_jnp_bfloat16():
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     x = torch.arange(10, dtype=torch.bfloat16) / 3.14
     with pytest.raises(TypeError):
@@ -267,16 +269,12 @@ def test_save_pretrained_to_memory_fs():
 
 def test_causal_lm_architecture_name_is_torch_free():
     """The degrade path derives `architectures` from the model type without importing torch."""
-    from transformers import GPT2Config as HfGpt2Config
-
     assert _causal_lm_architecture_name(HfGpt2Config) == "GPT2LMHeadModel"
 
 
 def _simulate_hub_offline(monkeypatch):
     """Make ``AutoConfig.from_pretrained`` fail for Hub ids but still work for local directories,
     mirroring a real HF outage (local files remain readable)."""
-    import transformers
-
     real = transformers.AutoConfig.from_pretrained
 
     def _offline(pretrained_model_name_or_path, *args, **kwargs):

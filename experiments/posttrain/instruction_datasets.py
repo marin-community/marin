@@ -59,8 +59,8 @@ from marin.transform.conversation.transform_conversation import (
     transform_hf_dataset,
 )
 
-from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
+from experiments.tokenization import default_tokenize
 
 SMOLTALK2_SPLITS = [
     "LongAlign_64k_Qwen3_32B_yarn_131k_think",

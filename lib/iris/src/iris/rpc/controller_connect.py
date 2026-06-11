@@ -112,8 +112,6 @@ class ControllerService(Protocol):
     async def get_scheduler_state(self, request: controller__pb2.Controller.GetSchedulerStateRequest, ctx: RequestContext) -> controller__pb2.Controller.GetSchedulerStateResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def set_task_status_text(self, request: job__pb2.SetTaskStatusTextRequest, ctx: RequestContext) -> job__pb2.SetTaskStatusTextResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
 class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]):
@@ -431,16 +429,7 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                     ),
                     function=svc.get_scheduler_state,
                 ),
-                "/iris.cluster.ControllerService/SetTaskStatusText": Endpoint.unary(
-                    method=MethodInfo(
-                        name="SetTaskStatusText",
-                        service_name="iris.cluster.ControllerService",
-                        input=job__pb2.SetTaskStatusTextRequest,
-                        output=job__pb2.SetTaskStatusTextResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.set_task_status_text,
-                ),
+
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
@@ -1074,25 +1063,6 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
-    async def set_task_status_text(
-        self,
-        request: job__pb2.SetTaskStatusTextRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> job__pb2.SetTaskStatusTextResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="SetTaskStatusText",
-                service_name="iris.cluster.ControllerService",
-                input=job__pb2.SetTaskStatusTextRequest,
-                output=job__pb2.SetTaskStatusTextResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
 
 
 class ControllerServiceSync(Protocol):
@@ -1157,8 +1127,6 @@ class ControllerServiceSync(Protocol):
     def list_user_budgets(self, request: controller__pb2.Controller.ListUserBudgetsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListUserBudgetsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_scheduler_state(self, request: controller__pb2.Controller.GetSchedulerStateRequest, ctx: RequestContext) -> controller__pb2.Controller.GetSchedulerStateResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def set_task_status_text(self, request: job__pb2.SetTaskStatusTextRequest, ctx: RequestContext) -> job__pb2.SetTaskStatusTextResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -1476,16 +1444,7 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                     ),
                     function=service.get_scheduler_state,
                 ),
-                "/iris.cluster.ControllerService/SetTaskStatusText": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="SetTaskStatusText",
-                        service_name="iris.cluster.ControllerService",
-                        input=job__pb2.SetTaskStatusTextRequest,
-                        output=job__pb2.SetTaskStatusTextResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.set_task_status_text,
-                ),
+
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
@@ -2119,22 +2078,3 @@ class ControllerServiceClientSync(ConnectClientSync):
             timeout_ms=timeout_ms,
         )
 
-    def set_task_status_text(
-        self,
-        request: job__pb2.SetTaskStatusTextRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> job__pb2.SetTaskStatusTextResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="SetTaskStatusText",
-                service_name="iris.cluster.ControllerService",
-                input=job__pb2.SetTaskStatusTextRequest,
-                output=job__pb2.SetTaskStatusTextResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )

@@ -47,7 +47,18 @@ from iris.rpc.worker_connect import WorkerServiceClient
 
 logger = logging.getLogger(__name__)
 
+# Per-worker RPC deadline applied to every fanned-out worker call (reconcile,
+# ping, ...). Combined with the fan-out semaphore this bounds a full reconcile
+# round at ~DEFAULT_WORKER_RPC_TIMEOUT * ceil(num_workers / parallelism), so the
+# control thread is never blocked indefinitely even if the whole fleet is hung.
 DEFAULT_WORKER_RPC_TIMEOUT = Duration.from_seconds(10.0)
+
+# Max concurrent in-flight per-worker RPCs in a fan-out (asyncio.Semaphore width).
+RECONCILE_FANOUT_PARALLELISM = 128
+
+# Generous deadline for an "unlimited" exec_in_container (negative timeout). Long
+# enough for real interactive/debug commands, but not the old ~1-hour stall.
+EXEC_IN_CONTAINER_MAX_TIMEOUT = Duration.from_seconds(900.0)
 
 _T = TypeVar("_T")
 _R = TypeVar("_R")
@@ -128,7 +139,7 @@ class RpcTaskBackend:
     """
 
     stub_factory: WorkerStubFactory
-    parallelism: int = 128
+    parallelism: int = RECONCILE_FANOUT_PARALLELISM
     name: str = "worker"
     # The Iris autoscaler that provisions capacity for this backend. Attached by
     # the controller's main() after construction (mirrors set_log_sink); None for
@@ -145,7 +156,13 @@ class RpcTaskBackend:
         self.autoscaler = autoscaler
 
     def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
-        """Fan the Reconcile RPC out across all planned workers concurrently."""
+        """Fan the Reconcile RPC out across all planned workers concurrently.
+
+        Each per-worker RPC carries the stub factory's configured deadline
+        (``DEFAULT_WORKER_RPC_TIMEOUT``) and the fan-out caps concurrency at
+        ``parallelism``, so this returns in bounded time even when the whole
+        fleet is hung — no separate watchdog is needed on the control thread.
+        """
 
         async def _one(sem: asyncio.Semaphore, plan: WorkerReconcilePlan) -> ReconcileResult:
             return await self._reconcile_one(sem, plan, batch.worker_addresses[plan.worker_id])
@@ -229,9 +246,10 @@ class RpcTaskBackend:
         if not target.address:
             raise ProviderError(f"Worker {target.worker_id} has no address")
         stub = self.stub_factory.get_stub(target.address)
-        # Negative timeout means no limit; use a large RPC deadline (1 hour)
+        # Negative timeout means "no caller limit"; still bound the RPC deadline
+        # with a generous cap so a hung exec can't pin the handler indefinitely.
         if timeout_seconds < 0:
-            rpc_timeout_ms = 3_600_000
+            rpc_timeout_ms = EXEC_IN_CONTAINER_MAX_TIMEOUT.to_ms()
         else:
             rpc_timeout_ms = (timeout_seconds + 5) * 1000
         return asyncio.run(stub.exec_in_container(request, timeout_ms=rpc_timeout_ms))

@@ -40,6 +40,10 @@ use datafusion::physical_plan::ExecutionPlan;
 pub struct NamespaceProvider {
     schema: SchemaRef,
     inner: Inner,
+    /// The snapshotted sealed segment paths, retained so a `contains()` scan can
+    /// locate each segment's trigram sidecar (`<segment>.tgm`) for row-group
+    /// pruning. Empty for the typed-empty (no-segments) case.
+    segment_paths: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -62,6 +66,7 @@ impl NamespaceProvider {
             return Ok(NamespaceProvider {
                 schema,
                 inner: Inner::Empty(Arc::new(mem)),
+                segment_paths: Vec::new(),
             });
         }
 
@@ -78,6 +83,7 @@ impl NamespaceProvider {
         Ok(NamespaceProvider {
             schema,
             inner: Inner::Listing(Arc::new(listing)),
+            segment_paths: segment_paths.to_vec(),
         })
     }
 }
@@ -113,7 +119,39 @@ impl TableProvider for NamespaceProvider {
         limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         match &self.inner {
-            Inner::Listing(t) => t.scan(state, projection, filters, limit).await,
+            Inner::Listing(t) => {
+                // Delegate to DataFusion's parquet scan (which keeps the existing
+                // range / min-max / bloom row-group pruning), then layer the
+                // trigram prune on top by injecting per-file access plans.
+                let plan = t.scan(state, projection, filters, limit).await?;
+                // Hot path: a query with no `contains(data, …)` filter does only
+                // this cheap expr inspection (no I/O) and returns untouched.
+                let needles = crate::query::trigram_prune::indexed_column_needles(filters);
+                if needles.is_empty() {
+                    return Ok(plan);
+                }
+                // Key ranges (incl. the analyzer's synthesized prefix bounds) scope
+                // which segments' sidecars the prune reads — cheap expr inspection,
+                // done here before the blocking work.
+                let key_ranges = crate::query::trigram_prune::string_column_ranges(filters);
+                // Substring query: the sidecar + footer reads are blocking, so run
+                // the prune off the async worker.
+                let segment_paths = self.segment_paths.clone();
+                tokio::task::spawn_blocking(move || {
+                    crate::query::trigram_prune::apply_with_needles(
+                        plan,
+                        &segment_paths,
+                        &needles,
+                        &key_ranges,
+                    )
+                })
+                .await
+                .map_err(|e| {
+                    datafusion::error::DataFusionError::Execution(format!(
+                        "trigram prune task join: {e}"
+                    ))
+                })
+            }
             Inner::Empty(t) => t.scan(state, projection, filters, limit).await,
         }
     }
@@ -308,5 +346,271 @@ mod tests {
         assert_eq!(total, 2);
         std::fs::remove_dir_all(&wdir).ok();
         std::fs::remove_dir_all(&tdir).ok();
+    }
+
+    /// Log-form schema: seq, key, data (the columns the trigram prune touches).
+    fn log_arrow() -> SchemaRef {
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("key", DataType::Utf8, false),
+            Field::new("data", DataType::Utf8, false),
+        ]))
+    }
+
+    /// Write one segment whose `data` column is `rg0` rows of `filler` followed
+    /// by `rg1`, then build its trigram sidecar — so row group 0 lacks the needle
+    /// and row group 1 carries it. Returns the segment path.
+    fn write_two_rg_log_segment(dir: &std::path::Path, filler: &str, rg1: &[&str]) -> String {
+        use crate::store::segment::ROW_GROUP_SIZE;
+        let n0 = ROW_GROUP_SIZE;
+        let mut data: Vec<String> = (0..n0).map(|_| filler.to_string()).collect();
+        data.extend(rg1.iter().map(|s| s.to_string()));
+        let n = data.len() as i64;
+        let batch = RecordBatch::try_new(
+            log_arrow(),
+            vec![
+                Arc::new(Int64Array::from_iter_values(1..=n)),
+                Arc::new(StringArray::from(vec!["/system/controller"; data.len()])),
+                Arc::new(StringArray::from(data)),
+            ],
+        )
+        .unwrap();
+        let (path, _) = write_segment_to_dir(dir, 1, 1, &batch).unwrap();
+        // Build the sidecar the way the compactor would.
+        assert!(
+            crate::store::trigram::write_sidecar(&path, &[batch], "data", Some("key")).unwrap(),
+            "sidecar should be written for a data column"
+        );
+        path.to_string_lossy().into_owned()
+    }
+
+    #[tokio::test]
+    async fn contains_query_returns_matches_and_prunes_row_groups() {
+        use datafusion::datasource::physical_plan::FileScanConfig;
+        use datafusion::datasource::source::DataSourceExec;
+        use datafusion::logical_expr::{col, lit};
+        use datafusion::logical_expr::{expr::ScalarFunction, Expr};
+        use datafusion_datasource_parquet::ParquetAccessPlan;
+
+        let dir = tempdir("contains_prune");
+        // The needle lives only in row group 1 (rows 2 and 4 of the tail).
+        let needle = "Bootstrap completed for TPU-xyz";
+        let rg1 = vec![
+            "idle heartbeat ok",
+            "E0601 Bootstrap completed for TPU-xyz started",
+            "idle heartbeat ok",
+            "another Bootstrap completed for TPU-xyz here",
+        ];
+        let path = write_two_rg_log_segment(&dir, "idle heartbeat ok", &rg1);
+
+        // 1) End-to-end correctness: the contains() query returns exactly the two
+        //    matching rows (and prunes row group 0 along the way).
+        let ctx = crate::query::make_ctx();
+        let provider = NamespaceProvider::build(log_arrow(), std::slice::from_ref(&path)).unwrap();
+        ctx.register_table(
+            datafusion::common::TableReference::bare("log"),
+            Arc::new(provider),
+        )
+        .unwrap();
+        let batches = ctx
+            .sql(&format!(
+                "SELECT data FROM \"log\" WHERE contains(data, '{needle}') ORDER BY seq"
+            ))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let got: Vec<String> = batches
+            .iter()
+            .flat_map(|b| {
+                let c = b.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+                (0..c.len())
+                    .map(|i| c.value(i).to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                "E0601 Bootstrap completed for TPU-xyz started".to_string(),
+                "another Bootstrap completed for TPU-xyz here".to_string(),
+            ],
+            "contains() must return exactly the matching rows"
+        );
+
+        // 2) Evidence of pruning: the injected access plan skips row group 0 and
+        //    keeps row group 1.
+        let state = ctx.state();
+        let udf = {
+            use datafusion::execution::FunctionRegistry;
+            ctx.udf("contains").unwrap()
+        };
+        let filter =
+            Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![col("data"), lit(needle)]));
+        let probe = NamespaceProvider::build(log_arrow(), &[path]).unwrap();
+        let plan = probe.scan(&state, None, &[filter], None).await.unwrap();
+        let exec = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec");
+        let cfg = exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        let mut checked = 0;
+        for group in &cfg.file_groups {
+            for pf in group.files() {
+                let ap = pf
+                    .extensions
+                    .as_ref()
+                    .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
+                    .expect("trigram access plan attached to the partitioned file");
+                assert!(
+                    !ap.should_scan(0),
+                    "row group 0 (no needle) must be skipped"
+                );
+                assert!(
+                    ap.should_scan(1),
+                    "row group 1 (has needle) must be scanned"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(
+            checked, 1,
+            "exactly one partitioned file with an access plan"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn like_substring_query_prunes_row_groups() {
+        // `data LIKE '%needle%'` must prune like `contains(data, 'needle')`: the
+        // expression survives the simplifier as `Expr::Like` and the prune
+        // extracts the framed substring. Asserts both the matching rows and the
+        // injected skip of the needle-free row group 0.
+        use datafusion::datasource::physical_plan::FileScanConfig;
+        use datafusion::datasource::source::DataSourceExec;
+        use datafusion_datasource_parquet::ParquetAccessPlan;
+
+        let dir = tempdir("like_prune");
+        let needle = "Bootstrap completed for TPU-xyz";
+        let rg1 = vec![
+            "idle heartbeat ok",
+            "E0601 Bootstrap completed for TPU-xyz started",
+            "idle heartbeat ok",
+        ];
+        let path = write_two_rg_log_segment(&dir, "idle heartbeat ok", &rg1);
+
+        let ctx = crate::query::make_ctx();
+        let provider = NamespaceProvider::build(log_arrow(), std::slice::from_ref(&path)).unwrap();
+        ctx.register_table(
+            datafusion::common::TableReference::bare("log"),
+            Arc::new(provider),
+        )
+        .unwrap();
+        let batches = ctx
+            .sql(&format!(
+                "SELECT data FROM \"log\" WHERE data LIKE '%{needle}%' ORDER BY seq"
+            ))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let got: Vec<String> = batches
+            .iter()
+            .flat_map(|b| {
+                let c = b.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+                (0..c.len())
+                    .map(|i| c.value(i).to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec!["E0601 Bootstrap completed for TPU-xyz started".to_string()],
+            "LIKE must return exactly the matching row"
+        );
+
+        // The injected access plan skips the needle-free row group 0.
+        let plan = NamespaceProvider::build(log_arrow(), &[path])
+            .unwrap()
+            .scan(
+                &ctx.state(),
+                None,
+                std::slice::from_ref(
+                    &datafusion::prelude::col("data")
+                        .like(datafusion::prelude::lit(format!("%{needle}%"))),
+                ),
+                None,
+            )
+            .await
+            .unwrap();
+        let cfg = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("a parquet DataSourceExec")
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        let mut checked = 0;
+        for group in &cfg.file_groups {
+            for pf in group.files() {
+                let ap = pf
+                    .extensions
+                    .as_ref()
+                    .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
+                    .expect("trigram access plan attached for the LIKE query");
+                assert!(
+                    !ap.should_scan(0),
+                    "row group 0 (no needle) must be skipped"
+                );
+                assert!(
+                    ap.should_scan(1),
+                    "row group 1 (has needle) must be scanned"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn non_contains_query_leaves_plan_unchanged() {
+        // A query with no contains() filter must not be rewritten — the hot path
+        // pays nothing. The returned plan is the untouched ListingTable scan.
+        use datafusion::datasource::source::DataSourceExec;
+        use datafusion::logical_expr::{col, lit};
+
+        let dir = tempdir("no_contains");
+        let path = write_two_rg_log_segment(&dir, "idle heartbeat ok", &["one match here"]);
+        let ctx = crate::query::make_ctx();
+        let provider = NamespaceProvider::build(log_arrow(), &[path]).unwrap();
+        let state = ctx.state();
+        let plan = provider
+            .scan(&state, None, &[col("seq").gt(lit(0_i64))], None)
+            .await
+            .unwrap();
+        // No access-plan extension is attached when there is no contains() filter.
+        let exec = plan.as_any().downcast_ref::<DataSourceExec>().unwrap();
+        let cfg = exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<datafusion::datasource::physical_plan::FileScanConfig>()
+            .unwrap();
+        for group in &cfg.file_groups {
+            for pf in group.files() {
+                assert!(
+                    pf.extensions.is_none(),
+                    "no prune extension on the hot path"
+                );
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

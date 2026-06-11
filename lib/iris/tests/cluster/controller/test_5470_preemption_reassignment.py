@@ -55,6 +55,9 @@ from .conftest import (
 )
 from .conftest import query_job as _query_job
 from .conftest import query_task as _query_task
+from .conftest import (
+    schedulable_tasks as _schedulable_tasks,
+)
 
 CHIPS_PER_VM = 4
 VMS_PER_SLICE = 8
@@ -154,8 +157,6 @@ def _build_context(scheduler, state):
 
 
 def _schedulable_tasks_for_test(state):
-    from .conftest import schedulable_tasks as _schedulable_tasks
-
     return _schedulable_tasks(state)
 
 

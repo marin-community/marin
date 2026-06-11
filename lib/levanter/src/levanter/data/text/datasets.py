@@ -209,6 +209,7 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, GrugLmExample]):
                 return example
 
             def _map(example: dict) -> GrugLmExample:
+                # pyrefly: ignore[bad-return]  # eqx.filter_jit wrapper types the call as returning Unknown
                 return _create_lm_example(example[input_ids_key])
 
         else:
@@ -227,6 +228,7 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, GrugLmExample]):
             def _map(example: dict) -> GrugLmExample:
                 loss_weight = example[loss_weights_key]
                 loss_weight = self.loss_weight_transform(loss_weight)
+                # pyrefly: ignore[bad-return, bad-argument-count]  # eqx.filter_jit wrapper hides the real signature
                 return _create_lm_example(example[input_ids_key], loss_weight)
 
         super().__init__(self.dataset, _map)
@@ -908,8 +910,15 @@ class LmDataConfig:
                 return name, cache, None
 
             if cache_exists:
-                cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
-                return name, cache, None
+                try:
+                    cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
+                    return name, cache, None
+                except FileNotFoundError:
+                    logger.warning(
+                        f"Cache dir at {cache_path} exists but is unloadable (likely a "
+                        "partial build from a killed prior cache-build job); auto_build_caches "
+                        "is on, so falling through to rebuild."
+                    )
             return name, None, (cache_path, shard_source, component.format)
 
         caches: dict[str, TreeCache[dict]] = {}

@@ -20,6 +20,8 @@ from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
+from experiments.llama import llama3_tokenizer
+
 # ============================================================================
 # RAW DATASET DOWNLOADS AND NORMALIZED OUTPUTS
 # ============================================================================
@@ -55,8 +57,6 @@ def tokenize_nemotron_v2_family(
     ``outputs/main/`` directory.
     """
     if tokenizer is None:
-        from experiments.llama import llama3_tokenizer
-
         tokenizer = llama3_tokenizer
 
     info = NEMOTRON_V2_DATASETS[family]

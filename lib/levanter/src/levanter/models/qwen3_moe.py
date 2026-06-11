@@ -5,7 +5,7 @@ import dataclasses
 import inspect
 from dataclasses import dataclass
 from functools import partial
-from typing import Callable, Dict, Optional, Type
+from typing import Any, Callable, Dict, Optional, Type, cast
 
 import equinox as eqx
 import jax
@@ -113,7 +113,8 @@ class Qwen3MoeConfig(LlamaConfig):
         if self.decoder_sparse_step != 1:
             raise NotImplementedError("Qwen3 MoE decoder_sparse_step values other than 1 are not supported yet.")
 
-    def hf_checkpoint_converter(
+    # config-reuse subclass narrows to its own HF config/model type (LSP narrowing; mypy flags the same)
+    def hf_checkpoint_converter(  # pyrefly: ignore[bad-override]
         self, ref_checkpoint: Optional[str] = None
     ) -> HFCheckpointConverter["Qwen3MoeConfig"]:  # type: ignore
         return HFCheckpointConverter(
@@ -157,7 +158,9 @@ class Qwen3MoeConfig(LlamaConfig):
             rope=rope_config,
         )
 
-    def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfQwen3MoeConfig:
+    def to_hf_config(  # pyrefly: ignore[bad-override]
+        self, vocab_size: int, config_overrides: Optional[Dict] = None
+    ) -> HfQwen3MoeConfig:
         if config_overrides is None:
             config_overrides = {}
 
@@ -193,7 +196,7 @@ class Qwen3MoeConfig(LlamaConfig):
         )
 
     @property
-    def model_type(self) -> Type["Qwen3MoeLMHeadModel"]:
+    def model_type(self) -> Type["Qwen3MoeLMHeadModel"]:  # pyrefly: ignore[bad-override]
         return Qwen3MoeLMHeadModel
 
     def flops_per_token(self, vocab_size: int, context_length: int):
@@ -325,6 +328,10 @@ class Qwen3MoeSparseMoeBlock(eqx.Module):
             expert_loads_ = jnp.bincount(selected_experts_.reshape(-1), length=self.config.num_experts)
             return selected_weights_, selected_experts_, expert_loads_
 
+        # jax.shard_map erases the wrapped callable's signature, so pyrefly mis-binds its
+        # decorator TypeVar to the Array argument; cast back to a plain callable.
+        sharded_route = cast(Callable[..., Any], sharded_route)
+
         with jax.named_scope("route"):
             selected_weights, selected_experts, expert_loads = sharded_route(router_logits.array)
             return (
@@ -356,6 +363,9 @@ class Qwen3MoeSparseMoeBlock(eqx.Module):
             group_sizes_ = jnp.bincount(topk_idx_flat_, length=self.config.num_experts)
             return x_repeat_sort_, group_sizes_, sort_idx_
 
+        # See sharded_route above: cast around jax.shard_map's signature erasure.
+        permute_sharded = cast(Callable[..., Any], permute_sharded)
+
         with jax.named_scope("permute"):
             x_repeat_sort, group_sizes, sort_idx = permute_sharded(x_flat.array, topk_idx_flat.array)
             return (
@@ -386,10 +396,12 @@ class Qwen3MoeSparseMoeBlock(eqx.Module):
             out_repeat_ = jnp.take(out_repeat_sort_, inv_sort_idx_, axis=0)
             return jnp.reshape(out_repeat_, (-1, self.config.num_experts_per_tok, self.config.hidden_dim))
 
+        # See sharded_route above: cast around jax.shard_map's signature erasure.
+        unpermute_sharded = cast(Callable[..., Any], unpermute_sharded)
+
         with jax.named_scope("unpermute"):
-            return hax.named(
-                unpermute_sharded(out_repeat_sort.array, sort_idx.array), (Token, TopExperts, self.config.Embed)
-            )
+            out_repeat_unflat = unpermute_sharded(out_repeat_sort.array, sort_idx.array)
+            return hax.named(out_repeat_unflat, (Token, TopExperts, self.config.Embed))
 
     @named_call
     def __call__(self, x: NamedArray, *, key=None) -> NamedArray:
@@ -508,7 +520,7 @@ class Qwen3MoeLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Qwen3Moe
             return self.lm_head(x, key=k_head)
         return self.embeddings.unembed(x)
 
-    def activations(
+    def activations(  # pyrefly: ignore[bad-override]  # narrows activations return type for this MoE head
         self,
         input_ids: NamedArray,
         attn_mask: AttentionMask | None = None,

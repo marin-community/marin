@@ -27,6 +27,8 @@ import sys
 from collections.abc import Iterator
 from typing import Any
 
+import datasets
+
 logger = logging.getLogger(__name__)
 
 
@@ -54,8 +56,6 @@ def trust_remote_code_for_hf() -> None:
     Also sets ``HF_ALLOW_CODE_EVAL=1`` so humaneval's ``code_eval`` metric
     initializes without an interactive disclaimer.
     """
-    import datasets
-
     os.environ["HF_ALLOW_CODE_EVAL"] = "1"
     original_load = datasets.load_dataset
     original_builder = datasets.load_dataset_builder

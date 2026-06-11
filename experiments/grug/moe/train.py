@@ -55,11 +55,20 @@ class GrugTrainerConfig:
     """Runtime knobs for grug training."""
 
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(use_explicit_mesh_axes=True))
-    train_batch_pspec: P = field(default_factory=lambda: P(("replica_dcn", "data", "expert")))
     data_seed: int | None = None
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
+
+    # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
+    # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
+    # Defaults reproduce the historical layout: no expert parallelism and full replication
+    # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
+    # replicated per slice and sharded only over the intra-slice `data` axis. For a model
+    # too large to replicate within one slice, set replica_axis_size=1 (FSDP across every
+    # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
+    expert_axis_size: int = 1
+    replica_axis_size: int | None = None
 
 
 @dataclass(frozen=True)
@@ -67,7 +76,6 @@ class GrugEvalConfig:
     """Perplexity eval settings for grug training."""
 
     eval_batch_size: int = 512
-    eval_batch_pspec: P = field(default_factory=lambda: P(("replica_dcn", "data", "expert")))
     steps_per_eval: int | None = 1000
     max_eval_batches: int | None = None
     prefix: str = "eval"
@@ -112,20 +120,23 @@ def build_train_dataset(
     )
 
 
+_BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+
+
 def build_train_loader(
     dataset: AsyncDataset[GrugLmExample],
     *,
     batch_schedule: BatchSchedule,
     mesh: Mesh,
-    batch_pspec: P = P(("replica_dcn", "data", "expert")),
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    axis_resource = batch_pspec[0]
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
         batch_schedule.schedule,
         mesh=mesh,
-        axis_resources={"__BATCH__": axis_resource},
+        axis_resources={"__BATCH__": _BATCH_AXES},
         batch_axis_name="__BATCH__",
         allow_nondivisible_batch_size=False,
     )
@@ -149,10 +160,11 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    batch_axis_resource = eval_cfg.eval_batch_pspec[0]
-    eval_axis_mapping = {"batch": batch_axis_resource}
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # are kept so we can name "expert" unconditionally.
+    eval_axis_mapping = {"batch": _BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
-    eval_array_sharding = NamedSharding(mesh, P(batch_axis_resource, None))
+    eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
 
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
         if isinstance(batch, LmExample):
@@ -380,12 +392,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     if config.trainer.data_seed is not None:
         data_key = jax.random.PRNGKey(config.trainer.data_seed)
 
-    mesh_axes = config.trainer.trainer.mesh.axes
-    expert_axis_size = int(mesh_axes.get("expert", 1))
-    replica_axis_size = int(mesh_axes.get("replica_dcn", jax.process_count()))
     # Grug uses raw PartitionSpecs rather than Trainer's logical axis mapping.
-    # Keep the mesh compact so P(("replica_dcn", "data", "expert")) spans slices directly.
-    mesh = compact_grug_mesh(expert_axis_size=expert_axis_size, replica_axis_size=replica_axis_size)
+    # Keep the mesh compact so the batch pspec derived by `_batch_spec(mesh)` spans slices directly.
+    # replica_axis_size=None lets compact_grug_mesh default to jax.process_count() (full
+    # cross-slice replication); set it to 1 on GrugTrainerConfig for cross-slice FSDP.
+    mesh = compact_grug_mesh(
+        expert_axis_size=config.trainer.expert_axis_size,
+        replica_axis_size=config.trainer.replica_axis_size,
+    )
     with set_mesh(mesh):
         batch_schedule = trainer.batch_schedule
 
@@ -399,7 +413,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             train_dataset,
             batch_schedule=batch_schedule,
             mesh=mesh,
-            batch_pspec=config.trainer.train_batch_pspec,
         )
 
         @jax.jit

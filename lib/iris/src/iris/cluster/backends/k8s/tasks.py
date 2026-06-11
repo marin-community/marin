@@ -83,6 +83,9 @@ _LABEL_JOB_ID = "iris.job_id"
 # Runtime identifier for pods created by K8sTaskProvider.
 _RUNTIME_LABEL_VALUE = "iris-kubernetes"
 
+# Extended resource name for NVIDIA GPUs in pod requests/limits.
+_GPU_RESOURCE = "nvidia.com/gpu"
+
 # Max pod name length is 253 chars in k8s. We stay well under it.
 _MAX_POD_NAME_LEN = 63
 
@@ -129,6 +132,11 @@ _KUEUE_PREFERRED_TOPOLOGY = "kueue.x-k8s.io/podset-preferred-topology"
 # but stamping it is harmless and required once a podset-topology annotation is
 # present. Sourced from the task ordinal (JobName.task_index).
 _KUEUE_POD_GROUP_POD_INDEX = "kueue.x-k8s.io/pod-group-pod-index"
+# Pod finalizer Kueue's webhook stamps on admitted gang pods. Kueue only
+# strips it for pods it considers accounted for; on teardown Iris removes it
+# itself so the pod objects actually disappear instead of pinning the
+# pod-group Workload (Kueue rebuilds it from surviving labeled pods).
+_KUEUE_MANAGED_FINALIZER = "kueue.x-k8s.io/managed"
 
 # CoreWeave-convention fallback for KueueConfig.topologies: group_by -> (node
 # label, required?). Used only when the cluster config leaves topologies unset.
@@ -526,7 +534,7 @@ def _build_pod_manifest(
             has_tpu = res.device.HasField("tpu")
             if gpu_count > 0:
                 # K8s treats accelerator limits as implicit requests.
-                limits["nvidia.com/gpu"] = str(gpu_count)
+                limits[_GPU_RESOURCE] = str(gpu_count)
                 if host_network:
                     # Request RDMA/IB devices for multi-host NCCL over InfiniBand.
                     limits["rdma/ib"] = str(gpu_count)
@@ -776,10 +784,73 @@ _ACTIVE_PODS_FIELD_SELECTOR = "status.phase!=Succeeded,status.phase!=Failed"
 _MANAGED_POD_LABELS = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE}
 
 # Garbage collection: how often to run the terminal-pod cleanup pass (seconds).
-_GC_INTERVAL_SECONDS = 300  # 5 minutes
+# 1 minute bounds how long a wedged gang can pin idle GPU nodes (the pass is two
+# field-selector list calls, so the cadence is cheap).
+_GC_INTERVAL_SECONDS = 60
 
 # Garbage collection: delete terminal pods and orphaned configmaps/PDBs older than this (seconds).
 _GC_MAX_AGE_SECONDS = 3600  # 1 hour
+
+# Garbage collection: shorter retention for terminal gang (Kueue pod-group)
+# pods. Gang pods pin Kueue quota and the TAS topology reservation for as long
+# as they exist — Kueue rebuilds the pod-group Workload from surviving labeled
+# pods — so they cannot get the 1h debugging window plain pods do: every held
+# slot is an idle GPU node. 1 minute is still far above pod-status poll
+# latency (the reconcile loop runs every few seconds), so prompt deletion
+# cannot race exit-status collection.
+_GANG_GC_MAX_AGE_SECONDS = 60
+
+# Blocker eviction: minimum interval between reconcile-driven eviction sweeps
+# of preempt_namespaces. Gang pods can stay SchedulingGated for many cycles
+# while Kueue retries admission; without this floor every reconcile would
+# re-list the foreign namespaces and re-issue deletes for pods already
+# terminating.
+_PREEMPT_INTERVAL_SECONDS = 30
+
+
+def _has_gated_gang_pods(pods: list[dict]) -> bool:
+    """True when any Kueue gang pod is still held by a scheduling gate.
+
+    Kueue's webhook gates every pod carrying the queue-name label and removes
+    the gate only on Workload admission, so a surviving gate means the gang is
+    still waiting for capacity.
+    """
+    for pod in pods:
+        if _KUEUE_POD_GROUP_NAME not in pod.get("metadata", {}).get("labels", {}):
+            continue
+        if pod.get("spec", {}).get("schedulingGates"):
+            return True
+    return False
+
+
+def _pod_gpu_request(pod: dict) -> int:
+    """Total GPUs the pod requests, counting limits as implicit requests."""
+    total = 0
+    for container in pod.get("spec", {}).get("containers", []):
+        resources = container.get("resources", {})
+        value = resources.get("requests", {}).get(_GPU_RESOURCE) or resources.get("limits", {}).get(_GPU_RESOURCE)
+        if value:
+            total += parse_k8s_quantity(str(value))
+    return total
+
+
+def _is_preemptible_blocker(pod: dict) -> bool:
+    """Whether a foreign-namespace pod is safe for Iris to evict.
+
+    Hard guards, independent of configuration: the pod must declare a negative
+    priority (its priority class marks it scheduler-preemptible by design) AND
+    request GPUs (it actually holds capacity Kueue TAS counts against gangs).
+    Terminal and already-terminating pods are skipped.
+    """
+    meta = pod.get("metadata", {})
+    if meta.get("deletionTimestamp"):
+        return False
+    if pod.get("status", {}).get("phase") in ("Succeeded", "Failed"):
+        return False
+    priority = pod.get("spec", {}).get("priority")
+    if not isinstance(priority, int) or priority >= 0:
+        return False
+    return _pod_gpu_request(pod) > 0
 
 
 def _build_pod_statuses(pods: list[dict]) -> list[controller_pb2.Controller.KubernetesPodStatus]:
@@ -1216,6 +1287,10 @@ class K8sTaskProvider:
     local_queue: str = ""
     kueue_priority_classes: dict[int, str] = field(default_factory=dict)
     kueue_topologies: dict[str, tuple[str, bool]] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
+    # Namespaces whose preemptible (negative-priority) GPU pods Iris evicts
+    # when it has gang work for Kueue. Empty disables the feature; see
+    # _evict_preemptible_blockers for the safety guards.
+    preempt_namespaces: list[str] = field(default_factory=list)
     log_client: LogWriterProtocol | None = None
     # Pre-resolved iris.task Table handle. The controller injects this after
     # constructing the LogClient (see controller.py); when None — e.g. tests
@@ -1234,6 +1309,7 @@ class K8sTaskProvider:
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
     _last_gc_time: float = field(default=0.0, init=False, repr=False)
+    _last_preempt_time: float = field(default=0.0, init=False, repr=False)
     _pending_gc_hashes: set[str] = field(default_factory=set, init=False, repr=False)
 
     def _ensure_resource_collector(self) -> ResourceCollector | None:
@@ -1277,6 +1353,12 @@ class K8sTaskProvider:
         Producing transitions only need to update ``tasks.state``; the next
         sync sees the diff.
         """
+        # Free GPU capacity for incoming gangs before their pods are created:
+        # Kueue TAS computes node capacity at admission, so blockers must be
+        # gone (or terminating) by the time it evaluates the new Workload.
+        if self.preempt_namespaces and any(r.coscheduling.group_by for r in batch.tasks_to_run):
+            self._evict_preemptible_blockers(reason="coscheduled gang submission", force=True)
+
         apply_failures: list[TaskUpdate] = []
         for run_req in batch.tasks_to_run:
             try:
@@ -1303,6 +1385,11 @@ class K8sTaskProvider:
             labels=_MANAGED_POD_LABELS,
             field_selector=_ACTIVE_PODS_FIELD_SELECTOR,
         )
+
+        # Blockers can also appear AFTER submission (health checks target any
+        # idle GPU node), so keep evicting while a gang waits for admission.
+        if self.preempt_namespaces and _has_gated_gang_pods(managed_pods):
+            self._evict_preemptible_blockers(reason="gang pods held SchedulingGated awaiting Kueue admission")
 
         desired_keys: set[tuple[str, int]] = set()
         for run_req in batch.tasks_to_run:
@@ -1511,6 +1598,57 @@ class K8sTaskProvider:
             self.kubectl.apply_json(pdb)
             logger.info("Applied PDB %s for coordinator task %s", pdb["metadata"]["name"], task_id)
 
+    def _evict_preemptible_blockers(self, *, reason: str, force: bool = False) -> None:
+        """Delete preemptible GPU pods from preempt_namespaces to unblock gang admission.
+
+        Kueue TAS counts every non-Kueue pod's GPU requests as fixed node usage
+        and its preemption only targets Kueue Workloads, while gang pods never
+        reach the kube-scheduler until admitted — so pods the kube-scheduler
+        would displace (negative priority, PreemptLowerPriority) instead starve
+        gangs indefinitely. Iris performs that eviction itself, in the layer it
+        owns.
+
+        Safety guards regardless of configuration: only pods that pass
+        _is_preemptible_blocker (negative priority AND GPU request, not already
+        terminating) are deleted, and Iris's own namespace is never touched.
+        ``force`` bypasses the debounce for discrete events (gang submission);
+        the reconcile-driven path is rate-limited to _PREEMPT_INTERVAL_SECONDS.
+
+        Eviction is best-effort: per-namespace list/delete failures are logged
+        and skipped so they can never block task dispatch in reconcile().
+        """
+        now = time.monotonic()
+        if not force and now - self._last_preempt_time < _PREEMPT_INTERVAL_SECONDS:
+            return
+        self._last_preempt_time = now
+        for ns in self.preempt_namespaces:
+            if ns == self.namespace:
+                logger.warning("preempt_namespaces includes iris's own namespace %r; refusing to evict there", ns)
+                continue
+            try:
+                pods = self.kubectl.list_pods_in_namespace(ns)
+            except KubectlError as e:
+                logger.warning("Failed to list pods in preempt namespace %s: %s", ns, e)
+                continue
+            for pod in pods:
+                if not _is_preemptible_blocker(pod):
+                    continue
+                name = pod.get("metadata", {}).get("name", "")
+                if not name:
+                    continue
+                logger.info(
+                    "Evicting preemptible blocker pod %s/%s (priority=%s, gpus=%d): %s",
+                    ns,
+                    name,
+                    pod.get("spec", {}).get("priority"),
+                    _pod_gpu_request(pod),
+                    reason,
+                )
+                try:
+                    self.kubectl.delete_pod_in_namespace(ns, name)
+                except KubectlError as e:
+                    logger.warning("Failed to evict blocker pod %s/%s: %s", ns, name, e)
+
     def _delete_stray_pods(self, cached_pods: list[dict], desired_keys: set[tuple[str, int]]) -> None:
         """Delete pods that aren't in the desired ``(task_hash, attempt_id)`` set.
 
@@ -1527,6 +1665,7 @@ class K8sTaskProvider:
         stray_pod_names: list[str] = []
         stray_hashes: set[str] = set()
         stray_pod_groups: set[str] = set()
+        stray_gang_pod_names: list[str] = []
         for pod in cached_pods:
             labels = pod.get("metadata", {}).get("labels", {})
             task_hash = labels.get(_LABEL_TASK_HASH)
@@ -1546,18 +1685,14 @@ class K8sTaskProvider:
                 pod_group = labels.get(_KUEUE_POD_GROUP_NAME)
                 if pod_group:
                     stray_pod_groups.add(pod_group)
+                    stray_gang_pod_names.append(pod_name)
 
         if not stray_pod_names:
             return
 
         self.kubectl.delete_many(K8sResource.PODS, stray_pod_names, wait=False)
-        # Release the Kueue gang reservation for every torn-down generation.
-        # Kueue parks a coscheduled Workload in WaitingForReplacementPods when
-        # its pods are deleted, holding the quota until the Workload itself is
-        # removed; without this, a gang requeue (which bumps to a new
-        # pod-group generation) would deadlock behind the old generation's
-        # still-reserved quota.
-        self._delete_kueue_workloads(stray_pod_groups)
+        # The GC pass re-drives any gang pods that survive this teardown.
+        self._release_gang_reservations(stray_gang_pod_names, stray_pod_groups)
         # Enqueue task hashes for deferred configmap/PDB cleanup by the GC pass.
         self._pending_gc_hashes.update(stray_hashes)
 
@@ -1567,6 +1702,21 @@ class K8sTaskProvider:
             len(stray_hashes),
             len(stray_pod_groups),
         )
+
+    def _release_gang_reservations(self, gang_pod_names: list[str], pod_groups: set[str]) -> None:
+        """Release the Kueue gang reservation for torn-down pod-group generations.
+
+        Kueue parks a coscheduled Workload in WaitingForReplacementPods when its
+        pods are deleted, holding the quota until the Workload itself is removed;
+        a gang requeue (which bumps to a new pod-group generation) would deadlock
+        behind the old generation's still-reserved quota. Stripping Kueue's pod
+        finalizer is what guarantees the labeled pods actually disappear —
+        otherwise Kueue rebuilds the Workload from the surviving pods and
+        re-holds the quota/TAS slots.
+        """
+        for pod_name in gang_pod_names:
+            self.kubectl.remove_finalizer(K8sResource.PODS, pod_name, _KUEUE_MANAGED_FINALIZER)
+        self._delete_kueue_workloads(pod_groups)
 
     def _delete_kueue_workloads(self, pod_group_names: set[str]) -> None:
         """Delete the Kueue Workload backing each coscheduled pod-group generation.
@@ -1581,7 +1731,8 @@ class K8sTaskProvider:
 
     def _maybe_gc_terminal_resources(self, active_pods: list[dict]) -> None:
         """Periodically delete terminal (Succeeded/Failed) pods and their associated
-        configmaps/PDBs that are older than _GC_MAX_AGE_SECONDS.
+        configmaps/PDBs that are older than _GC_MAX_AGE_SECONDS, and sweep terminal
+        gang pods (with their Kueue Workloads) on the shorter gang retention.
 
         Without this, completed pods and their configmaps accumulate in etcd indefinitely
         since the sync loop's field selector excludes terminal pods from its queries.
@@ -1600,16 +1751,30 @@ class K8sTaskProvider:
             logger.exception("GC pass failed; will retry next interval")
 
     def _gc_terminal_resources(self, active_pods: list[dict]) -> None:
-        cutoff = datetime.now(timezone.utc).timestamp() - _GC_MAX_AGE_SECONDS
+        """One GC pass: deferred CM/PDB cleanup, the 1h terminal-pod sweep, and a
+        short-retention sweep of terminal gang pods that strips the Kueue pod
+        finalizer and deletes the pod-group Workloads they would otherwise pin.
+        """
+        now = datetime.now(timezone.utc).timestamp()
+        cutoff = now - _GC_MAX_AGE_SECONDS
+        gang_cutoff = now - _GANG_GC_MAX_AGE_SECONDS
 
         # Collect task hashes that still have active (Pending/Running) pods.
         # These must NOT have their configmaps/PDBs deleted, even if an older
         # attempt of the same task is terminal — task_hash is shared across attempts.
         active_hashes: set[str] = set()
+        # Pod-groups with live (Pending/Running) members share one Kueue
+        # Workload across the gang; releasing it would evict the running
+        # siblings, so the gang sweep must skip those groups entirely.
+        active_gang_groups: set[str] = set()
         for pod in active_pods:
-            h = pod.get("metadata", {}).get("labels", {}).get(_LABEL_TASK_HASH)
+            labels = pod.get("metadata", {}).get("labels", {})
+            h = labels.get(_LABEL_TASK_HASH)
             if h:
                 active_hashes.add(h)
+            g = labels.get(_KUEUE_POD_GROUP_NAME)
+            if g:
+                active_gang_groups.add(g)
 
         # 1. Targeted cleanup: delete configmaps/PDBs for tasks that were killed
         #    since last GC. Uses label-selector deletes (one kubectl call per hash)
@@ -1630,6 +1795,9 @@ class K8sTaskProvider:
         #    Skip hashes that still have active pods to avoid deleting live resources.
         old_pod_names: list[str] = []
         old_task_hashes: set[str] = set()
+        gang_pod_names: list[str] = []
+        gang_pod_groups: set[str] = set()
+        gang_task_hashes: set[str] = set()
         for phase in ("Succeeded", "Failed"):
             pods = self.kubectl.list_json(
                 K8sResource.PODS,
@@ -1642,11 +1810,42 @@ class K8sTaskProvider:
                 if not created:
                     continue
                 ts = datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
+                task_hash = meta.get("labels", {}).get(_LABEL_TASK_HASH)
+                pod_group = meta.get("labels", {}).get(_KUEUE_POD_GROUP_NAME)
+                # Gang sweep: a deletionTimestamp means a prior delete is
+                # wedged on the Kueue finalizer; otherwise the shorter gang
+                # retention applies. Handled pods are excluded from the 1h
+                # sweep below. Pods whose group still has live members are
+                # deferred wholesale (not even age-swept): a partial delete
+                # would wedge on the finalizer, and releasing the shared
+                # Workload would evict the running siblings.
+                if pod_group and pod_group in active_gang_groups:
+                    continue
+                if pod_group and (meta.get("deletionTimestamp") or ts < gang_cutoff):
+                    gang_pod_names.append(meta["name"])
+                    gang_pod_groups.add(pod_group)
+                    if task_hash:
+                        gang_task_hashes.add(task_hash)
+                    continue
                 if ts < cutoff:
                     old_pod_names.append(meta["name"])
-                    task_hash = meta.get("labels", {}).get(_LABEL_TASK_HASH)
                     if task_hash:
                         old_task_hashes.add(task_hash)
+
+        if gang_pod_names:
+            # force (gracePeriodSeconds=0): these pods are already terminal, so
+            # there is nothing to terminate gracefully, and force unsticks
+            # deletion when the node's kubelet is gone (node failure).
+            self.kubectl.delete_many(K8sResource.PODS, gang_pod_names, force=True, wait=False)
+            self._release_gang_reservations(gang_pod_names, gang_pod_groups)
+            # CM/PDB cleanup follows the deferred path so active retry
+            # attempts sharing the task hash keep their resources.
+            self._pending_gc_hashes.update(gang_task_hashes)
+            logger.info(
+                "GC: swept %d terminal gang pods, released %d Kueue workloads",
+                len(gang_pod_names),
+                len(gang_pod_groups),
+            )
 
         if old_pod_names:
             self.kubectl.delete_many(K8sResource.PODS, old_pod_names, wait=False)

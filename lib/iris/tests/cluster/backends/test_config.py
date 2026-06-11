@@ -14,7 +14,6 @@ import yaml
 from iris.cluster.backends.factory import create_provider_bundle
 from iris.cluster.backends.gcp.service import KNOWN_GCP_ZONES
 from iris.cluster.config import (
-    connect_cluster,
     get_ssh_config,
     load_config,
     make_local_config,
@@ -23,6 +22,7 @@ from iris.cluster.config import (
 from iris.cluster.config_serde import config_to_dict
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
+from iris.cluster.lifecycle import connect_cluster
 from iris.rpc import config_pb2, controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import duration_to_proto

@@ -86,11 +86,17 @@ src_paths = ["src", "tests"]
 "Documentation" = "https://haliax.readthedocs.io/en/latest/"
 
 [tool.ruff.lint]
-# Local-import hygiene (issue #6219), mirrored from the root config so these
-# rules apply repo-wide: TID252 (absolute over parent-relative imports) and
+# Mirror the root config's extra rules on top of ruff's default E/F set so they
+# apply repo-wide: PLC0415 (no function-local imports), and the issue #6219
+# local-import hygiene pair TID252 (absolute over parent-relative imports) and
 # ICN001 (conventional import aliases, e.g. `import numpy as np`).
-extend-select = ["TID252", "ICN001"]
+extend-select = ["PLC0415", "TID252", "ICN001"]
 ignore = [ "E203", "E501", "W605", "F821", "E266", "F722", "E731", "E741" ]
+
+[tool.ruff.lint.per-file-ignores]
+# Notebook cells legitimately interleave imports with computation as they are
+# executed top-to-bottom; PLC0415's top-of-file rule does not apply to cells.
+"*.ipynb" = ["PLC0415"]
 
 [tool.setuptools.package-data]
 "haliax" = ["*.pyi"]

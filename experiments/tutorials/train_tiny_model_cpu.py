@@ -17,10 +17,11 @@ from levanter.data.text import TextLmDatasetFormat
 from marin.execution.executor import executor_main
 from marin.execution.types import versioned
 
-from experiments.defaults import default_tokenize, default_train
+from experiments.defaults import default_train
 from experiments.llama import llama_nano
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
+from experiments.tokenization import default_tokenize
 
 # 1. Choose a dataset
 tinystories_hf_id = "roneneldan/TinyStories"

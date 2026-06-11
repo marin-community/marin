@@ -10,9 +10,9 @@ dependencies = [
     "marin-rigging",
     # marin-finelog is a native (maturin) package shipped as a pre-built wheel
     # (it carries the in-process server ext, finelog._native, the controller
-    # starts). `>= 0.2.0.dev0` opts uv into its nightly pre-release wheels,
-    # mirroring the root pyproject.toml pin.
-    "marin-finelog >= 0.2.0.dev0",
+    # starts). Pinned to the latest stable release, mirroring the root
+    # pyproject.toml floor.
+    "marin-finelog >= 0.2.9",
     "click>=8.3.1",
     "cloudpickle>=3.1.2",
     "connect-python>=0.9.0",
@@ -38,7 +38,7 @@ dependencies = [
 [project.optional-dependencies]
 controller = [
     "duckdb>=1.0.0",
-    "pyarrow>=19.0.0",
+    "pyarrow>=23.0.0",
     "kubernetes>=31.0.0,<36",
 ]
 worker = []
@@ -56,7 +56,7 @@ examples = [
 ]
 dev = [
     "duckdb>=1.0.0",
-    "pyarrow>=19.0.0",
+    "pyarrow>=23.0.0",
     "kubernetes>=31.0.0,<36",
     "ipykernel>=7.1.0",
     "jupyter>=1.1.1",

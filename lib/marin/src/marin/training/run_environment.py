@@ -6,6 +6,8 @@ import logging
 import os
 from copy import deepcopy
 
+from fray import GpuConfig, ResourceConfig, TpuConfig
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,3 +45,23 @@ def add_run_env_variables(env: dict[str, str]) -> dict[str, str]:
         env["JAX_COMPILATION_CACHE_DIR"] = val
 
     return env
+
+
+def extras_for_resources(resources: ResourceConfig) -> list[str]:
+    """Return the uv extras for a resource device config."""
+    device = resources.device
+    if isinstance(device, TpuConfig):
+        return ["tpu"]
+    if isinstance(device, GpuConfig):
+        return ["gpu"]
+    return []
+
+
+def dependency_groups_for_resources(
+    resources: ResourceConfig,
+    dependency_groups: list[str] | None,
+) -> list[str]:
+    """Return explicit dependency groups, or infer accelerator extras from resources."""
+    if dependency_groups is not None:
+        return dependency_groups
+    return extras_for_resources(resources)

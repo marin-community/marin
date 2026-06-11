@@ -25,12 +25,14 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.schema import task_attempts_table, tasks_table, workers_table
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select
 
 from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller.conftest import make_test_entrypoint
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 # ---------------------------------------------------------------------------
@@ -154,8 +156,6 @@ class ServiceTestHarness:
         resources: job_pb2.ResourceSpecProto | None = None,
     ) -> JobName:
         """Submit a job via the RPC layer. Returns job_id."""
-        from tests.cluster.controller.conftest import make_test_entrypoint
-
         job_id = JobName.root(user, name)
         request = controller_pb2.Controller.LaunchJobRequest(
             name=job_id.to_wire(),
@@ -416,8 +416,6 @@ class ServiceTestHarness:
 
 
 def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
-
     db = ControllerDB(db_dir=tmp_path / "k8s_db")
     health = WorkerHealthTracker()
     endpoints = EndpointsProjection(db)
@@ -463,8 +461,6 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
 
 
 def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
-
     db = ControllerDB(db_dir=tmp_path / "gcp_db")
     health = WorkerHealthTracker()
     endpoints = EndpointsProjection(db)

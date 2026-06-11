@@ -10,13 +10,12 @@ Each row has a user prompt, the model's internal thinking, and the final
 assistant response. We render these into a single document.
 """
 
-import hashlib
-
 from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters
 from zephyr.readers import load_jsonl
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.rollout_transforms import text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -46,13 +45,7 @@ def row_to_doc(row: dict) -> list[dict]:
     text = "\n\n".join(parts)
 
     counters.increment("gpt_oss_rollouts/kept")
-    return [
-        {
-            "id": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "text": text,
-            "source": "andyrdt/gpt-oss-20b-rollouts",
-        }
-    ]
+    return [text_document(text, "andyrdt/gpt-oss-20b-rollouts")]
 
 
 def transform(input_path: str, output_path: str) -> None:

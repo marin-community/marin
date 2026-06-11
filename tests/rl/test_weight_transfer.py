@@ -378,7 +378,7 @@ def benchmark_arrow_flight_with_llama():
 @pytest.mark.slow("Uses real Llama model, requires HuggingFace access.")
 def test_arrow_flight_transfer_to_vllm():
     """Test Arrow Flight weight transfer to vLLM."""
-    from vllm import LLM
+    from vllm import LLM  # noqa: PLC0415  # optional dep: vllm
 
     MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
     devices = jax.devices("tpu")

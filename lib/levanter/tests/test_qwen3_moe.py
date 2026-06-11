@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import tempfile
 
 import jax
@@ -117,14 +118,18 @@ def test_qwen3_moe_forward_and_next_token_loss():
 
 
 @skip_if_no_torch
-def test_qwen3_moe_hf_logits_and_loss_match_torch():
+def test_qwen3_moe_hf_logits_and_loss_match_torch(local_gpt2_tokenizer_path):
     import torch  # noqa: PLC0415
     import torch.nn.functional as F  # noqa: PLC0415
     from transformers import Qwen3MoeForCausalLM  # noqa: PLC0415
 
     hf_config = _tiny_hf_config()
     config = Qwen3MoeConfig.from_hf_config(hf_config)
-    converter = config.hf_checkpoint_converter()
+    # Local tokenizer + no remote reference keeps the conversion off the Hub; the
+    # tokenizer is incidental (random inputs, logit-equivalence only).
+    converter = dataclasses.replace(
+        config, reference_checkpoint=None, tokenizer=local_gpt2_tokenizer_path
+    ).hf_checkpoint_converter()
     Batch = hax.Axis("batch", 2)
     Pos = config.max_Pos
     Vocab = hax.Axis("vocab", hf_config.vocab_size)

@@ -283,6 +283,14 @@ class InMemoryK8sService:
         self._top_pod_overrides: dict[str, PodResourceUsage | None] = {}
         self._log_watermarks: dict[str, int] = {}  # pod_name -> bytes consumed
 
+        # Pods living outside the service's own namespace, keyed by
+        # (namespace, name). Seeded via seed_namespaced_pod and visible only
+        # through the explicit-namespace protocol methods.
+        self._namespaced_pods: dict[tuple[str, str], dict] = {}
+        # Every explicit-namespace pod call as (operation, namespace), so
+        # tests can assert the eviction feature stays silent when disabled.
+        self.namespaced_pod_calls: list[tuple[str, str]] = []
+
         # Node model
         self._nodes: dict[str, FakeNode] = {}
         self._node_pools: dict[str, NodePoolConfig] = {}
@@ -613,6 +621,10 @@ class InMemoryK8sService:
         """
         self._resources[(resource.plural, name)] = manifest
 
+    def seed_namespaced_pod(self, namespace: str, name: str, manifest: dict) -> None:
+        """Insert a pod in an arbitrary namespace (outside the service's own)."""
+        self._namespaced_pods[(namespace, name)] = manifest
+
     # -- Protocol methods --
 
     def _check_failure(self, operation: str) -> None:
@@ -684,16 +696,27 @@ class InMemoryK8sService:
 
     def delete(self, resource: K8sResource, name: str, *, force: bool = False, wait: bool = True) -> None:
         self._check_failure("delete")
-        self._resources.pop((resource.plural, name), None)
+        key = (resource.plural, name)
+        manifest = self._resources.get(key)
+        if manifest is None:
+            return
 
+        # Model finalizers: a resource that still carries finalizers is not
+        # removed on delete — k8s marks it terminating (deletionTimestamp set)
+        # and waits for the finalizers to clear. force/grace does not bypass them.
+        if manifest.get("metadata", {}).get("finalizers"):
+            manifest.setdefault("metadata", {})["deletionTimestamp"] = "2024-01-01T00:00:00Z"
+            return
+
+        self._resources.pop(key, None)
         # Release resources when deleting a pod
         if resource is K8sResource.PODS:
             self._release_pod_resources(name)
 
-    def delete_many(self, resource: K8sResource, names: list[str], *, wait: bool = False) -> None:
+    def delete_many(self, resource: K8sResource, names: list[str], *, force: bool = False, wait: bool = False) -> None:
         """Delete multiple resources by name."""
         for name in names:
-            self.delete(resource, name)
+            self.delete(resource, name, force=force)
 
     def delete_by_labels(self, resource: K8sResource, labels: dict[str, str], *, wait: bool = False) -> None:
         """Delete all resources matching the given label selector."""
@@ -709,6 +732,38 @@ class InMemoryK8sService:
             if all(res_labels.get(k) == v for k, v in labels.items()):
                 to_delete.append(name)
         for name in to_delete:
+            self.delete(resource, name)
+
+    def list_pods_in_namespace(self, namespace: str) -> list[dict]:
+        """List pods in an explicit namespace (not the service's own)."""
+        self._check_failure("list_pods_in_namespace")
+        self.namespaced_pod_calls.append(("list", namespace))
+        if namespace == self._namespace:
+            return self.list_json(K8sResource.PODS)
+        return [manifest for (ns, _), manifest in self._namespaced_pods.items() if ns == namespace]
+
+    def delete_pod_in_namespace(self, namespace: str, name: str) -> None:
+        """Delete a pod in an explicit namespace, ignoring NotFound."""
+        self._check_failure("delete_pod_in_namespace")
+        self.namespaced_pod_calls.append(("delete", namespace))
+        if namespace == self._namespace:
+            self.delete(K8sResource.PODS, name)
+            return
+        self._namespaced_pods.pop((namespace, name), None)
+
+    def remove_finalizer(self, resource: K8sResource, name: str, finalizer: str) -> None:
+        """Strip a single finalizer from a stored resource (no-op if absent)."""
+        self._check_failure("remove_finalizer")
+        manifest = self._resources.get((resource.plural, name))
+        if manifest is None:
+            return
+        finalizers = manifest.get("metadata", {}).get("finalizers") or []
+        if finalizer not in finalizers:
+            return
+        remaining = [f for f in finalizers if f != finalizer]
+        manifest["metadata"]["finalizers"] = remaining
+        # A terminating object whose last finalizer just cleared is reclaimed.
+        if not remaining and manifest["metadata"].get("deletionTimestamp"):
             self.delete(resource, name)
 
     def logs(self, pod_name: str, *, container: str | None = None, tail: int = 50, previous: bool = False) -> str:

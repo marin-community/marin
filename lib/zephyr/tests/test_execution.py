@@ -15,6 +15,7 @@ from concurrent.futures import Future
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import cloudpickle
 import pytest
 from fray import ResourceConfig
 from fray.actor import ActorContext
@@ -25,24 +26,25 @@ from zephyr.execution import (
     _NON_RETRYABLE_ERRORS,
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
-    ZEPHYR_STAGE_BYTES_PROCESSED_KEY,
-    ZEPHYR_STAGE_ITEM_COUNT_KEY,
     CoordinatorUnreachable,
-    CounterSnapshot,
-    ListShard,
-    PickleDiskChunk,
     PullStatus,
-    ShardTask,
-    TaskResult,
     WorkerState,
     ZephyrContext,
     ZephyrCoordinator,
     ZephyrWorker,
     ZephyrWorkerError,
     _ensure_picklable_exception,
-    zephyr_worker_ctx,
 )
 from zephyr.plan import PhysicalStage, StageType, compute_plan
+from zephyr.shuffle import ListShard
+from zephyr.stage_io import (
+    ZEPHYR_STAGE_BYTES_PROCESSED_KEY,
+    ZEPHYR_STAGE_ITEM_COUNT_KEY,
+    PickleDiskChunk,
+    ShardTask,
+    TaskResult,
+)
+from zephyr.worker_context import CounterSnapshot, zephyr_worker_ctx
 
 
 class _UnpicklableError(Exception):
@@ -59,8 +61,6 @@ def test_ensure_picklable_exception_passes_through_picklable():
 
 
 def test_ensure_picklable_exception_wraps_unrevivable_and_preserves_message():
-    import cloudpickle
-
     err = _UnpicklableError(1, 2, 3)
     err.add_note("--- subprocess traceback ---\nsomewhere")
     with pytest.raises(TypeError):

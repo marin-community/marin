@@ -52,6 +52,7 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.reconcile.worker import ReconcileResult
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
@@ -148,8 +149,6 @@ class FakeProvider:
         return []
 
     def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
-        from iris.cluster.controller.reconcile.worker import ReconcileResult
-
         return BackendReconcileResult(
             worker_results=[
                 ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in batch.plans

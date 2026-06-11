@@ -43,11 +43,12 @@ from collections.abc import Iterator
 
 import click
 from fray import ResourceConfig
+from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
 from zephyr import Dataset
 from zephyr.dataset import ShardInfo
 from zephyr.execution import ZephyrContext
-from zephyr.plan import deterministic_hash
+from zephyr.shard_keys import deterministic_hash
 
 logger = logging.getLogger(__name__)
 
@@ -253,8 +254,6 @@ def main(
 
     status_path = os.environ.get("BENCH_STATUS_PATH")
     if status_path:
-        from rigging.filesystem import url_to_fs
-
         fs, _ = url_to_fs(status_path)
         with fs.open(status_path, "w") as f:
             f.write(json.dumps(summary))

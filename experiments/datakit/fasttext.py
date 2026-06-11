@@ -47,6 +47,9 @@ from collections.abc import Callable, Iterator
 from functools import cache, partial
 from typing import Any
 
+import fasttext
+import numpy as np
+from huggingface_hub import hf_hub_download
 from marin.execution.step_spec import StepSpec
 from pydantic import BaseModel
 from rigging.filesystem import atomic_rename, url_to_fs
@@ -122,9 +125,6 @@ def prepare_fasttext_model(
     Returns:
         :class:`FastTextModel` artifact pointing at the staged ``.bin``.
     """
-    # Import local: huggingface_hub is only needed by the prep step, not by classify workers.
-    from huggingface_hub import hf_hub_download
-
     local = hf_hub_download(repo_id=hf_repo_id, filename=hf_filename, revision=revision)
     size = os.path.getsize(local)
     target = os.path.join(output_path, _MODEL_FILENAME)
@@ -168,10 +168,8 @@ def _load_fasttext_model(model_path_str: str) -> Any:
     """
     # fasttext-wheel 0.9.2 calls ``np.array(..., copy=False)`` inside
     # ``FastText.predict``; NumPy 2.x rejects ``copy=False`` (must use
-    # ``copy=None``). Patch before importing fasttext so the predict path
+    # ``copy=None``). Patch before the first predict so the predict path
     # inherits the shim. Idempotent across calls in the same process.
-    import numpy as np
-
     if not getattr(np, "_fasttext_copy_compat", False):
         _orig_np_array = np.array
 
@@ -182,10 +180,6 @@ def _load_fasttext_model(model_path_str: str) -> Any:
 
         np.array = _np_array_copy_compat
         np._fasttext_copy_compat = True
-
-    # Local import so the driver (which never loads a model) doesn't pay the
-    # fasttext C-extension import cost.
-    import fasttext
 
     fs, resolved = url_to_fs(model_path_str)
     fd, local = tempfile.mkstemp(prefix="fasttext-", suffix=".bin")

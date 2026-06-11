@@ -21,7 +21,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
-from sqlalchemy import bindparam, func, select, text, tuple_
+from sqlalchemy import bindparam, case, func, select, text, tuple_
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints, validate_tpu_request
@@ -726,8 +726,6 @@ def _attempts_for_worker(
     independent state/duration per attempt rather than inheriting from the
     parent task (which produced bogus duplicate-RUNNING rows).
     """
-    from sqlalchemy import case
-
     with db.read_snapshot() as tx:
         raw_rows = tx.execute(
             select(*reads.ATTEMPT_COLS)
@@ -2380,25 +2378,10 @@ class ControllerServiceImpl:
             budget_limits: dict[str, int] = {b.user_id: b.budget_limit for b in budgets}
             user_spend = compute_user_spend(snap)
 
-            # Pending tasks: columns needed for task_row_can_be_scheduled.
-            # No ORDER BY — we aggregate, not display.
-            _TASK_ROW_COLS = (
-                tasks_table.c.task_id,
-                tasks_table.c.job_id,
-                tasks_table.c.state,
-                tasks_table.c.current_attempt_id,
-                tasks_table.c.failure_count,
-                tasks_table.c.preemption_count,
-                tasks_table.c.max_retries_failure,
-                tasks_table.c.max_retries_preemption,
-                tasks_table.c.submitted_at_ms,
-                tasks_table.c.priority_band,
-                tasks_table.c.priority_neg_depth,
-                tasks_table.c.priority_root_submitted_ms,
-                tasks_table.c.priority_insertion,
-            )
+            # Pending tasks: the scheduler's pending-task projection, reused here for
+            # task_row_can_be_scheduled + band aggregation. No ORDER BY — we aggregate, not display.
             pending_raw = snap.execute(
-                select(*_TASK_ROW_COLS).where(tasks_table.c.state == job_pb2.TASK_STATE_PENDING)
+                select(*reads.PENDING_TASK_COLS).where(tasks_table.c.state == job_pb2.TASK_STATE_PENDING)
             ).all()
             pending_rows = pending_raw
             pending_requested_bands = reads.get_priority_bands(snap, {row.job_id for row in pending_rows})
@@ -2510,16 +2493,3 @@ class ControllerServiceImpl:
             pending_buckets=pending_buckets,
             running_buckets=running_buckets,
         )
-
-    def set_task_status_text(
-        self,
-        _request: job_pb2.SetTaskStatusTextRequest,
-        _ctx: Any,
-    ) -> job_pb2.SetTaskStatusTextResponse:
-        """Deprecated no-op kept so pre-cutover clients don't crash.
-
-        Status text now flows through the iris.task_status finelog namespace
-        via RemoteClusterClient.report_task_status_text. Remove this handler
-        and its RPC/messages on the date in the iris-status-cleanup cron.
-        """
-        return job_pb2.SetTaskStatusTextResponse()

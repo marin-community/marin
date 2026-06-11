@@ -17,7 +17,7 @@ dependencies = [
     "fsspec>=2024.0.0",
     "gcsfs>=2024.0.0",
     "protobuf>=5.0",
-    "pyarrow>=19.0.0",
+    "pyarrow>=23.0.0",
     "pyyaml>=6.0",
     "zstandard>=0.22",
 ]

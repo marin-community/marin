@@ -737,6 +737,25 @@ class _SubmitSpy:
         return getattr(self._inner, item)
 
 
+def _run_step_with_submit_spy(step: StepSpec, fray_client) -> _SubmitSpy:
+    spy = _SubmitSpy(fray_client)
+    with set_current_client(spy):
+        StepRunner().run([step])
+    return spy
+
+
+def _call_remote_with_submit_spy(fn, fray_client) -> _SubmitSpy:
+    spy = _SubmitSpy(fray_client)
+    with set_current_client(spy):
+        fn()
+    return spy
+
+
+def _assert_single_submit_extras(spy: _SubmitSpy, expected: list[str]) -> None:
+    assert len(spy.requests) == 1
+    assert spy.requests[0].environment.extras == expected
+
+
 def test_step_resources_dispatches_via_fray(tmp_path: Path, fray_client):
     """Setting ``resources`` on a StepSpec submits ``fn`` as a Fray job."""
     spy = _SubmitSpy(fray_client)
@@ -760,6 +779,74 @@ def test_step_resources_dispatches_via_fray(tmp_path: Path, fray_client):
     assert spy.requests[0].resources == custom
     loaded = Artifact.from_path(tmp_path.as_posix(), PathMetadata)
     assert loaded.path == tmp_path.as_posix()
+
+
+def test_step_resources_dispatch_uses_device_extra(tmp_path: Path, fray_client):
+    resources = ResourceConfig.with_gpu("H100", count=8)
+
+    def my_step(output_path: str) -> PathMetadata:
+        return PathMetadata(path=output_path)
+
+    step = StepSpec(
+        name="gpu_resourced_step",
+        override_output_path=tmp_path.as_posix(),
+        fn=my_step,
+        resources=resources,
+    )
+
+    _assert_single_submit_extras(_run_step_with_submit_spy(step, fray_client), ["gpu"])
+
+
+def test_remote_resources_dispatch_uses_device_extra(tmp_path: Path, fray_client):
+    resources = ResourceConfig.with_gpu("H100", count=8)
+
+    @remote(resources=resources)
+    def my_step(output_path: str) -> PathMetadata:
+        return PathMetadata(path=output_path)
+
+    step = StepSpec(
+        name="remote_gpu_step",
+        override_output_path=tmp_path.as_posix(),
+        fn=my_step,
+    )
+
+    _assert_single_submit_extras(_run_step_with_submit_spy(step, fray_client), ["gpu"])
+
+
+def test_remote_dependency_groups_can_override_device_extra(tmp_path: Path, fray_client):
+    resources = ResourceConfig.with_gpu("H100", count=8)
+
+    @remote(resources=resources, pip_dependency_groups=[])
+    def my_step(output_path: str) -> PathMetadata:
+        return PathMetadata(path=output_path)
+
+    step = StepSpec(
+        name="remote_gpu_step_without_extras",
+        override_output_path=tmp_path.as_posix(),
+        fn=my_step,
+    )
+
+    _assert_single_submit_extras(_run_step_with_submit_spy(step, fray_client), [])
+
+
+def test_remote_direct_call_uses_device_extra(fray_client):
+    resources = ResourceConfig.with_gpu("H100", count=8)
+
+    @remote(resources=resources)
+    def my_step() -> None:
+        return None
+
+    _assert_single_submit_extras(_call_remote_with_submit_spy(my_step, fray_client), ["gpu"])
+
+
+def test_remote_direct_call_dependency_groups_can_override_device_extra(fray_client):
+    resources = ResourceConfig.with_gpu("H100", count=8)
+
+    @remote(resources=resources, pip_dependency_groups=[])
+    def my_step() -> None:
+        return None
+
+    _assert_single_submit_extras(_call_remote_with_submit_spy(my_step, fray_client), [])
 
 
 # ---------------------------------------------------------------------------

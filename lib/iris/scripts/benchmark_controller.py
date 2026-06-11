@@ -49,6 +49,7 @@ import click
 import uvicorn
 import yaml
 from connectrpc.request import RequestContext
+from iris.cluster.controller import db as db_mod
 from iris.cluster.controller import reads
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
@@ -79,10 +80,7 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcilePlan,
     build_reconcile_plans,
 )
-from iris.cluster.controller.scheduling.policy import (
-    _pending_tasks_with_jobs as _schedulable_tasks,
-)
-from iris.cluster.controller.scheduling.policy import compute_demand_entries
+from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
     endpoints_table,
@@ -99,7 +97,7 @@ from iris.cluster.controller.service import (
     _worker_roster,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import AttemptUid, JobName, WorkerId
+from iris.cluster.types import AttemptUid, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
@@ -1138,7 +1136,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
             )
             pending_count += int(_tx.execute(text("SELECT changes() AS c")).scalar() or 0)
     with db.read_snapshot() as _ptx:
-        pending_tasks = _schedulable_tasks(_ptx)
+        pending_tasks = reads.pending_tasks_with_jobs(_ptx)
     with db.read_snapshot() as _wtx:
         workers = reads.healthy_active_workers_with_attributes(_wtx, health, _NoAttrs())
     print(
@@ -1149,8 +1147,6 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # ---- resource_usage_by_worker (NEW): full join over unfinished
     #      worker-bound attempts. Runs every scheduling tick. ----
     def _usage_new():
-        from iris.cluster.controller import db as db_mod
-
         with db_mod.read_snapshot(db.sa_read_engine) as snap:
             reads.resource_usage_by_worker(snap)
 
@@ -1175,10 +1171,8 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
     # ---- Full tick: _read_scheduling_state-style aggregate ----
     def _state_read():
-        from iris.cluster.controller import db as db_mod
-
         with db.read_snapshot() as _ptx:
-            _schedulable_tasks(_ptx)
+            reads.pending_tasks_with_jobs(_ptx)
         with db.read_snapshot() as _rtx:
             ws = reads.healthy_active_workers_with_attributes(_rtx, health, _NoAttrs())
         with db_mod.read_snapshot(db.sa_read_engine) as snap:
@@ -1188,10 +1182,13 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     bench("Scheduling: state read (pending+workers+usage)", _state_read)
 
     # ---- Autoscaler demand path (compute_demand_entries) ----
+    # Demand is now a pure function over the per-tick scheduling context; build it
+    # once (as the scheduling pass does) and benchmark only the demand computation.
     sched = Scheduler()
+    demand_ctx = build_scheduling_context(db, health, _NoAttrs(), UserBudgetDefaults(), {})
 
     def _demand():
-        compute_demand_entries(db, scheduler=sched, workers=workers, reservation_claims={})
+        compute_demand_entries(demand_ctx, sched, {})
 
     bench(
         f"Scheduling: compute_demand_entries (w={len(workers)}, t={len(pending_tasks)})",
@@ -1307,8 +1304,6 @@ def benchmark_polling(db: ControllerDB) -> None:
         ids = worker_ids[:batch_size]
 
         def _reconcile(_ids=ids):
-            from iris.cluster.controller import db as db_mod
-
             target_ids = set(_ids)
             with db_mod.read_snapshot(db.sa_read_engine) as snap:
                 # Worker filter applied in Python to keep the partial index
@@ -1420,8 +1415,6 @@ def benchmark_polling(db: ControllerDB) -> None:
         drain_jid = drain_row.job_id
 
         def _has_unfinished():
-            from iris.cluster.controller import db as db_mod
-
             with db_mod.read_snapshot(db.sa_read_engine) as snap:
                 reads.has_unfinished_worker_attempts(snap, drain_jid)
 

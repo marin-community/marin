@@ -263,7 +263,7 @@ def _fetch_texts(
 
 
 def _ctfidf(texts_by_cluster: dict[int, list[str]], n_terms: int) -> dict[int, list[str]]:
-    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.feature_extraction.text import TfidfVectorizer  # noqa: PLC0415  # optional dep: sklearn
 
     cluster_ids = sorted(texts_by_cluster)
     docs = [" ".join(texts_by_cluster[c]) for c in cluster_ids]

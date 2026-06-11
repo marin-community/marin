@@ -30,13 +30,13 @@ from .axis import (
     AxisSpec,
     PartialShapeDict,
     ShapeDict,
+    _check_size_consistency,
     axis_name,
     axis_spec_to_shape_dict,
     axis_spec_to_tuple,
     dslice,
     eliminate_axes,
     selects_axis,
-    _check_size_consistency,
 )
 from .types import GatherScatterModeStr, IntScalar, PrecisionLike, Scalar
 
@@ -775,7 +775,8 @@ class NamedArray(metaclass=NamedArrayMeta):
     def __le__(self, other) -> "NamedArray":  # pragma: no cover
         return haliax.less_equal(self, other)
 
-    def __eq__(self, other):  # pragma: no cover
+    # numpy elementwise comparison semantics: returns a NamedArray, not bool
+    def __eq__(self, other):  # pragma: no cover  # pyrefly: ignore[bad-override]
         # special case because Jax sometimes call == on
         # types when they're in PyTrees
         if self.array is None:  # pragma: no cover
@@ -786,7 +787,8 @@ class NamedArray(metaclass=NamedArrayMeta):
 
         return haliax.equal(self, other)
 
-    def __ne__(self, other):  # pragma: no cover
+    # numpy elementwise comparison semantics: returns a NamedArray, not bool
+    def __ne__(self, other):  # pragma: no cover  # pyrefly: ignore[bad-override]
         return haliax.not_equal(self, other)
 
     def __gt__(self, other) -> "NamedArray":  # pragma: no cover
@@ -953,10 +955,7 @@ def take(array: NamedArray, axis: AxisSelector, index: int | NamedArray) -> Name
             return out
         else:
             new_axes = array.axes[:axis_index] + index.axes + array.axes[axis_index + 1 :]
-            # Local import to avoid a circular import between core <-> partitioning.
-            from haliax.partitioning import get_pspec_for_manual_mesh
-
-            out_sharding = get_pspec_for_manual_mesh(new_axes)
+            out_sharding = haliax.partitioning.get_pspec_for_manual_mesh(new_axes)
             indexer: list[Any] = [py_slice(None)] * array.array.ndim
             indexer[axis_index] = index.array
             new_array = array.array.at[tuple(indexer)].get(out_sharding=out_sharding)

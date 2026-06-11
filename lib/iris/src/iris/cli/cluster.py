@@ -9,6 +9,7 @@ controller VM management, VM operations via controller RPC, and the dashboard tu
 
 import json
 import signal
+import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -16,9 +17,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import click
+import uvicorn
+from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finelog.deploy.cli import down_cmd, logs_cmd, restart_cmd, status_cmd, up_cmd
 from rigging.config_discovery import list_cluster_configs
+from rigging.filesystem import marin_temp_bucket
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 from iris.cli.build import (
@@ -29,6 +33,7 @@ from iris.cli.build import (
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
 from iris.cluster.backends.gcp.bootstrap import build_worker_bootstrap_script
 from iris.cluster.backends.gcp.workers import GcpWorkerProvider
+from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.backends.types import Labels
 from iris.cluster.config import IrisConfig, clear_remote_state, make_local_config
 from iris.cluster.controller.autoscaler.scaling_group import (
@@ -36,6 +41,9 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     build_worker_config_for_group,
     prepare_slice_config,
 )
+from iris.cluster.controller.dashboard import ProxyControllerDashboard
+from iris.cluster.controller.main import run_controller_serve
+from iris.cluster.dashboard_common import VUE_DIST_DIR
 from iris.rpc import config_pb2, controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
@@ -281,8 +289,6 @@ def cluster_start(ctx, local: bool, fresh: bool):
     click.echo("Starting controller...")
     try:
         if is_local:
-            from iris.cluster.backends.local.cluster import LocalCluster
-
             cluster = LocalCluster(config)
             address = cluster.start()
             click.echo(f"Controller started at {address}")
@@ -330,8 +336,6 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
 
     # Set ephemeral state dir via marin_temp_bucket, which resolves
     # region-appropriate storage from MARIN_PREFIX.
-    from rigging.filesystem import marin_temp_bucket
-
     config.storage.remote_state_dir = marin_temp_bucket(ttl_days=7, prefix=f"iris/state/{label_prefix}")
 
     git_sha = get_git_sha()
@@ -683,14 +687,6 @@ def cluster_dashboard_proxy(ctx, port: int):
     the upstream controller. Open the rsbuild URL (printed on startup) in
     your browser.
     """
-    import signal
-    import subprocess
-
-    import uvicorn
-
-    from iris.cluster.controller.dashboard import ProxyControllerDashboard
-    from iris.cluster.dashboard_common import VUE_DIST_DIR
-
     controller_url = require_controller_url(ctx)
     dashboard = ProxyControllerDashboard(upstream_url=controller_url, port=port)
     click.echo(f"Proxying to controller at {controller_url}")
@@ -791,8 +787,6 @@ def vm_logs(ctx, vm_id):
     try:
         resp = _get_worker_status(controller_url, vm_id)
     except ConnectError as e:
-        from connectrpc.code import Code
-
         if e.code == Code.NOT_FOUND:
             click.echo(f"Worker not found: {vm_id}", err=True)
         else:
@@ -873,8 +867,6 @@ def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_
         iris --config=cluster.yaml cluster controller serve --dry-run \\
             --checkpoint-path gs://bucket/controller-state/1234567890
     """
-    from iris.cluster.controller.main import run_controller_serve
-
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for controller serve")
@@ -919,8 +911,6 @@ def controller_checkpoint(ctx, stop: bool):
         if not config:
             click.echo("--stop requires --config", err=True)
             raise SystemExit(1)
-        from iris.cluster.config import IrisConfig
-
         iris_config = IrisConfig(config)
         bundle = iris_config.provider_bundle()
         try:
