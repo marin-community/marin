@@ -17,6 +17,14 @@ For debugging and operating live infrastructure, read the relevant OPS.md:
 
 Zephyr OPS.md references Iris OPS.md for shared infrastructure commands — read Iris first when debugging zephyr jobs on Iris.
 
+For agent-oriented reference, the autodoc pipeline generates a budgeted doc tree
+under `docs/agent/` (read on demand). Start at `docs/agent/MAP.md` (the monorepo
+index), then per sub-project read `docs/agent/<project>/overview.md` to orient,
+`<project>/ops.md` for how to *use* it, or `<project>/architecture.md` for how to
+*understand and change* it. Each doc is capped at ~1000 tokens. Regenerate via the
+`autodoc` skill; `uv run --script scripts/agent_docs/main.py --stats` lists the
+discovered packages.
+
 ## Workflow Playbooks
 
 Skills are task-focused playbooks in `.agents/skills/` (also accessible as

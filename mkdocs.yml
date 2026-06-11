@@ -57,6 +57,10 @@ watch:
   - docs/
   - lib/marin/src/
 
+# Exclude machine-generated agent docs from the human-facing site
+exclude_docs: |
+  agent/
+
 nav:
   - Home: index.md
   - Tutorials:

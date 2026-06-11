@@ -11,7 +11,7 @@ Use this skill on scheduled scrub turns for docs/code parity in `marin-community
 
 ## Focus
 
-- Prioritize high-confidence drift in `README.md`, `docs/`, `.agents/docs/`, and operator-facing scripts.
+- Prioritize high-confidence drift in `README.md`, `docs/`, and operator-facing scripts.
 - Confirm command examples match current tooling conventions (`uv run`, repo scripts, and documented workflows).
 - Apply concrete corrections when drift is real; avoid status-only updates.
 
