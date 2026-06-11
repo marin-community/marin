@@ -369,6 +369,28 @@ fences. Always end with the complete script even if you could not verify every \
 detail.
 """
 
+# Docs-only variant: no tools at all. Used to measure doc quality in isolation
+# (the coder cannot read source to fill gaps), e.g. to ask whether agentic doc
+# CONTENT is intrinsically better than mechanical, independent of file access.
+CODER_PROMPT_DOCS_ONLY = """\
+You are a Python engineer working on the Marin monorepo. You have NO tools: you \
+cannot run code, read files, or search the repo. You must rely ONLY on the \
+documentation below.
+
+## Documentation
+
+{bundle}
+
+---
+
+## Task
+
+{task}
+
+Output ONLY the script — a single Python file's contents, no prose, no \
+explanation, no markdown fences.
+"""
+
 JUDGE_PROMPT = """\
 You are a senior engineer reviewing a script written by a weaker model that had \
 ONLY documentation to work from. Judge the script against the ground truth \

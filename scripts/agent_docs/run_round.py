@@ -108,6 +108,11 @@ def _print_round(row: dict, prev: dict | None) -> None:
 @click.option("--gen-model", default="sonnet", help="Doc generation model.")
 @click.option("--review-model", default="sonnet", help="Judge model.")
 @click.option("--coder-model", default="sonnet", help="Coder model (writes scripts; reads a few files, no execution).")
+@click.option(
+    "--coder-files/--no-coder-files",
+    default=True,
+    help="Coder may read a few files (default) vs docs-only (no tools).",
+)
 @click.option("--gen-budget-usd", default=10.0, type=float, help="Agentic generation spend cap (API-equivalent).")
 @click.option("--expdir", type=click.Path(), default=str(DEFAULT_EXPDIR), help="Experiment root dir.")
 @click.option("-v", "--verbose", is_flag=True)
@@ -120,6 +125,7 @@ def main(
     gen_model: str,
     review_model: str,
     coder_model: str,
+    coder_files: bool,
     gen_budget_usd: float,
     expdir: str,
     verbose: bool,
@@ -156,7 +162,7 @@ def main(
 
     results = []
     for probe in selected:
-        result = score_probe(probe, docs_dir, coder_model, review_model)
+        result = score_probe(probe, docs_dir, coder_model, review_model, read_files=coder_files)
         write_probe_artifacts(result, eval_dir)
         results.append(result)
     summary = write_summary(results, eval_dir, coder_model, review_model)
@@ -167,6 +173,7 @@ def main(
         "gen_model": "(reused)" if reuse_docs else gen_model,
         "review_model": review_model,
         "coder_model": coder_model,
+        "coder_files": coder_files,
         "docs_dir": str(docs_dir),
         "mean_rubric_acc": summary["mean_rubric_acc"],
         "mean_quality": summary["mean_quality"],

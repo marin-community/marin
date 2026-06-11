@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agent_docs.claude_cli import generate_json, run_agent_json, strip_markdown_fences
 from agent_docs.probes import PROBES, Probe
-from agent_docs.prompts import CODER_PROMPT, JUDGE_PROMPT
+from agent_docs.prompts import CODER_PROMPT, CODER_PROMPT_DOCS_ONLY, JUDGE_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,7 @@ CODER_SYSTEM_PROMPT = (
     "Lead with the provided docs; open at most a few files only to confirm details. "
     "Your final message must be only the script."
 )
+CODER_SYSTEM_PROMPT_DOCS_ONLY = "You are writing Python scripts for the Marin monorepo. Output only code."
 JUDGE_SYSTEM_PROMPT = "You are a senior engineer reviewing code. Output only the requested JSON."
 
 PROBES_BY_ID = {p.id: p for p in PROBES}
@@ -134,22 +135,33 @@ def build_bundle(probe: Probe, docs_dir: Path) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def run_coder(bundle: str, probe: Probe, model: str) -> CoderResult:
-    """Ask the budget-limited coder to write the probe's script.
+def run_coder(bundle: str, probe: Probe, model: str, *, read_files: bool) -> CoderResult:
+    """Ask the coder to write the probe's script.
 
-    The coder leads with the doc bundle but may open a few files (read-only)
-    under CODER_MAX_BUDGET_USD; it cannot execute anything. This measures how
-    well the docs route a capable agent to the right source within a tight budget.
+    With ``read_files`` (the default regime), the coder leads with the doc bundle
+    but may open a few files (read-only) under CODER_MAX_BUDGET_USD — measuring how
+    well the docs route a capable agent. With ``read_files=False`` it gets no tools
+    at all, so its output depends only on the docs — used to measure doc content
+    quality in isolation (e.g. agentic vs mechanical content). It never executes.
     """
-    prompt = CODER_PROMPT.format(bundle=bundle, task=probe.prompt)
-    data = run_agent_json(
-        prompt,
-        model=model,
-        allowed_tools=CODER_ALLOWED_TOOLS,
-        cwd=str(REPO_ROOT),
-        system_prompt=CODER_SYSTEM_PROMPT,
-        max_budget_usd=CODER_MAX_BUDGET_USD,
-    )
+    if read_files:
+        prompt = CODER_PROMPT.format(bundle=bundle, task=probe.prompt)
+        data = run_agent_json(
+            prompt,
+            model=model,
+            allowed_tools=CODER_ALLOWED_TOOLS,
+            cwd=str(REPO_ROOT),
+            system_prompt=CODER_SYSTEM_PROMPT,
+            max_budget_usd=CODER_MAX_BUDGET_USD,
+        )
+    else:
+        prompt = CODER_PROMPT_DOCS_ONLY.format(bundle=bundle, task=probe.prompt)
+        data = generate_json(
+            prompt,
+            model=model,
+            system_prompt=CODER_SYSTEM_PROMPT_DOCS_ONLY,
+            disable_tools=True,
+        )
     script = strip_markdown_fences(data.get("result", ""))
     usage = data.get("usage", {})
     return CoderResult(
@@ -204,11 +216,13 @@ def run_judge(script: str, probe: Probe, model: str) -> JudgeResult:
     )
 
 
-def score_probe(probe: Probe, docs_dir: Path, gen_model: str, review_model: str) -> ProbeResult:
+def score_probe(
+    probe: Probe, docs_dir: Path, gen_model: str, review_model: str, *, read_files: bool = True
+) -> ProbeResult:
     """Run one probe end to end: bundle -> coder -> judge -> scores."""
     bundle = build_bundle(probe, docs_dir)
     logger.info("Probe %s: bundle %d chars; asking %s for a script...", probe.id, len(bundle), gen_model)
-    coder = run_coder(bundle, probe, gen_model)
+    coder = run_coder(bundle, probe, gen_model, read_files=read_files)
 
     logger.info("Probe %s: reviewing with %s...", probe.id, review_model)
     judge = run_judge(coder.script, probe, review_model)
@@ -326,6 +340,11 @@ def print_probe_list() -> None:
 @click.option("--list", "list_probes", is_flag=True, help="List the 10 probes and exit (no API calls).")
 @click.option("--gen-model", default="sonnet", help="Coder model (writes scripts; reads a few files, no execution).")
 @click.option("--review-model", default="sonnet", help="Judge model (reviews scripts).")
+@click.option(
+    "--read-files/--no-read-files",
+    default=True,
+    help="Coder may read a few files (default) vs docs-only (no tools).",
+)
 @click.option("--output-dir", type=click.Path(), default=None, help="Where artifacts go (required unless --list).")
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging.")
 def main(
@@ -334,6 +353,7 @@ def main(
     list_probes: bool,
     gen_model: str,
     review_model: str,
+    read_files: bool,
     output_dir: str | None,
     verbose: bool,
 ) -> None:
@@ -364,7 +384,7 @@ def main(
 
     results: list[ProbeResult] = []
     for probe in selected:
-        result = score_probe(probe, docs_path, gen_model, review_model)
+        result = score_probe(probe, docs_path, gen_model, review_model, read_files=read_files)
         write_probe_artifacts(result, out)
         results.append(result)
 
