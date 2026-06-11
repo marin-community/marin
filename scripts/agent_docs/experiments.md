@@ -112,3 +112,78 @@ Remaining limiters (next levers):
 - **Internal-symbol understand-probes.** P4/P5/P10 anchor on private internals
   (`_reconcile_tick`, Rust store fns, `_invalidate`) that a doc would not name;
   they under-measure doc quality and should be re-scoped to public concepts.
+
+## R10: Judge fairness fixes (re-eval of R9 docs)
+
+Same R9 docs, fixed judge: intent-aware anchor scoring (USE = used in code;
+UNDERSTAND = named/referenced/explained), `foo`/`foo_step` builder-variant
+equivalence, recalibrated 1-5 quality rubric, PASS = rubric_acc ≥ 0.8 AND no
+hallucination (quality demoted to a secondary signal). Result: **0.23 → 0.26**
+rubric, quality 1.3 → 1.70. The key finding was qualitative: the judge is
+**high-precision, not over-flagging** — every hallucination flag was a real
+fabrication the (then haiku, tool-less) coder invented because the doc never
+surfaced the right symbol (`ControllerServiceClientSync`→`ControllerClient`;
+`DistributedConfig` fields jammed onto `TrainerConfig`). Root cause = doc
+content, not judging.
+
+## R11: Architecture docs name internal edit-site seams
+
+A separate architecture-only digest that also surfaces private methods on public
+classes + private module-level functions (marked `internal`), plus an
+ARCHITECTURE_PROMPT that must name the exact edit-site symbol. **0.26 → 0.39**
+rubric, quality 2.10, first PASS (P8). Big understand-probe gains (P7 2/4→4/4,
+P10 0/4→3/4). Validity caveat discovered: UNDERSTAND scores are partly inflated
+by **prompt-vocabulary leakage** — a coder can echo the prompt's words
+("resolver", "invalidation") into comments and the intent-aware judge credits
+them; the *non-obvious* anchors (`LogServiceProxy`) are the real discriminators.
+This is the last round of the old "haiku, no tools" coder regime.
+
+## Coder regime change (per request, R12+)
+
+The coder became a realistic agent: **sonnet that may open ~3 files** (read-only
+Read/Grep/Glob, no execution) under a tight $0.30 cap (no `--max-turns` flag
+exists; the dollar cap bounds exploration). This reframes the metric from
+"docs in isolation" to "how well docs ROUTE a capable, budget-limited agent."
+A new metric, **mean coder spend**, is tracked since rubric accuracy can saturate
+when the agent reads source.
+
+## The 2×2 + ablation (fixed sonnet model, R12–R17)
+
+These six rounds vary only doc-method and coder file-access:
+
+| docs | +files coder | docs-only coder |
+|------|:---:|:---:|
+| mechanical (R11) | R12: **0.66** | R15: **0.43** |
+| agentic ($4.71 gen) | R13: **0.64** | R17: **0.26** |
+| none | R14: **0.72** | R16: **0.12** (floor) |
+
+Key reads:
+- **Docs' value is conditional on file access.** Docs-only: mechanical docs give
+  **+0.31** (0.12 → 0.43). File-reading: docs give **~0** (0.66 vs 0.72, within
+  noise) — the agent recovers the symbols by reading code.
+- **Mechanical beats agentic.** Tied with files (0.66 vs 0.64) but mechanical is
+  clearly better docs-only (**0.43 vs 0.26**): the signature-dense mechanical
+  docs carry exact import paths + defaults a doc-only coder needs, while the
+  agentic docs read as narrative. Agentic generation cost $4.71/round for no win.
+- **Floor (R16 = 0.12):** with neither docs nor file access, only P9 (levanter,
+  JAX/distributed priors) and P8 scored — Marin's internal APIs aren't in
+  parametric knowledge, so docs/source are genuinely necessary.
+- **P4 (iris reconcile loop) is the hard case:** 0/4 with any doc, but 2/4 for
+  the no-docs file-reading coder (R14) which read `controller.py` directly.
+
+## Conclusions
+
+1. **Ship the cheap mechanical generator.** Agentic doc generation is grounded
+   and reads well but never wins: tied with files, *worse* doc-only (0.26 vs
+   0.43), at ~$4.71/round vs ~free.
+2. **Budgeted 1000-token two-axis docs work**, and the highest-value levers are
+   breadth-first `ops.md` (entry-point index) and an `architecture.md` that names
+   concrete edit-site symbols including internal seams. Keep docs signature-dense.
+3. **Docs primarily serve doc-only / weak / orientation use** (+0.31 there).
+   For agents that read source under a budget, docs are roughly neutral on
+   correctness; their value is speed/orientation, which this eval does not
+   measure. The realistic agent reads code regardless.
+4. **Eval caveats** for any follow-up: single-run variance (~±0.05–0.08);
+   UNDERSTAND prompts leak some anchor vocabulary; the eval rewards recovering
+   source symbols, which structurally favors file-reading agents; Rust non-`pub`
+   internals (P5) aren't in the digest (parser only captures `pub`).
