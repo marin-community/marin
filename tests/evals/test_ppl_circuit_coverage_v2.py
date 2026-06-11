@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterable
 
 from experiments.evals.ppl_circuit_coverage_v2 import (
     PPL_CIRCUIT_COVERAGE_V2_SLICES,
+    PplCircuitCoverageV2TaskTier,
     _generate_borrow_subtraction,
     iter_ppl_circuit_coverage_v2_plain_text_documents,
     iter_ppl_circuit_coverage_v2_records,
@@ -328,6 +329,13 @@ EXPECTED_TARGET_BY_TASK: dict[str, ExpectedTarget] = {
     "outline_indentation": _expected_outline_indentation,
 }
 
+EXTENDED_TASKS = {
+    "brainfuck_lite",
+    "finite_automata",
+    "regex_lite",
+    "turtle_commands",
+}
+
 
 def test_registry_points_all_slices_at_target_only_supervised_fields():
     datasets = ppl_circuit_coverage_v2_raw_validation_sets()
@@ -340,6 +348,16 @@ def test_registry_points_all_slices_at_target_only_supervised_fields():
         assert "loss:target_only" in dataset.tags
         assert f"family:{slice_.family.value}" in dataset.tags
         assert f"task:{slice_.task_name}" in dataset.tags
+        assert f"task_tier:{slice_.task_tier.value}" in dataset.tags
+
+
+def test_task_tiers_separate_reflexive_core_from_interpreter_stress_tasks():
+    tiers_by_task = {slice_.task_name: slice_.task_tier for slice_ in PPL_CIRCUIT_COVERAGE_V2_SLICES}
+
+    assert {task for task, tier in tiers_by_task.items() if tier == PplCircuitCoverageV2TaskTier.EXTENDED} == (
+        EXTENDED_TASKS
+    )
+    assert all(tier in PplCircuitCoverageV2TaskTier for tier in tiers_by_task.values())
 
 
 def test_records_are_deterministic_compact_completion_prompts():
@@ -352,6 +370,7 @@ def test_records_are_deterministic_compact_completion_prompts():
         assert not any(marker in str(row["input"]) for marker in SCAFFOLD_MARKERS)
         assert str(row["output"]).endswith("\n")
         assert not str(row["input"]).endswith(str(row["output"]))
+        assert f"task_tier:{row['metadata']['task_tier']}" in row["tags"]
 
 
 def test_string_slicing_prompt_keeps_demonstrations_complete_and_query_completion_only():
@@ -419,5 +438,8 @@ def test_plain_text_stream_respects_budget_and_keeps_task_variety():
 
     assert sum(int(document["estimated_tokens"]) for document in documents) >= 2500
     assert len({document["task"] for document in documents}) > 1
+    assert {document["task_tier"] for document in documents}.issubset(
+        {tier.value for tier in PplCircuitCoverageV2TaskTier}
+    )
     assert all(str(document["text"]).endswith("\n") for document in documents)
     assert not any(marker in str(document["text"]) for document in documents for marker in SCAFFOLD_MARKERS)

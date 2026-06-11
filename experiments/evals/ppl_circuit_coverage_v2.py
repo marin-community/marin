@@ -49,10 +49,16 @@ class PplCircuitCoverageV2Family(StrEnum):
     FORMAT_STYLE_INSTRUCTION = "format_style_instruction"
 
 
+class PplCircuitCoverageV2TaskTier(StrEnum):
+    CORE = "core"
+    EXTENDED = "extended"
+
+
 @dataclass(frozen=True)
 class PplCircuitCoverageV2Slice:
     family: PplCircuitCoverageV2Family
     task_name: str
+    task_tier: PplCircuitCoverageV2TaskTier = PplCircuitCoverageV2TaskTier.CORE
 
     @property
     def registry_key(self) -> str:
@@ -70,6 +76,7 @@ class PplCircuitCoverageV2Slice:
             f"issue:{PPL_CIRCUIT_COVERAGE_V2_ISSUE}",
             f"family:{self.family.value}",
             f"task:{self.task_name}",
+            f"task_tier:{self.task_tier.value}",
             f"seed:{PPL_CIRCUIT_COVERAGE_V2_SEED}",
             f"examples:{EXAMPLES_PER_CONFIG}",
             f"source:{PPL_CIRCUIT_COVERAGE_V2_SOURCE}",
@@ -90,8 +97,9 @@ def _slice(
     *,
     family: PplCircuitCoverageV2Family,
     task_name: str,
+    task_tier: PplCircuitCoverageV2TaskTier = PplCircuitCoverageV2TaskTier.CORE,
 ) -> PplCircuitCoverageV2Slice:
-    return PplCircuitCoverageV2Slice(family=family, task_name=task_name)
+    return PplCircuitCoverageV2Slice(family=family, task_name=task_name, task_tier=task_tier)
 
 
 PPL_CIRCUIT_COVERAGE_V2_SLICES: tuple[PplCircuitCoverageV2Slice, ...] = (
@@ -115,10 +123,26 @@ PPL_CIRCUIT_COVERAGE_V2_SLICES: tuple[PplCircuitCoverageV2Slice, ...] = (
     _slice(family=PplCircuitCoverageV2Family.STRUCTURED_SERIALIZATION, task_name="json_field_reemit"),
     _slice(family=PplCircuitCoverageV2Family.STRUCTURED_SERIALIZATION, task_name="csv_tsv_transforms"),
     _slice(family=PplCircuitCoverageV2Family.STATE_MACHINES, task_name="stack_push_pop"),
-    _slice(family=PplCircuitCoverageV2Family.STATE_MACHINES, task_name="finite_automata"),
-    _slice(family=PplCircuitCoverageV2Family.STATE_MACHINES, task_name="turtle_commands"),
-    _slice(family=PplCircuitCoverageV2Family.STATE_MACHINES, task_name="regex_lite"),
-    _slice(family=PplCircuitCoverageV2Family.STATE_MACHINES, task_name="brainfuck_lite"),
+    _slice(
+        family=PplCircuitCoverageV2Family.STATE_MACHINES,
+        task_name="finite_automata",
+        task_tier=PplCircuitCoverageV2TaskTier.EXTENDED,
+    ),
+    _slice(
+        family=PplCircuitCoverageV2Family.STATE_MACHINES,
+        task_name="turtle_commands",
+        task_tier=PplCircuitCoverageV2TaskTier.EXTENDED,
+    ),
+    _slice(
+        family=PplCircuitCoverageV2Family.STATE_MACHINES,
+        task_name="regex_lite",
+        task_tier=PplCircuitCoverageV2TaskTier.EXTENDED,
+    ),
+    _slice(
+        family=PplCircuitCoverageV2Family.STATE_MACHINES,
+        task_name="brainfuck_lite",
+        task_tier=PplCircuitCoverageV2TaskTier.EXTENDED,
+    ),
     _slice(family=PplCircuitCoverageV2Family.FORMAT_STYLE_INSTRUCTION, task_name="markdown_table_padding"),
     _slice(family=PplCircuitCoverageV2Family.FORMAT_STYLE_INSTRUCTION, task_name="line_wrapping"),
     _slice(family=PplCircuitCoverageV2Family.FORMAT_STYLE_INSTRUCTION, task_name="outline_indentation"),
@@ -155,6 +179,7 @@ def _record(
         "tags": list(slice_.tags),
         "metadata": {
             "family": slice_.family.value,
+            "task_tier": slice_.task_tier.value,
             "row_index": row_index,
             "generator": PPL_CIRCUIT_COVERAGE_V2_SOURCE,
             "eval_only": True,
@@ -1382,6 +1407,7 @@ def iter_ppl_circuit_coverage_v2_plain_text_documents(
                 "source": PLAIN_TEXT_PRETRAINING_SOURCE,
                 "family": slice_.family.value,
                 "task": slice_.task_name,
+                "task_tier": slice_.task_tier.value,
                 "seed": seed,
                 "supervised_record_id": record["id"],
             }
