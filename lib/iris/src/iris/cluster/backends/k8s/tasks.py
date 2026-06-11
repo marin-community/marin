@@ -35,7 +35,13 @@ from rigging.timing import Timestamp
 from iris.cluster.backends.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.backends.k8s.coreweave_topology import CW_LABEL_LEAFGROUP, CW_LABEL_NVLINK_DOMAIN
 from iris.cluster.backends.k8s.service import K8sService
-from iris.cluster.backends.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity
+from iris.cluster.backends.k8s.types import (
+    K8sResource,
+    KubectlError,
+    KubectlLogLine,
+    parse_k8s_quantity,
+    parse_k8s_timestamp,
+)
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.backend import (
     BackendReconcileInput,
@@ -884,7 +890,7 @@ def _build_pod_statuses(pods: list[dict]) -> list[controller_pb2.Controller.Kube
                     last_transition_str = cond.get("lastTransitionTime", "")
                     if last_transition_str:
                         try:
-                            dt = datetime.fromisoformat(last_transition_str.replace("Z", "+00:00"))
+                            dt = parse_k8s_timestamp(last_transition_str)
                             last_ts = Timestamp.from_seconds(dt.timestamp())
                         except (ValueError, AttributeError):
                             pass
@@ -1809,7 +1815,7 @@ class K8sTaskProvider:
                 created = meta.get("creationTimestamp", "")
                 if not created:
                     continue
-                ts = datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
+                ts = parse_k8s_timestamp(created).timestamp()
                 task_hash = meta.get("labels", {}).get(_LABEL_TASK_HASH)
                 pod_group = meta.get("labels", {}).get(_KUEUE_POD_GROUP_NAME)
                 # Gang sweep: a deletionTimestamp means a prior delete is
