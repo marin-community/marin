@@ -83,7 +83,61 @@ OVERVIEW_FILES_LIMIT = 12
 # (Controller, Trainer) has dozens of methods; without a cap one class block
 # would consume the whole reference budget, starving every other edit site.
 MAX_METHODS_PER_CLASS = 6
-MAX_INTERNAL_PER_CLASS = 4
+MAX_INTERNAL_PER_CLASS = 8
+
+# Ops entry-index ranking: prefer the most likely-to-be-called symbols project
+# wide, capped per package so one package can't dominate the index.
+OPS_MAX_PER_PACKAGE = 5
+_OPS_VERB_HINTS = (
+    "submit",
+    "launch",
+    "run",
+    "create",
+    "build",
+    "connect",
+    "make",
+    "register",
+    "start",
+    "main",
+    "load",
+    "open",
+    "download",
+    "train",
+    "eval",
+    "query",
+    "write",
+    "read",
+    "publish",
+    "deploy",
+)
+_OPS_CLASS_SUFFIXES = ("config", "client", "spec", "request", "builder", "step", "task", "handler", "server")
+
+# Control-flow / lifecycle name hints. The architecture edit-site half ranks
+# these methods first: the load-bearing seams an architecture doc must name are
+# the loops, ticks, reconcile/sync/dispatch routines — NOT whatever happens to
+# come first in source order (R21 surfaced `_run_scheduling_loop` but dropped the
+# real reconcile loop `_run_polling_loop`, so the coder grabbed the wrong one).
+_CONTROL_FLOW_HINTS = (
+    "run",
+    "loop",
+    "tick",
+    "reconcile",
+    "poll",
+    "reap",
+    "sync",
+    "schedul",
+    "plan",
+    "find",
+    "assign",
+    "select",
+    "step",
+    "dispatch",
+    "resolve",
+    "compact",
+    "flush",
+    "evict",
+    "heartbeat",
+)
 
 _WS = re.compile(r"\s+")
 
@@ -91,6 +145,23 @@ _WS = re.compile(r"\s+")
 def _norm_sig(sig: str) -> str:
     """Collapse a possibly multi-line tree-sitter signature onto one line."""
     return _WS.sub(" ", sig).strip()
+
+
+def _is_control_flow(name: str) -> bool:
+    n = name.lower().lstrip("_")
+    return any(h in n for h in _CONTROL_FLOW_HINTS)
+
+
+def _ops_score(name: str, is_class: bool, depth: int) -> float:
+    """Heuristic importance of an entry point for the ops index (higher = surface first)."""
+    n = name.lower()
+    score = 0.0
+    if is_class and any(n.endswith(s) for s in _OPS_CLASS_SUFFIXES):
+        score += 3.0
+    if any(h in n for h in _OPS_VERB_HINTS):
+        score += 2.0
+    score -= depth * 0.2  # symbols closer to a package root are usually the API surface
+    return score
 
 
 def _strip_preamble(text: str) -> str:
@@ -135,18 +206,6 @@ def _public_classes(pkg: PackageInfo) -> list[ClassInfo]:
     return [c for c in pkg.classes if c.is_public]
 
 
-def _round_robin(per_group: list[list[str]]) -> list[str]:
-    """Interleave per-group line lists so every group is represented before any
-    group's long tail — this is how the reference half gets BREADTH across the
-    sub-project's many packages instead of exhausting one package first."""
-    out: list[str] = []
-    for i in range(max((len(g) for g in per_group), default=0)):
-        for group in per_group:
-            if i < len(group):
-                out.append(group[i])
-    return out
-
-
 def _trim_to_budget(header: str, lines: list[str], budget: int) -> str:
     """Keep ``lines`` (in priority order) under ``header`` within ``budget`` tokens.
 
@@ -181,37 +240,59 @@ def render_important_files(packages: dict[str, PackageInfo], names: list[str], b
 
 
 def render_entry_index(packages: dict[str, PackageInfo], names: list[str], budget: int) -> str:
-    """REFERENCE half for the ops axis: entry-point signatures, breadth-first.
+    """REFERENCE half for the ops axis: entry-point signatures, importance-ranked.
 
     Class constructors and top-level functions across the WHOLE sub-project, with
-    full signatures + default values, interleaved across packages for coverage.
+    full signatures + default values. Ranked by an importance heuristic (verbs
+    like submit/run/connect, Config/Client/Spec suffixes, shallower paths) and
+    capped per package, so the load-bearing entry points surface first instead of
+    being buried by a pure breadth-first round-robin (which buried them in R21).
     """
-    per_pkg: list[list[str]] = []
+    scored: list[tuple[float, str]] = []
     for name in sorted(names):
         pkg = packages[name]
-        entries: list[str] = []
+        depth = name.count(".")
+        cand: list[tuple[float, str]] = []
         for c in _public_classes(pkg):
             ctor = next((m for m in c.methods if m.name == "__init__"), None)
             sig = _norm_sig(ctor.signature) if ctor else "()"
-            entries.append(f"- `{c.qualified_name}{sig}` ({_rel(c.file_path)}:{c.line_number})")
+            line = f"- `{c.qualified_name}{sig}` ({_rel(c.file_path)}:{c.line_number})"
+            cand.append((_ops_score(c.name, True, depth), line))
         for f in _public_funcs(pkg):
-            entries.append(f"- `{f.qualified_name}{_norm_sig(f.signature)}` ({_rel(f.file_path)}:{f.line_number})")
-        if entries:
-            per_pkg.append(entries)
-    return _trim_to_budget("### Entry-point index (signatures, breadth-first)", _round_robin(per_pkg), budget)
+            line = f"- `{f.qualified_name}{_norm_sig(f.signature)}` ({_rel(f.file_path)}:{f.line_number})"
+            cand.append((_ops_score(f.name, False, depth), line))
+        cand.sort(key=lambda sl: -sl[0])
+        scored.extend(cand[:OPS_MAX_PER_PACKAGE])
+    scored.sort(key=lambda sl: -sl[0])
+    return _trim_to_budget("### Entry-point index (signatures, importance-ranked)", [ln for _, ln in scored], budget)
+
+
+def _pick_methods(methods: list[FunctionInfo], cap: int) -> list[FunctionInfo]:
+    """Pick up to ``cap`` methods, control-flow/lifecycle names first then source order."""
+    ordered = sorted(enumerate(methods), key=lambda im: (not _is_control_flow(im[1].name), im[0]))
+    return [m for _, m in ordered[:cap]]
 
 
 def _edit_site_class(cls: ClassInfo) -> str:
-    """One compact edit-site block: ctor + a few public + a few internal methods."""
+    """One compact edit-site block: ctor + key public + key internal methods.
+
+    Methods are selected control-flow-first (loops, ticks, reconcile/dispatch) so
+    the real architectural seam is surfaced rather than whatever is declared first.
+    """
     ctor = next((m for m in cls.methods if m.name == "__init__"), None)
     sig = _norm_sig(ctor.signature) if ctor else "()"
     head = f"- class `{cls.qualified_name}{sig}` ({_rel(cls.file_path)}:{cls.line_number})"
-    pub = [m for m in cls.methods if m.is_public][:MAX_METHODS_PER_CLASS]
-    internal = [m for m in cls.methods if not m.is_public and m.name != "__init__"][:MAX_INTERNAL_PER_CLASS]
+    pub = _pick_methods([m for m in cls.methods if m.is_public], MAX_METHODS_PER_CLASS)
+    privates = [m for m in cls.methods if not m.is_public and m.name != "__init__"]
+    internal = _pick_methods(privates, MAX_INTERNAL_PER_CLASS)
     lines = [head]
     lines += [f"    - `{m.name}{_norm_sig(m.signature)}`" for m in pub]
     lines += [f"    - internal `{m.name}{_norm_sig(m.signature)}`" for m in internal]
     return "\n".join(lines)
+
+
+def _control_flow_count(cls: ClassInfo) -> int:
+    return sum(1 for m in cls.methods if m.name != "__init__" and _is_control_flow(m.name))
 
 
 def _internal_method_count(cls: ClassInfo) -> int:
@@ -221,11 +302,12 @@ def _internal_method_count(cls: ClassInfo) -> int:
 def render_edit_sites(packages: dict[str, PackageInfo], names: list[str], budget: int) -> str:
     """REFERENCE half for the architecture axis: edit seams incl. internals.
 
-    Classes (ctor + a few public + a few internal methods) and internal
-    module-level functions — the places behavior is actually implemented and
-    changed. Classes that HAVE internal seams come first (those are the real edit
-    sites), then by total method count; each class block is method-capped so one
-    god-class cannot starve the rest of the budget.
+    Classes (ctor + key public + key internal methods) and internal module-level
+    functions — where behavior is actually implemented and changed. Classes are
+    ranked by how many control-flow/lifecycle methods they carry (the real edit
+    sites), then by internal-method count; each block is method-capped so one
+    god-class cannot starve the budget. Internal module funcs matching a
+    control-flow name come first among the trailing functions.
     """
     classes: list[ClassInfo] = []
     internal_funcs: list[FunctionInfo] = []
@@ -233,7 +315,8 @@ def render_edit_sites(packages: dict[str, PackageInfo], names: list[str], budget
         pkg = packages[name]
         classes += _public_classes(pkg)
         internal_funcs += [f for f in pkg.functions if not f.is_public and not f.name.startswith("__")]
-    classes.sort(key=lambda c: (-_internal_method_count(c), -len(c.methods)))
+    classes.sort(key=lambda c: (-_control_flow_count(c), -_internal_method_count(c), -len(c.methods)))
+    internal_funcs.sort(key=lambda f: not _is_control_flow(f.name))
     lines = [_edit_site_class(c) for c in classes]
     lines += [
         f"- internal `{f.qualified_name}{_norm_sig(f.signature)}` ({_rel(f.file_path)}:{f.line_number})"
