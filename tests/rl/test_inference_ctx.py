@@ -23,6 +23,7 @@ from marin.rl.environments.inference_ctx import (
     vLLMInferenceContextConfig,
 )
 from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
+from marin.rl.environments.inference_ctx.render import Llama3Renderer
 from marin.rl.environments.inference_ctx.vllm import InferenceMode
 from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
@@ -575,6 +576,17 @@ def test_vllm_inference_context_uses_canonical_model_name(monkeypatch):
     assert ctx.model_name == "gs://marin-us-central1/models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f"
     assert ctx.canonical_model_name == "meta-llama/Llama-3.1-8B-Instruct"
     assert ctx.renderer == "meta-llama/Llama-3.1-8B-Instruct"
+
+
+def test_delphi_checkpoints_use_llama3_renderer_and_qwen_weight_mapping(llama3_tokenizer):
+    # Delphi HF exports are Qwen3-architecture but chat with the marin/Llama-3 template.
+    model_id = "laion/delphi-9e19-p33m67-coldstart-magpie_lr1e5"
+
+    renderer = vLLMInferenceContext._get_renderer(model_id, llama3_tokenizer)
+    assert isinstance(renderer, Llama3Renderer)
+
+    assert "model.layers.*.self_attn.q_norm" in MODEL_MAPPINGS[model_id]
+    assert "q_proj" in MODEL_TRANSPOSE_KEYS[model_id]
 
 
 def test_vllm_sync_engine_receives_kv_cache_metrics_flag(monkeypatch):

@@ -111,7 +111,8 @@ def _infer_mapping(model_name: str) -> dict:
     """Infer the vLLM mapping for a model name, falling back to substring matching."""
     if model_name in _MODEL_MAPPINGS:
         return _MODEL_MAPPINGS[model_name]
-    if "Qwen2.5" in model_name:
+    # Delphi checkpoints are Qwen3-architecture HF exports.
+    if "Qwen2.5" in model_name or "delphi" in model_name.lower():
         return levanter_qwen_to_vllm_mapping()
     raise KeyError(f"No MODEL_MAPPING registered for model: {model_name}")
 
@@ -120,7 +121,7 @@ def _infer_transpose_keys(model_name: str) -> dict:
     """Infer the transpose keys for a model name, falling back to substring matching."""
     if model_name in _MODEL_TRANSPOSE_KEYS:
         return _MODEL_TRANSPOSE_KEYS[model_name]
-    if "Qwen2.5" in model_name:
+    if "Qwen2.5" in model_name or "delphi" in model_name.lower():
         return llama_transpose_keys
     raise KeyError(f"No MODEL_TRANSPOSE_KEYS registered for model: {model_name}")
 

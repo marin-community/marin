@@ -58,7 +58,7 @@ LLAMA_3_1_8B_INSTRUCT = ModelConfig(
 )
 
 
-def _default_rl_loss() -> RLOOLoss:
+def default_math500_rl_loss() -> RLOOLoss:
     return RLOOLoss(
         kl=KLConfig(mode=KLMode.NONE, beta=0.0),
         clip_epsilon_low=0.2,
@@ -224,7 +224,7 @@ def build_experiment_config(args: argparse.Namespace) -> RLExperimentConfig:
 
     return RLExperimentConfig(
         model_config=LLAMA_3_1_8B_INSTRUCT,
-        rl_loss=_default_rl_loss(),
+        rl_loss=default_math500_rl_loss(),
         experiment_name_suffix=args.experiment_name_suffix,
         project_name=args.project_name,
         tags=tags,
