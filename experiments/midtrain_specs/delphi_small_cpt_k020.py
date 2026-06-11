@@ -1,9 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Midtraining sweep for Delphi bases 3e18 -> 3e20 at K=0.20.
+"""Delphi CPT midtraining launcher across the 3e18 -> 1e22 ladder.
 
-Sweep shape: 7 bases x 3 mixes x 4 LR factors = 84 cells.
+Budget: defaults to K=0.20 of each base's own pretrain tokens
+(``pretrain_fraction(0.20)``, iso-FLOP — bigger bases get more tokens). Pass
+``--budget-tokens N`` for a fixed math-token budget shared across every base
+(iso-token ladder: ``num_train_steps = round(N / (batch_size * 4096))`` per
+base). The cell id then carries ``tok<label>`` (e.g. ``tok1b``) instead of
+``k0p20`` so iso-token and K=0.20 runs never collide.
 
 Mode: CPT — `initialize_from_hf: <repo>@<revision>`. Each base streams its
 HF weights directly via Levanter's `RepoRef.from_string` path (free
@@ -52,6 +57,7 @@ from marin.midtraining import (
     build_launch_request,
     build_manifest_row,
     build_run_identity,
+    default_budget_label,
     preflight,
     resolve_midtrain_spec,
     submit_launch,
@@ -61,6 +67,8 @@ from marin.midtraining import (
 )
 
 from experiments.delphi_models import (
+    DELPHI_1E21,
+    DELPHI_1E22,
     DELPHI_2E19,
     DELPHI_2E20,
     DELPHI_3E18,
@@ -92,6 +100,8 @@ BASES: dict[str, DelphiModel] = {
     "9e19": DELPHI_9E19,
     "2e20": DELPHI_2E20,
     "3e20": DELPHI_3E20,
+    "1e21": DELPHI_1E21,
+    "1e22": DELPHI_1E22,
 }
 
 LR_FACTORS: tuple[float, ...] = (0.33, 0.5, 0.67, 0.83)
@@ -107,6 +117,8 @@ DEFAULT_TPU: dict[str, str] = {
     "9e19": "v5p-16",
     "2e20": "v5p-32",
     "3e20": "v5p-16",
+    "1e21": "v5p-64",
+    "1e22": "v5p-256",
 }
 
 # Per-base TPU allowlist. Picking a size outside this set fails preflight so
@@ -121,9 +133,11 @@ ALLOWED_TPUS_PER_BASE: dict[str, frozenset[str]] = {
     "9e18": frozenset({"v5p-8", "v5p-16", "v6e-4", "v6e-8"}),
     "2e19": frozenset({"v5p-8", "v5p-16", "v6e-4", "v6e-8"}),
     "3e19": frozenset({"v5p-8", "v5p-16", "v5p-32", "v6e-4", "v6e-8"}),
-    "9e19": frozenset({"v5p-16", "v5p-32", "v5p-64", "v6e-8"}),
+    "9e19": frozenset({"v5p-8", "v5p-16", "v5p-32", "v5p-64", "v6e-8"}),
     "2e20": frozenset({"v5p-8", "v5p-16", "v5p-32", "v5p-64"}),
-    "3e20": frozenset({"v5p-16", "v5p-32", "v5p-64"}),
+    "3e20": frozenset({"v5p-8", "v5p-16", "v5p-32", "v5p-64"}),
+    "1e21": frozenset({"v5p-8", "v5p-16", "v5p-32", "v5p-64", "v5p-128", "v5p-256", "v5p-512"}),
+    "1e22": frozenset({"v5p-8", "v5p-16", "v5p-32", "v5p-64", "v5p-128", "v5p-256", "v5p-512"}),
 }
 
 # Identity env vars that the redesign doc forbids — run_id must come from
@@ -200,8 +214,10 @@ def _optimizer_config_for_base(base: DelphiModel, *, lr_factor: float) -> dict:
     return {"type": "adamH", **draccus.encode(cfg)}
 
 
-def _logical_cell_id(base_key: str, mix: str, lr_factor: float, *, run_suffix: str | None = None) -> str:
-    cell_id = f"delphi-{base_key}-{mix}-k0p20-lr{round(lr_factor * 100):02d}"
+def _logical_cell_id(
+    base_key: str, mix: str, lr_factor: float, *, budget_tag: str = "k0p20", run_suffix: str | None = None
+) -> str:
+    cell_id = f"delphi-{base_key}-{mix}-{budget_tag}-lr{round(lr_factor * 100):02d}"
     if run_suffix is None:
         return cell_id
     _check_run_suffix(run_suffix)
@@ -217,32 +233,51 @@ def build_spec(
     attempt: int = 1,
     run_suffix: str | None = None,
     probe_steps: int | None = None,
+    budget_tokens: int | None = None,
     ram: str = DEFAULT_CONTAINER_RAM,
+    per_device_parallelism: int = -1,
+    region: str = REGION,
+    child_preemptible: bool = True,
 ) -> MidtrainSpec:
-    """Construct a :class:`MidtrainSpec` for one cell of the sweep."""
+    """Construct a :class:`MidtrainSpec` for one cell of the sweep.
+
+    ``region`` sets the TPU compute region and the checkpoint output region. The
+    math/val data block is region-independent (it pins the us-east5 cache for the
+    byte-identical val carve-out), and CPT streams model weights from HF, so a
+    cross-region ``region`` only moves compute + checkpoints, not the model load.
+    """
     _check_selectors(base_key=base_key, mix=mix, lr_factor=lr_factor)
     _check_probe_args(run_suffix=run_suffix, probe_steps=probe_steps)
+    _check_budget_args(probe_steps=probe_steps, budget_tokens=budget_tokens)
     base = BASES[base_key]
     tpu = tpu_type or DEFAULT_TPU[base_key]
     _check_tpu_allowed(base_key, tpu)
-    cell_id = _logical_cell_id(base_key, mix, lr_factor, run_suffix=run_suffix)
+    budget_tag = f"tok{default_budget_label(budget_tokens)}" if budget_tokens is not None else "k0p20"
+    cell_id = _logical_cell_id(base_key, mix, lr_factor, budget_tag=budget_tag, run_suffix=run_suffix)
     run = build_run_identity(
         logical_cell_id=cell_id,
         attempt=attempt,
-        output_region_name=REGION,
+        output_region_name=region,
         wandb_project=WANDB_PROJECT,
     )
     return MidtrainSpec(
         base=base,
         run=run,
-        compute=ComputeProfile(tpu_type=tpu, batch_size=base.batch_size, ram=ram, regions=(REGION,)),
+        compute=ComputeProfile(
+            tpu_type=tpu,
+            batch_size=base.batch_size,
+            ram=ram,
+            per_device_parallelism=per_device_parallelism,
+            regions=(region,),
+            preemptible=child_preemptible,
+        ),
         mode=CptMode(
             init=CptInit(
                 source_kind=CheckpointSourceKind.HF_WEIGHTS,
                 hf_repo=base.hf_repo,
                 hf_revision=base.hf_revision,
             ),
-            budget=_budget_policy(probe_steps),
+            budget=_budget_policy(probe_steps, budget_tokens),
         ),
         tokenizer=LLAMA3_TOKENIZER,
         model_config=_model_config_for_base(base),
@@ -253,7 +288,8 @@ def build_spec(
         extra_tags=tuple(
             tag
             for tag in (
-                "sweep:delphi-small-cpt-k020",
+                "sweep:delphi-cpt-isotoken" if budget_tokens is not None else "sweep:delphi-small-cpt-k020",
+                f"budget:{budget_tag}" if budget_tokens is not None else None,
                 f"mix:{mix}",
                 f"run_suffix:{run_suffix}" if run_suffix else None,
                 "probe:throughput-hbm" if probe_steps is not None else None,
@@ -265,10 +301,12 @@ def build_spec(
     )
 
 
-def _budget_policy(probe_steps: int | None) -> BudgetPolicy:
-    if probe_steps is None:
-        return BUDGET
-    return BudgetPolicy.fixed_steps(probe_steps, label=f"probe{probe_steps}steps")
+def _budget_policy(probe_steps: int | None, budget_tokens: int | None) -> BudgetPolicy:
+    if probe_steps is not None:
+        return BudgetPolicy.fixed_steps(probe_steps, label=f"probe{probe_steps}steps")
+    if budget_tokens is not None:
+        return BudgetPolicy.fixed_tokens(budget_tokens, label=default_budget_label(budget_tokens))
+    return BUDGET
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +396,13 @@ def _check_probe_args(*, run_suffix: str | None, probe_steps: int | None) -> Non
         raise ValueError("probe_steps requires a run_suffix starting with 'probe-'")
 
 
+def _check_budget_args(*, probe_steps: int | None, budget_tokens: int | None) -> None:
+    if probe_steps is not None and budget_tokens is not None:
+        raise ValueError("Pass at most one of --probe-steps / --budget-tokens; they select different CPT budgets.")
+    if budget_tokens is not None and budget_tokens <= 0:
+        raise ValueError(f"budget_tokens must be positive, got {budget_tokens!r}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -391,6 +436,17 @@ def main(argv: list[str] | None = None) -> int:
         help="Container RAM for the TPU child. Defaults to 256g after 9e18/2e19 HF-save exit-137 OOMs.",
     )
     parser.add_argument(
+        "--per-device-parallelism",
+        type=int,
+        default=-1,
+        help=(
+            "Levanter trainer.per_device_parallelism (per-device microbatch; -1 = auto = "
+            "global_batch / num_devices). Set a small positive value to enable gradient "
+            "accumulation when the auto per-device batch is too large for the slice — e.g. "
+            "1e22 (batch 1024) on small slices overflows int32 activation indexing; use 16."
+        ),
+    )
+    parser.add_argument(
         "--run-suffix",
         default=None,
         help="Optional safe suffix appended before -aNNN in the W&B/run id, e.g. bench-v6e4.",
@@ -402,6 +458,38 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "Run a clearly tagged fixed-step hardware probe instead of the full K=0.20 budget. "
             "Requires --run-suffix probe-*."
+        ),
+    )
+    parser.add_argument(
+        "--budget-tokens",
+        type=int,
+        default=None,
+        help=(
+            "Iso-token CPT: train a fixed math-token budget shared across every base "
+            "(e.g. 1000000000 for 1B) instead of the default K=0.20 pretrain-fraction budget. "
+            "num_train_steps = round(budget_tokens / (batch_size * 4096)) per base. "
+            "The cell id carries tok<label> (e.g. tok1b). Mutually exclusive with --probe-steps."
+        ),
+    )
+    parser.add_argument(
+        "--region",
+        default=REGION,
+        help=(
+            "Compute + checkpoint-output region (default us-east5). The data block stays the "
+            "us-east5 cache (byte-identical val) and CPT loads the model from HF, so a cross-region "
+            "value only moves compute + checkpoints, not the model load. Use when the default region "
+            "is capacity/quota-blocked (e.g. --region us-central1)."
+        ),
+    )
+    parser.add_argument(
+        "--no-child-preempt",
+        dest="child_preemptible",
+        action="store_false",
+        default=True,
+        help=(
+            "Request the TPU child on non-preemptible (reserved) capacity instead of preemptible. "
+            "Use for long single runs that thrash on preemption-recovery (e.g. 9.7B 1e22), at the cost "
+            "of competing for scarcer reserved quota."
         ),
     )
     parser.add_argument("--dry-run", action="store_true", help="Plan only; no submission.")
@@ -420,11 +508,19 @@ def main(argv: list[str] | None = None) -> int:
         attempt=args.attempt,
         run_suffix=args.run_suffix,
         probe_steps=args.probe_steps,
+        budget_tokens=args.budget_tokens,
         ram=args.ram,
+        per_device_parallelism=args.per_device_parallelism,
+        region=args.region,
+        child_preemptible=args.child_preemptible,
     )
     resolved = resolve_midtrain_spec(spec)
-    validate_midtrain_spec(resolved)
-    report = preflight(resolved, allow_existing_matching_manifest=_is_iris_retry_attempt())
+    validate_midtrain_spec(resolved, allow_cross_region_data=args.region != REGION)
+    report = preflight(
+        resolved,
+        allow_existing_matching_manifest=_is_iris_retry_attempt(),
+        allow_cross_region_data=args.region != REGION,
+    )
     label = spec.run.run_id
     if not report.ok:
         print(f"FAIL {label}")

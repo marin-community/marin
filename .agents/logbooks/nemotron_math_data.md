@@ -6,6 +6,12 @@ why the math val set is byte-identical across scales, how the upstream
 dedup pipeline works, and how the tokenizer is wired (with a determinism
 analysis).
 
+**See also:** [`debug_midtrain.md`](debug_midtrain.md) — the val-loss *crossover* investigation that
+builds on this file. It relies on the byte-identical val contract (§ "Math val set identity") and the
+contamination analysis/artifacts here; its **exp #1** (decontaminated re-eval of the 9 iso-token
+checkpoints across Jaccard thresholds) consumes `scratch/verified_pairs/`,
+`scratch/contaminated_val_ids.json`, and the per-scale Jaccard tables below.
+
 ---
 
 ## 2026-06-03 — Codebase analysis: CPT and cooldown on nemotron math

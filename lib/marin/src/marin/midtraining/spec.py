@@ -250,11 +250,15 @@ def resolve_midtrain_spec(spec: MidtrainSpec) -> ResolvedMidtrainSpec:
     )
 
 
-def validate_midtrain_spec(resolved: ResolvedMidtrainSpec) -> None:
-    """Run all cross-cutting + mode-specific guards."""
+def validate_midtrain_spec(resolved: ResolvedMidtrainSpec, *, allow_cross_region_data: bool = False) -> None:
+    """Run all cross-cutting + mode-specific guards.
+
+    ``allow_cross_region_data`` opts out of the run/data region-alignment guard for the
+    explicit case where compute runs in a different region from the data caches.
+    """
     spec = resolved.spec
     _assert_no_banned_substrings(spec)
-    _assert_run_region_alignment(spec)
+    _assert_run_region_alignment(spec, allow_cross_region_data=allow_cross_region_data)
     _assert_compute_regions_collapse(spec)
     if resolved.data_manifest is not None:
         _assert_tokenizers_agree(spec, resolved.data_manifest)
@@ -282,7 +286,12 @@ def _assert_no_banned_substrings(spec: MidtrainSpec) -> None:
                 )
 
 
-def _assert_run_region_alignment(spec: MidtrainSpec) -> None:
+def _assert_run_region_alignment(spec: MidtrainSpec, *, allow_cross_region_data: bool = False) -> None:
+    # Opt-out for the explicit case where compute runs in a different region from the data
+    # caches (e.g. the default region is quota-blocked). CPT streams the model from HF, so
+    # only the small tokenized data is read cross-region; checkpoints stay in the run region.
+    if allow_cross_region_data:
+        return
     run_region = spec.run.output_region
     if spec.data_manifest_uri is not None:
         data_uri_region = output_region(spec.data_manifest_uri)

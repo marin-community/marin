@@ -91,6 +91,7 @@ def preflight(
     *,
     cross_region_copy: CrossRegionCopyPolicy = CrossRegionCopyPolicy(),
     allow_existing_matching_manifest: bool = False,
+    allow_cross_region_data: bool = False,
     exists: GcsExists = default_gcs_exists,
     list_: GcsList = default_gcs_list,
     read_manifest: ReadManifest = read_run_manifest,
@@ -137,7 +138,7 @@ def preflight(
         for name, component in components.items():
             cache_dir = component.get("cache_dir") if isinstance(component, dict) else None
             if cache_dir and cache_dir.startswith("gs://"):
-                if output_region(cache_dir) != spec.run.output_region:
+                if not allow_cross_region_data and output_region(cache_dir) != spec.run.output_region:
                     failures.append(
                         f"Component {name!r} cache_dir region {output_region(cache_dir)!r} "
                         f"!= run region {spec.run.output_region!r}"
