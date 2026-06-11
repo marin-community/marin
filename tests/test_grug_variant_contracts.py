@@ -27,7 +27,7 @@ from jax._src import config as jax_config
 from jax.sharding import use_abstract_mesh
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
-from levanter.data.text import DirectDatasetComponent, LmDataConfig
+from levanter.data.text import DatasetComponent, DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
@@ -128,6 +128,37 @@ def _small_model_config(model_config_cls, *, vocab_size: int, seq_len: int):
     field_names = {field.name for field in dataclasses.fields(model_config_cls)}
     kwargs = {k: v for k, v in base_kwargs.items() if k in field_names}
     return model_config_cls(**kwargs)
+
+
+def test_grug_moe_layer_masks_preserve_thd_segment_metadata():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mask = GrugAttentionMask.causal().with_segment_ids(
+        jnp.array([[0, 0, 1, 1, -1, -1]], dtype=jnp.int32),
+        max_segments=3,
+    )
+
+    short_mask, long_mask = model_module._layer_attention_masks(mask, sliding_window=12)
+
+    assert short_mask.thd_segment_metadata is mask.thd_segment_metadata
+    assert long_mask.thd_segment_metadata is mask.thd_segment_metadata
+    assert short_mask.segment_ids is mask.segment_ids
+    assert long_mask.segment_ids is mask.segment_ids
+
+
+def test_coreweave_thd_canary_uses_fixed_shape_training_segments(monkeypatch):
+    monkeypatch.setenv("CANARY_ACCELERATOR", "gpu")
+    monkeypatch.setenv("CANARY_ATTENTION_IMPLEMENTATION", "gpu_fa4_thd")
+    monkeypatch.setenv("CANARY_TRACKER", "json_logger")
+    monkeypatch.setenv("RUN_ID", "test-thd")
+
+    canary_ferry = importlib.import_module("experiments.ferries.canary_ferry")
+    canary_ferry = importlib.reload(canary_ferry)
+    data = canary_ferry.canary_moe_step.config.data
+
+    components = list(data.components.values())
+    assert components
+    assert all(isinstance(component, DatasetComponent) for component in components)
+    assert {component.pack for component in components} == {1}
 
 
 @pytest.mark.parametrize(

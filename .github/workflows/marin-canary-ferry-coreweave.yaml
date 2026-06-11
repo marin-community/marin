@@ -26,6 +26,15 @@ on:
         type: number
         default: 1
         required: false
+      attention_implementation:
+        description: 'GPU attention backend'
+        type: choice
+        options:
+          - gpu_fa4_cute
+          - gpu_fa4_thd
+          - reference
+        default: gpu_fa4_cute
+        required: false
 
 permissions:
   contents: read   # actions/checkout
@@ -48,6 +57,7 @@ jobs:
     env:
       RUN_ID: canary-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       CANARY_ACCELERATOR: gpu
+      CANARY_ATTENTION_IMPLEMENTATION: ${{ github.event_name == 'workflow_dispatch' && inputs.attention_implementation || 'gpu_fa4_cute' }}
       CANARY_BATCH_SIZE: "16"
       CANARY_GPU_REPLICAS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.gpu_replicas) || '1' }}
       # TODO(#5524): remove this override once Levanter profiler stop is
@@ -123,6 +133,7 @@ jobs:
             -e MARIN_PREFIX s3://marin-na/marin/ \
             -e RUN_ID "$RUN_ID" \
             -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
+            -e CANARY_ATTENTION_IMPLEMENTATION "$CANARY_ATTENTION_IMPLEMENTATION" \
             -e CANARY_BATCH_SIZE "$CANARY_BATCH_SIZE" \
             -e CANARY_GPU_REPLICAS "$CANARY_GPU_REPLICAS" \
             -e CANARY_PROFILER_NUM_STEPS "$CANARY_PROFILER_NUM_STEPS" \
