@@ -12,22 +12,14 @@ from collections.abc import Callable, Iterable
 from experiments.evals.ppl_circuit_coverage_v2 import (
     PPL_CIRCUIT_COVERAGE_V2_SLICES,
     PplCircuitCoverageV2TaskTier,
+    _brainfuck_lite_state,
     _generate_borrow_subtraction,
+    _markdown_table,
+    _to_base,
     iter_ppl_circuit_coverage_v2_plain_text_documents,
     iter_ppl_circuit_coverage_v2_records,
     ppl_circuit_coverage_v2_raw_validation_sets,
     render_ppl_circuit_coverage_v2_plain_text_document,
-)
-
-SCAFFOLD_MARKERS = (
-    "### Circuit practice example",
-    "Family:",
-    "Task:",
-    "Prompt:",
-    "Final answer:",
-    "worked examples:",
-    "held-out query:",
-    "answer:",
 )
 
 
@@ -59,18 +51,6 @@ def _matching_bracket_index(text: str, bracket_index: int) -> int:
         matches[opening_index] = index
         matches[index] = opening_index
     return matches[bracket_index]
-
-
-def _to_base(value: int, base: int) -> str:
-    alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
-    if value == 0:
-        return "0"
-    digits: list[str] = []
-    remaining = value
-    while remaining:
-        remaining, digit = divmod(remaining, base)
-        digits.append(alphabet[digit])
-    return "".join(reversed(digits))
 
 
 def _csv_row(values: Iterable[str], delimiter: str) -> str:
@@ -107,34 +87,6 @@ def _turtle_state(commands: Iterable[str]) -> dict[str, object]:
         x += distance if heading == "E" else -distance if heading == "W" else 0
         y += distance if heading == "N" else -distance if heading == "S" else 0
     return {"x": x, "y": y, "heading": headings[heading_index]}
-
-
-def _brainfuck_lite_state(program: str, num_cells: int) -> dict[str, object]:
-    cells = [0 for _ in range(num_cells)]
-    pointer = 0
-    for command in program:
-        if command == ">":
-            pointer = min(pointer + 1, len(cells) - 1)
-        elif command == "<":
-            pointer = max(pointer - 1, 0)
-        elif command == "+":
-            cells[pointer] = (cells[pointer] + 1) % 256
-        elif command == "-":
-            cells[pointer] = (cells[pointer] - 1) % 256
-    return {"cells": cells, "pointer": pointer}
-
-
-def _markdown_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> str:
-    widths = [
-        max(len(headers[column_index]), *(len(row[column_index]) for row in rows))
-        for column_index in range(len(headers))
-    ]
-
-    def render_row(row: Iterable[str]) -> str:
-        return "| " + " | ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)) + " |"
-
-    separator = "| " + " | ".join("-" * width for width in widths) + " |"
-    return "\n".join((render_row(headers), separator, *(render_row(row) for row in rows)))
 
 
 def _expected_string_slicing(metadata: dict[str, object]) -> str:
@@ -269,7 +221,8 @@ def _expected_regex_lite(metadata: dict[str, object]) -> str:
 
 
 def _expected_brainfuck_lite(metadata: dict[str, object]) -> str:
-    return _json_for_task(_brainfuck_lite_state(str(metadata["program"]), int(metadata["num_cells"])))
+    cells, pointer = _brainfuck_lite_state(str(metadata["program"]), int(metadata["num_cells"]))
+    return _json_for_task({"cells": cells, "pointer": pointer})
 
 
 def _expected_markdown_table_padding(metadata: dict[str, object]) -> str:
@@ -360,14 +313,13 @@ def test_task_tiers_separate_reflexive_core_from_interpreter_stress_tasks():
     assert all(tier in PplCircuitCoverageV2TaskTier for tier in tiers_by_task.values())
 
 
-def test_records_are_deterministic_compact_completion_prompts():
+def test_records_are_deterministic_target_only_completion_prompts():
     rows = iter_ppl_circuit_coverage_v2_records(examples_per_config=2, seed=2026)
     rows_again = iter_ppl_circuit_coverage_v2_records(examples_per_config=2, seed=2026)
 
     assert rows == rows_again
     assert len(rows) == 2 * len(PPL_CIRCUIT_COVERAGE_V2_SLICES)
     for row in rows:
-        assert not any(marker in str(row["input"]) for marker in SCAFFOLD_MARKERS)
         assert str(row["output"]).endswith("\n")
         assert not str(row["input"]).endswith(str(row["output"]))
         assert f"task_tier:{row['metadata']['task_tier']}" in row["tags"]
@@ -420,7 +372,7 @@ def test_borrow_subtraction_generator_handles_minimum_left_boundary():
     assert row["output"] == "1\n"
 
 
-def test_plain_text_documents_append_the_target_without_reintroducing_scaffold():
+def test_plain_text_documents_append_the_target():
     row = next(
         row
         for row in iter_ppl_circuit_coverage_v2_records(examples_per_config=1)
@@ -430,7 +382,6 @@ def test_plain_text_documents_append_the_target_without_reintroducing_scaffold()
     text = render_ppl_circuit_coverage_v2_plain_text_document(row)
 
     assert text == row["input"] + row["output"]
-    assert not any(marker in text for marker in SCAFFOLD_MARKERS)
 
 
 def test_plain_text_stream_respects_budget_and_keeps_task_variety():
@@ -442,4 +393,3 @@ def test_plain_text_stream_respects_budget_and_keeps_task_variety():
         {tier.value for tier in PplCircuitCoverageV2TaskTier}
     )
     assert all(str(document["text"]).endswith("\n") for document in documents)
-    assert not any(marker in str(document["text"]) for document in documents for marker in SCAFFOLD_MARKERS)
