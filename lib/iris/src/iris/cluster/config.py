@@ -1170,6 +1170,7 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> TaskBackend:
             local_queue=local_queue,
             kueue_priority_classes=priority_classes,
             kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
+            preempt_namespaces=list(kp.preempt_namespaces),
         )
     if which == "worker_provider":
         return RpcTaskBackend(stub_factory=RpcWorkerStubFactory())

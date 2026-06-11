@@ -8,6 +8,7 @@ Config is driven by env vars set in the GH Actions workflow env: block and forwa
 to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
 
     CANARY_ACCELERATOR   tpu | gpu
+    CANARY_ATTENTION_IMPLEMENTATION gpu-only attention backend, e.g. gpu_fa4_cute
     CANARY_TPU_TYPE      tpu-only comma-separated slice types, primary first (default v5p-8,v4-8)
     CANARY_BATCH_SIZE    per-device batch size
     CANARY_CACHE_COPY_MAX_WORKERS gpu-only cache-copy worker cap
@@ -26,11 +27,15 @@ to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
     RUN_ID               unique run identifier
 """
 
+import dataclasses
 import datetime
 import os
+from typing import cast
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.data.text import DatasetComponent
+from levanter.grug.attention import GrugAttentionImplementation
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
@@ -61,6 +66,13 @@ CANARY_TRAINER = GrugTrainerConfig(
     z_loss_weight=1e-4,
     ema_beta=None,
     log_every=1,
+)
+_GPU_FA4_CUTE_ATTENTION: GrugAttentionImplementation = "gpu_fa4_cute"
+_GPU_FA4_THD_ATTENTION: GrugAttentionImplementation = "gpu_fa4_thd"
+_GPU_ATTENTION_IMPLEMENTATIONS: tuple[GrugAttentionImplementation, ...] = (
+    "reference",
+    _GPU_FA4_CUTE_ATTENTION,
+    _GPU_FA4_THD_ATTENTION,
 )
 
 # Compute budget passed to the heuristic when CANARY_HIDDEN_DIM scales the model.
@@ -130,10 +142,37 @@ def _build_step_from_env() -> ExecutorStep:
         else:
             model, _, _, _ = build_from_heuristic(budget=_HEURISTIC_BUDGET, hidden_dim=hidden_dim)
 
+        attention_implementation = os.environ.get("CANARY_ATTENTION_IMPLEMENTATION", _GPU_FA4_CUTE_ATTENTION)
+        if attention_implementation not in _GPU_ATTENTION_IMPLEMENTATIONS:
+            raise ValueError(
+                f"Unknown CANARY_ATTENTION_IMPLEMENTATION={attention_implementation!r}, expected one of "
+                f"{_GPU_ATTENTION_IMPLEMENTATIONS}"
+            )
+        attention_implementation = cast(GrugAttentionImplementation, attention_implementation)
+        model = dataclasses.replace(
+            model,
+            attention_implementation=attention_implementation,
+            # The THD backend only handles full causal windows. Setting the model
+            # window to 2x seq_len makes Grug's short-window mask a full window.
+            sliding_window=(
+                model.max_seq_len * 2 if attention_implementation == _GPU_FA4_THD_ATTENTION else model.sliding_window
+            ),
+        )
+
         batch_size = env_int("CANARY_BATCH_SIZE", 32)
         target_tokens = env_int("CANARY_TARGET_TOKENS", batch_size * model.max_seq_len * 50)
 
         data = slimpajama_6b_data()
+        if attention_implementation == _GPU_FA4_THD_ATTENTION:
+            data = dataclasses.replace(
+                data,
+                components={
+                    name: (
+                        dataclasses.replace(component, pack=1) if isinstance(component, DatasetComponent) else component
+                    )
+                    for name, component in data.components.items()
+                },
+            )
         resources = ResourceConfig.with_gpu(
             gpu_type,
             count=gpu_count,
@@ -142,16 +181,17 @@ def _build_step_from_env() -> ExecutorStep:
             disk="256g",
             replicas=gpu_replicas,
         )
-        name = f"canary-ferry-cw-{gpu_type.lower()}x{gpu_count}-r{gpu_replicas}-d{hidden_dim}"
-        wandb_group = f"canary-ferry-moe-gpu-{gpu_type.lower()}-r{gpu_replicas}"
-        wandb_tags = ["canary", "ferry", "grug", "moe", "gpu", gpu_type.lower()]
+        attention_tag = attention_implementation.removeprefix("gpu_")
+        name = f"canary-ferry-cw-{gpu_type.lower()}x{gpu_count}-r{gpu_replicas}-d{hidden_dim}-{attention_tag}"
+        wandb_group = f"canary-ferry-moe-gpu-{gpu_type.lower()}-r{gpu_replicas}-{attention_tag}"
+        wandb_tags = ["canary", "ferry", "grug", "moe", "gpu", gpu_type.lower(), f"d{hidden_dim}", attention_tag]
         eval_config = None
 
     num_steps = env_int("CANARY_STEPS", target_tokens // (batch_size * model.max_seq_len))
     if num_steps <= 0:
         raise ValueError(
             f"CANARY_STEPS={num_steps} invalid; set CANARY_STEPS or CANARY_TARGET_TOKENS high enough for "
-            f"batch_size={batch_size} x seq_len={GRUG_MOE_TRIAL_MODEL.max_seq_len}"
+            f"batch_size={batch_size} x seq_len={model.max_seq_len}"
         )
     if os.environ.get("CANARY_TRACKER", "wandb").lower() == "json_logger":
         tracker = JsonLoggerConfig(logger_name=os.environ.get("CANARY_JSON_LOGGER", "canary_ferry.metrics"))

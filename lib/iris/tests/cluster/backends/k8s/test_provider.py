@@ -13,7 +13,9 @@ import pytest
 from finelog.client.proxy import LogServiceProxy
 from finelog.rpc import logging_pb2
 from iris.cluster.backends.k8s.tasks import (
+    _GANG_GC_MAX_AGE_SECONDS,
     _GC_MAX_AGE_SECONDS,
+    _KUEUE_MANAGED_FINALIZER,
     _KUEUE_POD_GROUP_NAME,
     _KUEUE_POD_GROUP_TOTAL,
     _LABEL_ATTEMPT_ID,
@@ -41,7 +43,7 @@ from iris.cluster.types import JobName, TaskAttempt
 from iris.cluster.worker.stats import IrisTaskStat
 from iris.rpc import job_pb2
 
-from .conftest import make_batch, make_run_req, populate_node, populate_pod
+from .conftest import make_batch, make_kueue_provider, make_run_req, populate_node, populate_pod
 
 
 def _fetch_logs(log_service: LogServiceProxy, key: str, max_lines: int = 100) -> list[logging_pb2.LogEntry]:
@@ -1219,3 +1221,285 @@ def test_gang_teardown_deletes_kueue_workload(kueue_provider, k8s):
 
     assert k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS) == []
     assert k8s.get_json(K8sResource.WORKLOADS, group_name) is None, "stray-pod teardown must release the Kueue Workload"
+
+
+def test_gang_teardown_strips_kueue_finalizer(kueue_provider, k8s):
+    """Tearing down a gang whose pods hold the Kueue pod finalizer removes the
+    finalizer so the pod objects actually disappear.
+
+    The fake honors finalizers: a plain delete leaves a finalizer-held pod
+    parked with a deletionTimestamp. The pods being fully gone after teardown
+    proves the provider stripped the finalizer; without that, Kueue rebuilds
+    the pod-group Workload from the surviving labeled pods and re-holds the
+    quota/TAS reservation.
+    """
+    reqs = [
+        make_run_req(f"/gang/task/{i}", attempt_id=0, num_tasks=2, coscheduling_group_by="leafgroup") for i in range(2)
+    ]
+    kueue_provider.reconcile(make_batch(tasks_to_run=reqs))
+
+    pods = k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS)
+    assert len(pods) == 2
+    pod_names = [p["metadata"]["name"] for p in pods]
+    group_name = pods[0]["metadata"]["labels"][_KUEUE_POD_GROUP_NAME]
+    # Kueue's webhook stamps its finalizer on every admitted gang pod.
+    for pod in pods:
+        pod["metadata"]["finalizers"] = [_KUEUE_MANAGED_FINALIZER]
+    k8s.seed_resource(K8sResource.WORKLOADS, group_name, {"kind": "Workload", "metadata": {"name": group_name}})
+
+    # Empty desired set: the whole gang is stray.
+    kueue_provider.reconcile(make_batch())
+
+    for name in pod_names:
+        assert k8s.get_json(K8sResource.PODS, name) is None, "finalizer-held pod must be fully removed"
+    assert k8s.get_json(K8sResource.WORKLOADS, group_name) is None
+
+
+def _seed_gang_pod(
+    k8s,
+    name: str,
+    pod_group: str,
+    created: str,
+    *,
+    task_hash: str = "feedfacecafebeef",
+    finalizers: list[str] | None = None,
+    deletion_timestamp: str | None = None,
+) -> None:
+    """Insert a Failed gang pod (Kueue pod-group label) into the fake k8s store."""
+    metadata: dict = {
+        "name": name,
+        "creationTimestamp": created,
+        "labels": {
+            _LABEL_MANAGED: "true",
+            _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+            _LABEL_TASK_HASH: task_hash,
+            _KUEUE_POD_GROUP_NAME: pod_group,
+        },
+    }
+    if finalizers:
+        metadata["finalizers"] = finalizers
+    if deletion_timestamp:
+        metadata["deletionTimestamp"] = deletion_timestamp
+    k8s.seed_resource(K8sResource.PODS, name, {"kind": "Pod", "metadata": metadata, "status": {"phase": "Failed"}})
+
+
+def test_gc_sweeps_finalizer_wedged_gang_pod(provider, k8s):
+    """A Failed gang pod wedged in deletion on the Kueue finalizer is swept by GC
+    (finalizer stripped, pod removed, Workload deleted) regardless of age."""
+    now = datetime.now(timezone.utc)
+    recent_ts = (now - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    group = "wedged-gang-group"
+    _seed_gang_pod(
+        k8s,
+        "wedged-gang-pod",
+        group,
+        recent_ts,
+        finalizers=[_KUEUE_MANAGED_FINALIZER],
+        deletion_timestamp=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
+    k8s.seed_resource(K8sResource.WORKLOADS, group, {"kind": "Workload", "metadata": {"name": group}})
+
+    provider._last_gc_time = 0.0
+    provider._maybe_gc_terminal_resources(active_pods=[])
+
+    assert k8s.get_json(K8sResource.PODS, "wedged-gang-pod") is None
+    assert k8s.get_json(K8sResource.WORKLOADS, group) is None
+
+
+def test_gc_sweeps_crashed_gang_pods_on_short_retention(provider, k8s):
+    """A Failed gang pod older than the gang retention (but younger than the 1h
+    plain-pod retention) is swept along with its Workload; a non-gang Failed pod
+    of the same age keeps the 1h debugging window."""
+    now = datetime.now(timezone.utc)
+    age_ts = (now - timedelta(seconds=_GANG_GC_MAX_AGE_SECONDS + 60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    group = "crashed-gang-group"
+    _seed_gang_pod(k8s, "crashed-gang-pod", group, age_ts)
+    k8s.seed_resource(K8sResource.WORKLOADS, group, {"kind": "Workload", "metadata": {"name": group}})
+    _seed_terminal_pod(k8s, "plain-failed-pod", "Failed", "1122334455667788", age_ts)
+
+    provider._gc_terminal_resources(active_pods=[])
+
+    assert k8s.get_json(K8sResource.PODS, "crashed-gang-pod") is None
+    assert k8s.get_json(K8sResource.WORKLOADS, group) is None
+    assert k8s.get_json(K8sResource.PODS, "plain-failed-pod") is not None, "1h retention for plain pods must hold"
+
+
+def test_gc_skips_gang_with_active_sibling(provider, k8s):
+    """A terminal gang pod past the gang retention is NOT swept while a
+    Pending/Running sibling of the same pod group exists: releasing the shared
+    Workload would evict the live siblings. Once the gang has no live members,
+    the next GC pass sweeps it."""
+    now = datetime.now(timezone.utc)
+    age_ts = (now - timedelta(seconds=_GANG_GC_MAX_AGE_SECONDS + 60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    group = "skewed-gang-group"
+    _seed_gang_pod(k8s, "early-failed-gang-pod", group, age_ts, finalizers=[_KUEUE_MANAGED_FINALIZER])
+    k8s.seed_resource(K8sResource.WORKLOADS, group, {"kind": "Workload", "metadata": {"name": group}})
+    running_sibling = {
+        "kind": "Pod",
+        "metadata": {
+            "name": "running-gang-pod",
+            "labels": {_LABEL_TASK_HASH: "feedfacecafebeef", _KUEUE_POD_GROUP_NAME: group},
+        },
+        "status": {"phase": "Running"},
+    }
+
+    provider._gc_terminal_resources(active_pods=[running_sibling])
+
+    assert k8s.get_json(K8sResource.PODS, "early-failed-gang-pod") is not None, "gang with live sibling must be kept"
+    assert k8s.get_json(K8sResource.WORKLOADS, group) is not None, "shared Workload must survive while gang is live"
+
+    provider._gc_terminal_resources(active_pods=[])
+
+    assert k8s.get_json(K8sResource.PODS, "early-failed-gang-pod") is None
+    assert k8s.get_json(K8sResource.WORKLOADS, group) is None
+
+
+# ---------------------------------------------------------------------------
+# Preemptible blocker eviction (preempt_namespaces)
+# ---------------------------------------------------------------------------
+
+_PREEMPT_NS = "verify-ns"
+
+
+@pytest.fixture
+def preempt_provider(k8s):
+    """Kueue provider with blocker eviction enabled for _PREEMPT_NS."""
+    p = make_kueue_provider(k8s, preempt_namespaces=[_PREEMPT_NS])
+    yield p
+    p.close()
+
+
+def _seed_blocker_pod(
+    k8s,
+    namespace: str,
+    name: str,
+    *,
+    priority: int = -1,
+    gpus: int = 8,
+    phase: str = "Running",
+) -> None:
+    """Insert a health-check-style pod into a foreign namespace of the fake."""
+    resources = {"requests": {"nvidia.com/gpu": str(gpus)}} if gpus else {}
+    pod = {
+        "kind": "Pod",
+        "metadata": {"name": name, "namespace": namespace},
+        "spec": {
+            "priority": priority,
+            "containers": [{"name": "verify", "resources": resources}],
+        },
+        "status": {"phase": phase},
+    }
+    k8s.seed_namespaced_pod(namespace, name, pod)
+
+
+def _gang_reqs(num_tasks: int = 2) -> list[job_pb2.RunTaskRequest]:
+    return [
+        make_run_req(f"/gang/task/{i}", attempt_id=0, num_tasks=num_tasks, coscheduling_group_by="leafgroup")
+        for i in range(num_tasks)
+    ]
+
+
+def test_gang_submit_evicts_preemptible_gpu_blocker(preempt_provider, k8s):
+    """Submitting a gang deletes negative-priority GPU pods in configured namespaces,
+    freeing the node capacity Kueue TAS counts against the gang."""
+    _seed_blocker_pod(k8s, _PREEMPT_NS, "nhc-verify-0")
+
+    preempt_provider.reconcile(make_batch(tasks_to_run=_gang_reqs()))
+
+    assert k8s.list_pods_in_namespace(_PREEMPT_NS) == []
+    # The gang's own pods were still created.
+    assert len(k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS)) == 2
+
+
+def test_gang_submit_spares_non_blocker_pods(preempt_provider, k8s):
+    """The hard guards hold regardless of config: normal-priority pods, non-GPU
+    pods, and pods in unconfigured namespaces are never deleted."""
+    _seed_blocker_pod(k8s, _PREEMPT_NS, "normal-priority", priority=0)
+    _seed_blocker_pod(k8s, _PREEMPT_NS, "no-gpu", gpus=0)
+    _seed_blocker_pod(k8s, "other-ns", "unconfigured-ns")
+    _seed_blocker_pod(k8s, _PREEMPT_NS, "real-blocker")
+
+    preempt_provider.reconcile(make_batch(tasks_to_run=_gang_reqs()))
+
+    survivors = {p["metadata"]["name"] for p in k8s.list_pods_in_namespace(_PREEMPT_NS)}
+    assert survivors == {"normal-priority", "no-gpu"}
+    assert [p["metadata"]["name"] for p in k8s.list_pods_in_namespace("other-ns")] == ["unconfigured-ns"]
+
+
+def test_non_gang_submit_does_not_evict(preempt_provider, k8s):
+    """Plain (non-coscheduled) submissions never reach the kube-scheduler gated;
+    they trigger no eviction."""
+    _seed_blocker_pod(k8s, _PREEMPT_NS, "blocker")
+
+    preempt_provider.reconcile(make_batch(tasks_to_run=[make_run_req("/plain-job/0")]))
+
+    assert [p["metadata"]["name"] for p in k8s.list_pods_in_namespace(_PREEMPT_NS)] == ["blocker"]
+
+
+def test_reconcile_evicts_blockers_while_gang_gated(preempt_provider, k8s):
+    """A blocker that lands AFTER gang submission is evicted by the reconcile
+    loop while the gang's pods remain SchedulingGated, and the sweep is
+    debounced so back-to-back reconciles don't re-list the namespace."""
+    entries = [
+        RunningTaskEntry(task_id=JobName.from_wire(f"/gang/task/{i}"), attempt_id=0, coscheduled=True) for i in range(2)
+    ]
+    preempt_provider.reconcile(make_batch(tasks_to_run=_gang_reqs(), running_tasks=entries))
+
+    # Kueue's webhook gates gang pods until the pod-group Workload is admitted.
+    for pod in k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS):
+        pod["spec"]["schedulingGates"] = [{"name": "kueue.x-k8s.io/admission"}]
+        pod["status"] = {"phase": "Pending"}
+
+    # Health-check pod lands after submission, on capacity the gang needs.
+    _seed_blocker_pod(k8s, _PREEMPT_NS, "late-blocker")
+    preempt_provider._last_preempt_time = 0.0  # clear the submit-time debounce
+    preempt_provider.reconcile(make_batch(running_tasks=entries))
+    assert k8s.list_pods_in_namespace(_PREEMPT_NS) == []
+
+    # Debounce: a blocker appearing immediately after survives this cycle.
+    _seed_blocker_pod(k8s, _PREEMPT_NS, "back-to-back-blocker")
+    preempt_provider.reconcile(make_batch(running_tasks=entries))
+    assert [p["metadata"]["name"] for p in k8s.list_pods_in_namespace(_PREEMPT_NS)] == ["back-to-back-blocker"]
+
+
+def test_reconcile_without_gated_gang_pods_does_not_evict(preempt_provider, k8s):
+    """No gang work waiting on admission -> no eviction, even with a blocker present."""
+    _seed_blocker_pod(k8s, _PREEMPT_NS, "blocker")
+    preempt_provider._last_preempt_time = 0.0
+
+    preempt_provider.reconcile(make_batch())
+
+    assert [p["metadata"]["name"] for p in k8s.list_pods_in_namespace(_PREEMPT_NS)] == ["blocker"]
+
+
+def test_preemption_disabled_makes_no_foreign_namespace_calls(kueue_provider, k8s):
+    """With preempt_namespaces unset (the default), gang submission never lists
+    or deletes pods outside iris's own namespace."""
+    _seed_blocker_pod(k8s, _PREEMPT_NS, "blocker")
+
+    kueue_provider.reconcile(make_batch(tasks_to_run=_gang_reqs()))
+
+    assert k8s.namespaced_pod_calls == []
+    assert [p["metadata"]["name"] for p in k8s.list_pods_in_namespace(_PREEMPT_NS)] == ["blocker"]
+
+
+def test_preemption_never_touches_own_namespace(k8s):
+    """Even if misconfigured to include iris's own namespace, eviction skips it."""
+    provider = make_kueue_provider(k8s, preempt_namespaces=["iris"])
+    try:
+        victim = {
+            "kind": "Pod",
+            "metadata": {"name": "own-ns-victim"},
+            "spec": {
+                "priority": -1,
+                "containers": [{"name": "x", "resources": {"requests": {"nvidia.com/gpu": "8"}}}],
+            },
+            "status": {"phase": "Running"},
+        }
+        k8s.seed_resource(K8sResource.PODS, "own-ns-victim", victim)
+
+        provider.reconcile(make_batch(tasks_to_run=_gang_reqs()))
+
+        assert k8s.get_json(K8sResource.PODS, "own-ns-victim") is not None
+    finally:
+        provider.close()

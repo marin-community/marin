@@ -619,7 +619,7 @@ def test_no_claims_fast_path_matches_evolve(ctrl):
     for name in ("j1", "j2"):
         _submit_job(ctrl, name, _no_reservation_request(name))
 
-    scheduler = ctrl._scheduler
+    scheduler = Scheduler()
     no_claims: dict[WorkerId, ReservationClaim] = {}
 
     def _assign(rebuild: bool) -> set[tuple[JobName, WorkerId]]:
@@ -657,6 +657,21 @@ def test_no_claims_fast_path_matches_evolve(ctrl):
 # =============================================================================
 
 
+def _demand_no_dry_run(ctrl, claims):
+    """Compute demand with the capacity-fit dry-run disabled (empty worker list).
+
+    Isolates the reservation gate and emission logic from absorption, so a task
+    that passes the gate emits demand regardless of whether the fleet could
+    already run it. Mirrors the production demand path on a cluster with no
+    schedulable workers.
+    """
+    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, UserBudgetDefaults(), claims)
+    no_workers = ctx.evolve_with_workers(
+        workers=[], jobs={}, building_counts={}, max_building_tasks=DEFAULT_MAX_BUILDING_TASKS_PER_WORKER
+    )
+    return compute_demand_entries(no_workers, Scheduler(), claims)
+
+
 def _holder_demand(demand):
     return [d for d in demand if any(RESERVATION_HOLDER_JOB_NAME in t for t in d.task_ids)]
 
@@ -688,7 +703,7 @@ def test_demand_gates_real_task_until_reservation_claimed(ctrl):
     claims = read_reservation_claims(ctrl._db)
     assert claims == {}  # no GPU worker, reservation unfulfilled
 
-    demand = compute_demand_entries(ctrl._db, reservation_claims=claims)
+    demand = _demand_no_dry_run(ctrl, claims)
     # Holder provisions the reserved GPU; the parent's real task is gated.
     assert len(_holder_demand(demand)) == 1
     assert _real_demand(demand) == [], "real task must not emit demand while reservation is unclaimed"
@@ -700,7 +715,7 @@ def test_demand_gates_real_task_until_reservation_claimed(ctrl):
     claims = read_reservation_claims(ctrl._db)
     assert len(claims) == 1
 
-    demand = compute_demand_entries(ctrl._db, reservation_claims=claims)
+    demand = _demand_no_dry_run(ctrl, claims)
     real_ids = {t for d in _real_demand(demand) for t in d.task_ids}
     assert jid.task(0).to_wire() in real_ids
 

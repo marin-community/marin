@@ -534,22 +534,13 @@ def _compute_file_pushdown(
     for entry in files:
         path = entry.path
         is_parquet = load_op.format == "parquet" or (load_op.format == "auto" and path.endswith(".parquet"))
+        row_ranges: list[tuple[int | None, int | None]]
         if load_op.approx_shard_bytes is not None and is_parquet:
-            for row_start, row_end in compute_parquet_splits(path, load_op.approx_shard_bytes):
-                source_items.append(
-                    SourceItem(
-                        shard_idx=len(source_items),
-                        data=InputFileSpec(
-                            path=path,
-                            format=load_op.format,
-                            columns=select_columns,
-                            row_start=row_start,
-                            row_end=row_end,
-                            filter_expr=filter_expr,
-                        ),
-                    )
-                )
+            row_ranges = list(compute_parquet_splits(path, load_op.approx_shard_bytes))
         else:
+            # Whole-file read: a single span with no explicit row bounds.
+            row_ranges = [(None, None)]
+        for row_start, row_end in row_ranges:
             source_items.append(
                 SourceItem(
                     shard_idx=len(source_items),
@@ -557,6 +548,8 @@ def _compute_file_pushdown(
                         path=path,
                         format=load_op.format,
                         columns=select_columns,
+                        row_start=row_start,
+                        row_end=row_end,
                         filter_expr=filter_expr,
                     ),
                 )

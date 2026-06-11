@@ -74,6 +74,10 @@ def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
 
 
+def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
+    return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
+
+
 @dataclass(frozen=True)
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
@@ -409,8 +413,8 @@ class MoEMLP(eqx.Module):
             num_experts_per_token=self.cfg.num_experts_per_token,
         )
         # Sharded QB: compute beta locally per device, then average.
-        s_minus_alpha = router_logits - qb_alpha
         mesh = get_abstract_mesh()
+        s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
         num_devices = 1
         for a in _BATCH_AXES:
             num_devices *= mesh.shape[a]
@@ -527,9 +531,9 @@ class Transformer(eqx.Module):
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
-        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
-        long_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+        if not isinstance(mask, AttentionMask):
+            mask = AttentionMask.causal()
+        short_mask, long_mask = _layer_attention_masks(mask, sliding_window=cfg.sliding_window)
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)

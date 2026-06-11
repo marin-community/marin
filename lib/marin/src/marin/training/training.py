@@ -14,7 +14,7 @@ from typing import TypeVar, cast
 
 import draccus
 from draccus.utils import DataclassInstance
-from fray import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
+from fray import CpuConfig, ResourceConfig, TpuConfig
 from levanter.adaptor import NoAdaptorConfig
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
@@ -428,20 +428,6 @@ def resolve_training_env(
     _disable_xla_autotune_subcache(env)
 
     return env
-
-
-def extras_for_resources(resources: ResourceConfig) -> list[str]:
-    """Return the uv extras (``["tpu"]`` / ``["gpu"]`` / ``[]``) for a device config.
-
-    Worker JobRequests must declare the matching extras so accelerator-only
-    Python dependencies (e.g. ``jax[tpu]``, ``jax[cuda]``) are installed.
-    """
-    device = resources.device
-    if isinstance(device, TpuConfig):
-        return ["tpu"]
-    if isinstance(device, GpuConfig):
-        return ["gpu"]
-    return []
 
 
 def _prepare_training_run(

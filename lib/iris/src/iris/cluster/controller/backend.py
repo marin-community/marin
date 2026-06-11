@@ -51,6 +51,7 @@ from iris.cluster.controller.scheduling.policy import (
     GatedCandidates,
     SchedulingOrder,
     apply_scheduling_gates,
+    compute_demand_entries,
     compute_scheduling_order,
     inject_reservation_taints,
     inject_taint_constraints,
@@ -212,6 +213,10 @@ class ScheduleResult:
     # Post-taint context (or the un-tainted context when no claims were active),
     # surfaced for dashboard diagnostics. None only for the empty K8s result.
     post_taint_context: SchedulingContext | None = None
+    # Limits-free capacity-fit residual: the unmet demand the autoscaler must
+    # provision, computed in the same pass and from the same Scheduler instance
+    # as the assignments. The controller caches it for the autoscaler loop.
+    residual_demand: list[DemandEntry] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -268,11 +273,26 @@ def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> Sc
         max_tasks_per_job_per_cycle=snapshot.max_tasks_per_job_per_cycle,
         trace=trace,
     )
+
+    # Residual demand is computed alongside the assignments from the same
+    # snapshot and the same Scheduler instance: a limits-free capacity-fit over
+    # the pending tasks. Tasks this tick retires as UNSCHEDULABLE (deadline
+    # expired) are excluded so the autoscaler is never asked to provision for a
+    # job the same tick is failing. ``apply_scheduling_gates`` above only reads
+    # ``ctx``; this still runs before ``apply_placements`` mutates it.
+    residual_demand = compute_demand_entries(
+        ctx, scheduler, claims, exclude_task_ids={t.task_id for t in gated.expired_tasks}
+    )
+
     if not gated.schedulable_task_ids:
         # No work to place. Expired tasks (if any) still flow back so the
         # controller can mark them UNSCHEDULABLE; the un-tainted context is the
         # diagnostics snapshot for this tick.
-        return ScheduleResult(unschedulable=list(gated.expired_tasks), post_taint_context=ctx)
+        return ScheduleResult(
+            unschedulable=list(gated.expired_tasks),
+            post_taint_context=ctx,
+            residual_demand=residual_demand,
+        )
 
     order = compute_scheduling_order(ctx, gated, trace=trace)
     all_assignments, context, tainted_jobs = apply_placements(scheduler, order, gated, ctx, claims, trace=trace)
@@ -295,6 +315,7 @@ def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> Sc
         unschedulable=list(gated.expired_tasks),
         diagnostics=diagnostics,
         post_taint_context=context,
+        residual_demand=residual_demand,
     )
 
 

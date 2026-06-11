@@ -622,16 +622,3 @@ message RunTaskRequest {
   // WorkloadPriorityClass on the K8s direct path. UNSPECIFIED => INTERACTIVE.
   PriorityBand priority = 14;
 }
-
-// Deprecated. Kept for one release so pre-cutover clients don't crash on the
-// controller's missing RPC; the handler discards the payload and the data
-// flows through the iris.task_status finelog namespace now. Remove once all
-// clients are guaranteed to be running the new binary (deadline tracked in
-// the iris-status-cleanup cron reminder).
-message SetTaskStatusTextRequest {
-  string task_id = 1;
-  string status_text_detail_md = 2;
-  string status_text_summary_md = 3;
-}
-
-message SetTaskStatusTextResponse {}

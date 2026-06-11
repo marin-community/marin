@@ -744,17 +744,3 @@ class RunTaskRequest(_message.Message):
     coscheduling: CoschedulingConfig
     priority: PriorityBand
     def __init__(self, task_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., entrypoint: _Optional[_Union[RuntimeEntrypoint, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., attempt_id: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[Constraint, _Mapping]]] = ..., task_image: _Optional[str] = ..., attempt_uid: _Optional[str] = ..., coscheduling: _Optional[_Union[CoschedulingConfig, _Mapping]] = ..., priority: _Optional[_Union[PriorityBand, str]] = ...) -> None: ...
-
-class SetTaskStatusTextRequest(_message.Message):
-    __slots__ = ("task_id", "status_text_detail_md", "status_text_summary_md")
-    TASK_ID_FIELD_NUMBER: _ClassVar[int]
-    STATUS_TEXT_DETAIL_MD_FIELD_NUMBER: _ClassVar[int]
-    STATUS_TEXT_SUMMARY_MD_FIELD_NUMBER: _ClassVar[int]
-    task_id: str
-    status_text_detail_md: str
-    status_text_summary_md: str
-    def __init__(self, task_id: _Optional[str] = ..., status_text_detail_md: _Optional[str] = ..., status_text_summary_md: _Optional[str] = ...) -> None: ...
-
-class SetTaskStatusTextResponse(_message.Message):
-    __slots__ = ()
-    def __init__(self) -> None: ...
