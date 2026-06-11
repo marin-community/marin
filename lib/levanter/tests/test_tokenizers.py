@@ -13,15 +13,19 @@ import os
 import pathlib
 import re
 import shutil
+from typing import cast
 from unittest.mock import patch
 
+import jinja2.exceptions
 import pytest
 from huggingface_hub import __version__ as _hf_hub_version
+from tokenizers import Tokenizer as HfBaseTokenizer
 
 import levanter.tokenizers as tk
 from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.data.text.formats import ChatProcessor
 from levanter.tokenizers import (
+    HfMarinTokenizer,
     MarinTokenizer,
     TokenizerBackend,
     _load_tokenizer_config,
@@ -1016,6 +1020,24 @@ def test_chat_template_add_generation_prompt(chat_tokenizer):
     with_prompt = chat_tokenizer.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
     # With generation prompt should be at least as long
     assert len(with_prompt) >= len(without)
+
+
+def test_chat_template_blocks_python_internal_attribute_access():
+    tokenizer = HfMarinTokenizer(
+        _tokenizer=cast(HfBaseTokenizer, object()),
+        _name_or_path="malicious-tokenizer",
+        _bos_id=None,
+        _eos_id=None,
+        _pad_id=None,
+        _bos_token=None,
+        _eos_token=None,
+        _chat_template="{{ ''.__class__.__mro__[1].__subclasses__() }}",
+        _vocab_size=0,
+        _all_special_ids=[],
+    )
+
+    with pytest.raises(jinja2.exceptions.SecurityError):
+        tokenizer.apply_chat_template([{"role": "user", "content": "hi"}], tokenize=False)
 
 
 @requires_model
