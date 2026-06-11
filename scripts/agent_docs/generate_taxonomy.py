@@ -179,19 +179,19 @@ def build_digest(
     return digest[:MAX_DIGEST_CHARS] + "\n\n... (digest truncated at budget)", True
 
 
-def _enforce_budget(doc: str, model: str) -> str:
-    """Return ``doc`` shortened to the token budget (one pass) if it is over."""
+def _enforce_budget(doc: str, model: str, *, budget: int = DOC_TOKEN_BUDGET) -> str:
+    """Return ``doc`` shortened to ``budget`` tokens (one LLM pass) if it is over."""
     tokens = count_tokens(doc)
-    if tokens <= DOC_TOKEN_BUDGET:
+    if tokens <= budget:
         return doc
-    logger.info("  over budget (%d > %d tokens); shortening...", tokens, DOC_TOKEN_BUDGET)
+    logger.info("  over budget (%d > %d tokens); shortening...", tokens, budget)
     shortened = generate(
-        SHORTEN_PROMPT.format(tokens=tokens, budget=DOC_TOKEN_BUDGET, document=doc),
+        SHORTEN_PROMPT.format(tokens=tokens, budget=budget, document=doc),
         model=model,
         max_budget_usd=0.50,
     )
     final = count_tokens(shortened)
-    if final > DOC_TOKEN_BUDGET:
+    if final > budget:
         logger.warning("  still over budget after shorten (%d tokens); keeping shortened version", final)
     return shortened
 

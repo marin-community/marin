@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agent_docs.eval import score_probe, write_probe_artifacts, write_summary
 from agent_docs.generate_agentic import generate_taxonomy_agentic
+from agent_docs.generate_hybrid import generate_taxonomy_hybrid
 from agent_docs.generate_taxonomy import generate_taxonomy
 from agent_docs.packages import discover_packages
 from agent_docs.probes import PROBES
@@ -101,12 +102,14 @@ def _print_round(row: dict, prev: dict | None) -> None:
 @click.option("--probe", "probe_ids", multiple=True, help="Probe ids to run (default: all).")
 @click.option(
     "--mode",
-    type=click.Choice(["mechanical", "agentic"]),
+    type=click.Choice(["mechanical", "agentic", "hybrid"]),
     default="mechanical",
-    help="Generation track: mechanical (digest->doc) or agentic (tool-using agent explores source).",
+    help="Generation track: mechanical (digest->doc), agentic (agent explores source), "
+    "or hybrid (agentic narrative + mechanical reference, split-budget).",
 )
 @click.option("--gen-model", default="sonnet", help="Doc generation model.")
 @click.option("--review-model", default="sonnet", help="Judge model.")
+@click.option("--narrative-cache", type=click.Path(), default=None, help="Hybrid mode: reuse/store narrative halves.")
 @click.option("--coder-model", default="sonnet", help="Coder model (writes scripts; reads a few files, no execution).")
 @click.option(
     "--coder-files/--no-coder-files",
@@ -124,6 +127,7 @@ def main(
     mode: str,
     gen_model: str,
     review_model: str,
+    narrative_cache: str | None,
     coder_model: str,
     coder_files: bool,
     gen_budget_usd: float,
@@ -151,6 +155,17 @@ def main(
         if mode == "agentic":
             gen_cost = generate_taxonomy_agentic(
                 targets, docs_dir, model=gen_model, budget_usd=gen_budget_usd, dry_run=False
+            )
+        elif mode == "hybrid":
+            packages = discover_packages(Path(__file__).parent.parent.parent)
+            gen_cost = generate_taxonomy_hybrid(
+                packages,
+                targets,
+                docs_dir,
+                model=gen_model,
+                budget_usd=gen_budget_usd,
+                narrative_cache=Path(narrative_cache) if narrative_cache else None,
+                dry_run=False,
             )
         else:
             packages = discover_packages(Path(__file__).parent.parent.parent)

@@ -346,6 +346,95 @@ the call details). Output ONLY the markdown document.
 """
 )
 
+# --- Hybrid generation: narrative half -------------------------------------
+# The hybrid track (experiment v3) pairs an agentic NARRATIVE half (these
+# prompts) with a mechanically-derived REFERENCE half (exact files, classes, and
+# function signatures, appended after). The narrative must convey what a
+# signature list cannot — concepts, data flow, the reasoning behind the design —
+# and must NOT reproduce a signature dump, since the reference half carries that.
+
+HYBRID_NARRATIVE_NOTE = """
+You are writing ONLY the NARRATIVE half of this doc. A REFERENCE section listing \
+the exact files, classes, and function signatures (with defaults) is appended \
+automatically AFTER your text — do NOT reproduce a signature dump or an \
+exhaustive symbol list. Name the load-bearing symbols in prose to anchor the \
+concepts, but spend your budget on what a signature list cannot convey: the \
+mental model, how data flows between the pieces, and the reasoning behind the \
+design.
+"""
+
+HYBRID_NARRATIVE_OVERVIEW_PROMPT = (
+    AGENTIC_PREAMBLE
+    + HYBRID_NARRATIVE_NOTE
+    + """
+Produce the NARRATIVE half of the 30-second orientation card. Markdown, EXACTLY:
+
+## What it is
+1-2 sentences: what `{project_name}` is and the one problem it solves.
+
+## How it fits together
+One short paragraph: the main moving parts and how a request/data flows through
+them end to end — the mental picture an agent needs before opening any file.
+
+## Where to go next
+- USE / "how do I run or call it?" -> `{project_name}/ops.md`
+- UNDERSTAND or CHANGE / "how does it work, where do I edit?" -> `{project_name}/architecture.md`
+
+Rules: under ~700 tokens. No signature dumps. Only real names you verified.
+Output ONLY the markdown document.
+"""
+)
+
+HYBRID_NARRATIVE_OPS_PROMPT = (
+    AGENTIC_PREAMBLE
+    + HYBRID_NARRATIVE_NOTE
+    + """
+Produce the NARRATIVE half of the "how to USE `{project_name}`" doc. Markdown, EXACTLY:
+
+## What you can do with it
+A short paragraph mapping the main TASKS an agent performs with this sub-project
+to the area / entry point each one starts from (in prose, not a signature list).
+
+## Happy path
+ONE short fenced code block for the single most common end-to-end workflow, with
+real import paths and argument names you verified.
+
+## Gotchas
+2-4 bullets: non-obvious required setup, ordering, or tuned defaults an agent
+gets wrong — explain the REASONING, not just the value.
+
+Rules: under ~700 tokens. The exact entry-point signatures live in the REFERENCE
+half below — don't duplicate them. Only real names you verified. Output ONLY the
+markdown document.
+"""
+)
+
+HYBRID_NARRATIVE_ARCHITECTURE_PROMPT = (
+    AGENTIC_PREAMBLE
+    + HYBRID_NARRATIVE_NOTE
+    + """
+Produce the NARRATIVE half of the "how to UNDERSTAND and CHANGE `{project_name}`"
+doc. Markdown, EXACTLY:
+
+## Mental model
+1-2 prose paragraphs: the components, how data/control flows between them, and
+WHY the design is the way it is. Convey reasoning signatures alone cannot.
+
+## Key invariants
+2-5 bullets: properties the code relies on that an editor must not break, each
+with where it is enforced (name the function/method).
+
+## How to approach a change
+A short paragraph on how to reason about WHERE a change goes — which layer owns
+what — so the agent can use the edit-site list in the REFERENCE half below
+effectively. Name the load-bearing seams (including internal ones) in prose.
+
+Rules: under ~700 tokens. The exact edit-site symbols live in the REFERENCE half
+below — don't reproduce that list. Only real names you verified. Output ONLY the
+markdown document.
+"""
+)
+
 CODER_PROMPT = """\
 You are a Python engineer working on the Marin monorepo. You have read-only \
 tools (Read, Grep, Glob) and a TIGHT budget: you may open AT MOST a few files \
