@@ -393,7 +393,9 @@ Produce the NARRATIVE half of the "how to USE `{project_name}`" doc. Markdown, E
 
 ## What you can do with it
 A short paragraph mapping the main TASKS an agent performs with this sub-project
-to the area / entry point each one starts from (in prose, not a signature list).
+to the EXACT entry point each one starts from — name the precise function/class
+(e.g. `iris.client.submit`) for each task, not just the area. The reference half
+lists many entry points; the reader needs you to point at the right one per task.
 
 ## Happy path
 ONE short fenced code block for the single most common end-to-end workflow, with
@@ -401,10 +403,11 @@ real import paths and argument names you verified.
 
 ## Gotchas
 2-4 bullets: non-obvious required setup, ordering, or tuned defaults an agent
-gets wrong — explain the REASONING, not just the value.
+gets wrong — name the exact parameter/symbol and explain the REASONING.
 
-Rules: under ~700 tokens. The exact entry-point signatures live in the REFERENCE
-half below — don't duplicate them. Only real names you verified. Output ONLY the
+Rules: under ~700 tokens. The exhaustive signature list lives in the REFERENCE
+half below — don't duplicate it; your job is to name the RIGHT entry point per
+task and the happy-path wiring. Only real names you verified. Output ONLY the
 markdown document.
 """
 )
@@ -418,20 +421,25 @@ doc. Markdown, EXACTLY:
 
 ## Mental model
 1-2 prose paragraphs: the components, how data/control flows between them, and
-WHY the design is the way it is. Convey reasoning signatures alone cannot.
+WHY the design is the way it is. Convey reasoning signatures alone cannot. When
+the design has a central control loop or periodic routine, NAME THE EXACT method
+(e.g. `Controller._run_polling_loop`) and say what one tick does — the reference
+half lists many methods, so the reader needs you to point at THE load-bearing one.
 
 ## Key invariants
 2-5 bullets: properties the code relies on that an editor must not break, each
-with where it is enforced (name the function/method).
+with where it is enforced (name the exact function/method).
 
 ## How to approach a change
 A short paragraph on how to reason about WHERE a change goes — which layer owns
 what — so the agent can use the edit-site list in the REFERENCE half below
-effectively. Name the load-bearing seams (including internal ones) in prose.
+effectively. For each major subsystem, name its KEY routine by exact symbol
+(including internal ones, e.g. a reconcile loop, a scheduler's assignment search,
+a cache invalidation) so the reader can disambiguate it from look-alikes.
 
-Rules: under ~700 tokens. The exact edit-site symbols live in the REFERENCE half
-below — don't reproduce that list. Only real names you verified. Output ONLY the
-markdown document.
+Rules: under ~700 tokens. Verify every named symbol against source you actually
+read. Don't reproduce the flat edit-site list (the REFERENCE half has it) — your
+job is to name and EXPLAIN the few load-bearing ones. Output ONLY the markdown.
 """
 )
 
