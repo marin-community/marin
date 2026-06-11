@@ -14,9 +14,16 @@ import equinox as eqx
 import jax
 import jax.random as jrandom
 from jax import numpy as jnp
-from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds as SplashSegmentIds
-from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
+from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
 
+from levanter.kernels.pallas.splash_attention import (
+    DEFAULT_SPLASH_BLOCK_SIZE,
+    SplashAttentionMaskSpec,
+    lower_splash_attention_mask,
+    lower_splash_segment_ids,
+    splash_attention_block_sizes,
+    splash_partition_spec_shard_factor,
+)
 from levanter.inference.utils import is_valid
 
 try:
@@ -62,7 +69,6 @@ class AttentionBackend(StrEnum):
     VANILLA = "vanilla"  # regular dot product attention
 
 
-DEFAULT_SPLASH_BLOCK_SIZE = 512
 _SPLASH_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 
 
@@ -1006,19 +1012,19 @@ def _tpu_splash_attention(
         q_segment_ids, kv_segment_ids = segment_ids
         kv_segment_ids = kv_segment_ids.rename({QPos.name: KPos.name})
 
-        segment_ids = SplashSegmentIds(q_segment_ids.array, kv_segment_ids.array)
-        segment_ids_axes = SplashSegmentIds(pspec_for_axis(q_segment_ids.axes), pspec_for_axis(kv_segment_ids.axes))
-
         q_segment_batch_axis = _find_batch_axis_for_segment_ids(QPos, q_segment_ids)
         kv_segment_batch_axis = _find_batch_axis_for_segment_ids(KPos, kv_segment_ids)
 
-        if q_segment_batch_axis is not None or kv_segment_batch_axis is not None:
-            segment_batch_axis = SplashSegmentIds(q_segment_batch_axis, kv_segment_batch_axis)  # type: ignore[arg-type]
-        else:
-            segment_batch_axis = None
+        segment_id_lowering = lower_splash_segment_ids(
+            q_segment_ids=q_segment_ids.array,
+            kv_segment_ids=kv_segment_ids.array,
+            q_segment_ids_axes=pspec_for_axis(q_segment_ids.axes),
+            kv_segment_ids_axes=pspec_for_axis(kv_segment_ids.axes),
+            q_segment_batch_axis=q_segment_batch_axis,
+            kv_segment_batch_axis=kv_segment_batch_axis,
+        )
     else:
-        segment_batch_axis = None
-        segment_ids_axes = None
+        segment_id_lowering = lower_splash_segment_ids()
 
     # MaxText uses a block size of 512
     block_size = block_size or DEFAULT_SPLASH_BLOCK_SIZE
@@ -1027,9 +1033,9 @@ def _tpu_splash_attention(
     mesh = hax.partitioning._get_mesh()
     if mesh is None or mesh.empty:
         raise NotImplementedError("Splash attention requires a non-empty mesh")
-    head_shards = _spec_shard_factor(physical_axes_q[1], mesh)
-    q_seq_shards = _spec_shard_factor(physical_axes_q[2], mesh)
-    kv_seq_shards = _spec_shard_factor(physical_axes_k[2], mesh)
+    head_shards = splash_partition_spec_shard_factor(physical_axes_q[1], mesh)
+    q_seq_shards = splash_partition_spec_shard_factor(physical_axes_q[2], mesh)
+    kv_seq_shards = splash_partition_spec_shard_factor(physical_axes_k[2], mesh)
 
     # K should not be sharded for splash attention
     if physical_axes_k[2] is not None:
@@ -1038,69 +1044,40 @@ def _tpu_splash_attention(
             f"Got KV sequence spec: {physical_axes_k[2]}"
         )
 
-    # Compute block sizes based on per-shard sequence lengths
-    shard_Sq = max(1, Sq // max(1, q_seq_shards))
-    shard_Sk = max(1, Sk // max(1, kv_seq_shards))
-
-    def _compatible_block(shard_len: int, max_block: int) -> int:
-        """Pick largest block <= max_block that divides shard_len; prefer multiples of 128."""
-        if shard_len <= 0:
-            return max_block
-        cap = min(max_block, shard_len)
-        for step in (128, 1):
-            candidate = cap - (cap % step)
-            while candidate >= step:
-                if shard_len % candidate == 0:
-                    return candidate
-                candidate -= step
-        return 1
-
-    block_q = _compatible_block(shard_Sq, block_size)
-    block_kv = _compatible_block(shard_Sk, block_size)
-
-    block_sizes = splash_attention_kernel.BlockSizes(
-        block_q=block_q,
-        block_kv_compute=block_kv,
-        block_kv=block_kv,
-        block_q_dkv=block_q,
-        block_kv_dkv=block_kv,
-        block_kv_dkv_compute=block_q,
-        block_q_dq=block_q,
-        block_kv_dq=block_kv,
+    block_sizes = splash_attention_block_sizes(
+        q_seq_len=Sq,
+        kv_seq_len=Sk,
+        q_seq_shards=q_seq_shards,
+        kv_seq_shards=kv_seq_shards,
+        max_block_size=block_size,
     )
 
     # Create mask with GLOBAL shapes (outside shard_map)
     if mask is None:
-        base_mask = splash_attention_mask.FullMask(_shape=(Sq, Sk))
+        mask_spec = None
     elif isinstance(mask, AttentionMask):
-        if mask.is_causal:
-            if mask.causal_offset is not None:
-                raise NotImplementedError(
-                    "Causal offsets are not supported for splash attention. Please use a standard causal mask."
-                )
-            base_mask = splash_attention_mask.CausalMask((Sq, Sk), offset=0, shard_count=q_seq_shards)
-        else:
-            base_mask = splash_attention_mask.FullMask(_shape=(Sq, Sk))
-        if mask.sliding_window is not None:
-            local_mask = splash_attention_mask.LocalMask(
-                shape=(Sq, Sk),
-                window_size=(mask.sliding_window - 1, None),
-                offset=0,
-                shard_count=q_seq_shards,
-            )
-            base_mask = splash_attention_mask.LogicalAnd(base_mask, local_mask)
-        if mask.explicit_mask is not None:
-            raise NotImplementedError("Explicit masks are not yet supported for splash attention")
+        mask_spec = SplashAttentionMaskSpec(
+            is_causal=mask.is_causal,
+            causal_offset=mask.causal_offset,
+            sliding_window=mask.sliding_window,
+            has_explicit_mask=mask.explicit_mask is not None,
+        )
     elif isinstance(mask, NamedArray):
         raise NotImplementedError("NamedArray masks are not yet supported for splash attention")
     else:
         raise ValueError(f"Unknown mask type: {mask}")
 
-    kernel_mask = splash_attention_mask.MultiHeadMask(masks=[base_mask for _ in range(Hq)])
+    mask_lowering = lower_splash_attention_mask(
+        mask=mask_spec,
+        q_seq_len=Sq,
+        kv_seq_len=Sk,
+        num_heads=Hq,
+        q_seq_shards=q_seq_shards,
+    )
 
     # Create kernel with GLOBAL shapes and q_seq_shards (outside shard_map)
     splash_kernel = splash_attention_kernel.make_splash_mha(
-        mask=kernel_mask,
+        mask=mask_lowering.kernel_mask,
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
         block_sizes=block_sizes,
@@ -1118,7 +1095,7 @@ def _tpu_splash_attention(
             physical_axes_q,
             physical_axes_k,
             physical_axes_v,
-            segment_ids_axes,
+            segment_id_lowering.segment_ids_axes,
             physical_axes_sink,
             kernel_specs,
         ),
@@ -1138,10 +1115,10 @@ def _tpu_splash_attention(
 
         return jax.vmap(
             call_kernel,
-            in_axes=(0, 0, 0, segment_batch_axis, sink_in_axes),
+            in_axes=(0, 0, 0, segment_id_lowering.segment_batch_axis, sink_in_axes),
         )(q, k, v, segment_ids, sinks)
 
-    attn_output = wrap_flash_attention(q_, k_, v_, segment_ids, sinks, splash_kernel)
+    attn_output = wrap_flash_attention(q_, k_, v_, segment_id_lowering.segment_ids, sinks, splash_kernel)
 
     attn_output = haliax.named(attn_output, ("B", "H", "S", "D"))
     # the output shape is B, S_q, H_q, D_v. Right now we're requiring D_k == D_v
@@ -1184,22 +1161,6 @@ def _find_batch_axis_for_segment_ids(Pos, segment_ids) -> Optional[int]:
         segment_batch_axis = None
 
     return segment_batch_axis
-
-
-def _spec_shard_factor(entry, mesh) -> int:
-    """Compute product of mesh axis sizes referenced by a PartitionSpec entry."""
-    if mesh is None:
-        return 1
-    if entry is None or entry is PartitionSpec.UNCONSTRAINED:
-        return 1
-    if isinstance(entry, str):
-        return int(mesh.shape.get(entry, 1))
-    prod = 1
-    for e in entry:
-        if e is None or e is PartitionSpec.UNCONSTRAINED:
-            continue
-        prod *= int(mesh.shape.get(e, 1))
-    return prod
 
 
 @dataclass(frozen=True)
