@@ -264,6 +264,9 @@ def write_summary(results: list[ProbeResult], output_dir: Path, gen_model: str, 
             "quality": r.quality,
             "hallucinated": r.judge.hallucinated,
             "passed": r.passed,
+            # coder_cost is the routing-efficiency signal: with a capable coder
+            # that may read files, good docs route it to the answer for less spend.
+            "coder_cost_usd": r.coder.cost_usd,
             "cost_usd": r.total_cost_usd,
         }
         for r in results
@@ -272,6 +275,7 @@ def write_summary(results: list[ProbeResult], output_dir: Path, gen_model: str, 
     summary = {
         "gen_model": gen_model,
         "review_model": review_model,
+        "mean_coder_cost_usd": sum(r.coder.cost_usd for r in results) / n if n else 0.0,
         "num_probes": n,
         "mean_rubric_acc": sum(r.rubric_acc for r in results) / n if n else 0.0,
         "mean_quality": sum(r.quality for r in results) / n if n else 0.0,

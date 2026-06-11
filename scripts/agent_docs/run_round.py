@@ -78,10 +78,11 @@ def _print_round(row: dict, prev: dict | None) -> None:
         print(f"  {cols}{hall}")
     print("-" * 84)
     gen_cost = row.get("gen_cost_usd", 0.0)
+    coder_cost = row.get("mean_coder_cost_usd", 0.0)
     line = (
         f"  mean rubric {row['mean_rubric_acc']:.2f}   mean quality {row['mean_quality']:.2f}   "
-        f"passed {row['num_passed']}/{row['num_probes']}   "
-        f"cost(API-equiv) gen ${gen_cost:.2f} + eval ${row['eval_cost_usd']:.2f}"
+        f"passed {row['num_passed']}/{row['num_probes']}   mean coder spend ${coder_cost:.3f}\n"
+        f"  cost(API-equiv) gen ${gen_cost:.2f} + eval ${row['eval_cost_usd']:.2f}"
     )
     if prev:
         d_r = row["mean_rubric_acc"] - prev["mean_rubric_acc"]
@@ -169,6 +170,7 @@ def main(
         "docs_dir": str(docs_dir),
         "mean_rubric_acc": summary["mean_rubric_acc"],
         "mean_quality": summary["mean_quality"],
+        "mean_coder_cost_usd": summary["mean_coder_cost_usd"],
         "num_passed": summary["num_passed"],
         "num_probes": summary["num_probes"],
         "gen_cost_usd": gen_cost,
