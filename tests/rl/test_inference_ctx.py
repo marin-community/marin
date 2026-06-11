@@ -25,6 +25,7 @@ from marin.rl.environments.inference_ctx import (
 from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
 from marin.rl.environments.inference_ctx.render import Llama3Renderer
 from marin.rl.environments.inference_ctx.vllm import InferenceMode
+from marin.rl.environments.inference_ctx.vllm_utils import llama_transpose_keys
 from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
 from transformers import AutoTokenizer
@@ -586,7 +587,7 @@ def test_delphi_checkpoints_use_llama3_renderer_and_qwen_weight_mapping(llama3_t
     assert isinstance(renderer, Llama3Renderer)
 
     assert "model.layers.*.self_attn.q_norm" in MODEL_MAPPINGS[model_id]
-    assert "q_proj" in MODEL_TRANSPOSE_KEYS[model_id]
+    assert MODEL_TRANSPOSE_KEYS[model_id] == llama_transpose_keys
 
 
 def test_vllm_sync_engine_receives_kv_cache_metrics_flag(monkeypatch):

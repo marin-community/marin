@@ -63,6 +63,10 @@ DEFAULT_NUM_TRAIN_STEPS = 100
 DEFAULT_LEARNING_RATE = 2e-6
 DEFAULT_CHECKPOINT = "9e19-p33m67-magpie_lr1e5"
 
+# Midtrained HF exports live only in the us-east5 bucket; they are too large to
+# mirror, so RL-zero runs must be launched there.
+DELPHI_MIDTRAIN_PREFIX = "gs://marin-us-east5"
+
 # (attempt suffix, endpoint step) for the K=0.20 lr83 sweep scales. All three
 # mixes at a given scale share the same attempt and endpoint step.
 _K020_LR83_ENDPOINTS: dict[str, tuple[str, int]] = {
@@ -295,6 +299,12 @@ def main() -> None:
         curriculum=curriculum,
     )
     executor_config = executor_main_config_for_rl_experiment(experiment_config)
+
+    if args.checkpoint in DELPHI_MIDTRAIN_ENDPOINTS and executor_config.prefix != DELPHI_MIDTRAIN_PREFIX:
+        raise ValueError(
+            f"Midtrained Delphi endpoints are HF exports under {DELPHI_MIDTRAIN_PREFIX}, but the launcher "
+            f"resolved prefix {executor_config.prefix}. Relaunch the root Iris job in us-east5."
+        )
 
     logger.info(
         "Launching Delphi RL Math500 probe %s from checkpoint %s (train_tpu=%s, inference_tpu=%s, "
