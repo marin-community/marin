@@ -103,6 +103,24 @@ def _run_claude(
             )
             return result
 
+        # A nonzero rc that still carries a parseable JSON result envelope is a
+        # "soft" outcome — most importantly error_max_budget_usd, where the agent
+        # hit its intended spend cap mid-task. The envelope still has usage (and
+        # often partial result text), so return it and let the caller use what is
+        # there; retrying would just burn the budget cap again to no effect.
+        if output_format == "json":
+            try:
+                envelope = json.loads(result.stdout)
+            except (json.JSONDecodeError, ValueError):
+                envelope = None
+            if isinstance(envelope, dict) and envelope.get("type") == "result":
+                logger.warning(
+                    "claude exited rc=%d with a result envelope (subtype=%s); using it",
+                    result.returncode,
+                    envelope.get("subtype"),
+                )
+                return result
+
         if not result.stderr.strip() and attempt <= MAX_RETRIES:
             logger.warning(
                 "claude CLI returned rc=%d with empty stderr (attempt %d/%d, %.1fs), retrying...",

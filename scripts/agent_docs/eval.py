@@ -54,7 +54,12 @@ RUBRIC_PASS_THRESHOLD = 0.8
 # few file reads before it must write the script. Run from the repo root so its
 # reads resolve.
 CODER_ALLOWED_TOOLS = ["Read", "Grep", "Glob"]
-CODER_MAX_BUDGET_USD = 0.30
+# Tight spend cap that bounds the file-reading coder to a few reads before it must
+# write the script (no --max-turns flag exists). Raised from 0.30 once the larger
+# 1500-token hybrid docs pushed exploration past the old cap mid-script; on a cap
+# hit the CLI returns its partial result envelope (handled in claude_cli), so a
+# probe degrades to whatever it produced rather than crashing the round.
+CODER_MAX_BUDGET_USD = 0.50
 REPO_ROOT = Path(__file__).parent.parent.parent
 
 CODER_SYSTEM_PROMPT = (
