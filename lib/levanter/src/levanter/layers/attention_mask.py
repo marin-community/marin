@@ -158,10 +158,10 @@ class AttentionMask(eqx.Module):
             causal = None
 
         if self.sliding_window is not None:
-            sw_mask = _materialize_sliding_window_mask(
+            sliding_window_mask = _materialize_sliding_window_mask(
                 self.sliding_window, QPos, KPos, q_slice=q_slice, k_slice=k_slice
             )
-            causal = combine_masks_and(causal, sw_mask)
+            causal = combine_masks_and(causal, sliding_window_mask)
 
         prefix = None
         if self.prefix_length is not None:

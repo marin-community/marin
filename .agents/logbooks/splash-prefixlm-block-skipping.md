@@ -349,3 +349,25 @@
   - Changed-file precommit passed.
 - Interpretation: TPU benchmark commands can now paste multiple lines from `sample_packed_doc_lengths.py` as a semicolon-separated batch, exercising per-example packed segment-run metadata instead of only repeated layouts.
 - Next action: Use the two Alpaca sampled rows as a `B=2 --doc-lengths '<row0>;<row1>'` TPU run when capacity is available.
+
+### 2026-06-12 - v5p segment-run regression and compact gather fix
+- Hypothesis: The compact partial-mask payload path should improve packed segment-run metadata size, but the first implementation may have made runtime metadata packing too expensive by selecting compact blocks with a dense `grid_size x capacity x block_q x block_kv` broadcast.
+- Command:
+  - Subagent Boyle ran v5p-8 validation at commit `d907d8560984711ab7ee5cd638a1e7c440ed8207`.
+  - `uv run --project lib/levanter --group test python -m pytest -n0 lib/levanter/tests/test_attention.py -k test_tpu_splash_attention_batched_masks`
+  - `uv run --project lib/levanter python lib/levanter/scripts/bench/bench_splash_attention_masks.py --seq-len 8192 --block-size 512 --docs-per-sequence 4 --prefix-tokens-per-doc 256 --iterations 5 --warmup 2 --include-dense`
+  - `uv run --project lib/levanter python lib/levanter/scripts/bench/bench_splash_attention_masks.py --seq-len 16384 --block-size 512 --docs-per-sequence 4 --prefix-tokens-per-doc 512 --iterations 5 --warmup 2`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py`
+  - `./infra/pre-commit.py --changed-files --fix`
+- Config:
+  - v4-8 unavailable: `Insufficient TPUs (need 4, available 0)` for `tpu_v4-preemptible_8-us-central2-b`.
+  - v5p-8 worker: `marin-tpu-v5p-preemptible-8-us-east5-a-20260612-0902-6a5ea1a6`, zone `us-east5-a`.
+  - Hardware holders released after the run.
+- Result:
+  - TPU parity slice passed with `5 passed`.
+  - v5p 8192 equal-doc steady medians: static causal `1.197 ms`; packed causal segment `7.804 ms`; packed segment-runs `4.825 ms`; packed prefix-LM `7.784 ms`; dense references about `1.85-1.88 ms`.
+  - v5p 16384 equal-doc steady medians: static causal `3.312 ms`; packed causal segment `110.357 ms`; packed segment-runs `30.329 ms`; packed prefix-LM `110.432 ms`.
+  - Replaced `_compact_partial_mask_blocks`'s broadcast-and-reduce selection with `jnp.nonzero(..., size=partial_capacity)` plus direct gather.
+  - Local Splash metadata tests passed with `19 passed`; changed-file precommit passed.
+- Interpretation: Correctness is good, and segment-run metadata is faster than generic packed metadata, but the compact block packing implementation introduced a severe v5p performance regression. The direct gather fix targets the packing overhead while preserving the compact `MaskInfo` representation.
+- Next action: Re-run the v5p benchmark after the gather fix; if steady-state remains slow, profile whether metadata construction is still in the runtime path or whether the compact `MaskInfo` shape itself is stressing Splash.

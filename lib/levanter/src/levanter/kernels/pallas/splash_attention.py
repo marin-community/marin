@@ -464,9 +464,10 @@ def _compact_partial_mask_blocks(
     partial_indices = jnp.cumsum(is_partial.astype(jnp.int32), dtype=jnp.int32) - 1
     num_partial = jnp.sum(is_partial.astype(jnp.int32), dtype=jnp.int32)
 
-    slots = jnp.arange(partial_capacity, dtype=jnp.int32)
-    selected = (partial_indices[:, None] == slots[None, :]) & is_partial[:, None]
-    compact_blocks = jnp.any(selected[:, :, None, None] & flat_blocks[:, None, :, :], axis=0)
+    partial_flat_indices = jnp.nonzero(is_partial, size=partial_capacity, fill_value=0)[0]
+    compact_blocks = flat_blocks[partial_flat_indices]
+    valid_slots = jnp.arange(partial_capacity, dtype=jnp.int32) < num_partial
+    compact_blocks = jnp.where(valid_slots[:, None, None], compact_blocks, False)
     compact_blocks = eqx.error_if(
         compact_blocks,
         num_partial > partial_capacity,
