@@ -30,6 +30,7 @@ from typing import Any, Protocol, runtime_checkable
 import fsspec
 import jinja2
 import jinja2.ext
+import jinja2.sandbox
 from huggingface_hub import __version__ as _hf_hub_version
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
@@ -192,7 +193,7 @@ class _GenerationStripExtension(jinja2.ext.Extension):
 
 def _make_jinja_env(extensions: list[type]) -> jinja2.Environment:
     """Create a jinja2 environment matching HF's template rendering settings."""
-    env = jinja2.Environment(
+    env = jinja2.sandbox.SandboxedEnvironment(
         undefined=jinja2.StrictUndefined,
         trim_blocks=True,
         lstrip_blocks=True,
