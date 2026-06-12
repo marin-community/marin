@@ -92,6 +92,12 @@ jobs:
           echo "module=$MODULE" >> "$GITHUB_OUTPUT"
           echo "Authored module: $MODULE"
 
+      # Gate A, part 1 (credential-free): import + statically validate the agent's module
+      # BEFORE any cloud creds exist in the runner, so its import-time code can't read them.
+      - name: Gate A — validate (credential-free)
+        shell: bash -l {0}
+        run: .venv/bin/python -m experiments.ferries.agentic.agentic_canary check --module "${{ steps.mod.outputs.module }}"
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -113,10 +119,11 @@ jobs:
           chmod 600 ~/.ssh/google_compute_engine
           chmod 644 ~/.ssh/google_compute_engine.pub
 
-      # Gate A (CPU, pre-launch): module imports + exposes a valid launch; pinned dataset is in-region.
-      - name: Gate A (validate + data preflight)
+      # Gate A, part 2: confirm the pinned dataset is present in-region. This does NOT import
+      # the agent module (it only checks the pinned mixture), so running it post-auth is safe.
+      - name: Gate A — data preflight
         shell: bash -l {0}
-        run: .venv/bin/python -m experiments.ferries.agentic.agentic_canary gate-a --module "${{ steps.mod.outputs.module }}" --region us-east5
+        run: .venv/bin/python -m experiments.ferries.agentic.agentic_canary preflight --region us-east5
 
       # CI owns the launch. The worker entrypoint clamps consumption (resources/data/steps)
       # before submitting the child; --priority batch yields to interactive/production.

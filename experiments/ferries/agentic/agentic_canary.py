@@ -26,11 +26,14 @@ region, and step count are CI's.
 """
 
 import argparse
+import ast
 import dataclasses
 import importlib
+import importlib.util
 import math
 import os
 import subprocess
+from pathlib import Path
 
 import wandb
 from fray.cluster import ResourceConfig
@@ -75,8 +78,77 @@ WANDB_GROUP = "agentic-canary"
 CHILD_ENV_KEYS = ("WANDB_API_KEY", "WANDB_ENTITY", "WANDB_PROJECT", "HF_TOKEN", "MARIN_PREFIX")
 
 
+# --- Gate A static guard: reject import-time side effects before executing agent code ---
+# Importing runs the module's top level (in `_load_launch`), which on a credentialed host
+# or an Iris worker could read secrets or submit jobs before the clamp applies. We parse —
+# never execute — the source and require it to only declare (imports / assignments / defs /
+# a docstring), with no process/network imports and no exec/eval or job-submitting calls.
+# Best-effort: an obfuscated module can still evade it; full containment is a sandboxed
+# import (tracked separately).
+_FORBIDDEN_IMPORTS = frozenset(
+    {"subprocess", "socket", "requests", "urllib", "http", "ftplib", "smtplib", "ctypes", "pty", "shutil"}
+)
+_FORBIDDEN_CALLS = frozenset(
+    {
+        "eval",
+        "exec",
+        "compile",
+        "__import__",
+        "system",
+        "popen",
+        "run",
+        "Popen",
+        "call",
+        "check_output",
+        "check_call",
+        "train_grug",
+        "executor_main",
+        "run_grug",
+        "_submit_train_job",
+    }
+)
+
+
+def _assert_no_import_side_effects(module_path: str) -> None:
+    """Statically reject an agent module that would do work at import time."""
+    spec = importlib.util.find_spec(module_path)  # resolves parent packages only, not the target
+    if spec is None or not spec.origin:
+        raise SystemExit(f"GATE A FAILED: cannot locate source for {module_path}.")
+    tree = ast.parse(Path(spec.origin).read_text(), filename=spec.origin)
+
+    allowed = (
+        ast.Import,
+        ast.ImportFrom,
+        ast.Assign,
+        ast.AnnAssign,
+        ast.FunctionDef,
+        ast.AsyncFunctionDef,
+        ast.ClassDef,
+    )
+    for node in tree.body:
+        if isinstance(node, allowed) or (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)):
+            continue
+        raise SystemExit(
+            f"GATE A FAILED: {module_path} has a disallowed top-level {type(node).__name__} at "
+            f"line {node.lineno}; a config module may only import, assign, and define."
+        )
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            bad = next((a.name for a in node.names if a.name.split(".")[0] in _FORBIDDEN_IMPORTS), None)
+            if bad:
+                raise SystemExit(f"GATE A FAILED: {module_path} imports {bad!r} (process/network not allowed).")
+        elif isinstance(node, ast.ImportFrom) and node.module and node.module.split(".")[0] in _FORBIDDEN_IMPORTS:
+            raise SystemExit(f"GATE A FAILED: {module_path} imports from {node.module!r} (process/network not allowed).")
+        elif isinstance(node, ast.Call):
+            name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", None)
+            if name in _FORBIDDEN_CALLS:
+                raise SystemExit(f"GATE A FAILED: {module_path} calls {name!r}, not allowed at import.")
+
+
 def _load_launch(module_path: str) -> GrugBaseLaunchConfig:
-    """Import the agent's module and return its `launch`, asserting the contract."""
+    """Statically guard against import-time side effects, then import and return `launch`."""
+    _assert_no_import_side_effects(module_path)
     module = importlib.import_module(module_path)
     launch = getattr(module, "launch", None)
     if launch is None:
@@ -170,10 +242,19 @@ def check(module_path: str) -> None:
     print("CHECK PASSED.")
 
 
-def gate_a(module_path: str, region: str) -> None:
-    validate_module(module_path)
-    print(f"GATE A: data preflight for the pinned mixture in {region}:")
+def preflight(region: str) -> None:
+    """Assert the pinned dataset is present in-region. Does not import the agent module
+    (it only checks the pinned mixture), so it is safe to run after cloud creds exist."""
+    print(f"data preflight for the pinned mixture in {region}:")
     _data_preflight(region)
+    print("PREFLIGHT PASSED.")
+
+
+def gate_a(module_path: str, region: str) -> None:
+    """Local convenience: validate the module and run the preflight together. In CI these
+    run as two steps so the import stays credential-free (see the workflow)."""
+    validate_module(module_path)
+    preflight(region)
     print("GATE A PASSED.")
 
 
@@ -241,6 +322,9 @@ def main() -> None:
     p_a.add_argument("--module", required=True, help="Dotted path to the agent's module.")
     p_a.add_argument("--region", default=CLAMP_REGION)
 
+    p_p = sub.add_parser("preflight", help="Assert the pinned dataset is in-region (no agent import; post-auth).")
+    p_p.add_argument("--region", default=CLAMP_REGION)
+
     p_l = sub.add_parser("launch", help="Clamp consumption and submit the run (Iris worker entrypoint).")
     p_l.add_argument("--module", required=True, help="Dotted path to the agent's module.")
 
@@ -252,6 +336,8 @@ def main() -> None:
         check(args.module)
     elif args.command == "gate-a":
         gate_a(args.module, args.region)
+    elif args.command == "preflight":
+        preflight(args.region)
     elif args.command == "launch":
         launch_cmd(args.module)
     elif args.command == "gate-b":
