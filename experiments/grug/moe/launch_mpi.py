@@ -16,6 +16,7 @@ Gate 1 = d512 + d768. Submit with:
 """
 
 import dataclasses
+import os
 
 from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
@@ -37,11 +38,17 @@ _MPI_C_PRIME: float = 3.0
 # full effective-speedup gate) AND co-located with the data in gs://marin-us-central2 (submit
 # with MARIN_PREFIX=gs://marin-us-central2; no cross-region). Reserved access requires
 # preemptible=False on the TRAINING ResourceConfig (the parent --reserve flag does nothing).
-# d512 first to de-risk the MPI code; d768 enabled after d512 validates.
-_GATE1_CELLS: tuple[tuple[int, int, int], ...] = (
-    (512, 32, 10_980),
-    # (768, 64, 16_875),
-)
+# Dim -> (dim, batch_size, steps), matching launch.py's compute-optimal baseline cells.
+# Select which dims to run via env MPI_DIMS (comma-separated) so cells can be launched in
+# separate parallel coordinators, e.g. MPI_DIMS=512 and MPI_DIMS=768 concurrently.
+_ALL_CELLS: dict[int, tuple[int, int, int]] = {
+    512: (512, 32, 10_980),
+    768: (768, 64, 16_875),
+    1024: (1024, 128, 16_080),
+    1280: (1280, 256, 14_325),
+}
+_DIMS: list[int] = [int(d) for d in os.environ.get("MPI_DIMS", "512").split(",")]
+_GATE1_CELLS: tuple[tuple[int, int, int], ...] = tuple(_ALL_CELLS[d] for d in _DIMS)
 _TPU: str = "v4-32"
 _TPU_REGIONS: list[str] = ["us-central2"]
 _EXPERT_PARALLEL: int = 2
