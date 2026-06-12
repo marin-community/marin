@@ -15,6 +15,7 @@ from levanter.kernels.pallas.splash_attention import (
     BLOCK_MASK_FULL,
     BLOCK_MASK_PARTIAL,
     SplashAttentionMaskSpec,
+    SplashDynamicPrefixMask,
     lower_splash_attention_mask,
     lower_splash_segment_ids,
     packed_prefix_lm_mask_infos,
@@ -203,7 +204,7 @@ def test_lower_splash_attention_mask_rejects_unsupported_structured_fields():
 
     with pytest.raises(NotImplementedError):
         lower_splash_attention_mask(
-            mask=SplashAttentionMaskSpec(is_causal=True, has_prefix_mask=True),
+            mask=SplashAttentionMaskSpec(is_causal=True, dynamic_prefix=SplashDynamicPrefixMask.PREFIX_MASK),
             q_seq_len=128,
             kv_seq_len=128,
             num_heads=1,
@@ -212,7 +213,7 @@ def test_lower_splash_attention_mask_rejects_unsupported_structured_fields():
 
     with pytest.raises(NotImplementedError):
         lower_splash_attention_mask(
-            mask=SplashAttentionMaskSpec(is_causal=True, has_prefix_lengths=True),
+            mask=SplashAttentionMaskSpec(is_causal=True, dynamic_prefix=SplashDynamicPrefixMask.PREFIX_LENGTHS),
             q_seq_len=128,
             kv_seq_len=128,
             num_heads=1,

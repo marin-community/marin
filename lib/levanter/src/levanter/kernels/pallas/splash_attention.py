@@ -5,6 +5,7 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 
 import jax
 import numpy as np
@@ -26,6 +27,12 @@ PREFIX_PARTIAL_MASK_SLOT_OFFSET = 1
 PartitionSpecEntry = str | Sequence[str | None] | None
 
 
+class SplashDynamicPrefixMask(StrEnum):
+    NONE = "none"
+    PREFIX_LENGTHS = "prefix_lengths"
+    PREFIX_MASK = "prefix_mask"
+
+
 @dataclass(frozen=True)
 class SplashAttentionMaskSpec:
     """Static mask fields consumed by Splash Attention lowering."""
@@ -34,8 +41,7 @@ class SplashAttentionMaskSpec:
     causal_offset: int | None = None
     sliding_window: int | None = None
     prefix_length: int | None = None
-    has_prefix_lengths: bool = False
-    has_prefix_mask: bool = False
+    dynamic_prefix: SplashDynamicPrefixMask = SplashDynamicPrefixMask.NONE
     has_explicit_mask: bool = False
 
 
@@ -49,13 +55,20 @@ class SplashAttentionMaskLowering:
 
 def splash_attention_mask_spec_from_attention_mask(mask) -> SplashAttentionMaskSpec:
     """Convert an AttentionMask-like object to the static fields used by Splash lowering."""
+    dynamic_prefix = SplashDynamicPrefixMask.NONE
+    if mask.prefix_lengths is not None and mask.prefix_mask is not None:
+        raise ValueError("Splash attention mask spec cannot combine prefix_lengths and prefix_mask.")
+    if mask.prefix_lengths is not None:
+        dynamic_prefix = SplashDynamicPrefixMask.PREFIX_LENGTHS
+    elif mask.prefix_mask is not None:
+        dynamic_prefix = SplashDynamicPrefixMask.PREFIX_MASK
+
     return SplashAttentionMaskSpec(
         is_causal=mask.is_causal,
         causal_offset=mask.causal_offset,
         sliding_window=mask.sliding_window,
         prefix_length=mask.prefix_length,
-        has_prefix_lengths=mask.prefix_lengths is not None,
-        has_prefix_mask=mask.prefix_mask is not None,
+        dynamic_prefix=dynamic_prefix,
         has_explicit_mask=mask.explicit_mask is not None,
     )
 
@@ -272,7 +285,7 @@ def lower_splash_attention_mask(
     if mask is None:
         base_mask = splash_attention_mask.FullMask(_shape=(q_seq_len, kv_seq_len))
     else:
-        if mask.has_prefix_lengths or mask.has_prefix_mask:
+        if mask.dynamic_prefix != SplashDynamicPrefixMask.NONE:
             raise NotImplementedError("Dynamic prefix-LM masks are not yet supported for splash attention")
         if mask.prefix_length is not None and not mask.is_causal:
             raise NotImplementedError("Splash prefix-LM masks must also be causal.")
