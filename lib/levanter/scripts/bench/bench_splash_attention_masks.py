@@ -50,6 +50,7 @@ class BenchShape:
     docs_per_sequence: int
     prefix_tokens_per_doc: int
     doc_length_profile: str
+    doc_lengths: tuple[int, ...] | None
     dtype: jnp.dtype
 
 
@@ -64,6 +65,7 @@ class BenchResult:
     docs_per_sequence: int
     prefix_tokens_per_doc: int
     doc_length_profile: str
+    doc_lengths: tuple[int, ...]
     dtype: str
     device_kind: str
     num_devices: int
@@ -77,15 +79,17 @@ class BenchResult:
 def main() -> None:
     args = _parse_args()
     dtype = _parse_dtype(args.dtype)
+    doc_lengths = _parse_doc_lengths(args.doc_lengths)
     shape = BenchShape(
         batch=args.batch,
         seq_len=args.seq_len,
         heads=args.heads,
         head_dim=args.head_dim,
         block_size=args.block_size,
-        docs_per_sequence=args.docs_per_sequence,
+        docs_per_sequence=len(doc_lengths) if doc_lengths is not None else args.docs_per_sequence,
         prefix_tokens_per_doc=args.prefix_tokens_per_doc,
         doc_length_profile=args.doc_length_profile,
+        doc_lengths=doc_lengths,
         dtype=dtype,
     )
     if jax.default_backend() != "tpu" and not args.allow_non_tpu:
@@ -245,6 +249,7 @@ def _time_variant(
         docs_per_sequence=shape.docs_per_sequence,
         prefix_tokens_per_doc=shape.prefix_tokens_per_doc,
         doc_length_profile=shape.doc_length_profile,
+        doc_lengths=_doc_lengths(shape),
         dtype=str(shape.dtype),
         device_kind=device_kind,
         num_devices=len(jax.devices()),
@@ -284,6 +289,15 @@ def _packed_prefix_mask(shape: BenchShape, Batch: hax.Axis, Pos: hax.Axis) -> ha
 
 
 def _doc_lengths(shape: BenchShape) -> tuple[int, ...]:
+    if shape.doc_lengths is not None:
+        if len(shape.doc_lengths) == 0:
+            raise ValueError("doc_lengths must not be empty.")
+        if any(doc_len <= 0 for doc_len in shape.doc_lengths):
+            raise ValueError("doc_lengths must all be positive.")
+        if sum(shape.doc_lengths) != shape.seq_len:
+            raise ValueError(f"doc_lengths must sum to seq_len={shape.seq_len}, got {sum(shape.doc_lengths)}.")
+        return shape.doc_lengths
+
     if shape.docs_per_sequence <= 0:
         raise ValueError("docs_per_sequence must be positive.")
     if shape.docs_per_sequence > shape.seq_len:
@@ -331,6 +345,15 @@ def _parse_dtype(dtype: str) -> jnp.dtype:
     raise ValueError(f"Unsupported dtype {dtype!r}.")
 
 
+def _parse_doc_lengths(doc_lengths: str | None) -> tuple[int, ...] | None:
+    if doc_lengths is None:
+        return None
+    parsed_lengths = tuple(int(part.strip()) for part in doc_lengths.split(",") if part.strip())
+    if not parsed_lengths:
+        raise ValueError("--doc-lengths must contain at least one integer.")
+    return parsed_lengths
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--batch", type=int, default=1)
@@ -341,6 +364,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--docs-per-sequence", type=int, default=4)
     parser.add_argument("--prefix-tokens-per-doc", type=int, default=256)
     parser.add_argument("--doc-length-profile", choices=DOC_LENGTH_PROFILES, default=DOC_LENGTH_PROFILE_EQUAL)
+    parser.add_argument("--doc-lengths", type=str, default=None)
     parser.add_argument("--dtype", choices=("bf16", "fp32"), default="bf16")
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--iterations", type=int, default=5)

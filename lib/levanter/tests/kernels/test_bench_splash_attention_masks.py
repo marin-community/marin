@@ -41,6 +41,7 @@ def test_packed_doc_profiles_feed_segment_run_metadata(profile, expected_lengths
         docs_per_sequence=4,
         prefix_tokens_per_doc=16,
         doc_length_profile=profile,
+        doc_lengths=None,
         dtype=jnp.bfloat16,
     )
     Batch = hax.Axis("batch", shape.batch)
@@ -64,3 +65,34 @@ def test_packed_doc_profiles_feed_segment_run_metadata(profile, expected_lengths
     assert (metadata.segment_lengths.array[0] == jnp.asarray(expected_lengths)).all()
     assert (prefix_mask.array[:, : min(shape.prefix_tokens_per_doc, expected_lengths[0])]).all()
     assert (segment_run_mask.materialize(Pos, KPos).array == segment_id_mask.materialize(Pos, KPos).array).all()
+
+
+def test_explicit_doc_lengths_override_profile_and_docs_per_sequence():
+    explicit_lengths = (5, 17, 29, 77)
+    shape = BenchShape(
+        batch=2,
+        seq_len=128,
+        heads=2,
+        head_dim=16,
+        block_size=128,
+        docs_per_sequence=999,
+        prefix_tokens_per_doc=16,
+        doc_length_profile="equal",
+        doc_lengths=explicit_lengths,
+        dtype=jnp.bfloat16,
+    )
+    Batch = hax.Axis("batch", shape.batch)
+    Pos = hax.Axis("position", shape.seq_len)
+    KPos = Pos.alias("key_position")
+
+    segment_ids = _packed_segment_ids(shape, Batch, Pos, KPos)
+    segment_run_mask = AttentionMask.causal().with_segment_runs(
+        segment_ids.q,
+        kv_segment_ids=segment_ids.kv,
+        max_segments=len(explicit_lengths),
+    )
+
+    metadata = segment_run_mask.segment_run_metadata
+    assert metadata is not None
+    assert _doc_lengths(shape) == explicit_lengths
+    assert (metadata.segment_lengths.array[0] == jnp.asarray(explicit_lengths)).all()

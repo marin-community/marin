@@ -287,3 +287,19 @@
   - New benchmark-profile tests passed (`3 passed`); attention segment-run slice passed (`1 passed, 5 skipped`); Splash helper tests passed (`19 passed`); changed-file precommit passed; lint review reported no findings.
 - Interpretation: The next TPU benchmark can measure the compact segment-run path on ragged packed-doc layouts closer to real packed instruction data, while preserving the previous equal-doc baseline for comparison.
 - Next action: Run v4-8/v5p-8 when available with both `--doc-length-profile equal` and `--doc-length-profile long-tail`.
+
+### 2026-06-12 - Explicit packed-doc benchmark lengths
+- Hypothesis: Synthetic profiles are useful, but the benchmark also needs a direct path for Lima/Alpaca-derived packed lengths without code edits.
+- Command:
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_bench_splash_attention_masks.py`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'segment_runs or batched_masks'`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `timeout 900 ./infra/pre-commit.py --review --agent-command='env RUST_LOG=error codex exec --ignore-user-config --ephemeral --dangerously-bypass-approvals-and-sandbox'`
+- Config: Added `--doc-lengths` as a comma-separated override. Explicit lengths must be positive and sum to `seq_len`; when present, `docs_per_sequence` is inferred from the number of lengths.
+- Result:
+  - `BenchResult` JSON now records concrete `doc_lengths`.
+  - New benchmark-profile tests passed (`4 passed`), including an explicit-length override case.
+  - Attention segment-run slice passed (`1 passed, 5 skipped`); Splash helper tests passed (`19 passed`); changed-file precommit passed; lint review reported no findings.
+- Interpretation: We can now run synthetic profiles or feed measured packed lengths from a dataset/tokenizer pass into the same benchmark command.
+- Next action: Capture or choose representative Lima/Alpaca packed lengths, then run the updated harness on v4-8/v5p-8 when capacity is available.
