@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -275,7 +276,7 @@ class GcpService(Protocol):
         self, zones: list[str], labels: dict[str, str] | None = None
     ) -> list[QueuedResourceInfo]: ...
 
-    def vm_create(self, request: VmCreateRequest) -> VmInfo: ...
+    def vm_create(self, request: VmCreateRequest, *, wait: bool = False) -> VmInfo: ...
     def vm_delete(self, name: str, zone: str, *, wait: bool = False) -> None: ...
     def vm_describe(self, name: str, zone: str) -> VmInfo | None: ...
     def vm_list(self, zones: list[str], labels: dict[str, str] | None = None) -> list[VmInfo]: ...
@@ -412,6 +413,7 @@ class CloudGcpService:
         self._creds: google.auth.credentials.Credentials | None = None
         self._token: str | None = None
         self._expires_at: float = 0.0
+        self._token_lock = threading.Lock()
         self._valid_zones: set[str] = set(KNOWN_GCP_ZONES)
         self._valid_accelerator_types: set[str] = set(KNOWN_TPU_TYPES)
         self._tpu_alpha_client_cached: tpu_v2alpha1.TpuClient | None = None
@@ -436,7 +438,10 @@ class CloudGcpService:
 
     def _headers(self) -> dict[str, str]:
         if self._token is None or time.monotonic() >= self._expires_at:
-            self._refresh_token()
+            with self._token_lock:
+                # Re-check under the lock: another thread may have refreshed already.
+                if self._token is None or time.monotonic() >= self._expires_at:
+                    self._refresh_token()
         return {
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json",
@@ -775,7 +780,16 @@ class CloudGcpService:
     # VM operations
     # ========================================================================
 
-    def vm_create(self, request: VmCreateRequest) -> VmInfo:
+    def vm_create(self, request: VmCreateRequest, *, wait: bool = False) -> VmInfo:
+        """POST the instance insert and return.
+
+        With wait=False (the default): returns a synthesized VmInfo in PROVISIONING
+        state immediately after the insert is accepted.  internal_ip is empty; callers
+        that need the instance running before proceeding must pass wait=True.
+
+        With wait=True: blocks until the insert zone operation completes, then describes
+        the instance so the returned VmInfo reflects the live state including internal_ip.
+        """
         validate_vm_create(request, self._valid_zones)
 
         all_metadata = dict(request.metadata)
@@ -811,22 +825,38 @@ class CloudGcpService:
 
         logger.info("Creating VM: %s (zone=%s, type=%s)", request.name, request.zone, request.machine_type)
         try:
-            # POST to insert, wait for zone operation
             url = self._instance_url(request.zone)
             resp = self._client.post(url, headers=self._headers(), json=body)
             self._classify_response(resp)
             data = resp.json()
             op_name = data.get("name", "")
-            if op_name:
+            if wait and op_name:
                 self._wait_zone_operation(request.zone, op_name)
         except InfraError as e:
             if "already exists" not in str(e).lower():
                 raise
 
-        info = self.vm_describe(request.name, request.zone)
-        if info is None:
-            raise InfraError(f"VM {request.name} created but could not be described")
-        return info
+        if wait:
+            info = self.vm_describe(request.name, request.zone)
+            if info is None:
+                raise InfraError(f"VM {request.name} created but could not be described")
+            return info
+
+        # Non-blocking path: synthesize a VmInfo in PROVISIONING state so the
+        # caller has the name and zone available immediately.  internal_ip is
+        # empty; the refresh loop's vm_describe() calls will supply it once the
+        # VM reaches RUNNING.
+        return VmInfo(
+            name=request.name,
+            status="PROVISIONING",
+            zone=request.zone,
+            internal_ip="",
+            external_ip=None,
+            labels=dict(request.labels),
+            metadata=dict(request.metadata),
+            service_account=request.service_account,
+            created_at=Timestamp.now(),
+        )
 
     def vm_delete(self, name: str, zone: str, *, wait: bool = False) -> None:
         logger.info("Deleting VM: %s", name)

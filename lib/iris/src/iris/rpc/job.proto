@@ -275,7 +275,7 @@ message ResourceUsage {
   int32 process_count = 6;
 }
 
-// Host-level resource snapshot collected by the worker during each Ping.
+// Host-level resource snapshot collected by the worker during each Reconcile.
 message WorkerResourceSnapshot {
   iris.time.Timestamp timestamp = 1;
   // Host CPU utilization as percentage (0-100 averaged across cores)

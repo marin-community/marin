@@ -130,11 +130,11 @@ class SliceState:
     worker_urls: dict[str, str] = field(default_factory=dict)
     # worker_id -> consecutive /health probe failures since the last
     # success. Reset on a healthy response; once any worker crosses
-    # PING_FAILURE_THRESHOLD the slice is terminated. Memory-only.
+    # CONSECUTIVE_FAILURE_THRESHOLD the slice is terminated. Memory-only.
     ping_failures: dict[str, int] = field(default_factory=dict)
     # Consecutive health-probe passes where the slice's cloud allocation
     # reported zero workers (so there was nothing to /health-probe). Reset the
-    # moment any worker becomes probeable; once it crosses PING_FAILURE_THRESHOLD
+    # moment any worker becomes probeable; once it crosses CONSECUTIVE_FAILURE_THRESHOLD
     # the slice is terminated. This catches a slice whose backing allocation
     # vanished while it had no cached worker URLs (e.g. preempted after a
     # controller restart), which the per-worker counters never observe.
@@ -716,7 +716,7 @@ class ScalingGroup:
         """Update the per-worker ping_failures counter and return the new count.
 
         Returns 0 on success (counter reset) and the incremented count on
-        failure. A counter that reaches PING_FAILURE_THRESHOLD signals the
+        failure. A counter that reaches CONSECUTIVE_FAILURE_THRESHOLD signals the
         slice should be terminated (the runtime owns that decision).
         """
         with self._slices_lock:
@@ -738,7 +738,7 @@ class ScalingGroup:
         A READY slice whose cloud allocation reports zero workers cannot be
         /health-probed at all, so the per-worker ping counters never see it.
         Tracking the streak lets the runtime tear the slice down after
-        PING_FAILURE_THRESHOLD sustained observations -- mirroring the
+        CONSECUTIVE_FAILURE_THRESHOLD sustained observations -- mirroring the
         per-worker zombie path -- while tolerating a single transient describe().
         """
         with self._slices_lock:

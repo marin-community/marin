@@ -3,10 +3,11 @@
 
 """RpcTaskBackend: a TaskBackend backed by worker daemons via Connect RPC.
 
-The ``PlacementOwner.IRIS_CONTROLLER`` backend used by the GCP/TPU, CoreWeave-bare-metal,
-manual, and local clusters. The Iris scheduler assigns task→worker; this
-backend fans the per-worker Reconcile RPC out to the worker daemons and reports
-the raw observations back to the controller.
+The worker-daemon backend used by the GCP/TPU, CoreWeave-bare-metal, manual, and
+local clusters. The Iris scheduler assigns task→worker; this backend fans the
+per-worker Reconcile RPC out to the worker daemons, reports the raw observations
+back to the controller, and surfaces the per-worker liveness it observed
+(REACHED / UNREACHABLE) as health events the controller folds.
 """
 
 from __future__ import annotations
@@ -24,22 +25,22 @@ from rigging.timing import Duration
 
 from iris.chaos import chaos
 from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.backend import (
-    BackendReconcileInput,
-    BackendReconcileResult,
-    CapacityInput,
-    CapacityResult,
-    PingResult,
-    PlacementOwner,
+    AutoscaleResult,
+    BackendCapability,
     ProviderError,
+    ReconcileResult,
     ScheduleInput,
     ScheduleResult,
     TaskTarget,
-    WorkersFailedResult,
+    plans_from_snapshot,
     run_scheduling_decision,
 )
-from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
+from iris.cluster.controller.reads import ControlSnapshot
+from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.scheduling.scheduler import Scheduler
+from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind
 from iris.cluster.types import WorkerId
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -47,10 +48,10 @@ from iris.rpc.worker_connect import WorkerServiceClient
 
 logger = logging.getLogger(__name__)
 
-# Per-worker RPC deadline applied to every fanned-out worker call (reconcile,
-# ping, ...). Combined with the fan-out semaphore this bounds a full reconcile
-# round at ~DEFAULT_WORKER_RPC_TIMEOUT * ceil(num_workers / parallelism), so the
-# control thread is never blocked indefinitely even if the whole fleet is hung.
+# Per-worker RPC deadline applied to every fanned-out worker reconcile call.
+# Combined with the fan-out semaphore this bounds a full reconcile round at
+# ~DEFAULT_WORKER_RPC_TIMEOUT * ceil(num_workers / parallelism), so the control
+# thread is never blocked indefinitely even if the whole fleet is hung.
 DEFAULT_WORKER_RPC_TIMEOUT = Duration.from_seconds(10.0)
 
 # Max concurrent in-flight per-worker RPCs in a fan-out (asyncio.Semaphore width).
@@ -129,10 +130,10 @@ class RpcWorkerStubFactory:
 
 @dataclass
 class RpcTaskBackend:
-    """``PlacementOwner.IRIS_CONTROLLER`` :class:`~iris.cluster.controller.backend.TaskBackend`
-    backed by worker daemons via async Connect RPCs.
+    """A worker-daemon :class:`~iris.cluster.controller.backend.TaskBackend`
+    backed by async Connect RPCs.
 
-    Each public method spins up an asyncio event loop and dispatches the
+    Each fan-out method spins up an asyncio event loop and dispatches the
     relevant RPC to each worker concurrently via `asyncio.gather`, capped at
     `parallelism` in-flight requests by a local semaphore. Cached stubs in
     the factory keep their pyqwest connection pools across rounds.
@@ -145,8 +146,9 @@ class RpcTaskBackend:
     # the controller's main() after construction (mirrors set_log_sink); None for
     # clusters with no scale groups, where capacity calls are no-ops.
     autoscaler: Autoscaler | None = None
-    placement: ClassVar[PlacementOwner] = PlacementOwner.IRIS_CONTROLLER
-    manages_capacity: ClassVar[bool] = False
+    capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
+        {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
+    )
     # Stateless: holds no per-tick state, so one shared instance is reused
     # across scheduling cycles (mirrors the autoscaler's own Scheduler).
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
@@ -155,48 +157,76 @@ class RpcTaskBackend:
         """Attach the Iris autoscaler that provisions capacity for this backend."""
         self.autoscaler = autoscaler
 
-    def reconcile(self, batch: BackendReconcileInput) -> BackendReconcileResult:
-        """Fan the Reconcile RPC out across all planned workers concurrently.
-
-        Each per-worker RPC carries the stub factory's configured deadline
-        (``DEFAULT_WORKER_RPC_TIMEOUT``) and the fan-out caps concurrency at
-        ``parallelism``, so this returns in bounded time even when the whole
-        fleet is hung — no separate watchdog is needed on the control thread.
-        """
-
-        async def _one(sem: asyncio.Semaphore, plan: WorkerReconcilePlan) -> ReconcileResult:
-            return await self._reconcile_one(sem, plan, batch.worker_addresses[plan.worker_id])
-
-        results = _fan_out(batch.plans, self.parallelism, _one)
-        return BackendReconcileResult(worker_results=results)
-
     def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
         """Run the Iris scheduling decision pipeline over the snapshot."""
         return run_scheduling_decision(self._scheduler, snapshot)
 
-    def manage_capacity(self, snapshot: CapacityInput) -> CapacityResult:
-        """Run one autoscaler cycle (refresh + probe_health + update) over the snapshot.
+    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
+        """Build per-worker plans, fan the Reconcile RPC out, observe liveness.
 
-        The DB reads (worker status, demand) are done by the controller and
-        handed in via ``snapshot``; this drives the in-memory autoscaler and
-        returns its tracked state for the controller to persist.
+        Plans are built here (worker-daemon-specific protos) from the snapshot's
+        reconcile rows + job specs. Each per-worker RPC carries the stub
+        factory's deadline and the fan-out caps concurrency at ``parallelism``,
+        so this returns in bounded time even when the whole fleet is hung. Each
+        outcome yields a health event the controller folds:
+
+        * a healthy response is REACHED;
+        * an RPC error/timeout is UNREACHABLE, and the (likely broken) stub is
+          evicted as I/O hygiene;
+        * a response that self-reports unhealthy (e.g. failed disk) is also
+          UNREACHABLE so the worker is eventually reaped, but the connection is
+          fine so the stub is kept.
+
+        The backend never decides a worker is dead — it only observes.
+        """
+        plans = plans_from_snapshot(snapshot)
+
+        async def _one(sem: asyncio.Semaphore, plan: WorkerReconcilePlan) -> WorkerReconcileResult:
+            return await self._reconcile_one(sem, plan, snapshot.worker_addresses[plan.worker_id])
+
+        results = _fan_out(plans, self.parallelism, _one)
+
+        worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = list(zip(plans, results, strict=True))
+        health_events: list[WorkerHealthEvent] = []
+        for plan, result in worker_results:
+            if result.error is not None:
+                health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
+                self.stub_factory.evict(snapshot.worker_addresses[plan.worker_id])
+            elif not result.self_healthy:
+                health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
+            else:
+                health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
+        return ReconcileResult(worker_results=worker_results, health_events=health_events)
+
+    def autoscale(
+        self,
+        snapshot: ControlSnapshot,
+        residual_demand: list[DemandEntry],
+        dead_workers: list[WorkerId],
+    ) -> AutoscaleResult:
+        """Tear down dead workers' slices, or run one provisioning cycle.
+
+        With ``dead_workers`` set the autoscaler terminates their slices and
+        returns the dead workers plus their healthy siblings as
+        ``removed_workers`` (no provisioning this call); the cached stub for
+        every torn-down worker is evicted, since none will be reconciled again.
+        Otherwise it runs a refresh + probe_health + update cycle against
+        ``residual_demand``. The DB reads (worker status, demand) are done by the
+        controller and handed in; this only drives the in-memory autoscaler.
         """
         if self.autoscaler is None:
-            return CapacityResult()
+            return AutoscaleResult()
+        if dead_workers:
+            siblings = self.autoscaler.terminate_slices_for_workers([str(wid) for wid in dead_workers])
+            removed = list(dead_workers) + [WorkerId(wid) for wid in siblings]
+            for wid in removed:
+                if address := snapshot.worker_addresses.get(wid):
+                    self.stub_factory.evict(address)
+            return AutoscaleResult(removed_workers=removed, autoscaler_state=self.autoscaler.persistable_state())
         self.autoscaler.refresh(snapshot.worker_status_map)
         self.autoscaler.probe_health()
-        self.autoscaler.update(snapshot.demand_entries)
-        return CapacityResult(state=self.autoscaler.persistable_state())
-
-    def on_workers_failed(self, worker_ids: list[WorkerId]) -> WorkersFailedResult:
-        """Terminate the failed workers' slices and return their healthy siblings."""
-        if self.autoscaler is None:
-            return WorkersFailedResult()
-        siblings = self.autoscaler.terminate_slices_for_workers([str(wid) for wid in worker_ids])
-        return WorkersFailedResult(
-            sibling_worker_ids=[WorkerId(wid) for wid in siblings],
-            state=self.autoscaler.persistable_state(),
-        )
+        self.autoscaler.update(residual_demand)
+        return AutoscaleResult(autoscaler_state=self.autoscaler.persistable_state())
 
     def get_process_status(
         self,
@@ -213,10 +243,6 @@ class RpcTaskBackend:
             min_log_level=request.min_log_level,
         )
         return asyncio.run(stub.get_process_status(forwarded, timeout_ms=10000))
-
-    def on_worker_failed(self, worker_id: WorkerId, address: str | None) -> None:
-        if address:
-            self.stub_factory.evict(address)
 
     def set_log_sink(
         self,
@@ -254,43 +280,12 @@ class RpcTaskBackend:
             rpc_timeout_ms = (timeout_seconds + 5) * 1000
         return asyncio.run(stub.exec_in_container(request, timeout_ms=rpc_timeout_ms))
 
-    def ping_workers(self, workers: list[tuple[WorkerId, str | None]]) -> list[PingResult]:
-        """Send Ping RPCs to all workers concurrently. Returns per-worker results."""
-
-        async def _one(sem: asyncio.Semaphore, target: tuple[WorkerId, str | None]) -> PingResult:
-            wid, addr = target
-            async with sem:
-                if not addr:
-                    return PingResult(worker_id=wid, worker_address=addr, error=f"Worker {wid} has no address")
-                try:
-                    if rule := chaos("controller.ping"):
-                        await asyncio.sleep(rule.delay_seconds)
-                        raise ProviderError("chaos: controller.ping")
-                    stub = self.stub_factory.get_stub(addr)
-                    response = await stub.ping(worker_pb2.Worker.PingRequest())
-                    if not response.healthy:
-                        return PingResult(
-                            worker_id=wid,
-                            worker_address=addr,
-                            error=f"worker {wid} reported unhealthy: {response.health_error}",
-                        )
-                    return PingResult(
-                        worker_id=wid,
-                        worker_address=addr,
-                        healthy=response.healthy,
-                        health_error=response.health_error,
-                    )
-                except Exception as e:
-                    return PingResult(worker_id=wid, worker_address=addr, error=str(e))
-
-        return _fan_out(workers, self.parallelism, _one)
-
     async def _reconcile_one(
         self,
         sem: asyncio.Semaphore,
         plan: WorkerReconcilePlan,
         address: str,
-    ) -> ReconcileResult:
+    ) -> WorkerReconcileResult:
         """Issue a single Reconcile RPC to one worker under the shared semaphore."""
         async with sem:
             try:
@@ -299,13 +294,14 @@ class RpcTaskBackend:
                     raise ProviderError("chaos: controller.reconcile")
                 stub = self.stub_factory.get_stub(address)
                 response = await stub.reconcile(plan.request)
-                return ReconcileResult(
+                return WorkerReconcileResult(
                     worker_id=plan.worker_id,
                     observations=list(response.observed),
                     error=None,
+                    self_healthy=response.health.healthy,
                 )
             except Exception as e:
-                return ReconcileResult(worker_id=plan.worker_id, observations=[], error=str(e))
+                return WorkerReconcileResult(worker_id=plan.worker_id, observations=[], error=str(e))
 
     def close(self) -> None:
         if self.autoscaler is not None:

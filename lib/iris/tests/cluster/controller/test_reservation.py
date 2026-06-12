@@ -231,7 +231,9 @@ def ctrl(make_controller) -> Controller:
 def _claim_for_reservations(ctrl: Controller) -> None:
     """Read claims, run the claim pass, and persist — mirrors the scheduling cycle."""
     claims = read_reservation_claims(ctrl._db)
-    if claim_workers_for_reservations(claims, ctrl._db, ctrl._health, ctrl._worker_attrs):
+    with ctrl._db.read_snapshot() as snap:
+        changed = claim_workers_for_reservations(claims, snap, ctrl._health, ctrl._worker_attrs)
+    if changed:
         with ctrl._db.transaction() as cur:
             writes.replace_reservation_claims(cur, claims)
 
@@ -239,7 +241,9 @@ def _claim_for_reservations(ctrl: Controller) -> None:
 def _cleanup_claims(ctrl: Controller) -> None:
     """Read claims, run the stale-claim sweep, and persist."""
     claims = read_reservation_claims(ctrl._db)
-    if cleanup_stale_claims(claims, ctrl._db, ctrl._health):
+    with ctrl._db.read_snapshot() as snap:
+        changed = cleanup_stale_claims(claims, snap, ctrl._health)
+    if changed:
         with ctrl._db.transaction() as cur:
             writes.replace_reservation_claims(cur, claims)
 
@@ -519,7 +523,7 @@ def test_cleanup_removes_finished_job_claims(ctrl):
 
     # Kill the job to mark it as finished.
     with ctrl._db.transaction() as cur:
-        ops.job.cancel(cur, job_id=jid, reason="test", endpoints=ctrl._endpoints, health=ctrl._health)
+        ops.job.cancel(cur, job_id=jid, reason="test", endpoints=ctrl._endpoints)
 
     job = _query_job(ctrl, jid)
     assert is_job_finished(job.state)
@@ -558,7 +562,8 @@ def test_gate_satisfied_when_claims_meet_entries(ctrl):
     _claim_for_reservations(ctrl)
 
     claims = ctrl.reservation_claims
-    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults, claims)
+    with ctrl._db.read_snapshot() as snap:
+        ctx = build_scheduling_context(snap, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults, claims)
     gated = apply_scheduling_gates(ctx, claims, max_tasks_per_job_per_cycle=0)
     # The task_id for a 1-replica job is jid.task(0)
     assert jid.task(0) in gated.schedulable_task_ids
@@ -575,7 +580,8 @@ def test_gate_unsatisfied_when_claims_below_entries(ctrl):
 
     # Only 1 worker available for 2 entries — gate must stay closed.
     claims = ctrl.reservation_claims
-    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults, claims)
+    with ctrl._db.read_snapshot() as snap:
+        ctx = build_scheduling_context(snap, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults, claims)
     gated = apply_scheduling_gates(ctx, claims, max_tasks_per_job_per_cycle=0)
     assert jid.task(0) not in gated.schedulable_task_ids
 
@@ -592,7 +598,8 @@ def test_gate_satisfied_for_jobs_without_reservation(ctrl):
     jid = _submit_job(ctrl, "no-res", req)
 
     claims: dict[WorkerId, ReservationClaim] = {}
-    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults, claims)
+    with ctrl._db.read_snapshot() as snap:
+        ctx = build_scheduling_context(snap, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults, claims)
     gated = apply_scheduling_gates(ctx, claims, max_tasks_per_job_per_cycle=0)
     assert jid.task(0) in gated.schedulable_task_ids
 
@@ -623,14 +630,15 @@ def test_no_claims_fast_path_matches_evolve(ctrl):
     no_claims: dict[WorkerId, ReservationClaim] = {}
 
     def _assign(rebuild: bool) -> set[tuple[JobName, WorkerId]]:
-        ctx = build_scheduling_context(
-            ctrl._db,
-            ctrl._health,
-            ctrl._worker_attrs,
-            ctrl._config.user_budget_defaults,
-            no_claims,
-            max_building_tasks=scheduler.max_building_tasks_per_worker,
-        )
+        with ctrl._db.read_snapshot() as snap:
+            ctx = build_scheduling_context(
+                snap,
+                ctrl._health,
+                ctrl._worker_attrs,
+                ctrl._config.user_budget_defaults,
+                no_claims,
+                max_building_tasks=scheduler.max_building_tasks_per_worker,
+            )
         gated = apply_scheduling_gates(ctx, no_claims, max_tasks_per_job_per_cycle=0)
         order = compute_scheduling_order(ctx, gated)
         jobs = inject_taint_constraints(gated.jobs, gated.has_reservation, gated.has_direct_reservation)
@@ -665,7 +673,8 @@ def _demand_no_dry_run(ctrl, claims):
     already run it. Mirrors the production demand path on a cluster with no
     schedulable workers.
     """
-    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, UserBudgetDefaults(), claims)
+    with ctrl._db.read_snapshot() as snap:
+        ctx = build_scheduling_context(snap, ctrl._health, ctrl._worker_attrs, UserBudgetDefaults(), claims)
     no_workers = ctx.evolve_with_workers(
         workers=[], jobs={}, building_counts={}, max_building_tasks=DEFAULT_MAX_BUILDING_TASKS_PER_WORKER
     )
@@ -1786,9 +1795,7 @@ def test_holder_task_removed_from_worker_when_parent_cancelled_all_tasks_already
     # skips them. Only the explicit _cancel_child_jobs call at the end of
     # _on_job_cancelled can clean up the holder.
     with state._db.transaction() as cur:
-        ops.job.cancel(
-            cur, job_id=parent_job_id, reason="manual cancel", endpoints=state._endpoints, health=state._health
-        )
+        ops.job.cancel(cur, job_id=parent_job_id, reason="manual cancel", endpoints=state._endpoints)
 
     holder_task = _query_task(state, holder_task.task_id)
     assert holder_task is not None

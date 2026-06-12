@@ -415,7 +415,6 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
         finalize(
             cur,
             [TerminalDecision(TerminalKind.PREEMPT, child_task.task_id, "evicted by prod tenant")],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )
@@ -486,7 +485,6 @@ def test_existing_job_policy_keep_force_reaps_after_drain_wait(service, state, m
         finalize(
             cur,
             [TerminalDecision(TerminalKind.PREEMPT, child_task.task_id, "evicted, worker stuck")],
-            health=state._health,
             endpoints=state._endpoints,
             now=Timestamp.now(),
         )

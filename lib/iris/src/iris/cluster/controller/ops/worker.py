@@ -18,7 +18,7 @@ from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjecti
 from iris.cluster.controller.reconcile import ControllerEffects, ReconcileState
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
-from iris.cluster.controller.reconcile.worker import ReconcileResult, WorkerReconcilePlan
+from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.schema import worker_attributes_table, workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import AttemptUid, JobName, WorkerId, get_gpu_count, get_tpu_count
@@ -44,10 +44,10 @@ def _attribute_value_cols(value: str | int | float) -> dict:
 class WorkerFailureBatchResult:
     """Narrow result for :func:`fail`: just the worker rows removed.
 
-    ``_terminate_workers`` calls ``provider.on_worker_failed`` for each entry
-    and forwards the IDs to the autoscaler for slice-sibling teardown. Per-
-    task kill targets and log events are already applied by ``commit_effects``
-    inside the batch, so they don't need to surface in the return value.
+    The controller's ``_fail_and_teardown`` forwards these IDs to
+    ``backend.autoscale`` for slice-sibling teardown. Per-task kill targets and
+    log events are already applied by ``commit_effects`` inside the batch, so
+    they don't need to surface in the return value.
     """
 
     removed_workers: list[tuple[WorkerId, str | None]]
@@ -227,17 +227,15 @@ def _apply_worker_failures_chunk(
 
     # commit_effects before remove_worker: task mutations reference attempt rows
     # that would be CASCADE-deleted by remove_worker; order must be preserved.
-    commit_effects(cur, effects, health=health, endpoints=endpoints, now=now)
+    commit_effects(cur, effects, endpoints=endpoints)
     for worker_id, _, _ in failures:
         writes.remove_worker(cur, worker_id, health=health, worker_attrs=worker_attrs)
 
 
 def apply_reconcile(
     cur: Tx,
-    plans_by_worker: dict[WorkerId, WorkerReconcilePlan],
-    results: list[ReconcileResult],
+    plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]],
     *,
-    health: WorkerHealthTracker,
     endpoints: EndpointsProjection,
     now: Timestamp,
 ) -> ControllerEffects:
@@ -247,15 +245,12 @@ def apply_reconcile(
     all pairs so cascade kills triggered by earlier workers are visible to
     later ones.
     """
-    plan_results: list[tuple[WorkerReconcilePlan, ReconcileResult]] = []
     all_task_ids: list[JobName] = []
     all_attempt_keys: list[tuple[JobName, int]] = []
     all_attempt_uids: list[AttemptUid] = []
     all_worker_ids: list[WorkerId] = []
 
-    for result in results:
-        plan = plans_by_worker[result.worker_id]
-        plan_results.append((plan, result))
+    for plan, result in plan_results:
         all_worker_ids.append(plan.worker_id)
 
         if result.error is not None:
@@ -283,5 +278,5 @@ def apply_reconcile(
         extra_attempt_keys=all_attempt_keys,
     )
     effects = ReconcileState.open(snapshot).reconcile(plan_results, now)
-    commit_effects(cur, effects, health=health, endpoints=endpoints, now=now)
+    commit_effects(cur, effects, endpoints=endpoints)
     return effects

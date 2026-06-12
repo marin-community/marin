@@ -269,15 +269,29 @@ class CloudK8sService:
                 raise KubectlError(f"apply {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:500]}") from e
 
     def _apply_pod(self, res: K8sResource, name: str, ns: str | None, manifest: dict) -> None:
-        """Apply a Pod manifest. Pods are mostly immutable, so delete-then-create."""
+        """Create the Pod if it is not already present (create-if-absent).
+
+        A task attempt's pod name is stable and its manifest deterministic, so a
+        pod that already exists — in any phase — is the one we want; we must NOT
+        delete and recreate it. Delete-then-create would destroy a running task
+        on every redrive and, because the delete and the create race, fail with
+        409 AlreadyExists ("object is being deleted") while the prior pod is
+        still Terminating — which the dispatch loop then mistakes for worker loss
+        and retries, churning the task through attempts until it fails. A pod
+        that genuinely needs to change comes from a new attempt (new name); one
+        that should go away is removed by stray-pod GC.
+        """
         api = self._resource_api(res)
         ns_kw = {"namespace": ns} if ns else {}
         timeout_kw = self._request_timeout_kwargs()
         try:
-            api.delete(name=name, **timeout_kw, **ns_kw)
-        except (NotFoundError, ApiException):
-            pass
-        api.create(body=manifest, **timeout_kw, **ns_kw)
+            api.create(body=manifest, **timeout_kw, **ns_kw)
+        except ApiException as e:
+            if e.status == 409:
+                # Pod already present (or a prior generation still terminating);
+                # leave it. A later reconcile re-applies once any deletion lands.
+                return
+            raise
 
     # -- get -----------------------------------------------------------------
 

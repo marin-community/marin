@@ -113,7 +113,6 @@ class ControllerService(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
-
 class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]):
     def __init__(self, service: ControllerService | AsyncGenerator[ControllerService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None) -> None:
         super().__init__(
@@ -429,12 +428,12 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                     ),
                     function=svc.get_scheduler_state,
                 ),
-
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
             compressions=compressions,
         )
+
     @property
     def path(self) -> str:
         """Returns the URL path to mount the application to when serving multiple applications."""
@@ -1063,7 +1062,6 @@ class ControllerServiceClient(ConnectClient):
         )
 
 
-
 class ControllerServiceSync(Protocol):
     def launch_job(self, request: controller__pb2.Controller.LaunchJobRequest, ctx: RequestContext) -> controller__pb2.Controller.LaunchJobResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -1443,7 +1441,6 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                     ),
                     function=service.get_scheduler_state,
                 ),
-
             },
             interceptors=interceptors,
             read_max_bytes=read_max_bytes,
