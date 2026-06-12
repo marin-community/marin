@@ -33,17 +33,16 @@ from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 _MPI_C_PRIME: float = 3.0
 # (dim, batch_size, steps) — same compute budgets as launch.py's compute-optimal baseline.
-# Run on v5p-8 in us-east5 (easy to get; data mirrored there). MUST submit with
-# MARIN_PREFIX=gs://marin-us-east5 so the executor resolves data/output to east5 (co-located,
-# no cross-region) instead of its eu-west4 default. v5p-8 is a different/smaller slice than the
-# v4-32 baseline, so gate-1 uses a LOSS-only comparison (MPI tok/s overhead is ~0.2%).
-# Launch d512 first to de-risk the new MPI code; d768 enabled after d512 validates.
+# Run on v6e-8 in europe-west4 — the only TPU with idle capacity (v5p-8 east5 wouldn't boot),
+# and co-located with this executor's default data prefix gs://marin-eu-west4 (so submit
+# WITHOUT MARIN_PREFIX). Different/smaller slice than the v4-32 baseline, so gate-1 uses a
+# LOSS-only comparison (MPI tok/s overhead is ~0.2%). d512 first to de-risk; d768 after.
 _GATE1_CELLS: tuple[tuple[int, int, int], ...] = (
     (512, 32, 10_980),
     # (768, 64, 16_875),
 )
-_TPU: str = "v5p-8"
-_TPU_REGIONS: list[str] = ["us-east5"]
+_TPU: str = "v6e-8"
+_TPU_REGIONS: list[str] = ["europe-west4"]
 _EXPERT_PARALLEL: int = 1
 
 mpi_steps: list[ExecutorStep] = []
