@@ -48,3 +48,13 @@ Launched CENTER (full-matrix, freq=1, b1=0.95,b2=0.9,shampoo=0.9, lr×1, maxgn=1
 - `klsoaph_d512_center` — coordinator /kaiyue/iris-run-job-20260612-223838 — wandb marin-community/marin_moe group klsoaph-d512-maypr.
 - Purpose: de-risk full-matrix eigh on real sharded mesh (expert grams [256,512,512] replicated — watch OOM/compile/throughput) + new baseline vs MuonH 3.5438.
 - NEXT (once center trains clean): fan out parallel sweep — beta2 {0.95,0.99} (suspected undertuned), max_grad_norm None, lr_mult {0.7,1.4}, shampoo {0.95}.
+
+## Round 1 — parallel coordinate-descent (2026-06-12, full-matrix, freq=1)
+Anchor = center. Launched in parallel on reserved v4-32 us-central2 (wandb group klsoaph-d512-maypr):
+| tag | HP delta | coordinator |
+|---|---|---|
+| center | — | /kaiyue/iris-run-job-20260612-223838 |
+| beta2-0p95 | beta2 0.9→0.95 | /kaiyue/iris-run-job-20260612-224307 |
+| beta2-0p99 | beta2 0.9→0.99 | /kaiyue/iris-run-job-20260612-224325 |
+| maxgn-none | max_grad_norm 1.0→None | /kaiyue/iris-run-job-20260612-224338 |
+Target: paloma < 3.5438. beta2 prioritized (0.9 low for SOAP Adam 2nd-moment). Watch full-matrix OOM/compile on expert grams.
