@@ -123,6 +123,14 @@ to the v4 anchor and the MuonH baseline; only tok/s differs (not the stopping me
 | lr-1p8 | v5p-8 east5 (preempt) | lr ×1.8 | /kaiyue/iris-run-job-20260612-231854 |
 Watch: full-matrix SOAP gram OOM on v5p-8 (fewer chips than v4-32; v5p has 95GB/chip though).
 
+### Status 23:25 UTC — all 6 children RUNNING, cold-starting
+east5 preemptible v5p-8 autoscaler provisioned all 5 axes within ~1 min ("available 0" was transient).
+All 6 wandb runs RUNNING, no loss yet (compiling). v5p-8 child confirmed reading gs://marin-us-east5
+(in-region, no cross-region). NOTE: a draccus traceback "TypeError: cannot create weak reference to
+'str' object" / "Failed to dump config to yaml" appears in every run — BENIGN config-yaml-artifact dump
+failure (can't encode the `model` field); training proceeds, structured config still logs to wandb.config.
+Do NOT treat that traceback as a failure. No OOM on v5p-8 so far.
+
 ### Config-parity de-risk — weight decay (2026-06-12)
 Checked: MuonH baseline config stores weight_decay=0.1, BUT neither GrugMoeMuonHConfig.build() nor
 GrugMoeKLSoapHConfig.build() references add_decayed_weights/weight_decay — both custom build()s leave
