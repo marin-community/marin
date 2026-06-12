@@ -86,9 +86,6 @@ class AttentionMask(eqx.Module):
     prefix_length: Optional[int] = eqx.field(default=None, static=True)
     prefix_lengths: Optional[NamedArray] = None
     prefix_mask: Optional[NamedArray] = None
-    # CF https://github.com/jax-ml/jax/blob/47858c4ac2fd4757a3b6fc5bb2981b71a71f00c2/jax/experimental/pallas/ops/tpu/flash_attention.py#L34
-    # TODO: add prefixlm
-    # cf https://github.com/google-research/t5x/blob/51a99bff8696c373cc03918707ada1e98cbca407/t5x/examples/decoder_only/layers.py#L978
 
     def materialize(
         self,

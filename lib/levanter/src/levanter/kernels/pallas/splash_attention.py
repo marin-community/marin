@@ -20,6 +20,9 @@ DEFAULT_SPLASH_BLOCK_SIZE = 512
 BLOCK_MASK_EMPTY = 0
 BLOCK_MASK_PARTIAL = 1
 BLOCK_MASK_FULL = 2
+PARTIAL_MASK_SLOTS_PER_Q_BLOCK = 2
+CAUSAL_PARTIAL_MASK_SLOT_OFFSET = 0
+PREFIX_PARTIAL_MASK_SLOT_OFFSET = 1
 PartitionSpecEntry = str | Sequence[str | None] | None
 
 
@@ -282,10 +285,14 @@ def _prefix_lm_mask_info_components(
     data_next = jnp.where(block_mask[0] != BLOCK_MASK_EMPTY, data_next, 0).astype(jnp.int32)
     data_next = jnp.broadcast_to(data_next[None, :, :], (num_heads, q_blocks, kv_blocks))
 
-    causal_slot = q_block_ids * 2
+    causal_slot = q_block_ids * PARTIAL_MASK_SLOTS_PER_Q_BLOCK + CAUSAL_PARTIAL_MASK_SLOT_OFFSET
     prefix_boundary_block = prefix_length // block_kv
     is_prefix_boundary = kv_block_ids == prefix_boundary_block
-    mask_next = jnp.where(is_prefix_boundary & (kv_block_ids != q_block_ids), causal_slot + 1, causal_slot)
+    mask_next = jnp.where(
+        is_prefix_boundary & (kv_block_ids != q_block_ids),
+        causal_slot + PREFIX_PARTIAL_MASK_SLOT_OFFSET,
+        causal_slot,
+    )
     mask_next = jnp.where(partial, mask_next, 0).astype(jnp.int32)
     mask_next = jnp.broadcast_to(mask_next[None, :, :], (num_heads, q_blocks, kv_blocks))
 
@@ -301,9 +308,13 @@ def _prefix_lm_mask_info_components(
     prefix_blocks = jnp.broadcast_to(prefix_block[None, :, :], (q_blocks, block_q, block_kv))
     prefix_blocks = prefix_blocks | (prefix_kv_global[None, :, :] <= q_global)
 
-    partial_mask_blocks = jnp.zeros((2 * q_blocks, block_q, block_kv), dtype=jnp.bool_)
-    partial_mask_blocks = partial_mask_blocks.at[0::2].set(causal_blocks)
-    partial_mask_blocks = partial_mask_blocks.at[1::2].set(prefix_blocks)
+    partial_mask_blocks = jnp.zeros((PARTIAL_MASK_SLOTS_PER_Q_BLOCK * q_blocks, block_q, block_kv), dtype=jnp.bool_)
+    partial_mask_blocks = partial_mask_blocks.at[CAUSAL_PARTIAL_MASK_SLOT_OFFSET::PARTIAL_MASK_SLOTS_PER_Q_BLOCK].set(
+        causal_blocks
+    )
+    partial_mask_blocks = partial_mask_blocks.at[PREFIX_PARTIAL_MASK_SLOT_OFFSET::PARTIAL_MASK_SLOTS_PER_Q_BLOCK].set(
+        prefix_blocks
+    )
 
     return _PrefixLmMaskInfoComponents(
         data_next=data_next,

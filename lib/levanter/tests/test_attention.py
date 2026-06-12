@@ -585,6 +585,24 @@ def test_tpu_splash_attention_sliding_window():
         assert_trees_all_close(hax_out.array, flash_out.array, atol=1e-3, rtol=1e-3)
 
 
+def _assert_tpu_splash_matches_reference(QPos, KPos, Key, q, k, v, mask, block_size):
+    flash_out = _tpu_splash_attention(
+        QPos,
+        KPos,
+        Key,
+        q,
+        k,
+        v,
+        inference=True,
+        mask=mask,
+        block_size=block_size,
+        scaling_factor=1 / math.sqrt(Key.size),
+    )
+    hax_out = hax.nn.attention.dot_product_attention(KPos, Key, q, k, v, mask=mask.materialize(QPos, KPos))
+    assert hax_out.axes == flash_out.axes
+    assert_trees_all_close(hax_out.array, flash_out.array, atol=1e-3, rtol=1e-3)
+
+
 def test_tpu_splash_attention_dynamic_prefix_lm():
     if jax.default_backend() != "tpu":
         pytest.skip("TPU only")
@@ -603,22 +621,7 @@ def test_tpu_splash_attention_dynamic_prefix_lm():
         q = hax.random.normal(jrandom.PRNGKey(10), (Batch, QPos, Head, Key)) * 0.02
         k = hax.random.normal(jrandom.PRNGKey(11), (Batch, KPos, Head, Key)) * 0.02
         v = hax.random.normal(jrandom.PRNGKey(12), (Batch, KPos, Head, Key)) * 0.02
-
-        flash_out = _tpu_splash_attention(
-            QPos,
-            KPos,
-            Key,
-            q,
-            k,
-            v,
-            inference=True,
-            mask=mask,
-            block_size=BLOCK_SIZE,
-            scaling_factor=1 / math.sqrt(Key.size),
-        )
-        hax_out = hax.nn.attention.dot_product_attention(KPos, Key, q, k, v, mask=mask.materialize(QPos, KPos))
-        assert hax_out.axes == flash_out.axes
-        assert_trees_all_close(hax_out.array, flash_out.array, atol=1e-3, rtol=1e-3)
+        _assert_tpu_splash_matches_reference(QPos, KPos, Key, q, k, v, mask, BLOCK_SIZE)
 
 
 def test_tpu_splash_attention_dynamic_prefix_lm_with_segment_ids():
@@ -650,22 +653,7 @@ def test_tpu_splash_attention_dynamic_prefix_lm_with_segment_ids():
         q = hax.random.normal(jrandom.PRNGKey(20), (Batch, QPos, Head, Key)) * 0.02
         k = hax.random.normal(jrandom.PRNGKey(21), (Batch, KPos, Head, Key)) * 0.02
         v = hax.random.normal(jrandom.PRNGKey(22), (Batch, KPos, Head, Key)) * 0.02
-
-        flash_out = _tpu_splash_attention(
-            QPos,
-            KPos,
-            Key,
-            q,
-            k,
-            v,
-            inference=True,
-            mask=mask,
-            block_size=BLOCK_SIZE,
-            scaling_factor=1 / math.sqrt(Key.size),
-        )
-        hax_out = hax.nn.attention.dot_product_attention(KPos, Key, q, k, v, mask=mask.materialize(QPos, KPos))
-        assert hax_out.axes == flash_out.axes
-        assert_trees_all_close(hax_out.array, flash_out.array, atol=1e-3, rtol=1e-3)
+        _assert_tpu_splash_matches_reference(QPos, KPos, Key, q, k, v, mask, BLOCK_SIZE)
 
 
 @pytest.mark.parametrize("impl", ["default", "jax_flash", "vanilla"])
