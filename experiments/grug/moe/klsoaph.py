@@ -1,26 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# KL SOAP H: block-wise SOAP-style Hessian-eigenbasis preconditioner with Adam
-# moments in the eigenbasis. Adapts the upstream KLSOAPH from
-# KellerJordan/modded-nanogpt PR #290 to MoE-scale weight matrices by
-# decomposing each (rows, cols) weight into a tiling of ``B x B`` blocks
-# (default B=128). Each block carries its own SOAP state and eigenbasis;
-# the full-matrix direction is reassembled before the scale-invariant
-# ("hyperball") post-step so that normalization still operates on the
-# unblocked parameter / update.
+# KL SOAP H: full-matrix SOAP-style Hessian-eigenbasis preconditioner with Adam
+# moments in the eigenbasis. Faithful port of the upstream KLSOAPH from
+# KellerJordan/modded-nanogpt PR #290, run on the full per-leaf (rows, cols)
+# matrix (no block tiling). For a stacked weight (e.g. an expert tensor with a
+# leading (E,) axis), the leading axes are batched and full-matrix SOAP runs
+# per slice via einsum-ellipsis; the row-Gram is (rows, rows) and the col-Gram
+# is (cols, cols).
 #
-# Why blocks: the dense KLSOAPH operates on the full (cols, cols) Gram
-# matrix. On MoE expert tensors with cols ~ 2816 and an expert-stack
-# leading axis of 256, that means 256 independent eigh of 2816x2816 every
-# refresh — slow and JIT-compile-heavy on TPU. Block decomposition keeps
-# every per-block Gram at exactly B x B = 128 x 128, which is fast and
-# enables a single compiled kernel to vmap over (E, R, C) block
-# instances. The intent is fidelity to upstream KLSOAPH *within each
-# block*, with the MoE-scale weight matrix treated as a sum of
-# independent per-block preconditioned updates.
-#
-# Per-block algorithm follows upstream KLSOAPH exactly:
+# Algorithm follows upstream KLSOAPH exactly:
 #  1. First call: initialize Q from descending-eigh of (g g.T / cols,
 #     g.T g / rows) computed on the first gradient; esi = init_factor**-0.5.
 #     First call returns zero direction.
@@ -30,7 +19,7 @@
 #     symmetric counterpart for gg_r. Update esi via projected-gradient
 #     diagonals.
 #  4. Refresh every ``precond_freq`` steps: warm-started QR iteration
-#     (``qr(GG @ Q)``) and reproject exp_avg through old→new basis.
+#     (``qr(GG @ Q)``) and reproject exp_avg through old->new basis.
 #
 # scale_by_klsoaph returns only the SOAP direction (full parameter
 # shape). The hyperball post-step is applied by ``scale_with_grug_klsoaph``
@@ -47,15 +36,15 @@ from jax.sharding import reshard
 
 
 class ScaleByKLSoapHState(NamedTuple):
-    """Per-leaf block-wise SOAP state. Float32 throughout for eigh / qr stability.
+    """Per-leaf full-matrix SOAP state. Float32 throughout for eigh / qr stability.
 
-    Tensor shapes for a parameter ``p`` with shape ``(..., rows, cols)``,
-    R = ceil(rows / B), C = ceil(cols / B):
+    Tensor shapes for a parameter ``p`` with shape ``(..., rows, cols)``:
 
-      exp_avg, exp_avg_sq:    (..., R, C, B, B)
-      gg_l, q_l:              (..., R, C, B, B)   -- block-local row-Gram / its eigenbasis
-      gg_r, q_r:              (..., R, C, B, B)   -- block-local col-Gram / its eigenbasis
-      esi_l, esi_r:           (..., R, C, B)
+      exp_avg, exp_avg_sq:    (..., rows, cols)
+      gg_l, q_l:              (..., rows, rows)   -- row-Gram / its eigenbasis
+      gg_r, q_r:              (..., cols, cols)   -- col-Gram / its eigenbasis
+      esi_l:                  (..., rows)
+      esi_r:                  (..., cols)
     """
 
     count: chex.Array
@@ -154,8 +143,8 @@ def _symmetrize(matrix):
     return 0.5 * (matrix + jnp.swapaxes(matrix, -1, -2))
 
 
-def _klsoaph_step_blocked(
-    grad_blocks: jnp.ndarray,
+def _klsoaph_step(
+    grad: jnp.ndarray,
     exp_avg: jnp.ndarray,
     exp_avg_sq: jnp.ndarray,
     gg_l: jnp.ndarray,
@@ -172,22 +161,21 @@ def _klsoaph_step_blocked(
     precond_freq: int,
     init_factor: float,
 ):
-    """Run one block-wise SOAP step over the (..., R, C, B, B) blocked gradient.
+    """Run one full-matrix SOAP step over the (..., rows, cols) gradient.
 
-    Every leading axis (including (R, C)) is treated independently; eigh /
-    qr operate on the trailing (B, B) only. Replicates all intermediates
-    across the mesh to keep contracting-dim sharding unambiguous; the
-    parameter-sharding for the externally-visible direction is restored
-    downstream by ``_match_named_update_sharding`` in ``optimizer.py``.
+    Every leading axis is treated independently; eigh / qr operate on the
+    trailing (rows, rows) / (cols, cols) Grams only. Replicates all
+    intermediates across the mesh to keep contracting-dim sharding
+    unambiguous; the parameter-sharding for the externally-visible direction
+    is restored downstream by ``_match_named_update_sharding`` in ``optimizer.py``.
     """
-    # Full-matrix SOAP: the trailing two dims of g32 are the actual (rows, cols);
-    # gg_l/q_l are (rows, rows), gg_r/q_r are (cols, cols). Normalizers use the
-    # true rows/cols (not a block size).
-    inner_rows = grad_blocks.shape[-2]
-    inner_cols = grad_blocks.shape[-1]
+    # The trailing two dims of g32 are the actual (rows, cols); gg_l/q_l are
+    # (rows, rows), gg_r/q_r are (cols, cols).
+    inner_rows = grad.shape[-2]
+    inner_cols = grad.shape[-1]
 
     has_mesh = not jax.sharding.get_abstract_mesh().empty
-    g32 = grad_blocks.astype(jnp.float32)
+    g32 = grad.astype(jnp.float32)
     if has_mesh:
         repl = _replicated_pspec(g32.ndim)
         g32 = reshard(g32, repl)
@@ -203,7 +191,7 @@ def _klsoaph_step_blocked(
     out_p = _replicated_pspec(g32.ndim) if has_mesh else None
 
     def _init_branch(_):
-        # GG = [g g.T / cols, g.T g / rows] on the trailing (B, B) of each block.
+        # GG = [g g.T / cols, g.T g / rows] on the trailing (rows, cols) of each leaf.
         new_gg_l = jnp.einsum("...ik,...jk->...ij", g32, g32, out_sharding=out_p) / inner_cols
         new_gg_r = jnp.einsum("...ki,...kj->...ij", g32, g32, out_sharding=out_p) / inner_rows
         new_gg_l = _symmetrize(new_gg_l)
@@ -226,7 +214,7 @@ def _klsoaph_step_blocked(
         )
 
     def _normal_branch(_):
-        # 1. Project: g_proj = q_l.T @ g @ q_r (per block).
+        # 1. Project: g_proj = q_l.T @ g @ q_r.
         g_qr = jnp.einsum("...ij,...jk->...ik", g32, q_r, out_sharding=out_p)
         g_proj = jnp.einsum("...ki,...kj->...ij", q_l, g_qr, out_sharding=out_p)
 
@@ -351,7 +339,7 @@ def scale_by_klsoaph(
             # Full-matrix SOAP: run the step directly on the (..., rows, cols) gradient.
             # The step replicates state internally for the eigh/qr; the parameter
             # sharding is restored downstream via _match_named_update_sharding.
-            out = _klsoaph_step_blocked(
+            out = _klsoaph_step(
                 grad.astype(jnp.float32),
                 exp_avg,
                 exp_avg_sq,
