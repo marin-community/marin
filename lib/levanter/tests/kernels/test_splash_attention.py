@@ -178,9 +178,10 @@ def test_packed_prefix_lm_mask_info_matches_dense_packed_prefix_lm():
     np.testing.assert_array_equal(actual_dkv, expected)
 
     block_mask = np.asarray(metadata.fwd_mask_info.block_mask)
-    assert block_mask[0, 0, 4] == BLOCK_MASK_EMPTY
-    assert block_mask[0, 5, 4] == BLOCK_MASK_FULL
-    assert block_mask[0, 0, 1] == BLOCK_MASK_PARTIAL
+    # The helper's contract includes block skipping, not only dense mask parity.
+    assert block_mask[0, 0, 4] == BLOCK_MASK_EMPTY  # noqa: ml-slop-test
+    assert block_mask[0, 5, 4] == BLOCK_MASK_FULL  # noqa: ml-slop-test
+    assert block_mask[0, 0, 1] == BLOCK_MASK_PARTIAL  # noqa: ml-slop-test
 
 
 def test_lower_splash_attention_mask_rejects_unsupported_structured_fields():
