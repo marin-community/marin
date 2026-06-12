@@ -123,6 +123,30 @@ to the v4 anchor and the MuonH baseline; only tok/s differs (not the stopping me
 | lr-1p8 | v5p-8 east5 (preempt) | lr ×1.8 | /kaiyue/iris-run-job-20260612-231854 |
 Watch: full-matrix SOAP gram OOM on v5p-8 (fewer chips than v4-32; v5p has 95GB/chip though).
 
+### Config-parity de-risk — weight decay (2026-06-12)
+Checked: MuonH baseline config stores weight_decay=0.1, BUT neither GrugMoeMuonHConfig.build() nor
+GrugMoeKLSoapHConfig.build() references add_decayed_weights/weight_decay — both custom build()s leave
+it inert (and wd is meaningless under the scale-invariant hyperball matrix step). So NO wd apples-to-apples
+gap. Combined with the eps/beta/lr/maxgn pinning, the SOAP eigenbasis HPs are now the ONLY variable vs MuonH.
+
+### Coordinate-descent plan (full axis spec + grids + re-anchor logic)
+SOAP eigenbasis HPs are the only knobs (non-SOAP pinned to MuonH d512). Convergence = no single-axis
+move improves paloma macro_loss by > 2e-3 (the "match threshold"). Significant improvement to re-anchor:
+> 2e-3 better than current anchor.
+- **Anchor₀** = (beta1 0.95, beta2 0.9, shampoo 0.9, eps 1e-8, init_factor 0.1, precond_freq 1, lr×1.0).
+- **Round 1 (in flight):** beta2 ∈ {0.95, 0.99, 0.999} (large-batch: MuonH real-Adam beta2=0.999 ⇒ SOAP
+  0.9 likely undertuned); lr ∈ {×1.4, ×1.8 (≈ upstream .018)}.
+- **Round 2 (re-anchor on R1 best, then sweep in parallel):**
+  - shampoo_beta ∈ {0.95, 0.99} — Gram EMA, same large-batch half-life argument as beta2.
+  - beta1 ∈ {0.9, 0.98} — momentum (0.99 historically diverged → exclude).
+  - eps ∈ {1e-7, 1e-6} — SOAP eigenbasis Adam denom.
+  - init_factor ∈ {0.05, 1.0} — ESI init (whitening warmup).
+  - lr finer bracket around R1-best lr (e.g. best=1.8 → try ×2.2, ×2.6; best=1.0 → ×0.7, ×1.2).
+- **Round 3+:** finer grid around the running anchor on whichever axes still move; stop at convergence.
+- **Ablations if stuck above 3.5438:** (a) SOAP-H (drop ESI whitening; track_3 #27 ≈ KL-SOAP-H) to test
+  whether whitening hurts at MoE scale; (b) precond_freq 1→2 only if eigh cost forces it (quality-first).
+  Power-decay LR schedule is OUT (user: unnecessary; linear matches baseline).
+
 ### Code de-risking (while cold-starting) — klsoaph.py re-audit
 Full re-audit of the de-blocked full-matrix impl vs upstream PR #290: projection (qₗᵀ·g·qᵣ),
 back-projection, whitened-Gram (gg_l from g·qᵣ·esiᵣ outer product), ESI (eigen=1/esi² EMA, rsqrt
