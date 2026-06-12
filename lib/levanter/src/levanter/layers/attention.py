@@ -26,7 +26,7 @@ from levanter.kernels.pallas.splash_attention import (
     packed_prefix_lm_mask_infos,
     prefix_lm_mask_infos,
     splash_attention_block_sizes,
-    splash_attention_mask_spec_from_attention_mask,
+    splash_attention_mask_spec_from_fields,
     splash_partition_spec_shard_factor,
 )
 from levanter.inference.utils import is_valid
@@ -832,7 +832,6 @@ def _prepare_sinks_for_splash(attn_sink: NamedArray, q_class, physical_axes_q: P
 
 
 def _prepare_prefix_lengths_for_splash(prefix_lengths: NamedArray, q_class, physical_axes_q: PartitionSpec):
-    """Reshape and broadcast prefix lengths to Splash's flattened batch axis."""
     batch_axes = tuple(q_class["B"])
     lengths = _prepare_splash_batch_value(
         prefix_lengths,
@@ -876,7 +875,6 @@ def _prepare_prefix_mask_for_splash(
     physical_axes_q: PartitionSpec,
     physical_axes_k: PartitionSpec,
 ):
-    """Reshape and broadcast a per-key prefix mask to Splash's flattened batch axis."""
     batch_axes = tuple(q_class["B"])
     if QPos.name in {ax.name for ax in prefix_mask.axes} and QPos.name != KPos.name:
         prefix_mask = prefix_mask.rename({QPos.name: KPos.name})
@@ -901,18 +899,16 @@ def _batched_splash_kernel_specs(
     q_seq_spec,
     num_heads: int,
 ):
-    """Build shard_map specs for a Splash kernel batched over examples."""
-
     def spec_for_leaf(leaf):
         if leaf is None:
             return None
-        ndim = getattr(leaf, "ndim", 0)
-        if ndim == 0:
+        if not isinstance(leaf, jax.Array):
             return PartitionSpec()
-        shape = getattr(leaf, "shape", ())
-        if ndim >= 4 and len(shape) > 1 and shape[1] == num_heads:
-            return PartitionSpec(batch_spec, head_spec, q_seq_spec, *([None] * (ndim - 3)))
-        return PartitionSpec(batch_spec, *([None] * (ndim - 1)))
+        if leaf.ndim == 0:
+            return PartitionSpec()
+        if leaf.ndim >= 4 and leaf.shape[1] == num_heads:
+            return PartitionSpec(batch_spec, head_spec, q_seq_spec, *([None] * (leaf.ndim - 3)))
+        return PartitionSpec(batch_spec, *([None] * (leaf.ndim - 1)))
 
     return jax.tree_util.tree_map(spec_for_leaf, kernel)
 
@@ -1379,7 +1375,15 @@ def _static_splash_kernel_plan(
     if mask is None:
         mask_spec = None
     elif isinstance(mask, AttentionMask):
-        mask_spec = splash_attention_mask_spec_from_attention_mask(mask)
+        mask_spec = splash_attention_mask_spec_from_fields(
+            is_causal=mask.is_causal,
+            causal_offset=mask.causal_offset,
+            sliding_window=mask.sliding_window,
+            prefix_length=mask.prefix_length,
+            prefix_lengths=mask.prefix_lengths,
+            prefix_mask=mask.prefix_mask,
+            explicit_mask=mask.explicit_mask,
+        )
     elif isinstance(mask, NamedArray):
         raise NotImplementedError("NamedArray masks are not yet supported for splash attention")
     else:

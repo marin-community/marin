@@ -28,6 +28,7 @@ from levanter.layers.attention import AttentionMask, _tpu_splash_attention
 from levanter.utils.mesh import create_mesh_from_axis_specs
 
 STATIC_CAUSAL_SPLASH_VARIANT = "static_causal_splash"
+INPUT_SCALE = 0.02
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,17 +98,22 @@ def run_benchmarks(
     Key = hax.Axis("key", shape.head_dim)
 
     rng = jrandom.PRNGKey(0)
-    q = hax.random.normal(rng, (Batch, Pos, Heads, Key)).astype(shape.dtype) * 0.02
+    q = hax.random.normal(rng, (Batch, Pos, Heads, Key)).astype(shape.dtype) * INPUT_SCALE
     rng, key_rng = jrandom.split(rng)
-    k = hax.random.normal(key_rng, (Batch, KPos, Heads, Key)).astype(shape.dtype) * 0.02
+    k = hax.random.normal(key_rng, (Batch, KPos, Heads, Key)).astype(shape.dtype) * INPUT_SCALE
     rng, value_rng = jrandom.split(rng)
-    v = hax.random.normal(value_rng, (Batch, KPos, Heads, Key)).astype(shape.dtype) * 0.02
+    v = hax.random.normal(value_rng, (Batch, KPos, Heads, Key)).astype(shape.dtype) * INPUT_SCALE
 
     segment_ids = _packed_segment_ids(shape, Batch, Pos, KPos)
     prefix_mask = _packed_prefix_mask(shape, Batch, Pos)
     masks = {
         STATIC_CAUSAL_SPLASH_VARIANT: AttentionMask.causal(),
         "packed_causal_segment_splash": AttentionMask.causal(segment_ids=(segment_ids.q, segment_ids.kv)),
+        "packed_causal_segment_runs_splash": AttentionMask.causal().with_segment_runs(
+            segment_ids.q,
+            kv_segment_ids=segment_ids.kv,
+            max_segments=shape.docs_per_sequence,
+        ),
         "packed_prefix_lm_splash": AttentionMask.prefix_lm(
             prefix_mask=prefix_mask,
             segment_ids=(segment_ids.q, segment_ids.kv),

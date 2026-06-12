@@ -327,7 +327,7 @@ class AttentionMask(eqx.Module):
             is_causal = False
         explicit_mask = combine_masks_and(self.explicit_mask, other.explicit_mask)
         segment_ids = self._check_for_same_segment_ids(other)
-        segment_run_metadata = self._check_for_same_segment_run_metadata(other)
+        segment_run_metadata = self._segment_run_metadata_for_combination(other)
         prefix_mask = combine_masks_and(self.prefix_mask, other.prefix_mask)
         prefix_length = _combine_prefix_lengths_and(self.prefix_length, other.prefix_length)
         prefix_lengths = _combine_dynamic_prefix_lengths_and(self.prefix_lengths, other.prefix_lengths)
@@ -367,7 +367,7 @@ class AttentionMask(eqx.Module):
             causal_offset = None
         explicit_mask = combine_masks_or(self.explicit_mask, other.explicit_mask)
         segment_ids = self._check_for_same_segment_ids(other)
-        segment_run_metadata = self._check_for_same_segment_run_metadata(other)
+        segment_run_metadata = self._segment_run_metadata_for_combination(other)
         prefix_mask = combine_masks_or(self.prefix_mask, other.prefix_mask)
         prefix_length = _combine_prefix_lengths_or(self.prefix_length, other.prefix_length)
         prefix_lengths = _combine_dynamic_prefix_lengths_or(self.prefix_lengths, other.prefix_lengths)
@@ -415,7 +415,7 @@ class AttentionMask(eqx.Module):
             segment_ids = other_si
         return segment_ids
 
-    def _check_for_same_segment_run_metadata(self, other):
+    def _segment_run_metadata_for_combination(self, other):
         if self.segment_run_metadata is not None:
             return self.segment_run_metadata
         return other.segment_run_metadata

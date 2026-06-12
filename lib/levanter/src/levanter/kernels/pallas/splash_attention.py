@@ -55,35 +55,31 @@ class SplashAttentionMaskLowering:
     kernel_mask: splash_attention_mask.MultiHeadMask
 
 
-class SplashAttentionMaskLike(Protocol):
-    """Structured mask fields consumed by Splash Attention lowering."""
-
-    is_causal: bool
-    causal_offset: object | None
-    sliding_window: int | None
-    prefix_length: int | None
-    prefix_lengths: object | None
-    prefix_mask: object | None
-    explicit_mask: object | None
-
-
-def splash_attention_mask_spec_from_attention_mask(mask: SplashAttentionMaskLike) -> SplashAttentionMaskSpec:
-    """Convert an AttentionMask-like object to the static fields used by Splash lowering."""
+def splash_attention_mask_spec_from_fields(
+    *,
+    is_causal: bool,
+    causal_offset: object | None = None,
+    sliding_window: int | None = None,
+    prefix_length: int | None = None,
+    prefix_lengths: object | None = None,
+    prefix_mask: object | None = None,
+    explicit_mask: object | None = None,
+) -> SplashAttentionMaskSpec:
     dynamic_prefix = SplashDynamicPrefixMask.NONE
-    if mask.prefix_lengths is not None and mask.prefix_mask is not None:
+    if prefix_lengths is not None and prefix_mask is not None:
         raise ValueError("Splash attention mask spec cannot combine prefix_lengths and prefix_mask.")
-    if mask.prefix_lengths is not None:
+    if prefix_lengths is not None:
         dynamic_prefix = SplashDynamicPrefixMask.PREFIX_LENGTHS
-    elif mask.prefix_mask is not None:
+    elif prefix_mask is not None:
         dynamic_prefix = SplashDynamicPrefixMask.PREFIX_MASK
 
     return SplashAttentionMaskSpec(
-        is_causal=mask.is_causal,
-        causal_offset=mask.causal_offset,
-        sliding_window=mask.sliding_window,
-        prefix_length=mask.prefix_length,
+        is_causal=is_causal,
+        causal_offset=causal_offset,
+        sliding_window=sliding_window,
+        prefix_length=prefix_length,
         dynamic_prefix=dynamic_prefix,
-        has_explicit_mask=mask.explicit_mask is not None,
+        has_explicit_mask=explicit_mask is not None,
     )
 
 

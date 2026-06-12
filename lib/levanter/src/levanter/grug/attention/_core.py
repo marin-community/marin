@@ -20,7 +20,7 @@ from levanter.kernels.pallas.splash_attention import (
     DEFAULT_SPLASH_BLOCK_SIZE,
     lower_splash_attention_mask,
     lower_splash_segment_ids,
-    splash_attention_mask_spec_from_attention_mask,
+    splash_attention_mask_spec_from_fields,
     splash_attention_block_sizes,
     splash_partition_spec_shard_factor,
 )
@@ -344,7 +344,10 @@ def _tpu_splash_attention(
             if mask.sliding_window <= 0:
                 raise ValueError(f"sliding_window must be positive, got {mask.sliding_window}")
 
-        mask_spec = splash_attention_mask_spec_from_attention_mask(mask)
+        mask_spec = splash_attention_mask_spec_from_fields(
+            is_causal=mask.is_causal,
+            sliding_window=mask.sliding_window,
+        )
 
         if mask.segment_ids is not None:
             q_segment_ids, kv_segment_ids = mask.segment_ids

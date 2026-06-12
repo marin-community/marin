@@ -241,3 +241,21 @@
 - Result: The holder job remained `JOB_STATE_PENDING` with scheduler reason `Insufficient TPUs (need 4, available 0)` for `tpu_v4-preemptible_8-us-central2-b`; no local dev TPU session file was created. The pending holder job was killed and verified as `JOB_STATE_KILLED` with `Terminated by user`.
 - Interpretation: No TPU parity/benchmark data was collected for the public segment-run path in this attempt. The code remains locally validated only for this milestone; the TPU-gated test still needs hardware or CI confirmation.
 - Next action: Use CI TPU results if they complete first; otherwise retry v4-8/v5p-8 allocation when capacity improves.
+
+### 2026-06-12 - Segment-run benchmark variant
+- Hypothesis: The checked-in Splash mask benchmark should directly compare the generic packed segment-ID path against the new fixed segment-run metadata path, so the next TPU run can measure the compact `MaskInfo` path without editing the harness.
+- Command:
+  - `uv run --project lib/levanter python - <<'PY' ...`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'segment_runs or batched_masks'`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/grug/test_attention.py -k 'thd_segment_metadata'`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `timeout 900 ./infra/pre-commit.py --review --agent-command='env RUST_LOG=error codex exec --ignore-user-config --ephemeral --dangerously-bypass-approvals-and-sandbox'`
+- Config: Local construction check at `B=2`, `S=128`, `docs_per_sequence=4`, block size `128`; benchmark variant uses `AttentionMask.causal().with_segment_runs(..., max_segments=docs_per_sequence)`.
+- Result:
+  - Added `packed_causal_segment_runs_splash` to `bench_splash_attention_masks.py`.
+  - The local construction check verified that the segment-run benchmark mask materializes identically to the generic packed segment-ID mask.
+  - Focused tests passed: attention slice `1 passed, 5 skipped`; Splash helper tests `19 passed`; Grug THD metadata tests `3 passed`.
+  - Changed-file precommit passed and lint review reported no findings.
+- Interpretation: The next TPU run can now produce side-by-side timings for static causal, generic packed causal segment IDs, compact segment-run metadata, packed prefix-LM, and dense references. The harness still cannot execute Splash timing on CPU; `--allow-non-tpu` only bypasses the backend guard and Pallas still rejects CPU lowering.
+- Next action: Retry v4-8/v5p-8 and run the benchmark with `--include-dense` at 8192 plus Splash-only at 16384.
