@@ -3,7 +3,7 @@
 
 """Canary ferry: Grug MoE daily pretraining canary.
 
-Supports TPU (v5p-8, Nemotron, ~1B tokens) and GPU (8x H100, SlimPajama, ~50 steps).
+Supports TPU (v5p-8, Nemotron, ~0.25B tokens) and GPU (8x H100, SlimPajama, ~50 steps).
 Config is driven by env vars set in the GH Actions workflow env: block and forwarded
 to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
 
@@ -93,8 +93,10 @@ def _env_bool(key: str, default: bool) -> bool:
 # stockout otherwise strands the canary indefinitely. v4-8 is a topology-compatible
 # fallback (both are single-VM 4-chip slices, so training shape is unchanged) and
 # adds us-central2-b plus the v4 reserved pool, which is not subject to preemptible
-# capacity churn. All entries must share vm_count and chips_per_vm (ResourceConfig
-# enforces this).
+# capacity churn. v4 has only ~1/3 the per-chip HBM of v5p (~30.75 vs 95 GiB), so the
+# canary's batch size is sized to fit v4 (see the TPU branch below); keep any new
+# entry's per-chip HBM at or above v4's. All entries must share vm_count and
+# chips_per_vm (ResourceConfig enforces this).
 _DEFAULT_CANARY_TPU_TYPES = ("v5p-8", "v4-8")
 
 
@@ -113,8 +115,16 @@ def _build_step_from_env() -> ExecutorStep:
 
     if accelerator == "tpu":
         model = GRUG_MOE_TRIAL_MODEL
-        batch_size = env_int("CANARY_BATCH_SIZE", 512)
-        target_tokens = env_int("CANARY_TARGET_TOKENS", 1_000_000_000)
+        # Global batch is sized to fit the smallest pool in the fallback list. The
+        # dominant train_step allocation is the MoE expert grouped-matmul over
+        # batch_size * max_seq_len tokens, so per-device HBM scales with the global
+        # batch. At 512 the compiled train_step needs ~42.6 GiB and OOMs on the
+        # v4-8 fallback (~30.75 GiB usable); 128 leaves comfortable headroom on v4
+        # while staying valid on v5p, giving one config across both pools.
+        batch_size = env_int("CANARY_BATCH_SIZE", 128)
+        # Hold the step count steady (~476) so wall-clock stays bounded after the
+        # batch shrink: tokens = batch_size * max_seq_len * steps.
+        target_tokens = env_int("CANARY_TARGET_TOKENS", 250_000_000)
         name = "canary-ferry-moe"
         data = NEMOTRON_MIX_WITH_DEFAULT_VALIDATION
         resources = ResourceConfig.with_tpu(_tpu_types_from_env())

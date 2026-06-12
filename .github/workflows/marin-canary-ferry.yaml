@@ -30,8 +30,8 @@ jobs:
       RUN_ID: canary-tpu-${{ github.run_id }}-${{ github.run_attempt }}
       CANARY_ACCELERATOR: tpu
       CANARY_TPU_TYPE: "v5p-8,v4-8"
-      CANARY_BATCH_SIZE: "512"
-      CANARY_TARGET_TOKENS: "1000000000"
+      CANARY_BATCH_SIZE: "128"
+      CANARY_TARGET_TOKENS: "250000000"
       CANARY_MIN_STEPS: "400"
       CANARY_MAX_LOSS: "8.0"
       CANARY_CHILD_WAIT_TIMEOUT: "12600"
