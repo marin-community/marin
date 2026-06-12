@@ -36,14 +36,21 @@ class SplashDynamicPrefixMask(StrEnum):
 
 
 @dataclass(frozen=True)
+class SplashPrefixLmMaskSpec:
+    """Static or dynamic prefix-LM controls for Splash mask lowering."""
+
+    prefix_length: int | None = None
+    dynamic_prefix: SplashDynamicPrefixMask = SplashDynamicPrefixMask.NONE
+
+
+@dataclass(frozen=True)
 class SplashAttentionMaskSpec:
     """Static mask fields consumed by Splash Attention lowering."""
 
     is_causal: bool = False
     causal_offset: object | None = None
     sliding_window: int | None = None
-    prefix_length: int | None = None
-    dynamic_prefix: SplashDynamicPrefixMask = SplashDynamicPrefixMask.NONE
+    prefix_lm: SplashPrefixLmMaskSpec | None = None
     has_explicit_mask: bool = False
 
 
@@ -77,8 +84,11 @@ def splash_attention_mask_spec_from_fields(
         is_causal=is_causal,
         causal_offset=causal_offset,
         sliding_window=sliding_window,
-        prefix_length=prefix_length,
-        dynamic_prefix=dynamic_prefix,
+        prefix_lm=(
+            None
+            if prefix_length is None and dynamic_prefix == SplashDynamicPrefixMask.NONE
+            else SplashPrefixLmMaskSpec(prefix_length=prefix_length, dynamic_prefix=dynamic_prefix)
+        ),
         has_explicit_mask=explicit_mask is not None,
     )
 
@@ -133,6 +143,26 @@ class _PrefixLmDataNextAxis(StrEnum):
 class _DynamicMaskInfoRole(StrEnum):
     FWD_OR_DQ = "fwd_or_dq"
     DKV = "dkv"
+
+
+def _packed_dynamic_mask_context(
+    *,
+    q_seq_len: int,
+    kv_seq_len: int,
+    block_sizes: splash_attention_kernel.BlockSizes,
+    head_shards: int,
+    q_seq_shards: int,
+    caller: str,
+) -> _PackedDynamicMaskContext:
+    if not block_sizes.has_backward_blocks:
+        raise ValueError(f"{caller} requires backward block sizes.")
+    return _PackedDynamicMaskContext(
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        block_sizes=block_sizes,
+        head_shards=head_shards,
+        q_seq_shards=q_seq_shards,
+    )
 
 
 def prefix_lm_mask_infos(
@@ -195,15 +225,13 @@ def packed_prefix_lm_mask_infos(
     This supports packed docs by letting callers mark prefix tokens per key
     position while segment IDs keep those prefix tokens local to their document.
     """
-    if not block_sizes.has_backward_blocks:
-        raise ValueError("packed_prefix_lm_mask_infos requires backward block sizes.")
-
-    context = _PackedDynamicMaskContext(
+    context = _packed_dynamic_mask_context(
         q_seq_len=q_seq_len,
         kv_seq_len=kv_seq_len,
         block_sizes=block_sizes,
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
+        caller="packed_prefix_lm_mask_infos",
     )
 
     def mask_block_builder(*, block_q: int, block_kv: int) -> jax.Array:
@@ -211,8 +239,8 @@ def packed_prefix_lm_mask_infos(
             prefix_mask=prefix_mask,
             q_segment_ids=q_segment_ids,
             kv_segment_ids=kv_segment_ids,
-            q_seq_len=q_seq_len,
-            kv_seq_len=kv_seq_len,
+            q_seq_len=context.q_seq_len,
+            kv_seq_len=context.kv_seq_len,
             block_q=block_q,
             block_kv=block_kv,
         )
@@ -473,23 +501,21 @@ def packed_causal_segment_mask_infos(
 
     The represented mask is ``same_segment(q, kv) & (kv <= q)``.
     """
-    if not block_sizes.has_backward_blocks:
-        raise ValueError("packed_causal_segment_mask_infos requires backward block sizes.")
-
-    context = _PackedDynamicMaskContext(
+    context = _packed_dynamic_mask_context(
         q_seq_len=q_seq_len,
         kv_seq_len=kv_seq_len,
         block_sizes=block_sizes,
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
+        caller="packed_causal_segment_mask_infos",
     )
 
     def mask_block_builder(*, block_q: int, block_kv: int) -> jax.Array:
         return packed_causal_segment_block_mask_blocks(
             q_segment_ids=q_segment_ids,
             kv_segment_ids=kv_segment_ids,
-            q_seq_len=q_seq_len,
-            kv_seq_len=kv_seq_len,
+            q_seq_len=context.q_seq_len,
+            kv_seq_len=context.kv_seq_len,
             block_q=block_q,
             block_kv=block_kv,
         )
@@ -510,8 +536,14 @@ def packed_causal_segment_run_mask_infos(
     """Build packed causal metadata from fixed-shape contiguous segment lengths."""
     if q_seq_len != kv_seq_len:
         raise NotImplementedError("Segment-run Splash metadata currently supports self-attention only.")
-    if not block_sizes.has_backward_blocks:
-        raise ValueError("packed_causal_segment_run_mask_infos requires backward block sizes.")
+    context = _packed_dynamic_mask_context(
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        block_sizes=block_sizes,
+        head_shards=head_shards,
+        q_seq_shards=q_seq_shards,
+        caller="packed_causal_segment_run_mask_infos",
+    )
 
     segment_lengths = jnp.asarray(segment_lengths, dtype=jnp.int32)
     if segment_lengths.ndim != 1:
@@ -520,14 +552,7 @@ def packed_causal_segment_run_mask_infos(
     segment_ids = _segment_ids_from_lengths(
         segment_lengths=segment_lengths,
         num_segments=num_segments,
-        seq_len=q_seq_len,
-    )
-    context = _PackedDynamicMaskContext(
-        q_seq_len=q_seq_len,
-        kv_seq_len=kv_seq_len,
-        block_sizes=block_sizes,
-        head_shards=head_shards,
-        q_seq_shards=q_seq_shards,
+        seq_len=context.q_seq_len,
     )
     max_segments = segment_lengths.shape[0]
 
@@ -535,8 +560,8 @@ def packed_causal_segment_run_mask_infos(
         return packed_causal_segment_block_mask_blocks(
             q_segment_ids=segment_ids,
             kv_segment_ids=segment_ids,
-            q_seq_len=q_seq_len,
-            kv_seq_len=kv_seq_len,
+            q_seq_len=context.q_seq_len,
+            kv_seq_len=context.kv_seq_len,
             block_q=block_q,
             block_kv=block_kv,
         )
@@ -545,9 +570,9 @@ def packed_causal_segment_run_mask_infos(
         mask_block_builder=mask_block_builder,
         context=context,
         partial_capacities=_segment_run_partial_capacities(
-            q_seq_len=q_seq_len,
-            kv_seq_len=kv_seq_len,
-            block_sizes=block_sizes,
+            q_seq_len=context.q_seq_len,
+            kv_seq_len=context.kv_seq_len,
+            block_sizes=context.block_sizes,
             max_segments=max_segments,
         ),
     )
@@ -622,9 +647,10 @@ def lower_splash_attention_mask(
     if mask is None:
         base_mask = splash_attention_mask.FullMask(_shape=(q_seq_len, kv_seq_len))
     else:
-        if mask.dynamic_prefix != SplashDynamicPrefixMask.NONE:
+        prefix_lm = mask.prefix_lm
+        if prefix_lm is not None and prefix_lm.dynamic_prefix != SplashDynamicPrefixMask.NONE:
             raise NotImplementedError("Dynamic prefix-LM masks are not yet supported for splash attention")
-        if mask.prefix_length is not None and not mask.is_causal:
+        if prefix_lm is not None and prefix_lm.prefix_length is not None and not mask.is_causal:
             raise NotImplementedError("Splash prefix-LM masks must also be causal.")
 
         if mask.is_causal:
@@ -649,10 +675,10 @@ def lower_splash_attention_mask(
             )
             causal_mask = splash_attention_mask.LogicalAnd(causal_mask, local_mask)
 
-        if mask.prefix_length is not None:
+        if prefix_lm is not None and prefix_lm.prefix_length is not None:
             prefix_mask = PrefixMask(
                 shape=(q_seq_len, kv_seq_len),
-                prefix_length=mask.prefix_length,
+                prefix_length=prefix_lm.prefix_length,
                 shard_count=q_seq_shards,
             )
             base_mask = splash_attention_mask.LogicalOr(causal_mask, prefix_mask)

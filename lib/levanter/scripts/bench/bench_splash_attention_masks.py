@@ -38,6 +38,12 @@ DOC_LENGTH_PROFILES = (
     DOC_LENGTH_PROFILE_STAGGERED,
     DOC_LENGTH_PROFILE_LONG_TAIL,
 )
+DTYPE_OPTIONS = (
+    ("bf16", jnp.bfloat16),
+    ("fp32", jnp.float32),
+)
+DTYPE_NAMES = tuple(name for name, _ in DTYPE_OPTIONS)
+DEFAULT_DTYPE_NAME = DTYPE_NAMES[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,10 +344,9 @@ def _integer_partition_from_weights(total: int, weights: tuple[int, ...]) -> tup
 
 
 def _parse_dtype(dtype: str) -> jnp.dtype:
-    if dtype == "bf16":
-        return jnp.bfloat16
-    if dtype == "fp32":
-        return jnp.float32
+    for name, jax_dtype in DTYPE_OPTIONS:
+        if dtype == name:
+            return jax_dtype
     raise ValueError(f"Unsupported dtype {dtype!r}.")
 
 
@@ -365,7 +370,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--prefix-tokens-per-doc", type=int, default=256)
     parser.add_argument("--doc-length-profile", choices=DOC_LENGTH_PROFILES, default=DOC_LENGTH_PROFILE_EQUAL)
     parser.add_argument("--doc-lengths", type=str, default=None)
-    parser.add_argument("--dtype", choices=("bf16", "fp32"), default="bf16")
+    parser.add_argument("--dtype", choices=DTYPE_NAMES, default=DEFAULT_DTYPE_NAME)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--include-dense", action="store_true")

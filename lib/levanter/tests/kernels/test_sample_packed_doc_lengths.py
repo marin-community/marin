@@ -14,6 +14,7 @@ assert _SCRIPT_SPEC is not None and _SCRIPT_SPEC.loader is not None
 sample_packed_doc_lengths = importlib.util.module_from_spec(_SCRIPT_SPEC)
 _SCRIPT_SPEC.loader.exec_module(sample_packed_doc_lengths)
 
+_parse_text_keys = sample_packed_doc_lengths._parse_text_keys
 _texts_from_jsonl = sample_packed_doc_lengths._texts_from_jsonl
 _texts_from_text_file = sample_packed_doc_lengths._texts_from_text_file
 _pack_token_lengths = sample_packed_doc_lengths._pack_token_lengths
@@ -43,18 +44,35 @@ def test_pack_token_lengths_requires_enough_input():
         _pack_token_lengths([3, 4], seq_len=16, num_packs=2, max_docs_per_pack=None)
 
 
-def test_texts_from_jsonl_supports_nested_keys(tmp_path: Path):
+@pytest.mark.parametrize(
+    ("rows", "text_keys", "expected"),
+    [
+        (
+            [
+                {"conversation": {"text": "hello"}},
+                {"conversation": {"text": ["a", "b"]}},
+                {"conversation": {"text": ""}},
+            ],
+            ("conversation.text",),
+            ["hello", "a\nb"],
+        ),
+        (
+            [
+                {"instruction": "Do this", "input": "", "output": "Done"},
+                {"instruction": "Say", "input": "hello", "output": "world"},
+            ],
+            _parse_text_keys("instruction,input,output"),
+            ["Do this\nDone", "Say\nhello\nworld"],
+        ),
+    ],
+)
+def test_texts_from_jsonl(tmp_path: Path, rows: list[dict], text_keys: tuple[str, ...], expected: list[str]):
     path = tmp_path / "docs.jsonl"
-    rows = [
-        {"conversation": {"text": "hello"}},
-        {"conversation": {"text": ["a", "b"]}},
-        {"conversation": {"text": ""}},
-    ]
     with path.open("w") as f:
         for row in rows:
             f.write(json.dumps(row) + "\n")
 
-    assert list(_texts_from_jsonl(str(path), text_key="conversation.text")) == ["hello", "a\nb"]
+    assert list(_texts_from_jsonl(str(path), text_keys=text_keys)) == expected
 
 
 def test_texts_from_text_file_skips_empty_lines(tmp_path: Path):

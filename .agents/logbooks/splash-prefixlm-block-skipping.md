@@ -318,3 +318,20 @@
   - Attention segment-run slice passed (`1 passed, 5 skipped`); Splash helper tests passed (`19 passed`); changed-file precommit passed; lint review reported no findings.
 - Interpretation: A dataset/tokenizer pass can now be run once on CPU to produce concrete packed lengths, then TPU timing can stay focused on kernel behavior using `--doc-lengths`.
 - Next action: Run the helper on a representative local/HF instruction dataset when network/tokenizer access is convenient, then benchmark those lengths on v4-8/v5p-8.
+
+### 2026-06-12 - Alpaca packed-length sampling
+- Hypothesis: Alpaca-style rows need multi-field text extraction (`instruction`, `input`, `output`) before tokenization, and the resulting packed lengths can provide a more realistic `--doc-lengths` input than synthetic equal/staggered profiles.
+- Command:
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_sample_packed_doc_lengths.py lib/levanter/tests/kernels/test_bench_splash_attention_masks.py`
+  - `timeout 300 uv run --project lib/levanter python lib/levanter/scripts/bench/sample_packed_doc_lengths.py --dataset yahma/alpaca-cleaned --split train --streaming --text-key instruction,input,output --tokenizer gpt2 --seq-len 8192 --num-packs 2 --max-examples 2000`
+  - `timeout 300 uv run --project lib/levanter python lib/levanter/scripts/bench/sample_packed_doc_lengths.py --dataset GAIR/lima --split train --streaming --text-key conversations --tokenizer gpt2 --seq-len 8192 --num-packs 1 --max-examples 2000`
+- Config: CPU-side sampling only; tokenizer `gpt2`; first two greedy 8192-token packs from `yahma/alpaca-cleaned`.
+- Result:
+  - Extended `sample_packed_doc_lengths.py` so `--text-key` can be a comma-separated field list; nonempty fields are joined with newlines before tokenization.
+  - Sampler/benchmark tests passed with `11 passed`.
+  - Alpaca sampling succeeded and produced:
+    - `158,71,262,290,181,268,186,338,49,149,16,171,364,37,232,216,170,254,32,43,441,79,52,112,168,27,398,102,51,358,27,90,381,411,30,86,82,96,186,166,125,388,144,169,150,153,233`
+    - `340,127,102,48,115,172,75,155,114,109,46,93,19,130,193,25,32,21,324,39,92,38,334,20,30,65,132,27,77,20,383,39,177,365,32,399,337,278,228,280,224,79,27,300,35,164,493,202,18,181,77,14,24,256,407,53,6`
+  - Direct `GAIR/lima` loading failed under the installed `datasets` package with `RuntimeError: Dataset scripts are no longer supported, but found lima.py`.
+- Interpretation: The Alpaca path is now reproducible without ad hoc preprocessing and gives concrete ragged packed-doc profiles for the TPU benchmark. The LIMA failure is a dataset packaging issue in the local HF stack, not a sampler logic failure; use a local JSONL export or a script-free mirror if LIMA lengths are still needed.
+- Next action: Run `bench_splash_attention_masks.py --doc-lengths <alpaca pack>` on v4-8/v5p-8 when Boyle or a later TPU reservation gets capacity.

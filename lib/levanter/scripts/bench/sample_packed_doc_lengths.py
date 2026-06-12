@@ -36,8 +36,9 @@ def main() -> None:
 
 
 def _texts_from_args(args: argparse.Namespace) -> Iterable[str]:
+    text_keys = _parse_text_keys(args.text_key)
     if args.jsonl is not None:
-        return _texts_from_jsonl(args.jsonl, text_key=args.text_key)
+        return _texts_from_jsonl(args.jsonl, text_keys=text_keys)
     if args.text_file is not None:
         return _texts_from_text_file(args.text_file)
     if args.dataset is not None:
@@ -45,19 +46,19 @@ def _texts_from_args(args: argparse.Namespace) -> Iterable[str]:
             args.dataset,
             dataset_config=args.dataset_config,
             split=args.split,
-            text_key=args.text_key,
+            text_keys=text_keys,
             streaming=args.streaming,
         )
     raise ValueError("Specify one of --jsonl, --text-file, or --dataset.")
 
 
-def _texts_from_jsonl(path: str, *, text_key: str) -> Iterator[str]:
+def _texts_from_jsonl(path: str, *, text_keys: tuple[str, ...]) -> Iterator[str]:
     with Path(path).open() as f:
         for line in f:
             if not line.strip():
                 continue
             row = json.loads(line)
-            text = _text_from_row(row, text_key=text_key)
+            text = _text_from_row(row, text_keys=text_keys)
             if text:
                 yield text
 
@@ -75,17 +76,22 @@ def _texts_from_hf_dataset(
     *,
     dataset_config: str | None,
     split: str,
-    text_key: str,
+    text_keys: tuple[str, ...],
     streaming: bool,
 ) -> Iterator[str]:
     dataset = datasets.load_dataset(dataset_name, dataset_config, split=split, streaming=streaming)
     for row in dataset:
-        text = _text_from_row(row, text_key=text_key)
+        text = _text_from_row(row, text_keys=text_keys)
         if text:
             yield text
 
 
-def _text_from_row(row: dict[str, Any], *, text_key: str) -> str:
+def _text_from_row(row: dict[str, Any], *, text_keys: tuple[str, ...]) -> str:
+    values = [_text_value_from_row(row, text_key=text_key) for text_key in text_keys]
+    return "\n".join(value for value in values if value)
+
+
+def _text_value_from_row(row: dict[str, Any], *, text_key: str) -> str:
     value = row
     for key in text_key.split("."):
         value = value[key]
@@ -94,6 +100,13 @@ def _text_from_row(row: dict[str, Any], *, text_key: str) -> str:
     if isinstance(value, Sequence):
         return "\n".join(str(part) for part in value)
     return str(value)
+
+
+def _parse_text_keys(text_key: str) -> tuple[str, ...]:
+    text_keys = tuple(key.strip() for key in text_key.split(",") if key.strip())
+    if not text_keys:
+        raise ValueError("text_key must contain at least one field name.")
+    return text_keys
 
 
 def _token_lengths(
@@ -157,7 +170,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-config", type=str, default=None)
     parser.add_argument("--split", type=str, default="train")
     parser.add_argument("--streaming", action="store_true")
-    parser.add_argument("--text-key", type=str, default="text")
+    parser.add_argument(
+        "--text-key",
+        type=str,
+        default="text",
+        help="Field name, nested path, or comma-separated field list to join into one document.",
+    )
     parser.add_argument("--tokenizer", type=str, required=True)
     parser.add_argument("--seq-len", type=int, default=8192)
     parser.add_argument("--num-packs", type=int, default=1)

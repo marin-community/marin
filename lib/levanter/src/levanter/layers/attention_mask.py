@@ -54,6 +54,20 @@ def _materialize_sliding_window_mask(
     return (diff >= 0) & (diff < window)
 
 
+class PrefixLmMaskSpec(eqx.Module):
+    """Structured prefix-LM visibility controls."""
+
+    prefix_length: Optional[int] = eqx.field(default=None, static=True)
+    prefix_lengths: Optional[NamedArray] = None
+    prefix_mask: Optional[NamedArray] = None
+
+    def __post_init__(self):
+        if self.prefix_length is None and self.prefix_lengths is None and self.prefix_mask is None:
+            raise ValueError("PrefixLmMaskSpec requires prefix_length, prefix_lengths, or prefix_mask.")
+        if self.prefix_length is not None and self.prefix_length < 0:
+            raise ValueError(f"prefix_length must be non-negative, got {self.prefix_length}.")
+
+
 class AttentionMask(eqx.Module):
     """
 
@@ -91,9 +105,19 @@ class AttentionMask(eqx.Module):
     segment_ids: tuple[NamedArray, NamedArray] | None = None
     segment_run_metadata: Optional["SegmentRunMetadata"] = None
     sliding_window: Optional[int] = eqx.field(default=None, static=True)
-    prefix_length: Optional[int] = eqx.field(default=None, static=True)
-    prefix_lengths: Optional[NamedArray] = None
-    prefix_mask: Optional[NamedArray] = None
+    prefix_lm_spec: Optional[PrefixLmMaskSpec] = None
+
+    @property
+    def prefix_length(self) -> Optional[int]:
+        return None if self.prefix_lm_spec is None else self.prefix_lm_spec.prefix_length
+
+    @property
+    def prefix_lengths(self) -> Optional[NamedArray]:
+        return None if self.prefix_lm_spec is None else self.prefix_lm_spec.prefix_lengths
+
+    @property
+    def prefix_mask(self) -> Optional[NamedArray]:
+        return None if self.prefix_lm_spec is None else self.prefix_lm_spec.prefix_mask
 
     def materialize(
         self,
@@ -221,9 +245,11 @@ class AttentionMask(eqx.Module):
 
         return AttentionMask(
             is_causal=True,
-            prefix_length=prefix_length,
-            prefix_lengths=prefix_lengths,
-            prefix_mask=prefix_mask,
+            prefix_lm_spec=PrefixLmMaskSpec(
+                prefix_length=prefix_length,
+                prefix_lengths=prefix_lengths,
+                prefix_mask=prefix_mask,
+            ),
             sliding_window=sliding_window,
             segment_ids=segment_ids,
         )
@@ -257,9 +283,7 @@ class AttentionMask(eqx.Module):
             explicit_mask=self.explicit_mask,
             segment_ids=seg_field,
             sliding_window=self.sliding_window,
-            prefix_length=self.prefix_length,
-            prefix_lengths=self.prefix_lengths,
-            prefix_mask=self.prefix_mask,
+            prefix_lm_spec=self.prefix_lm_spec,
         )
 
     def with_segment_runs(
@@ -284,9 +308,7 @@ class AttentionMask(eqx.Module):
             segment_ids=self.segment_ids,
             segment_run_metadata=segment_run_metadata,
             sliding_window=self.sliding_window,
-            prefix_length=self.prefix_length,
-            prefix_lengths=self.prefix_lengths,
-            prefix_mask=self.prefix_mask,
+            prefix_lm_spec=self.prefix_lm_spec,
         )
 
     def with_sliding_window(self, sliding_window: int | None) -> "AttentionMask":
@@ -298,9 +320,7 @@ class AttentionMask(eqx.Module):
             segment_ids=self.segment_ids,
             segment_run_metadata=self.segment_run_metadata,
             sliding_window=sliding_window,
-            prefix_length=self.prefix_length,
-            prefix_lengths=self.prefix_lengths,
-            prefix_mask=self.prefix_mask,
+            prefix_lm_spec=self.prefix_lm_spec,
         )
 
     def __and__(self, other) -> "AttentionMask":
@@ -328,9 +348,7 @@ class AttentionMask(eqx.Module):
         explicit_mask = combine_masks_and(self.explicit_mask, other.explicit_mask)
         segment_ids = self._check_for_same_segment_ids(other)
         segment_run_metadata = self._segment_run_metadata_for_combination(other)
-        prefix_mask = combine_masks_and(self.prefix_mask, other.prefix_mask)
-        prefix_length = _combine_prefix_lengths_and(self.prefix_length, other.prefix_length)
-        prefix_lengths = _combine_dynamic_prefix_lengths_and(self.prefix_lengths, other.prefix_lengths)
+        prefix_lm = _combine_prefix_lm_and(self.prefix_lm_spec, other.prefix_lm_spec)
         if self.sliding_window is None:
             sliding_window = other.sliding_window
         elif other.sliding_window is None:
@@ -345,9 +363,7 @@ class AttentionMask(eqx.Module):
             segment_ids=segment_ids,
             segment_run_metadata=segment_run_metadata,
             sliding_window=sliding_window,
-            prefix_length=prefix_length,
-            prefix_lengths=prefix_lengths,
-            prefix_mask=prefix_mask,
+            prefix_lm_spec=prefix_lm,
         )
 
     def __or__(self, other) -> "AttentionMask":
@@ -368,9 +384,7 @@ class AttentionMask(eqx.Module):
         explicit_mask = combine_masks_or(self.explicit_mask, other.explicit_mask)
         segment_ids = self._check_for_same_segment_ids(other)
         segment_run_metadata = self._segment_run_metadata_for_combination(other)
-        prefix_mask = combine_masks_or(self.prefix_mask, other.prefix_mask)
-        prefix_length = _combine_prefix_lengths_or(self.prefix_length, other.prefix_length)
-        prefix_lengths = _combine_dynamic_prefix_lengths_or(self.prefix_lengths, other.prefix_lengths)
+        prefix_lm = _combine_prefix_lm_or(self.prefix_lm_spec, other.prefix_lm_spec)
         if self.sliding_window is None or other.sliding_window is None:
             sliding_window = None
         else:
@@ -382,9 +396,7 @@ class AttentionMask(eqx.Module):
             segment_ids=segment_ids,
             segment_run_metadata=segment_run_metadata,
             sliding_window=sliding_window,
-            prefix_length=prefix_length,
-            prefix_lengths=prefix_lengths,
-            prefix_mask=prefix_mask,
+            prefix_lm_spec=prefix_lm,
         )
 
     def _check_for_same_segment_ids(self, other):
@@ -466,20 +478,44 @@ def _check_matching_segment_ids_for_runs(segment_ids: NamedArray, kv_segment_ids
     return hax.named(checked_segment_ids, segment_ids.axes)
 
 
-def _combine_prefix_lengths_and(left: int | None, right: int | None) -> int | None:
-    return _combine_optional_prefix_values(left, right, min)
+def _combine_prefix_lm_and(left: PrefixLmMaskSpec | None, right: PrefixLmMaskSpec | None) -> PrefixLmMaskSpec | None:
+    return _combine_prefix_lm_specs(
+        left,
+        right,
+        combine_length=min,
+        combine_lengths=hax.minimum,
+        combine_mask=combine_masks_and,
+    )
 
 
-def _combine_prefix_lengths_or(left: int | None, right: int | None) -> int | None:
-    return _combine_optional_prefix_values(left, right, max)
+def _combine_prefix_lm_or(left: PrefixLmMaskSpec | None, right: PrefixLmMaskSpec | None) -> PrefixLmMaskSpec | None:
+    return _combine_prefix_lm_specs(
+        left,
+        right,
+        combine_length=max,
+        combine_lengths=hax.maximum,
+        combine_mask=combine_masks_or,
+    )
 
 
-def _combine_dynamic_prefix_lengths_and(left: NamedArray | None, right: NamedArray | None) -> NamedArray | None:
-    return _combine_optional_prefix_values(left, right, hax.minimum)
+def _combine_prefix_lm_specs(
+    left: PrefixLmMaskSpec | None,
+    right: PrefixLmMaskSpec | None,
+    *,
+    combine_length: Callable[[int, int], int],
+    combine_lengths: Callable[[NamedArray, NamedArray], NamedArray],
+    combine_mask: Callable[[NamedArray | None, NamedArray | None], NamedArray | None],
+) -> PrefixLmMaskSpec | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
 
-
-def _combine_dynamic_prefix_lengths_or(left: NamedArray | None, right: NamedArray | None) -> NamedArray | None:
-    return _combine_optional_prefix_values(left, right, hax.maximum)
+    return PrefixLmMaskSpec(
+        prefix_length=_combine_optional_prefix_values(left.prefix_length, right.prefix_length, combine_length),
+        prefix_lengths=_combine_optional_prefix_values(left.prefix_lengths, right.prefix_lengths, combine_lengths),
+        prefix_mask=combine_mask(left.prefix_mask, right.prefix_mask),
+    )
 
 
 def _combine_optional_prefix_values(left: T | None, right: T | None, combine: Callable[[T, T], T]) -> T | None:
