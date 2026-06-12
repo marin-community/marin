@@ -24,11 +24,20 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 
+from levanter.kernels.pallas.splash_attention import DEFAULT_SPLASH_BLOCK_SIZE
 from levanter.layers.attention import AttentionMask, _tpu_splash_attention
 from levanter.utils.mesh import create_mesh_from_axis_specs
 
 STATIC_CAUSAL_SPLASH_VARIANT = "static_causal_splash"
 INPUT_SCALE = 0.02
+DOC_LENGTH_PROFILE_EQUAL = "equal"
+DOC_LENGTH_PROFILE_STAGGERED = "staggered"
+DOC_LENGTH_PROFILE_LONG_TAIL = "long-tail"
+DOC_LENGTH_PROFILES = (
+    DOC_LENGTH_PROFILE_EQUAL,
+    DOC_LENGTH_PROFILE_STAGGERED,
+    DOC_LENGTH_PROFILE_LONG_TAIL,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +49,7 @@ class BenchShape:
     block_size: int
     docs_per_sequence: int
     prefix_tokens_per_doc: int
+    doc_length_profile: str
     dtype: jnp.dtype
 
 
@@ -53,6 +63,7 @@ class BenchResult:
     block_size: int
     docs_per_sequence: int
     prefix_tokens_per_doc: int
+    doc_length_profile: str
     dtype: str
     device_kind: str
     num_devices: int
@@ -74,6 +85,7 @@ def main() -> None:
         block_size=args.block_size,
         docs_per_sequence=args.docs_per_sequence,
         prefix_tokens_per_doc=args.prefix_tokens_per_doc,
+        doc_length_profile=args.doc_length_profile,
         dtype=dtype,
     )
     if jax.default_backend() != "tpu" and not args.allow_non_tpu:
@@ -232,6 +244,7 @@ def _time_variant(
         block_size=shape.block_size,
         docs_per_sequence=shape.docs_per_sequence,
         prefix_tokens_per_doc=shape.prefix_tokens_per_doc,
+        doc_length_profile=shape.doc_length_profile,
         dtype=str(shape.dtype),
         device_kind=device_kind,
         num_devices=len(jax.devices()),
@@ -250,10 +263,10 @@ class _PackedSegmentIds:
 
 
 def _packed_segment_ids(shape: BenchShape, Batch: hax.Axis, Pos: hax.Axis, KPos: hax.Axis) -> _PackedSegmentIds:
-    if shape.seq_len % shape.docs_per_sequence != 0:
-        raise ValueError("seq_len must be divisible by docs_per_sequence.")
-    doc_len = shape.seq_len // shape.docs_per_sequence
-    one_sequence = jnp.repeat(jnp.arange(shape.docs_per_sequence, dtype=jnp.int32), doc_len)
+    doc_lengths = _doc_lengths(shape)
+    one_sequence = jnp.concatenate(
+        [jnp.full((doc_len,), doc_id, dtype=jnp.int32) for doc_id, doc_len in enumerate(doc_lengths)]
+    )
     segment_ids = jnp.broadcast_to(one_sequence[None, :], (shape.batch, shape.seq_len))
     return _PackedSegmentIds(
         q=hax.named(segment_ids, (Batch, Pos)),
@@ -262,15 +275,52 @@ def _packed_segment_ids(shape: BenchShape, Batch: hax.Axis, Pos: hax.Axis, KPos:
 
 
 def _packed_prefix_mask(shape: BenchShape, Batch: hax.Axis, Pos: hax.Axis) -> hax.NamedArray:
-    if shape.seq_len % shape.docs_per_sequence != 0:
-        raise ValueError("seq_len must be divisible by docs_per_sequence.")
-    doc_len = shape.seq_len // shape.docs_per_sequence
-    if shape.prefix_tokens_per_doc > doc_len:
-        raise ValueError("prefix_tokens_per_doc must be <= per-document length.")
-    positions = jnp.arange(shape.seq_len, dtype=jnp.int32)
-    prefix = (positions % doc_len) < shape.prefix_tokens_per_doc
+    doc_lengths = _doc_lengths(shape)
+    prefix = jnp.concatenate(
+        [jnp.arange(doc_len, dtype=jnp.int32) < min(shape.prefix_tokens_per_doc, doc_len) for doc_len in doc_lengths]
+    )
     prefix = jnp.broadcast_to(prefix[None, :], (shape.batch, shape.seq_len))
     return hax.named(prefix, (Batch, Pos))
+
+
+def _doc_lengths(shape: BenchShape) -> tuple[int, ...]:
+    if shape.docs_per_sequence <= 0:
+        raise ValueError("docs_per_sequence must be positive.")
+    if shape.docs_per_sequence > shape.seq_len:
+        raise ValueError("docs_per_sequence must be <= seq_len.")
+
+    if shape.doc_length_profile == DOC_LENGTH_PROFILE_EQUAL:
+        if shape.seq_len % shape.docs_per_sequence != 0:
+            raise ValueError("seq_len must be divisible by docs_per_sequence for equal doc lengths.")
+        doc_len = shape.seq_len // shape.docs_per_sequence
+        return (doc_len,) * shape.docs_per_sequence
+
+    if shape.doc_length_profile == DOC_LENGTH_PROFILE_STAGGERED:
+        weights = tuple(range(1, shape.docs_per_sequence + 1))
+    elif shape.doc_length_profile == DOC_LENGTH_PROFILE_LONG_TAIL:
+        weights = tuple(2**i for i in reversed(range(shape.docs_per_sequence)))
+    else:
+        raise ValueError(f"Unsupported doc_length_profile {shape.doc_length_profile!r}.")
+
+    return _integer_partition_from_weights(shape.seq_len, weights)
+
+
+def _integer_partition_from_weights(total: int, weights: tuple[int, ...]) -> tuple[int, ...]:
+    min_lengths = len(weights)
+    if total < min_lengths:
+        raise ValueError("total must be at least the number of weights.")
+
+    remaining = total - min_lengths
+    weight_sum = sum(weights)
+    raw_lengths = [remaining * weight / weight_sum for weight in weights]
+    lengths = [1 + int(raw_length) for raw_length in raw_lengths]
+    remainder = total - sum(lengths)
+    fractional_order = sorted(range(len(weights)), key=lambda i: raw_lengths[i] - int(raw_lengths[i]), reverse=True)
+    for index in fractional_order[:remainder]:
+        lengths[index] += 1
+
+    assert sum(lengths) == total
+    return tuple(lengths)
 
 
 def _parse_dtype(dtype: str) -> jnp.dtype:
@@ -287,9 +337,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--seq-len", type=int, default=8192)
     parser.add_argument("--heads", type=int, default=8)
     parser.add_argument("--head-dim", type=int, default=128)
-    parser.add_argument("--block-size", type=int, default=512)
+    parser.add_argument("--block-size", type=int, default=DEFAULT_SPLASH_BLOCK_SIZE)
     parser.add_argument("--docs-per-sequence", type=int, default=4)
     parser.add_argument("--prefix-tokens-per-doc", type=int, default=256)
+    parser.add_argument("--doc-length-profile", choices=DOC_LENGTH_PROFILES, default=DOC_LENGTH_PROFILE_EQUAL)
     parser.add_argument("--dtype", choices=("bf16", "fp32"), default="bf16")
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--iterations", type=int, default=5)

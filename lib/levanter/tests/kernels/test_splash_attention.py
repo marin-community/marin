@@ -438,8 +438,6 @@ def _materialize_splash_mask(mask):
 class _PartialBlockLayout(StrEnum):
     COMPACT = "compact"
     COMPACT_TRANSPOSED = "compact_transposed"
-    DYNAMIC = "dynamic"
-    DYNAMIC_TRANSPOSED = "dynamic_transposed"
 
 
 def _materialize_mask_info(
@@ -466,17 +464,8 @@ def _materialize_mask_info(
             if block_kind == BLOCK_MASK_FULL:
                 out[q_slice, kv_slice] = True
             elif block_kind == BLOCK_MASK_PARTIAL:
-                if partial_block_layout in (
-                    _PartialBlockLayout.DYNAMIC,
-                    _PartialBlockLayout.DYNAMIC_TRANSPOSED,
-                ):
-                    partial_block = partial_mask_blocks[head, q_block, kv_block]
-                else:
-                    partial_block = partial_mask_blocks[int(mask_next[head, q_block, kv_block])]
-                if partial_block_layout in (
-                    _PartialBlockLayout.COMPACT_TRANSPOSED,
-                    _PartialBlockLayout.DYNAMIC_TRANSPOSED,
-                ):
+                partial_block = partial_mask_blocks[int(mask_next[head, q_block, kv_block])]
+                if partial_block_layout == _PartialBlockLayout.COMPACT_TRANSPOSED:
                     partial_block = partial_block.T
                 out[q_slice, kv_slice] = partial_block
     return out

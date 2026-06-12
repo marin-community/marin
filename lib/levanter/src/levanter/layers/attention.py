@@ -1160,13 +1160,32 @@ def _packed_dynamic_mask_kernel_plan(
 
     def make_kernel(*args):
         *metadata_args, q_segment_ids, kv_segment_ids = args
-        metadata = metadata_builder(*metadata_args, q_segment_ids, kv_segment_ids)
+        return metadata_builder(*metadata_args, q_segment_ids, kv_segment_ids)
+
+    return _dynamic_metadata_kernel_plan(
+        context=context,
+        metadata_values=metadata_values + (segment_ids.q, segment_ids.kv),
+        metadata_in_axes=metadata_in_axes + (segment_ids.q_vmap_axis, segment_ids.kv_vmap_axis),
+        metadata_builder=make_kernel,
+        batch_spec=batch_spec,
+        segment_id_lowering=lower_splash_segment_ids(),
+    )
+
+
+def _dynamic_metadata_kernel_plan(
+    *,
+    context: _SplashKernelContext,
+    metadata_values: tuple[jax.Array, ...],
+    metadata_in_axes: tuple[int | None, ...],
+    metadata_builder,
+    batch_spec,
+    segment_id_lowering: SplashSegmentIdsLowering,
+) -> _SplashKernelPlan:
+    def make_kernel(*metadata_args):
+        metadata = metadata_builder(*metadata_args)
         return _splash_kernel_from_dynamic_metadata(metadata, context.block_sizes, context.logits_soft_cap)
 
-    splash_kernel = jax.vmap(
-        make_kernel,
-        in_axes=metadata_in_axes + (segment_ids.q_vmap_axis, segment_ids.kv_vmap_axis),
-    )(*metadata_values, segment_ids.q, segment_ids.kv)
+    splash_kernel = jax.vmap(make_kernel, in_axes=metadata_in_axes)(*metadata_values)
     kernel_specs = _batched_splash_kernel_specs(
         splash_kernel,
         batch_spec=batch_spec,
@@ -1178,7 +1197,7 @@ def _packed_dynamic_mask_kernel_plan(
         kernel=splash_kernel,
         kernel_specs=kernel_specs,
         kernel_vmap_axis=0,
-        segment_id_lowering=lower_splash_segment_ids(),
+        segment_id_lowering=segment_id_lowering,
     )
 
 
@@ -1287,21 +1306,12 @@ def _packed_causal_segment_run_kernel_plan(
         )
         return _splash_kernel_from_dynamic_metadata(metadata, context.block_sizes, context.logits_soft_cap)
 
-    splash_kernel = jax.vmap(make_kernel)(
-        segment_run_controls.segment_lengths,
-        segment_run_controls.num_segments,
-    )
-    kernel_specs = _batched_splash_kernel_specs(
-        splash_kernel,
+    return _dynamic_metadata_kernel_plan(
+        context=context,
+        metadata_values=(segment_run_controls.segment_lengths, segment_run_controls.num_segments),
+        metadata_in_axes=(0, 0),
+        metadata_builder=make_kernel,
         batch_spec=segment_run_controls.physical_axes_segment_lengths[0],
-        head_spec=context.physical_axes_q[1],
-        q_seq_spec=context.physical_axes_q[2],
-        num_heads=context.num_heads,
-    )
-    return _SplashKernelPlan(
-        kernel=splash_kernel,
-        kernel_specs=kernel_specs,
-        kernel_vmap_axis=0,
         segment_id_lowering=lower_splash_segment_ids(),
     )
 
@@ -1349,18 +1359,12 @@ def _prefix_length_kernel_plan(
         )
         return _splash_kernel_from_dynamic_metadata(prefix_metadata, context.block_sizes, context.logits_soft_cap)
 
-    splash_kernel = jax.vmap(make_prefix_lm_kernel)(prefix_lengths)
-    kernel_specs = _batched_splash_kernel_specs(
-        splash_kernel,
+    return _dynamic_metadata_kernel_plan(
+        context=context,
+        metadata_values=(prefix_lengths,),
+        metadata_in_axes=(0,),
+        metadata_builder=make_prefix_lm_kernel,
         batch_spec=physical_axes_prefix_lengths[0],
-        head_spec=context.physical_axes_q[1],
-        q_seq_spec=context.physical_axes_q[2],
-        num_heads=context.num_heads,
-    )
-    return _SplashKernelPlan(
-        kernel=splash_kernel,
-        kernel_specs=kernel_specs,
-        kernel_vmap_axis=0,
         segment_id_lowering=segment_id_lowering,
     )
 

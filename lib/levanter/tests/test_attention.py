@@ -638,6 +638,9 @@ class _TpuSplashSegmentIds:
     kv: hax.NamedArray
 
 
+TPU_SPLASH_TEST_INPUT_SCALE = 0.02
+
+
 def _tpu_splash_mask_case() -> _TpuSplashMaskCase:
     block_size = 256
     return _TpuSplashMaskCase(
@@ -665,9 +668,12 @@ def _packed_segment_ids_for_splash_case(case: _TpuSplashMaskCase) -> _TpuSplashS
 
 def _run_batched_tpu_splash_mask_case(mask: AttentionMask, case: _TpuSplashMaskCase, seed: int):
     with use_test_mesh():
-        q = hax.random.normal(jrandom.PRNGKey(seed), (case.batch, case.q_pos, case.head, case.key)) * 0.02
-        k = hax.random.normal(jrandom.PRNGKey(seed + 1), (case.batch, case.k_pos, case.head, case.key)) * 0.02
-        v = hax.random.normal(jrandom.PRNGKey(seed + 2), (case.batch, case.k_pos, case.head, case.key)) * 0.02
+        q = hax.random.normal(jrandom.PRNGKey(seed), (case.batch, case.q_pos, case.head, case.key))
+        k = hax.random.normal(jrandom.PRNGKey(seed + 1), (case.batch, case.k_pos, case.head, case.key))
+        v = hax.random.normal(jrandom.PRNGKey(seed + 2), (case.batch, case.k_pos, case.head, case.key))
+        q = q * TPU_SPLASH_TEST_INPUT_SCALE
+        k = k * TPU_SPLASH_TEST_INPUT_SCALE
+        v = v * TPU_SPLASH_TEST_INPUT_SCALE
         _assert_tpu_splash_matches_reference(case.q_pos, case.k_pos, case.key, q, k, v, mask, case.block_size)
 
 

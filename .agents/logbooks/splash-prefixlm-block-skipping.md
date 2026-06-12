@@ -270,3 +270,20 @@
 - Result: The holder job stayed `JOB_STATE_PENDING` with autoscaler reason `Waiting for workers in scale group 'tpu_v5p-preemptible_8-us-central1-a' to become ready`; no local dev TPU session file was created. The pending holder job was killed and verified as `JOB_STATE_KILLED` with `Terminated by user`.
 - Interpretation: No v5p TPU timing was collected. Current blocker for hardware validation is capacity, not a benchmark or code failure.
 - Next action: Use PR TPU CI if it completes first; otherwise retry v4-8/v5p-8 later and run the updated benchmark harness.
+
+### 2026-06-12 - Variable packed-doc benchmark profiles
+- Hypothesis: Equal-length synthetic documents are too narrow for the requested Lima/Alpaca-style packed-doc evaluation; the benchmark should support ragged packed sequences without requiring dataset downloads during TPU timing.
+- Command:
+  - `uv run --project lib/levanter python - <<'PY' ...`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_bench_splash_attention_masks.py`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'segment_runs or batched_masks'`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `timeout 900 ./infra/pre-commit.py --review --agent-command='env RUST_LOG=error codex exec --ignore-user-config --ephemeral --dangerously-bypass-approvals-and-sandbox'`
+- Config: Added `--doc-length-profile={equal,staggered,long-tail}` to `bench_splash_attention_masks.py`. Local profile test uses `S=128`, `docs_per_sequence=4`, with expected lengths `equal=(32,32,32,32)`, `staggered=(13,26,38,51)`, and `long-tail=(67,34,18,9)`.
+- Result:
+  - Benchmark `BenchResult` JSON now records `doc_length_profile`.
+  - Segment IDs, prefix masks, and segment-run metadata are generated from the same deterministic doc lengths.
+  - New benchmark-profile tests passed (`3 passed`); attention segment-run slice passed (`1 passed, 5 skipped`); Splash helper tests passed (`19 passed`); changed-file precommit passed; lint review reported no findings.
+- Interpretation: The next TPU benchmark can measure the compact segment-run path on ragged packed-doc layouts closer to real packed instruction data, while preserving the previous equal-doc baseline for comparison.
+- Next action: Run v4-8/v5p-8 when available with both `--doc-length-profile equal` and `--doc-length-profile long-tail`.
