@@ -8,7 +8,8 @@ from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_ma
 from jax.sharding import PartitionSpec as P
 
 from levanter.kernels.pallas.splash_attention import (
-    PrefixMask,
+    BLOCK_MASK_FULL,
+    BLOCK_MASK_PARTIAL,
     SplashAttentionMaskSpec,
     lower_splash_attention_mask,
     lower_splash_segment_ids,
@@ -46,7 +47,6 @@ def test_lower_splash_attention_mask_builds_static_prefix_lm_mask():
     expected = np.tril(np.ones((256, 256), dtype=bool))
     expected |= np.arange(256)[None, :] < 64
     np.testing.assert_array_equal(_materialize_splash_mask(lowering.kernel_mask.masks[0]), expected)
-    assert isinstance(lowering.kernel_mask.masks[0].right, PrefixMask)
 
 
 def test_lower_splash_attention_mask_combines_static_prefix_lm_and_sliding_window():
@@ -218,9 +218,9 @@ def _materialize_mask_info(
         for kv_block in range(kv_blocks):
             kv_slice = slice(kv_block * block_kv, (kv_block + 1) * block_kv)
             block_kind = int(block_mask[head, q_block, kv_block])
-            if block_kind == 2:
+            if block_kind == BLOCK_MASK_FULL:
                 out[q_slice, kv_slice] = True
-            elif block_kind == 1:
+            elif block_kind == BLOCK_MASK_PARTIAL:
                 partial_block = partial_mask_blocks[int(mask_next[head, q_block, kv_block])]
                 if transposed_partial_blocks:
                     partial_block = partial_block.T
