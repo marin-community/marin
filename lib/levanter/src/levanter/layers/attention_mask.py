@@ -202,8 +202,9 @@ class AttentionMask(eqx.Module):
     ) -> "AttentionMask":
         """Create a prefix-LM mask.
 
-        Keys marked as prefix are visible to every query. Non-prefix keys use
-        causal masking, optionally constrained by ``sliding_window``.
+        Keys marked as prefix pass the prefix/causal portion of the mask for every query.
+        Non-prefix keys use causal masking, optionally constrained by ``sliding_window``.
+        Segment IDs and explicit masks are still applied afterward.
         """
         if prefix_length is None and prefix_lengths is None and prefix_mask is None:
             raise ValueError("prefix_lm requires prefix_length, prefix_lengths, or prefix_mask.")
