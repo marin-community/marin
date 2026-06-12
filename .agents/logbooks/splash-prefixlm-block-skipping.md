@@ -230,3 +230,14 @@
   - Local results: Splash helper tests `19 passed`; attention segment-run slice `1 passed, 5 skipped` (TPU-only parity cases skipped locally); Grug THD metadata slice `3 passed`; changed-file precommit passed; lint review reported no findings.
 - Interpretation: The compact segment-run metadata path now has a public surface and planner integration for pure causal packed docs. It still needs TPU benchmark evidence against the generic packed segment-ID path and broader hardware coverage before treating it as a performance-complete THD-style path.
 - Next action: Run the parametrized TPU parity case and benchmark `AttentionMask.causal().with_segment_runs(...)` on v4-8/v5p-8, then extend the benchmark harness to compare generic segment IDs versus fixed segment-run metadata directly.
+
+### 2026-06-12 - v4-8 segment-run validation capacity block
+- Hypothesis: A v4-8 dev TPU can run the new public segment-run parity case and provide first benchmark evidence for `AttentionMask.causal().with_segment_runs(...)`.
+- Command:
+  - `uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name dlwh-splash-segment-runs allocate --tpu-type v4-8 --timeout 900`
+  - `uv run iris --config=lib/iris/config/marin.yaml job list --prefix /dlwh/dev-tpu-dlwh-splash-segment-runs --json`
+  - `uv run iris --config=lib/iris/config/marin.yaml job kill /dlwh/dev-tpu-dlwh-splash-segment-runs`
+- Config: Requested v4-8 holder through Iris with the explicit dev TPU name `dlwh-splash-segment-runs`.
+- Result: The holder job remained `JOB_STATE_PENDING` with scheduler reason `Insufficient TPUs (need 4, available 0)` for `tpu_v4-preemptible_8-us-central2-b`; no local dev TPU session file was created. The pending holder job was killed and verified as `JOB_STATE_KILLED` with `Terminated by user`.
+- Interpretation: No TPU parity/benchmark data was collected for the public segment-run path in this attempt. The code remains locally validated only for this milestone; the TPU-gated test still needs hardware or CI confirmation.
+- Next action: Use CI TPU results if they complete first; otherwise retry v4-8/v5p-8 allocation when capacity improves.
