@@ -167,6 +167,21 @@ class InMemoryGcpService:
             raise ValueError(f"TPU {name!r} not found in {zone}")
         self._tpus[key] = dataclasses.replace(self._tpus[key], state=state)
 
+    def advance_vm_state(self, name: str, zone: str, status: str = "RUNNING") -> None:
+        """Transition a VM to a new status string (DRY_RUN/LOCAL only).
+
+        Also sets a plausible internal_ip when advancing to RUNNING so that
+        describe() tests can assert on the IP field.
+        """
+        key = (name, zone)
+        if key not in self._vms:
+            raise ValueError(f"VM {name!r} not found in {zone}")
+        vm = self._vms[key]
+        updated_ip = vm.internal_ip
+        if status == "RUNNING" and not updated_ip:
+            updated_ip = f"10.1.{len(self._vms)}.1"
+        self._vms[key] = dataclasses.replace(vm, status=status, internal_ip=updated_ip)
+
     def _check_injected_failure(self, operation: str) -> None:
         err = self._injected_failures.pop(operation, None)
         if err is not None:
@@ -310,7 +325,7 @@ class InMemoryGcpService:
     # VM operations
     # ========================================================================
 
-    def vm_create(self, request: VmCreateRequest) -> VmInfo:
+    def vm_create(self, request: VmCreateRequest, *, wait: bool = False) -> VmInfo:
         self._check_injected_failure("vm_create")
 
         if self._mode == ServiceMode.LOCAL:

@@ -344,7 +344,8 @@ class GcpWorkerProvider:
 
         logger.info("Creating GCE instance: %s (zone=%s, type=%s)", config.name, zone, machine_type)
         try:
-            vm_info = self._gcp.vm_create(request)
+            # wait=True: start_controller uses internal_ip immediately to build the RPC address.
+            vm_info = self._gcp.vm_create(request, wait=True)
         except InfraError:
             self._best_effort_delete_vm(config.name, zone)
             raise
