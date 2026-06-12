@@ -259,3 +259,14 @@
   - Changed-file precommit passed and lint review reported no findings.
 - Interpretation: The next TPU run can now produce side-by-side timings for static causal, generic packed causal segment IDs, compact segment-run metadata, packed prefix-LM, and dense references. The harness still cannot execute Splash timing on CPU; `--allow-non-tpu` only bypasses the backend guard and Pallas still rejects CPU lowering.
 - Next action: Retry v4-8/v5p-8 and run the benchmark with `--include-dense` at 8192 plus Splash-only at 16384.
+
+### 2026-06-12 - v5p-8 segment-run validation capacity block
+- Hypothesis: v5p-8 capacity may become available sooner than v4-8 for the segment-run benchmark harness.
+- Command:
+  - `uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name dlwh-splash-segment-runs-v5p allocate --tpu-type v5p-8 --timeout 900`
+  - `uv run iris --config=lib/iris/config/marin.yaml job list --prefix /dlwh/dev-tpu-dlwh-splash-segment-runs-v5p --json`
+  - `uv run iris --config=lib/iris/config/marin.yaml job kill /dlwh/dev-tpu-dlwh-splash-segment-runs-v5p`
+- Config: Requested v5p-8 holder through Iris with explicit dev TPU name `dlwh-splash-segment-runs-v5p`.
+- Result: The holder job stayed `JOB_STATE_PENDING` with autoscaler reason `Waiting for workers in scale group 'tpu_v5p-preemptible_8-us-central1-a' to become ready`; no local dev TPU session file was created. The pending holder job was killed and verified as `JOB_STATE_KILLED` with `Terminated by user`.
+- Interpretation: No v5p TPU timing was collected. Current blocker for hardware validation is capacity, not a benchmark or code failure.
+- Next action: Use PR TPU CI if it completes first; otherwise retry v4-8/v5p-8 later and run the updated benchmark harness.
