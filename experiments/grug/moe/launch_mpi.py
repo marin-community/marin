@@ -32,11 +32,18 @@ from experiments.grug.moe.launch import (
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 _MPI_C_PRIME: float = 3.0
-# (dim, batch_size, steps) — same cells as launch.py's compute-optimal baseline.
+# (dim, batch_size, steps) — same compute budgets as launch.py's compute-optimal baseline.
+# Data for this executor lives in gs://marin-eu-west4, so we run on v6e in europe-west4 (the
+# only TPU family co-located with the data); the baseline ran on v4-32/us-central2, so this is
+# a different chip — gate-1 uses a LOSS-only comparison (MPI tok/s overhead is ~0.2%).
+# Launch d512 first to de-risk the new MPI code + v6e; d768 enabled after d512 validates.
 _GATE1_CELLS: tuple[tuple[int, int, int], ...] = (
     (512, 32, 10_980),
-    (768, 64, 16_875),
+    # (768, 64, 16_875),
 )
+_TPU: str = "v6e-32"
+_TPU_REGIONS: list[str] = ["europe-west4"]
+_EXPERT_PARALLEL: int = 2
 
 mpi_steps: list[ExecutorStep] = []
 for _dim, _bs, _steps in _GATE1_CELLS:
@@ -57,7 +64,7 @@ for _dim, _bs, _steps in _GATE1_CELLS:
                 data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
                 output_path=this_output_path(),
                 run_id=_run_id,
-                resources=versioned(ResourceConfig.with_tpu("v4-32", regions=["us-central2"])),
+                resources=versioned(ResourceConfig.with_tpu(_TPU, regions=_TPU_REGIONS)),
                 steps=versioned(_steps),
                 batch_size=versioned(_bs),
                 seed=versioned(0),
@@ -85,6 +92,7 @@ for _dim, _bs, _steps in _GATE1_CELLS:
                         eval_ema=False,
                     )
                 ),
+                expert_parallel=_EXPERT_PARALLEL,
             ),
         )
     )
