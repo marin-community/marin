@@ -87,6 +87,10 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.3
     router_z_loss_coef: float = 0.0
+    # Manifold Power Iteration router (arXiv 2606.12397): reparameterize router rows toward the
+    # principal singular direction of each expert's gate matrix. C = mpi_c_prime / sqrt(num_experts).
+    use_mpi_router: bool = False
+    mpi_c_prime: float = 3.0
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
@@ -418,7 +422,24 @@ class MoEMLP(eqx.Module):
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
-        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+        if self.cfg.use_mpi_router:
+            # Manifold Power Iteration (arXiv 2606.12397): one power-iteration step pulls each
+            # router row R[:,e] toward the top left-singular direction of expert e's gate matrix
+            # W_g^e, then retract to a fixed L2 norm. R_hat[e] = R[:,e] W_g^e (W_g^e)^T;
+            # R'[e] = R_hat[e]/||R_hat[e]||; logits = (C'/sqrt(E)) * x R'^T. W_g is differentiated
+            # through (no stop-grad), matching the paper's Figure-1 pseudocode.
+            # w_gate is [E, D, M] sharded P("expert", "data", "model"); both contractions hit a
+            # sharded axis, so give each einsum an explicit out_sharding, then gather R' replicated.
+            w_gate = self.expert_mlp.w_gate.astype(jnp.float32)  # [E@expert, D@data, M@model]
+            r_rows = reshard(self.router.T.astype(jnp.float32), P("expert", "data"))  # [E, D]
+            r_proj = jnp.einsum("ed,edm->em", r_rows, w_gate, out_sharding=P("expert", "model"))  # [E, M]
+            r_hat = jnp.einsum("em,edm->ed", r_proj, w_gate, out_sharding=P("expert", "data"))  # [E, D]
+            r_hat = reshard(r_hat, P(None, None))
+            r_prime = r_hat * jax.lax.rsqrt(jnp.sum(r_hat * r_hat, axis=-1, keepdims=True) + 1e-12)
+            c = self.cfg.mpi_c_prime * self.cfg.num_experts**-0.5
+            router_logits = c * jnp.einsum("td,ed->te", x_flat.astype(jnp.float32), r_prime)
+        else:
+            router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
