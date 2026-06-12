@@ -33,8 +33,15 @@ _OUTPUT_PREFIX = "gs://marin-us-central2/grug/"
 _CANDIDATE_RE = re.compile(r"swarm_fisher_dsp_d512_(\d{6})-[a-f0-9]+")
 _BUDGET = 840
 
-# MMLU 0/5-shot + GSM8K 5-shot + HumanEval 10-shot (all loglikelihood-scored).
-_EVAL_TASKS: tuple[EvalTaskConfig, ...] = LOGPROB_TASKS
+# Logprob task surface — we keep growing this from the all_evals.py PR
+# (marin-community/marin#2663) one eval at a time.
+_EXTRA_LOGPROB_TASKS: tuple[EvalTaskConfig, ...] = (
+    EvalTaskConfig("arc_easy", 0, task_alias="arc_easy_0shot"),
+    EvalTaskConfig("arc_challenge", 0, task_alias="arc_challenge_0shot"),
+)
+
+# MMLU 0/5-shot + GSM8K 5-shot + HumanEval 10-shot + arc_easy 0-shot.
+_EVAL_TASKS: tuple[EvalTaskConfig, ...] = LOGPROB_TASKS + _EXTRA_LOGPROB_TASKS
 
 
 def _find_finished_checkpoints() -> dict[int, str]:

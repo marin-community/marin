@@ -20,6 +20,7 @@ from levanter.data.text import LmDataConfig
 from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
+from levanter.utils.mesh import MeshConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
@@ -88,6 +89,11 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
+        # `MoEMLP.init` calls `_mesh_axis_size(mesh, "expert")` which raises if
+        # the abstract mesh has no `expert` axis. The compact physical mesh
+        # only includes `expert` when expert parallelism > 1; declaring
+        # expert=1 here is what satisfies the model-init check.
+        mesh=MeshConfig(axes={"expert": 1}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         checkpointer=CheckpointerConfig(
