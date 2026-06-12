@@ -97,6 +97,33 @@ def test_sync_apply_error_yields_worker_failed(provider, k8s):
     assert result.updates[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
 
 
+def test_redrive_does_not_recreate_running_pod(provider, k8s):
+    """Re-applying a still-ASSIGNED task's RunTaskRequest never recreates its pod.
+
+    A task stays ASSIGNED until a (slower) poll observes it Running, so the apply
+    loop redrives the same RunTaskRequest every reconcile tick. That redrive must
+    be create-if-absent: delete-and-recreating the live pod destroyed the running
+    task and raced its own deletion (409 AlreadyExists), churning the task
+    through attempts until it failed. Here the pod is Running, so the second
+    apply is a no-op — the pod keeps its phase and the task is not failed.
+    """
+    req = make_run_req("/test-job/0")
+
+    provider.reconcile(make_batch(tasks_to_run=[req]))
+    pods = k8s.list_json(K8sResource.PODS, labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
+    assert len(pods) == 1
+    pod_name = pods[0]["metadata"]["name"]
+    k8s.transition_pod(pod_name, "Running")
+
+    # Redrive: same RunTaskRequest while the task is still ASSIGNED.
+    result = provider.reconcile(make_batch(tasks_to_run=[req]))
+
+    pod_after = k8s.get_json(K8sResource.PODS, pod_name)
+    assert pod_after is not None
+    assert pod_after["status"]["phase"] == "Running"  # not reset by a recreate
+    assert all(u.new_state != job_pb2.TASK_STATE_WORKER_FAILED for u in result.updates)
+
+
 # ---------------------------------------------------------------------------
 # sync(): stray pod deletion (kill via desired-set diff)
 # ---------------------------------------------------------------------------

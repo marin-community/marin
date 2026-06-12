@@ -199,14 +199,22 @@ def test_delete_nonexistent_is_idempotent(svc: InMemoryK8sService):
     svc.delete(K8sResource.PODS, "nope")
 
 
-def test_apply_overwrites(svc: InMemoryK8sService):
+def test_apply_pod_is_create_if_absent(svc: InMemoryK8sService):
+    """Re-applying an existing pod is a no-op: the live pod is never overwritten.
+
+    A task attempt's pod name is stable, so a redrive re-applies the same name
+    every tick. Overwriting (delete-then-create) would destroy a running pod and
+    race its own deletion (409 AlreadyExists), churning the task through attempts
+    until it fails — the regression this guards against.
+    """
     m1 = _pod_manifest("p1")
     m2 = _pod_manifest("p1", labels={"version": "v2"})
     svc.apply_json(m1)
     svc.apply_json(m2)
     result = svc.get_json(K8sResource.PODS, "p1")
     assert result is not None
-    assert result["metadata"].get("labels", {}).get("version") == "v2"
+    # Second apply was a no-op — the original pod (no version label) survives.
+    assert result["metadata"].get("labels", {}).get("version") is None
 
 
 # ========================================================================
