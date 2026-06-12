@@ -74,6 +74,14 @@ Additional local probe:
 - Passing the batched `SplashAttentionKernel` pytree through a one-device `shard_map` also succeeded when every kernel metadata leaf used a leading batch partition spec.
 - This suggests the remaining hard part is compact metadata construction, not the Pallas call interface.
 
+TPU validation on Iris v4-8:
+
+- Worker: `marin-tpu-v4-reserved-8-us-central2-b-20260611-0351-9ea73cc7`.
+- Dynamic prefix-LM smoke passed on TPU for `B=2`, `S=512`, `H=8`, `D=128`, block size `256`, prefix lengths `[0, 300]`, compared against materialized Haliax attention.
+- Dynamic prefix-LM plus batched segment IDs smoke passed on TPU for `B=2`, `S=512`, `H=8`, `D=128`, block size `256`, prefix lengths `[128, 300]`, compared against materialized Haliax attention.
+- Jitted forward microbench on v4-8, `B=1`, `S=8192`, `H=8`, `D=128`, block size `512`: static causal median warm `2.15 ms`; dynamic prefix-LM with prefix length `2048` median warm `2.18 ms`.
+- Jitted forward microbench on v4-8, `B=2`, `S=8192`, `H=8`, `D=128`, block size `512`: static causal median warm `3.67 ms`; dynamic prefix-LM with prefix lengths `[0, 2048]` median warm `4.11 ms`.
+
 ## Important Design State
 
 JAX Splash has two mask processing paths:
@@ -115,16 +123,16 @@ Main options:
 
 ## Recommended Next Steps
 
-1. Run a TPU smoke test for `AttentionMask.prefix_lm(prefix_lengths=...)` through `_tpu_splash_attention`.
-2. Add correctness tests comparing:
+1. Add permanent TPU-gated correctness tests comparing:
    - static prefix length against reference attention,
-   - per-example prefix masks,
-   - prefix masks plus segment IDs for packed docs.
-3. Add a benchmark harness for 8192/16384 that reports compile-including and steady-state timing on v4-8/v5p-8.
-4. Implement segment-ID block skipping, probably by deriving block metadata from packed segment runs or THD metadata.
+   - per-example prefix lengths,
+   - dynamic prefix lengths plus segment IDs for packed docs.
+2. Add a benchmark harness for 8192/16384 that reports compile-including and steady-state timing on v4-8/v5p-8.
+3. Implement segment-ID block skipping, probably by deriving block metadata from packed segment runs or THD metadata.
+4. Broaden TPU validation to v5p-8, then v5e/v6e.
 
 ## Caveats
 
-- Dynamic prefix-length support is implemented but not yet TPU-smoke-tested in this branch.
+- Dynamic prefix-length support passed focused v4-8 smokes, but it is not covered by permanent TPU-gated tests yet.
 - Current Splash segment IDs mask inside visited blocks; they do not provide block skipping for packed segment masks by themselves.
 - Dynamic `prefix_mask` remains unsupported in Splash; use structured `prefix_lengths` for the compact path.

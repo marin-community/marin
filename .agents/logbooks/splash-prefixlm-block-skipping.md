@@ -51,3 +51,22 @@
 - Result: Pre-commit passed. Splash helper tests passed with `14 passed`. Attention-mask tests passed with `4 passed`.
 - Interpretation: `prefix_lm_forward_mask_info` and `prefix_lm_dkv_mask_info` reconstruct the dense prefix-LM mask while storing only `2 * q_blocks` partial blocks. `_tpu_splash_attention` now has a dynamic-prefix branch that builds a batched `SplashAttentionKernel` from `prefix_lm_mask_infos` and passes it through `shard_map` with leading batch specs.
 - Next action: Run a TPU smoke test on v4-8 for dynamic `prefix_lengths`, then benchmark 8192/16384 against dense dynamic masks/reference fallback.
+
+### 2026-06-11 22:10 - v4-8 TPU smoke and forward microbench
+- Hypothesis: The compact dynamic prefix-LM metadata path should execute through Pallas on TPU, preserve correctness with segment IDs, and avoid a major steady-state speed regression after the outer training/inference step is jitted.
+- Command:
+  - `uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name dlwh-splash-prefixlm-v4 allocate --tpu-type v4-8`
+  - `uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name dlwh-splash-prefixlm-v4 execute --no-sync -- env PYTHONPATH=lib/levanter/tests uv run --project lib/levanter --group test python -c '...'`
+- Config:
+  - Worker: `marin-tpu-v4-reserved-8-us-central2-b-20260611-0351-9ea73cc7`.
+  - Correctness smoke 1: `B=2`, `S=512`, `H=8`, `D=128`, block size `256`, prefix lengths `[0, 300]`.
+  - Correctness smoke 2: same shape with batched segment IDs and prefix lengths `[128, 300]`.
+  - Jitted microbench: `S=8192`, `H=8`, `D=128`, block size `512`, warm iterations only.
+- Result:
+  - Dynamic prefix-LM TPU smoke passed against materialized Haliax attention.
+  - Dynamic prefix-LM plus batched segment IDs TPU smoke passed against materialized Haliax attention.
+  - `B=1` jitted forward median warm: static causal `2.15 ms`; dynamic prefix-LM, prefix length `2048`, `2.18 ms`.
+  - `B=2` jitted forward median warm: static causal `3.67 ms`; dynamic prefix-LM, prefix lengths `[0, 2048]`, `4.11 ms`.
+  - Non-jitted calls were much slower because they include Python-side metadata construction and dispatch; they are not representative of a jitted Levanter step.
+- Interpretation: The batched dynamic-prefix `SplashAttentionKernel` pytree works on v4-8, including with segment IDs for correctness. The jitted steady-state overhead is small for `B=1` and about 12% in the `B=2` smoke. Segment IDs still do not contribute block skipping; this only confirms they remain correct inside visited blocks.
+- Next action: Promote the two smokes into TPU-gated tests, add a repeatable 8192/16384 benchmark harness, and then implement segment-ID block skipping from packed segment metadata.
