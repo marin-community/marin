@@ -184,52 +184,6 @@ def log_hyperparameters(hparams: dict[str, Any]):
     _global_tracker.log_hyperparameters(hparams)
 
 
-def _resolve_stringized_annotations(
-    obj: Any, _seen_types: Optional[set[type]] = None, _seen_ids: Optional[set[int]] = None
-) -> None:
-    """Rewrite PEP 563 stringized dataclass field annotations to real types, in place.
-
-    draccus's encoder reads ``dataclasses.Field.type`` directly and uses it as a key in a
-    ``WeakKeyDictionary``. In a config module that uses ``from __future__ import annotations``
-    those types are plain strings, and a weak reference to a ``str`` is illegal, so
-    ``draccus.dump`` raises ``TypeError: cannot create weak reference to 'str' object``.
-    Resolving each stringized annotation via ``typing.get_type_hints`` lets draccus encode
-    (and later reload) the config. The rewrite matches what ``get_type_hints`` already reports,
-    so it is idempotent and a no-op for configs that never used stringized annotations. We walk
-    field *values* so concrete subclasses of polymorphic choice fields are resolved too.
-
-    ``Field`` objects are class-level, so this intentionally rewrites the annotation metadata on
-    the config classes themselves, not just this instance. That is a benign, idempotent
-    normalization (it only ever replaces a string with the type it already denotes).
-    """
-    _seen_types = set() if _seen_types is None else _seen_types
-    _seen_ids = set() if _seen_ids is None else _seen_ids
-
-    if isinstance(obj, (list, tuple)):
-        for item in obj:
-            _resolve_stringized_annotations(item, _seen_types, _seen_ids)
-        return
-    if isinstance(obj, dict):
-        for value in obj.values():
-            _resolve_stringized_annotations(value, _seen_types, _seen_ids)
-        return
-    if not dataclasses.is_dataclass(obj) or isinstance(obj, type) or id(obj) in _seen_ids:
-        return
-    _seen_ids.add(id(obj))
-
-    cls = type(obj)
-    if cls not in _seen_types:
-        _seen_types.add(cls)
-        if any(isinstance(field.type, str) for field in dataclasses.fields(cls)):
-            hints = typing.get_type_hints(cls)
-            for field in dataclasses.fields(cls):
-                if isinstance(field.type, str) and field.name in hints:
-                    field.type = hints[field.name]
-
-    for field in dataclasses.fields(obj):
-        _resolve_stringized_annotations(getattr(obj, field.name), _seen_types, _seen_ids)
-
-
 def log_configuration(hparams: Any, config_name: Optional[str] = None):
     """
      Logs a configuration object to the global tracker. If the configuration object is a dataclass,
@@ -250,7 +204,6 @@ def log_configuration(hparams: Any, config_name: Optional[str] = None):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = os.path.join(tmpdir, "config.yaml")
             try:
-                _resolve_stringized_annotations(hparams)
                 with open(config_path, "w") as f:
                     draccus.dump(hparams, f, encoding="utf-8")
                     name = config_name or "config.yaml"
