@@ -376,14 +376,22 @@ class GrugMoeKLSoapHConfig(OptimizerConfig):
     """
 
     adam_lr: float = 6e-4
-    # (beta1, beta2, shampoo_beta) = upstream "passing" tuple from PR #290.
+    # SOAP eigenbasis: (beta1, beta2, shampoo_beta) = upstream "passing" tuple from PR #290.
+    # beta1 = projected-momentum EMA, beta2 = projected-Adam 2nd-moment, shampoo_beta = Gram EMA.
     beta1: float = 0.95
     beta2: float = 0.9
     shampoo_beta: float = 0.9
-    epsilon: float = 1e-8
+    epsilon: float = 1e-8  # SOAP eigenbasis Adam eps (upstream PR #290)
     precond_freq: int = 1
     init_factor: float = 0.1
-    max_grad_norm: float | None = 1.0
+    # Real-Adam settings for the NON-SOAP groups (adamh: lm_head/output_proj; adam: embeddings/router),
+    # kept SEPARATE from the SOAP eigenbasis betas/eps above so the SOAP group is the only variable
+    # vs the MuonH baseline. Defaults match the d512 MuonH run (heuristic beta1=0.9062, beta2=0.999,
+    # eps=1.01e-15); the launcher pins them from the MuonH heuristic to stay apples-to-apples.
+    adam_beta1: float = 0.9062
+    adam_beta2: float = 0.999
+    adam_epsilon: float = 1e-15
+    max_grad_norm: float | None = None
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -412,14 +420,14 @@ class GrugMoeKLSoapHConfig(OptimizerConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate))
+                components.append(scale_by_adamh(self.adam_beta1, self.adam_beta2, self.adam_epsilon, learning_rate))
                 return optax.chain(*components)
 
             def adam_transform():
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale_by_adam(self.adam_beta1, self.adam_beta2, self.adam_epsilon))
                 components.append(optax.scale(-adam_lr))
                 return optax.chain(*components)
 

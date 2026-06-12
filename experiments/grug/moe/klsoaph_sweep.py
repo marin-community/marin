@@ -64,14 +64,19 @@ _muonh = _heuristic.build_muonh_config(_bs, _tokens, _dim, seq_len=_SEQ_LEN)
 
 _optimizer = GrugMoeKLSoapHConfig(
     learning_rate=_muonh.learning_rate * _LR_MULT,
-    adam_lr=_f("KLSOAPH_ADAM_LR", 6e-4),
+    # SOAP eigenbasis HPs (the variable under test):
     beta1=_f("KLSOAPH_BETA1", 0.95),
     beta2=_f("KLSOAPH_BETA2", 0.9),
     shampoo_beta=_f("KLSOAPH_SHAMPOO", 0.9),
     epsilon=_f("KLSOAPH_EPS", 1e-8),
     precond_freq=int(os.environ.get("KLSOAPH_PRECOND_FREQ", "1")),
     init_factor=_f("KLSOAPH_INITF", 0.1),
-    max_grad_norm=_maybe_none_float("KLSOAPH_MAXGN", 1.0),
+    # Non-SOAP groups pinned to the d512 MuonH baseline (apples-to-apples) — env-overridable:
+    adam_lr=_f("KLSOAPH_ADAM_LR", _muonh.adam_lr),
+    adam_beta1=_f("KLSOAPH_ADAM_BETA1", _muonh.beta1),
+    adam_beta2=_f("KLSOAPH_ADAM_BETA2", _muonh.beta2),
+    adam_epsilon=_f("KLSOAPH_ADAM_EPS", _muonh.epsilon),
+    max_grad_norm=_maybe_none_float("KLSOAPH_MAXGN", _muonh.max_grad_norm),
     warmup=_muonh.warmup,
     min_lr_ratio=_muonh.min_lr_ratio,
     lr_schedule=_muonh.lr_schedule,
