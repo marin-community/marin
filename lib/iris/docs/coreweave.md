@@ -53,7 +53,7 @@ uv run iris --cluster=cw-us-east-02a job run \
 
 # One H100, proving JAX sees the GPU
 uv run iris --cluster=cw-us-east-02a job run \
-  --cpu 8 --memory 64GB --gpu H100x1 --extra gpu \
+  --cpu 8 --memory 64GB --gpu H100x1 --enable-extra-resources --extra gpu \
   -- python -c "import jax; print(jax.devices())"
 ```
 
