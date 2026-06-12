@@ -2,6 +2,10 @@
 
 **Issue**: [#2822 -- Iris: Implement CoreWeave platform](https://github.com/marin-community/marin/issues/2822)
 
+> **New here?** Start with [`coreweave-quickstart.md`](coreweave-quickstart.md)
+> for the token → kubeconfig → `cluster status` → hello-world walkthrough on the
+> `marin-gpu` cluster. This document is the full operator runbook.
+
 ## 1. Overview
 
 Iris runs on CoreWeave CKS (bare-metal Kubernetes) using a shared NodePool model.
