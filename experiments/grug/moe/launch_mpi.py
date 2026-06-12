@@ -33,17 +33,18 @@ from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 _MPI_C_PRIME: float = 3.0
 # (dim, batch_size, steps) — same compute budgets as launch.py's compute-optimal baseline.
-# Run on v6e-8 in europe-west4 — the only TPU with idle capacity (v5p-8 east5 wouldn't boot),
-# and co-located with this executor's default data prefix gs://marin-eu-west4 (so submit
-# WITHOUT MARIN_PREFIX). Different/smaller slice than the v4-32 baseline, so gate-1 uses a
-# LOSS-only comparison (MPI tok/s overhead is ~0.2%). d512 first to de-risk; d768 after.
+# Run on RESERVED v4-32 in us-central2 — the baseline's exact hardware (tok/s comparable →
+# full effective-speedup gate) AND co-located with the data in gs://marin-us-central2 (submit
+# with MARIN_PREFIX=gs://marin-us-central2; no cross-region). Reserved access requires
+# preemptible=False on the TRAINING ResourceConfig (the parent --reserve flag does nothing).
+# d512 first to de-risk the MPI code; d768 enabled after d512 validates.
 _GATE1_CELLS: tuple[tuple[int, int, int], ...] = (
     (512, 32, 10_980),
     # (768, 64, 16_875),
 )
-_TPU: str = "v6e-8"
-_TPU_REGIONS: list[str] = ["europe-west4"]
-_EXPERT_PARALLEL: int = 1
+_TPU: str = "v4-32"
+_TPU_REGIONS: list[str] = ["us-central2"]
+_EXPERT_PARALLEL: int = 2
 
 mpi_steps: list[ExecutorStep] = []
 for _dim, _bs, _steps in _GATE1_CELLS:
@@ -64,7 +65,7 @@ for _dim, _bs, _steps in _GATE1_CELLS:
                 data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
                 output_path=this_output_path(),
                 run_id=_run_id,
-                resources=versioned(ResourceConfig.with_tpu(_TPU, regions=_TPU_REGIONS)),
+                resources=versioned(ResourceConfig.with_tpu(_TPU, regions=_TPU_REGIONS, preemptible=False)),
                 steps=versioned(_steps),
                 batch_size=versioned(_bs),
                 seed=versioned(0),
