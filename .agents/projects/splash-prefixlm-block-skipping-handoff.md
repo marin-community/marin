@@ -22,6 +22,22 @@ Target hardware for validation and tuning:
 - Then: v5e and v6e.
 - Shapes where skipping should matter: sequence lengths 8192 and 16384, usually with 512-token blocks.
 
+## Current Status, 2026-06-12
+
+- Draft PR: https://github.com/marin-community/marin/pull/6330
+- Latest local change: `packed_causal_segment_run_mask_infos(...)` now builds compact segment-run `MaskInfo` directly from contiguous segment intervals instead of first materializing dense block payloads.
+- Local validation at the direct-builder head:
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py lib/levanter/tests/kernels/test_bench_splash_attention_masks.py -q` -> `25 passed`.
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'prefix_lm or sliding_window_mask or segment_runs' -q` -> `6 passed`.
+  - `./infra/pre-commit.py --changed-files --fix` -> passed.
+  - `timeout 900 ./infra/pre-commit.py --review --agent-command='env RUST_LOG=error codex exec --ignore-user-config --ephemeral --dangerously-bypass-approvals-and-sandbox'` -> no findings.
+- Latest authoritative v5p evidence is at commit `62e10c9d7e50f3cc27346f2cc5f9634b783f7843`, before the direct segment-run builder:
+  - TPU parity slice passed with `5 passed`.
+  - 8192 equal-doc steady medians: static causal `1.178 ms`; packed causal segment `1.705 ms`; packed segment-runs `3.362 ms`; packed prefix-LM `1.717 ms`; dense references `1.830-1.882 ms`.
+  - 16384 equal-doc steady medians: static causal `3.316 ms`; packed causal segment `4.417 ms`; packed segment-runs `6.573 ms`; packed prefix-LM `4.463 ms`.
+  - The compact gather fix fixed the previous v5p regression: packed prefix-LM went from `110.432 ms` to `4.463 ms` at 16384.
+- Next required benchmark: rerun v5p/v4-8 at the direct-builder head and decide whether segment-run metadata should become the default packed causal segment path.
+
 ## What Changed So Far
 
 This checkpoint implements the first slices: static prefix-LM masks, reference semantics for batch-dependent prefix lengths, compact Splash metadata for dynamic prefix lengths, and a packed prefix-mask Splash path for `prefix_mask + segment_ids`.
@@ -41,6 +57,7 @@ Files changed:
   - Adds compact `prefix_lm_mask_infos(...)` metadata for dynamic prefix lengths. The representation stores a full block grid but only `2 * q_blocks` partial blocks per example.
   - Adds `packed_prefix_lm_mask_infos(...)` for packed prefix masks represented as `same_segment(q, kv) & (kv <= q | prefix_mask[kv])`.
   - Uses a mask-info head dimension of size 1 for packed prefix masks so Splash broadcasts the metadata across heads instead of storing one dynamic partial-mask payload per head.
+  - Adds packed causal segment-run metadata from fixed-shape contiguous document lengths, including a direct interval-derived builder that avoids dense pre-compaction mask payload construction.
 
 - `lib/levanter/src/levanter/layers/attention.py`
   - Passes `prefix_length` / `has_prefix_mask` from `AttentionMask` into the Splash mask spec.

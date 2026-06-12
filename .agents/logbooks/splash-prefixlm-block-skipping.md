@@ -371,3 +371,39 @@
   - Local Splash metadata tests passed with `19 passed`; changed-file precommit passed.
 - Interpretation: Correctness is good, and segment-run metadata is faster than generic packed metadata, but the compact block packing implementation introduced a severe v5p performance regression. The direct gather fix targets the packing overhead while preserving the compact `MaskInfo` representation.
 - Next action: Re-run the v5p benchmark after the gather fix; if steady-state remains slow, profile whether metadata construction is still in the runtime path or whether the compact `MaskInfo` shape itself is stressing Splash.
+
+### 2026-06-12 06:31 - v5p compact-gather rerun
+- Hypothesis: Replacing broadcast/reduce compact-block selection with direct `nonzero` + gather should remove the major v5p runtime regression for packed segment and prefix-LM metadata.
+- Command:
+  - Subagent Boyle ran v5p-8 validation at commit `62e10c9d7e50f3cc27346f2cc5f9634b783f7843`.
+  - `uv run --project lib/levanter --group test python -m pytest -n0 lib/levanter/tests/test_attention.py -k test_tpu_splash_attention_batched_masks`
+  - `uv run --project lib/levanter python lib/levanter/scripts/bench/bench_splash_attention_masks.py --seq-len 8192 --block-size 512 --docs-per-sequence 4 --prefix-tokens-per-doc 256 --iterations 5 --warmup 2 --include-dense`
+  - `uv run --project lib/levanter python lib/levanter/scripts/bench/bench_splash_attention_masks.py --seq-len 16384 --block-size 512 --docs-per-sequence 4 --prefix-tokens-per-doc 512 --iterations 5 --warmup 2`
+- Config:
+  - v5p-8 worker: `marin-tpu-v5p-preemptible-8-us-east5-a-20260612-0902-7a2bd67a`, zone `us-east5-a`.
+  - `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`.
+  - Holder `dlwh-splash-compact-gather-v5p` was released and verified killed after the run.
+- Result:
+  - TPU parity slice passed with `5 passed`.
+  - 8192 equal-doc steady medians: static causal `1.178 ms`; packed causal segment `1.705 ms`; packed segment-runs `3.362 ms`; packed prefix-LM `1.717 ms`; dense references `1.830-1.882 ms`.
+  - 16384 equal-doc steady medians: static causal `3.316 ms`; packed causal segment `4.417 ms`; packed segment-runs `6.573 ms`; packed prefix-LM `4.463 ms`.
+  - Compared to the prior v5p run, packed causal segment improved `7.804 -> 1.705 ms` at 8192 and `110.357 -> 4.417 ms` at 16384; packed prefix-LM improved `7.784 -> 1.717 ms` at 8192 and `110.432 -> 4.463 ms` at 16384.
+  - Optional 8192 `B=2` Alpaca layout timing likely included a concurrent dirty local file, so treat it as non-authoritative: static causal `1.189 ms`; packed causal segment `1.761 ms`; packed segment-runs `9.347 ms`; packed prefix-LM `1.765 ms`; dense references about `1.83-1.86 ms`.
+- Interpretation: The gather fix resolves the major v5p regression for generic packed segment and packed prefix-LM masks. Segment-run metadata also improves, but it is still slower than the generic packed path at this commit, so the next target is eliminating segment-run dense block construction entirely.
+- Next action: Commit and benchmark the direct segment-run metadata builder, then decide whether to wire segment-run metadata into the default packed path or keep it as an experimental benchmark variant.
+
+### 2026-06-12 06:31 - Direct segment-run metadata builder
+- Hypothesis: Segment-run metadata should not construct dense `[q_blocks, kv_blocks, block_q, block_kv]` boolean payloads before compacting; deriving block states from contiguous segment intervals should reduce metadata construction overhead and move closer to THD-style block skipping.
+- Command:
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py lib/levanter/tests/kernels/test_bench_splash_attention_masks.py -q`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'prefix_lm or sliding_window_mask or segment_runs' -q`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `timeout 900 ./infra/pre-commit.py --review --agent-command='env RUST_LOG=error codex exec --ignore-user-config --ephemeral --dangerously-bypass-approvals-and-sandbox'`
+- Config: Local CPU/JAX metadata tests; segment-run path now computes full/partial/empty blocks from segment start/end intervals, gathers only partial block coordinates, and reconstructs compact per-token payloads for those partial blocks.
+- Result:
+  - Kernel and benchmark-harness tests passed with `25 passed`.
+  - Attention prefix/segment-run slice passed with `6 passed`.
+  - Changed-file precommit passed.
+  - Lint review reported no findings after factoring shared `MaskInfo` assembly, replacing positional segment-boundary triples with a dataclass, deduplicating boundary logic, and removing a speculative private Protocol.
+- Interpretation: The segment-run benchmark variant now avoids dense pre-compaction block payload construction while preserving the tested dense-mask semantics. This is a structural improvement; v4/v5p TPU timing is still needed at the new head before claiming speedup.
+- Next action: Push this commit, trigger a new v5p/v4-8 benchmark at the new head, and update PR #6330 / issue #6332 with authoritative hardware numbers.
