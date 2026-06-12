@@ -20,12 +20,15 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 from iris.cluster.backends.gcp.fake import InMemoryGcpService
+from iris.cluster.backends.gcp.handles import GcpVmSliceHandle
 from iris.cluster.backends.gcp.service import (
     CloudGcpService,
     TpuCreateRequest,
     VmCreateRequest,
+    VmInfo,
 )
 from iris.cluster.backends.types import (
+    CloudSliceState,
     InfraError,
     InfraUnavailableError,
     QuotaExhaustedError,
@@ -33,6 +36,7 @@ from iris.cluster.backends.types import (
 )
 from iris.cluster.service_mode import ServiceMode
 from iris.rpc import config_pb2
+from rigging.timing import Timestamp
 
 
 @pytest.fixture
@@ -482,3 +486,196 @@ def test_vm_list_propagates_api_errors(monkeypatch: pytest.MonkeyPatch, code: in
     svc = _mock_service(lambda _r: _gcp_error_response(code, message="boom"))
     with pytest.raises(expected):
         svc.vm_list(zones=[], labels={"iris-x-controller": "true"})
+
+
+# ========================================================================
+# Non-blocking vm_create
+# ========================================================================
+
+# A long-running zone operation that should never be awaited on the autoscaler path.
+_OP_NAME = "operation-123"
+_VM_ZONE = "us-central1-a"
+_VM_NAME = "my-vm"
+
+
+def _mock_service_with_insert_op(op_name: str = _OP_NAME) -> CloudGcpService:
+    """Build a CloudGcpService whose POST /instances returns an operation name.
+
+    The token is pre-seeded so _headers() never triggers a real credential refresh.
+    Any GET request (for the operation poll or describe) returns 404 so that the
+    non-blocking path's describe-skipping is exercised without network calls.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(200, json={"name": op_name, "status": "RUNNING"})
+        # GET for operation or describe: return 404 (VM not yet visible)
+        return httpx.Response(404, json={"error": {"code": 404, "status": "NOT_FOUND", "message": "not found"}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    svc = CloudGcpService(project_id="test-project", http_client=client)
+    svc._token = "fake-token"
+    svc._expires_at = time.monotonic() + 3600
+    return svc
+
+
+def test_vm_create_default_does_not_wait_for_zone_operation() -> None:
+    """vm_create(wait=False) submits the insert and returns without polling the operation.
+
+    Verifies the boundedness fix: blocking on the zone op (up to 600 s) inside
+    the single-threaded control tick would starve reconcile and worker keep-alive.
+    """
+    wait_called = False
+
+    def _fail_if_wait_called(zone: str, op: str, timeout: float = 600.0) -> dict:
+        nonlocal wait_called
+        wait_called = True
+        raise AssertionError("_wait_zone_operation must not be called on the non-blocking path")
+
+    svc = _mock_service_with_insert_op()
+    svc._wait_zone_operation = _fail_if_wait_called  # type: ignore[method-assign]
+
+    req = VmCreateRequest(
+        name=_VM_NAME,
+        zone=_VM_ZONE,
+        machine_type="n2-standard-4",
+    )
+    info = svc.vm_create(req)  # wait=False by default
+
+    assert not wait_called
+    assert info.name == _VM_NAME
+    assert info.status == "PROVISIONING"
+    assert info.internal_ip == ""  # IP not yet assigned
+
+
+def test_vm_create_wait_true_calls_wait_zone_operation() -> None:
+    """vm_create(wait=True) does poll the zone operation (controller-VM bootstrap path)."""
+    wait_called = False
+
+    def _record_wait(zone: str, op: str, timeout: float = 600.0) -> dict:
+        nonlocal wait_called
+        wait_called = True
+        return {}
+
+    # For wait=True the service also calls vm_describe after the wait.  Return
+    # a minimal running-instance response so describe() succeeds.
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        if request.method == "POST":
+            return httpx.Response(200, json={"name": _OP_NAME, "status": "RUNNING"})
+        # GET /instances/<name>: return a running instance
+        return httpx.Response(
+            200,
+            json={
+                "name": _VM_NAME,
+                "status": "RUNNING",
+                "zone": f"https://www.googleapis.com/compute/v1/projects/test-project/zones/{_VM_ZONE}",
+                "networkInterfaces": [{"networkIP": "10.0.0.1"}],
+                "labels": {},
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    svc = CloudGcpService(project_id="test-project", http_client=client)
+    svc._token = "fake-token"
+    svc._expires_at = time.monotonic() + 3600
+    svc._wait_zone_operation = _record_wait  # type: ignore[method-assign]
+
+    req = VmCreateRequest(name=_VM_NAME, zone=_VM_ZONE, machine_type="n2-standard-4")
+    info = svc.vm_create(req, wait=True)
+
+    assert wait_called
+    assert info.status == "RUNNING"
+    assert info.internal_ip == "10.0.0.1"
+
+
+# ========================================================================
+# GcpVmSliceHandle state machine: None-describe → CREATING → READY
+# ========================================================================
+
+
+def _make_vm_slice_handle(gcp_service: InMemoryGcpService, slice_id: str, vm_name: str, zone: str) -> GcpVmSliceHandle:
+    """Build a GcpVmSliceHandle in the bootstrapping state (bootstrap_state=None)."""
+    return GcpVmSliceHandle(
+        _slice_id=slice_id,
+        _vm_name=vm_name,
+        _zone=zone,
+        _project_id="test-project",
+        _labels={},
+        _created_at=Timestamp.now(),
+        _label_prefix="iris",
+        _worker_port=10001,
+        _gcp_service=gcp_service,
+        _bootstrapping=True,  # bootstrap_state=None → still booting
+    )
+
+
+def test_vm_slice_describe_unknown_when_vm_not_yet_visible() -> None:
+    """describe() returns UNKNOWN when vm_describe returns None immediately after insert.
+
+    The slice must NOT be treated as FAILED during the boot grace window: UNKNOWN
+    is the correct state for a VM that has been inserted but is not yet visible to
+    the describe API (a race that was always possible but is now more common with
+    the non-blocking insert path).
+    """
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    handle = _make_vm_slice_handle(gcp_service, "slice-abc", "vm-abc", "us-central2-b")
+
+    # VM not in the service yet (as if the insert just returned but describe hasn't caught up)
+    status = handle.describe()
+    assert status.state == CloudSliceState.UNKNOWN, (
+        f"Expected UNKNOWN while VM is not visible, got {status.state}. "
+        "FAILED here would cause an immediate spurious boot failure."
+    )
+
+
+def test_vm_slice_advances_from_creating_to_ready() -> None:
+    """Slice state machine: not-visible → CREATING (PROVISIONING) → READY (RUNNING).
+
+    This is the normal boot path for the non-blocking create: the autoscaler's
+    refresh loop drives state advancement purely through vm_describe() calls.
+    No zone-operation wait is involved.
+    """
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+
+    # Create VM in PROVISIONING state by adding it directly to the service
+    zone = "us-central2-b"
+    vm_name = "vm-boot-test"
+    provisioning_info = VmInfo(
+        name=vm_name,
+        status="PROVISIONING",
+        zone=zone,
+        internal_ip="",
+        external_ip=None,
+        labels={},
+        metadata={},
+        service_account=None,
+        created_at=Timestamp.now(),
+    )
+    gcp_service._vms[(vm_name, zone)] = provisioning_info
+
+    handle = _make_vm_slice_handle(gcp_service, "slice-boot", vm_name, zone)
+
+    # PROVISIONING maps to CREATING in the state machine
+    status = handle.describe()
+    assert status.state == CloudSliceState.CREATING, f"Expected CREATING while VM is PROVISIONING, got {status.state}"
+
+    # Advance to RUNNING (as refresh() would see after a few seconds)
+    gcp_service.advance_vm_state(vm_name, zone, "RUNNING")
+
+    # Still BOOTSTRAPPING because the bootstrap thread hasn't completed yet
+    status = handle.describe()
+    assert (
+        status.state == CloudSliceState.BOOTSTRAPPING
+    ), f"Expected BOOTSTRAPPING after VM is RUNNING but before bootstrap completes, got {status.state}"
+
+    # Simulate bootstrap thread completing
+    with handle._bootstrap_lock:
+        handle._bootstrap_state = CloudSliceState.READY
+
+    status = handle.describe()
+    assert status.state == CloudSliceState.READY
+    assert status.worker_count == 1
+    assert status.workers[0].internal_address == gcp_service._vms[(vm_name, zone)].internal_ip
