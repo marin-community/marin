@@ -170,3 +170,29 @@
   - Release verified: no active local dev TPU session after release; Iris holder job ended `JOB_STATE_KILLED` with `Terminated by user`.
 - Interpretation: The packed block-skipping path also wins on v5p-8. At 8192 it is about `1.7x` faster than dense materialized references and modestly faster than static causal Splash because cross-document blocks are skipped. At 16384 the same trend holds against static causal Splash.
 - Next action: Re-run v5p after the direct blocked metadata patch is pushed, then check v5e/v6e compatibility and start a bounded segment-run metadata design.
+
+### 2026-06-12 - Direct blocked metadata v4-8 rerun
+- Hypothesis: Replacing packed-mask dense SxS metadata construction with direct blocked metadata construction should preserve the previous v4-8 steady-state benchmark results.
+- Command:
+  - `git fetch origin codex/splash-prefixlm-block-skipping`
+  - `git merge --ff-only origin/codex/splash-prefixlm-block-skipping`
+  - `git rev-parse HEAD`
+  - `uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name dlwh-splash-mask-direct-v5p-bench allocate --tpu-type v5p-8 --timeout 900`
+  - `uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name dlwh-splash-mask-direct-v4-bench allocate --tpu-type v4-8 --timeout 900`
+  - `uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name dlwh-splash-mask-direct-v4-bench execute -- uv run --project lib/levanter python lib/levanter/scripts/bench/bench_splash_attention_masks.py --seq-len 8192 --block-size 512 --docs-per-sequence 4 --prefix-tokens-per-doc 256 --iterations 5 --warmup 2 --include-dense`
+  - `uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name dlwh-splash-mask-direct-v4-bench execute --no-sync -- uv run --project lib/levanter python lib/levanter/scripts/bench/bench_splash_attention_masks.py --seq-len 16384 --block-size 512 --docs-per-sequence 4 --prefix-tokens-per-doc 512 --iterations 5 --warmup 2`
+  - `uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name dlwh-splash-mask-direct-v4-bench release`
+- Config:
+  - Commit: `34c0e462939042f7841a63acee3bf9ea6a2dc69d`.
+  - v5p-8 was capacity-blocked on `tpu_v5p-preemptible_8-us-central1-a`; that holder was killed before falling back to v4.
+  - Worker: `marin-tpu-v4-reserved-8-us-central2-b-20260612-0606-76dde9f7`, IP `10.130.0.134`, zone `us-central2-b`.
+  - Benchmark-reported device: `TPU v4`, `num_devices=4`.
+  - `B=1`, `H=8`, `D=128`, BF16 inputs, block size `512`, four equal-length packed docs per sequence.
+- Result:
+  - 8192 steady medians: static causal Splash `1.844 ms`; packed causal segment Splash `1.537 ms`; packed prefix-LM Splash `1.547 ms`; packed causal dense reference `3.763 ms`; packed prefix dense reference `3.756 ms`.
+  - 8192 compile-including: static causal Splash `0.961 s`; packed causal segment Splash `0.843 s`; packed prefix-LM Splash `0.855 s`; packed causal dense reference `12.759 s`; packed prefix dense reference `10.351 s`.
+  - 16384 Splash-only steady medians: static causal `5.795 ms`; packed causal segment `4.462 ms`; packed prefix-LM `4.445 ms`.
+  - 16384 Splash-only compile-including: static causal `2.321 s`; packed causal segment `1.164 s`; packed prefix-LM `1.256 s`.
+  - Release verified: no active local v4 session; Iris holder job ended `JOB_STATE_KILLED` with `Terminated by user`.
+- Interpretation: The direct blocked metadata patch preserves the v4 long-sequence performance envelope. The small packed-prefix shift at 8192 is within run-to-run noise relative to earlier v4 measurements (`1.510 ms` before, `1.547 ms` after); the dense-reference speedup and static-causal comparison still hold.
+- Next action: Retry v5p-8 on the direct blocked metadata commit when capacity improves; then implement a true compact segment-run metadata path that reduces the partial-mask payload rather than only avoiding dense SxS construction.
