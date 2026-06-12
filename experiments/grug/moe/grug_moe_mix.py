@@ -356,15 +356,10 @@ def run_grug_moe_mix(config: GrugMoeLaunchConfig) -> None:
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
-        # `compact_grug_mesh` (post-#6166) drops the `expert` axis from the
-        # mesh when `expert_axis_size == 1`, but `MoEMLP.init` calls
-        # `_mesh_axis_size(mesh, "expert")` and raises if it's missing. On
-        # v4-8 (4 chips) we declare expert=2 → mesh (1, 2, 2, 1) for
-        # (replica_dcn, data, expert, model), which both satisfies the
-        # init-time check and gives us 2-way expert parallelism. 64
-        # experts ÷ 2 expert_axis_size = 32, so the divisibility check
-        # in MoEMLP.init also passes.
-        mesh=MeshConfig(axes={"expert": 2}),
+        # `expert: 1` matches the swarm's sharding (and every pre-#6166 grug
+        # MoE run) — full replication, no expert parallelism. The MoE init
+        # check in model.py is tolerant of the axis being absent post-#6166.
+        mesh=MeshConfig(axes={"expert": 1}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         checkpointer=CheckpointerConfig(

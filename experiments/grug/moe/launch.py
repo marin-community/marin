@@ -89,10 +89,10 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
-        # See grug_moe_mix.py's identical block: expert=2 gives the compact
-        # mesh an `expert` axis so MoEMLP.init's `_mesh_axis_size(mesh,
-        # "expert")` check passes, with 2-way expert parallelism on v4-8.
-        mesh=MeshConfig(axes={"expert": 2}),
+        # `expert: 1` matches the swarm's sharding (full replication, no
+        # expert parallelism). The MoE init check in model.py tolerates the
+        # axis being absent from the post-#6166 compact mesh.
+        mesh=MeshConfig(axes={"expert": 1}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         checkpointer=CheckpointerConfig(
