@@ -58,3 +58,16 @@ Anchor = center. Launched in parallel on reserved v4-32 us-central2 (wandb group
 | beta2-0p99 | beta2 0.9→0.99 | /kaiyue/iris-run-job-20260612-224325 |
 | maxgn-none | max_grad_norm 1.0→None | /kaiyue/iris-run-job-20260612-224338 |
 Target: paloma < 3.5438. beta2 prioritized (0.9 low for SOAP Adam 2nd-moment). Watch full-matrix OOM/compile on expert grams.
+
+## modded-nanogpt track_3 review (2026-06-12) — informs the grid
+- Result #19 KL-SOAP-H (val 3.278): precond_freq=1, lr=.018, beta1=.95, beta2=.9, shampoo_beta=.9, hyperball, **no bias correction**. → our center anchor EXACTLY matches the upstream winning tuple; the missing bias-correction is INTENTIONAL upstream (not a bug).
+- Result #21 Shampoo (3.2776): lr=.0015, betas (.9,.95), precond_freq=5, power=-1/4, wd=.2.
+- Result #25 KL-SOAP-H + power LR decay + nonzero LR floors (3.2781): LR SCHEDULE matters.
+- Result #27 SOAP-H (3.2782): freq=1, lr=.018, b1.95, b2.9 — whitening ≈ optional upstream.
+KEY: upstream KL-SOAP-H lr=.018 ≈ 1.8× our MuonH-heuristic lr (0.0098). KL-SOAP-H wants HIGHER lr than MuonH → added lr-1.4 / lr-1.8 to round 1. beta2=0.9 was upstream-optimal (beta2↑ may not help). LR-schedule/power-decay is a later axis.
+
+## Round 1 (extended) — lr axis added per track_3
+| tag | HP delta | coordinator |
+|---|---|---|
+| lr-1p4 | lr ×1.4 (→0.0137) | /kaiyue/iris-run-job-20260612-224600 |
+| lr-1p8 | lr ×1.8 (→0.0176 ≈ upstream .018) | /kaiyue/iris-run-job-20260612-224618 |
