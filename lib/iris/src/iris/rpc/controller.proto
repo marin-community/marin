@@ -254,7 +254,7 @@ message Controller {
     repeated string running_job_ids = 5;
     string address = 6;                    // Worker RPC address (host:port)
     iris.job.WorkerMetadata metadata = 7;           // Full worker metadata
-    string status_message = 8;             // Error or status message (e.g., "Ping timeout", "Worker crashed")
+    string status_message = 8;             // Error or status message (e.g., "Reconcile timeout", "Worker crashed")
   }
 
   // Sort fields for worker listing
