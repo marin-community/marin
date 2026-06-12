@@ -55,6 +55,12 @@ def _maybe_none_float(name: str, default: float | None) -> float | None:
 _DIM = int(os.environ.get("KLSOAPH_DIM", "512"))
 _TAG = os.environ.get("KLSOAPH_TAG", "center")
 _LR_MULT = _f("KLSOAPH_LR_MULT", 1.0)
+# Hardware (env-parametrized so the same sweep point can run on reserved v4-32 us-central2
+# OR preemptible v5p-8 us-east5 when the reservation is contended). MARIN_PREFIX must match
+# the region (gs://marin-us-central2 / gs://marin-us-east5) — both have the grug data mirrored.
+_TPU = os.environ.get("KLSOAPH_TPU", "v4-32")
+_REGION = os.environ.get("KLSOAPH_REGION", "us-central2")
+_PREEMPTIBLE = os.environ.get("KLSOAPH_PREEMPTIBLE", "0").lower() in ("1", "true", "yes")
 _dim, _bs, _steps = _CELLS[_DIM]
 _tokens = float(_steps * _bs * _SEQ_LEN)
 
@@ -93,7 +99,7 @@ klsoaph_steps: list[ExecutorStep] = [
             data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
             output_path=this_output_path(),
             run_id=_run_id,
-            resources=versioned(ResourceConfig.with_tpu("v4-32", regions=["us-central2"], preemptible=False)),
+            resources=versioned(ResourceConfig.with_tpu(_TPU, regions=[_REGION], preemptible=_PREEMPTIBLE)),
             steps=versioned(_steps),
             batch_size=versioned(_bs),
             seed=versioned(0),
