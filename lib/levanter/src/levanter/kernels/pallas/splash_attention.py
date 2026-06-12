@@ -17,6 +17,9 @@ from jax.sharding import Mesh, PartitionSpec
 
 SPLASH_BLOCK_GRANULARITY = 128
 DEFAULT_SPLASH_BLOCK_SIZE = 512
+BLOCK_MASK_EMPTY = 0
+BLOCK_MASK_PARTIAL = 1
+BLOCK_MASK_FULL = 2
 PartitionSpecEntry = str | Sequence[str | None] | None
 
 
@@ -57,6 +60,14 @@ class SplashPrefixLmMetadata:
     fwd_mask_info: splash_attention_mask_info.MaskInfo
     dq_mask_info: splash_attention_mask_info.MaskInfo
     dkv_mask_info: splash_attention_mask_info.MaskInfo
+
+
+@dataclass(frozen=True)
+class _PrefixLmMaskInfoComponents:
+    data_next: jax.Array
+    mask_next: jax.Array
+    block_mask: jax.Array
+    partial_mask_blocks: jax.Array
 
 
 def prefix_lm_mask_infos(
@@ -167,13 +178,8 @@ def prefix_lm_forward_mask_info(
     block_q: int,
     block_kv: int,
 ) -> splash_attention_mask_info.MaskInfo:
-    """Build compact forward Splash metadata for a prefix-LM mask.
-
-    The represented mask is ``kv < prefix_length OR kv <= q``. Metadata keeps a
-    full block grid but stores only two partial mask candidates per query block:
-    the causal boundary block and the prefix boundary block.
-    """
-    return _prefix_lm_mask_info(
+    """Build forward Splash metadata for ``kv < prefix_length OR kv <= q``."""
+    components = _prefix_lm_mask_info_components(
         prefix_length=prefix_length,
         q_seq_len=q_seq_len,
         kv_seq_len=kv_seq_len,
@@ -181,8 +187,8 @@ def prefix_lm_forward_mask_info(
         block_q=block_q,
         block_kv=block_kv,
         data_next_axis="kv",
-        transpose_partial_blocks=False,
     )
+    return _prefix_lm_mask_info_from_components(components)
 
 
 def prefix_lm_dkv_mask_info(
@@ -195,7 +201,7 @@ def prefix_lm_dkv_mask_info(
     block_kv: int,
 ) -> splash_attention_mask_info.MaskInfo:
     """Build compact dKV Splash metadata for a prefix-LM mask."""
-    return _prefix_lm_mask_info(
+    components = _prefix_lm_mask_info_components(
         prefix_length=prefix_length,
         q_seq_len=q_seq_len,
         kv_seq_len=kv_seq_len,
@@ -203,11 +209,31 @@ def prefix_lm_dkv_mask_info(
         block_q=block_q,
         block_kv=block_kv,
         data_next_axis="q",
-        transpose_partial_blocks=True,
+    )
+    return _prefix_lm_mask_info_from_components(
+        _PrefixLmMaskInfoComponents(
+            data_next=components.data_next,
+            mask_next=components.mask_next,
+            block_mask=components.block_mask,
+            partial_mask_blocks=jnp.swapaxes(components.partial_mask_blocks, -1, -2),
+        )
     )
 
 
-def _prefix_lm_mask_info(
+def _prefix_lm_mask_info_from_components(
+    components: _PrefixLmMaskInfoComponents,
+) -> splash_attention_mask_info.MaskInfo:
+    return splash_attention_mask_info.MaskInfo(
+        data_next=components.data_next,
+        mask_next=components.mask_next,
+        block_mask=components.block_mask.astype(jnp.int8),
+        partial_mask_blocks=components.partial_mask_blocks,
+        q_sequence=None,
+        is_dynamic_mask=None,
+    )
+
+
+def _prefix_lm_mask_info_components(
     *,
     prefix_length: jax.Array,
     q_seq_len: int,
@@ -216,8 +242,7 @@ def _prefix_lm_mask_info(
     block_q: int,
     block_kv: int,
     data_next_axis: str,
-    transpose_partial_blocks: bool,
-) -> splash_attention_mask_info.MaskInfo:
+) -> _PrefixLmMaskInfoComponents:
     if block_q != block_kv:
         raise NotImplementedError("Compact prefix-LM metadata currently requires block_q == block_kv.")
     if q_seq_len % block_q != 0:
@@ -247,12 +272,14 @@ def _prefix_lm_mask_info(
     full = full_prefix | full_causal
     partial = nonzero & ~full
 
-    block_mask = jnp.where(full, 2, jnp.where(partial, 1, 0)).astype(jnp.int32)
+    block_mask = jnp.where(full, BLOCK_MASK_FULL, jnp.where(partial, BLOCK_MASK_PARTIAL, BLOCK_MASK_EMPTY)).astype(
+        jnp.int32
+    )
     block_mask = jnp.broadcast_to(block_mask[None, :, :], (num_heads, q_blocks, kv_blocks))
 
     data_block_ids = kv_block_ids if data_next_axis == "kv" else q_block_ids
     data_next = jnp.broadcast_to(data_block_ids, (q_blocks, kv_blocks))
-    data_next = jnp.where(block_mask[0] > 0, data_next, 0).astype(jnp.int32)
+    data_next = jnp.where(block_mask[0] != BLOCK_MASK_EMPTY, data_next, 0).astype(jnp.int32)
     data_next = jnp.broadcast_to(data_next[None, :, :], (num_heads, q_blocks, kv_blocks))
 
     causal_slot = q_block_ids * 2
@@ -277,16 +304,12 @@ def _prefix_lm_mask_info(
     partial_mask_blocks = jnp.zeros((2 * q_blocks, block_q, block_kv), dtype=jnp.bool_)
     partial_mask_blocks = partial_mask_blocks.at[0::2].set(causal_blocks)
     partial_mask_blocks = partial_mask_blocks.at[1::2].set(prefix_blocks)
-    if transpose_partial_blocks:
-        partial_mask_blocks = jnp.swapaxes(partial_mask_blocks, -1, -2)
 
-    return splash_attention_mask_info.MaskInfo(
+    return _PrefixLmMaskInfoComponents(
         data_next=data_next,
         mask_next=mask_next,
-        block_mask=block_mask.astype(jnp.int8),
+        block_mask=block_mask,
         partial_mask_blocks=partial_mask_blocks,
-        q_sequence=None,
-        is_dynamic_mask=None,
     )
 
 
