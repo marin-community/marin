@@ -407,3 +407,16 @@
   - Lint review reported no findings after factoring shared `MaskInfo` assembly, replacing positional segment-boundary triples with a dataclass, deduplicating boundary logic, and removing a speculative private Protocol.
 - Interpretation: The segment-run benchmark variant now avoids dense pre-compaction block payload construction while preserving the tested dense-mask semantics. This is a structural improvement; v4/v5p TPU timing is still needed at the new head before claiming speedup.
 - Next action: Push this commit, trigger a new v5p/v4-8 benchmark at the new head, and update PR #6330 / issue #6332 with authoritative hardware numbers.
+
+### 2026-06-12 06:43 - Segment-run metadata coverage hardening
+- Hypothesis: The direct segment-run builder should preserve dense causal segment semantics for padded inactive segment slots and many short ragged packed documents, not only one ragged four-document case.
+- Command:
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py -q`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_bench_splash_attention_masks.py -q`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'prefix_lm or sliding_window_mask or segment_runs' -q`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `timeout 900 ./infra/pre-commit.py --review --agent-command='env RUST_LOG=error codex exec --ignore-user-config --ephemeral --dangerously-bypass-approvals-and-sandbox'`
+- Config: Added parameterized segment-run metadata cases for `[128, 64, 320, 0, 0]` with `num_segments=3` and `[17, 31, 29, 53, 97, 285]` with `num_segments=6`, in addition to the existing ragged four-segment case.
+- Result: Splash metadata tests passed with `21 passed`; benchmark-harness tests passed with `6 passed`; attention prefix/segment-run slice passed with `6 passed`; changed-file precommit passed; lint review reported no findings.
+- Interpretation: Local coverage now exercises direct segment-run block classification and compact payload reconstruction across inactive padded slots and short-doc ragged layouts.
+- Next action: Wait for Hubble's v5p/v4-8 benchmark at the direct-builder head and integrate the result.

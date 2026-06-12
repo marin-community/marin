@@ -181,11 +181,35 @@ def test_packed_causal_segment_mask_info_matches_dense_packed_causal(case_name):
     )
 
 
-def test_packed_causal_segment_run_mask_info_uses_compact_partial_payload():
+@pytest.mark.parametrize(
+    ("segment_lengths", "num_segments", "block_expectations"),
+    [
+        (
+            [37, 93, 151, 231],
+            4,
+            {"partial_q_block": 2, "partial_kv_block": 0, "full_q_block": 15, "full_kv_block": 9},
+        ),
+        (
+            [128, 64, 320, 0, 0],
+            3,
+            {"partial_q_block": 0, "partial_kv_block": 0, "full_q_block": 20, "full_kv_block": 13},
+        ),
+        (
+            [17, 31, 29, 53, 97, 285],
+            6,
+            {"partial_q_block": 1, "partial_kv_block": 0, "full_q_block": 20, "full_kv_block": 18},
+        ),
+    ],
+)
+def test_packed_causal_segment_run_mask_info_uses_compact_partial_payload(
+    segment_lengths,
+    num_segments,
+    block_expectations,
+):
     seq_len = 512
     block_size = 16
-    segment_lengths = jnp.array([37, 93, 151, 231], dtype=jnp.int32)
-    num_segments = jnp.array(4, dtype=jnp.int32)
+    segment_lengths = jnp.array(segment_lengths, dtype=jnp.int32)
+    num_segments = jnp.array(num_segments, dtype=jnp.int32)
 
     metadata = packed_causal_segment_run_mask_infos(
         segment_lengths=segment_lengths,
@@ -195,7 +219,7 @@ def test_packed_causal_segment_run_mask_info_uses_compact_partial_payload():
         block_sizes=_packed_metadata_test_block_sizes(block_size),
     )
 
-    segment_ids = np.repeat(np.arange(4, dtype=np.int32), np.asarray(segment_lengths))
+    segment_ids = np.repeat(np.arange(segment_lengths.shape[0], dtype=np.int32), np.asarray(segment_lengths))
     q = np.arange(seq_len)[:, None]
     kv = np.arange(seq_len)[None, :]
     expected = (segment_ids[:, None] == segment_ids[None, :]) & (kv <= q)
@@ -204,10 +228,7 @@ def test_packed_causal_segment_run_mask_info_uses_compact_partial_payload():
         expected,
         seq_len=seq_len,
         block_size=block_size,
-        partial_q_block=2,
-        partial_kv_block=0,
-        full_q_block=15,
-        full_kv_block=9,
+        **block_expectations,
     )
 
     block_count = seq_len // block_size
