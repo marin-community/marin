@@ -71,3 +71,31 @@ KEY: upstream KL-SOAP-H lr=.018 ≈ 1.8× our MuonH-heuristic lr (0.0098). KL-SO
 |---|---|---|
 | lr-1p4 | lr ×1.4 (→0.0137) | /kaiyue/iris-run-job-20260612-224600 |
 | lr-1p8 | lr ×1.8 (→0.0176 ≈ upstream .018) | /kaiyue/iris-run-job-20260612-224618 |
+
+## ⚠️ CRITICAL FIX (2026-06-12) — non-SOAP groups were NOT apples-to-apples
+Pulled the actual d512 MuonH baseline config from wandb (`marin-big-run-moe_may_compute_opt_d512`):
+**adam beta1=0.9062, beta2=0.999, adam_lr=0.002262, epsilon=1.01e-15, max_grad_norm=None,
+warmup=0.01, lr=0.009804, wd=0.1, lr_schedule=linear** — all heuristic-derived (heuristic_v2:
+beta1=0.9062 fixed; beta2=clip(0.999^(tpb/131072),0.95,0.9999); for d512 tpb=131072 → beta2=0.999).
+KLSOAPH was running its NON-SOAP groups (adamh: lm_head/output_proj; adam: embeddings/router) with
+WRONG values: adam betas 0.9/0.95, adam_lr 6e-4 (~4× low), eps 1e-8, maxgn 1.0 — confounding the
+whole comparison. The earlier "beta2" sweep was doubly confounded: one `self.beta2` drove BOTH the
+SOAP eigenbasis 2nd-moment AND the real-Adam 2nd-moment.
+**Fix (commit fe811dd32):** split SOAP eps from real-Adam eps (`adam_epsilon`); launcher now PINS
+adam_lr/beta1/beta2/eps/maxgn from the MuonH heuristic (`_muonh`). The SOAP eigenbasis HPs
+(beta1=0.95, beta2=0.9, shampoo=0.9, eps=1e-8, lr_mult, init_factor, precond_freq=1) are now the
+ONLY variables under test. Killed all 6 confounded round-1 jobs; relaunched below.
+KEY INSIGHT: MuonH's real-Adam beta2=0.999 (large-batch half-life, tpb=131072) ⇒ the SOAP eigenbasis
+beta2=0.9 (upstream small-batch value) is very likely undertuned here → beta2 sweep up to 0.999.
+
+## Round 1 (CORRECTED, apples-to-apples) — 2026-06-12
+Anchor = center (full-matrix, freq=1, SOAP b1=0.95/b2=0.9/shampoo=0.9, lr×1; non-SOAP = MuonH d512).
+| tag | SOAP HP delta | coordinator |
+|---|---|---|
+| center | — | /kaiyue/iris-run-job-20260612-230400 |
+| beta2-0p95 | SOAP beta2 0.9→0.95 | /kaiyue/iris-run-job-20260612-230419 |
+| beta2-0p99 | SOAP beta2 0.9→0.99 | /kaiyue/iris-run-job-20260612-230434 |
+| beta2-0p999 | SOAP beta2 0.9→0.999 | /kaiyue/iris-run-job-20260612-230455 |
+| lr-1p4 | lr ×1.4 | /kaiyue/iris-run-job-20260612-230509 |
+| lr-1p8 | lr ×1.8 (≈ upstream .018) | /kaiyue/iris-run-job-20260612-230523 |
+Target: paloma macro_loss < 3.5438. Power-decay dropped (linear matches baseline; user: unnecessary).
