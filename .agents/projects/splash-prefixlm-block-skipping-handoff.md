@@ -5,6 +5,7 @@
 - Branch: `codex/splash-prefixlm-block-skipping`
 - Base: `origin/main` as of 2026-06-11, including merged PR #6314 and the 2026-06-11 `origin/main` updates through `87046a667`.
 - Research logbook: `.agents/logbooks/splash-prefixlm-block-skipping.md`
+- Experiment issue: https://github.com/marin-community/marin/issues/6332
 
 ## Goal
 

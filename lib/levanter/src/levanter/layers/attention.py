@@ -831,27 +831,38 @@ def _prepare_sinks_for_splash(attn_sink: NamedArray, q_class, physical_axes_q: P
 def _prepare_prefix_lengths_for_splash(prefix_lengths: NamedArray, q_class, physical_axes_q: PartitionSpec):
     """Reshape and broadcast prefix lengths to Splash's flattened batch axis."""
     batch_axes = tuple(q_class["B"])
-    allowed_axes = {ax.name for ax in batch_axes}
-    extra_axes = tuple(ax for ax in prefix_lengths.axes if ax.name not in allowed_axes)
-    if extra_axes:
-        raise NotImplementedError(
-            f"Prefix lengths contain axes unsupported by splash attention: {', '.join(ax.name for ax in extra_axes)}"
-        )
-
-    lengths = prefix_lengths
-    length_axis_names = {ax.name for ax in lengths.axes}
-    for ax in batch_axes:
-        if ax.name not in length_axis_names:
-            lengths = lengths.broadcast_axis(ax)
-            length_axis_names.add(ax.name)
-
-    if batch_axes:
-        lengths = _maybe_flatten(lengths, batch_axes, SPLASH_BATCH_AXIS_NAME)
-    else:
-        lengths = _maybe_flatten(lengths, (), SPLASH_BATCH_AXIS_NAME)
-
+    lengths = _prepare_splash_batch_value(
+        prefix_lengths,
+        batch_axes=batch_axes,
+        allowed_axis_names={ax.name for ax in batch_axes},
+        value_name="Prefix lengths",
+    )
     lengths = lengths.rearrange((SPLASH_BATCH_AXIS_NAME,))
     return lengths.astype(jnp.int32).array, PartitionSpec(physical_axes_q[0])
+
+
+def _prepare_splash_batch_value(
+    value: NamedArray,
+    *,
+    batch_axes: tuple[Axis, ...],
+    allowed_axis_names: set[str],
+    value_name: str,
+) -> NamedArray:
+    extra_axes = tuple(ax for ax in value.axes if ax.name not in allowed_axis_names)
+    if extra_axes:
+        raise NotImplementedError(
+            f"{value_name} contain axes unsupported by splash attention: {', '.join(ax.name for ax in extra_axes)}"
+        )
+
+    axis_names = {ax.name for ax in value.axes}
+    for ax in batch_axes:
+        if ax.name not in axis_names:
+            value = value.broadcast_axis(ax)
+            axis_names.add(ax.name)
+
+    if batch_axes:
+        return _maybe_flatten(value, batch_axes, SPLASH_BATCH_AXIS_NAME)
+    return _maybe_flatten(value, (), SPLASH_BATCH_AXIS_NAME)
 
 
 def _prepare_prefix_mask_for_splash(
@@ -866,27 +877,15 @@ def _prepare_prefix_mask_for_splash(
     batch_axes = tuple(q_class["B"])
     if QPos.name in {ax.name for ax in prefix_mask.axes} and QPos.name != KPos.name:
         prefix_mask = prefix_mask.rename({QPos.name: KPos.name})
-    allowed_axes = {ax.name for ax in batch_axes + (KPos,)}
-    extra_axes = tuple(ax for ax in prefix_mask.axes if ax.name not in allowed_axes)
-    if extra_axes:
-        raise NotImplementedError(
-            f"Prefix mask contains axes unsupported by splash attention: {', '.join(ax.name for ax in extra_axes)}"
-        )
-
-    mask = prefix_mask
-    mask_axis_names = {ax.name for ax in mask.axes}
-    for ax in batch_axes:
-        if ax.name not in mask_axis_names:
-            mask = mask.broadcast_axis(ax)
-            mask_axis_names.add(ax.name)
-    if KPos.name not in mask_axis_names:
+    if KPos.name not in {ax.name for ax in prefix_mask.axes}:
         raise ValueError(f"prefix_mask must contain key position axis {KPos.name}.")
 
-    if batch_axes:
-        mask = _maybe_flatten(mask, batch_axes, SPLASH_BATCH_AXIS_NAME)
-    else:
-        mask = _maybe_flatten(mask, (), SPLASH_BATCH_AXIS_NAME)
-
+    mask = _prepare_splash_batch_value(
+        prefix_mask,
+        batch_axes=batch_axes,
+        allowed_axis_names={ax.name for ax in batch_axes + (KPos,)},
+        value_name="Prefix mask",
+    )
     mask = mask.rearrange((SPLASH_BATCH_AXIS_NAME, KPos.name))
     return mask.astype(jnp.bool_).array, PartitionSpec(physical_axes_q[0], physical_axes_k[2])
 

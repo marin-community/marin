@@ -160,27 +160,24 @@ def packed_prefix_lm_mask_infos(
         kv_seq_len=kv_seq_len,
         num_heads=1,
     )
-    fwd_mask_info = _dynamic_dense_mask_info(
+    fwd_mask_info = _dynamic_forward_dense_mask_info(
         dense_mask,
         block_q=block_sizes.block_q,
         block_kv=block_sizes.block_kv,
-        is_dkv=False,
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
     )
-    dq_mask_info = _dynamic_dense_mask_info(
+    dq_mask_info = _dynamic_forward_dense_mask_info(
         dense_mask,
         block_q=block_sizes.block_q_dq,
         block_kv=block_sizes.block_kv_dq,
-        is_dkv=False,
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
     )
-    dkv_mask_info = _dynamic_dense_mask_info(
+    dkv_mask_info = _dynamic_dkv_dense_mask_info(
         dense_mask,
         block_q=block_sizes.block_q_dkv,
         block_kv=block_sizes.block_kv_dkv,
-        is_dkv=True,
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
     )
@@ -227,19 +224,36 @@ def packed_prefix_lm_dense_mask(
     return jnp.broadcast_to(mask[None, :, :], (num_heads, q_seq_len, kv_seq_len))
 
 
-def _dynamic_dense_mask_info(
+def _dynamic_forward_dense_mask_info(
     dense_mask: jax.Array,
     *,
     block_q: int,
     block_kv: int,
-    is_dkv: bool,
     head_shards: int,
     q_seq_shards: int,
 ) -> splash_attention_mask_info.MaskInfo:
     mask_info, _ = splash_attention_mask_info._process_dynamic_mask(
         dense_mask,
         (block_q, block_kv),
-        is_dkv=is_dkv,
+        is_dkv=False,
+        head_shards=head_shards,
+        q_seq_shards=q_seq_shards,
+    )
+    return mask_info
+
+
+def _dynamic_dkv_dense_mask_info(
+    dense_mask: jax.Array,
+    *,
+    block_q: int,
+    block_kv: int,
+    head_shards: int,
+    q_seq_shards: int,
+) -> splash_attention_mask_info.MaskInfo:
+    mask_info, _ = splash_attention_mask_info._process_dynamic_mask(
+        dense_mask,
+        (block_q, block_kv),
+        is_dkv=True,
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
     )
@@ -496,8 +510,7 @@ class PrefixMask(splash_attention_mask.Mask):
         prefix = kv_ids < self.prefix_length
         return np.broadcast_to(prefix[None, :], (q_size, kv_stop - kv_start))
 
-    def mask_function(self, q_ids, kv_ids):
-        del q_ids
+    def mask_function(self, _q_ids, kv_ids):
         return kv_ids < self.prefix_length
 
     def __eq__(self, other: object):

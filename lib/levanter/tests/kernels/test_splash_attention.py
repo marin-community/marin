@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from enum import StrEnum
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -15,7 +17,6 @@ from levanter.kernels.pallas.splash_attention import (
     SplashAttentionMaskSpec,
     lower_splash_attention_mask,
     lower_splash_segment_ids,
-    packed_prefix_lm_dense_mask,
     packed_prefix_lm_mask_infos,
     prefix_lm_dkv_mask_info,
     prefix_lm_forward_mask_info,
@@ -104,7 +105,7 @@ def test_prefix_lm_dkv_mask_info_matches_dense_prefix_lm(prefix_length):
         kv_seq_len=256,
         block_q=64,
         block_kv=64,
-        transposed_partial_blocks=True,
+        partial_block_layout=_PartialBlockLayout.COMPACT_TRANSPOSED,
     )
     q = np.arange(256)[:, None]
     kv = np.arange(256)[None, :]
@@ -149,16 +150,10 @@ def test_packed_prefix_lm_mask_info_matches_dense_packed_prefix_lm():
         block_sizes=block_sizes,
     )
 
-    expected = np.asarray(
-        packed_prefix_lm_dense_mask(
-            prefix_mask=prefix_mask,
-            q_segment_ids=segment_ids,
-            kv_segment_ids=segment_ids,
-            q_seq_len=seq_len,
-            kv_seq_len=seq_len,
-            num_heads=2,
-        )[0]
-    )
+    q = np.arange(seq_len)[:, None]
+    kv = np.arange(seq_len)[None, :]
+    segments = np.asarray(segment_ids)
+    expected = (segments[:, None] == segments[None, :]) & ((kv <= q) | np.asarray(prefix_mask)[None, :])
     actual_fwd = _materialize_mask_info(
         metadata.fwd_mask_info,
         head=0,
@@ -166,7 +161,7 @@ def test_packed_prefix_lm_mask_info_matches_dense_packed_prefix_lm():
         kv_seq_len=seq_len,
         block_q=block_size,
         block_kv=block_size,
-        dynamic_partial_blocks=True,
+        partial_block_layout=_PartialBlockLayout.DYNAMIC,
     )
     actual_dkv = _materialize_mask_info(
         metadata.dkv_mask_info,
@@ -175,8 +170,7 @@ def test_packed_prefix_lm_mask_info_matches_dense_packed_prefix_lm():
         kv_seq_len=seq_len,
         block_q=block_size,
         block_kv=block_size,
-        dynamic_partial_blocks=True,
-        transposed_partial_blocks=True,
+        partial_block_layout=_PartialBlockLayout.DYNAMIC_TRANSPOSED,
     )
 
     np.testing.assert_array_equal(actual_fwd, expected)
@@ -272,6 +266,13 @@ def _materialize_splash_mask(mask):
     return np.asarray(mask.mask_function(q_indices, kv_indices))
 
 
+class _PartialBlockLayout(StrEnum):
+    COMPACT = "compact"
+    COMPACT_TRANSPOSED = "compact_transposed"
+    DYNAMIC = "dynamic"
+    DYNAMIC_TRANSPOSED = "dynamic_transposed"
+
+
 def _materialize_mask_info(
     mask_info,
     *,
@@ -280,8 +281,7 @@ def _materialize_mask_info(
     kv_seq_len: int,
     block_q: int,
     block_kv: int,
-    dynamic_partial_blocks: bool = False,
-    transposed_partial_blocks: bool = False,
+    partial_block_layout: _PartialBlockLayout = _PartialBlockLayout.COMPACT,
 ):
     q_blocks = q_seq_len // block_q
     kv_blocks = kv_seq_len // block_kv
@@ -297,11 +297,17 @@ def _materialize_mask_info(
             if block_kind == BLOCK_MASK_FULL:
                 out[q_slice, kv_slice] = True
             elif block_kind == BLOCK_MASK_PARTIAL:
-                if dynamic_partial_blocks:
+                if partial_block_layout in (
+                    _PartialBlockLayout.DYNAMIC,
+                    _PartialBlockLayout.DYNAMIC_TRANSPOSED,
+                ):
                     partial_block = partial_mask_blocks[head, q_block, kv_block]
                 else:
                     partial_block = partial_mask_blocks[int(mask_next[head, q_block, kv_block])]
-                if transposed_partial_blocks:
+                if partial_block_layout in (
+                    _PartialBlockLayout.COMPACT_TRANSPOSED,
+                    _PartialBlockLayout.DYNAMIC_TRANSPOSED,
+                ):
                     partial_block = partial_block.T
                 out[q_slice, kv_slice] = partial_block
     return out
