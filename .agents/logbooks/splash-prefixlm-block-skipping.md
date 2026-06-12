@@ -213,3 +213,20 @@
   - Lint review reported no findings.
 - Interpretation: This is the first THD-shaped metadata API for Splash packed causal masks. It is not yet wired into `AttentionMask`/training batches, but it proves the `MaskInfo` representation can use a compact partial-block list when fixed-shape segment-run metadata is available.
 - Next action: Wire segment-run metadata through a public mask surface, then benchmark against the segment-ID path on v4/v5p.
+
+### 2026-06-12 - Public segment-run lowering for packed causal Splash
+- Hypothesis: Exposing fixed-shape contiguous segment-run metadata on `levanter.layers.attention_mask.AttentionMask` lets the public packed causal mask path use the compact segment-run Splash metadata instead of the generic segment-ID metadata path.
+- Command:
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'segment_runs or batched_masks'`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/grug/test_attention.py -k 'thd_segment_metadata'`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `timeout 900 ./infra/pre-commit.py --review --agent-command='env RUST_LOG=error codex exec --ignore-user-config --ephemeral --dangerously-bypass-approvals-and-sandbox'`
+- Config: Local CPU validation. New public mask case uses two packed examples with segment lengths `[2, 2, 4]` and `[3, 2, 3]`; TPU-gated parity coverage is parametrized with the existing `B=2`, `S=512`, `H=8`, `D=128`, block size `256` Splash case and will run on TPU CI/hardware.
+- Result:
+  - Added shared `levanter.segment_runs.segment_run_metadata_from_segment_ids(...)` and reused it from both Levanter `AttentionMask` and Grug THD metadata.
+  - Added `AttentionMask.with_segment_runs(...)`, which stores normal segment IDs for materialization/reference behavior and fixed-shape segment-run metadata for optimized lowering.
+  - Wired `_tpu_splash_attention` to prefer `packed_causal_segment_run_mask_infos(...)` for pure causal self-attention when segment-run metadata is present; the resulting kernel plan clears runtime segment IDs because the metadata encodes same-segment filtering.
+  - Local results: Splash helper tests `19 passed`; attention segment-run slice `1 passed, 5 skipped` (TPU-only parity cases skipped locally); Grug THD metadata slice `3 passed`; changed-file precommit passed; lint review reported no findings.
+- Interpretation: The compact segment-run metadata path now has a public surface and planner integration for pure causal packed docs. It still needs TPU benchmark evidence against the generic packed segment-ID path and broader hardware coverage before treating it as a performance-complete THD-style path.
+- Next action: Run the parametrized TPU parity case and benchmark `AttentionMask.causal().with_segment_runs(...)` on v4-8/v5p-8, then extend the benchmark harness to compare generic segment IDs versus fixed segment-run metadata directly.

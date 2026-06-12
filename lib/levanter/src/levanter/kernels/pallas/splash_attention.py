@@ -209,15 +209,19 @@ def packed_prefix_lm_mask_infos(
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
     )
-    return _blocked_packed_dynamic_mask_infos(
-        mask_block_builder=packed_prefix_lm_block_mask_blocks,
-        mask_kwargs={
-            "prefix_mask": prefix_mask,
-            "q_segment_ids": q_segment_ids,
-            "kv_segment_ids": kv_segment_ids,
-        },
-        context=context,
-    )
+
+    def mask_block_builder(*, block_q: int, block_kv: int) -> jax.Array:
+        return packed_prefix_lm_block_mask_blocks(
+            prefix_mask=prefix_mask,
+            q_segment_ids=q_segment_ids,
+            kv_segment_ids=kv_segment_ids,
+            q_seq_len=q_seq_len,
+            kv_seq_len=kv_seq_len,
+            block_q=block_q,
+            block_kv=block_kv,
+        )
+
+    return _blocked_packed_dynamic_mask_infos(mask_block_builder=mask_block_builder, context=context)
 
 
 def packed_prefix_lm_block_mask_blocks(
@@ -321,18 +325,18 @@ def _blocked_packed_segment_mask_inputs(
     )
 
 
+class _PackedMaskBlockBuilder(Protocol):
+    def __call__(self, *, block_q: int, block_kv: int) -> jax.Array: ...
+
+
 def _blocked_packed_dynamic_mask_infos(
     *,
-    mask_block_builder,
-    mask_kwargs: dict[str, object],
+    mask_block_builder: _PackedMaskBlockBuilder,
     context: _PackedDynamicMaskContext,
     partial_capacities: _PartialMaskCapacities | None = None,
 ) -> SplashDynamicMaskMetadata:
     fwd_mask_info = _blocked_packed_dynamic_mask_info(
         mask_block_builder(
-            **mask_kwargs,
-            q_seq_len=context.q_seq_len,
-            kv_seq_len=context.kv_seq_len,
             block_q=context.block_sizes.block_q,
             block_kv=context.block_sizes.block_kv,
         ),
@@ -343,9 +347,6 @@ def _blocked_packed_dynamic_mask_infos(
     )
     dq_mask_info = _blocked_packed_dynamic_mask_info(
         mask_block_builder(
-            **mask_kwargs,
-            q_seq_len=context.q_seq_len,
-            kv_seq_len=context.kv_seq_len,
             block_q=context.block_sizes.block_q_dq,
             block_kv=context.block_sizes.block_kv_dq,
         ),
@@ -356,9 +357,6 @@ def _blocked_packed_dynamic_mask_infos(
     )
     dkv_mask_info = _blocked_packed_dynamic_mask_info(
         mask_block_builder(
-            **mask_kwargs,
-            q_seq_len=context.q_seq_len,
-            kv_seq_len=context.kv_seq_len,
             block_q=context.block_sizes.block_q_dkv,
             block_kv=context.block_sizes.block_kv_dkv,
         ),
@@ -489,14 +487,18 @@ def packed_causal_segment_mask_infos(
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
     )
-    return _blocked_packed_dynamic_mask_infos(
-        mask_block_builder=packed_causal_segment_block_mask_blocks,
-        mask_kwargs={
-            "q_segment_ids": q_segment_ids,
-            "kv_segment_ids": kv_segment_ids,
-        },
-        context=context,
-    )
+
+    def mask_block_builder(*, block_q: int, block_kv: int) -> jax.Array:
+        return packed_causal_segment_block_mask_blocks(
+            q_segment_ids=q_segment_ids,
+            kv_segment_ids=kv_segment_ids,
+            q_seq_len=q_seq_len,
+            kv_seq_len=kv_seq_len,
+            block_q=block_q,
+            block_kv=block_kv,
+        )
+
+    return _blocked_packed_dynamic_mask_infos(mask_block_builder=mask_block_builder, context=context)
 
 
 def packed_causal_segment_run_mask_infos(
@@ -532,12 +534,19 @@ def packed_causal_segment_run_mask_infos(
         q_seq_shards=q_seq_shards,
     )
     max_segments = segment_lengths.shape[0]
+
+    def mask_block_builder(*, block_q: int, block_kv: int) -> jax.Array:
+        return packed_causal_segment_block_mask_blocks(
+            q_segment_ids=segment_ids,
+            kv_segment_ids=segment_ids,
+            q_seq_len=q_seq_len,
+            kv_seq_len=kv_seq_len,
+            block_q=block_q,
+            block_kv=block_kv,
+        )
+
     return _blocked_packed_dynamic_mask_infos(
-        mask_block_builder=packed_causal_segment_block_mask_blocks,
-        mask_kwargs={
-            "q_segment_ids": segment_ids,
-            "kv_segment_ids": segment_ids,
-        },
+        mask_block_builder=mask_block_builder,
         context=context,
         partial_capacities=_segment_run_partial_capacities(
             q_seq_len=q_seq_len,

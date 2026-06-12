@@ -22,6 +22,7 @@ from levanter.kernels.pallas.splash_attention import (
     lower_splash_attention_mask,
     lower_splash_segment_ids,
     packed_causal_segment_mask_infos,
+    packed_causal_segment_run_mask_infos,
     packed_prefix_lm_mask_infos,
     prefix_lm_mask_infos,
     splash_attention_block_sizes,
@@ -941,6 +942,13 @@ class _SplashPrefixControls:
 
 
 @dataclass(frozen=True)
+class _SplashSegmentRunControls:
+    segment_lengths: jax.Array | None
+    physical_axes_segment_lengths: PartitionSpec | None
+    num_segments: jax.Array | None
+
+
+@dataclass(frozen=True)
 class _SplashKernelPlan:
     kernel: object
     kernel_specs: object
@@ -1044,6 +1052,48 @@ def _prepare_splash_prefix_controls(
         physical_axes_prefix_lengths=physical_axes_prefix_lengths,
         prefix_masks=prefix_masks,
         physical_axes_prefix_mask=physical_axes_prefix_mask,
+    )
+
+
+def _prepare_splash_segment_run_controls(
+    *,
+    mask: Optional[Union[NamedArray, "AttentionMask"]],
+    q_class,
+    physical_axes_q: PartitionSpec,
+) -> _SplashSegmentRunControls:
+    if not isinstance(mask, AttentionMask) or mask.segment_run_metadata is None:
+        return _SplashSegmentRunControls(
+            segment_lengths=None,
+            physical_axes_segment_lengths=None,
+            num_segments=None,
+        )
+
+    batch_axes = tuple(q_class["B"])
+    segment_lengths = mask.segment_run_metadata.segment_lengths
+    if not segment_lengths.axes:
+        raise ValueError("segment_run_metadata.segment_lengths must include a segment-run axis.")
+
+    segment_run_axis = segment_lengths.axes[-1]
+    segment_lengths = _prepare_splash_batch_value(
+        segment_lengths,
+        batch_axes=batch_axes,
+        allowed_axis_names={ax.name for ax in batch_axes + (segment_run_axis,)},
+        value_name="Segment-run lengths",
+    )
+    segment_lengths = segment_lengths.rearrange((SPLASH_BATCH_AXIS_NAME, segment_run_axis.name))
+
+    num_segments = _prepare_splash_batch_value(
+        mask.segment_run_metadata.num_segments,
+        batch_axes=batch_axes,
+        allowed_axis_names={ax.name for ax in batch_axes},
+        value_name="Segment-run counts",
+    )
+    num_segments = num_segments.rearrange((SPLASH_BATCH_AXIS_NAME,))
+
+    return _SplashSegmentRunControls(
+        segment_lengths=segment_lengths.astype(jnp.int32).array,
+        physical_axes_segment_lengths=PartitionSpec(physical_axes_q[0], None),
+        num_segments=num_segments.astype(jnp.int32).array,
     )
 
 
@@ -1180,8 +1230,17 @@ def _can_use_packed_causal_segment_kernel(
         return False
     if segment_id_lowering.segment_batch_axis.q is None or segment_id_lowering.segment_batch_axis.kv is None:
         return False
+    return _is_plain_causal_splash_mask(mask=mask, prefix_controls=prefix_controls)
+
+
+def _is_plain_causal_splash_mask(
+    *,
+    mask: Optional[Union[NamedArray, "AttentionMask"]],
+    prefix_controls: _SplashPrefixControls,
+) -> bool:
     return (
-        mask.is_causal
+        isinstance(mask, AttentionMask)
+        and mask.is_causal
         and mask.causal_offset is None
         and mask.sliding_window is None
         and mask.prefix_length is None
@@ -1190,6 +1249,64 @@ def _can_use_packed_causal_segment_kernel(
         and mask.explicit_mask is None
         and prefix_controls.prefix_lengths is None
         and prefix_controls.prefix_masks is None
+    )
+
+
+def _can_use_packed_causal_segment_run_kernel(
+    *,
+    mask: Optional[Union[NamedArray, "AttentionMask"]],
+    prefix_controls: _SplashPrefixControls,
+    segment_run_controls: _SplashSegmentRunControls,
+    context: _SplashKernelContext,
+) -> bool:
+    if not isinstance(mask, AttentionMask):
+        return False
+    if context.q_seq_shards != 1:
+        return False
+    if context.q_seq_len != context.kv_seq_len:
+        return False
+    if segment_run_controls.segment_lengths is None or segment_run_controls.num_segments is None:
+        return False
+    return _is_plain_causal_splash_mask(mask=mask, prefix_controls=prefix_controls)
+
+
+def _packed_causal_segment_run_kernel_plan(
+    *,
+    segment_run_controls: _SplashSegmentRunControls,
+    context: _SplashKernelContext,
+) -> _SplashKernelPlan:
+    assert segment_run_controls.segment_lengths is not None
+    assert segment_run_controls.num_segments is not None
+    assert segment_run_controls.physical_axes_segment_lengths is not None
+
+    def make_kernel(segment_lengths, num_segments):
+        metadata = packed_causal_segment_run_mask_infos(
+            segment_lengths=segment_lengths,
+            num_segments=num_segments,
+            q_seq_len=context.q_seq_len,
+            kv_seq_len=context.kv_seq_len,
+            block_sizes=context.block_sizes,
+            head_shards=context.head_shards,
+            q_seq_shards=context.q_seq_shards,
+        )
+        return _splash_kernel_from_dynamic_metadata(metadata, context.block_sizes, context.logits_soft_cap)
+
+    splash_kernel = jax.vmap(make_kernel)(
+        segment_run_controls.segment_lengths,
+        segment_run_controls.num_segments,
+    )
+    kernel_specs = _batched_splash_kernel_specs(
+        splash_kernel,
+        batch_spec=segment_run_controls.physical_axes_segment_lengths[0],
+        head_spec=context.physical_axes_q[1],
+        q_seq_spec=context.physical_axes_q[2],
+        num_heads=context.num_heads,
+    )
+    return _SplashKernelPlan(
+        kernel=splash_kernel,
+        kernel_specs=kernel_specs,
+        kernel_vmap_axis=0,
+        segment_id_lowering=lower_splash_segment_ids(),
     )
 
 
@@ -1300,6 +1417,7 @@ def _splash_kernel_plan(
     *,
     mask: Optional[Union[NamedArray, "AttentionMask"]],
     prefix_controls: _SplashPrefixControls,
+    segment_run_controls: _SplashSegmentRunControls,
     segment_id_lowering: SplashSegmentIdsLowering,
     context: _SplashKernelContext,
     mesh,
@@ -1319,6 +1437,17 @@ def _splash_kernel_plan(
             prefix_lengths=prefix_controls.prefix_lengths,
             physical_axes_prefix_lengths=prefix_controls.physical_axes_prefix_lengths,
             segment_id_lowering=segment_id_lowering,
+            context=context,
+        )
+
+    if _can_use_packed_causal_segment_run_kernel(
+        mask=mask,
+        prefix_controls=prefix_controls,
+        segment_run_controls=segment_run_controls,
+        context=context,
+    ):
+        return _packed_causal_segment_run_kernel_plan(
+            segment_run_controls=segment_run_controls,
             context=context,
         )
 
@@ -1513,6 +1642,11 @@ def _tpu_splash_attention(
         kv_seq_len=Sk,
     )
     segment_id_lowering = _lower_splash_attention_segment_ids(mask=mask, QPos=QPos, KPos=KPos)
+    segment_run_controls = _prepare_splash_segment_run_controls(
+        mask=mask,
+        q_class=q_class,
+        physical_axes_q=physical_axes_q,
+    )
 
     # MaxText uses a block size of 512
     block_size = block_size or DEFAULT_SPLASH_BLOCK_SIZE
@@ -1553,6 +1687,7 @@ def _tpu_splash_attention(
     kernel_plan = _splash_kernel_plan(
         mask=mask,
         prefix_controls=prefix_controls,
+        segment_run_controls=segment_run_controls,
         segment_id_lowering=segment_id_lowering,
         context=kernel_context,
         mesh=mesh,
@@ -1578,10 +1713,10 @@ def _tpu_splash_attention(
         v = v.astype(attention_dtype)
         sink_in_axes = 0 if sinks is not None else None
 
-        def call_kernel(q_b, k_b, v_b, si, sink, kernel_b):
+        def call_kernel(q_b, k_b, v_b, segment_ids_for_batch, sink, kernel_b):
             if sink is None:
-                return kernel_b(q_b, k_b, v_b, segment_ids=si)
-            return kernel_b(q_b, k_b, v_b, segment_ids=si, sinks=sink)
+                return kernel_b(q_b, k_b, v_b, segment_ids=segment_ids_for_batch)
+            return kernel_b(q_b, k_b, v_b, segment_ids=segment_ids_for_batch, sinks=sink)
 
         return jax.vmap(
             call_kernel,
