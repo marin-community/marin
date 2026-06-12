@@ -1201,8 +1201,11 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # ---- Autoscaler demand path (compute_demand_entries) ----
     # Demand is now a pure function over the per-tick scheduling context; build it
     # once (as the scheduling pass does) and benchmark only the demand computation.
+    # SchedulingContext carries plain data built eagerly, so it is safe to use after
+    # the snapshot closes.
     sched = Scheduler()
-    demand_ctx = build_scheduling_context(db, health, _NoAttrs(), UserBudgetDefaults(), {})
+    with db.read_snapshot() as _sched_snap:
+        demand_ctx = build_scheduling_context(_sched_snap, health, _NoAttrs(), UserBudgetDefaults(), {})
 
     def _demand():
         compute_demand_entries(demand_ctx, sched, {})
