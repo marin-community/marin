@@ -43,7 +43,7 @@ import uuid
 from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, NotRequired, TypedDict, cast
 
 import click
 import uvicorn
@@ -59,6 +59,7 @@ from iris.cluster.controller.controller import (
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.db import Tx as _Tx
 from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.run_template import new_run_template_cache
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.managed_thread import ThreadContainer
 
@@ -68,7 +69,12 @@ if not hasattr(_Tx, "fetchall"):
     _Tx.fetchone = lambda self, stmt, params=None: self.execute(stmt, params).first()
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.controller import ops
-from iris.cluster.controller.backend import BackendReconcileInput, BackendReconcileResult, PlacementOwner
+from iris.cluster.controller.backend import (
+    BackendReconcileInput,
+    BackendReconcileResult,
+    PlacementOwner,
+    TaskBackend,
+)
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
@@ -101,7 +107,7 @@ from iris.cluster.types import AttemptUid, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.worker_connect import WorkerServiceASGIApplication
+from iris.rpc.worker_connect import WorkerService, WorkerServiceASGIApplication
 from iris.version import client_revision_date
 from rigging.timing import Timestamp
 from sqlalchemy import func, select, text, update
@@ -1380,7 +1386,7 @@ def benchmark_polling(db: ControllerDB) -> None:
 
         def _template_first():
             # Fresh cache to defeat the LRU cache on every call.
-            cold_cache = dispatch.RunTemplateCache()
+            cold_cache = new_run_template_cache()
             with db.read_snapshot() as snap:
                 dispatch.run_request_template(cold_cache, snap, first_job)
 
@@ -1665,6 +1671,17 @@ def _print_latency_distribution(name: str, latencies: list[float]) -> None:
     )
 
 
+class _ContentionScenario(TypedDict):
+    """Per-scenario overrides spread into :func:`_run_apply_under_contention` via ``**``."""
+
+    name: str
+    fail_threads: NotRequired[int]
+    fail_chunk: NotRequired[int]
+    fail_interval_s: NotRequired[float]
+    register_threads: NotRequired[int]
+    endpoint_threads: NotRequired[int]
+
+
 def _run_apply_under_contention(
     *,
     name: str,
@@ -1802,18 +1819,18 @@ def benchmark_apply_contention(db: ControllerDB) -> None:
         print("  (skipped, no workers)")
         return
 
-    scenarios = [
-        dict(name="Contention: apply @ baseline (no contention)"),
-        dict(name="Contention: apply + fail_workers", fail_threads=1),
-        dict(name="Contention: apply + register burst", register_threads=1),
-        dict(name="Contention: apply + add_endpoint storm", endpoint_threads=1),
-        dict(
+    scenarios: list[_ContentionScenario] = [
+        _ContentionScenario(name="Contention: apply @ baseline (no contention)"),
+        _ContentionScenario(name="Contention: apply + fail_workers", fail_threads=1),
+        _ContentionScenario(name="Contention: apply + register burst", register_threads=1),
+        _ContentionScenario(name="Contention: apply + add_endpoint storm", endpoint_threads=1),
+        _ContentionScenario(
             name="Contention: apply + prod-mix (fail+reg+ep)",
             fail_threads=1,
             register_threads=1,
             endpoint_threads=1,
         ),
-        dict(
+        _ContentionScenario(
             name="Contention: apply + heavy storm (2f/2r/2e, chunk=200)",
             fail_threads=2,
             fail_chunk=200,
@@ -2127,7 +2144,7 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
         checkpoint_interval=None,
     )
     threads = ThreadContainer("bench-serve")
-    controller = Controller(config=config, provider=_FakeProvider(), db=db, threads=threads)
+    controller = Controller(config=config, provider=cast(TaskBackend, _FakeProvider()), db=db, threads=threads)
     controller.start()
     deadline = time.time() + 10.0
     while time.time() < deadline:
@@ -2372,7 +2389,7 @@ class _EchoWorker:
 @contextmanager
 def _serve_fake_worker():
     app = WorkerServiceASGIApplication(
-        _EchoWorker(),
+        cast(WorkerService, _EchoWorker()),
         compressions=IRIS_RPC_COMPRESSIONS,
     )
     config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error", log_config=None, timeout_keep_alive=120)

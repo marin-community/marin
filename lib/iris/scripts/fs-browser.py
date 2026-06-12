@@ -26,6 +26,7 @@ import os
 import pathlib
 import sys
 from dataclasses import dataclass
+from typing import cast
 
 import click
 import s3fs
@@ -125,7 +126,8 @@ def format_size(size: int) -> str:
 def fetch_file(fs: s3fs.S3FileSystem, path: str, max_bytes: int = MAX_FILE_SIZE) -> bytes:
     """Download a file from S3, up to max_bytes."""
     with fs.open(path, "rb") as f:
-        return f.read(max_bytes)
+        # Opened "rb", so read() yields bytes; the s3fs stub widens it to bytes | str.
+        return cast(bytes, f.read(max_bytes))
 
 
 def render_json_table(data: object) -> str:
