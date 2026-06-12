@@ -70,3 +70,13 @@
   - Non-jitted calls were much slower because they include Python-side metadata construction and dispatch; they are not representative of a jitted Levanter step.
 - Interpretation: The batched dynamic-prefix `SplashAttentionKernel` pytree works on v4-8, including with segment IDs for correctness. The jitted steady-state overhead is small for `B=1` and about 12% in the `B=2` smoke. Segment IDs still do not contribute block skipping; this only confirms they remain correct inside visited blocks.
 - Next action: Promote the two smokes into TPU-gated tests, add a repeatable 8192/16384 benchmark harness, and then implement segment-ID block skipping from packed segment metadata.
+
+### 2026-06-11 22:20 - Permanent TPU-gated tests
+- Hypothesis: The ad hoc v4-8 smokes should be cheap enough to keep as TPU-gated regression tests in `test_attention.py`.
+- Command:
+  - Local: `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'prefix_lm or tpu_splash_attention_dynamic_prefix_lm'`
+  - TPU: `uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name dlwh-splash-prefixlm-v4-tests execute --no-sync -- env PYTHONPATH=lib/levanter/tests uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'test_tpu_splash_attention_dynamic_prefix_lm' -q -n0`
+- Config: Same v4-8 worker and correctness shapes as the previous smoke. Pytest xdist was disabled on TPU with `-n0` because libtpu only supports one initializing process per host.
+- Result: Local subset passed with `3 passed, 2 skipped`. TPU subset passed with `2 passed, 74 deselected`.
+- Interpretation: The dynamic prefix-LM and dynamic prefix-LM plus segment-ID paths are now covered by permanent TPU-gated tests. Default xdist is unsafe for TPU tests in this file; use `-n0` for these targeted runs.
+- Next action: Add a repeatable benchmark harness for 8192/16384 and proceed to segment-ID block skipping.

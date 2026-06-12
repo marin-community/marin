@@ -585,6 +585,89 @@ def test_tpu_splash_attention_sliding_window():
         assert_trees_all_close(hax_out.array, flash_out.array, atol=1e-3, rtol=1e-3)
 
 
+def test_tpu_splash_attention_dynamic_prefix_lm():
+    if jax.default_backend() != "tpu":
+        pytest.skip("TPU only")
+
+    BLOCK_SIZE = 256
+
+    Batch = hax.Axis("Batch", 2)
+    Head = hax.Axis("Head", 8)
+    Key = hax.Axis("Key", 128)
+    QPos = hax.Axis("QPos", BLOCK_SIZE * 2)
+    KPos = hax.Axis("KPos", BLOCK_SIZE * 2)
+    prefix_lengths = hax.named(jnp.array([0, 300], dtype=jnp.int32), Batch)
+    mask = AttentionMask.prefix_lm(prefix_lengths=prefix_lengths)
+
+    with use_test_mesh():
+        q = hax.random.normal(jrandom.PRNGKey(10), (Batch, QPos, Head, Key)) * 0.02
+        k = hax.random.normal(jrandom.PRNGKey(11), (Batch, KPos, Head, Key)) * 0.02
+        v = hax.random.normal(jrandom.PRNGKey(12), (Batch, KPos, Head, Key)) * 0.02
+
+        flash_out = _tpu_splash_attention(
+            QPos,
+            KPos,
+            Key,
+            q,
+            k,
+            v,
+            inference=True,
+            mask=mask,
+            block_size=BLOCK_SIZE,
+            scaling_factor=1 / math.sqrt(Key.size),
+        )
+        hax_out = hax.nn.attention.dot_product_attention(KPos, Key, q, k, v, mask=mask.materialize(QPos, KPos))
+        assert hax_out.axes == flash_out.axes
+        assert_trees_all_close(hax_out.array, flash_out.array, atol=1e-3, rtol=1e-3)
+
+
+def test_tpu_splash_attention_dynamic_prefix_lm_with_segment_ids():
+    if jax.default_backend() != "tpu":
+        pytest.skip("TPU only")
+
+    BLOCK_SIZE = 256
+
+    Batch = hax.Axis("Batch", 2)
+    Head = hax.Axis("Head", 8)
+    Key = hax.Axis("Key", 128)
+    QPos = hax.Axis("QPos", BLOCK_SIZE * 2)
+    KPos = hax.Axis("KPos", BLOCK_SIZE * 2)
+    prefix_lengths = hax.named(jnp.array([128, 300], dtype=jnp.int32), Batch)
+    segment_ids = jnp.stack(
+        [
+            jnp.array([0] * BLOCK_SIZE + [1] * BLOCK_SIZE, dtype=jnp.int32),
+            jnp.array([2] * 128 + [3] * (BLOCK_SIZE * 2 - 128), dtype=jnp.int32),
+        ]
+    )
+    q_segment_ids = hax.named(segment_ids, (Batch, QPos))
+    kv_segment_ids = hax.named(segment_ids, (Batch, KPos))
+    mask = AttentionMask.prefix_lm(
+        prefix_lengths=prefix_lengths,
+        segment_ids=(q_segment_ids, kv_segment_ids),
+    )
+
+    with use_test_mesh():
+        q = hax.random.normal(jrandom.PRNGKey(20), (Batch, QPos, Head, Key)) * 0.02
+        k = hax.random.normal(jrandom.PRNGKey(21), (Batch, KPos, Head, Key)) * 0.02
+        v = hax.random.normal(jrandom.PRNGKey(22), (Batch, KPos, Head, Key)) * 0.02
+
+        flash_out = _tpu_splash_attention(
+            QPos,
+            KPos,
+            Key,
+            q,
+            k,
+            v,
+            inference=True,
+            mask=mask,
+            block_size=BLOCK_SIZE,
+            scaling_factor=1 / math.sqrt(Key.size),
+        )
+        hax_out = hax.nn.attention.dot_product_attention(KPos, Key, q, k, v, mask=mask.materialize(QPos, KPos))
+        assert hax_out.axes == flash_out.axes
+        assert_trees_all_close(hax_out.array, flash_out.array, atol=1e-3, rtol=1e-3)
+
+
 @pytest.mark.parametrize("impl", ["default", "jax_flash", "vanilla"])
 def test_segment_ids_are_respected(impl):
     # test that we can't attend to something outside of the range

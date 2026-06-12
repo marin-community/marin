@@ -81,6 +81,7 @@ TPU validation on Iris v4-8:
 - Dynamic prefix-LM plus batched segment IDs smoke passed on TPU for `B=2`, `S=512`, `H=8`, `D=128`, block size `256`, prefix lengths `[128, 300]`, compared against materialized Haliax attention.
 - Jitted forward microbench on v4-8, `B=1`, `S=8192`, `H=8`, `D=128`, block size `512`: static causal median warm `2.15 ms`; dynamic prefix-LM with prefix length `2048` median warm `2.18 ms`.
 - Jitted forward microbench on v4-8, `B=2`, `S=8192`, `H=8`, `D=128`, block size `512`: static causal median warm `3.67 ms`; dynamic prefix-LM with prefix lengths `[0, 2048]` median warm `4.11 ms`.
+- The two focused smokes are now permanent TPU-gated tests in `lib/levanter/tests/test_attention.py`. Run them on TPU with pytest xdist disabled: `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'test_tpu_splash_attention_dynamic_prefix_lm' -q -n0`.
 
 ## Important Design State
 
@@ -123,16 +124,12 @@ Main options:
 
 ## Recommended Next Steps
 
-1. Add permanent TPU-gated correctness tests comparing:
-   - static prefix length against reference attention,
-   - per-example prefix lengths,
-   - dynamic prefix lengths plus segment IDs for packed docs.
-2. Add a benchmark harness for 8192/16384 that reports compile-including and steady-state timing on v4-8/v5p-8.
-3. Implement segment-ID block skipping, probably by deriving block metadata from packed segment runs or THD metadata.
-4. Broaden TPU validation to v5p-8, then v5e/v6e.
+1. Add a benchmark harness for 8192/16384 that reports compile-including and steady-state timing on v4-8/v5p-8.
+2. Implement segment-ID block skipping, probably by deriving block metadata from packed segment runs or THD metadata.
+3. Broaden TPU validation to v5p-8, then v5e/v6e.
 
 ## Caveats
 
-- Dynamic prefix-length support passed focused v4-8 smokes, but it is not covered by permanent TPU-gated tests yet.
+- Dynamic prefix-length support passed focused v4-8 smokes and now has permanent TPU-gated tests, but those tests must run single-process (`-n0`) because libtpu cannot be initialized by pytest-xdist workers on one host.
 - Current Splash segment IDs mask inside visited blocks; they do not provide block skipping for packed segment masks by themselves.
 - Dynamic `prefix_mask` remains unsupported in Splash; use structured `prefix_lengths` for the compact path.
