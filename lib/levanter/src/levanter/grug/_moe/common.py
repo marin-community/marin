@@ -23,11 +23,12 @@ MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Ar
 MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
+    "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
-_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all")
+_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep")
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (
@@ -39,6 +40,17 @@ _CHECKPOINT_DISPATCH_INPUT = "grug_moe_dispatch_input"
 _CHECKPOINT_EXPERT_HIDDEN = "grug_moe_expert_hidden"
 _CHECKPOINT_DISPATCH_OUTPUT = "grug_moe_dispatch_output"
 _CHECKPOINT_MOE_OUTPUT = "grug_moe_output"
+
+# Checkpoint names every MoE backend tags on its dispatch tensors. A remat
+# policy of jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+# keeps these alive for backward instead of re-running expert dispatch —
+# including the EP collectives — during the recompute.
+MOE_REMAT_SAVE_NAMES = (
+    _CHECKPOINT_DISPATCH_INPUT,
+    _CHECKPOINT_EXPERT_HIDDEN,
+    _CHECKPOINT_DISPATCH_OUTPUT,
+    _CHECKPOINT_MOE_OUTPUT,
+)
 
 
 @dataclass(frozen=True)

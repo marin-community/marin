@@ -9,14 +9,15 @@ backed by in-memory fakes rather than MagicMock.
 """
 
 import threading
+import unittest.mock
 
+from iris.cluster.backends.gcp.fake import InMemoryGcpService
+from iris.cluster.backends.gcp.workers import GcpWorkerProvider
+from iris.cluster.backends.types import CloudSliceState
 from iris.cluster.constraints import DeviceType, PlacementRequirements
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry, ScalingAction
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
-from iris.cluster.providers.gcp.fake import InMemoryGcpService
-from iris.cluster.providers.gcp.workers import GcpWorkerProvider
-from iris.cluster.providers.types import CloudSliceState
 from iris.cluster.service_mode import ServiceMode
 from iris.rpc import config_pb2, job_pb2
 from iris.time_proto import duration_to_proto
@@ -216,7 +217,7 @@ class TestAutoscalerWaterfallEndToEnd:
         )
         demand = [
             DemandEntry(
-                task_ids=[f"task-{i}"],
+                task_ids=(f"task-{i}",),
                 coschedule_group_id=None,
                 normalized=normalized,
                 constraints=[],
@@ -233,7 +234,11 @@ class TestAutoscalerWaterfallEndToEnd:
         total = group_primary.slice_count() + group_fallback.slice_count()
         assert total == 3
 
-    def test_demand_cascades_through_priority_groups_on_backoff(self):
+    # The fallback slice now reports READY as soon as it has worker IPs (worker
+    # health is canonical), so run_once health-probes it. Stub the probe — the
+    # fake's synthetic IPs have no server and would otherwise block on timeouts.
+    @unittest.mock.patch("iris.cluster.controller.autoscaler.runtime._probe_worker_health", return_value=True)
+    def test_demand_cascades_through_priority_groups_on_backoff(self, _mock_probe):
         """E2E: primary keeps failing creates -> detector HOSTILE -> cascades to fallback."""
         config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10, zones=["us-central1-a"])
         config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20, zones=["us-central1-a"])
@@ -515,7 +520,10 @@ def test_marin_style_lifecycle():
             _mark_all_slices_ready(g)
 
     def routed(group_name):
-        return len(autoscaler._last_scale_plan.routing_decision.routed_entries.get(group_name, []))
+        routed_entries = autoscaler._last_routing_decision_proto.routed_entries
+        if group_name not in routed_entries:
+            return 0
+        return len(routed_entries[group_name].entries)
 
     def assert_no_load_on_last():
         assert routed("tpu-16vm") == 0, "tpu-16vm should never receive load"

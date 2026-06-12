@@ -9,6 +9,10 @@ on:
         description: 'Override training token budget'
         type: number
         required: false
+      tpu_type:
+        description: 'Override TPU slice type(s), comma-separated, primary first (e.g. v5p-8,v4-8)'
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -25,6 +29,7 @@ jobs:
     env:
       RUN_ID: canary-tpu-${{ github.run_id }}-${{ github.run_attempt }}
       CANARY_ACCELERATOR: tpu
+      CANARY_TPU_TYPE: "v5p-8,v4-8"
       CANARY_BATCH_SIZE: "512"
       CANARY_TARGET_TOKENS: "1000000000"
       CANARY_MIN_STEPS: "400"
@@ -81,9 +86,9 @@ jobs:
             job run --no-wait \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
             --priority production \
-            --reserve v5p-8 \
             -e RUN_ID "$RUN_ID" \
             -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
+            -e CANARY_TPU_TYPE "$CANARY_TPU_TYPE" \
             -e CANARY_BATCH_SIZE "$CANARY_BATCH_SIZE" \
             -e CANARY_TARGET_TOKENS "$CANARY_TARGET_TOKENS" \
             -e WANDB_ENTITY "$WANDB_ENTITY" \
@@ -97,8 +102,18 @@ jobs:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           CANARY_TARGET_TOKENS: ${{ inputs.target_tokens || env.CANARY_TARGET_TOKENS }}
+          CANARY_TPU_TYPE: ${{ inputs.tpu_type || env.CANARY_TPU_TYPE }}
 
+      # Bound the wait below the job timeout (360) so a hung ferry fails this
+      # *step* rather than tripping the job timeout. A step timeout is failure(),
+      # which keeps the runner alive and lets Claude triage run with its full
+      # budget; a job timeout is cancelled(), which force-kills triage after
+      # GitHub's short cancellation grace (exit 143). --child-wait-timeout only
+      # bounds the queue wait — once a child is RUNNING the monitor relies on
+      # this wall clock. Healthy runs finish in ~2h, so 300 leaves 60m for
+      # diagnostics + triage.
       - name: Wait for canary ferry
+        timeout-minutes: 300
         shell: bash -l {0}
         run: |
           uv run python scripts/workflows/iris_monitor.py wait \
@@ -109,16 +124,19 @@ jobs:
             --github-output
 
       - name: Validate canary metrics
-        continue-on-error: ${{ inputs.target_tokens != '' }}
+        # target_tokens / tpu_type overrides change the step's versioned config, so the
+        # output path this step recomputes (with no CANARY_* env) no longer matches the
+        # submitted run — tolerate the resulting read miss on a manual dispatch.
+        continue-on-error: ${{ inputs.target_tokens != '' || inputs.tpu_type != '' }}
         shell: bash -l {0}
         # MARIN_PREFIX is required so mirror:// knows which gs://marin-* bucket
         # counts as "local" — without it the runner falls back to /tmp/marin,
         # _mirror_remote_prefixes() returns [] (to avoid anonymous-caller 401s
         # from gcsfs off-GCP), and the read raises FileNotFoundError. The
         # google-github-actions/auth step above provides the credentials
-        # gcsfs needs to actually scan the remote buckets. Canary lands on v5p
-        # in us-central1 or us-east5; picking us-central1 keeps the hit rate
-        # high and lets mirror:// resolve either region.
+        # gcsfs needs to actually scan the remote buckets. The canary lands on
+        # v5p (us-central1/us-east5) or its v4 fallback (us-central2); mirror://
+        # scans all marin-* regions, and us-central1 keeps the hit rate high.
         env:
           MARIN_PREFIX: gs://marin-us-central1
         run: .venv/bin/python scripts/canary/validate_canary_metrics.py

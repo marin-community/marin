@@ -95,7 +95,7 @@ create branches on github and submit PRs from them.
 ## Uploading
 
 When all tests pass, upload your branch and open a PR following
-`.agents/skills/author-pr/SKILL.md` **exactly** — use the plain-text format it
+`.agents/skills/commit/SKILL.md` **exactly** — use the plain-text format it
 specifies (no markdown headers, bullet lists, or `## Summary` sections;
 violations are rejected). Attach a comment to the Github issue summarizing the fix.
 

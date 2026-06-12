@@ -10,7 +10,7 @@ polynomial utilities.
 
 from __future__ import annotations
 
-from typing import Literal, overload
+from typing import Literal, cast, overload
 
 import jax.numpy as jnp
 from jaxtyping import Array, ArrayLike
@@ -227,6 +227,9 @@ def polyfit(
         return NamedArray(coeffs, (axis,))
 
     if full:
+        # With full=True, jnp.polyfit returns a tuple; pyrefly resolves the default
+        # (array-returning) overload because `full` is a runtime bool.
+        result = cast(tuple, result)
         coeffs = wrap_coeffs(result[0])
         return (coeffs,) + result[1:]
     coeffs = wrap_coeffs(result if not cov else result[0])

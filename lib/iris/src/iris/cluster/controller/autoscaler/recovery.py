@@ -3,14 +3,14 @@
 
 """Autoscaler checkpoint restore helpers."""
 
-from __future__ import annotations
-
 import logging
 import threading
 from dataclasses import dataclass
 
 from sqlalchemy import select
 
+from iris.cluster.backends.protocols import WorkerInfraProvider
+from iris.cluster.backends.types import CloudSliceState, SliceHandle
 from iris.cluster.controller.autoscaler.scaling_group import (
     GroupSnapshot,
     ScalingGroup,
@@ -20,8 +20,6 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, TrackedWorkerRow, restore_tracked_workers
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import scaling_groups_table, slices_table, workers_table
-from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.providers.types import CloudSliceState, SliceHandle
 
 _LIVE_CLOUD_STATES = frozenset({CloudSliceState.CREATING, CloudSliceState.READY, CloudSliceState.REPAIRING})
 
@@ -133,14 +131,15 @@ def restore_autoscaler_state(
         restore_result = restore_scaling_group(
             group_snapshot=group_snapshot,
             cloud_handles=cloud_by_group.get(group_snapshot.name, []),
-            label_prefix=group.label_prefix,
         )
         group.restore_from_snapshot(
             slices=restore_result.slices,
             last_scale_up=restore_result.last_scale_up,
             last_scale_down=restore_result.last_scale_down,
         )
-        group.purge_persisted_slice_rows(restore_result.discarded_slice_ids)
+        # Discarded slice rows (missing from cloud) are not re-added to the
+        # group's in-memory state, so the controller's first wholesale DB sync
+        # after the next capacity call deletes them — no explicit purge needed.
 
     return restore_tracked_workers(checkpoint.tracked_worker_rows)
 

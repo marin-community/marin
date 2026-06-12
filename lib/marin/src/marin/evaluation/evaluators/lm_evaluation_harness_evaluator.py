@@ -8,11 +8,11 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import is_remote_path, open_url, url_to_fs
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
-from marin.evaluation.utils import is_remote_path, upload_to_gcs
+from marin.evaluation.utils import upload_to_gcs
 from marin.inference.vllm_server import VllmEnvironment
 
 logger = logging.getLogger(__name__)
@@ -84,9 +84,9 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                 resolved_model = env.model
 
                 def _run_lm_eval(lm_eval_model_local: str, pretrained_args_local: str) -> None:
-                    from lm_eval.evaluator import simple_evaluate
-                    from lm_eval.loggers import EvaluationTracker, WandbLogger
-                    from lm_eval.utils import simple_parse_args_string
+                    from lm_eval.evaluator import simple_evaluate  # noqa: PLC0415  # optional dep: lm_eval
+                    from lm_eval.loggers import EvaluationTracker, WandbLogger  # noqa: PLC0415  # optional dep: lm_eval
+                    from lm_eval.utils import simple_parse_args_string  # noqa: PLC0415  # optional dep: lm_eval
 
                     for eval_task in evals:
                         result_filepath = os.path.join(

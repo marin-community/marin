@@ -3,8 +3,8 @@
 
 """GCP utilities for cluster management.
 
-This provides functions to get access to the current GCP configuration, list and
-connect to TPUs, and find TPUs by IP address.
+This provides functions to get access to the current GCP configuration, list
+TPUs, and find TPUs or VMs by name or IP address.
 """
 
 import json
@@ -33,8 +33,9 @@ def get_project_id() -> str | None:
         return None
 
 
-def list_tpu_nodes(project: str, zone: str, filter_expr: str = "") -> list[dict[str, Any]]:
+def list_tpu_nodes(project: str, zone: str | None = None, filter_expr: str = "") -> list[dict[str, Any]]:
     """List TPU nodes in a zone."""
+    zone_arg = zone or "-"
     cmd = [
         "gcloud",
         "compute",
@@ -42,7 +43,7 @@ def list_tpu_nodes(project: str, zone: str, filter_expr: str = "") -> list[dict[
         "tpu-vm",
         "list",
         f"--project={project}",
-        f"--zone={zone}",
+        f"--zone={zone_arg}",
         "--format=json",
     ]
     if filter_expr:
@@ -52,32 +53,69 @@ def list_tpu_nodes(project: str, zone: str, filter_expr: str = "") -> list[dict[
     return json.loads(result.stdout)
 
 
-def find_tpu_by_ip(target_ip: str, project: str, zone: str = "-") -> tuple[str, str, int] | None:
-    """Find TPU node by its internal IP address.
+def _parse_tpu_node_name(full_name: str, fallback_zone: str) -> tuple[str, str]:
+    name_parts = full_name.split("/")
+    if len(name_parts) >= 6:
+        return name_parts[5], name_parts[3]
+    return full_name, fallback_zone
 
-    Searches all zones by default (zone="-").
+
+def _find_tpu_by_name_in_nodes(
+    target_name: str,
+    tpu_nodes: list[dict[str, Any]],
+    *,
+    fallback_zone: str,
+) -> tuple[str, str] | None:
+    for node in tpu_nodes:
+        simple_name, node_zone = _parse_tpu_node_name(node["name"], fallback_zone)
+        if simple_name == target_name or node["name"] == target_name:
+            return simple_name, node_zone
+
+    return None
+
+
+def find_tpu_by_name(target_name: str, project: str, zone: str | None = None) -> tuple[str, str] | None:
+    """Find TPU node by name.
+
+    Searches all zones by default.
+
+    Returns:
+        Tuple of (tpu_name, zone) or None if not found.
+    """
+    tpu_nodes = list_tpu_nodes(project, zone)
+
+    return _find_tpu_by_name_in_nodes(target_name, tpu_nodes, fallback_zone=zone or "-")
+
+
+def _find_tpu_by_ip_in_nodes(
+    target_ip: str,
+    tpu_nodes: list[dict[str, Any]],
+    *,
+    fallback_zone: str,
+) -> tuple[str, str, int] | None:
+    for node in tpu_nodes:
+        network_endpoints = node.get("networkEndpoints", [])
+        for worker_index, endpoint in enumerate(network_endpoints):
+            # Iris worker RPC addresses can surface either TPU-internal IPs or NATed external IPs.
+            external_ip = (endpoint.get("accessConfig") or {}).get("externalIp")
+            if endpoint.get("ipAddress") == target_ip or external_ip == target_ip:
+                simple_name, node_zone = _parse_tpu_node_name(node["name"], fallback_zone)
+                return simple_name, node_zone, worker_index
+
+    return None
+
+
+def find_tpu_by_ip(target_ip: str, project: str, zone: str | None = None) -> tuple[str, str, int] | None:
+    """Find TPU node by its internal or external IP address.
+
+    Searches all zones by default.
 
     Returns:
         Tuple of (tpu_name, zone, worker_index) or None if not found
     """
     tpu_nodes = list_tpu_nodes(project, zone)
 
-    for node in tpu_nodes:
-        network_endpoints = node.get("networkEndpoints", [])
-        for worker_index, endpoint in enumerate(network_endpoints):
-            if endpoint.get("ipAddress") == target_ip:
-                # Extract simple name from full resource path
-                full_name = node["name"]
-                name_parts = full_name.split("/")
-                if len(name_parts) >= 6:
-                    simple_name = name_parts[5]  # nodes/simple-name
-                    node_zone = name_parts[3]  # locations/zone
-                    return simple_name, node_zone, worker_index
-                else:
-                    # Fallback for different naming schemes
-                    return full_name, zone, worker_index
-
-    return None
+    return _find_tpu_by_ip_in_nodes(target_ip, tpu_nodes, fallback_zone=zone or "-")
 
 
 def find_vm_by_ip(target_ip: str, project: str) -> tuple[str, str] | None:
@@ -111,48 +149,3 @@ def find_vm_by_ip(target_ip: str, project: str) -> tuple[str, str] | None:
     # zone is a full URL like .../zones/us-central1-a
     zone = instance["zone"].split("/")[-1]
     return name, zone
-
-
-def ssh_to_vm(instance_name: str, zone: str, project: str, extra_args: list[str] | None = None) -> None:
-    """SSH into a GCE VM."""
-    cmd = [
-        "gcloud",
-        "compute",
-        "ssh",
-        instance_name,
-        f"--zone={zone}",
-        f"--project={project}",
-    ]
-
-    if extra_args:
-        cmd.extend(["--", *extra_args])
-
-    subprocess.run(cmd, check=True)
-
-
-def ssh_to_tpu(tpu_name: str, zone: str, project: str, extra_args: list[str] | None = None, worker_id: int = 0) -> None:
-    """SSH into a TPU node.
-
-    Args:
-        tpu_name: Name of the TPU
-        zone: GCP zone
-        project: GCP project
-        extra_args: Additional SSH arguments
-        worker_id: Worker index for multi-worker TPUs (default: 0)
-    """
-    cmd = [
-        "gcloud",
-        "compute",
-        "tpus",
-        "tpu-vm",
-        "ssh",
-        tpu_name,
-        f"--zone={zone}",
-        f"--project={project}",
-        f"--worker={worker_id}",
-    ]
-
-    if extra_args:
-        cmd.extend(["--", *extra_args])
-
-    subprocess.run(cmd, check=True)

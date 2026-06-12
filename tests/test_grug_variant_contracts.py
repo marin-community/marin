@@ -27,10 +27,12 @@ from jax._src import config as jax_config
 from jax.sharding import use_abstract_mesh
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
-from levanter.data.text import DirectDatasetComponent, LmDataConfig
+from levanter.data.text import DatasetComponent, DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
+from levanter.grug.sharding import _compact_grug_mesh_shape
+from levanter.schedule import BatchSchedule
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 
@@ -54,6 +56,32 @@ def _discover_grug_variants_with_file(filename: str) -> list[str]:
 
 def _variant_module_name(variant: str, module: str) -> str:
     return f"experiments.grug.{variant}.{module}"
+
+
+def test_compact_grug_mesh_shape_allows_expert_axis_to_span_processes():
+    assert _compact_grug_mesh_shape(
+        process_count=32,
+        local_device_count=4,
+        expert_axis_size=16,
+        replica_axis_size=4,
+        model_axis_size=1,
+    ) == (4, 2, 16, 1)
+
+
+def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
+    """Standardized contract: compact_grug_mesh always carries the expert axis.
+
+    The data-loader and model code reference "expert" unconditionally; we keep the axis at
+    size 1 instead of dropping it so size-1 cases (e.g. the GPU canary) don't fall through
+    a separate "axis absent" code path. See #6252 for the bug this contract prevents.
+    """
+    assert _compact_grug_mesh_shape(
+        process_count=1,
+        local_device_count=4,
+        expert_axis_size=1,
+        replica_axis_size=1,
+        model_axis_size=1,
+    ) == (1, 4, 1, 1)
 
 
 def _variant_has_noverify(variant_dir: Path) -> bool:
@@ -100,6 +128,37 @@ def _small_model_config(model_config_cls, *, vocab_size: int, seq_len: int):
     field_names = {field.name for field in dataclasses.fields(model_config_cls)}
     kwargs = {k: v for k, v in base_kwargs.items() if k in field_names}
     return model_config_cls(**kwargs)
+
+
+def test_grug_moe_layer_masks_preserve_thd_segment_metadata():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mask = GrugAttentionMask.causal().with_segment_ids(
+        jnp.array([[0, 0, 1, 1, -1, -1]], dtype=jnp.int32),
+        max_segments=3,
+    )
+
+    short_mask, long_mask = model_module._layer_attention_masks(mask, sliding_window=12)
+
+    assert short_mask.thd_segment_metadata is mask.thd_segment_metadata
+    assert long_mask.thd_segment_metadata is mask.thd_segment_metadata
+    assert short_mask.segment_ids is mask.segment_ids
+    assert long_mask.segment_ids is mask.segment_ids
+
+
+def test_coreweave_thd_canary_uses_fixed_shape_training_segments(monkeypatch):
+    monkeypatch.setenv("CANARY_ACCELERATOR", "gpu")
+    monkeypatch.setenv("CANARY_ATTENTION_IMPLEMENTATION", "gpu_fa4_thd")
+    monkeypatch.setenv("CANARY_TRACKER", "json_logger")
+    monkeypatch.setenv("RUN_ID", "test-thd")
+
+    canary_ferry = importlib.import_module("experiments.ferries.canary_ferry")
+    canary_ferry = importlib.reload(canary_ferry)
+    data = canary_ferry.canary_moe_step.config.data
+
+    components = list(data.components.values())
+    assert components
+    assert all(isinstance(component, DatasetComponent) for component in components)
+    assert {component.pack for component in components} == {1}
 
 
 @pytest.mark.parametrize(
@@ -179,6 +238,66 @@ def test_grug_moe_variant_threads_moe_implementation_to_kernel():
         closed_jaxpr, _, _ = eqx.filter_make_jaxpr(one_step)()
 
     assert "ragged_all_to_all" in str(closed_jaxpr)
+
+
+def test_grug_moe_data_loaders_build_against_single_expert_mesh():
+    """Regression: build_train_loader / build_tagged_evaluator must work when the
+    compact mesh's expert axis has size 1 (canary configuration).
+
+    See https://github.com/marin-community/marin/issues/6252 — canary configurations
+    always have expert_axis_size == 1. Under the standardized
+    ``(replica_dcn, data, expert, model)`` contract the "expert" axis is kept at length 1
+    instead of being dropped, so the data-loader pspec can name it unconditionally.
+    """
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    compact_grug_mesh = importlib.import_module("levanter.grug.sharding").compact_grug_mesh
+
+    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+    assert mesh.shape.get("expert") == 1, "fixture must reproduce the canary single-expert layout"
+
+    dataset = ListAsyncDataset(
+        [
+            GrugLmExample(
+                tokens=jnp.zeros((4,), dtype=jnp.int32),
+                loss_weight=jnp.ones((4,), dtype=jnp.float32),
+                attn_mask=GrugAttentionMask.causal(),
+            )
+        ]
+    )
+    batch_schedule = BatchSchedule(max(1, len(jax.devices())))
+
+    # This used to raise: "Resource axis: expert ... is not found in mesh: (..., model)".
+    loader = train_module.build_train_loader(dataset, batch_schedule=batch_schedule, mesh=mesh)
+    assert loader is not None
+
+
+def test_grug_moe_model_init_against_single_expert_mesh():
+    """Regression: MoEMLP.init must build when the compact mesh's expert axis has size 1.
+
+    See https://github.com/marin-community/marin/issues/6252 — canary configurations
+    have expert_axis_size == 1. Under the standardized
+    ``(replica_dcn, data, expert, model)`` contract the "expert" axis is kept at length 1,
+    so MoEMLP.init reads ``mesh.shape["expert"] == 1`` rather than hitting an
+    "axis absent" branch.
+    """
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    compact_grug_mesh = importlib.import_module("levanter.grug.sharding").compact_grug_mesh
+
+    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+    assert mesh.shape.get("expert") == 1, "fixture must reproduce the canary single-expert layout"
+
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+
+    def build():
+        return train_module.initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh.abstract_mesh):
+        state_shape = eqx.filter_eval_shape(build)
+
+    assert state_shape.params is not None
 
 
 @pytest.mark.parametrize(

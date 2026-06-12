@@ -14,8 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import zstandard
-from rigging.filesystem import open_url
-from zephyr.writers import atomic_rename
+from rigging.filesystem import atomic_rename, open_url
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.ingestion_manifest import (

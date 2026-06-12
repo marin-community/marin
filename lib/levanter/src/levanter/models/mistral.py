@@ -68,6 +68,8 @@ class MistralConfig(LlamaConfig):
     use_bias: bool = False
     rope: RotaryEmbeddingsConfig = dataclasses.field(default_factory=DefaultRotaryEmbeddingsConfig)
 
+    reference_checkpoint: str = "mistralai/Mistral-7B-v0.1"
+
     # Axis
     @property
     def Embed(self) -> Axis:
@@ -79,16 +81,15 @@ class MistralConfig(LlamaConfig):
     Mlp = property(lambda self: Axis(name="mlp", size=self.intermediate_dim))
     HeadSize = property(lambda self: Axis(name="head_size", size=self.hidden_dim // self.num_heads))
 
-    def hf_checkpoint_converter(
+    # config-reuse subclass narrows to its own HF config/model type (LSP narrowing; mypy flags the same)
+    def hf_checkpoint_converter(  # pyrefly: ignore[bad-override]
         self, ref_checkpoint: Optional[str] = None
     ) -> HFCheckpointConverter["MistralConfig"]:  # type: ignore
-        hf_model_path = "mistralai/Mistral-7B-v0.1" if ref_checkpoint is None else ref_checkpoint
-
         return HFCheckpointConverter(
             self,
-            reference_checkpoint=hf_model_path,
+            reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
             trust_remote_code=True,
-            tokenizer=hf_model_path,
+            tokenizer=ref_checkpoint if self.tokenizer is None else self.tokenizer,
             HfConfigClass=HfMistralConfig,
         )
 
@@ -110,7 +111,9 @@ class MistralConfig(LlamaConfig):
             rope=rope_config,
         )
 
-    def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfMistralConfig:
+    def to_hf_config(  # pyrefly: ignore[bad-override]
+        self, vocab_size: int, config_overrides: Optional[Dict] = None
+    ) -> HfMistralConfig:
         """Convert to HuggingFace's MistralConfig
 
         Args:
@@ -144,7 +147,7 @@ class MistralConfig(LlamaConfig):
         )
 
     @property
-    def model_type(cls) -> Type["MistralLMHeadModel"]:
+    def model_type(cls) -> Type["MistralLMHeadModel"]:  # pyrefly: ignore[bad-override]
         return MistralLMHeadModel
 
     def flops_per_token(self, vocab_size: int, context_length: int) -> float:
@@ -179,7 +182,7 @@ class MistralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MistralCo
     lm_head: hnn.Linear
 
     @property
-    def config(self):
+    def config(self):  # pyrefly: ignore[bad-override]  # config-reuse: reuses LlamaTransformer
         return self.transformer.config
 
     @property

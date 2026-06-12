@@ -4,6 +4,7 @@
 """Tests for Worker class (includes PortAllocator and task management)."""
 
 import hashlib
+import json
 import socket
 import subprocess as sp
 import threading
@@ -13,7 +14,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from connectrpc.request import RequestContext
-from iris.cluster.log_store_helpers import worker_log_key
+from iris.cluster.log_keys import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import (
     ContainerConfig,
@@ -523,9 +524,9 @@ def test_stop_intent_by_uid_kills_live_twin(mock_worker, mock_runtime):
     live attempt by UID, then re-resolved by composite when killing — landing
     on the terminal twin, so the live attempt kept running.
     """
-    task_id, terminal, live = _terminal_and_live_twins(mock_worker, mock_runtime)
+    _task_id, terminal, live = _terminal_and_live_twins(mock_worker, mock_runtime)
 
-    mock_worker._process_stop_intent(task_id, 0, "uid-live")
+    mock_worker._process_stop_intent("uid-live")
 
     wait_for_condition(lambda: live.status == job_pb2.TASK_STATE_KILLED)
     live.thread.join(timeout=15.0)
@@ -771,7 +772,6 @@ def _worker_with_mock_client(config, mock_bundle_store, mock_runtime):
 def test_attach_log_handler_uses_worker_log_key_before_register(mock_bundle_store, mock_runtime, tmp_path):
     """Worker known locally (e.g. via slice_id) attaches under worker_log_key
     *before* register so pre-register failures ship remote logs."""
-
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
@@ -805,7 +805,6 @@ def test_attach_log_handler_noop_without_worker_id(mock_bundle_store, mock_runti
 
 def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runtime, tmp_path):
     """Re-attach under a new worker_id renames the handler's key in place."""
-
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
@@ -1247,7 +1246,6 @@ def test_preserve_containers_then_new_worker_adopts_with_live_log_client(mock_bu
     restart must end with adopted attempts pointed at the *new* worker's live
     client and tables.
     """
-
     container = _make_discovered_container(worker_id="worker-rt", attempt_uid="uid-roundtrip")
     # Same container survives across the stop/start; mock_runtime keeps reporting
     # it from discover_containers because preserve_containers=True leaves it
@@ -1413,7 +1411,6 @@ def test_task_attempt_adopt_factory():
 @pytest.mark.docker
 def test_docker_container_has_adoption_labels(docker_runtime, tmp_path):
     """Containers created by DockerRuntime should have adoption labels."""
-
     workdir = tmp_path / "workdir"
     workdir.mkdir()
 
@@ -1445,8 +1442,6 @@ def test_docker_container_has_adoption_labels(docker_runtime, tmp_path):
             check=True,
         )
 
-        import json
-
         labels = json.loads(result.stdout)
         assert labels["iris.managed"] == "true"
         assert labels["iris.task_id"] == "/test-user/test-job/0"
@@ -1462,7 +1457,6 @@ def test_docker_container_has_adoption_labels(docker_runtime, tmp_path):
 @pytest.mark.docker
 def test_docker_discover_containers(docker_runtime, tmp_path):
     """discover_containers() should find iris-managed containers."""
-
     workdir = tmp_path / "workdir"
     workdir.mkdir()
 
@@ -1503,7 +1497,6 @@ def test_docker_discover_containers(docker_runtime, tmp_path):
 @pytest.mark.docker
 def test_docker_adopt_container(docker_runtime, tmp_path):
     """adopt_container() should wrap an existing container."""
-
     workdir = tmp_path / "workdir"
     workdir.mkdir()
 
@@ -1544,7 +1537,6 @@ def test_docker_worker_restart_round_trip_adopts_surviving_container(docker_runt
     identity. This exercises the real discover_containers / adopt_container
     path through Worker.start(), which the mock-runtime test cannot.
     """
-
     workdir = tmp_path / "workdir"
     workdir.mkdir()
 

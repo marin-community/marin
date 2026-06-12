@@ -28,7 +28,8 @@ from levanter.checkpoint import (
     register_debug_checkpointer_state_provider,
     unregister_debug_checkpointer_state_provider,
 )
-from levanter.layers.attention import DEFAULT_SPLASH_BLOCK_SIZE, AttentionBackend
+from levanter.kernels.pallas.splash_attention import DEFAULT_SPLASH_BLOCK_SIZE
+from levanter.layers.attention import AttentionBackend
 from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SIZE
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.optim import OptimizerConfig

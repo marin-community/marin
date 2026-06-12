@@ -33,6 +33,16 @@ def local_gpt2_tokenizer(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
+def local_gpt2_tokenizer_path(tmp_path_factory) -> str:
+    """Path to a local GPT-2 tokenizer directory.
+
+    Lets HF roundtrip tests build an ``HFCheckpointConverter`` with a local
+    tokenizer (and no ``reference_checkpoint``) so they never reach the Hub.
+    """
+    return str(_gpt2_tokenizer_dir(tmp_path_factory))
+
+
+@pytest.fixture(scope="session")
 def local_gpt2_marin_tokenizer(tmp_path_factory) -> HfMarinTokenizer:
     """Load a GPT2 MarinTokenizer from a local JSON file to avoid network downloads."""
 

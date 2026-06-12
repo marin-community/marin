@@ -66,7 +66,19 @@ LARGE_EXTS = frozenset(
 )
 # Compressed record streams — individually moderate but usually many per job.
 MEDIUM_EXTS = frozenset({".jsonl.gz", ".json.gz", ".jsonl.zst", ".jsonl.xz", ".jsonl", ".csv.gz"})
-SMALL_EXTS = frozenset({".json", ".yaml", ".yml", ".txt", ".log", ".md", ".toml", ".csv", ".cfg", ".ini"})
+# `.lock` is distributed-lock coordination churn (a few bytes); it lives under
+# `checkpoints/`, so without an explicit small classification the path-pattern
+# override below would tag it `large`.
+SMALL_EXTS = frozenset({".json", ".yaml", ".yml", ".txt", ".log", ".md", ".toml", ".csv", ".cfg", ".ini", ".lock"})
+
+# Lowercased substrings that mark a whole log line as a non-transfer event — a
+# log-shipping retry or other diagnostic that names a gs:// path without moving
+# its bytes. Lines matching these are forced to the `small` tier regardless of
+# the path's extension, so they don't show up as large-egress offenders.
+SMALL_LINE_SUBSTRINGS = (
+    "failed to download logs",
+    "failed to upload logs",
+)
 
 
 def _extension(path: str) -> str:
@@ -102,6 +114,16 @@ def classify_size_tier(path: str) -> str:
     if "/documents/" in lower or "/tokenized/" in lower or "/data/" in lower:
         return "medium"
     return "unknown"
+
+
+def is_small_line(data: str) -> bool:
+    """True for log lines that name a gs:// path but move no bulk data.
+
+    These are diagnostics (log-shipping retries, etc.) — their paths should be
+    classified `small` so they don't surface as large-egress offenders.
+    """
+    lower = data.lower()
+    return any(sub in lower for sub in SMALL_LINE_SUBSTRINGS)
 
 
 def extract_user(task_id: str) -> str:
@@ -496,13 +518,16 @@ def analyze(
 
         user = extract_user(task_id)
         line_cross_region = False
+        # Diagnostic lines (log-shipping retries, etc.) name a path without
+        # moving its bytes — force their paths to the `small` tier.
+        small_line = is_small_line(data)
         for path in paths:
             parts = path.split("/", 3)
             bucket_name = parts[2] if len(parts) > 2 else ""
             if not bucket_name:
                 unknown_buckets["<empty>"] += 1
                 continue
-            size_tier = classify_size_tier(path)
+            size_tier = "small" if small_line else classify_size_tier(path)
             size_tier_counts[size_tier] += 1
             region = bucket_region(bucket_name, bucket_cache)
             if region is None:

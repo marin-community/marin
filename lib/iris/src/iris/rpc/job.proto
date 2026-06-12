@@ -610,17 +610,15 @@ message RunTaskRequest {
   // Controller-minted attempt routing key (16 hex chars). The worker echoes
   // it back on Reconcile observations so the controller can route by UID.
   string attempt_uid = 12;
-}
 
-// Deprecated. Kept for one release so pre-cutover clients don't crash on the
-// controller's missing RPC; the handler discards the payload and the data
-// flows through the iris.task_status finelog namespace now. Remove once all
-// clients are guaranteed to be running the new binary (deadline tracked in
-// the iris-status-cleanup cron reminder).
-message SetTaskStatusTextRequest {
-  string task_id = 1;
-  string status_text_detail_md = 2;
-  string status_text_summary_md = 3;
-}
+  // Coscheduling configuration for the owning job. Empty group_by => the job
+  // is not coscheduled. On the K8s direct path this drives Kueue gang
+  // admission: all pods carrying the same pod-group-name are admitted
+  // atomically. group_by additionally selects the topology the gang prefers
+  // (soft) or requires (hard) to land on.
+  CoschedulingConfig coscheduling = 13;
 
-message SetTaskStatusTextResponse {}
+  // Effective priority band for the owning job, used to select the Kueue
+  // WorkloadPriorityClass on the K8s direct path. UNSPECIFIED => INTERACTIVE.
+  PriorityBand priority = 14;
+}

@@ -67,12 +67,7 @@ class WorkerHealthTracker:
 
     def register(self, worker_id: WorkerId, *, now_ms: int) -> None:
         """Mark a worker as live with a fresh heartbeat. Resets failure counters."""
-        with self._lock:
-            state = self._states.setdefault(worker_id, WorkerLiveness())
-            state.last_heartbeat_ms = now_ms
-            state.healthy = True
-            state.active = True
-            state.consecutive_failures = 0
+        self.heartbeat([worker_id], now_ms)
 
     def heartbeat(self, worker_ids: Iterable[WorkerId], now_ms: int) -> None:
         """Record a successful heartbeat batch — bumps last_heartbeat_ms and resets health."""
