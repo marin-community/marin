@@ -10,6 +10,7 @@ knowledge of logical operation types.
 
 from __future__ import annotations
 
+import functools
 import heapq
 import logging
 from collections.abc import Callable, Iterable, Iterator
@@ -99,13 +100,17 @@ class Map:
 
 @dataclass
 class Write:
-    """Write stream to file, return path."""
+    """Write a stream to a file and yield the output path.
+
+    ``write_fn`` is the bound writer callable ``(records, output_path) ->
+    metadata``. The planner resolves it from the logical op's writer type (and
+    schema) so ``run_stage`` dispatches no string and never imports concrete
+    writer functions — consistent with the other physical ops.
+    """
 
     output_pattern: Callable[[int, int], str]  # (shard_idx, total_shards) → path
-    writer_type: str  # For chunk aggregation: "jsonl", "parquet", "binary", "vortex"
+    write_fn: Callable[[Iterable, str], object]  # (records, output_path) → metadata
     skip_existing: bool = False
-    # Writer-specific parameters
-    schema: Any = None  # For parquet
 
 
 @dataclass
@@ -250,6 +255,23 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
         return stream
 
     return pipeline
+
+
+def _writer_for(writer_type: str, schema: Any) -> Callable[[Iterable, str], object]:
+    """Bind a logical writer type (and optional schema) to its writer callable.
+
+    Resolved once at plan time so ``run_stage`` neither dispatches on a string
+    nor imports concrete writer functions.
+    """
+    if writer_type == "jsonl":
+        return write_jsonl_file
+    if writer_type == "binary":
+        return write_binary_file
+    if writer_type == "parquet":
+        return functools.partial(write_parquet_file, schema=schema)
+    if writer_type == "vortex":
+        return functools.partial(write_vortex_file, schema=schema)
+    raise ValueError(f"Unknown writer_type: {writer_type}")
 
 
 def compose_join(
@@ -434,9 +456,8 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
             state.add_op(
                 Write(
                     output_pattern=op.output_pattern,
-                    writer_type=op.writer_type,
+                    write_fn=_writer_for(op.writer_type, op.schema),
                     skip_existing=op.skip_existing,
-                    schema=op.schema,
                 )
             )
 
@@ -817,17 +838,7 @@ def run_stage(
                     yield output_path
                     return
 
-            if op.writer_type == "jsonl":
-                write_jsonl_file(stream, output_path)
-            elif op.writer_type == "parquet":
-                write_parquet_file(stream, output_path, schema=op.schema)
-            elif op.writer_type == "binary":
-                write_binary_file(stream, output_path)
-            elif op.writer_type == "vortex":
-                write_vortex_file(stream, output_path, schema=op.schema)
-            else:
-                raise ValueError(f"Unknown writer_type: {op.writer_type}")
-
+            op.write_fn(stream, output_path)
             yield output_path
             return
 
