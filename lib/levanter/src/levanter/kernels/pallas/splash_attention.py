@@ -47,6 +47,19 @@ class SplashAttentionMaskLowering:
     kernel_mask: splash_attention_mask.MultiHeadMask
 
 
+def splash_attention_mask_spec_from_attention_mask(mask) -> SplashAttentionMaskSpec:
+    """Convert an AttentionMask-like object to the static fields used by Splash lowering."""
+    return SplashAttentionMaskSpec(
+        is_causal=mask.is_causal,
+        causal_offset=mask.causal_offset,
+        sliding_window=mask.sliding_window,
+        prefix_length=mask.prefix_length,
+        has_prefix_lengths=mask.prefix_lengths is not None,
+        has_prefix_mask=mask.prefix_mask is not None,
+        has_explicit_mask=mask.explicit_mask is not None,
+    )
+
+
 @dataclass(frozen=True)
 class SplashSegmentIdsLowering:
     """Segment ID arrays and sharding metadata for Splash Attention."""

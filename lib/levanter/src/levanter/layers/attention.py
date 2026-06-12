@@ -18,10 +18,10 @@ from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_ke
 
 from levanter.kernels.pallas.splash_attention import (
     DEFAULT_SPLASH_BLOCK_SIZE,
-    SplashAttentionMaskSpec,
     lower_splash_attention_mask,
     lower_splash_segment_ids,
     prefix_lm_mask_infos,
+    splash_attention_mask_spec_from_attention_mask,
     splash_attention_block_sizes,
     splash_partition_spec_shard_factor,
 )
@@ -1156,15 +1156,7 @@ def _tpu_splash_attention(
         if mask is None:
             mask_spec = None
         elif isinstance(mask, AttentionMask):
-            mask_spec = SplashAttentionMaskSpec(
-                is_causal=mask.is_causal,
-                causal_offset=mask.causal_offset,
-                sliding_window=mask.sliding_window,
-                prefix_length=mask.prefix_length,
-                has_prefix_lengths=mask.prefix_lengths is not None,
-                has_prefix_mask=mask.prefix_mask is not None,
-                has_explicit_mask=mask.explicit_mask is not None,
-            )
+            mask_spec = splash_attention_mask_spec_from_attention_mask(mask)
         elif isinstance(mask, NamedArray):
             raise NotImplementedError("NamedArray masks are not yet supported for splash attention")
         else:

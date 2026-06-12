@@ -63,9 +63,11 @@ class AttentionMask(eqx.Module):
     1) Materialization: An AttentionMask can be materialized for a particular slice of the query and key position axes.
        Most naively, you can just get the whole mask as a NamedArray. However, in some cases, you might want to
        only get a particular chunk (e.g. for flash attention).
-    2) Combination: AttentionMasks are represented as an implicit conjunction of multiple masks, each with different
-        kinds of structure. You can combine masks with `&` and `|`. Due to the way jit works, we don't use inheritance
-        or similar to represent different kinds of masks. Instead, we use a single class with different fields.
+    2) Combination: AttentionMasks are represented as structured mask fields, then combined by the mask's semantics.
+        Most fields restrict attention by conjunction. Prefix-LM masks first OR prefix visibility with causal/local
+        visibility, then still apply explicit and segment masks. You can combine masks with `&` and `|`. Due to the way
+        jit works, we don't use inheritance or similar to represent different kinds of masks. Instead, we use a single
+        class with different fields.
 
     In general, it should be safe to batch Attention Masks, but it is important that *all members of a batch have the
     same set of combined masks*. Otherwise, the batching will not work and you'll get weird errors
