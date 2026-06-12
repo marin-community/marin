@@ -1,6 +1,6 @@
 ---
 plan: tighten-iris-control-boundaries-multi-backend-readiness
-status: in-progress
+status: complete
 ---
 
 # Tighten Iris control boundaries (multi-backend readiness)
@@ -20,10 +20,11 @@ status: in-progress
 > `BackendResult` name stays (the `*Result` swarm collapses, so the earlier naming concern is
 > moot).
 
-## Status — independent layer landed (2026-06-10)
+## Status — all tasks landed (2026-06-12)
 
-T1–T3 are merged to `main`; T4/T5 are the remaining sequenced work, plus one new task (T6)
-from the post-merge audit.
+T1–T6 are merged to `main`, plus two post-merge fixes (#6349, #6352) from the adversarial
+review of the T5×T6 composition. The remaining step is operational: restart `marin-dev` onto
+the new controller (user decision; see Open questions).
 
 | Task | PR | Outcome |
 |---|---|---|
@@ -31,8 +32,10 @@ from the post-merge audit.
 | T2 / I2 | #6295 | As specced. One `Scheduler` (backend-owned, `rpc/backend.py:152`); residual demand computed in the scheduling pass (`backend.py:283`) and returned on `ScheduleResult`; autoscaler loop consumes the cached `_last_residual_demand`; dry-run + second snapshot + controller `Scheduler` deleted. Demand-parity tests pin holder/taint/absorption semantics. Validated live on `marin-dev` (fineweb 10BT dedup end-to-end). |
 | T3 / I4 | #6294 | As specced. `reads.py` is the DB fan-out point; `ControlSnapshot{worker_addresses, reconcile_rows, timeout_rows, health}` built by `load_control_snapshot` in one read txn (`reads.py:1612`), health tracker attached by the controller. |
 | T4 / I3 | #6311 | Uniform `schedule`/`reconcile`/`autoscale`; ping + dispatch loops deleted (7→5 threads); health observed by backend, folded via one `WorkerHealthTracker.apply`; `placement`/`manages_capacity` deleted in favor of a `BackendCapability` descriptor consulted once at construction (+ service-RPC guards). **Design deltas:** results are three *method-specific* types (`ScheduleResult`/`ReconcileResult`/`AutoscaleResult`), each uniform across backends — better than the planned single fat `BackendResult`; `schedule` keeps `ScheduleInput` (genuinely different shape); the dispatch drain stays controller-side (it is a *write*). **Review caught a blocker the 1900-test suite couldn't:** the ping RPC was also the *workers'* keep-alive — reconcile now resets the worker heartbeat deadline. Detection latency is grace-based (`worker_unreachable_grace`=50s ÷ `poll_interval`); placement excludes failing workers while reconcile keeps probing them. **Rollout:** no churn-free deploy order (old workers decode `health` unset → reaped; old controller pings → gone on new workers); controller-first one-time churn recommended on marin-dev, optional one-release shim for prod. |
+| T5 / I1 | #6344 | As specced. One `control-loop` thread: snapshot → schedule → reconcile → fold health → autoscale → **single end-of-tick write txn** (`_commit_tick`); per-phase `due()`; wake → schedule-only mini-tick; `run_autoscale → run_schedule` invariant guarantees fresh same-tick residual demand (no cached handoff on the new path); legacy loops retained behind `single_control_tick` (default on). Honest exceptions to one-txn: CLUSTER_VIEW drains in a pre-read txn (documented); dead-worker teardown rides post-commit writes (matches legacy). **Post-merge review found** a stale `build_scheduling_context(db, ...)` call in `lib/iris/scripts/benchmark_controller.py` (pyrefly-uncovered; the same gap as T4's round) — fixed in #6349; structural fix tracked in #6348. |
+| T6 | #6343 | **Design delta — simpler than planned:** no operation-handle state machine. The detached threads were never necessary: TPU `create_slice` submits the LRO and returns, the persisted slice row *is* the operation handle, and the existing `BOOTING→READY/FAILED` `describe()` poll in `refresh()` is the polling mechanism. Shipped as plan → bounded parallel issue (`_run_io_batch`, joined in-phase) → serial fold; restart adoption reuses slice adoption unchanged. **Post-merge review refuted the boundedness claim for VM slices:** `vm_create` still blocked in `_wait_zone_operation` (600 s) — composed with T5's single tick this could stall reconcile (now the worker keep-alive) for 10 min on `GCP_SLICE_MODE_VM`. Fixed in #6352 (`wait: bool = False`, synthesized PROVISIONING `VmInfo`, token-refresh lock); tests sharpened to HTTP-boundary assertions in #6355. |
 
-**Verified post-merge state (audit of `main`):**
+**Verified post-merge state (audit of `main`, 2026-06-10 — after T1–T3, before T4–T6):**
 
 - **Still 7 `ManagedThread` loops** + uvicorn (`controller.py:493-541`): scheduling, polling/
   reconcile, ping, dispatch, prune, autoscaler, checkpoint. T4 deletes ping; T5 collapses
@@ -484,6 +487,8 @@ unifying the **input shape** (dispatch-drain vs reconcile-plan inputs both becom
 it from this task's scope.
 
 ### T5 — I1: collapse the fast loops into one phased control tick  `exec: session`  `value: high`  `deps: T1, T2, T4`
+**Done — #6344 (merged 2026-06-12).** See the status table for outcome + post-merge fix (#6349).
+
 One driver: snapshot → schedule → reconcile(+health events) → apply-thresholds → autoscale →
 **single end-of-tick commit**; per-phase `due()`; wake → schedule-only mini-tick; drop
 ping/dispatch/autoscaler loops; keep prune/checkpoint + the in-memory tracker. Acceptance: one
@@ -494,6 +499,12 @@ suite green; behind a fallback flag. Also fold the remaining control-path snapsh
 replace the `_last_residual_demand` cross-thread field with same-tick dataflow.
 
 ### T6 — autoscaler cloud ops become polled operations  `exec: session`  `value: medium`  `deps: T4`
+**Done — #6343 (merged 2026-06-12), simpler than specced.** No `AutoscalerState` operation
+handles: the slice row is the handle and `refresh()`'s `describe()` poll is the poller; the
+spec below survives as the *constraint* (every autoscale phase bounded, no detached threads,
+restart-adopted in-flight work) rather than the mechanism. VM-create boundedness completed by
+#6352. See the status table.
+
 Today `Autoscaler.update()` and `terminate_slices_for_workers` spawn detached fire-and-forget
 threads that block inside cloud calls (GCP `create_slice`/`terminate` wait up to the 600 s
 operation timeout). Replace with the poll workflow: the autoscale phase *issues* the cloud
@@ -526,12 +537,10 @@ apply path.
 3. ~~**T3 (I4)**~~ — done (#6294; `ControlSnapshot` with health view is now T4's input).
 4. ~~**T4 (I3)**~~ — done (#6311, merged 2026-06-12; two review rounds — the adversarial pass
    caught the worker-keep-alive blocker).
-5. **T5 (I1)** — next. The tick is then an ordering shell over functions
-   that already exist; also folds the remaining snapshot builders, kills the
-   `_last_residual_demand` cross-thread handoff, and absorbs T4's deferred doc nits.
-   Fallback flag; `marin-dev` bake (which doubles as T4's rollout churn validation).
-6. **T6** — after T4 (the autoscale phase is the natural home for issue-then-poll); independent
-   of T5 and can land in parallel with it.
+5. ~~**T5 (I1)**~~ — done (#6344, merged 2026-06-12; post-merge fix #6349). The `marin-dev`
+   bake is still pending and doubles as the T4/T5 rollout churn validation.
+6. ~~**T6**~~ — done (#6343, merged 2026-06-12 in parallel with T5; post-merge fix #6352,
+   test sharpening #6355).
 
 **Risk register:**
 
@@ -554,8 +563,11 @@ apply path.
 - *Multi-backend itself is out of scope* — these five make it tractable; `BackendRegistry` +
   `cluster=` routing is a follow-on once T4 + T5 land.
 
-**Shipped:** T1, T2, T3. **Sequenced:** T4 (after T2+T3) → T5 (after T1, T2, T4) ∥ T6 (after
-T4). Estimated ~3–4 remaining focused sessions.
+**Shipped:** all of T1–T6 (+ post-merge fixes #6349/#6352). End state vs the six constraints:
+3 control threads (tick + prune + checkpoint); DB touched only at snapshot/commit boundaries;
+backends operate, controller serializes; every per-tick cloud call is a single bounded
+submission polled by `refresh()`; one RPC per idea (Ping deleted — reconcile is the
+keep-alive); scheduler↔autoscaler synchronized by same-tick dataflow.
 
 ## Decisions & open questions
 
@@ -582,12 +594,22 @@ T4). Estimated ~3–4 remaining focused sessions.
 - **Placement vs probing filters split**: scheduling excludes `consecutive_failures > 0`;
   reconcile targets all active workers.
 
+**Decided since (T5/T6 review):**
+- **Observation resolution (I3) settled as a hybrid:** the backend emits liveness events
+  (REACHED/UNREACHABLE from its own I/O) while BUILD_FAILED is controller-synthesized in
+  `_fold_health` from kernel effects; thresholds resolve controller-side in one
+  `WorkerHealthTracker.apply`.
+- **No poll budget needed (T6):** with no operation-handle machinery, the only per-phase cloud
+  calls are single bounded HTTP submissions plus one `describe()` per non-ready slice; the
+  in-phase `_run_io_batch` join makes phase duration = slowest single call. This puts a hard
+  contract on platform methods — `create_slice`/`terminate` must submit-and-return (the
+  `vm_create` violation was the one post-merge blocker, #6352).
+- **The tick has no per-phase watchdog by design** (consistent with the T1 decision): its
+  liveness leans on the bounded-submission contract above, not on timeouts around phases.
+
 **Open:**
-- **T4 rollout order** (one-time controller-first churn vs one-release Ping/health-unset shim) —
-  user decision at deploy time; analysis on PR #6311.
-- **Observation resolution (I3):** backend returns raw observations and the controller resolves
-  in the pure kernel (recommended), vs backend pre-resolves against the in-memory snapshot.
+- **Rollout** (now covers T4+T5+T6 together — one `marin-dev` restart validates all of it):
+  one-time controller-first churn vs one-release Ping/health-unset shim — user decision at
+  deploy time; analysis on PR #6311.
 - **`cluster=` routing (follow-on):** hard constraint resolved by a pre-scheduler dispatcher
   that partitions tasks per backend, or inside each backend's eligibility filter?
-- **T6 poll budget:** the per-phase cap on operation-status polls (the issue call itself can be
-  bounded at the HTTP layer, e.g. GCP's 30 s POST timeout).
