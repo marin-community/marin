@@ -12,6 +12,7 @@ from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.moe.adamh import scale_by_adamh
+from experiments.grug.moe.klsoaph import scale_by_klsoaph
 
 
 def _target_named_sharding(array) -> jax.sharding.NamedSharding | None:
@@ -312,3 +313,142 @@ __all__ = [
     "GrugMoeMuonHConfig",
     "scale_with_grug_muonh",
 ]
+
+
+def _uses_klsoaph_baseline_adam_group(path_lower: str) -> bool:
+    """KL Soap H variant override: route attn_gate into the matrix group.
+
+    Same as the MuonH baseline-Adam predicate but drops "attn_gate" — the
+    attention gate (hidden_dim, num_heads) is kept under the SOAP preconditioner.
+    """
+    return "token_embed" in path_lower or "router_bias" in path_lower or ".router" in path_lower
+
+
+def scale_with_grug_klsoaph(
+    beta1: float = 0.95,
+    beta2: float = 0.9,
+    shampoo_beta: float = 0.9,
+    eps: float = 1e-8,
+    precond_freq: int = 1,
+    init_factor: float = 0.1,
+    learning_rate: float = 0.018,
+) -> optax.GradientTransformation:
+    """KL Soap H: full-matrix SOAP-eigenbasis Adam direction + hyperball post-step.
+
+    Reproduces KLSOAPH from KellerJordan/modded-nanogpt PR #290 on the full
+    per-leaf matrix (no block tiling). The scale-invariant ("hyperball")
+    post-step normalizes the full update. Default (beta1, beta2, shampoo_beta)
+    = (0.95, 0.9, 0.9) matches upstream's passing tuple; precond_freq=1.
+    """
+    soap_transform = scale_by_klsoaph(
+        beta1=beta1,
+        beta2=beta2,
+        shampoo_beta=shampoo_beta,
+        eps=eps,
+        precond_freq=precond_freq,
+        init_factor=init_factor,
+    )
+
+    def init_fn(params):
+        return soap_transform.init(params)
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("scale_with_grug_klsoaph requires params for norm-preserving updates")
+        direction, next_state = soap_transform.update(updates, state, params)
+        klsoaph_updates = _scale_invariant_hyperball_updates(params, direction, learning_rate)
+        return klsoaph_updates, next_state
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
+@OptimizerConfig.register_subclass("grug_moe_klsoaph_v1")
+@dataclass(frozen=True)
+class GrugMoeKLSoapHConfig(OptimizerConfig):
+    """KL Soap H for Grug MoE (full-matrix SOAP + hyperball).
+
+    Reproduces KLSOAPH from KellerJordan/modded-nanogpt PR #290. "KL" names the
+    scale-invariant ("hyperball") post-step. Routing mirrors MuonH but routes
+    attn_gate into the SOAP matrix group:
+    - klsoaph: matrix leaves (incl. attn_gate, gated_norm, experts)
+    - adamh: lm_head / output_proj
+    - adam: token_embed / router / router_bias
+    """
+
+    adam_lr: float = 6e-4
+    # (beta1, beta2, shampoo_beta) = upstream "passing" tuple from PR #290.
+    beta1: float = 0.95
+    beta2: float = 0.9
+    shampoo_beta: float = 0.9
+    epsilon: float = 1e-8
+    precond_freq: int = 1
+    init_factor: float = 0.1
+    max_grad_norm: float | None = 1.0
+
+    def build(self, num_train_steps):
+        learning_rate_schedule = self.lr_scheduler(num_train_steps)
+        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+
+        def optimizer(learning_rate, adam_lr):
+            def klsoaph_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(
+                    scale_with_grug_klsoaph(
+                        beta1=self.beta1,
+                        beta2=self.beta2,
+                        shampoo_beta=self.shampoo_beta,
+                        eps=self.epsilon,
+                        precond_freq=self.precond_freq,
+                        init_factor=self.init_factor,
+                        learning_rate=learning_rate,
+                    )
+                )
+                components.append(_match_named_update_sharding())
+                return optax.chain(*components)
+
+            def adamh_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate))
+                return optax.chain(*components)
+
+            def adam_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale(-adam_lr))
+                return optax.chain(*components)
+
+            return optax.multi_transform(
+                {
+                    "klsoaph": klsoaph_transform(),
+                    "adamh": adamh_transform(),
+                    "adam": adam_transform(),
+                },
+                self.create_mask,
+            )
+
+        return optax.inject_hyperparams(optimizer)(
+            learning_rate=learning_rate_schedule,
+            adam_lr=adam_lr_schedule,
+        )
+
+    def create_mask(self, params):
+        paths = leaf_key_paths(params)
+
+        def mask_fn(param, path):
+            path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+            path_lower = path_str.lower()
+            if _uses_klsoaph_baseline_adam_group(path_lower):
+                return "adam"
+            if "output_proj" in path_lower or "lm_head" in path_lower:
+                return "adamh"
+            if hasattr(param, "ndim") and param.ndim in (2, 3):
+                return "klsoaph"
+            return "adam"
+
+        return jax.tree.map(mask_fn, params, paths)
