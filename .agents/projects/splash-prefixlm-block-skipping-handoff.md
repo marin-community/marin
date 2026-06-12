@@ -27,7 +27,7 @@ Target hardware for validation and tuning:
 - Draft PR: https://github.com/marin-community/marin/pull/6330
 - Latest local change: `packed_causal_segment_run_mask_infos(...)` now builds compact segment-run `MaskInfo` directly from contiguous segment intervals instead of first materializing dense block payloads; tests now cover inactive padded segment slots and many-short-doc layouts.
 - Local validation at the direct-builder head:
-  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py lib/levanter/tests/kernels/test_bench_splash_attention_masks.py -q` -> `25 passed`.
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py lib/levanter/tests/kernels/test_bench_splash_attention_masks.py -q` -> `27 passed`.
   - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'prefix_lm or sliding_window_mask or segment_runs' -q` -> `6 passed`.
   - `./infra/pre-commit.py --changed-files --fix` -> passed.
   - `timeout 900 ./infra/pre-commit.py --review --agent-command='env RUST_LOG=error codex exec --ignore-user-config --ephemeral --dangerously-bypass-approvals-and-sandbox'` -> no findings.
@@ -38,6 +38,10 @@ Target hardware for validation and tuning:
   - 8192 B=2 Alpaca steady medians: static causal `1.200 ms`; packed causal segment `1.692 ms`; packed segment-runs `9.352 ms`; packed prefix-LM `1.755 ms`; dense references `1.857-1.870 ms`.
   - The compact gather fix fixed the previous v5p regression: packed prefix-LM went from `110.432 ms` to about `4.5 ms` at 16384.
 - Current decision: do not promote segment-run metadata as the default packed causal path yet. Generic packed segment metadata is faster on v5p, especially for B=2 Alpaca-style many-doc layouts. Segment-run metadata remains useful as an experimental THD-style path while schedule/metadata-shape overhead is investigated.
+- v5e/v6e compatibility at `7c80f737d` is confirmed:
+  - v5e parity passed; 8192 equal-doc medians: packed causal segment `3.965 ms`, packed prefix-LM `3.947 ms`, dense references about `5.48 ms`; 16384 packed causal segment `11.074 ms`, packed prefix-LM `11.196 ms`.
+  - v6e parity passed; 8192 equal-doc medians: packed causal segment `2.768 ms`, packed prefix-LM `2.884 ms`, dense references about `3.22-3.25 ms`; 16384 packed causal segment `7.622 ms`, packed prefix-LM `7.686 ms`.
+  - Segment-runs remain slower on both families, especially B=2 Alpaca layouts.
 
 ## What Changed So Far
 

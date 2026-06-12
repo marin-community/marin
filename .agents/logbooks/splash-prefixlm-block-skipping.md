@@ -441,3 +441,27 @@
   - 8192 B=2 Alpaca steady medians: static causal `1.200 ms`; packed causal segment `1.692 ms`; packed segment-runs `9.352 ms`; packed prefix-LM `1.755 ms`; dense references `1.857-1.870 ms`.
 - Interpretation: Direct segment-run metadata is correctness-preserving but does not improve v5p steady-state timing versus the previous segment-run run (`3.362 -> 3.385 ms` at 8192 and `6.573 -> 6.619 ms` at 16384, within noise/slightly slower). The generic packed segment path remains the best current segment-ID block-skipping path (`4.402 ms` at 16384 versus dense fallback previously `~110 ms`, and `1.692 ms` on B=2 Alpaca versus dense references around `1.86 ms`). Segment-run metadata should stay opt-in/experimental until we find why its dynamic metadata shape stresses Splash.
 - Next action: Do not promote segment-run metadata as the default packed causal path. Investigate segment-run `MaskInfo` shape/capacity and Splash schedule differences before more implementation work; v5e/v6e remain unverified.
+
+### 2026-06-12 07:17 - v5e/v6e compatibility benchmark
+- Hypothesis: The packed segment and packed prefix-LM block-skipping paths should compile and preserve the same relative speedup on v5e/v6e with generation-specific scoped VMEM settings.
+- Command:
+  - Subagent Newton validated commit `7c80f737d778a2b9c25ef5ac707a79d62e884169`.
+  - `uv run --project lib/levanter --group test python -m pytest -n0 lib/levanter/tests/test_attention.py -k test_tpu_splash_attention_batched_masks`
+  - `uv run --project lib/levanter python lib/levanter/scripts/bench/bench_splash_attention_masks.py --seq-len 8192 --block-size 512 --docs-per-sequence 4 --prefix-tokens-per-doc 256 --iterations 5 --warmup 2 --include-dense`
+  - `uv run --project lib/levanter python lib/levanter/scripts/bench/bench_splash_attention_masks.py --seq-len 16384 --block-size 512 --docs-per-sequence 4 --prefix-tokens-per-doc 512 --iterations 5 --warmup 2`
+  - `uv run --project lib/levanter python lib/levanter/scripts/bench/bench_splash_attention_masks.py --seq-len 8192 --block-size 512 --batch 2 --doc-lengths '<two Alpaca layouts>' --iterations 5 --warmup 2 --include-dense`
+- Config:
+  - v5e used configured Iris type `v5litepod-8` because literal `v5e-8` has no `tpu:v5e-8` scaling group. Worker `marin-tpu-v5e-serving-8-us-west4-a-20260612-0613-de6bdf68`, zone `us-west4-a`, IP `10.182.0.4`, `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`.
+  - v6e used `v6e-8`. Worker `marin-tpu-v6e-preemptible-8-europe-west4-20260612-0411-a28a9421`, zone `europe-west4-a`, IP `10.164.0.29`, `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304`.
+  - Both holders were released and verified as killed.
+- Result:
+  - v5e parity passed: `5 passed, 76 deselected, 7 warnings in 34.71s`.
+  - v6e parity passed: `5 passed, 76 deselected, 7 warnings in 32.33s`.
+  - v5e 8192 equal-doc steady medians: static causal `2.043 ms`; packed causal segment `3.965 ms`; packed segment-runs `6.114 ms`; packed prefix-LM `3.947 ms`; dense references `5.474-5.485 ms`.
+  - v5e 16384 equal-doc steady medians: static causal `6.186 ms`; packed causal segment `11.074 ms`; packed segment-runs `11.881 ms`; packed prefix-LM `11.196 ms`.
+  - v5e 8192 B=2 Alpaca steady medians: static causal `2.051 ms`; packed causal segment `4.035 ms`; packed segment-runs `17.285 ms`; packed prefix-LM `4.188 ms`; dense references `5.482-5.510 ms`.
+  - v6e 8192 equal-doc steady medians: static causal `1.841 ms`; packed causal segment `2.768 ms`; packed segment-runs `5.092 ms`; packed prefix-LM `2.884 ms`; dense references `3.221-3.250 ms`.
+  - v6e 16384 equal-doc steady medians: static causal `5.488 ms`; packed causal segment `7.622 ms`; packed segment-runs `10.273 ms`; packed prefix-LM `7.686 ms`.
+  - v6e 8192 B=2 Alpaca steady medians: static causal `1.853 ms`; packed causal segment `2.834 ms`; packed segment-runs `14.325 ms`; packed prefix-LM `3.040 ms`; dense references `3.197-3.317 ms`.
+- Interpretation: v5e and v6e compatibility is confirmed for the current packed prefix-LM and packed segment block-skipping paths. The packed segment and packed prefix-LM paths beat dense references at 8192 on both families. Segment-run metadata remains materially slower, especially for many-doc Alpaca layouts, so it remains experimental.
+- Next action: Wait for the rerun of the transient Levanter unit CI failure, then decide whether to move the PR out of draft or keep tuning segment-run metadata in a follow-up branch.
