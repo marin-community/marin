@@ -95,10 +95,6 @@ class FakeWorkerHandle:
         return f"http://{self._internal_address}:10001"
 
     @property
-    def external_address(self) -> str | None:
-        return None
-
-    @property
     def bootstrap_log(self) -> str:
         return ""
 
@@ -128,9 +124,6 @@ class FakeWorkerHandle:
 
     def bootstrap(self, script: str) -> None:
         self.bootstrap_calls.append(script)
-
-    def reboot(self) -> None:
-        pass
 
     def terminate(self, *, wait: bool = False) -> None:
         self.terminated = True

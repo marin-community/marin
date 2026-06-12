@@ -349,10 +349,6 @@ class InMemoryGcpService:
         self._check_injected_failure("vm_delete")
         self._vms.pop((name, zone), None)
 
-    def vm_reset(self, name: str, zone: str) -> None:
-        self._check_injected_failure("vm_reset")
-        # DRY_RUN / LOCAL: no-op (VM stays in same state)
-
     def vm_describe(self, name: str, zone: str) -> VmInfo | None:
         self._check_injected_failure("vm_describe")
         return self._vms.get((name, zone))
