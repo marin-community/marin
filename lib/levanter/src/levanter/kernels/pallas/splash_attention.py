@@ -450,22 +450,34 @@ def _compact_partial_mask_blocks(
 ) -> tuple[jax.Array, jax.Array]:
     q_blocks, kv_blocks, block_q, block_kv = partial_mask_blocks.shape
     flat_blocks = partial_mask_blocks.reshape(q_blocks * kv_blocks, block_q, block_kv)
-    is_partial = block_mask.reshape(-1) == BLOCK_MASK_PARTIAL
-    partial_indices = jnp.cumsum(is_partial.astype(jnp.int32), dtype=jnp.int32) - 1
-    num_partial = jnp.sum(is_partial.astype(jnp.int32), dtype=jnp.int32)
+    partial_indexing = _partial_block_indexing(block_mask, q_blocks=q_blocks, kv_blocks=kv_blocks)
 
-    partial_flat_indices = jnp.nonzero(is_partial, size=partial_capacity, fill_value=0)[0]
+    partial_flat_indices = jnp.nonzero(partial_indexing.is_partial, size=partial_capacity, fill_value=0)[0]
     compact_blocks = flat_blocks[partial_flat_indices]
-    valid_slots = jnp.arange(partial_capacity, dtype=jnp.int32) < num_partial
+    valid_slots = jnp.arange(partial_capacity, dtype=jnp.int32) < partial_indexing.num_partial
     compact_blocks = jnp.where(valid_slots[:, None, None], compact_blocks, False)
     compact_blocks = eqx.error_if(
         compact_blocks,
-        num_partial > partial_capacity,
+        partial_indexing.num_partial > partial_capacity,
         PARTIAL_BLOCK_CAPACITY_ERROR,
     )
 
+    return compact_blocks, partial_indexing.mask_next
+
+
+@dataclass(frozen=True)
+class _PartialBlockIndexing:
+    is_partial: jax.Array
+    num_partial: jax.Array
+    mask_next: jax.Array
+
+
+def _partial_block_indexing(block_mask: jax.Array, *, q_blocks: int, kv_blocks: int) -> _PartialBlockIndexing:
+    is_partial = block_mask.reshape(-1) == BLOCK_MASK_PARTIAL
+    partial_indices = jnp.cumsum(is_partial.astype(jnp.int32), dtype=jnp.int32) - 1
+    num_partial = jnp.sum(is_partial.astype(jnp.int32), dtype=jnp.int32)
     mask_next = jnp.where(is_partial, partial_indices, 0).reshape(1, q_blocks, kv_blocks)
-    return compact_blocks, mask_next
+    return _PartialBlockIndexing(is_partial=is_partial, num_partial=num_partial, mask_next=mask_next)
 
 
 def _packed_dynamic_mask_info_from_components(
@@ -655,10 +667,7 @@ def _segment_run_dynamic_mask_info(
         block_q=block_q,
         block_kv=block_kv,
     )
-    is_partial = block_mask.reshape(-1) == BLOCK_MASK_PARTIAL
-    partial_indices = jnp.cumsum(is_partial.astype(jnp.int32), dtype=jnp.int32) - 1
-    num_partial = jnp.sum(is_partial.astype(jnp.int32), dtype=jnp.int32)
-    mask_next = jnp.where(is_partial, partial_indices, 0).reshape(1, q_blocks, kv_blocks)
+    partial_indexing = _partial_block_indexing(block_mask, q_blocks=q_blocks, kv_blocks=kv_blocks)
 
     compact_mask_blocks = _segment_run_partial_mask_blocks(
         segment_lengths=segment_lengths,
@@ -667,20 +676,20 @@ def _segment_run_dynamic_mask_info(
         kv_blocks=kv_blocks,
         block_q=block_q,
         block_kv=block_kv,
-        is_partial=is_partial,
-        num_partial=num_partial,
+        is_partial=partial_indexing.is_partial,
+        num_partial=partial_indexing.num_partial,
         partial_capacity=partial_capacity,
     )
     compact_mask_blocks = eqx.error_if(
         compact_mask_blocks,
-        num_partial > partial_capacity,
+        partial_indexing.num_partial > partial_capacity,
         PARTIAL_BLOCK_CAPACITY_ERROR,
     )
 
     return _packed_dynamic_mask_info_from_components(
         block_mask=block_mask,
         compact_mask_blocks=compact_mask_blocks,
-        mask_next=mask_next,
+        mask_next=partial_indexing.mask_next,
         q_blocks=q_blocks,
         kv_blocks=kv_blocks,
         role=role,

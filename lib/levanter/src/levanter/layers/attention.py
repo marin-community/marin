@@ -8,7 +8,7 @@ import math
 import warnings
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, Optional, Union, cast
+from typing import Literal, Optional, TypedDict, Union, cast
 
 import equinox as eqx
 import jax
@@ -557,7 +557,10 @@ def _te_flash_attention(
     # references: https://github.com/NVIDIA/TransformerEngine/blob/8255f87f3ee8076db21777795ce15b6ddf8754c0/transformer_engine/jax/fused_attn.py#L31
     # https://github.com/NVIDIA/TransformerEngine/blob/8255f87f3ee8076db21777795ce15b6ddf8754c0/transformer_engine/jax/flax/transformer.py#L269
 
-    q_class, k_class, v_class = _bin_and_group_axes_by_function(query, key, value, QPos, KPos, Key)
+    axis_bins = _bin_and_group_axes_by_function(query, key, value, QPos, KPos, Key)
+    q_class = axis_bins.q
+    k_class = axis_bins.k
+    v_class = axis_bins.v
     q_: jax.Array = _reshape_axes_for_bshd_bins(query, q_class).array
     k_ = _reshape_axes_for_bshd_bins(key, k_class).array
     v_ = _reshape_axes_for_bshd_bins(value, v_class).array
@@ -689,7 +692,21 @@ _DUMMY_HEAD = "__head__"
 _DUMMY_BATCH = "__batch__"
 
 
-def _bin_and_group_axes_by_function(q, k, v, QPos, KPos, Key):
+class _AxisBins(TypedDict):
+    B: list[Axis]
+    S: list[Axis]
+    H: list[Axis]
+    D: list[Axis]
+
+
+@dataclass(frozen=True)
+class _QkvAxisBins:
+    q: _AxisBins
+    k: _AxisBins
+    v: _AxisBins
+
+
+def _bin_and_group_axes_by_function(q, k, v, QPos, KPos, Key) -> _QkvAxisBins:
     """
     NVTE and the Splash Attention kernel require the Q, K, and V to be in a specific format. This function groups the axes
     of Q, K, and V into the right bins to match that format.
@@ -716,9 +733,9 @@ def _bin_and_group_axes_by_function(q, k, v, QPos, KPos, Key):
     KPos = k.resolve_axis(KPos)
     Key = q.resolve_axis(Key)
 
-    q_class = {"B": [], "S": [QPos], "H": [], "D": [Key]}
-    k_class = {"B": [], "S": [KPos], "H": [], "D": [Key]}
-    v_class = {"B": [], "S": [KPos], "H": [], "D": [Key]}
+    q_class: _AxisBins = {"B": [], "S": [QPos], "H": [], "D": [Key]}
+    k_class: _AxisBins = {"B": [], "S": [KPos], "H": [], "D": [Key]}
+    v_class: _AxisBins = {"B": [], "S": [KPos], "H": [], "D": [Key]}
 
     present_in_all: set[str] = q.shape.keys() & k.shape.keys() & v.shape.keys()
     spoken_for: set[str] = {QPos.name, KPos.name, Key.name}
@@ -767,7 +784,7 @@ def _bin_and_group_axes_by_function(q, k, v, QPos, KPos, Key):
         if a.name not in spoken_for:
             raise ValueError(f"Axis {a.name} is present in v but not in q and/or k")
 
-    return q_class, k_class, v_class
+    return _QkvAxisBins(q=q_class, k=k_class, v=v_class)
 
 
 def _maybe_flatten(q, axes, name):
@@ -961,9 +978,9 @@ class _SplashPreparedLayout:
     q: jax.Array
     k: jax.Array
     v: jax.Array
-    q_class: dict
-    k_class: dict
-    v_class: dict
+    q_class: _AxisBins
+    k_class: _AxisBins
+    v_class: _AxisBins
     QPos: Axis
     KPos: Axis
     batch: int
@@ -1515,7 +1532,10 @@ def _prepare_splash_layout(
     scaling_factor: float,
     block_size: int | None,
 ) -> _SplashPreparedLayout:
-    q_class, k_class, v_class = _bin_and_group_axes_by_function(query, key, value, QPos, KPos, Key)
+    axis_bins = _bin_and_group_axes_by_function(query, key, value, QPos, KPos, Key)
+    q_class = axis_bins.q
+    k_class = axis_bins.k
+    v_class = axis_bins.v
     query = query * scaling_factor
 
     q: jax.Array = _reshape_axes_for_bshd_bins(query, q_class, output_order=list("BHSD")).array
@@ -1765,6 +1785,100 @@ def _tpu_splash_attention(
         logits_soft_cap=logits_soft_cap,
         attn_sink=attn_sink,
     )
+    return _run_prepared_tpu_splash_attention(
+        QPos,
+        KPos,
+        Key,
+        query,
+        key,
+        value,
+        mask=mask,
+        bias=bias,
+        dropout=dropout,
+        inference=inference,
+        prng=prng,
+        attention_dtype=attention_dtype,
+        precision=precision,
+        scaling_factor=scaling_factor,
+        layout=layout,
+        invocation=invocation,
+    )
+
+
+def _run_prepared_tpu_splash_attention(
+    QPos: AxisSelector,
+    KPos: AxisSelection,
+    Key: AxisSelector,
+    query: NamedArray,
+    key: NamedArray,
+    value: NamedArray,
+    mask: Optional[Union[NamedArray, "AttentionMask"]] = None,
+    bias: Optional[NamedArray] = None,
+    dropout: float = 0.0,
+    inference: bool = False,
+    *,
+    prng: Optional[PRNGKeyArray] = None,
+    attention_dtype: Optional[jnp.dtype] = None,
+    precision: PrecisionLike = None,
+    scaling_factor: float,
+    layout: _SplashPreparedLayout,
+    invocation: _SplashInvocationPlan,
+) -> NamedArray:
+    """Run Splash Attention with a precomputed mask/kernel invocation plan."""
+    if dropout != 0.0:
+        raise NotImplementedError("Splash attention does not support dropout")
+
+    if bias is not None:
+        raise NotImplementedError("Splash attention does not support bias")
+
+    scaled_query = query * scaling_factor
+    q: jax.Array = _reshape_axes_for_bshd_bins(scaled_query, layout.q_class, output_order=list("BHSD")).array
+    k = _reshape_axes_for_bshd_bins(key, layout.k_class, output_order=list("BHSD")).array
+    v = _reshape_axes_for_bshd_bins(value, layout.v_class, output_order=list("BHSD")).array
+
+    return _run_prepared_tpu_splash_attention_arrays(
+        QPos,
+        KPos,
+        Key,
+        query,
+        key,
+        value,
+        q,
+        k,
+        v,
+        mask=mask,
+        bias=bias,
+        dropout=dropout,
+        inference=inference,
+        prng=prng,
+        attention_dtype=attention_dtype,
+        precision=precision,
+        layout=layout,
+        invocation=invocation,
+    )
+
+
+def _run_prepared_tpu_splash_attention_arrays(
+    QPos: AxisSelector,
+    KPos: AxisSelection,
+    Key: AxisSelector,
+    query: NamedArray,
+    key: NamedArray,
+    value: NamedArray,
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    mask: Optional[Union[NamedArray, "AttentionMask"]] = None,
+    bias: Optional[NamedArray] = None,
+    dropout: float = 0.0,
+    inference: bool = False,
+    *,
+    prng: Optional[PRNGKeyArray] = None,
+    attention_dtype: Optional[jnp.dtype] = None,
+    precision: PrecisionLike = None,
+    layout: _SplashPreparedLayout,
+    invocation: _SplashInvocationPlan,
+) -> NamedArray:
     kernel_plan = invocation.kernel_plan
 
     @functools.partial(
@@ -1805,9 +1919,9 @@ def _tpu_splash_attention(
         )(q, k, v, segment_ids, sinks, kernel)
 
     attn_output = wrap_flash_attention(
-        layout.q,
-        layout.k,
-        layout.v,
+        q,
+        k,
+        v,
         kernel_plan.segment_id_lowering.segment_ids,
         invocation.sinks,
         kernel_plan.kernel,

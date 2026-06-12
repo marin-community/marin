@@ -25,12 +25,18 @@ Target hardware for validation and tuning:
 ## Current Status, 2026-06-12
 
 - Draft PR: https://github.com/marin-community/marin/pull/6330
-- Latest local change: `packed_causal_segment_run_mask_infos(...)` now builds compact segment-run `MaskInfo` directly from contiguous segment intervals instead of first materializing dense block payloads; tests now cover inactive padded segment slots and many-short-doc layouts.
-- Local validation at the direct-builder head:
+- Latest local change: `_tpu_splash_attention(...)` now separates Splash layout and invocation-plan preparation from prepared kernel execution. The benchmark harness can run a fake multi-layer residual stack with `--layers N`, preparing Splash metadata once per mask variant and reusing it across layer calls.
+- Local validation at the prepared-plan head:
   - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py lib/levanter/tests/kernels/test_bench_splash_attention_masks.py -q` -> `27 passed`.
   - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'prefix_lm or sliding_window_mask or segment_runs' -q` -> `6 passed`.
   - `./infra/pre-commit.py --changed-files --fix` -> passed.
   - `timeout 900 ./infra/pre-commit.py --review --agent-command='env RUST_LOG=error codex exec --ignore-user-config --ephemeral --dangerously-bypass-approvals-and-sandbox'` -> no findings.
+- Latest current-workspace v5p amortized evidence:
+  - Worker `marin-tpu-v5p-preemptible-8-us-east5-a-20260612-1147-84c53e43`, holder `/dlwh/dev-tpu-dlwh-splash-amortized-v5p`, released and verified killed after the run.
+  - 8192 equal-doc single-layer steady medians: static causal `1.181 ms`; static prefix-LM `1.184 ms`; packed causal segment `1.721 ms`; packed segment-runs `3.413 ms`; packed prefix-LM `1.802 ms`.
+  - 8192 equal-doc 20-layer per-layer steady medians with prepared-plan reuse: static causal `0.781 ms`; static prefix-LM `0.801 ms`; packed causal segment `0.576 ms`; packed segment-runs `0.569 ms`; packed prefix-LM `0.576 ms`.
+  - Block counts: static causal/static prefix-LM visited `136 / 256` blocks; packed segment/prefix variants visited `40 / 256` blocks, `29.4%` of static causal's visited blocks.
+  - Interpretation: per-layer packed prefix-LM becomes faster than static causal once layout/invocation planning is amortized across layers, but compile-including cost remains high and should not be paid per layer.
 - Latest authoritative v5p evidence is at commit `11b76220192421dfeb7ef0021bf05db0559c7846`, the direct segment-run builder head:
   - TPU parity slice passed with `5 passed`.
   - 8192 equal-doc steady medians: static causal `1.217 ms`; packed causal segment `1.795 ms`; packed segment-runs `3.385 ms`; packed prefix-LM `1.774 ms`; dense references `1.866-1.900 ms`.

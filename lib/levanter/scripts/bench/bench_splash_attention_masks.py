@@ -25,11 +25,22 @@ import jax.numpy as jnp
 import jax.random as jrandom
 
 from levanter.kernels.pallas.splash_attention import DEFAULT_SPLASH_BLOCK_SIZE
-from levanter.layers.attention import AttentionMask, _tpu_splash_attention
+from levanter.layers.attention import (
+    AttentionMask,
+    _prepare_splash_invocation_plan,
+    _prepare_splash_layout,
+    _run_prepared_tpu_splash_attention,
+    _tpu_splash_attention,
+)
 from levanter.utils.mesh import create_mesh_from_axis_specs
 
 STATIC_CAUSAL_SPLASH_VARIANT = "static_causal_splash"
+STATIC_PREFIX_LM_SPLASH_VARIANT = "static_prefix_lm_splash"
+PACKED_CAUSAL_SEGMENT_SPLASH_VARIANT = "packed_causal_segment_splash"
+PACKED_CAUSAL_SEGMENT_RUNS_SPLASH_VARIANT = "packed_causal_segment_runs_splash"
+PACKED_PREFIX_LM_SPLASH_VARIANT = "packed_prefix_lm_splash"
 INPUT_SCALE = 0.02
+RESIDUAL_SCALE = 0.01
 DOC_LENGTH_PROFILE_EQUAL = "equal"
 DOC_LENGTH_PROFILE_STAGGERED = "staggered"
 DOC_LENGTH_PROFILE_LONG_TAIL = "long-tail"
@@ -63,6 +74,7 @@ class BenchShape:
 @dataclass(frozen=True, slots=True)
 class BenchResult:
     variant: str
+    layers: int
     batch: int
     seq_len: int
     heads: int
@@ -76,11 +88,27 @@ class BenchResult:
     dtype: str
     device_kind: str
     num_devices: int
+    total_blocks: int
+    visited_blocks: int
+    visited_block_fraction: float
+    skipped_block_fraction: float
+    visited_blocks_vs_static_causal: float
     compile_including: float
+    compile_including_per_layer: float
     steady_median: float
+    steady_median_per_layer: float
     steady_min: float
+    steady_min_per_layer: float
     steady_max: float
+    steady_max_per_layer: float
     steady_times: tuple[float, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _BlockStats:
+    total_blocks: int
+    visited_blocks: int
+    static_causal_visited_blocks: int
 
 
 def main() -> None:
@@ -104,7 +132,13 @@ def main() -> None:
     if jax.default_backend() != "tpu" and not args.allow_non_tpu:
         raise RuntimeError("This benchmark expects a TPU backend. Pass --allow-non-tpu only for dry-run debugging.")
 
-    results = run_benchmarks(shape, warmup=args.warmup, iterations=args.iterations, include_dense=args.include_dense)
+    results = run_benchmarks(
+        shape,
+        warmup=args.warmup,
+        iterations=args.iterations,
+        include_dense=args.include_dense,
+        layers=args.layers,
+    )
     for result in results:
         print(json.dumps(asdict(result)))
 
@@ -115,7 +149,11 @@ def run_benchmarks(
     warmup: int,
     iterations: int,
     include_dense: bool,
+    layers: int,
 ) -> list[BenchResult]:
+    if layers <= 0:
+        raise ValueError("layers must be positive.")
+
     Batch = hax.Axis("batch", shape.batch)
     Heads = hax.Axis("heads", shape.heads)
     Pos = hax.Axis("position", shape.seq_len)
@@ -133,13 +171,14 @@ def run_benchmarks(
     prefix_mask = _packed_prefix_mask(shape, Batch, Pos)
     masks = {
         STATIC_CAUSAL_SPLASH_VARIANT: AttentionMask.causal(),
-        "packed_causal_segment_splash": AttentionMask.causal(segment_ids=(segment_ids.q, segment_ids.kv)),
-        "packed_causal_segment_runs_splash": AttentionMask.causal().with_segment_runs(
+        STATIC_PREFIX_LM_SPLASH_VARIANT: AttentionMask.prefix_lm(prefix_length=shape.prefix_tokens_per_doc),
+        PACKED_CAUSAL_SEGMENT_SPLASH_VARIANT: AttentionMask.causal(segment_ids=(segment_ids.q, segment_ids.kv)),
+        PACKED_CAUSAL_SEGMENT_RUNS_SPLASH_VARIANT: AttentionMask.causal().with_segment_runs(
             segment_ids.q,
             kv_segment_ids=segment_ids.kv,
             max_segments=shape.docs_per_sequence,
         ),
-        "packed_prefix_lm_splash": AttentionMask.prefix_lm(
+        PACKED_PREFIX_LM_SPLASH_VARIANT: AttentionMask.prefix_lm(
             prefix_mask=prefix_mask,
             segment_ids=(segment_ids.q, segment_ids.kv),
         ),
@@ -157,14 +196,23 @@ def run_benchmarks(
         k = hax.shard(k)
         v = hax.shard(v)
         for variant, mask in masks.items():
-            results.append(_time_splash_variant(variant, shape, Pos, KPos, Key, q, k, v, mask, warmup, iterations))
+            if layers == 1:
+                results.append(_time_splash_variant(variant, shape, Pos, KPos, Key, q, k, v, mask, warmup, iterations))
+            else:
+                results.append(
+                    _time_prepared_splash_stack_variant(
+                        variant, shape, Pos, KPos, Key, q, k, v, mask, warmup, iterations, layers
+                    )
+                )
         if include_dense:
             for variant, mask in masks.items():
                 if variant == STATIC_CAUSAL_SPLASH_VARIANT:
                     continue
                 dense_variant = variant.replace("_splash", "_dense_reference")
                 results.append(
-                    _time_dense_variant(dense_variant, shape, Pos, KPos, Key, q, k, v, mask, warmup, iterations)
+                    _time_dense_variant(
+                        dense_variant, shape, Pos, KPos, Key, q, k, v, mask, warmup, iterations, layers
+                    )
                 )
     return results
 
@@ -197,7 +245,62 @@ def _time_splash_variant(
             scaling_factor=1 / math.sqrt(Key.size),
         )
 
-    return _time_variant(variant, shape, lambda: run(q, k, v), warmup=warmup, iterations=iterations)
+    return _time_variant(variant, shape, lambda: run(q, k, v), warmup=warmup, iterations=iterations, layers=1)
+
+
+def _time_prepared_splash_stack_variant(
+    variant: str,
+    shape: BenchShape,
+    Pos: hax.Axis,
+    KPos: hax.Axis,
+    Key: hax.Axis,
+    q: hax.NamedArray,
+    k: hax.NamedArray,
+    v: hax.NamedArray,
+    mask: AttentionMask,
+    warmup: int,
+    iterations: int,
+    layers: int,
+) -> BenchResult:
+    layout = _prepare_splash_layout(
+        Pos,
+        KPos,
+        Key,
+        q,
+        k,
+        v,
+        scaling_factor=1 / math.sqrt(Key.size),
+        block_size=shape.block_size,
+    )
+    invocation = _prepare_splash_invocation_plan(
+        layout=layout,
+        mask=mask,
+        block_size=shape.block_size,
+        logits_soft_cap=None,
+        attn_sink=None,
+    )
+
+    @eqx.filter_jit
+    def run(q, k, v):
+        x = q
+        for _ in range(layers):
+            attn_out = _run_prepared_tpu_splash_attention(
+                Pos,
+                KPos,
+                Key,
+                x,
+                k,
+                v,
+                inference=True,
+                mask=mask,
+                scaling_factor=1 / math.sqrt(Key.size),
+                layout=layout,
+                invocation=invocation,
+            )
+            x = x + attn_out * RESIDUAL_SCALE
+        return x
+
+    return _time_variant(variant, shape, lambda: run(q, k, v), warmup=warmup, iterations=iterations, layers=layers)
 
 
 def _time_dense_variant(
@@ -212,14 +315,19 @@ def _time_dense_variant(
     mask: AttentionMask,
     warmup: int,
     iterations: int,
+    layers: int,
 ) -> BenchResult:
     materialized_mask = mask.materialize(Pos, KPos)
 
     @eqx.filter_jit
     def run(q, k, v):
-        return hnn.attention.dot_product_attention(KPos, Key, q, k, v, mask=materialized_mask)
+        x = q
+        for _ in range(layers):
+            attn_out = hnn.attention.dot_product_attention(KPos, Key, x, k, v, mask=materialized_mask)
+            x = x + attn_out * RESIDUAL_SCALE
+        return x
 
-    return _time_variant(variant, shape, lambda: run(q, k, v), warmup=warmup, iterations=iterations)
+    return _time_variant(variant, shape, lambda: run(q, k, v), warmup=warmup, iterations=iterations, layers=layers)
 
 
 def _time_variant(
@@ -229,6 +337,7 @@ def _time_variant(
     *,
     warmup: int,
     iterations: int,
+    layers: int,
 ) -> BenchResult:
     start = time.perf_counter()
     output = run()
@@ -248,8 +357,10 @@ def _time_variant(
 
     device_kind = jax.devices()[0].device_kind if jax.devices() else "unknown"
     times_array = jnp.asarray(times)
+    block_stats = _block_stats_for_variant(shape, variant)
     return BenchResult(
         variant=variant,
+        layers=layers,
         batch=shape.batch,
         seq_len=shape.seq_len,
         heads=shape.heads,
@@ -263,10 +374,19 @@ def _time_variant(
         dtype=str(shape.dtype),
         device_kind=device_kind,
         num_devices=len(jax.devices()),
+        total_blocks=block_stats.total_blocks,
+        visited_blocks=block_stats.visited_blocks,
+        visited_block_fraction=block_stats.visited_blocks / block_stats.total_blocks,
+        skipped_block_fraction=1 - block_stats.visited_blocks / block_stats.total_blocks,
+        visited_blocks_vs_static_causal=block_stats.visited_blocks / block_stats.static_causal_visited_blocks,
         compile_including=compile_including,
+        compile_including_per_layer=compile_including / layers,
         steady_median=float(jnp.median(times_array)),
+        steady_median_per_layer=float(jnp.median(times_array)) / layers,
         steady_min=float(jnp.min(times_array)),
+        steady_min_per_layer=float(jnp.min(times_array)) / layers,
         steady_max=float(jnp.max(times_array)),
+        steady_max_per_layer=float(jnp.max(times_array)) / layers,
         steady_times=tuple(float(t) for t in times),
     )
 
@@ -275,6 +395,151 @@ def _time_variant(
 class _PackedSegmentIds:
     q: hax.NamedArray
     kv: hax.NamedArray
+
+
+def _block_stats_for_variant(shape: BenchShape, variant: str) -> _BlockStats:
+    splash_variant = variant.replace("_dense_reference", "_splash")
+    total_blocks = shape.batch * _blocks_per_sequence(shape) ** 2
+    static_causal_blocks = _count_static_causal_blocks(shape) * shape.batch
+
+    if splash_variant == STATIC_CAUSAL_SPLASH_VARIANT:
+        visited_blocks = static_causal_blocks
+    elif splash_variant == STATIC_PREFIX_LM_SPLASH_VARIANT:
+        visited_blocks = _count_static_prefix_lm_blocks(shape) * shape.batch
+    elif splash_variant in {PACKED_CAUSAL_SEGMENT_SPLASH_VARIANT, PACKED_CAUSAL_SEGMENT_RUNS_SPLASH_VARIANT}:
+        visited_blocks = _count_packed_blocks(shape, _packed_causal_block_has_attention)
+    elif splash_variant == PACKED_PREFIX_LM_SPLASH_VARIANT:
+        visited_blocks = _count_packed_blocks(shape, _packed_prefix_lm_block_has_attention)
+    else:
+        raise ValueError(f"Unknown benchmark variant {variant!r}.")
+
+    return _BlockStats(
+        total_blocks=total_blocks,
+        visited_blocks=visited_blocks,
+        static_causal_visited_blocks=static_causal_blocks,
+    )
+
+
+def _blocks_per_sequence(shape: BenchShape) -> int:
+    return math.ceil(shape.seq_len / shape.block_size)
+
+
+def _count_static_causal_blocks(shape: BenchShape) -> int:
+    blocks = _blocks_per_sequence(shape)
+    return blocks * (blocks + 1) // 2
+
+
+def _count_static_prefix_lm_blocks(shape: BenchShape) -> int:
+    return _count_blocks(
+        shape,
+        lambda _doc_lengths, _q_start, q_end, kv_start, _kv_end: kv_start < q_end
+        or kv_start < shape.prefix_tokens_per_doc,
+    )
+
+
+def _count_packed_blocks(
+    shape: BenchShape,
+    block_has_attention: Callable[[BenchShape, tuple[int, ...], int, int, int, int], bool],
+) -> int:
+    # Count block reachability without constructing block_q x block_kv payloads.
+    return sum(
+        _count_blocks(
+            shape,
+            lambda doc_lengths, q_start, q_end, kv_start, kv_end: block_has_attention(
+                shape, doc_lengths, q_start, q_end, kv_start, kv_end
+            ),
+            doc_lengths=doc_lengths,
+        )
+        for doc_lengths in _doc_length_batches(shape)
+    )
+
+
+def _count_blocks(
+    shape: BenchShape,
+    block_has_attention: Callable[[tuple[int, ...], int, int, int, int], bool],
+    *,
+    doc_lengths: tuple[int, ...] | None = None,
+) -> int:
+    blocks = _blocks_per_sequence(shape)
+    count = 0
+    lengths = _doc_lengths(shape) if doc_lengths is None else doc_lengths
+    for q_block in range(blocks):
+        q_start = q_block * shape.block_size
+        q_end = min(q_start + shape.block_size, shape.seq_len)
+        for kv_block in range(blocks):
+            kv_start = kv_block * shape.block_size
+            kv_end = min(kv_start + shape.block_size, shape.seq_len)
+            if block_has_attention(lengths, q_start, q_end, kv_start, kv_end):
+                count += 1
+    return count
+
+
+def _packed_causal_block_has_attention(
+    _shape: BenchShape,
+    doc_lengths: tuple[int, ...],
+    q_start: int,
+    q_end: int,
+    kv_start: int,
+    kv_end: int,
+) -> bool:
+    return _any_packed_doc_block_overlap(
+        doc_lengths,
+        q_start,
+        q_end,
+        kv_start,
+        kv_end,
+        lambda _doc_start, _doc_end, _q_doc_start, q_doc_end, kv_doc_start, _kv_doc_end: kv_doc_start < q_doc_end,
+    )
+
+
+def _packed_prefix_lm_block_has_attention(
+    shape: BenchShape,
+    doc_lengths: tuple[int, ...],
+    q_start: int,
+    q_end: int,
+    kv_start: int,
+    kv_end: int,
+) -> bool:
+    return _any_packed_doc_block_overlap(
+        doc_lengths,
+        q_start,
+        q_end,
+        kv_start,
+        kv_end,
+        lambda doc_start, doc_end, _q_doc_start, q_doc_end, kv_doc_start, _kv_doc_end: (
+            kv_doc_start < min(doc_start + shape.prefix_tokens_per_doc, doc_end) or kv_doc_start < q_doc_end
+        ),
+    )
+
+
+def _any_packed_doc_block_overlap(
+    doc_lengths: tuple[int, ...],
+    q_start: int,
+    q_end: int,
+    kv_start: int,
+    kv_end: int,
+    doc_block_has_attention: Callable[[int, int, int, int, int, int], bool],
+) -> bool:
+    for doc_start, doc_end in _doc_intervals(doc_lengths):
+        q_doc_start = max(q_start, doc_start)
+        q_doc_end = min(q_end, doc_end)
+        kv_doc_start = max(kv_start, doc_start)
+        kv_doc_end = min(kv_end, doc_end)
+        if q_doc_start >= q_doc_end or kv_doc_start >= kv_doc_end:
+            continue
+        if doc_block_has_attention(doc_start, doc_end, q_doc_start, q_doc_end, kv_doc_start, kv_doc_end):
+            return True
+    return False
+
+
+def _doc_intervals(doc_lengths: tuple[int, ...]) -> tuple[tuple[int, int], ...]:
+    intervals = []
+    start = 0
+    for doc_len in doc_lengths:
+        end = start + doc_len
+        intervals.append((start, end))
+        start = end
+    return tuple(intervals)
 
 
 def _packed_segment_ids(shape: BenchShape, Batch: hax.Axis, Pos: hax.Axis, KPos: hax.Axis) -> _PackedSegmentIds:
@@ -414,6 +679,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--dtype", choices=DTYPE_NAMES, default=DEFAULT_DTYPE_NAME)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--iterations", type=int, default=5)
+    parser.add_argument(
+        "--layers",
+        type=int,
+        default=1,
+        help="Number of repeated attention calls in a fake residual stack. Values >1 reuse one prepared Splash plan.",
+    )
     parser.add_argument("--include-dense", action="store_true")
     parser.add_argument("--allow-non-tpu", action="store_true")
     return parser.parse_args()

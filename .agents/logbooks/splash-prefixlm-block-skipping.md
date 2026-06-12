@@ -465,3 +465,22 @@
   - v6e 8192 B=2 Alpaca steady medians: static causal `1.853 ms`; packed causal segment `2.834 ms`; packed segment-runs `14.325 ms`; packed prefix-LM `3.040 ms`; dense references `3.197-3.317 ms`.
 - Interpretation: v5e and v6e compatibility is confirmed for the current packed prefix-LM and packed segment block-skipping paths. The packed segment and packed prefix-LM paths beat dense references at 8192 on both families. Segment-run metadata remains materially slower, especially for many-doc Alpaca layouts, so it remains experimental.
 - Next action: Wait for the rerun of the transient Levanter unit CI failure, then decide whether to move the PR out of draft or keep tuning segment-run metadata in a follow-up branch.
+
+### 2026-06-12 14:37 - v5p amortized prepared-plan benchmark
+- Hypothesis: If Splash layout and invocation planning are prepared once and reused across attention layers, packed prefix-LM and packed segment metadata should have much lower per-layer steady-state overhead than the one-layer benchmark, while still preserving block skipping.
+- Command:
+  - Current workspace, synced manually to v5p worker after the prepared invocation refactor.
+  - `uv run --project lib/levanter --group test python lib/levanter/scripts/bench/bench_splash_attention_masks.py --seq-len 8192 --batch 1 --heads 8 --head-dim 128 --docs-per-sequence 4 --prefix-tokens-per-doc 256 --warmup 2 --iterations 3 --layers 1`
+  - `uv run --project lib/levanter --group test python lib/levanter/scripts/bench/bench_splash_attention_masks.py --seq-len 8192 --batch 1 --heads 8 --head-dim 128 --docs-per-sequence 4 --prefix-tokens-per-doc 256 --warmup 2 --iterations 3 --layers 20`
+- Config:
+  - v5p-8 worker: `marin-tpu-v5p-preemptible-8-us-east5-a-20260612-1147-84c53e43`, zone `us-east5-a`, IP `10.202.0.11`.
+  - Holder job: `/dlwh/dev-tpu-dlwh-splash-amortized-v5p`.
+  - `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`.
+  - Holder was released after the run; Iris reported `killed` with reason `Terminated by user`, and `dev_tpu.py status` reported no active session.
+- Result:
+  - Single-layer steady medians: static causal `1.181 ms`; static prefix-LM `1.184 ms`; packed causal segment `1.721 ms`; packed segment-runs `3.413 ms`; packed prefix-LM `1.802 ms`.
+  - Single-layer block counts: static causal/static prefix-LM visited `136 / 256` blocks (`53.1%`); packed causal segment, packed segment-runs, and packed prefix-LM each visited `40 / 256` blocks (`15.6%`, `29.4%` of static causal).
+  - 20-layer per-layer steady medians: static causal `0.781 ms`; static prefix-LM `0.801 ms`; packed causal segment `0.576 ms`; packed segment-runs `0.569 ms`; packed prefix-LM `0.576 ms`.
+  - 20-layer compile-including per-layer times: static causal `62.6 ms`; static prefix-LM `73.3 ms`; packed causal segment `544.4 ms`; packed segment-runs `349.9 ms`; packed prefix-LM `541.8 ms`.
+- Interpretation: The prepared-plan refactor changes the steady-state story materially for stacked attention layers. In the one-layer path, packed prefix-LM is slower than static causal despite visiting far fewer blocks because setup and metadata costs dominate. With a pretend 20-layer residual stream that prepares layout/invocation once, packed prefix-LM is faster per layer than static causal (`0.576 ms` vs `0.781 ms`) and roughly tracks the lower visited-block count. Compile cost is still much higher for packed dynamic metadata, so this should be amortized across layers rather than paid per layer.
+- Next action: Commit the prepared invocation benchmark/refactor slice and push it to PR #6330. Keep segment-run metadata opt-in; the amortized result helps segment-runs at equal-doc B=1, but prior Alpaca B=2 evidence still shows the segment-run path is not ready to become the default.
