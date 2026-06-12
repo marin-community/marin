@@ -330,7 +330,10 @@ def test_te_bin_and_group_axes_by_function():
     k = hax.zeros((B, KPos, H, D))
     v = hax.zeros((B, KPos, H, D))
 
-    q_c, k_c, v_c = _bin_and_group_axes_by_function(q, k, v, "QPos", "KPos", "D")
+    axis_bins = _bin_and_group_axes_by_function(q, k, v, "QPos", "KPos", "D")
+    q_c = axis_bins.q
+    k_c = axis_bins.k
+    v_c = axis_bins.v
     assert q_c["B"] == [B]
     assert k_c["B"] == [B]
     assert v_c["B"] == [B]
@@ -436,7 +439,10 @@ def test_mqa_te_bin_and_group_axes_by_function():
     k = hax.zeros((B, KPos, D))
     v = hax.zeros((B, KPos, D))
 
-    q_c, k_c, v_c = _bin_and_group_axes_by_function(gq, k, v, "QPos", "KPos", "D")
+    axis_bins = _bin_and_group_axes_by_function(gq, k, v, "QPos", "KPos", "D")
+    q_c = axis_bins.q
+    k_c = axis_bins.k
+    v_c = axis_bins.v
     assert q_c["H"] == [G]
     assert k_c["H"] == []
     assert v_c["H"] == []
