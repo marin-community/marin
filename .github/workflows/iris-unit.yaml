@@ -67,6 +67,8 @@ jobs:
     if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -117,9 +119,9 @@ jobs:
             -m requires_cluster -o "addopts=" --tb=short -v
 
       - name: Verify screenshots with Claude
-        if: always() && hashFiles('iris-screenshots/*.txt') != ''
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+        # Skip on PRs without secrets access (forks, dependabot): no token means
+        # the claude CLI can't authenticate, so the step would only error out.
+        if: always() && env.CLAUDE_CODE_OAUTH_TOKEN != '' && hashFiles('iris-screenshots/*.txt') != ''
         run: |
           npm install -g @anthropic-ai/claude-code
           python lib/iris/scripts/verify_screenshots.py \
