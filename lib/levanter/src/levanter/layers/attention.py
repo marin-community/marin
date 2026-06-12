@@ -20,9 +20,10 @@ from levanter.kernels.pallas.splash_attention import (
     DEFAULT_SPLASH_BLOCK_SIZE,
     lower_splash_attention_mask,
     lower_splash_segment_ids,
+    packed_prefix_lm_mask_infos,
     prefix_lm_mask_infos,
-    splash_attention_mask_spec_from_attention_mask,
     splash_attention_block_sizes,
+    splash_attention_mask_spec_from_attention_mask,
     splash_partition_spec_shard_factor,
 )
 from levanter.inference.utils import is_valid
@@ -851,6 +852,43 @@ def _prepare_prefix_lengths_for_splash(prefix_lengths: NamedArray, q_class, phys
     return lengths.astype(jnp.int32).array, PartitionSpec(physical_axes_q[0])
 
 
+def _prepare_prefix_mask_for_splash(
+    prefix_mask: NamedArray,
+    QPos: Axis,
+    KPos: Axis,
+    q_class,
+    physical_axes_q: PartitionSpec,
+    physical_axes_k: PartitionSpec,
+):
+    """Reshape and broadcast a per-key prefix mask to Splash's flattened batch axis."""
+    batch_axes = tuple(q_class["B"])
+    if QPos.name in {ax.name for ax in prefix_mask.axes} and QPos.name != KPos.name:
+        prefix_mask = prefix_mask.rename({QPos.name: KPos.name})
+    allowed_axes = {ax.name for ax in batch_axes + (KPos,)}
+    extra_axes = tuple(ax for ax in prefix_mask.axes if ax.name not in allowed_axes)
+    if extra_axes:
+        raise NotImplementedError(
+            f"Prefix mask contains axes unsupported by splash attention: {', '.join(ax.name for ax in extra_axes)}"
+        )
+
+    mask = prefix_mask
+    mask_axis_names = {ax.name for ax in mask.axes}
+    for ax in batch_axes:
+        if ax.name not in mask_axis_names:
+            mask = mask.broadcast_axis(ax)
+            mask_axis_names.add(ax.name)
+    if KPos.name not in mask_axis_names:
+        raise ValueError(f"prefix_mask must contain key position axis {KPos.name}.")
+
+    if batch_axes:
+        mask = _maybe_flatten(mask, batch_axes, "splash_batch")
+    else:
+        mask = _maybe_flatten(mask, (), "splash_batch")
+
+    mask = mask.rearrange(("splash_batch", KPos.name))
+    return mask.astype(jnp.bool_).array, PartitionSpec(physical_axes_q[0], physical_axes_k[2])
+
+
 def _batched_splash_kernel_specs(
     kernel,
     *,
@@ -868,8 +906,8 @@ def _batched_splash_kernel_specs(
         if ndim == 0:
             return PartitionSpec()
         shape = getattr(leaf, "shape", ())
-        if ndim == 4 and len(shape) > 1 and shape[1] == num_heads:
-            return PartitionSpec(batch_spec, head_spec, q_seq_spec, None)
+        if ndim >= 4 and len(shape) > 1 and shape[1] == num_heads:
+            return PartitionSpec(batch_spec, head_spec, q_seq_spec, *([None] * (ndim - 3)))
         return PartitionSpec(batch_spec, *([None] * (ndim - 1)))
 
     return jax.tree_util.tree_map(spec_for_leaf, kernel)
@@ -1070,6 +1108,26 @@ def _tpu_splash_attention(
         prefix_lengths = None
         physical_axes_prefix_lengths = None
 
+    if isinstance(mask, AttentionMask) and mask.prefix_mask is not None:
+        if not mask.is_causal:
+            raise NotImplementedError("Splash attention requires prefix_mask to be part of a causal prefix-LM mask.")
+        if mask.sliding_window is not None:
+            raise NotImplementedError("Splash attention does not support prefix_mask with sliding windows.")
+        prefix_masks, physical_axes_prefix_mask = _prepare_prefix_mask_for_splash(
+            mask.prefix_mask,
+            QPos,
+            KPos,
+            q_class,
+            physical_axes_q,
+            physical_axes_k,
+        )
+        if mask.prefix_length is not None:
+            prefix_positions = jnp.arange(Sk, dtype=jnp.int32)[None, :] < mask.prefix_length
+            prefix_masks = prefix_masks | prefix_positions
+    else:
+        prefix_masks = None
+        physical_axes_prefix_mask = None
+
     segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
     # do we have a batch axis in segment_ids? (needed for vmap below)
 
@@ -1117,7 +1175,65 @@ def _tpu_splash_attention(
         max_block_size=block_size,
     )
 
-    if prefix_lengths is not None:
+    kernel_segment_id_lowering = segment_id_lowering
+
+    if prefix_masks is not None:
+        if mask is None or not isinstance(mask, AttentionMask):
+            raise AssertionError("prefix_masks can only be set for AttentionMask.")
+
+        if segment_id_lowering.segment_ids is None:
+            q_segment_ids_for_mask = jnp.zeros((Sq,), dtype=jnp.int32)
+            kv_segment_ids_for_mask = jnp.zeros((Sk,), dtype=jnp.int32)
+            q_segment_ids_vmap_axis = None
+            kv_segment_ids_vmap_axis = None
+        else:
+            q_segment_ids_for_mask = segment_id_lowering.segment_ids.q
+            kv_segment_ids_for_mask = segment_id_lowering.segment_ids.kv
+            assert segment_id_lowering.segment_batch_axis is not None
+            q_segment_ids_vmap_axis = segment_id_lowering.segment_batch_axis.q
+            kv_segment_ids_vmap_axis = segment_id_lowering.segment_batch_axis.kv
+
+        def make_packed_prefix_lm_kernel(prefix_mask, q_segment_ids, kv_segment_ids):
+            prefix_metadata = packed_prefix_lm_mask_infos(
+                prefix_mask=prefix_mask,
+                q_segment_ids=q_segment_ids,
+                kv_segment_ids=kv_segment_ids,
+                q_seq_len=Sq,
+                kv_seq_len=Sk,
+                num_heads=Hq,
+                block_sizes=block_sizes,
+                head_shards=head_shards,
+                q_seq_shards=q_seq_shards,
+            )
+            return splash_attention_kernel.SplashAttentionKernel(
+                prefix_metadata.fwd_mask_info,
+                None if block_sizes.use_fused_bwd_kernel else prefix_metadata.dq_mask_info,
+                prefix_metadata.dkv_mask_info,
+                block_sizes=block_sizes,
+                is_mqa=False,
+                save_residuals=False,
+                mask_value=splash_attention_kernel.DEFAULT_MASK_VALUE,
+                attn_logits_soft_cap=logits_soft_cap,
+                residual_checkpoint_name=None,
+                mask_function=None,
+                interpret=False,
+            )
+
+        splash_kernel = jax.vmap(
+            make_packed_prefix_lm_kernel,
+            in_axes=(0, q_segment_ids_vmap_axis, kv_segment_ids_vmap_axis),
+        )(prefix_masks, q_segment_ids_for_mask, kv_segment_ids_for_mask)
+        assert physical_axes_prefix_mask is not None
+        kernel_specs = _batched_splash_kernel_specs(
+            splash_kernel,
+            batch_spec=physical_axes_prefix_mask[0],
+            head_spec=physical_axes_q[1],
+            q_seq_spec=physical_axes_q[2],
+            num_heads=Hq,
+        )
+        kernel_vmap_axis = 0
+        kernel_segment_id_lowering = lower_splash_segment_ids()
+    elif prefix_lengths is not None:
 
         def make_prefix_lm_kernel(prefix_length):
             prefix_metadata = prefix_lm_mask_infos(
@@ -1191,7 +1307,7 @@ def _tpu_splash_attention(
             physical_axes_q,
             physical_axes_k,
             physical_axes_v,
-            segment_id_lowering.segment_ids_axes,
+            kernel_segment_id_lowering.segment_ids_axes,
             physical_axes_sink,
             kernel_specs,
         ),
@@ -1211,10 +1327,10 @@ def _tpu_splash_attention(
 
         return jax.vmap(
             call_kernel,
-            in_axes=(0, 0, 0, segment_id_lowering.segment_batch_axis, sink_in_axes, kernel_vmap_axis),
+            in_axes=(0, 0, 0, kernel_segment_id_lowering.segment_batch_axis, sink_in_axes, kernel_vmap_axis),
         )(q, k, v, segment_ids, sinks, kernel)
 
-    attn_output = wrap_flash_attention(q_, k_, v_, segment_id_lowering.segment_ids, sinks, splash_kernel)
+    attn_output = wrap_flash_attention(q_, k_, v_, kernel_segment_id_lowering.segment_ids, sinks, splash_kernel)
 
     attn_output = haliax.named(attn_output, ("B", "H", "S", "D"))
     # the output shape is B, S_q, H_q, D_v. Right now we're requiring D_k == D_v

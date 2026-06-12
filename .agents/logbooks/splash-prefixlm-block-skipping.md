@@ -80,3 +80,25 @@
 - Result: Local subset passed with `3 passed, 2 skipped`. TPU subset passed with `2 passed, 74 deselected`.
 - Interpretation: The dynamic prefix-LM and dynamic prefix-LM plus segment-ID paths are now covered by permanent TPU-gated tests. Default xdist is unsafe for TPU tests in this file; use `-n0` for these targeted runs.
 - Next action: Add a repeatable benchmark harness for 8192/16384 and proceed to segment-ID block skipping.
+
+### 2026-06-11 23:40 - Packed prefix-mask Splash path on v4-8
+- Hypothesis: Packed prefix-LM can use `AttentionMask.prefix_lm(prefix_mask=..., segment_ids=...)` as the public representation: the per-token prefix mask marks each document's prefix keys after packing, while segment IDs keep prefix visibility local to each packed document. Splash can lower this by building dynamic block metadata for `same_segment(q, kv) & (kv <= q | prefix_mask[kv])`.
+- Command:
+  - Local metadata tests: `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py`
+  - Local public-mask tests: `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'prefix_lm_mask_materializes or tpu_splash_attention_packed_prefix_lm'`
+  - TPU smoke: `uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name dlwh-splash-prefixlm-v4 execute -- uv run --project lib/levanter --group test python -m pytest -n0 lib/levanter/tests/test_attention.py -k 'tpu_splash_attention_packed_prefix_lm'`
+  - TPU microbench: ad hoc `uv run --project lib/levanter --group test python -c ...` through the same dev TPU session.
+- Config:
+  - Worker: `marin-tpu-v4-reserved-8-us-central2-b-20260529-1645-faa7f405`, v4-8, `us-central2-b`.
+  - Correctness smoke: `B=2`, `S=512`, `H=8`, `D=128`, block size `256`, two packed layouts, per-token prefix masks, compared against materialized Haliax attention.
+  - Microbench 8192: `B=1`, `S=8192`, `H=8`, `D=128`, four 2048-token packed docs, 256-token prefix per doc, block size `512`.
+  - Microbench 16384: `B=1`, `S=16384`, `H=8`, `D=128`, four 4096-token packed docs, 512-token prefix per doc, block size `512`.
+- Result:
+  - Kernel metadata reconstruction tests passed locally with `15 passed`.
+  - Public mask subset passed locally with `3 passed, 1 skipped`.
+  - Packed prefix-mask TPU smoke passed with `1 passed, 77 deselected`.
+  - The dynamic packed metadata is shared across heads using a mask-info head dimension of size 1, which Splash broadcasts to all heads. This avoids an H-fold partial-mask payload.
+  - v4-8 8192 jitted forward: packed-prefix Splash compile-including `1.024 s`, steady median `1.395 ms`; dense materialized Haliax reference compile-including `10.246 s`, steady median `3.605 ms`; max absolute diff `3.05e-05`.
+  - v4-8 16384 Splash-only jitted forward: compile-including `1.315 s`, steady median `4.49 ms`.
+- Interpretation: Packed prefix-LM now has a working Splash path with block skipping for off-segment/off-causal blocks and long-shape v4 evidence. It still uses Splash's dynamic-mask representation, so partial-mask payload size grows with the block grid (`q_blocks * kv_blocks`) rather than with only segment boundaries. The shared-head optimization keeps it viable for the tested 8192/16384 cases, but a more compact THD/segment-run representation is still the next performance target.
+- Next action: Land this packed-prefix checkpoint, then replace the dynamic dense block payload with segment-run-derived compact partial blocks and extend the same machinery to pure causal segment-ID block skipping.

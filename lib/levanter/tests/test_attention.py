@@ -152,6 +152,24 @@ def test_prefix_lm_mask_materializes_dynamic_prefix_lengths():
     np.testing.assert_array_equal(np.asarray(mat.array), expected)
 
 
+def test_prefix_lm_mask_materializes_packed_prefix_mask_with_segment_ids():
+    Pos = hax.Axis("pos", 8)
+    KeyPos = Pos.alias("key_pos")
+    segment_ids = hax.named(jnp.array([0, 0, 0, 0, 1, 1, 1, 1], dtype=jnp.int32), Pos)
+    kv_segment_ids = hax.named(segment_ids.array, KeyPos)
+    prefix_mask = hax.named(jnp.array([True, True, False, False, True, False, False, False]), Pos)
+    mask = AttentionMask.prefix_lm(prefix_mask=prefix_mask, segment_ids=(segment_ids, kv_segment_ids))
+
+    mat = mask.materialize(Pos, KeyPos)
+
+    q = np.arange(Pos.size)[:, None]
+    k = np.arange(KeyPos.size)[None, :]
+    segments = np.array([0, 0, 0, 0, 1, 1, 1, 1])
+    prefix = np.array([True, True, False, False, True, False, False, False])
+    expected = (segments[:, None] == segments[None, :]) & ((k <= q) | prefix[None, :])
+    np.testing.assert_array_equal(np.asarray(mat.array), expected)
+
+
 def test_attention_sink():
     Pos = hax.Axis("position", 2)
     KeyPos = Pos.alias("key_pos")
@@ -653,6 +671,42 @@ def test_tpu_splash_attention_dynamic_prefix_lm_with_segment_ids():
         q = hax.random.normal(jrandom.PRNGKey(20), (Batch, QPos, Head, Key)) * 0.02
         k = hax.random.normal(jrandom.PRNGKey(21), (Batch, KPos, Head, Key)) * 0.02
         v = hax.random.normal(jrandom.PRNGKey(22), (Batch, KPos, Head, Key)) * 0.02
+        _assert_tpu_splash_matches_reference(QPos, KPos, Key, q, k, v, mask, BLOCK_SIZE)
+
+
+def test_tpu_splash_attention_packed_prefix_lm_with_prefix_mask():
+    if jax.default_backend() != "tpu":
+        pytest.skip("TPU only")
+
+    BLOCK_SIZE = 256
+
+    Batch = hax.Axis("Batch", 2)
+    Head = hax.Axis("Head", 8)
+    Key = hax.Axis("Key", 128)
+    QPos = hax.Axis("QPos", BLOCK_SIZE * 2)
+    KPos = hax.Axis("KPos", BLOCK_SIZE * 2)
+    segment_ids = jnp.stack(
+        [
+            jnp.array([0] * BLOCK_SIZE + [1] * BLOCK_SIZE, dtype=jnp.int32),
+            jnp.array([2] * 128 + [3] * (BLOCK_SIZE * 2 - 128), dtype=jnp.int32),
+        ]
+    )
+    prefix_mask = jnp.zeros((Batch.size, QPos.size), dtype=jnp.bool_)
+    prefix_mask = prefix_mask.at[0, :64].set(True)
+    prefix_mask = prefix_mask.at[0, BLOCK_SIZE : BLOCK_SIZE + 96].set(True)
+    prefix_mask = prefix_mask.at[1, :96].set(True)
+    prefix_mask = prefix_mask.at[1, 128:192].set(True)
+    q_segment_ids = hax.named(segment_ids, (Batch, QPos))
+    kv_segment_ids = hax.named(segment_ids, (Batch, KPos))
+    mask = AttentionMask.prefix_lm(
+        prefix_mask=hax.named(prefix_mask, (Batch, QPos)),
+        segment_ids=(q_segment_ids, kv_segment_ids),
+    )
+
+    with use_test_mesh():
+        q = hax.random.normal(jrandom.PRNGKey(23), (Batch, QPos, Head, Key)) * 0.02
+        k = hax.random.normal(jrandom.PRNGKey(24), (Batch, KPos, Head, Key)) * 0.02
+        v = hax.random.normal(jrandom.PRNGKey(25), (Batch, KPos, Head, Key)) * 0.02
         _assert_tpu_splash_matches_reference(QPos, KPos, Key, q, k, v, mask, BLOCK_SIZE)
 
 

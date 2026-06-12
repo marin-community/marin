@@ -129,6 +129,125 @@ def prefix_lm_mask_infos(
     )
 
 
+def packed_prefix_lm_mask_infos(
+    *,
+    prefix_mask: jax.Array,
+    q_segment_ids: jax.Array,
+    kv_segment_ids: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    num_heads: int,
+    block_sizes: splash_attention_kernel.BlockSizes,
+    head_shards: int = 1,
+    q_seq_shards: int = 1,
+) -> SplashPrefixLmMetadata:
+    """Build Splash metadata for packed prefix-LM masks.
+
+    The represented mask is ``same_segment(q, kv) & (kv <= q | prefix_mask[kv])``.
+    This supports packed docs by letting callers mark prefix tokens per key
+    position while segment IDs keep those prefix tokens local to their document.
+    """
+    del num_heads
+    if not block_sizes.has_backward_blocks:
+        raise ValueError("packed_prefix_lm_mask_infos requires backward block sizes.")
+
+    # The packed prefix mask is identical for every attention head. Splash treats
+    # a mask-info head dimension of size 1 as shared across all heads, avoiding
+    # an H-fold blowup in dynamic partial mask blocks at long sequence lengths.
+    dense_mask = packed_prefix_lm_dense_mask(
+        prefix_mask=prefix_mask,
+        q_segment_ids=q_segment_ids,
+        kv_segment_ids=kv_segment_ids,
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        num_heads=1,
+    )
+    fwd_mask_info = _dynamic_dense_mask_info(
+        dense_mask,
+        block_q=block_sizes.block_q,
+        block_kv=block_sizes.block_kv,
+        is_dkv=False,
+        head_shards=head_shards,
+        q_seq_shards=q_seq_shards,
+    )
+    dq_mask_info = _dynamic_dense_mask_info(
+        dense_mask,
+        block_q=block_sizes.block_q_dq,
+        block_kv=block_sizes.block_kv_dq,
+        is_dkv=False,
+        head_shards=head_shards,
+        q_seq_shards=q_seq_shards,
+    )
+    dkv_mask_info = _dynamic_dense_mask_info(
+        dense_mask,
+        block_q=block_sizes.block_q_dkv,
+        block_kv=block_sizes.block_kv_dkv,
+        is_dkv=True,
+        head_shards=head_shards,
+        q_seq_shards=q_seq_shards,
+    )
+    return SplashPrefixLmMetadata(
+        fwd_mask_info=fwd_mask_info,
+        dq_mask_info=dq_mask_info,
+        dkv_mask_info=dkv_mask_info,
+    )
+
+
+def packed_prefix_lm_dense_mask(
+    *,
+    prefix_mask: jax.Array,
+    q_segment_ids: jax.Array,
+    kv_segment_ids: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    num_heads: int,
+) -> jax.Array:
+    """Materialize the per-example dense mask used by packed prefix-LM lowering."""
+    prefix_mask = jnp.asarray(prefix_mask, dtype=jnp.bool_)
+    q_segment_ids = jnp.asarray(q_segment_ids)
+    kv_segment_ids = jnp.asarray(kv_segment_ids)
+
+    if prefix_mask.ndim != 1:
+        raise ValueError(f"prefix_mask must be rank 1 after batching, got shape {prefix_mask.shape}.")
+    if q_segment_ids.ndim != 1 or kv_segment_ids.ndim != 1:
+        raise ValueError(
+            "q_segment_ids and kv_segment_ids must be rank 1 after batching, "
+            f"got {q_segment_ids.shape} and {kv_segment_ids.shape}."
+        )
+    if prefix_mask.shape[0] != kv_seq_len:
+        raise ValueError(f"prefix_mask length {prefix_mask.shape[0]} must match kv_seq_len={kv_seq_len}.")
+    if q_segment_ids.shape[0] != q_seq_len:
+        raise ValueError(f"q_segment_ids length {q_segment_ids.shape[0]} must match q_seq_len={q_seq_len}.")
+    if kv_segment_ids.shape[0] != kv_seq_len:
+        raise ValueError(f"kv_segment_ids length {kv_segment_ids.shape[0]} must match kv_seq_len={kv_seq_len}.")
+
+    q_positions = jnp.arange(q_seq_len, dtype=jnp.int32)[:, None]
+    kv_positions = jnp.arange(kv_seq_len, dtype=jnp.int32)[None, :]
+    same_segment = q_segment_ids[:, None] == kv_segment_ids[None, :]
+    prefix_or_causal = (kv_positions <= q_positions) | prefix_mask[None, :]
+    mask = same_segment & prefix_or_causal
+    return jnp.broadcast_to(mask[None, :, :], (num_heads, q_seq_len, kv_seq_len))
+
+
+def _dynamic_dense_mask_info(
+    dense_mask: jax.Array,
+    *,
+    block_q: int,
+    block_kv: int,
+    is_dkv: bool,
+    head_shards: int,
+    q_seq_shards: int,
+) -> splash_attention_mask_info.MaskInfo:
+    mask_info, _ = splash_attention_mask_info._process_dynamic_mask(
+        dense_mask,
+        (block_q, block_kv),
+        is_dkv=is_dkv,
+        head_shards=head_shards,
+        q_seq_shards=q_seq_shards,
+    )
+    return mask_info
+
+
 def lower_splash_attention_mask(
     *,
     mask: SplashAttentionMaskSpec | None,

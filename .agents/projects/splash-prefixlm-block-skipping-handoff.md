@@ -3,7 +3,7 @@
 ## Current Branch
 
 - Branch: `codex/splash-prefixlm-block-skipping`
-- Base: `origin/main` as of 2026-06-11, including merged PR #6314.
+- Base: `origin/main` as of 2026-06-11, including merged PR #6314 and the 2026-06-11 `origin/main` updates through `87046a667`.
 - Research logbook: `.agents/logbooks/splash-prefixlm-block-skipping.md`
 
 ## Goal
@@ -23,7 +23,7 @@ Target hardware for validation and tuning:
 
 ## What Changed So Far
 
-This checkpoint implements the first slices: static prefix-LM masks, reference semantics for batch-dependent prefix lengths, and compact Splash metadata for dynamic prefix lengths.
+This checkpoint implements the first slices: static prefix-LM masks, reference semantics for batch-dependent prefix lengths, compact Splash metadata for dynamic prefix lengths, and a packed prefix-mask Splash path for `prefix_mask + segment_ids`.
 
 Files changed:
 
@@ -38,18 +38,22 @@ Files changed:
   - Adds `PrefixMask`, a sliceable Splash mask for static prefix keys.
   - Lowers static prefix-LM to `LogicalOr(causal_or_local_mask, PrefixMask)`, preserving Splash static mask processing and block skipping.
   - Adds compact `prefix_lm_mask_infos(...)` metadata for dynamic prefix lengths. The representation stores a full block grid but only `2 * q_blocks` partial blocks per example.
-  - Still rejects dynamic `prefix_mask`.
+  - Adds `packed_prefix_lm_mask_infos(...)` for packed prefix masks represented as `same_segment(q, kv) & (kv <= q | prefix_mask[kv])`.
+  - Uses a mask-info head dimension of size 1 for packed prefix masks so Splash broadcasts the metadata across heads instead of storing one dynamic partial-mask payload per head.
 
 - `lib/levanter/src/levanter/layers/attention.py`
   - Passes `prefix_length` / `has_prefix_mask` from `AttentionMask` into the Splash mask spec.
   - Builds one dynamic-prefix `SplashAttentionKernel` per batch example with `jax.vmap`, then passes the batched kernel pytree through `shard_map`.
+  - For `prefix_mask`, builds packed prefix metadata from the prefix mask and segment IDs, then omits the redundant runtime `segment_ids` argument because the block metadata already encodes same-segment filtering.
 
 - `lib/levanter/tests/test_attention.py`
   - Adds reference materialization tests for prefix-LM, prefix-LM plus sliding window, and per-batch dynamic prefix lengths.
+  - Adds reference materialization and TPU-gated parity tests for packed prefix masks with segment IDs.
 
 - `lib/levanter/tests/kernels/test_splash_attention.py`
   - Adds static Splash prefix-LM lowering tests.
   - Adds compact forward/dKV `MaskInfo` reconstruction tests for dynamic prefix lengths.
+  - Adds packed prefix-mask metadata reconstruction tests, including empty/full/partial block assertions.
   - Extends test mask materialization to handle `LogicalOr`.
 
 ## Validation Already Run
@@ -60,13 +64,13 @@ Both commands passed locally:
 uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py
 ```
 
-Result after compact metadata: `14 passed`.
+Result after packed prefix metadata: `15 passed`.
 
 ```bash
 uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'prefix_lm or sliding_window_mask'
 ```
 
-Result after adding dynamic prefix lengths: `4 passed`.
+Result after packed prefix mask materialization: focused subset `3 passed, 1 skipped`.
 
 Additional local probe:
 
@@ -82,6 +86,10 @@ TPU validation on Iris v4-8:
 - Jitted forward microbench on v4-8, `B=1`, `S=8192`, `H=8`, `D=128`, block size `512`: static causal median warm `2.15 ms`; dynamic prefix-LM with prefix length `2048` median warm `2.18 ms`.
 - Jitted forward microbench on v4-8, `B=2`, `S=8192`, `H=8`, `D=128`, block size `512`: static causal median warm `3.67 ms`; dynamic prefix-LM with prefix lengths `[0, 2048]` median warm `4.11 ms`.
 - The two focused smokes are now permanent TPU-gated tests in `lib/levanter/tests/test_attention.py`. Run them on TPU with pytest xdist disabled: `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'test_tpu_splash_attention_dynamic_prefix_lm' -q -n0`.
+- Packed prefix-mask TPU smoke passed on v4-8 for `B=2`, `S=512`, `H=8`, `D=128`, block size `256`, two packed layouts, compared against materialized Haliax attention. Run it with: `uv run --project lib/levanter --group test python -m pytest -n0 lib/levanter/tests/test_attention.py -k 'tpu_splash_attention_packed_prefix_lm'`.
+- Packed prefix-mask v4-8 microbench:
+  - `B=1`, `S=8192`, `H=8`, `D=128`, four 2048-token packed docs, 256-token prefix per doc, block size `512`: Splash compile-including `1.024 s`, steady median `1.395 ms`; dense materialized Haliax reference compile-including `10.246 s`, steady median `3.605 ms`; max abs diff `3.05e-05`.
+  - `B=1`, `S=16384`, `H=8`, `D=128`, four 4096-token packed docs, 512-token prefix per doc, block size `512`: Splash compile-including `1.315 s`, steady median `4.49 ms` (Splash-only timing).
 
 ## Important Design State
 
@@ -92,27 +100,20 @@ JAX Splash has two mask processing paths:
 
 `process_dynamic_mask` still computes `block_mask` and `data_next`, so it can skip fully empty blocks. However, it has no batch axis. Levanter’s current Splash path creates one `SplashAttentionKernel` outside `shard_map`, then vmaps the kernel call over batch, only varying `q`, `k`, `v`, `segment_ids`, and sinks.
 
-Dynamic prefix lengths are now represented by a batched `SplashAttentionKernel` pytree. A packed batch can use per-example prefix lengths and segment IDs for correctness. Segment IDs are still applied inside visited blocks by Splash, so this does not yet provide segment-ID block skipping.
+Dynamic prefix lengths are represented by a batched `SplashAttentionKernel` pytree. Packed prefix masks are represented by `prefix_mask + segment_ids` and now get Splash block metadata that encodes same-segment filtering, so off-document/off-causal blocks can be skipped. Pure causal segment-ID masks still use Splash runtime `segment_ids`, so they do not yet provide segment-ID block skipping.
 
 ## Open Technical Question
 
-Need decide the dynamic packed-prefix representation.
+Need decide the compact THD/segment-run representation for pure segment-ID masks and for improving packed prefix masks further.
 
 Main options:
 
-1. Per-example dynamic mask metadata:
-   - Build per-example `[heads, q, kv]` masks or metadata.
-   - Try `jax.vmap(make_splash_mha)(mask_bhsk)` to produce a batched `SplashAttentionKernel` pytree.
-   - Then call the per-example kernel inside the existing batch vmap.
-   - Local probe showed this works in CPU interpret mode, including through `shard_map` with leading batch specs.
-   - Current branch uses compact metadata instead of dense `[heads, q, kv]` masks.
-
-2. Structured metadata without dense `[B,H,S,S]` masks:
+1. Structured metadata without dense `[B,H,S,S]` masks:
    - Derive `MaskInfo` directly from per-example prefix lengths and packed segment metadata.
-   - This is probably the right performance direction if dynamic-mask dense materialization is too expensive at 8192/16384.
+   - This is probably the right performance direction if dynamic packed-mask partial payloads become too expensive at larger packed layouts.
    - It likely requires bypassing or extending JAX Splash internals rather than only using public mask objects.
 
-3. Fold batch into heads:
+2. Fold batch into heads:
    - Represent per-example masks as extra heads and avoid a batch axis in the dynamic mask.
    - Likely awkward because the actual Q/K/V batch dimension remains separate and Splash expects `[H, Q, KV]` mask metadata, not `[B*H, Q, KV]` over a separate batch call.
 
@@ -124,12 +125,13 @@ Main options:
 
 ## Recommended Next Steps
 
-1. Add a benchmark harness for 8192/16384 that reports compile-including and steady-state timing on v4-8/v5p-8.
-2. Implement segment-ID block skipping, probably by deriving block metadata from packed segment runs or THD metadata.
-3. Broaden TPU validation to v5p-8, then v5e/v6e.
+1. Add a checked-in benchmark harness for 8192/16384 that reports compile-including and steady-state timing on v4-8/v5p-8.
+2. Implement pure segment-ID block skipping, probably by deriving block metadata from packed segment runs or THD metadata.
+3. Replace packed prefix-mask dynamic partial payloads with a compact segment-run representation if v5p/v5e/v6e timing or memory pressure warrants it.
+4. Broaden TPU validation to v5p-8, then v5e/v6e.
 
 ## Caveats
 
 - Dynamic prefix-length support passed focused v4-8 smokes and now has permanent TPU-gated tests, but those tests must run single-process (`-n0`) because libtpu cannot be initialized by pytest-xdist workers on one host.
 - Current Splash segment IDs mask inside visited blocks; they do not provide block skipping for packed segment masks by themselves.
-- Dynamic `prefix_mask` remains unsupported in Splash; use structured `prefix_lengths` for the compact path.
+- Packed `prefix_mask + segment_ids` uses Splash dynamic mask metadata and skips empty blocks, but its partial-mask payload still grows with the block grid. It is not yet the final compact THD-style representation.
