@@ -25,18 +25,19 @@ Target hardware for validation and tuning:
 ## Current Status, 2026-06-12
 
 - Draft PR: https://github.com/marin-community/marin/pull/6330
-- Latest local change: `packed_causal_segment_run_mask_infos(...)` now builds compact segment-run `MaskInfo` directly from contiguous segment intervals instead of first materializing dense block payloads.
+- Latest local change: `packed_causal_segment_run_mask_infos(...)` now builds compact segment-run `MaskInfo` directly from contiguous segment intervals instead of first materializing dense block payloads; tests now cover inactive padded segment slots and many-short-doc layouts.
 - Local validation at the direct-builder head:
   - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py lib/levanter/tests/kernels/test_bench_splash_attention_masks.py -q` -> `25 passed`.
   - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'prefix_lm or sliding_window_mask or segment_runs' -q` -> `6 passed`.
   - `./infra/pre-commit.py --changed-files --fix` -> passed.
   - `timeout 900 ./infra/pre-commit.py --review --agent-command='env RUST_LOG=error codex exec --ignore-user-config --ephemeral --dangerously-bypass-approvals-and-sandbox'` -> no findings.
-- Latest authoritative v5p evidence is at commit `62e10c9d7e50f3cc27346f2cc5f9634b783f7843`, before the direct segment-run builder:
+- Latest authoritative v5p evidence is at commit `11b76220192421dfeb7ef0021bf05db0559c7846`, the direct segment-run builder head:
   - TPU parity slice passed with `5 passed`.
-  - 8192 equal-doc steady medians: static causal `1.178 ms`; packed causal segment `1.705 ms`; packed segment-runs `3.362 ms`; packed prefix-LM `1.717 ms`; dense references `1.830-1.882 ms`.
-  - 16384 equal-doc steady medians: static causal `3.316 ms`; packed causal segment `4.417 ms`; packed segment-runs `6.573 ms`; packed prefix-LM `4.463 ms`.
-  - The compact gather fix fixed the previous v5p regression: packed prefix-LM went from `110.432 ms` to `4.463 ms` at 16384.
-- Next required benchmark: rerun v5p/v4-8 at the direct-builder head and decide whether segment-run metadata should become the default packed causal segment path.
+  - 8192 equal-doc steady medians: static causal `1.217 ms`; packed causal segment `1.795 ms`; packed segment-runs `3.385 ms`; packed prefix-LM `1.774 ms`; dense references `1.866-1.900 ms`.
+  - 16384 equal-doc steady medians: static causal `3.293 ms`; packed causal segment `4.402 ms`; packed segment-runs `6.619 ms`; packed prefix-LM `4.487 ms`.
+  - 8192 B=2 Alpaca steady medians: static causal `1.200 ms`; packed causal segment `1.692 ms`; packed segment-runs `9.352 ms`; packed prefix-LM `1.755 ms`; dense references `1.857-1.870 ms`.
+  - The compact gather fix fixed the previous v5p regression: packed prefix-LM went from `110.432 ms` to about `4.5 ms` at 16384.
+- Current decision: do not promote segment-run metadata as the default packed causal path yet. Generic packed segment metadata is faster on v5p, especially for B=2 Alpaca-style many-doc layouts. Segment-run metadata remains useful as an experimental THD-style path while schedule/metadata-shape overhead is investigated.
 
 ## What Changed So Far
 

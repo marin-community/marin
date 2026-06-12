@@ -107,18 +107,6 @@ class AttentionMask(eqx.Module):
     sliding_window: Optional[int] = eqx.field(default=None, static=True)
     prefix_lm_spec: Optional[PrefixLmMaskSpec] = None
 
-    @property
-    def prefix_length(self) -> Optional[int]:
-        return None if self.prefix_lm_spec is None else self.prefix_lm_spec.prefix_length
-
-    @property
-    def prefix_lengths(self) -> Optional[NamedArray]:
-        return None if self.prefix_lm_spec is None else self.prefix_lm_spec.prefix_lengths
-
-    @property
-    def prefix_mask(self) -> Optional[NamedArray]:
-        return None if self.prefix_lm_spec is None else self.prefix_lm_spec.prefix_mask
-
     def materialize(
         self,
         QPos: Axis,
@@ -164,20 +152,21 @@ class AttentionMask(eqx.Module):
             causal = combine_masks_and(causal, sliding_window_mask)
 
         prefix = None
-        if self.prefix_length is not None:
+        prefix_lm = self.prefix_lm_spec
+        if prefix_lm is not None and prefix_lm.prefix_length is not None:
             sub_k = KPos.resize(k_slice.size)
-            prefix = hax.arange(sub_k) + k_slice.start < self.prefix_length
+            prefix = hax.arange(sub_k) + k_slice.start < prefix_lm.prefix_length
             prefix = prefix.broadcast_axis(QPos.resize(q_slice.size))
 
-        if self.prefix_lengths is not None:
+        if prefix_lm is not None and prefix_lm.prefix_lengths is not None:
             sub_k = KPos.resize(k_slice.size)
             kv_positions = hax.arange(sub_k) + k_slice.start
-            dynamic_prefix = kv_positions < self.prefix_lengths.broadcast_axis(sub_k)
+            dynamic_prefix = kv_positions < prefix_lm.prefix_lengths.broadcast_axis(sub_k)
             dynamic_prefix = dynamic_prefix.broadcast_axis(QPos.resize(q_slice.size))
             prefix = combine_masks_or(prefix, dynamic_prefix)
 
-        if self.prefix_mask is not None:
-            prefix_mask = self.prefix_mask.rename({QPos.name: KPos.name})[KPos.name, k_slice]
+        if prefix_lm is not None and prefix_lm.prefix_mask is not None:
+            prefix_mask = prefix_lm.prefix_mask.rename({QPos.name: KPos.name})[KPos.name, k_slice]
             prefix = combine_masks_or(prefix, prefix_mask.broadcast_axis(QPos.resize(q_slice.size)))
 
         causal = combine_masks_or(causal, prefix)

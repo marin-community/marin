@@ -420,3 +420,24 @@
 - Result: Splash metadata tests passed with `21 passed`; benchmark-harness tests passed with `6 passed`; attention prefix/segment-run slice passed with `6 passed`; changed-file precommit passed; lint review reported no findings.
 - Interpretation: Local coverage now exercises direct segment-run block classification and compact payload reconstruction across inactive padded slots and short-doc ragged layouts.
 - Next action: Wait for Hubble's v5p/v4-8 benchmark at the direct-builder head and integrate the result.
+
+### 2026-06-12 06:46 - Direct segment-run v5p benchmark
+- Hypothesis: Direct interval-derived segment-run metadata may reduce the segment-run path's v5p steady-state overhead relative to the prior segment-run implementation.
+- Command:
+  - Subagent Hubble ran v5p-8 validation at commit `11b76220192421dfeb7ef0021bf05db0559c7846`.
+  - `uv run --project lib/levanter --group test python -m pytest -n0 lib/levanter/tests/test_attention.py -k test_tpu_splash_attention_batched_masks`
+  - `uv run --project lib/levanter python lib/levanter/scripts/bench/bench_splash_attention_masks.py --seq-len 8192 --block-size 512 --docs-per-sequence 4 --prefix-tokens-per-doc 256 --iterations 5 --warmup 2 --include-dense`
+  - `uv run --project lib/levanter python lib/levanter/scripts/bench/bench_splash_attention_masks.py --seq-len 16384 --block-size 512 --docs-per-sequence 4 --prefix-tokens-per-doc 512 --iterations 5 --warmup 2`
+  - `uv run --project lib/levanter python lib/levanter/scripts/bench/bench_splash_attention_masks.py --seq-len 8192 --block-size 512 --batch 2 --doc-lengths '<two Alpaca layouts>' --iterations 5 --warmup 2 --include-dense`
+- Config:
+  - v5p-8 worker: `marin-tpu-v5p-preemptible-8-us-east5-a-20260612-0902-723c36f8`, zone `us-east5-a`, IP `10.202.0.88`.
+  - Holder job: `/dlwh/dev-tpu-dlwh-codex-splash-b131`.
+  - `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`.
+  - Clean checkout confirmed before TPU execution; holder released and verified killed afterward.
+- Result:
+  - TPU parity slice passed with `5 passed, 76 deselected, 7 warnings in 31.66s`.
+  - 8192 equal-doc steady medians: static causal `1.217 ms`; packed causal segment `1.795 ms`; packed segment-runs `3.385 ms`; packed prefix-LM `1.774 ms`; dense references `1.866-1.900 ms`.
+  - 16384 equal-doc steady medians: static causal `3.293 ms`; packed causal segment `4.402 ms`; packed segment-runs `6.619 ms`; packed prefix-LM `4.487 ms`.
+  - 8192 B=2 Alpaca steady medians: static causal `1.200 ms`; packed causal segment `1.692 ms`; packed segment-runs `9.352 ms`; packed prefix-LM `1.755 ms`; dense references `1.857-1.870 ms`.
+- Interpretation: Direct segment-run metadata is correctness-preserving but does not improve v5p steady-state timing versus the previous segment-run run (`3.362 -> 3.385 ms` at 8192 and `6.573 -> 6.619 ms` at 16384, within noise/slightly slower). The generic packed segment path remains the best current segment-ID block-skipping path (`4.402 ms` at 16384 versus dense fallback previously `~110 ms`, and `1.692 ms` on B=2 Alpaca versus dense references around `1.86 ms`). Segment-run metadata should stay opt-in/experimental until we find why its dynamic metadata shape stresses Splash.
+- Next action: Do not promote segment-run metadata as the default packed causal path. Investigate segment-run `MaskInfo` shape/capacity and Splash schedule differences before more implementation work; v5e/v6e remain unverified.

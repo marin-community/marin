@@ -25,6 +25,7 @@ BLOCK_MASK_FULL = 2
 PARTIAL_MASK_SLOTS_PER_Q_BLOCK = 2
 CAUSAL_PARTIAL_MASK_SLOT_OFFSET = 0
 PREFIX_PARTIAL_MASK_SLOT_OFFSET = 1
+PARTIAL_BLOCK_CAPACITY_ERROR = "Packed Splash metadata partial block capacity exceeded."
 PartitionSpecEntry = str | Sequence[str | None] | None
 
 
@@ -460,7 +461,7 @@ def _compact_partial_mask_blocks(
     compact_blocks = eqx.error_if(
         compact_blocks,
         num_partial > partial_capacity,
-        "Packed Splash metadata partial block capacity exceeded.",
+        PARTIAL_BLOCK_CAPACITY_ERROR,
     )
 
     mask_next = jnp.where(is_partial, partial_indices, 0).reshape(1, q_blocks, kv_blocks)
@@ -673,7 +674,7 @@ def _segment_run_dynamic_mask_info(
     compact_mask_blocks = eqx.error_if(
         compact_mask_blocks,
         num_partial > partial_capacity,
-        "Packed Splash metadata partial block capacity exceeded.",
+        PARTIAL_BLOCK_CAPACITY_ERROR,
     )
 
     return _packed_dynamic_mask_info_from_components(
