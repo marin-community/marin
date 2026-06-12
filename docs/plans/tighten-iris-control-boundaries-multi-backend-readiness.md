@@ -30,6 +30,7 @@ from the post-merge audit.
 | T1 / I5 | #6291 | **Scope reduced in review** — see I5 below. exec deadline 1 h → 15 min; fan-out bounds documented as named constants. The watchdog pool was rolled back: reconcile/ping fan-outs were *already* bounded (10 s/RPC × 128-way semaphore), and a tripped watchdog would leave a hung pool thread still mutating the shared `Autoscaler` while the next cycle dispatched — two unsynchronized writers. |
 | T2 / I2 | #6295 | As specced. One `Scheduler` (backend-owned, `rpc/backend.py:152`); residual demand computed in the scheduling pass (`backend.py:283`) and returned on `ScheduleResult`; autoscaler loop consumes the cached `_last_residual_demand`; dry-run + second snapshot + controller `Scheduler` deleted. Demand-parity tests pin holder/taint/absorption semantics. Validated live on `marin-dev` (fineweb 10BT dedup end-to-end). |
 | T3 / I4 | #6294 | As specced. `reads.py` is the DB fan-out point; `ControlSnapshot{worker_addresses, reconcile_rows, timeout_rows, health}` built by `load_control_snapshot` in one read txn (`reads.py:1612`), health tracker attached by the controller. |
+| T4 / I3 | #6311 (open, review-complete) | Uniform `schedule`/`reconcile`/`autoscale`; ping + dispatch loops deleted (7→5 threads); health observed by backend, folded via one `WorkerHealthTracker.apply`; `placement`/`manages_capacity` deleted in favor of a `BackendCapability` descriptor consulted once at construction (+ service-RPC guards). **Design deltas:** results are three *method-specific* types (`ScheduleResult`/`ReconcileResult`/`AutoscaleResult`), each uniform across backends — better than the planned single fat `BackendResult`; `schedule` keeps `ScheduleInput` (genuinely different shape); the dispatch drain stays controller-side (it is a *write*). **Review caught a blocker the 1900-test suite couldn't:** the ping RPC was also the *workers'* keep-alive — reconcile now resets the worker heartbeat deadline. Detection latency is grace-based (`worker_unreachable_grace`=50s ÷ `poll_interval`); placement excludes failing workers while reconcile keeps probing them. **Rollout:** no churn-free deploy order (old workers decode `health` unset → reaped; old controller pings → gone on new workers); controller-first one-time churn recommended on marin-dev, optional one-release shim for prod. |
 
 **Verified post-merge state (audit of `main`):**
 
@@ -454,6 +455,12 @@ moved behind `reads.py`. (Remaining acceptable locals: `dispatch.py:_dispatch_qu
 when T4 unifies dispatch into reconcile — and service-RPC detail-view queries.)
 
 ### T4 — I3: uniform backend interface + backend-observed health  `exec: session`  `value: high`  `deps: T2, T3`
+**Done — PR #6311 (awaiting merge).** See the status table for outcome + design deltas. Doc
+nits deferred to T5: AGENTS.md/architecture.md still claim capabilities "never gate the
+per-tick loops" (the `_backend_drains_dispatch` exception exists and is documented in
+`backend.py`) and call BUILD_FAILED backend-emitted (it is controller-synthesized);
+`set_worker_consecutive_failures_for_test` is unused.
+
 Define `BackendResult` + the uniform `schedule`/`reconcile`/`autoscale(snapshot)` interface;
 **move worker-health observation into the backend** (RPC: reconcile-RPC + build failures emitted
 as generic events; K8s: pod status), returning per-worker health events; **keep the in-memory
@@ -515,13 +522,12 @@ apply path.
 1. ~~**T1 (I5)**~~ — done (#6291, reduced scope; capacity-path boundedness → T6).
 2. ~~**T2 (I2)**~~ — done (#6295; demand parity pinned by tests, validated on `marin-dev`).
 3. ~~**T3 (I4)**~~ — done (#6294; `ControlSnapshot` with health view is now T4's input).
-4. **T4 (I3)** — next; largest churn (uniform interface, health-events-into-backend, autoscaler
-   restore decoupling, input-shape unification). The Scheduler merge already happened in T2.
-   Land health-events-into-backend with the ping loop still present as belt-and-suspenders, then
-   remove ping in the same task once the backend events match the ping-derived liveness.
-5. **T5 (I1)** — after T1, T2, T4. The tick is then an ordering shell over functions that
-   already exist; also folds the remaining snapshot builders and kills the
-   `_last_residual_demand` cross-thread handoff. Fallback flag; `marin-dev` bake.
+4. ~~**T4 (I3)**~~ — done (PR #6311, awaiting merge; two review rounds — the adversarial pass
+   caught the worker-keep-alive blocker).
+5. **T5 (I1)** — next, after #6311 merges. The tick is then an ordering shell over functions
+   that already exist; also folds the remaining snapshot builders, kills the
+   `_last_residual_demand` cross-thread handoff, and absorbs T4's deferred doc nits.
+   Fallback flag; `marin-dev` bake (which doubles as T4's rollout churn validation).
 6. **T6** — after T4 (the autoscale phase is the natural home for issue-then-poll); independent
    of T5 and can land in parallel with it.
 
@@ -563,7 +569,20 @@ T4). Estimated ~3–4 remaining focused sessions.
   abandoning a hung pool thread that mutates shared autoscaler state is worse than blocking.
   Capacity-path boundedness comes from T6's polled operations instead.
 
+**Decided since (T4 review):**
+- **Method-specific results, uniform across backends** (`ScheduleResult`/`ReconcileResult`/
+  `AutoscaleResult`) instead of one fat `BackendResult`. The constraint that matters is *no
+  backend-type branching in the apply paths* — verified held.
+- **Reconcile is the worker keep-alive** (deadline reset + stats + self-health bit ride the
+  reconcile RPC); the worker Ping RPC is deleted end-to-end.
+- **Detection thresholds are time-based** (`worker_unreachable_grace`, default 50s, divided by
+  `poll_interval`) so cadence changes can't silently change reap latency again.
+- **Placement vs probing filters split**: scheduling excludes `consecutive_failures > 0`;
+  reconcile targets all active workers.
+
 **Open:**
+- **T4 rollout order** (one-time controller-first churn vs one-release Ping/health-unset shim) —
+  user decision at deploy time; analysis on PR #6311.
 - **Observation resolution (I3):** backend returns raw observations and the controller resolves
   in the pure kernel (recommended), vs backend pre-resolves against the in-memory snapshot.
 - **`cluster=` routing (follow-on):** hard constraint resolved by a pre-scheduler dispatcher
