@@ -99,6 +99,11 @@ class _PrefixLmMaskInfoComponents:
     partial_mask_blocks: jax.Array
 
 
+class _PrefixLmDataNextAxis(StrEnum):
+    Q = "q"
+    KV = "kv"
+
+
 def prefix_lm_mask_infos(
     *,
     prefix_length: jax.Array,
@@ -346,7 +351,7 @@ def prefix_lm_forward_mask_info(
         num_heads=num_heads,
         block_q=block_q,
         block_kv=block_kv,
-        data_next_axis="kv",
+        data_next_axis=_PrefixLmDataNextAxis.KV,
     )
     return _prefix_lm_mask_info_from_components(components)
 
@@ -368,7 +373,7 @@ def prefix_lm_dkv_mask_info(
         num_heads=num_heads,
         block_q=block_q,
         block_kv=block_kv,
-        data_next_axis="q",
+        data_next_axis=_PrefixLmDataNextAxis.Q,
     )
     return _prefix_lm_mask_info_from_components(
         _PrefixLmMaskInfoComponents(
@@ -401,7 +406,7 @@ def _prefix_lm_mask_info_components(
     num_heads: int,
     block_q: int,
     block_kv: int,
-    data_next_axis: str,
+    data_next_axis: _PrefixLmDataNextAxis,
 ) -> _PrefixLmMaskInfoComponents:
     if block_q != block_kv:
         raise NotImplementedError("Compact prefix-LM metadata currently requires block_q == block_kv.")
@@ -409,9 +414,6 @@ def _prefix_lm_mask_info_components(
         raise ValueError(f"block_q={block_q} must divide q_seq_len={q_seq_len}.")
     if kv_seq_len % block_kv != 0:
         raise ValueError(f"block_kv={block_kv} must divide kv_seq_len={kv_seq_len}.")
-    if data_next_axis not in ("q", "kv"):
-        raise ValueError(f"data_next_axis must be 'q' or 'kv', got {data_next_axis}.")
-
     q_blocks = q_seq_len // block_q
     kv_blocks = kv_seq_len // block_kv
     prefix_length = jnp.asarray(prefix_length, dtype=jnp.int32)
@@ -437,7 +439,7 @@ def _prefix_lm_mask_info_components(
     )
     block_mask = jnp.broadcast_to(block_mask[None, :, :], (num_heads, q_blocks, kv_blocks))
 
-    data_block_ids = kv_block_ids if data_next_axis == "kv" else q_block_ids
+    data_block_ids = kv_block_ids if data_next_axis == _PrefixLmDataNextAxis.KV else q_block_ids
     data_next = jnp.broadcast_to(data_block_ids, (q_blocks, kv_blocks))
     data_next = jnp.where(block_mask[0] != BLOCK_MASK_EMPTY, data_next, 0).astype(jnp.int32)
     data_next = jnp.broadcast_to(data_next[None, :, :], (num_heads, q_blocks, kv_blocks))
