@@ -498,74 +498,22 @@ _VM_ZONE = "us-central1-a"
 _VM_NAME = "my-vm"
 
 
-def _mock_service_with_insert_op(op_name: str = _OP_NAME) -> CloudGcpService:
-    """Build a CloudGcpService whose POST /instances returns an operation name.
+def _make_recording_service(op_name: str = _OP_NAME) -> tuple[CloudGcpService, list[httpx.Request]]:
+    """Build a CloudGcpService that records every HTTP request it issues.
 
+    POST /instances returns an operation name; GET /operations/... returns DONE;
+    GET /instances/<name> returns a running instance so wait=True describe succeeds.
     The token is pre-seeded so _headers() never triggers a real credential refresh.
-    Any GET request (for the operation poll or describe) returns 404 so that the
-    non-blocking path's describe-skipping is exercised without network calls.
     """
+    recorded: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        recorded.append(request)
         if request.method == "POST":
             return httpx.Response(200, json={"name": op_name, "status": "RUNNING"})
-        # GET for operation or describe: return 404 (VM not yet visible)
-        return httpx.Response(404, json={"error": {"code": 404, "status": "NOT_FOUND", "message": "not found"}})
-
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    svc = CloudGcpService(project_id="test-project", http_client=client)
-    svc._token = "fake-token"
-    svc._expires_at = time.monotonic() + 3600
-    return svc
-
-
-def test_vm_create_default_does_not_wait_for_zone_operation() -> None:
-    """vm_create(wait=False) submits the insert and returns without polling the operation.
-
-    Verifies the boundedness fix: blocking on the zone op (up to 600 s) inside
-    the single-threaded control tick would starve reconcile and worker keep-alive.
-    """
-    wait_called = False
-
-    def _fail_if_wait_called(zone: str, op: str, timeout: float = 600.0) -> dict:
-        nonlocal wait_called
-        wait_called = True
-        raise AssertionError("_wait_zone_operation must not be called on the non-blocking path")
-
-    svc = _mock_service_with_insert_op()
-    svc._wait_zone_operation = _fail_if_wait_called  # type: ignore[method-assign]
-
-    req = VmCreateRequest(
-        name=_VM_NAME,
-        zone=_VM_ZONE,
-        machine_type="n2-standard-4",
-    )
-    info = svc.vm_create(req)  # wait=False by default
-
-    assert not wait_called
-    assert info.name == _VM_NAME
-    assert info.status == "PROVISIONING"
-    assert info.internal_ip == ""  # IP not yet assigned
-
-
-def test_vm_create_wait_true_calls_wait_zone_operation() -> None:
-    """vm_create(wait=True) does poll the zone operation (controller-VM bootstrap path)."""
-    wait_called = False
-
-    def _record_wait(zone: str, op: str, timeout: float = 600.0) -> dict:
-        nonlocal wait_called
-        wait_called = True
-        return {}
-
-    # For wait=True the service also calls vm_describe after the wait.  Return
-    # a minimal running-instance response so describe() succeeds.
-    call_count = {"n": 0}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        call_count["n"] += 1
-        if request.method == "POST":
-            return httpx.Response(200, json={"name": _OP_NAME, "status": "RUNNING"})
-        # GET /instances/<name>: return a running instance
+        if "/operations/" in str(request.url):
+            return httpx.Response(200, json={"name": op_name, "status": "DONE"})
+        # GET /instances/<name>
         return httpx.Response(
             200,
             json={
@@ -581,12 +529,49 @@ def test_vm_create_wait_true_calls_wait_zone_operation() -> None:
     svc = CloudGcpService(project_id="test-project", http_client=client)
     svc._token = "fake-token"
     svc._expires_at = time.monotonic() + 3600
-    svc._wait_zone_operation = _record_wait  # type: ignore[method-assign]
+    return svc, recorded
+
+
+def test_vm_create_default_issues_no_operation_poll() -> None:
+    """vm_create(wait=False) issues only the insert POST; no zone-operation GET is sent.
+
+    The observable contract at the HTTP boundary: blocking on the operation poll
+    (up to 600 s) inside the single control tick would starve reconcile and
+    worker keep-alive for GCP_SLICE_MODE_VM slices.
+    """
+    svc, recorded = _make_recording_service()
+
+    req = VmCreateRequest(name=_VM_NAME, zone=_VM_ZONE, machine_type="n2-standard-4")
+    info = svc.vm_create(req)  # wait=False by default
+
+    methods = [r.method for r in recorded]
+    urls = [str(r.url) for r in recorded]
+
+    assert methods == ["POST"], f"Expected only the insert POST, got: {list(zip(methods, urls, strict=True))}"
+    assert info.name == _VM_NAME
+    assert info.status == "PROVISIONING"
+    assert info.internal_ip == ""  # IP not yet assigned; describe loop will supply it
+
+
+def test_vm_create_wait_true_polls_operation_and_describes() -> None:
+    """vm_create(wait=True) polls the zone operation then describes the instance.
+
+    This is the controller-VM bootstrap path that needs internal_ip immediately.
+    The observable contract: a POST (insert), a GET to operations, and a GET to
+    the instance are all issued.
+    """
+    svc, recorded = _make_recording_service()
 
     req = VmCreateRequest(name=_VM_NAME, zone=_VM_ZONE, machine_type="n2-standard-4")
     info = svc.vm_create(req, wait=True)
 
-    assert wait_called
+    methods = [r.method for r in recorded]
+    urls = [str(r.url) for r in recorded]
+
+    assert methods[0] == "POST", f"First call should be the insert POST, got: {list(zip(methods, urls, strict=True))}"
+    assert any(
+        "/operations/" in u for u in urls
+    ), f"Expected a zone-operation poll GET, got: {list(zip(methods, urls, strict=True))}"
     assert info.status == "RUNNING"
     assert info.internal_ip == "10.0.0.1"
 
