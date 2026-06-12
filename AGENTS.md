@@ -148,20 +148,12 @@ Dependency direction: {`iris`, `haliax`} → {`levanter`, `zephyr`} → `marin`.
 
 ## Testing
 
-- Always fix tests you broke. Do not relax tolerances or hack around failures.
-- Prefer integration-style tests that validate externally-observable behavior.
-- Do not write tautological tests: tests must fail if behavior is wrong, not just if implementation changes.
-- Do not write "slop" tests that assert on incidental strings — the exact text of a log
-  message, or that a constructed command line contains a particular word or flag. These
-  couple the test to copy and to how a command is assembled, not to behavior: they break
-  on a harmless reword or flag-form change while a real regression slips through. They are
-  pure maintenance burden. Assert on the structured output or the effect instead. Assert on
-  a string only when that string *is* the contract (machine-readable output, a wire format,
-  a log line a downstream tool parses) — and then assert on the structured field, not the
-  rendered text.
-- Use pytest fixtures and parameterization to avoid duplication.
-- Prefer top-level `def test_*` with fixtures over test classes.
-- Search for existing test files before creating new ones. Extend existing files first.
-- No mocks unless testing I/O boundaries (network, filesystem). Test against real behavior.
-- No `time.sleep()` in tests — inject `now=time.time()` or mock time instead.
-- Mock at boundaries (e.g., wandb), not internal logger output.
+Read `TESTING.md` before writing or reviewing tests. It is the root testing
+policy for behavior-focused tests, slop-test rejection, mocks/fakes, timing,
+numerical tolerances, and pytest style.
+
+Before touching tests under `lib/*`, also read the nearest module `AGENTS.md`
+and any module `TESTING.md` it references. Module docs define local commands,
+markers, fakes, mocks, optional dependencies, and integration-test boundaries.
+
+Always fix tests you broke. Do not relax tolerances or hack around failures.
