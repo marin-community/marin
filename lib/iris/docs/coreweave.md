@@ -65,8 +65,8 @@ Follow logs of a detached job with
 Iris runs on CoreWeave CKS (bare-metal Kubernetes) using a shared NodePool model.
 Each Iris scale group maps to one CoreWeave NodePool with autoscaling enabled.
 CoreWeave manages node provisioning and deprovisioning; Iris manages only Pods.
-Tasks execute as independent Kubernetes Pods via `KubernetesRuntime` (Pod-per-task),
-which replaced an originally-planned containerd/crictl approach during implementation.
+Tasks execute as independent Kubernetes Pods via `KubernetesRuntime`
+(Pod-per-task).
 
 Example config: `lib/iris/config/coreweave.yaml`
 
@@ -173,47 +173,35 @@ and Network (traffic, latency). No setup required.
 
 ## 4. Operator Setup Guide
 
+§0 is the quickstart for the `marin-gpu` cluster. This section is the generic
+operator reference (any `--cluster=NAME`) and the lifecycle details behind it.
+
 ### Prerequisites
 
 - A CoreWeave CKS cluster (created via Console or Terraform)
-- A kubeconfig downloaded from CoreWeave Console > Tokens
+- A kubeconfig downloaded from CoreWeave Console > Tokens (see §0)
 - Images pushed to `ghcr.io/marin-community/`
-- Controller extras in the local Iris venv:
-  `uv pip install 'marin-iris[controller]'`
+- Controller extras: `uv pip install 'marin-iris[controller]'`
 
-This document is the canonical runbook for day-to-day CoreWeave operations.
-
-### Step 1: Save kubeconfig
-
-```bash
-mkdir -p ~/.kube
-mv ~/Downloads/kubeconfig.yaml ~/.kube/coreweave-iris
-export KUBECONFIG=~/.kube/coreweave-iris
-kubectl cluster-info
-```
-
-### Step 2: Set S3 credentials (if using S3 storage)
-
-```bash
-export R2_ACCESS_KEY_ID=<your-r2-access-key-id>
-export R2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
-```
-
-`iris cluster start` creates a K8s Secret (`iris-s3-credentials`) from these
-environment variables automatically.
+For S3 storage, export `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`;
+`iris cluster start` turns them into the `iris-s3-credentials` Secret.
 
 > **Note**: CoreWeave AI Object Storage (`cwobject.com`, `cwlota.com`) uses
-> virtual-hosted-style S3 addressing, which is auto-detected and configured.
-> However, this addressing style is incompatible with JAX's GCS/S3 backend.
-> Use Cloudflare R2 or another path-style-compatible endpoint for JAX workloads.
+> virtual-hosted-style S3 addressing, which is auto-detected and configured but
+> is incompatible with JAX's GCS/S3 backend. Use Cloudflare R2 or another
+> path-style-compatible endpoint for JAX workloads.
 
-### Step 3: Start the cluster
+### Lifecycle
 
 ```bash
-iris --cluster=coreweave cluster start
+iris --cluster=<name> cluster start      # idempotent; reconciles everything below
+iris --cluster=<name> cluster status
+iris --cluster=<name> cluster dashboard
+iris --cluster=<name> cluster stop       # deletes Pods + controller; NodePools survive
 ```
 
-This is fully idempotent. It creates/reconciles:
+`cluster start` creates/reconciles, in order:
+
 1. Namespace (`iris`) and RBAC (ServiceAccount, ClusterRole, ClusterRoleBinding)
 2. S3 credentials Secret (if S3 storage URIs are configured)
 3. ConfigMap (`iris-cluster-config`) with the cluster config as JSON
@@ -221,21 +209,8 @@ This is fully idempotent. It creates/reconciles:
 5. Controller Deployment (`iris-controller`) — images are built and pushed automatically
 6. Controller Service (`iris-controller-svc`, ClusterIP)
 
-### Step 4: Use the cluster
-
-```bash
-iris --cluster=coreweave cluster status
-iris --cluster=coreweave cluster dashboard
-```
-
-### Step 5: Stop
-
-```bash
-iris --cluster=coreweave cluster stop
-```
-
-Deletes worker Pods and controller resources. NodePools are left in place (they
-scale to zero when idle).
+`cluster stop` leaves NodePools in place; they scale to zero when idle (but
+still bill — see the NodePool cleanup under §4 Gotchas).
 
 ### Connecting
 
