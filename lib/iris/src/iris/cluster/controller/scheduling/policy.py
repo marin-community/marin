@@ -649,17 +649,17 @@ def _worker_matches_reservation_entry(
 
 def cleanup_stale_claims(
     claims: dict[WorkerId, ReservationClaim],
-    db: ControllerDB,
+    tx: Tx,
     health: WorkerHealthTracker,
 ) -> bool:
     """Remove claims for workers that disappeared or jobs that finished.
 
-    Mutates ``claims`` in place; returns whether anything was removed.
+    Reads job state from the caller's snapshot ``tx``. Mutates ``claims`` in
+    place; returns whether anything was removed.
     """
     active_worker_ids = {wid for wid, lease in health.all().items() if lease.active}
     claimed_job_ids = {JobName.from_wire(claim.job_id) for claim in claims.values()}
-    with db.read_snapshot() as tx:
-        job_states = reads.job_states_by_id(tx, claimed_job_ids)
+    job_states = reads.job_states_by_id(tx, claimed_job_ids)
     stale: list[WorkerId] = []
     for worker_id, claim in claims.items():
         if worker_id not in active_worker_ids:
@@ -675,15 +675,16 @@ def cleanup_stale_claims(
 
 def claim_workers_for_reservations(
     claims: dict[WorkerId, ReservationClaim],
-    db: ControllerDB,
+    tx: Tx,
     health: WorkerHealthTracker,
     worker_attrs: WorkerAttrsProjection,
 ) -> bool:
     """Assign unclaimed workers to unsatisfied reservation entries.
 
-    Scans all non-finished jobs with reservations. For each unfulfilled entry,
-    finds an eligible unclaimed worker and records the claim. Mutates ``claims``
-    in place; returns whether any new claim was added.
+    Scans all non-finished jobs with reservations from the caller's snapshot
+    ``tx``. For each unfulfilled entry, finds an eligible unclaimed worker and
+    records the claim. Mutates ``claims`` in place; returns whether any new
+    claim was added.
     """
     claimed_entries: set[tuple[str, int]] = {(c.job_id, c.entry_idx) for c in claims.values()}
     claimed_worker_ids: set[WorkerId] = set(claims.keys())
@@ -692,9 +693,8 @@ def claim_workers_for_reservations(
         job_pb2.JOB_STATE_BUILDING,
         job_pb2.JOB_STATE_RUNNING,
     )
-    with db.read_snapshot() as tx:
-        all_workers = reads.healthy_active_workers_with_attributes(tx, health, worker_attrs)
-        reservation_jobs = reads.jobs_with_reservations(tx, reservable_states)
+    all_workers = reads.healthy_active_workers_with_attributes(tx, health, worker_attrs)
+    reservation_jobs = reads.jobs_with_reservations(tx, reservable_states)
     changed = False
 
     for job in reservation_jobs:
@@ -733,13 +733,29 @@ def refresh_reservation_claims(
     ``persist=False`` to compute the updated claims without writing them
     (dry-run).
     """
-    claims = read_reservation_claims(db)
-    changed = cleanup_stale_claims(claims, db, health)
-    changed = claim_workers_for_reservations(claims, db, health, worker_attrs) or changed
+    with db.read_snapshot() as tx:
+        claims, changed = refresh_reservation_claims_in_tx(tx, health, worker_attrs)
     if changed and persist:
         with db.transaction() as cur:
             writes.replace_reservation_claims(cur, claims)
     return claims
+
+
+def refresh_reservation_claims_in_tx(
+    tx: Tx,
+    health: WorkerHealthTracker,
+    worker_attrs: WorkerAttrsProjection,
+) -> tuple[dict[WorkerId, ReservationClaim], bool]:
+    """Read claims and run the stale-sweep + re-claim passes over ``tx``.
+
+    The DB-less core shared by :func:`refresh_reservation_claims` and the control
+    tick's snapshot build. Returns the updated claims plus whether anything
+    changed, so the caller persists them in its own write transaction.
+    """
+    claims = reads.list_claims(tx)
+    changed = cleanup_stale_claims(claims, tx, health)
+    changed = claim_workers_for_reservations(claims, tx, health, worker_attrs) or changed
+    return claims, changed
 
 
 def inject_reservation_taints(
@@ -914,34 +930,31 @@ def preference_pass(
 
 
 def build_scheduling_context(
-    queries: ControllerDB,
+    snap: Tx,
     health: WorkerHealthTracker,
     worker_attrs: WorkerAttrsProjection,
     defaults: UserBudgetDefaults,
     claims: dict[WorkerId, ReservationClaim],
     max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
 ) -> SchedulingContext:
-    """Build a ``SchedulingContext`` from a single read snapshot.
+    """Build a ``SchedulingContext`` from the caller's read snapshot ``snap``.
 
-    All scheduling-tick DB I/O lives here. The returned context carries
+    All scheduling-tick DB reads live here. The returned context carries
     un-tainted workers; reservation taints are applied during the assignment
-    pass only (in ``run_scheduling_decision``). The running-for-preemption read
-    shares this same snapshot, so the scheduling tick is a single DB read.
+    pass only (in ``run_scheduling_decision``). Every read shares the caller's
+    snapshot, so the control tick issues a single DB read for the whole tick.
     """
     with slow_log(logger, "scheduling tick context", threshold_ms=50):
-        with queries.read_snapshot() as snap:
-            pending = reads.pending_tasks_with_jobs(snap)
-            workers = reads.healthy_active_workers_with_attributes(snap, health, worker_attrs)
-            usage_by_worker = reads.resource_usage_by_worker(snap)
-            user_spend = compute_user_spend(snap)
-            user_budget_limits = reads.get_all_user_budget_limits(snap)
-            requested_bands = reads.get_priority_bands(snap, {t.job_id for t in pending})
-            reserved_jobs = reads.reserved_job_ids(snap)
-            reservation_entry_counts = reads.reservation_entry_counts(
-                snap, {t.job_id for t in pending if t.has_reservation}
-            )
-            building_counts = reads.building_counts(snap, [w.worker_id for w in workers])
-            running = _running_tasks_with_band_and_value(snap, set(claims.keys()))
+        pending = reads.pending_tasks_with_jobs(snap)
+        workers = reads.healthy_active_workers_with_attributes(snap, health, worker_attrs)
+        usage_by_worker = reads.resource_usage_by_worker(snap)
+        user_spend = compute_user_spend(snap)
+        user_budget_limits = reads.get_all_user_budget_limits(snap)
+        requested_bands = reads.get_priority_bands(snap, {t.job_id for t in pending})
+        reserved_jobs = reads.reserved_job_ids(snap)
+        reservation_entry_counts = reads.reservation_entry_counts(snap, {t.job_id for t in pending if t.has_reservation})
+        building_counts = reads.building_counts(snap, [w.worker_id for w in workers])
+        running = _running_tasks_with_band_and_value(snap, set(claims.keys()))
 
     snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
     sorted_pending = _sort_pending_tasks_by_resolved_band(pending, requested_bands)

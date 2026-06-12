@@ -123,7 +123,8 @@ def _demand_entries(state: ControllerTestState):
     Mirrors the production demand path: build the per-tick scheduling context
     from the live DB and run the single demand computation over it.
     """
-    ctx = build_scheduling_context(state._db, state._health, state._worker_attrs, UserBudgetDefaults(), {})
+    with state._db.read_snapshot() as snap:
+        ctx = build_scheduling_context(snap, state._health, state._worker_attrs, UserBudgetDefaults(), {})
     return compute_demand_entries(ctx, Scheduler(), {})
 
 
