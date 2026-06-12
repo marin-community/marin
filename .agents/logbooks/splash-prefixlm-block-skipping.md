@@ -133,3 +133,40 @@
   - 16384 Splash-only compile-including: static causal `2.334 s`; packed causal segment `1.167 s`; packed prefix-LM `1.247 s`.
 - Interpretation: The dynamic packed metadata path is already a useful long-sequence win on v4-8 for both packed prefix and pure causal segment IDs: about `2.4-2.5x` faster than dense materialized references at 8192, and faster than static causal Splash because cross-document blocks are skipped. The remaining compact segment-run work should target metadata construction/payload scalability rather than proving basic block-skipping value.
 - Next action: Run the same harness on v5p-8 when available, then design a compact segment-run `MaskInfo` builder with a fixed partial-block capacity derived from contiguous packed document boundaries.
+
+### 2026-06-12 - Direct blocked metadata for packed masks
+- Hypothesis: The first packed prefix/segment implementation can avoid the intermediate dense `[S, S]` dynamic mask by constructing the blocked mask payload directly from blocked segment IDs and prefix masks, while preserving the same Splash `MaskInfo` contract.
+- Command:
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `timeout 900 ./infra/pre-commit.py --review --agent-command='env RUST_LOG=error codex exec --ignore-user-config --ephemeral --dangerously-bypass-approvals-and-sandbox'`
+- Config: Local CPU metadata tests at `S=128`, block size `16`, with both block-aligned two-document packing and ragged four-document packing (`19/23/41/45` tokens).
+- Result:
+  - `packed_prefix_lm_mask_infos` and `packed_causal_segment_mask_infos` now build `[q_blocks, kv_blocks, block_q, block_kv]` mask blocks directly from packed segment IDs.
+  - Removed the private dense dynamic-mask metadata path for packed masks.
+  - Splash helper tests passed with `18 passed`.
+  - Changed-file precommit passed.
+  - Lint review reported no findings.
+- Interpretation: This is not full THD-style segment-run metadata yet, because dynamic partial-mask blocks are still allocated for every block coordinate. It does remove the avoidable dense mask materialization step and adds ragged packed-doc coverage, which is a concrete step toward compact segment-run metadata.
+- Next action: Re-benchmark on TPU after this patch, then replace per-block partial payloads with segment-run-derived partial blocks where possible.
+
+### 2026-06-12 - v5p-8 packed mask benchmark harness
+- Hypothesis: The packed mask Splash wins observed on v4-8 should hold on v5p-8 with the scoped VMEM setting used for v5-class TPU microbenches.
+- Command:
+  - `uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name dlwh-splash-mask-v5p-bench allocate --tpu-type v5p-8 --timeout 900`
+  - `uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name dlwh-splash-mask-v5p-bench execute --env 'LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000' -- uv run --project lib/levanter python lib/levanter/scripts/bench/bench_splash_attention_masks.py --seq-len 8192 --block-size 512 --docs-per-sequence 4 --prefix-tokens-per-doc 256 --iterations 5 --warmup 2 --include-dense`
+  - `uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name dlwh-splash-mask-v5p-bench execute --no-sync --env 'LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000' -- uv run --project lib/levanter python lib/levanter/scripts/bench/bench_splash_attention_masks.py --seq-len 16384 --block-size 512 --docs-per-sequence 4 --prefix-tokens-per-doc 512 --iterations 5 --warmup 2`
+  - `uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name dlwh-splash-mask-v5p-bench release`
+- Config:
+  - Worker: `marin-tpu-v5p-preemptible-8-us-central1-20260612-0636-2fe5e706`, IP `10.128.0.130`, zone `us-central1-a`.
+  - Env: `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`.
+  - Benchmark-reported device: `TPU v5`, `num_devices=4`.
+  - `B=1`, `H=8`, `D=128`, BF16 inputs, block size `512`, four equal-length packed docs per sequence.
+- Result:
+  - 8192 steady medians: static causal Splash `1.204 ms`; packed causal segment Splash `1.051 ms`; packed prefix-LM Splash `1.079 ms`; packed causal dense reference `1.850 ms`; packed prefix dense reference `1.861 ms`.
+  - 8192 compile-including: static causal Splash `1.155 s`; packed causal segment Splash `0.834 s`; packed prefix-LM Splash `0.837 s`; packed causal dense reference `15.056 s`; packed prefix dense reference `8.947 s`.
+  - 16384 Splash-only steady medians: static causal `3.297 ms`; packed causal segment `2.683 ms`; packed prefix-LM `2.699 ms`.
+  - 16384 Splash-only compile-including: static causal `2.298 s`; packed causal segment `0.961 s`; packed prefix-LM `1.009 s`.
+  - Release verified: no active local dev TPU session after release; Iris holder job ended `JOB_STATE_KILLED` with `Terminated by user`.
+- Interpretation: The packed block-skipping path also wins on v5p-8. At 8192 it is about `1.7x` faster than dense materialized references and modestly faster than static causal Splash because cross-document blocks are skipped. At 16384 the same trend holds against static causal Splash.
+- Next action: Re-run v5p after the direct blocked metadata patch is pushed, then check v5e/v6e compatibility and start a bounded segment-run metadata design.

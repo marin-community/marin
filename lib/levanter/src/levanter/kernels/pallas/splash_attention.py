@@ -113,15 +113,22 @@ class _PrefixLmMaskInfoComponents:
 
 
 @dataclass(frozen=True)
-class _PackedSegmentMaskInputs:
-    q_positions: jax.Array
-    kv_positions: jax.Array
-    same_segment: jax.Array
+class _PackedDynamicMaskContext:
+    q_seq_len: int
+    kv_seq_len: int
+    block_sizes: splash_attention_kernel.BlockSizes
+    head_shards: int
+    q_seq_shards: int
 
 
 class _PrefixLmDataNextAxis(StrEnum):
     Q = "q"
     KV = "kv"
+
+
+class _DynamicMaskInfoRole(StrEnum):
+    FWD_OR_DQ = "fwd_or_dq"
+    DKV = "dkv"
 
 
 def prefix_lm_mask_infos(
@@ -187,23 +194,250 @@ def packed_prefix_lm_mask_infos(
     if not block_sizes.has_backward_blocks:
         raise ValueError("packed_prefix_lm_mask_infos requires backward block sizes.")
 
-    # The packed prefix mask is identical for every attention head. Splash treats
-    # a mask-info head dimension of size 1 as shared across all heads, avoiding
-    # an H-fold blowup in dynamic partial mask blocks at long sequence lengths.
-    dense_mask = packed_prefix_lm_dense_mask(
-        prefix_mask=prefix_mask,
-        q_segment_ids=q_segment_ids,
-        kv_segment_ids=kv_segment_ids,
+    context = _PackedDynamicMaskContext(
         q_seq_len=q_seq_len,
         kv_seq_len=kv_seq_len,
-        num_heads=1,
-    )
-    return _dynamic_dense_mask_infos(
-        dense_mask,
         block_sizes=block_sizes,
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
     )
+    return _blocked_packed_dynamic_mask_infos(
+        mask_block_builder=packed_prefix_lm_block_mask_blocks,
+        mask_kwargs={
+            "prefix_mask": prefix_mask,
+            "q_segment_ids": q_segment_ids,
+            "kv_segment_ids": kv_segment_ids,
+        },
+        context=context,
+    )
+
+
+def packed_prefix_lm_block_mask_blocks(
+    *,
+    prefix_mask: jax.Array,
+    q_segment_ids: jax.Array,
+    kv_segment_ids: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    block_q: int,
+    block_kv: int,
+) -> jax.Array:
+    """Build mask blocks for ``same_segment(q, kv) & (kv <= q | prefix_mask[kv])``."""
+    prefix_mask = jnp.asarray(prefix_mask, dtype=jnp.bool_)
+    if prefix_mask.ndim != 1:
+        raise ValueError(f"prefix_mask must be rank 1 after batching, got shape {prefix_mask.shape}.")
+    if prefix_mask.shape[0] != kv_seq_len:
+        raise ValueError(f"prefix_mask length {prefix_mask.shape[0]} must match kv_seq_len={kv_seq_len}.")
+
+    mask_inputs = _blocked_packed_segment_mask_inputs(
+        q_segment_ids=q_segment_ids,
+        kv_segment_ids=kv_segment_ids,
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        block_q=block_q,
+        block_kv=block_kv,
+    )
+    causal_or_prefix = mask_inputs.kv_positions <= mask_inputs.q_positions
+    prefix = prefix_mask.reshape(mask_inputs.kv_blocks, block_kv)[None, :, None, :]
+    return mask_inputs.same_segment & (causal_or_prefix | prefix)
+
+
+def packed_causal_segment_block_mask_blocks(
+    *,
+    q_segment_ids: jax.Array,
+    kv_segment_ids: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    block_q: int,
+    block_kv: int,
+) -> jax.Array:
+    """Build mask blocks for ``same_segment(q, kv) & (kv <= q)``."""
+    mask_inputs = _blocked_packed_segment_mask_inputs(
+        q_segment_ids=q_segment_ids,
+        kv_segment_ids=kv_segment_ids,
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        block_q=block_q,
+        block_kv=block_kv,
+    )
+    return mask_inputs.same_segment & (mask_inputs.kv_positions <= mask_inputs.q_positions)
+
+
+@dataclass(frozen=True)
+class _BlockedPackedSegmentMaskInputs:
+    q_blocks: int
+    kv_blocks: int
+    q_positions: jax.Array
+    kv_positions: jax.Array
+    same_segment: jax.Array
+
+
+def _blocked_packed_segment_mask_inputs(
+    *,
+    q_segment_ids: jax.Array,
+    kv_segment_ids: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    block_q: int,
+    block_kv: int,
+) -> _BlockedPackedSegmentMaskInputs:
+    q_segment_ids = jnp.asarray(q_segment_ids)
+    kv_segment_ids = jnp.asarray(kv_segment_ids)
+
+    if q_segment_ids.ndim != 1 or kv_segment_ids.ndim != 1:
+        raise ValueError(
+            "q_segment_ids and kv_segment_ids must be rank 1 after batching, "
+            f"got {q_segment_ids.shape} and {kv_segment_ids.shape}."
+        )
+    if q_segment_ids.shape[0] != q_seq_len:
+        raise ValueError(f"q_segment_ids length {q_segment_ids.shape[0]} must match q_seq_len={q_seq_len}.")
+    if kv_segment_ids.shape[0] != kv_seq_len:
+        raise ValueError(f"kv_segment_ids length {kv_segment_ids.shape[0]} must match kv_seq_len={kv_seq_len}.")
+    if q_seq_len % block_q != 0:
+        raise ValueError(f"block_q={block_q} must divide q_seq_len={q_seq_len}.")
+    if kv_seq_len % block_kv != 0:
+        raise ValueError(f"block_kv={block_kv} must divide kv_seq_len={kv_seq_len}.")
+
+    q_blocks = q_seq_len // block_q
+    kv_blocks = kv_seq_len // block_kv
+    q_segment_blocks = q_segment_ids.reshape(q_blocks, block_q)
+    kv_segment_blocks = kv_segment_ids.reshape(kv_blocks, block_kv)
+    same_segment = q_segment_blocks[:, None, :, None] == kv_segment_blocks[None, :, None, :]
+
+    q_positions = jnp.arange(q_seq_len, dtype=jnp.int32).reshape(q_blocks, block_q)
+    kv_positions = jnp.arange(kv_seq_len, dtype=jnp.int32).reshape(kv_blocks, block_kv)
+    return _BlockedPackedSegmentMaskInputs(
+        q_blocks=q_blocks,
+        kv_blocks=kv_blocks,
+        q_positions=q_positions[:, None, :, None],
+        kv_positions=kv_positions[None, :, None, :],
+        same_segment=same_segment,
+    )
+
+
+def _blocked_packed_dynamic_mask_infos(
+    *,
+    mask_block_builder,
+    mask_kwargs: dict[str, object],
+    context: _PackedDynamicMaskContext,
+) -> SplashDynamicMaskMetadata:
+    fwd_mask_info = _blocked_packed_dynamic_mask_info(
+        mask_block_builder(
+            **mask_kwargs,
+            q_seq_len=context.q_seq_len,
+            kv_seq_len=context.kv_seq_len,
+            block_q=context.block_sizes.block_q,
+            block_kv=context.block_sizes.block_kv,
+        ),
+        role=_DynamicMaskInfoRole.FWD_OR_DQ,
+        head_shards=context.head_shards,
+        q_seq_shards=context.q_seq_shards,
+    )
+    dq_mask_info = _blocked_packed_dynamic_mask_info(
+        mask_block_builder(
+            **mask_kwargs,
+            q_seq_len=context.q_seq_len,
+            kv_seq_len=context.kv_seq_len,
+            block_q=context.block_sizes.block_q_dq,
+            block_kv=context.block_sizes.block_kv_dq,
+        ),
+        role=_DynamicMaskInfoRole.FWD_OR_DQ,
+        head_shards=context.head_shards,
+        q_seq_shards=context.q_seq_shards,
+    )
+    dkv_mask_info = _blocked_packed_dynamic_mask_info(
+        mask_block_builder(
+            **mask_kwargs,
+            q_seq_len=context.q_seq_len,
+            kv_seq_len=context.kv_seq_len,
+            block_q=context.block_sizes.block_q_dkv,
+            block_kv=context.block_sizes.block_kv_dkv,
+        ),
+        role=_DynamicMaskInfoRole.DKV,
+        head_shards=context.head_shards,
+        q_seq_shards=context.q_seq_shards,
+    )
+    return SplashDynamicMaskMetadata(
+        fwd_mask_info=fwd_mask_info,
+        dq_mask_info=dq_mask_info,
+        dkv_mask_info=dkv_mask_info,
+    )
+
+
+def _blocked_packed_dynamic_mask_info(
+    partial_mask_blocks: jax.Array,
+    *,
+    role: _DynamicMaskInfoRole,
+    head_shards: int,
+    q_seq_shards: int,
+) -> splash_attention_mask_info.MaskInfo:
+    if partial_mask_blocks.ndim != 4:
+        raise ValueError(f"Expected blocked mask with rank 4, got {partial_mask_blocks.shape}.")
+    if partial_mask_blocks.dtype != jnp.bool_:
+        raise ValueError(f"Expected bool blocked mask, got {partial_mask_blocks.dtype}.")
+    if head_shards != 1:
+        raise NotImplementedError("Packed dynamic Splash metadata with shared heads currently requires head_shards=1.")
+
+    q_blocks, kv_blocks, _, _ = partial_mask_blocks.shape
+    if q_blocks % q_seq_shards != 0:
+        raise ValueError(f"q_seq_shards={q_seq_shards} must divide q block count {q_blocks}.")
+
+    partial_mask_blocks = partial_mask_blocks[None, :, :, :, :]
+    is_full_mask = jnp.all(partial_mask_blocks, axis=(-1, -2))
+    is_empty_mask = jnp.logical_not(jnp.any(partial_mask_blocks, axis=(-1, -2)))
+
+    block_mask = jnp.ones((1, q_blocks, kv_blocks), dtype=jnp.int32)
+    block_mask = jnp.where(is_full_mask, BLOCK_MASK_FULL, block_mask)
+    block_mask = jnp.where(is_empty_mask, BLOCK_MASK_EMPTY, block_mask)
+
+    q_blocks_per_shard = q_blocks // q_seq_shards
+    data_next_slices = []
+    mask_next_slices = []
+    for q_seq_shard in range(q_seq_shards):
+        q_start = q_seq_shard * q_blocks_per_shard
+        local_block_mask = block_mask[:, q_start : q_start + q_blocks_per_shard]
+        mask_next = jnp.arange(q_blocks_per_shard * kv_blocks, dtype=jnp.int32).reshape(
+            1, q_blocks_per_shard, kv_blocks
+        )
+        mask_next = jnp.where(local_block_mask == BLOCK_MASK_PARTIAL, mask_next, 0)
+
+        if role == _DynamicMaskInfoRole.DKV:
+            data_next = jnp.arange(q_blocks_per_shard, dtype=jnp.int32)[None, :, None]
+            data_next = jnp.broadcast_to(data_next, (1, q_blocks_per_shard, kv_blocks))
+        else:
+            data_next = jnp.arange(kv_blocks, dtype=jnp.int32)[None, None, :]
+            data_next = jnp.broadcast_to(data_next, (1, q_blocks_per_shard, kv_blocks))
+        data_next = jnp.where(local_block_mask == BLOCK_MASK_EMPTY, 0, data_next)
+
+        data_next_slices.append(data_next)
+        mask_next_slices.append(mask_next)
+
+    data_next = jnp.concatenate(data_next_slices, axis=1)
+    mask_next = jnp.concatenate(mask_next_slices, axis=1)
+    if role == _DynamicMaskInfoRole.DKV:
+        partial_mask_blocks = partial_mask_blocks.swapaxes(-1, -2)
+
+    return splash_attention_mask_info.MaskInfo(
+        data_next=_downcast_dynamic_mask_index(
+            data_next,
+            q_blocks_per_shard if role == _DynamicMaskInfoRole.DKV else kv_blocks,
+        ),
+        mask_next=_downcast_dynamic_mask_index(mask_next, q_blocks_per_shard * kv_blocks),
+        block_mask=block_mask.astype(jnp.int8),
+        partial_mask_blocks=partial_mask_blocks,
+        q_sequence=None,
+        is_dynamic_mask=True,
+    )
+
+
+def _downcast_dynamic_mask_index(array: jax.Array, max_value: int) -> jax.Array:
+    if array.size == 0:
+        return array
+    if max_value <= np.iinfo(np.int8).max:
+        return array.astype(jnp.int8)
+    if max_value <= np.iinfo(np.int16).max:
+        return array.astype(jnp.int16)
+    return array.astype(jnp.int32)
 
 
 def packed_causal_segment_mask_infos(
@@ -223,159 +457,21 @@ def packed_causal_segment_mask_infos(
     if not block_sizes.has_backward_blocks:
         raise ValueError("packed_causal_segment_mask_infos requires backward block sizes.")
 
-    dense_mask = packed_causal_segment_dense_mask(
-        q_segment_ids=q_segment_ids,
-        kv_segment_ids=kv_segment_ids,
+    context = _PackedDynamicMaskContext(
         q_seq_len=q_seq_len,
         kv_seq_len=kv_seq_len,
-        num_heads=1,
-    )
-    return _dynamic_dense_mask_infos(
-        dense_mask,
         block_sizes=block_sizes,
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
     )
-
-
-def packed_prefix_lm_dense_mask(
-    *,
-    prefix_mask: jax.Array,
-    q_segment_ids: jax.Array,
-    kv_segment_ids: jax.Array,
-    q_seq_len: int,
-    kv_seq_len: int,
-    num_heads: int,
-) -> jax.Array:
-    """Materialize the per-example dense mask used by packed prefix-LM lowering."""
-    prefix_mask = jnp.asarray(prefix_mask, dtype=jnp.bool_)
-    q_segment_ids = jnp.asarray(q_segment_ids)
-    kv_segment_ids = jnp.asarray(kv_segment_ids)
-
-    if prefix_mask.ndim != 1:
-        raise ValueError(f"prefix_mask must be rank 1 after batching, got shape {prefix_mask.shape}.")
-    if q_segment_ids.ndim != 1 or kv_segment_ids.ndim != 1:
-        raise ValueError(
-            "q_segment_ids and kv_segment_ids must be rank 1 after batching, "
-            f"got {q_segment_ids.shape} and {kv_segment_ids.shape}."
-        )
-    if prefix_mask.shape[0] != kv_seq_len:
-        raise ValueError(f"prefix_mask length {prefix_mask.shape[0]} must match kv_seq_len={kv_seq_len}.")
-    mask_inputs = _packed_segment_mask_inputs(
-        q_segment_ids=q_segment_ids,
-        kv_segment_ids=kv_segment_ids,
-        q_seq_len=q_seq_len,
-        kv_seq_len=kv_seq_len,
+    return _blocked_packed_dynamic_mask_infos(
+        mask_block_builder=packed_causal_segment_block_mask_blocks,
+        mask_kwargs={
+            "q_segment_ids": q_segment_ids,
+            "kv_segment_ids": kv_segment_ids,
+        },
+        context=context,
     )
-    prefix_or_causal = (mask_inputs.kv_positions <= mask_inputs.q_positions) | prefix_mask[None, :]
-    mask = mask_inputs.same_segment & prefix_or_causal
-    return jnp.broadcast_to(mask[None, :, :], (num_heads, q_seq_len, kv_seq_len))
-
-
-def packed_causal_segment_dense_mask(
-    *,
-    q_segment_ids: jax.Array,
-    kv_segment_ids: jax.Array,
-    q_seq_len: int,
-    kv_seq_len: int,
-    num_heads: int,
-) -> jax.Array:
-    """Materialize the per-example dense mask used by packed causal segment lowering."""
-    mask_inputs = _packed_segment_mask_inputs(
-        q_segment_ids=q_segment_ids,
-        kv_segment_ids=kv_segment_ids,
-        q_seq_len=q_seq_len,
-        kv_seq_len=kv_seq_len,
-    )
-    mask = mask_inputs.same_segment & (mask_inputs.kv_positions <= mask_inputs.q_positions)
-    return jnp.broadcast_to(mask[None, :, :], (num_heads, q_seq_len, kv_seq_len))
-
-
-def _packed_segment_mask_inputs(
-    *,
-    q_segment_ids: jax.Array,
-    kv_segment_ids: jax.Array,
-    q_seq_len: int,
-    kv_seq_len: int,
-) -> _PackedSegmentMaskInputs:
-    q_segment_ids = jnp.asarray(q_segment_ids)
-    kv_segment_ids = jnp.asarray(kv_segment_ids)
-
-    if q_segment_ids.ndim != 1 or kv_segment_ids.ndim != 1:
-        raise ValueError(
-            "q_segment_ids and kv_segment_ids must be rank 1 after batching, "
-            f"got {q_segment_ids.shape} and {kv_segment_ids.shape}."
-        )
-    if q_segment_ids.shape[0] != q_seq_len:
-        raise ValueError(f"q_segment_ids length {q_segment_ids.shape[0]} must match q_seq_len={q_seq_len}.")
-    if kv_segment_ids.shape[0] != kv_seq_len:
-        raise ValueError(f"kv_segment_ids length {kv_segment_ids.shape[0]} must match kv_seq_len={kv_seq_len}.")
-
-    q_positions = jnp.arange(q_seq_len, dtype=jnp.int32)[:, None]
-    kv_positions = jnp.arange(kv_seq_len, dtype=jnp.int32)[None, :]
-    same_segment = q_segment_ids[:, None] == kv_segment_ids[None, :]
-    return _PackedSegmentMaskInputs(
-        q_positions=q_positions,
-        kv_positions=kv_positions,
-        same_segment=same_segment,
-    )
-
-
-def _dynamic_dense_mask_infos(
-    dense_mask: jax.Array,
-    *,
-    block_sizes: splash_attention_kernel.BlockSizes,
-    head_shards: int,
-    q_seq_shards: int,
-) -> SplashDynamicMaskMetadata:
-    fwd_mask_info = _dynamic_dense_mask_info(
-        dense_mask,
-        block_q=block_sizes.block_q,
-        block_kv=block_sizes.block_kv,
-        is_dkv=False,
-        head_shards=head_shards,
-        q_seq_shards=q_seq_shards,
-    )
-    dq_mask_info = _dynamic_dense_mask_info(
-        dense_mask,
-        block_q=block_sizes.block_q_dq,
-        block_kv=block_sizes.block_kv_dq,
-        is_dkv=False,
-        head_shards=head_shards,
-        q_seq_shards=q_seq_shards,
-    )
-    dkv_mask_info = _dynamic_dense_mask_info(
-        dense_mask,
-        block_q=block_sizes.block_q_dkv,
-        block_kv=block_sizes.block_kv_dkv,
-        is_dkv=True,
-        head_shards=head_shards,
-        q_seq_shards=q_seq_shards,
-    )
-    return SplashDynamicMaskMetadata(
-        fwd_mask_info=fwd_mask_info,
-        dq_mask_info=dq_mask_info,
-        dkv_mask_info=dkv_mask_info,
-    )
-
-
-def _dynamic_dense_mask_info(
-    dense_mask: jax.Array,
-    *,
-    block_q: int,
-    block_kv: int,
-    is_dkv: bool,
-    head_shards: int,
-    q_seq_shards: int,
-) -> splash_attention_mask_info.MaskInfo:
-    mask_info, _ = splash_attention_mask_info._process_dynamic_mask(
-        dense_mask,
-        (block_q, block_kv),
-        is_dkv=is_dkv,
-        head_shards=head_shards,
-        q_seq_shards=q_seq_shards,
-    )
-    return mask_info
 
 
 def lower_splash_attention_mask(

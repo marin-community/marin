@@ -120,13 +120,11 @@ def test_prefix_lm_dkv_mask_info_matches_dense_prefix_lm(prefix_length):
     np.testing.assert_array_equal(data_next[0], np.where(block_mask[0] > 0, q_block_ids, 0))
 
 
-def test_packed_prefix_lm_mask_info_matches_dense_packed_prefix_lm():
+@pytest.mark.parametrize("case_name", ["aligned", "ragged"])
+def test_packed_prefix_lm_mask_info_matches_dense_packed_prefix_lm(case_name):
     seq_len = 128
     block_size = 16
-    segment_ids = _two_segment_ids()
-    prefix_mask = jnp.zeros((seq_len,), dtype=jnp.bool_)
-    prefix_mask = prefix_mask.at[:20].set(True)
-    prefix_mask = prefix_mask.at[64:80].set(True)
+    segment_ids, prefix_mask, block_expectations = _packed_prefix_case(case_name)
 
     metadata = packed_prefix_lm_mask_infos(
         prefix_mask=prefix_mask,
@@ -146,15 +144,15 @@ def test_packed_prefix_lm_mask_info_matches_dense_packed_prefix_lm():
         expected,
         seq_len=seq_len,
         block_size=block_size,
-        partial_q_block=0,
-        partial_kv_block=1,
+        **block_expectations,
     )
 
 
-def test_packed_causal_segment_mask_info_matches_dense_packed_causal():
+@pytest.mark.parametrize("case_name", ["aligned", "ragged"])
+def test_packed_causal_segment_mask_info_matches_dense_packed_causal(case_name):
     seq_len = 128
     block_size = 16
-    segment_ids = _two_segment_ids()
+    segment_ids, block_expectations = _packed_causal_case(case_name)
 
     metadata = packed_causal_segment_mask_infos(
         q_segment_ids=segment_ids,
@@ -173,8 +171,7 @@ def test_packed_causal_segment_mask_info_matches_dense_packed_causal():
         expected,
         seq_len=seq_len,
         block_size=block_size,
-        partial_q_block=1,
-        partial_kv_block=1,
+        **block_expectations,
     )
 
 
@@ -185,6 +182,86 @@ def _two_segment_ids():
             jnp.ones((64,), dtype=jnp.int32),
         ]
     )
+
+
+def _ragged_segment_ids():
+    return jnp.concatenate(
+        [
+            jnp.zeros((19,), dtype=jnp.int32),
+            jnp.ones((23,), dtype=jnp.int32),
+            jnp.full((41,), 2, dtype=jnp.int32),
+            jnp.full((45,), 3, dtype=jnp.int32),
+        ]
+    )
+
+
+def _ragged_prefix_mask():
+    prefix_mask = jnp.zeros((128,), dtype=jnp.bool_)
+    for start in (0, 19, 42, 83):
+        prefix_mask = prefix_mask.at[start : start + 5].set(True)
+    return prefix_mask
+
+
+def _packed_prefix_case(case_name):
+    if case_name == "aligned":
+        prefix_mask = jnp.zeros((128,), dtype=jnp.bool_)
+        prefix_mask = prefix_mask.at[:20].set(True)
+        prefix_mask = prefix_mask.at[64:80].set(True)
+        return (
+            _two_segment_ids(),
+            prefix_mask,
+            _block_expectations(
+                partial_q_block=0,
+                partial_kv_block=1,
+                full_q_block=5,
+                full_kv_block=4,
+            ),
+        )
+    if case_name == "ragged":
+        return (
+            _ragged_segment_ids(),
+            _ragged_prefix_mask(),
+            _block_expectations(
+                partial_q_block=1,
+                partial_kv_block=0,
+                full_q_block=4,
+                full_kv_block=3,
+            ),
+        )
+    raise ValueError(f"Unknown packed prefix case: {case_name}.")
+
+
+def _packed_causal_case(case_name):
+    if case_name == "aligned":
+        return _two_segment_ids(), _block_expectations(
+            partial_q_block=1,
+            partial_kv_block=1,
+            full_q_block=5,
+            full_kv_block=4,
+        )
+    if case_name == "ragged":
+        return _ragged_segment_ids(), _block_expectations(
+            partial_q_block=1,
+            partial_kv_block=0,
+            full_q_block=4,
+            full_kv_block=3,
+        )
+    raise ValueError(f"Unknown packed causal case: {case_name}.")
+
+
+def _block_expectations(
+    *,
+    partial_q_block: int,
+    partial_kv_block: int,
+    full_q_block: int,
+    full_kv_block: int,
+):
+    return {
+        "partial_q_block": partial_q_block,
+        "partial_kv_block": partial_kv_block,
+        "full_q_block": full_q_block,
+        "full_kv_block": full_kv_block,
+    }
 
 
 def _packed_metadata_test_block_sizes(block_size):
@@ -208,6 +285,8 @@ def _assert_packed_metadata_matches_dense(
     block_size: int,
     partial_q_block: int,
     partial_kv_block: int,
+    full_q_block: int,
+    full_kv_block: int,
 ):
     actual_fwd = _materialize_mask_info(
         metadata.fwd_mask_info,
@@ -234,7 +313,7 @@ def _assert_packed_metadata_matches_dense(
     block_mask = np.asarray(metadata.fwd_mask_info.block_mask)
     # The helper's contract includes block skipping, not only dense mask parity.
     assert block_mask[0, 0, 4] == BLOCK_MASK_EMPTY  # noqa: ml-slop-test
-    assert block_mask[0, 5, 4] == BLOCK_MASK_FULL  # noqa: ml-slop-test
+    assert block_mask[0, full_q_block, full_kv_block] == BLOCK_MASK_FULL  # noqa: ml-slop-test
     assert block_mask[0, partial_q_block, partial_kv_block] == BLOCK_MASK_PARTIAL  # noqa: ml-slop-test
 
 
