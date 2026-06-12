@@ -16,9 +16,10 @@ commit. The review is read-only: it never edits, commits, or pushes for you.
 
 ## Checklist
 
-Work top to bottom. For a quick work-in-progress checkpoint, do **1, 2, 4, 5, 7**
-(clean up, lint, stage, commit, push) and stop. Run the whole list before you
-open or update a PR.
+Work top to bottom. For a quick work-in-progress checkpoint, do **1, 2, 4, 5,
+7** (clean up, lint, stage, commit, push) and stop. The changed-test cleanup in
+step 1 is a PR-readiness gate, not required for disposable WIP checkpoints. Run
+the whole list before you open or update a PR.
 
 1. Clean up your own diff (self-review).
 2. Mechanical lint & format — `./infra/pre-commit.py --changed-files --fix`.
@@ -26,7 +27,7 @@ open or update a PR.
 4. Stage the specific files for this work.
 5. Commit. ← natural checkpoint; the working tree is now clean.
 6. Lint-catalog review — `./infra/pre-commit.py --review`; fix or answer every finding.
-7. Push.
+7. Push (maybe).
 8. Open or update the PR.
 
 ## 1. Clean up your own diff
@@ -35,6 +36,17 @@ Read your own `git diff` before anything else. Drop dead code, debugging
 leftovers, and stale comments; tighten names; make the change say only what it
 means to. The review in step 6 is advisory and read-only — it will not clean up
 for you.
+
+If the diff touches tests and this commit is intended for a PR or review, read
+root `TESTING.md` and the relevant module-specific `AGENTS.md` or testing docs
+as part of this self-review. Review every changed test for slop: tautological
+assertions, disposable smoke probes left as pytest tests, internal call-count
+assertions, incidental string or command-fragment assertions, over-mocking,
+weakened tolerances, sleeps, skipped tests, and local marker/fake/mock
+violations.
+
+Fix or delete low-value tests before a PR-ready commit. Scratch probes are fine
+during development and WIP checkpointing, but they must not survive into a PR.
 
 ## 2. Lint and format
 
@@ -102,7 +114,7 @@ read it when a lane is slow or a run looks wrong.
 
 ## 7. Push
 
-Push to the remote tracking branch (`git push -u origin HEAD` if no upstream is
+If asked, or if the branch has an upstream, push to the remote tracking branch (`git push -u origin HEAD` if no upstream is
 set). If the push is rejected (diverged history), stop and ask the user — do not
 force-push.
 
@@ -162,6 +174,7 @@ gh pr create --title "<title>" --body "<plain text body>" --label agent-generate
 - Always add the `agent-generated` label.
 - Never credit yourself in commits or PR descriptions.
 - Include `Fixes #NNNN` when addressing a pre-existing issue.
+- If you have a specific github tool, you may use it.
 
 ## 9. Monitor the PR — mandatory, in a loop
 

@@ -28,7 +28,7 @@ Follow these steps precisely:
 
 4. Launch 4 agents in parallel to independently review the changes. Each returns a list of issues; each issue includes a description and the reason it was flagged (e.g. "CLAUDE.md adherence", "bug").
 
-   Agents 1 + 2: CLAUDE.md/AGENTS.md compliance sonnet agents. Audit changes for compliance. When evaluating a file, only consider CLAUDE.md/AGENTS.md files that share its path or are parents.
+   Agents 1 + 2: CLAUDE.md/AGENTS.md compliance sonnet agents. Audit changes for compliance. When evaluating a file, only consider CLAUDE.md/AGENTS.md files that share its path or are parents. If the PR adds or changes tests, read root `TESTING.md` plus the relevant module-specific testing docs, and check for low-value/slop tests or local testing-policy violations.
 
    Agents 3 + 4: Opus bug agents (parallel). Scan for obvious bugs, security issues, and incorrect logic within the changed code. Focus only on the diff without reading extra context. Flag only significant bugs you can validate from the diff alone; ignore nitpicks and likely false positives.
 
@@ -114,7 +114,8 @@ Notes:
 
 - Use gh CLI to interact with GitHub (e.g., fetch pull requests, create comments). Do not use web fetch.
 - Create a todo list before starting.
-- You must cite and link each issue in inline comments (e.g., if referring to a CLAUDE.md, include a link to it).
+- You must cite and link each issue in inline comments (e.g., if referring to a CLAUDE.md, include a link to it ideally with line number).
+- For changed tests, use root `TESTING.md` and the relevant module-specific `AGENTS.md`/`TESTING.md`/testing docs as the review checklist. Flag only concrete violations; do not use them to request broad coverage improvements.
 - If no issues are found and `--comment` argument is provided, post a comment with the following format:
 
 ---
