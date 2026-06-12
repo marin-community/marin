@@ -107,6 +107,22 @@ Target: paloma macro_loss < 3.5438. Power-decay dropped (linear matches baseline
   /pc0618/). Not mine to touch; my AMUSE runs are in east5 (won't free central2 v4). Letting them queue
   per the no-premature-conclusion-under-contention rule; they schedule as others' jobs finish.
 
+### Status 23:19 UTC — moved 5 pending points to preemptible v5p-8 us-east5
+v4 reservation stayed packed → per user ("use preemptible v5p-8 and other compute"), parametrized the
+launcher (KLSOAPH_TPU/REGION/PREEMPTIBLE) and moved the 5 pending axes to preemptible v5p-8 us-east5
+(MARIN_PREFIX=gs://marin-us-east5; verified nemotron/paloma/uncheatable mirrored there — no cross-region).
+Loss is hardware-independent (global batch 32, steps 10980, seed 0 fixed) so v5p-8 losses compare directly
+to the v4 anchor and the MuonH baseline; only tok/s differs (not the stopping metric).
+| tag | HW | SOAP HP delta | coordinator |
+|---|---|---|---|
+| center | v4-32 central2 (resvd) | — | /kaiyue/iris-run-job-20260612-230400 (RUNNING) |
+| beta2-0p95 | v5p-8 east5 (preempt) | SOAP beta2→0.95 | /kaiyue/iris-run-job-20260612-231751 |
+| beta2-0p99 | v5p-8 east5 (preempt) | SOAP beta2→0.99 | /kaiyue/iris-run-job-20260612-231809 |
+| beta2-0p999 | v5p-8 east5 (preempt) | SOAP beta2→0.999 | /kaiyue/iris-run-job-20260612-231822 |
+| lr-1p4 | v5p-8 east5 (preempt) | lr ×1.4 | /kaiyue/iris-run-job-20260612-231840 |
+| lr-1p8 | v5p-8 east5 (preempt) | lr ×1.8 | /kaiyue/iris-run-job-20260612-231854 |
+Watch: full-matrix SOAP gram OOM on v5p-8 (fewer chips than v4-32; v5p has 95GB/chip though).
+
 ### Code de-risking (while cold-starting) — klsoaph.py re-audit
 Full re-audit of the de-blocked full-matrix impl vs upstream PR #290: projection (qₗᵀ·g·qᵣ),
 back-projection, whitened-Gram (gg_l from g·qᵣ·esiᵣ outer product), ESI (eigen=1/esi² EMA, rsqrt
