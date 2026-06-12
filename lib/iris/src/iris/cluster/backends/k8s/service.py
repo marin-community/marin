@@ -44,6 +44,7 @@ from iris.cluster.backends.k8s.types import (
     PodResourceUsage,
     parse_k8s_cpu,
     parse_k8s_quantity,
+    parse_k8s_timestamp,
 )
 from iris.cluster.backends.types import find_free_port
 
@@ -846,9 +847,7 @@ def _parse_kubectl_log_line(line: str) -> KubectlLogLine:
     if len(parts) == 2:
         ts_str, payload = parts
         try:
-            if len(ts_str) > 27 and ts_str.endswith("Z"):
-                ts_str = ts_str[:26] + "Z"
-            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            ts = parse_k8s_timestamp(ts_str)
             return KubectlLogLine(timestamp=ts, stream="stdout", data=payload)
         except ValueError:
             logger.warning("Failed to parse timestamp from log line: %r", line[:120])
