@@ -57,7 +57,7 @@ for _dim, _bs, _steps in _GATE1_CELLS:
                 data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
                 output_path=this_output_path(),
                 run_id=_run_id,
-                resources=versioned(ResourceConfig.with_tpu("v4-32")),
+                resources=versioned(ResourceConfig.with_tpu("v4-32", regions=["us-central2"])),
                 steps=versioned(_steps),
                 batch_size=versioned(_bs),
                 seed=versioned(0),
