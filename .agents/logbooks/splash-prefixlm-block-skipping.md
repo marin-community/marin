@@ -40,3 +40,14 @@
 - Result: Reference mask tests passed with `4 passed`; Splash helper tests passed with `6 passed`.
 - Interpretation: `AttentionMask.prefix_lm(prefix_lengths=...)` now gives correct dense/reference semantics for per-batch prefix lengths. Splash lowering rejects dynamic prefix lengths instead of silently dropping them until the compact metadata path is implemented.
 - Next action: Implement and test a compact forward `MaskInfo` builder for prefix lengths, then extend it to backward and segment-aware packed-doc masks.
+
+### 2026-06-11 01:45 - Compact prefix-length Splash metadata
+- Hypothesis: Prefix-LM block skipping can avoid dense `[B, H, S, S]` masks by constructing Splash `MaskInfo` directly from each example's prefix length. For equal Q/KV block sizes, each query block needs at most two partial mask blocks: the causal boundary and the prefix boundary.
+- Command:
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py`
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'prefix_lm or sliding_window_mask'`
+- Config: Local CPU tests. Compact metadata tested at `S=256`, `block=64`, prefix lengths `0`, `64`, `130`, and `256`.
+- Result: Pre-commit passed. Splash helper tests passed with `14 passed`. Attention-mask tests passed with `4 passed`.
+- Interpretation: `prefix_lm_forward_mask_info` and `prefix_lm_dkv_mask_info` reconstruct the dense prefix-LM mask while storing only `2 * q_blocks` partial blocks. `_tpu_splash_attention` now has a dynamic-prefix branch that builds a batched `SplashAttentionKernel` from `prefix_lm_mask_infos` and passes it through `shard_map` with leading batch specs.
+- Next action: Run a TPU smoke test on v4-8 for dynamic `prefix_lengths`, then benchmark 8192/16384 against dense dynamic masks/reference fallback.

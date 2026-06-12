@@ -12,6 +12,8 @@ from levanter.kernels.pallas.splash_attention import (
     SplashAttentionMaskSpec,
     lower_splash_attention_mask,
     lower_splash_segment_ids,
+    prefix_lm_dkv_mask_info,
+    prefix_lm_forward_mask_info,
     splash_attention_block_sizes,
 )
 
@@ -60,6 +62,55 @@ def test_lower_splash_attention_mask_combines_static_prefix_lm_and_sliding_windo
     kv = np.arange(256)[None, :]
     expected = (kv < 64) | ((kv <= q) & (kv >= q - 31))
     np.testing.assert_array_equal(_materialize_splash_mask(lowering.kernel_mask.masks[0]), expected)
+
+
+@pytest.mark.parametrize("prefix_length", [0, 64, 130, 256])
+def test_prefix_lm_forward_mask_info_matches_dense_prefix_lm(prefix_length):
+    mask_info = prefix_lm_forward_mask_info(
+        prefix_length=jnp.asarray(prefix_length, dtype=jnp.int32),
+        q_seq_len=256,
+        kv_seq_len=256,
+        num_heads=2,
+        block_q=64,
+        block_kv=64,
+    )
+
+    actual = _materialize_mask_info(mask_info, head=0, q_seq_len=256, kv_seq_len=256, block_q=64, block_kv=64)
+    q = np.arange(256)[:, None]
+    kv = np.arange(256)[None, :]
+    expected = (kv < prefix_length) | (kv <= q)
+    np.testing.assert_array_equal(actual, expected)
+
+
+@pytest.mark.parametrize("prefix_length", [0, 64, 130, 256])
+def test_prefix_lm_dkv_mask_info_matches_dense_prefix_lm(prefix_length):
+    mask_info = prefix_lm_dkv_mask_info(
+        prefix_length=jnp.asarray(prefix_length, dtype=jnp.int32),
+        q_seq_len=256,
+        kv_seq_len=256,
+        num_heads=2,
+        block_q=64,
+        block_kv=64,
+    )
+
+    actual = _materialize_mask_info(
+        mask_info,
+        head=0,
+        q_seq_len=256,
+        kv_seq_len=256,
+        block_q=64,
+        block_kv=64,
+        transposed_partial_blocks=True,
+    )
+    q = np.arange(256)[:, None]
+    kv = np.arange(256)[None, :]
+    expected = (kv < prefix_length) | (kv <= q)
+    np.testing.assert_array_equal(actual, expected)
+
+    data_next = np.asarray(mask_info.data_next)
+    block_mask = np.asarray(mask_info.block_mask)
+    q_block_ids = np.arange(4, dtype=data_next.dtype)[:, None]
+    np.testing.assert_array_equal(data_next[0], np.where(block_mask[0] > 0, q_block_ids, 0))
 
 
 def test_lower_splash_attention_mask_rejects_unsupported_structured_fields():
@@ -144,3 +195,34 @@ def _materialize_splash_mask(mask):
     q_indices = jnp.arange(mask.shape[0])[:, None]
     kv_indices = jnp.arange(mask.shape[1])[None, :]
     return np.asarray(mask.mask_function(q_indices, kv_indices))
+
+
+def _materialize_mask_info(
+    mask_info,
+    *,
+    head: int,
+    q_seq_len: int,
+    kv_seq_len: int,
+    block_q: int,
+    block_kv: int,
+    transposed_partial_blocks: bool = False,
+):
+    q_blocks = q_seq_len // block_q
+    kv_blocks = kv_seq_len // block_kv
+    out = np.zeros((q_seq_len, kv_seq_len), dtype=bool)
+    block_mask = np.asarray(mask_info.block_mask)
+    mask_next = np.asarray(mask_info.mask_next)
+    partial_mask_blocks = np.asarray(mask_info.partial_mask_blocks)
+    for q_block in range(q_blocks):
+        q_slice = slice(q_block * block_q, (q_block + 1) * block_q)
+        for kv_block in range(kv_blocks):
+            kv_slice = slice(kv_block * block_kv, (kv_block + 1) * block_kv)
+            block_kind = int(block_mask[head, q_block, kv_block])
+            if block_kind == 2:
+                out[q_slice, kv_slice] = True
+            elif block_kind == 1:
+                partial_block = partial_mask_blocks[int(mask_next[head, q_block, kv_block])]
+                if transposed_partial_blocks:
+                    partial_block = partial_block.T
+                out[q_slice, kv_slice] = partial_block
+    return out

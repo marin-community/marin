@@ -21,6 +21,7 @@ from levanter.kernels.pallas.splash_attention import (
     SplashAttentionMaskSpec,
     lower_splash_attention_mask,
     lower_splash_segment_ids,
+    prefix_lm_mask_infos,
     splash_attention_block_sizes,
     splash_partition_spec_shard_factor,
 )
@@ -824,6 +825,56 @@ def _prepare_sinks_for_splash(attn_sink: NamedArray, q_class, physical_axes_q: P
     return sinks_array, physical_axes_sink
 
 
+def _prepare_prefix_lengths_for_splash(prefix_lengths: NamedArray, q_class, physical_axes_q: PartitionSpec):
+    """Reshape and broadcast prefix lengths to Splash's flattened batch axis."""
+    batch_axes = tuple(q_class["B"])
+    allowed_axes = {ax.name for ax in batch_axes}
+    extra_axes = tuple(ax for ax in prefix_lengths.axes if ax.name not in allowed_axes)
+    if extra_axes:
+        raise NotImplementedError(
+            f"Prefix lengths contain axes unsupported by splash attention: {', '.join(ax.name for ax in extra_axes)}"
+        )
+
+    lengths = prefix_lengths
+    length_axis_names = {ax.name for ax in lengths.axes}
+    for ax in batch_axes:
+        if ax.name not in length_axis_names:
+            lengths = lengths.broadcast_axis(ax)
+            length_axis_names.add(ax.name)
+
+    if batch_axes:
+        lengths = _maybe_flatten(lengths, batch_axes, "splash_batch")
+    else:
+        lengths = _maybe_flatten(lengths, (), "splash_batch")
+
+    lengths = lengths.rearrange(("splash_batch",))
+    return lengths.astype(jnp.int32).array, PartitionSpec(physical_axes_q[0])
+
+
+def _batched_splash_kernel_specs(
+    kernel,
+    *,
+    batch_spec,
+    head_spec,
+    q_seq_spec,
+    num_heads: int,
+):
+    """Build shard_map specs for a Splash kernel batched over examples."""
+
+    def spec_for_leaf(leaf):
+        if leaf is None:
+            return None
+        ndim = getattr(leaf, "ndim", 0)
+        if ndim == 0:
+            return PartitionSpec()
+        shape = getattr(leaf, "shape", ())
+        if ndim == 4 and len(shape) > 1 and shape[1] == num_heads:
+            return PartitionSpec(batch_spec, head_spec, q_seq_spec, None)
+        return PartitionSpec(batch_spec, *([None] * (ndim - 1)))
+
+    return jax.tree_util.tree_map(spec_for_leaf, kernel)
+
+
 def _unflatten_bshd(attn_output, q_class, v_class):
     attn_output = attn_output.unflatten_axis("B", q_class["B"])
     attn_output = attn_output.unflatten_axis("S", q_class["S"])
@@ -1005,6 +1056,20 @@ def _tpu_splash_attention(
         sinks = None
         physical_axes_sink = None
 
+    if isinstance(mask, AttentionMask) and mask.prefix_lengths is not None:
+        if mask.prefix_mask is not None:
+            raise NotImplementedError("Splash attention does not support prefix_lengths combined with prefix_mask.")
+        if mask.sliding_window is not None:
+            raise NotImplementedError("Splash attention does not support dynamic prefix lengths with sliding windows.")
+        prefix_lengths, physical_axes_prefix_lengths = _prepare_prefix_lengths_for_splash(
+            mask.prefix_lengths, q_class, physical_axes_q
+        )
+        if mask.prefix_length is not None:
+            prefix_lengths = jnp.maximum(prefix_lengths, mask.prefix_length)
+    else:
+        prefix_lengths = None
+        physical_axes_prefix_lengths = None
+
     segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
     # do we have a batch axis in segment_ids? (needed for vmap below)
 
@@ -1052,44 +1117,80 @@ def _tpu_splash_attention(
         max_block_size=block_size,
     )
 
-    # Create mask with GLOBAL shapes (outside shard_map)
-    if mask is None:
-        mask_spec = None
-    elif isinstance(mask, AttentionMask):
-        mask_spec = SplashAttentionMaskSpec(
-            is_causal=mask.is_causal,
-            causal_offset=mask.causal_offset,
-            sliding_window=mask.sliding_window,
-            prefix_length=mask.prefix_length,
-            has_prefix_lengths=mask.prefix_lengths is not None,
-            has_prefix_mask=mask.prefix_mask is not None,
-            has_explicit_mask=mask.explicit_mask is not None,
+    if prefix_lengths is not None:
+
+        def make_prefix_lm_kernel(prefix_length):
+            prefix_metadata = prefix_lm_mask_infos(
+                prefix_length=prefix_length,
+                q_seq_len=Sq,
+                kv_seq_len=Sk,
+                num_heads=Hq,
+                block_sizes=block_sizes,
+            )
+            return splash_attention_kernel.SplashAttentionKernel(
+                prefix_metadata.fwd_mask_info,
+                None if block_sizes.use_fused_bwd_kernel else prefix_metadata.dq_mask_info,
+                prefix_metadata.dkv_mask_info,
+                block_sizes=block_sizes,
+                is_mqa=False,
+                save_residuals=False,
+                mask_value=splash_attention_kernel.DEFAULT_MASK_VALUE,
+                attn_logits_soft_cap=logits_soft_cap,
+                residual_checkpoint_name=None,
+                mask_function=None,
+                interpret=False,
+            )
+
+        splash_kernel = jax.vmap(make_prefix_lm_kernel)(prefix_lengths)
+        assert physical_axes_prefix_lengths is not None
+        kernel_specs = _batched_splash_kernel_specs(
+            splash_kernel,
+            batch_spec=physical_axes_prefix_lengths[0],
+            head_spec=physical_axes_q[1],
+            q_seq_spec=physical_axes_q[2],
+            num_heads=Hq,
         )
-    elif isinstance(mask, NamedArray):
-        raise NotImplementedError("NamedArray masks are not yet supported for splash attention")
+        kernel_vmap_axis = 0
     else:
-        raise ValueError(f"Unknown mask type: {mask}")
+        # Create mask with GLOBAL shapes (outside shard_map)
+        if mask is None:
+            mask_spec = None
+        elif isinstance(mask, AttentionMask):
+            mask_spec = SplashAttentionMaskSpec(
+                is_causal=mask.is_causal,
+                causal_offset=mask.causal_offset,
+                sliding_window=mask.sliding_window,
+                prefix_length=mask.prefix_length,
+                has_prefix_lengths=mask.prefix_lengths is not None,
+                has_prefix_mask=mask.prefix_mask is not None,
+                has_explicit_mask=mask.explicit_mask is not None,
+            )
+        elif isinstance(mask, NamedArray):
+            raise NotImplementedError("NamedArray masks are not yet supported for splash attention")
+        else:
+            raise ValueError(f"Unknown mask type: {mask}")
 
-    mask_lowering = lower_splash_attention_mask(
-        mask=mask_spec,
-        q_seq_len=Sq,
-        kv_seq_len=Sk,
-        num_heads=Hq,
-        q_seq_shards=q_seq_shards,
-    )
+        mask_lowering = lower_splash_attention_mask(
+            mask=mask_spec,
+            q_seq_len=Sq,
+            kv_seq_len=Sk,
+            num_heads=Hq,
+            q_seq_shards=q_seq_shards,
+        )
 
-    # Create kernel with GLOBAL shapes and q_seq_shards (outside shard_map)
-    splash_kernel = splash_attention_kernel.make_splash_mha(
-        mask=mask_lowering.kernel_mask,
-        head_shards=head_shards,
-        q_seq_shards=q_seq_shards,
-        block_sizes=block_sizes,
-        attn_logits_soft_cap=logits_soft_cap,
-    )
+        # Create kernel with GLOBAL shapes and q_seq_shards (outside shard_map)
+        splash_kernel = splash_attention_kernel.make_splash_mha(
+            mask=mask_lowering.kernel_mask,
+            head_shards=head_shards,
+            q_seq_shards=q_seq_shards,
+            block_sizes=block_sizes,
+            attn_logits_soft_cap=logits_soft_cap,
+        )
 
-    # Get partition specs for the kernel (it's a pytree with mask_info arrays)
-    kernel_sharding = jax.sharding.NamedSharding(mesh, PartitionSpec(physical_axes_q[1], physical_axes_q[2]))
-    kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
+        # Get partition specs for the kernel (it's a pytree with mask_info arrays)
+        kernel_sharding = jax.sharding.NamedSharding(mesh, PartitionSpec(physical_axes_q[1], physical_axes_q[2]))
+        kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
+        kernel_vmap_axis = None
 
     @functools.partial(
         shard_map,
@@ -1111,15 +1212,15 @@ def _tpu_splash_attention(
         v = v.astype(attention_dtype)
         sink_in_axes = 0 if sinks is not None else None
 
-        def call_kernel(q_b, k_b, v_b, si, sink):
+        def call_kernel(q_b, k_b, v_b, si, sink, kernel_b):
             if sink is None:
-                return kernel(q_b, k_b, v_b, segment_ids=si)
-            return kernel(q_b, k_b, v_b, segment_ids=si, sinks=sink)
+                return kernel_b(q_b, k_b, v_b, segment_ids=si)
+            return kernel_b(q_b, k_b, v_b, segment_ids=si, sinks=sink)
 
         return jax.vmap(
             call_kernel,
-            in_axes=(0, 0, 0, segment_id_lowering.segment_batch_axis, sink_in_axes),
-        )(q, k, v, segment_ids, sinks)
+            in_axes=(0, 0, 0, segment_id_lowering.segment_batch_axis, sink_in_axes, kernel_vmap_axis),
+        )(q, k, v, segment_ids, sinks, kernel)
 
     attn_output = wrap_flash_attention(q_, k_, v_, segment_id_lowering.segment_ids, sinks, splash_kernel)
 

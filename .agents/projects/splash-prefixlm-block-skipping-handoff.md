@@ -23,7 +23,7 @@ Target hardware for validation and tuning:
 
 ## What Changed So Far
 
-This checkpoint implements the first slices: static prefix-LM masks and reference semantics for batch-dependent prefix lengths.
+This checkpoint implements the first slices: static prefix-LM masks, reference semantics for batch-dependent prefix lengths, and compact Splash metadata for dynamic prefix lengths.
 
 Files changed:
 
@@ -37,16 +37,19 @@ Files changed:
   - Adds `prefix_length`, `has_prefix_lengths`, and `has_prefix_mask` to `SplashAttentionMaskSpec`.
   - Adds `PrefixMask`, a sliceable Splash mask for static prefix keys.
   - Lowers static prefix-LM to `LogicalOr(causal_or_local_mask, PrefixMask)`, preserving Splash static mask processing and block skipping.
-  - Explicitly rejects dynamic `prefix_lengths` / `prefix_mask` in Splash for now.
+  - Adds compact `prefix_lm_mask_infos(...)` metadata for dynamic prefix lengths. The representation stores a full block grid but only `2 * q_blocks` partial blocks per example.
+  - Still rejects dynamic `prefix_mask`.
 
 - `lib/levanter/src/levanter/layers/attention.py`
   - Passes `prefix_length` / `has_prefix_mask` from `AttentionMask` into the Splash mask spec.
+  - Builds one dynamic-prefix `SplashAttentionKernel` per batch example with `jax.vmap`, then passes the batched kernel pytree through `shard_map`.
 
 - `lib/levanter/tests/test_attention.py`
   - Adds reference materialization tests for prefix-LM, prefix-LM plus sliding window, and per-batch dynamic prefix lengths.
 
 - `lib/levanter/tests/kernels/test_splash_attention.py`
   - Adds static Splash prefix-LM lowering tests.
+  - Adds compact forward/dKV `MaskInfo` reconstruction tests for dynamic prefix lengths.
   - Extends test mask materialization to handle `LogicalOr`.
 
 ## Validation Already Run
@@ -57,7 +60,7 @@ Both commands passed locally:
 uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py
 ```
 
-Result: `6 passed`.
+Result after compact metadata: `14 passed`.
 
 ```bash
 uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/test_attention.py -k 'prefix_lm or sliding_window_mask'
@@ -80,7 +83,7 @@ JAX Splash has two mask processing paths:
 
 `process_dynamic_mask` still computes `block_mask` and `data_next`, so it can skip fully empty blocks. However, it has no batch axis. Levanter’s current Splash path creates one `SplashAttentionKernel` outside `shard_map`, then vmaps the kernel call over batch, only varying `q`, `k`, `v`, `segment_ids`, and sinks.
 
-This means data-dependent prefix-LM under packing is not solved by the static checkpoint. A packed batch has per-example prefix lengths or prefix masks and segment boundaries, so one shared static `MultiHeadMask` is not enough.
+Dynamic prefix lengths are now represented by a batched `SplashAttentionKernel` pytree. A packed batch can use per-example prefix lengths and segment IDs for correctness. Segment IDs are still applied inside visited blocks by Splash, so this does not yet provide segment-ID block skipping.
 
 ## Open Technical Question
 
@@ -93,6 +96,7 @@ Main options:
    - Try `jax.vmap(make_splash_mha)(mask_bhsk)` to produce a batched `SplashAttentionKernel` pytree.
    - Then call the per-example kernel inside the existing batch vmap.
    - Local probe showed this works in CPU interpret mode, including through `shard_map` with leading batch specs.
+   - Current branch uses compact metadata instead of dense `[heads, q, kv]` masks.
 
 2. Structured metadata without dense `[B,H,S,S]` masks:
    - Derive `MaskInfo` directly from per-example prefix lengths and packed segment metadata.
@@ -111,17 +115,16 @@ Main options:
 
 ## Recommended Next Steps
 
-1. Implement a helper that constructs compact `MaskInfo` from per-batch prefix lengths without dense full masks.
-2. Start with forward/inference metadata, then extend to backward metadata.
-3. Integrate that helper into `_tpu_splash_attention` for `AttentionMask.prefix_lm(prefix_lengths=...)`.
-4. Add correctness tests comparing:
+1. Run a TPU smoke test for `AttentionMask.prefix_lm(prefix_lengths=...)` through `_tpu_splash_attention`.
+2. Add correctness tests comparing:
    - static prefix length against reference attention,
    - per-example prefix masks,
    - prefix masks plus segment IDs for packed docs.
-5. Add a benchmark harness for 8192/16384 that reports compile-including and steady-state timing on v4-8/v5p-8.
+3. Add a benchmark harness for 8192/16384 that reports compile-including and steady-state timing on v4-8/v5p-8.
+4. Implement segment-ID block skipping, probably by deriving block metadata from packed segment runs or THD metadata.
 
 ## Caveats
 
-- Current static prefix-LM support is useful but not the final requested end state.
+- Dynamic prefix-length support is implemented but not yet TPU-smoke-tested in this branch.
 - Current Splash segment IDs mask inside visited blocks; they do not provide block skipping for packed segment masks by themselves.
-- Dynamic prefix lengths/masks are intentionally rejected in Splash lowering for now, so standard reference attention remains the fallback for `prefix_lengths` / `prefix_mask`.
+- Dynamic `prefix_mask` remains unsupported in Splash; use structured `prefix_lengths` for the compact path.

@@ -10,6 +10,8 @@ import jax
 import numpy as np
 from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds as SplashSegmentIds
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
+from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_mask_info
+from jax import numpy as jnp
 from jax.sharding import Mesh, PartitionSpec
 
 
@@ -46,6 +48,58 @@ class SplashSegmentIdsLowering:
     segment_ids: SplashSegmentIds | None
     segment_ids_axes: SplashSegmentIds | None
     segment_batch_axis: SplashSegmentIds | None
+
+
+@dataclass(frozen=True)
+class SplashPrefixLmMetadata:
+    """Compact block metadata for a dynamic prefix-LM mask."""
+
+    fwd_mask_info: splash_attention_mask_info.MaskInfo
+    dq_mask_info: splash_attention_mask_info.MaskInfo
+    dkv_mask_info: splash_attention_mask_info.MaskInfo
+
+
+def prefix_lm_mask_infos(
+    *,
+    prefix_length: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    num_heads: int,
+    block_sizes: splash_attention_kernel.BlockSizes,
+) -> SplashPrefixLmMetadata:
+    """Build compact Splash mask metadata for dynamic prefix-LM attention."""
+    if not block_sizes.has_backward_blocks:
+        raise ValueError("prefix_lm_mask_infos requires backward block sizes.")
+
+    fwd_mask_info = prefix_lm_forward_mask_info(
+        prefix_length=prefix_length,
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        num_heads=num_heads,
+        block_q=block_sizes.block_q,
+        block_kv=block_sizes.block_kv,
+    )
+    dq_mask_info = prefix_lm_forward_mask_info(
+        prefix_length=prefix_length,
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        num_heads=num_heads,
+        block_q=block_sizes.block_q_dq,
+        block_kv=block_sizes.block_kv_dq,
+    )
+    dkv_mask_info = prefix_lm_dkv_mask_info(
+        prefix_length=prefix_length,
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        num_heads=num_heads,
+        block_q=block_sizes.block_q_dkv,
+        block_kv=block_sizes.block_kv_dkv,
+    )
+    return SplashPrefixLmMetadata(
+        fwd_mask_info=fwd_mask_info,
+        dq_mask_info=dq_mask_info,
+        dkv_mask_info=dkv_mask_info,
+    )
 
 
 def lower_splash_attention_mask(
@@ -102,6 +156,138 @@ def lower_splash_attention_mask(
 
     kernel_mask = splash_attention_mask.MultiHeadMask(masks=[base_mask for _ in range(num_heads)])
     return SplashAttentionMaskLowering(base_mask=base_mask, kernel_mask=kernel_mask)
+
+
+def prefix_lm_forward_mask_info(
+    *,
+    prefix_length: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    num_heads: int,
+    block_q: int,
+    block_kv: int,
+) -> splash_attention_mask_info.MaskInfo:
+    """Build compact forward Splash metadata for a prefix-LM mask.
+
+    The represented mask is ``kv < prefix_length OR kv <= q``. Metadata keeps a
+    full block grid but stores only two partial mask candidates per query block:
+    the causal boundary block and the prefix boundary block.
+    """
+    return _prefix_lm_mask_info(
+        prefix_length=prefix_length,
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        num_heads=num_heads,
+        block_q=block_q,
+        block_kv=block_kv,
+        data_next_axis="kv",
+        transpose_partial_blocks=False,
+    )
+
+
+def prefix_lm_dkv_mask_info(
+    *,
+    prefix_length: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    num_heads: int,
+    block_q: int,
+    block_kv: int,
+) -> splash_attention_mask_info.MaskInfo:
+    """Build compact dKV Splash metadata for a prefix-LM mask."""
+    return _prefix_lm_mask_info(
+        prefix_length=prefix_length,
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        num_heads=num_heads,
+        block_q=block_q,
+        block_kv=block_kv,
+        data_next_axis="q",
+        transpose_partial_blocks=True,
+    )
+
+
+def _prefix_lm_mask_info(
+    *,
+    prefix_length: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    num_heads: int,
+    block_q: int,
+    block_kv: int,
+    data_next_axis: str,
+    transpose_partial_blocks: bool,
+) -> splash_attention_mask_info.MaskInfo:
+    if block_q != block_kv:
+        raise NotImplementedError("Compact prefix-LM metadata currently requires block_q == block_kv.")
+    if q_seq_len % block_q != 0:
+        raise ValueError(f"block_q={block_q} must divide q_seq_len={q_seq_len}.")
+    if kv_seq_len % block_kv != 0:
+        raise ValueError(f"block_kv={block_kv} must divide kv_seq_len={kv_seq_len}.")
+    if data_next_axis not in ("q", "kv"):
+        raise ValueError(f"data_next_axis must be 'q' or 'kv', got {data_next_axis}.")
+
+    q_blocks = q_seq_len // block_q
+    kv_blocks = kv_seq_len // block_kv
+    prefix_length = jnp.asarray(prefix_length, dtype=jnp.int32)
+
+    q_block_ids = jnp.arange(q_blocks, dtype=jnp.int32)[:, None]
+    kv_block_ids = jnp.arange(kv_blocks, dtype=jnp.int32)[None, :]
+    q_start = q_block_ids * block_q
+    q_end = q_start + block_q - 1
+    kv_start = kv_block_ids * block_kv
+    kv_end = kv_start + block_kv - 1
+
+    has_prefix = kv_start < prefix_length
+    causal_nonzero = kv_start <= q_end
+    nonzero = has_prefix | causal_nonzero
+
+    full_prefix = kv_end < prefix_length
+    full_causal = kv_end <= q_start
+    full = full_prefix | full_causal
+    partial = nonzero & ~full
+
+    block_mask = jnp.where(full, 2, jnp.where(partial, 1, 0)).astype(jnp.int32)
+    block_mask = jnp.broadcast_to(block_mask[None, :, :], (num_heads, q_blocks, kv_blocks))
+
+    data_block_ids = kv_block_ids if data_next_axis == "kv" else q_block_ids
+    data_next = jnp.broadcast_to(data_block_ids, (q_blocks, kv_blocks))
+    data_next = jnp.where(block_mask[0] > 0, data_next, 0).astype(jnp.int32)
+    data_next = jnp.broadcast_to(data_next[None, :, :], (num_heads, q_blocks, kv_blocks))
+
+    causal_slot = q_block_ids * 2
+    prefix_boundary_block = prefix_length // block_kv
+    is_prefix_boundary = kv_block_ids == prefix_boundary_block
+    mask_next = jnp.where(is_prefix_boundary & (kv_block_ids != q_block_ids), causal_slot + 1, causal_slot)
+    mask_next = jnp.where(partial, mask_next, 0).astype(jnp.int32)
+    mask_next = jnp.broadcast_to(mask_next[None, :, :], (num_heads, q_blocks, kv_blocks))
+
+    q_offsets = jnp.arange(block_q, dtype=jnp.int32)[:, None]
+    kv_offsets = jnp.arange(block_kv, dtype=jnp.int32)[None, :]
+    q_global = jnp.arange(q_blocks, dtype=jnp.int32)[:, None, None] * block_q + q_offsets[None, :, :]
+    causal_kv_global = jnp.arange(q_blocks, dtype=jnp.int32)[:, None, None] * block_kv + kv_offsets[None, :, :]
+    causal_blocks = (causal_kv_global <= q_global) | (causal_kv_global < prefix_length)
+
+    prefix_kv_start = prefix_boundary_block * block_kv
+    prefix_kv_global = prefix_kv_start + kv_offsets
+    prefix_block = prefix_kv_global < prefix_length
+    prefix_blocks = jnp.broadcast_to(prefix_block[None, :, :], (q_blocks, block_q, block_kv))
+    prefix_blocks = prefix_blocks | (prefix_kv_global[None, :, :] <= q_global)
+
+    partial_mask_blocks = jnp.zeros((2 * q_blocks, block_q, block_kv), dtype=jnp.bool_)
+    partial_mask_blocks = partial_mask_blocks.at[0::2].set(causal_blocks)
+    partial_mask_blocks = partial_mask_blocks.at[1::2].set(prefix_blocks)
+    if transpose_partial_blocks:
+        partial_mask_blocks = jnp.swapaxes(partial_mask_blocks, -1, -2)
+
+    return splash_attention_mask_info.MaskInfo(
+        data_next=data_next,
+        mask_next=mask_next,
+        block_mask=block_mask.astype(jnp.int8),
+        partial_mask_blocks=partial_mask_blocks,
+        q_sequence=None,
+        is_dynamic_mask=None,
+    )
 
 
 class PrefixMask(splash_attention_mask.Mask):
