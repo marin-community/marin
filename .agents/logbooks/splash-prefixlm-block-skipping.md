@@ -196,3 +196,20 @@
   - Release verified: no active local v4 session; Iris holder job ended `JOB_STATE_KILLED` with `Terminated by user`.
 - Interpretation: The direct blocked metadata patch preserves the v4 long-sequence performance envelope. The small packed-prefix shift at 8192 is within run-to-run noise relative to earlier v4 measurements (`1.510 ms` before, `1.547 ms` after); the dense-reference speedup and static-causal comparison still hold.
 - Next action: Retry v5p-8 on the direct blocked metadata commit when capacity improves; then implement a true compact segment-run metadata path that reduces the partial-mask payload rather than only avoiding dense SxS construction.
+
+### 2026-06-12 - Compact partial-block payload prototype
+- Hypothesis: Splash's dynamic `MaskInfo` can reduce packed-mask payload size by storing only partial mask blocks and remapping `mask_next`, instead of storing a partial block for every block-grid coordinate. Segment-run metadata with a fixed max segment count can then choose a smaller static capacity than `q_blocks * kv_blocks`.
+- Command:
+  - `uv run --project lib/levanter --group test python -m pytest lib/levanter/tests/kernels/test_splash_attention.py`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `timeout 900 ./infra/pre-commit.py --review --agent-command='env RUST_LOG=error codex exec --ignore-user-config --ephemeral --dangerously-bypass-approvals-and-sandbox'`
+- Config: Local CPU metadata tests. New segment-run case uses `S=512`, block size `16`, segment lengths `[37, 93, 151, 231]`, and `max_segments=4`.
+- Result:
+  - Packed dynamic metadata now stores compact partial-block payloads addressed by `mask_next`.
+  - Existing segment-ID and prefix-mask paths keep a safe dense-grid upper-bound capacity.
+  - Added `packed_causal_segment_run_mask_infos(...)`, which accepts fixed-shape contiguous segment lengths and uses a smaller segment-count-derived partial capacity.
+  - Splash helper tests passed with `19 passed`.
+  - Changed-file precommit passed.
+  - Lint review reported no findings.
+- Interpretation: This is the first THD-shaped metadata API for Splash packed causal masks. It is not yet wired into `AttentionMask`/training batches, but it proves the `MaskInfo` representation can use a compact partial-block list when fixed-shape segment-run metadata is available.
+- Next action: Wire segment-run metadata through a public mask surface, then benchmark against the segment-ID path on v4/v5p.

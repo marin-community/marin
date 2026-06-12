@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
+import equinox as eqx
 import jax
 import numpy as np
 from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds as SplashSegmentIds
@@ -119,6 +120,13 @@ class _PackedDynamicMaskContext:
     block_sizes: splash_attention_kernel.BlockSizes
     head_shards: int
     q_seq_shards: int
+
+
+@dataclass(frozen=True)
+class _PartialMaskCapacities:
+    fwd: int
+    dq: int
+    dkv: int
 
 
 class _PrefixLmDataNextAxis(StrEnum):
@@ -265,7 +273,6 @@ def packed_causal_segment_block_mask_blocks(
 
 @dataclass(frozen=True)
 class _BlockedPackedSegmentMaskInputs:
-    q_blocks: int
     kv_blocks: int
     q_positions: jax.Array
     kv_positions: jax.Array
@@ -307,7 +314,6 @@ def _blocked_packed_segment_mask_inputs(
     q_positions = jnp.arange(q_seq_len, dtype=jnp.int32).reshape(q_blocks, block_q)
     kv_positions = jnp.arange(kv_seq_len, dtype=jnp.int32).reshape(kv_blocks, block_kv)
     return _BlockedPackedSegmentMaskInputs(
-        q_blocks=q_blocks,
         kv_blocks=kv_blocks,
         q_positions=q_positions[:, None, :, None],
         kv_positions=kv_positions[None, :, None, :],
@@ -320,6 +326,7 @@ def _blocked_packed_dynamic_mask_infos(
     mask_block_builder,
     mask_kwargs: dict[str, object],
     context: _PackedDynamicMaskContext,
+    partial_capacities: _PartialMaskCapacities | None = None,
 ) -> SplashDynamicMaskMetadata:
     fwd_mask_info = _blocked_packed_dynamic_mask_info(
         mask_block_builder(
@@ -332,6 +339,7 @@ def _blocked_packed_dynamic_mask_infos(
         role=_DynamicMaskInfoRole.FWD_OR_DQ,
         head_shards=context.head_shards,
         q_seq_shards=context.q_seq_shards,
+        partial_capacity=None if partial_capacities is None else partial_capacities.fwd,
     )
     dq_mask_info = _blocked_packed_dynamic_mask_info(
         mask_block_builder(
@@ -344,6 +352,7 @@ def _blocked_packed_dynamic_mask_infos(
         role=_DynamicMaskInfoRole.FWD_OR_DQ,
         head_shards=context.head_shards,
         q_seq_shards=context.q_seq_shards,
+        partial_capacity=None if partial_capacities is None else partial_capacities.dq,
     )
     dkv_mask_info = _blocked_packed_dynamic_mask_info(
         mask_block_builder(
@@ -356,6 +365,7 @@ def _blocked_packed_dynamic_mask_infos(
         role=_DynamicMaskInfoRole.DKV,
         head_shards=context.head_shards,
         q_seq_shards=context.q_seq_shards,
+        partial_capacity=None if partial_capacities is None else partial_capacities.dkv,
     )
     return SplashDynamicMaskMetadata(
         fwd_mask_info=fwd_mask_info,
@@ -370,6 +380,7 @@ def _blocked_packed_dynamic_mask_info(
     role: _DynamicMaskInfoRole,
     head_shards: int,
     q_seq_shards: int,
+    partial_capacity: int | None,
 ) -> splash_attention_mask_info.MaskInfo:
     if partial_mask_blocks.ndim != 4:
         raise ValueError(f"Expected blocked mask with rank 4, got {partial_mask_blocks.shape}.")
@@ -382,52 +393,66 @@ def _blocked_packed_dynamic_mask_info(
     if q_blocks % q_seq_shards != 0:
         raise ValueError(f"q_seq_shards={q_seq_shards} must divide q block count {q_blocks}.")
 
-    partial_mask_blocks = partial_mask_blocks[None, :, :, :, :]
     is_full_mask = jnp.all(partial_mask_blocks, axis=(-1, -2))
     is_empty_mask = jnp.logical_not(jnp.any(partial_mask_blocks, axis=(-1, -2)))
 
     block_mask = jnp.ones((1, q_blocks, kv_blocks), dtype=jnp.int32)
-    block_mask = jnp.where(is_full_mask, BLOCK_MASK_FULL, block_mask)
-    block_mask = jnp.where(is_empty_mask, BLOCK_MASK_EMPTY, block_mask)
+    block_mask = jnp.where(is_full_mask[None, :, :], BLOCK_MASK_FULL, block_mask)
+    block_mask = jnp.where(is_empty_mask[None, :, :], BLOCK_MASK_EMPTY, block_mask)
 
-    q_blocks_per_shard = q_blocks // q_seq_shards
-    data_next_slices = []
-    mask_next_slices = []
-    for q_seq_shard in range(q_seq_shards):
-        q_start = q_seq_shard * q_blocks_per_shard
-        local_block_mask = block_mask[:, q_start : q_start + q_blocks_per_shard]
-        mask_next = jnp.arange(q_blocks_per_shard * kv_blocks, dtype=jnp.int32).reshape(
-            1, q_blocks_per_shard, kv_blocks
-        )
-        mask_next = jnp.where(local_block_mask == BLOCK_MASK_PARTIAL, mask_next, 0)
+    compact_mask_blocks, mask_next = _compact_partial_mask_blocks(
+        partial_mask_blocks,
+        block_mask=block_mask,
+        partial_capacity=partial_capacity or (q_blocks * kv_blocks),
+    )
 
-        if role == _DynamicMaskInfoRole.DKV:
-            data_next = jnp.arange(q_blocks_per_shard, dtype=jnp.int32)[None, :, None]
-            data_next = jnp.broadcast_to(data_next, (1, q_blocks_per_shard, kv_blocks))
-        else:
-            data_next = jnp.arange(kv_blocks, dtype=jnp.int32)[None, None, :]
-            data_next = jnp.broadcast_to(data_next, (1, q_blocks_per_shard, kv_blocks))
-        data_next = jnp.where(local_block_mask == BLOCK_MASK_EMPTY, 0, data_next)
-
-        data_next_slices.append(data_next)
-        mask_next_slices.append(mask_next)
-
-    data_next = jnp.concatenate(data_next_slices, axis=1)
-    mask_next = jnp.concatenate(mask_next_slices, axis=1)
     if role == _DynamicMaskInfoRole.DKV:
-        partial_mask_blocks = partial_mask_blocks.swapaxes(-1, -2)
+        data_next = jnp.arange(q_blocks, dtype=jnp.int32)[None, :, None]
+        data_next = jnp.broadcast_to(data_next, (1, q_blocks, kv_blocks))
+    else:
+        data_next = jnp.arange(kv_blocks, dtype=jnp.int32)[None, None, :]
+        data_next = jnp.broadcast_to(data_next, (1, q_blocks, kv_blocks))
+    data_next = jnp.where(block_mask == BLOCK_MASK_EMPTY, 0, data_next)
+
+    if role == _DynamicMaskInfoRole.DKV:
+        compact_mask_blocks = compact_mask_blocks.swapaxes(-1, -2)
 
     return splash_attention_mask_info.MaskInfo(
         data_next=_downcast_dynamic_mask_index(
             data_next,
-            q_blocks_per_shard if role == _DynamicMaskInfoRole.DKV else kv_blocks,
+            q_blocks if role == _DynamicMaskInfoRole.DKV else kv_blocks,
         ),
-        mask_next=_downcast_dynamic_mask_index(mask_next, q_blocks_per_shard * kv_blocks),
+        mask_next=_downcast_dynamic_mask_index(mask_next, partial_capacity or (q_blocks * kv_blocks)),
         block_mask=block_mask.astype(jnp.int8),
-        partial_mask_blocks=partial_mask_blocks,
+        partial_mask_blocks=compact_mask_blocks,
         q_sequence=None,
         is_dynamic_mask=True,
     )
+
+
+def _compact_partial_mask_blocks(
+    partial_mask_blocks: jax.Array,
+    *,
+    block_mask: jax.Array,
+    partial_capacity: int,
+) -> tuple[jax.Array, jax.Array]:
+    q_blocks, kv_blocks, block_q, block_kv = partial_mask_blocks.shape
+    flat_blocks = partial_mask_blocks.reshape(q_blocks * kv_blocks, block_q, block_kv)
+    is_partial = block_mask.reshape(-1) == BLOCK_MASK_PARTIAL
+    partial_indices = jnp.cumsum(is_partial.astype(jnp.int32), dtype=jnp.int32) - 1
+    num_partial = jnp.sum(is_partial.astype(jnp.int32), dtype=jnp.int32)
+
+    slots = jnp.arange(partial_capacity, dtype=jnp.int32)
+    selected = (partial_indices[:, None] == slots[None, :]) & is_partial[:, None]
+    compact_blocks = jnp.any(selected[:, :, None, None] & flat_blocks[:, None, :, :], axis=0)
+    compact_blocks = eqx.error_if(
+        compact_blocks,
+        num_partial > partial_capacity,
+        "Packed Splash metadata partial block capacity exceeded.",
+    )
+
+    mask_next = jnp.where(is_partial, partial_indices, 0).reshape(1, q_blocks, kv_blocks)
+    return compact_blocks, mask_next
 
 
 def _downcast_dynamic_mask_index(array: jax.Array, max_value: int) -> jax.Array:
@@ -472,6 +497,112 @@ def packed_causal_segment_mask_infos(
         },
         context=context,
     )
+
+
+def packed_causal_segment_run_mask_infos(
+    *,
+    segment_lengths: jax.Array,
+    num_segments: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    block_sizes: splash_attention_kernel.BlockSizes,
+    head_shards: int = 1,
+    q_seq_shards: int = 1,
+) -> SplashDynamicMaskMetadata:
+    """Build packed causal metadata from fixed-shape contiguous segment lengths."""
+    if q_seq_len != kv_seq_len:
+        raise NotImplementedError("Segment-run Splash metadata currently supports self-attention only.")
+    if not block_sizes.has_backward_blocks:
+        raise ValueError("packed_causal_segment_run_mask_infos requires backward block sizes.")
+
+    segment_lengths = jnp.asarray(segment_lengths, dtype=jnp.int32)
+    if segment_lengths.ndim != 1:
+        raise ValueError(f"segment_lengths must be rank 1 after batching, got shape {segment_lengths.shape}.")
+
+    segment_ids = _segment_ids_from_lengths(
+        segment_lengths=segment_lengths,
+        num_segments=num_segments,
+        seq_len=q_seq_len,
+    )
+    context = _PackedDynamicMaskContext(
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        block_sizes=block_sizes,
+        head_shards=head_shards,
+        q_seq_shards=q_seq_shards,
+    )
+    max_segments = segment_lengths.shape[0]
+    return _blocked_packed_dynamic_mask_infos(
+        mask_block_builder=packed_causal_segment_block_mask_blocks,
+        mask_kwargs={
+            "q_segment_ids": segment_ids,
+            "kv_segment_ids": segment_ids,
+        },
+        context=context,
+        partial_capacities=_segment_run_partial_capacities(
+            q_seq_len=q_seq_len,
+            kv_seq_len=kv_seq_len,
+            block_sizes=block_sizes,
+            max_segments=max_segments,
+        ),
+    )
+
+
+def _segment_ids_from_lengths(
+    *,
+    segment_lengths: jax.Array,
+    num_segments: jax.Array,
+    seq_len: int,
+) -> jax.Array:
+    num_segments = jnp.asarray(num_segments, dtype=jnp.int32)
+    active = jnp.arange(segment_lengths.shape[0], dtype=jnp.int32) < num_segments
+    lengths = jnp.where(active, segment_lengths, jnp.zeros_like(segment_lengths))
+    lengths = eqx.error_if(
+        lengths,
+        jnp.sum(lengths, dtype=jnp.int32) != seq_len,
+        "Packed Splash segment lengths must cover the full sequence.",
+    )
+    segment_ends = jnp.cumsum(lengths, dtype=jnp.int32)
+    positions = jnp.arange(seq_len, dtype=jnp.int32)
+    return jnp.sum(positions[:, None] >= segment_ends[None, :], axis=1, dtype=jnp.int32)
+
+
+def _segment_run_partial_capacities(
+    *,
+    q_seq_len: int,
+    kv_seq_len: int,
+    block_sizes: splash_attention_kernel.BlockSizes,
+    max_segments: int,
+) -> _PartialMaskCapacities:
+    return _PartialMaskCapacities(
+        fwd=_segment_run_partial_capacity(
+            q_blocks=q_seq_len // block_sizes.block_q,
+            kv_blocks=kv_seq_len // block_sizes.block_kv,
+            max_segments=max_segments,
+        ),
+        dq=_segment_run_partial_capacity(
+            q_blocks=q_seq_len // _required_block_size(block_sizes.block_q_dq, "block_q_dq"),
+            kv_blocks=kv_seq_len // _required_block_size(block_sizes.block_kv_dq, "block_kv_dq"),
+            max_segments=max_segments,
+        ),
+        dkv=_segment_run_partial_capacity(
+            q_blocks=q_seq_len // _required_block_size(block_sizes.block_q_dkv, "block_q_dkv"),
+            kv_blocks=kv_seq_len // _required_block_size(block_sizes.block_kv_dkv, "block_kv_dkv"),
+            max_segments=max_segments,
+        ),
+    )
+
+
+def _required_block_size(block_size: int | None, name: str) -> int:
+    if block_size is None:
+        raise ValueError(f"{name} must be set.")
+    return block_size
+
+
+def _segment_run_partial_capacity(*, q_blocks: int, kv_blocks: int, max_segments: int) -> int:
+    dense_capacity = q_blocks * kv_blocks
+    segment_capacity = max_segments * (q_blocks + kv_blocks + 1)
+    return min(dense_capacity, segment_capacity)
 
 
 def lower_splash_attention_mask(

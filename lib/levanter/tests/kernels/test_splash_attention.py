@@ -19,6 +19,7 @@ from levanter.kernels.pallas.splash_attention import (
     lower_splash_attention_mask,
     lower_splash_segment_ids,
     packed_causal_segment_mask_infos,
+    packed_causal_segment_run_mask_infos,
     packed_prefix_lm_mask_infos,
     prefix_lm_dkv_mask_info,
     prefix_lm_forward_mask_info,
@@ -175,6 +176,39 @@ def test_packed_causal_segment_mask_info_matches_dense_packed_causal(case_name):
     )
 
 
+def test_packed_causal_segment_run_mask_info_uses_compact_partial_payload():
+    seq_len = 512
+    block_size = 16
+    segment_lengths = jnp.array([37, 93, 151, 231], dtype=jnp.int32)
+    num_segments = jnp.array(4, dtype=jnp.int32)
+
+    metadata = packed_causal_segment_run_mask_infos(
+        segment_lengths=segment_lengths,
+        num_segments=num_segments,
+        q_seq_len=seq_len,
+        kv_seq_len=seq_len,
+        block_sizes=_packed_metadata_test_block_sizes(block_size),
+    )
+
+    segment_ids = np.repeat(np.arange(4, dtype=np.int32), np.asarray(segment_lengths))
+    q = np.arange(seq_len)[:, None]
+    kv = np.arange(seq_len)[None, :]
+    expected = (segment_ids[:, None] == segment_ids[None, :]) & (kv <= q)
+    _assert_packed_metadata_matches_dense(
+        metadata,
+        expected,
+        seq_len=seq_len,
+        block_size=block_size,
+        partial_q_block=2,
+        partial_kv_block=0,
+        full_q_block=15,
+        full_kv_block=9,
+    )
+
+    block_count = seq_len // block_size
+    assert metadata.fwd_mask_info.partial_mask_blocks.shape[0] < block_count * block_count
+
+
 def _two_segment_ids():
     return jnp.concatenate(
         [
@@ -295,7 +329,7 @@ def _assert_packed_metadata_matches_dense(
         kv_seq_len=seq_len,
         block_q=block_size,
         block_kv=block_size,
-        partial_block_layout=_PartialBlockLayout.DYNAMIC,
+        partial_block_layout=_PartialBlockLayout.COMPACT,
     )
     actual_dkv = _materialize_mask_info(
         metadata.dkv_mask_info,
@@ -304,7 +338,7 @@ def _assert_packed_metadata_matches_dense(
         kv_seq_len=seq_len,
         block_q=block_size,
         block_kv=block_size,
-        partial_block_layout=_PartialBlockLayout.DYNAMIC_TRANSPOSED,
+        partial_block_layout=_PartialBlockLayout.COMPACT_TRANSPOSED,
     )
 
     np.testing.assert_array_equal(actual_fwd, expected)
