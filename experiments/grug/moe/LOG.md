@@ -99,3 +99,18 @@ Anchor = center (full-matrix, freq=1, SOAP b1=0.95/b2=0.9/shampoo=0.9, lr×1; no
 | lr-1p4 | lr ×1.4 | /kaiyue/iris-run-job-20260612-230509 |
 | lr-1p8 | lr ×1.8 (≈ upstream .018) | /kaiyue/iris-run-job-20260612-230523 |
 Target: paloma macro_loss < 3.5438. Power-decay dropped (linear matches baseline; user: unnecessary).
+
+### Status 23:18 UTC — reserved-v4 contention
+- center child RUNNING (grabbed a freed v4-32 slot), cold-starting (~48min to first loss).
+- beta2-{0p95,0p99,0p999} + lr-{1p4,1p8} children PENDING: "Coscheduling: need 4 workers" — the
+  us-central2 reservation is packed (/held/ unimax+proportional+swarm_fisher, /larry/ d512/768/1024,
+  /pc0618/). Not mine to touch; my AMUSE runs are in east5 (won't free central2 v4). Letting them queue
+  per the no-premature-conclusion-under-contention rule; they schedule as others' jobs finish.
+
+### Code de-risking (while cold-starting) — klsoaph.py re-audit
+Full re-audit of the de-blocked full-matrix impl vs upstream PR #290: projection (qₗᵀ·g·qᵣ),
+back-projection, whitened-Gram (gg_l from g·qᵣ·esiᵣ outer product), ESI (eigen=1/esi² EMA, rsqrt
+clamp 4000), warm-started QR refresh (qr(GG·Q) + old→new basis momentum reprojection), eigh init +
+zero first-step, intentional no-bias-correction — all FAITHFUL, no bugs. Cleaned stale block-wise
+docstrings/naming (commit). CPU smoke re-verified shapes + finiteness. So if a point returns weak,
+the cause is HP tuning, not the implementation.
