@@ -195,11 +195,6 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
         }
         return WorkerStatus(state=state_map.get(info.status, CloudWorkerState.UNKNOWN))
 
-    def reboot(self) -> None:
-        assert self._gcp_service is not None
-        logger.info("Rebooting GCE instance: %s", self._gce_vm_name)
-        self._gcp_service.vm_reset(self._gce_vm_name, self._zone)
-
     def terminate(self, *, wait: bool = False) -> None:
         assert self._gcp_service is not None
         logger.info("Deleting GCE instance: %s", self._gce_vm_name)
@@ -341,9 +336,6 @@ class GcpSliceHandle:
         workers: list[GcpWorkerHandle] = []
         for i in range(worker_count):
             internal_ip = tpu_info.network_endpoints[i] if i < len(tpu_info.network_endpoints) else ""
-            external_ip = (
-                tpu_info.external_network_endpoints[i] if i < len(tpu_info.external_network_endpoints) else None
-            )
 
             if not internal_ip and i < len(tpu_info.network_endpoints):
                 logger.warning(
@@ -365,7 +357,6 @@ class GcpSliceHandle:
                     _vm_id=f"{self._slice_id}-worker-{i}",
                     _internal_address=internal_ip,
                     _port=self._worker_port,
-                    _external_address=external_ip,
                     _remote_exec=remote_exec,
                 )
             )
@@ -487,7 +478,6 @@ class GcpVmSliceHandle:
             _vm_id=f"{self._slice_id}-worker-0",
             _internal_address=vm_info.internal_ip,
             _port=self._worker_port,
-            _external_address=vm_info.external_ip,
             _gce_vm_name=self._vm_name,
             _zone=self._zone,
             _project_id=self._project_id,

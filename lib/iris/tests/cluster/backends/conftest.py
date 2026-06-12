@@ -67,10 +67,6 @@ class FakeWorkerHandle:
         return f"http://{self._internal_address}:{self._port}"
 
     @property
-    def external_address(self) -> str | None:
-        return None
-
-    @property
     def bootstrap_log(self) -> str:
         return self._bootstrap_log
 
@@ -84,9 +80,6 @@ class FakeWorkerHandle:
         on_line: Callable[[str], None] | None = None,
     ) -> CommandResult:
         return CommandResult(returncode=0, stdout="", stderr="")
-
-    def reboot(self) -> None:
-        pass
 
 
 @dataclass

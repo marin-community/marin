@@ -47,10 +47,6 @@ class StubWorkerHandle:
         return self._address
 
     @property
-    def external_address(self) -> str | None:
-        return None
-
-    @property
     def bootstrap_log(self) -> str:
         return ""
 
@@ -58,9 +54,6 @@ class StubWorkerHandle:
         return WorkerStatus(state=CloudWorkerState.RUNNING)
 
     def run_command(self, command: str, timeout: Duration | None = None, on_line=None):
-        raise NotImplementedError
-
-    def reboot(self) -> None:
         raise NotImplementedError
 
 
